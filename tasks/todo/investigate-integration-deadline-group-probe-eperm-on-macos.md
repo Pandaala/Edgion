@@ -24,7 +24,7 @@ After the deadline message, `terminate_group -> process_group_exists` raised
 exit was 1 rather than timeout 124. The probe catches only ProcessLookupError;
 signal_group also does not handle permission errors. No reproduction child or
 wrapper remained in the follow-up listing, but this does not prove descendant
-cleanup. The helper was unchanged by the external commit and B0203.
+cleanup. Revalidate the helper at the current revision before implementing a fix.
 
 The owning `skills/04-review/observability/regression-guards/debug-access-log-wire-and-lifecycle.md`
 records the same macOS issue and a historical successful Linux reproduction;
@@ -41,5 +41,5 @@ Linux was not rerun in this diagnosis.
   groups, permission failures and forwarded SIGTERM/SIGINT.
 - Verify macOS and Linux separately, owned-process cleanup and bounded elapsed
   time. Do not claim the underlying bug is fixed by restoring this task record.
-- The existing helper remains frozen during the optimization campaign; runtime
-  and test changes require separately authorized implementation.
+- Changes to the existing helper and integration files require explicit
+  authorization for their exact paths; do not weaken cleanup guarantees to pass a test.

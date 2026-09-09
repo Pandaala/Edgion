@@ -5,7 +5,6 @@
 - Status: pending
 - Type: test
 - Priority: P3
-- Source: Gateway campaign B0207 / D0119
 
 ## Evidence
 
@@ -21,9 +20,10 @@ one ignored. The unchanged `ctx.rs` blob is
   embedded SelectedGrpcBackend policy lookup and its verified size from 24 to
   32 bytes after the context expectation's `3b76481f` update.
 
-B0207 changes only TLS proxy function implementations/tests, not any embedded
-layout type or Cargo configuration. Independent grpc backend and ordinary context
-budget tests each pass; the latter remains within its 1280-byte budget.
+The historical diagnosis attributed these failures to the embedded layout changes
+above, not TLS proxy function bodies. Independent gRPC backend and ordinary context
+budget tests passed at that revision; the latter remained within its 1280-byte
+budget. Revalidate both layout and allocation costs against the current HEAD.
 
 ## Acceptance
 

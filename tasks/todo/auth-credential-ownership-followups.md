@@ -9,11 +9,10 @@
 | Type | investigation |
 | Priority | P2 |
 | Issue | N/A |
-| Source | D0036 credential ownership audit |
 
 ## AI guide summary
 
-Evaluate the optional credential copy and retention questions left by D0036 one ownership boundary at a time, promoting only changes with a concrete security or memory-residency benefit that preserve correctness and hot-path performance.
+Evaluate the optional credential copy and retention questions listed below one ownership boundary at a time, promoting only changes with a concrete security or memory-residency benefit that preserve correctness and hot-path performance.
 
 ## Requirements
 
@@ -29,13 +28,13 @@ Evaluate the optional credential copy and retention questions left by D0036 one 
 
 ### In scope
 
-- Optional residual copy/retention questions explicitly recorded by the completed D0036 evidence.
+- Optional residual copy/retention questions listed in this task and the maintained credential-ownership reference.
 - Source-backed ownership and value analysis, with narrow implementation follow-ups only when justified.
 
 ### Out of scope
 
 - A universal credential destruction deadline or repository-wide zeroization claim.
-- Reopening completed D0036 corrections or unrelated authentication defects.
+- Changes outside the listed copy/retention boundaries, including reopening completed ownership fixes or unrelated authentication defects.
 - Third-party allocator, SDK, operating-system, remote-service, and transport erasure guarantees.
 
 ## Acceptance criteria
@@ -43,5 +42,5 @@ Evaluate the optional credential copy and retention questions left by D0036 one 
 - Every recorded candidate has an ownership-specific evidence table and keep/change/defer decision.
 - Proposed changes state which concrete copy is removed, which independent copies remain, and why behavior and performance are preserved.
 - Any implementation work is separately scoped and tested without weakening redaction or observability rules.
-- The completed D0036 evidence remains truthful: release events are not presented as physical erasure guarantees.
+- The maintained credential-ownership evidence remains truthful: release events are not presented as physical erasure guarantees.
 - Documentation validation and `git diff --check` pass; existing integration tests remain unchanged.

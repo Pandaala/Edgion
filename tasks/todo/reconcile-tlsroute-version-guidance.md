@@ -5,7 +5,6 @@
 - Status: pending
 - Type: docs
 - Priority: P3
-- Source: Gateway quality campaign B0197 / D0111
 
 ## Evidence
 
@@ -24,4 +23,4 @@ not override this requirement or serve as proof that fallback is intended.
 - If code violates the policy, record that independently rather than silently
   relaxing the requirement or expanding this documentation task.
 - Keep this work separate from L4 incremental-update helper cleanup and preserve
-  the campaign's frozen integration files.
+  existing integration files without explicit authorization.

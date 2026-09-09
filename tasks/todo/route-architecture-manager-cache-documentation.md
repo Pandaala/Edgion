@@ -19,13 +19,13 @@ Align route architecture knowledge with the current request path, where HTTP and
 - Revalidate HTTP, gRPC, TCP, UDP, and TLS manager ownership against current code.
 - Correct `route-architecture-consistency.md` statements that still describe dynamic HTTP/gRPC manager lookup.
 - Preserve historical rationale while clearly distinguishing the current cached-handle design from legacy behavior.
-- Cross-check retained-manager removal and recreation semantics documented by the route-manager cleanup campaign.
-- Revalidate the same page's claim that only HTTP/gRPC support Gateway-driven rebuilds and its raw-route cache table. B0198 found all five route families in `runtime/handler.rs` rebuild dispatch and compiled TCP route units; do not use those stale claims as current ownership evidence.
+- Cross-check retained-manager removal and recreation against each protocol's `routes_mgr.rs`: removing a registry entry must clear the snapshot visible through retained handles, while recreation must not revive the removed generation. The separate [retained-handle integration task](route-manager-retained-listener-handle-integration.md) owns live verification, not this documentation-only correction.
+- Revalidate the same page's claim that only HTTP/gRPC support Gateway-driven rebuilds and its raw-route cache table. Check all five route families in `edgion-gateway/src/runtime/handler.rs` rebuild dispatch and the compiled TCP route units; do not use those stale claims as current ownership evidence.
 - Recheck the shared-L4 paragraph in `skills/01-architecture/02-gateway/03-routes/SKILL.md`, which also describes raw route Arcs. The TCP-specific page now documents compiled units; keep the index and owning review page consistent without changing runtime ownership.
-- Revalidate `edgion-gateway/src/routes/tls/routes_mgr.rs` module comments describing raw-schema caching and full rebuild on every change; B0203 verified compiled units and affected-listener incremental publication. Limit any correction to accurate ownership documentation.
-- B0215 also identified `edgion-gateway/src/routes/udp/routes_mgr.rs` comments describing per-packet loading, raw schema caching and every-change full rebuild. Actual established sessions use their pinned fast path; route-table lookup is for new-session routing, while managers cache compiled units and publish affected listener tables.
+- Revalidate `edgion-gateway/src/routes/tls/routes_mgr.rs` module comments describing raw-schema caching and full rebuild on every change; compare those comments with compiled units and affected-listener incremental publication. Limit any correction to accurate ownership documentation.
+- Revalidate `edgion-gateway/src/routes/udp/routes_mgr.rs` comments describing per-packet loading, raw schema caching and every-change full rebuild. Actual established sessions use their pinned fast path; route-table lookup is for new-session routing, while managers cache compiled units and publish affected listener tables.
 - Reconcile `skills/01-architecture/02-gateway/03-routes/05-udp-route.md` schema-vector/from_routes descriptions and the shared routes index's per-datagram wording with compiled units/from_units and new-session lookup. Do not introduce immediate active-session revocation or new runtime policy.
-- B0216 identified `udp_route_table.rs` header wording that conflates handler compilation with listener-table rebuild. Also reconcile `skills/01-architecture/05-resources/08-udp-route.md`: its introduction and Gateway-side step 4 still describe per-packet route selection, while step 1 describes validation where initialize_route only builds the companion unit. Preserve session policy while correcting ownership descriptions.
+- Revalidate `edgion-gateway/src/routes/udp/udp_route_table.rs` header wording that conflates handler compilation with listener-table rebuild. Also reconcile `skills/01-architecture/05-resources/08-udp-route.md`: its introduction and Gateway-side step 4 still describe per-packet route selection, while step 1 describes validation where initialize_route only builds the companion unit. Preserve session policy while correcting ownership descriptions.
 
 ## Scope
 
@@ -37,7 +37,7 @@ Align route architecture knowledge with the current request path, where HTTP and
 ### Out of scope
 
 - Runtime changes to manager publication, lookup, or invalidation.
-- B0176's per-listener proxy-state cleanup.
+- Unrelated per-listener proxy-state cleanup.
 - Changes to existing `edgion-tests/**` files.
 
 ## Affected modules
@@ -51,5 +51,5 @@ Align route architecture knowledge with the current request path, where HTTP and
 
 | Date | Decision | Reason |
 |------|----------|--------|
-| 2026-09-09 | Defer from B0176 | The stale statement is independent documentation debt and should not expand a Pingora lifecycle cleanup. |
-| 2026-09-09 | Attach B0198 findings to this existing task | Gateway-driven rebuild coverage and the raw-route cache table are related ownership-documentation drift, not TCP handler runtime defects. |
+| 2026-09-09 | Schedule a separate repair | The stale statement is independent documentation debt and should not expand a Pingora lifecycle cleanup. |
+| 2026-09-09 | Include related route ownership documentation | Gateway-driven rebuild coverage and the raw-route cache table are related ownership-documentation drift, not TCP handler runtime defects. |

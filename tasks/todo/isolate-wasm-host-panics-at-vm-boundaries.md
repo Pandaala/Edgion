@@ -9,7 +9,6 @@
 | Type | security |
 | Priority | P1 |
 | Issue | N/A |
-| Depends on | Future `vm_manager.rs` quality batch |
 
 ## AI guide summary
 
@@ -33,4 +32,4 @@ Prevent Rust host-function panics resumed by Wasmtime from escaping any Gateway 
 
 ## Completion evidence
 
-B0115 implemented the complete boundary in `vm_manager.rs`. Independent review approved all initialization, request/response, callout, tick, done, and delete paths. Fifty-nine VM-manager tests, 206 Gateway Wasm tests, 23 `edgion-wasm` tests, workspace format/check/Clippy, Gateway build, and all repository/frozen-path guards passed.
+Historical verification of `edgion-gateway/src/plugins/http/wasm/vm_manager.rs` covered the complete boundary. Independent review approved all initialization, request/response, callout, tick, done, and delete paths. At that revision, 59 VM-manager tests, 206 Gateway Wasm tests, 23 `edgion-wasm` tests, workspace format/check/Clippy, Gateway build, and repository guards passed. These are historical results, not fresh verification of subsequent source changes.

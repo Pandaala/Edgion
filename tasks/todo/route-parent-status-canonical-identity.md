@@ -9,7 +9,6 @@
 | Type | bugfix |
 | Priority | P1 |
 | Issue | N/A |
-| Source | B0162 adjacent Controller status audit |
 
 ## AI guide summary
 
@@ -28,7 +27,7 @@ Define and apply one canonical route-parent status identity from Controller writ
 - Reuse a shared identity helper or type; do not introduce route-family copies with subtly different defaulting or field sets.
 - Do not add logs or metrics. Any existing Controller diagnostic must remain bounded and redact resource or credential detail according to the logging rules.
 - Add deterministic focused unit tests for omitted/explicit defaults, group/kind collisions, namespace fallback, section and port distinctions, customizable controllerName ownership, foreign-controller precedence, stale retention, deduplication, status semantic equality, and Gateway publication filtering.
-- Keep every existing `edgion-tests/**` file frozen during the active quality campaign; record separately any live scenario that cannot be added without modifying a frozen file.
+- Keep every existing `edgion-tests/**` file frozen unless their exact paths are explicitly authorized; record separately any live scenario that cannot be added without modifying a frozen file.
 
 ## Scope
 
@@ -43,7 +42,7 @@ Define and apply one canonical route-parent status identity from Controller writ
 
 - Per-request Gateway route matching after configuration publication.
 - New Gateway API fields, delegation behavior, workqueues, status writers, logs, or metrics.
-- Existing integration-test modifications during the active campaign.
+- Existing integration-test modifications unless their exact paths are explicitly authorized.
 
 ## Acceptance criteria
 

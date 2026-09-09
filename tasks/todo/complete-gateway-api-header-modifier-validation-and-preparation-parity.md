@@ -20,7 +20,10 @@ Validate every native and EdgionPlugins HTTP/GRPC header modifier before publica
 - Cover HTTP and GRPC rule and backend filter lists, including delegated or effective rules and the EdgionPlugins preserve-unknown-fields path.
 - Keep Controller invalid-rule/status and Gateway defensive-construction behavior consistent for every ingest backend.
 - Prepare typed immutable header names and values once when publication succeeds; retain first-equivalent-entry and set-then-add-then-remove semantics.
-- Coordinate response-field restrictions with D0068 and request framing with D0091 instead of adding local deny-lists.
+- Coordinate response-field restrictions with [response-header mutation policy](unify-response-header-mutation-policy.md)
+  and request framing with [proxied-request mutation/framing policy](unify-proxied-request-header-mutation-and-framing-policy.md).
+  Those tasks own cross-producer semantics; this task owns admission/preparation
+  parity for native header modifiers. Reuse their canonical restrictions instead of local deny-lists.
 - Keep errors static and non-sensitive, use canonical access-log diagnostics, add no tracing, and preserve response streaming.
 - Keep English and Chinese header-modifier documentation synchronized.
 - Do not modify existing integration-test files.

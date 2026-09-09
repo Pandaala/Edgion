@@ -9,7 +9,6 @@
 | Type | security |
 | Priority | P1 |
 | Issue | N/A |
-| Depends on | B0091 |
 
 ## AI guide summary
 
@@ -23,7 +22,10 @@ Give every OpenID Connect dependency failure a typed internal classification and
 - Keep request-level observability in the canonical access log. Do not add tracing or per-request event logs.
 - Do not log or return endpoint URLs, resolved addresses, proxy details, provider response bodies, parser text, tokens, cookies, claims, client credentials, or Secret metadata.
 - Prefer one typed error-to-wire mapping over endpoint-local string formatting; update all affected producers and consumers atomically.
-- Coordinate with D0056 without implementing its egress resolver or policy in this task.
+- Preserve the already implemented dial-time egress boundary documented in
+  `skills/04-review/oidc/regression-guards/dial-time-egress-policy.md`: canonical
+  resolver, proxy-env disabling, redirect denial and literal-address checks.
+  This task changes public error projection, not destination authorization.
 
 ## Acceptance criteria
 
@@ -37,4 +39,4 @@ Give every OpenID Connect dependency failure a typed internal classification and
 
 | Date | Decision | Reason |
 |------|----------|--------|
-| 2026-09-01 | Defer the cross-endpoint error-model redesign from B0091. | The Secret-generation batch could safely fix credential detail leaks, but changing one dependency branch would leave inconsistent OIDC public responses. |
+| 2026-09-01 | Schedule the cross-endpoint error-model redesign separately. | The credential-lifecycle fix could safely remove credential detail leaks, but changing one dependency branch would leave inconsistent OIDC public responses. |

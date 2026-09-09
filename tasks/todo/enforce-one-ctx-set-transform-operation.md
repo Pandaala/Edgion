@@ -9,7 +9,6 @@
 | Type | correctness |
 | Priority | P2 |
 | Issue | N/A |
-| Depends on | B0071 |
 
 ## AI guide summary
 

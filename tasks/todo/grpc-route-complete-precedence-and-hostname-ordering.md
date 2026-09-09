@@ -9,7 +9,6 @@
 | Type | bugfix |
 | Priority | P1 |
 | Issue | N/A |
-| Source | B0166 adjacent routing-precedence audit |
 
 ## AI guide summary
 
@@ -26,7 +25,7 @@ Define and implement one complete GRPCRoute winner-selection order across every 
 - Preserve gRPC-first routing with HTTPRoute fallback when no GRPCRoute matches; explicitly test overlapping HTTPRoute and GRPCRoute hostnames without introducing a new cross-type rejection policy.
 - Do not add request-path tracing, parallel logs, or metrics. Gateway traffic diagnostics remain owned by the canonical access log and must not expose headers, route configuration, or other sensitive request data.
 - Add deterministic focused unit coverage for every ordering field and for overlapping candidates that cross current Exact/RegularExpression buckets.
-- Add live overlap coverage only under separate authorization. Existing `edgion-tests/**` files remain frozen during the active quality campaign.
+- Add live overlap coverage only under separate authorization. Existing `edgion-tests/**` files remain frozen unless their exact paths are explicitly authorized.
 
 ## Scope
 

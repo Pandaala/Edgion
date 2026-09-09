@@ -6,7 +6,6 @@
 - Type: bug
 - Priority: P1
 - Severity: high
-- Source: Gateway campaign B0204 / D0114
 
 ## Evidence
 
@@ -40,5 +39,5 @@ loses catch-all reachability because the global union contains only named hosts.
 - Add future shared-topology integration scenarios for the three-Gateway/two-port
   case, catch-all plus named attachments, and update/delete hot reload; verify
   actual backend identity, not only a table match.
-- Keep existing integration files frozen during the current campaign. This is
-  not fixed by B0204's semantics-preserving storage optimization.
+- Keep existing integration files frozen unless their exact paths are explicitly authorized. This is
+  not fixed by route-table storage or winner-allocation optimizations.

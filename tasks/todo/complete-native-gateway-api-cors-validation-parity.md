@@ -19,7 +19,9 @@ Make native Gateway API `HTTPCORSFilter` validation and defaults match the vendo
 - Inventory every relevant v1.5 CORS constraint: origin scheme/host/port and length, list bounds and set semantics, wildcard exclusivity for allowed origins, methods, and request headers, allowed methods, header-name grammar, and `maxAge` minimum/default. Credentialed `exposeHeaders: ["*"]` behavior remains owned by [`decide-credentialed-native-cors-expose-headers-wildcard.md`](decide-credentialed-native-cors-expose-headers-wildcard.md).
 - Enforce the same semantic validator through Controller invalid-rule/status handling and Gateway construction without adding a watcher-local OpenAPI engine.
 - Make omitted `maxAge` behavior match the v1.5 default while preserving valid explicit values.
-- Keep this native Gateway API contract separate from D0040's EdgionPlugins CORS validator and representation.
+- Keep this native Gateway API contract separate from the
+  [EdgionPlugins CORS validator and precomputation](unify-cors-validation-and-header-precomputation.md).
+  Share canonical primitives where their semantics agree, without merging the two admission contracts.
 - Preserve immutable publication, established valid wire behavior, restrained diagnostics, and English-only content.
 - Do not modify existing integration-test files.
 

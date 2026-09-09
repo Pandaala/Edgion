@@ -70,15 +70,12 @@ Replace the two live Gateway `${type:name}` runtime evaluator families with one 
 - Focused resource, Gateway, and controller tests cover the policy matrix. Existing integration tests remain untouched; create a separate integration task only if implementation discovers a cross-process capability/status behavior that unit and handler tests cannot prove.
 - Formatting, workspace check, Clippy, documentation validation, SSA, metrics, Pingora source, Gateway no-tracing, and integration-freeze guards pass.
 
-## Document index
+## Implementation Gate
 
-| Document | Status | Notes |
-|----------|--------|-------|
-| `unify-gateway-request-template-runtime.md` | done | Analysis boundary and acceptance contract |
-| `00-context.md` | not created | Create before implementation |
-| `01-design.md` | not created | Required before implementation |
-| `02-implementation.md` | not created | Create after independent design approval |
-| `03-subtasks.md` | not created | Required when the multi-module design is approved |
+Review the canonical evaluator, typed field policies, Secret ownership and
+consumer error contracts before implementation. This file contains the repair
+scope and acceptance criteria; do not require another agent to update a shared
+index or a separate progress document to implement it.
 
 ## Affected modules
 

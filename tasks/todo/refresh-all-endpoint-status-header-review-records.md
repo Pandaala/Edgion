@@ -47,4 +47,4 @@ Correct closed-review and user-documentation statements that still describe obso
 
 | Date | Decision | Reason |
 |------|----------|--------|
-| 2026-09-01 | Defer stale review and user-doc corrections from B0063. | They are real knowledge debt but not part of the runtime security/correctness implementation boundary. |
+| 2026-09-01 | Schedule stale review and user-doc corrections separately. | They are real knowledge debt but not part of the runtime security/correctness implementation boundary. |

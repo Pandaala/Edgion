@@ -9,7 +9,6 @@
 | Type | correctness |
 | Priority | P2 |
 | Issue | N/A |
-| Depends on | B0084 |
 
 ## AI guide summary
 
@@ -19,7 +18,7 @@ Parse every compact-JWE protected header once as a strict JSON object, rejecting
 
 - Reject duplicate protected-header member names, including `alg`, `enc`, and unknown names.
 - Reject arrays, scalars, and `null` as invalid protected-header JSON instead of classifying them as missing required headers.
-- Preserve B0084's `zip`/`crit` presence rejection, algorithm checks, allowlist, token cap, failure precedence, status, and static logs.
+- Preserve the existing `zip`/`crit` presence rejection, algorithm checks, allowlist, token cap, failure precedence, status, and static logs.
 - Preserve the exact original protected segment as AES-GCM AAD; do not authenticate reserialized JSON.
 - Do not modify existing integration tests.
 

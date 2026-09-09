@@ -20,7 +20,7 @@ oidc_egress, and proxy_protocol_policy_lifecycle. Final gates are 4/4. Fifteen
 Kubernetes-only static entries are reported but are not the failure condition.
 
 Relevant runner/inventory/validator inputs were unchanged by that external commit;
-this gap is independent of its new HTTP/1-only gRPC-Web coverage and B0203.
+this gap is independent of HTTP/1-only gRPC-Web coverage.
 See `skills/04-review/h2-grpc/regression-guards/grpc-web-independent-of-frontend-http2.md`.
 
 ## Acceptance Criteria
@@ -34,5 +34,5 @@ See `skills/04-review/h2-grpc/regression-guards/grpc-web-independent-of-frontend
 - Run the parity validator and
   `bash edgion-tests/k8s/scripts/common/tests/validate_suite_parity_test.sh`.
 - Verify newly wired cases in Kubernetes; report unavailable live checks honestly.
-- Existing integration files remain frozen during the optimization campaign;
+- Existing integration files remain unchanged without explicit path authorization;
   implementation requires separately authorized test changes.

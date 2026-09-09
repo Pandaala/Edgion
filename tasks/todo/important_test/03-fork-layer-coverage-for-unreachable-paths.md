@@ -4,7 +4,7 @@
 |-----|-------|
 | Created | 2026-08-04 |
 | Status | item A done (2026-08-04, with corrections below); item B deferred per its "Worth doing when" |
-| Covers | gaps 5 and 6 of `tasks/todo/transport-coverage-observability-gaps.md` |
+| Covers | CONNECT framing coercion and the custom-connector response pump, specified below |
 | Where the change goes | `pingora-proxy/tests/` — a new driver per item; **nothing in Edgion** |
 | Method | build the request shape directly against the proxy, bypassing Gateway API routing |
 | Effort | item A small, item B medium (needs a session type the harness has never constructed) |
@@ -97,3 +97,18 @@ correctness rests entirely on review.
   workaround.
 - Item B's driver is the expensive part. Build it once, generally enough that
   future custom-pump work can reuse it, rather than a single-scenario fixture.
+
+## Verification Contract
+
+- Keep changes in the fork test harness; do not add production entry points to
+  make a test reachable. Revalidate the historical completed-item evidence at
+  the pinned fork revision before changing its status.
+- Prove the event under test occurred before asserting its result. Negative
+  claims need bounded absence checks and exact event counts, not `count <= 1`.
+- In an isolated owned worktree, mutate the specific guard and demonstrate that
+  the new test fails, then restore it. Never overwrite another agent's changes.
+- Run each new or materially changed test independently at least ten times and
+  report actual pass counts, announced skips and unavailable combinations.
+- Diagnose failures rather than weakening assertions. Report scope, observed
+  discrimination, isolation counts and limitations in this task's handoff;
+  no shared dispatch/index file needs editing.

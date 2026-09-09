@@ -24,11 +24,11 @@ with `status:100` cannot fall through to the original upstream response.
 
 ## Scope
 
-- Add or extend integration coverage only after the campaign freeze is lifted.
-- Do not modify existing `edgion-tests/**` files during B0186.
+- Add or extend integration coverage only after explicit authorization for the exact integration paths.
+- Do not modify existing `edgion-tests/**` files without explicit path-level authorization.
 
 ## Decision log
 
 | Date | Decision | Reason |
 |------|----------|--------|
-| 2026-09-09 | Defer from B0186 | Existing integration tests are the frozen validation control line. |
+| 2026-09-09 | Schedule a separate repair | Existing integration tests are the frozen validation control line. |

@@ -2,7 +2,7 @@
 
 ## Status
 
-Pending; discovered in B0195.
+Pending; the required wire scenarios are specified below.
 
 ## Required Coverage
 
@@ -13,5 +13,5 @@ Pending; discovered in B0195.
   rather than treating the malformed value as a valid bare hash.
 - Reuse the existing shared integration topology and bounded synchronization.
 
-Existing integration files remain frozen during the campaign. Current unit
+Existing integration files remain frozen unless their exact paths are explicitly authorized. Current unit
 coverage belongs beside the session-persistence implementation.

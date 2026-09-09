@@ -9,7 +9,6 @@
 | Type | documentation |
 | Priority | P2 |
 | Issue | N/A |
-| Depends on | B0105 |
 
 ## AI guide summary
 

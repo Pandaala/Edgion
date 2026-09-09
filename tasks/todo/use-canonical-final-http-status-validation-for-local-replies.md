@@ -9,7 +9,6 @@
 | Type | correctness-unification |
 | Priority | P2 |
 | Issue | N/A |
-| Depends on | B0075 |
 
 ## AI guide summary
 

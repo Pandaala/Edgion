@@ -6,7 +6,6 @@
 - Type: bug
 - Priority: P2
 - Severity: medium
-- Source: Gateway campaign B0212 / D0120
 
 ## Evidence and Scope
 
@@ -30,5 +29,5 @@ necessary local test seams and owning knowledge. Preserve protocol behavior.
 - Use controlled scheduling for expiry/activity, remove/recreate and receiver
   failure/cancellation. Defer new wire scenarios; do not edit frozen integration.
 
-B0212's proposed inline counters and delayed IP formatting do not resolve this
+Inline counters and delayed IP formatting do not resolve this
 issue and can proceed without changing these lifecycle semantics.

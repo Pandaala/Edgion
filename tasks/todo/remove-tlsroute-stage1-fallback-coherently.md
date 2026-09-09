@@ -5,7 +5,6 @@
 - Status: pending
 - Type: refactor
 - Priority: P2
-- Source: Gateway campaign B0205 / D0115
 
 ## Evidence
 
@@ -28,4 +27,4 @@ into allow, so this is a coordinated migration rather than a local cleanup.
 - After separate integration authorization, migrate existing fixtures and verify
   Terminate/Passthrough deny/allow, missing-resource fail-close, empty/disabled/
   Bypass behavior and dynamic updates in the canonical shared topology.
-- Keep existing integration files unchanged during the current campaign.
+- Keep existing integration files unchanged unless their exact paths are explicitly authorized.

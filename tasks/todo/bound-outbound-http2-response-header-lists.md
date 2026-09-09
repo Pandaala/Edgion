@@ -9,7 +9,6 @@
 | Type | security |
 | Priority | P2 |
 | Issue | N/A |
-| Depends on | B0107 analysis |
 
 ## AI guide summary
 

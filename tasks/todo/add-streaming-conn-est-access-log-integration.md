@@ -26,11 +26,11 @@ Add one integration scenario proving that a long-lived streaming protocol emits 
 ### In scope
 
 - A new standalone integration file if it can be discovered without modifying existing `edgion-tests/**` files.
-- Otherwise, design and later wire the scenario after the quality campaign's frozen-test period.
+- Otherwise, design and later wire the scenario after explicit authorization for the required harness changes.
 
 ### Out of scope
 
-- Editing, deleting, or renaming an existing integration-test file during the campaign.
+- Editing, deleting, or renaming an existing integration-test file without explicit authorization for that file.
 - Changing access-log production behavior or adding a parallel log sink.
 - Duplicating both WebSocket and gRPC-Web coverage without evidence.
 
@@ -38,4 +38,4 @@ Add one integration scenario proving that a long-lived streaming protocol emits 
 
 | Date | Decision | Reason |
 |------|----------|--------|
-| 2026-09-09 | Defer from B0178 | Existing traffic integrations do not assert the immediate record, and the frozen test harness may require later wiring changes. |
+| 2026-09-09 | Schedule a separate repair | Existing traffic integrations do not assert the immediate record, and the frozen test harness may require later wiring changes. |

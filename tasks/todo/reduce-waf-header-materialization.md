@@ -9,7 +9,6 @@
 | Type | performance |
 | Priority | P2 |
 | Issue | N/A |
-| Depends on | B0106 analysis |
 
 ## AI guide summary
 

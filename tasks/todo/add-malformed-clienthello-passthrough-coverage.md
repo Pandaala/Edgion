@@ -5,7 +5,6 @@
 - Status: pending
 - Type: test
 - Priority: P3
-- Source: Gateway campaign B0210 / D0118
 
 ## Scope and Acceptance
 
@@ -22,4 +21,4 @@ is a test gap, not a claim of authentication bypass or successful malformed TLS.
 - Keep the inspection cap and absolute deadline unchanged. Do not implement
   fragmented ClientHello reassembly or new hostname/duplicate-extension policy.
 - Integrate only in a later authorized testing task; existing integration files
-  remain immutable and no new integration test is added by this campaign.
+  remain unchanged until the exact test paths are separately authorized.

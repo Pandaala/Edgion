@@ -32,8 +32,8 @@ Decide and implement HTTP route precedence that is independent of named-paramete
 
 ### Out of scope
 
-- The allocation-only B0172 route-table build optimization.
-- Changes to existing `edgion-tests/**` files during the Gateway quality campaign.
+- Allocation-only changes to route-table construction.
+- Changes to existing `edgion-tests/**` files without explicit authorization for those existing test paths.
 - Regex-route precedence or unrelated HTTP match predicates.
 
 ## Affected modules
@@ -48,4 +48,4 @@ Decide and implement HTTP route precedence that is independent of named-paramete
 
 | Date | Decision | Reason |
 |------|----------|--------|
-| 2026-09-09 | Defer from B0172 | Correcting this changes observable routing and requires an explicit precedence design; the current campaign keeps existing integration tests frozen. |
+| 2026-09-09 | Schedule a separate repair | Correcting this changes observable routing and requires an explicit precedence design; existing integration changes require separate path-level authorization. |

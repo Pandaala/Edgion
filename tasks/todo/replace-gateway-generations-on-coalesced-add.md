@@ -6,7 +6,6 @@
 - Type: bug
 - Priority: P2
 - Severity: medium
-- Source: Gateway campaign B0218 / D0123
 
 ## Evidence
 
@@ -36,7 +35,9 @@ persists beyond the accepted brief cross-store publication window.
 - Candidate support: runtime handler, Gateway store only for necessary mutation/
   local-test seam, and CacheData compressed-event tests. Freeze final paths in
   the reviewed plan; do not create a new merged global store.
-- D0003 full-set identity removal is distinct and unresolved; do not claim this
-  delta correction fixes it or expand unrelated B0217 key precomputation.
+- [Authoritative backend TLS identity replacement](replace-gateway-backend-tls-identities-authoritatively.md)
+  owns omitted-key removal during full snapshots. This task owns coalesced delta
+  replacement; neither fix substitutes for the other. Immutable key precomputation
+  is unrelated and must not be expanded here.
 - Defer delete/recreate wire integration coverage; existing integration tests
-  remain frozen and no new integration is added by this campaign.
+  remain unchanged until the exact test paths are separately authorized.

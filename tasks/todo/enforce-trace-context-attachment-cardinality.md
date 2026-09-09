@@ -9,7 +9,6 @@
 | Type | architecture-correctness |
 | Priority | P1 |
 | Issue | N/A |
-| Depends on | B0105 |
 
 ## AI guide summary
 

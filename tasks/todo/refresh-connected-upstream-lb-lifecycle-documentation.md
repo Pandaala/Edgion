@@ -38,4 +38,4 @@ Update Pingora lifecycle architecture to describe the current attempt-owned load
 
 | Date | Decision | Reason |
 |------|----------|--------|
-| 2026-09-09 | Defer from B0178 | The callback is correct; only its architecture description is stale. |
+| 2026-09-09 | Schedule a separate repair | The callback is correct; only its architecture description is stale. |

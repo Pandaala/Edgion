@@ -6,7 +6,6 @@
 - Type: bug
 - Priority: P2
 - Severity: medium
-- Source: Gateway campaign B0212 / D0121
 
 ## Evidence and Acceptance
 
@@ -24,7 +23,7 @@ exploit or arbitrary valid application response is claimed.
   safety checks; verify wrong IP and wrong port independently.
 - Reuse existing mechanisms and add no per-packet tracing or unbounded labels.
 - Add real socket/wire coverage only in a later authorized integration task;
-  existing integration files remain frozen in this campaign.
+  existing integration files remain frozen unless their exact paths are explicitly authorized.
 
-B0212's local ownership optimization leaves this policy unchanged and must not
+Local ownership changes leave this policy unchanged and must not
 claim to fix sender validation.

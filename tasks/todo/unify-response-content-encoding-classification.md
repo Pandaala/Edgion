@@ -23,7 +23,7 @@ field and comma-delimited token in Guardrail admission and final-head gating.
 - Use the same classifier in Guardrail response admission and response-head Hold gating.
 - Preserve fail-open/fail-close behavior, bounded Hold processing, and main-response streaming.
 - Add unit coverage for repeated and comma-combined identity/non-identity values.
-- Add later wire coverage for both failure policies without editing frozen tests during the campaign.
+- Add later wire coverage for both failure policies without editing frozen tests unless their exact paths are explicitly authorized.
 
 ## Out of scope
 
@@ -34,4 +34,4 @@ field and comma-delimited token in Guardrail admission and final-head gating.
 
 | Date | Decision | Reason |
 |------|----------|--------|
-| 2026-09-09 | Defer from B0187 | The invariant crosses the session trait/adapter, Guardrail plugin, and final response-head gate. |
+| 2026-09-09 | Schedule a separate repair | The invariant crosses the session trait/adapter, Guardrail plugin, and final response-head gate. |

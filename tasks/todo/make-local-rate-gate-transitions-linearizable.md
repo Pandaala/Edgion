@@ -27,8 +27,10 @@
   the zero timestamp sentinel.
 - Preserve the monotonic clock, Stage ordering, metrics, failure policy, Redis
   behavior and `DirectPeerIp` semantics.
-- Coordinate but do not merge scopes: D0028 owns numeric bounds and overflow;
-  D0099 owns listener accept-loop head-of-line blocking around dependency awaits.
+- Coordinate but do not merge scopes: [numeric-domain validation](define-redis-rate-limiter-numeric-domain/define-redis-rate-limiter-numeric-domain.md)
+  owns numeric bounds and overflow; [listener accept-loop isolation](avoid-listener-accept-head-of-line-blocking.md)
+  owns head-of-line blocking around dependency awaits. This task owns local
+  admission/refill linearizability and coherent generation transitions.
 - Keep existing integration-test files unchanged. Add an integration-test issue
   separately only if the approved design introduces behavior not covered by
   deterministic Gateway tests.

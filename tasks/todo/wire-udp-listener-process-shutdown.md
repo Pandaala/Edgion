@@ -6,7 +6,6 @@
 - Type: bug
 - Priority: P2
 - Severity: medium
-- Source: Gateway campaign B0213 / D0122
 
 ## Evidence and Acceptance
 
@@ -23,7 +22,9 @@ process exit is claimed.
 - Deliver real shutdown to every registered listener and join/otherwise account
   for serve, cleanup and receiver completion; repeated shutdown is idempotent.
 - Define token/task ownership instead of treating runtime destruction as graceful
-  completion. Coordinate session terminal statistics/permits/sockets with D0120.
+  completion. Coordinate session terminal statistics/permits/sockets with
+  [generation-aware session retirement](retire-udp-sessions-by-generation.md),
+  which owns expiry/recreation races rather than process shutdown ordering.
 - Preserve frozen-at-startup ports; do not add dynamic listener lifecycle features.
 - Add deterministic token/registry tests in the later fix. New shutdown-with-UDP
   wire coverage remains a deferred integration requirement; frozen tests stay unchanged.

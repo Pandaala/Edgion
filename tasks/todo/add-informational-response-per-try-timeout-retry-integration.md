@@ -16,7 +16,7 @@ Add an HTTP/1 integration scenario proving that a non-terminal informational res
 
 ## Requirements
 
-- Extend the established per-try timeout harness after the campaign's frozen-test period.
+- Extend the established per-try timeout harness after explicit authorization for the required harness changes.
 - Make the first upstream attempt send `100 Continue` and then stall beyond `backendRequest`; make the second attempt succeed.
 - Assert that the retry reaches the successful attempt, the first upstream attempt is diagnosed as `504` with `BackendRequestTimeoutRetry`, and no duplicate or corrupted final response head reaches the client.
 - Use bounded waits and deterministic cleanup.
@@ -30,11 +30,11 @@ Add an HTTP/1 integration scenario proving that a non-terminal informational res
 
 ### Out of scope
 
-- Editing an existing `edgion-tests/**` file during the quality campaign.
+- Editing an existing `edgion-tests/**` file without explicit authorization for that test path.
 - Changing production retry counts, budgets, buffering, status mapping, or access-log ownership.
 
 ## Decision log
 
 | Date | Decision | Reason |
 |------|----------|--------|
-| 2026-09-09 | Defer from B0180 | The meaningful end-to-end scenario requires extending frozen integration infrastructure; local H1 session tests cover the production fix now. |
+| 2026-09-09 | Schedule a separate repair | The meaningful end-to-end scenario requires extending frozen integration infrastructure; local H1 session tests cover the production fix now. |

@@ -12,7 +12,7 @@
 
 ## AI guide summary
 
-Independently determine whether whole-generation last-known-good retention can preserve an older runtime without newly imposed plugin policy restrictions. The B0132 analysis found a concrete call-path concern, not a reproduced defect.
+Independently determine whether whole-generation last-known-good retention can preserve an older runtime without newly imposed plugin policy restrictions. The call paths below identify a concrete concern, not a reproduced defect.
 
 ## Requirements
 

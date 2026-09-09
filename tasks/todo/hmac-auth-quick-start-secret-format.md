@@ -9,7 +9,6 @@
 | Type | docs |
 | Priority | P1 |
 | Issue | N/A |
-| Source | D0036 credential ownership audit |
 
 ## AI guide summary
 

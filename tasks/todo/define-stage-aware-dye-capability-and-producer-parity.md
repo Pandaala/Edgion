@@ -22,7 +22,7 @@ Make every accepted plugin/stage/outcome dye combination correspond to a real ru
 - Decide whether Wasm response-body dye must be rejected or explicitly supported without response aggregation, per-chunk logging, or false fail-close claims after headers commit.
 - Decide whether AiProxy fail-open/fail-close/reject outcomes become supported public dye behavior or the producers that are currently unreachable to the dye renderer are removed.
 - Decide whether ExtProc response success becomes configurable or the producers that are currently unreachable to the dye renderer are removed.
-- Preserve active/disabled/policy-stamped behavior, B0121 condition fail-close versus observational unresolved semantics, header sanitization, set/append ordering, redaction, observability restraint, and response streaming.
+- Preserve active/disabled/policy-stamped behavior, condition fail-close versus observational unresolved semantics, header sanitization, set/append ordering, redaction, observability restraint, and response streaming.
 - Restore the missing dye design authority or replace every stale source and user-documentation link with the actual canonical record.
 - Do not modify existing integration-test files.
 

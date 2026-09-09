@@ -12,7 +12,7 @@
 
 ## AI guide summary
 
-Make the Gateway's request-visible core Service `EdgionBackendTrafficPolicy` state a single typed immutable generation. The current store publishes authority, load balancing, retry budget, circuit breaker, connect timeout, panic threshold, health-check configuration, and outlier configuration through separate maps and external stores before it publishes the typed `ArcSwap`. Concurrent requests can therefore observe fields from different policy generations. The typed Service snapshot also omits load balancing and authority, so changes limited to those fields need not advance its generation. Policy reconciliation repeatedly scans every cached policy for every affected target and allocates validation and target-key intermediates, which is especially costly because Service fan-out is intentionally unbounded.
+This task is recorded as implemented; the following describes its original problem and acceptance contract, not a claim that the defect persists. Request-visible Service policy fields were published through separate maps/stores, allowing mixed generations; authority/load-balancing-only updates could fail to advance the typed snapshot. Reconciliation also scanned all policies per affected target despite unbounded Service fan-out. The required correction is one typed immutable policy/index generation, captured once by request consumers. Revalidate current code before reopening any part of this completed work.
 
 ## Requirements
 
@@ -40,14 +40,17 @@ Make the Gateway's request-visible core Service `EdgionBackendTrafficPolicy` sta
 - Route destination selection or weight semantics.
 - BackendTLSPolicy lookup semantics.
 
-## Document index
+## Ownership Contract
 
-| Document | Status | Notes |
-|----------|--------|-------|
-| [00-context.md](backend-traffic-policy-atomic-service-snapshot/00-context.md) | done | Skills and code index |
-| [01-design.md](backend-traffic-policy-atomic-service-snapshot/01-design.md) | draft | Spec: snapshot, publish, capture |
-| [02-implementation.md](backend-traffic-policy-atomic-service-snapshot/02-implementation.md) | draft | Task-by-task plan |
-| 03-subtasks.md | — | Covered by 02-implementation.md |
+Service policy capture occurs at the first `begin_upstream_attempt`, without a
+`selected_backend` gate that would omit gRPC. Publish the immutable snapshot
+before reconciling probes; equivalent generations skip redundant side effects.
+Keep live connection counts on existing runtime objects and distinguish their
+state from configured panic thresholds. Candidate target keys are deduplicated;
+retarget/removal must patch the reverse index without losing unaffected entries.
+Any follow-up must review publication, capture/readers, index mutation and
+background side effects together; no separate progress or plan document is a
+prerequisite for understanding this contract.
 
 ## Acceptance criteria
 
@@ -73,5 +76,5 @@ Make the Gateway's request-visible core Service `EdgionBackendTrafficPolicy` sta
 | Date | Decision | Reason |
 |------|----------|--------|
 | 2026-08-31 | Defer implementation from the file audit. | Removing one compatibility map or adding a standalone index would leave mixed-generation readers; correctness requires migrating all request consumers and publication state together. |
-| 2026-09-04 | Lock snapshot+capture design before coding. | Spec and plan live in `backend-traffic-policy-atomic-service-snapshot/01-design.md` and `02-implementation.md`. Service captures at first `begin_upstream_attempt`; publish snapshot then reconcile probes; live connection counts stay on existing objects. Independent review required merging type+publish, capture+readers, incremental reverse-index patch, outbound `client.rs`, and documenting the L4 panic residual. |
-| 2026-09-05 | Second-round spec/plan review absorbed. | Four independent reviews (publication, capture call-graph, plan completeness, side-effects). Locked: Task 1 snapshot shims so DashMap delete still compiles; AI outlier handle materialized at effective-build; `target_keys` dedup + `retain(!ptr_eq)` patch; `reverse_index_equivalent` like TLS; no-bump skips side effects; Service/gRPC capture has no `selected_backend` gate; split `panic_engaged`; delete Service `resolve_connect_deadline`; AC 1/3 tests move to Task 2. |
+| 2026-09-04 | Review snapshot and capture as one design. | Publication, consumer capture, incremental reverse-index mutation, outbound readers and L4 panic-state ownership must agree. |
+| 2026-09-05 | Incorporate publication, capture and side-effect reviews. | Preserve deduplicated target keys, equivalent-generation reuse, AI outlier handle ownership and Service/gRPC capture coverage; these invariants are stated above without depending on separate plan numbering. |

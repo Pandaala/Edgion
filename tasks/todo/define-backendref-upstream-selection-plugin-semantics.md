@@ -32,4 +32,4 @@ then enforce that choice consistently in validation and runtime dispatch.
 
 | Date | Decision | Reason |
 |------|----------|--------|
-| 2026-09-09 | Defer from B0188 | The correction requires a product choice and coordinated validation/runtime semantics beyond the local URI-order batch. |
+| 2026-09-09 | Schedule a separate repair | The correction requires a product choice and coordinated validation/runtime semantics beyond a local URI-order correction. |

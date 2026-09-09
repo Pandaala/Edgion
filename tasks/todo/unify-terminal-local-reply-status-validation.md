@@ -32,4 +32,4 @@ native WAF, plugin schemas, runtime producers, and request/response consumers.
 
 | Date | Decision | Reason |
 |------|----------|--------|
-| 2026-09-09 | Defer from B0186 | The complete invariant crosses resource schemas, WAF compilation, request/response runtime producers, and multiple terminal writers. |
+| 2026-09-09 | Schedule a separate repair | The complete invariant crosses resource schemas, WAF compilation, request/response runtime producers, and multiple terminal writers. |

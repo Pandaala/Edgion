@@ -32,8 +32,8 @@ Design a coherent per-request PluginStore snapshot so global, Gateway, route, gR
 
 ### Out of scope
 
-- B0175's singleton Arc-clone removal and local-test-store cleanup.
-- Changes to existing `edgion-tests/**` files during the Gateway quality campaign.
+- Unrelated singleton ownership and local-test-store cleanup.
+- Changes to existing `edgion-tests/**` files without explicit authorization for those existing test paths.
 - Plugin execution-order or failure-policy redesign.
 
 ## Affected modules
@@ -49,4 +49,4 @@ Design a coherent per-request PluginStore snapshot so global, Gateway, route, gR
 
 | Date | Decision | Reason |
 |------|----------|--------|
-| 2026-09-09 | Defer from B0175 | Capturing only inside one helper would mask intra-vector mixing while leaving tier, preflight, and backend generation mixing unresolved. |
+| 2026-09-09 | Schedule a separate repair | Capturing only inside one helper would mask intra-vector mixing while leaving tier, preflight, and backend generation mixing unresolved. |

@@ -5,7 +5,6 @@
 - Status: pending
 - Type: docs
 - Priority: P3
-- Source: Gateway campaign B0199 / D0113
 
 ## Acceptance Criteria
 

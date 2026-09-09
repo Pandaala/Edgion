@@ -9,7 +9,6 @@
 | Type | testing |
 | Priority | P2 |
 | Issue | N/A |
-| Source | B0162 parentRef identity correction |
 
 ## AI guide summary
 
@@ -24,7 +23,7 @@ Add live HTTPRoute and GRPCRoute regression coverage proving that a delegation-o
 - Assert route status and live traffic outcomes without depending only on raw configuration presence.
 - Preserve delegation prefix/service-scope rules, ReferenceGrant behavior, route ordering, and existing parent/child status semantics.
 - Keep traffic observability in the existing access-log path; do not add tracing, metrics, or sensitive diagnostics for the test.
-- Do not modify any existing `edgion-tests/**` file during B0162. Implement this deferred coverage only after separate authorization releases the exact required integration paths.
+- Do not modify any existing `edgion-tests/**` file without explicit path-level authorization. Implement this deferred coverage only after separate authorization releases the exact required integration paths.
 
 ## Scope
 
@@ -38,7 +37,7 @@ Add live HTTPRoute and GRPCRoute regression coverage proving that a delegation-o
 
 - Further parentRef identity implementation changes.
 - New delegation semantics, configuration fields, logging, or metrics.
-- Changes to existing integration files in the active quality campaign.
+- Changes to existing integration files without explicit authorization for their exact paths.
 
 ## Acceptance criteria
 

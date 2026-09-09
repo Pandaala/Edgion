@@ -68,4 +68,3 @@ The 2026-08-30 audit produced a candidate of approximately `+921/-192` lines in 
 - `skills/00-design-rules.md`
 - `skills/01-architecture/02-gateway/00-overview.md` — canonical SSE substrate
 - `AGENTS.md` — HTTP body handling invariants
-- `tasks/pending/edgion-gateway-file-optimization/`

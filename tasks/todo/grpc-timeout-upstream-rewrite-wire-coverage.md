@@ -12,7 +12,7 @@
 
 ## AI guide summary
 
-Add standalone cross-process coverage that observes the adjusted `grpc-timeout` value received by an upstream service, complementing the formatter's exact unit tests without modifying the campaign's frozen existing integration tests.
+Add standalone cross-process coverage that observes the adjusted `grpc-timeout` value received by an upstream service, complementing the formatter's exact unit tests. Existing integration-file changes require explicit path-level authorization.
 
 ## Requirements
 

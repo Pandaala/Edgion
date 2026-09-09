@@ -8,19 +8,23 @@
 | Status | blocked |
 | Profile | investigation |
 | Priority | P3 |
-| Source finding | Pingora review issue 23: `pingora/tasks/pingora-review/23-async-per-chunk-boxed-future.md` |
+| Mechanism | `async_trait` boxes each call to `ProxyHttp::upstream_response_body_filter` |
 
 ## Investigation result
 
 Investigation work completed on 2026-08-11 with a **do not implement** decision;
 the measured cost does not justify a speculative public API without
 production-representative evidence. Formal task closure remains blocked by the
-repository's currently failing Pingora source-policy guard. See
-[`01-investigation-report.md`](01-investigation-report.md).
+source-policy failure recorded at the investigation revision; rerun the current
+guard before treating that historical blocker as still active.
 
 The boxed-future mechanism is confirmed, but the public no-work predicate is
 declined. The current decision is to retain the awaitable pipeline cost and
-re-evaluate only when the report's re-evaluation triggers are met.
+re-evaluate only when production-representative chunk/idle-work distributions,
+load-test profiles or allocator samples demonstrate material cost. The original
+synthetic benchmark removed 98 of 100 calls by construction; it did not establish
+real Gateway throughput or tail-latency benefit. Required TTFT, processors and
+all route/backend/Gateway/global body filters must still run.
 
 ## AI guide summary
 
@@ -244,9 +248,8 @@ Do not modify Pingora or Edgion runtime code as part of this investigation.
 
 ## Source finding disposition
 
-This investigation supersedes Pingora review issue 23. The finding established
-that the per-chunk boxed future exists, but did not establish that its measured
-cost justifies a public API optimization. This task owns that decision. The
-original review finding can be closed without a runtime change once this task
-is linked from the review index or closure record and all required repository
-checks pass.
+The per-chunk boxed future is established, but its measured workload cost does
+not yet justify a public API optimization. This task owns the decision and its
+re-evaluation criteria. Historical raw measurements may remain in the local
+investigation report; no shared review index or external progress record must
+be read or updated to apply the decision stated here.

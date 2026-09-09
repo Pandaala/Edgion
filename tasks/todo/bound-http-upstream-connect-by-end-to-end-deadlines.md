@@ -20,7 +20,7 @@ Clamp upstream connection establishment by the remaining route request and clien
 - Preserve request-before-gRPC attribution when both deadlines expire.
 - Keep `backendRequest` independent because it begins with backend request I/O rather than connection establishment.
 - Preserve canonical timeout diagnostics and HTTP/gRPC terminal status mapping.
-- Add bounded shared-topology integration coverage for a stalled connect or TLS handshake after the campaign freeze.
+- Add bounded shared-topology integration coverage for a stalled connect or TLS handshake after explicit authorization for the required integration changes.
 
 ## Scope
 
@@ -31,11 +31,11 @@ Clamp upstream connection establishment by the remaining route request and clien
 
 ### Out of scope
 
-- Editing an existing `edgion-tests/**` file during the quality campaign.
+- Editing an existing `edgion-tests/**` file without explicit authorization for that test path.
 - Changing retry counts, retry budgets, backend-request timeouts, body replay, or failure policy.
 
 ## Decision log
 
 | Date | Decision | Reason |
 |------|----------|--------|
-| 2026-09-09 | Defer from B0181 | Correct terminal outcome now; connection-time clamping spans upstream-peer timeout configuration and frozen shared-topology integration coverage. |
+| 2026-09-09 | Schedule a separate repair | Correct terminal outcome now; connection-time clamping spans upstream-peer timeout configuration and frozen shared-topology integration coverage. |

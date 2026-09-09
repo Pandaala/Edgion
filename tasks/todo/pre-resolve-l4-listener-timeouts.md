@@ -5,7 +5,6 @@
 - Status: pending
 - Type: refactor
 - Priority: P3
-- Source: Gateway campaign B0199 / D0112
 
 ## Evidence and Acceptance Criteria
 
@@ -22,4 +21,4 @@ as missing security controls.
   listener replacement/hot-reload semantics, retries, and shared relay idle policy.
 - Use a reviewed implementation plan with an exact cross-file allow-list and
   unit tests for resolution and propagation. Defer new integration coverage;
-  existing integration files remain frozen during the campaign.
+  existing integration files remain frozen unless their exact paths are explicitly authorized.

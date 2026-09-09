@@ -51,7 +51,7 @@ connection alive across configuration convergence.
 - Changing route-manager lifecycle semantics.
 - Adding a second Controller or Gateway topology.
 - Modifying existing integration files without separate authorization; the
-  quality campaign keeps the current integration suite frozen.
+  current integration suite is a protected validation baseline.
 
 ## Completion criteria
 

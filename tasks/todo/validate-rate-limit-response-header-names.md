@@ -9,7 +9,6 @@
 | Type | correctness-security |
 | Priority | P1 |
 | Issue | N/A |
-| Depends on | B0096 |
 
 ## AI guide summary
 
@@ -35,4 +34,4 @@ Validate the shared RateLimit and RateLimitRedis response-header configuration o
 
 | Date | Decision | Reason |
 |------|----------|--------|
-| 2026-09-01 | Defer from B0096. | The shared schema and two plugin consumers require one canonical admission change; a RateLimit-only runtime filter would leave invalid configuration accepted and create drift. |
+| 2026-09-01 | Schedule a separate repair | The shared schema and two plugin consumers require one canonical admission change; a RateLimit-only runtime filter would leave invalid configuration accepted and create drift. |

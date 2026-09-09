@@ -9,7 +9,6 @@
 | Type | bugfix |
 | Priority | P1 |
 | Issue | N/A |
-| Source | B0166 matcher classification audit |
 
 ## AI guide summary
 
@@ -26,7 +25,7 @@ Resolve the inconsistent treatment of a GRPCRoute match that specifies a method 
 - Reuse shared validation and error classification. Do not introduce route-family-specific policy copies or a new failure-policy shape.
 - Diagnostics must follow binary ownership, remain bounded and redacted, and avoid raw patterns, headers, resource payloads, or request data. Do not add request-path tracing, parallel logs, or metrics.
 - Add deterministic focused tests for admitted and rejected shapes, defaulted and explicit fields, delegation inheritance, publication/status behavior, Exact and RegularExpression policy, and runtime selection or defensive rejection.
-- Keep existing `edgion-tests/**` files frozen during the active campaign; record any necessary live configuration-source scenario for separately authorized work.
+- Keep existing `edgion-tests/**` files frozen unless their exact paths are explicitly authorized; record any necessary live configuration-source scenario for separately authorized work.
 
 ## Scope
 
