@@ -23,9 +23,11 @@ The fix adds a fast-path guard at the top of `handle_client_packet`: if
 stored `upstream_addr` over its dedicated `upstream_socket` and the function returns before
 the pipeline runs.
 
-Re-reports of the form "UDP route match / backend selection / SSRF check repeated per packet"
-are **not accepted**; verify the current `handle_client_packet` carries the
-`client_sessions.get(..).map(|s| s.value().clone())` fast-path before re-reporting.
+Verify the current `handle_client_packet` carries the
+`client_sessions.get(..).map(|s| s.value().clone())` fast-path before concluding that
+route match, backend selection, or SSRF checks repeat for established sessions.
+The historical correction does not establish that every per-packet cost or session
+lifecycle behavior is correct.
 
 ## Core Rationale
 
@@ -63,14 +65,44 @@ read guard is dropped before the `send_to(..).await`, avoiding holding a shard l
 
 ## Re-evaluation Triggers
 
-Re-open only if:
+Re-evaluate if:
 
 - A requirement appears to apply route/backend changes to **in-flight** UDP sessions
   immediately (would need explicit session invalidation on route update, not a per-packet
   re-match).
+- The session fast path changes, or synchronization fields gain consumers whose
+  lifetime is independent of the owning session.
+
+## Session-owned bookkeeping and deferred address formatting
+
+`ClientSession` is already shared through `Arc<ClientSession>` by the session map,
+packet handlers, and cleanup. Its activity mutex and four atomic counters have no
+independent owners, so they live inline in the session rather than behind five
+additional Arcs. This removes five allocations per constructed session; the mutex,
+relaxed counter ordering, and update/read sites are unchanged. It is a structural
+allocation reduction, not a measured throughput or RSS claim.
+
+Successful established-session sends do not need a textual client IP. The upstream
+send-result helper therefore takes `SocketAddr` and calls the shared
+`canonicalize_ip` only on failure, matching the downstream helper. New-session
+route/plugin processing still obtains the canonical IP before policy evaluation.
+Failure entries retain the same status, peer port, canonical IPv4-mapped spelling,
+and `UdpLogEntry` sensitive-data serialization. No new log surface is introduced.
+
+The socket, permit, cancellation/task ownership, pinned destination, bind-family
+selection, address-safety gate, packet buffer, and session limit remain unchanged.
+The 60-second timeout is inactivity-based, not a maximum lifetime for active
+sessions. Retirement races, upstream sender validation, and shutdown draining are
+separate residual issues; this optimization does not correct or accept them.
+
+Verification uses the existing inline UDP tests and UDP log serialization/status
+tests. Existing socket-based tests are preserved, not expanded. No allocator
+instrumentation or new integration fixtures are introduced; these checks do not
+establish live-session retirement or cross-process hot-reload correctness.
 
 ## Reference Cases
 
 - F-016 (BadLogic, Medium), fixed 2026-05-26.
 - Source: `edgion-gateway/src/routes/udp/edgion_udp.rs` `handle_client_packet` fast-path.
 - Doc: `docs/en/user-guide/udp-route/overview.md` (Notes §3).
+- B0212: inline session bookkeeping and error-only upstream peer formatting.

@@ -2,7 +2,7 @@
 
 ## Scope
 
-- Pipeline state: verified; awaiting local commit.
+- Pipeline state: committed locally.
 - Active anchor crate: `edgion-gateway`.
 - Target: `edgion-gateway/src/routes/udp/conf_handler_impl.rs`.
 - Baseline: `ac3dfe7c`.
@@ -32,4 +32,4 @@
 - All seven original tests retained and three inline tests added. Fresh handler 10/10 and UDP 34/34 passed, covering schema identity, shared/sibling unit and selector identity, immutable generations and retained-manager clearing.
 - Implementer targeted format/diff and agent docs (1,265 files) passed. No integration/global PGIS/shared helper/logging changes.
 - Independent reviewer: `b0211_final_review`; LGTM, no Must Fix or Should Fix at `86e2002c`, all three hashes unchanged. Personally passed UDP 34/34 including handler 10, format/diff/docs and checked real session consumption and retained-handle behavior. No UDP handler Clippy diagnostic or new warning.
-- Coordinator routes 605/605, workspace format/check/Clippy, Gateway build, docs (1,265 files), SSA, metrics, Pingora source, Gateway tracing, English-only, diff and 3,120-file freeze passed. Clippy retains the same 983 Gateway lib-test warnings. Commit pending; no push.
+- Coordinator routes 605/605, workspace format/check/Clippy, Gateway build, docs (1,265 files), SSA, metrics, Pingora source, Gateway tracing, English-only, diff and 3,120-file freeze passed. Clippy retains the same 983 Gateway lib-test warnings. Commit: `aec5caf5`; no push.

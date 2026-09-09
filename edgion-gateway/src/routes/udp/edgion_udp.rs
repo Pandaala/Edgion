@@ -92,12 +92,12 @@ struct ClientSession {
     session_permit: Mutex<Option<OwnedSemaphorePermit>>,
     upstream_socket: Arc<UdpSocket>,
     upstream_addr: std::net::SocketAddr,
-    last_activity: Arc<Mutex<Instant>>,
+    last_activity: Mutex<Instant>,
     session_start: Instant,
-    packets_sent: Arc<AtomicU64>,
-    packets_received: Arc<AtomicU64>,
-    bytes_sent: Arc<AtomicU64>,
-    bytes_received: Arc<AtomicU64>,
+    packets_sent: AtomicU64,
+    packets_received: AtomicU64,
+    bytes_sent: AtomicU64,
+    bytes_received: AtomicU64,
 }
 
 impl ClientSession {
@@ -185,9 +185,6 @@ impl EdgionUdpProxy {
     }
 
     async fn handle_client_packet(&self, data: &[u8], direct_peer_addr: std::net::SocketAddr) {
-        let direct_peer_ip = crate::ctx::canonicalize_ip(direct_peer_addr.ip());
-        let direct_peer_port = direct_peer_addr.port();
-
         // Fast path: an established session already has a pinned upstream and a
         // dedicated upstream socket, so the route pipeline below (ArcSwap load,
         // route match, backend selection, round-robin, SSRF validation) is pure
@@ -198,17 +195,12 @@ impl EdgionUdpProxy {
         // DashMap read guard is dropped before the `.await` below.
         if let Some(session) = self.client_sessions.get(&direct_peer_addr).map(|s| s.value().clone()) {
             let send_result = session.upstream_socket.send_to(data, session.upstream_addr).await;
-            Self::record_upstream_send_result(
-                send_result,
-                &session,
-                self.listener_port,
-                direct_peer_ip,
-                direct_peer_port,
-            )
-            .await;
+            Self::record_upstream_send_result(send_result, &session, self.listener_port, direct_peer_addr).await;
             return;
         }
 
+        let direct_peer_ip = crate::ctx::canonicalize_ip(direct_peer_addr.ip());
+        let direct_peer_port = direct_peer_addr.port();
         let route_table = self.udp_route_manager.load_route_table();
         let unit = match route_table.match_route() {
             Some(unit) => unit,
@@ -372,14 +364,7 @@ impl EdgionUdpProxy {
         };
 
         let send_result = session.upstream_socket.send_to(data, session.upstream_addr).await;
-        Self::record_upstream_send_result(
-            send_result,
-            &session,
-            self.listener_port,
-            direct_peer_ip,
-            direct_peer_port,
-        )
-        .await;
+        Self::record_upstream_send_result(send_result, &session, self.listener_port, direct_peer_addr).await;
     }
 
     /// Get or create a client session.
@@ -417,12 +402,12 @@ impl EdgionUdpProxy {
             session_permit: Mutex::new(Some(session_permit)),
             upstream_socket: upstream_socket.clone(),
             upstream_addr,
-            last_activity: Arc::new(Mutex::new(Instant::now())),
+            last_activity: Mutex::new(Instant::now()),
             session_start: Instant::now(),
-            packets_sent: Arc::new(AtomicU64::new(0)),
-            packets_received: Arc::new(AtomicU64::new(0)),
-            bytes_sent: Arc::new(AtomicU64::new(0)),
-            bytes_received: Arc::new(AtomicU64::new(0)),
+            packets_sent: AtomicU64::new(0),
+            packets_received: AtomicU64::new(0),
+            bytes_sent: AtomicU64::new(0),
+            bytes_received: AtomicU64::new(0),
         });
 
         let session = match self.client_sessions.entry(direct_peer_addr) {
@@ -490,8 +475,7 @@ impl EdgionUdpProxy {
         result: std::io::Result<usize>,
         session: &ClientSession,
         listener_port: u16,
-        direct_peer_ip: String,
-        direct_peer_port: u16,
+        direct_peer_addr: std::net::SocketAddr,
     ) {
         match result {
             Ok(bytes_sent) => {
@@ -502,8 +486,8 @@ impl EdgionUdpProxy {
             Err(_) => {
                 log_udp(&UdpLogEntry::failure(
                     listener_port,
-                    direct_peer_ip,
-                    direct_peer_port,
+                    crate::ctx::canonicalize_ip(direct_peer_addr.ip()),
+                    direct_peer_addr.port(),
                     UdpStatus::UpstreamSendError.as_str(),
                 ))
                 .await;
@@ -751,12 +735,12 @@ mod tests {
             )),
             upstream_socket,
             upstream_addr: "127.0.0.1:8080".parse().unwrap(),
-            last_activity: Arc::new(Mutex::new(expired_time)),
+            last_activity: Mutex::new(expired_time),
             session_start: expired_time,
-            packets_sent: Arc::new(AtomicU64::new(5)),
-            packets_received: Arc::new(AtomicU64::new(3)),
-            bytes_sent: Arc::new(AtomicU64::new(500)),
-            bytes_received: Arc::new(AtomicU64::new(300)),
+            packets_sent: AtomicU64::new(5),
+            packets_received: AtomicU64::new(3),
+            bytes_sent: AtomicU64::new(500),
+            bytes_received: AtomicU64::new(300),
         });
 
         let direct_peer_addr: std::net::SocketAddr = "192.168.1.1:12345".parse().unwrap();
@@ -794,12 +778,12 @@ mod tests {
             )),
             upstream_socket,
             upstream_addr: "127.0.0.1:8080".parse().unwrap(),
-            last_activity: Arc::new(Mutex::new(Instant::now())),
+            last_activity: Mutex::new(Instant::now()),
             session_start: Instant::now(),
-            packets_sent: Arc::new(AtomicU64::new(0)),
-            packets_received: Arc::new(AtomicU64::new(0)),
-            bytes_sent: Arc::new(AtomicU64::new(0)),
-            bytes_received: Arc::new(AtomicU64::new(0)),
+            packets_sent: AtomicU64::new(0),
+            packets_received: AtomicU64::new(0),
+            bytes_sent: AtomicU64::new(0),
+            bytes_received: AtomicU64::new(0),
         });
 
         let direct_peer_addr: std::net::SocketAddr = "192.168.1.2:12346".parse().unwrap();
