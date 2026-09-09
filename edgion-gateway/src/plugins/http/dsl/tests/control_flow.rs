@@ -162,3 +162,27 @@ fn test_nested_while_break() {
     );
     assert_eq!(result, good_next());
 }
+
+#[test]
+fn nested_break_preserves_the_outer_loop_iteration_limit() {
+    let cases = [
+        ("while", "while true { break }"),
+        ("for-range", "for inner in range(0, 2) { break }"),
+        ("for-in", "for inner in split(\"a,b\", \",\") { break }"),
+    ];
+
+    for (name, inner_loop) in cases {
+        let source = format!("let mut outer = 0\nwhile outer < 10 {{\n{inner_loop}\nouter = outer + 1\n}}");
+        let limits = VmLimits {
+            max_loop_iterations: 2,
+            max_steps: 10_000,
+            ..Default::default()
+        };
+        let error = run_expect_runtime_err_with_limits(&source, MockPluginSession::new(), limits);
+
+        assert!(
+            matches!(error, RuntimeError::LoopLimitExceeded { limit: 2 }),
+            "inner {name} break must preserve the outer loop counter, got {error:?}"
+        );
+    }
+}

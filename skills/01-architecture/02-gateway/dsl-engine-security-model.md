@@ -41,6 +41,12 @@ These are the `VmLimits` fields and where every breach is raised. **When adding 
 | `max_list_len` | 1_024 | List construction lives entirely in builtins — `builtins.rs:510-549` (`split` pre-allocation estimate, `range` with `hard_cap = max_list_len.min(1000)`); also bounds `req.header_names` / `resp.header_names` via their own hard 256 cap (predates Point 02) |
 | `max_map_size` | 512 | `vm.rs` `MakeMap`, `http.call` response-header retained-prefix traversal, `redis.hgetall` rejection, and the compile-time `MakeMap(n)` operand check in `edgion-dsl` |
 
+Each entered loop emits one `LoopInit` and reaches exactly one matching
+`LoopEnd` on natural exhaustion or `break`. The compiler patches `break` to
+the `LoopEnd` opcode itself, not after it, so the VM pops the inner counter
+before an enclosing loop executes `LoopBack`. `continue` targets remain the
+condition check for `while` and the increment step for both `for` forms.
+
 Request-body scanning has a separate per-plugin runtime limit,
 `DslRuntime::max_body_scan_passes` (default 4, configured as
 `maxBodyScanPasses`, valid range 1–16). At request execution, the VM converts

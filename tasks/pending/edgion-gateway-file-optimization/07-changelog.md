@@ -16,7 +16,9 @@ This is the single concise record of actual changes across the file-by-file audi
 
 ## Entries
 
-- B0260: made all seven DSL compile-error tests assert their intended diagnostics, corrected an obsolete invalid-regex syntax that failed in parsing, and built a 1,003-opcode fixture that reaches only the instruction limit. Independent LGTM; target 7/7, full DSL 329/329, locked workspace check/Clippy, and all repository guards passed. Local commit pending; no production, integration, or deferred-task change; no push.
+- B0261: corrected while, range-for, and list-for `break` backpatches to execute their matching `LoopEnd`, preventing leaked inner counters from bypassing an enclosing loop's iteration limit. Added a three-form nested-break sandbox regression and maintained security knowledge. Independent LGTM; focused tests, locked workspace check/Clippy, and all repository guards passed. D0134 separately owns structured validation of untrusted hand-crafted bytecode. Local commit pending; no integration change or push.
+
+- B0260: made all seven DSL compile-error tests assert their intended diagnostics, corrected an obsolete invalid-regex syntax that failed in parsing, and built a 1,003-opcode fixture that reaches only the instruction limit. Independent LGTM; target 7/7, full DSL 329/329, locked workspace check/Clippy, and all repository guards passed. Commit `87fb44df`; no production, integration, or deferred-task change; no push.
 
 - B0259: replaced stale bytecode version 1 in hostile validator fixtures with the current version, derived a safe distinct unsupported version, removed irrelevant truncated-JSON version data, and corrected obsolete test comments. Independent LGTM; target 13/13, full DSL filters, locked workspace check/Clippy, and all repository guards passed. D0131 remains the wider trust-boundary owner. Commit `d795f6e0`; no production or integration change; no push.
 

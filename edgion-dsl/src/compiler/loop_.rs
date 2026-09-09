@@ -69,9 +69,8 @@ impl Compiler {
         self.emit(OpCode::LoopBack(back_offset));
 
         self.patch_jump(exit_jump);
-        self.emit(OpCode::LoopEnd);
-
         let break_target = self.current_offset();
+        self.emit(OpCode::LoopEnd);
 
         let break_patches = self
             .break_patch_stacks
@@ -171,9 +170,8 @@ impl Compiler {
         self.emit(OpCode::LoopBack(back_offset));
 
         self.patch_jump(exit_jump);
-        self.emit(OpCode::LoopEnd);
-
         let break_target = self.current_offset();
+        self.emit(OpCode::LoopEnd);
 
         let break_patches = self
             .break_patch_stacks
@@ -230,11 +228,10 @@ impl Compiler {
         self.emit(OpCode::LoopBack(back_offset));
 
         self.patch_jump(exit_jump);
+        let break_target = self.current_offset();
         self.emit(OpCode::LoopEnd);
 
-        let break_target = self.current_offset();
-
-        // Backpatch break jumps → after LoopEnd
+        // Backpatch break jumps → LoopEnd so every entered loop pops its counter.
         let break_patches = self
             .break_patch_stacks
             .pop()

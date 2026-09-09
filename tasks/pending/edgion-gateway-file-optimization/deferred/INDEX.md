@@ -206,3 +206,4 @@ These entries are backlinks only. A linked `tasks/todo` file is the editable sou
 | Revalidate the DSL compilation trust-boundary ADR (D0131) | pending | [task](../../../todo/revalidate-dsl-compilation-trust-boundary-adr.md) |
 | Bound DSL runtime-limit scalars (D0132) | pending | [task](../../../todo/bound-dsl-runtime-limit-scalars.md) |
 | Correct DSL guide request-plugin examples (D0133) | pending | [task](../../../todo/correct-dsl-guide-request-plugin-examples.md) |
+| Validate structured DSL bytecode control flow (D0134) | pending | [task](../../../todo/validate-structured-dsl-bytecode-control-flow.md) |
