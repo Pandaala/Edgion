@@ -2,7 +2,7 @@
 
 ## Scope
 
-- Pipeline state: verified examined-no-change; awaiting local commit.
+- Pipeline state: terminal; local commit `4c575bee`.
 - Active anchor crate: `edgion-gateway`.
 - Target: `edgion-gateway/src/runtime/mod.rs`.
 - Baseline: `4db7b1eb`.
@@ -27,4 +27,4 @@
 
 - Fresh `b0223_final_review` LGTM; no source changes or worthwhile facade rewrite. Original rules, complete facade, child/consumer ownership and two store-owned knowledge discrepancies independently verified. Queued B0224/D0126 explicitly excluded from this review.
 - Fresh identity 3/3 and full matching 45/45 passed. Workspace format/check/Clippy (existing warnings), docs, SSA, metrics, Pingora source, Gateway tracing, English-only, diff and integration freeze passed. Logs: `/tmp/edgion-b0223-{identity,matching,check,clippy}.log`.
-- Ledger/changelog updated; no source/integration modifications. Commit pending, local only.
+- Ledger/changelog updated; no source/integration modifications. Commit `4c575bee`, local only.

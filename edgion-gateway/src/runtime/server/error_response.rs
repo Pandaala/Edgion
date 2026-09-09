@@ -185,7 +185,7 @@ const GRPC_MESSAGE_ASCII_SET: &AsciiSet = &CONTROLS.add(b'%');
 
 /// Percent-encode a gRPC message string per gRPC over HTTP/2 spec (RFC 3986 §2.1).
 ///
-/// Keeps ASCII visible characters as-is except `%` and space (0x20); percent-encodes
+/// Keeps ASCII visible characters and space (0x20) as-is except `%`; percent-encodes
 /// control characters, `%`, and non-ASCII bytes. Matches the encoding used by
 /// `session_adapter::send_grpc_error_direct` for consistency across gRPC error paths.
 pub(crate) fn percent_encode_grpc_message(s: &str) -> String {
@@ -213,11 +213,25 @@ pub fn http_to_grpc_status(http_status: u16) -> (u16, &'static str) {
 
 // ─── Public HTTP error response functions ────────────────────────────────────
 
+// These fixed rejection pages are compiled once rather than formatted per response.
+macro_rules! html_error_body {
+    ($title:literal) => {
+        concat!(
+            "<html>\n<head><title>",
+            $title,
+            "</title></head>\n<body>\n<center><h1>",
+            $title,
+            "</h1></center>\n<hr><center>edgion</center>\n</body>\n</html>"
+        )
+        .as_bytes()
+    };
+}
+
 /// Shared nginx-style HTML error response writer used by every `end_response_<code>` helper.
 ///
 /// Claims final-response ownership, records the selected status, builds the
 /// response header with the standard `Content-Type: text/html`, writes the nginx-style
-/// body (only `title` varies between status codes), and tears down the session.
+/// static body, and tears down the session.
 ///
 /// gRPC-aware delegation is intentionally NOT performed here: each caller checks
 /// `ctx.request_info.is_grpc_request` first and routes to [`send_grpc_trailers_only`]
@@ -228,7 +242,7 @@ async fn send_html_error(
     ctx: &mut EdgionHttpContext,
     server_header_opts: &ServerHeaderOpts,
     status: u16,
-    title: &str,
+    body: &'static [u8],
 ) -> pingora_core::Result<()> {
     if !ctx.claim_final_response(status) {
         return Ok(());
@@ -239,13 +253,11 @@ async fn send_html_error(
     resp.insert_header("Content-Type", "text/html")
         .expect("static ASCII header literal, cannot fail");
 
-    let body = format!(
-        "<html>\n<head><title>{title}</title></head>\n<body>\n<center><h1>{title}</h1></center>\n<hr><center>edgion</center>\n</body>\n</html>"
-    );
-
     let resp_box = Box::new(resp);
     session.write_response_header(resp_box, false).await?;
-    session.write_response_body(Some(Bytes::from(body)), true).await?;
+    session
+        .write_response_body(Some(Bytes::from_static(body)), true)
+        .await?;
     shutdown_after_error_response(session).await;
 
     Ok(())
@@ -261,7 +273,14 @@ pub async fn end_response_400(
     if ctx.request_info.is_grpc_request {
         return send_grpc_trailers_only(session, ctx, server_header_opts, 400).await;
     }
-    send_html_error(session, ctx, server_header_opts, 400, "400 Bad Request").await
+    send_html_error(
+        session,
+        ctx,
+        server_header_opts,
+        400,
+        html_error_body!("400 Bad Request"),
+    )
+    .await
 }
 
 /// Send 421 Misdirected Request error response (RFC 7540).
@@ -275,7 +294,14 @@ pub async fn end_response_421(
     if ctx.request_info.is_grpc_request {
         return send_grpc_trailers_only(session, ctx, server_header_opts, 421).await;
     }
-    send_html_error(session, ctx, server_header_opts, 421, "421 Misdirected Request").await
+    send_html_error(
+        session,
+        ctx,
+        server_header_opts,
+        421,
+        html_error_body!("421 Misdirected Request"),
+    )
+    .await
 }
 
 /// Send 404 Not Found error response (nginx-style).
@@ -288,7 +314,7 @@ pub async fn end_response_404(
     if ctx.request_info.is_grpc_request {
         return send_grpc_trailers_only(session, ctx, server_header_opts, 404).await;
     }
-    send_html_error(session, ctx, server_header_opts, 404, "404 Not Found").await
+    send_html_error(session, ctx, server_header_opts, 404, html_error_body!("404 Not Found")).await
 }
 
 /// Send gRPC UNAVAILABLE (status 14) error response for backend errors.
@@ -325,7 +351,14 @@ pub async fn end_response_500(
     if ctx.request_info.is_grpc_request {
         return send_grpc_trailers_only(session, ctx, server_header_opts, 500).await;
     }
-    send_html_error(session, ctx, server_header_opts, 500, "500 Internal Server Error").await
+    send_html_error(
+        session,
+        ctx,
+        server_header_opts,
+        500,
+        html_error_body!("500 Internal Server Error"),
+    )
+    .await
 }
 
 /// Send 502 Bad Gateway error response (nginx-style).
@@ -339,7 +372,14 @@ pub async fn end_response_502(
     if ctx.request_info.is_grpc_request {
         return send_grpc_trailers_only(session, ctx, server_header_opts, 502).await;
     }
-    send_html_error(session, ctx, server_header_opts, 502, "502 Bad Gateway").await
+    send_html_error(
+        session,
+        ctx,
+        server_header_opts,
+        502,
+        html_error_body!("502 Bad Gateway"),
+    )
+    .await
 }
 
 /// Fail-safe for plugins that returned
@@ -384,7 +424,7 @@ pub async fn end_response_503(
         ctx,
         server_header_opts,
         503,
-        "503 Service Temporarily Unavailable",
+        html_error_body!("503 Service Temporarily Unavailable"),
     )
     .await
 }
@@ -397,7 +437,9 @@ mod tests {
     use pingora_core::modules::http::grpc_web::GrpcWeb;
     use pingora_core::modules::http::HttpModules;
     use pingora_proxy::Session;
+    use std::time::Duration;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::time::timeout;
 
     async fn closed_downstream_session() -> Session {
         let (mut client, server) = tokio::io::duplex(4096);
@@ -442,6 +484,84 @@ mod tests {
             .get_mut::<GrpcWebBridge>()
             .expect("gRPC-Web bridge module") = GrpcWebCtx::Upgrade;
         (session, client)
+    }
+
+    #[tokio::test]
+    async fn html_error_helpers_preserve_exact_bodies_headers_and_statuses() {
+        for (status, title) in [
+            (400, "400 Bad Request"),
+            (404, "404 Not Found"),
+            (421, "421 Misdirected Request"),
+            (500, "500 Internal Server Error"),
+            (502, "502 Bad Gateway"),
+            (503, "503 Service Temporarily Unavailable"),
+        ] {
+            let (mut session, mut client) = live_downstream_session().await;
+            let mut ctx = EdgionHttpContext::new();
+            let opts = ServerHeaderOpts::default();
+            match status {
+                400 => end_response_400(&mut session, &mut ctx, &opts).await,
+                404 => end_response_404(&mut session, &mut ctx, &opts).await,
+                421 => end_response_421(&mut session, &mut ctx, &opts).await,
+                500 => end_response_500(&mut session, &mut ctx, &opts).await,
+                502 => end_response_502(&mut session, &mut ctx, &opts).await,
+                503 => end_response_503(&mut session, &mut ctx, &opts).await,
+                _ => unreachable!("the table contains only the six HTML error statuses"),
+            }
+            .unwrap();
+
+            assert_eq!(ctx.final_downstream_status(), Some(status));
+            assert!(ctx.response_write_started());
+            assert_eq!(
+                ctx.request_info.status_option(),
+                None,
+                "only terminal logging finalizes status"
+            );
+            let written = session.response_written().expect("HTML response header");
+            assert_eq!(written.status.as_u16(), status);
+            assert_eq!(written.headers.get("server").unwrap(), "Edgion");
+            assert_eq!(
+                written.headers.get("strict-transport-security").unwrap(),
+                "max-age=63072000; includeSubDomains; preload"
+            );
+            assert_eq!(written.headers.get("content-type").unwrap(), "text/html");
+            assert!(written.headers.get("content-length").is_none());
+            assert!(written.headers.get("transfer-encoding").is_none());
+
+            let mut wire = Vec::new();
+            timeout(Duration::from_secs(1), client.read_to_end(&mut wire))
+                .await
+                .expect("HTTP/1 error response must close the downstream")
+                .unwrap();
+            let body_start = wire
+                .windows(4)
+                .position(|bytes| bytes == b"\r\n\r\n")
+                .expect("response header terminator")
+                + 4;
+            // Independent expectation retains the original format and exact newlines.
+            let expected = format!(
+                "<html>\n<head><title>{title}</title></head>\n<body>\n<center><h1>{title}</h1></center>\n<hr><center>edgion</center>\n</body>\n</html>"
+            );
+            assert_eq!(&wire[body_start..], expected.as_bytes(), "HTML body for {status}");
+        }
+    }
+
+    #[tokio::test]
+    async fn html_error_helper_preserves_existing_response_owner() {
+        let mut session = closed_downstream_session().await;
+        let mut ctx = EdgionHttpContext::new();
+        assert!(ctx.claim_final_response(204));
+
+        // A write to this closed peer would fail; the real helper must return before I/O.
+        end_response_503(&mut session, &mut ctx, &ServerHeaderOpts::default())
+            .await
+            .unwrap();
+
+        assert_eq!(ctx.final_downstream_status(), Some(204));
+        assert!(ctx.response_write_started());
+        assert_eq!(ctx.request_info.status_option(), None);
+        assert!(session.response_written().is_none());
+        assert!(ctx.diagnostics.is_empty());
     }
 
     #[tokio::test]
@@ -601,8 +721,7 @@ mod tests {
     }
 
     /// Non-ASCII bytes must be percent-encoded per gRPC spec (RFC 3986 §2.1).
-    /// Uses latin-1 chars and a multi-byte CJK character to exercise both
-    /// two-byte and three-byte UTF-8 encoding paths.
+    /// Uses accented Latin and Greek characters to exercise two-byte UTF-8 encoding.
     #[test]
     fn percent_encode_grpc_message_non_ascii_encoded() {
         // é = U+00E9 → UTF-8 0xC3 0xA9 → "%C3%A9"

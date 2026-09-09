@@ -10,10 +10,10 @@
 | Priority | P1 |
 | Baseline commit | `d484e580` |
 | Scope | Every tracked file under `edgion-gateway/` |
-| Campaign status | in-progress; B0222 committed locally as `b5e8156b`; external source updates remain reconciled |
-| Coverage | 547 current Gateway files: 219 changed, 176 examined-no-change, 13 deferred, 139 non-terminal; 3 historical rows are removed. Six OIDC rows reopened and one new test added after `74e6ccdd`; earlier Redis reopenings retained. |
-| Active batch | B0223 runtime module independently approved and verified; committing locally. Automatic local batch commits authorized, never push. D0119's pre-existing context layout failures remain separate. |
-| Analysis queue | B0224 terminal error response is analysis-ready; B0225 server module analysis is in progress. D0126 awaits B0224 independent review and commit. D0124 owns frontend-TLS knowledge and D0125 investigates collision snapshot retention. |
+| Campaign status | in-progress; B0223 committed locally as `4c575bee`; external source updates remain reconciled |
+| Coverage | 547 current Gateway files: 220 changed, 176 examined-no-change, 13 deferred, 138 non-terminal; 3 historical rows are removed. Six OIDC rows reopened and one new test added after `74e6ccdd`; earlier Redis reopenings retained. |
+| Active batch | B0224 fixed HTML response bodies independently approved and verified; committing locally. Automatic local batch commits authorized, never push. D0119's pre-existing context layout failures remain separate. |
+| Analysis queue | B0225 server module is analysis-ready. B0226 PROXY policy analysis needs resumption after a provider-capacity error; no verdict claimed. D0126 terminal-header repair independently confirmed, not implemented by B0224. |
 | Integration freeze | 3,121 files. External updates through `53d59adb` were reconciled individually after byte/mode verification, most recently two changed files and one new DSL Redis test. No campaign integration-test edit occurred. |
 
 ## AI guide summary

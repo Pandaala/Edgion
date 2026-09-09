@@ -213,7 +213,9 @@ This is the single concise record of actual changes across the file-by-file audi
 
 | [`B0222`](batches/B0222-runtime-tls-matching.md) | 2026-09-09 | 1 | examined-no-change | Retained strict immutable TLS matcher; rejected low-value construction churn and separated unmeasured collision retention | Independent LGTM; fresh TLS 26/26, workspace format/check/Clippy and all guards passed | `b5e8156b` | D0125 standalone P3 investigation; D0124 already owns knowledge drift |
 
-| [`B0223`](batches/B0223-runtime-module.md) | 2026-09-09 | 1 | examined-no-change | Retained explicit runtime facade and private factory/trailer boundaries with actual consumers | Independent LGTM; identity 3/3, matching 45/45, workspace format/check/Clippy and all guards passed | pending | Store-owned documentation discrepancies carried forward; no source/integration changes |
+| [`B0223`](batches/B0223-runtime-module.md) | 2026-09-09 | 1 | examined-no-change | Retained explicit runtime facade and private factory/trailer boundaries with actual consumers | Independent LGTM; identity 3/3, matching 45/45, workspace format/check/Clippy and all guards passed | `4c575bee` | Store-owned documentation discrepancies carried forward; no source/integration changes |
+
+| [`B0224`](batches/B0224-runtime-error-response.md) | 2026-09-09 | 1 target, 2 knowledge files | changed | Removed formatting/body allocation from six fixed HTML replies while preserving exact bytes; corrected current gRPC writer/encoding knowledge | Independent plan approval and final LGTM; response 11/11, final status 8/8, workspace format/check/Clippy and all guards passed | pending | D0126 canonical gRPC terminal-header repair independently confirmed and deferred; no integration changes |
 
 ### `UTIL-001` — `edgion-gateway/src/util/*`
 

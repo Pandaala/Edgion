@@ -200,3 +200,4 @@ These entries are backlinks only. A linked `tasks/todo` file is the editable sou
 | Replace Gateway generations on coalesced add (D0123) | pending | [task](../../../todo/replace-gateway-generations-on-coalesced-add.md) |
 | Reconcile Gateway frontend TLS knowledge (D0124) | pending | [task](../../../todo/reconcile-gateway-frontend-tls-knowledge.md) |
 | Investigate Gateway TLS collision retention (D0125) | needs-investigation | [task](../../../todo/investigate-gateway-tls-collision-snapshot-retention.md) |
+| Enforce canonical gRPC terminal status headers (D0126) | pending | [task](../../../todo/enforce-canonical-grpc-terminal-status-headers.md) |
