@@ -12,6 +12,12 @@ HTTPRoute is the most complex routing resource in Edgion, defining routing rules
 
 ## Full Schema
 
+Native `type: CORS` is supported only in `rules[].filters`. A CORS filter in any
+`backendRefs[].filters` invalidates its entire rule, even at weight zero or when
+combined with rule-level CORS. Other valid rules remain active. See the
+[scope decision](../../04-review/cors/intentional-design/native-cors-rule-scope.md)
+for Controller/Gateway enforcement and conformance coverage limits.
+
 ```yaml
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute

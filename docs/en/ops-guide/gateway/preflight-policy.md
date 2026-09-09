@@ -118,6 +118,18 @@ spec:
 
 ## Relationship with CORS
 
+Native Gateway API `type: CORS` is supported only in `HTTPRoute.spec.rules[].filters`.
+It is not supported in `backendRefs[].filters`. Any such backend filter makes its
+entire rule invalid, including a zero-weight backend or a mixture with rule-level
+CORS. Edgion reports `PartiallyInvalid=True` with the offending backend index and
+keeps other valid rules active. If no rule survives and an authored rule has this
+scope error, the Gateway attachment is instead rejected with `Accepted=False` and
+reason `UnsupportedValue`. For a delegated child, the parent reports the child
+rule and backend index in its delegation diagnostic. Both preflight and actual requests stop matching
+the invalid rule; another valid rule may match, otherwise the response is `404`.
+Move the policy to rule scope to apply it to all backends of that rule. This also
+applies to delegated routes and updates without a Gateway restart.
+
 How preflight interacts with CORS depends on how CORS is configured on the route:
 
 - **Gateway API native `type: CORS` filter** — the preflight handler does **not** intervene;

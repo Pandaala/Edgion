@@ -447,7 +447,11 @@ fn flatten_child_rules(
     for (idx, rule) in rules.iter().enumerate() {
         if invalid_indices.contains(&idx) {
             ctx.issues.push(DelegationIssue::RuleDropped {
-                message: format!("child '{child_key}' rules[{idx}] dropped: invalid rule (see child status)"),
+                message: format!(
+                    "child '{child_key}' rules[{idx}] dropped: {}",
+                    rule.unsupported_backend_cors_reason()
+                        .unwrap_or_else(|| "invalid rule (see child status)".to_string())
+                ),
             });
             continue;
         }

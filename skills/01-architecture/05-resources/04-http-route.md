@@ -63,7 +63,16 @@ Generate an independent RouteParentStatus for each parentRef:
 - `Accepted`: validates whether the Gateway/Listener corresponding to parentRef exists and admits this route (non-empty hostname intersection, namespace policy permits). Only `kind: Gateway` parentRefs enter this path
 - `ResolvedRefs`: validates whether all backendRef-targeted Services exist and whether cross-namespace references are rejected (delegation refs are excluded from Service validation; a missing named delegation child surfaces as `BackendNotFound` via `DelegationIssue::MissingChild`)
 - `PartiallyInvalid`: own invalid rules plus every delegation-dropped rule message (`DelegationIssue::RuleDropped` — out-of-prefix child rules, filter conflicts, cycles, depth, malformed delegating rules)
-- **Per-rule findings never flip `Accepted` while a sibling rule still serves** — `Accepted=False` removes the whole route from the gateway route table (`filter_accepted_parent_refs`), so a rule-level problem rides `PartiallyInvalid` instead. The one escalation is an AI attachment/retry-cap violation (`ai_rule_invalid_reason`) on a route where **no** rule serves any more: then `Accepted=False/UnsupportedValue` lists every `rules[i]: <reason>` and `PartiallyInvalid` is never set True (an earlier True is cleared to False with reason `UnsupportedValue`), so the two conditions cannot contradict each other
+- Native CORS on any backendRef invalidates the entire owning rule through
+  `HTTPRouteRule::unsupported_backend_cors_reason`. The same check is used during
+  delegation flattening and independently on the Gateway's effective rules before
+  runtime compilation. Rule-level native CORS remains supported; no backend policy
+  is promoted or merged into the rule. See the
+  [scope decision](../../04-review/cors/intentional-design/native-cors-rule-scope.md).
+  If an authored rule has this scope error and no effective rule survives, the
+  Gateway attachment uses `Accepted=False/UnsupportedValue` instead. Delegating
+  parents include the rejected child rule's backend CORS reason in their diagnostics.
+- **Per-rule findings never flip `Accepted` while a sibling rule still serves** — `Accepted=False` removes the whole route from the gateway route table (`filter_accepted_parent_refs`), so a rule-level problem rides `PartiallyInvalid` instead. AI attachment/retry-cap violations and authored native backend CORS scope violations escalate on a route where **no** effective rule serves any more: then `Accepted=False/UnsupportedValue` lists the offending `rules[i]: <reason>` and `PartiallyInvalid` is never set True (an earlier True is cleared to False with reason `UnsupportedValue`), so the two conditions cannot contradict each other
 - Child-side delegation status: each `kind: HTTPRoute` parentRef (reverse lock) gets an `Accepted` condition — True iff that parent currently delegates to this route (`DelegationAccepted` / `NoMatchingParent`, computed from `RouteDelegationIndex`)
 - Cleans up old status entries that correspond to parentRefs no longer present
 
