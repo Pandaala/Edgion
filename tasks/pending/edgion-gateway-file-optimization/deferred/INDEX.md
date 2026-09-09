@@ -204,3 +204,5 @@ These entries are backlinks only. A linked `tasks/todo` file is the editable sou
 | Bound DSL body reads before allocation (D0129) | pending | [task](../../../todo/bound-dsl-body-reads-before-allocation.md) |
 | Correct DSL sandbox security documentation (D0130) | pending | [task](../../../todo/correct-dsl-sandbox-security-documentation.md) |
 | Revalidate the DSL compilation trust-boundary ADR (D0131) | pending | [task](../../../todo/revalidate-dsl-compilation-trust-boundary-adr.md) |
+| Bound DSL runtime-limit scalars (D0132) | pending | [task](../../../todo/bound-dsl-runtime-limit-scalars.md) |
+| Correct DSL guide request-plugin examples (D0133) | pending | [task](../../../todo/correct-dsl-guide-request-plugin-examples.md) |

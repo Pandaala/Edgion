@@ -10,10 +10,10 @@
 | Priority | P1 |
 | Baseline commit | `d484e580` |
 | Scope | Every tracked file under `edgion-gateway/` |
-| Campaign status | in-progress at campaign HEAD `63e974bc`; B0254 implementation, independent final review, and full verification are complete, with commit pending. |
-| Coverage | 549 current Gateway files: 236 changed, 185 examined-no-change, 14 deferred, 114 non-terminal; 3 historical rows are removed. The new canonical bounded-regex helper is included in the current inventory. Four terminal files changed by external `bea47373` remain reopened without discarding their historical evidence. |
-| Active batch | B0254: target-only correction of the `dsl/mod.rs` compile/validation/runtime ownership rustdoc; independent final LGTM and full commit gates passed. Automatic local batch commits authorized, never push. |
-| Analysis queue | B0255 (`dsl/plugin.rs`) is analysis-ready but must be refreshed after B0254 commits; B0256 (`dsl/runtime.rs`) will include directly related architecture corrections. D0127–D0131 track confirmed separate work. |
+| Campaign status | in-progress at campaign HEAD `53b436aa`; B0255 implementation, corrected independent final review, and full verification are complete, with commit pending. |
+| Coverage | 549 current Gateway files: 237 changed, 185 examined-no-change, 14 deferred, 113 non-terminal; 3 historical rows are removed. The new canonical bounded-regex helper is included in the current inventory. Four terminal files changed by external `bea47373` remain reopened without discarding their historical evidence. |
+| Active batch | B0255: canonical 36-byte DSL plugin-name bound; corrected independent final LGTM and full commit gates passed. Automatic local batch commits authorized, never push. |
+| Analysis queue | B0256 (`dsl/runtime.rs`) is analysis-ready but must refresh after B0255. D0127–D0133 track confirmed separate work. |
 | Integration freeze | 3,231 files. External `2c01a075` added 95 and refreshed 38 entries; `bea47373` and `5cd384c6` refreshed six more existing entries. All are byte/mode-identical to their commits, the full check passes, and the campaign made no integration-test edit. |
 
 ## AI guide summary

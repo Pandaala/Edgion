@@ -44,7 +44,7 @@ spec:
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `name` | String | **Required** | Script name (used for logging and debugging) |
+| `name` | String | **Required** | Script name (used for logging and debugging); 1–36 UTF-8 bytes |
 | `source` | String | **Required** (or `bytecode`) | DSL source code |
 | `bytecode` | String | **Required** (or `source`) | Pre-compiled bytecode (Base64) |
 | `maxSteps` | Integer | `10000` | Maximum execution steps |

@@ -27,7 +27,7 @@ pub struct DslPlugin {
 
 impl DslPlugin {
     /// Create a new DslPlugin from pre-compiled script
-    pub fn new(
+    fn new(
         name: String,
         script: CompiledScript,
         limits: VmLimits,
@@ -187,6 +187,30 @@ mod tests {
             source: Some(source.to_string()),
             ..Default::default()
         }
+    }
+
+    fn config_with_name(name: String) -> DslConfig {
+        DslConfig {
+            name,
+            source: Some("return next()".to_string()),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn standalone_factories_enforce_plugin_log_name_capacity() {
+        assert_eq!(DslConfig::MAX_NAME_BYTES, crate::plugins::runtime::log::NAME_CAPACITY);
+
+        let valid = config_with_name("a".repeat(DslConfig::MAX_NAME_BYTES));
+        let request_filter = DslPlugin::from_config(&valid).expect("36-byte request plugin name must be accepted");
+        assert_eq!(request_filter.name(), valid.name);
+        let response_filter =
+            DslPlugin::from_config_response(&valid).expect("36-byte response plugin name must be accepted");
+        assert_eq!(response_filter.name(), valid.name);
+
+        let overlong = config_with_name("a".repeat(DslConfig::MAX_NAME_BYTES + 1));
+        assert!(DslPlugin::from_config(&overlong).is_none());
+        assert!(DslPlugin::from_config_response(&overlong).is_none());
     }
 
     #[test]

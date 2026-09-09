@@ -105,7 +105,7 @@ pub enum DslErrorPolicy {
 #[derive(Debug, Default, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct DslConfig {
-    /// Script name (for logging and identification)
+    /// Script name (for logging and identification), limited to 1..=36 UTF-8 bytes.
     pub name: String,
 
     /// EdgionDSL source code — inline script written by the user.
@@ -182,6 +182,22 @@ pub struct DslConfig {
 }
 
 impl DslConfig {
+    /// Maximum UTF-8 byte length accepted for the plugin name.
+    pub const MAX_NAME_BYTES: usize = 36;
+
+    fn validate_name(&self) -> Result<(), String> {
+        if self.name.is_empty() {
+            return Err("dsl plugin name is required".to_string());
+        }
+        if self.name.len() > Self::MAX_NAME_BYTES {
+            return Err(format!(
+                "dsl plugin name must be at most {} UTF-8 bytes",
+                Self::MAX_NAME_BYTES
+            ));
+        }
+        Ok(())
+    }
+
     /// Validate linkSysRefs: names must be unique and contain only [a-z0-9_-].
     pub fn validate(&self) -> Result<(), String> {
         let mut seen = std::collections::HashSet::new();
@@ -224,13 +240,16 @@ impl DslConfig {
     /// the one failure that cannot be predicted statically and is covered by
     /// the data-plane seal backstop.
     ///
-    /// Check order mirrors the original gateway `validate_config`: resolve the
-    /// script (compile `source` / deserialize+validate `bytecode`) first, then
-    /// the linkSysRefs format check, then the redis link-name scan — so a
-    /// dual-fault config reports the compile error. Returns the validated
-    /// `CompiledScript` so data-plane callers can reuse it without paying for
-    /// a second compile/deserialize cycle.
+    /// The name is checked first because it must fit the runtime log identity.
+    /// For valid names, check order mirrors the original gateway
+    /// `validate_config`: resolve the script (compile `source` /
+    /// deserialize+validate `bytecode`) first, then the linkSysRefs format
+    /// check, then the redis link-name scan — so a dual-fault config reports
+    /// the compile error. Returns the validated `CompiledScript` so data-plane
+    /// callers can reuse it without paying for a second compile/deserialize
+    /// cycle.
     pub fn compile_and_validate(&self) -> Result<edgion_dsl::bytecode::CompiledScript, String> {
+        self.validate_name()?;
         let val_limits = edgion_dsl::validator::ValidationLimits {
             max_map_size: self.max_map_size.unwrap_or(512),
             ..Default::default()
@@ -307,8 +326,8 @@ impl PluginValidation for DslConfig {
     /// init (`Vm::new`) is the one remaining gateway-only failure — it cannot
     /// be predicted statically and is covered by the data-plane seal backstop.
     fn validation_error(&self) -> Option<String> {
-        if self.name.is_empty() {
-            return Some("dsl plugin name is required".to_string());
+        if let Err(error) = self.validate_name() {
+            return Some(error);
         }
         if self.source.is_none() && self.bytecode.is_none() {
             return Some("either source or bytecode must be provided".to_string());
@@ -384,7 +403,41 @@ mod tests {
             source: Some("let x = 1".to_string()),
             ..Default::default()
         };
-        assert!(config.validation_error().is_some());
+        assert_eq!(
+            config.validation_error(),
+            Some("dsl plugin name is required".to_string())
+        );
+        assert_eq!(
+            config.compile_and_validate().unwrap_err(),
+            "dsl plugin name is required"
+        );
+    }
+
+    #[test]
+    fn plugin_name_uses_utf8_byte_boundaries() {
+        for name in ["a".repeat(36), "é".repeat(18)] {
+            let config = DslConfig {
+                name,
+                source: Some("let x = 1".to_string()),
+                ..Default::default()
+            };
+            assert_eq!(config.validation_error(), None);
+            assert!(config.compile_and_validate().is_ok());
+        }
+
+        for name in ["a".repeat(37), "é".repeat(19)] {
+            let config = DslConfig {
+                name,
+                source: Some("let x = 1".to_string()),
+                ..Default::default()
+            };
+            let expected = Some("dsl plugin name must be at most 36 UTF-8 bytes".to_string());
+            assert_eq!(config.validation_error(), expected);
+            assert_eq!(
+                config.compile_and_validate().unwrap_err(),
+                "dsl plugin name must be at most 36 UTF-8 bytes"
+            );
+        }
     }
 
     #[test]

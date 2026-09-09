@@ -376,8 +376,8 @@
 | `edgion-gateway/src/plugins/http/dsl/lang/mod.rs` | `plugins-http-dsl` | source | changed | B0252: removed three unused compatibility re-exports; independent LGTM |
 | `edgion-gateway/src/plugins/http/dsl/lang/vm.rs` | `plugins-http-dsl` | source | changed | B0253: bounded regex construction before maxStringLen overflow; independent plan/final LGTM |
 | `edgion-gateway/src/plugins/http/dsl/mod.rs` | `plugins-http-dsl` | source | changed | B0254: corrected compile/validation/runtime ownership rustdoc; independent LGTM |
-| `edgion-gateway/src/plugins/http/dsl/plugin.rs` | `plugins-http-dsl` | source | pending | — |
-| `edgion-gateway/src/plugins/http/dsl/runtime.rs` | `plugins-http-dsl` | source | pending | — |
+| `edgion-gateway/src/plugins/http/dsl/plugin.rs` | `plugins-http-dsl` | source | changed | B0255: canonical 36-byte plugin-name validation and constructor closure; corrected independent LGTM |
+| `edgion-gateway/src/plugins/http/dsl/runtime.rs` | `plugins-http-dsl` | source | analysis-in-progress | B0256: queued runtime lifecycle and owning architecture analysis |
 | `edgion-gateway/src/plugins/http/dsl/tests/api_errors.rs` | `plugins-http-dsl` | test | pending | — |
 | `edgion-gateway/src/plugins/http/dsl/tests/body_value.rs` | `plugins-http-dsl` | test | pending | — |
 | `edgion-gateway/src/plugins/http/dsl/tests/bytecode_deserialization.rs` | `plugins-http-dsl` | test | pending | — |
