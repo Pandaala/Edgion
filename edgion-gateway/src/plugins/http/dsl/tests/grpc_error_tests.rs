@@ -17,18 +17,33 @@ fn test_return_grpc_error_basic() {
 }
 
 #[test]
-fn test_return_grpc_error_out_of_range_code() {
-    let source = r#"return grpc_error(99, "bad code")"#;
-    let session = MockPluginSession::new();
-    let result = run(source, session);
-    // Out of range (0-16) → defaults to 13 (INTERNAL)
+fn test_return_grpc_error_nil_message() {
+    let result = run("return grpc_error(7, nil)", MockPluginSession::new());
+
     assert_eq!(
         result,
         PluginRunningResult::ErrGrpcError {
-            grpc_status: 13,
-            message: Some("bad code".to_string()),
+            grpc_status: 7,
+            message: None,
         }
     );
+}
+
+#[test]
+fn test_return_grpc_error_out_of_range_code() {
+    for code in [-1, 17] {
+        let source = format!(r#"return grpc_error({code}, "bad code")"#);
+        let result = run(&source, MockPluginSession::new());
+
+        // Codes outside 0..=16 default to INTERNAL while preserving the message.
+        assert_eq!(
+            result,
+            PluginRunningResult::ErrGrpcError {
+                grpc_status: 13,
+                message: Some("bad code".to_string()),
+            }
+        );
+    }
 }
 
 #[test]

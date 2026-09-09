@@ -10,10 +10,10 @@
 | Priority | P1 |
 | Baseline commit | `d484e580` |
 | Scope | Every tracked file under `edgion-gateway/` |
-| Campaign status | in-progress at campaign HEAD `b6e3dcb7`; B0264 implementation, independent final review, and full verification are complete, with local commit pending. |
-| Coverage | 549 current Gateway files: 246 changed, 185 examined-no-change, 14 deferred, 104 non-terminal; 3 historical rows are removed. The new canonical bounded-regex helper is included in the current inventory. Four terminal files changed by external `bea47373` remain reopened without discarding their historical evidence. |
-| Active batch | B0264: locked DSL panic isolation and BodyAccess fixed-fail-close behavior; independent LGTM and full gates passed. Automatic local batch commits authorized, never push. |
-| Analysis queue | B0265 (`dsl/tests/grpc_error_tests.rs`) is analyzing read-only behind B0264; later DSL test files remain serial. D0127–D0137 track confirmed separate work. |
+| Campaign status | in-progress at campaign HEAD `420b0905`; B0265 implementation, independent final review, and full verification are complete, with local commit pending. |
+| Coverage | 549 current Gateway files: 247 changed, 185 examined-no-change, 14 deferred, 103 non-terminal; 3 historical rows are removed. The new canonical bounded-regex helper is included in the current inventory. Four terminal files changed by external `bea47373` remain reopened without discarding their historical evidence. |
+| Active batch | B0265: strengthened DSL gRPC-error result boundaries; independent LGTM and full gates passed. Automatic local batch commits authorized, never push. |
+| Analysis queue | B0266 (`dsl/tests/http_call_tests.rs`) is analyzing read-only behind B0265; later DSL test files remain serial. D0127–D0138 track confirmed separate work. |
 | Integration freeze | 3,231 files. External `2c01a075` added 95 and refreshed 38 entries; `bea47373` and `5cd384c6` refreshed six more existing entries. All are byte/mode-identical to their commits, the full check passes, and the campaign made no integration-test edit. |
 
 ## AI guide summary

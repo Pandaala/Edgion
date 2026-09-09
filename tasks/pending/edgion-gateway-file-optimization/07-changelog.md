@@ -16,7 +16,9 @@ This is the single concise record of actual changes across the file-by-file audi
 
 ## Entries
 
-- B0264: added exact unit regressions for caught VM panic under Ignore and the BodyAccess fixed-fail-close exception, including result, dye outcome/cause, and static-only PluginLog assertions. Independent LGTM; target 9/9, full Gateway DSL 333/333, locked workspace check/Clippy, and all repository guards passed. Local commit pending; no production or integration change; no push.
+- B0265: added exact DSL gRPC-error coverage for `nil` message translation and both invalid integer-code boundaries around `0..=16`. Independent LGTM; target 4/4, full Gateway DSL 334/334, locked workspace check/Clippy, and all repository guards passed. D0138 separately owns stale response-stage documentation. Local commit pending; no production or integration change; no push.
+
+- B0264: added exact unit regressions for caught VM panic under Ignore and the BodyAccess fixed-fail-close exception, including result, dye outcome/cause, and static-only PluginLog assertions. Independent LGTM; target 9/9, full Gateway DSL 333/333, locked workspace check/Clippy, and all repository guards passed. Commit `420b0905`; no production or integration change; no push.
 
 - B0263: removed legacy `"; "` suffixes from DSL normal decision entries and aligned exact decision/overflow tests plus maintained observability knowledge with the canonical one-push-per-entry contract. The initial no-change analysis was rejected, reconciled, implemented, and independently approved. Focused/full DSL tests, locked workspace check/Clippy, and all repository guards passed; B0264 owns BodyAccess/panic policy coverage. Commit `b6e3dcb7`; no integration change or push.
 

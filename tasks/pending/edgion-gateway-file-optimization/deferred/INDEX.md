@@ -210,3 +210,4 @@ These entries are backlinks only. A linked `tasks/todo` file is the editable sou
 | Avoid the DSL `ctx.get` string copy (D0135) | pending | [task](../../../todo/avoid-dsl-ctx-get-string-copy.md) |
 | Correct DSL context access-log examples (D0136) | pending | [task](../../../todo/correct-dsl-ctx-access-log-examples.md) |
 | Add DSL request-to-response context integration coverage (D0137) | pending | [task](../../../todo/add-dsl-request-to-response-context-integration-coverage.md) |
+| Correct DSL response-stage gRPC error documentation (D0138) | pending | [task](../../../todo/correct-dsl-response-stage-grpc-error-documentation.md) |

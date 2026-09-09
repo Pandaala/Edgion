@@ -31,3 +31,4 @@
 - Reviewer: target 9/9 and full Gateway DSL 333/333 passed; format, diff, and frozen-path checks passed.
 - Coordinator full workspace checks passed: format, locked workspace all-target check and Clippy, agent-doc, SSA, metrics inventory, Pingora source, Gateway no-tracing, English-only, diff, and frozen integration guards.
 - Frozen integration manifest: 3,231 paths unchanged.
+- Commit: `420b0905` (`Test DSL hard error boundaries`); no push.
