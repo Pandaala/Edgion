@@ -21,6 +21,7 @@ before applying a decision to current code.
 
 ## Regression guards
 
+- [TCP connection snapshot ownership](regression-guards/tcp-connection-snapshot-ownership.md)
 - [TCP route schema Arc sharing](regression-guards/tcp-route-schema-arc-sharing.md)
 - [Session persistence token extraction](regression-guards/session-persistence-token-extraction.md)
 - [Connect failure after an expired end-to-end deadline uses the timeout outcome](regression-guards/connect-failure-after-deadline-uses-timeout-outcome.md)
