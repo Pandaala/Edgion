@@ -32,7 +32,7 @@ pub use json_request::{form_request_headers_are_supported, json_request_headers_
 /// `reject_request` (whose signature differs between `RateLimit` and
 /// `RateLimitRedis`, so the rejection itself stays caller-side).
 pub enum RateLimitKey {
-    /// A non-empty key was resolved (joined parts, or the configured default).
+    /// A key was resolved, including the intentional empty global-bucket key.
     Resolved(String),
     /// No key resolved and `OnKeyMiss::Allow` — let the request through.
     Allow,
@@ -60,17 +60,28 @@ pub fn resolve_rate_limit_key(
     on_missing: &OnKeyMiss,
     plugin_log: &mut PluginLog,
 ) -> RateLimitKey {
-    let mut parts: Vec<Option<String>> = Vec::with_capacity(keys.len());
-    for k in keys {
-        parts.push(session.key_get(k));
-    }
-
-    // An empty `keys` list is not a key miss: there is no source that could have
-    // been missed, so the plugin still rate-limits, under the single empty-string
-    // bucket every request composes to. Routing it through the miss path instead
-    // would silently disable the limiter whenever `onKeyMiss` is `Allow`.
-    if keys.is_empty() || parts.iter().any(|p| p.is_some()) {
-        return RateLimitKey::Resolved(compose_rate_limit_key(&parts));
+    match keys {
+        // An empty `keys` list is not a key miss: there is no source that could
+        // have been missed, so the plugin still rate-limits under one global
+        // empty-string bucket. Routing it through the miss path would silently
+        // disable the limiter whenever `onKeyMiss` is `Allow`.
+        [] => return RateLimitKey::Resolved(String::new()),
+        // The common single-source path can move the value returned by KeyGet
+        // directly into the result instead of allocating a Vec and cloning it.
+        [key] => {
+            if let Some(value) = session.key_get(key) {
+                return RateLimitKey::Resolved(value);
+            }
+        }
+        _ => {
+            let mut parts: Vec<Option<String>> = Vec::with_capacity(keys.len());
+            for key in keys {
+                parts.push(session.key_get(key));
+            }
+            if parts.iter().any(Option::is_some) {
+                return RateLimitKey::Resolved(compose_rate_limit_key(&parts));
+            }
+        }
     }
 
     // No keys resolved - fall back to the configured default key if present.
@@ -277,7 +288,7 @@ mod tests {
     #[test]
     fn resolve_rate_limit_key_empty_key_list_still_rate_limits() {
         let mut session = MockPluginSession::new();
-        session.expect_key_get().return_const(None);
+        session.expect_key_get().times(0);
         let mut plugin_log = PluginLog::new("RateLimit");
 
         // No configured source is not a key miss: OnKeyMiss::Allow must not
@@ -285,6 +296,8 @@ mod tests {
         let out = resolve_rate_limit_key(&mut session, &[], None, &OnKeyMiss::Allow, &mut plugin_log);
 
         assert!(matches!(out, RateLimitKey::Resolved(k) if k.is_empty()));
+        let rendered = serde_json::to_value(&plugin_log).expect("plugin log must serialize");
+        assert!(rendered.get("log").is_none());
     }
 
     #[test]

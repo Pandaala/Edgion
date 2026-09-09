@@ -16,7 +16,9 @@ This is the single concise record of actual changes across the file-by-file audi
 
 ## Entries
 
-- B0243: changed shared JSON/form request classification to borrow the canonical HeaderMap directly, removing temporary Content-Type and Content-Encoding vectors and String clones from three configured request paths. Preserved duplicate/raw-byte, MIME/charset and identity-encoding failure semantics; added real-HeaderMap regressions. Independent LGTM; focused tests 34/34 and all workspace/guard checks passed. No integration change or issue. Local commit SHA pending; never push.
+- B0244: added zero/single-source fast paths to shared rate-limit key resolution, removing the default one-source request-path vector allocation and String clone while preserving the empty global bucket, injective multi-source bytes, miss policy and exact log tags. Independent plan approval and final LGTM; four focused filters completed 66/66 test executions and all workspace/guard checks passed. No integration change or issue. Local commit SHA pending; never push.
+
+- B0243: changed shared JSON/form request classification to borrow the canonical HeaderMap directly, removing temporary Content-Type and Content-Encoding vectors and String clones from three configured request paths. Preserved duplicate/raw-byte, MIME/charset and identity-encoding failure semantics; added real-HeaderMap regressions. Independent LGTM; focused tests 34/34 and all workspace/guard checks passed. No integration change or issue. Commit `8fc76e83`; no push.
 
 - B0242: examined the OIDC bounded JSON reader with no code change. Independent LGTM retained early Content-Length rejection and strict streamed decoded-byte checks, which avoid the truncating helper's failure-path prefix copy. Confirmed dynamic reqwest/serde detail remains atomically owned by the existing self-contained P1 OIDC redaction task. Helper 4/4, OIDC 133 passed/8 ignored fixtures and all workspace/guard checks passed. No integration change or issue. Commit `cf359498`; no push.
 

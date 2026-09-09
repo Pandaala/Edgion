@@ -23,4 +23,4 @@
 - Converted the unit fixtures to real HeaderMaps and added duplicate-charset plus raw non-UTF-8 Content-Type/Content-Encoding regressions. No integration, schema, logging, metric or public protocol change was made.
 - Independent final reviewer `b0243_final_review`: LGTM with no findings; confirmed exact four-file technical scope, caller lifetimes and preserved header semantics.
 - Verification: shared classifier 5/5, JsonSchemaValidation 9/9, ProxyRewrite 12/12 and FormJsonTransform 8/8. Workspace format/check/Clippy (existing warnings), agent docs, SSA, metrics inventory, Pingora source, Gateway no-tracing, English-only, diff and 3,136-file freeze passed.
-- Commit: pending; never push.
+- Commit: `8fc76e83`; never pushed by the campaign.
