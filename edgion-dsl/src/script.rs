@@ -147,6 +147,34 @@ mod tests {
     }
 
     #[test]
+    fn redis_rate_limit_source_bytecode_and_alias_contract() {
+        let mut script = compile("let r = redis.rate_limit(\"cache\", \"requests\", \"key\", 1)");
+        assert!(script.references_builtin(crate::bytecode::BuiltinId::RedisRateLimit));
+        assert!(check_redis_link_names(&script, &HashSet::new()).is_err());
+        assert!(check_redis_link_names(&script, &HashSet::from(["cache"])).is_ok());
+        let encoded = script.serialize_base64().unwrap();
+        let decoded = resolve_script(None, Some(&encoded), &ValidationLimits::default()).unwrap();
+        assert!(decoded.references_builtin(crate::bytecode::BuiltinId::RedisRateLimit));
+        for argc in [3, 5] {
+            for op in &mut script.code {
+                if let OpCode::CallBuiltin(crate::bytecode::BuiltinId::RedisRateLimit, count) = op {
+                    *count = argc;
+                }
+            }
+            let encoded = script.serialize_base64().unwrap();
+            assert!(resolve_script(None, Some(&encoded), &ValidationLimits::default()).is_err());
+        }
+        for source in [
+            "redis.rate_limit(\"cache\", \"requests\", \"key\")",
+            "redis.rate_limit(\"cache\", \"requests\", \"key\", 1, 2)",
+        ] {
+            assert!(resolve_script(Some(source), None, &ValidationLimits::default()).is_err());
+        }
+        let dynamic = compile("redis.rate_limit(\"unknown\", \"requests\", \"key:\" + req.remote_ip, 1)");
+        assert!(check_redis_link_names(&dynamic, &HashSet::new()).is_ok());
+    }
+
+    #[test]
     fn check_accepts_declared_link_with_multi_instruction_sibling_arg() {
         // A non-literal (multi-instruction) argument after the link name makes
         // the i-argc positional guess unreliable; the link-name check must be

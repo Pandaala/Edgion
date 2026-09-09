@@ -7,7 +7,7 @@ provider-not-ready and Redis command failures without a runtime exception.
 ## Supported Operations
 
 `get`, `set`, `del`, `exists`, `ttl`, `expire`, `incr`, `incr_by`, `hget`, `hset`,
-`hdel`, `hgetall`, and `hexists` are registered in `BuiltinId` and the compiler builtin
+`hdel`, `hgetall`, `hexists`, and `rate_limit` are registered in `BuiltinId` and the compiler builtin
 catalogue. The first argument is always the alias from `linkSysRefs`.
 
 ## Ownership
@@ -47,15 +47,39 @@ and avoid logging the raw dynamic error into `PluginLog`; classify it or use the
 sensitive logging path.
 
 ```dsl
-let r = redis.incr("ratelimit", "rate:" + req.remote_ip)
+// Configure the requests policy and set errorPolicy: deny; see the API reference.
+let r = redis.rate_limit("ratelimit", "requests", req.remote_ip, 1)
 if !r["ok"] {
   log_warn("redis unavailable")
   return deny(503, "service unavailable")
 }
-if r["value"] > 100 {
+if !r["value"]["allowed"] {
   return deny(429, "rate limit exceeded")
 }
 ```
+
+## Atomic rate limiting
+
+`DslConfig.rate_limit_policies` declares policies resolved into `DslRateLimits`
+at plugin construction. `redis.rate_limit(link, policy, key, cost)` selects one
+policy and resolves its live LinkSys client per call. It uses the canonical
+`RedisRateLimiter::eval_policy`, with no additional Lua or uncertain-error retry.
+The result envelope distinguishes successful denial from failure. Type/range
+errors use fixed result-map classes; VM limits still use runtime errors.
+
+The canonical numeric helpers live in `edgion-resources/src/redis_rate_limit.rs`.
+They bound input and output domains; they do not make sliding-window floating
+weights exact or validate Redis state written by outsiders. The shared numeric-domain
+task retains broader HTTP/Stream adoption and stronger intermediate precision work.
+The operator namespace and length-delimited policy identity prevent accidental key
+composition collisions. Equal explicit identity on the same database deliberately
+shares counters. Configuration changes to algorithm/rate/interval select fresh keys.
+
+See [the script API](../../../docs/en/user-guide/http-route/filters/edgion-plugins/dsl/api-reference.md#redis-rate_limit)
+for configuration, bounds, timeout/cancellation and field semantics, and
+[the review guard](../../04-review/dsl/regression-guards/redis-rate-limit-policy-contract.md)
+for regression coverage. A bare `redis.incr` is only a cumulative counter; it never
+establishes a time window or automatic expiration.
 
 ## Adding an Operation
 

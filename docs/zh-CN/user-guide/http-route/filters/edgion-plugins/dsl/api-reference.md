@@ -1771,16 +1771,109 @@ if r["value"] == "on" {
 - `link`（Str）— 来自 `linkSysRefs[].name` 的别名
 - `key`（Str）— Redis 键名
 
-**示例 — 简单限流**：
+**示例 — 累计计数**（没有时间窗口或自动重置；周期限流请使用下方的 `redis.rate_limit`）：
 ```
 let r = redis.incr("cache", "rate:" + req.remote_ip)
 if !r["ok"] {
   return deny(503, "service unavailable")
 }
 if r["value"] > 100 {
-  return deny(429, "rate limit exceeded")
+  return deny(429, "cumulative quota exceeded")
 }
 ```
+
+---
+
+### redis.rate_limit
+
+**签名**：`redis.rate_limit(link, policy, key, cost)` → `Map { ok, value, error }`
+
+原子执行一条命名 Redis 限流策略。先配置名为 `default/cache` 的 Redis LinkSys，
+再通过 ExtensionRef 将以下 EdgionPlugins 绑定到 HTTPRoute：
+
+```yaml
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: dsl-rate-limit
+  namespace: default
+spec:
+  requestPlugins:
+    - type: Dsl
+      config:
+        name: limited-api
+        errorPolicy: deny
+        linkSysRefs:
+          - name: cache
+            namespace: default
+        rateLimitPolicies:
+          - name: requests
+            link: cache
+            namespace: public-api
+            algorithm: SlidingWindow
+            rate: 100
+            interval: 1s
+            timeoutMs: 500
+        source: |
+          let r = redis.rate_limit("cache", "requests", req.remote_ip, 1)
+          if !r["ok"] {
+            log_warn("rate limit unavailable")
+            return deny(503, "service unavailable")
+          }
+          if !r["value"]["allowed"] {
+            return deny(429, "rate limit exceeded")
+          }
+          return next()
+```
+
+| 参数 | 类型 | 含义 |
+|---|---|---|
+| `link` | Str | 已声明的 `linkSysRefs[].name`，必须匹配策略的 `link` |
+| `policy` | Str | `rateLimitPolicies` 中的策略名称 |
+| `key` | Str | 业务计数键，最多 4096 个 UTF-8 字节；空字符串表示全局桶 |
+| `cost` | Int | 本次消耗量，范围 1–1000000；不接受字符串转换 |
+
+最多配置 64 条策略，名称必须唯一。名称与 `namespace` 均为 1–128 个 ASCII
+字母、数字或 `-_.:/`。显式 `namespace` 控制共享：在同一 Redis 数据库中，
+命名空间、策略名、算法、额度、周期和业务键全部相同的调用会跨插件共享计数。
+独立规则应使用不同命名空间。修改算法、额度或周期会启用新一代计数；只修改超时
+则保留计数。连接别名是本地名称，不保证 Redis 存储隔离。DSL 键前缀与
+HTTP/Stream 限流插件分离，请勿向 DSL 管理的键写入其他值。
+
+`algorithm` 支持 `SlidingWindow`（默认）、`FixedWindow`、`TokenBucket`。
+`rate` 为每个 `interval` 的额度，范围 1–1000000；令牌桶容量等于 rate。
+周期采用时长字符串，范围 `100ms` 至 `2147483647ms`，必须为整毫秒。
+`timeoutMs` 默认 500，范围 1–30000 毫秒。
+
+执行成功时 `ok=true`、`error=nil`，`value` 包含：
+
+| 字段 | 含义 |
+|---|---|
+| `allowed` | 是否允许；配额拒绝不是依赖错误 |
+| `current` | 窗口算法的当前计数；令牌桶的剩余令牌数 |
+| `remaining` | 放行后的剩余额度，拒绝时为零 |
+| `limit` | 配置额度 |
+| `retry_ms` | 现有算法给出的重试估计毫秒数，放行时为零 |
+
+沿用现有算法语义：滑动窗口使用加权计数近似，固定窗口允许边界突发，令牌桶按
+整令牌补充。重试时间不是额度预留或下次必定放行的时间。cost 大于 rate 时，
+该策略始终无法放行。
+
+失败时 `ok=false`、`value=nil`，`error` 为固定分类：
+`invalid_argument`、`unknown_policy`（也表示策略与连接不匹配）、
+`unknown_link`、`provider_not_ready`、`dependency_error` 或 `timeout`。
+参数类型错误、cost 越界或键超长会在 Redis I/O 前拒绝。策略配置在加载时校验。
+别名静态检查是尽力而为，动态或未知别名仍须在运行时处理。
+
+每次调用消耗正常 VM 调用预算，并要求 `maxMapSize >= 5`、
+`maxStringLen >= 18` 以容纳结果。VM 限制错误遵循 `errorPolicy`；
+示例设为 `deny`，同时单独处理结果 map 中的失败。
+
+超时覆盖完整操作及脚本缓存未命中回退。超时或取消可能发生在 Redis 已扣费之后，
+不要假设尚未执行而重试；本接口不对不确定执行添加应用层重试，仍沿用 LinkSys
+传输行为。多次调用各自原子，并不组成一个事务。每次调用都会观察当前客户端，
+支持连接替换。Gateway 时钟偏差会影响窗口或补充时间；数值边界不负责时钟同步，
+也不能验证由外部破坏的 Redis 状态。
 
 ---
 

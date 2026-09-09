@@ -3,7 +3,11 @@
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
 
+use crate::plugins::common::redis_rate_limiter::RedisRateLimiter;
 use edgion_common::dns::ResolverSpec;
+use edgion_resources::resources::edgion_plugins::plugin_configs::dsl::DslConfig;
+use edgion_resources::resources::edgion_plugins::RateLimitAlgorithm;
+use std::time::Duration;
 
 use crate::link_sys::http_client::{build_outbound_client, OutboundClientConfig, OutboundRedirect};
 use crate::plugins::http::common::outbound::egress::{egress_dns_cache_ttl, EgressPolicy, EgressResolver};
@@ -22,6 +26,8 @@ pub struct DslRuntime {
     /// Built once from linkSysRefs at plugin load time.
     /// Client is resolved per-call (ArcSwap read) — matches rate_limit_redis pattern.
     pub redis_links: HashMap<String, String>,
+    /// Immutable policies and shared Lua executor, built at plugin load.
+    pub rate_limits: DslRateLimits,
     /// Cumulative request-body scan allowance, measured in physical-cap passes.
     pub max_body_scan_passes: u8,
 }
@@ -34,8 +40,63 @@ impl Default for DslRuntime {
             max_request_body_bytes: 1024 * 1024,  // 1 MiB
             block_private_ips: false,
             redis_links: HashMap::new(),
+            rate_limits: DslRateLimits::default(),
             max_body_scan_passes: 4,
         }
+    }
+}
+
+/// Config-owned policy table; there is no process-global mutable DSL counter cache.
+#[derive(Default)]
+pub struct DslRateLimits {
+    pub(super) policies: HashMap<String, ResolvedRateLimitPolicy>,
+    pub(super) limiter: RedisRateLimiter,
+}
+
+pub(super) struct ResolvedRateLimitPolicy {
+    pub link: String,
+    pub prefix: String,
+    pub algorithm: RateLimitAlgorithm,
+    pub rate: u64,
+    pub window_ms: i64,
+    pub timeout: Duration,
+}
+
+impl DslRateLimits {
+    /// Validate before constructing immutable policy snapshots, including callers
+    /// that do not enter through the normal plugin factory.
+    pub fn from_config(config: &DslConfig) -> Result<Self, String> {
+        config.validate()?;
+        let mut policies = HashMap::with_capacity(config.rate_limit_policies.len());
+        for policy in &config.rate_limit_policies {
+            let window_ms = policy.validate()?;
+            // Length-delimit operator identity; numeric parameters select a fresh
+            // generation on reload. No raw client key is truncated or hashed.
+            let prefix = format!(
+                "edgion:dsl:rl:{}:{}:{}:{}:{}:{}:",
+                policy.namespace.len(),
+                policy.namespace,
+                policy.name.len(),
+                policy.name,
+                policy.rate,
+                window_ms
+            );
+            policies.insert(
+                policy.name.clone(),
+                ResolvedRateLimitPolicy {
+                    link: policy.link.clone(),
+                    prefix,
+                    algorithm: policy.algorithm.clone(),
+                    rate: policy.rate,
+                    window_ms,
+                    timeout: Duration::from_millis(policy.timeout_ms),
+                },
+            );
+        }
+        Ok(Self {
+            policies,
+            limiter: RedisRateLimiter::new(),
+        })
     }
 }
 

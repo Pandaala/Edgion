@@ -61,7 +61,14 @@ spec:
 | `linkSysRefs` | Array\<Object\> | `[]` | List of LinkSys Redis resources. **Required** if any `redis.*` builtin appears in the script. Each `name` is the alias used as the first arg to `redis.*` calls |
 
 \* `source` and `bytecode` are mutually exclusive; at least one must be provided.
-† `linkSysRefs` is required if any `redis.*` builtin appears in the script; the plugin fails at load time if absent.
+† Declare every Redis alias in `linkSysRefs`. Static checking rejects provable
+unknown aliases; dynamic or ambiguous expressions may instead return `ok=false`
+at runtime. Every `rateLimitPolicies[].link` is checked at load time.
+
+Use `rateLimitPolicies` (array, default `[]`, at most 64 entries) to declare
+named atomic Redis policies for [`redis.rate_limit`](api-reference.md#redis-rate_limit).
+Each entry specifies `name`, `link`, `namespace`, `rate`, `interval`, optional
+`algorithm` (default `SlidingWindow`), and `timeoutMs` (default `500`).
 
 ## Error Policies
 

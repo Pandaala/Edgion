@@ -1894,6 +1894,7 @@ dependencies = [
  "ldap3",
  "parking_lot",
  "percent-encoding",
+ "pingora-http",
  "prost 0.13.5",
  "proxy-header",
  "rand 0.9.5",

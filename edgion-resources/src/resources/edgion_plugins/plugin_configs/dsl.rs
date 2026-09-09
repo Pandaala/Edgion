@@ -8,10 +8,57 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use super::rate_limit_redis::RateLimitAlgorithm;
+use crate::duration::parse_duration;
+use crate::redis_rate_limit::validate_rate_limit_policy;
 use edgion_dsl::bytecode::BuiltinId;
 
 use crate::resources::edgion_plugins::plugin_configs::LinkSysRef;
 use crate::resources::edgion_plugins::PluginValidation;
+
+/// A load-time Redis policy selected by `redis.rate_limit(link, policy, key, cost)`.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DslRateLimitPolicy {
+    pub name: String,
+    pub link: String,
+    /// Explicit counter-sharing namespace; use distinct values for independent rules.
+    pub namespace: String,
+    #[serde(default)]
+    pub algorithm: RateLimitAlgorithm,
+    pub rate: u64,
+    pub interval: String,
+    /// Aggregate timeout, including the shared NOSCRIPT fallback.
+    #[serde(default = "default_rate_limit_timeout_ms")]
+    pub timeout_ms: u64,
+}
+
+fn default_rate_limit_timeout_ms() -> u64 {
+    500
+}
+
+impl DslRateLimitPolicy {
+    /// Reused by resource validation and Gateway policy construction.
+    pub fn validate(&self) -> Result<i64, String> {
+        for (field, value) in [("name", &self.name), ("namespace", &self.namespace)] {
+            if value.is_empty()
+                || value.len() > 128
+                || !value
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b"-_.:/".contains(&b))
+            {
+                return Err(format!(
+                    "rateLimitPolicies.{field} must contain 1..128 ASCII letters, digits, or -_.:/"
+                ));
+            }
+        }
+        if !(1..=30_000).contains(&self.timeout_ms) {
+            return Err("rateLimitPolicies.timeoutMs must be between 1 and 30000".into());
+        }
+        let window = parse_duration(&self.interval).map_err(|e| format!("rateLimitPolicies.interval: {e}"))?;
+        validate_rate_limit_policy(self.rate, window).map_err(|e| format!("rateLimitPolicies: {e}"))
+    }
+}
 
 /// DSL error handling policy — user-configurable per plugin.
 ///
@@ -129,6 +176,9 @@ pub struct DslConfig {
     /// Names must be unique within this list; allowed chars: a-z 0-9 - _
     #[serde(default, skip_serializing_if = "Vec::is_empty", rename = "linkSysRefs")]
     pub linksys_refs: Vec<LinkSysRef>,
+    /// Named atomic Redis rate-limit policies, resolved once at plugin construction.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rate_limit_policies: Vec<DslRateLimitPolicy>,
 }
 
 impl DslConfig {
@@ -148,6 +198,22 @@ impl DslConfig {
             }
             if !seen.insert(r.name.as_str()) {
                 return Err(format!("linkSysRefs: duplicate name '{}'", r.name));
+            }
+        }
+        if self.rate_limit_policies.len() > 64 {
+            return Err("rateLimitPolicies supports at most 64 policies".into());
+        }
+        let mut policies = std::collections::HashSet::new();
+        for policy in &self.rate_limit_policies {
+            policy.validate()?;
+            if !seen.contains(policy.link.as_str()) {
+                return Err(format!(
+                    "rateLimitPolicies link '{}' is not in linkSysRefs",
+                    policy.link
+                ));
+            }
+            if !policies.insert(policy.name.as_str()) {
+                return Err(format!("rateLimitPolicies duplicate name '{}'", policy.name));
             }
         }
         Ok(())
@@ -179,6 +245,56 @@ impl DslConfig {
         let valid_names: std::collections::HashSet<&str> = self.linksys_refs.iter().map(|r| r.name.as_str()).collect();
         edgion_dsl::check_redis_link_names(&script, &valid_names)?;
         Ok(script)
+    }
+}
+
+#[cfg(test)]
+mod rate_limit_tests {
+    use super::*;
+
+    fn config_value() -> serde_json::Value {
+        serde_json::json!({
+            "name": "limited", "source": "redis.rate_limit(\"cache\", \"requests\", \"key\", 1)",
+            "linkSysRefs": [{"name": "cache", "namespace": "default"}],
+            "rateLimitPolicies": [{"name": "requests", "link": "cache", "namespace": "api/requests",
+                "rate": 100, "interval": "1s", "algorithm": "FixedWindow"}]
+        })
+    }
+
+    #[test]
+    fn redis_rate_limit_config_roundtrip_and_boundaries() {
+        let config: DslConfig = serde_json::from_value(config_value()).unwrap();
+        assert_eq!(config.rate_limit_policies[0].timeout_ms, 500);
+        let script = config.compile_and_validate().unwrap();
+        let mut transported: DslConfig = serde_json::from_str(&serde_json::to_string(&config).unwrap()).unwrap();
+        transported.source = None;
+        transported.bytecode = Some(script.serialize_base64().unwrap());
+        assert!(transported.compile_and_validate().is_ok());
+        for (field, value) in [
+            ("rate", serde_json::json!(0)),
+            ("rate", serde_json::json!(1_000_001)),
+            ("interval", serde_json::json!("0s")),
+            ("interval", serde_json::json!("2147483648ms")),
+            ("timeoutMs", serde_json::json!(0)),
+            ("timeoutMs", serde_json::json!(30001)),
+            ("namespace", serde_json::json!("")),
+            ("namespace", serde_json::json!("{hash-tag}")),
+            ("link", serde_json::json!("missing")),
+            ("name", serde_json::json!("")),
+        ] {
+            let mut input = config_value();
+            input["rateLimitPolicies"][0][field] = value;
+            let invalid: DslConfig = serde_json::from_value(input).unwrap();
+            assert!(invalid.compile_and_validate().is_err(), "accepted invalid {field}");
+        }
+        let mut duplicate = config.clone();
+        duplicate
+            .rate_limit_policies
+            .push(config.rate_limit_policies[0].clone());
+        assert!(duplicate.validate().unwrap_err().contains("duplicate"));
+        let mut unknown_field = config_value();
+        unknown_field["rateLimitPolicies"][0]["timoutMs"] = serde_json::json!(5);
+        assert!(serde_json::from_value::<DslConfig>(unknown_field).is_err());
     }
 }
 

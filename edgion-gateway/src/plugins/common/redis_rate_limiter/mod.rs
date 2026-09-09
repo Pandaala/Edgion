@@ -22,7 +22,7 @@ use std::sync::LazyLock;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// Largest integer represented exactly by the Redis Lua 5.1 number type.
-pub const MAX_SAFE_LUA_INTEGER: u64 = (1_u64 << 53) - 1;
+pub use edgion_resources::redis_rate_limit::MAX_SAFE_LUA_INTEGER;
 
 /// Opaque, same-slot Redis keys for one cumulative quota operation.
 #[derive(Debug, Clone, PartialEq, Eq)]

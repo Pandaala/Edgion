@@ -1810,17 +1810,118 @@ Atomically increments the integer value of a key by 1. Creates the key with valu
 - `link` (Str) — Alias name from `linkSysRefs[].name`
 - `key` (Str) — Redis key name
 
-**Example — simple rate limiting**:
+**Example — cumulative counter** (no time window or automatic reset; use
+`redis.rate_limit` below for rate limiting):
 ```
 let r = redis.incr("cache", "rate:" + req.remote_ip)
 if !r["ok"] {
-  log_warn("redis error: " + r["error"])
+  log_warn("redis unavailable")
   return deny(503, "service unavailable")
 }
 if r["value"] > 100 {
-  return deny(429, "rate limit exceeded")
+  return deny(429, "cumulative quota exceeded")
 }
 ```
+
+---
+
+### redis.rate_limit
+
+**Signature**: `redis.rate_limit(link, policy, key, cost)` → `Map { ok, value, error }`
+
+Atomically evaluates one named Redis rate-limit policy. Configure a Redis LinkSys
+resource named `default/cache`, then attach this EdgionPlugins resource to your
+HTTPRoute using ExtensionRef:
+
+```yaml
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: dsl-rate-limit
+  namespace: default
+spec:
+  requestPlugins:
+    - type: Dsl
+      config:
+        name: limited-api
+        errorPolicy: deny
+        linkSysRefs:
+          - name: cache
+            namespace: default
+        rateLimitPolicies:
+          - name: requests
+            link: cache
+            namespace: public-api
+            algorithm: SlidingWindow
+            rate: 100
+            interval: 1s
+            timeoutMs: 500
+        source: |
+          let r = redis.rate_limit("cache", "requests", req.remote_ip, 1)
+          if !r["ok"] {
+            log_warn("rate limit unavailable")
+            return deny(503, "service unavailable")
+          }
+          if !r["value"]["allowed"] {
+            return deny(429, "rate limit exceeded")
+          }
+          return next()
+```
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `link` | Str | Declared `linkSysRefs[].name`; must match the policy's `link` |
+| `policy` | Str | Name from `rateLimitPolicies` |
+| `key` | Str | Business bucket key, at most 4096 UTF-8 bytes; empty selects a global bucket |
+| `cost` | Int | Positive weighted consumption, 1–1000000; strings are not coerced |
+
+At most 64 policies may be configured, with unique names. Names and namespaces
+contain 1–128 ASCII letters, digits, or `-_.:/`. The explicit `namespace` controls
+sharing: equal namespace, policy name, algorithm, rate, interval and key on the
+same Redis database share counters across plugins. Use different namespaces for
+independent rules. Changing algorithm, rate or interval starts a new counter
+generation; changing only timeout preserves counters. Link aliases are local names,
+not a guarantee of separate Redis storage. The DSL prefix is separate from the
+HTTP/Stream rate-limit plugins. Do not write other values into DSL-owned keys.
+
+`algorithm` accepts `SlidingWindow` (default), `FixedWindow`, or `TokenBucket`.
+`rate` is 1–1000000 units per `interval`; TokenBucket capacity equals rate.
+Intervals use duration strings, from `100ms` through `2147483647ms`, with whole
+milliseconds. `timeoutMs` defaults to 500 and accepts 1–30000 milliseconds.
+
+Successful execution has `ok=true`, `error=nil`, and these `value` fields:
+
+| Field | Meaning |
+|---|---|
+| `allowed` | Boolean admission decision; denial is not a dependency error |
+| `current` | Current count for window algorithms; remaining token balance for TokenBucket |
+| `remaining` | Remaining units after allowance; zero on denial |
+| `limit` | Configured rate |
+| `retry_ms` | Existing algorithm's retry estimate in milliseconds, zero on allowance |
+
+The algorithms preserve their existing behavior: SlidingWindow uses a weighted
+counter approximation, FixedWindow permits boundary bursts, and TokenBucket
+refills in whole tokens. Retry delay is not a reservation or exact next-admission
+time. A cost larger than rate can never be allowed by that policy.
+
+Failures return `ok=false`, `value=nil`, and a fixed `error`:
+`invalid_argument`, `unknown_policy` (also a policy/link mismatch),
+`unknown_link`, `provider_not_ready`, `dependency_error`, or `timeout`.
+Bad types and out-of-range cost/key values are rejected before Redis I/O.
+Policy configuration is validated at load time. Unknown/dynamic aliases still
+require runtime handling; static alias checking is best-effort.
+
+Each call consumes the normal VM call budget and requires `maxMapSize >= 5`
+and `maxStringLen >= 18` for its result. VM limit failures follow `errorPolicy`;
+the example sets it to `deny` and separately handles result-map failures.
+
+The timeout bounds the complete operation, including a script-cache miss.
+Timeout/cancellation can happen after Redis has charged quota: do not retry on
+the assumption that nothing executed. No application retry is added after uncertain
+execution; the existing LinkSys transport behavior still applies. Multiple calls
+are separate atomic operations, not one transaction. Client replacement is
+observed on each call. Gateway wall-clock skew can affect windows/refill timing;
+numeric bounds do not synchronize clocks or validate externally corrupted state.
 
 ---
 

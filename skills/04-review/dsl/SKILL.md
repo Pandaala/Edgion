@@ -25,6 +25,8 @@ before applying a decision to current code.
 
 ## Regression guards
 
+- [DSL Redis rate-limit policy contract](regression-guards/redis-rate-limit-policy-contract.md)
+
 - [Chrono `Display::to_string()` Panic on Bad Format — FIXED, PIN-IN-PLACE](regression-guards/chrono-display-panic.md)
 - [DSL regex constants: DFA size_limit / dfa_size_limit are capped at 1MB](regression-guards/dfa-size-limit.md)
 - [Digest output string limit](regression-guards/digest-output-string-limit.md)

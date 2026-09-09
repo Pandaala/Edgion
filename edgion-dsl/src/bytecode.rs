@@ -281,6 +281,8 @@ pub enum BuiltinId {
     RedisHGetAll,
     /// `redis.hexists(link, key, field)` → Map { ok: Bool, value: Bool, error: Str|Nil }
     RedisHExists,
+    /// `redis.rate_limit(link, policy, key, cost)` -> Map { ok, value, error }
+    RedisRateLimit,
 }
 
 impl BuiltinId {
@@ -307,6 +309,7 @@ impl BuiltinId {
                 | BuiltinId::RedisHDel
                 | BuiltinId::RedisHGetAll
                 | BuiltinId::RedisHExists
+                | BuiltinId::RedisRateLimit
         )
     }
 

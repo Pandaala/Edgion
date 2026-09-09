@@ -110,6 +110,7 @@ pub(super) fn resolve_namespace_method(namespace: &str, method: &str) -> Option<
         ("redis", "hdel") => Some(BuiltinId::RedisHDel),
         ("redis", "hgetall") => Some(BuiltinId::RedisHGetAll),
         ("redis", "hexists") => Some(BuiltinId::RedisHExists),
+        ("redis", "rate_limit") => Some(BuiltinId::RedisRateLimit),
 
         _ => None,
     }
@@ -211,6 +212,7 @@ pub(crate) fn builtin_arity(id: &BuiltinId) -> BuiltinArity {
         BuiltinId::RedisHDel => Exact(3),
         BuiltinId::RedisHExists => Exact(3),
         BuiltinId::RedisHSet => Exact(4),
+        BuiltinId::RedisRateLimit => Exact(4),
         BuiltinId::RedisSet => RangeInclusive { min: 3, max: 4 },
     }
 }

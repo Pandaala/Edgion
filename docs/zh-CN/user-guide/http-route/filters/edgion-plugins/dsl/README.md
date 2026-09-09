@@ -61,7 +61,14 @@ spec:
 | `linkSysRefs` | Vec<{namespace, name}> | ❌† | `[]` | LinkSys Redis 资源列表。每个 `name` 是作为 `redis.*` 调用第一个参数的别名 |
 
 \* `source` 和 `bytecode` 二选一，至少提供一个。
-† `linkSysRefs` 在脚本中使用了任何 `redis.*` 函数时为必填项；若缺失，插件在加载时会失败。
+† 每个 Redis 别名都应在 `linkSysRefs` 中声明。静态检查会拒绝能够确定的未知别名；
+动态或有歧义的表达式可能在运行时返回 `ok=false`。
+`rateLimitPolicies[].link` 始终在加载时校验。
+
+使用 `rateLimitPolicies`（数组，默认 `[]`，最多 64 条）为
+[`redis.rate_limit`](api-reference.md#redis-rate_limit) 声明原子限流策略。
+每条策略包含 `name`、`link`、`namespace`、`rate`、`interval`，以及可选的
+`algorithm`（默认 `SlidingWindow`）和 `timeoutMs`（默认 `500`）。
 
 ## 错误策略
 

@@ -15,7 +15,7 @@ use edgion_resources::filters::PluginRunningResult;
 use super::config::DslConfig;
 use super::lang::bytecode::CompiledScript;
 use super::lang::vm::{execute_safe, DslErrorPolicy, Vm, VmLimits};
-use super::runtime::DslRuntime;
+use super::runtime::{DslRateLimits, DslRuntime};
 
 /// DslPlugin — runs a pre-compiled DSL script per request
 pub struct DslPlugin {
@@ -73,6 +73,7 @@ impl DslPlugin {
             max_request_body_bytes: config.http_max_request_body_bytes.unwrap_or(1024 * 1024),
             block_private_ips: config.http_block_private_ips.unwrap_or(false),
             redis_links,
+            rate_limits: DslRateLimits::from_config(config)?,
             max_body_scan_passes: config.max_body_scan_passes.unwrap_or(4),
         };
         Ok((script, limits, policy, runtime))

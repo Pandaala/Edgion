@@ -4,6 +4,7 @@
 //! Each builtin maps to exactly one PluginSession API call.
 
 use bytes::Bytes;
+use edgion_resources::redis_rate_limit::validate_rate_limit_call;
 use futures::StreamExt;
 use indexmap::IndexMap;
 use parking_lot::Mutex;
@@ -1123,6 +1124,7 @@ impl Vm {
             | BuiltinId::RedisTtl
             | BuiltinId::RedisExpire
             | BuiltinId::RedisIncr
+            | BuiltinId::RedisRateLimit
             | BuiltinId::RedisIncrBy
             | BuiltinId::RedisHGet
             | BuiltinId::RedisHSet
@@ -1476,6 +1478,81 @@ impl Vm {
     ) -> Result<Value, RuntimeError> {
         match id {
             // ===== Basic KV =====
+            BuiltinId::RedisRateLimit => {
+                // Reserve enough result capacity before a potentially mutating call.
+                if self.limits.max_map_size < 5 {
+                    return Err(RuntimeError::MapTooLarge {
+                        size: 5,
+                        limit: self.limits.max_map_size,
+                    });
+                }
+                if self.limits.max_string_len < 18 {
+                    return Err(RuntimeError::StringTooLong {
+                        len: 18,
+                        limit: self.limits.max_string_len,
+                    });
+                }
+                let cost = state.pop()?;
+                let key = state.pop()?;
+                let policy_name = state.pop()?;
+                let link = state.pop()?;
+                let (Value::Int(cost), Value::Str(key), Value::Str(policy_name), Value::Str(link)) =
+                    (cost, key, policy_name, link)
+                else {
+                    return Ok(redis_err("invalid_argument".into()));
+                };
+                if key.len() > 4096 {
+                    return Ok(redis_err("invalid_argument".into()));
+                }
+                let now_ms = chrono::Utc::now().timestamp_millis();
+                let Ok(cost) = validate_rate_limit_call(cost, now_ms) else {
+                    return Ok(redis_err("invalid_argument".into()));
+                };
+                let Some(policy) = runtime.rate_limits.policies.get(policy_name.as_ref()) else {
+                    return Ok(redis_err("unknown_policy".into()));
+                };
+                if policy.link != link.as_ref() {
+                    return Ok(redis_err("unknown_policy".into()));
+                }
+                let Some(ns_name) = runtime.redis_links.get(link.as_ref()) else {
+                    return Ok(redis_err("unknown_link".into()));
+                };
+                let Some(client) = get_redis_client(ns_name) else {
+                    return Ok(redis_err("provider_not_ready".into()));
+                };
+                let check = runtime.rate_limits.limiter.eval_policy(
+                    &client,
+                    &policy.algorithm,
+                    &policy.prefix,
+                    0,
+                    &key,
+                    policy.rate,
+                    policy.window_ms,
+                    now_ms,
+                    cost,
+                );
+                let result = match tokio::time::timeout(policy.timeout, check).await {
+                    Ok(Ok(result)) => result,
+                    Ok(Err(_)) => return Ok(redis_err("dependency_error".into())),
+                    Err(_) => return Ok(redis_err("timeout".into())),
+                };
+                // Reject inconsistent values instead of exposing unbounded results
+                // from a Redis key modified outside this policy's ownership.
+                let limit = policy.rate as i64;
+                if !(0..=limit).contains(&result.current)
+                    || !(0..=limit).contains(&result.remaining)
+                    || !(0..=i64::from(cost) * policy.window_ms).contains(&result.retry_ms)
+                {
+                    return Ok(redis_err("dependency_error".into()));
+                }
+                let mut decision = IndexMap::with_capacity(5);
+                decision.insert("allowed".into(), Value::Bool(result.allowed));
+                decision.insert("current".into(), Value::Int(result.current));
+                decision.insert("remaining".into(), Value::Int(result.remaining));
+                decision.insert("limit".into(), Value::Int(limit));
+                decision.insert("retry_ms".into(), Value::Int(result.retry_ms));
+                Ok(redis_ok(Value::Map(Box::new(decision))))
+            }
             BuiltinId::RedisGet => {
                 // redis.get(link, key)
                 let key = state.pop()?.runtime_string()?;
