@@ -33,3 +33,4 @@
 - Reviewer: control-flow 16/16, full `edgion-dsl` 114/114, and Gateway DSL 330/330 passed; format and diff checks passed.
 - Coordinator full workspace checks passed: format, locked workspace all-target check and Clippy, agent-doc, SSA, metrics inventory, Pingora source, Gateway no-tracing, English-only, diff, and frozen integration guards.
 - Frozen integration manifest: 3,231 paths unchanged.
+- Commit: `6daaa9e8` (`Preserve DSL loop counters on break`); no push.

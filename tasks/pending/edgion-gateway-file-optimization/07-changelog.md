@@ -16,7 +16,9 @@ This is the single concise record of actual changes across the file-by-file audi
 
 ## Entries
 
-- B0261: corrected while, range-for, and list-for `break` backpatches to execute their matching `LoopEnd`, preventing leaked inner counters from bypassing an enclosing loop's iteration limit. Added a three-form nested-break sandbox regression and maintained security knowledge. Independent LGTM; focused tests, locked workspace check/Clippy, and all repository guards passed. D0134 separately owns structured validation of untrusted hand-crafted bytecode. Local commit pending; no integration change or push.
+- B0262: added exact `ctx.get` runtime string-limit coverage and corrected a response-phase test that previously overstated request-to-response setup. Independent LGTM; target 7/7, Gateway DSL 331/331, locked workspace check/Clippy, and all repository guards passed. D0135–D0137 separately own the production copy, access-log examples, and a new integration scenario. Local commit pending; no production or integration change; no push.
+
+- B0261: corrected while, range-for, and list-for `break` backpatches to execute their matching `LoopEnd`, preventing leaked inner counters from bypassing an enclosing loop's iteration limit. Added a three-form nested-break sandbox regression and maintained security knowledge. Independent LGTM; focused tests, locked workspace check/Clippy, and all repository guards passed. D0134 separately owns structured validation of untrusted hand-crafted bytecode. Commit `6daaa9e8`; no integration change or push.
 
 - B0260: made all seven DSL compile-error tests assert their intended diagnostics, corrected an obsolete invalid-regex syntax that failed in parsing, and built a 1,003-opcode fixture that reaches only the instruction limit. Independent LGTM; target 7/7, full DSL 329/329, locked workspace check/Clippy, and all repository guards passed. Commit `87fb44df`; no production, integration, or deferred-task change; no push.
 

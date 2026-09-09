@@ -207,3 +207,6 @@ These entries are backlinks only. A linked `tasks/todo` file is the editable sou
 | Bound DSL runtime-limit scalars (D0132) | pending | [task](../../../todo/bound-dsl-runtime-limit-scalars.md) |
 | Correct DSL guide request-plugin examples (D0133) | pending | [task](../../../todo/correct-dsl-guide-request-plugin-examples.md) |
 | Validate structured DSL bytecode control flow (D0134) | pending | [task](../../../todo/validate-structured-dsl-bytecode-control-flow.md) |
+| Avoid the DSL `ctx.get` string copy (D0135) | pending | [task](../../../todo/avoid-dsl-ctx-get-string-copy.md) |
+| Correct DSL context access-log examples (D0136) | pending | [task](../../../todo/correct-dsl-ctx-access-log-examples.md) |
+| Add DSL request-to-response context integration coverage (D0137) | pending | [task](../../../todo/add-dsl-request-to-response-context-integration-coverage.md) |

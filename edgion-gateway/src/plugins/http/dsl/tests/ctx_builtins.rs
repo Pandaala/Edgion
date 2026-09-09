@@ -1,7 +1,8 @@
-//! Tests for ctx.* builtins: get / set / remove.
+//! Tests for ctx.* builtins: get / set / remove and ctx.get string limits.
 //!
-//! Covers happy paths, the upstream_response_filter phase, and the ApiError
-//! path returned by fallible session.set_ctx_var / remove_ctx_var.
+//! Covers present and missing values, reading a pre-existing value in the
+//! upstream_response_filter phase, and the ApiError path returned by fallible
+//! session.set_ctx_var / remove_ctx_var.
 
 use super::*;
 
@@ -88,10 +89,28 @@ if value == nil { req.set_header("X-NoVal", "true") }"#,
     assert_eq!(result, good_next());
 }
 
+#[test]
+fn test_ctx_get_value_exceeding_max_string_len_returns_exact_error() {
+    let mut session = MockPluginSession::new();
+    session
+        .expect_get_ctx_var()
+        .withf(|k| k == "k")
+        .times(1)
+        .returning(|_| Some("four".to_string()));
+    let limits = VmLimits {
+        max_string_len: 3,
+        ..Default::default()
+    };
+
+    let error = run_expect_runtime_err_with_limits(r#"ctx.get("k")"#, session, limits);
+
+    assert!(matches!(error, RuntimeError::StringTooLong { len: 4, limit: 3 }));
+}
+
 // ── Cross-phase: ctx.get in upstream_response_filter ─────────────────────────
 
 #[tokio::test(flavor = "multi_thread")]
-async fn test_ctx_shared_request_to_upstream_response() {
+async fn test_ctx_get_reads_pre_existing_value_in_upstream_response() {
     use crate::plugins::http::dsl::config::DslConfig;
     use crate::plugins::http::dsl::plugin::DslPlugin;
     let mut session = MockPluginSession::new();
@@ -99,10 +118,10 @@ async fn test_ctx_shared_request_to_upstream_response() {
         .expect_get_ctx_var()
         .withf(|k| k == "k")
         .times(1)
-        .returning(|_| Some("from_request_phase".to_string()));
+        .returning(|_| Some("pre_existing".to_string()));
     session
         .expect_set_response_header()
-        .withf(|h, v| h == "X-Ctx-Out" && v == "from_request_phase")
+        .withf(|h, v| h == "X-Ctx-Out" && v == "pre_existing")
         .times(1)
         .returning(|_, _| Ok(()));
 
