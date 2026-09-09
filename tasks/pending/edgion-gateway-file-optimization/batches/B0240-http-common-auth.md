@@ -18,4 +18,4 @@
 - Independent reviewer `b0236_ai_guard_plugin_analysis`: approved defer and the required record/task amendment. It found no other target-local auth response, challenge, credential-hiding, delay, log/redaction or failure-policy change that clears the value gate.
 - Existing integration tests remain unchanged and no integration issue is required; resource validation and Gateway unit tests can prove the future plan.
 - Verification: shared auth 19/19, JWT 45/45, OpenID Connect 133 passed/8 ignored explicit network fixtures, JWE 11/11, and resource JWT/OIDC/JWE 34/34. Workspace format/check/Clippy (existing warnings), agent docs, SSA, metrics inventory, Pingora source, Gateway no-tracing, English-only, diff and 3,136-file freeze passed.
-- Local record commit SHA is backfilled by the next batch; never push.
+- Commit: `3d7001c0`; never pushed by the campaign.

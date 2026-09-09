@@ -16,7 +16,9 @@ This is the single concise record of actual changes across the file-by-file audi
 
 ## Entries
 
-- B0240: deferred the shared authentication claim projection redesign to the existing D0052 after independently confirming nondeterministic HashMap/case-insensitive destination ownership across JWT, OIDC and JWE plus array materialization before cap checks. Expanded the single self-contained task with JWE, direct bounded array construction and three-consumer coverage; no runtime or integration change. Local commit SHA pending; never push.
+- B0241: examined the shared capped serialization writer with no code change. Independent LGTM retained checked atomic writes, exact/zero cap behavior, sticky overflow and caller-owned success publication; a finish API or cross-layer writer merge offered only churn/coupling. Writer/FormJsonTransform/ProxyRewrite/AiGuard evaluator tests 27/27 and all workspace/guard checks passed. No integration change or issue. Local commit SHA pending; never push.
+
+- B0240: deferred the shared authentication claim projection redesign to the existing D0052 after independently confirming nondeterministic HashMap/case-insensitive destination ownership across JWT, OIDC and JWE plus array materialization before cap checks. Expanded the single self-contained task with JWE, direct bounded array construction and three-consumer coverage; no runtime or integration change. Commit `3d7001c0`; no push.
 
 - B0239: examined the externally added AllEndpointStatus transport with no code change. Independent LGTM retained request/endpoint-scoped clients, complementary snapshot/near-dial/pinned-resolver checks, explicit TLS identity defaults, disabled proxy/redirect/pooling, bounded fan-out/body/deadlines and static errors. Focused tests 18/18 and all workspace/guard checks passed. Existing cross-client HTTP/2 header task remains the sole owner; no integration change or new issue. Commit `9b1340bc`; no push.
 
