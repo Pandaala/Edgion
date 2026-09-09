@@ -379,8 +379,8 @@
 | `edgion-gateway/src/plugins/http/dsl/plugin.rs` | `plugins-http-dsl` | source | changed | B0255: canonical 36-byte plugin-name validation and constructor closure; corrected independent LGTM |
 | `edgion-gateway/src/plugins/http/dsl/runtime.rs` | `plugins-http-dsl` | source | changed | B0256: corrected per-generation runtime and owning knowledge descriptions; independent LGTM |
 | `edgion-gateway/src/plugins/http/dsl/tests/api_errors.rs` | `plugins-http-dsl` | test | changed | B0257: completed all session-mutation API-error label coverage; independent LGTM |
-| `edgion-gateway/src/plugins/http/dsl/tests/body_value.rs` | `plugins-http-dsl` | test | analysis-in-progress | B0258: queued body-value test/value analysis |
-| `edgion-gateway/src/plugins/http/dsl/tests/bytecode_deserialization.rs` | `plugins-http-dsl` | test | pending | — |
+| `edgion-gateway/src/plugins/http/dsl/tests/body_value.rs` | `plugins-http-dsl` | test | changed | B0258: locked dynamic-empty body.replace rejection before scan/mutation; independent LGTM |
+| `edgion-gateway/src/plugins/http/dsl/tests/bytecode_deserialization.rs` | `plugins-http-dsl` | test | analysis-in-progress | B0259: queued bytecode-deserialization test/value analysis |
 | `edgion-gateway/src/plugins/http/dsl/tests/compile_errors.rs` | `plugins-http-dsl` | test | pending | — |
 | `edgion-gateway/src/plugins/http/dsl/tests/control_flow.rs` | `plugins-http-dsl` | test | pending | — |
 | `edgion-gateway/src/plugins/http/dsl/tests/ctx_builtins.rs` | `plugins-http-dsl` | test | pending | — |

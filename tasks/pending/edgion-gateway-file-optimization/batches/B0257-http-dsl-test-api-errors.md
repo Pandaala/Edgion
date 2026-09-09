@@ -30,3 +30,4 @@
 - Target tests: 9/9; full DSL tests: 328/328; Gateway locked all-target compile; format and diff checks passed.
 - Coordinator: `cargo fmt --all`; locked workspace check; locked workspace Clippy (exit 0 with pre-existing warnings); agent docs; SSA force; metrics inventory; Pingora source policy; Gateway no-tracing; English-only; diff check; and frozen paths all passed.
 - Frozen integration manifest: 3,231 paths unchanged.
+- Commit: `222f59b7` (`Complete DSL API error tests`); no push.

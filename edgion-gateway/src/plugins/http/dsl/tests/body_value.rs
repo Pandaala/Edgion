@@ -37,6 +37,29 @@ fn body_replace_requires_exact_string_arguments() {
 }
 
 #[test]
+fn body_replace_rejects_dynamic_empty_search_before_scanning() {
+    let mut session = available_body_session();
+    session.expect_ctx().times(0);
+    session.expect_request_body_replace_literal().times(0);
+
+    let error = run_expect_runtime_err(
+        r#"
+            let search = ""
+            req.body.replace(search, "replacement")
+        "#,
+        session,
+    );
+    assert!(matches!(
+        error,
+        RuntimeError::TypeError {
+            expected: "non-empty Str",
+            got: "Str",
+            operation: "body.replace"
+        }
+    ));
+}
+
+#[test]
 fn body_digest_methods_require_body_receiver() {
     for (source, operation) in [
         (r#""abc".md5()"#, "body.md5"),
