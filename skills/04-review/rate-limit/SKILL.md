@@ -18,6 +18,7 @@ before applying a decision to current code.
 
 ## Regression guards
 
+- [Shared Redis script descriptors and cache-miss recovery](regression-guards/redis-script-cache-lifecycle.md)
 - [ConnectionRateLimit counters must be scoped to the owning plugin entry — FIXED](regression-guards/connection-rate-limit-entry-scoped-buckets.md)
 - [ConnectionRateLimit listener and route attachments are independent policy layers — ACCEPTED](regression-guards/connection-rate-limit-layered-attachments.md)
 - [Rate-limit `default_key` fallback vs `OnKeyMiss::Allow` share a log tag — FIXED (m8-01)](regression-guards/default-key-vs-allow-log-tag.md)

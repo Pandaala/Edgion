@@ -10,8 +10,8 @@
 //! typed result shapes below.
 //!
 //! ## EVALSHA Optimization
-//! At runtime, scripts are loaded via SCRIPT LOAD and invoked via EVALSHA.
-//! On NOSCRIPT (Redis restart / SCRIPT FLUSH), automatic fallback to EVAL.
+//! Script SHA1 descriptors are shared locally and invoked via EVALSHA.
+//! Only NOSCRIPT (Redis restart / SCRIPT FLUSH) triggers fallback to EVAL.
 
 /// Cumulative quota ledger — one bucket HASH and one request-marker HASH.
 ///

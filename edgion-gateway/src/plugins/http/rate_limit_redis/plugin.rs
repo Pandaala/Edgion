@@ -4,7 +4,7 @@
 //! Uses Lua scripts for atomic rate limit checks via EVALSHA with EVAL fallback.
 //!
 //! ## Architecture:
-//! - Each plugin instance holds a `RedisRateLimiter` core for lazy script loading
+//! - Each plugin instance holds a `RedisRateLimiter` core with shared script descriptors
 //! - Redis client is resolved at runtime via `get_redis_client()` (ArcSwap-backed, hot-swappable)
 //! - All Lua scripts operate on single KEYS[1] — Redis Cluster compatible
 //! - Multiple policies are evaluated independently; ALL must pass

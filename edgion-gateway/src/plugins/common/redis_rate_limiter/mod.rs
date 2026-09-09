@@ -2,7 +2,7 @@
 //!
 //! Extracted from the HTTP `rate_limit_redis` plugin so both the HTTP request
 //! limiter and the L4 connection-rate limiter share one implementation of the
-//! SCRIPT LOAD / EVALSHA-with-EVAL-fallback machinery and the Lua algorithms.
+//! shared script descriptors, EVALSHA-with-EVAL-fallback machinery and Lua algorithms.
 //! This core is protocol-agnostic: it never touches `PluginSession` /
 //! `PluginLog` / HTTP responses. Callers map `RateLimitResult.allowed` to their
 //! own allow/deny action.
@@ -16,7 +16,9 @@ use scripts::{
     CREDENTIAL_RESERVATION_SCRIPT, CUMULATIVE_QUOTA_SCRIPT, FIXED_WINDOW_SCRIPT, SLIDING_WINDOW_SCRIPT,
     TOKEN_BUCKET_SCRIPT,
 };
+use sha1::Sha1;
 use sha2::{Digest, Sha256};
+use std::sync::LazyLock;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// Largest integer represented exactly by the Redis Lua 5.1 number type.
@@ -405,17 +407,47 @@ pub fn truncate_limit_key(raw: &str, max_len: usize) -> &str {
     }
 }
 
-struct ScriptHashes {
-    sliding_window: String,
-    fixed_window: String,
-    token_bucket: String,
-    cumulative_quota: String,
-    credential_reservation: String,
+struct ScriptDescriptor {
+    source: &'static str,
+    sha1: String,
 }
 
-/// Owns the lazily-loaded SCRIPT LOAD hashes so EVALSHA caching is shared per instance.
+impl ScriptDescriptor {
+    fn new(source: &'static str) -> Self {
+        Self {
+            source,
+            // Redis addresses cached scripts by SHA1; this is not a security digest.
+            sha1: format!("{:x}", Sha1::digest(source.as_bytes())),
+        }
+    }
+}
+
+struct ScriptDescriptors {
+    sliding_window: ScriptDescriptor,
+    fixed_window: ScriptDescriptor,
+    token_bucket: ScriptDescriptor,
+    cumulative_quota: ScriptDescriptor,
+    credential_reservation: ScriptDescriptor,
+}
+
+static SCRIPTS: LazyLock<ScriptDescriptors> = LazyLock::new(|| ScriptDescriptors {
+    sliding_window: ScriptDescriptor::new(SLIDING_WINDOW_SCRIPT),
+    fixed_window: ScriptDescriptor::new(FIXED_WINDOW_SCRIPT),
+    token_bucket: ScriptDescriptor::new(TOKEN_BUCKET_SCRIPT),
+    cumulative_quota: ScriptDescriptor::new(CUMULATIVE_QUOTA_SCRIPT),
+    credential_reservation: ScriptDescriptor::new(CREDENTIAL_RESERVATION_SCRIPT),
+});
+
+// Fred preserves the Redis error code in the first token of an Unknown error.
+// Only a cache miss proves the script did not run; other errors must not replay it.
+fn is_missing_script(error: &fred::error::Error) -> bool {
+    error.kind() == &fred::error::ErrorKind::Unknown
+        && error.details().split_ascii_whitespace().next() == Some("NOSCRIPT")
+}
+
+/// References process-shared script descriptors; remote cache misses are handled per invocation.
 pub struct RedisRateLimiter {
-    script_hashes: tokio::sync::OnceCell<ScriptHashes>,
+    scripts: &'static ScriptDescriptors,
 }
 
 impl Default for RedisRateLimiter {
@@ -427,66 +459,27 @@ impl Default for RedisRateLimiter {
 impl RedisRateLimiter {
     pub fn new() -> Self {
         Self {
-            script_hashes: tokio::sync::OnceCell::new(),
+            // Initialize the fixed descriptor set at construction, not on first admission.
+            scripts: LazyLock::force(&SCRIPTS),
         }
-    }
-
-    async fn ensure_scripts_loaded(&self, client: &RedisLinkClient) -> anyhow::Result<&ScriptHashes> {
-        self.script_hashes
-            .get_or_try_init(|| async {
-                let sw: String = client
-                    .pool()
-                    .script_load(SLIDING_WINDOW_SCRIPT)
-                    .await
-                    .map_err(|e| anyhow::anyhow!("script_load sliding_window: {:?}", e))?;
-                let fw: String = client
-                    .pool()
-                    .script_load(FIXED_WINDOW_SCRIPT)
-                    .await
-                    .map_err(|e| anyhow::anyhow!("script_load fixed_window: {:?}", e))?;
-                let tb: String = client
-                    .pool()
-                    .script_load(TOKEN_BUCKET_SCRIPT)
-                    .await
-                    .map_err(|e| anyhow::anyhow!("script_load token_bucket: {:?}", e))?;
-                let quota: String = client
-                    .pool()
-                    .script_load(CUMULATIVE_QUOTA_SCRIPT)
-                    .await
-                    .map_err(|e| anyhow::anyhow!("script_load cumulative_quota: {:?}", e))?;
-                let credential_reservation: String = client
-                    .pool()
-                    .script_load(CREDENTIAL_RESERVATION_SCRIPT)
-                    .await
-                    .map_err(|e| anyhow::anyhow!("script_load credential_reservation: {:?}", e))?;
-                Ok(ScriptHashes {
-                    sliding_window: sw,
-                    fixed_window: fw,
-                    token_bucket: tb,
-                    cumulative_quota: quota,
-                    credential_reservation,
-                })
-            })
-            .await
     }
 
     async fn eval_script(
         &self,
         client: &RedisLinkClient,
-        hash: &str,
-        script: &str,
+        script: &ScriptDescriptor,
         keys: Vec<String>,
         args: Vec<String>,
     ) -> anyhow::Result<Vec<i64>> {
         match client
             .pool()
-            .evalsha::<Vec<i64>, _, _, _>(hash, keys.clone(), args.clone())
+            .evalsha::<Vec<i64>, _, _, _>(script.sha1.as_str(), keys.clone(), args.clone())
             .await
         {
             Ok(result) => Ok(result),
-            Err(ref e) if e.details().contains("NOSCRIPT") => client
+            Err(ref e) if is_missing_script(e) => client
                 .pool()
-                .eval(script, keys, args)
+                .eval(script.source, keys, args)
                 .await
                 .map_err(|e| anyhow::anyhow!("Redis EVAL fallback failed: {:?}", e)),
             Err(e) => Err(anyhow::anyhow!("Redis EVALSHA failed: {:?}", e)),
@@ -502,12 +495,10 @@ impl RedisRateLimiter {
         limit: u64,
     ) -> anyhow::Result<CumulativeQuotaResult> {
         validate_quota_common(client, quota_key, limit)?;
-        let hashes = self.ensure_scripts_loaded(client).await?;
         let values = self
             .eval_script(
                 client,
-                &hashes.cumulative_quota,
-                CUMULATIVE_QUOTA_SCRIPT,
+                &self.scripts.cumulative_quota,
                 // Admission reads only KEYS[1]. Reusing it as KEYS[2] keeps the
                 // invocation valid in Redis Cluster without inventing a marker.
                 vec![quota_key.to_string(), quota_key.to_string()],
@@ -557,12 +548,10 @@ impl RedisRateLimiter {
         validate_safe_lua_integer("cumulative target", cumulative_target)?;
         let (bucket_ttl_ms, marker_ttl_ms) = validate_quota_ttls(bucket_ttl, marker_ttl)?;
 
-        let hashes = self.ensure_scripts_loaded(client).await?;
         let values = self
             .eval_script(
                 client,
-                &hashes.cumulative_quota,
-                CUMULATIVE_QUOTA_SCRIPT,
+                &self.scripts.cumulative_quota,
                 vec![bucket_key.to_string(), marker_key.to_string()],
                 vec![
                     mode.lua_code().to_string(),
@@ -610,12 +599,10 @@ impl RedisRateLimiter {
         validate_safe_lua_integer("credential reservation token amount", amount)?;
         let ttl_ms = validate_credential_reservation_ttl(ttl)?;
 
-        let hashes = self.ensure_scripts_loaded(client).await?;
         let values = self
             .eval_script(
                 client,
-                &hashes.credential_reservation,
-                CREDENTIAL_RESERVATION_SCRIPT,
+                &self.scripts.credential_reservation,
                 vec![keys.bucket.clone(), keys.marker.clone()],
                 vec![
                     operation.lua_code().to_string(),
@@ -644,7 +631,6 @@ impl RedisRateLimiter {
         now_ms: i64,
         cost: u32,
     ) -> anyhow::Result<RateLimitResult> {
-        let hashes = self.ensure_scripts_loaded(client).await?;
         match algorithm {
             RateLimitAlgorithm::SlidingWindow => {
                 let key = build_redis_key(key_prefix, "sw", policy_idx, limit_key, "");
@@ -655,7 +641,7 @@ impl RedisRateLimiter {
                     cost.to_string(),
                 ];
                 let v = self
-                    .eval_script(client, &hashes.sliding_window, SLIDING_WINDOW_SCRIPT, vec![key], args)
+                    .eval_script(client, &self.scripts.sliding_window, vec![key], args)
                     .await?;
                 Ok(RateLimitResult::from_lua_result(&v, rate))
             }
@@ -664,7 +650,7 @@ impl RedisRateLimiter {
                 let key = build_redis_key(key_prefix, "fw", policy_idx, limit_key, &window_id.to_string());
                 let args = vec![rate.to_string(), window_ms.to_string(), cost.to_string()];
                 let v = self
-                    .eval_script(client, &hashes.fixed_window, FIXED_WINDOW_SCRIPT, vec![key], args)
+                    .eval_script(client, &self.scripts.fixed_window, vec![key], args)
                     .await?;
                 Ok(RateLimitResult::from_lua_result(&v, rate))
             }
@@ -678,7 +664,7 @@ impl RedisRateLimiter {
                     cost.to_string(),
                 ];
                 let v = self
-                    .eval_script(client, &hashes.token_bucket, TOKEN_BUCKET_SCRIPT, vec![key], args)
+                    .eval_script(client, &self.scripts.token_bucket, vec![key], args)
                     .await?;
                 Ok(RateLimitResult::from_lua_result(&v, rate))
             }
@@ -805,6 +791,56 @@ fn validate_quota_common(client: &RedisLinkClient, quota_key: &str, limit: u64) 
 mod tests {
     use super::*;
     use std::collections::HashMap;
+
+    #[test]
+    fn script_descriptors_pair_each_source_with_its_redis_sha1() {
+        let core = RedisRateLimiter::new();
+        let cases = [
+            (&core.scripts.sliding_window, SLIDING_WINDOW_SCRIPT),
+            (&core.scripts.fixed_window, FIXED_WINDOW_SCRIPT),
+            (&core.scripts.token_bucket, TOKEN_BUCKET_SCRIPT),
+            (&core.scripts.cumulative_quota, CUMULATIVE_QUOTA_SCRIPT),
+            (&core.scripts.credential_reservation, CREDENTIAL_RESERVATION_SCRIPT),
+        ];
+        for (script, source) in cases {
+            assert_eq!(script.source, source);
+            assert_eq!(script.sha1, format!("{:x}", Sha1::digest(source.as_bytes())));
+        }
+        // Redis's documented SCRIPT LOAD example anchors the digest's wire format.
+        assert_eq!(
+            ScriptDescriptor::new("return 'Immabe a cached script'").sha1,
+            "c664a3bf70bd1d45c4284ffebb65a6f2299bfc9f"
+        );
+    }
+
+    #[test]
+    fn new_limiters_reuse_the_initialized_script_descriptors() {
+        let first = RedisRateLimiter::new();
+        let second = RedisRateLimiter::default();
+        assert!(std::ptr::eq(first.scripts, second.scripts));
+    }
+
+    #[test]
+    fn only_a_redis_noscript_error_permits_fallback() {
+        use fred::error::{Error, ErrorKind};
+
+        for details in ["NOSCRIPT", "NOSCRIPT No matching script. Please use EVAL."] {
+            assert!(is_missing_script(&Error::new(ErrorKind::Unknown, details)));
+        }
+        for details in [
+            "",
+            "NOSCRIPTING not a Redis cache-miss code",
+            "ERR script reported NOSCRIPT after changing a key",
+            "WRONGTYPE NOSCRIPT",
+            "NOPERM NOSCRIPT",
+            "noscript No matching script",
+        ] {
+            assert!(!is_missing_script(&Error::new(ErrorKind::Unknown, details)));
+        }
+        for kind in [ErrorKind::Timeout, ErrorKind::IO, ErrorKind::Auth, ErrorKind::Canceled] {
+            assert!(!is_missing_script(&Error::new(kind, "NOSCRIPT")));
+        }
+    }
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     enum MemoryMarker {

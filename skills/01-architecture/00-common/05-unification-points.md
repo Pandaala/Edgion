@@ -199,10 +199,11 @@ not in-process checks.
   (`edgion-gateway/src/link_sys/providers/redis/client.rs`, a fred `Pool`
   with reconnection/TLS/cluster/sentinel handling), obtained via
   `get_redis_client` from the LinkSys store. Rate-limit Lua machinery
-  (SCRIPT LOAD / EVALSHA-with-EVAL-fallback + the three algorithms) is shared
+  (shared local script descriptors / EVALSHA-with-EVAL-fallback, request-rate
+  algorithms, cumulative quotas, and credential reservations) is shared
   in `edgion-gateway/src/plugins/common/redis_rate_limiter/mod.rs`.
-- **Consumers**: rate_limit_redis, stream connection_rate_limit, DSL
-  `redis.*` builtins.
+- **Consumers**: rate_limit_redis, stream connection_rate_limit, AI quota and
+  credential reservation runtimes, and DSL `redis.*` builtins (client access).
 - **Rule**: never create a direct redis connection; new rate-limit algorithms
   extend the shared core, not a plugin-local copy.
 

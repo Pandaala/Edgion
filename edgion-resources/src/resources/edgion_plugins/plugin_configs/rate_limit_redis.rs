@@ -9,7 +9,7 @@
 //! - All rate limit checks are atomic via Redis Lua scripts (EVAL/EVALSHA)
 //! - Single KEYS design for Redis Cluster compatibility (no CROSSSLOT)
 //! - EVALSHA with automatic EVAL fallback on NOSCRIPT
-//! - Lazy script loading via tokio::sync::OnceCell
+//! - Process-shared immutable Lua source/SHA descriptors; EVAL fallback only on an exact NOSCRIPT error
 //!
 //! ## Complementary to RateLimit:
 //! - RateLimit: in-process CMS, ~nanosecond, approximate, per-instance
