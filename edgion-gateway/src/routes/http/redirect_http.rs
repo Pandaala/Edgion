@@ -23,6 +23,7 @@ struct RedirectRequestInfo<'a> {
     #[serde(serialize_with = "edgion_resources::sensitive::masked::serialize")]
     remote_ip: &'a str,
     host: &'a str,
+    #[serde(serialize_with = "edgion_resources::sensitive::masked::serialize")]
     path: &'a str,
     status: u16,
 }
@@ -33,8 +34,10 @@ struct RedirectLogEntry<'a> {
     #[serde(rename = "type")]
     log_type: &'static str,
     request_info: RedirectRequestInfo<'a>,
+    #[serde(serialize_with = "edgion_resources::sensitive::masked::serialize")]
     redirect_url: &'a str,
     latency_ms: u64,
+    #[serde(serialize_with = "edgion_resources::sensitive::masked_opt::serialize")]
     error: Option<String>,
 }
 
@@ -195,16 +198,16 @@ impl ProxyHttp for EdgionHttpRedirectProxy {
         }
 
         ctx.host = raw_host.to_string();
-        ctx.path = req_header
-            .uri
-            .path_and_query()
-            .map(|pq| pq.as_str().to_string())
-            .unwrap_or_else(|| "/".to_string());
+        let path_and_query = req_header.uri.path_and_query().map(|pq| pq.as_str()).unwrap_or("/");
+        ctx.path = match req_header.uri.path() {
+            "" => "/".to_string(),
+            path => path.to_string(),
+        };
 
-        let redirect_url = self.build_redirect_url_from_parts(&ctx.host, &ctx.path);
+        let redirect_url = self.build_redirect_url_from_parts(&ctx.host, path_and_query);
         ctx.status = 301;
 
-        ctx.redirect_url = redirect_url.clone();
+        ctx.redirect_url = self.build_redirect_url_from_parts(&ctx.host, &ctx.path);
 
         let mut resp = ResponseHeader::build(StatusCode::MOVED_PERMANENTLY, Some(3))?;
         resp.insert_header("Location", &redirect_url)?;
@@ -250,6 +253,54 @@ impl ProxyHttp for EdgionHttpRedirectProxy {
 mod tests {
     use super::*;
     use edgion_resources::resources::edgion_gateway_config::EdgionGatewayConfigSpec;
+    use edgion_resources::sensitive::{SensitiveMode, SENSITIVE_MODE};
+    use std::sync::atomic::Ordering;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    fn assert_sensitive_log_in_subprocess(test_name: &str, assertion: impl FnOnce()) {
+        const CHILD_ENV: &str = "EDGION_REDIRECT_SENSITIVE_LOG_CHILD";
+        const TEST_MODULE: &str = "routes::http::redirect_http::tests";
+
+        if std::env::var(CHILD_ENV).as_deref() == Ok(test_name) {
+            // Only this exact test runs in the child, isolating process-global
+            // masking state from all other Gateway tests.
+            assertion();
+            return;
+        }
+
+        let exact_test_name = format!("{TEST_MODULE}::{test_name}");
+        let output = std::process::Command::new(
+            std::env::current_exe().expect("the Rust test harness must have a current executable"),
+        )
+        .args(["--exact", exact_test_name.as_str(), "--nocapture"])
+        .env(CHILD_ENV, test_name)
+        .output()
+        .expect("the isolated redirect sensitive-log test process must start");
+        assert!(
+            output.status.success(),
+            "isolated redirect sensitive-log test failed:\nstdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    fn redirect_log_json(error: Option<String>) -> serde_json::Value {
+        serde_json::to_value(RedirectLogEntry {
+            ts: 0,
+            log_type: "redirect",
+            request_info: RedirectRequestInfo {
+                direct_peer_ip: "192.0.2.1",
+                remote_ip: "198.51.100.2",
+                host: "example.com",
+                path: "/account/reset",
+                status: 301,
+            },
+            redirect_url: "https://example.com/account/reset",
+            latency_ms: 1,
+            error,
+        })
+        .unwrap()
+    }
 
     fn test_access_logger() -> Arc<AccessLogger> {
         Arc::new(AccessLogger::new())
@@ -371,5 +422,82 @@ mod tests {
     fn test_new_ctx() {
         let redirect = EdgionHttpRedirectProxy::new(443, test_access_logger(), test_gateway_config());
         let _ctx = redirect.new_ctx(); // Should not panic
+    }
+
+    #[test]
+    fn redirect_log_sensitive_fields_follow_the_shared_masking_contract() {
+        assert_sensitive_log_in_subprocess(
+            "redirect_log_sensitive_fields_follow_the_shared_masking_contract",
+            || {
+                for (mode, expected_path, expected_error) in [
+                    (SensitiveMode::Replace, "***", "***"),
+                    (SensitiveMode::Wrap, "<E>/account/reset</E>", "<E>private failure</E>"),
+                    (SensitiveMode::Off, "/account/reset", "private failure"),
+                ] {
+                    SENSITIVE_MODE.store(mode as u8, Ordering::SeqCst);
+                    let value = redirect_log_json(Some("private failure".to_string()));
+                    assert_eq!(value["request_info"]["path"], expected_path);
+                    assert_eq!(
+                        value["redirect_url"],
+                        match mode {
+                            SensitiveMode::Replace => "***",
+                            SensitiveMode::Wrap => "<E>https://example.com/account/reset</E>",
+                            SensitiveMode::Off => "https://example.com/account/reset",
+                        }
+                    );
+                    assert_eq!(value["error"], expected_error);
+                }
+            },
+        );
+    }
+
+    #[test]
+    fn absent_redirect_error_stays_null_under_masking() {
+        assert_sensitive_log_in_subprocess("absent_redirect_error_stays_null_under_masking", || {
+            SENSITIVE_MODE.store(SensitiveMode::Replace as u8, Ordering::SeqCst);
+            assert!(redirect_log_json(None)["error"].is_null());
+        });
+    }
+
+    #[tokio::test]
+    async fn redirect_wire_preserves_query_percent_encoding_ipv6_port_and_client_requested_close() {
+        let redirect = EdgionHttpRedirectProxy::new(8443, test_access_logger(), test_gateway_config());
+        let (mut client, server) = tokio::io::duplex(4096);
+        // Pingora derives the response Connection header from session keepalive;
+        // exercise the client-requested close branch without changing that policy.
+        client
+            .write_all(
+                b"GET /account%20reset?token=secret HTTP/1.1\r\nHost: [2001:db8::1]:8080\r\nConnection: close\r\n\r\n",
+            )
+            .await
+            .unwrap();
+        let stream: pingora_core::protocols::Stream = Box::new(server);
+        let mut session = Session::new_h1(stream);
+        assert!(session.read_request().await.unwrap());
+        let mut ctx = redirect.new_ctx();
+
+        assert!(redirect.request_filter(&mut session, &mut ctx).await.unwrap());
+        assert_eq!(ctx.path, "/account%20reset");
+        assert_eq!(ctx.redirect_url, "https://[2001:db8::1]:8443/account%20reset");
+        drop(session);
+
+        let mut wire = Vec::new();
+        client.read_to_end(&mut wire).await.unwrap();
+        let wire = String::from_utf8(wire).unwrap();
+        assert!(wire.starts_with("HTTP/1.1 301"));
+        let header = |name: &str| {
+            wire.split("\r\n")
+                .filter_map(|line| line.split_once(": "))
+                .find_map(|(key, value)| key.eq_ignore_ascii_case(name).then_some(value))
+        };
+        assert_eq!(
+            header("Location"),
+            Some("https://[2001:db8::1]:8443/account%20reset?token=secret")
+        );
+        assert_eq!(header("Content-Length"), Some("0"));
+        assert_eq!(header("Connection"), Some("close"));
+        assert!(wire.ends_with("\r\n\r\n"));
+        assert!(!ctx.path.contains("token="));
+        assert!(!ctx.redirect_url.contains("token="));
     }
 }

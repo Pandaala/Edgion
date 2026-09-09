@@ -181,7 +181,7 @@
 | `edgion-gateway/src/ai/terminal.rs` | `ai-core` | source | pending | — |
 | `edgion-gateway/src/ai/usage.rs` | `ai-core` | source | pending | — |
 | `edgion-gateway/src/api/admin_auth.rs` | `api` | source | pending | — |
-| `edgion-gateway/src/api/mod.rs` | `api` | source | changed | B0168: use canonical plural gRPC route-manager getter |
+| `edgion-gateway/src/api/mod.rs` | `api` | source | pending | Reopened after external 7534a9bf; prior B0168 evidence retained |
 | `edgion-gateway/src/backends/circuit_breaker/concurrency_integration_tests.rs` | `backends-circuit-breaker` | test | changed | `B0033`: concurrent winner permits now prove RAII release to zero without leaking handles |
 | `edgion-gateway/src/backends/circuit_breaker/mod.rs` | `backends-circuit-breaker` | source | examined-no-change | `B0033`: minimal production RAII wrapper retained |
 | `edgion-gateway/src/backends/discovery/conf_handler_common.rs` | `backends-discovery-shared` | source | removed | `B0034` completed before external commit `8cbbed6c` removed the file |
@@ -511,12 +511,14 @@
 | `edgion-gateway/src/plugins/http/wasm/host_abi.rs` | `plugins-http-wasm` | source | changed | B0108 |
 | `edgion-gateway/src/plugins/http/wasm/mod.rs` | `plugins-http-wasm` | source | examined-no-change | B0109 |
 | `edgion-gateway/src/plugins/http/wasm/oci/auth.rs` | `plugins-http-wasm` | source | changed | B0110 |
-| `edgion-gateway/src/plugins/http/wasm/oci/cache.rs` | `plugins-http-wasm` | source | changed | B0111 |
+| `edgion-gateway/src/plugins/http/wasm/oci/cache.rs` | `plugins-http-wasm` | source | pending | Reopened after external 7534a9bf; prior B0111 evidence retained |
+| `edgion-gateway/src/plugins/http/wasm/oci/cache_tests.rs` | `plugins-http-wasm` | test | pending | Added externally in 7534a9bf; requires campaign analysis |
+| `edgion-gateway/src/plugins/http/wasm/oci/memory_pipeline_tests.rs` | `plugins-http-wasm` | test | pending | Added externally in 7534a9bf; requires campaign analysis |
 | `edgion-gateway/src/plugins/http/wasm/oci/manifest.rs` | `plugins-http-wasm` | source | changed | B0112 |
-| `edgion-gateway/src/plugins/http/wasm/oci/mod.rs` | `plugins-http-wasm` | source | changed | B0110 |
+| `edgion-gateway/src/plugins/http/wasm/oci/mod.rs` | `plugins-http-wasm` | source | pending | Reopened after external 7534a9bf; prior B0110 evidence retained |
 | `edgion-gateway/src/plugins/http/wasm/plugin.rs` | `plugins-http-wasm` | source | changed | B0113 |
 | `edgion-gateway/src/plugins/http/wasm/shared_data.rs` | `plugins-http-wasm` | source | changed | B0114 |
-| `edgion-gateway/src/plugins/http/wasm/vm_manager.rs` | `plugins-http-wasm` | source | changed | B0115 |
+| `edgion-gateway/src/plugins/http/wasm/vm_manager.rs` | `plugins-http-wasm` | source | pending | Reopened after external 7534a9bf; prior B0115 evidence retained |
 | `edgion-gateway/src/plugins/http/webhook_key_get/mod.rs` | `plugins-http-webhook-key-get` | source | examined-no-change | `B0116`: minimal private-module/public-type facade retained |
 | `edgion-gateway/src/plugins/http/webhook_key_get/plugin.rs` | `plugins-http-webhook-key-get` | source | changed | B0117 |
 | `edgion-gateway/src/plugins/mod.rs` | `plugins-root` | source | examined-no-change | `B0118`: compile-time facade and live selective re-exports retained |
@@ -623,9 +625,9 @@
 | `edgion-gateway/src/routes/http/proxy_http/pg_upstream_response_filter.rs` | `routes-shared` | source | examined-no-change | B0191: retained final/interim attempt accounting and response-plugin lifecycle |
 | `edgion-gateway/src/routes/http/proxy_http/pg_upstream_response_trailer_filter.rs` | `routes-shared` | source | changed | B0192: prevent gateway-owned trailer failures from penalizing the selected backend |
 | `edgion-gateway/src/routes/http/proxy_http/preflight_handler.rs` | `routes-shared` | source | examined-no-change | B0193: native/plugin CORS preflight ownership retained; D0084 already owns backend scope design |
-| `edgion-gateway/src/routes/http/redirect_http.rs` | `routes-shared` | source | pending | — |
+| `edgion-gateway/src/routes/http/redirect_http.rs` | `routes-shared` | source | changed | B0194: redact dedicated redirect access-log paths without changing the wire Location |
 | `edgion-gateway/src/routes/http/routes_mgr.rs` | `routes-shared` | source | changed | B0169: clear exact retained manager on stale/orphan removal |
-| `edgion-gateway/src/routes/http/session_persistence.rs` | `routes-shared` | source | pending | — |
+| `edgion-gateway/src/routes/http/session_persistence.rs` | `routes-shared` | source | analysis-ready | B0195: reuse multi-field cookie extraction and reject malformed expiry fallback |
 | `edgion-gateway/src/routes/http/tests.rs` | `routes-shared` | test | changed | B0169: retained nonempty HTTP manager removal regressions |
 | `edgion-gateway/src/routes/l4_duplex.rs` | `routes-shared` | source | pending | — |
 | `edgion-gateway/src/routes/l4_partial_update.rs` | `routes-shared` | source | pending | — |

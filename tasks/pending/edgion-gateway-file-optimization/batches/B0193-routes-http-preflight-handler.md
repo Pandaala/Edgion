@@ -25,4 +25,4 @@
 - Decision: examined-no-change. Detection, route/plugin CORS single ownership, fallback validation and response construction before final-writer claim, empty terminal response, and canonical access-log ownership remain correct.
 - Independent review: approved with no Must Fix or Should Fix. Existing D0084 remains the sole owner of backendRef-scoped native CORS design.
 - Verification: focused target tests 4/4; `cargo fmt --all`, locked workspace check and Clippy, locked Gateway binary build, agent-doc, SSA, metrics inventory, Pingora source, Gateway no-tracing, English-only, diff, and frozen integration-path checks passed.
-- Commit: pending; never push.
+- Commit: `8f1530ab`; never pushed by the campaign.

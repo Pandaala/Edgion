@@ -3110,5 +3110,5 @@ bbc0ef6a3fc7b07763cb6c4efaa88d7aa0fc8343e60a7094dfaa22b6cd061323	file	000	edgion
 f86a1b2fabd6098364fafdf5559ffcf631a526075922928ad3724de6792b5f60	file	000	edgion-tests/wasm/header-demo/Cargo.lock
 10331810bed39fe821522dcc90a19b4d1beea2e206649396dc87a69b758d702a	file	000	edgion-tests/wasm/header-demo/Cargo.toml
 c65092b3cd313a636052f80fd4ac1a3245fec9df8f4ca867c64f99d1ffccd933	file	000	edgion-tests/wasm/header-demo/src/lib.rs
-c5b0e295eb74312c911e3579fbe54ffbae5fc1401ffe2c7b24ca5651c696ca9e	file	000	edgion-tests/wasm/oci/README.md
+7bd56ce6a8373ebc9c1d5c5806f870ed1e7265c529dd7fa1db87cf0d514a3ae3	file	000	edgion-tests/wasm/oci/README.md
 b4fbc4bdce7891f52bd34cb9c55d1b91454721ea7e439ae207771fd9e7c2c2be	file	000	edgion-tests/wasm/oci/push_wasm_image.py
