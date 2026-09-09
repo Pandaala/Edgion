@@ -2,7 +2,7 @@
 
 ## Scope
 
-- Pipeline state: verified changed; awaiting local commit.
+- Pipeline state: terminal; local commit `4db7b1eb`.
 - Active anchor crate: `edgion-gateway`.
 - Target: `edgion-gateway/src/runtime/matching/route.rs`.
 - Baseline: `1ce924ef`.
@@ -48,4 +48,4 @@
 - Final reviewer LGTM; no Must Fix, Should Fix or new deferred issue. Reviewed route blob `5efe644dd4c540c87b016462b69d26a934d8e0a0`; lookup equivalence, all consumers/invariants, 15 retained tests plus four substantive additions and both knowledge conclusions independently checked.
 - Fresh tests: route 19/19, full runtime matching 45/45, PGIS 10/10, HTTP matching 49/49 and gRPC matching 19/19. Logs: `/tmp/edgion-b0220-{route,matching,pgis,http,grpc}.log`.
 - Workspace format/check/Clippy passed (existing lint warnings); docs (1,268 files), SSA, metrics, Pingora source, Gateway no-tracing, English-only, diff and integration freeze passed. No integration or protected user files changed.
-- Ledger/changelog updated. Commit pending; local only, never push.
+- Ledger/changelog updated. Commit `4db7b1eb`; local only, never push.
