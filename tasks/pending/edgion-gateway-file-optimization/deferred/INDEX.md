@@ -80,7 +80,7 @@ These entries are backlinks only. A linked `tasks/todo` file is the editable sou
 | D0084 — Define backendRef-scoped native CORS preflight ownership | needs-discussion | [campaign finding](D0084-backendref-native-cors-preflight-ownership.md) |
 | D0085 — Complete native Gateway API CORS validation parity | needs-implementation | [campaign finding](D0085-native-gateway-api-cors-validation-parity.md) |
 | D0086 — Decide credentialed native CORS expose-headers wildcard semantics | needs-discussion | [campaign finding](D0086-credentialed-native-cors-expose-headers-wildcard.md) |
-| D0087 — Add debug access-log wire integration coverage | needs-implementation | [campaign finding](D0087-debug-access-log-wire-integration-coverage.md) |
+| D0087 — Add debug access-log wire integration coverage | resolved externally in `bfc2691e` | [maintained knowledge](../../../../skills/04-review/observability/regression-guards/debug-access-log-wire-and-lifecycle.md) |
 | D0088 — Define a bounded debug access-log response surface | needs-discussion | [campaign finding](D0088-bounded-debug-access-log-response-surface.md) |
 | D0089 — Fail closed on missing Gateway API ExtensionRef configuration | needs-implementation | [campaign finding](D0089-fail-closed-missing-extensionref-configuration.md) |
 | D0090 — Complete Gateway API header-modifier validation and preparation parity | needs-implementation | [campaign finding](D0090-gateway-api-header-modifier-validation-preparation-parity.md) |
@@ -164,7 +164,7 @@ These entries are backlinks only. A linked `tasks/todo` file is the editable sou
 | Define backendRef-scoped native CORS preflight ownership | pending | [task](../../../todo/define-backendref-native-cors-preflight-ownership.md) |
 | Complete native Gateway API CORS validation parity | pending | [task](../../../todo/complete-native-gateway-api-cors-validation-parity.md) |
 | Decide credentialed native CORS expose-headers wildcard semantics | pending | [task](../../../todo/decide-credentialed-native-cors-expose-headers-wildcard.md) |
-| Add debug access-log wire integration coverage | pending | [task](../../../todo/add-debug-access-log-wire-integration-coverage.md) |
+| Add debug access-log wire integration coverage | resolved externally in `bfc2691e` | [maintained knowledge](../../../../skills/04-review/observability/regression-guards/debug-access-log-wire-and-lifecycle.md) |
 | Define a bounded debug access-log response surface | pending | [task](../../../todo/define-bounded-debug-access-log-response-surface.md) |
 | Fail closed on missing Gateway API ExtensionRef configuration | pending | [task](../../../todo/fail-closed-missing-gateway-api-extensionref-configuration.md) |
 | Complete Gateway API header-modifier validation and preparation parity | pending | [task](../../../todo/complete-gateway-api-header-modifier-validation-and-preparation-parity.md) |
@@ -189,3 +189,4 @@ These entries are backlinks only. A linked `tasks/todo` file is the editable sou
 | Pre-resolve L4 listener timeouts | pending | [task](../../../todo/pre-resolve-l4-listener-timeouts.md) |
 | Refresh L4 connect-timeout knowledge | pending | [task](../../../todo/refresh-l4-connect-timeout-knowledge.md) |
 | Scope TLSRoute effective hostnames to attachments | pending (high) | [task](../../../todo/scope-tlsroute-effective-hostnames-to-attachments.md) |
+| Remove TLSRoute Stage-1 fallback coherently | pending | [task](../../../todo/remove-tlsroute-stage1-fallback-coherently.md) |

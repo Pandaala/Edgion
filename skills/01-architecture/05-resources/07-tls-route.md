@@ -50,7 +50,7 @@ Produce a RouteParentStatus for each parentRef. TLSRoute passes route_hostnames 
 
 TLSRoute's ConfHandler compiles routes into `GlobalTlsRouteManagers`:
 
-1. **Route initialization**: call `initialize_route()` to validate the route data
+1. **Route initialization**: call `initialize_route()` to share the immutable incoming `Arc<TLSRoute>` with a compiled `TlsRouteUnit`; runtime selectors and resolved annotations live on the unit, not on a cloned or mutated schema
 2. **Per-listener management**: based on resolved_listeners, register into the route manager of the corresponding `ListenerKey`
 3. **SNI matching**: match TLS SNI against spec.hostnames, supporting wildcard domains
 4. **Incremental updates**: partial_update collects affected listeners (old + new) and rebuilds only those listeners' route tables

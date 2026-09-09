@@ -2,7 +2,7 @@ use crate::routes::l4_partial_update::apply_l4_partial_update;
 use crate::routes::tls::route_unit::TlsRouteUnit;
 use crate::routes::tls::routes_mgr::resolved_listeners_for_route;
 use crate::routes::tls::{get_global_tls_route_managers, GlobalTlsRouteManagers};
-use edgion_common::conf_sync::traits::{arc_map_into_owned, ConfHandler};
+use edgion_common::conf_sync::traits::ConfHandler;
 use edgion_resources::TLSRoute;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -27,7 +27,7 @@ impl ConfHandler<TLSRoute> for GlobalTlsRouteManagers {
         self.clear_route_cache();
 
         for (key, route) in data {
-            match self.initialize_route((**route).clone()) {
+            match self.initialize_route(Arc::clone(route)) {
                 Ok(initialized) => {
                     self.insert_route(initialized);
                 }
@@ -65,13 +65,10 @@ impl ConfHandler<TLSRoute> for GlobalTlsRouteManagers {
             "partial update"
         );
 
-        let add_owned = arc_map_into_owned(add);
-        let update_owned = arc_map_into_owned(update);
-
         apply_l4_partial_update(
             "TLSRoute",
-            add_owned,
-            update_owned,
+            add,
+            update,
             remove,
             |key| self.get_route(key),
             |u| resolved_listeners_for_route(&u.route).to_vec(),
@@ -98,8 +95,8 @@ impl GlobalTlsRouteManagers {
     /// proxy-protocol version, connect retry budget, keepalive config,
     /// stream-plugin store key) lives on [`TlsRouteUnit`], not the schema; see
     /// [`TlsRouteUnit::from_route`].
-    fn initialize_route(&self, route: TLSRoute) -> Result<Arc<TlsRouteUnit>, String> {
-        Ok(Arc::new(TlsRouteUnit::from_route(Arc::new(route))))
+    fn initialize_route(&self, route: Arc<TLSRoute>) -> Result<Arc<TlsRouteUnit>, String> {
+        Ok(Arc::new(TlsRouteUnit::from_route(route)))
     }
 }
 
@@ -174,6 +171,9 @@ mod tests {
 
         let mgr = managers.get_or_create_listener_manager(&key443);
         let table = mgr.load_route_table();
+        for (key, schema) in &data {
+            assert!(Arc::ptr_eq(&managers.get_route(key).unwrap().route, schema));
+        }
         assert!(table.match_route("test.example.com").is_some());
         assert!(table.match_route("api.example.com").is_some());
         assert!(table.match_route("other.example.com").is_none());
@@ -227,10 +227,74 @@ mod tests {
             Arc::ptr_eq(&a_before, &a_after),
             "sibling add must not rebuild route A's unit (WRR cursor must be preserved)"
         );
+        assert!(Arc::ptr_eq(&a_before.backend_finder, &a_after.backend_finder));
         assert!(
             mgr.load_route_table().match_route("b.example.com").is_some(),
             "sibling route B must be routable after the add"
         );
+    }
+
+    #[test]
+    fn test_schema_sharing_preserves_generations_across_listener_migration() {
+        let managers = GlobalTlsRouteManagers::new();
+        let old_key = make_listener_key(10443, "TLS");
+        let new_key = make_listener_key(11443, "TLS");
+        let mut original = create_test_tls_route("default", "shared", "gw", "old.example.com", 10443, old_key.clone());
+        original.spec.hostnames = Some(vec!["*.example.com".to_string()]);
+        original.spec.effective_hostnames = Some(vec!["old.example.com".to_string(), "alias.example.com".to_string()]);
+        let original = Arc::new(original);
+        managers.partial_update(
+            HashMap::from([("default/shared".to_string(), Arc::clone(&original))]),
+            HashMap::new(),
+            HashSet::new(),
+        );
+        let old_manager = managers.get_or_create_listener_manager(&old_key);
+        let old_table = Arc::clone(&old_manager.load_route_table());
+        let old_unit = old_table.match_route("old.example.com").unwrap();
+        let alias_unit = old_table.match_route("alias.example.com").unwrap();
+        assert!(Arc::ptr_eq(&old_unit.route, &original));
+        assert!(Arc::ptr_eq(&old_unit, &alias_unit));
+        assert!(Arc::ptr_eq(&old_unit.backend_finder, &alias_unit.backend_finder));
+        assert!(old_table.match_route("unresolved.example.com").is_none());
+        assert_eq!(old_unit.backend_finder.select().unwrap().name, "test-service");
+
+        let mut replacement =
+            create_test_tls_route("default", "shared", "gw", "new.example.com", 11443, new_key.clone());
+        replacement.spec.rules.as_mut().unwrap()[0]
+            .backend_refs
+            .as_mut()
+            .unwrap()[0]
+            .name = "new-service".to_string();
+        let replacement = Arc::new(replacement);
+        managers.partial_update(
+            HashMap::new(),
+            HashMap::from([("default/shared".to_string(), Arc::clone(&replacement))]),
+            HashSet::new(),
+        );
+
+        // The proxy's retained manager must be cleared, even if its registry entry is removed.
+        assert!(old_manager.load_route_table().match_route("old.example.com").is_none());
+        assert!(old_manager
+            .load_route_table()
+            .match_route("alias.example.com")
+            .is_none());
+        let new_manager = managers.get_or_create_listener_manager(&new_key);
+        let new_table = new_manager.load_route_table();
+        let new_unit = new_table.match_route("new.example.com").unwrap();
+        assert!(Arc::ptr_eq(&new_unit.route, &replacement));
+        assert!(Arc::ptr_eq(&managers.get_route("default/shared").unwrap(), &new_unit));
+        assert!(!Arc::ptr_eq(&old_unit, &new_unit));
+        assert_eq!(new_unit.backend_finder.select().unwrap().name, "new-service");
+        assert!(new_table.match_route("old.example.com").is_none());
+
+        // In-flight connections holding the prior snapshot retain the prior schema and runtime.
+        assert!(Arc::ptr_eq(
+            &old_table.match_route("old.example.com").unwrap(),
+            &old_unit
+        ));
+        assert!(old_table.match_route("new.example.com").is_none());
+        assert_eq!(original.spec.resolved_listeners.as_ref().unwrap(), &[old_key]);
+        assert_eq!(old_unit.backend_finder.select().unwrap().name, "test-service");
     }
 
     #[test]

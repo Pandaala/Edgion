@@ -10,11 +10,11 @@
 | Priority | P1 |
 | Baseline commit | `d484e580` |
 | Scope | Every tracked file under `edgion-gateway/` |
-| Campaign status | in-progress; B0201 committed locally as `9cb9bf86`; external updates incorporated through `7ac8a760` |
-| Coverage | 546 current Gateway files: 217 changed, 168 examined-no-change, 11 deferred, 150 non-terminal; 3 historical rows are removed |
-| Active batch | B0202 source no-change and documentation correction verified; exact staging and commit gate |
-| Analysis queue | B0203 TLS configuration handler is analysis-ready, proposed schema Arc sharing; B0204 TLS table is analysis-ready, complex plan-first. D0114 tracks a separate high-severity attachment-projection defect. |
-| Integration freeze | 3,113 files; the sole README fingerprint changed by external commit `7534a9bf` was reconciled after verifying worktree bytes equal committed HEAD and the previous bytes equal the frozen baseline. No campaign integration-test edit occurred. |
+| Campaign status | in-progress; B0202 committed locally as `02bc7699`; external updates incorporated through `bfc2691e` |
+| Coverage | 546 current Gateway files: 218 changed, 168 examined-no-change, 11 deferred, 149 non-terminal; 3 historical rows are removed |
+| Active batch | B0203 verified after external-sync reconciliation; exact staging and commit gate |
+| Analysis queue | B0204 TLS table is analysis-ready, complex plan-first; B0205 TLS module is analysis-ready, proposed defer via D0115. D0114 remains a separate high-severity attachment-projection defect. |
+| Integration freeze | 3,119 files. External `7534a9bf` README and `bfc2691e` four existing/six added paths were reconciled individually after old-baseline/current-HEAD byte and mode verification. No campaign integration-test edit occurred. |
 
 ## AI guide summary
 
