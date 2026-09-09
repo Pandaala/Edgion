@@ -650,10 +650,10 @@
 | `edgion-gateway/src/routes/udp/conf_handler_impl.rs` | `routes-shared` | source | changed | B0211: preserved schema Arcs through full/add/update; independent LGTM, handler 10/10 and routes 605/605 |
 | `edgion-gateway/src/routes/udp/edgion_udp.rs` | `routes-shared` | source | changed | B0212: removed five session allocations and success-path IP formatting; independent LGTM, UDP 34/34; D0120–22 separate |
 | `edgion-gateway/src/routes/udp/mod.rs` | `routes-shared` | source | deferred | B0213: independent approval of D0122 shutdown ownership task; UDP 34/34 |
-| `edgion-gateway/src/routes/udp/route_unit.rs` | `routes-shared` | source | analysis-ready | B0214: retain unit runtime; correct owning plugin wiring and inactivity knowledge |
+| `edgion-gateway/src/routes/udp/route_unit.rs` | `routes-shared` | source | examined-no-change | B0214: runtime retained; owning plugin-key/inactivity knowledge corrected with independent LGTM |
 | `edgion-gateway/src/routes/udp/routes_mgr.rs` | `routes-shared` | source | analysis-ready | B0215: retain canonical serialized manager publication; existing docs task extended |
 | `edgion-gateway/src/routes/udp/udp_route_table.rs` | `routes-shared` | source | analysis-ready | B0216: retain deterministic compiled-unit table and route-count semantics |
-| `edgion-gateway/src/runtime/gateway_info.rs` | `runtime` | source | pending | — |
+| `edgion-gateway/src/runtime/gateway_info.rs` | `runtime` | source | analysis-ready | B0217: plan-first cached immutable Gateway key with exact consumer scope |
 | `edgion-gateway/src/runtime/handler.rs` | `runtime` | source | pending | — |
 | `edgion-gateway/src/runtime/matching/mod.rs` | `runtime` | source | pending | — |
 | `edgion-gateway/src/runtime/matching/route.rs` | `runtime` | source | pending | — |

@@ -1,11 +1,93 @@
 ---
 name: udproute-stream-plugins-annotation-wiring
-description: Read when reviewing UDPRoute stream-plugin findings — `edgion.io/edgion-stream-plugins` annotation silently ignored on UDPRoute, `stream_plugin_runtime` never populated/read, no wiring at any layer, a stream plugin (IP allow-list, rate limit) declared on a UDPRoute never running with no warning or status (udp-F012 / F-012).
+description: Use when reviewing UDPRoute stream-plugin annotation compilation, dynamic store lookup at session creation, and the limits of policy hot reload for established sessions (udp-F012 / F-012).
 knowledge_type: regression-guards
 ---
 
 # UDPRoute `edgion.io/edgion-stream-plugins` annotation wiring (udp-F012)
 
-**Status / verdict**: fixed (udp-F012, 2026-05-26)
+## Conclusion and scope
 
-When reviewing UDPRoute findings of the form "`edgion.io/edgion-stream-plugins` annotation is silently ignored on UDPRoute / `stream_plugin_runtime` field is never populated or read / no wiring at any of the three layers / a stream plugin (IP allow-list, rate limit) declared on a UDPRoute never runs, with no warning and no status (F-012)": **fixed (udp-F012, 2026-05-26)**. UDP now mirrors the TCPRoute/TLSRoute stream-plugin path: `UDPRouteRule` gained a `stream_plugin_store_key: Option<String>` runtime field (`edgion-resources/src/resources/udp_route.rs`, `#[serde(skip)]`/`#[schemars(skip)]`, additive — no CRD/serialization change); `GlobalUdpRouteManagers::initialize_route` (`edgion-gateway/src/routes/udp/conf_handler_impl.rs`) resolves it from the `EDGION_STREAM_PLUGINS` annotation via `resolve_stream_plugin_store_key` (identical to TCP/TLS); and `EdgionUdpProxy::handle_client_packet` (`edgion-gateway/src/routes/udp/edgion_udp.rs`) calls the shared `check_stream_plugins` (fail-close) before backend selection. **Only Stage-1 ConnectionFilter (`spec.plugins`, IP-based) applies** — UDP has no TLS handshake, so `tlsRoutePlugins` never run. Enforcement is **per session, not per packet**: the F-016 session fast-path (`cpu-memory/cases/udp-established-session-route-pipeline-per-packet.md`) returns first for established sessions, so the check runs once at session creation — like TCP's per-connection check, and a denied client never establishes a session (so no fast-path bypass). A mid-session ESP hot-reload-to-deny applies on the next new session / after the ≤60s `SESSION_TIMEOUT`, the accepted session-affinity tradeoff. A rule with no annotation has `store_key == None`, so `check_stream_plugins` returns `Allow` on its first line — the non-annotated path pays one `Option` check only. The rule's older `stream_plugin_runtime` field stays vestigial (TCP keeps its copy too; the real mechanism is `store_key` + dynamic `StreamPluginStore` lookup) — the issue's "use the resolved `stream_plugin_runtime`" wording conflated the two. Option B (controller `warn!` + `ResolvedRefs=False` "unsupported") was **not** taken — there is no technical reason UDP cannot support stream plugins when TCP/TLS do, and a capability gap across the L4 route family is worse than parity. Docs updated: `annotations-metadata.md`, `00-annotations-overview.md`, `14-edgion-stream-plugins.md`. Re-reports of the silently-ignored / never-wired form are not accepted; verify `handle_client_packet` calls `check_stream_plugins` and `initialize_route` resolves the store key before re-reporting.
+UDPRoute supports `edgion.io/edgion-stream-plugins` through a compiled route-unit
+key and dynamic plugin-store lookup before new-session backend selection. Only
+the Stage-1 connection-context runtime (`spec.plugins`) applies; UDP has no TLS
+handshake and does not execute `tlsRoutePlugins`.
+
+The current owner is `UdpRouteUnit::from_route` in
+`edgion-gateway/src/routes/udp/route_unit.rs`. It calls the shared
+`resolve_stream_plugin_store_key` with the route metadata and stores the result
+on `UdpRouteUnit::stream_plugin_store_key`. `GlobalUdpRouteManagers::initialize_route`
+delegates to this constructor during configuration updates. The schema in
+`edgion-resources/src/resources/udp_route.rs` has neither a
+`stream_plugin_store_key` nor a `stream_plugin_runtime` field; `UDPRouteRule`
+contains only `backend_refs`. Gateway runtime state does not belong on that schema.
+See [UDP route schema Arc sharing](udp-route-schema-arc-sharing.md).
+
+## Enforcement and hot-reload boundary
+
+`EdgionUdpProxy::handle_client_packet` in
+`edgion-gateway/src/routes/udp/edgion_udp.rs` passes the selected unit's key to
+the shared `check_stream_plugins` in `routes/tcp/edgion_tcp.rs`, before backend
+selection and `get_or_create_session`. No annotation (or a whitespace-only
+annotation) produces `None`, which returns `Allow` immediately. A present key
+is looked up in the current `StreamPluginStore` snapshot; a missing resource or
+policy denial fails closed. An empty Stage-1 runtime is a no-op pass-through.
+The route unit stores a key, not a snapshot of the compiled plugin runtime.
+
+Enforcement is per session admission, not per packet. The established-session
+fast path returns before route/plugin evaluation, reusing the pinned upstream;
+a denied new-session attempt never creates a session. The
+[F-016 session fast-path guard](../../cpu-memory/regression-guards/udp-established-session-route-pipeline-per-packet.md)
+owns that optimization and its session-affinity boundary.
+
+A policy hot reload is observed by subsequent new-session checks, not by
+already-established sessions. `SESSION_TIMEOUT` is a 60-second **inactivity
+threshold**, not a maximum session lifetime or a policy-revocation deadline.
+Both `record_upstream_send_result` and `record_downstream_send_result` refresh
+`last_activity` on successful sends. Cleanup runs after a 10-second sleep per
+loop and selects sessions whose inactivity exceeds the threshold; it is not an
+exact expiry timer. Continuing successful traffic can keep an existing session
+active beyond 60 seconds without re-running plugins. There is no fixed
+60-second bound for a hot-reload-to-deny to affect such a session.
+
+This page does not introduce immediate invalidation, a maximum session lifetime,
+or per-packet policy checks. It also does not establish correctness of session
+retirement races or shutdown draining. The corresponding backend-authorization
+boundary is documented in
+[Denied L4 Backend Refs Fail Closed](l4-backend-ref-denied-fail-closed.md).
+
+## Verification and re-evaluation
+
+Current source evidence is the constructor/resolver, handler delegation,
+`handle_client_packet`, `check_stream_plugins`, `StreamPluginStore::get`, the two
+send-result helpers, and `cleanup_expired_sessions` described above. Existing
+inline tests `test_stream_plugin_store_key_resolved_on_unit` and
+`test_no_annotation_leaves_store_key_none` cover unit key ownership; shared
+resolver tests cover normalization and namespace defaults. Handler test
+`delta_schema_sharing_preserves_siblings_and_old_generations` checks old/new
+plugin-key generations. UDP timeout/cleanup tests cover the constant and
+inactive/active session examples. These test sources do not prove cross-process
+policy hot reload or a live-session revocation bound; this documentation
+correction does not claim a fresh integration run.
+
+Re-evaluate a wiring report against `UdpRouteUnit::from_route`, the shared
+resolver, the selected-unit key passed by `handle_client_packet`, and the current
+store lookup in `check_stream_plugins`. Historical resolution is not grounds to
+reject a regression with current evidence. Re-evaluate the session contract if
+immediate policy revocation or a maximum lifetime becomes a requirement; that
+requires an explicit lifecycle design rather than assuming idle expiry supplies
+the guarantee.
+
+## Resolution references
+
+- udp-F012 / F-012: originally recorded fixed on 2026-05-26. The old record
+  described adding a schema-side key, resolving it in the handler, and retaining
+  a vestigial runtime field. Those ownership descriptions are historical, not
+  current fields or implementation requirements. The selected historical fix
+  implemented UDP support instead of the alternative controller warning/status
+  for an unsupported annotation.
+- F-016: established-session fast-path correction, recorded on 2026-05-26;
+  current owning knowledge is linked above.
+- B0214: corrected current route-unit ownership, removed the inaccurate
+  60-second revocation claim, and repaired the F-016 knowledge link. Runtime and
+  integration-test behavior are unchanged.
