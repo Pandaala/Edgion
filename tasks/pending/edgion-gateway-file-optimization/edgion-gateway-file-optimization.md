@@ -10,11 +10,11 @@
 | Priority | P1 |
 | Baseline commit | `d484e580` |
 | Scope | Every tracked file under `edgion-gateway/` |
-| Campaign status | in-progress; B0216 committed locally as `ede9c526`; external updates incorporated through `256733d7` |
-| Coverage | 546 current Gateway files: 223 changed, 172 examined-no-change, 13 deferred, 138 non-terminal; 3 historical rows are removed. B0217 is verified but uncommitted. Three Redis rows reopened after external `264847df`. |
-| Active batch | B0217 Gateway identity verified changed, independent LGTM and required gates passed; user reaffirmed automatic local batch commits, never push. D0119's pre-existing context layout failures remain separate. |
-| Analysis queue | Deferred B0218 handler and no-change B0219 matching facade remain analysis-ready; neither enters mutation before B0217's commit gate. D0123 tracks coalesced Gateway add divergence separately from D0003; known TLS/UDP lifecycle findings remain open. |
-| Integration freeze | 3,120 files. External `7534a9bf` README, `bfc2691e` four existing/six added paths, and `264847df` one new test were reconciled individually after byte/mode verification. No campaign integration-test edit occurred. |
+| Campaign status | in-progress; B0217 committed locally as `1ce924ef`; external updates reconciled through `53d59adb` |
+| Coverage | 547 current Gateway files: 218 changed, 172 examined-no-change, 13 deferred, 144 non-terminal; 3 historical rows are removed. Six OIDC rows reopened and one new test added after `74e6ccdd`; earlier Redis reopenings retained. |
+| Active batch | B0218 handler verified deferred; committing locally. Automatic local batch commits authorized, never push. D0119's pre-existing context layout failures remain separate. |
+| Analysis queue | B0219 matching facade and B0220 route matching are analysis-ready. D0123 tracks coalesced Gateway add divergence separately from D0003; known TLS/UDP lifecycle findings remain open. |
+| Integration freeze | 3,121 files. External updates through `53d59adb` were reconciled individually after byte/mode verification, most recently two changed files and one new DSL Redis test. No campaign integration-test edit occurred. |
 
 ## AI guide summary
 
@@ -23,6 +23,8 @@ Audit `edgion-gateway` file by file in cohesive, dependency-aware batches. Make 
 ## Requirements
 
 The user explicitly reaffirmed standing authorization: commit every batch locally after its independent review and verification gates, without further per-batch confirmation; never push. This campaign-specific instruction supplies the explicit Git authorization required by AGENTS.md. Keep one serial mutation lane and finish its local commit before promoting the next batch.
+
+The user concurrently resolves standalone `tasks/todo/` issues through other agents. Preserve and reconcile those external commits without reopening resolved issue bodies or treating HEAD movement alone as a blocker. This campaign directory is coordinator-owned; each repair task is self-contained and must not reference or require updates to a shared global task index. Only the coordinator maintains campaign status/backlinks here.
 
 - Cover every tracked file under `edgion-gateway/`; a reviewed file may legitimately need no change.
 - Preserve the Controller/Gateway split, conf-sync semantics, `EdgionHttpContext`, access-log architecture, Pingora lifecycle, and existing public behavior.

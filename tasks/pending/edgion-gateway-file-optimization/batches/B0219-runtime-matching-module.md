@@ -17,3 +17,5 @@
 - Module contains only two declarations and nine re-exports. Actual route/TLS callbacks, Gateway rebuild, admin stats and tests consume them; no hidden singleton, cache, wrapper, logging or duplicate matcher.
 - Visibility/re-export movement offers no demonstrated value. No technical allow-list, new issue, knowledge page or integration requirement.
 - Existing tests live in child modules; do not create redundant facade smoke tests. Revalidate exports after queued B0217 support changes, then independently review and rerun runtime matching at promotion.
+
+- Original analyst refreshed at `1ce924ef`: B0217 changed only child-module test construction/getter assertions, not production API or exports. Fresh matching tests 41/41 passed; target blob unchanged.

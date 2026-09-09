@@ -2,7 +2,7 @@
 
 ## Scope
 
-- Pipeline state: verified changed; local commit authorized, serial lane retained until commit.
+- Pipeline state: terminal changed; committed locally as `1ce924ef`.
 - Active anchor crate: `edgion-gateway`.
 - Target: `edgion-gateway/src/runtime/gateway_info.rs`.
 - Baseline: `2f51deff`.
@@ -47,4 +47,4 @@
 - Gateway library check and scoped formatting passed. Coordinator workspace format/check/Clippy, Gateway binary build, docs (1,266 files), SSA, metrics, Pingora source, Gateway tracing, English-only, diff and 3,120-file freeze passed. Clippy retains the recorded 983 Gateway lib-test warnings; no warning-free claim.
 - Final reviewer: `b0217_final_review`, separate from analyst, implementer and plan reviewer; LGTM with no Must Fix, Should Fix or new deferred finding. Independently verified complete consumers, dynamic TLS and the ownership knowledge claim; fresh identity 3/3, PGIS 10/10 and peer builder 15/15 passed. The broader backend filter covers the actual selected-service tests.
 - No integration or protected-path changes. No whole-workspace unit/integration run or measured latency/whole-request allocation claim. D0119's pre-existing broad context layout failures are not claimed fixed by these targeted checks.
-- Verification logs: `/tmp/edgion-b0217-{check,clippy,build}.log`, implementer `edgion-b0217-impl-*.log` and independent `edgion-b0217-final-review-*.log`. Local commit authorized; no push. B0218/B0219 remain queued until this commit completes.
+- Verification logs: `/tmp/edgion-b0217-{check,clippy,build}.log`, implementer `edgion-b0217-impl-*.log` and independent `edgion-b0217-final-review-*.log`. Resume formatting/workspace check/Clippy and all guards passed again without source changes. Committed locally as `1ce924ef`; no push.

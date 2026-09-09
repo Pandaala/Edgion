@@ -460,21 +460,22 @@
 | `edgion-gateway/src/plugins/http/mock/mod.rs` | `plugins-http-mock` | source | examined-no-change | B0089 |
 | `edgion-gateway/src/plugins/http/mock/plugin.rs` | `plugins-http-mock` | source | changed | B0089 |
 | `edgion-gateway/src/plugins/http/mod.rs` | `plugins-http-framework` | source | examined-no-change | B0062 |
-| `edgion-gateway/src/plugins/http/openid_connect/callback.rs` | `plugins-http-openid-connect` | source | changed | B0091 |
+| `edgion-gateway/src/plugins/http/openid_connect/auth_response_caps_integration.rs` | `plugins-http-openid-connect` | test | pending | Added by external `74e6ccdd`; independent file audit pending |
+| `edgion-gateway/src/plugins/http/openid_connect/callback.rs` | `plugins-http-openid-connect` | source | pending | Reopened after external `74e6ccdd`; historical B0091 retained |
 | `edgion-gateway/src/plugins/http/openid_connect/config_validation.rs` | `plugins-http-openid-connect` | source | changed | B0094: borrowed claim scopes and allocation-free issuer selection |
 | `edgion-gateway/src/plugins/http/openid_connect/discovery_jwks.rs` | `plugins-http-openid-connect` | source | changed | B0092 |
-| `edgion-gateway/src/plugins/http/openid_connect/error.rs` | `plugins-http-openid-connect` | source | deferred | B0094: D0058 owns the unified dependency error-to-wire model |
+| `edgion-gateway/src/plugins/http/openid_connect/error.rs` | `plugins-http-openid-connect` | source | pending | Reopened after external `74e6ccdd`; D0058 remains unresolved beyond response caps |
 | `edgion-gateway/src/plugins/http/openid_connect/jwks_provider.rs` | `plugins-http-openid-connect` | source | changed | B0092 |
 | `edgion-gateway/src/plugins/http/openid_connect/jwt_common.rs` | `plugins-http-openid-connect` | source | changed | B0090 |
 | `edgion-gateway/src/plugins/http/openid_connect/logout.rs` | `plugins-http-openid-connect` | source | examined-no-change | B0093 |
 | `edgion-gateway/src/plugins/http/openid_connect/mod.rs` | `plugins-http-openid-connect` | source | examined-no-change | B0094: minimal live module facade and visibility boundary retained |
-| `edgion-gateway/src/plugins/http/openid_connect/plugin.rs` | `plugins-http-openid-connect` | source | changed | B0091 |
+| `edgion-gateway/src/plugins/http/openid_connect/plugin.rs` | `plugins-http-openid-connect` | source | pending | Reopened after external `74e6ccdd`; historical B0091 retained |
 | `edgion-gateway/src/plugins/http/openid_connect/refresh_flight_registry.rs` | `plugins-http-openid-connect` | source | examined-no-change | B0092 |
-| `edgion-gateway/src/plugins/http/openid_connect/request_filter_impl.rs` | `plugins-http-openid-connect` | source | changed | B0093 |
+| `edgion-gateway/src/plugins/http/openid_connect/request_filter_impl.rs` | `plugins-http-openid-connect` | source | pending | Reopened after external `74e6ccdd`; historical B0093 retained |
 | `edgion-gateway/src/plugins/http/openid_connect/session_cookie.rs` | `plugins-http-openid-connect` | source | changed | B0091 |
 | `edgion-gateway/src/plugins/http/openid_connect/tests.rs` | `plugins-http-openid-connect` | test | changed | B0090; support reopened in B0091, B0093, and B0094 |
-| `edgion-gateway/src/plugins/http/openid_connect/token_exchange.rs` | `plugins-http-openid-connect` | source | changed | CACHE-001 / `40f7eb74`; support reopened in B0091 and B0093 |
-| `edgion-gateway/src/plugins/http/openid_connect/token_verify.rs` | `plugins-http-openid-connect` | source | changed | B0090; support reopened in B0091 |
+| `edgion-gateway/src/plugins/http/openid_connect/token_exchange.rs` | `plugins-http-openid-connect` | source | pending | Reopened after external `74e6ccdd`; historical CACHE-001/B0091/B0093 retained |
+| `edgion-gateway/src/plugins/http/openid_connect/token_verify.rs` | `plugins-http-openid-connect` | source | pending | Reopened after external `74e6ccdd`; historical B0090/B0091 retained |
 | `edgion-gateway/src/plugins/http/openid_connect/userinfo.rs` | `plugins-http-openid-connect` | source | examined-no-change | B0093 |
 | `edgion-gateway/src/plugins/http/plugin_store.rs` | `plugins-http-framework` | source | changed | B0062; B0121 condition-publication fail-close support |
 | `edgion-gateway/src/plugins/http/proxy_rewrite/mod.rs` | `plugins-http-proxy-rewrite` | source | examined-no-change | B0095 |
@@ -654,9 +655,9 @@
 | `edgion-gateway/src/routes/udp/routes_mgr.rs` | `routes-shared` | source | examined-no-change | B0215: independent approval of canonical serialized publication/retained-handle cleanup; manager 6/6, handler 10/10 |
 | `edgion-gateway/src/routes/udp/udp_route_table.rs` | `routes-shared` | source | examined-no-change | B0216: deterministic owned-unit lookup and route-count contract retained; independent approval, table 4/4 |
 | `edgion-gateway/src/runtime/gateway_info.rs` | `runtime` | source | changed | B0217: immutable precomputed borrowed identity key; independent LGTM and gates passed; local commit authorized |
-| `edgion-gateway/src/runtime/handler.rs` | `runtime` | source | analysis-ready | B0218: defer coalesced-add generation divergence D0123; D0003 remains separate |
+| `edgion-gateway/src/runtime/handler.rs` | `runtime` | source | deferred | B0218: independently confirmed D0123/D0003, safe continuation; policy 12/12 and PGIS 10/10 |
 | `edgion-gateway/src/runtime/matching/mod.rs` | `runtime` | source | analysis-ready | B0219: retain declaration-only facade and consumed matching exports |
-| `edgion-gateway/src/runtime/matching/route.rs` | `runtime` | source | pending | — |
+| `edgion-gateway/src/runtime/matching/route.rs` | `runtime` | source | analysis-ready | B0220: reuse Gateway lookup on named-listener path; correct two owning knowledge claims |
 | `edgion-gateway/src/runtime/matching/tests/tls_test.rs` | `runtime` | test | pending | — |
 | `edgion-gateway/src/runtime/matching/tls.rs` | `runtime` | source | pending | — |
 | `edgion-gateway/src/runtime/mod.rs` | `runtime` | source | pending | — |
