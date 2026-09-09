@@ -16,7 +16,9 @@ This is the single concise record of actual changes across the file-by-file audi
 
 ## Entries
 
-- B0231: deferred the independently confirmed per-bundle custom-CA validation defect as D0127; no production code changed. Mixed valid/empty bundles are accepted by three canonical adapters and require a plan-first cross-adapter repair. TLS/OIDC/common tests 32/32 and workspace/guard checks passed; external CredentialInjector freeze changes were independently reconciled, with no campaign integration edit. Local record commit SHA pending backfill; no push.
+- B0232: preserved fractional Token Bucket refill across calls with lazy state migration, exact integer retry timing, saturation/rollback handling and symmetric allow/deny persistence. Independent plan approval and final LGTM; scripts 4/4, shared 27/27, HTTP 14/14, connection 12/12 and full workspace/guard checks passed. Existing integrations unchanged; future real-Redis coverage is a standalone task. Local commit SHA pending; no push.
+
+- B0231: deferred the independently confirmed per-bundle custom-CA validation defect as D0127; no production code changed. Mixed valid/empty bundles are accepted by three canonical adapters and require a plan-first cross-adapter repair. TLS/OIDC/common tests 32/32 and workspace/guard checks passed; external CredentialInjector freeze changes were independently reconciled, with no campaign integration edit. Commit `64b0b164`; no push.
 
 - B0230: examined the runtime store facade with no code change. Independent LGTM confirmed every export and public module has live handler, Admin, route, L4, TLS or test consumers; visibility reshaping has no measurable value. Store 14/14, route 19/19 and full workspace/guard checks passed. No integration change. Commit `57df89f3`; no push.
 

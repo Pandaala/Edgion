@@ -10,11 +10,11 @@
 | Priority | P1 |
 | Baseline commit | `d484e580` |
 | Scope | Every tracked file under `edgion-gateway/` |
-| Campaign status | in-progress; B0229 committed as `6e4af44e`; B0230 examined-no-change committed as `57df89f3`. Remote CORS and subsequent user commits through `312d10e8` reconciled. |
-| Coverage | 547 current Gateway files: 221 changed, 180 examined-no-change, 14 deferred, 132 non-terminal; 3 historical rows are removed. HTTP conf_handler reopened after external CORS enforcement; earlier OIDC/Redis reopenings retained. |
-| Active batch | B0231 outbound TLS client: sole serial defer record commit gate at external `774c63bc`; no production edit. Automatic local batch commits authorized, never push. |
-| Analysis queue | B0232 Redis limiter scripts is analysis-ready with a plan-first fractional-refill fix. D0127 tracks the independently confirmed outbound CA gap. |
-| Integration freeze | 3,121 files. External CORS, ACME/GeoRestriction and CredentialInjector changes were individually verified against source commits and current HEAD; only proven entries reconciled. See external-sync records. No campaign integration-test edit occurred. |
+| Campaign status | in-progress; B0231 deferred as D0127 and committed as `64b0b164`; external user commits through `774c63bc` reconciled. |
+| Coverage | 548 current Gateway files: 222 changed, 180 examined-no-change, 14 deferred, 132 non-terminal; 3 historical rows are removed. HTTP conf_handler reopened after external CORS enforcement; earlier OIDC/Redis reopenings retained. |
+| Active batch | B0232 Redis limiter scripts: sole serial commit gate at external `55bb2c84`; independent plan/final review and all verification passed. Automatic local batch commits authorized, never push. |
+| Analysis queue | B0233 Redis limiter module is analysis-ready and must be refreshed after B0232; B0234 AI Guard evaluator is analysis-ready. D0127 tracks the independently confirmed outbound CA gap. |
+| Integration freeze | 3,124 files. External CORS, ACME/GeoRestriction, CredentialInjector and Transport changes were individually verified against source commits and current HEAD; only proven entries reconciled. See external-sync records. No campaign integration-test edit occurred. |
 
 ## AI guide summary
 

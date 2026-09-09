@@ -66,7 +66,7 @@
 | `config-root` | 1 | 0 | 1 | 0 | complete |
 | `crate-entry` | 2 | 0 | 2 | 0 | complete |
 | `crate-root` | 2 | 0 | 0 | 0 | pending |
-| `external-tests` | 1 | 0 | 0 | 0 | pending |
+| `external-tests` | 3 | 0 | 0 | 0 | pending |
 | `geoip` | 5 | 2 | 2 | 1 | complete |
 | `http-context` | 1 | 0 | 0 | 0 | pending |
 | `lb-backend-selector` | 3 | 0 | 0 | 0 | pending |
@@ -89,7 +89,7 @@
 | `observe-core` | 3 | 1 | 2 | 0 | complete |
 | `observe-metrics` | 5 | 3 | 2 | 0 | complete |
 | `observe-protocol-logs` | 7 | 4 | 3 | 0 | complete |
-| `plugins-common` | 3 | 1 | 2 | 0 | complete |
+| `plugins-common` | 3 | 1 | 1 | 0 | pending |
 | `plugins-http-ai-guard` | 5 | 0 | 0 | 0 | pending |
 | `plugins-http-ai-proxy` | 2 | 0 | 0 | 0 | pending |
 | `plugins-http-all-endpoint-status` | 3 | 1 | 1 | 0 | pending |
@@ -326,9 +326,9 @@
 | `edgion-gateway/src/observe/mod.rs` | `observe-core` | source | examined-no-change | OBS-CORE-001 / `4b1d27d5` |
 | `edgion-gateway/src/observe/request_diagnostics.rs` | `observe-core` | source | examined-no-change | OBS-CORE-001 / `4b1d27d5` |
 | `edgion-gateway/src/plugins/common/mod.rs` | `plugins-common` | source | examined-no-change | `B0061`: retained correct entry-scope compilation and identity separation |
-| `edgion-gateway/src/plugins/common/redis_rate_limiter/mod.rs` | `plugins-common` | source | pending | Reopened after external `264847df`; historical B0061 no-change retained |
-| `edgion-gateway/src/plugins/common/redis_rate_limiter/scripts.rs` | `plugins-common` | source | analysis-ready | B0232: plan-first fractional Token Bucket refill preservation candidate |
-| `edgion-gateway/src/plugins/http/ai_guard/evaluator.rs` | `plugins-http-ai-guard` | source | pending | — |
+| `edgion-gateway/src/plugins/common/redis_rate_limiter/mod.rs` | `plugins-common` | source | analysis-ready | B0233: remove warm-path String deep copies after B0232 freshness check |
+| `edgion-gateway/src/plugins/common/redis_rate_limiter/scripts.rs` | `plugins-common` | source | changed | B0232: persisted fractional refill; independent plan/final LGTM, focused filters passed |
+| `edgion-gateway/src/plugins/http/ai_guard/evaluator.rs` | `plugins-http-ai-guard` | source | analysis-ready | B0234: borrow selected span text during capped evaluator serialization |
 | `edgion-gateway/src/plugins/http/ai_guard/mod.rs` | `plugins-http-ai-guard` | source | pending | — |
 | `edgion-gateway/src/plugins/http/ai_guard/plugin.rs` | `plugins-http-ai-guard` | source | pending | REQ-BODY-CORE-001 follow-up: replace the 32-bit-truncating physical-cap `as usize` cast during the full plugin audit |
 | `edgion-gateway/src/plugins/http/ai_guard/rules.rs` | `plugins-http-ai-guard` | source | pending | — |
@@ -706,3 +706,4 @@
 | `edgion-gateway/src/util/redacted.rs` | `util` | source | examined-no-change | UTIL-001 / `a909f16f` |
 | `edgion-gateway/tests/conf_sync_failover.rs` | `external-tests` | test | pending | Added by external commit `715e20d5`; full audit pending |
 | `edgion-gateway/tests/geoip_fixture_readback.rs` | `external-tests` | test | pending | — |
+| `edgion-gateway/tests/tls_passthrough_clienthello.rs` | `external-tests` | test | pending | Added by external commit `55bb2c84`; full audit pending |
