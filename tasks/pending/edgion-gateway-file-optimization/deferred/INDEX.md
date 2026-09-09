@@ -180,7 +180,7 @@ These entries are backlinks only. A linked `tasks/todo` file is the editable sou
 | Define backendRef upstream-selection plugin semantics | pending | [task](../../../todo/define-backendref-upstream-selection-plugin-semantics.md) |
 | Add deferred-credential Connection nomination integration coverage | resolved (2026-09-09) | [maintained knowledge](../../../../skills/04-review/security/regression-guards/deferred-credential-connection-nomination.md) |
 | Clarify redirect connection policy | pending | [task](../../../todo/clarify-redirect-connection-policy.md) |
-| Add session cookie field integration coverage | pending | [task](../../../todo/add-session-cookie-field-integration.md) |
+| Add session cookie field integration coverage | resolved (2026-09-09) | [maintained knowledge](../../../../skills/04-review/routing/regression-guards/session-persistence-token-extraction.md) |
 | Add L4 duplex backpressure integration coverage | pending | [task](../../../todo/add-l4-duplex-backpressure-integration.md) |
 | Reconcile TLSRoute version guidance | pending | [task](../../../todo/reconcile-tlsroute-version-guidance.md) |
 | Reconcile route architecture ownership and rebuild documentation | pending | [task](../../../todo/route-architecture-manager-cache-documentation.md) |

@@ -24,7 +24,7 @@
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use async_trait::async_trait;
 use std::collections::HashSet;
-use std::time::Instant;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use super::super::test::test_service_client::TestServiceClient;
 use super::super::test::HelloRequest;
@@ -79,7 +79,116 @@ async fn say_hello(
 
 pub struct GrpcSessionPersistenceTestSuite;
 
+/// Send separate Cookie metadata fields over HTTP/2, preserving insertion order.
+async fn cookie_wire_rpc(
+    client: &mut TestServiceClient<tonic::transport::Channel>,
+    cookies: &[&str],
+) -> Result<(String, Option<String>), String> {
+    let mut request = tonic::Request::new(HelloRequest { name: "Edgion".into() });
+    for cookie in cookies {
+        request.metadata_mut().append(
+            "cookie",
+            cookie.parse().map_err(|e| format!("building Cookie metadata: {e}"))?,
+        );
+    }
+    let response = tokio::time::timeout(Duration::from_secs(5), client.say_hello(request))
+        .await
+        .map_err(|_| "cookie RPC timed out".to_string())?
+        .map_err(|e| format!("cookie RPC failed: {:?}: {}", e.code(), e.message()))?;
+    let mut tokens = response
+        .metadata()
+        .get_all("set-cookie")
+        .iter()
+        .filter_map(|value| value.to_str().ok()?.split(';').next()?.strip_prefix("edgion-grpc-sp="));
+    let token = tokens.next().map(str::to_owned);
+    if tokens.next().is_some() {
+        return Err("multiple affinity Set-Cookie fields in one response".into());
+    }
+    let addr = response.into_inner().server_addr;
+    if addr.is_empty() {
+        return Err("cookie RPC returned an empty backend identity".into());
+    }
+    Ok((addr, token))
+}
+
+fn live_cookie_hash(token: &str) -> Result<&str, String> {
+    let (hash, expiry) = token.split_once('.').ok_or("affinity token has no expiry")?;
+    let expiry = expiry.parse::<u64>().map_err(|_| "affinity expiry is not a u64")?;
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|e| format!("reading current epoch: {e}"))?
+        .as_secs();
+    if hash.len() != 16 || !hash.bytes().all(|c| c.is_ascii_hexdigit()) || expiry <= now {
+        return Err("affinity token must contain a 16-hex hash and a future expiry".into());
+    }
+    Ok(hash)
+}
+
+async fn cookie_wire_scenarios(ctx: TestContext) -> Result<String, String> {
+    let mut client = tokio::time::timeout(Duration::from_secs(5), connect(&ctx, COOKIE_HOSTNAME))
+        .await
+        .map_err(|_| "connecting cookie client timed out".to_string())??;
+    let mut seen = HashSet::new();
+    let mut issued = None;
+    for _ in 0..CONTROL_RPCS {
+        let (addr, token) = cookie_wire_rpc(&mut client, &[]).await?;
+        let token = token.ok_or("control RPC did not issue an affinity cookie")?;
+        live_cookie_hash(&token)?;
+        seen.insert(addr.clone());
+        issued = Some((addr, token));
+    }
+    if seen.len() < 2 {
+        return Err(format!("control RPCs reached fewer than two backends: {seen:?}"));
+    }
+    let (issuing_addr, token) = issued.ok_or("no control response")?;
+    let cookie = format!("{COOKIE_NAME}={token}");
+    for _ in 0..10 {
+        let (addr, refreshed) = cookie_wire_rpc(&mut client, &["unrelated=first", &cookie]).await?;
+        if addr != issuing_addr || refreshed.is_some() {
+            return Err(format!(
+                "second Cookie field: backend={addr}, expected={issuing_addr}, refreshed={}",
+                refreshed.is_some()
+            ));
+        }
+    }
+    let hash = live_cookie_hash(&token)?;
+    for suffix in ["invalid", "", "18446744073709551616", "1.2"] {
+        // Keep a known live hash so silently stripping the malformed suffix cannot pass.
+        let malformed = format!("{COOKIE_NAME}={hash}.{suffix}");
+        let (addr, refreshed) = cookie_wire_rpc(&mut client, &[&malformed]).await?;
+        let refreshed = refreshed.ok_or_else(|| format!("malformed expiry {suffix:?} did not refresh"))?;
+        live_cookie_hash(&refreshed)?;
+        let refreshed_cookie = format!("{COOKIE_NAME}={refreshed}");
+        // A refresh can legitimately issue identical bytes within the same second.
+        for _ in 0..5 {
+            let (replay_addr, reissued) = cookie_wire_rpc(&mut client, &[&refreshed_cookie]).await?;
+            if replay_addr != addr || reissued.is_some() {
+                return Err(format!(
+                    "refreshed cookie for suffix {suffix:?} did not remain pinned without reissue"
+                ));
+            }
+        }
+    }
+    Ok("Second Cookie field pins its issuing backend without refresh; four malformed expiry forms refresh and remain pinned".into())
+}
+
 impl GrpcSessionPersistenceTestSuite {
+    fn test_cookie_fields_and_malformed_expiry() -> TestCase {
+        TestCase::new(
+            "grpc_sp_cookie_fields_and_malformed_expiry",
+            "Repeated Cookie fields and malformed expiry on gRPC HTTP/2",
+            |ctx| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    match cookie_wire_scenarios(ctx).await {
+                        Ok(message) => TestResult::passed_with_message(start.elapsed(), message),
+                        Err(error) => TestResult::failed(start.elapsed(), error),
+                    }
+                })
+            },
+        )
+    }
+
     /// Control: without a token, RPCs must spread across >=2 backends. Guards
     /// the vacuous-pass trap (targetPort rewrite or a single live backend
     /// would make the sticky assertions below meaningless).
@@ -335,6 +444,7 @@ impl TestSuite for GrpcSessionPersistenceTestSuite {
             Self::test_cookie_persistence(),
             Self::test_header_persistence(),
             Self::test_stale_token_refresh(),
+            Self::test_cookie_fields_and_malformed_expiry(),
         ]
     }
 }

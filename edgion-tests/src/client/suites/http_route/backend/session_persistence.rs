@@ -12,6 +12,7 @@
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use async_trait::async_trait;
+use std::collections::HashSet;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 pub struct SessionPersistenceTestSuite;
@@ -36,7 +37,137 @@ fn parse_token_expiry(token: &str) -> Option<(&str, u64)> {
     }
 }
 
+/// Consume the response so status, affinity headers and backend identity are all checked.
+async fn cookie_wire_response(response: reqwest::Response) -> Result<(String, Option<String>), String> {
+    if response.status() != 200 {
+        return Err(format!("expected HTTP 200, got {}", response.status()));
+    }
+    let mut cookies = response
+        .headers()
+        .get_all("set-cookie")
+        .iter()
+        .filter_map(|value| value.to_str().ok()?.split(';').next()?.strip_prefix("edgion-sp-test="));
+    let token = cookies.next().map(str::to_owned);
+    if cookies.next().is_some() {
+        return Err("multiple affinity Set-Cookie fields in one response".into());
+    }
+    let body = response
+        .text()
+        .await
+        .map_err(|e| format!("reading echo response: {e}"))?;
+    let addr = body
+        .lines()
+        .find_map(|line| line.strip_prefix("Server: "))
+        .filter(|addr| !addr.is_empty())
+        .ok_or("echo response has no backend identity")?;
+    Ok((addr.to_owned(), token))
+}
+
+async fn cookie_wire_scenarios(ctx: TestContext) -> Result<String, String> {
+    let client = reqwest::Client::builder()
+        .http1_only()
+        .connect_timeout(std::time::Duration::from_secs(2))
+        .timeout(std::time::Duration::from_secs(5))
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|e| format!("building HTTP client: {e}"))?;
+    let request = || {
+        client
+            .get(format!("{}/test", ctx.http_url()))
+            .header("host", "sp-cookie.example.com")
+    };
+    let mut seen = HashSet::new();
+    let mut issued = None;
+    // Prove the topology can distinguish backends before making any sticky assertion.
+    for _ in 0..20 {
+        let response = request().send().await.map_err(|e| format!("control request: {e}"))?;
+        let (addr, token) = cookie_wire_response(response).await?;
+        let token = token.ok_or("control request did not issue an affinity cookie")?;
+        if parse_token_expiry(&token).is_none_or(|(_, expiry)| expiry <= now_secs()) {
+            return Err("issued affinity token has no valid future expiry".into());
+        }
+        seen.insert(addr.clone());
+        issued = Some((addr, token));
+    }
+    if seen.len() < 2 {
+        return Err(format!("control requests reached fewer than two backends: {seen:?}"));
+    }
+    let (issuing_addr, token) = issued.ok_or("no control response")?;
+    for _ in 0..10 {
+        // HeaderMap::append keeps these as distinct H1 fields, in this order.
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.append("cookie", reqwest::header::HeaderValue::from_static("unrelated=first"));
+        headers.append(
+            "cookie",
+            format!("edgion-sp-test={token}")
+                .parse()
+                .map_err(|e| format!("building affinity Cookie: {e}"))?,
+        );
+        let response = request()
+            .headers(headers)
+            .send()
+            .await
+            .map_err(|e| format!("second-field request: {e}"))?;
+        let (addr, refreshed) = cookie_wire_response(response).await?;
+        if addr != issuing_addr || refreshed.is_some() {
+            return Err(format!(
+                "second Cookie field: backend={addr}, expected={issuing_addr}, refreshed={}",
+                refreshed.is_some()
+            ));
+        }
+    }
+    let (hash, _) = parse_token_expiry(&token).ok_or("invalid control token")?;
+    for suffix in ["invalid", "", "18446744073709551616", "1.2"] {
+        // A known live hash is essential: an arbitrary hash would miss even with the old bug.
+        let response = request()
+            .header("cookie", format!("edgion-sp-test={hash}.{suffix}"))
+            .send()
+            .await
+            .map_err(|e| format!("malformed-expiry request: {e}"))?;
+        let (addr, refreshed) = cookie_wire_response(response).await?;
+        let refreshed = refreshed.ok_or_else(|| format!("malformed expiry {suffix:?} did not refresh"))?;
+        if parse_token_expiry(&refreshed).is_none_or(|(_, expiry)| expiry <= now_secs()) {
+            return Err(format!(
+                "malformed expiry {suffix:?} did not produce a valid future expiry"
+            ));
+        }
+        // Refresh need not change the hash or timestamp when it selects the same backend.
+        // Prove the newly issued cookie actually pins its issuing backend without another refresh.
+        for _ in 0..5 {
+            let response = request()
+                .header("cookie", format!("edgion-sp-test={refreshed}"))
+                .send()
+                .await
+                .map_err(|e| format!("refreshed-cookie request: {e}"))?;
+            let (replay_addr, reissued) = cookie_wire_response(response).await?;
+            if replay_addr != addr || reissued.is_some() {
+                return Err(format!(
+                    "refreshed cookie for suffix {suffix:?} did not remain pinned without reissue"
+                ));
+            }
+        }
+    }
+    Ok("Second Cookie field pins its issuing backend without refresh; four malformed expiry forms refresh and remain pinned".into())
+}
+
 impl SessionPersistenceTestSuite {
+    fn test_cookie_fields_and_malformed_expiry() -> TestCase {
+        TestCase::new(
+            "cookie_fields_and_malformed_expiry",
+            "Repeated Cookie fields and malformed expiry on HTTP/1.1",
+            |ctx| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    match cookie_wire_scenarios(ctx).await {
+                        Ok(message) => TestResult::passed_with_message(start.elapsed(), message),
+                        Err(error) => TestResult::failed(start.elapsed(), error),
+                    }
+                })
+            },
+        )
+    }
+
     /// Test Cookie-based session persistence
     fn test_cookie_persistence() -> TestCase {
         TestCase::new(
@@ -482,6 +613,7 @@ impl TestSuite for SessionPersistenceTestSuite {
             Self::test_header_persistence(),
             Self::test_cookie_absolute_expiry_and_refresh(),
             Self::test_header_absolute_expiry_and_refresh(),
+            Self::test_cookie_fields_and_malformed_expiry(),
         ]
     }
 }

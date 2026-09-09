@@ -1,0 +1,18 @@
+# Separate ports make backend identity observable through the shared echo server.
+apiVersion: discovery.k8s.io/v1
+kind: EndpointSlice
+metadata:
+  name: sp-service-eps-30002
+  namespace: edgion-default
+  labels:
+    kubernetes.io/service-name: sp-service
+addressType: IPv4
+ports:
+  - name: http
+    port: 30002
+    protocol: TCP
+endpoints:
+  - addresses:
+      - "127.0.0.1"
+    conditions:
+      ready: true
