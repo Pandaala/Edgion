@@ -2,7 +2,7 @@
 
 ## Scope
 
-- Pipeline state: verified; awaiting local commit.
+- Pipeline state: committed locally.
 - Active anchor crate: `edgion-gateway`.
 - Target: `edgion-gateway/src/routes/tls/proxy.rs`.
 - Baseline: `c70aa9fe`.
@@ -37,4 +37,4 @@
 - Format/diff, documentation (1,264 files), SSA, metrics, Pingora, Gateway tracing, English-only, frozen paths, corrected workspace check, Clippy and Gateway build passed. Routes 597/597, TLS 54/54, logs 17/17, relevant request-scenario context 3/3 and independent proxy tests 2/2 passed.
 - Independent wait diagnosis confirmed active test-binary compilation with advancing CPU time and sufficient disk, not a deadlock; the queue completed without process intervention.
 - Broader `ctx::` execution and independent rerun reported 91 passed, three failed fixed-size layout assertions and one ignored. Independent diagnosis traced all three to committed HTTP layout changes (`90a45683`, `9b6b6fa0`, `8cbbed6c`), verified unchanged context/Cargo sources and no embedded dependency on this function-only TLS diff, and approved safe continuation with D0119. Separate grpc/context budget tests each pass; no claim of complete context or allocation-free verification is made. No assertion was edited to suppress failure.
-- Commit: pending local commit; no push.
+- Commit: `ac3dfe7c`; no push.
