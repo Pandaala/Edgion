@@ -106,6 +106,16 @@ spec:
 
 ## 与 CORS 的关系
 
+原生 Gateway API `type: CORS` 仅支持配置在 `HTTPRoute.spec.rules[].filters`，
+不支持 `backendRefs[].filters`。任何后端上的原生 CORS 都会使所属整条规则无效，
+包括零权重后端以及与规则级 CORS 混用的情况。Edgion 通过 `PartiallyInvalid=True`
+说明出错的后端索引，其他有效规则继续服务。如果没有规则可以服务，且本路由声明的
+规则存在此作用域错误，则改为通过 `Accepted=False`、原因 `UnsupportedValue` 拒绝
+Gateway 绑定。对于委派子路由，父路由的委派诊断会说明子规则和后端索引。
+预检和实际请求都不再匹配该无效规则；
+如果没有其他有效规则匹配，则返回 `404`。请将策略移到规则级，使其应用于该规则的
+所有后端。此限制同样适用于委派路由，修改配置后无需重启 Gateway。
+
 预检如何与 CORS 交互取决于路由的 CORS 配置方式：
 
 - **Gateway API 原生 `type: CORS` filter**——预检处理器**不介入**；预检由路由级 filter 链内部处理，`preflightPolicy` 对此路径无效。

@@ -16,6 +16,10 @@ handler delegates to the normal route plugin pipeline without running an ad-hoc 
 instance. The route runtime is the single owner of local preflight responses and queued
 pass-through response headers.
 
+This EdgionPlugins conclusion does not imply backendRef-scoped native CORS support.
+The [native CORS scope decision](../intentional-design/native-cors-rule-scope.md)
+owns that separate boundary and the D0084 correction.
+
 Fix suggestions that de-duplicate every repeated `PendingHeaderOp::Append` pair are **not
 accepted**.
 

@@ -193,6 +193,25 @@ pub struct HTTPRouteRule {
     pub parsed_mirror_tuning: Option<MirrorTuning>,
 }
 
+impl HTTPRouteRule {
+    /// Native CORS is supported only at rule scope. Reject the whole rule when
+    /// any backend reference carries it, even at weight zero or alongside a
+    /// rule-level policy. Preflight ownership cannot depend on backend selection.
+    /// Shared by Controller validation (including delegation) and Gateway publication.
+    pub fn unsupported_backend_cors_reason(&self) -> Option<String> {
+        let index = self.backend_refs.as_ref()?.iter().position(|backend| {
+            backend.filters.as_ref().is_some_and(|filters| {
+                filters
+                    .iter()
+                    .any(|filter| filter.filter_type == HTTPRouteFilterType::CORS)
+            })
+        })?;
+        Some(format!(
+            "backendRefs[{index}] CORS is not supported; configure CORS in rules[].filters instead"
+        ))
+    }
+}
+
 impl Clone for HTTPRouteRule {
     fn clone(&self) -> Self {
         Self {
@@ -1437,6 +1456,42 @@ pub struct RouteParentStatus {
 mod tests {
     use super::*;
     use std::time::Duration;
+
+    #[test]
+    fn backend_cors_scope_rejects_every_backend_policy() {
+        use serde_json::json;
+        let cors = json!({"type": "CORS", "cors": {"allowOrigins": ["https://app.example"]}});
+        for filter in [cors.clone(), json!({"type": "CORS"})] {
+            for weight in [0, 1, 50] {
+                for rule_filters in [json!([]), json!([cors.clone()])] {
+                    let rule: HTTPRouteRule = serde_json::from_value(json!({
+                        "filters": rule_filters,
+                        "backendRefs": [
+                            {"name": "plain", "port": 80},
+                            {"name": "cors", "port": 80, "weight": weight, "filters": [filter]}
+                        ]
+                    }))
+                    .unwrap();
+                    assert_eq!(
+                        rule.unsupported_backend_cors_reason().as_deref(),
+                        Some("backendRefs[1] CORS is not supported; configure CORS in rules[].filters instead")
+                    );
+                }
+            }
+        }
+        for rule in [
+            json!({}),
+            json!({"filters": [cors]}),
+            json!({
+                "backendRefs": [{"name": "plain", "port": 80, "filters": [
+                    {"type": "RequestHeaderModifier", "requestHeaderModifier": {"set": [{"name": "x-test", "value": "ok"}]}}
+                ]}]
+            }),
+        ] {
+            let rule: HTTPRouteRule = serde_json::from_value(rule).unwrap();
+            assert_eq!(rule.unsupported_backend_cors_reason(), None);
+        }
+    }
 
     #[test]
     fn route_status_empty_parents_serialize_explicit_array() {

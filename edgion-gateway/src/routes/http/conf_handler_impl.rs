@@ -342,6 +342,7 @@ fn append_match_to_domain(domain_rules: &mut DomainRouteRulesMap, hostname: &str
 struct SharedHttpRule {
     rule_id: usize,
     rule: Arc<HTTPRouteRule>,
+    runtime: HttpRuleRuntime,
     metric_handles: Arc<crate::observe::metrics::route_handles::RouteMetricHandles>,
 }
 
@@ -353,11 +354,10 @@ fn append_route_to_hostname(
     validated: &ValidatedHttpRoute<'_>,
     resource_key: &str,
     // Resolved once per route by the caller and shared across every hostname
-    // bucket, matching how `rule_runtimes` is hoisted.
+    // bucket, like the runtimes in `shared_rules`.
     resolved_parent_refs: &Arc<[ResolvedParentRef]>,
     creation_ts_ms: i64,
     route_sv: u64,
-    rule_runtimes: &[HttpRuleRuntime],
     shared_rules: &[SharedHttpRule],
     route_arc: &Arc<HTTPRoute>,
 ) {
@@ -374,10 +374,10 @@ fn append_route_to_hostname(
     for shared_rule in shared_rules {
         let rule_id = shared_rule.rule_id;
         let rule = &shared_rule.rule;
-        // Compiled runtime is built ONCE per rule (`rule_runtimes[rule_id]`);
+        // Compiled runtime is built ONCE per accepted rule;
         // the LB selector is built once per (rule, hostname) and shared across
         // this rule's match-item units.
-        let rule_rt = &rule_runtimes[rule_id];
+        let rule_rt = &shared_rule.runtime;
         let backend_finder = HttpRouteRuleUnit::build_backend_selector(&rule_rt.backends);
         let matches = match &rule.matches {
             Some(m) if !m.is_empty() => m,
@@ -443,16 +443,7 @@ fn parse_http_routes_to_domain_rules(data: &HashMap<String, Arc<HTTPRoute>>) -> 
         let route_sv = route.get_sync_version();
         let creation_ts_ms = extract_creation_ts_ms(route);
         let resource_key = route.key_name();
-        // Compile each rule's runtime ONCE per route (shared across all hostnames
-        // and match-items). Correctness-critical: in-memory RateLimit owns per-rule
-        // state, so building a runtime per hostname/match would split that state.
-        let rule_runtimes: Vec<HttpRuleRuntime> = validated
-            .rules
-            .iter()
-            .map(|r| HttpRouteRuleUnit::compile_http_rule(r, &validated.namespace))
-            .collect();
-
-        // Resolved ONCE per route, like `rule_runtimes` above: the inputs are
+        // Resolved ONCE per route: the inputs are
         // loop-invariant across hostnames, and the resulting slice is
         // Arc-shared into every match-item unit of every hostname bucket.
         let resolved_parent_refs: Arc<[ResolvedParentRef]> =
@@ -472,7 +463,15 @@ fn parse_http_routes_to_domain_rules(data: &HashMap<String, Arc<HTTPRoute>>) -> 
             .iter()
             .enumerate()
             .filter(|(rule_id, _)| !invalid_rule_indices.is_some_and(|inv| inv.contains(rule_id)))
-            .map(|(rule_id, rule)| {
+            .filter_map(|(rule_id, rule)| {
+                // Check effective rules independently of Controller status, including
+                // resolved delegation rules, before compiling or publishing a runtime.
+                if let Some(reason) = rule.unsupported_backend_cors_reason() {
+                    tracing::warn!(route = %resource_key, rule_id, %reason, "skipping unsupported HTTPRoute rule");
+                    return None;
+                }
+                // Share one runtime across every hostname and match of this rule.
+                let runtime = HttpRouteRuleUnit::compile_http_rule(rule, &validated.namespace);
                 let rule = Arc::new(rule.clone());
                 let metric_handles = Arc::new(crate::observe::metrics::route_handles::RouteMetricHandles::build(
                     &attached_gateways,
@@ -480,11 +479,12 @@ fn parse_http_routes_to_domain_rules(data: &HashMap<String, Arc<HTTPRoute>>) -> 
                     &validated.name,
                     &http_backends_from_rule(&rule, &validated.namespace),
                 ));
-                SharedHttpRule {
+                Some(SharedHttpRule {
                     rule_id,
                     rule,
+                    runtime,
                     metric_handles,
-                }
+                })
             })
             .collect();
         for hostname in &get_effective_hostnames(route) {
@@ -496,7 +496,6 @@ fn parse_http_routes_to_domain_rules(data: &HashMap<String, Arc<HTTPRoute>>) -> 
                 &resolved_parent_refs,
                 creation_ts_ms,
                 route_sv,
-                &rule_runtimes,
                 &shared_rules,
                 route,
             );
@@ -1139,7 +1138,7 @@ mod tests {
 
     /// The resolved slice is built once per ROUTE, not once per hostname, so
     /// units in different hostname buckets of the same route share one
-    /// allocation. This mirrors how `rule_runtimes` is hoisted in the same
+    /// allocation. This mirrors how rule runtimes are shared in the same
     /// loop; the inputs are loop-invariant across hostnames.
     #[test]
     fn resolved_parent_refs_are_shared_across_hostname_buckets() {
@@ -1317,6 +1316,55 @@ mod tests {
         let domain_rules = parse_http_routes_to_domain_rules(&data);
         let paths = domain_unit_paths(&domain_rules, "test.example.com");
         assert_eq!(paths, vec!["/spec-b"], "indices must still apply to spec.rules");
+    }
+
+    #[test]
+    fn backend_cors_scope_rejected_without_controller_status_or_for_resolved_rules() {
+        use serde_json::json;
+        let cors = json!({"type": "CORS", "cors": {"allowOrigins": ["https://app.example"]}});
+        let rules = json!([
+            {"matches": [{"path": {"value": "/backend-only"}}], "backendRefs": [
+                {"name": "svc", "port": 80, "filters": [cors.clone()]}
+            ]},
+            {"matches": [{"path": {"value": "/rule-only"}}], "filters": [cors.clone()],
+             "backendRefs": [{"name": "svc", "port": 80}]},
+            {"matches": [{"path": {"value": "/mixed"}}], "filters": [cors.clone()],
+             "backendRefs": [{"name": "svc", "port": 80, "filters": [cors.clone()]}]},
+            {"matches": [{"path": {"value": "/weighted"}}], "backendRefs": [
+                {"name": "plain", "port": 80, "weight": 1},
+                {"name": "cors", "port": 80, "weight": 0, "filters": [cors]}
+            ]},
+            {"matches": [{"path": {"value": "/plain"}}], "backendRefs": [{"name": "svc", "port": 80}]}
+        ]);
+        for resolved in [false, true] {
+            let mut route = route_with_paths(
+                "cors-scope",
+                "route",
+                vec!["cors.example"],
+                "2026-09-09T00:00:00Z",
+                rules.clone(),
+            );
+            if resolved {
+                route.spec.resolved_rules = route.spec.rules.take();
+                // These indices address authored rules, never resolved rules.
+                route.spec.invalid_rule_indices = Some(vec![1, 4]);
+            }
+            route.pre_parse();
+            assert!(route.status.is_none());
+            let data = HashMap::from([("cors-scope/route".to_string(), Arc::new(route))]);
+            let domains = parse_http_routes_to_domain_rules(&data);
+            let mut paths = domain_unit_paths(&domains, "cors.example");
+            paths.sort();
+            assert_eq!(paths, ["/plain", "/rule-only"], "resolved={resolved}");
+            let (normal, regex) = domains.get("cors.example").unwrap();
+            let mut ids: Vec<_> = normal
+                .iter()
+                .chain(regex)
+                .map(|unit| unit.matched_info.rule_id)
+                .collect();
+            ids.sort();
+            assert_eq!(ids, [1, 4], "dropping rules must preserve original rule IDs");
+        }
     }
 
     #[test]

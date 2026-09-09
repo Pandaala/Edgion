@@ -13,6 +13,33 @@
 ./scripts/run.sh --extended
 ```
 
+## Native CORS coverage boundary
+
+The module pins Gateway API types to v1.5.0 and the conformance suite to v1.5.1.
+`HTTPRouteCORS` and `HTTPRouteCORSAllowCredentialsBehavior` use only rule-level
+`filters` (seven rules in their two manifests); neither exercises backendRef CORS.
+Keep these tests enabled for the supported rule-level behavior. There is no separate
+backendRef CORS feature flag in this pinned suite. The existing `HTTPRouteCORS`
+declaration must not be read as evidence of complete backendRef coverage.
+
+Edgion explicitly rejects native CORS in `backendRefs[].filters`; Gateway API
+v1.5.0 defines that placement as an Extended capability, not a Core requirement.
+The API's generic backend-filter field also has an implementation-specific support
+annotation. Passing the current suite alone does not resolve that specification
+granularity or establish support for all placements. Recheck both the declaration
+and the tests when upgrading the dependency or changing the supported scope.
+
+The separate scope regression client uses the shared HTTPRoute/Basic topology and
+does not change upstream tests or existing fixtures:
+
+```bash
+# From the repository root, after starting HTTPRoute/Basic:
+python3 edgion-tests/integration/scripts/integration/test_native_cors_scope.py
+```
+
+It verifies backend-only/mixed/zero-weight rejection, allowed and denied origins
+at rule scope, the no-CORS fallback, and policy moves through hot reload and delegation.
+
 ## TLSRoute-only environment
 
 TLSRoute data-plane conformance requires the TLS passthrough listener on 443 to be

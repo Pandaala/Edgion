@@ -645,13 +645,13 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
         let generation = route.metadata.generation;
         let route_ns = route.metadata.namespace.as_deref().unwrap_or("default");
 
-        // Protocol attachment and backend-contract violations are per-rule findings, like a
+        // Protocol attachment, backend-contract, and native CORS scope violations are per-rule findings, like a
         // rewrite/redirect conflict: they drop just that rule via
         // `invalid_rule_indices` + PartiallyInvalid. They are lifted to a
         // route-level Accepted=False only when no rule is left to serve for this
-        // parent (`protocol_rejects_route` below). Emitting both would advertise
+        // parent (`attachment_rejects_route` below). Emitting both would advertise
         // "N of M rules active" while the gateway drops the entire route.
-        let protocol_invalid_rules: Vec<(usize, String)> = route
+        let attachment_invalid_rules: Vec<(usize, String)> = route
             .spec
             .rules
             .iter()
@@ -659,6 +659,7 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
             .enumerate()
             .filter_map(|(index, rule)| {
                 protocol_rule_invalid_reason_with_runtime(rule, route_ns, _ctx.runtime())
+                    .or_else(|| rule.unsupported_backend_cors_reason())
                     .map(|message| (index, message))
             })
             .collect();
@@ -709,18 +710,26 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
             Some(resolved) => resolved.is_empty(),
             None => valid_rules == 0,
         };
-        let protocol_rejects_route = !protocol_invalid_rules.is_empty() && serves_no_rule;
+        let attachment_rejects_route = !attachment_invalid_rules.is_empty() && serves_no_rule;
 
         let mut validation_accepted_errors = AcceptedError::from_validation_errors(validation_errors);
         validation_accepted_errors.extend(ownership_accepted_errors.clone());
-        if protocol_rejects_route {
-            for (index, message) in &protocol_invalid_rules {
+        if attachment_rejects_route {
+            for (index, message) in &attachment_invalid_rules {
                 validation_accepted_errors.push(AcceptedError::UnsupportedValue {
                     message: format!("rules[{index}]: {message}"),
                 });
             }
+            // PartiallyInvalid is suppressed for a rejected attachment, so keep
+            // the dropped child diagnostics in its Accepted condition instead.
+            validation_accepted_errors.extend(
+                delegation_dropped
+                    .iter()
+                    .cloned()
+                    .map(|message| AcceptedError::UnsupportedValue { message }),
+            );
         }
-        let route_rejected = protocol_rejects_route || !ownership_accepted_errors.is_empty();
+        let route_rejected = attachment_rejects_route || !ownership_accepted_errors.is_empty();
 
         let status = route.status.get_or_insert_with(|| HTTPRouteStatus { parents: vec![] });
         let route_hostnames = route.spec.hostnames.as_ref();
@@ -749,7 +758,7 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
                 // the route at all; flipping it to False would drop the entire route
                 // from the data-plane route table.
                 //
-                // Exceptions are an AI protocol violation that leaves no rule
+                // Exceptions are an AI protocol or native CORS scope violation that leaves no rule
                 // serving and a backend-scoped WAF ownership violation. WAF is
                 // request-wide, so a late backend attachment makes the route's
                 // election ambiguous even when a sibling rule could serve.
@@ -780,7 +789,7 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
                 // Set PartiallyInvalid condition (own-rule findings plus
                 // delegation drops — a dropped delegated rule never flips
                 // Accepted, matching the per-rule precedent above). Skipped when
-                // `protocol_rejects_route` already rejected the whole route: a route
+                // `attachment_rejects_route` already rejected the whole route: a route
                 // that serves nothing must not also claim rules are active.
                 let own_invalid = !invalid_indices.is_empty() && valid_rules > 0;
                 if !route_rejected && (own_invalid || !delegation_dropped.is_empty()) {
@@ -976,16 +985,18 @@ fn has_rewrite_redirect_conflict(
     has_rewrite && has_redirect
 }
 
-/// Return `Some(reason)` if any `type: CORS` filter on the rule (rule-level or
-/// per-backendRef) is malformed: either `cors:` config is absent, or
+/// Return `Some(reason)` for unsupported backendRef-scoped CORS, or a malformed
+/// rule-level `type: CORS` filter: either `cors:` config is absent, or
 /// `HTTPCORSFilter::validate()` rejects the origin format. Reason text is
 /// operator-readable and lands in the `PartiallyInvalid` condition message.
 ///
-/// Rules flagged here go into `invalid_rule_indices` → `PartiallyInvalid=True`
-/// while the route stays `Accepted=True`. This matches the rewrite/redirect
-/// filter-conflict precedent and avoids dropping the entire route from the
-/// data-plane route table on misconfiguration.
+/// Rules flagged here go into `invalid_rule_indices`. With surviving siblings,
+/// `PartiallyInvalid=True` leaves those rules active. A backend CORS scope error
+/// with no surviving effective rule escalates to `Accepted=False/UnsupportedValue`.
 fn invalid_cors_reason(rule: &edgion_resources::resources::http_route::HTTPRouteRule) -> Option<String> {
+    if let Some(reason) = rule.unsupported_backend_cors_reason() {
+        return Some(reason);
+    }
     let filter_reason = |f: &edgion_resources::resources::http_route::HTTPRouteFilter| -> Option<String> {
         if f.filter_type != HTTPRouteFilterType::CORS {
             return None;
@@ -999,17 +1010,6 @@ fn invalid_cors_reason(rule: &edgion_resources::resources::http_route::HTTPRoute
         for f in filters {
             if let Some(reason) = filter_reason(f) {
                 return Some(reason);
-            }
-        }
-    }
-    if let Some(backend_refs) = rule.backend_refs.as_ref() {
-        for (br_idx, br) in backend_refs.iter().enumerate() {
-            if let Some(br_filters) = br.filters.as_ref() {
-                for f in br_filters {
-                    if let Some(reason) = filter_reason(f) {
-                        return Some(format!("backendRefs[{br_idx}] {reason}"));
-                    }
-                }
             }
         }
     }
@@ -1692,7 +1692,7 @@ fn backend_waf_ownership_errors(
 ///
 /// A rule is invalid if:
 /// - It has conflicting URLRewrite + RequestRedirect filters (rule-level, per-backendRef, or cross-level)
-/// - It has a malformed CORS filter (missing `cors:` block, or origin fails Gateway API v1.5 validation)
+/// - It has backendRef-scoped CORS, or malformed rule-level CORS (missing `cors:` block or invalid origin)
 /// - It has an ExtensionRef filter targeting an unsupported kind (only EdgionPlugins is supported)
 ///
 /// The reason string is rendered into the `PartiallyInvalid` condition message
@@ -3085,6 +3085,99 @@ spec:
 "#;
         let route: HTTPRoute = serde_yaml::from_str(yaml).unwrap();
         assert_eq!(indices_only(find_invalid_rule_details(&route, "default")), vec![0]);
+    }
+
+    #[test]
+    fn backend_cors_scope_status_clears_after_policy_moves_to_rule() {
+        let mut route = route_with_one_cors_rule(&["https://app.example"]);
+        route.spec.parent_refs = Some(serde_json::from_value(serde_json::json!([{"name": "gw"}])).unwrap());
+        let rules = route.spec.rules.as_mut().unwrap();
+        let valid = rules[0].clone();
+        rules[0].backend_refs = Some(
+            serde_json::from_value(serde_json::json!([
+                {"name": "svc", "port": 80, "filters": [
+                    {"type": "CORS", "cors": {"allowOrigins": ["https://app.example"]}}
+                ]}
+            ]))
+            .unwrap(),
+        );
+        rules.push(valid);
+        let handler = HttpRouteHandler::default();
+        let ctx = make_ctx();
+        handler.update_status(&mut route, &ctx, &[]);
+        assert_eq!(route.spec.invalid_rule_indices.as_deref(), Some(&[0][..]));
+        let partial = route.status.as_ref().unwrap().parents[0]
+            .conditions
+            .iter()
+            .find(|condition| condition.type_ == "PartiallyInvalid")
+            .unwrap();
+        assert_eq!(partial.status, "True");
+        assert_eq!(partial.reason, "RuleInvalid");
+        assert!(partial.message.contains("backendRefs[0] CORS is not supported"));
+        assert!(partial.message.contains("1 of 2 rules active"));
+
+        // Removing the valid sibling must not clear the diagnostic as AllRulesValid.
+        route.spec.rules.as_mut().unwrap().truncate(1);
+        handler.update_status(&mut route, &ctx, &[]);
+        let conditions = &route.status.as_ref().unwrap().parents[0].conditions;
+        let accepted = conditions.iter().find(|c| c.type_ == "Accepted").unwrap();
+        assert_eq!(accepted.status, "False");
+        assert!(accepted.message.contains("backendRefs[0] CORS is not supported"));
+        let partial = conditions.iter().find(|c| c.type_ == "PartiallyInvalid").unwrap();
+        assert_eq!(partial.status, "False");
+        assert_eq!(partial.reason, "UnsupportedValue");
+
+        route.spec.rules.as_mut().unwrap()[0].backend_refs.as_mut().unwrap()[0].filters = None;
+        handler.update_status(&mut route, &ctx, &[]);
+        assert_eq!(route.spec.invalid_rule_indices, None);
+        assert!(!route.status.as_ref().unwrap().parents[0]
+            .conditions
+            .iter()
+            .any(|condition| condition.message.contains("CORS is not supported")));
+        assert!(!route.status.as_ref().unwrap().parents[0]
+            .conditions
+            .iter()
+            .any(|condition| condition.type_ == "PartiallyInvalid" && condition.status == "True"));
+    }
+
+    #[test]
+    fn backend_cors_scope_delegation_diagnostic_survives_attachment_rejection() {
+        let mut route = route_with_one_cors_rule(&["https://app.example"]);
+        let valid = route.spec.rules.as_ref().unwrap()[0].clone();
+        route.spec.parent_refs = Some(serde_json::from_value(serde_json::json!([{"name": "gw"}])).unwrap());
+        route.spec.rules = Some(
+            serde_json::from_value(serde_json::json!([{
+                "backendRefs": [{"group": "gateway.networking.k8s.io", "kind": "HTTPRoute", "name": "child"}]
+            }]))
+            .unwrap(),
+        );
+        route.spec.resolved_rules = Some(vec![]);
+        let diagnostic = "child 'default/child' rules[0] dropped: backendRefs[0] CORS is not supported; configure CORS in rules[].filters instead";
+        route.spec.delegation_issues = vec![DelegationIssue::RuleDropped {
+            message: diagnostic.to_string(),
+        }];
+        let handler = HttpRouteHandler::default();
+        let ctx = make_ctx();
+        handler.update_status(&mut route, &ctx, &[]);
+        let conditions = &route.status.as_ref().unwrap().parents[0].conditions;
+        let accepted = conditions.iter().find(|c| c.type_ == "Accepted").unwrap();
+        assert_eq!(accepted.status, "False");
+        assert!(accepted.message.contains(diagnostic));
+        assert!(!conditions.iter().any(|c| c.reason == "AllRulesValid"));
+
+        // With a surviving effective rule, diagnostics belong to PartiallyInvalid.
+        route.spec.resolved_rules = Some(vec![valid]);
+        handler.update_status(&mut route, &ctx, &[]);
+        assert!(route.status.as_ref().unwrap().parents[0]
+            .conditions
+            .iter()
+            .any(|c| c.type_ == "PartiallyInvalid" && c.status == "True" && c.message.contains(diagnostic)));
+        route.spec.delegation_issues.clear();
+        handler.update_status(&mut route, &ctx, &[]);
+        assert!(!route.status.as_ref().unwrap().parents[0]
+            .conditions
+            .iter()
+            .any(|c| c.message.contains("CORS is not supported")));
     }
 
     #[test]

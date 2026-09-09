@@ -15,6 +15,18 @@ This file records Gateway API spec features that Edgion has evaluated and decide
 > (kept byte-equal by a Rust unit test). This document only records *why* a
 > feature is skipped; do not treat it as the list of record.
 
+## Native CORS on backend references
+
+**Decision: rule-level native CORS only.** Gateway API v1.5.0 marks native CORS
+on `HTTPBackendRef` as Extended. Edgion rejects any such placement at the rule
+boundary, including mixed policies and zero-weight backends, instead of leaving
+preflight and actual responses partially active. Other valid rules remain active.
+
+The pinned conformance v1.5.1 `HTTPRouteCORS` tests cover rule-level filters only;
+they remain enabled and do not certify backendRef CORS support. There is no separate
+backend CORS flag to remove from the shared feature list. See the
+[decision and verification boundary](../../04-review/cors/intentional-design/native-cors-rule-scope.md).
+
 ## Programmed / Ready status conditions
 
 **Decision: simplified implementation (completed)**
