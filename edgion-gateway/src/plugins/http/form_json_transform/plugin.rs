@@ -84,15 +84,9 @@ impl FormJsonTransform {
     }
 
     fn media_supported(&self, session: &dyn PluginSession) -> bool {
-        let content_types = session.request_header_values("content-type");
-        let content_encodings = session.request_header_values("content-encoding");
         match self.direction {
-            FormJsonDirection::FormToJson => {
-                form_request_headers_are_supported(content_types.as_deref(), content_encodings.as_deref())
-            }
-            FormJsonDirection::JsonToForm => {
-                json_request_headers_are_supported(content_types.as_deref(), content_encodings.as_deref())
-            }
+            FormJsonDirection::FormToJson => form_request_headers_are_supported(session.request_header_map()),
+            FormJsonDirection::JsonToForm => json_request_headers_are_supported(session.request_header_map()),
         }
     }
 
@@ -374,6 +368,14 @@ fn writer_failure(_: std::io::Error) -> TransformFailure {
 mod tests {
     use super::*;
     use crate::plugins::runtime::traits::session::MockPluginSession;
+    use http::header::CONTENT_TYPE;
+    use http::{HeaderMap, HeaderValue};
+
+    fn request_headers(content_type: &'static str) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        headers.insert(CONTENT_TYPE, HeaderValue::from_static(content_type));
+        headers
+    }
 
     fn filter(direction: FormJsonDirection, limit: u64) -> FormJsonTransform {
         FormJsonTransform {
@@ -385,13 +387,8 @@ mod tests {
     fn session(body: &'static [u8], content_type: &'static str) -> MockPluginSession {
         let mut session = MockPluginSession::new();
         session
-            .expect_request_header_values()
-            .times(2)
-            .returning(move |name| match name {
-                "content-type" => Some(vec![content_type.to_string()]),
-                "content-encoding" => Some(Vec::new()),
-                _ => unreachable!("unexpected header"),
-            });
+            .expect_request_header_map()
+            .return_const(request_headers(content_type));
         session.expect_declares_body().return_const(Some(!body.is_empty()));
         session
             .expect_request_body_available_len()
@@ -561,13 +558,9 @@ mod tests {
     async fn media_and_pre_materialization_limits_fail_before_mutation() {
         let filter = filter(FormJsonDirection::FormToJson, 3);
         let mut media = MockPluginSession::new();
-        media.expect_request_header_values().times(2).returning(|name| {
-            Some(match name {
-                "content-type" => vec!["application/json".to_string()],
-                "content-encoding" => Vec::new(),
-                _ => unreachable!("unexpected header"),
-            })
-        });
+        media
+            .expect_request_header_map()
+            .return_const(request_headers("application/json"));
         media.expect_read_request_body().times(0);
         media.expect_overwrite_request_body().times(0);
         let mut log = PluginLog::new(filter.name());
@@ -577,13 +570,9 @@ mod tests {
         );
 
         let mut too_large = MockPluginSession::new();
-        too_large.expect_request_header_values().times(2).returning(|name| {
-            Some(match name {
-                "content-type" => vec!["application/x-www-form-urlencoded".to_string()],
-                "content-encoding" => Vec::new(),
-                _ => unreachable!("unexpected header"),
-            })
-        });
+        too_large
+            .expect_request_header_map()
+            .return_const(request_headers("application/x-www-form-urlencoded"));
         too_large.expect_declares_body().return_const(Some(true));
         too_large.expect_request_body_available_len().return_const(Ok(4));
         too_large

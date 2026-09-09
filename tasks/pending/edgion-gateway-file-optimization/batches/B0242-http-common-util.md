@@ -4,7 +4,7 @@
 
 - Pipeline state: examined-no-change; verification and independent review complete, awaiting local record commit.
 - Active anchor: `edgion-gateway`.
-- Baseline: `3d7001c0`.
+- Baseline: `761ea605`.
 - Target: `edgion-gateway/src/plugins/http/common/http_util.rs`.
 - Inspect complete shared HTTP utility parsing and formatting, request-path allocation, all callers and tests.
 - Root owns Cargo and all writes. Existing integrations, external todos and handoff/WAF paths remain protected. Revalidate after the active batch before promotion.
@@ -17,4 +17,4 @@
 - Dynamic reqwest/serde error strings can carry provider detail, but the existing self-contained P1 OIDC redaction task/D0058 explicitly owns a typed, atomic producer/consumer repair across all endpoints and rejects partial fixes. No amendment or duplicate task is needed.
 - Independent reviewer `b0236_ai_guard_plugin_analysis`: LGTM/examined-no-change. It found no target-local cap, allocation, parsing, status, content-type, log/metric or schema change that clears the value gate.
 - Verification: helper 4/4 and OpenID Connect 133 passed/8 ignored explicit network fixtures. Workspace format/check/Clippy (existing warnings), agent docs, SSA, metrics inventory, Pingora source, Gateway no-tracing, English-only, diff and 3,136-file freeze passed. No source, knowledge, issue or integration edit.
-- Local record commit SHA is backfilled by the next batch; never push.
+- Commit: `cf359498`; never pushed by the campaign.

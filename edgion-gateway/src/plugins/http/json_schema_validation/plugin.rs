@@ -72,9 +72,7 @@ impl RequestFilter for JsonSchemaValidation {
             log.push("deny body too large");
             return Self::reject(413, None);
         }
-        let content_types = session.request_header_values("content-type");
-        let content_encodings = session.request_header_values("content-encoding");
-        if !json_request_headers_are_supported(content_types.as_deref(), content_encodings.as_deref()) {
+        if !json_request_headers_are_supported(session.request_header_map()) {
             log.push("deny media type");
             return Self::reject(415, Some(UNSUPPORTED_MEDIA_TYPE));
         }
@@ -133,6 +131,8 @@ mod tests {
     use super::*;
     use crate::plugins::runtime::traits::session::{BodyReadError, MockPluginSession};
     use bytes::Bytes;
+    use http::header::CONTENT_TYPE;
+    use http::{HeaderMap, HeaderValue};
     use serde_json::json;
 
     fn plugin(schema: serde_json::Value) -> Box<dyn RequestFilter> {
@@ -164,15 +164,12 @@ mod tests {
             .expect_request_body_available_len()
             .with(mockall::predicate::eq(false))
             .return_const(Ok(body.len() as u64));
-        let content_type = content_type.to_string();
-        session
-            .expect_request_header_values()
-            .times(2)
-            .returning(move |name| match name {
-                "content-type" => Some(vec![content_type.clone()]),
-                "content-encoding" => Some(Vec::new()),
-                _ => unreachable!("unexpected header name"),
-            });
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            CONTENT_TYPE,
+            HeaderValue::from_str(content_type).expect("valid content type"),
+        );
+        session.expect_request_header_map().return_const(headers);
         session
             .expect_read_request_body()
             .with(mockall::predicate::eq(None))
@@ -262,10 +259,7 @@ mod tests {
             .expect_request_body_available_len()
             .with(mockall::predicate::eq(false))
             .return_const(Ok(body.len() as u64));
-        session
-            .expect_request_header_values()
-            .times(2)
-            .returning(|_| Some(Vec::new()));
+        session.expect_request_header_map().return_const(HeaderMap::new());
         let mut log = PluginLog::new(filter.name());
 
         assert_eq!(
@@ -285,14 +279,9 @@ mod tests {
             .expect_request_body_available_len()
             .with(mockall::predicate::eq(false))
             .return_const(Ok(body.len() as u64));
-        session
-            .expect_request_header_values()
-            .times(2)
-            .returning(|name| match name {
-                "content-type" => Some(vec!["application/json".to_string()]),
-                "content-encoding" => Some(Vec::new()),
-                _ => unreachable!("unexpected header name"),
-            });
+        let mut headers = HeaderMap::new();
+        headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+        session.expect_request_header_map().return_const(headers);
         session
             .expect_read_request_body()
             .with(mockall::predicate::eq(None))

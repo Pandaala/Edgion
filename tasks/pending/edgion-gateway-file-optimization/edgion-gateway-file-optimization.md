@@ -10,10 +10,10 @@
 | Priority | P1 |
 | Baseline commit | `d484e580` |
 | Scope | Every tracked file under `edgion-gateway/` |
-| Campaign status | in-progress; B0242 examined-no-change and passed its commit gate at `761ea605`; external user commits through `6a5e428a` reconciled. |
-| Coverage | 548 current Gateway files: 225 changed, 184 examined-no-change, 15 deferred, 124 non-terminal; 3 historical rows are removed. HTTP conf_handler, plugin store and RequestMirror reopened after external changes; OIDC reopenings retained. |
-| Active batch | B0242 shared HTTP utilities: independent no-change review and full verification passed; exact local record commit is next. Automatic local batch commits authorized, never push. |
-| Analysis queue | B0243 shared JSON request construction is analysis-in-progress. D0127 tracks the independently confirmed outbound CA gap. |
+| Campaign status | in-progress; B0243 implementation, independent review and verification complete at `cf359498`, awaiting its local commit; external user commits through `6a5e428a` reconciled. |
+| Coverage | 548 current Gateway files: 226 changed, 184 examined-no-change, 15 deferred, 123 non-terminal; 3 historical rows are removed. HTTP conf_handler, plugin store and RequestMirror reopened after external changes; OIDC reopenings retained. |
+| Active batch | B0243 shared JSON request classification: commit gate complete for the exact four-file implementation lane. Automatic local batch commits authorized, never push. |
+| Analysis queue | B0244 starts with the next pending HTTP common helper after B0243 commits. D0127 tracks the independently confirmed outbound CA gap. |
 | Integration freeze | 3,136 files. External test changes through `6a5e428a` were individually verified against source commits and current HEAD; only proven entries reconciled. See external-sync records. No campaign integration-test edit occurred. |
 
 ## AI guide summary

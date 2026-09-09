@@ -369,9 +369,7 @@ impl ProxyRewrite {
         let Some(rewrite) = &self.config.compiled_json_body else {
             return Ok(());
         };
-        let content_types = session.request_header_values("content-type");
-        let content_encodings = session.request_header_values("content-encoding");
-        if !json_request_headers_are_supported(content_types.as_deref(), content_encodings.as_deref()) {
+        if !json_request_headers_are_supported(session.request_header_map()) {
             plugin_log.push("deny media type");
             return Err(Self::reject(415, Some(UNSUPPORTED_MEDIA_TYPE)));
         }
@@ -754,6 +752,14 @@ mod tests {
     use super::*;
     use crate::plugins::runtime::traits::session::MockPluginSession;
     use edgion_resources::resources::edgion_plugins::{JsonBodyRewrite, JsonLiteralValue, JsonPatchOperation};
+    use http::header::CONTENT_TYPE;
+    use http::{HeaderMap, HeaderValue};
+
+    fn request_headers(content_type: &'static str) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        headers.insert(CONTENT_TYPE, HeaderValue::from_static(content_type));
+        headers
+    }
 
     fn plugin(config: &ProxyRewriteConfig) -> ProxyRewrite {
         ProxyRewrite::create(config, None).expect("valid ProxyRewrite config")
@@ -795,13 +801,9 @@ mod tests {
             ..Default::default()
         });
         let mut session = MockPluginSession::new();
-        session.expect_request_header_values().times(2).returning(|name| {
-            Some(match name {
-                "content-type" => vec!["application/json".to_string()],
-                "content-encoding" => Vec::new(),
-                _ => unreachable!("unexpected header"),
-            })
-        });
+        session
+            .expect_request_header_map()
+            .return_const(request_headers("application/json"));
         session.expect_declares_body().return_const(Some(true));
         session
             .expect_request_body_available_len()
@@ -828,13 +830,9 @@ mod tests {
 
     fn json_session(body: &'static [u8], content_type: &'static str) -> MockPluginSession {
         let mut session = MockPluginSession::new();
-        session.expect_request_header_values().times(2).returning(move |name| {
-            Some(match name {
-                "content-type" => vec![content_type.to_string()],
-                "content-encoding" => Vec::new(),
-                _ => unreachable!("unexpected header"),
-            })
-        });
+        session
+            .expect_request_header_map()
+            .return_const(request_headers(content_type));
         session.expect_declares_body().return_const(Some(!body.is_empty()));
         session
             .expect_request_body_available_len()
@@ -936,13 +934,9 @@ mod tests {
         ));
 
         let mut media = MockPluginSession::new();
-        media.expect_request_header_values().times(2).returning(|name| {
-            Some(match name {
-                "content-type" => vec!["text/plain".to_string()],
-                "content-encoding" => Vec::new(),
-                _ => unreachable!("unexpected header"),
-            })
-        });
+        media
+            .expect_request_header_map()
+            .return_const(request_headers("text/plain"));
         media.expect_read_request_body().times(0);
         media.expect_overwrite_request_body().times(0);
         let mut log = PluginLog::new("ProxyRewrite");
