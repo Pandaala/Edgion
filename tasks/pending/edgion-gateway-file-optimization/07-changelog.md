@@ -16,7 +16,9 @@ This is the single concise record of actual changes across the file-by-file audi
 
 ## Entries
 
-- B0266: added an exact pre-dial regression proving opaque DSL `http.call` bodies use the lower of the configured and physical request-body caps. Independent LGTM; target 37/37, full Gateway DSL 335/335, locked workspace check/Clippy, and all repository guards passed. D0139 separately owns a new response-stage async timeout-clamp integration scenario. Local commit pending; no production or integration change; no push.
+- B0267: corrected the DSL test-module header to describe current-thread helpers and the multi-thread runtime required by synchronous upstream-response bridge tests, removing two false blanket claims. Independent LGTM; full Gateway DSL 335/335, locked workspace check/Clippy, and all repository guards passed. Local commit pending; no behavior or integration change; no push.
+
+- B0266: added an exact pre-dial regression proving opaque DSL `http.call` bodies use the lower of the configured and physical request-body caps. Independent LGTM; target 37/37, full Gateway DSL 335/335, locked workspace check/Clippy, and all repository guards passed. D0139 separately owns a new response-stage async timeout-clamp integration scenario. Commit `83a82fc1`; no production or integration change; no push.
 
 - B0265: added exact DSL gRPC-error coverage for `nil` message translation and both invalid integer-code boundaries around `0..=16`. Independent LGTM; target 4/4, full Gateway DSL 334/334, locked workspace check/Clippy, and all repository guards passed. D0138 separately owns stale response-stage documentation. Commit `0c547725`; no production or integration change; no push.
 

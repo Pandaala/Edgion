@@ -1,7 +1,9 @@
 //! Unit tests for EdgionDSL VM execution semantics.
 //!
-//! Uses MockPluginSession to validate behaviour without real HTTP connections.
-//! MockPluginSession is not Send — all tests use #[test], not #[tokio::test].
+//! Most tests use `MockPluginSession` with synchronous `#[test]` helpers that
+//! create a current-thread Tokio runtime. Tests exercising the synchronous
+//! upstream-response bridge use `#[tokio::test(flavor = "multi_thread")]`
+//! because `block_in_place` requires a multi-thread runtime.
 
 pub(super) use super::lang::bytecode::{CompiledScript, OpCode};
 pub(super) use super::lang::error::RuntimeError;

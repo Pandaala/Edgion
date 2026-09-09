@@ -10,10 +10,10 @@
 | Priority | P1 |
 | Baseline commit | `d484e580` |
 | Scope | Every tracked file under `edgion-gateway/` |
-| Campaign status | in-progress at campaign HEAD `0c547725`; B0266 implementation, independent final review, and full verification are complete, with local commit pending. |
-| Coverage | 549 current Gateway files: 248 changed, 185 examined-no-change, 14 deferred, 102 non-terminal; 3 historical rows are removed. The new canonical bounded-regex helper is included in the current inventory. Four terminal files changed by external `bea47373` remain reopened without discarding their historical evidence. |
-| Active batch | B0266: locked the physical body cap for opaque DSL outbound calls; independent LGTM and full gates passed. Automatic local batch commits authorized, never push. |
-| Analysis queue | B0267 (`dsl/tests/mod.rs`) is analyzing read-only behind B0266; later DSL test files remain serial. D0127–D0139 track confirmed separate work. |
+| Campaign status | in-progress at campaign HEAD `83a82fc1`; B0267 implementation, independent final review, and full verification are complete, with local commit pending. |
+| Coverage | 549 current Gateway files: 249 changed, 185 examined-no-change, 14 deferred, 101 non-terminal; 3 historical rows are removed. The new canonical bounded-regex helper is included in the current inventory. Four terminal files changed by external `bea47373` remain reopened without discarding their historical evidence. |
+| Active batch | B0267: corrected DSL test-runtime topology docs; independent LGTM and full gates passed. Automatic local batch commits authorized, never push. |
+| Analysis queue | B0268 (`dsl/tests/p3_utility_tests.rs`) is analyzing read-only behind B0267; later DSL test files remain serial. D0127–D0139 track confirmed separate work. |
 | Integration freeze | 3,231 files. External `2c01a075` added 95 and refreshed 38 entries; `bea47373` and `5cd384c6` refreshed six more existing entries. All are byte/mode-identical to their commits, the full check passes, and the campaign made no integration-test edit. |
 
 ## AI guide summary
