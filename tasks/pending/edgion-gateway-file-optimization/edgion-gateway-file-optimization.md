@@ -10,10 +10,10 @@
 | Priority | P1 |
 | Baseline commit | `d484e580` |
 | Scope | Every tracked file under `edgion-gateway/` |
-| Campaign status | in-progress; B0218 committed locally as `a8f62d29`; external updates reconciled through `53d59adb` |
-| Coverage | 547 current Gateway files: 218 changed, 173 examined-no-change, 13 deferred, 143 non-terminal; 3 historical rows are removed. Six OIDC rows reopened and one new test added after `74e6ccdd`; earlier Redis reopenings retained. |
-| Active batch | B0219 matching facade verified no-change; committing locally. Automatic local batch commits authorized, never push. D0119's pre-existing context layout failures remain separate. |
-| Analysis queue | B0220 route matching is analysis-ready; B0221 TLS matching tests analysis is in progress. D0123 tracks coalesced Gateway add divergence separately from D0003; known TLS/UDP lifecycle findings remain open. |
+| Campaign status | in-progress; B0219 committed locally as `93a07192`; resumed at `00f896a2` after standalone todo maintenance |
+| Coverage | 547 current Gateway files: 219 changed, 173 examined-no-change, 13 deferred, 142 non-terminal; 3 historical rows are removed. Six OIDC rows reopened and one new test added after `74e6ccdd`; earlier Redis reopenings retained. |
+| Active batch | B0220 route matching independently approved and verified; committing locally. Automatic local batch commits authorized, never push. D0119's pre-existing context layout failures remain separate. |
+| Analysis queue | B0221 TLS matching tests and B0222 production TLS matching are analysis-ready. D0123 tracks coalesced Gateway add divergence separately from D0003; known TLS/UDP lifecycle findings remain open. |
 | Integration freeze | 3,121 files. External updates through `53d59adb` were reconciled individually after byte/mode verification, most recently two changed files and one new DSL Redis test. No campaign integration-test edit occurred. |
 
 ## AI guide summary

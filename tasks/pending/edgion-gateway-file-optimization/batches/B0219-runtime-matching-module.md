@@ -2,7 +2,7 @@
 
 ## Scope
 
-- Pipeline state: verified examined-no-change; awaiting local commit.
+- Pipeline state: terminal; committed locally as `93a07192`.
 - Active anchor crate: `edgion-gateway`.
 - Target: `edgion-gateway/src/runtime/matching/mod.rs`.
 - Baseline: `f01f3c86`.
@@ -25,4 +25,4 @@
 ## Review and Verification
 
 - Independent reviewer Approved at `a8f62d29`, no Must Fix/Should Fix. All exports have real route/TLS/rebuild/admin consumers; no runtime mechanism originates in the facade and no worthwhile visibility/test churn was identified. Stale wildcard knowledge is already assigned to B0220, not duplicated here.
-- Fresh independent and coordinator runtime matching 41/41 passed. Workspace format/check/Clippy, docs (1,268 files), SSA, metrics, Pingora source, Gateway tracing, English-only, diff and 3,121-file freeze passed. No source, integration or shared task-index changes. Local commit pending; never push.
+- Fresh independent and coordinator runtime matching 41/41 passed. Workspace format/check/Clippy, docs (1,268 files), SSA, metrics, Pingora source, Gateway tracing, English-only, diff and 3,121-file freeze passed. No source, integration or shared task-index changes. Local commit `93a07192`; never push.

@@ -143,21 +143,22 @@ pub fn check_gateway_listener_match(
         // the no-`allowedRoutes` default must reject.
         let gateway_key = pr.gateway_key.as_str();
         let parent_ns = pr.parent_ns.as_str();
+        let Some(gw) = index.get_gateway(gateway_key) else {
+            continue;
+        };
 
         // Fast path: sectionName → O(1) two-level HashMap lookup
         // Still must enforce hostname isolation per Gateway API spec.
         if let Some(section_name) = &pr.section_name {
-            if let Some(entry) = index.get(gateway_key, section_name) {
+            if let Some(entry) = gw.get(section_name) {
                 if let Some(ref listener_host) = entry.hostname {
                     if !hostname_matches_listener(request_hostname, listener_host) {
                         continue;
                     }
                 }
                 // Check if a more-specific listener should take priority
-                if let Some(gw) = index.get_gateway(gateway_key) {
-                    if gw.has_more_specific(request_hostname, entry.hostname.as_deref()) {
-                        continue;
-                    }
+                if gw.has_more_specific(request_hostname, entry.hostname.as_deref()) {
+                    continue;
                 }
                 if !check_allowed_routes(&entry.allowed_routes, route_ns, route_kind, parent_ns) {
                     continue;
@@ -168,9 +169,6 @@ pub fn check_gateway_listener_match(
         }
 
         // Slow path: no sectionName → hostname isolation
-        let Some(gw) = index.get_gateway(gateway_key) else {
-            continue;
-        };
         for entry in gw.iter() {
             if let Some(ref listener_host) = entry.hostname {
                 if !hostname_matches_listener(request_hostname, listener_host) {
@@ -307,6 +305,85 @@ mod tests {
         let parent_refs = vec![resolved("gw-ns/absent", "gw-ns", Some("http"))];
 
         assert!(check_gateway_listener_match(&parent_refs, &index, "example.com", "gw-ns", "HTTPRoute").is_none());
+    }
+
+    #[test]
+    fn missing_gateway_or_listener_continues_to_later_parent_refs() {
+        let index = GatewayInfoIndex::from_entries_for_test(vec![(
+            "gw-ns/gw".to_string(),
+            listener_entry("gw-ns", "gw", Some("http"), None, None),
+        )]);
+        let parent_refs = vec![
+            resolved("gw-ns/absent", "gw-ns", Some("http")),
+            resolved("gw-ns/gw", "gw-ns", Some("absent")),
+            resolved("gw-ns/gw", "gw-ns", Some("http")),
+        ];
+
+        let matched = check_gateway_listener_match(&parent_refs, &index, "example.com", "gw-ns", "HTTPRoute")
+            .expect("the final parent reference names an eligible listener");
+        assert!(Arc::ptr_eq(&matched, &index.get("gw-ns/gw", "http").unwrap().info));
+    }
+
+    #[test]
+    fn an_explicit_missing_section_does_not_fall_back_to_a_sibling() {
+        let index = GatewayInfoIndex::from_entries_for_test(vec![(
+            "gw-ns/gw".to_string(),
+            listener_entry("gw-ns", "gw", Some("http"), None, None),
+        )]);
+        let parent_refs = vec![resolved("gw-ns/gw", "gw-ns", Some("absent"))];
+
+        assert!(check_gateway_listener_match(&parent_refs, &index, "example.com", "gw-ns", "HTTPRoute").is_none());
+    }
+
+    #[test]
+    fn a_more_specific_listener_blocks_fallback_even_when_it_denies_the_route() {
+        use edgion_resources::resources::gateway::RouteNamespaces;
+
+        let allow_all = AllowedRoutes {
+            namespaces: Some(RouteNamespaces {
+                from: Some("All".to_string()),
+                selector: None,
+            }),
+            kinds: None,
+        };
+        let index = GatewayInfoIndex::from_entries_for_test(vec![
+            (
+                "gw-ns/gw".to_string(),
+                listener_entry("gw-ns", "gw", Some("catch-all"), None, Some(allow_all)),
+            ),
+            (
+                "gw-ns/gw".to_string(),
+                listener_entry("gw-ns", "gw", Some("exact"), Some("example.com"), None),
+            ),
+        ]);
+
+        for section_name in [Some("catch-all"), None] {
+            let parent_refs = vec![resolved("gw-ns/gw", "gw-ns", section_name)];
+            assert!(
+                check_gateway_listener_match(&parent_refs, &index, "example.com", "route-ns", "HTTPRoute").is_none(),
+                "the exact listener's namespace denial must not enable catch-all fallback"
+            );
+            assert!(
+                check_gateway_listener_match(&parent_refs, &index, "other.com", "route-ns", "HTTPRoute").is_some(),
+                "the catch-all listener allows the route when no more-specific listener matches"
+            );
+        }
+    }
+
+    #[test]
+    fn named_and_unnamed_matches_share_the_index_gateway_info() {
+        let index = GatewayInfoIndex::from_entries_for_test(vec![(
+            "gw-ns/gw".to_string(),
+            listener_entry("gw-ns", "gw", Some("http"), None, None),
+        )]);
+        let expected = &index.get("gw-ns/gw", "http").unwrap().info;
+
+        for section_name in [Some("http"), None] {
+            let parent_refs = vec![resolved("gw-ns/gw", "gw-ns", section_name)];
+            let matched = check_gateway_listener_match(&parent_refs, &index, "example.com", "gw-ns", "HTTPRoute")
+                .expect("the sole listener allows this same-namespace route");
+            assert!(Arc::ptr_eq(&matched, expected));
+        }
     }
 
     /// parentRefs are tried in order and the first match wins.

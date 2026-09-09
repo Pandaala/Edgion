@@ -1,6 +1,6 @@
 ---
 name: route-predicate-prefilter-not-justified
-description: Use when reviewing findings proposing a build-time header/query predicate prefilter (Kong ATC style) in front of HTTP route deep matching; covers why the candidate fan-out it targets is unmeasured, why the per-candidate cost it would displace has a cheaper direct remedy, and which prefilter designs are rejected outright.
+description: Use when reviewing a build-time header/query predicate prefilter in front of HTTP route deep matching; covers the unmeasured candidate fan-out, existing direct listener-lookup optimizations, and rejected secondary-index designs.
 status: wont-fix
 finding_id: task-add-route-predicate-prefilter
 closed: 2026-09-03
@@ -17,8 +17,9 @@ order; the listener/hostname check is step 0 *inside* `deep_match_common`, paid 
 candidate. Adding a second, predicate-keyed index in front of that loop — a build-time
 inverted table from a header or query value to a candidate set, intersected with the radix
 candidates at request time — is **not accepted on present evidence**: the fan-out it
-targets has never been measured, and the one non-trivial per-candidate cost it would
-displace has a direct remedy that is orders of magnitude cheaper than a second index.
+targets has not been measured in the evidence supporting this decision. Direct listener
+lookup optimizations are already present; their existence does not establish that the
+remaining deep-match cost justifies a second index.
 
 Fix suggestions of the form "index routes by their header/query predicates so `match_route`
 skips candidates that cannot match", "port Kong's `atc-router` optional-field prefilter", or
@@ -58,7 +59,7 @@ in point 1.
 
 So neither shape has a number. That is the whole of the evidentiary position.
 
-**3. The predicate evaluation itself is cheap; the listener check is not**
+**3. Account for the current listener lookup, not its historical allocation cost**
 
 `deep_match_common` (`edgion-gateway/src/routes/http/match_unit.rs`) rejects a non-matching
 candidate through: step 0 listener/hostname, step 1 optional method comparison, step 2
@@ -70,19 +71,19 @@ Query matching is gated on `has_query_matchers` and shares a single `ctx.cached_
 parse across every candidate of the request, so a route without query predicates never
 touches the query string.
 
-Step 0 is **not** free, and this record previously claimed otherwise. For every
-`parentRef` of every candidate, `check_gateway_listener_match`
-(`edgion-gateway/src/runtime/matching/route.rs`) builds its index key with
-`format_gateway_key` (`edgion-gateway/src/runtime/store/listener_gateway_info.rs`), which is
-`format!("{}/{}", namespace, name)` — a heap `String` allocation per parentRef per
-candidate.
+Step 0 is not free, but the previously recorded per-candidate key allocation is no longer
+current. Route snapshot construction precomputes `ResolvedParentRef.gateway_key` with
+`format_gateway_key`; `check_gateway_listener_match`
+(`edgion-gateway/src/runtime/matching/route.rs`) borrows those bytes. It resolves one
+`GatewayListeners` borrow per parentRef and reuses that borrow for the named listener lookup
+and specificity check, or for unnamed listener iteration. This removes the named path's
+duplicate outer Gateway-key lookup without introducing another index.
 
-That allocation is real, and it is precisely the per-candidate cost a prefilter would
-displace. It is also the reason a prefilter is the wrong instrument: the allocation is
-removable directly (the key is derived from immutable snapshot data and is a candidate for
-build-time precomputation or a borrowed lookup key), at a fraction of a second index's memory,
-build time, request-time extraction and false-negative risk. **Any re-report of this finding
-must first establish that the direct remedy has been taken and the fan-out still dominates.**
+Only immutable parent-reference data is precomputed. The Gateway index changes independently
+of route snapshots, so listener slots, borrowed entries and matching results must not be
+cached across generations. The remaining hostname, specificity and AllowedRoutes work still
+runs per candidate. **A renewed prefilter proposal must measure that current path and show
+that candidate fan-out still dominates; no throughput improvement is inferred here.**
 
 **4. The task's own gate was never satisfied**
 
@@ -107,8 +108,8 @@ Unlike points 1–4, this rejection is unconditional and does not turn on measur
   an unpredicated route unreachable (false negative, 404). Any accepted design must carry that
   set explicitly.
 - "Build an inverted `(header name, value) -> candidate set` index and intersect it with the
-  radix candidates" — not accepted while the fan-out is unmeasured and while the per-candidate
-  allocation in point 3 has a cheaper direct remedy.
+  radix candidates" — not accepted while the fan-out and remaining deep-match cost after
+  the direct optimizations in point 3 are unmeasured.
 - "Port the Kong `atc-router` optional-field prefilter wholesale" — Kong's router dispatches
   over a general expression language with no prior path narrowing; Edgion has already narrowed
   by radix path before this point, so the premise that motivates the prefilter does not
@@ -120,10 +121,10 @@ Unlike points 1–4, this rejection is unconditional and does not turn on measur
 
 ## Re-evaluation Triggers
 
-**Precondition, unconditional.** The per-candidate `format_gateway_key` allocation in point 3
-must be removed first, and deep matching must still dominate afterwards. It is the cheaper
-change by orders of magnitude, and it targets the same cost. No trigger below authorizes
-re-opening while it stands.
+**Measurement baseline.** The historical per-candidate `format_gateway_key` allocation has
+already been removed, and the named path now reuses its Gateway lookup. Any measurement must
+include these direct optimizations and establish that deep matching still dominates. Their
+presence alone does not satisfy the prefilter's benchmark gate.
 
 With that precondition satisfied, re-open this decision only if:
 
@@ -148,8 +149,8 @@ With that precondition satisfied, re-open this decision only if:
 - `edgion-gateway/src/routes/http/match_unit.rs` — `deep_match_common`, `match_header`,
   `match_query_param`
 - `edgion-gateway/src/runtime/matching/route.rs` and
-  `edgion-gateway/src/runtime/store/listener_gateway_info.rs` — the per-candidate
-  `format_gateway_key` allocation
+  `edgion-gateway/src/runtime/store/listener_gateway_info.rs` — precomputed parent-reference
+  keys and generation-local Gateway/listener lookup ownership
 - `edgion-resources/src/matcher/radix_tree/frozen.rs` — `match_all_ext` returns every valued
   node along the path
 - `tasks/todo/radix-route-matching-benchmarks.md` — the prerequisite measurement surface and
