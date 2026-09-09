@@ -643,10 +643,10 @@
 | `edgion-gateway/src/routes/tls/gateway_tls_routes.rs` | `routes-shared` | source | changed | B0204: borrowed hostname inputs and winner-only published tables; independent LGTM, TLS 48/48 and routes 591/591 |
 | `edgion-gateway/src/routes/tls/mod.rs` | `routes-shared` | source | deferred | B0205: D0115 coordinates Stage-1 fallback removal with frozen fixture migration; independent approval and fail-close 7/7 |
 | `edgion-gateway/src/routes/tls/passthrough_proxy.rs` | `routes-shared` | source | changed | B0206: released table and initial replay buffer before relay, borrowed endpoint; independent LGTM and routes 595/595 |
-| `edgion-gateway/src/routes/tls/proxy.rs` | `routes-shared` | source | analysis-ready | B0207: shorten table/digest ownership and borrow backend endpoint |
+| `edgion-gateway/src/routes/tls/proxy.rs` | `routes-shared` | source | changed | B0207: released table guard and avoided full TLS metadata copy; independent LGTM, routes 597/597; unrelated context assertions tracked D0119 |
 | `edgion-gateway/src/routes/tls/route_unit.rs` | `routes-shared` | source | analysis-ready | B0208: retain immutable unit, shared selector policy and live plugin lookup |
 | `edgion-gateway/src/routes/tls/routes_mgr.rs` | `routes-shared` | source | analysis-ready | B0209: retain serialized rebuild, affected-listener cleanup and owned manager handles |
-| `edgion-gateway/src/routes/tls/sni_parser.rs` | `routes-shared` | source | pending | — |
+| `edgion-gateway/src/routes/tls/sni_parser.rs` | `routes-shared` | source | analysis-ready | B0210: enforce nested ClientHello/SNI length boundaries; malformed-input wire coverage deferred |
 | `edgion-gateway/src/routes/udp/conf_handler_impl.rs` | `routes-shared` | source | pending | — |
 | `edgion-gateway/src/routes/udp/edgion_udp.rs` | `routes-shared` | source | pending | — |
 | `edgion-gateway/src/routes/udp/mod.rs` | `routes-shared` | source | pending | — |

@@ -20,7 +20,7 @@ use crate::observe::logs::LogBuffer;
 use crate::observe::AccessLogger;
 use crate::routes::common::UNSAFE_UPSTREAM_ADDRESS_LOG;
 use crate::routes::l4_duplex::bidirectional_relay;
-use crate::routes::tls::TlsRouteManager;
+use crate::routes::tls::{TlsRouteManager, TlsRouteUnit};
 use crate::util::proxy_protocol::ProxyProtocolV2Builder;
 use crate::{MatchedInfo, Rsc, TlsConnMeta};
 use edgion_resources::resources::edgion_gateway_config::EdgionGatewayConfig;
@@ -133,7 +133,7 @@ impl TlsContext {
 
 /// TLS-to-TCP proxy service for Gateway TLS listeners.
 ///
-/// Each instance holds an `Arc<TlsRouteManager>` for its listener port,
+/// Each instance holds an `Arc<TlsRouteManager>` for its listener,
 /// obtained at startup from `GlobalTlsRouteManagers`. Route updates swap
 /// only the inner `ArcSwap<TlsRouteTable>`, so the Arc stays stable.
 pub struct EdgionTlsTcpProxy {
@@ -169,16 +169,13 @@ impl ServerApp for EdgionTlsTcpProxy {
             return None;
         }
 
-        // Read TlsConnMeta from SslDigest extension (set by handshake_complete_callback)
-        let tls_meta = downstream
-            .get_ssl_digest()
-            .and_then(|d| d.extension.get::<TlsConnMeta>().cloned());
-
-        if let Some(meta) = tls_meta.as_ref() {
-            ctx.tls_id = meta.tls_id.clone();
-            ctx.sni = meta.sni.clone();
-            ctx.matched = meta.matched.clone();
-            ctx.is_mtls = meta.is_mtls;
+        // Borrow handshake metadata only while installing the connection fields.
+        {
+            let ssl_digest = downstream.get_ssl_digest();
+            install_tls_metadata(
+                &mut ctx,
+                ssl_digest.as_ref().and_then(|d| d.extension.get::<TlsConnMeta>()),
+            );
         }
         if ctx.sni.is_none() {
             ctx.sni = Self::extract_sni(&mut downstream);
@@ -216,9 +213,8 @@ impl EdgionTlsTcpProxy {
 
     /// Core logic for handling TLS-terminated connections
     async fn handle_connection(&self, downstream: Stream, ctx: &mut TlsContext, sni: &str) {
-        // 1. Match TLSRoute unit by SNI from per-port route table
-        let route_table = self.tls_route_manager.load_route_table();
-        let unit = match route_table.match_route(sni) {
+        // 1. Match TLSRoute unit by SNI from the per-listener route table.
+        let unit = match select_route_unit(&self.tls_route_manager, sni) {
             Some(unit) => unit,
             None => {
                 ctx.err_log = Some("no match".to_string());
@@ -302,7 +298,7 @@ impl EdgionTlsTcpProxy {
                 };
             let backend = endpoint.backend;
 
-            let upstream_addr = backend.inner().addr.clone();
+            let upstream_addr = &backend.inner().addr;
             let upstream_addr_str = upstream_addr.to_string();
             let outlier_store = crate::backends::get_outlier_detection_store();
             let outlier_token = outlier_store.capture_completion_token(backend.as_ref());
@@ -328,7 +324,7 @@ impl EdgionTlsTcpProxy {
                 proxy_protocol_sent: false,
                 upstream_protocol: Some("TCP".to_string()),
             });
-            if validate_endpoint_backend_addr(&upstream_addr, self.allow_loopback_upstream()).is_err() {
+            if validate_endpoint_backend_addr(upstream_addr, self.allow_loopback_upstream()).is_err() {
                 ctx.err_log = Some(UNSAFE_UPSTREAM_ADDRESS_LOG.to_string());
                 return;
             }
@@ -513,5 +509,146 @@ impl EdgionTlsTcpProxy {
             "status": ctx.status,
         });
         self.access_logger.send(log_entry.to_string()).await;
+    }
+}
+
+/// Keep only the selected generation, never a table guard across connection I/O.
+fn select_route_unit(manager: &TlsRouteManager, sni: &str) -> Option<Arc<TlsRouteUnit>> {
+    manager.load_route_table().match_route(sni)
+}
+
+/// Copy only the fields used by the TLS connection, not the full handshake record.
+fn install_tls_metadata(ctx: &mut TlsContext, meta: Option<&TlsConnMeta>) {
+    if let Some(meta) = meta {
+        ctx.tls_id = meta.tls_id.clone();
+        ctx.sni = meta.sni.clone();
+        ctx.matched = meta.matched.clone();
+        ctx.is_mtls = meta.is_mtls;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ctx::ClientCertInfo;
+    use edgion_resources::resources::tls_route::{TLSRoute, TLSRouteSpec};
+    use kube::api::ObjectMeta;
+    use std::collections::HashMap;
+
+    fn route_unit(name: &str, hostname: &str) -> Arc<TlsRouteUnit> {
+        Arc::new(TlsRouteUnit::from_route(Arc::new(TLSRoute {
+            metadata: ObjectMeta {
+                namespace: Some("default".to_string()),
+                name: Some(name.to_string()),
+                ..Default::default()
+            },
+            spec: TLSRouteSpec {
+                parent_refs: None,
+                hostnames: Some(vec![hostname.to_string()]),
+                rules: None,
+                resolved_listeners: None,
+                effective_hostnames: None,
+            },
+            status: None,
+        })))
+    }
+
+    #[test]
+    fn selected_unit_survives_reload_without_retaining_old_table() {
+        let manager = TlsRouteManager::new();
+        assert!(select_route_unit(&manager, "a.example.com").is_none());
+        let old_unit = route_unit("a", "a.example.com");
+        let sibling = route_unit("b", "b.example.com");
+        let old_unit_weak = Arc::downgrade(&old_unit);
+        let selector_weak = Arc::downgrade(&old_unit.backend_finder);
+        let sibling_weak = Arc::downgrade(&sibling);
+        manager.rebuild(&HashMap::from([
+            ("default/a".to_string(), old_unit),
+            ("default/b".to_string(), sibling),
+        ]));
+        let old_table = Arc::downgrade(&manager.load_route_table());
+        assert!(select_route_unit(&manager, "missing.example.com").is_none());
+        let selected = select_route_unit(&manager, "A.EXAMPLE.COM").unwrap();
+        assert!(Arc::ptr_eq(&selected, &old_unit_weak.upgrade().unwrap()));
+        assert!(select_route_unit(&manager, "b.example.com").is_some());
+
+        let new_unit = route_unit("a", "a.example.com");
+        manager.rebuild(&HashMap::from([("default/a".to_string(), new_unit.clone())]));
+        assert!(old_table.upgrade().is_none(), "selection must release the table guard");
+        assert!(
+            sibling_weak.upgrade().is_none(),
+            "unselected hostname winner is released"
+        );
+        assert!(Arc::ptr_eq(&selected.backend_finder, &selector_weak.upgrade().unwrap()));
+        assert!(Arc::ptr_eq(
+            &select_route_unit(&manager, "a.example.com").unwrap(),
+            &new_unit
+        ));
+        assert!(!Arc::ptr_eq(&selected, &new_unit));
+        assert!(select_route_unit(&manager, "b.example.com").is_none());
+        drop(selected);
+        assert!(old_unit_weak.upgrade().is_none());
+        assert!(selector_weak.upgrade().is_none());
+    }
+
+    #[test]
+    fn metadata_install_preserves_fields_and_leaves_source_unchanged() {
+        let mut ctx = TlsContext::new(8443, "192.0.2.1".into(), 1234, "192.0.2.2".into(), 5678);
+        let mut meta = TlsConnMeta {
+            ts: 42,
+            start_at: Instant::now(),
+            handshake_complete_time: Some(17),
+            port: Some(9443),
+            tls_id: Some("tls-connection".into()),
+            sni: Some("A.EXAMPLE.COM".into()),
+            log: None,
+            matched: Some(MatchedInfo {
+                rsc: Rsc {
+                    kind: "EdgionTls".into(),
+                    ns: "default".into(),
+                    name: "certificate".into(),
+                    labels: None,
+                },
+                section: Some("secure".into()),
+                sv: 123,
+            }),
+            err_log: Some("handshake diagnostic".into()),
+            client_cert_info: Some(ClientCertInfo {
+                subject: "CN=client.example.com".into(),
+                sans: vec!["client.example.com".into()],
+                cn: Some("client.example.com".into()),
+                fingerprint: "test-fingerprint".into(),
+            }),
+            is_mtls: true,
+        };
+        let before = serde_json::to_value(&meta).unwrap();
+        install_tls_metadata(&mut ctx, Some(&meta));
+        assert_eq!(ctx.tls_id, meta.tls_id);
+        assert_eq!(ctx.sni, meta.sni);
+        assert_eq!(serde_json::to_value(&ctx.matched).unwrap(), before["matched"]);
+        assert!(ctx.is_mtls);
+        assert_eq!(ctx.listener_port, 8443);
+        assert!(ctx.log.is_none());
+        assert!(ctx.err_log.is_none());
+        assert_eq!(serde_json::to_value(&meta).unwrap(), before);
+        let cert = meta.client_cert_info.as_ref().unwrap();
+        assert_eq!(cert.subject, "CN=client.example.com");
+        assert_eq!(cert.sans, ["client.example.com"]);
+        assert_eq!(cert.cn.as_deref(), Some("client.example.com"));
+        assert_eq!(cert.fingerprint, "test-fingerprint");
+
+        let installed = serde_json::to_value(&ctx).unwrap();
+        install_tls_metadata(&mut ctx, None);
+        assert_eq!(serde_json::to_value(&ctx).unwrap(), installed);
+
+        meta.tls_id = None;
+        meta.sni = None;
+        meta.matched = None;
+        meta.is_mtls = false;
+        install_tls_metadata(&mut ctx, Some(&meta));
+        assert!(ctx.tls_id.is_none());
+        assert!(ctx.sni.is_none());
+        assert!(ctx.matched.is_none());
+        assert!(!ctx.is_mtls);
     }
 }

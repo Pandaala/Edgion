@@ -2,7 +2,7 @@
 
 ## Scope
 
-- Pipeline state: verified; awaiting local commit.
+- Pipeline state: committed locally.
 - Active anchor crate: `edgion-gateway`.
 - Target: `edgion-gateway/src/routes/tls/passthrough_proxy.rs`.
 - Baseline: `b29c0701`.
@@ -35,4 +35,4 @@
 - Implementer passed fresh TLS 52/52, shared duplex 21/21, targeted format/diff and agent-doc (1,263 files) checks.
 - Independent reviewer: `b0206_final_review`; LGTM, no Must Fix or Should Fix at `62e43e2f`. Target reviewed blob `504a34986014ad7c8fe83b31d25bc9cbc9d9df0e`. Personally passed TLS 52/52, duplex 21/21 and diff checks; confirmed all six target manual-let-else warnings predate this batch and new helpers/tests introduce none.
 - Coordinator workspace format/check/Clippy, Gateway build, broader routes 595/595, docs, SSA, metrics, Pingora, Gateway tracing, English and 3,120-file freeze passed. Clippy retains the same 983 Gateway lib-test warnings as the preceding code batch; final reviewer checks target attribution.
-- Commit: pending local commit; no push.
+- Commit: `aba8fd24`; no push.

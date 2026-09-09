@@ -23,6 +23,7 @@ before applying a decision to current code.
 
 - [TCP connection snapshot ownership](regression-guards/tcp-connection-snapshot-ownership.md)
 - [TLS passthrough connection ownership](regression-guards/tls-passthrough-connection-ownership.md)
+- [TLS terminated connection ownership](regression-guards/tls-terminated-connection-ownership.md)
 - [TCP route schema Arc sharing](regression-guards/tcp-route-schema-arc-sharing.md)
 - [TLS route schema Arc sharing](regression-guards/tls-route-schema-arc-sharing.md)
 - [Session persistence token extraction](regression-guards/session-persistence-token-extraction.md)

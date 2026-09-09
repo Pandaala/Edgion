@@ -192,3 +192,5 @@ These entries are backlinks only. A linked `tasks/todo` file is the editable sou
 | Remove TLSRoute Stage-1 fallback coherently | pending | [task](../../../todo/remove-tlsroute-stage1-fallback-coherently.md) |
 | Apply sensitive mode to TLS log surfaces | pending | [task](../../../todo/apply-sensitive-mode-to-tls-log-surfaces.md) |
 | Investigate TLS setup write deadlines | needs-investigation | [task](../../../todo/investigate-tls-setup-write-deadlines.md) |
+| Add malformed ClientHello passthrough coverage (D0118) | pending | [task](../../../todo/add-malformed-clienthello-passthrough-coverage.md) |
+| Reconcile HTTP context layout expectations (D0119) | pending | [task](../../../todo/reconcile-http-context-layout-expectations.md) |
