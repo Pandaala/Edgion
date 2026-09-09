@@ -385,8 +385,8 @@
 | `edgion-gateway/src/plugins/http/dsl/tests/control_flow.rs` | `plugins-http-dsl` | test | analysis-in-progress | B0261: queued control-flow test/value analysis |
 | `edgion-gateway/src/plugins/http/dsl/tests/ctx_builtins.rs` | `plugins-http-dsl` | test | analysis-in-progress | B0262: queued context-builtin test/value analysis |
 | `edgion-gateway/src/plugins/http/dsl/tests/decision_log_tests.rs` | `plugins-http-dsl` | test | changed | B0263: removed legacy per-entry decision-log delimiters after corrected independent review |
-| `edgion-gateway/src/plugins/http/dsl/tests/error_policy.rs` | `plugins-http-dsl` | test | analysis-in-progress | B0264: queued DSL error-policy test/value analysis |
-| `edgion-gateway/src/plugins/http/dsl/tests/grpc_error_tests.rs` | `plugins-http-dsl` | test | pending | — |
+| `edgion-gateway/src/plugins/http/dsl/tests/error_policy.rs` | `plugins-http-dsl` | test | changed | B0264: locked panic isolation and BodyAccess fixed-fail-close dye/log behavior; independent LGTM |
+| `edgion-gateway/src/plugins/http/dsl/tests/grpc_error_tests.rs` | `plugins-http-dsl` | test | analysis-in-progress | B0265: queued DSL gRPC-error test/value analysis |
 | `edgion-gateway/src/plugins/http/dsl/tests/http_call_tests.rs` | `plugins-http-dsl` | test | pending | — |
 | `edgion-gateway/src/plugins/http/dsl/tests/mod.rs` | `plugins-http-dsl` | test | pending | — |
 | `edgion-gateway/src/plugins/http/dsl/tests/p3_utility_tests.rs` | `plugins-http-dsl` | test | pending | B0129 bounded LogFmt regressions only; full file audit pending |

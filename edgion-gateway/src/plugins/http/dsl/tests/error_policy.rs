@@ -1,6 +1,7 @@
-//! Tests for DslErrorPolicy variants: Ignore, Deny, DenyWith.
+//! Tests for DslErrorPolicy variants, panic isolation, and fixed BodyAccess handling.
 
 use super::*;
+use crate::plugins::runtime::traits::session::BodyReadError;
 use crate::plugins::runtime::DyeOutcome;
 
 fn limited_vm() -> Vm {
@@ -72,10 +73,14 @@ fn test_policy_deny_with_informational_status_fails_safe() {
 // don't care about dye behavior; a narrow `.times(1)` expectation added here
 // after that catch-all would never be reached (mockall matches newest-first).
 
-fn run_vm_policy_with_session(vm: &Vm, mut session: MockPluginSession, policy: &DslErrorPolicy) -> PluginRunningResult {
+fn run_vm_policy_with_session(
+    vm: &Vm,
+    mut session: MockPluginSession,
+    policy: &DslErrorPolicy,
+) -> (PluginRunningResult, PluginLog) {
     let mut log = PluginLog::new("test");
     let rt_ctx = DslRuntime::default();
-    tokio::runtime::Builder::new_current_thread()
+    let result = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .unwrap()
@@ -85,7 +90,8 @@ fn run_vm_policy_with_session(vm: &Vm, mut session: MockPluginSession, policy: &
             &mut log,
             policy,
             &rt_ctx,
-        ))
+        ));
+    (result, log)
 }
 
 #[test]
@@ -97,7 +103,7 @@ fn test_policy_ignore_records_fail_open() {
         .withf(|outcome, value| matches!(outcome, DyeOutcome::FailOpen) && value == "script-error")
         .times(1)
         .return_const(());
-    let result = run_vm_policy_with_session(&vm, session, &DslErrorPolicy::Ignore);
+    let (result, _) = run_vm_policy_with_session(&vm, session, &DslErrorPolicy::Ignore);
     assert_eq!(result, good_next());
 }
 
@@ -110,7 +116,7 @@ fn test_policy_deny_records_fail_close() {
         .withf(|outcome, value| matches!(outcome, DyeOutcome::FailClose) && value == "script-error")
         .times(1)
         .return_const(());
-    let result = run_vm_policy_with_session(&vm, session, &DslErrorPolicy::Deny);
+    let (result, _) = run_vm_policy_with_session(&vm, session, &DslErrorPolicy::Deny);
     assert_eq!(result, err_response_body(500, "DSL execution error"));
 }
 
@@ -127,6 +133,56 @@ fn test_policy_deny_with_records_fail_close() {
         .withf(|outcome, value| matches!(outcome, DyeOutcome::FailClose) && value == "script-error")
         .times(1)
         .return_const(());
-    let result = run_vm_policy_with_session(&vm, session, &policy);
+    let (result, _) = run_vm_policy_with_session(&vm, session, &policy);
     assert_eq!(result, err_response_body(418, "teapot"));
+}
+
+#[test]
+fn test_policy_ignore_catches_vm_panic_and_records_fail_open() {
+    let vm = make_vm(r#"let value = req.header("X-Panic")"#);
+    let mut session = MockPluginSession::new();
+    session
+        .expect_header_value()
+        .withf(|name| name == "X-Panic")
+        .times(1)
+        .returning(|_| panic!("injected header read panic"));
+    session
+        .expect_record_outcome()
+        .withf(|outcome, value| matches!(outcome, DyeOutcome::FailOpen) && value == "script-error")
+        .times(1)
+        .return_const(());
+
+    let (result, log) = run_vm_policy_with_session(&vm, session, &DslErrorPolicy::Ignore);
+
+    assert_eq!(result, good_next());
+    assert_eq!(log.render_for_test(), "err: vm panic");
+    assert!(
+        !log.contains("OK") && !log.contains("Deny"),
+        "panic path must not emit a normal decision entry"
+    );
+}
+
+#[test]
+fn test_body_access_bypasses_ignore_and_records_fixed_fail_close() {
+    let vm = make_vm("let b = req.body");
+    let mut session = MockPluginSession::new();
+    session.expect_declares_body().return_const(Some(true));
+    session
+        .expect_request_body_available_len()
+        .times(1)
+        .returning(|_| Err(BodyReadError::Unimplemented));
+    session
+        .expect_record_outcome()
+        .withf(|outcome, value| matches!(outcome, DyeOutcome::FailClose) && value == "request-body-access-error")
+        .times(1)
+        .return_const(());
+
+    let (result, log) = run_vm_policy_with_session(&vm, session, &DslErrorPolicy::Ignore);
+
+    assert_eq!(result, err_response_body(500, "Request body processing failed"));
+    assert_eq!(log.render_for_test(), "err: request body access error");
+    assert!(
+        !log.contains("OK") && !log.contains("Deny"),
+        "BodyAccess path must not emit a normal decision entry"
+    );
 }

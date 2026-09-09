@@ -37,3 +37,4 @@
 - Reviewer: decision-log 6/6, P3 utility 39/39, and full Gateway DSL 331/331 passed; format, diff, and frozen-path checks passed.
 - Coordinator full workspace checks passed: format, locked workspace all-target check and Clippy, agent-doc, SSA, metrics inventory, Pingora source, Gateway no-tracing, English-only, diff, and frozen integration guards.
 - Frozen integration manifest: 3,231 paths unchanged.
+- Commit: `b6e3dcb7` (`Normalize DSL decision log entries`); no push.
