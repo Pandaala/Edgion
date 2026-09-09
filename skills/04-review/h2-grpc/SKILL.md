@@ -29,7 +29,7 @@ before applying a decision to current code.
 - [H2 ci contract enforcement out of scope](regression-guards/h2-ci-contract-enforcement-out-of-scope.md)
 - [H2 dependency baseline tests version robust](regression-guards/h2-dependency-baseline-tests-version-robust.md)
 - [H2 downstream request-body reads are bounded by `read_timeout` — FIXED](regression-guards/h2-downstream-body-read-timeout.md)
-- [H2 end stream wire observer](regression-guards/h2-end-stream-wire-observer.md)
+- [H2 wire observer GOAWAY ceiling and read-terminal poisoning](regression-guards/h2-end-stream-wire-observer.md)
 - [H2 local reset invalidates shared evidence](regression-guards/h2-local-reset-invalidates-shared-evidence.md)
 - [H2 proxy cache reuse harness consumers](regression-guards/h2-proxy-cache-reuse-harness-consumers.md)
 - [H2 shutdown connection not allocatable](regression-guards/h2-shutdown-connection-not-allocatable.md)

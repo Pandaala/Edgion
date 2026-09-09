@@ -117,4 +117,12 @@ fresh verification of this window implementation.
 - `retry-budget-generation-and-window-coherence` — real window defect; Service
   Arc generation capture originally missed absent-policy retention, corrected
   by the first-attempt capture gate; fixed and verified
-  2026-09-07. The original open task is removed after its close gate.
+  2026-09-07. On 2026-09-09, source revalidation found the pending task still
+  described the replaced implementation. The user approved closing it as
+  already fixed, without another runtime change. Fresh read-only independent
+  review returned LGTM. `cargo fmt --all`, workspace check and Clippy, agent-doc,
+  SSA-force, metrics-inventory, Pingora-source, and diff-whitespace checks passed.
+  Clippy retained warnings in existing code. Agent-doc validation required two
+  unrelated missing-task links to be described as unverified historical paths.
+  This closure removes the stale pending task. Unit and integration tests were
+  not rerun; the test results above remain historical evidence.

@@ -504,43 +504,79 @@ impl TcpGeoRestrictionTestSuite {
         )
     }
 
-    /// Parse-only (`config: {}`) is rejected at L4 admission. It is a valid
-    /// HTTP mode — there it fills the access log's `geo` block — but L4 has no
-    /// access log and `StreamContext` carries no logging sink, so a resolved
-    /// location would have nowhere to go and the plugin could provably do
-    /// nothing. Accepting it would let an operator ship a security control that
-    /// silently does not run.
+    /// Parse-only (`config: {}`) reports invalid status and installs a live
+    /// fail-closed gate. A valid replacement must restore TCP forwarding.
     fn parse_only_is_rejected_at_l4() -> TestCase {
         TestCase::new(
             "parse_only_is_rejected_at_l4",
-            "config: {} is refused at L4 admission rather than accepted as a no-op",
+            "invalid L4 geo config denies TCP traffic and a valid replacement restores forwarding",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
-                    // Lenient admission: the apply itself succeeds; the refusal
-                    // surfaces as the Accepted condition.
-                    if let Err(e) = apply_esp(&ctx, GEO_PARSE_ONLY).await {
-                        return TestResult::failed(start.elapsed(), format!("apply: {e}"));
-                    }
-                    match wait_for_esp_accepted(&ctx, "False").await {
-                        Ok(msg) => {
-                            if msg.contains("at least one") {
-                                TestResult::passed_with_message(
-                                    start.elapsed(),
-                                    format!("rule-less L4 config correctly refused: {msg}"),
-                                )
-                            } else {
-                                TestResult::failed(
-                                    start.elapsed(),
-                                    format!("Accepted=False, but not for the rule-less reason: {msg}"),
-                                )
-                            }
+                    let src = test_source("127.0.0.1");
+                    let addr = ctx.tcp_addr();
+                    // CIDR-only rules allow this source without depending on MMDB.
+                    let baseline = if k8s_mode() { GEO_DENY_OTHER_CIDR } else { GEO_DENY_CIDR_RU };
+                    let check = async {
+                        apply_esp(&ctx, baseline).await?;
+                        wait_for_esp_accepted(&ctx, "True").await?;
+                        wait_for_echo(src, &addr, b"invalid-geo-baseline").await?;
+
+                        // Lenient admission reports invalidity through status; it
+                        // does not prove that the Gateway has activated the gate.
+                        apply_esp(&ctx, GEO_PARSE_ONLY).await?;
+                        let msg = wait_for_esp_accepted(&ctx, "False").await?;
+                        if !msg.contains("at least one") {
+                            return Err(format!("Accepted=False, but not for the rule-less reason: {msg}"));
                         }
-                        Err(e) => TestResult::failed(start.elapsed(), e),
+
+                        let mut last = "no TCP probe completed".to_string();
+                        let denied = async {
+                            loop {
+                                match probe_from(src, &addr, b"invalid-geo-denial").await {
+                                    TcpEchoProbe::Closed(reason) => return reason,
+                                    // conf_sync may still be serving the proven
+                                    // allow baseline; wait for its replacement.
+                                    TcpEchoProbe::Echoed(n) => last = format!("received {n} echo bytes"),
+                                    TcpEchoProbe::Inconclusive(reason) => last = reason,
+                                }
+                                tokio::time::sleep(Duration::from_millis(200)).await;
+                            }
+                        };
+                        tokio::time::timeout(Duration::from_secs(8), denied)
+                            .await
+                            .map_err(|_| format!("invalid L4 geo config did not close TCP connections within 8s; last: {last}"))
+                    };
+                    let result = tokio::time::timeout(Duration::from_secs(40), check)
+                        .await
+                        .unwrap_or_else(|_| Err("invalid-generation verification timed out after 40s".to_string()));
+
+                    // Always restore, even after an apply/status/probe failure.
+                    // Recovery is also the positive control against a broken
+                    // listener/backend being mistaken for a fail-closed gate.
+                    let restore = async {
+                        apply_esp(&ctx, baseline).await?;
+                        wait_for_esp_accepted(&ctx, "True").await?;
+                        wait_for_echo(src, &addr, b"invalid-geo-recovered").await
+                    };
+                    let recovery = tokio::time::timeout(Duration::from_secs(30), restore)
+                        .await
+                        .unwrap_or_else(|_| Err("baseline restoration timed out after 30s".to_string()));
+                    match (result, recovery) {
+                        (Ok(reason), Ok(n)) => TestResult::passed_with_message(
+                            start.elapsed(),
+                            format!("Accepted=False for rule-less config; denied ({reason}); valid replacement echoed {n} bytes"),
+                        ),
+                        (Err(e), Ok(_)) => TestResult::failed(start.elapsed(), e),
+                        (Ok(_), Err(e)) => TestResult::failed(start.elapsed(), format!("recovery/cleanup: {e}")),
+                        (Err(e), Err(cleanup)) => {
+                            TestResult::failed(start.elapsed(), format!("{e}; recovery/cleanup: {cleanup}"))
+                        }
                     }
                 })
             },
         )
+        .with_timeout(Duration::from_secs(75))
     }
 
     /// Two-plugin chain: `GlobalConnectionIpRestriction` (first) denies a
