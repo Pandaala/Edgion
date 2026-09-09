@@ -10,10 +10,10 @@
 | Priority | P1 |
 | Baseline commit | `d484e580` |
 | Scope | Every tracked file under `edgion-gateway/` |
-| Campaign status | in-progress; B0268 passed independent final review and all verification gates, awaiting its local commit. |
-| Coverage | 549 current Gateway files: 250 changed, 185 examined-no-change, 14 deferred, 100 non-terminal; 3 historical rows are removed. The new canonical bounded-regex helper is included in the current inventory. Four terminal files changed by external `bea47373` remain reopened without discarding their historical evidence. |
-| Active batch | B0268 commit gate; next target is DSL `tests/property_bytecode.rs`. Automatic local batch commits authorized, never push. |
-| Analysis queue | Later DSL test files remain serial behind B0268. D0127–D0140 track confirmed separate work. |
+| Campaign status | in-progress; B0269 reviewed and verified, awaiting local commit. |
+| Coverage | 549 current Gateway files: 251 changed, 185 examined-no-change, 14 deferred, 99 non-terminal; 3 historical rows are removed. The new canonical bounded-regex helper is included in the current inventory. Four terminal files changed by external `bea47373` remain reopened without discarding their historical evidence. |
+| Active batch | B0269 commit gate. Automatic local batch commits authorized, never push. |
+| Analysis queue | B0270 range/string tests analysis-in-progress. D0127–D0140 track confirmed separate work. |
 | Integration freeze | 3,231 files. External `2c01a075` added 95 and refreshed 38 entries; `bea47373` and `5cd384c6` refreshed six more existing entries. All are byte/mode-identical to their commits, the full check passes, and the campaign made no integration-test edit. |
 
 ## AI guide summary

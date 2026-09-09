@@ -45,4 +45,4 @@
 ## Handoff
 
 - Ledger and changelog updated; one newly terminal file, builtins remains previously counted support coverage.
-- Commit: pending automatic local commit; never push.
+- Commit: `12cfc41d`; never pushed by the campaign.
