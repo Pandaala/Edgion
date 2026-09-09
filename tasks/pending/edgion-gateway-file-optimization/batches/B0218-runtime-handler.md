@@ -2,7 +2,7 @@
 
 ## Scope
 
-- Pipeline state: verified deferred; awaiting local commit.
+- Pipeline state: terminal deferred; committed locally as `a8f62d29`.
 - Active anchor crate: `edgion-gateway`.
 - Target: `edgion-gateway/src/runtime/handler.rs`.
 - Baseline: `aa178a25`.

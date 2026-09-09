@@ -656,9 +656,9 @@
 | `edgion-gateway/src/routes/udp/udp_route_table.rs` | `routes-shared` | source | examined-no-change | B0216: deterministic owned-unit lookup and route-count contract retained; independent approval, table 4/4 |
 | `edgion-gateway/src/runtime/gateway_info.rs` | `runtime` | source | changed | B0217: immutable precomputed borrowed identity key; independent LGTM and gates passed; local commit authorized |
 | `edgion-gateway/src/runtime/handler.rs` | `runtime` | source | deferred | B0218: independently confirmed D0123/D0003, safe continuation; policy 12/12 and PGIS 10/10 |
-| `edgion-gateway/src/runtime/matching/mod.rs` | `runtime` | source | analysis-ready | B0219: retain declaration-only facade and consumed matching exports |
+| `edgion-gateway/src/runtime/matching/mod.rs` | `runtime` | source | examined-no-change | B0219: independently verified live facade; matching 41/41, no worthwhile rewrite |
 | `edgion-gateway/src/runtime/matching/route.rs` | `runtime` | source | analysis-ready | B0220: reuse Gateway lookup on named-listener path; correct two owning knowledge claims |
-| `edgion-gateway/src/runtime/matching/tests/tls_test.rs` | `runtime` | test | pending | — |
+| `edgion-gateway/src/runtime/matching/tests/tls_test.rs` | `runtime` | test | analysis-in-progress | B0221: TLS matcher coverage and original security/selection contracts |
 | `edgion-gateway/src/runtime/matching/tls.rs` | `runtime` | source | pending | — |
 | `edgion-gateway/src/runtime/mod.rs` | `runtime` | source | pending | — |
 | `edgion-gateway/src/runtime/server/base.rs` | `runtime` | source | changed | B0176: remove the now-unconsumed GatewayClass clone chain |
