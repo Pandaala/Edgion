@@ -1,4 +1,4 @@
-//! DslRuntime — per-request execution context for external capabilities
+//! DslRuntime — immutable per-plugin policy for external capabilities
 
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
@@ -12,7 +12,9 @@ use std::time::Duration;
 use crate::link_sys::http_client::{build_outbound_client, OutboundClientConfig, OutboundRedirect};
 use crate::plugins::http::common::outbound::egress::{egress_dns_cache_ttl, EgressPolicy, EgressResolver};
 
-/// Per-execution limits for external calls, constructed at request time from DslConfig.
+/// Per-plugin external-call policy, built once by `resolve_parts` for each config generation.
+///
+/// Request execution borrows this immutable snapshot from the shared `DslPlugin`.
 pub struct DslRuntime {
     /// Maximum wall-clock timeout for a single http.call (ms)
     pub max_timeout_ms: u64,
@@ -36,7 +38,7 @@ impl Default for DslRuntime {
     fn default() -> Self {
         Self {
             max_timeout_ms: 5_000,
-            max_response_body_bytes: 1024 * 1024, // 1 MB
+            max_response_body_bytes: 1024 * 1024, // 1 MiB
             max_request_body_bytes: 1024 * 1024,  // 1 MiB
             block_private_ips: false,
             redis_links: HashMap::new(),

@@ -62,7 +62,7 @@ The language core (parser, AST, compiler, bytecode, errors, value, validator) li
 | VM (`async fn execute`, panic-isolated `execute_safe`, `VmLimits`) | `edgion-gateway/src/plugins/http/dsl/lang/vm.rs` |
 | Builtin implementations (`call_builtin`, `call_builtin_http`, `call_builtin_redis`) | `lang/builtins.rs` |
 | Value enum (`Value::Str(Arc<str>)`, opaque `Value::Body`, `List`, `Map(Box<IndexMap<String, Value>>)`) | `edgion-dsl/src/value.rs` |
-| Storage-transparent request-body scanners and mutations | `lang/body_scanners.rs`, `edgion-gateway/src/request_body/operation.rs` |
+| Storage-transparent request-body scanners and mutations | `edgion-gateway/src/request_body/body_scanners.rs`, `edgion-gateway/src/request_body/operation.rs` |
 | Runtime errors | `edgion-dsl/src/error.rs` |
 | Plugin entry (RequestFilter + UpstreamResponseFilter impls, config-to-plugin factory) | `plugin.rs` |
 | Per-plugin external-call context (limits + redis link table) | `runtime.rs` — `DslRuntime` |
@@ -138,13 +138,14 @@ pub struct DslRuntime {
     pub max_response_body_bytes: usize, // http.call body cap
     pub block_private_ips: bool,        // http.call literal and resolved-address guard
     pub redis_links: HashMap<String, String>, // alias → "namespace/name" for get_redis_client
+    pub rate_limits: DslRateLimits,     // immutable named rate-limit policies + shared executor
     pub max_body_scan_passes: u8,       // cumulative body-scan budget in physical-cap passes
 }
 ```
 
 Shared resources are global, not per-`DslRuntime`:
 
-- `dsl_http_client() -> &'static reqwest::Client` is a `OnceLock<reqwest::Client>` initialized on first use with `pool_max_idle_per_host(4)` and redirect policy `limited(10)`. Per-call timeouts come from `DslRuntime`, not from the client.
+- `dsl_http_client(block_private_ips, follow_redirects)` selects one of four process-global `OnceLock<reqwest::Client>` instances keyed by that boolean pair. Every client uses `pool_max_idle_per_host(4)`; replayable string/nil calls may follow at most ten redirects, while opaque Body calls use the no-redirect variants. The clients are built through the shared `build_outbound_client` factory with `disable_proxy: true`; per-call timeouts come from `DslRuntime`, not from the client.
 - Redis clients are resolved per-call from `link_sys` via `get_redis_client()` and the alias map; this matches the `rate_limit_redis` plugin pattern (ArcSwap read).
 
 Implication: if the plugin's config changes (e.g. `httpMaxTimeoutMs` is updated), the controller emits a new `EdgionPlugins` entry; the gateway rebuilds `PluginRuntime` during preparse and constructs a fresh `DslPlugin` — and therefore a fresh `DslRuntime`. There is no in-place mutation path.

@@ -22,7 +22,7 @@ The compile-time layers (parser, validator, compiler, bytecode loader) now live 
 | VM (per-instruction) | runtime | steps, calls, stack depth, loops, string len, list len, map size | `lang/vm.rs:34-95,132-176` |
 | VM init (regex precompile) | script load | per-pattern DFA memory ≤ 1 MiB | `lang/vm.rs:199-235` |
 | Builtins (per-call) | runtime | per-builtin caps (split list size, range list size, header map size, http.call response size, etc.); shared `checked_value_str` / `checked_value_opt_str` helpers at `lang/builtins.rs:46-56` | `lang/builtins.rs:500-549,943-1208` |
-| Body operation layer | runtime | cumulative scan bytes, physical body cap, bounded returned strings, mutation ranges and segment count | `lang/body_scanners.rs`, `lang/vm.rs`, `request_body/operation.rs` |
+| Body operation layer | runtime | cumulative scan bytes, physical body cap, bounded returned strings, mutation ranges and segment count | `request_body/body_scanners.rs`, `lang/vm.rs`, `request_body/operation.rs` |
 | Panic isolation | the whole `execute` | catches everything else | `lang/vm.rs` → `execute_safe` (`AssertUnwindSafe + catch_unwind`); see `dsl-engine.md` §5 |
 
 **Pre-compiled bytecode shipped from the controller is re-validated by `Validator::validate` on the gateway side.** The controller's compile output is never trusted blindly — see `DslConfig::compile_and_validate` → `edgion_dsl::resolve_script` for the order `deserialize → Validator::validate → use`. Hand-crafted bytecode payloads that declare `max_loop_depth: 0` while shipping deeper loops, or `MakeMap(65535)` operands, are rejected here (`edgion-dsl/src/validator.rs:220-290`).

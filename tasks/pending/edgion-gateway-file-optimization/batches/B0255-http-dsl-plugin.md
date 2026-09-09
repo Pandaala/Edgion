@@ -33,3 +33,4 @@
 - Gateway DSL plugin tests: 5/5; Gateway targeted compile passed.
 - Format and diff checks passed. Coordinator locked workspace check/Clippy plus agent docs, SSA force, metrics inventory, Pingora source policy, Gateway no-tracing, English-only, diff, and frozen-path gates all passed.
 - Frozen integration manifest: 3,231 paths unchanged.
+- Commit: `efd98773` (`Bound DSL plugin names`); no push.
