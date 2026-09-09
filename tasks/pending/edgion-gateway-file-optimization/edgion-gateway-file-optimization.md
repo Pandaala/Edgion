@@ -10,11 +10,11 @@
 | Priority | P1 |
 | Baseline commit | `d484e580` |
 | Scope | Every tracked file under `edgion-gateway/` |
-| Campaign status | in-progress; B0229 committed as `6e4af44e`; B0230 examined-no-change and ready for its record commit. Remote CORS and subsequent user commits through `312d10e8` reconciled. |
-| Coverage | 547 current Gateway files: 221 changed, 180 examined-no-change, 13 deferred, 133 non-terminal; 3 historical rows are removed. HTTP conf_handler reopened after external CORS enforcement; earlier OIDC/Redis reopenings retained. |
-| Active batch | B0230 runtime store facade: sole serial record commit gate. Automatic local batch commits authorized, never push. D0119's pre-existing context layout failures remain separate. |
-| Analysis queue | B0231 outbound TLS client is analysis-ready with a cross-adapter CA validation defer candidate; B0232 Redis limiter scripts is analysis-in-progress. D0126 terminal-header repair independently confirmed, not implemented by B0224. |
-| Integration freeze | 3,120 files. External CORS and subsequent ACME/GeoRestriction changes were individually verified against source commits and current HEAD; only proven entries reconciled. See external-sync records. No campaign integration-test edit occurred. |
+| Campaign status | in-progress; B0229 committed as `6e4af44e`; B0230 examined-no-change committed as `57df89f3`. Remote CORS and subsequent user commits through `312d10e8` reconciled. |
+| Coverage | 547 current Gateway files: 221 changed, 180 examined-no-change, 14 deferred, 132 non-terminal; 3 historical rows are removed. HTTP conf_handler reopened after external CORS enforcement; earlier OIDC/Redis reopenings retained. |
+| Active batch | B0231 outbound TLS client: sole serial defer record commit gate at external `774c63bc`; no production edit. Automatic local batch commits authorized, never push. |
+| Analysis queue | B0232 Redis limiter scripts is analysis-ready with a plan-first fractional-refill fix. D0127 tracks the independently confirmed outbound CA gap. |
+| Integration freeze | 3,121 files. External CORS, ACME/GeoRestriction and CredentialInjector changes were individually verified against source commits and current HEAD; only proven entries reconciled. See external-sync records. No campaign integration-test edit occurred. |
 
 ## AI guide summary
 

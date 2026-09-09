@@ -149,7 +149,7 @@
 | `tls-core` | 3 | 1 | 2 | 0 | complete |
 | `tls-runtime` | 6 | 2 | 4 | 0 | complete |
 | `tls-store` | 4 | 2 | 2 | 0 | complete |
-| `tls-validation` | 6 | 3 | 2 | 0 | pending |
+| `tls-validation` | 6 | 3 | 2 | 1 | complete |
 | `util` | 6 | 4 | 2 | 0 | complete |
 
 ## File ledger
@@ -327,7 +327,7 @@
 | `edgion-gateway/src/observe/request_diagnostics.rs` | `observe-core` | source | examined-no-change | OBS-CORE-001 / `4b1d27d5` |
 | `edgion-gateway/src/plugins/common/mod.rs` | `plugins-common` | source | examined-no-change | `B0061`: retained correct entry-scope compilation and identity separation |
 | `edgion-gateway/src/plugins/common/redis_rate_limiter/mod.rs` | `plugins-common` | source | pending | Reopened after external `264847df`; historical B0061 no-change retained |
-| `edgion-gateway/src/plugins/common/redis_rate_limiter/scripts.rs` | `plugins-common` | source | analysis-in-progress | B0232: refreshed shared Redis limiter script and caller analysis after external change |
+| `edgion-gateway/src/plugins/common/redis_rate_limiter/scripts.rs` | `plugins-common` | source | analysis-ready | B0232: plan-first fractional Token Bucket refill preservation candidate |
 | `edgion-gateway/src/plugins/http/ai_guard/evaluator.rs` | `plugins-http-ai-guard` | source | pending | — |
 | `edgion-gateway/src/plugins/http/ai_guard/mod.rs` | `plugins-http-ai-guard` | source | pending | — |
 | `edgion-gateway/src/plugins/http/ai_guard/plugin.rs` | `plugins-http-ai-guard` | source | pending | REQ-BODY-CORE-001 follow-up: replace the 32-bit-truncating physical-cap `as usize` cast during the full plugin audit |
@@ -696,7 +696,7 @@
 | `edgion-gateway/src/tls/validation/cert.rs` | `tls-validation` | source | examined-no-change | TLS-VALIDATION-001: canonical shared validation re-export retained |
 | `edgion-gateway/src/tls/validation/mod.rs` | `tls-validation` | source | examined-no-change | TLS-VALIDATION-001: narrow module exports retained |
 | `edgion-gateway/src/tls/validation/mtls.rs` | `tls-validation` | source | changed | TLS-VALIDATION-001 / `f65f66bc`; typed SAN semantics deferred to dedicated TODO |
-| `edgion-gateway/src/tls/validation/outbound_client.rs` | `tls-validation` | source | analysis-ready | B0231: defer candidate for per-bundle CA validation across canonical adapters |
+| `edgion-gateway/src/tls/validation/outbound_client.rs` | `tls-validation` | source | deferred | B0231/D0127: per-bundle CA validation requires plan-first cross-adapter repair |
 | `edgion-gateway/src/tls/validation/outbound_san_verifier.rs` | `tls-validation` | source | changed | TLS-VALIDATION-001 / `f65f66bc` |
 | `edgion-gateway/src/util/client_ip.rs` | `util` | source | changed | UTIL-001 / `a909f16f` |
 | `edgion-gateway/src/util/mod.rs` | `util` | source | examined-no-change | UTIL-001 / `a909f16f` |

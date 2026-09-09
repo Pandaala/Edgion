@@ -18,7 +18,7 @@
 - This is a queued candidate and cannot enter the serial mutation/review lane before earlier batches commit.
 - Previous batch: `1aad294d`; never push.
 - Freshness: revalidated at `1aad294d6933384413c943a51babb035dba679e2`; target blob remains `66ba047b962fdda1829557baacc5b667ec7c3c0d`. B0188 changed URI write/latch order before connection and did not affect header sanitization, credential state, retry ownership, or this implementation brief.
-- Deferred record: `D0107` owns later real H1 sanitizer-pipeline integration coverage; existing integration files remain frozen.
+- At this batch's baseline, D0107 owned later real H1 sanitizer-pipeline integration coverage; existing integration files remained frozen.
 
 ## Approved Implementation Plan
 
@@ -36,3 +36,8 @@ Independent plan review approved this plan without a Must Fix. Independent final
 - Tests: target 13/13, diagnostic 2/2, and full proxy-http 261/261.
 - Gates: `cargo fmt --all`, locked workspace check and Clippy, locked Gateway binary build, agent-doc, SSA, metrics inventory, Pingora source, Gateway no-tracing, English-only, diff, and frozen integration-path checks passed.
 - Commit: `12ec874a`; never pushed by the campaign.
+
+## External Reconciliation
+
+- External `774c63bc` closed D0107 with a real HTTP/1 CredentialInjector-to-ProxyRewrite nomination scenario and deleted its standalone task. Independent provenance review verified the new fixture and changed suite file byte-for-byte against that commit and current HEAD. Do not recreate the deleted issue.
+- The external 8/8 result remains historical; it does not alter this batch's original verification. No Gateway source changed and this target retains its terminal coverage.

@@ -16,7 +16,9 @@ This is the single concise record of actual changes across the file-by-file audi
 
 ## Entries
 
-- B0230: examined the runtime store facade with no code change. Independent LGTM confirmed every export and public module has live handler, Admin, route, L4, TLS or test consumers; visibility reshaping has no measurable value. Store 14/14, route 19/19 and full workspace/guard checks passed. No integration change. Local record commit SHA pending backfill; no push.
+- B0231: deferred the independently confirmed per-bundle custom-CA validation defect as D0127; no production code changed. Mixed valid/empty bundles are accepted by three canonical adapters and require a plan-first cross-adapter repair. TLS/OIDC/common tests 32/32 and workspace/guard checks passed; external CredentialInjector freeze changes were independently reconciled, with no campaign integration edit. Local record commit SHA pending backfill; no push.
+
+- B0230: examined the runtime store facade with no code change. Independent LGTM confirmed every export and public module has live handler, Admin, route, L4, TLS or test consumers; visibility reshaping has no measurable value. Store 14/14, route 19/19 and full workspace/guard checks passed. No integration change. Commit `57df89f3`; no push.
 
 - B0229: borrowed the original Gateway annotation map during listener snapshot rebuild, removing two temporary map constructions; added four projection matrix tests and corrected owning snapshot knowledge. Independent LGTM at `312d10e8`; store 14/14, route 19/19, identity 3/3, DNS 12/12 and workspace/guard checks passed. Existing integration tests unchanged by the batch. Concurrent external commits reconciled in [provenance](external-sync-312d10e8.md). Commit `6e4af44e`; no push.
 

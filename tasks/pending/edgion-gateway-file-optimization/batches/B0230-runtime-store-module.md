@@ -22,4 +22,4 @@
 - Decision: examined-no-change. The facade's global raw-store getter, listener store/getter/rebuild and public index/listener types all have live GatewayHandler, Admin, route-matching, L4, TLS and test consumers. Privatization or re-export reshaping would add unrelated churn without runtime or correctness value.
 - Fresh independent reviewer `b0230_final_review`: LGTM, no Must Fix or Should Fix at `6e4af44e`; target blob `ed166b35ba54c5315139fea72d5a7915e11a58df`, no target diff. B0229 changed no public facade contract, state or publication sequence.
 - Verification: listener store 14/14 and route matching 19/19; workspace format/check/Clippy, agent docs, SSA, metrics inventory, Pingora source, Gateway no-tracing, English-only, diff and frozen-path guards passed. No source, knowledge, issue or integration change.
-- Commit SHA is backfilled after the local record commit; never push.
+- Commit: `57df89f3`; never pushed by the campaign.
