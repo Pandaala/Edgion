@@ -14,7 +14,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use edgion_resources::resources::common::external_http::{
-    ActiveHealthCheck, ExternalHttpConnection, PassiveHealthCheck, TargetKind, WebhookRetry, WebhookTarget,
+    validate_active_health_path, ActiveHealthCheck, ExternalHttpConnection, PassiveHealthCheck, TargetKind,
+    WebhookRetry, WebhookTarget,
 };
 use edgion_resources::resources::common::outbound_request::OutboundRequestSpec;
 use edgion_resources::resources::common::success::SuccessSpec;
@@ -300,12 +301,14 @@ impl ManagedOutboundClient {
             .as_ref()
             .map(|rl| SlidingWindowCounter::new(rl.rate, Duration::from_secs(rl.window_sec.max(1))));
 
+        let passive_health_check = conn.health_check.as_ref().and_then(|hc| hc.passive.as_ref()).cloned();
+
         // ── 9. Spawn active-health task ────────────────────────────────────
         let health_task = if let Some(active) = conn.health_check.as_ref().and_then(|hc| hc.active.as_ref()) {
             let active_clone = active.clone();
             let health_clone = Arc::clone(&health);
             let client_clone = Arc::clone(&http_client);
-            let ref_clone = ref_label.to_string();
+            let has_passive_health = passive_health_check.is_some();
             // Build a standalone target for the health task. We re-use the same
             // resolved_target kind but construct a fresh one for the task so that
             // we can move it without cloning the AtomicUsize cursor (which is not
@@ -314,7 +317,15 @@ impl ManagedOutboundClient {
             let task_target = build_resolved_target(&conn.target, conn.tls.is_some())
                 .unwrap_or(ResolvedTarget::Static(String::new()));
             Some(tokio::spawn(async move {
-                run_active_health_check(ref_clone, task_target, active_clone, health_clone, client_clone).await;
+                run_active_health_check(
+                    task_target,
+                    active_clone,
+                    health_clone,
+                    client_clone,
+                    egress_policy,
+                    has_passive_health,
+                )
+                .await;
             }))
         } else {
             None
@@ -328,8 +339,6 @@ impl ManagedOutboundClient {
             }
             r
         });
-        let passive_health_check = conn.health_check.as_ref().and_then(|hc| hc.passive.as_ref()).cloned();
-
         Ok(ManagedOutboundClient {
             http_client,
             resolved_target,
@@ -367,45 +376,7 @@ impl ManagedOutboundClient {
             .pick_url()
             .ok_or(ManagedOutboundDialError::NoEndpoint)?;
 
-        let literal = extract_ip_literal(&url).map_err(|e| {
-            ManagedOutboundDialError::SsrfRejected(format!("cannot parse address from URL {url:?}: {e}"))
-        })?;
-
-        if let Some(addr) = literal {
-            let pingora_addr = pingora_core::protocols::l4::socket::SocketAddr::Inet(addr);
-            validate_endpoint_backend_addr(&pingora_addr, false).map_err(|status| {
-                ManagedOutboundDialError::SsrfRejected(format!("address {addr} is blocked by SSRF guard: {status:?}"))
-            })?;
-
-            // Unspecified (0.0.0.0 / ::) is blocked unconditionally for URL targets,
-            // not gated on `blockPrivate`: `validate_endpoint_backend_addr` allows it
-            // (cluster-internal Service targets legitimately never see 0.0.0.0), but on
-            // Linux a connect to 0.0.0.0 is routed to 127.0.0.1 — a loopback-equivalent
-            // bypass of the guard's "loopback always blocked" promise, and a hostile DNS
-            // answer of 0.0.0.0 is a rebinding-class bypass. This block only runs when
-            // `egress_policy` is set, i.e. for URL targets; Service targets are untouched.
-            if self.egress_policy.is_some() && crate::util::net::classify_ip(addr.ip()) == IpClass::Unspecified {
-                record_egress_blocked("unspecified");
-                return Err(ManagedOutboundDialError::SsrfRejected(format!(
-                    "address {addr} is an unspecified address"
-                )));
-            }
-
-            // A URL target's `blockPrivate` must also apply to IP-literal hosts, which
-            // never reach `EgressResolver`. `validate_endpoint_backend_addr` allows
-            // RFC1918 by design, so the private check lives here.
-            if let Some(policy) = self.egress_policy {
-                if policy.block_private {
-                    let class = crate::util::net::classify_ip(addr.ip());
-                    if matches!(class, IpClass::Private | IpClass::UniqueLocal) {
-                        record_egress_blocked("private");
-                        return Err(ManagedOutboundDialError::SsrfRejected(format!(
-                            "address {addr} is blocked by blockPrivate"
-                        )));
-                    }
-                }
-            }
-        }
+        validate_literal_dial_url(&url, self.egress_policy)?;
 
         Ok(url)
     }
@@ -558,6 +529,99 @@ pub(crate) fn extract_ip_literal(url: &str) -> Result<Option<std::net::SocketAdd
     }
 }
 
+/// Apply the final IP-literal safety policy for one outbound URL.
+///
+/// DNS names deliberately return success here: URL targets resolve through
+/// `EgressResolver`, while Service authority names resolve through
+/// `AnchorPinnedResolver`. Both classify the actual connector addresses.
+fn validate_literal_dial_url(url: &str, egress_policy: Option<EgressPolicy>) -> Result<(), ManagedOutboundDialError> {
+    let literal = extract_ip_literal(url)
+        .map_err(|e| ManagedOutboundDialError::SsrfRejected(format!("cannot parse address from URL {url:?}: {e}")))?;
+
+    let Some(addr) = literal else {
+        return Ok(());
+    };
+
+    let pingora_addr = pingora_core::protocols::l4::socket::SocketAddr::Inet(addr);
+    validate_endpoint_backend_addr(&pingora_addr, false).map_err(|status| {
+        ManagedOutboundDialError::SsrfRejected(format!("address {addr} is blocked by SSRF guard: {status:?}"))
+    })?;
+
+    // Unspecified addresses are rejected for free-form URL targets. Service
+    // targets keep the canonical endpoint policy, which allows cluster-internal
+    // address classes other than loopback and link-local.
+    if egress_policy.is_some() && crate::util::net::classify_ip(addr.ip()) == IpClass::Unspecified {
+        record_egress_blocked("unspecified");
+        return Err(ManagedOutboundDialError::SsrfRejected(format!(
+            "address {addr} is an unspecified address"
+        )));
+    }
+
+    // IP-literal URL hosts never reach EgressResolver, so enforce the URL
+    // target's optional private-address policy at this final-dial seam.
+    if egress_policy.is_some_and(|policy| policy.block_private)
+        && matches!(
+            crate::util::net::classify_ip(addr.ip()),
+            IpClass::Private | IpClass::UniqueLocal
+        )
+    {
+        record_egress_blocked("private");
+        return Err(ManagedOutboundDialError::SsrfRejected(format!(
+            "address {addr} is blocked by blockPrivate"
+        )));
+    }
+
+    Ok(())
+}
+
+/// Compose and validate the URL for one active-health probe.
+///
+/// The health path is parsed as a URL reference before its parsed path and
+/// query are applied. Raw concatenation is intentionally avoided: special-URL
+/// backslash and scheme-relative forms can otherwise replace the authority.
+fn prepare_active_health_url(
+    base: &str,
+    path: Option<&str>,
+    egress_policy: Option<EgressPolicy>,
+) -> Result<reqwest::Url, String> {
+    let mut composed = reqwest::Url::parse(base).map_err(|e| format!("invalid active-health base URL: {e}"))?;
+    let original_scheme = composed.scheme().to_string();
+    let original_host = composed.host_str().map(str::to_string);
+    let original_port = composed.port_or_known_default();
+
+    if !composed.username().is_empty() || composed.password().is_some() {
+        return Err("active-health base URL must not contain credentials".to_string());
+    }
+
+    if let Some(raw_path) = path {
+        validate_active_health_path(raw_path).map_err(|e| format!("invalid active-health path: {e}"))?;
+        let reference_base = reqwest::Url::parse("https://health-check.invalid/")
+            .map_err(|e| format!("invalid active-health validation base: {e}"))?;
+        let reference = reference_base
+            .join(raw_path)
+            .map_err(|e| format!("invalid active-health path reference: {e}"))?;
+        composed.set_path(reference.path());
+        composed.set_query(reference.query());
+
+        if composed.path() != reference.path() || composed.query() != reference.query() {
+            return Err("active-health path or query changed during URL composition".to_string());
+        }
+    }
+    composed.set_fragment(None);
+
+    if composed.scheme() != original_scheme
+        || composed.host_str() != original_host.as_deref()
+        || composed.port_or_known_default() != original_port
+        || !composed.username().is_empty()
+        || composed.password().is_some()
+    {
+        return Err("active-health path changed the target authority".to_string());
+    }
+
+    validate_literal_dial_url(composed.as_str(), egress_policy).map_err(|e| e.to_string())?;
+    Ok(composed)
+}
+
 // ============================================================
 // Active health check task
 // ============================================================
@@ -568,11 +632,12 @@ pub(crate) fn extract_ip_literal(url: &str) -> Result<Option<std::net::SocketAdd
 /// `health.healthy`. Long-running; exits only when the task is aborted (via
 /// `Drop` on the owner).
 async fn run_active_health_check(
-    ref_label: String,
     target: ResolvedTarget,
     active: ActiveHealthCheck,
     health: Arc<HealthState>,
     client: Arc<reqwest::Client>,
+    egress_policy: Option<EgressPolicy>,
+    has_passive_health: bool,
 ) {
     let interval = Duration::from_secs(active.interval_sec.max(1));
     let timeout = Duration::from_millis(active.timeout_ms.max(100));
@@ -590,43 +655,62 @@ async fn run_active_health_check(
     loop {
         tokio::time::sleep(interval).await;
 
-        let Some(base) = target.pick_url() else {
-            // No ready backend yet — skip this tick without resetting counters.
-            let _ = &ref_label; // suppress unused-variable lint
-            continue;
-        };
-
-        // A Service anchor carrying an `upstreamAuthority` policy dispatches by
-        // Host/SNI; the active probe has no request to render a per-request
-        // label from, so it sends the static `healthCheckHost` instead. Looked
-        // up from the current snapshot every tick (not cached at task-spawn
-        // time) so a policy attached or detached after this task started still
-        // takes effect on the very next probe — mirrors the per-call snapshot
-        // `get_effective` lookup in `outbound_call`.
-        let base = resolve_probe_base(base, service_key.as_deref());
-
-        let check_url = match &active.path {
-            Some(path) => format!("{}{}", base.trim_end_matches('/'), path),
-            None => base,
-        };
-
-        let result = client.get(&check_url).timeout(timeout).send().await;
-
-        match result {
-            Ok(resp) if resp.status().is_success() => {
-                consecutive_failures = 0;
-                consecutive_successes += 1;
-                if consecutive_successes >= active.healthy_threshold {
-                    health.healthy.store(true, Ordering::Relaxed);
+        let success = match target.pick_url() {
+            Some(base) => {
+                // A Service anchor carrying an `upstreamAuthority` policy
+                // dispatches by Host/SNI. The active probe has no request to
+                // render a label from, so it uses the static healthCheckHost.
+                // The lookup is refreshed every tick so policy hot reload takes
+                // effect without respawning this task.
+                let base = resolve_probe_base(base, service_key.as_deref());
+                match prepare_active_health_url(&base, active.path.as_deref(), egress_policy) {
+                    Ok(check_url) => client
+                        .get(check_url)
+                        .timeout(timeout)
+                        .send()
+                        .await
+                        .is_ok_and(|response| response.status().is_success()),
+                    Err(_) => false,
                 }
             }
-            _ => {
-                consecutive_successes = 0;
-                consecutive_failures += 1;
-                if consecutive_failures >= active.unhealthy_threshold {
-                    health.healthy.store(false, Ordering::Relaxed);
-                }
-            }
+            None => false,
+        };
+
+        record_active_health_result(
+            &health,
+            &active,
+            has_passive_health,
+            &mut consecutive_failures,
+            &mut consecutive_successes,
+            success,
+        );
+    }
+}
+
+/// Update the active-health counters and the shared health flag for one tick.
+///
+/// Passive monitoring exclusively owns circuit opening when it is configured.
+/// Active success may recover either mode, but it must not reset passive
+/// counters or the monotonic half-open/backoff state.
+fn record_active_health_result(
+    health: &HealthState,
+    active: &ActiveHealthCheck,
+    has_passive_health: bool,
+    consecutive_failures: &mut u32,
+    consecutive_successes: &mut u32,
+    success: bool,
+) {
+    if success {
+        *consecutive_failures = 0;
+        *consecutive_successes = (*consecutive_successes).saturating_add(1);
+        if *consecutive_successes >= active.healthy_threshold {
+            health.healthy.store(true, Ordering::Relaxed);
+        }
+    } else {
+        *consecutive_successes = 0;
+        *consecutive_failures = (*consecutive_failures).saturating_add(1);
+        if !has_passive_health && *consecutive_failures >= active.unhealthy_threshold {
+            health.healthy.store(false, Ordering::Relaxed);
         }
     }
 }
@@ -899,6 +983,131 @@ mod tests {
             client.dial_url(),
             Err(ManagedOutboundDialError::SsrfRejected(_))
         ));
+    }
+
+    #[test]
+    fn active_health_url_preserves_origin_and_parsed_query() {
+        let url = prepare_active_health_url(
+            "https://10.1.2.3:8443/original?stale=1",
+            Some("/healthz?ready=1&scope=%2Fapi"),
+            None,
+        )
+        .expect("a safe Service probe URL must compose");
+
+        assert_eq!(url.scheme(), "https");
+        assert_eq!(url.host_str(), Some("10.1.2.3"));
+        assert_eq!(url.port_or_known_default(), Some(8443));
+        assert_eq!(url.path(), "/healthz");
+        assert_eq!(url.query(), Some("ready=1&scope=%2Fapi"));
+        assert!(url.username().is_empty());
+        assert!(url.password().is_none());
+
+        let encoded = prepare_active_health_url("http://10.1.2.3:8080", Some("/%2F%5C%23?next=%2F"), None)
+            .expect("percent-encoded structural bytes are path data");
+        assert_eq!(encoded.path(), "/%2F%5C%23");
+        assert_eq!(encoded.query(), Some("next=%2F"));
+    }
+
+    #[test]
+    fn active_health_url_defensively_rejects_authority_references() {
+        for path in [
+            "healthz",
+            "https://evil.example/healthz",
+            "//evil.example/healthz",
+            "///evil.example/healthz",
+            r"/\evil.example/healthz",
+            "/healthz#details",
+        ] {
+            assert!(
+                prepare_active_health_url("http://10.1.2.3:8080", Some(path), None).is_err(),
+                "path {path:?} must fail closed at runtime"
+            );
+        }
+    }
+
+    #[test]
+    fn active_health_url_applies_target_specific_literal_policy() {
+        assert!(
+            prepare_active_health_url("http://10.1.2.3:8080", Some("/healthz"), None).is_ok(),
+            "Service probes must allow RFC1918 endpoints"
+        );
+        assert!(
+            prepare_active_health_url("http://169.254.169.254:80", Some("/healthz"), None).is_err(),
+            "Service probes must reject link-local metadata endpoints"
+        );
+        assert!(prepare_active_health_url(
+            "http://10.1.2.3:8080",
+            Some("/healthz"),
+            Some(EgressPolicy { block_private: true }),
+        )
+        .is_err());
+        assert!(prepare_active_health_url(
+            "http://0.0.0.0:8080",
+            Some("/healthz"),
+            Some(EgressPolicy { block_private: false }),
+        )
+        .is_err());
+        assert!(prepare_active_health_url(
+            "http://127.0.0.1:8080",
+            Some("/healthz"),
+            Some(EgressPolicy { block_private: false }),
+        )
+        .is_err());
+    }
+
+    fn active_health_thresholds() -> ActiveHealthCheck {
+        ActiveHealthCheck {
+            path: Some("/healthz".to_string()),
+            interval_sec: 10,
+            timeout_ms: 2_000,
+            healthy_threshold: 2,
+            unhealthy_threshold: 2,
+        }
+    }
+
+    #[test]
+    fn active_only_health_opens_and_recovers_at_thresholds() {
+        let health = HealthState::new();
+        let active = active_health_thresholds();
+        let mut failures = 0;
+        let mut successes = 0;
+
+        record_active_health_result(&health, &active, false, &mut failures, &mut successes, false);
+        assert!(health.healthy.load(Ordering::Relaxed));
+        record_active_health_result(&health, &active, false, &mut failures, &mut successes, false);
+        assert!(!health.healthy.load(Ordering::Relaxed));
+
+        record_active_health_result(&health, &active, false, &mut failures, &mut successes, true);
+        assert!(!health.healthy.load(Ordering::Relaxed));
+        record_active_health_result(&health, &active, false, &mut failures, &mut successes, true);
+        assert!(health.healthy.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn combined_health_passive_opens_and_active_only_recovers() {
+        let health = HealthState::new();
+        let active = active_health_thresholds();
+        let mut failures = 0;
+        let mut successes = 0;
+
+        record_active_health_result(&health, &active, true, &mut failures, &mut successes, false);
+        record_active_health_result(&health, &active, true, &mut failures, &mut successes, false);
+        assert!(
+            health.healthy.load(Ordering::Relaxed),
+            "active failure must not open a passive-owned circuit"
+        );
+
+        health.healthy.store(false, Ordering::Relaxed);
+        health.passive_failures.store(7, Ordering::Relaxed);
+        health.last_halfopen.store(41, Ordering::Relaxed);
+        health.backoff_sec.store(13, Ordering::Relaxed);
+        record_active_health_result(&health, &active, true, &mut failures, &mut successes, true);
+        record_active_health_result(&health, &active, true, &mut failures, &mut successes, true);
+
+        assert!(health.healthy.load(Ordering::Relaxed));
+        assert_eq!(health.passive_failures.load(Ordering::Relaxed), 7);
+        assert_eq!(health.last_halfopen.load(Ordering::Relaxed), 41);
+        assert_eq!(health.backoff_sec.load(Ordering::Relaxed), 13);
     }
 
     /// A URL target with no TLS block must still get a dedicated client — otherwise

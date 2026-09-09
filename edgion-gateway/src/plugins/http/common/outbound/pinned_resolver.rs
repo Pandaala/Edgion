@@ -77,7 +77,17 @@ impl AnchorPinnedResolver {
         if eps.is_empty() {
             return Vec::new();
         }
-        let mut parsed: Vec<SocketAddr> = eps.iter().filter_map(|e| e.parse().ok()).collect();
+        let mut parsed: Vec<SocketAddr> = eps
+            .iter()
+            .filter_map(|endpoint| endpoint.parse().ok())
+            .filter(|address| {
+                crate::backends::validate_endpoint_backend_addr(
+                    &pingora_core::protocols::l4::socket::SocketAddr::Inet(*address),
+                    false,
+                )
+                .is_ok()
+            })
+            .collect();
         if parsed.is_empty() {
             return Vec::new();
         }
@@ -199,6 +209,14 @@ mod tests {
                     }),
                     ..Default::default()
                 },
+                Endpoint {
+                    addresses: vec!["169.254.169.254".to_string()],
+                    conditions: Some(EndpointConditions {
+                        ready: Some(true),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
             ],
         };
         let mut add = HashMap::new();
@@ -237,5 +255,67 @@ mod tests {
         let mut rotated_first = first.clone();
         rotated_first.rotate_left(1);
         assert_eq!(second, rotated_first, "rotation must advance by one position per call");
+    }
+
+    #[tokio::test]
+    async fn all_unsafe_endpoints_yield_no_addresses_without_advancing_rotation() {
+        use crate::backends::discovery::endpoint_slice::get_roundrobin_store;
+        use edgion_resources::constants::labels::k8s::SERVICE_NAME;
+        use k8s_openapi::api::discovery::v1::{Endpoint, EndpointConditions, EndpointPort, EndpointSlice};
+        use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
+        use std::collections::{BTreeMap, HashMap, HashSet};
+        use std::str::FromStr;
+
+        let ns = "pinned-resolver-unsafe-test";
+        let svc = "unsafe-anchor";
+        let service_key = format!("{ns}/{svc}");
+
+        let mut labels = BTreeMap::new();
+        labels.insert(SERVICE_NAME.to_string(), svc.to_string());
+        let slice = EndpointSlice {
+            metadata: ObjectMeta {
+                name: Some("unsafe-anchor-eps1".to_string()),
+                namespace: Some(ns.to_string()),
+                labels: Some(labels),
+                ..Default::default()
+            },
+            address_type: "IPv4".to_string(),
+            ports: Some(vec![EndpointPort {
+                port: Some(8080),
+                ..Default::default()
+            }]),
+            endpoints: vec![
+                Endpoint {
+                    addresses: vec!["169.254.1.1".to_string()],
+                    conditions: Some(EndpointConditions {
+                        ready: Some(true),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+                Endpoint {
+                    addresses: vec!["169.254.169.254".to_string()],
+                    conditions: Some(EndpointConditions {
+                        ready: Some(true),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+            ],
+        };
+        let mut add = HashMap::new();
+        add.insert(format!("{ns}/unsafe-anchor-eps1"), slice);
+        get_roundrobin_store().update_data_only(add, HashMap::new(), &HashSet::new());
+
+        let resolver = AnchorPinnedResolver::new(service_key, Some(8080));
+        let queried = Name::from_str("must-not-fall-back.example").unwrap();
+        let actual: Vec<SocketAddr> = resolver.resolve(queried).await.unwrap().collect();
+
+        assert!(actual.is_empty(), "an all-unsafe pool must expose no dial candidates");
+        assert_eq!(
+            resolver.cursor.load(Ordering::Relaxed),
+            0,
+            "an empty safe pool must be detected before cursor modulo and rotation"
+        );
     }
 }

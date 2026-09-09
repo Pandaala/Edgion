@@ -352,10 +352,10 @@
 | `edgion-gateway/src/plugins/http/common/json_request.rs` | `plugins-http-common` | source | changed | B0243: borrowed raw HeaderMap classification removes per-request header clones; independent LGTM and focused tests passed |
 | `edgion-gateway/src/plugins/http/common/mod.rs` | `plugins-http-common` | source | changed | B0244: allocation-free empty/single rate-limit key paths; independent plan/final approval and focused tests passed |
 | `edgion-gateway/src/plugins/http/common/outbound/call.rs` | `plugins-http-common` | source | changed | B0245: move sole-attempt requests and use monotonic passive recovery; independent revised-plan/final approval |
-| `edgion-gateway/src/plugins/http/common/outbound/client.rs` | `plugins-http-common` | source | analysis-ready | B0246: active-health/final-resolver SSRF repair ready; refresh after B0245 client documentation edit |
+| `edgion-gateway/src/plugins/http/common/outbound/client.rs` | `plugins-http-common` | source | changed | B0246: fail-closed active-health URL/dial validation and correct passive/active circuit ownership |
 | `edgion-gateway/src/plugins/http/common/outbound/egress.rs` | `plugins-http-common` | source | pending | — |
 | `edgion-gateway/src/plugins/http/common/outbound/mod.rs` | `plugins-http-common` | source | pending | — |
-| `edgion-gateway/src/plugins/http/common/outbound/pinned_resolver.rs` | `plugins-http-common` | source | pending | — |
+| `edgion-gateway/src/plugins/http/common/outbound/pinned_resolver.rs` | `plugins-http-common` | source | changed | B0246: filter every pinned EndpointSlice address through canonical final-dial validation before rotation |
 | `edgion-gateway/src/plugins/http/common/outbound/request.rs` | `plugins-http-common` | source | changed | B0107: canonical framing helper reused by Wasm callouts |
 | `edgion-gateway/src/plugins/http/common/outbound/target.rs` | `plugins-http-common` | source | pending | — |
 | `edgion-gateway/src/plugins/http/conf_handler_impl.rs` | `plugins-http-framework` | source | changed | B0062 |

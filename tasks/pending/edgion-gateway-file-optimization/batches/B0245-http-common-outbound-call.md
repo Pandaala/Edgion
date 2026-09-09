@@ -31,4 +31,4 @@
 - Independent plan reviewer `b0245_plan_review` required and approved the explicit zero-interval branch and reversed-sample regression. Independent final reviewer `b0245_final_review` required three documentation/test corrections, then returned LGTM with no remaining findings.
 - Verification: outbound call 34/34, ForwardAuth 6/6, AI Guard 49/49, Guardrail 20/20 and Webhook 46/46. Workspace format/check/Clippy (existing warnings), agent docs, SSA, metrics inventory, Pingora source, Gateway no-tracing, English-only, diff and 3,136-file freeze passed.
 - Deferred: D0128 tracks isolation of the remaining network-backed library unit tests without editing existing integrations.
-- Commit: pending; never push.
+- Commit: `ceb13835`; never pushed by the campaign.

@@ -10,10 +10,10 @@
 | Priority | P1 |
 | Baseline commit | `d484e580` |
 | Scope | Every tracked file under `edgion-gateway/` |
-| Campaign status | in-progress; B0245 implementation, independent reviews and verification complete at `654fe9a1`, awaiting its local commit; external user commits through `6a5e428a` reconciled. |
-| Coverage | 548 current Gateway files: 228 changed, 184 examined-no-change, 15 deferred, 121 non-terminal; 3 historical rows are removed. HTTP conf_handler, plugin store and RequestMirror reopened after external changes; OIDC reopenings retained. |
-| Active batch | B0245 outbound call ownership and passive recovery timing: commit gate complete for the exact two-file code scope plus standalone D0128 task. Automatic local batch commits authorized, never push. |
-| Analysis queue | B0246 outbound client security repair remains analysis-ready and must refresh against B0245's changed `client.rs` before promotion. D0127 tracks the independently confirmed outbound CA gap. |
+| Campaign status | in-progress; B0246 implementation, independent reviews and verification complete at `ceb13835`, awaiting its local commit; external user commits through `6a5e428a` reconciled. |
+| Coverage | 548 current Gateway files: 230 changed, 184 examined-no-change, 15 deferred, 119 non-terminal; 3 historical rows are removed. HTTP conf_handler, plugin store and RequestMirror reopened after external changes; OIDC reopenings retained. |
+| Active batch | B0246 outbound client security and health-ownership repair: commit gate complete for two Gateway files plus one necessary resource support file. Automatic local batch commits authorized, never push. |
+| Analysis queue | B0247 starts with the next pending outbound helper after B0246 commits. D0127 tracks the independently confirmed outbound CA gap. |
 | Integration freeze | 3,136 files. External test changes through `6a5e428a` were individually verified against source commits and current HEAD; only proven entries reconciled. See external-sync records. No campaign integration-test edit occurred. |
 
 ## AI guide summary

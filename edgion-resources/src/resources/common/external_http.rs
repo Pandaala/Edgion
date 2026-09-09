@@ -197,6 +197,41 @@ fn validate_origin_url(raw: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Validate an active-health path as a root-relative URL reference.
+///
+/// The path is joined to a runtime-selected backend origin. Requiring exactly
+/// one leading slash and rejecting backslashes prevents the URL parser's
+/// special-scheme normalization from treating the value as a replacement
+/// authority. Percent-encoded bytes remain ordinary path data and are not
+/// decoded for these structural checks.
+pub fn validate_active_health_path(raw: &str) -> Result<(), String> {
+    if !raw.starts_with('/') || raw.as_bytes().get(1) == Some(&b'/') {
+        return Err("must be a root-relative URL reference starting with exactly one '/'".to_string());
+    }
+    if raw.contains('\\') {
+        return Err("must not contain a backslash".to_string());
+    }
+
+    let base = url::Url::parse("https://health-check.invalid/")
+        .map_err(|e| format!("internal validation base is invalid: {e}"))?;
+    let parsed = base
+        .join(raw)
+        .map_err(|e| format!("must be a valid root-relative URL reference: {e}"))?;
+
+    if parsed.scheme() != base.scheme()
+        || parsed.host_str() != base.host_str()
+        || parsed.port_or_known_default() != base.port_or_known_default()
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+    {
+        return Err("must not replace the target authority".to_string());
+    }
+    if parsed.fragment().is_some() {
+        return Err("must not contain a fragment".to_string());
+    }
+    Ok(())
+}
+
 /// Validate a Service-backed target.
 ///
 /// Checks:
@@ -255,6 +290,16 @@ pub fn validate_connection_target(conn: &ExternalHttpConnection) -> Option<Strin
                         .to_string(),
                 );
             }
+        }
+    }
+    if let Some(path) = conn
+        .health_check
+        .as_ref()
+        .and_then(|health| health.active.as_ref())
+        .and_then(|active| active.path.as_deref())
+    {
+        if let Err(e) = validate_active_health_path(path) {
+            return Some(format!("healthCheck.active.path: {e}"));
         }
     }
     if let Some(retry) = conn.retry.as_ref() {
@@ -757,6 +802,63 @@ mod failure_policy_tests {
         let c: ExternalHttpConnection =
             serde_yaml::from_str("target:\n  url: https://api.example.com\nstatusOnError: 502\n").unwrap();
         assert_eq!(c.status_on_error, 502);
+    }
+}
+
+#[cfg(test)]
+mod active_health_path_tests {
+    use super::*;
+
+    fn connection_with_path(path: &str) -> ExternalHttpConnection {
+        ExternalHttpConnection {
+            target: WebhookTarget {
+                url: Some("https://api.example.com".to_string()),
+                ..Default::default()
+            },
+            health_check: Some(WebhookHealthCheck {
+                active: Some(ActiveHealthCheck {
+                    path: Some(path.to_string()),
+                    interval_sec: 10,
+                    timeout_ms: 2_000,
+                    healthy_threshold: 1,
+                    unhealthy_threshold: 3,
+                }),
+                passive: None,
+            }),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn active_health_path_accepts_root_relative_path_and_query() {
+        for path in ["/healthz", "/healthz?ready=1", "/%2F%5C%23?next=%2F"] {
+            assert!(
+                validate_active_health_path(path).is_ok(),
+                "path {path:?} must be accepted"
+            );
+            assert!(
+                validate_connection_target(&connection_with_path(path)).is_none(),
+                "path {path:?} must pass connection validation"
+            );
+        }
+    }
+
+    #[test]
+    fn active_health_path_rejects_authority_and_fragment_forms() {
+        for path in [
+            "healthz",
+            "?ready=1",
+            "https://evil.example/healthz",
+            "//evil.example/healthz",
+            "///evil.example/healthz",
+            r"/\evil.example/healthz",
+            r"/healthz\tail",
+            "/healthz#details",
+        ] {
+            let err = validate_connection_target(&connection_with_path(path))
+                .unwrap_or_else(|| panic!("path {path:?} must be rejected"));
+            assert!(err.contains("healthCheck.active.path"), "got: {err}");
+        }
     }
 }
 
