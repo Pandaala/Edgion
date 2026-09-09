@@ -337,7 +337,7 @@
 | `edgion-gateway/src/plugins/http/ai_proxy/plugin.rs` | `plugins-http-ai-proxy` | source | changed | B0064 |
 | `edgion-gateway/src/plugins/http/all_endpoint_status/mod.rs` | `plugins-http-all-endpoint-status` | source | examined-no-change | B0063 |
 | `edgion-gateway/src/plugins/http/all_endpoint_status/plugin.rs` | `plugins-http-all-endpoint-status` | source | changed | B0063 |
-| `edgion-gateway/src/plugins/http/all_endpoint_status/transport.rs` | `plugins-http-all-endpoint-status` | source | analysis-ready | B0239: current transport satisfies canonical egress/TLS/bounds; queued independent no-change review after B0238 commit |
+| `edgion-gateway/src/plugins/http/all_endpoint_status/transport.rs` | `plugins-http-all-endpoint-status` | source | examined-no-change | B0239: request/endpoint isolation and canonical egress/TLS/bounds retained; independent LGTM, focused tests 18/18 |
 | `edgion-gateway/src/plugins/http/bandwidth_limit/mod.rs` | `plugins-http-bandwidth-limit` | source | examined-no-change | B0065 |
 | `edgion-gateway/src/plugins/http/bandwidth_limit/plugin.rs` | `plugins-http-bandwidth-limit` | source | changed | B0065 |
 | `edgion-gateway/src/plugins/http/basic_auth/htpasswd.rs` | `plugins-http-basic-auth` | source | examined-no-change | B0067 |
@@ -345,7 +345,7 @@
 | `edgion-gateway/src/plugins/http/basic_auth/plugin.rs` | `plugins-http-basic-auth` | source | changed | B0067 |
 | `edgion-gateway/src/plugins/http/canary/mod.rs` | `plugins-http-canary` | source | examined-no-change | B0066 |
 | `edgion-gateway/src/plugins/http/canary/plugin.rs` | `plugins-http-canary` | source | changed | B0066 |
-| `edgion-gateway/src/plugins/http/common/auth_common.rs` | `plugins-http-common` | source | pending | — |
+| `edgion-gateway/src/plugins/http/common/auth_common.rs` | `plugins-http-common` | source | analysis-in-progress | B0240: shared HTTP authentication helper, header ownership and failure semantics analysis |
 | `edgion-gateway/src/plugins/http/common/capped_writer.rs` | `plugins-http-common` | source | pending | — |
 | `edgion-gateway/src/plugins/http/common/http_client.rs` | `plugins-http-common` | source | changed | B0102: canonical default and dedicated RequestMirror singleton clients |
 | `edgion-gateway/src/plugins/http/common/http_util.rs` | `plugins-http-common` | source | pending | — |

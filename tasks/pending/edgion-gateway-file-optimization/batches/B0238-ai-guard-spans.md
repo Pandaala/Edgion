@@ -30,4 +30,4 @@
 - Fifteen span tests cover escaped ASCII and surrogate boundaries, zero/saturated limits, vocabulary prebounds, duplicate fields in both orders, non-text and mixed-array exemptions, and count-before-decode precedence. Existing span ordering/role/content behavior remains covered.
 - Fresh independent final reviewer `b0237_ai_guard_rules_analysis`: LGTM, no Must Fix or Should Fix. It independently checked the bound proof, offsets, decode ordering, duplicate semantics, compatibility exceptions, guide, tests and project hard rules.
 - Verification: spans 15/15 and full AI Guard 49/49; workspace format/check/Clippy (existing warnings), agent docs, SSA, metrics inventory, Pingora source, Gateway no-tracing, English-only, diff and 3,136-file freeze passed. Existing integration files were not edited.
-- Local commit SHA is backfilled by the next batch; never push.
+- Commit: `f470e758`; never pushed by the campaign.
