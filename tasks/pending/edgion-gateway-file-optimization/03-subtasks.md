@@ -372,7 +372,7 @@
 | `edgion-gateway/src/plugins/http/direct_endpoint/plugin.rs` | `plugins-http-direct-endpoint` | source | changed | B0072 |
 | `edgion-gateway/src/plugins/http/dsl/config.rs` | `plugins-http-dsl` | source | changed | B0250: corrected stale schema/compiler/VM ownership documentation; independent LGTM |
 | `edgion-gateway/src/plugins/http/dsl/lang/builtins.rs` | `plugins-http-dsl` | source | changed | B0251: atomic bounded http.call failure, allocation-safe decoding and retained-header bounds; corrected independent LGTM, DSL 350/350 |
-| `edgion-gateway/src/plugins/http/dsl/lang/mod.rs` | `plugins-http-dsl` | source | analysis-ready | B0252: zero-runtime compatibility facade retained; no worthwhile API tidiness churn |
+| `edgion-gateway/src/plugins/http/dsl/lang/mod.rs` | `plugins-http-dsl` | source | changed | B0252: removed three unused compatibility re-exports; independent LGTM |
 | `edgion-gateway/src/plugins/http/dsl/lang/vm.rs` | `plugins-http-dsl` | source | pending | REQ-BODY-BLOCKING-001 targeted owned-input JSON scan / `1eb48138`; full DSL audit pending |
 | `edgion-gateway/src/plugins/http/dsl/mod.rs` | `plugins-http-dsl` | source | pending | — |
 | `edgion-gateway/src/plugins/http/dsl/plugin.rs` | `plugins-http-dsl` | source | pending | — |

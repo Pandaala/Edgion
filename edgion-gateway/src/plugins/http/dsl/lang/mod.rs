@@ -1,11 +1,10 @@
-//! EdgionDSL language runtime — VM execution and builtin dispatch.
+//! Gateway-local EdgionDSL runtime facade.
 //!
-//! The language core (parser, compiler, bytecode, static validator) lives in
-//! the `edgion-dsl` crate so the control plane can run the same
-//! compile/validate path. The re-exports below keep the historical
-//! `dsl::lang::*` paths working for the runtime side that stays here.
+//! VM execution and builtin dispatch are owned by `edgion-gateway`.
+//! Runtime-independent bytecode, errors, validation, and values are owned by
+//! `edgion-dsl` and re-exported here for adjacent Gateway runtime modules.
 
 pub mod builtins;
 pub mod vm;
 
-pub use edgion_dsl::{ast, bytecode, compiler, error, parser, validator, value};
+pub use edgion_dsl::{bytecode, error, validator, value};

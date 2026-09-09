@@ -2,7 +2,7 @@
 
 ## Scope
 
-- Pipeline state: ready to commit; implementation, correction re-review, targeted tests, and required gates passed.
+- Pipeline state: terminal; changed; implementation, correction re-review, targeted tests, and required gates passed.
 - Active anchor: `edgion-gateway`.
 - Baseline HEAD: `f326f2800c03c34fce39f9fbedf73f18cacc2dc1`.
 - Target: `edgion-gateway/src/plugins/http/dsl/lang/builtins.rs`.
@@ -39,6 +39,7 @@
 - `http_call_tests`: 36/36; builtins helper tests: 19/19 before the correction; complete Gateway DSL suite: 350/350 after correction.
 - Locked workspace all-target check and Clippy passed; Clippy retains repository warnings outside this batch. Format, agent-doc, SSA-force, metrics-inventory, Pingora-source, Gateway no-tracing, English-only, diff, and 3,231-file frozen-path guards passed.
 - Existing `edgion-tests/**` files are unchanged by the campaign.
+- Commit: `397d27ef`; never pushed by the campaign.
 
 ## Deferred Findings
 
