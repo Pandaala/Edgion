@@ -21,6 +21,7 @@ use super::super::gateway_info::GatewayInfo;
 use crate::observe::metrics::TestType;
 use crate::runtime::matching::route::hostname_matches_listener;
 use arc_swap::ArcSwap;
+use edgion_common::dns::resolver_select::candidate_from_annotations;
 use edgion_resources::constants::annotations::edgion as annotations;
 use edgion_resources::listener_key::{resolve_listener_addr, ListenerKey};
 use edgion_resources::resources::gateway::AllowedRoutes;
@@ -188,7 +189,7 @@ impl ListenerGatewayInfoSnapshot {
 
 pub struct ListenerGatewayInfoStore {
     // Single ArcSwap so that `flat` and `index` are always swapped atomically
-    // and a concurrent reader can never observe a cross-epoch pair.
+    // and one snapshot load observes an epoch-consistent pair.
     snapshot: ArcSwap<ListenerGatewayInfoSnapshot>,
 }
 
@@ -232,7 +233,7 @@ impl ListenerGatewayInfoStore {
     /// Rebuild the store from the full list of Gateway resources.
     ///
     /// Iterates all Gateways and their Listeners, skipping conflicted ones,
-    /// and builds both the flat port → Vec<GatewayInfo> mapping and the
+    /// and builds both the flat port → Vec<Arc<GatewayInfo>> mapping and the
     /// per-port GatewayInfoIndex for O(1) route matching lookups.
     pub fn rebuild(&self, gateways: &[Gateway]) {
         let mut port_map: HashMap<ListenerKey, Vec<Arc<GatewayInfo>>> = HashMap::new();
@@ -247,39 +248,28 @@ impl ListenerGatewayInfoStore {
                 None => continue,
             };
 
-            let gateway_annotations_map: HashMap<String, String> = gateway
-                .metadata
-                .annotations
-                .clone()
-                .map(|btree| btree.into_iter().collect())
-                .unwrap_or_default();
+            let gateway_annotations = gateway.metadata.annotations.as_ref();
 
-            let metrics_test_key = gateway_annotations_map.get(annotations::METRICS_TEST_KEY).cloned();
-            let metrics_test_type = gateway_annotations_map
-                .get(annotations::METRICS_TEST_TYPE)
+            let metrics_test_key = gateway_annotations
+                .and_then(|map| map.get(annotations::METRICS_TEST_KEY))
+                .cloned();
+            let metrics_test_type = gateway_annotations
+                .and_then(|map| map.get(annotations::METRICS_TEST_TYPE))
                 .map(|s| TestType::from_str(s));
 
-            let require_sni_host_match = gateway_annotations_map
-                .get(annotations::REQUIRE_SNI_HOST_MATCH)
+            let require_sni_host_match = gateway_annotations
+                .and_then(|map| map.get(annotations::REQUIRE_SNI_HOST_MATCH))
                 .map(|v| v == "true");
 
-            let plugin_store_keys = gateway_annotations_map
-                .get(annotations::EDGION_PLUGINS)
+            let plugin_store_keys = gateway_annotations
+                .and_then(|map| map.get(annotations::EDGION_PLUGINS))
                 .map(|v| annotations::parse_plugin_ref_list(v, gateway_namespace.as_deref().unwrap_or("default")))
                 .unwrap_or_default();
 
             // Precompute the gateway-layer DNS resolver candidate from the two
             // `edgion.io/dns-resolver{,-ref}` annotations, so the hot ExternalName
             // self-resolution path reads it off GatewayInfo without re-parsing.
-            let dns_resolver_candidate = {
-                let mut dns_ann: std::collections::BTreeMap<String, String> = std::collections::BTreeMap::new();
-                for key in [annotations::DNS_RESOLVER, annotations::DNS_RESOLVER_REF] {
-                    if let Some(v) = gateway_annotations_map.get(key) {
-                        dns_ann.insert(key.to_string(), v.clone());
-                    }
-                }
-                edgion_common::dns::resolver_select::candidate_from_annotations(&dns_ann)
-            };
+            let dns_resolver_candidate = gateway_annotations.and_then(candidate_from_annotations);
 
             for listener in listeners {
                 if is_listener_conflicted(gateway, &listener.name) {
@@ -335,7 +325,7 @@ impl ListenerGatewayInfoStore {
             .collect();
 
         // Single atomic swap: both `flat` and `index` become visible together,
-        // so a concurrent reader can never see a cross-epoch pair.
+        // so one snapshot load sees an epoch-consistent pair.
         self.snapshot.store(Arc::new(ListenerGatewayInfoSnapshot {
             flat: flat_arc_map,
             index: index_arc_map,
@@ -440,9 +430,11 @@ pub fn rebuild_listener_gateway_infos(gateways: &[Gateway]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use edgion_common::dns::resolver_select::{LinkSysKey, ResolverCandidate};
     use edgion_resources::resources::common::Condition;
     use edgion_resources::resources::gateway::{GatewaySpec, GatewayStatus, Listener, ListenerStatus};
     use kube::api::ObjectMeta;
+    use std::collections::BTreeMap;
 
     fn make_condition(type_: &str, status: &str) -> Condition {
         Condition {
@@ -491,6 +483,120 @@ mod tests {
                 conditions: None,
                 listeners: Some(vec![make_listener_status(listener_name, conditions)]),
             }),
+        }
+    }
+
+    #[test]
+    fn annotation_projection_preserves_absent_empty_and_unrelated_maps() {
+        for annotations in [
+            None,
+            Some(BTreeMap::new()),
+            Some(BTreeMap::from([(
+                "example.com/unrelated".to_owned(),
+                "ignored".repeat(128),
+            )])),
+        ] {
+            let store = ListenerGatewayInfoStore::new();
+            let mut gateway = make_gateway("https", vec![]);
+            gateway.metadata.annotations = annotations;
+            store.rebuild(&[gateway]);
+            let key = ListenerKey::new("0.0.0.0:443".parse().unwrap(), "HTTPS");
+            let flat = store.get(&key);
+            assert_eq!(flat.len(), 1);
+            let info = &flat[0];
+            assert_eq!(info.metrics_test_key, None);
+            assert_eq!(info.metrics_test_type, None);
+            assert_eq!(info.require_sni_host_match, None);
+            assert!(info.plugin_store_keys.is_empty());
+            assert_eq!(info.dns_resolver_candidate, None);
+        }
+    }
+
+    #[test]
+    fn annotation_projection_preserves_metrics_and_exact_sni_boolean() {
+        for (sni, expected_sni, metrics_type, expected_type) in [
+            ("true", true, "LB", TestType::Lb),
+            ("false", false, "retry", TestType::Retry),
+            ("True", false, "LATENCY", TestType::Latency),
+            (" true ", false, "unknown", TestType::None),
+            ("", false, "", TestType::None),
+        ] {
+            let store = ListenerGatewayInfoStore::new();
+            let mut gateway = make_gateway("https", vec![]);
+            gateway.metadata.annotations = Some(BTreeMap::from([
+                (annotations::METRICS_TEST_KEY.to_owned(), sni.to_owned()),
+                (annotations::METRICS_TEST_TYPE.to_owned(), metrics_type.to_owned()),
+                (annotations::REQUIRE_SNI_HOST_MATCH.to_owned(), sni.to_owned()),
+                ("example.com/unrelated".to_owned(), "ignored".to_owned()),
+            ]));
+            store.rebuild(&[gateway]);
+            let key = ListenerKey::new("0.0.0.0:443".parse().unwrap(), "HTTPS");
+            let flat = store.get(&key);
+            let info = &flat[0];
+            assert_eq!(info.metrics_test_key.as_deref(), Some(sni));
+            assert_eq!(info.metrics_test_type, Some(expected_type));
+            assert_eq!(info.require_sni_host_match, Some(expected_sni));
+        }
+    }
+
+    #[test]
+    fn annotation_projection_preserves_plugin_namespace_fallback() {
+        for (namespace, expected) in [
+            (None, "default/local"),
+            (Some(""), "/local"),
+            (Some("team"), "team/local"),
+        ] {
+            for (plugins, expected_keys) in [
+                ("local, shared/plugin local", vec![expected, "shared/plugin"]),
+                ("", vec![]),
+            ] {
+                let store = ListenerGatewayInfoStore::new();
+                let mut gateway = make_gateway("https", vec![]);
+                gateway.metadata.namespace = namespace.map(str::to_owned);
+                gateway.metadata.annotations = Some(BTreeMap::from([(
+                    annotations::EDGION_PLUGINS.to_owned(),
+                    plugins.to_owned(),
+                )]));
+                store.rebuild(&[gateway]);
+                let key = ListenerKey::new("0.0.0.0:443".parse().unwrap(), "HTTPS");
+                let flat = store.get(&key);
+                assert_eq!(flat[0].plugin_store_keys, expected_keys);
+                assert_eq!(flat[0].namespace(), namespace);
+            }
+        }
+    }
+
+    #[test]
+    fn annotation_projection_preserves_dns_candidate_precedence() {
+        let servers = ResolverCandidate::Servers(vec!["1.1.1.1".to_owned(), "8.8.8.8:5353".to_owned()]);
+        let reference = ResolverCandidate::HttpDnsRef(LinkSysKey {
+            namespace: "dns".to_owned(),
+            name: "resolver".to_owned(),
+        });
+        for (inline, dns_ref, expected) in [
+            (Some("1.1.1.1, 8.8.8.8:5353\t1.1.1.1"), None, Some(servers.clone())),
+            (None, Some(" dns / resolver "), Some(reference.clone())),
+            (Some("9.9.9.9"), Some("dns/resolver"), Some(reference)),
+            (Some("1.1.1.1\n8.8.8.8:5353"), Some("bare-name"), Some(servers)),
+            (None, Some("bare-name"), None),
+            (Some(" , \t\n"), Some(""), None),
+        ] {
+            let store = ListenerGatewayInfoStore::new();
+            let mut gateway = make_gateway("https", vec![]);
+            let mut map = BTreeMap::from([("example.com/unrelated".to_owned(), "ignored".to_owned())]);
+            for (key, value) in [
+                (annotations::DNS_RESOLVER, inline),
+                (annotations::DNS_RESOLVER_REF, dns_ref),
+            ] {
+                if let Some(value) = value {
+                    map.insert(key.to_owned(), value.to_owned());
+                }
+            }
+            gateway.metadata.annotations = Some(map);
+            store.rebuild(&[gateway]);
+            let key = ListenerKey::new("0.0.0.0:443".parse().unwrap(), "HTTPS");
+            let flat = store.get(&key);
+            assert_eq!(flat[0].dns_resolver_candidate, expected);
         }
     }
 

@@ -10,11 +10,11 @@
 | Priority | P1 |
 | Baseline commit | `d484e580` |
 | Scope | Every tracked file under `edgion-gateway/` |
-| Campaign status | in-progress; B0228 committed as `06b88877`; user-requested remote `7825ef03` merged as `3775e7e5`, reconciliation and fresh CORS verification passed |
-| Coverage | 547 current Gateway files: 220 changed, 179 examined-no-change, 13 deferred, 135 non-terminal; 3 historical rows are removed. HTTP conf_handler reopened after external CORS enforcement; earlier OIDC/Redis reopenings retained. |
-| Active batch | No active implementation; closing external-sync records before B0229 promotion. Automatic local batch commits authorized, never push. D0119's pre-existing context layout failures remain separate. |
-| Analysis queue | B0229 listener Gateway store is revalidated analysis-ready at `3775e7e5`; B0230 store facade is analysis-ready and must be refreshed after B0229. D0126 terminal-header repair independently confirmed, not implemented by B0224. |
-| Integration freeze | 3,122 files. External `7825ef03` changes to the conformance testing guide and new native-CORS scope script were individually verified against remote/HEAD bytes and file/000 mode, then only those entries reconciled. No campaign integration-test edit occurred. |
+| Campaign status | in-progress; B0229 reviewed and verified, ready to commit. Remote CORS merge and subsequent user ACME/GeoRestriction commits through `312d10e8` reconciled. |
+| Coverage | 547 current Gateway files: 221 changed, 179 examined-no-change, 13 deferred, 134 non-terminal; 3 historical rows are removed. HTTP conf_handler reopened after external CORS enforcement; earlier OIDC/Redis reopenings retained. |
+| Active batch | B0229 listener Gateway store: sole serial commit gate. Automatic local batch commits authorized, never push. D0119's pre-existing context layout failures remain separate. |
+| Analysis queue | B0230 store facade is refreshed analysis-ready; B0231 outbound TLS client is analysis-ready with a cross-adapter CA validation defer candidate. D0126 terminal-header repair independently confirmed, not implemented by B0224. |
+| Integration freeze | 3,120 files. External CORS and subsequent ACME/GeoRestriction changes were individually verified against source commits and current HEAD; only proven entries reconciled. See external-sync records. No campaign integration-test edit occurred. |
 
 ## AI guide summary
 

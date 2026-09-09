@@ -1,6 +1,6 @@
 ---
 name: listener-gateway-info-dual-arcswap-merged-snapshot
-description: ListenerGatewayInfoStore previously kept two separate ArcSwap fields (`flat_data` and `index_data`) that were rebuilt by two consecutive `store()` calls, leaving a window where a reader could observe a cross-epoch pair. The store has since been refactored to a single `ArcSwap<ListenerGatewayInfoSnapshot>` that publishes both maps atomically. Reject re-reports that claim the rebuild is non-atomic.
+description: ListenerGatewayInfoStore publishes flat and indexed views through one immutable ArcSwap snapshot, sharing each GatewayInfo through Arc. Joint-epoch consistency requires one snapshot load, not independent reader calls.
 knowledge_type: regression-guards
 ---
 
@@ -16,7 +16,7 @@ fields. The struct is now:
 
 ```rust
 struct ListenerGatewayInfoSnapshot {
-    flat: HashMap<ListenerKey, Arc<Vec<GatewayInfo>>>,
+    flat: HashMap<ListenerKey, Arc<Vec<Arc<GatewayInfo>>>>,
     index: HashMap<ListenerKey, Arc<GatewayInfoIndex>>,
 }
 
@@ -27,13 +27,21 @@ pub struct ListenerGatewayInfoStore {
 
 `rebuild()` performs a single `self.snapshot.store(Arc::new(ListenerGatewayInfoSnapshot { flat, index }))`,
 so any future caller that loads the snapshot once and reads both `flat` and `index` is
-guaranteed to see a single-epoch pair. The public reader methods (`get`, `get_index`,
-`all_listener_keys`, `stats`) keep their original signatures and now go through
-`self.snapshot.load()`.
+guaranteed to see a single-epoch pair. Each public reader method (`get`, `get_index`,
+`all_listener_keys`, `stats`) loads the snapshot independently. Separate calls to
+`get()` and `get_index()` can straddle a rebuild; they do not provide a joint-epoch
+guarantee. The snapshot type is private, so public callers cannot currently request
+both views through one load.
 
-Re-reports of the form "rebuild stores flat_data then index_data non-atomically, a concurrent
-reader can observe a cross-epoch pair" are **not accepted** — verify the current struct uses
-the single `snapshot: ArcSwap<ListenerGatewayInfoSnapshot>` field before re-reporting.
+Each listener generation creates one `Arc<GatewayInfo>` shared by the flat view and
+the indexed `ListenerEntry` values. `get()` returns `Arc<Vec<Arc<GatewayInfo>>>`,
+not the historical `Arc<Vec<GatewayInfo>>`. The original snapshot fix preserved
+the public signatures at that time; that historical claim does not describe the
+later per-entry Arc ownership change.
+
+When reviewing atomicity, verify the current single snapshot publication and the
+caller's load scope. The old two-store premise no longer applies, but independent
+loads still require separate reasoning.
 
 ## What was wrong (before the fix)
 
@@ -48,10 +56,10 @@ index_data: ArcSwap<HashMap<ListenerKey, Arc<GatewayInfoIndex>>>,
 Gateway slice in the same rebuild call, but between the two stores a reader could observe
 `flat_data` from the new epoch paired with `index_data` from the old epoch (or vice versa).
 
-No caller in tree actually cross-reads both fields under a joint invariant today — the per-
-request hot path in `pg_request_filter` uses only `get_index()`, the route managers'
-rebuild/cleanup paths read only `flat_data` via `all_listener_keys()`, and `stats()` reads
-only `flat_data`. The defect was purely latent, but the dual-`ArcSwap` shape was a
+At the original review, no caller cross-read both fields under a joint invariant;
+the defect was classified as latent. The current per-request `pg_request_filter`
+loads `get_index()`; `all_listener_keys()` and `stats()` each inspect the flat view
+from one snapshot load. The dual-`ArcSwap` shape was a
 maintenance trap: a future caller assuming "every key in `flat_data` has a matching entry in
 `index_data`" would silently fail during Gateway change events with no log or panic.
 
@@ -66,3 +74,7 @@ intermediate state, regardless of how few cycles separate the two `store()` call
 ## Resolution references
 
 - `runtime-F013` — 2026-05-28.
+- Current source tests: `flat_and_index_share_the_same_gateway_info`,
+  `in_flight_gateway_info_survives_generation_replacement`, and
+  `retained_gateway_identity_survives_store_replacement`. These check identity and
+  retained-generation ownership, not joint consistency of independent loads.

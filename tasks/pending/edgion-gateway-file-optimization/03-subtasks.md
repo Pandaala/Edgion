@@ -142,7 +142,7 @@
 | `request-body` | 9 | 8 | 1 | 0 | complete |
 | `response-processing` | 1 | 0 | 0 | 0 | pending |
 | `routes-shared` | 66 | 1 | 1 | 0 | pending |
-| `runtime` | 16 | 6 | 7 | 1 | pending |
+| `runtime` | 16 | 7 | 7 | 1 | pending |
 | `services` | 4 | 1 | 3 | 0 | complete |
 | `sse` | 3 | 1 | 2 | 0 | complete |
 | `tls-boringssl` | 2 | 1 | 1 | 0 | complete |
@@ -668,7 +668,7 @@
 | `edgion-gateway/src/runtime/server/proxy_protocol_policy.rs` | `runtime` | source | examined-no-change | B0226: independent LGTM; policy 12/12, listener trust 1/1, CLI 2/2; frozen trust lifecycle retained |
 | `edgion-gateway/src/runtime/server/server_header.rs` | `runtime` | source | changed | B0227: corrected three HSTS cost rustdoc lines only; independent LGTM and four response regressions passed |
 | `edgion-gateway/src/runtime/store/gateway.rs` | `runtime` | source | examined-no-change | B0228: independent LGTM; raw store retained, owning API/frequency/snapshot knowledge corrected |
-| `edgion-gateway/src/runtime/store/listener_gateway_info.rs` | `runtime` | source | analysis-ready | B0229: borrow original annotation map for projection/DNS; preserve immutable snapshot semantics |
+| `edgion-gateway/src/runtime/store/listener_gateway_info.rs` | `runtime` | source | changed | B0229: borrowed annotations without temporary maps; independent LGTM, store 14/14 and adjacent filters passed |
 | `edgion-gateway/src/runtime/store/mod.rs` | `runtime` | source | analysis-ready | B0230: no-change facade recommendation; refresh after B0229 before independent review |
 | `edgion-gateway/src/services/acme/challenge_store.rs` | `services` | source | changed | `B0060`: made the absolute expiry boundary exclusive with deterministic coverage |
 | `edgion-gateway/src/services/acme/conf_handler_impl.rs` | `services` | source | examined-no-change | `B0060`: retained real incremental atomic publication and bounded config logging |
@@ -696,7 +696,7 @@
 | `edgion-gateway/src/tls/validation/cert.rs` | `tls-validation` | source | examined-no-change | TLS-VALIDATION-001: canonical shared validation re-export retained |
 | `edgion-gateway/src/tls/validation/mod.rs` | `tls-validation` | source | examined-no-change | TLS-VALIDATION-001: narrow module exports retained |
 | `edgion-gateway/src/tls/validation/mtls.rs` | `tls-validation` | source | changed | TLS-VALIDATION-001 / `f65f66bc`; typed SAN semantics deferred to dedicated TODO |
-| `edgion-gateway/src/tls/validation/outbound_client.rs` | `tls-validation` | source | pending | Added by external commit `7ceb0ea1`; full audit pending |
+| `edgion-gateway/src/tls/validation/outbound_client.rs` | `tls-validation` | source | analysis-ready | B0231: defer candidate for per-bundle CA validation across canonical adapters |
 | `edgion-gateway/src/tls/validation/outbound_san_verifier.rs` | `tls-validation` | source | changed | TLS-VALIDATION-001 / `f65f66bc` |
 | `edgion-gateway/src/util/client_ip.rs` | `util` | source | changed | UTIL-001 / `a909f16f` |
 | `edgion-gateway/src/util/mod.rs` | `util` | source | examined-no-change | UTIL-001 / `a909f16f` |
