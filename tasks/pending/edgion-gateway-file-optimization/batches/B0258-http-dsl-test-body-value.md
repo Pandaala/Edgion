@@ -29,3 +29,4 @@
 - Focused body-value tests: 12/12; full DSL tests: 329/329; literal-empty compiler regression passed; Gateway locked all-target compile; format and diff checks passed.
 - Coordinator: `cargo fmt --all`; locked workspace check; locked workspace Clippy (exit 0 with pre-existing warnings); agent docs; SSA force; metrics inventory; Pingora source policy; Gateway no-tracing; English-only; diff check; and frozen paths all passed.
 - Frozen integration manifest: 3,231 paths unchanged.
+- Commit: `9610ead5` (`Test dynamic empty body replacement`); no push.

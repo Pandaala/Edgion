@@ -16,7 +16,9 @@ This is the single concise record of actual changes across the file-by-file audi
 
 ## Entries
 
-- B0258: added a dynamic-empty `req.body.replace` regression that locks the VM's exact `TypeError` and proves rejection before context/scan-budget access or body mutation. Independent LGTM; body-value 12/12, full DSL 329/329, locked workspace check/Clippy, and all repository guards passed. D0129 remains the separate body-read allocation owner. Commit pending; no production or integration change; no push.
+- B0259: replaced stale bytecode version 1 in hostile validator fixtures with the current version, derived a safe distinct unsupported version, removed irrelevant truncated-JSON version data, and corrected obsolete test comments. Independent LGTM; target 13/13, full DSL filters, locked workspace check/Clippy, and all repository guards passed. D0131 remains the wider trust-boundary owner. Commit pending; no production or integration change; no push.
+
+- B0258: added a dynamic-empty `req.body.replace` regression that locks the VM's exact `TypeError` and proves rejection before context/scan-budget access or body mutation. Independent LGTM; body-value 12/12, full DSL 329/329, locked workspace check/Clippy, and all repository guards passed. D0129 remains the separate body-read allocation owner. Commit `9610ead5`; no production or integration change; no push.
 
 - B0257: completed explicit `RuntimeError::ApiError.function` coverage for all 12 DSL session/context mutation wrappers by adding five exact mock failure tests and a static-label assertion helper. Independent LGTM; target 9/9, full DSL 328/328, locked workspace check/Clippy, and all repository guards passed. D0130 now explicitly owns the stale chrono panic knowledge. Commit `222f59b7`; no production or integration change; no push.
 

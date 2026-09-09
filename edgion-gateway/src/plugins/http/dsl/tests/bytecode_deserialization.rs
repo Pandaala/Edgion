@@ -1,10 +1,11 @@
 //! Negative tests for `CompiledScript::deserialize_base64`.
 //!
-//! Each test exercises one of the three error branches in `lang/bytecode.rs`:
+//! Each test exercises one of the three error branches in
+//! `edgion-dsl/src/bytecode.rs`:
 //! base64 decode failure, JSON deserialize failure, and unsupported version.
 //! The version-mismatch path also has an in-crate sibling test
-//! (`bytecode.rs::tests::test_reject_unknown_version`); this file covers the
-//! public test surface.
+//! (`edgion_dsl::bytecode::tests::test_reject_unknown_version`); this file
+//! covers the public test surface.
 
 use super::*;
 
@@ -20,7 +21,7 @@ fn test_deserialize_invalid_base64() {
 fn test_deserialize_truncated_json() {
     use base64::Engine;
     // Valid base64 wrapping invalid (truncated) JSON. Decodes fine, fails at serde_json.
-    let truncated = br#"{"version":1,"code":["#;
+    let truncated = br#"{"code":["#;
     let encoded = base64::engine::general_purpose::STANDARD.encode(truncated);
     let err = CompiledScript::deserialize_base64(&encoded).expect_err("truncated JSON must fail");
     assert!(err.contains("deserialize"), "expected deserialize error, got: {}", err);
@@ -29,10 +30,15 @@ fn test_deserialize_truncated_json() {
 #[test]
 fn test_deserialize_unsupported_version() {
     use base64::Engine;
-    // Use version 255 — distinct from BYTECODE_VERSION (1), LEGACY_BYTECODE_VERSION (0),
-    // and the inline test's value (999), so each test exercises an independent input.
+    // Derive a value distinct from BYTECODE_VERSION without assuming that the
+    // current version can always be incremented.
+    let unsupported_version = if BYTECODE_VERSION == u16::MAX {
+        BYTECODE_VERSION - 1
+    } else {
+        BYTECODE_VERSION + 1
+    };
     let payload = serde_json::json!({
-        "version": 255,
+        "version": unsupported_version,
         "code": ["ReturnNext"],
         "constants": [],
         "local_count": 0,
@@ -50,13 +56,14 @@ fn test_deserialize_unsupported_version() {
 
 // ── Validator rejects semantically-malicious bytecode ────────────────────────
 
+use super::super::lang::bytecode::{BuiltinId, Constant, BYTECODE_VERSION};
 use super::super::lang::validator::Validator;
 
 fn make_script(code: Vec<OpCode>, local_count: u16) -> CompiledScript {
     // Manually constructed — bypasses the compiler so the validator's checks
     // are the only line of defense.
     CompiledScript {
-        version: super::super::lang::bytecode::BYTECODE_VERSION,
+        version: BYTECODE_VERSION,
         code,
         constants: vec![],
         local_count,
@@ -93,8 +100,6 @@ fn test_validator_rejects_local_slot_out_of_bounds() {
     );
 }
 
-use super::super::lang::bytecode::{BuiltinId, Constant};
-
 #[test]
 fn test_validator_rejects_setlocal_out_of_bounds() {
     // SetLocal(99) with local_count = 1 must be rejected — symmetric to the
@@ -129,7 +134,7 @@ fn test_validator_rejects_loadconst_pointing_to_regex() {
     // constants are not valid stack values; they are opaque references for the
     // regex opcodes only.
     let script = CompiledScript {
-        version: 1,
+        version: BYTECODE_VERSION,
         code: vec![OpCode::LoadConst(0), OpCode::ReturnNext],
         constants: vec![Constant::Regex("\\d+".to_string())],
         local_count: 0,
@@ -186,7 +191,7 @@ fn test_validator_rejects_regex_opcode_pointing_to_non_regex() {
     // Matches(0) where constants[0] is a plain Str must be rejected — the
     // validator's check_regex_ref helper guards all three regex opcodes.
     let script = CompiledScript {
-        version: 1,
+        version: BYTECODE_VERSION,
         code: vec![OpCode::Matches(0), OpCode::ReturnNext],
         constants: vec![Constant::Str("not-a-regex".to_string())],
         local_count: 0,
@@ -209,7 +214,7 @@ fn test_validator_rejects_regex_find_pointing_to_non_regex() {
     // Sibling of the Matches test — locks in the same check_regex_ref guard for
     // RegexFind so a future split of the helper does not silently drop coverage.
     let script = CompiledScript {
-        version: 1,
+        version: BYTECODE_VERSION,
         code: vec![OpCode::RegexFind(0), OpCode::ReturnNext],
         constants: vec![Constant::Str("not-a-regex".to_string())],
         local_count: 0,
@@ -230,7 +235,7 @@ fn test_validator_rejects_regex_replace_pointing_to_non_regex() {
     // Sibling of the Matches test — locks in the same check_regex_ref guard for
     // RegexReplace so a future split of the helper does not silently drop coverage.
     let script = CompiledScript {
-        version: 1,
+        version: BYTECODE_VERSION,
         code: vec![OpCode::RegexReplace(0), OpCode::ReturnNext],
         constants: vec![Constant::Str("not-a-regex".to_string())],
         local_count: 0,
