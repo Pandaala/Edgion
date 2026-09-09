@@ -90,7 +90,7 @@ if grep -Eq '^[[:space:]]*EdgionBackend[[:space:]]*\|' "${SUITES_FILE}"; then
     --service edgion-test-server --port 30001 \
     --expected-count "${TEST_SERVER_EXPECTED_REPLICAS}" --timeout-secs 30 --output ips)"
 elif [[ -z "${TEST_SERVER_ENDPOINT_IPS}" ]] \
-  && grep -Eq '^EdgionPlugins\|(RequestMirror|CredentialInjector|RequestBodyBuffer|BodyPlugins|Guardrail)[[:space:]]*$' "${SUITES_FILE}"; then
+  && grep -Eq '^(EdgionPlugins\|(RequestMirror|CredentialInjector|RequestBodyBuffer|BodyPlugins|Guardrail)|[[:space:]]*Gateway[[:space:]]*\|[[:space:]]*TLS/BackendTLS)[[:space:]]*$' "${SUITES_FILE}"; then
   TEST_SERVER_ENDPOINT_IPS="$("${ENDPOINT_INVENTORY}" --namespace edgion-test \
     --service edgion-test-server --port 30001 --timeout-secs 30 --output ips)"
 fi

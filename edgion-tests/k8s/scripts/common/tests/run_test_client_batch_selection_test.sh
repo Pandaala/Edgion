@@ -77,4 +77,9 @@ grep -Fq 'export EDGION_TEST_BACKEND_ENDPOINT_IPS="10.0.0.1,10.0.0.2"' "${INNER_
 grep -Fq -- "-i 'BodyPlugins'" "${INNER_SCRIPT}"
 grep -Fq -- "-i 'Guardrail'" "${INNER_SCRIPT}"
 
+printf ' Gateway | TLS/BackendTLS \n' > "${SUITES_FILE}"
+"${COMMON_DIR}/run_test_client_batch.sh" "${SUITES_FILE}" > /dev/null
+grep -Fq 'export EDGION_TEST_BACKEND_ENDPOINT_IPS="10.0.0.1,10.0.0.2"' "${INNER_SCRIPT}"
+grep -Fq -- "-i 'TLS/BackendTLS'" "${INNER_SCRIPT}"
+
 echo "run_test_client_batch_selection_test.sh: PASS"

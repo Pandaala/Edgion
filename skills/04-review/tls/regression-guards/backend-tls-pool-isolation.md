@@ -107,6 +107,18 @@ Verified on 2026-09-08:
 - Independent read-only review returned LGTM after the timeout cleanup and
   asynchronous publication synchronization corrections.
 
+Kubernetes runner verification on 2026-09-09 found a separate test-input defect:
+the single and batch runners did not select endpoint inventory for
+`Gateway/TLS/BackendTLS`. Without an explicit endpoint override, the pool test
+used Service DNS in an IPv4 EndpointSlice, which Kubernetes rejected before the
+TLS assertions. Both runners now reuse the existing Pod IP inventory for this
+suite and preserve explicit overrides. A Gateway-only shell regression covers
+the batch selection, including whitespace around the resource/item separator.
+After that correction, the batch and single runners each passed all 6 BackendTLS
+cases without a manually supplied endpoint IP. No production TLS behavior or
+pool-isolation assertions changed. The cluster/image/CRD-overlay limits of this
+run are recorded in the [canonical API verification](../../controller/regression-guards/backend-tls-policy-canonical-api-ingress.md).
+
 Re-evaluate when TLS input fields, identity precedence, profile serialization,
 policy publication, peer constructors, or Pingora hashing/pooling change.
 

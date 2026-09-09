@@ -331,6 +331,36 @@ mod tests {
     }
 
     #[test]
+    fn admin_parser_rejects_missing_or_malformed_backend_tls_policy_version() {
+        let canonical: serde_json::Value =
+            serde_json::from_str(&backend_tls_policy_body("gateway.networking.k8s.io/v1")).unwrap();
+        for version in [
+            None,
+            Some(serde_json::Value::Null),
+            Some(serde_json::json!(1)),
+            Some(serde_json::json!("")),
+            Some(serde_json::json!("gateway.networking.k8s.io/v1beta1")),
+        ] {
+            let mut document = canonical.clone();
+            match version {
+                Some(value) => document["apiVersion"] = value,
+                None => {
+                    document.as_object_mut().unwrap().remove("apiVersion");
+                }
+            }
+            for body in [
+                serde_json::to_string(&document).unwrap(),
+                serde_yaml::to_string(&document).unwrap(),
+            ] {
+                for update_version in [false, true] {
+                    let result = parse_resource_and_update_version::<BackendTLSPolicy>(&body, update_version);
+                    assert_eq!(result.err(), Some(StatusCode::BAD_REQUEST), "input: {body}");
+                }
+            }
+        }
+    }
+
+    #[test]
     fn not_supported_maps_to_501() {
         let status = map_writer_error(ConfWriterError::NotSupported("x".to_string()));
         assert_eq!(status, StatusCode::NOT_IMPLEMENTED);
