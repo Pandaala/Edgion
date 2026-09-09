@@ -2,7 +2,7 @@
 
 ## Scope
 
-- Pipeline state: changed; implementation, independent reviews and verification complete, awaiting local commit.
+- Pipeline state: changed; committed locally.
 - Active anchor: `edgion-gateway`.
 - Baseline HEAD: `a9236e7579d09198c4c5315929103cfcfef0d9da`.
 - Target: `edgion-gateway/src/plugins/http/common/outbound/target.rs`.
@@ -31,4 +31,4 @@
 - Independent plan review approved. Fresh final review returned LGTM with no Must Fix, Should Fix or deferred findings after tracing all three production callers and coordinator semantics.
 - Verification: EndpointSlice store 4/4, outbound target 1/1, pinned resolver 4/4, managed client 30/30, Webhook runtime 14/14 and manager 21/21 (74/74). Workspace format/check/Clippy, Gateway build, agent docs, SSA, metrics inventory, Pingora source, Gateway no-tracing, English-only, diff and 3,136-file freeze passed.
 - No integration edit or new issue. D0127 remains independent.
-- Commit: pending; never push.
+- Commit: `f326f280`; never pushed.

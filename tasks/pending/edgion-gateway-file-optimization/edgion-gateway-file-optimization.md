@@ -10,10 +10,10 @@
 | Priority | P1 |
 | Baseline commit | `d484e580` |
 | Scope | Every tracked file under `edgion-gateway/` |
-| Campaign status | in-progress; B0249 implementation, independent reviews and verification complete at `07bfdcbd`, awaiting its local commit; external user commits through `6a5e428a` reconciled. |
-| Coverage | 548 current Gateway files: 232 changed, 185 examined-no-change, 15 deferred, 116 non-terminal; 3 historical rows are removed. HTTP conf_handler, plugin store and RequestMirror reopened after external changes; OIDC reopenings retained. |
-| Active batch | B0249 canonical Service-port section resolution: commit gate complete for the target plus one necessary active-anchor discovery support file. Automatic local batch commits authorized, never push. |
-| Analysis queue | The next pending source-order Gateway file starts after B0249 commits. D0127 tracks the independently confirmed outbound CA gap. |
+| Campaign status | in-progress; B0250 documentation implementation, independent review and verification complete at `f326f280`, awaiting local commit; external user commits through `6a5e428a` reconciled. |
+| Coverage | 548 current Gateway files: 233 changed, 185 examined-no-change, 15 deferred, 115 non-terminal; 3 historical rows are removed. HTTP conf_handler, plugin store and RequestMirror reopened after external changes; OIDC reopenings retained. |
+| Active batch | B0250 DSL config ownership rustdoc: commit gate complete. Automatic local batch commits authorized, never push. |
+| Analysis queue | B0251's complex `http.call` overflow-contract repair and B0252's no-change facade report are ready at `f326f280`; both require current-HEAD refresh before serial promotion. D0127 tracks the independently confirmed outbound CA gap. |
 | Integration freeze | 3,136 files. External test changes through `6a5e428a` were individually verified against source commits and current HEAD; only proven entries reconciled. See external-sync records. No campaign integration-test edit occurred. |
 
 ## AI guide summary

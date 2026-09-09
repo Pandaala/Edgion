@@ -370,9 +370,9 @@
 | `edgion-gateway/src/plugins/http/ctx_set/plugin.rs` | `plugins-http-ctx-set` | source | changed | B0071 |
 | `edgion-gateway/src/plugins/http/direct_endpoint/mod.rs` | `plugins-http-direct-endpoint` | source | examined-no-change | B0072 |
 | `edgion-gateway/src/plugins/http/direct_endpoint/plugin.rs` | `plugins-http-direct-endpoint` | source | changed | B0072 |
-| `edgion-gateway/src/plugins/http/dsl/config.rs` | `plugins-http-dsl` | source | pending | — |
-| `edgion-gateway/src/plugins/http/dsl/lang/builtins.rs` | `plugins-http-dsl` | source | pending | B0129 LogFmt-only supporting change; full file audit pending |
-| `edgion-gateway/src/plugins/http/dsl/lang/mod.rs` | `plugins-http-dsl` | source | pending | — |
+| `edgion-gateway/src/plugins/http/dsl/config.rs` | `plugins-http-dsl` | source | changed | B0250: corrected stale schema/compiler/VM ownership documentation; independent LGTM |
+| `edgion-gateway/src/plugins/http/dsl/lang/builtins.rs` | `plugins-http-dsl` | source | analysis-ready | B0251: DSL http.call must fail rather than truncate bounded response data; complex candidate |
+| `edgion-gateway/src/plugins/http/dsl/lang/mod.rs` | `plugins-http-dsl` | source | analysis-ready | B0252: zero-runtime compatibility facade retained; no worthwhile API tidiness churn |
 | `edgion-gateway/src/plugins/http/dsl/lang/vm.rs` | `plugins-http-dsl` | source | pending | REQ-BODY-BLOCKING-001 targeted owned-input JSON scan / `1eb48138`; full DSL audit pending |
 | `edgion-gateway/src/plugins/http/dsl/mod.rs` | `plugins-http-dsl` | source | pending | — |
 | `edgion-gateway/src/plugins/http/dsl/plugin.rs` | `plugins-http-dsl` | source | pending | — |

@@ -1,8 +1,8 @@
 //! DSL plugin configuration — re-exported from `edgion_resources`.
 //!
-//! `DslConfig` and `DslErrorPolicy` are defined in
-//! `edgion_resources::resources::edgion_plugins::plugin_configs::dsl`
-//! so the schema layer carries no engine dependency.
-//! The compiled DSL VM (`DslPlugin`) remains in this gateway module.
+//! `edgion_resources` owns the shared `DslConfig` schema and its static
+//! compile/validation wrapper. The runtime-independent parser, compiler, and
+//! validator live in `edgion_dsl`. `DslPlugin`, VM execution, builtin dispatch,
+//! and runtime integration remain in `edgion_gateway`.
 
 pub use edgion_resources::resources::edgion_plugins::plugin_configs::dsl::DslConfig;
