@@ -7,6 +7,7 @@ use edgion_resources::resources::http_route::{CookieLifetimeType, SessionPersist
 use pingora_proxy::Session;
 use sha2::{Digest, Sha256};
 
+use crate::plugins::runtime::session_adapter::cookie_value;
 use crate::{EdgionHttpContext, SessionPersistenceState};
 
 pub(crate) struct StickyCandidate {
@@ -76,23 +77,9 @@ pub fn get_persistence_type(sp: &SessionPersistence) -> SessionPersistenceType {
     sp.persistence_type.clone().unwrap_or(SessionPersistenceType::Cookie)
 }
 
-/// Extract a session token from the Cookie header.
+/// Extract a session token from all Cookie fields using canonical first-match semantics.
 pub fn extract_token_from_cookie(session: &Session, cookie_name: &str) -> Option<String> {
-    let req_header = session.req_header();
-    req_header
-        .headers
-        .get("cookie")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|cookies| {
-            cookies.split(';').map(|s| s.trim()).find_map(|cookie| {
-                let (name, value) = cookie.split_once('=')?;
-                if name.trim() == cookie_name {
-                    Some(value.trim().to_string())
-                } else {
-                    None
-                }
-            })
-        })
+    cookie_value(&session.req_header().headers, cookie_name)
 }
 
 /// Extract a session token from a custom header.
@@ -146,20 +133,23 @@ pub(crate) fn sp_extract_token(
 ///   missing token so the caller falls back to weighted selection and refreshes).
 /// - Present, live → `Inactive`, `Some(addrhash)` (expiry stripped; the affinity
 ///   map is keyed by the bare `addrhash`).
+/// - Malformed expiry → retain the whole token so affinity lookup misses and refreshes.
 fn sp_apply_extracted_token(raw: Option<String>, sp_state: &mut SessionPersistenceState, now: u64) -> Option<String> {
     match raw {
         None => {
             *sp_state = SessionPersistenceState::InjectNew;
             None
         }
-        Some(token) => {
+        Some(mut token) => {
             let (hash, expiry) = parse_wire_token(&token);
             if expiry.is_some_and(|e| now >= e) {
                 *sp_state = SessionPersistenceState::InjectNew;
                 None
             } else {
                 *sp_state = SessionPersistenceState::Inactive;
-                Some(hash.to_string())
+                let hash_len = hash.len();
+                token.truncate(hash_len);
+                Some(token)
             }
         }
     }
@@ -309,11 +299,14 @@ pub fn build_wire_token(addrhash: &str, now: u64, ttl_secs: Option<u64>) -> Stri
 }
 
 /// Split a wire token into `(addrhash, Option<expiry_epoch>)`. An unparseable
-/// expiry component is treated as "no expiry" so a malformed token never
-/// mis-expires (it will simply miss the affinity map and refresh).
+/// expiry component retains the whole token as the lookup key, so it misses
+/// the affinity map instead of adopting a valid hash with its expiry removed.
 fn parse_wire_token(token: &str) -> (&str, Option<u64>) {
     match token.split_once('.') {
-        Some((hash, exp)) => (hash, exp.parse::<u64>().ok()),
+        Some((hash, exp)) => match exp.parse::<u64>() {
+            Ok(expiry) => (hash, Some(expiry)),
+            Err(_) => (token, None),
+        },
         None => (token, None),
     }
 }
@@ -352,6 +345,50 @@ pub fn build_set_cookie_value(sp: &SessionPersistence, token: &str, is_tls: bool
 mod tests {
     use super::*;
     use edgion_resources::resources::http_route::CookieConfig;
+    use tokio::io::AsyncWriteExt;
+
+    async fn session_with_request(request: &[u8]) -> Session {
+        let (mut client, server) = tokio::io::duplex(4096);
+        client.write_all(request).await.unwrap();
+        drop(client);
+        let mut session = Session::new_h1(Box::new(server));
+        assert!(session.read_request().await.unwrap());
+        session
+    }
+
+    #[tokio::test]
+    async fn extracts_session_cookie_from_later_field() {
+        let session = session_with_request(
+            b"GET / HTTP/1.1\r\nHost: test\r\nCookie: unrelated=first\r\nCookie: affinity=abc123.1060\r\n\r\n",
+        )
+        .await;
+        let sp = SessionPersistence {
+            session_name: Some("affinity".to_string()),
+            absolute_timeout: None,
+            idle_timeout: None,
+            persistence_type: None,
+            cookie_config: None,
+            strict: None,
+        };
+        let mut state = SessionPersistenceState::InjectNew;
+        assert_eq!(
+            sp_extract_token(&session, &mut state, Some(&sp), 1000).as_deref(),
+            Some("abc123")
+        );
+        assert!(matches!(state, SessionPersistenceState::Inactive));
+    }
+
+    #[tokio::test]
+    async fn session_cookie_uses_first_match_within_and_across_fields() {
+        let session = session_with_request(
+            b"GET / HTTP/1.1\r\nHost: test\r\nCookie: unrelated=first; affinity=first; affinity=second\r\nCookie: affinity=third\r\n\r\n",
+        )
+        .await;
+        assert_eq!(
+            extract_token_from_cookie(&session, "affinity").as_deref(),
+            Some("first")
+        );
+    }
 
     #[test]
     fn test_token_generation_determinism() {
@@ -453,6 +490,13 @@ mod tests {
         let token_b = generate_session_token(&b_addr.to_string());
         let hit = sp_lookup_rule_scoped(refs.iter().copied(), "rule-scope-test", &token_b);
         assert_eq!(hit, Some((1, b_addr)), "token bound to svc-b must resolve to index 1");
+        let mut state = SessionPersistenceState::Inactive;
+        let malformed = sp_apply_extracted_token(Some(format!("{token_b}.invalid")), &mut state, 1000).unwrap();
+        assert_eq!(
+            sp_lookup_rule_scoped(refs.iter().copied(), "rule-scope-test", &malformed),
+            None,
+            "a malformed expiry must not adopt a known live endpoint"
+        );
         let indexed_refs = [
             (0, "svc-a", None::<&str>, Some(i32::from(a_addr.port()))),
             (2, "svc-b", None, Some(i32::from(b_addr.port()))),
@@ -499,8 +543,36 @@ mod tests {
     fn test_parse_wire_token() {
         assert_eq!(parse_wire_token("abc123"), ("abc123", None));
         assert_eq!(parse_wire_token("abc123.1060"), ("abc123", Some(1060)));
-        // Unparseable expiry component -> treated as no expiry (never mis-expires).
-        assert_eq!(parse_wire_token("abc123.xyz"), ("abc123", None));
+        assert_eq!(parse_wire_token("abc123.xyz"), ("abc123.xyz", None));
+    }
+
+    #[test]
+    fn malformed_expiry_preserves_whole_lookup_token() {
+        for token in [
+            "abc123.xyz",
+            "abc123.",
+            "abc123.18446744073709551616",
+            "abc123.1000.2000",
+        ] {
+            let mut state = SessionPersistenceState::Inactive;
+            assert_eq!(parse_wire_token(token), (token, None));
+            assert_eq!(
+                sp_apply_extracted_token(Some(token.to_string()), &mut state, 1000).as_deref(),
+                Some(token)
+            );
+        }
+    }
+
+    #[test]
+    fn live_token_reuses_owned_buffer() {
+        for wire in ["abc123", "abc123.1060"] {
+            let token = wire.to_string();
+            let buffer = token.as_ptr();
+            let mut state = SessionPersistenceState::Inactive;
+            let extracted = sp_apply_extracted_token(Some(token), &mut state, 1000).unwrap();
+            assert_eq!(extracted, "abc123");
+            assert_eq!(extracted.as_ptr(), buffer);
+        }
     }
 
     #[test]
@@ -510,6 +582,13 @@ mod tests {
         let got = sp_apply_extracted_token(Some("aaaabbbbccccdddd.500".to_string()), &mut st, 1000);
         assert_eq!(got, None);
         assert!(matches!(st, SessionPersistenceState::InjectNew));
+
+        let mut boundary_state = SessionPersistenceState::Inactive;
+        assert_eq!(
+            sp_apply_extracted_token(Some("aaaabbbbccccdddd.1000".to_string()), &mut boundary_state, 1000),
+            None
+        );
+        assert!(matches!(boundary_state, SessionPersistenceState::InjectNew));
 
         // Future expiry: live -> Inactive, returns bare addrhash (expiry stripped).
         let mut st2 = SessionPersistenceState::Inactive;

@@ -2,12 +2,13 @@
 
 ## Scope
 
-- Pipeline state: analysis-ready
+- Pipeline state: terminal
 - Active anchor crate: `edgion-gateway`
 - Target: `edgion-gateway/src/routes/http/session_persistence.rs`
 - Analysis baseline: `7ac8a760`
-- Read-only candidate; B0194 owns the serial lane.
+- Freshness check at `387ec0d7`; previous B0194 is committed.
 - Existing integration files and user-owned paths remain protected.
+- Implementation agent: `b0195_implementation`; independent review follows implementation.
 
 ## Investigation
 
@@ -22,3 +23,26 @@
 - Proposed technical scope: target source, new `skills/04-review/routing/regression-guards/session-persistence-token-extraction.md`, and `skills/04-review/routing/SKILL.md`.
 - Verification pending: target and canonical cookie helper tests, real in-memory request extraction, malformed/valid expiry, and owned-buffer reuse where meaningful.
 - Deferred integration required when promoted: later Cookie-field affinity for HTTP/gRPC and malformed-expiry refresh, keeping existing integration files frozen.
+
+## Implementation
+
+- Implementer: `b0195_implementation`; exact three-file technical scope above respected.
+- Replaced the first-field-only parser with the canonical borrowed cookie helper, retained malformed token suffixes for a lookup miss, and truncated valid expiry suffixes in the existing owned buffer.
+- Added four unit tests and strengthened expiry/known-backend cases. Backend selection, strict affinity, retry, local replies, and valid/bare token semantics remain unchanged.
+- Future HTTP/gRPC integration coverage is tracked by [D0109](../deferred/D0109-session-cookie-field-integration.md); no integration file was modified.
+
+## Independent Review
+
+- Reviewer: `b0195_independent_review`; LGTM, no Must Fix or Should Fix. Independently reran both targeted filters and checked all HTTP/gRPC consumers and the knowledge conclusion.
+
+## Verification
+
+- Session-persistence filter: 21/21 (19 target-module tests); canonical cookie helper: 4/4.
+- Full HTTP routes unit filter: 394/394 with the default parallel runner.
+- Workspace format, locked workspace check/Clippy, agent-doc validation, SSA, metrics, Pingora source, Gateway tracing, English-only, and diff checks passed.
+- Locked Gateway binary build passed. Frozen-path check passed; final exact staging gate follows.
+
+## Handoff
+
+- Ledger/changelog updated: yes.
+- Commit: pending automatic commit.

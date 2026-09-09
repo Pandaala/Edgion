@@ -627,9 +627,9 @@
 | `edgion-gateway/src/routes/http/proxy_http/preflight_handler.rs` | `routes-shared` | source | examined-no-change | B0193: native/plugin CORS preflight ownership retained; D0084 already owns backend scope design |
 | `edgion-gateway/src/routes/http/redirect_http.rs` | `routes-shared` | source | changed | B0194: redact dedicated redirect access-log paths without changing the wire Location |
 | `edgion-gateway/src/routes/http/routes_mgr.rs` | `routes-shared` | source | changed | B0169: clear exact retained manager on stale/orphan removal |
-| `edgion-gateway/src/routes/http/session_persistence.rs` | `routes-shared` | source | analysis-ready | B0195: reuse multi-field cookie extraction and reject malformed expiry fallback |
+| `edgion-gateway/src/routes/http/session_persistence.rs` | `routes-shared` | source | changed | B0195: reuse multi-field cookie extraction and reject malformed expiry fallback |
 | `edgion-gateway/src/routes/http/tests.rs` | `routes-shared` | test | changed | B0169: retained nonempty HTTP manager removal regressions |
-| `edgion-gateway/src/routes/l4_duplex.rs` | `routes-shared` | source | pending | — |
+| `edgion-gateway/src/routes/l4_duplex.rs` | `routes-shared` | source | analysis-ready | B0196: prevent stalled directional writes from blocking reverse traffic; plan-first |
 | `edgion-gateway/src/routes/l4_partial_update.rs` | `routes-shared` | source | pending | — |
 | `edgion-gateway/src/routes/l4_rebuild.rs` | `routes-shared` | source | changed | B0169: shared L4 clear-on-remove invariant |
 | `edgion-gateway/src/routes/mod.rs` | `routes-shared` | source | changed | B0168: remove legacy singular gRPC manager re-export |

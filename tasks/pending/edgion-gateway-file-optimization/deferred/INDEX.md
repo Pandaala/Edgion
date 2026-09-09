@@ -182,3 +182,4 @@ These entries are backlinks only. A linked `tasks/todo` file is the editable sou
 | Define backendRef upstream-selection plugin semantics | pending | [task](../../../todo/define-backendref-upstream-selection-plugin-semantics.md) |
 | Add deferred-credential Connection nomination integration coverage | pending | [task](../../../todo/add-deferred-credential-connection-nomination-integration.md) |
 | Clarify redirect connection policy | pending | [task](../../../todo/clarify-redirect-connection-policy.md) |
+| Add session cookie field integration coverage | pending | [task](../../../todo/add-session-cookie-field-integration.md) |

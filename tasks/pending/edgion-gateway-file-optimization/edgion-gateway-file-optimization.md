@@ -10,10 +10,10 @@
 | Priority | P1 |
 | Baseline commit | `d484e580` |
 | Scope | Every tracked file under `edgion-gateway/` |
-| Campaign status | in-progress; B0193 committed locally as `8f1530ab`; remote changes incorporated through `acc356cc` by merge `577444f4` |
-| Coverage | 546 current Gateway files: 213 changed, 164 examined-no-change, 11 deferred, 158 non-terminal; 3 historical rows are removed |
-| Active batch | B0194 passed corrected independent review and all verification gates; local commit pending |
-| Analysis queue | External 7534a9bf added two OCI test files and reopened four changed Gateway files for fresh analysis; prior pending additions remain tracked. D0074 was closed externally; other deferred scopes remain separate. |
+| Campaign status | in-progress; B0194 committed locally as `387ec0d7`; external updates incorporated through `7ac8a760` |
+| Coverage | 546 current Gateway files: 214 changed, 164 examined-no-change, 11 deferred, 157 non-terminal; 3 historical rows are removed |
+| Active batch | B0195 completed verification; exact staging/commit gate |
+| Analysis queue | B0196 L4 duplex is analysis-ready: complex, plan-first. External OCI additions and reopened files remain pending in the ledger. |
 | Integration freeze | 3,113 files; the sole README fingerprint changed by external commit `7534a9bf` was reconciled after verifying worktree bytes equal committed HEAD and the previous bytes equal the frozen baseline. No campaign integration-test edit occurred. |
 
 ## AI guide summary

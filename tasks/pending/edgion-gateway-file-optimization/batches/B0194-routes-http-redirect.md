@@ -27,4 +27,4 @@
 - Independent correction review: LGTM, all Must Fix and Should Fix items resolved. Global-mode assertions run in exact-test subprocesses and cannot race unrelated test suites.
 - Target tests: 9/9. Complete HTTP route module: 390/390 with default parallel execution.
 - Verification passed: format, locked workspace all-target check and Clippy, locked Gateway binary build, agent-doc, SSA, metrics inventory, Pingora source, Gateway no-tracing, English-only, diff and frozen-path guards. Clippy exited zero with warnings.
-- Commit: pending; never push.
+- Commit: `387ec0d7`; never pushed by the campaign.
