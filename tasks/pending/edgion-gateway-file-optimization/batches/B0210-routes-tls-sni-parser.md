@@ -2,7 +2,7 @@
 
 ## Scope
 
-- Pipeline state: verified; awaiting local commit.
+- Pipeline state: committed locally.
 - Active anchor crate: `edgion-gateway`.
 - Target: `edgion-gateway/src/routes/tls/sni_parser.rs`.
 - Baseline: `aba8fd24`.
@@ -33,4 +33,4 @@
 - Original eleven tests retained; five matrix tests added. Standalone and Cargo parser execution each passed 16/16; fresh Cargo TLS passed 59/59, and broader routes passed 602/602.
 - Independent reviewer: `b0210_final_review`; corrected LGTM, no remaining Must Fix or Should Fix at `cb9aaf4b`. Personally passed standalone and Cargo parser 16/16, docs and diff; no parser Clippy diagnostic. Workspace format/check/Clippy, Gateway build, documentation (1,264 files), SSA, metrics, Pingora source, Gateway tracing, English-only, diff and 3,120-file freeze passed. Clippy retains 983 Gateway lib-test warnings.
 - Review distinguishes malformed nested lengths from a valid ClientHello fragmented across complete records: the latter remains unsupported by this first-record parser, not inherently malformed TLS. No complete supported single-record regression was found. Reviewer reproduced an oversized declaration; implementer confirmed actual 24/declared 25 in the original log and corrected the previously mistaken short-length attribution without source changes. Correction re-review passed.
-- Commit: pending local commit; no push.
+- Commit: `86e2002c`; no push.

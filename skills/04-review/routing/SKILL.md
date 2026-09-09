@@ -26,6 +26,7 @@ before applying a decision to current code.
 - [TLS terminated connection ownership](regression-guards/tls-terminated-connection-ownership.md)
 - [TCP route schema Arc sharing](regression-guards/tcp-route-schema-arc-sharing.md)
 - [TLS route schema Arc sharing](regression-guards/tls-route-schema-arc-sharing.md)
+- [UDP route schema Arc sharing](regression-guards/udp-route-schema-arc-sharing.md)
 - [Session persistence token extraction](regression-guards/session-persistence-token-extraction.md)
 - [Connect failure after an expired end-to-end deadline uses the timeout outcome](regression-guards/connect-failure-after-deadline-uses-timeout-outcome.md)
 - [RegionRoute base, overlay, and effective-table validation](regression-guards/region-route-effective-table-validation.md)

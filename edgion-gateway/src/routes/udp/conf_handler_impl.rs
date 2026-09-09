@@ -3,7 +3,7 @@ use crate::routes::udp::route_unit::UdpRouteUnit;
 use crate::routes::udp::routes_mgr::{
     get_global_udp_route_managers, resolved_listeners_for_route, GlobalUdpRouteManagers,
 };
-use edgion_common::conf_sync::traits::{arc_map_into_owned, ConfHandler};
+use edgion_common::conf_sync::traits::ConfHandler;
 use edgion_resources::UDPRoute;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -24,7 +24,7 @@ impl ConfHandler<UDPRoute> for GlobalUdpRouteManagers {
         self.clear_route_cache();
 
         for (key, route) in data {
-            match self.initialize_route((**route).clone()) {
+            match self.initialize_route(Arc::clone(route)) {
                 Ok(initialized) => {
                     self.insert_route(initialized);
                 }
@@ -62,13 +62,10 @@ impl ConfHandler<UDPRoute> for GlobalUdpRouteManagers {
             "partial update"
         );
 
-        let add_owned = arc_map_into_owned(add);
-        let update_owned = arc_map_into_owned(update);
-
         apply_l4_partial_update(
             "UDPRoute",
-            add_owned,
-            update_owned,
+            add,
+            update,
             remove,
             |key| self.get_route(key),
             |u| resolved_listeners_for_route(&u.route).to_vec(),
@@ -93,8 +90,8 @@ impl GlobalUdpRouteManagers {
     /// never resets this route's `backend_finder` WRR cursor. The compiled
     /// runtime (BackendSelector, stream-plugin store key) lives on the unit,
     /// not on the schema — see [`UdpRouteUnit::from_route`].
-    fn initialize_route(&self, route: UDPRoute) -> Result<Arc<UdpRouteUnit>, String> {
-        Ok(Arc::new(UdpRouteUnit::from_route(Arc::new(route))))
+    fn initialize_route(&self, route: Arc<UDPRoute>) -> Result<Arc<UdpRouteUnit>, String> {
+        Ok(Arc::new(UdpRouteUnit::from_route(route)))
     }
 }
 
@@ -149,6 +146,158 @@ mod tests {
             },
             status: None,
         }
+    }
+
+    #[test]
+    fn schema_arc_is_shared_across_full_set_and_listener_snapshots() {
+        let managers = GlobalUdpRouteManagers::new();
+        let first = make_listener_key(9700, "UDP");
+        let second = make_listener_key(9701, "UDP");
+        let mut route = create_test_udp_route("default", "shared", "gw", "udp", 9700, first.clone());
+        route.spec.resolved_listeners = Some(vec![first.clone(), second.clone()]);
+        let route = Arc::new(route);
+        let data = HashMap::from([("default/shared".to_string(), Arc::clone(&route))]);
+        managers.full_set(&data);
+
+        let cached = managers.get_route("default/shared").unwrap();
+        assert!(Arc::ptr_eq(&cached.route, &route));
+        let first_manager = managers.get_or_create_listener_manager(&first);
+        let second_manager = managers.get_or_create_listener_manager(&second);
+        for manager in [&first_manager, &second_manager] {
+            let selected = manager.load_route_table().match_route().unwrap();
+            assert!(Arc::ptr_eq(&selected, &cached));
+            assert!(Arc::ptr_eq(&selected.backend_finder, &cached.backend_finder));
+        }
+
+        managers.full_set(&HashMap::new());
+        assert_eq!(managers.stats().route_cache, 0);
+        // Check the retained handles, not newly created empty managers.
+        assert!(first_manager.load_route_table().match_route().is_none());
+        assert!(second_manager.load_route_table().match_route().is_none());
+        assert!(Arc::ptr_eq(&cached.route, &route));
+    }
+
+    #[test]
+    fn delta_schema_sharing_preserves_siblings_and_old_generations() {
+        let managers = GlobalUdpRouteManagers::new();
+        let old_listener = make_listener_key(9710, "UDP");
+        let new_listener = make_listener_key(9711, "UDP");
+        let mut original = create_test_udp_route("default", "a", "gw", "udp", 9710, old_listener.clone());
+        original.metadata.annotations =
+            Some([("edgion.io/edgion-stream-plugins".to_string(), "old-policy".to_string())].into());
+        let original = Arc::new(original);
+        let sibling = Arc::new(create_test_udp_route(
+            "default",
+            "b",
+            "gw",
+            "udp",
+            9710,
+            old_listener.clone(),
+        ));
+        managers.partial_update(
+            HashMap::from([
+                ("default/a".to_string(), Arc::clone(&original)),
+                ("default/b".to_string(), Arc::clone(&sibling)),
+            ]),
+            HashMap::new(),
+            HashSet::new(),
+        );
+        let old_unit = managers.get_route("default/a").unwrap();
+        let sibling_unit = managers.get_route("default/b").unwrap();
+        assert!(Arc::ptr_eq(&old_unit.route, &original));
+        assert!(Arc::ptr_eq(&sibling_unit.route, &sibling));
+        let old_manager = managers.get_or_create_listener_manager(&old_listener);
+        let old_snapshot = Arc::clone(&old_manager.load_route_table());
+        assert!(Arc::ptr_eq(&old_snapshot.match_route().unwrap(), &old_unit));
+
+        let mut updated = create_test_udp_route("default", "a", "gw", "udp", 9711, new_listener.clone());
+        updated.metadata.annotations = Some(
+            [(
+                "edgion.io/edgion-stream-plugins".to_string(),
+                "other/new-policy".to_string(),
+            )]
+            .into(),
+        );
+        updated.spec.rules.as_mut().unwrap()[0].backend_refs.as_mut().unwrap()[0].name = "new-service".to_string();
+        let updated = Arc::new(updated);
+        managers.partial_update(
+            HashMap::new(),
+            HashMap::from([("default/a".to_string(), Arc::clone(&updated))]),
+            HashSet::new(),
+        );
+        let new_unit = managers.get_route("default/a").unwrap();
+        let new_manager = managers.get_or_create_listener_manager(&new_listener);
+        assert!(Arc::ptr_eq(&new_unit.route, &updated));
+        assert!(!Arc::ptr_eq(&new_unit, &old_unit));
+        assert!(!Arc::ptr_eq(&new_unit.backend_finder, &old_unit.backend_finder));
+        assert!(Arc::ptr_eq(
+            &new_manager.load_route_table().match_route().unwrap(),
+            &new_unit
+        ));
+        let remaining = old_manager.load_route_table().match_route().unwrap();
+        assert!(Arc::ptr_eq(&remaining, &sibling_unit));
+        assert!(Arc::ptr_eq(&remaining.backend_finder, &sibling_unit.backend_finder));
+        assert!(Arc::ptr_eq(&old_snapshot.match_route().unwrap(), &old_unit));
+        assert_eq!(old_unit.backend_finder.select().unwrap().name, "test-service");
+        assert_eq!(new_unit.backend_finder.select().unwrap().name, "new-service");
+        assert_eq!(old_unit.stream_plugin_store_key.as_deref(), Some("default/old-policy"));
+        assert_eq!(new_unit.stream_plugin_store_key.as_deref(), Some("other/new-policy"));
+        assert_eq!(
+            old_unit.route.spec.resolved_listeners.as_ref().unwrap(),
+            &[old_listener]
+        );
+        assert_eq!(
+            new_unit.route.spec.resolved_listeners.as_ref().unwrap(),
+            &[new_listener]
+        );
+
+        managers.partial_update(
+            HashMap::new(),
+            HashMap::new(),
+            HashSet::from(["default/a".to_string(), "default/b".to_string()]),
+        );
+        assert_eq!(managers.stats().route_cache, 0);
+        assert!(old_manager.load_route_table().match_route().is_none());
+        assert!(new_manager.load_route_table().match_route().is_none());
+        assert!(Arc::ptr_eq(&old_snapshot.match_route().unwrap(), &old_unit));
+    }
+
+    #[test]
+    fn delta_listener_migration_clears_retained_old_manager() {
+        let managers = GlobalUdpRouteManagers::new();
+        let old_listener = make_listener_key(9720, "UDP");
+        let new_listener = make_listener_key(9721, "UDP");
+        let original = Arc::new(create_test_udp_route(
+            "default",
+            "a",
+            "gw",
+            "udp",
+            9720,
+            old_listener.clone(),
+        ));
+        managers.full_set(&HashMap::from([("default/a".to_string(), original)]));
+        let retained = managers.get_or_create_listener_manager(&old_listener);
+        assert_eq!(retained.load_route_table().route_count(), 1);
+        let updated = Arc::new(create_test_udp_route(
+            "default",
+            "a",
+            "gw",
+            "udp",
+            9721,
+            new_listener.clone(),
+        ));
+        managers.partial_update(
+            HashMap::new(),
+            HashMap::from([("default/a".to_string(), Arc::clone(&updated))]),
+            HashSet::new(),
+        );
+        assert!(retained.load_route_table().match_route().is_none());
+        let selected = managers
+            .get_or_create_listener_manager(&new_listener)
+            .load_route_table()
+            .match_route()
+            .unwrap();
+        assert!(Arc::ptr_eq(&selected.route, &updated));
     }
 
     #[test]
