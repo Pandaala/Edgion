@@ -45,9 +45,9 @@ impl ServerHeaderOpts {
     ///
     /// `Bytes` and `HeaderValue` clones here are refcount bumps. Pingora's
     /// `insert_header` still re-derives an internal `HeaderName` from the
-    /// bytes — cheap enum dispatch for standard headers, one small
-    /// `Bytes::copy_from_slice` for `HeaderName::Custom` entries (e.g.
-    /// HSTS) — unavoidable at this layer.
+    /// bytes — cheap enum dispatch for standard headers, including both
+    /// Server and HSTS configured here. Genuinely custom names may allocate
+    /// during this conversion.
     pub fn apply_to_response(&self, response: &mut ResponseHeader) {
         if self.enable {
             for entry in &self.headers {

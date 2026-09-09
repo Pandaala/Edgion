@@ -142,7 +142,7 @@
 | `request-body` | 9 | 8 | 1 | 0 | complete |
 | `response-processing` | 1 | 0 | 0 | 0 | pending |
 | `routes-shared` | 66 | 1 | 1 | 0 | pending |
-| `runtime` | 16 | 5 | 6 | 1 | pending |
+| `runtime` | 16 | 6 | 6 | 1 | pending |
 | `services` | 4 | 1 | 3 | 0 | complete |
 | `sse` | 3 | 1 | 2 | 0 | complete |
 | `tls-boringssl` | 2 | 1 | 1 | 0 | complete |
@@ -666,8 +666,8 @@
 | `edgion-gateway/src/runtime/server/listener_builder.rs` | `runtime` | source | changed | B0176: derive minimal immutable listener facts at construction |
 | `edgion-gateway/src/runtime/server/mod.rs` | `runtime` | source | examined-no-change | B0225: independent LGTM; explicit writer/server facade retained; server tests 26/26 |
 | `edgion-gateway/src/runtime/server/proxy_protocol_policy.rs` | `runtime` | source | examined-no-change | B0226: independent LGTM; policy 12/12, listener trust 1/1, CLI 2/2; frozen trust lifecycle retained |
-| `edgion-gateway/src/runtime/server/server_header.rs` | `runtime` | source | analysis-in-progress | B0227: header policy construction/consumer value analysis |
-| `edgion-gateway/src/runtime/store/gateway.rs` | `runtime` | source | pending | — |
+| `edgion-gateway/src/runtime/server/server_header.rs` | `runtime` | source | changed | B0227: corrected three HSTS cost rustdoc lines only; independent LGTM and four response regressions passed |
+| `edgion-gateway/src/runtime/store/gateway.rs` | `runtime` | source | analysis-ready | B0228: retain raw store; correct owning architecture API/frequency/consumer description |
 | `edgion-gateway/src/runtime/store/listener_gateway_info.rs` | `runtime` | source | pending | — |
 | `edgion-gateway/src/runtime/store/mod.rs` | `runtime` | source | pending | — |
 | `edgion-gateway/src/services/acme/challenge_store.rs` | `services` | source | changed | `B0060`: made the absolute expiry boundary exclusive with deterministic coverage |

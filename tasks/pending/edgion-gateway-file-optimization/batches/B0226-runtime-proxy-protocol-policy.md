@@ -2,7 +2,7 @@
 
 ## Scope
 
-- Pipeline state: verified examined-no-change; awaiting local commit.
+- Pipeline state: terminal; local commit `a63a88ca`.
 - Active anchor crate: `edgion-gateway`.
 - Target: `edgion-gateway/src/runtime/server/proxy_protocol_policy.rs`.
 - Baseline: `4c575bee`.
@@ -32,4 +32,4 @@
 
 - Fresh `b0226_final_review` LGTM; no Must Fix/Should Fix/disagreement. Full policy and 12 tests, serialized publication/preflight/fatal/readiness/shutdown and installed fork physical-peer trust independently verified. No worthwhile cold-path rewrite or new issue.
 - Fresh policy 12/12, listener trust 1/1 and CLI 2/2 passed. Workspace format/check/Clippy (existing warnings), docs, SSA, metrics, Pingora source, Gateway tracing, English-only, diff and integration freeze passed. Logs: `/tmp/edgion-b0226-{policy,trust,cli,check,clippy}.log`.
-- No runtime/integration changes; source allow-list empty. Ledger/changelog updated; commit pending, local only.
+- No runtime/integration changes; source allow-list empty. Ledger/changelog updated; commit `a63a88ca`, local only.

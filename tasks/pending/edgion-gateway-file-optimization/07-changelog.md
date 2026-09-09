@@ -219,7 +219,9 @@ This is the single concise record of actual changes across the file-by-file audi
 
 | [`B0225`](batches/B0225-runtime-server-module.md) | 2026-09-09 | 1 | examined-no-change | Retained explicit server facade and distinct crate-private canonical writer seams | Independent LGTM; server 26/26, workspace format/check/Clippy and all guards passed | `415584d5` | No source/integration changes; D0126 remains separate |
 
-| [`B0226`](batches/B0226-runtime-proxy-protocol-policy.md) | 2026-09-09 | 1 | examined-no-change | Retained canonical startup-frozen PROXY policy, monotonic fatal guard and physical-peer trust boundary | Independent LGTM; policy 12/12, trust 1/1, CLI 2/2, workspace format/check/Clippy and all guards passed | pending | No new issue or source/integration changes |
+| [`B0226`](batches/B0226-runtime-proxy-protocol-policy.md) | 2026-09-09 | 1 | examined-no-change | Retained canonical startup-frozen PROXY policy, monotonic fatal guard and physical-peer trust boundary | Independent LGTM; policy 12/12, trust 1/1, CLI 2/2, workspace format/check/Clippy and all guards passed | `a63a88ca` | No new issue or source/integration changes |
+
+| [`B0227`](batches/B0227-runtime-server-header.md) | 2026-09-09 | 1 | changed (rustdoc only) | Corrected HSTS standard-header allocation explanation; retained runtime and distinct Pingora title-case rationale | Independent LGTM; four response regressions passed, workspace format/check/Clippy and all guards passed | pending | No runtime, test or integration changes |
 
 ### `UTIL-001` — `edgion-gateway/src/util/*`
 
