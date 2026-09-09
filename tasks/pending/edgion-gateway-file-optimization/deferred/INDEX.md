@@ -213,3 +213,4 @@ These entries are backlinks only. A linked `tasks/todo` file is the editable sou
 | Correct DSL response-stage gRPC error documentation (D0138) | pending | [task](../../../todo/correct-dsl-response-stage-grpc-error-documentation.md) |
 | Add DSL response-stage async HTTP-call timeout integration coverage (D0139) | pending | [task](../../../todo/add-dsl-response-stage-http-call-timeout-integration-coverage.md) |
 | Isolate remaining sensitive-mode Gateway tests (D0140) | pending | [task](../../../todo/isolate-remaining-sensitive-mode-gateway-tests.md) |
+| Enforce DSL Trim output string limits (D0141) | pending | [task](../../../todo/enforce-dsl-trim-output-string-limit.md) |

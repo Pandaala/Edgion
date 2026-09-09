@@ -391,7 +391,7 @@
 | `edgion-gateway/src/plugins/http/dsl/tests/mod.rs` | `plugins-http-dsl` | test | changed | B0267: corrected current-thread and multi-thread test-runtime topology docs; independent LGTM |
 | `edgion-gateway/src/plugins/http/dsl/tests/p3_utility_tests.rs` | `plugins-http-dsl` | test | changed | B0268: bounded Join/UUID regression coverage and 14 isolated sensitive-mode tests; independent PASS, full DSL 373/373 |
 | `edgion-gateway/src/plugins/http/dsl/tests/property_bytecode.rs` | `plugins-http-dsl` | test | changed | B0269: assert valid-source compile/VM success and exact source-map lookup; independent PASS, properties 4/4 |
-| `edgion-gateway/src/plugins/http/dsl/tests/range_and_string_ops.rs` | `plugins-http-dsl` | test | analysis-in-progress | B0270: queued read-only range/string test value analysis |
+| `edgion-gateway/src/plugins/http/dsl/tests/range_and_string_ops.rs` | `plugins-http-dsl` | test | changed | B0270: typed negative assertions, Unicode split and range hard-ceiling coverage; independent PASS, DSL 376/376 |
 | `edgion-gateway/src/plugins/http/dsl/tests/redis_builtins.rs` | `plugins-http-dsl` | test | pending | — |
 | `edgion-gateway/src/plugins/http/dsl/tests/req_metadata_tests.rs` | `plugins-http-dsl` | test | pending | — |
 | `edgion-gateway/src/plugins/http/dsl/tests/request_builtins.rs` | `plugins-http-dsl` | test | pending | — |

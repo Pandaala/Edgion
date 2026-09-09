@@ -34,6 +34,11 @@ fn test_split_exceeds_list_limit() {
         max_list_len: 2,
         ..VmLimits::default()
     };
+    let error = run_expect_runtime_err_with_limits(source, MockPluginSession::new(), limits.clone());
+    assert!(
+        matches!(error, RuntimeError::ListTooLong { len: 3, limit: 2 }),
+        "expected three split parts to exceed limit two, got {error:?}"
+    );
     let session = MockPluginSession::new();
     let result = run_with_limits(source, session, limits);
     assert_eq!(
@@ -53,6 +58,11 @@ fn test_split_empty_delim_exceeds_limit() {
         max_list_len: 5,
         ..VmLimits::default()
     };
+    let error = run_expect_runtime_err_with_limits(source, MockPluginSession::new(), limits.clone());
+    assert!(
+        matches!(error, RuntimeError::ListTooLong { len: 8, limit: 5 }),
+        "expected eight split parts to exceed limit five, got {error:?}"
+    );
     let session = MockPluginSession::new();
     let result = run_with_limits(source, session, limits);
     assert_eq!(
@@ -73,6 +83,11 @@ fn test_split_empty_delim_bypass_is_closed() {
         max_list_len: 4,
         ..VmLimits::default()
     };
+    let error = run_expect_runtime_err_with_limits(source, MockPluginSession::new(), limits.clone());
+    assert!(
+        matches!(error, RuntimeError::ListTooLong { len: 5, limit: 4 }),
+        "expected boundary tokens to count toward the split limit, got {error:?}"
+    );
     let session = MockPluginSession::new();
     let result = run_with_limits(source, session, limits);
     assert_eq!(
@@ -81,6 +96,40 @@ fn test_split_empty_delim_bypass_is_closed() {
             status: 500,
             body: Some(Bytes::from_static(b"DSL execution error"))
         },
+    );
+}
+
+#[test]
+fn test_split_empty_delim_multibyte_within_limit() {
+    let source = r#"
+        let parts = split("éñ", "")
+        if len(parts) == 4 && parts[0] == "" && parts[1] == "é" && parts[2] == "ñ" && parts[3] == "" {
+            req.set_header("X-Out", "exact parts")
+        }
+    "#;
+    let limits = VmLimits {
+        max_list_len: 4,
+        ..VmLimits::default()
+    };
+    let mut session = MockPluginSession::new();
+    session
+        .expect_set_request_header()
+        .withf(|h, v| h == "X-Out" && v == "exact parts")
+        .times(1)
+        .returning(|_, _| Ok(()));
+    assert_eq!(run_with_limits(source, session, limits), good_next());
+}
+
+#[test]
+fn test_split_empty_delim_multibyte_exceeds_limit() {
+    let limits = VmLimits {
+        max_list_len: 3,
+        ..VmLimits::default()
+    };
+    let error = run_expect_runtime_err_with_limits(r#"split("éñ", "")"#, MockPluginSession::new(), limits);
+    assert!(
+        matches!(error, RuntimeError::ListTooLong { len: 4, limit: 3 }),
+        "expected two Unicode characters plus two boundary tokens, got {error:?}"
     );
 }
 
@@ -127,8 +176,21 @@ fn test_add_str_nil() {
 // Bool + Bool — neither operand is Str or Int → TypeError → ErrResponse 500
 #[test]
 fn test_add_bool_bool_type_error() {
+    let source = r#"let x = true + false"#;
+    let error = run_expect_runtime_err(source, MockPluginSession::new());
+    assert!(
+        matches!(
+            error,
+            RuntimeError::TypeError {
+                expected: "Int or Str",
+                got: "Bool",
+                operation: "+"
+            }
+        ),
+        "expected Bool addition to return its typed error, got {error:?}"
+    );
     let session = MockPluginSession::new();
-    let result = run(r#"let x = true + false"#, session);
+    let result = run(source, session);
     assert!(
         matches!(result, PluginRunningResult::ErrResponse { status: 500, .. }),
         "Bool + Bool should produce a type error (got {:?})",
@@ -202,7 +264,7 @@ fn test_same_constant_equality() {
     assert_sets_request_header(source, "X-Out", "equal");
 }
 
-// Same constant used three times in a loop — each iteration reads a fresh Arc clone.
+// Same constant loaded into three locals — each load reads a fresh Arc clone.
 #[test]
 fn test_same_constant_multiple_loads() {
     // Assign the same literal to three locals and concatenate them.
@@ -292,6 +354,27 @@ fn test_range_truncated_to_max_list_len() {
     assert_eq!(result, good_next());
 }
 
+#[test]
+fn test_range_truncated_to_hard_ceiling() {
+    let source = r#"
+        let r = range(0, 1001)
+        if len(r) == 1000 && r[999] == "999" && r[1000] == nil {
+            req.set_header("X-Out", "hard ceiling")
+        }
+    "#;
+    let limits = VmLimits {
+        max_list_len: 2000,
+        ..VmLimits::default()
+    };
+    let mut session = MockPluginSession::new();
+    session
+        .expect_set_request_header()
+        .withf(|h, v| h == "X-Out" && v == "hard ceiling")
+        .times(1)
+        .returning(|_, _| Ok(()));
+    assert_eq!(run_with_limits(source, session, limits), good_next());
+}
+
 // Adversarial inputs that would overflow i64 on `end - start` must surface as
 // RuntimeError::IntegerOverflow (handled by error_policy), not panic in debug
 // nor silently wrap in release. Mirrors the discipline of Add/Sub/Mul/Div in vm.rs.
@@ -301,6 +384,11 @@ fn test_range_diff_overflow_returns_error() {
         let r = range(-1, 9223372036854775807)
         req.set_header("X-Len", to_str(len(r)))
     "#;
+    let error = run_expect_runtime_err(source, MockPluginSession::new());
+    assert!(
+        matches!(error, RuntimeError::IntegerOverflow { operation: "range" }),
+        "expected range subtraction to return a typed overflow, got {error:?}"
+    );
     let session = MockPluginSession::new();
     let result = run(source, session);
     assert_eq!(result, err_response_body(500, "DSL execution error"));
