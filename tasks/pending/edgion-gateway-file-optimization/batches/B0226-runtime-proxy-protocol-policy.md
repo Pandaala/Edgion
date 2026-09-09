@@ -2,7 +2,7 @@
 
 ## Scope
 
-- Pipeline state: analysis-ready; queued, not active mutation.
+- Pipeline state: verified examined-no-change; awaiting local commit.
 - Active anchor crate: `edgion-gateway`.
 - Target: `edgion-gateway/src/runtime/server/proxy_protocol_policy.rs`.
 - Baseline: `4c575bee`.
@@ -22,3 +22,14 @@
 - TrustedSources is intentionally opportunistic, not Required mode; physical peer trust precedes probing and DirectPeerIp stays separate from resolved identity. Fatal guard stops newly checked connections, not atomically all already accepted work. No stronger guarantee or defect inferred.
 - Retain 12 target tests and frozen lifecycle coverage; no new integration requirement. Fresh filters: `runtime::server::proxy_protocol_policy::tests`, `runtime::server::listener_builder::proxy_protocol_trust_tests`, `cli::pingora::tests`.
 - Original knowledge: Gateway startup/shutdown, listeners `compatibility-constraints/listener-port-set-frozen-at-startup.md`, log-safety/Rust/unit-test rules. No knowledge correction required.
+
+## Promotion
+
+- Mechanically refreshed at `415584d5`: no source/skills/rules changes since completed analysis at `3786c2cd`. Technical allow-list remains empty; freeze passed before delegation.
+- Coordinator scope: main task, ledger, changelog, B0225 SHA backfill, this record and subsequent queued analysis records. Existing integration and user-owned handoff/WAF paths remain protected.
+
+## Independent Review and Verification
+
+- Fresh `b0226_final_review` LGTM; no Must Fix/Should Fix/disagreement. Full policy and 12 tests, serialized publication/preflight/fatal/readiness/shutdown and installed fork physical-peer trust independently verified. No worthwhile cold-path rewrite or new issue.
+- Fresh policy 12/12, listener trust 1/1 and CLI 2/2 passed. Workspace format/check/Clippy (existing warnings), docs, SSA, metrics, Pingora source, Gateway tracing, English-only, diff and integration freeze passed. Logs: `/tmp/edgion-b0226-{policy,trust,cli,check,clippy}.log`.
+- No runtime/integration changes; source allow-list empty. Ledger/changelog updated; commit pending, local only.

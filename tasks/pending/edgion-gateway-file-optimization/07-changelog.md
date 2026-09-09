@@ -217,7 +217,9 @@ This is the single concise record of actual changes across the file-by-file audi
 
 | [`B0224`](batches/B0224-runtime-error-response.md) | 2026-09-09 | 1 target, 2 knowledge files | changed | Removed formatting/body allocation from six fixed HTML replies while preserving exact bytes; corrected current gRPC writer/encoding knowledge | Independent plan approval and final LGTM; response 11/11, final status 8/8, workspace format/check/Clippy and all guards passed | `3786c2cd` | D0126 canonical gRPC terminal-header repair independently confirmed and deferred; no integration changes |
 
-| [`B0225`](batches/B0225-runtime-server-module.md) | 2026-09-09 | 1 | examined-no-change | Retained explicit server facade and distinct crate-private canonical writer seams | Independent LGTM; server 26/26, workspace format/check/Clippy and all guards passed | pending | No source/integration changes; D0126 remains separate |
+| [`B0225`](batches/B0225-runtime-server-module.md) | 2026-09-09 | 1 | examined-no-change | Retained explicit server facade and distinct crate-private canonical writer seams | Independent LGTM; server 26/26, workspace format/check/Clippy and all guards passed | `415584d5` | No source/integration changes; D0126 remains separate |
+
+| [`B0226`](batches/B0226-runtime-proxy-protocol-policy.md) | 2026-09-09 | 1 | examined-no-change | Retained canonical startup-frozen PROXY policy, monotonic fatal guard and physical-peer trust boundary | Independent LGTM; policy 12/12, trust 1/1, CLI 2/2, workspace format/check/Clippy and all guards passed | pending | No new issue or source/integration changes |
 
 ### `UTIL-001` — `edgion-gateway/src/util/*`
 

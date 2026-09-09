@@ -2,7 +2,7 @@
 
 ## Scope
 
-- Pipeline state: verified examined-no-change; awaiting local commit.
+- Pipeline state: terminal; local commit `415584d5`.
 - Active anchor crate: `edgion-gateway`.
 - Target: `edgion-gateway/src/runtime/server/mod.rs`.
 - Baseline: `b5e8156b`.
@@ -27,4 +27,4 @@
 
 - Fresh `b0225_final_review` LGTM, no Must Fix. Complete facade, distinct crate-private writers and real server/helper consumers verified after B0224; explicit exports retained with no synthetic tests or style changes.
 - Fresh runtime server tests 26/26 passed (`/tmp/edgion-b0225-server.log`). Workspace format/check/Clippy (existing warnings), docs, SSA, metrics, Pingora source, Gateway tracing, English-only, diff and integration freeze passed.
-- No source or integration changes. D0126 remains separate. Ledger/changelog updated; commit pending, local only.
+- No source or integration changes. D0126 remains separate. Ledger/changelog updated; commit `415584d5`, local only.
