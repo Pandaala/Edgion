@@ -2,7 +2,7 @@
 
 ## Scope
 
-- Pipeline state: verified examined-no-change; awaiting local commit.
+- Pipeline state: committed locally; examined-no-change.
 - Active anchor crate: `edgion-gateway`.
 - Target: `edgion-gateway/src/routes/tls/route_unit.rs`.
 - Baseline: `62e43e2f`.
@@ -24,4 +24,4 @@
 
 - Analyst revalidated at `ac3dfe7c`: target blob, selector/resolver/handler/table unchanged; both new proxy helpers preserve the owned unit API and shared state. Original new ownership knowledge was read directly.
 - Independent reviewer: `b0208_unit_review`; Approved, no target-local Must Fix or Should Fix. Personally verified original rules, full target and real configuration/selection/plugin consumers at `ac3dfe7c`, target blob unchanged. Fresh independent TLS 54/54 and shared selector 22/22 passed. No production or integration changes.
-- Fresh coordinator unit 9/9, shared selector 22/22, TLS 54/54, workspace format/check/Clippy, docs (1,264 files), SSA, metrics, Pingora source, Gateway tracing, English-only and 3,120-file freeze passed. Commit pending; no push.
+- Fresh coordinator unit 9/9, shared selector 22/22, TLS 54/54, workspace format/check/Clippy, docs (1,264 files), SSA, metrics, Pingora source, Gateway tracing, English-only and 3,120-file freeze passed. Commit: `f48fca38`; no push.

@@ -10,10 +10,10 @@
 | Priority | P1 |
 | Baseline commit | `d484e580` |
 | Scope | Every tracked file under `edgion-gateway/` |
-| Campaign status | in-progress; B0207 committed locally as `ac3dfe7c`; external updates incorporated through `256733d7` |
-| Coverage | 546 current Gateway files: 219 changed, 168 examined-no-change, 12 deferred, 147 non-terminal; 3 historical rows are removed. Three Redis rows reopened after external `264847df`. |
-| Active batch | B0208 route unit verified examined-no-change; committing locally. D0119 separately tracks independently diagnosed pre-existing context layout failures. |
-| Analysis queue | B0209 manager and B0210 nested SNI lengths are analysis-ready; B0211 UDP handler analysis is running. D0114 remains a high-severity attachment-projection defect; D0116/D0117 remain separate from proxy ownership changes. D0118 defers malformed-input wire coverage. |
+| Campaign status | in-progress; B0208 committed locally as `f48fca38`; external updates incorporated through `256733d7` |
+| Coverage | 546 current Gateway files: 219 changed, 169 examined-no-change, 12 deferred, 146 non-terminal; 3 historical rows are removed. Three Redis rows reopened after external `264847df`. |
+| Active batch | B0209 TLS manager verified examined-no-change; committing locally. D0119 separately tracks independently diagnosed pre-existing context layout failures. |
+| Analysis queue | B0210 nested SNI lengths and B0211 UDP handler are analysis-ready; B0212 UDP proxy analysis is running. D0114 remains a high-severity attachment-projection defect; D0116/D0117 remain separate from proxy ownership changes. D0118 defers malformed-input wire coverage. |
 | Integration freeze | 3,120 files. External `7534a9bf` README, `bfc2691e` four existing/six added paths, and `264847df` one new test were reconciled individually after byte/mode verification. No campaign integration-test edit occurred. |
 
 ## AI guide summary
