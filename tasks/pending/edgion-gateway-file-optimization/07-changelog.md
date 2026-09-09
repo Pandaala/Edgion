@@ -16,7 +16,9 @@ This is the single concise record of actual changes across the file-by-file audi
 
 ## Entries
 
-- B0234: borrowed selected AI Guard span text through capped evaluator serialization, removing one String allocation/full copy per nonempty span while retaining payload Vec and encoded Bytes. Independent LGTM; evaluator 6/6, full AI Guard 30/30 and all workspace/guard checks passed. No integration change. Local commit SHA pending; no push.
+- B0235: examined the eight-line AI Guard facade with no code change. Independent LGTM retained its private implementation modules and live AiGuard export; full AI Guard 30/30 and all workspace/guard checks passed. D0082 remains separate; no integration change. Local record commit SHA pending; no push.
+
+- B0234: borrowed selected AI Guard span text through capped evaluator serialization, removing one String allocation/full copy per nonempty span while retaining payload Vec and encoded Bytes. Independent LGTM; evaluator 6/6, full AI Guard 30/30 and all workspace/guard checks passed. No integration change. Commit `899436e7`; no push.
 
 - B0233: converted Redis script keys/arguments once to Fred reference-counted representations, eliminating warm EVALSHA string-content deep copies while retaining shallow outer vectors and exact NOSCRIPT fallback inputs. Independent LGTM refreshed after external source changes; Redis/DSL/AI focused tests 426/426 and all workspace/guard checks passed again at `72be06f1`. External mirror/session/L4 test provenance was reconciled; no campaign integration change. Commit `2466e808`; no push.
 
