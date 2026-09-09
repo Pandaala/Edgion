@@ -10,10 +10,10 @@
 | Priority | P1 |
 | Baseline commit | `d484e580` |
 | Scope | Every tracked file under `edgion-gateway/` |
-| Campaign status | in-progress; B0232 changed and committed as `e42437af`; external user commits through `72be06f1` reconciled. |
-| Coverage | 548 current Gateway files: 221 changed, 180 examined-no-change, 14 deferred, 133 non-terminal; 3 historical rows are removed. HTTP conf_handler, plugin store and RequestMirror reopened after external changes; OIDC reopenings retained. |
-| Active batch | B0233 Redis limiter module: sole serial commit gate at external `72be06f1`; refreshed independent review and all verification passed. Automatic local batch commits authorized, never push. |
-| Analysis queue | B0234 AI Guard evaluator and B0235 AI Guard facade are analysis-ready; B0235 must refresh after B0234. D0127 tracks the independently confirmed outbound CA gap. |
+| Campaign status | in-progress; B0233 changed and committed as `2466e808`; external user commits through `72be06f1` reconciled. |
+| Coverage | 548 current Gateway files: 222 changed, 180 examined-no-change, 14 deferred, 132 non-terminal; 3 historical rows are removed. HTTP conf_handler, plugin store and RequestMirror reopened after external changes; OIDC reopenings retained. |
+| Active batch | B0234 AI Guard evaluator: sole serial commit gate at `2466e808`; independent review and all verification passed. Automatic local batch commits authorized, never push. |
+| Analysis queue | B0235 AI Guard facade is analysis-ready and must refresh after B0234; B0236 AI Guard plugin is analysis-ready for post-B0234 plan-first refresh. D0127 tracks the independently confirmed outbound CA gap. |
 | Integration freeze | 3,136 files. External test changes through `72be06f1` were individually verified against source commits and current HEAD; only proven entries reconciled. See external-sync records. No campaign integration-test edit occurred. |
 
 ## AI guide summary

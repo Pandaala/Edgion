@@ -16,7 +16,9 @@ This is the single concise record of actual changes across the file-by-file audi
 
 ## Entries
 
-- B0233: converted Redis script keys/arguments once to Fred reference-counted representations, eliminating warm EVALSHA string-content deep copies while retaining shallow outer vectors and exact NOSCRIPT fallback inputs. Independent LGTM refreshed after external source changes; Redis/DSL/AI focused tests 426/426 and all workspace/guard checks passed again at `72be06f1`. External mirror/session/L4 test provenance was reconciled; no campaign integration change. Local commit SHA pending; no push.
+- B0234: borrowed selected AI Guard span text through capped evaluator serialization, removing one String allocation/full copy per nonempty span while retaining payload Vec and encoded Bytes. Independent LGTM; evaluator 6/6, full AI Guard 30/30 and all workspace/guard checks passed. No integration change. Local commit SHA pending; no push.
+
+- B0233: converted Redis script keys/arguments once to Fred reference-counted representations, eliminating warm EVALSHA string-content deep copies while retaining shallow outer vectors and exact NOSCRIPT fallback inputs. Independent LGTM refreshed after external source changes; Redis/DSL/AI focused tests 426/426 and all workspace/guard checks passed again at `72be06f1`. External mirror/session/L4 test provenance was reconciled; no campaign integration change. Commit `2466e808`; no push.
 
 - B0232: preserved fractional Token Bucket refill across calls with lazy state migration, exact integer retry timing, saturation/rollback handling and symmetric allow/deny persistence. Independent plan approval and final LGTM; scripts 4/4, shared 27/27, HTTP 14/14, connection 12/12 and full workspace/guard checks passed. Existing integrations unchanged; future real-Redis coverage is a standalone task. Commit `e42437af`; no push.
 

@@ -90,7 +90,7 @@
 | `observe-metrics` | 5 | 3 | 2 | 0 | complete |
 | `observe-protocol-logs` | 7 | 4 | 3 | 0 | complete |
 | `plugins-common` | 3 | 2 | 1 | 0 | complete |
-| `plugins-http-ai-guard` | 5 | 0 | 0 | 0 | pending |
+| `plugins-http-ai-guard` | 5 | 1 | 0 | 0 | pending |
 | `plugins-http-ai-proxy` | 2 | 0 | 0 | 0 | pending |
 | `plugins-http-all-endpoint-status` | 3 | 1 | 1 | 0 | pending |
 | `plugins-http-bandwidth-limit` | 2 | 0 | 0 | 0 | pending |
@@ -328,9 +328,9 @@
 | `edgion-gateway/src/plugins/common/mod.rs` | `plugins-common` | source | examined-no-change | `B0061`: retained correct entry-scope compilation and identity separation |
 | `edgion-gateway/src/plugins/common/redis_rate_limiter/mod.rs` | `plugins-common` | source | changed | B0233: shallow Fred input clones retain NOSCRIPT fallback; independent LGTM, 426 focused tests |
 | `edgion-gateway/src/plugins/common/redis_rate_limiter/scripts.rs` | `plugins-common` | source | changed | B0232: persisted fractional refill; independent plan/final LGTM, focused filters passed |
-| `edgion-gateway/src/plugins/http/ai_guard/evaluator.rs` | `plugins-http-ai-guard` | source | analysis-ready | B0234: borrow selected span text during capped evaluator serialization |
+| `edgion-gateway/src/plugins/http/ai_guard/evaluator.rs` | `plugins-http-ai-guard` | source | changed | B0234: borrowed evaluator serialization spans; independent LGTM, evaluator 6/6 and module 30/30 |
 | `edgion-gateway/src/plugins/http/ai_guard/mod.rs` | `plugins-http-ai-guard` | source | analysis-ready | B0235: minimal private-module facade; refresh after B0234 before final review |
-| `edgion-gateway/src/plugins/http/ai_guard/plugin.rs` | `plugins-http-ai-guard` | source | pending | REQ-BODY-CORE-001 follow-up: replace the 32-bit-truncating physical-cap `as usize` cast during the full plugin audit |
+| `edgion-gateway/src/plugins/http/ai_guard/plugin.rs` | `plugins-http-ai-guard` | source | analysis-ready | B0236: plan-first cap conversion, lazy facts and post-B0234 borrowed spans |
 | `edgion-gateway/src/plugins/http/ai_guard/rules.rs` | `plugins-http-ai-guard` | source | pending | — |
 | `edgion-gateway/src/plugins/http/ai_guard/spans.rs` | `plugins-http-ai-guard` | source | pending | — |
 | `edgion-gateway/src/plugins/http/ai_proxy/mod.rs` | `plugins-http-ai-proxy` | source | examined-no-change | B0064 |

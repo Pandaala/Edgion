@@ -37,15 +37,15 @@ const MAX_REASON_BYTES: usize = 256;
 #[serde(rename_all = "camelCase")]
 struct DecisionRequest<'a> {
     version: &'static str,
-    spans: &'a [RequestSpan],
+    spans: &'a [RequestSpan<'a>],
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct RequestSpan {
+struct RequestSpan<'a> {
     message_index: u32,
     part: WirePart,
-    current: String,
+    current: &'a str,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -152,12 +152,12 @@ impl CompiledEvaluator {
         // Data minimization: only the selected bounded span text and its
         // structural key leave the gateway. No raw body, headers, model,
         // provider identity, or backend address.
-        let payload: Vec<RequestSpan> = spans
+        let payload: Vec<RequestSpan<'_>> = spans
             .iter()
             .map(|(key, current)| RequestSpan {
                 message_index: key.message_index,
                 part: key.part.into(),
-                current: current.clone(),
+                current: current.as_str(),
             })
             .collect();
         let request = encode_request(&payload, self.max_request_bytes)?;
@@ -193,7 +193,7 @@ impl CompiledEvaluator {
     }
 }
 
-fn encode_request(spans: &[RequestSpan], cap: usize) -> Result<Bytes, &'static str> {
+fn encode_request(spans: &[RequestSpan<'_>], cap: usize) -> Result<Bytes, &'static str> {
     let mut writer = CappedWriter::new(cap);
     DecisionRequest { version: "v1", spans }
         .serialize(&mut serde_json::Serializer::new(&mut writer))
@@ -312,7 +312,7 @@ mod tests {
         let spans = vec![RequestSpan {
             message_index: 0,
             part: WirePart::Content,
-            current: "hello".to_string(),
+            current: "hello",
         }];
         let encoded = encode_request(&spans, 1024).expect("encodes");
         assert_eq!(encode_request(&spans, encoded.len()).expect("exact cap"), encoded);
@@ -337,7 +337,7 @@ mod tests {
         let spans = vec![RequestSpan {
             message_index: 2,
             part: WirePart::TextPart { part_index: 1 },
-            current: "prompt".to_string(),
+            current: "prompt",
         }];
         let encoded = encode_request(&spans, 4096).expect("encodes");
         let text = String::from_utf8(encoded.to_vec()).expect("utf8");
