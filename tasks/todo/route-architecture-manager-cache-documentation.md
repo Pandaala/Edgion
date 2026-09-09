@@ -22,6 +22,7 @@ Align route architecture knowledge with the current request path, where HTTP and
 - Cross-check retained-manager removal and recreation semantics documented by the route-manager cleanup campaign.
 - Revalidate the same page's claim that only HTTP/gRPC support Gateway-driven rebuilds and its raw-route cache table. B0198 found all five route families in `runtime/handler.rs` rebuild dispatch and compiled TCP route units; do not use those stale claims as current ownership evidence.
 - Recheck the shared-L4 paragraph in `skills/01-architecture/02-gateway/03-routes/SKILL.md`, which also describes raw route Arcs. The TCP-specific page now documents compiled units; keep the index and owning review page consistent without changing runtime ownership.
+- Revalidate `edgion-gateway/src/routes/tls/routes_mgr.rs` module comments describing raw-schema caching and full rebuild on every change; B0203 verified compiled units and affected-listener incremental publication. Limit any correction to accurate ownership documentation.
 
 ## Scope
 

@@ -10,10 +10,10 @@
 | Priority | P1 |
 | Baseline commit | `d484e580` |
 | Scope | Every tracked file under `edgion-gateway/` |
-| Campaign status | in-progress; B0199 committed locally as `b833f400`; external updates incorporated through `7ac8a760` |
-| Coverage | 546 current Gateway files: 217 changed, 166 examined-no-change, 11 deferred, 152 non-terminal; 3 historical rows are removed |
-| Active batch | B0200 no-change verified; exact staging and commit gate |
-| Analysis queue | B0201 TCP route unit is analysis-ready, proposed no change; B0202 TCP table is analysis-ready, no runtime change with a focused owning-document correction. |
+| Campaign status | in-progress; B0200 committed locally as `9853a685`; external updates incorporated through `7ac8a760` |
+| Coverage | 546 current Gateway files: 217 changed, 167 examined-no-change, 11 deferred, 151 non-terminal; 3 historical rows are removed |
+| Active batch | B0201 no-change verified; exact staging and commit gate |
+| Analysis queue | B0202 TCP table is analysis-ready, no runtime change with a focused owning-document correction; B0203 TLS configuration handler is analysis-ready, proposed schema Arc sharing. |
 | Integration freeze | 3,113 files; the sole README fingerprint changed by external commit `7534a9bf` was reconciled after verifying worktree bytes equal committed HEAD and the previous bytes equal the frozen baseline. No campaign integration-test edit occurred. |
 
 ## AI guide summary
