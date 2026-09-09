@@ -1,0 +1,112 @@
+# Isolate passive health state from every other CredentialInjector case.
+apiVersion: v1
+kind: Service
+metadata:
+  name: credential-connection
+  namespace: edgion-default
+spec:
+  ports:
+    - port: 30001
+      targetPort: 30001
+      protocol: TCP
+---
+apiVersion: discovery.k8s.io/v1
+kind: EndpointSlice
+metadata:
+  name: credential-connection
+  namespace: edgion-default
+  labels:
+    kubernetes.io/service-name: credential-connection
+addressType: IPv4
+endpoints:
+  - addresses: ["127.0.0.1"]
+    conditions:
+      ready: true
+ports:
+  - port: 30001
+    protocol: TCP
+---
+apiVersion: edgion.io/v1
+kind: EdgionBackendTrafficPolicy
+metadata:
+  name: credential-connection
+  namespace: edgion-default
+spec:
+  targetRefs:
+    - kind: Service
+      name: credential-connection
+  loadBalancer:
+    type: RoundRobin
+    degradeThreshold: 0
+  outlierDetection:
+    consecutiveErrors: 1
+    consecutiveGatewayErrors: 1
+    consecutiveLocalOriginFailures: 1
+    ejectionTime: 5s
+    maxEjectionTime: 5s
+    maxEjectionPercent: 0
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: credential-connection-conflict
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - type: CredentialInjector
+      config:
+        credentialRef:
+          name: credential-injector-token
+        target:
+          type: Header
+          name: X-Provider-Key
+          valuePrefix: "Token "
+    # Mutate Connection only: rewriting the target itself would cancel staging.
+    - type: ProxyRewrite
+      config:
+        headers:
+          set:
+            - name: Connection
+              value: "keep-alive, x-PrOvIdEr-KeY"
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: credential-connection-conflict
+  namespace: edgion-default
+spec:
+  parentRefs:
+    - name: edgion-plugins-gateway
+      namespace: edgion-test
+  hostnames: [credential-connection-conflict.example.com]
+  rules:
+    - filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: credential-connection-conflict
+      backendRefs:
+        - name: credential-connection
+          port: 30001
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: credential-connection-control
+  namespace: edgion-default
+spec:
+  parentRefs:
+    - name: edgion-plugins-gateway
+      namespace: edgion-test
+  hostnames: [credential-connection-control.example.com]
+  rules:
+    - filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: credential-injector-custom
+      backendRefs:
+        - name: credential-connection
+          port: 30001

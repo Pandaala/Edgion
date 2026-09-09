@@ -12,6 +12,226 @@ const DOUBLE_INJECTOR_HOST: &str = "credential-injector-double.example.com";
 const MISSING_HOST: &str = "credential-injector-missing.example.com";
 const MIRROR_HOST: &str = "credential-injector-mirror.example.com";
 const DYNAMIC_HOST: &str = "credential-injector-dynamic.example.com";
+const CONNECTION_CONFLICT_HOST: &str = "credential-connection-conflict.example.com";
+const CONNECTION_CONTROL_HOST: &str = "credential-connection-control.example.com";
+
+async fn connection_request(
+    ctx: &TestContext,
+    host: &str,
+    path: &str,
+    trace_id: &str,
+) -> Result<(u16, String), &'static str> {
+    let mut request = ctx
+        .http_client
+        .get(format!("{}{path}", ctx.http_url()))
+        .version(reqwest::Version::HTTP_11)
+        .header("host", host)
+        .header("x-trace-id", trace_id)
+        .timeout(Duration::from_secs(2));
+    if host == CONNECTION_CONFLICT_HOST {
+        request = request.header("access_log", "test_store");
+    }
+    let response = request
+        .send()
+        .await
+        .map_err(|_| "Connection nomination request failed")?;
+    if response.version() != reqwest::Version::HTTP_11 {
+        return Err("Connection nomination case did not use HTTP/1.1");
+    }
+    let status = response.status().as_u16();
+    let body = response
+        .text()
+        .await
+        .map_err(|_| "Connection nomination response read failed")?;
+    Ok((status, body))
+}
+
+async fn connection_captures(ctx: &TestContext, trace_id: &str) -> Result<Vec<Value>, &'static str> {
+    let mut captures = Vec::new();
+    for host in mirror_backend_hosts(ctx) {
+        let response = ctx
+            .http_client
+            .get(format!("http://{host}:30001/mirror/query/{trace_id}"))
+            .timeout(Duration::from_secs(2))
+            .send()
+            .await
+            .map_err(|_| "Backend capture query failed")?
+            .error_for_status()
+            .map_err(|_| "Backend capture query returned an error status")?;
+        let data: Value = response
+            .json()
+            .await
+            .map_err(|_| "Backend capture response was not JSON")?;
+        let entries = data["captures"]
+            .as_array()
+            .ok_or("Backend capture response omitted captures")?;
+        if data["count"].as_u64() != Some(entries.len() as u64) || data["found"].as_bool() != Some(!entries.is_empty())
+        {
+            return Err("Backend capture response had inconsistent counts");
+        }
+        captures.extend(entries.iter().cloned());
+    }
+    Ok(captures)
+}
+
+async fn check_connection_nomination(ctx: &TestContext, traces: &[String; 5]) -> Result<(), &'static str> {
+    wait_connection_endpoint(ctx, &traces[4]).await?;
+    // Prove the exact Secret generation and the observation path work first.
+    let (status, _) = connection_request(ctx, CONNECTION_CONTROL_HOST, "/mirror/capture", &traces[0]).await?;
+    if status != 200 {
+        return Err("Credential connection control request was not successful");
+    }
+    let captures = connection_captures(ctx, &traces[0]).await?;
+    if captures.len() != 1 || captures[0]["headers"]["x-provider-key"].as_str() != Some("Token static-provider-token") {
+        return Err("Credential connection control did not capture the expected generation");
+    }
+
+    // Finish rejection and availability checks before the five-second ejection
+    // window can expire. A stalled test must fail, not hide a transient ejection.
+    tokio::time::timeout(Duration::from_secs(3), async {
+        for trace in &traces[1..=3] {
+            let (status, body) = connection_request(ctx, CONNECTION_CONFLICT_HOST, "/mirror/capture", trace).await?;
+            if status != 500 {
+                return Err("Late Connection nomination did not fail closed with 500");
+            }
+            let lower = body.to_ascii_lowercase();
+            if [
+                "static-provider-token",
+                "x-provider-key",
+                "credentialinjector",
+                "credential_injector",
+            ]
+            .iter()
+            .any(|secret_detail| lower.contains(secret_detail))
+            {
+                return Err("Connection rejection response exposed credential detail");
+            }
+        }
+        let (status, _) = connection_request(ctx, CONNECTION_CONTROL_HOST, "/health", &traces[4]).await?;
+        if status != 200 {
+            return Err("Local credential rejection penalized the selected endpoint");
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|_| "Connection rejection checks exceeded the ejection observation deadline")??;
+
+    let logs = ctx.access_log_client();
+    for trace in &traces[1..=3] {
+        let log = logs
+            .get_access_log_with_retry(trace, 10, 100)
+            .await
+            .map_err(|_| "Connection rejection access log was unavailable")?;
+        if log.status_code() != Some(500)
+            || !log.has_diagnostic("error", "CredentialConnectionConflict")
+            || log.backend_name() != Some("credential-connection")
+            || log.upstream_count() != 1
+        {
+            return Err("Connection rejection did not have the expected local diagnostic and single upstream attempt");
+        }
+    }
+    // Access-log completion precedes this bounded negative observation. Query
+    // failures are infrastructure errors, never evidence of zero backend receipt.
+    for observation in 0..3 {
+        for trace in &traces[1..=3] {
+            if !connection_captures(ctx, trace).await?.is_empty() {
+                return Err("Backend received a request rejected for credential Connection nomination");
+            }
+        }
+        if observation < 2 {
+            sleep(Duration::from_millis(100)).await;
+        }
+    }
+
+    // A real backend 502 must eject this same one-endpoint Service. Without
+    // this positive control, a missing policy could make the earlier check pass.
+    tokio::time::timeout(Duration::from_secs(3), async {
+        let (status, _) = connection_request(ctx, CONNECTION_CONTROL_HOST, "/status/502", &traces[4]).await?;
+        if status != 502 {
+            return Err("Outlier positive control did not receive the backend 502");
+        }
+        let (status, _) = connection_request(ctx, CONNECTION_CONTROL_HOST, "/health", &traces[4]).await?;
+        if !matches!(status, 502 | 503) {
+            return Err("Outlier policy did not eject the endpoint after a real backend failure");
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|_| "Outlier positive control exceeded the ejection observation deadline")?
+}
+
+async fn wait_connection_endpoint(ctx: &TestContext, trace: &str) -> Result<(), &'static str> {
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            if matches!(
+                connection_request(ctx, CONNECTION_CONTROL_HOST, "/health", trace).await,
+                Ok((200, _))
+            ) {
+                break;
+            }
+            sleep(Duration::from_millis(100)).await;
+        }
+    })
+    .await
+    .map_err(|_| "Credential connection endpoint did not become available")
+}
+
+async fn cleanup_connection_nomination(ctx: &TestContext, traces: &[String; 5]) -> Result<(), &'static str> {
+    // Always restore endpoint availability, including after an assertion fails.
+    // Continue clearing observations even if recovery fails.
+    let mut result = wait_connection_endpoint(ctx, &traces[4]).await;
+
+    for host in mirror_backend_hosts(ctx) {
+        let reset = ctx
+            .http_client
+            .get(format!("http://{host}:30001/mirror/reset"))
+            .timeout(Duration::from_secs(2))
+            .send()
+            .await
+            .map_err(|_| "Credential connection capture cleanup failed")
+            .and_then(|response| {
+                response
+                    .error_for_status()
+                    .map_err(|_| "Credential connection capture cleanup returned an error status")
+            })
+            .map(|_| ());
+        result = result.and(reset);
+    }
+    let logs = ctx.access_log_client();
+    for trace in &traces[1..=3] {
+        let deleted = logs
+            .delete_access_log(trace)
+            .await
+            .map_err(|_| "Credential connection access-log cleanup failed")
+            .and_then(|deleted| {
+                if deleted {
+                    Ok(())
+                } else {
+                    Err("Credential connection access-log cleanup was unsuccessful")
+                }
+            });
+        result = result.and(deleted);
+    }
+    result
+}
+
+async fn assert_connection_nomination(ctx: TestContext) -> TestResult {
+    let start = Instant::now();
+    let traces = std::array::from_fn(|_| format!("credential-connection-{}", uuid::Uuid::new_v4()));
+    let result = tokio::time::timeout(Duration::from_secs(30), check_connection_nomination(&ctx, &traces))
+        .await
+        .unwrap_or(Err("Credential connection scenario exceeded its deadline"));
+    // Keep cleanup outside the scenario timeout so cancellation still restores
+    // captured data and the dedicated endpoint before the next suite runs.
+    let cleanup = tokio::time::timeout(Duration::from_secs(20), cleanup_connection_nomination(&ctx, &traces))
+        .await
+        .unwrap_or(Err("Credential connection cleanup exceeded its deadline"));
+    match (result, cleanup) {
+        (Ok(()), Ok(())) => TestResult::passed(start.elapsed()),
+        (Err(error), Ok(())) | (Ok(()), Err(error)) => TestResult::failed(start.elapsed(), error.to_string()),
+        (Err(error), Err(cleanup)) => TestResult::failed(start.elapsed(), format!("{error}; {cleanup}")),
+    }
+}
 
 fn echoed_header(body: &str, expected_name: &str) -> Option<String> {
     let response: Value = serde_json::from_str(body).ok()?;
@@ -315,6 +535,12 @@ impl TestSuite for CredentialInjectorTestSuite {
                 "A later RequestMirror sees neither the client spoof nor the deferred Secret while the main upstream receives it",
                 |ctx| Box::pin(async move { assert_mirror_isolation(ctx).await }),
             ),
+            TestCase::new(
+                "late_connection_nomination_fails_before_backend_receipt",
+                "Real H1 sanitization rejects a late credential nomination without penalizing the selected endpoint",
+                |ctx| Box::pin(async move { assert_connection_nomination(ctx).await }),
+            )
+            .with_timeout(Duration::from_secs(60)),
         ]
     }
 }

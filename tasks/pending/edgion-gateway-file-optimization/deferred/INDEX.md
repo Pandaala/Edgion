@@ -178,7 +178,7 @@ These entries are backlinks only. A linked `tasks/todo` file is the editable sou
 | Add native WAF response-stage invalid-status integration coverage | pending | [task](../../../todo/add-native-waf-response-invalid-status-integration.md) |
 | Unify response Content-Encoding classification | pending | [task](../../../todo/unify-response-content-encoding-classification.md) |
 | Define backendRef upstream-selection plugin semantics | pending | [task](../../../todo/define-backendref-upstream-selection-plugin-semantics.md) |
-| Add deferred-credential Connection nomination integration coverage | pending | [task](../../../todo/add-deferred-credential-connection-nomination-integration.md) |
+| Add deferred-credential Connection nomination integration coverage | resolved (2026-09-09) | [maintained knowledge](../../../../skills/04-review/security/regression-guards/deferred-credential-connection-nomination.md) |
 | Clarify redirect connection policy | pending | [task](../../../todo/clarify-redirect-connection-policy.md) |
 | Add session cookie field integration coverage | pending | [task](../../../todo/add-session-cookie-field-integration.md) |
 | Add L4 duplex backpressure integration coverage | pending | [task](../../../todo/add-l4-duplex-backpressure-integration.md) |
