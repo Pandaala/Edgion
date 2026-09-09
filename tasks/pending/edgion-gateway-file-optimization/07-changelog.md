@@ -16,7 +16,9 @@ This is the single concise record of actual changes across the file-by-file audi
 
 ## Entries
 
-- B0267: corrected the DSL test-module header to describe current-thread helpers and the multi-thread runtime required by synchronous upstream-response bridge tests, removing two false blanket claims. Independent LGTM; full Gateway DSL 335/335, locked workspace check/Clippy, and all repository guards passed. Local commit pending; no behavior or integration change; no push.
+- B0268: preflight exact checked Join length before output allocation, enforce UUID string limits, and isolate 14 sensitive-mode tests in exact child processes with completion markers. Independent PASS; helper 3/3, utility 42/42, complete DSL 373/373, locked workspace check/Clippy and all guards passed. D0140 records remaining global-mode test isolation separately. Commit pending automatic local commit; existing integration tests unchanged; no push.
+
+- B0267: corrected the DSL test-module header to describe current-thread helpers and the multi-thread runtime required by synchronous upstream-response bridge tests, removing two false blanket claims. Independent LGTM; full Gateway DSL 335/335, locked workspace check/Clippy, and all repository guards passed. Commit `04511b57`; no behavior or integration change; no push.
 
 - B0266: added an exact pre-dial regression proving opaque DSL `http.call` bodies use the lower of the configured and physical request-body caps. Independent LGTM; target 37/37, full Gateway DSL 335/335, locked workspace check/Clippy, and all repository guards passed. D0139 separately owns a new response-stage async timeout-clamp integration scenario. Commit `83a82fc1`; no production or integration change; no push.
 

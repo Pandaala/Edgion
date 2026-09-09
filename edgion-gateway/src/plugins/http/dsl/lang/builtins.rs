@@ -345,6 +345,27 @@ fn checked_value_str(s: String, limit: usize) -> Result<Value, RuntimeError> {
     Ok(Value::Str(s.into()))
 }
 
+fn checked_join_output_len<I>(mut item_lens: I, delimiter_len: usize, limit: usize) -> Result<usize, RuntimeError>
+where
+    I: ExactSizeIterator<Item = usize>,
+{
+    let separator_len = match item_lens.len() {
+        0 | 1 => 0,
+        count => delimiter_len
+            .checked_mul(count - 1)
+            .ok_or(RuntimeError::StringTooLong { len: usize::MAX, limit })?,
+    };
+    let output_len = item_lens.try_fold(separator_len, |total, item_len| {
+        total
+            .checked_add(item_len)
+            .ok_or(RuntimeError::StringTooLong { len: usize::MAX, limit })
+    })?;
+    if output_len > limit {
+        return Err(RuntimeError::StringTooLong { len: output_len, limit });
+    }
+    Ok(output_len)
+}
+
 fn http_call_failure_map() -> Value {
     let mut result = IndexMap::new();
     result.insert("status".to_string(), Value::Int(0));
@@ -1038,7 +1059,7 @@ impl Vm {
             }
             BuiltinId::Uuid => {
                 let id = uuid::Uuid::new_v4().to_string();
-                Ok(Value::Str(id.into()))
+                checked_value_str(id, self.limits.max_string_len)
             }
             BuiltinId::HexEncode => {
                 let s = state.pop()?.runtime_string()?;
@@ -1148,8 +1169,19 @@ impl Vm {
                 let list = state.pop()?;
                 match list {
                     Value::List(items) => {
-                        let joined = items.join(&delim);
-                        check_string_len(&joined, self.limits.max_string_len)?;
+                        let output_len = checked_join_output_len(
+                            items.iter().map(|item| item.len()),
+                            delim.len(),
+                            self.limits.max_string_len,
+                        )?;
+                        let mut joined = String::with_capacity(output_len);
+                        if let Some((first, rest)) = items.split_first() {
+                            joined.push_str(first);
+                            for item in rest {
+                                joined.push_str(&delim);
+                                joined.push_str(item);
+                            }
+                        }
                         Ok(Value::Str(joined.into()))
                     }
                     _ => Err(RuntimeError::TypeError {
@@ -1987,6 +2019,42 @@ mod ip_tests {
             "IPv4-mapped IPv6 not detected as private: {:?}",
             host
         );
+    }
+}
+
+#[cfg(test)]
+mod join_length_tests {
+    use super::{checked_join_output_len, RuntimeError};
+
+    #[test]
+    fn computes_empty_single_and_multi_item_lengths() {
+        assert_eq!(checked_join_output_len(std::iter::empty(), 8, 0).unwrap(), 0);
+        assert_eq!(checked_join_output_len([3].into_iter(), 8, 3).unwrap(), 3);
+        assert_eq!(checked_join_output_len([1, 2, 3].into_iter(), 4, 14).unwrap(), 14);
+    }
+
+    #[test]
+    fn reports_exact_representable_length_above_limit() {
+        assert!(matches!(
+            checked_join_output_len([1, 1, 1].into_iter(), 4, 10),
+            Err(RuntimeError::StringTooLong { len: 11, limit: 10 })
+        ));
+    }
+
+    #[test]
+    fn reports_usize_max_for_arithmetic_overflow() {
+        for result in [
+            checked_join_output_len([0, 0, 0].into_iter(), usize::MAX, 10),
+            checked_join_output_len([usize::MAX, 1].into_iter(), 0, 10),
+        ] {
+            assert!(matches!(
+                result,
+                Err(RuntimeError::StringTooLong {
+                    len: usize::MAX,
+                    limit: 10
+                })
+            ));
+        }
     }
 }
 

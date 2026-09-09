@@ -3,24 +3,33 @@
 use super::*;
 use edgion_resources::sensitive::SENSITIVE_MODE;
 use std::sync::atomic::Ordering;
-use std::sync::Mutex;
 
-static MODE_LOCK: Mutex<()> = Mutex::new(());
+fn assert_sensitive_test_in_subprocess(test_name: &str, assertion: impl FnOnce()) {
+    const CHILD_ENV: &str = "EDGION_DSL_P3_SENSITIVE_CHILD";
+    const COMPLETION_PREFIX: &str = "EDGION_DSL_P3_SENSITIVE_COMPLETE:";
+    const TEST_MODULE: &str = "plugins::http::dsl::tests::p3_utility_tests";
 
-struct ModeGuard<'a> {
-    prev: u8,
-    // Held purely for RAII: serializes tests that mutate SENSITIVE_MODE.
-    _lock: std::sync::MutexGuard<'a, ()>,
-}
-impl Drop for ModeGuard<'_> {
-    fn drop(&mut self) {
-        SENSITIVE_MODE.store(self.prev, Ordering::SeqCst);
+    if std::env::var(CHILD_ENV).as_deref() == Ok(test_name) {
+        assertion();
+        println!("{COMPLETION_PREFIX}{test_name}");
+        return;
     }
-}
-fn set_mode(mode: u8) -> ModeGuard<'static> {
-    let guard = MODE_LOCK.lock().unwrap();
-    let prev = SENSITIVE_MODE.swap(mode, Ordering::SeqCst);
-    ModeGuard { prev, _lock: guard }
+
+    let exact_test_name = format!("{TEST_MODULE}::{test_name}");
+    let output = std::process::Command::new(
+        std::env::current_exe().expect("the Rust test harness must have a current executable"),
+    )
+    .args(["--exact", exact_test_name.as_str(), "--nocapture"])
+    .env(CHILD_ENV, test_name)
+    .output()
+    .expect("the isolated DSL sensitive-mode test process must start");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let completion_marker = format!("{COMPLETION_PREFIX}{test_name}");
+    assert!(
+        output.status.success() && stdout.contains(&completion_marker),
+        "isolated DSL sensitive-mode test failed or did not complete:\nstdout: {stdout}\nstderr: {stderr}"
+    );
 }
 
 #[test]
@@ -154,8 +163,29 @@ fn test_uuid_format() {
         .withf(|n, v| n == "X-Has-UUID" && v == "yes")
         .times(1)
         .returning(|_, _| Ok(()));
-    let result = run(source, session);
+    let result = run_with_limits(
+        source,
+        session,
+        VmLimits {
+            max_string_len: 36,
+            ..VmLimits::default()
+        },
+    );
     assert_eq!(result, good_next());
+}
+
+#[test]
+fn test_uuid_rejects_result_above_max_string_len() {
+    let error = run_expect_runtime_err_with_limits(
+        "let id = uuid()",
+        MockPluginSession::new(),
+        VmLimits {
+            max_string_len: 35,
+            ..VmLimits::default()
+        },
+    );
+
+    assert!(matches!(error, RuntimeError::StringTooLong { len: 36, limit: 35 }));
 }
 
 #[test]
@@ -344,270 +374,337 @@ fn test_join() {
 }
 
 #[test]
+fn test_join_accepts_result_exactly_at_max_string_len() {
+    let mut session = MockPluginSession::new();
+    session
+        .expect_set_request_header()
+        .withf(|name, value| name == "X-Joined" && value == "a-b-c")
+        .times(1)
+        .returning(|_, _| Ok(()));
+
+    let result = run_with_limits(
+        r#"let joined = join(split("a,b,c", ","), "-")
+req.set_header("X-Joined", joined)"#,
+        session,
+        VmLimits {
+            max_string_len: 5,
+            ..VmLimits::default()
+        },
+    );
+
+    assert_eq!(result, good_next());
+}
+
+#[test]
+fn test_join_reports_exact_result_length_above_max_string_len() {
+    let error = run_expect_runtime_err_with_limits(
+        r#"let joined = join(split("a,b,c", ","), "-")"#,
+        MockPluginSession::new(),
+        VmLimits {
+            max_string_len: 4,
+            ..VmLimits::default()
+        },
+    );
+
+    assert!(matches!(error, RuntimeError::StringTooLong { len: 5, limit: 4 }));
+}
+
+#[test]
 fn test_log_warn() {
-    let _g = set_mode(0);
-    let source = r#"
+    assert_sensitive_test_in_subprocess("test_log_warn", || {
+        SENSITIVE_MODE.store(0, Ordering::SeqCst);
+        let source = r#"
         log_warn("something suspicious")
         return next()
     "#;
-    let vm = make_vm(source);
-    let (result, log) = run_vm_policy_log(&vm, MockPluginSession::new(), &DslErrorPolicy::Deny);
-    assert_eq!(result, good_next());
-    assert!(
-        log.contains("something suspicious"),
-        "log_warn value not recorded: {:?}",
-        log.log
-    );
+        let vm = make_vm(source);
+        let (result, log) = run_vm_policy_log(&vm, MockPluginSession::new(), &DslErrorPolicy::Deny);
+        assert_eq!(result, good_next());
+        assert!(
+            log.contains("something suspicious"),
+            "log_warn value not recorded: {:?}",
+            log.log
+        );
+    });
 }
 
 #[test]
 fn test_log_error() {
-    let _g = set_mode(0);
-    let source = r#"
+    assert_sensitive_test_in_subprocess("test_log_error", || {
+        SENSITIVE_MODE.store(0, Ordering::SeqCst);
+        let source = r#"
         log_error("critical failure")
         return next()
     "#;
-    let vm = make_vm(source);
-    let (result, log) = run_vm_policy_log(&vm, MockPluginSession::new(), &DslErrorPolicy::Deny);
-    assert_eq!(result, good_next());
-    assert!(
-        log.contains("err: critical failure"),
-        "log_error must emit unified `err: <value>` entry: {:?}",
-        log.log
-    );
+        let vm = make_vm(source);
+        let (result, log) = run_vm_policy_log(&vm, MockPluginSession::new(), &DslErrorPolicy::Deny);
+        assert_eq!(result, good_next());
+        assert!(
+            log.contains("err: critical failure"),
+            "log_error must emit unified `err: <value>` entry: {:?}",
+            log.log
+        );
+    });
 }
 
 #[test]
 fn test_log_warn_replace_mode() {
-    let _g = set_mode(1);
-    let source = r#"
+    assert_sensitive_test_in_subprocess("test_log_warn_replace_mode", || {
+        SENSITIVE_MODE.store(1, Ordering::SeqCst);
+        let source = r#"
         log_warn("super-secret-value")
         return next()
     "#;
-    let vm = make_vm(source);
-    let (result, log) = run_vm_policy_log(&vm, MockPluginSession::new(), &DslErrorPolicy::Deny);
-    assert_eq!(result, good_next());
-    assert!(log.contains("***"), "expected masked output: {:?}", log.log);
-    assert!(
-        !log.contains("super-secret-value"),
-        "plaintext must not appear in replace mode"
-    );
+        let vm = make_vm(source);
+        let (result, log) = run_vm_policy_log(&vm, MockPluginSession::new(), &DslErrorPolicy::Deny);
+        assert_eq!(result, good_next());
+        assert!(log.contains("***"), "expected masked output: {:?}", log.log);
+        assert!(
+            !log.contains("super-secret-value"),
+            "plaintext must not appear in replace mode"
+        );
+    });
 }
 
 #[test]
 fn test_log_warn_wrap_mode() {
-    let _g = set_mode(2);
-    let source = r#"
+    assert_sensitive_test_in_subprocess("test_log_warn_wrap_mode", || {
+        SENSITIVE_MODE.store(2, Ordering::SeqCst);
+        let source = r#"
         log_warn("super-secret-value")
         return next()
     "#;
-    let vm = make_vm(source);
-    let (result, log) = run_vm_policy_log(&vm, MockPluginSession::new(), &DslErrorPolicy::Deny);
-    assert_eq!(result, good_next());
-    assert!(
-        log.contains("<E>super-secret-value</E>"),
-        "expected wrapped output: {:?}",
-        log.log
-    );
+        let vm = make_vm(source);
+        let (result, log) = run_vm_policy_log(&vm, MockPluginSession::new(), &DslErrorPolicy::Deny);
+        assert_eq!(result, good_next());
+        assert!(
+            log.contains("<E>super-secret-value</E>"),
+            "expected wrapped output: {:?}",
+            log.log
+        );
+    });
 }
 
 #[test]
 fn test_log_error_replace_mode() {
-    let _g = set_mode(1);
-    let source = r#"
+    assert_sensitive_test_in_subprocess("test_log_error_replace_mode", || {
+        SENSITIVE_MODE.store(1, Ordering::SeqCst);
+        let source = r#"
         log_error("super-secret-value")
         return next()
     "#;
-    let vm = make_vm(source);
-    let (result, log) = run_vm_policy_log(&vm, MockPluginSession::new(), &DslErrorPolicy::Deny);
-    assert_eq!(result, good_next());
-    assert!(
-        log.contains("err: ***"),
-        "expected `err:` prefix wrapping masked value: {:?}",
-        log.log
-    );
-    assert!(
-        !log.contains("super-secret-value"),
-        "plaintext must not appear in replace mode"
-    );
+        let vm = make_vm(source);
+        let (result, log) = run_vm_policy_log(&vm, MockPluginSession::new(), &DslErrorPolicy::Deny);
+        assert_eq!(result, good_next());
+        assert!(
+            log.contains("err: ***"),
+            "expected `err:` prefix wrapping masked value: {:?}",
+            log.log
+        );
+        assert!(
+            !log.contains("super-secret-value"),
+            "plaintext must not appear in replace mode"
+        );
+    });
 }
 
 #[test]
 fn test_log_error_wrap_mode() {
-    let _g = set_mode(2);
-    let source = r#"
+    assert_sensitive_test_in_subprocess("test_log_error_wrap_mode", || {
+        SENSITIVE_MODE.store(2, Ordering::SeqCst);
+        let source = r#"
         log_error("super-secret-value")
         return next()
     "#;
-    let vm = make_vm(source);
-    let (result, log) = run_vm_policy_log(&vm, MockPluginSession::new(), &DslErrorPolicy::Deny);
-    assert_eq!(result, good_next());
-    assert!(
-        log.contains("err: <E>super-secret-value</E>"),
-        "expected `err:` prefix wrapping wrapped value: {:?}",
-        log.log
-    );
+        let vm = make_vm(source);
+        let (result, log) = run_vm_policy_log(&vm, MockPluginSession::new(), &DslErrorPolicy::Deny);
+        assert_eq!(result, good_next());
+        assert!(
+            log.contains("err: <E>super-secret-value</E>"),
+            "expected `err:` prefix wrapping wrapped value: {:?}",
+            log.log
+        );
+    });
 }
 
 #[test]
 fn test_log_fmt_repeated_large_shared_value_remains_bounded() {
-    let source = format!(
-        "let value = req.header(\"X-Large\")\nlet result = log_fmt(\"{}\", {})\nif result != nil {{ return deny(403, \"unexpected result\") }}\nlog_fmt(\"later entry\")\nreturn next()",
-        "{}".repeat(254),
-        vec!["value"; 254].join(", "),
-    );
-    let vm = make_vm_with_limits(
-        &source,
-        VmLimits {
-            max_stack_depth: 256,
-            max_string_len: 1024 * 1024,
-            ..VmLimits::default()
-        },
-    );
-    for mode in [0, 1, 2] {
-        let _g = set_mode(mode);
-        let mut session = MockPluginSession::new();
-        session
-            .expect_header_value()
-            .withf(|name| name == "X-Large")
-            .times(1)
-            .returning(|_| Some("x".repeat(1024 * 1024)));
-        let (result, log) = run_vm_policy_log(&vm, session, &DslErrorPolicy::Deny);
-        assert_eq!(result, good_next());
-        let json = serde_json::to_value(log).unwrap();
-        assert_eq!(json["log"], serde_json::json!(["later entry", "OK"]));
-        assert_eq!(json["log_full"], true);
-    }
+    assert_sensitive_test_in_subprocess("test_log_fmt_repeated_large_shared_value_remains_bounded", || {
+        let source = format!(
+            "let value = req.header(\"X-Large\")\nlet result = log_fmt(\"{}\", {})\nif result != nil {{ return deny(403, \"unexpected result\") }}\nlog_fmt(\"later entry\")\nreturn next()",
+            "{}".repeat(254),
+            vec!["value"; 254].join(", "),
+        );
+        let vm = make_vm_with_limits(
+            &source,
+            VmLimits {
+                max_stack_depth: 256,
+                max_string_len: 1024 * 1024,
+                ..VmLimits::default()
+            },
+        );
+        for mode in [0, 1, 2] {
+            SENSITIVE_MODE.store(mode, Ordering::SeqCst);
+            let mut session = MockPluginSession::new();
+            session
+                .expect_header_value()
+                .withf(|name| name == "X-Large")
+                .times(1)
+                .returning(|_| Some("x".repeat(1024 * 1024)));
+            let (result, log) = run_vm_policy_log(&vm, session, &DslErrorPolicy::Deny);
+            assert_eq!(result, good_next());
+            let json = serde_json::to_value(log).unwrap();
+            assert_eq!(json["log"], serde_json::json!(["later entry", "OK"]));
+            assert_eq!(json["log_full"], true);
+        }
+    });
 }
 
 #[test]
 fn test_log_fmt_preserves_scalar_coercion_and_body_error_after_oversized_prefix() {
-    let _g = set_mode(0);
-    let vm = make_vm(r#"log_fmt("{} {} {} {}", 42, true, false, nil)"#);
-    let (result, log) = run_vm_policy_log(&vm, MockPluginSession::new(), &DslErrorPolicy::Deny);
-    assert_eq!(result, good_next());
-    assert!(log.contains("42 true false nil"));
-    for mode in [0, 1, 2] {
-        SENSITIVE_MODE.store(mode, Ordering::SeqCst);
-        let source = format!("log_fmt(\"{}{{}}\", req.body)", "x".repeat(513));
-        let mut session = MockPluginSession::new();
-        session.expect_declares_body().return_const(Some(true));
-        session.expect_request_body_available_len().return_const(Ok(0));
-        let error = run_expect_runtime_err(&source, session);
-        assert!(matches!(
-            error,
-            RuntimeError::TypeError {
-                expected: "a value implicitly convertible to Str",
-                got: "Body",
-                operation: "implicit string conversion",
+    assert_sensitive_test_in_subprocess(
+        "test_log_fmt_preserves_scalar_coercion_and_body_error_after_oversized_prefix",
+        || {
+            SENSITIVE_MODE.store(0, Ordering::SeqCst);
+            let vm = make_vm(r#"log_fmt("{} {} {} {}", 42, true, false, nil)"#);
+            let (result, log) = run_vm_policy_log(&vm, MockPluginSession::new(), &DslErrorPolicy::Deny);
+            assert_eq!(result, good_next());
+            assert!(log.contains("42 true false nil"));
+            for mode in [0, 1, 2] {
+                SENSITIVE_MODE.store(mode, Ordering::SeqCst);
+                let source = format!("log_fmt(\"{}{{}}\", req.body)", "x".repeat(513));
+                let mut session = MockPluginSession::new();
+                session.expect_declares_body().return_const(Some(true));
+                session.expect_request_body_available_len().return_const(Ok(0));
+                let error = run_expect_runtime_err(&source, session);
+                assert!(matches!(
+                    error,
+                    RuntimeError::TypeError {
+                        expected: "a value implicitly convertible to Str",
+                        got: "Body",
+                        operation: "implicit string conversion",
+                    }
+                ));
             }
-        ));
-    }
+        },
+    );
 }
 
 #[test]
 fn test_log_fmt_off_mode() {
-    let _g = set_mode(0);
-    let source = r#"
+    assert_sensitive_test_in_subprocess("test_log_fmt_off_mode", || {
+        SENSITIVE_MODE.store(0, Ordering::SeqCst);
+        let source = r#"
         log_fmt("secret: {}", "abc-token")
         return next()
     "#;
-    let vm = make_vm(source);
-    let (result, log) = run_vm_policy_log(&vm, MockPluginSession::new(), &DslErrorPolicy::Deny);
-    assert_eq!(result, good_next());
-    assert!(
-        log.contains("secret: abc-token"),
-        "expected plain interpolation in off mode: {:?}",
-        log.log
-    );
+        let vm = make_vm(source);
+        let (result, log) = run_vm_policy_log(&vm, MockPluginSession::new(), &DslErrorPolicy::Deny);
+        assert_eq!(result, good_next());
+        assert!(
+            log.contains("secret: abc-token"),
+            "expected plain interpolation in off mode: {:?}",
+            log.log
+        );
+    });
 }
 
 #[test]
 fn test_log_fmt_replace_mode_keeps_template() {
-    let _g = set_mode(1);
-    let source = r#"
+    assert_sensitive_test_in_subprocess("test_log_fmt_replace_mode_keeps_template", || {
+        SENSITIVE_MODE.store(1, Ordering::SeqCst);
+        let source = r#"
         log_fmt("secret: {}", "abc-token")
         return next()
     "#;
-    let vm = make_vm(source);
-    let (result, log) = run_vm_policy_log(&vm, MockPluginSession::new(), &DslErrorPolicy::Deny);
-    assert_eq!(result, good_next());
-    assert!(
-        log.contains("secret: ***"),
-        "expected template preserved with masked value: {:?}",
-        log.log
-    );
-    assert!(
-        !log.contains("abc-token"),
-        "plaintext value must not appear in replace mode"
-    );
+        let vm = make_vm(source);
+        let (result, log) = run_vm_policy_log(&vm, MockPluginSession::new(), &DslErrorPolicy::Deny);
+        assert_eq!(result, good_next());
+        assert!(
+            log.contains("secret: ***"),
+            "expected template preserved with masked value: {:?}",
+            log.log
+        );
+        assert!(
+            !log.contains("abc-token"),
+            "plaintext value must not appear in replace mode"
+        );
+    });
 }
 
 #[test]
 fn test_log_fmt_wrap_mode() {
-    let _g = set_mode(2);
-    let source = r#"
+    assert_sensitive_test_in_subprocess("test_log_fmt_wrap_mode", || {
+        SENSITIVE_MODE.store(2, Ordering::SeqCst);
+        let source = r#"
         log_fmt("secret: {}", "abc-token")
         return next()
     "#;
-    let vm = make_vm(source);
-    let (result, log) = run_vm_policy_log(&vm, MockPluginSession::new(), &DslErrorPolicy::Deny);
-    assert_eq!(result, good_next());
-    assert!(
-        log.contains("secret: <E>abc-token</E>"),
-        "expected template plus wrapped value: {:?}",
-        log.log
-    );
+        let vm = make_vm(source);
+        let (result, log) = run_vm_policy_log(&vm, MockPluginSession::new(), &DslErrorPolicy::Deny);
+        assert_eq!(result, good_next());
+        assert!(
+            log.contains("secret: <E>abc-token</E>"),
+            "expected template plus wrapped value: {:?}",
+            log.log
+        );
+    });
 }
 
 #[test]
 fn test_log_fmt_multiple_args_replace_mode() {
-    let _g = set_mode(1);
-    let source = r#"
+    assert_sensitive_test_in_subprocess("test_log_fmt_multiple_args_replace_mode", || {
+        SENSITIVE_MODE.store(1, Ordering::SeqCst);
+        let source = r#"
         log_fmt("user {} ip {}", "alice", "1.2.3.4")
         return next()
     "#;
-    let vm = make_vm(source);
-    let (result, log) = run_vm_policy_log(&vm, MockPluginSession::new(), &DslErrorPolicy::Deny);
-    assert_eq!(result, good_next());
-    assert!(
-        log.contains("user *** ip ***"),
-        "expected each arg masked in order: {:?}",
-        log.log
-    );
+        let vm = make_vm(source);
+        let (result, log) = run_vm_policy_log(&vm, MockPluginSession::new(), &DslErrorPolicy::Deny);
+        assert_eq!(result, good_next());
+        assert!(
+            log.contains("user *** ip ***"),
+            "expected each arg masked in order: {:?}",
+            log.log
+        );
+    });
 }
 
 #[test]
 fn test_log_fmt_multiple_args_off_mode_order() {
-    let _g = set_mode(0);
-    // Verifies positional ordering — args render left-to-right matching `{}` order.
-    let source = r#"
+    assert_sensitive_test_in_subprocess("test_log_fmt_multiple_args_off_mode_order", || {
+        SENSITIVE_MODE.store(0, Ordering::SeqCst);
+        // Verifies positional ordering — args render left-to-right matching `{}` order.
+        let source = r#"
         log_fmt("first={} second={}", "A", "B")
         return next()
     "#;
-    let vm = make_vm(source);
-    let (result, log) = run_vm_policy_log(&vm, MockPluginSession::new(), &DslErrorPolicy::Deny);
-    assert_eq!(result, good_next());
-    assert!(
-        log.contains("first=A second=B"),
-        "args must render in source order: {:?}",
-        log.log
-    );
+        let vm = make_vm(source);
+        let (result, log) = run_vm_policy_log(&vm, MockPluginSession::new(), &DslErrorPolicy::Deny);
+        assert_eq!(result, good_next());
+        assert!(
+            log.contains("first=A second=B"),
+            "args must render in source order: {:?}",
+            log.log
+        );
+    });
 }
 
 #[test]
 fn test_log_fmt_zero_args() {
-    // `log_fmt("no placeholders")` with zero values is permitted and degenerates
-    // to a plain log entry.
-    let _g = set_mode(0);
-    let source = r#"
+    assert_sensitive_test_in_subprocess("test_log_fmt_zero_args", || {
+        SENSITIVE_MODE.store(0, Ordering::SeqCst);
+        // `log_fmt("no placeholders")` with zero values is permitted and degenerates
+        // to a plain log entry.
+        let source = r#"
         log_fmt("a static event")
         return next()
     "#;
-    let vm = make_vm(source);
-    let (result, log) = run_vm_policy_log(&vm, MockPluginSession::new(), &DslErrorPolicy::Deny);
-    assert_eq!(result, good_next());
-    assert!(log.contains("a static event"), "expected static output: {:?}", log.log);
+        let vm = make_vm(source);
+        let (result, log) = run_vm_policy_log(&vm, MockPluginSession::new(), &DslErrorPolicy::Deny);
+        assert_eq!(result, good_next());
+        assert!(log.contains("a static event"), "expected static output: {:?}", log.log);
+    });
 }
 
 #[test]

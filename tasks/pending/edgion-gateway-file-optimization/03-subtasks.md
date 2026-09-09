@@ -389,7 +389,7 @@
 | `edgion-gateway/src/plugins/http/dsl/tests/grpc_error_tests.rs` | `plugins-http-dsl` | test | changed | B0265: locked nil-message translation and both invalid integer-code boundaries; independent LGTM |
 | `edgion-gateway/src/plugins/http/dsl/tests/http_call_tests.rs` | `plugins-http-dsl` | test | changed | B0266: locked the physical request-body cap in opaque outbound calls before dialing; independent LGTM |
 | `edgion-gateway/src/plugins/http/dsl/tests/mod.rs` | `plugins-http-dsl` | test | changed | B0267: corrected current-thread and multi-thread test-runtime topology docs; independent LGTM |
-| `edgion-gateway/src/plugins/http/dsl/tests/p3_utility_tests.rs` | `plugins-http-dsl` | test | analysis-in-progress | B0268: full-file utility test/value analysis; B0129 covered only bounded LogFmt regressions |
+| `edgion-gateway/src/plugins/http/dsl/tests/p3_utility_tests.rs` | `plugins-http-dsl` | test | changed | B0268: bounded Join/UUID regression coverage and 14 isolated sensitive-mode tests; independent PASS, full DSL 373/373 |
 | `edgion-gateway/src/plugins/http/dsl/tests/property_bytecode.rs` | `plugins-http-dsl` | test | pending | — |
 | `edgion-gateway/src/plugins/http/dsl/tests/range_and_string_ops.rs` | `plugins-http-dsl` | test | pending | — |
 | `edgion-gateway/src/plugins/http/dsl/tests/redis_builtins.rs` | `plugins-http-dsl` | test | pending | — |
