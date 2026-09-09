@@ -2,7 +2,7 @@
 
 ## Scope
 
-- Pipeline state: verified changed; awaiting local commit.
+- Pipeline state: terminal; local commit `3786c2cd`.
 - Active anchor crate: `edgion-gateway`.
 - Target: `edgion-gateway/src/runtime/server/error_response.rs`.
 - Baseline: `72454f81`.
@@ -44,4 +44,4 @@
 
 - Final reviewer LGTM; no Must Fix/Should Fix. Full current source, actual callers, exact body/ownership semantics and both knowledge conclusions checked. D0126 independently confirmed as a pre-existing source-reachable defect with no client-specific interpretation or fresh reproduction claim.
 - Fresh error-response tests 11/11 and final-downstream-status tests 8/8 passed. Workspace format/check/Clippy (existing warnings), docs, SSA, metrics, Pingora source, Gateway tracing, English-only, diff and integration freeze passed. Logs: `/tmp/edgion-b0224-{error-response,final-status,check,clippy}.log`.
-- Final source blob `b749f823461f9740e8bfc4df0d6f82aee7a326c5`. No integration changes; existing nine tests retained. Ledger/changelog updated; commit pending, local only.
+- Final source blob `b749f823461f9740e8bfc4df0d6f82aee7a326c5`. No integration changes; existing nine tests retained. Ledger/changelog updated; commit `3786c2cd`, local only.

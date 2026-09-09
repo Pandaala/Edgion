@@ -2,7 +2,7 @@
 
 ## Scope
 
-- Pipeline state: analysis-ready; queued, not active mutation.
+- Pipeline state: verified examined-no-change; awaiting local commit.
 - Active anchor crate: `edgion-gateway`.
 - Target: `edgion-gateway/src/runtime/server/mod.rs`.
 - Baseline: `b5e8156b`.
@@ -17,3 +17,14 @@
 - Retain explicit exports/visibility; no style-only rewrite or synthetic facade tests. Queued B0224 owns response implementation and its existing follow-up, not this batch.
 - Original knowledge: Gateway startup/shutdown architecture, Rust/unit-testing rules and h2-grpc `compatibility-constraints/trailers-only-three-frame.md`, whose resolved historical banner must not motivate current facade changes.
 - At promotion verify current exports after B0224, independently review and run compile/gates (optionally runtime server tests). No new issue or integration requirement.
+
+## Promotion
+
+- Original analyst refreshed at `3786c2cd`; target/server/runtime/lib exports and actual consumers unchanged. B0224 only changed a private HTML parameter/template/tests, not the facade contract; updated encoding/sentinel knowledge read directly.
+- Empty technical allow-list. Coordinator record scope: main task, ledger, changelog, B0224 SHA backfill, this record and B0226 resumed analysis record. Existing integrations and protected handoff/WAF paths unchanged; freeze passed before promotion.
+
+## Independent Review and Verification
+
+- Fresh `b0225_final_review` LGTM, no Must Fix. Complete facade, distinct crate-private writers and real server/helper consumers verified after B0224; explicit exports retained with no synthetic tests or style changes.
+- Fresh runtime server tests 26/26 passed (`/tmp/edgion-b0225-server.log`). Workspace format/check/Clippy (existing warnings), docs, SSA, metrics, Pingora source, Gateway tracing, English-only, diff and integration freeze passed.
+- No source or integration changes. D0126 remains separate. Ledger/changelog updated; commit pending, local only.
