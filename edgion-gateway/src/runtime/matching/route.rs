@@ -215,12 +215,16 @@ mod tests {
         allowed_routes: Option<AllowedRoutes>,
     ) -> ListenerEntry {
         ListenerEntry {
-            info: Arc::new(GatewayInfo {
-                namespace: Some(gateway_ns.to_string()),
-                name: gateway_name.to_string(),
-                listener_name: listener_name.map(str::to_string),
-                ..Default::default()
-            }),
+            info: Arc::new(GatewayInfo::new(
+                Some(gateway_ns.to_string()),
+                gateway_name.to_string(),
+                listener_name.map(str::to_string),
+                None,
+                None,
+                None,
+                Vec::new(),
+                None,
+            )),
             hostname: hostname.map(str::to_string),
             allowed_routes,
         }
@@ -325,7 +329,7 @@ mod tests {
 
         let matched = check_gateway_listener_match(&parent_refs, &index, "example.com", "gw-ns", "HTTPRoute")
             .expect("one of the two gateways must match");
-        assert_eq!(matched.name, "first");
+        assert_eq!(matched.gateway_name(), "first");
     }
 
     /// Listener hostname isolation is unaffected by the refactor.

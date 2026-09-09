@@ -134,8 +134,9 @@ pub(crate) async fn try_get_peer(
     is_grpc: bool,
     selected_http: Option<&SelectedLogicalBackend>,
 ) -> Result<Box<HttpPeer>, EdgionErrorCode> {
-    let gateway_key = ctx.gateway_info.as_deref().map(GatewayInfo::gateway_key);
-    let gateway_key_ref = gateway_key.as_deref();
+    // Keep the shared identity alive while peer selection mutates the context.
+    let gateway_info = ctx.gateway_info.clone();
+    let gateway_key_ref = gateway_info.as_deref().map(GatewayInfo::gateway_key);
 
     // HTTP routed Service identity comes exclusively from the selected proof.
     // gRPC and Invalid retain their existing context compatibility input.

@@ -1447,9 +1447,7 @@ fn try_direct_endpoint_peer(
     let policy = direct.tls_policy.clone();
     let gateway_key = ctx.gateway_info.as_deref().map(|gateway| gateway.gateway_key());
     let peer = crate::backends::validate_endpoint_backend_addr(&addr, ctx.allow_loopback_upstream)
-        .and_then(|()| {
-            crate::backends::peer_builder::peer_from_backend_tls_lookup(addr, &policy, gateway_key.as_deref())
-        })
+        .and_then(|()| crate::backends::peer_builder::peer_from_backend_tls_lookup(addr, &policy, gateway_key))
         .map_err(|status| {
             ctx.record_error(status);
             PingoraError::explain(ErrorType::ConnectError, "direct endpoint unavailable")

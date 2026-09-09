@@ -5,7 +5,9 @@
 //! port-based GatewayInfo store.
 
 use crate::observe::metrics::TestType;
+use crate::runtime::store::listener_gateway_info::format_gateway_key;
 use edgion_common::dns::resolver_select::ResolverCandidate;
+use std::fmt;
 
 /// Gateway information for route matching context
 ///
@@ -18,12 +20,14 @@ use edgion_common::dns::resolver_select::ResolverCandidate;
 /// Note: Listener configuration (hostname, allowedRoutes) is resolved through
 /// `ListenerGatewayInfoStore::GatewayInfoIndex`, which is rebuilt on every
 /// Gateway change to support hot-reload.
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub struct GatewayInfo {
     /// Gateway namespace (None for cluster-scoped or default namespace)
-    pub namespace: Option<String>,
+    namespace: Option<String>,
     /// Gateway name
-    pub name: String,
+    name: String,
+    /// Canonical identity key, resolved once for this Gateway/listener generation.
+    gateway_key: String,
     /// Current listener name (required for listener-specific config lookup)
     pub listener_name: Option<String>,
 
@@ -64,9 +68,11 @@ impl GatewayInfo {
         plugin_store_keys: Vec<String>,
         dns_resolver_candidate: Option<ResolverCandidate>,
     ) -> Self {
+        let gateway_key = format_gateway_key(namespace.as_deref().unwrap_or(""), &name);
         Self {
             namespace,
             name,
+            gateway_key,
             listener_name,
             metrics_test_key,
             metrics_test_type,
@@ -76,12 +82,14 @@ impl GatewayInfo {
         }
     }
 
-    /// Build Gateway Key: "{namespace}/{name}" or just "{name}" if no namespace
-    pub fn gateway_key(&self) -> String {
-        match &self.namespace {
-            Some(ns) if !ns.is_empty() => format!("{}/{}", ns, self.name),
-            _ => self.name.clone(),
-        }
+    /// Borrow the precomputed Gateway key without allocating on the request path.
+    pub fn gateway_key(&self) -> &str {
+        &self.gateway_key
+    }
+
+    /// Borrow the raw namespace, preserving an absent versus explicitly empty value.
+    pub fn namespace(&self) -> Option<&str> {
+        self.namespace.as_deref()
     }
 
     /// Get gateway namespace for metrics (returns empty string if None)
@@ -94,5 +102,83 @@ impl GatewayInfo {
     #[inline]
     pub fn gateway_name(&self) -> &str {
         &self.name
+    }
+}
+
+impl fmt::Debug for GatewayInfo {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("GatewayInfo")
+            .field("namespace", &self.namespace)
+            .field("name", &self.name)
+            .field("listener_name", &self.listener_name)
+            .field("metrics_test_key", &self.metrics_test_key)
+            .field("metrics_test_type", &self.metrics_test_type)
+            .field("require_sni_host_match", &self.require_sni_host_match)
+            .field("plugin_store_keys", &self.plugin_store_keys)
+            .field("dns_resolver_candidate", &self.dns_resolver_candidate)
+            .finish()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+
+    #[test]
+    fn identity_keys_preserve_raw_namespace_and_canonical_format() {
+        for (namespace, name, expected) in [
+            (None, "gateway", "gateway"),
+            (Some(""), "gateway", "gateway"),
+            (Some("first"), "gateway", "first/gateway"),
+            (Some("second"), "gateway", "second/gateway"),
+            (None, "", ""),
+            (Some(""), "", ""),
+            (Some("first"), "", "first/"),
+        ] {
+            let info = GatewayInfo::new(
+                namespace.map(str::to_owned),
+                name.to_owned(),
+                None,
+                None,
+                None,
+                None,
+                Vec::new(),
+                None,
+            );
+            assert_eq!(info.namespace(), namespace);
+            assert_eq!(info.gateway_namespace(), namespace.unwrap_or(""));
+            assert_eq!(info.gateway_name(), name);
+            assert_eq!(info.gateway_key(), expected);
+            assert_eq!(info.gateway_key(), format_gateway_key(namespace.unwrap_or(""), name));
+        }
+    }
+
+    #[test]
+    fn default_identity_and_debug_remain_unchanged() {
+        let info = GatewayInfo::default();
+        assert_eq!(info.namespace(), None);
+        assert_eq!(info.gateway_namespace(), "");
+        assert_eq!(info.gateway_name(), "");
+        assert_eq!(info.gateway_key(), "");
+        assert_eq!(format!("{info:?}"), "GatewayInfo { namespace: None, name: \"\", listener_name: None, metrics_test_key: None, metrics_test_type: None, require_sni_host_match: None, plugin_store_keys: [], dns_resolver_candidate: None }");
+    }
+
+    #[test]
+    fn shared_generation_borrows_the_same_key_storage() {
+        let info = Arc::new(GatewayInfo::new(
+            Some("team".to_owned()),
+            "gateway".to_owned(),
+            Some("http".to_owned()),
+            Some("test-key".to_owned()),
+            None,
+            Some(true),
+            vec!["team/plugin".to_owned()],
+            None,
+        ));
+        let shared = Arc::clone(&info);
+        assert_eq!(info.gateway_key().as_ptr(), info.gateway_key().as_ptr());
+        assert_eq!(info.gateway_key().as_ptr(), shared.gateway_key().as_ptr());
+        assert_eq!(format!("{info:?}"), "GatewayInfo { namespace: Some(\"team\"), name: \"gateway\", listener_name: Some(\"http\"), metrics_test_key: Some(\"test-key\"), metrics_test_type: None, require_sni_host_match: Some(true), plugin_store_keys: [\"team/plugin\"], dns_resolver_candidate: None }");
     }
 }

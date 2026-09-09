@@ -36,6 +36,7 @@ before applying a decision to current code.
 - [`DomainRouteRules` Inner `ArcSwap` Fields Removed (REAL FIX)](regression-guards/domain-route-rules-inner-arcswap-removed.md)
 - [`url_encode` builds incrementally and bails on overflow (fixed)](regression-guards/dsl-url-encode-streaming-bail.md)
 - [`GlobalConnectionIpRestrictionPlugin` Per-Connection Store-Key `format!` — FIXED (F-008)](regression-guards/gcir-stream-plugin-store-key-precompute.md)
+- [Gateway identity keys are precomputed per shared generation](regression-guards/gateway-identity-key-precomputation.md)
 - [Header-only HMAC condition verifier is prebuilt — FIXED (cl-05)](regression-guards/header-hmac-condition-verifier-prebuilt.md)
 - [Local Response Bodies Are Clone-cheap Immutable `Bytes` — FIXED](regression-guards/local-response-body-is-clone-cheap-bytes.md)
 - [LRU Expiration Maintenance Is a Bounded Ordered Index — FIXED](regression-guards/lru-bounded-expiration-index.md)

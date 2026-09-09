@@ -2,7 +2,7 @@
 
 ## Scope
 
-- Pipeline state: analysis-ready; queued, not the active mutation batch.
+- Pipeline state: verified changed; local commit authorized, serial lane retained until commit.
 - Active anchor crate: `edgion-gateway`.
 - Target: `edgion-gateway/src/runtime/gateway_info.rs`.
 - Baseline: `2f51deff`.
@@ -20,3 +20,31 @@
 - Matching tests contain the only identity literal and direct name assertion. Ordinary peer selection may clone the existing GatewayInfo Arc to borrow its key while mutating context; never retain an extra PGIS guard or deep-copy info. Support paths do not gain independent coverage credit.
 - Preserve dynamic backend TLS store lookup and policy-client-certificate priority, PGIS flat/index Arc identity, old-request generation, metrics getters, endpoint/DNS safety and config/body/client-IP ownership. Do not confuse the separate precomputed parentRef key with this allocation.
 - Required plan review covers all identity callers, borrow boundaries, debug and empty/default cases. Verification includes new identity cases, PGIS sharing/generations, matching, peer-builder/DirectEndpoint/AllEndpointStatus filters. No integration changes required for the proposed ownership proof.
+
+## Promotion
+
+- Original analyst revalidated at `ede9c526`: all six source files unchanged, four key consumers and sole test literal unchanged; fresh PGIS tests 9/9 passed.
+- Implementer: `b0217_implementation`, phase 1 plan only. Eight technical paths above are the frozen allow-list; supporting files receive no independent coverage credit.
+- Existing integrations remain immutable, and new integration requirements become deferred tasks. User-owned handoff/WAF paths remain untouched.
+- After the verified handoff, the user explicitly reaffirmed automatic local commits for every campaign batch, never push; no further per-batch confirmation is required.
+
+## Implementation Plan
+
+1. Encapsulate namespace/name and compute the canonical String key in the constructor; borrow it through the getter, preserve Default/metric getters and original eight-field Debug, and expose raw optional namespace read-only.
+2. Adapt the cold PGIS index ownership and sole matching test literal/assertion, preserving flat/index Arc identity and atomic publication.
+3. Borrow keys in all three request consumers; use only an existing GatewayInfo Arc clone where mutable context needs independent ownership. Keep dynamic TLS lookup, policy priority and endpoint safety unchanged.
+4. Add inline identity/default/Debug/backing-byte assertions and PGIS sharing/old-new identity generation assertions; retain existing tests and integrations unchanged.
+5. Add one ownership regression guard and its cpu-memory index link, documenting retained storage cost and excluding latency/whole-path allocation claims.
+6. Run identity, PGIS, matching, peer-builder, backend, DirectEndpoint and AllEndpointStatus test filters, scoped formatting, compile and doc checks; then independent final review and coordinator workspace gates.
+
+- Plan reviewer: `b0217_plan_review`; Approved at `ede9c526`, no Must Fix. Independently confirmed the mutable/async ordinary peer path needs a local existing Arc owner, other key borrows end before mutation/awaits, and dynamic TLS semantics remain uncached. Phase 2 authorized to the original implementer.
+- Stop for hidden consumers outside the eight-path scope, semantic borrowing changes, overlapping external source edits or broader defects; revise the plan before any scope/strategy deviation.
+
+## Implementation and Verification
+
+- Implementer completed exactly the eight technical paths. Private immutable identity owns one canonical key; three request consumers borrow it, with only an existing Arc handle retained across the ordinary peer path. Cold PGIS indexing owns its key copy. Default, raw namespace, original Debug and dynamic TLS semantics are preserved.
+- Fresh implementer filters passed: identity 3/3, PGIS 10/10, matching 41/41, peer builder 15/15, backends 253/253, upstream peer 92/92 and AllEndpointStatus 18/18. The planned `backends::tests::` filter selected zero tests; the broader `backends::` run covers the actual inline test module.
+- Gateway library check and scoped formatting passed. Coordinator workspace format/check/Clippy, Gateway binary build, docs (1,266 files), SSA, metrics, Pingora source, Gateway tracing, English-only, diff and 3,120-file freeze passed. Clippy retains the recorded 983 Gateway lib-test warnings; no warning-free claim.
+- Final reviewer: `b0217_final_review`, separate from analyst, implementer and plan reviewer; LGTM with no Must Fix, Should Fix or new deferred finding. Independently verified complete consumers, dynamic TLS and the ownership knowledge claim; fresh identity 3/3, PGIS 10/10 and peer builder 15/15 passed. The broader backend filter covers the actual selected-service tests.
+- No integration or protected-path changes. No whole-workspace unit/integration run or measured latency/whole-request allocation claim. D0119's pre-existing broad context layout failures are not claimed fixed by these targeted checks.
+- Verification logs: `/tmp/edgion-b0217-{check,clippy,build}.log`, implementer `edgion-b0217-impl-*.log` and independent `edgion-b0217-final-review-*.log`. Local commit authorized; no push. B0218/B0219 remain queued until this commit completes.

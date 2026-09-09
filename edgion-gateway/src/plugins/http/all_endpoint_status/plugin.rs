@@ -1265,7 +1265,7 @@ impl RequestFilter for AllEndpointStatus {
                     allow_loopback,
                     &discovery,
                     &policies,
-                    gateway_key.as_deref(),
+                    gateway_key,
                 )
             },
         );

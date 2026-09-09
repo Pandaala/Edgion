@@ -302,7 +302,7 @@ impl ListenerGatewayInfoStore {
                     dns_resolver_candidate.clone(),
                 ));
 
-                let gateway_key = gi.gateway_key();
+                let gateway_key = gi.gateway_key().to_owned();
                 let entry = ListenerEntry {
                     info: Arc::clone(&gi),
                     hostname: listener.hostname.clone(),
@@ -598,6 +598,8 @@ mod tests {
 
         assert_eq!(flat.len(), 1);
         assert!(Arc::ptr_eq(&flat[0], &indexed.info));
+        assert_eq!(flat[0].gateway_key(), "default/test-gw");
+        assert_eq!(flat[0].gateway_key().as_ptr(), indexed.info.gateway_key().as_ptr());
     }
 
     #[test]
@@ -627,5 +629,33 @@ mod tests {
         assert!(!Arc::ptr_eq(&old, &new));
         assert_eq!(old.metrics_test_key.as_deref(), Some("old-generation"));
         assert_eq!(new.metrics_test_key.as_deref(), Some("new-generation"));
+        assert_eq!(old.gateway_key(), "default/test-gw");
+        assert_eq!(new.gateway_key(), "default/test-gw");
+    }
+
+    #[test]
+    fn retained_gateway_identity_survives_store_replacement() {
+        let store = ListenerGatewayInfoStore::new();
+        let key = ListenerKey::new("0.0.0.0:443".parse().unwrap(), "HTTPS");
+        let mut gateway = make_gateway(
+            "https",
+            vec![make_condition("Accepted", "True"), make_condition("Programmed", "True")],
+        );
+        store.rebuild(&[gateway.clone()]);
+        let old = Arc::clone(&store.get(&key)[0]);
+        gateway.metadata.namespace = Some("new-namespace".to_owned());
+        gateway.metadata.name = Some("new-gateway".to_owned());
+        store.rebuild(&[gateway]);
+
+        let index = store.get_index(&key);
+        assert!(index.get("default/test-gw", "https").is_none());
+        let new = &index.get("new-namespace/new-gateway", "https").unwrap().info;
+        assert_eq!(old.namespace(), Some("default"));
+        assert_eq!(old.gateway_name(), "test-gw");
+        assert_eq!(old.gateway_key(), "default/test-gw");
+        assert_eq!(new.namespace(), Some("new-namespace"));
+        assert_eq!(new.gateway_name(), "new-gateway");
+        assert_eq!(new.gateway_key(), "new-namespace/new-gateway");
+        assert!(!Arc::ptr_eq(&old, new));
     }
 }
