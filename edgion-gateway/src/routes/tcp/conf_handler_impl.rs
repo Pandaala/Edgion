@@ -3,7 +3,7 @@ use crate::routes::tcp::route_unit::TcpRouteUnit;
 use crate::routes::tcp::routes_mgr::{
     get_global_tcp_route_managers, resolved_listeners_for_route, GlobalTcpRouteManagers,
 };
-use edgion_common::conf_sync::traits::{arc_map_into_owned, ConfHandler};
+use edgion_common::conf_sync::traits::ConfHandler;
 use edgion_resources::TCPRoute;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -24,7 +24,7 @@ impl ConfHandler<TCPRoute> for GlobalTcpRouteManagers {
         self.clear_route_cache();
 
         for (key, route) in data {
-            match self.initialize_route((**route).clone()) {
+            match self.initialize_route(Arc::clone(route)) {
                 Ok(initialized) => {
                     self.insert_route(initialized);
                 }
@@ -62,13 +62,10 @@ impl ConfHandler<TCPRoute> for GlobalTcpRouteManagers {
             "partial update"
         );
 
-        let add_owned = arc_map_into_owned(add);
-        let update_owned = arc_map_into_owned(update);
-
         apply_l4_partial_update(
             "TCPRoute",
-            add_owned,
-            update_owned,
+            add,
+            update,
             remove,
             |key| self.get_route(key),
             |u| resolved_listeners_for_route(&u.route).to_vec(),
@@ -93,8 +90,8 @@ impl GlobalTcpRouteManagers {
     /// never resets this route's `backend_finder` WRR cursor. The compiled
     /// runtime (BackendSelector, stream-plugin store key, keepalive config) lives
     /// on the unit, not on the schema — see [`TcpRouteUnit::from_route`].
-    fn initialize_route(&self, route: TCPRoute) -> Result<Arc<TcpRouteUnit>, String> {
-        Ok(Arc::new(TcpRouteUnit::from_route(Arc::new(route))))
+    fn initialize_route(&self, route: Arc<TCPRoute>) -> Result<Arc<TcpRouteUnit>, String> {
+        Ok(Arc::new(TcpRouteUnit::from_route(route)))
     }
 }
 
@@ -168,6 +165,11 @@ mod tests {
 
         managers.full_set(&data);
 
+        for (key, source) in &data {
+            let cached = managers.get_route(key).unwrap();
+            assert!(Arc::ptr_eq(source, &cached.route));
+        }
+
         let mgr9000 = managers.get_or_create_listener_manager(&key9000);
         assert!(mgr9000.load_route_table().match_route().is_some());
 
@@ -177,6 +179,77 @@ mod tests {
         let key9002 = make_listener_key(9002, "TCP");
         let mgr9002 = managers.get_or_create_listener_manager(&key9002);
         assert!(mgr9002.load_route_table().match_route().is_none());
+    }
+
+    #[test]
+    fn test_partial_update_shares_schema_and_preserves_prior_generation() {
+        let managers = GlobalTcpRouteManagers::new();
+        let old_listener = make_listener_key(9400, "TCP");
+        let new_listener = make_listener_key(9401, "TCP");
+        let source = Arc::new(create_test_tcp_route(
+            "default",
+            "a-moving",
+            "gateway",
+            "old",
+            9400,
+            old_listener.clone(),
+        ));
+        let sibling_source = Arc::new(create_test_tcp_route(
+            "default",
+            "z-sibling",
+            "gateway",
+            "new",
+            9401,
+            new_listener.clone(),
+        ));
+        managers.partial_update(
+            HashMap::from([
+                ("default/a-moving".to_string(), Arc::clone(&source)),
+                ("default/z-sibling".to_string(), Arc::clone(&sibling_source)),
+            ]),
+            HashMap::new(),
+            HashSet::new(),
+        );
+        let prior = managers.get_route("default/a-moving").unwrap();
+        let sibling = managers.get_route("default/z-sibling").unwrap();
+        assert!(Arc::ptr_eq(&source, &prior.route));
+        assert!(Arc::ptr_eq(&sibling_source, &sibling.route));
+        let old_manager = managers.get_or_create_listener_manager(&old_listener);
+        let old_snapshot = Arc::clone(&old_manager.load_route_table());
+        assert!(Arc::ptr_eq(&prior, &old_snapshot.match_route().unwrap()));
+
+        let mut updated = (*source).clone();
+        updated.spec.resolved_listeners = Some(vec![new_listener.clone()]);
+        let parent = &mut updated.spec.parent_refs.as_mut().unwrap()[0];
+        parent.section_name = Some("new".to_string());
+        parent.port = Some(9401);
+        updated.spec.rules.as_mut().unwrap()[0].backend_refs.as_mut().unwrap()[0].name = "new-service".to_string();
+        let updated = Arc::new(updated);
+        managers.partial_update(
+            HashMap::new(),
+            HashMap::from([("default/a-moving".to_string(), Arc::clone(&updated))]),
+            HashSet::new(),
+        );
+
+        let current = managers.get_route("default/a-moving").unwrap();
+        assert!(Arc::ptr_eq(&updated, &current.route));
+        assert!(!Arc::ptr_eq(&prior, &current));
+        assert!(old_manager.load_route_table().match_route().is_none());
+        let new_manager = managers.get_or_create_listener_manager(&new_listener);
+        assert!(Arc::ptr_eq(
+            &current,
+            &new_manager.load_route_table().match_route().unwrap()
+        ));
+        assert_eq!(current.backend_finder.select().unwrap().name, "new-service");
+
+        // Retained input and in-flight snapshots keep the previous generation.
+        assert_eq!(resolved_listeners_for_route(&source), &[old_listener]);
+        assert!(Arc::ptr_eq(&prior, &old_snapshot.match_route().unwrap()));
+        assert!(Arc::ptr_eq(&source, &prior.route));
+        assert_eq!(prior.backend_finder.select().unwrap().name, "test-service");
+        let sibling_after = managers.get_route("default/z-sibling").unwrap();
+        assert!(Arc::ptr_eq(&sibling, &sibling_after));
+        assert!(Arc::ptr_eq(&sibling.backend_finder, &sibling_after.backend_finder));
     }
 
     #[test]

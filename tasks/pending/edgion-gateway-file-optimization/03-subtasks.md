@@ -633,9 +633,9 @@
 | `edgion-gateway/src/routes/l4_partial_update.rs` | `routes-shared` | source | examined-no-change | B0197: incremental listener ownership and per-listener publication verified |
 | `edgion-gateway/src/routes/l4_rebuild.rs` | `routes-shared` | source | changed | B0169: shared L4 clear-on-remove invariant |
 | `edgion-gateway/src/routes/mod.rs` | `routes-shared` | source | changed | B0168: remove legacy singular gRPC manager re-export |
-| `edgion-gateway/src/routes/tcp/conf_handler_impl.rs` | `routes-shared` | source | analysis-ready | B0198: preserve immutable input schema Arcs across full/delta updates |
-| `edgion-gateway/src/routes/tcp/edgion_tcp.rs` | `routes-shared` | source | analysis-in-progress | B0199: inspect TCP accept/connect/relay lifecycle and trust boundaries |
-| `edgion-gateway/src/routes/tcp/mod.rs` | `routes-shared` | source | pending | — |
+| `edgion-gateway/src/routes/tcp/conf_handler_impl.rs` | `routes-shared` | source | changed | B0198: preserve immutable input schema Arcs across full/delta updates |
+| `edgion-gateway/src/routes/tcp/edgion_tcp.rs` | `routes-shared` | source | analysis-ready | B0199: shorten table-guard ownership and remove address String clone |
+| `edgion-gateway/src/routes/tcp/mod.rs` | `routes-shared` | source | analysis-ready | B0200: no worthwhile export/visibility change |
 | `edgion-gateway/src/routes/tcp/route_unit.rs` | `routes-shared` | source | pending | — |
 | `edgion-gateway/src/routes/tcp/routes_mgr.rs` | `routes-shared` | source | changed | B0169: retained nonempty manager tests for shared L4 removal |
 | `edgion-gateway/src/routes/tcp/tcp_route_table.rs` | `routes-shared` | source | pending | — |

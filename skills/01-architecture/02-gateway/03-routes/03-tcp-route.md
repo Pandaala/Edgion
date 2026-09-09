@@ -16,6 +16,7 @@ edgion-gateway/src/routes/tcp/
 ├── mod.rs                # module entry and type exports
 ├── conf_handler_impl.rs  # ConfHandler<TCPRoute> implementation
 ├── routes_mgr.rs         # TcpPortRouteManager / GlobalTcpRouteManagers
+├── route_unit.rs         # compiled TcpRouteUnit companion
 ├── tcp_route_table.rs    # TcpRouteTable: per-listener immutable route snapshot
 └── edgion_tcp.rs         # EdgionTcpProxy: TCP proxy implementation
 ```
@@ -26,26 +27,41 @@ edgion-gateway/src/routes/tcp/
 
 ```rust
 pub struct TcpRouteTable {
-    routes: Vec<Arc<TCPRoute>>,
+    routes: Vec<Arc<TcpRouteUnit>>,
 }
 ```
 
-- **Build**: `from_routes` collects all routes from `HashMap<String, Arc<TCPRoute>>` into a Vec.
-- **Match**: `match_route()` uses first-match semantics — returns `routes.first()` directly.
+- **Build**: `from_units` Arc-clones cached compiled units into a Vec and sorts by resource key (`namespace/name`) for deterministic selection.
+- **Match**: `match_route()` uses first-match semantics — clones the first unit's Arc.
 - TCP has no hostname dimension (unlike TLS's SNI matching), so no `HashHost` index is needed.
 - Per the Gateway API spec, each TCP listener is typically bound to at most one TCPRoute.
 
 ## Route management, bucketing, rebuild, ConfHandler
 
-`GlobalTcpRouteManagers` (`route_cache` + `by_listener → TcpPortRouteManager → ArcSwap<TcpRouteTable>`) follows the shared L4 per-listener management pattern — listener bucketing via `resolved_listeners`, `rebuild_all`/`rebuild_affected`, and `full_set`/`partial_update` ConfHandler semantics. See [SKILL.md → Shared L4 per-listener management](SKILL.md#shared-l4-per-listener-management-tcp--tls--udp).
+`GlobalTcpRouteManagers` caches `Arc<TcpRouteUnit>` by resource key, with
+`by_listener → TcpPortRouteManager → ArcSwap<TcpRouteTable>` for publication.
+The handler compiles each incoming route generation once. `full_set` clones the
+incoming `Arc<TCPRoute>` handle; `partial_update` moves incoming handles through
+the shared L4 delta helper. Neither path deep-copies the immutable schema.
+The unit retains that schema Arc and owns the compiled backend selector,
+stream-plugin store key, and keepalive configuration.
+
+Listener bucketing uses `resolved_listeners`. Full replacement rebuilds all
+listener tables; deltas rebuild only affected listeners under the existing
+rebuild lock. Rebuilds reuse cached units, preserving unchanged siblings' WRR
+cursors. Old snapshots retain old units; new schema generations create new
+units. Empty/removed listener managers are cleared, including handles retained
+by proxies. See the [shared L4 orchestration](SKILL.md#shared-l4-per-listener-management-tcp--tls--udp)
+for bucketing and clear-pass mechanics, and the
+[schema-sharing regression guard](../../../04-review/routing/regression-guards/tcp-route-schema-arc-sharing.md).
 
 ## TCP proxy
 
 `EdgionTcpProxy` is the core TCP proxy implementation:
 
 - Holds an `Arc<TcpPortRouteManager>` and gets the current snapshot via `load_route_table()`.
-- Calls `match_route()` once per connection to obtain the route.
-- Selects a backend from the route's `backend_refs` and establishes an upstream TCP connection.
+- Calls `match_route()` once per connection to obtain the compiled unit and its schema.
+- Selects a backend through the unit's compiled `backend_finder` and establishes an upstream TCP connection after the existing backend checks.
 - Forwards data transparently in both directions, never parsing the application layer.
 
 ## Key source files
@@ -54,5 +70,6 @@ pub struct TcpRouteTable {
 |------|----------------|
 | `edgion-gateway/src/routes/tcp/routes_mgr.rs` | GlobalTcpRouteManagers, TcpPortRouteManager |
 | `edgion-gateway/src/routes/tcp/tcp_route_table.rs` | TcpRouteTable |
+| `edgion-gateway/src/routes/tcp/route_unit.rs` | TcpRouteUnit and compiled per-route state |
 | `edgion-gateway/src/routes/tcp/edgion_tcp.rs` | EdgionTcpProxy |
 | `edgion-gateway/src/routes/tcp/conf_handler_impl.rs` | ConfHandler<TCPRoute> implementation |
