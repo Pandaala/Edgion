@@ -19,6 +19,7 @@ Align the English and Chinese DSL sandbox security guides with the fixed panic d
 - Update both DSL sandbox security pages:
   - `docs/en/user-guide/http-route/filters/edgion-plugins/dsl/sandbox-security.md`
   - `docs/zh-CN/user-guide/http-route/filters/edgion-plugins/dsl/sandbox-security.md`
+- Reconcile `skills/04-review/dsl/regression-guards/chrono-display-panic.md`, which still claims VM execution lacks a top-level panic boundary, against the current `execute_safe` behavior. Update the DSL review index only if its link or title must change.
 - State that `execute_safe` discards the panic payload and records only the fixed `vm panic` classification; do not claim that panic messages, script names, or trigger details are logged.
 - Distinguish outbound `http.call` response-stream failure, which returns the documented atomic failure map, from request-body upload/read failure, which enters the fixed `BodyAccess` fail-close path.
 - Verify all nearby error-policy and observability statements against current runtime code and maintained DSL knowledge before editing.
@@ -28,7 +29,7 @@ Align the English and Chinese DSL sandbox security guides with the fixed panic d
 
 ### In scope
 
-- The two sandbox security pages and directly necessary documentation links.
+- The two sandbox security pages, the chrono-display panic regression guard, and only directly necessary documentation links.
 
 ### Out of scope
 

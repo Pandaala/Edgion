@@ -10,10 +10,10 @@
 | Priority | P1 |
 | Baseline commit | `d484e580` |
 | Scope | Every tracked file under `edgion-gateway/` |
-| Campaign status | in-progress at campaign HEAD `efd98773`; B0256 implementation, independent final review, and full verification are complete, with commit pending. |
-| Coverage | 549 current Gateway files: 238 changed, 185 examined-no-change, 14 deferred, 112 non-terminal; 3 historical rows are removed. The new canonical bounded-regex helper is included in the current inventory. Four terminal files changed by external `bea47373` remain reopened without discarding their historical evidence. |
-| Active batch | B0256: DSL per-generation runtime lifecycle and directly owning architecture/SSRF knowledge; independent final LGTM and full commit gates passed. Automatic local batch commits authorized, never push. |
-| Analysis queue | B0257 (`dsl/tests/api_errors.rs`) is analysis-ready but must refresh after B0256; later DSL test files remain serial. D0127–D0133 track confirmed separate work. |
+| Campaign status | in-progress at campaign HEAD `f2d39a75`; B0257 implementation, independent final review, and full verification are complete, with commit pending. |
+| Coverage | 549 current Gateway files: 239 changed, 185 examined-no-change, 14 deferred, 111 non-terminal; 3 historical rows are removed. The new canonical bounded-regex helper is included in the current inventory. Four terminal files changed by external `bea47373` remain reopened without discarding their historical evidence. |
+| Active batch | B0257: complete DSL session-mutation API-error label coverage; independent final LGTM and full commit gates passed. Automatic local batch commits authorized, never push. |
+| Analysis queue | B0258 (`dsl/tests/body_value.rs`) is analysis-ready but must refresh after B0257; later DSL test files remain serial. D0127–D0133 track confirmed separate work. |
 | Integration freeze | 3,231 files. External `2c01a075` added 95 and refreshed 38 entries; `bea47373` and `5cd384c6` refreshed six more existing entries. All are byte/mode-identical to their commits, the full check passes, and the campaign made no integration-test edit. |
 
 ## AI guide summary

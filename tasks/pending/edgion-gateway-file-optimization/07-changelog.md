@@ -16,7 +16,9 @@ This is the single concise record of actual changes across the file-by-file audi
 
 ## Entries
 
-- B0256: corrected DSL runtime and owning knowledge to describe immutable per-plugin/config-generation construction, current request-body scanners, `rate_limits`, four policy-keyed shared HTTP clients, canonical outbound construction/proxy disablement, and current SSRF paths. Independent LGTM with no new issue; locked workspace check/Clippy and all repository guards passed. D0132 remains the sole scalar-range owner. Commit pending; no runtime or integration change; no push.
+- B0257: completed explicit `RuntimeError::ApiError.function` coverage for all 12 DSL session/context mutation wrappers by adding five exact mock failure tests and a static-label assertion helper. Independent LGTM; target 9/9, full DSL 328/328, locked workspace check/Clippy, and all repository guards passed. D0130 now explicitly owns the stale chrono panic knowledge. Commit pending; no production or integration change; no push.
+
+- B0256: corrected DSL runtime and owning knowledge to describe immutable per-plugin/config-generation construction, current request-body scanners, `rate_limits`, four policy-keyed shared HTTP clients, canonical outbound construction/proxy disablement, and current SSRF paths. Independent LGTM with no new issue; locked workspace check/Clippy and all repository guards passed. D0132 remains the sole scalar-range owner. Commit `f2d39a75`; no runtime or integration change; no push.
 
 - B0255: enforced the existing 36-byte plugin identity capacity through canonical resource-owned DSL name validation, standalone request/response Gateway factory defenses, byte-boundary tests, and bilingual docs. Independent review found and closed the public `DslPlugin::new` bypass by making it private; correction re-review LGTM. Resource/Gateway focused tests, locked workspace check/Clippy, and all repository guards passed. D0132 owns runtime scalar ranges and D0133 owns the wider malformed example audit. Commit `efd98773`; existing integrations unchanged; no push.
 

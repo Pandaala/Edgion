@@ -10,6 +10,15 @@ fn err_inject() -> crate::plugins::runtime::traits::session::PluginSessionError 
     Box::new(std::io::Error::other("injected session failure"))
 }
 
+fn assert_api_error_function(error: &RuntimeError, expected: &'static str) {
+    match error {
+        RuntimeError::ApiError { function, .. } => {
+            assert_eq!(function, expected, "unexpected ApiError function")
+        }
+        other => panic!("expected ApiError({expected}), got {other:?}"),
+    }
+}
+
 #[test]
 fn test_api_error_req_set_uri() {
     let mut session = MockPluginSession::new();
@@ -19,11 +28,7 @@ fn test_api_error_req_set_uri() {
         .times(1)
         .returning(|_| Err(err_inject()));
     let err = run_expect_runtime_err(r#"req.set_uri("/v2")"#, session);
-    assert!(
-        matches!(&err, RuntimeError::ApiError { function, .. } if function == "req.set_uri"),
-        "expected ApiError(req.set_uri), got {:?}",
-        err
-    );
+    assert_api_error_function(&err, "req.set_uri");
 }
 
 #[test]
@@ -35,11 +40,7 @@ fn test_api_error_req_set_host() {
         .times(1)
         .returning(|_| Err(err_inject()));
     let err = run_expect_runtime_err(r#"req.set_host("example.test")"#, session);
-    assert!(
-        matches!(&err, RuntimeError::ApiError { function, .. } if function == "req.set_host"),
-        "expected ApiError(req.set_host), got {:?}",
-        err
-    );
+    assert_api_error_function(&err, "req.set_host");
 }
 
 #[test]
@@ -51,11 +52,7 @@ fn test_api_error_req_set_method() {
         .times(1)
         .returning(|_| Err(err_inject()));
     let err = run_expect_runtime_err(r#"req.set_method("POST")"#, session);
-    assert!(
-        matches!(&err, RuntimeError::ApiError { function, .. } if function == "req.set_method"),
-        "expected ApiError(req.set_method), got {:?}",
-        err
-    );
+    assert_api_error_function(&err, "req.set_method");
 }
 
 #[test]
@@ -67,9 +64,65 @@ fn test_api_error_resp_set_status() {
         .times(1)
         .returning(|_| Err(err_inject()));
     let err = run_expect_runtime_err(r#"resp.set_status(200)"#, session);
-    assert!(
-        matches!(&err, RuntimeError::ApiError { function, .. } if function == "resp.set_status"),
-        "expected ApiError(resp.set_status), got {:?}",
-        err
-    );
+    assert_api_error_function(&err, "resp.set_status");
+}
+
+#[test]
+fn test_api_error_req_append_header() {
+    let mut session = MockPluginSession::new();
+    session
+        .expect_append_request_header()
+        .withf(|name, value| name == "X-Trace" && value == "second")
+        .times(1)
+        .returning(|_, _| Err(err_inject()));
+    let err = run_expect_runtime_err(r#"req.append_header("X-Trace", "second")"#, session);
+    assert_api_error_function(&err, "req.append_header");
+}
+
+#[test]
+fn test_api_error_req_remove_header() {
+    let mut session = MockPluginSession::new();
+    session
+        .expect_remove_request_header()
+        .withf(|name| name == "X-Internal")
+        .times(1)
+        .returning(|_| Err(err_inject()));
+    let err = run_expect_runtime_err(r#"req.remove_header("X-Internal")"#, session);
+    assert_api_error_function(&err, "req.remove_header");
+}
+
+#[test]
+fn test_api_error_resp_set_header() {
+    let mut session = MockPluginSession::new();
+    session
+        .expect_set_response_header()
+        .withf(|name, value| name == "Cache-Control" && value == "no-store")
+        .times(1)
+        .returning(|_, _| Err(err_inject()));
+    let err = run_expect_runtime_err(r#"resp.set_header("Cache-Control", "no-store")"#, session);
+    assert_api_error_function(&err, "resp.set_header");
+}
+
+#[test]
+fn test_api_error_resp_append_header() {
+    let mut session = MockPluginSession::new();
+    session
+        .expect_append_response_header()
+        .withf(|name, value| name == "Vary" && value == "Origin")
+        .times(1)
+        .returning(|_, _| Err(err_inject()));
+    let err = run_expect_runtime_err(r#"resp.append_header("Vary", "Origin")"#, session);
+    assert_api_error_function(&err, "resp.append_header");
+}
+
+#[test]
+fn test_api_error_resp_remove_header() {
+    let mut session = MockPluginSession::new();
+    session
+        .expect_remove_response_header()
+        .withf(|name| name == "Server")
+        .times(1)
+        .returning(|_| Err(err_inject()));
+    let err = run_expect_runtime_err(r#"resp.remove_header("Server")"#, session);
+    assert_api_error_function(&err, "resp.remove_header");
 }
