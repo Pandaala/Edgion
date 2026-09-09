@@ -188,3 +188,4 @@ These entries are backlinks only. A linked `tasks/todo` file is the editable sou
 | Reconcile route architecture ownership and rebuild documentation | pending | [task](../../../todo/route-architecture-manager-cache-documentation.md) |
 | Pre-resolve L4 listener timeouts | pending | [task](../../../todo/pre-resolve-l4-listener-timeouts.md) |
 | Refresh L4 connect-timeout knowledge | pending | [task](../../../todo/refresh-l4-connect-timeout-knowledge.md) |
+| Scope TLSRoute effective hostnames to attachments | pending (high) | [task](../../../todo/scope-tlsroute-effective-hostnames-to-attachments.md) |

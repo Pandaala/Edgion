@@ -638,9 +638,9 @@
 | `edgion-gateway/src/routes/tcp/mod.rs` | `routes-shared` | source | examined-no-change | B0200: used exports and visibility retained without unnecessary churn |
 | `edgion-gateway/src/routes/tcp/route_unit.rs` | `routes-shared` | source | examined-no-change | B0201: compiled unit ownership, selection and live plugin lookup verified |
 | `edgion-gateway/src/routes/tcp/routes_mgr.rs` | `routes-shared` | source | changed | B0169: retained nonempty manager tests for shared L4 removal |
-| `edgion-gateway/src/routes/tcp/tcp_route_table.rs` | `routes-shared` | source | analysis-ready | B0202: no runtime change; correct owning selection/ownership documentation |
+| `edgion-gateway/src/routes/tcp/tcp_route_table.rs` | `routes-shared` | source | examined-no-change | B0202: runtime retained; owning ListenerKey/order/compilation documentation corrected |
 | `edgion-gateway/src/routes/tls/conf_handler_impl.rs` | `routes-shared` | source | analysis-ready | B0203: preserve incoming TLS schema Arcs through full/delta compilation |
-| `edgion-gateway/src/routes/tls/gateway_tls_routes.rs` | `routes-shared` | source | pending | — |
+| `edgion-gateway/src/routes/tls/gateway_tls_routes.rs` | `routes-shared` | source | analysis-ready | B0204: borrow hostnames and publish only match winners; plan-first |
 | `edgion-gateway/src/routes/tls/mod.rs` | `routes-shared` | source | pending | — |
 | `edgion-gateway/src/routes/tls/passthrough_proxy.rs` | `routes-shared` | source | pending | — |
 | `edgion-gateway/src/routes/tls/proxy.rs` | `routes-shared` | source | pending | — |

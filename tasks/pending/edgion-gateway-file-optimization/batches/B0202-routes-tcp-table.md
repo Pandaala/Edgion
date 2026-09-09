@@ -2,10 +2,11 @@
 
 ## Scope
 
-- Pipeline state: analysis-ready; queued, not the active mutation batch.
+- Pipeline state: terminal.
 - Active anchor crate: `edgion-gateway`.
 - Target: `edgion-gateway/src/routes/tcp/tcp_route_table.rs`.
 - Baseline: `b833f400`.
+- Freshness confirmed at `9cb9bf86`; target, callers and owning documentation unchanged.
 - Analyst: `b0202_tcp_table_analysis`.
 - Investigate deterministic construction/order, owned match results, empty and
   compiled-unit snapshots, callers and related architecture documentation.
@@ -19,3 +20,15 @@
 - Owning resource architecture incorrectly says per-port registration-order selection and validation. Current Gateway architecture and historical gateway-routes-05 evidence establish deliberate deterministic resource-key fallback, not full Gateway API conflict arbitration.
 - Exact proposed edit scope: `skills/01-architecture/05-resources/06-tcp-route.md` only. Clarify resolved ListenerKey scope, schema Arc compilation to unit, and namespace/name ordering; link the existing Gateway page. Do not amend unrelated Controller history or create another knowledge page.
 - No source changes or new integration coverage needed. Independent review must verify both no-change value and documentation correctness.
+
+## Implementation, Review and Verification
+
+- Implementer: `b0202_documentation_implementation`; changed only the approved resource-architecture page. Clarified ListenerKey, schema compilation, namespace/name fallback and canonical Gateway link.
+- Reviewer: `b0202_independent_review`; LGTM, no Must Fix or Should Fix. Confirmed both source no-change and documentation evidence; no full conflict-arbitration claim.
+- Independent TCP tests 22/22, agent-doc (1,259 files) and diff checks passed.
+- Fresh workspace format, locked check/Clippy, SSA, metrics, Pingora, Gateway tracing, English-only and frozen checks passed. No runtime/integration changes.
+
+## Handoff
+
+- Ledger/changelog updated: yes.
+- Commit: pending automatic commit.
