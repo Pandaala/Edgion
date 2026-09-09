@@ -96,11 +96,11 @@ Additional timeout injection on macOS exposed a pre-existing shared-wrapper
 limitation: after terminating the group, `os.killpg(pid, 0)` raised EPERM and
 the wrapper returned 1 rather than 124. The same failure reproduced with a
 minimal Python sleep command, without this scenario. No scenario processes
-remained in the subsequent process listing. The cause and robust cross-platform
-handling remain tracked in
-[ITEST-DEADLINE-EPERM](../../../../tasks/todo/investigate-integration-deadline-group-probe-eperm-on-macos.md);
-the frozen shared helper is unchanged. This is a real unresolved limitation,
-not an accepted design or a passing timeout-classification check.
+remained in the subsequent process listing. The subsequent authorized
+`ITEST-DEADLINE-EPERM` fix and focused lifecycle verification are maintained in
+[owned integration deadlines](../../testing/regression-guards/integration-orchestrators-need-owned-deadlines.md).
+The helper was unchanged during D0087; its historical timeout injection was
+a failure, not an accepted design or a passing timeout-classification check.
 The minimal shared-wrapper timeout reproduction returned the expected 124 in
 the Linux container; this limits the observed failure to the tested macOS
 environment without claiming a fully diagnosed platform cause.

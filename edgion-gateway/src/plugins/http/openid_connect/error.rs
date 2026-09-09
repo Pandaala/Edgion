@@ -10,20 +10,43 @@ use jsonwebtoken::errors::ErrorKind;
 
 use super::jwt_common::map_jwt_decode_error;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum AuthResponseFailure {
+    TooLarge,
+    Read,
+    Json,
+}
+
+impl AuthResponseFailure {
+    fn log_tag(self) -> &'static str {
+        match self {
+            Self::TooLarge => "auth response too large",
+            Self::Read => "auth response read fail",
+            Self::Json => "auth response json fail",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum OidcVerifyError {
     Expired,
     InvalidFormat,
     RefreshSingleflightTimeout,
     JwksFetch(String),
+    AuthResponse(AuthResponseFailure),
+    InvalidFormatAfterIntrospection(AuthResponseFailure),
     Other { status: u16, message: String },
 }
 
 impl OidcVerifyError {
     pub(super) fn http_status(&self) -> u16 {
         match self {
-            OidcVerifyError::Expired | OidcVerifyError::InvalidFormat => 401,
-            OidcVerifyError::RefreshSingleflightTimeout | OidcVerifyError::JwksFetch(_) => 502,
+            OidcVerifyError::Expired
+            | OidcVerifyError::InvalidFormat
+            | OidcVerifyError::InvalidFormatAfterIntrospection(_) => 401,
+            OidcVerifyError::RefreshSingleflightTimeout
+            | OidcVerifyError::JwksFetch(_)
+            | OidcVerifyError::AuthResponse(_) => 502,
             OidcVerifyError::Other { status, .. } => *status,
         }
     }
@@ -31,9 +54,11 @@ impl OidcVerifyError {
     pub(super) fn user_message(&self) -> Cow<'_, str> {
         match self {
             OidcVerifyError::Expired => Cow::Borrowed("Token expired"),
-            OidcVerifyError::InvalidFormat => Cow::Borrowed("Invalid token format"),
+            OidcVerifyError::InvalidFormat | OidcVerifyError::InvalidFormatAfterIntrospection(_) => {
+                Cow::Borrowed("Invalid token format")
+            }
             OidcVerifyError::RefreshSingleflightTimeout => Cow::Borrowed("Token refresh singleflight wait timeout"),
-            OidcVerifyError::JwksFetch(_) => Cow::Borrowed("Bad Gateway"),
+            OidcVerifyError::JwksFetch(_) | OidcVerifyError::AuthResponse(_) => Cow::Borrowed("Bad Gateway"),
             OidcVerifyError::Other { message, .. } => Cow::Borrowed(message.as_str()),
         }
     }
@@ -44,6 +69,9 @@ impl OidcVerifyError {
             OidcVerifyError::InvalidFormat => "token decode fail",
             OidcVerifyError::RefreshSingleflightTimeout => "token refresh fail",
             OidcVerifyError::JwksFetch(_) => "jwks fetch fail",
+            OidcVerifyError::AuthResponse(reason) | OidcVerifyError::InvalidFormatAfterIntrospection(reason) => {
+                reason.log_tag()
+            }
             OidcVerifyError::Other { status, .. } => {
                 if *status == 502 {
                     "introspect fail"
@@ -51,6 +79,22 @@ impl OidcVerifyError {
                     "token verify fail"
                 }
             }
+        }
+    }
+
+    /// Preserve the caller's existing classification for unrelated failures.
+    pub(super) fn response_log_tag_or(&self, fallback: &'static str) -> &'static str {
+        match self {
+            Self::AuthResponse(_) | Self::InvalidFormatAfterIntrospection(_) => self.log_tag(),
+            _ => fallback,
+        }
+    }
+
+    /// Auto mode keeps its original JWT rejection while retaining safe diagnostics.
+    pub(super) fn with_introspection_failure(self, failure: Self) -> Self {
+        match (self, failure) {
+            (Self::InvalidFormat, Self::AuthResponse(reason)) => Self::InvalidFormatAfterIntrospection(reason),
+            (jwt_error, _) => jwt_error,
         }
     }
 }
@@ -71,6 +115,29 @@ pub(super) fn map_jwt_decode_error_typed(err: jsonwebtoken::errors::Error) -> Oi
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn auto_fallback_preserves_wire_status_and_static_response_reason() {
+        for reason in [
+            AuthResponseFailure::TooLarge,
+            AuthResponseFailure::Read,
+            AuthResponseFailure::Json,
+        ] {
+            let error =
+                OidcVerifyError::InvalidFormat.with_introspection_failure(OidcVerifyError::AuthResponse(reason));
+            assert_eq!(error.http_status(), 401);
+            assert_eq!(error.user_message(), "Invalid token format");
+            assert_eq!(error.log_tag(), reason.log_tag());
+            assert_eq!(error.response_log_tag_or("token verify fail"), reason.log_tag());
+        }
+        assert_eq!(
+            OidcVerifyError::InvalidFormat.with_introspection_failure(OidcVerifyError::Other {
+                status: 502,
+                message: "existing failure".into()
+            }),
+            OidcVerifyError::InvalidFormat
+        );
+    }
 
     #[test]
     fn http_status_for_typed_variants() {

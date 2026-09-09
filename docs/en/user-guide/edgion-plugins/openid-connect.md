@@ -136,6 +136,15 @@ registry is also separate from both caches.
 |-----------|------|---------|-------------|
 | `timeout` | Integer | `3` | OIDC Provider request timeout (seconds) |
 
+Token exchange, token refresh, and introspection responses have a fixed **1 MiB
+(1,048,576 bytes)** body limit, including JSON whitespace. The limit is enforced
+while reading, including chunked responses. Oversized, unreadable, or invalid JSON
+responses fail the exchange; they are never truncated and used as credentials.
+When returned to the client as an upstream error, these failures use **502 Bad
+Gateway** without provider details. Existing session-refresh fallback and
+`unauthAction` behavior still apply. In Auto mode, failed introspection after an
+invalid JWT retains the original 401 rejection. This limit is not configurable.
+
 ---
 
 ## Recommended Security Switches

@@ -69,10 +69,7 @@ impl OpenidConnect {
             });
         }
 
-        let claims: Value = resp.json().await.map_err(|e| OidcVerifyError::Other {
-            status: 502,
-            message: format!("Invalid introspection response: {}", e),
-        })?;
+        let claims: Value = super::token_exchange::read_auth_response(resp).await?;
         if !claims.get("active").and_then(|v| v.as_bool()).unwrap_or(false) {
             return Err(OidcVerifyError::Other {
                 status: 401,
@@ -228,7 +225,7 @@ impl OpenidConnect {
                         Err(jwt_error) if Self::should_auto_fallback_to_introspection(&jwt_error) => {
                             match self.verify_token_via_introspection(session, token).await {
                                 Ok(claims) => Ok(claims),
-                                Err(_) => Err(jwt_error),
+                                Err(err) => Err(jwt_error.with_introspection_failure(err)),
                             }
                         }
                         Err(err) => Err(err),

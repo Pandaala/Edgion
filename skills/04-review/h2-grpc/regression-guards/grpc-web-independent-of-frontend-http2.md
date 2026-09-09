@@ -114,8 +114,10 @@ client. A live Kubernetes run was not performed.
 
 The extra repository-wide `validate_suite_parity.sh` check failed on unrelated
 pre-existing missing entries, reproduced with the unmodified HEAD test-client
-manifest. They are tracked in
-[the inventory follow-up](../../../../tasks/todo/reconcile-k8s-integration-suite-inventory.md).
+manifest. The inventory follow-up (ITEST-K8S-INVENTORY-PARITY) was removed at
+the user's request; any future reconciliation is left to the user. Standard
+integration and Kubernetes-specific tests are separate suites, so this inventory
+difference alone does not establish a required coverage gap or a completed fix.
 These unary binary-mode cases do not establish grpc-web-text, server-streaming,
 or independent H2 frame-level coverage.
 

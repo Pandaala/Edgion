@@ -31,19 +31,45 @@ def parse_args() -> argparse.Namespace:
     return args
 
 
-def signal_group(process: subprocess.Popen, sig: signal.Signals) -> None:
+def group_has_live_members(pgid: int) -> bool:
+    """Disambiguate EPERM without treating inaccessible live processes as gone."""
+    result = subprocess.run(
+        ["ps", "-axo", "pgid=,stat="],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=1,
+    )
+    if not result.stdout.strip():
+        raise ValueError("ps returned an empty process snapshot")
+    for line in result.stdout.splitlines():
+        group, state = line.split()
+        if int(group) == pgid and not state.startswith("Z"):
+            return True
+    return False
+
+
+def try_signal_group(process: subprocess.Popen, sig: int) -> bool:
+    """Return false only when the owned group has no signalable live members."""
     try:
         os.killpg(process.pid, sig)
-    except ProcessLookupError:
-        pass
-
-
-def process_group_exists(process: subprocess.Popen) -> bool:
-    try:
-        os.killpg(process.pid, 0)
         return True
     except ProcessLookupError:
         return False
+    except PermissionError:
+        # Darwin can return EPERM for an existing group containing only zombies.
+        # Keep the leader unreaped until cleanup ends, retaining its PID ownership.
+        if group_has_live_members(process.pid):
+            raise
+        return False
+
+
+def signal_group(process: subprocess.Popen, sig: signal.Signals) -> None:
+    try_signal_group(process, sig)
+
+
+def process_group_exists(process: subprocess.Popen) -> bool:
+    return try_signal_group(process, 0)
 
 
 def terminate_group(process: subprocess.Popen, grace_secs: int) -> None:

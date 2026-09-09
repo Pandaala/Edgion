@@ -1,4 +1,26 @@
+use super::super::error::AuthResponseFailure;
 use super::*;
+use crate::plugins::http::common::outbound::call::stream_body_capped;
+
+const AUTH_RESPONSE_MAX_BYTES: usize = 1024 * 1024;
+
+/// Token exchange, refresh, and introspection are bounded independent exchanges.
+/// Never deserialize a truncated response or retain provider error text.
+pub(super) async fn read_auth_response<T: serde::de::DeserializeOwned>(response: reqwest::Response) -> VerifyResult<T> {
+    if response
+        .content_length()
+        .is_some_and(|length| length > AUTH_RESPONSE_MAX_BYTES as u64)
+    {
+        return Err(OidcVerifyError::AuthResponse(AuthResponseFailure::TooLarge));
+    }
+    let (body, truncated) = stream_body_capped(response, AUTH_RESPONSE_MAX_BYTES)
+        .await
+        .map_err(|_| OidcVerifyError::AuthResponse(AuthResponseFailure::Read))?;
+    if truncated {
+        return Err(OidcVerifyError::AuthResponse(AuthResponseFailure::TooLarge));
+    }
+    serde_json::from_slice(&body).map_err(|_| OidcVerifyError::AuthResponse(AuthResponseFailure::Json))
+}
 
 /// Record an outbound TLS SAN-pinning rejection on an OIDC outbound call.
 ///
@@ -181,12 +203,7 @@ impl OpenidConnect {
                 message: format!("Token exchange request failed with status {}", resp.status()),
             });
         }
-        resp.json::<TokenEndpointResponse>()
-            .await
-            .map_err(|e| OidcVerifyError::Other {
-                status: 502,
-                message: format!("Invalid token endpoint response: {}", e),
-            })
+        read_auth_response(resp).await
     }
 
     pub(super) async fn revoke_token(
@@ -329,12 +346,7 @@ impl OpenidConnect {
                 message: format!("Token refresh request failed with status {}", resp.status()),
             });
         }
-        resp.json::<TokenEndpointResponse>()
-            .await
-            .map_err(|e| OidcVerifyError::Other {
-                status: 502,
-                message: format!("Invalid token refresh response: {}", e),
-            })
+        read_auth_response(resp).await
     }
 
     pub(super) fn should_persist_id_token(&self, discovery: &DiscoveryDocument) -> bool {
@@ -412,5 +424,101 @@ impl OpenidConnect {
         let token = self.try_refresh_session_token(session_cookie).await?;
         self.put_refresh_result(lock_key, session_cookie.clone()).await;
         Ok(token)
+    }
+}
+
+#[cfg(test)]
+mod response_tests {
+    use super::*;
+    use futures::{stream, StreamExt};
+    use std::io;
+
+    fn streamed(parts: Vec<Result<Bytes, io::Error>>) -> reqwest::Response {
+        http::Response::new(reqwest::Body::wrap_stream(stream::iter(parts))).into()
+    }
+
+    fn padded_json(size: usize) -> Vec<u8> {
+        let mut body = br#"{"access_token":"fixture-token"}"#.to_vec();
+        body.resize(size, b' ');
+        body
+    }
+
+    #[tokio::test]
+    async fn known_oversize_body_is_rejected() {
+        let response = http::Response::new(vec![b'x'; AUTH_RESPONSE_MAX_BYTES + 1]).into();
+        assert_eq!(
+            read_auth_response::<Value>(response).await.unwrap_err(),
+            OidcVerifyError::AuthResponse(AuthResponseFailure::TooLarge)
+        );
+    }
+
+    #[tokio::test]
+    async fn exact_limit_stream_preserves_token_fields() {
+        let body = padded_json(AUTH_RESPONSE_MAX_BYTES);
+        let parts = body.chunks(8192).map(|part| Ok(Bytes::copy_from_slice(part))).collect();
+        let token: TokenEndpointResponse = read_auth_response(streamed(parts)).await.unwrap();
+        assert_eq!(token.access_token, "fixture-token");
+    }
+
+    #[tokio::test]
+    async fn stream_stops_at_first_oversize_chunk_without_parsing_prefix() {
+        let parts = stream::iter([
+            Ok::<_, io::Error>(Bytes::from(padded_json(AUTH_RESPONSE_MAX_BYTES))),
+            Ok(Bytes::from_static(b" ")),
+        ])
+        .chain(stream::poll_fn(
+            |_| -> std::task::Poll<Option<Result<Bytes, io::Error>>> {
+                panic!("oversized response must be dropped without polling the remainder")
+            },
+        ));
+        let response = http::Response::new(reqwest::Body::wrap_stream(parts)).into();
+        assert_eq!(
+            read_auth_response::<TokenEndpointResponse>(response).await.unwrap_err(),
+            OidcVerifyError::AuthResponse(AuthResponseFailure::TooLarge)
+        );
+    }
+
+    #[tokio::test]
+    async fn body_read_failure_is_static_and_rejects_valid_prefix() {
+        let response = streamed(vec![
+            Ok(Bytes::from_static(br#"{"access_token":"fixture-token"}"#)),
+            Err(io::Error::other("private-provider-detail")),
+        ]);
+        let error = read_auth_response::<TokenEndpointResponse>(response).await.unwrap_err();
+        assert_eq!(error, OidcVerifyError::AuthResponse(AuthResponseFailure::Read));
+        assert_eq!(error.user_message(), "Bad Gateway");
+        assert_eq!(error.log_tag(), "auth response read fail");
+    }
+
+    #[tokio::test]
+    async fn malformed_or_wrong_shape_json_has_no_provider_detail() {
+        for body in [
+            b"{private-provider-detail".as_slice(),
+            br#"{"access_token":{"private":"credential"}}"#,
+        ] {
+            let error = read_auth_response::<TokenEndpointResponse>(http::Response::new(body.to_vec()).into())
+                .await
+                .unwrap_err();
+            assert_eq!(error, OidcVerifyError::AuthResponse(AuthResponseFailure::Json));
+            assert_eq!(error.user_message(), "Bad Gateway");
+            assert_eq!(error.log_tag(), "auth response json fail");
+        }
+    }
+
+    #[test]
+    fn response_errors_keep_wire_and_contextual_log_contracts() {
+        for error in [
+            OidcVerifyError::AuthResponse(AuthResponseFailure::TooLarge),
+            OidcVerifyError::AuthResponse(AuthResponseFailure::Read),
+            OidcVerifyError::AuthResponse(AuthResponseFailure::Json),
+        ] {
+            assert_eq!(error.http_status(), 502);
+            assert_eq!(error.user_message(), "Bad Gateway");
+            assert_eq!(error.response_log_tag_or("token refresh fail"), error.log_tag());
+        }
+        assert_eq!(
+            OidcVerifyError::Expired.response_log_tag_or("token refresh fail"),
+            "token refresh fail"
+        );
     }
 }

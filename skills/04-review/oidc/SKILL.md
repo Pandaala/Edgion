@@ -20,6 +20,8 @@ before applying a decision to current code.
 
 ## Regression guards
 
+- [OIDC authentication response byte caps](regression-guards/authentication-response-byte-caps.md)
+
 - [OpenID Connect Dial-time Egress Policy — FIXED](regression-guards/dial-time-egress-policy.md)
 - [OpenID Connect Discovery Failure Backoff — FIXED](regression-guards/discovery-failure-backoff.md)
 - [OIDC Outbound TLS Policy Construction Fails Closed](regression-guards/outbound-tls-policy-construction-fails-closed.md)

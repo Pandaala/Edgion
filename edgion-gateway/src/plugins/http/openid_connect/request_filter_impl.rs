@@ -87,8 +87,8 @@ impl RequestFilter for OpenidConnect {
                                 self.maybe_set_session_cookie_header(session, &session_cookie).await;
                                 plugin_log.push("token refresh miss");
                             }
-                            Err(_) => {
-                                plugin_log.push_err("token refresh fail");
+                            Err(err) => {
+                                plugin_log.push_err(err.response_log_tag_or("token refresh fail"));
                             }
                         }
                     }
@@ -103,8 +103,8 @@ impl RequestFilter for OpenidConnect {
                                 self.maybe_set_session_cookie_header(session, &session_cookie).await;
                                 plugin_log.push("token refresh preemptive");
                             }
-                            Err(_) => {
-                                plugin_log.push_err("token refresh fail");
+                            Err(err) => {
+                                plugin_log.push_err(err.response_log_tag_or("token refresh fail"));
                             }
                         }
                     }
@@ -151,8 +151,8 @@ impl RequestFilter for OpenidConnect {
                                                 self.strip_gateway_owned_cookies(session);
                                                 return PluginRunningResult::GoodNext;
                                             }
-                                            Err(_) => {
-                                                plugin_log.push_err("token verify fail");
+                                            Err(err) => {
+                                                plugin_log.push_err(err.response_log_tag_or("token verify fail"));
                                             }
                                         },
                                         Err(refresh_err) => {
@@ -177,11 +177,11 @@ impl RequestFilter for OpenidConnect {
                                                     Err(_) => {}
                                                 }
                                             }
-                                            plugin_log.push_err("token refresh fail");
+                                            plugin_log.push_err(refresh_err.response_log_tag_or("token refresh fail"));
                                         }
                                     }
                                 } else {
-                                    plugin_log.push_err("token verify fail");
+                                    plugin_log.push_err(err.response_log_tag_or("token verify fail"));
                                 }
                             }
                         }

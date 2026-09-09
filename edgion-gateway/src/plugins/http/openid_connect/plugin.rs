@@ -542,3 +542,7 @@ mod userinfo;
 #[cfg(test)]
 #[path = "tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "auth_response_caps_integration.rs"]
+mod auth_response_caps_integration;

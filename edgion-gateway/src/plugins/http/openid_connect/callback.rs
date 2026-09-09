@@ -262,7 +262,7 @@ impl OpenidConnect {
         {
             Ok(v) => v,
             Err(err) => {
-                plugin_log.push_err("token exchange fail");
+                plugin_log.push_err(err.response_log_tag_or("token exchange fail"));
                 self.send_oidc_error(session, &err).await;
                 return PluginRunningResult::ErrTerminateRequest;
             }

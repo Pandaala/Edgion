@@ -132,8 +132,9 @@ third-party library allocations or deployed log/storage history.
 
 Optional unresolved copy reductions and shared-core questions are preserved with
 source evidence in [credential ownership follow-ups](../../../../tasks/todo/auth-credential-ownership-followups.md).
-The separate [OIDC response cap task](../../../../tasks/todo/oidc-auth-response-byte-caps.md)
-tracks a body-boundedness defect; it is not accepted or claimed fixed by this audit.
+The body-boundedness defect deferred by this audit is corrected separately in the
+[OIDC authentication response cap guard](../../oidc/regression-guards/authentication-response-byte-caps.md).
+That correction does not establish credential erasure or full public-error redaction.
 Re-evaluate on new auth consumers, changed stores/serialization/retry tasks, new
 Debug implementations, typed header conversions, or dependency behavior changes.
 
@@ -142,9 +143,10 @@ tracked original task files. Current checkout inspection confirms their presence
 the claim that they are absent from both the checkout and available Git history
 no longer applies. The HMAC quick-start and ACME DNS diagnostic corrections have
 the semantic guards linked above, although their original task metadata still
-says pending. Credential ownership investigation and OIDC response caps remain
-open in their linked tasks. In particular, token exchange and refresh in
-`openid_connect/token_exchange.rs` still call `Response::json` directly.
+says pending. The credential ownership follow-up task remains open. At recovery
+review time, token exchange and refresh still called `Response::json` directly;
+the later response-cap correction, including introspection, is recorded in the
+OIDC guard linked above.
 Closing the recovery record does not close those follow-ups, reconcile their
 individual lifecycle metadata, or claim new execution of their historical tests.
 Re-evaluate this recovery conclusion if those task files or semantic links disappear.
