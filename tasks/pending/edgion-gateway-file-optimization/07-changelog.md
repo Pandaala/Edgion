@@ -209,7 +209,9 @@ This is the single concise record of actual changes across the file-by-file audi
 | [`B0219`](batches/B0219-runtime-matching-module.md) | 2026-09-09 | 1 | examined-no-change | Retained live matching facade and explicit exports with no redundant runtime mechanism | Independent approval; matching 41/41, workspace format/check/Clippy and guards passed | `93a07192` | Stale wildcard knowledge already assigned to B0220; no duplicate issue |
 | [`B0220`](batches/B0220-runtime-route-matching.md) | 2026-09-09 | 1 target, 2 knowledge files | changed | Reused one Gateway lookup per parentRef; retained matching semantics and corrected precomputed-key/hostname knowledge | Independent plan approval and final LGTM; route 19, matching 45, PGIS 10, HTTP 49, gRPC 19 passed; workspace format/check/Clippy and guards passed | `4db7b1eb` | Four new unit tests; no integration changes or new issue |
 
-| [`B0221`](batches/B0221-runtime-tls-matching-tests.md) | 2026-09-09 | 1 | examined-no-change | Retained all 26 TLS security tests and meaningful unique-certificate limit coverage; recorded standalone knowledge correction | Independent LGTM; fresh TLS 26/26, workspace format/check/Clippy and all guards passed | pending | D0124 frontend-TLS knowledge task; no source/integration changes |
+| [`B0221`](batches/B0221-runtime-tls-matching-tests.md) | 2026-09-09 | 1 | examined-no-change | Retained all 26 TLS security tests and meaningful unique-certificate limit coverage; recorded standalone knowledge correction | Independent LGTM; fresh TLS 26/26, workspace format/check/Clippy and all guards passed | `72454f81` | D0124 frontend-TLS knowledge task; no source/integration changes |
+
+| [`B0222`](batches/B0222-runtime-tls-matching.md) | 2026-09-09 | 1 | examined-no-change | Retained strict immutable TLS matcher; rejected low-value construction churn and separated unmeasured collision retention | Independent LGTM; fresh TLS 26/26, workspace format/check/Clippy and all guards passed | pending | D0125 standalone P3 investigation; D0124 already owns knowledge drift |
 
 ### `UTIL-001` — `edgion-gateway/src/util/*`
 

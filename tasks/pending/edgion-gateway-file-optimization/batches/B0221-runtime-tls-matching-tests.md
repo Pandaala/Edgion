@@ -2,7 +2,7 @@
 
 ## Scope
 
-- Pipeline state: verified examined-no-change; awaiting local commit.
+- Pipeline state: terminal; local commit `72454f81`.
 - Active anchor crate: `edgion-gateway`.
 - Target: `edgion-gateway/src/runtime/matching/tests/tls_test.rs`.
 - Baseline: `a8f62d29`.
@@ -26,4 +26,4 @@
 
 - Fresh reviewer `b0221_final_review` LGTM at `4db7b1eb`; no Must Fix/Should Fix. Full test/security value and latest self-contained D0124 task independently validated; source and integration diffs empty.
 - Fresh coordinator TLS matcher tests 26/26 passed in 0.26 seconds (`/tmp/edgion-b0221-final-tls.log`). Workspace format/check/Clippy (existing warnings), docs, SSA, metrics, Pingora source, Gateway tracing, English-only, diff and 3,121-file integration freeze passed.
-- No tests removed or rewritten, runtime behavior unchanged. Ledger/changelog updated; commit pending, local only.
+- No tests removed or rewritten, runtime behavior unchanged. Ledger/changelog updated; commit `72454f81`, local only.
