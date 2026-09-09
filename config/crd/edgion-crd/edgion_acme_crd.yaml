@@ -55,21 +55,22 @@ spec:
                   enum: ["ecdsa-p256", "ecdsa-p384"]
                 challenge:
                   type: object
-                  description: "ACME challenge configuration"
+                  description: "Built-in HTTP-01 challenge configuration"
+                  required: ["type", "gatewayRef"]
                   x-kubernetes-preserve-unknown-fields: true
                   properties:
                     type:
                       type: string
                       description: "Challenge type"
-                      enum: ["http-01", "dns-01"]
-                    http01:
+                      enum: ["http-01"]
+                    gatewayRef:
                       type: object
-                      description: "HTTP-01 challenge configuration"
+                      description: "Gateway reference for HTTP-01 challenge responses"
                       x-kubernetes-preserve-unknown-fields: true
-                    dns01:
-                      type: object
-                      description: "DNS-01 challenge configuration"
-                      x-kubernetes-preserve-unknown-fields: true
+                      required: ["name"]
+                      properties:
+                        name:
+                          type: string
                 renewal:
                   type: object
                   description: "Certificate renewal configuration"
@@ -134,10 +135,6 @@ spec:
                       items:
                         type: object
                         x-kubernetes-preserve-unknown-fields: true
-                dnsCredentialSecret:
-                  type: object
-                  description: "DNS provider credential Secret (resolved by Controller)"
-                  x-kubernetes-preserve-unknown-fields: true
                 accountSecret:
                   type: object
                   description: "ACME account Secret (resolved by Controller)"
@@ -152,7 +149,7 @@ spec:
                     Gateway-API-style conditions:
                       - `Accepted` reflects spec validation.
                       - `ResolvedRefs` reflects whether the referenced ACME
-                        account / DNS-credential Secrets were successfully
+                        account Secret was successfully
                         resolved. Uses `Unknown` with reason `NeedsRegistration`
                         when the account Secret does not yet exist and Edgion
                         is expected to create it; `False` with Edgion-extension
@@ -226,7 +223,7 @@ spec:
         - name: ResolvedRefs
           type: string
           jsonPath: .status.conditions[?(@.type=='ResolvedRefs')].status
-          description: "Whether the ACME account / DNS-credential Secrets have been resolved"
+          description: "Whether the ACME account Secret has been resolved"
           priority: 1
         - name: Expires
           type: string

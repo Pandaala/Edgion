@@ -83,7 +83,8 @@ Fresh verification on 2026-09-08:
   existing warnings in unchanged code; this closure changes no Rust files.
 - Agent-doc validation, SSA-force, metrics-inventory, and Pingora-source-policy
   scripts initially passed. A final agent-doc rerun found an unrelated broken
-  ACME knowledge link to `tasks/todo/acme-alidns-cleanup-response-validation.md`;
+  ACME knowledge link to the cleanup-response task (now maintained in the
+  [ACME cleanup response guard](../../acme/superseded/dns01-retired.md));
   closure was deferred pending resolution of that missing target and a passing rerun.
   No full-workspace test run was requested or performed.
 - Independent read-only review returned LGTM for the current source verdict,

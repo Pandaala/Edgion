@@ -6,6 +6,8 @@ knowledge_type: review-evidence
 
 # Credential copy ownership and release boundaries
 
+DNS-01 adapters and credential resolution were removed on 2026-09-09. DNS-specific observations below are historical and impose no restoration requirement.
+
 ## Conclusion and scope
 
 D0036, originating in the B0067 BasicAuth audit, audits application-owned
@@ -108,7 +110,7 @@ Sensitive header provenance is recorded in the
 - At the time of this ownership audit, DNS response aggregation was capped but
   arbitrary provider error text reached diagnostics. This defect was deferred
   by the ownership audit and subsequently corrected at the DNS
-  provider diagnostic boundary; see the [ACME DNS error redaction guard](../../acme/regression-guards/dns-provider-error-redaction.md)
+  provider diagnostic boundary; see the [ACME DNS error redaction guard](../../acme/superseded/dns01-retired.md)
   for the separate correction, verification, and remaining cleanup limits.
 
 ## Zeroization decision

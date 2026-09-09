@@ -52,9 +52,7 @@ is a bug" rule also gets a line there.
   and OCI pulls, openid_connect (both ordinary and SAN-pinning factory paths),
   request_mirror,
   the elasticsearch link_sys provider, health-check probes,
-  all_endpoint_status, the controller ACME DNS-01 providers
-  (`edgion-controller/src/services/acme/dns_provider.rs`, factory-default
-  `Deny` redirects kept deliberately), and the CLI admin-API client
+  all_endpoint_status, and the CLI admin-API client
   (`edgion-cli/src/cli/client.rs` `build_cli_client` +
   `edgion-cli/src/cli/commands/login.rs` `probe_status`).
 - **Operator-CLI caveat**: `edgion-cli` is the one consumer that sets
@@ -172,23 +170,6 @@ not in-process checks.
   through `EgressResolver` (`ResolverSpec::System`) and injects the admitted
   stream into ldap3; openid_connect installs the same resolver on both IdP
   HTTP clients.
-- **In-canon special case**: the ACME dns-01 propagation probe
-  (`edgion-common/src/dns/txt_probe.rs`, controller cold path) shares the
-  hickory backend but is deliberately not `ResolverSpec`-driven — its query
-  targets are the zone's authoritative nameservers (protocol-determined,
-  discovered via the system recursive resolver), never operator resolver
-  config. **Rule-3 note (recorded exemption, not compliance)**: the NS IPs it
-  dials on port 53 ARE influenced by operator-supplied `spec.domains` (via
-  attacker-controllable DNS answers), and no `classify_ip`-style check runs
-  at dial time — deliberately: blocking private NS IPs would break the
-  legitimate internal-DNS + internal-ACME issuance scenario, `classify_ip` /
-  `EgressResolver` live in `edgion-gateway` (unreachable from
-  `edgion-common` per the crate DAG), and the blast radius is bounded to
-  outbound DNS queries whose responses only fold into a
-  Found/NotFound/Unreachable tri-state (no response bytes reach any request,
-  log-verbatim, or exfil channel; rate is capped by the cold-path poll
-  cadence). Same family as the DSL `http.call` F-018 tradeoff. See
-  `skills/04-review/acme/regression-guards/acme-propagation-check-interval-removed.md`.
 - **Not DNS at all**: K8s Service backends dial EndpointSlice pod IPs /
   ClusterIP directly; the upstream-authority outbound path uses
   `AnchorPinnedResolver`.

@@ -84,7 +84,6 @@ rand.workspace = true
 smallvec.workspace = true
 indexmap.workspace = true
 sha2.workspace = true
-hmac.workspace = true
 hex.workspace = true
 
 etcd-client.workspace = true
@@ -109,7 +108,6 @@ reqwest.workspace = true
 instant-acme.workspace = true
 rcgen.workspace = true
 time.workspace = true
-sha1.workspace = true
 tower.workspace = true
 croner.workspace = true
 chrono-tz.workspace = true

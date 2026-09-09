@@ -49,14 +49,6 @@ pub struct PendingHttpChallenge {
     pub key_authorization: String,
 }
 
-/// Pending DNS-01 challenge information
-pub struct PendingDnsChallenge {
-    /// The domain being validated
-    pub domain: String,
-    /// The digest value to set as DNS TXT record at _acme-challenge.{domain}
-    pub digest: String,
-}
-
 impl AcmeClient {
     /// Create a new ACME client with a new account registration
     pub async fn new(
@@ -272,104 +264,7 @@ impl AcmeClient {
         self.finalize_order(ctx.order, domains, key_type).await
     }
 
-    /// Phase 1: Prepare a DNS-01 certificate order.
-    ///
-    /// Creates an ACME order and extracts challenge digests, but does NOT notify
-    /// the ACME server yet (no `set_ready()`).
-    ///
-    /// Correct flow:
-    /// 1. `prepare_dns01_order()` — extract digests
-    /// 2. Caller creates DNS TXT records
-    /// 3. Caller waits for DNS propagation
-    /// 4. `activate_dns01_challenges()` — notify ACME server to start validation
-    /// 5. `complete_dns01_order()` — poll & finalize
-    pub async fn prepare_dns01_order(
-        &self,
-        domains: &[String],
-    ) -> Result<(Vec<PendingDnsChallenge>, Dns01OrderContext)> {
-        // For DNS identifiers, strip wildcard prefix
-        let identifiers: Vec<Identifier> = domains
-            .iter()
-            .map(|d| Identifier::Dns(d.strip_prefix("*.").unwrap_or(d).to_string()))
-            .collect();
-
-        let mut order = self
-            .account
-            .new_order(&NewOrder::new(&identifiers))
-            .await
-            .context("Failed to create ACME order")?;
-
-        let mut auths = order.authorizations();
-        let mut pending = Vec::new();
-
-        while let Some(auth_result) = auths.next().await {
-            let mut auth = auth_result.context("Failed to get authorization")?;
-
-            if auth.status == AuthorizationStatus::Valid {
-                continue;
-            }
-
-            // Extract identifier info first (immutable borrow)
-            let domain = auth.identifier().to_string();
-
-            // Now get challenge (mutable borrow) — only extract digest, do NOT set_ready
-            let challenge = auth
-                .challenge(ChallengeType::Dns01)
-                .ok_or_else(|| anyhow::anyhow!("No DNS-01 challenge available for {}", &domain))?;
-
-            let key_auth = challenge.key_authorization();
-            let digest = instant_acme::KeyAuthorization::dns_value(&key_auth);
-
-            pending.push(PendingDnsChallenge { domain, digest });
-        }
-
-        Ok((pending, Dns01OrderContext { order }))
-    }
-
-    /// Phase 2: Notify the ACME server that DNS-01 challenges are ready for validation.
-    ///
-    /// Call this AFTER DNS TXT records have been created and propagated.
-    pub async fn activate_dns01_challenges(&self, ctx: &mut Dns01OrderContext) -> Result<()> {
-        let mut auths = ctx.order.authorizations();
-
-        while let Some(auth_result) = auths.next().await {
-            let mut auth = auth_result.context("Failed to get authorization")?;
-
-            if auth.status == AuthorizationStatus::Valid {
-                continue;
-            }
-
-            let domain = auth.identifier().to_string();
-
-            let mut challenge = auth
-                .challenge(ChallengeType::Dns01)
-                .ok_or_else(|| anyhow::anyhow!("No DNS-01 challenge for {}", &domain))?;
-
-            challenge
-                .set_ready()
-                .await
-                .context(format!("Failed to set DNS-01 challenge ready for {}", &domain))?;
-
-            tracing::debug!(
-                domain = %domain,
-                "Notified ACME server: DNS-01 challenge ready"
-            );
-        }
-
-        Ok(())
-    }
-
-    /// Phase 3: Complete a DNS-01 order after challenges have been validated.
-    pub async fn complete_dns01_order(
-        &self,
-        ctx: Dns01OrderContext,
-        domains: &[String],
-        key_type: &AcmeKeyType,
-    ) -> Result<AcmeCertificateResult> {
-        self.finalize_order(ctx.order, domains, key_type).await
-    }
-
-    /// Internal: finalize an order (shared by HTTP-01 and DNS-01)
+    /// Finalize the HTTP-01 order
     async fn finalize_order(
         &self,
         mut order: instant_acme::Order,
@@ -412,11 +307,6 @@ impl AcmeClient {
 
 /// Context for an in-progress HTTP-01 ACME order
 pub struct Http01OrderContext {
-    order: instant_acme::Order,
-}
-
-/// Context for an in-progress DNS-01 ACME order
-pub struct Dns01OrderContext {
     order: instant_acme::Order,
 }
 

@@ -6,24 +6,24 @@
 
 EdgionAcme runs an ACME client on the Controller: it registers an account, validates domain ownership, issues and renews certificates, writes them to a Kubernetes Secret, and optionally maintains an EdgionTls resource so the Gateway can serve them.
 
+Built-in ACME supports **HTTP-01 only**, with no DNS-01 or DNS provider API integration. For DNS-01 or wildcard issuance, use cert-manager or another external issuer and reference its standard TLS Secret through Gateway/EdgionTls. Edgion already loads and hot-reloads these Secrets; no EdgionAcme resource is needed for externally managed certificates.
+
 ## Overview
 
 ```
 EdgionAcme (Controller) --ACME order--> ACME server (Let's Encrypt)
    ├─ HTTP-01: token published in status -> Gateway serves /.well-known/acme-challenge/<token>
-   ├─ DNS-01:  _acme-challenge TXT record created via provider API
    └─ on success: write cert to storage.secretName, update EdgionTls (autoEdgionTls)
 ```
 
 **Challenge types**
 
-- **HTTP-01** validates ownership over `http://<domain>/.well-known/acme-challenge/<token>`. Suitable for single, non-wildcard domains; the Gateway's HTTP listener must be publicly reachable.
-- **DNS-01** validates over a DNS TXT record and is the **only** option for wildcard domains (e.g. `*.example.com`).
+- **HTTP-01** validates ownership over `http://<domain>/.well-known/acme-challenge/<token>`. Suitable for one or more non-wildcard domains; the Gateway's HTTP listener must be publicly reachable.
 
 **Current limitations**
 
 - Only **ECDSA** keys are supported (`ecdsa-p256` / `ecdsa-p384`).
-- Independent of cert-manager — Edgion manages its own ACME account and certificates.
+- Built-in issuance manages its own ACME account; externally issued TLS Secrets, including cert-manager output, are also supported.
 
 ## Quick Start
 
@@ -78,7 +78,7 @@ After creation the Controller registers the ACME account (storing its key in `pr
 | `server` | String | Let's Encrypt production directory | ACME directory URL. Use the staging URL for testing |
 | `email` | String | **Required** | Contact email for ACME account registration |
 | `privateKeySecretRef` | Object | **Required** | Secret that stores the ACME **account** private key. Edgion creates it if missing; existing credentials are reused |
-| `domains` | Array\<String\> | **Required** | Domains to request. Wildcards (e.g. `*.example.com`) require DNS-01 |
+| `domains` | Array\<String\> | **Required** | Domains to request. Wildcard domains are not supported |
 | `keyType` | Enum | `ecdsa-p256` | Certificate key algorithm. Allowed values: `ecdsa-p256` \| `ecdsa-p384` |
 | `challenge` | Object | **Required** | Challenge configuration; see [Challenge configuration](#challenge-configuration) |
 | `renewal` | Object | (defaults below) | Renewal timing; see [Renewal](#renewal) |
@@ -90,7 +90,7 @@ After creation the Controller registers the ACME account (storing its key in `pr
 
 ### Challenge configuration
 
-`challenge` is a tagged enum keyed by `type`; the type-specific fields are flattened directly under `challenge` (there are no `http01:` / `dns01:` sub-objects).
+`challenge` accepts only `type: http-01` and a required `gatewayRef`. Other challenge types and unknown fields are rejected.
 
 **HTTP-01** (`type: http-01`):
 
@@ -99,20 +99,6 @@ After creation the Controller registers the ACME account (storing its key in `pr
 | `gatewayRef` | Object | **Required** | Gateway whose HTTP listener serves the challenge response |
 
 The Controller publishes the token in `status.activeChallenges`; the Gateway reads it and answers `http://<domain>/.well-known/acme-challenge/<token>` only while a challenge is in flight, then stops intercepting that path.
-
-**DNS-01** (`type: dns-01`):
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `provider` | String | **Required** | DNS provider. Allowed values: `cloudflare` \| `alidns` |
-| `credentialRef` | Object | **Required** | Secret holding the provider's API credentials |
-| `propagationTimeout` | Duration | `120s` | Upper bound on the DNS propagation wait (GEP-2257 duration). The Controller polls the zone's authoritative nameservers and requests validation as soon as all TXT records are visible; if the deadline expires with a record still confirmed missing, the flow fails into the `failBackoff` retry path |
-| `propagationCheckInterval` | Duration | `5s` | Poll cadence for the propagation check (GEP-2257 duration) |
-
-The Controller creates a `_acme-challenge.<domain>` TXT record via the provider API, polls the zone's authoritative nameservers until the record is visible (recursive resolution is used only to discover the authoritative servers, avoiding negative-cache false negatives), asks ACME to validate, then deletes the record. If the authoritative nameservers cannot be reached at all (e.g. outbound DNS is firewalled), the Controller waits out the full `propagationTimeout`, logs a warning, and proceeds optimistically — equivalent to the previous fixed-wait behavior. The deadline is evaluated between poll rounds, so a round of hanging DNS queries may run slightly past it. Provider credential Secret keys:
-
-- **Cloudflare** — `api-token` (with Zone.DNS:Edit permission)
-- **Alibaba Cloud DNS (`alidns`)** — `access-key-id` and `access-key-secret`
 
 ### Renewal
 
@@ -166,54 +152,7 @@ Omit `externalAccountBinding` entirely for Let's Encrypt, which does not require
 
 ## Common configuration scenarios
 
-### 1. Wildcard certificate via DNS-01 (Cloudflare)
-
-Wildcards can only be issued with DNS-01:
-
-```yaml
-apiVersion: edgion.io/v1
-kind: EdgionAcme
-metadata:
-  name: wildcard-acme
-  namespace: production
-spec:
-  email: admin@example.com
-  privateKeySecretRef:
-    name: wildcard-acme-account
-  domains:
-    - "*.example.com"
-    - example.com
-  keyType: ecdsa-p384
-  challenge:
-    type: dns-01
-    provider: cloudflare
-    credentialRef:
-      name: cloudflare-api-token
-      namespace: production
-    propagationTimeout: 180s
-  renewal:
-    renewBefore: 336h
-    checkInterval: 12h
-  storage:
-    secretName: wildcard-example-com-tls
-  autoEdgionTls:
-    enabled: true
-    parentRefs:
-      - name: main-gateway
-        sectionName: https
-```
-
-Create the provider credential Secret:
-
-```bash
-kubectl create secret generic cloudflare-api-token \
-  --from-literal=api-token=<cloudflare-api-token> \
-  -n production
-```
-
-⚠️ The `<cloudflare-api-token>` value is a placeholder — never commit a real token.
-
-### 2. Multiple domains on one certificate (HTTP-01)
+### 1. Multiple domains on one certificate (HTTP-01)
 
 A single EdgionAcme can cover several non-wildcard domains in one certificate (SAN list):
 
@@ -247,7 +186,7 @@ spec:
 
 Each domain must resolve to the Gateway and pass its own HTTP-01 challenge.
 
-### 3. Production issuance (Let's Encrypt prod)
+### 2. Production issuance (Let's Encrypt prod)
 
 Omit `server` to use the production directory by default. **Mind the rate limits** — validate with staging first (see Quick Start), then apply the production resource:
 
@@ -339,37 +278,10 @@ If the ACME service is not running on the contacted replica (for example one tha
 
 ### Common issues
 
-DNS provider failures in Controller logs and `status.lastFailureReason` report
-the provider operation and a fixed error category. HTTP failures include a numeric
-status; Cloudflare API rejections may include one numeric error code. Provider
-messages, response bodies, record IDs, signed request URLs, domains, and derived
-TXT record names are omitted from DNS provider diagnostics to protect credentials
-and identity data. Cleanup warnings identify records by their zero-based index
-within the current cleanup batch. Use the provider console for additional
-diagnostics. DNS record cleanup failures remain non-fatal to certificate issuance.
-
-AliDNS cleanup checks the HTTP status and business response of the record lookup
-and every deletion. Rejected, malformed, or oversized responses (over 256 KiB)
-are reported as cleanup errors. After an individual deletion fails, cleanup
-continues with later records within the existing cleanup timeout and reports the
-first error through the Controller's non-fatal cleanup warning. If a warning
-appears, check the provider console for leftover TXT records.
-
-AliDNS removes only TXT records whose relative name matches the challenge name
-(case-insensitively) and whose value exactly matches the challenge digest. Other
-values at the same name and similar names are preserved. Cleanup finishes its
-paginated lookup before deleting, so its own deletions cannot shift later pages.
-Lookup is limited to 100 pages, 4,096 candidates, and 256 KiB of retained record-ID
-strings, within the existing 120-second operation deadline. Invalid, repeated,
-changing, or excessive results abort lookup before deletion and produce a
-non-fatal cleanup warning. External DNS edits are not snapshot-isolated; inspect
-the provider console if records change concurrently or cleanup reports a warning.
-
 1. **HTTP-01 fails** — confirm the domain resolves to the Gateway and its HTTP port (typically 80) is reachable from the internet. The Gateway must receive the published token via List-Watch and answer `/.well-known/acme-challenge/<token>`.
-2. **DNS-01 times out** — increase `propagationTimeout` (a generous value is cheap: the poll loop exits as soon as the records are visible); verify the `credentialRef` Secret keys are correct and the provider API is reachable. A "propagation not confirmed" failure means the zone's authoritative nameservers still did not serve the TXT record at the deadline.
-3. **Stuck in `Failed`** — read `status.lastFailureReason`, fix the cause, then use [Manual trigger](#manual-trigger) to re-run and reset the retry counter.
-4. **Wildcard request rejected** — wildcards require `challenge.type: dns-01`; HTTP-01 cannot validate them.
-5. **Rate-limited by the ACME server** — switch to the staging directory while testing; production Let's Encrypt enforces strict per-domain limits.
+2. **Stuck in `Failed`** — read `status.lastFailureReason`, fix the cause, then use [Manual trigger](#manual-trigger) to re-run and reset the retry counter.
+3. **Wildcard request rejected** — built-in HTTP-01 cannot validate wildcards. Use cert-manager or another external issuer and reference its TLS Secret.
+4. **Rate-limited by the ACME server** — switch to the staging directory while testing; production Let's Encrypt enforces strict per-domain limits.
 
 ## Get help
 

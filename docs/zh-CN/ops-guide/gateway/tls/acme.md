@@ -6,24 +6,24 @@
 
 EdgionAcme 在控制器（Controller）侧运行 ACME 客户端：注册账号、验证域名所有权、签发和续期证书，将证书写入 Kubernetes Secret，并可选自动维护 EdgionTls 资源，供 Gateway 使用。
 
+内置 ACME 仅支持 **HTTP-01**，不集成 DNS-01 或 DNS 提供商 API。需要 DNS-01 或通配符证书时，可用 cert-manager 等外部工具签发，再通过 Gateway/EdgionTls 引用其标准 TLS Secret；Edgion 已支持加载和热更新这些 Secret，无需创建 EdgionAcme。
+
 ## 概述
 
 ```
 EdgionAcme (Controller) --ACME order--> ACME server (Let's Encrypt)
    ├─ HTTP-01: token published in status -> Gateway serves /.well-known/acme-challenge/<token>
-   ├─ DNS-01:  _acme-challenge TXT record created via provider API
    └─ on success: write cert to storage.secretName, update EdgionTls (autoEdgionTls)
 ```
 
 **校验类型**
 
-- **HTTP-01**：通过 `http://<domain>/.well-known/acme-challenge/<token>` 访问验证所有权。适合单域名或非通配符；Gateway 的 HTTP 监听器必须可从公网访问。
-- **DNS-01**：通过 DNS TXT 记录验证，是通配符域名（如 `*.example.com`）的**唯一**选项。
+- **HTTP-01**：通过 `http://<domain>/.well-known/acme-challenge/<token>` 访问验证所有权。适合一个或多个非通配符域名；Gateway 的 HTTP 监听器必须可从公网访问。
 
 **当前限制**
 
 - 仅支持 **ECDSA** 证书（`ecdsa-p256` / `ecdsa-p384`）。
-- 不与 cert-manager 互通——Edgion 独立管理 ACME 账号和证书。
+- 内置 ACME 独立管理账号和证书；也可直接加载 cert-manager 签发的 TLS Secret。
 
 ## 快速开始
 
@@ -78,7 +78,7 @@ spec:
 | `server` | String | Let's Encrypt 生产目录 | ACME 目录 URL，测试时使用 staging URL |
 | `email` | String | **必填** | ACME 账号注册的联系邮箱 |
 | `privateKeySecretRef` | Object | **必填** | 存储 ACME **账号**私钥的 Secret，不存在时 Edgion 自动创建；已有凭据时复用 |
-| `domains` | Array\<String\> | **必填** | 申请的域名；含通配符（如 `*.example.com`）时必须使用 DNS-01 |
+| `domains` | Array\<String\> | **必填** | 申请的域名；不支持通配符域名 |
 | `keyType` | Enum | `ecdsa-p256` | 证书密钥算法。可选值：`ecdsa-p256` \| `ecdsa-p384` |
 | `challenge` | Object | **必填** | 校验配置；见[校验配置](#校验配置) |
 | `renewal` | Object | （见下文默认值） | 续期时机；见[续期](#续期与重试renewal) |
@@ -90,7 +90,7 @@ spec:
 
 ### 校验配置
 
-`challenge` 是以 `type` 为键的标签枚举；类型特定字段直接平铺在 `challenge` 下（没有 `http01:` / `dns01:` 子对象）。
+`challenge` 仅接受 `type: http-01` 和必填的 `gatewayRef`，其他校验类型和未知字段会被拒绝。
 
 **HTTP-01**（`type: http-01`）：
 
@@ -99,20 +99,6 @@ spec:
 | `gatewayRef` | Object | **必填** | 提供校验响应的 Gateway 的 HTTP 监听器引用 |
 
 Controller 将 token 发布到 `status.activeChallenges`；Gateway 读取后仅在校验进行中时响应 `http://<domain>/.well-known/acme-challenge/<token>`，校验结束后停止拦截该路径。
-
-**DNS-01**（`type: dns-01`）：
-
-| 参数 | 类型 | 默认值 | 说明 |
-|------|------|--------|------|
-| `provider` | String | **必填** | DNS 提供商。可选值：`cloudflare` \| `alidns` |
-| `credentialRef` | Object | **必填** | 持有提供商 API 凭据的 Secret 引用 |
-| `propagationTimeout` | Duration | `120s` | DNS 传播等待的时间上限（GEP-2257 时长）。Controller 轮询该 zone 的权威 DNS 服务器，全部 TXT 记录可见后立即发起校验；到期仍确认缺失则进入 `failBackoff` 重试路径 |
-| `propagationCheckInterval` | Duration | `5s` | 传播检查的轮询间隔（GEP-2257 时长） |
-
-Controller 通过提供商 API 创建 `_acme-challenge.<domain>` TXT 记录，然后轮询该 zone 的权威 DNS 服务器直到记录可见（递归解析器只用于发现权威服务器，避免负缓存造成的假阴性），随后请求 ACME 验证，验证后删除记录。若权威服务器完全不可达（例如出方向 DNS 被防火墙拦截），Controller 会等满 `propagationTimeout` 并记录告警后乐观放行——等价于旧版固定等待行为。超时在轮询轮次之间判定，一轮挂起的 DNS 查询可能略微超出该上限。提供商凭据 Secret 键：
-
-- **Cloudflare**——`api-token`（需要 Zone.DNS:Edit 权限）
-- **阿里云 DNS（alidns）**——`access-key-id` 和 `access-key-secret`
 
 ### 续期与重试（renewal）
 
@@ -166,54 +152,7 @@ Let's Encrypt 不需要 EAB，完全省略 `externalAccountBinding` 即可。
 
 ## 常见配置场景
 
-### 1. 通配符证书（DNS-01，Cloudflare）
-
-通配符证书只能使用 DNS-01 签发：
-
-```yaml
-apiVersion: edgion.io/v1
-kind: EdgionAcme
-metadata:
-  name: wildcard-acme
-  namespace: production
-spec:
-  email: admin@example.com
-  privateKeySecretRef:
-    name: wildcard-acme-account
-  domains:
-    - "*.example.com"
-    - example.com
-  keyType: ecdsa-p384
-  challenge:
-    type: dns-01
-    provider: cloudflare
-    credentialRef:
-      name: cloudflare-api-token
-      namespace: production
-    propagationTimeout: 180s
-  renewal:
-    renewBefore: 336h
-    checkInterval: 12h
-  storage:
-    secretName: wildcard-example-com-tls
-  autoEdgionTls:
-    enabled: true
-    parentRefs:
-      - name: main-gateway
-        sectionName: https
-```
-
-创建提供商凭据 Secret：
-
-```bash
-kubectl create secret generic cloudflare-api-token \
-  --from-literal=api-token=<cloudflare-api-token> \
-  -n production
-```
-
-⚠️ `<cloudflare-api-token>` 是占位符——切勿提交真实 token。
-
-### 2. 多域名证书（HTTP-01）
+### 1. 多域名证书（HTTP-01）
 
 单个 EdgionAcme 可以在一张证书（SAN 列表）中覆盖多个非通配符域名：
 
@@ -247,7 +186,7 @@ spec:
 
 每个域名都必须解析到 Gateway 并通过各自的 HTTP-01 校验。
 
-### 3. 生产签发（Let's Encrypt prod）
+### 2. 生产签发（Let's Encrypt prod）
 
 省略 `server` 默认使用生产目录。**注意速率限制**——先使用 staging 验证（见快速开始），再应用生产资源：
 
@@ -339,27 +278,10 @@ curl -X POST "http://<controller-admin>:12101/api/v1/services/acme/<namespace>/<
 
 ### 常见问题
 
-Controller 日志和 `status.lastFailureReason` 中的 DNS 提供方错误只显示操作名称和固定错误类别。
-HTTP 失败包含数字状态码；Cloudflare API 拒绝请求时可能包含一个数字错误码。
-为保护凭据和身份信息，DNS 提供方诊断不输出提供方消息、响应正文、记录 ID、签名请求 URL、域名或派生的 TXT 记录名。
-清理警告通过当前清理批次内从 0 开始的记录序号标识记录。
-需要更多诊断信息时，请查看提供方控制台。DNS 记录清理失败仍不会导致证书签发失败。
-
-AliDNS 清理会检查记录查询和每次删除的 HTTP 状态及业务响应。拒绝、格式异常或超过
-256 KiB 的响应会作为清理错误报告；单条删除失败后，会在现有清理超时内继续尝试后续记录，
-并通过 Controller 的非致命清理警告报告第一个错误。出现警告时，请在提供方控制台检查残留的 TXT 记录。
-
-AliDNS 仅删除相对名称与挑战名称一致（忽略大小写）、且值与挑战摘要精确一致的 TXT 记录，
-保留同名的其他摘要及相似名称。清理会先完成分页查询，再开始删除，避免自身删除导致后续页偏移。
-查询最多处理 100 页、4,096 条候选记录，保留的记录 ID 字符串累计不超过 256 KiB，
-整个操作仍受现有 120 秒期限约束。结果格式异常、重复、分页变化或超限会在删除前终止查询，
-并报告非致命清理警告。外部 DNS 修改不具备快照隔离保证；存在并发修改或清理警告时，请检查提供方控制台。
-
 1. **HTTP-01 失败**——确认域名已解析到 Gateway 且其 HTTP 端口（通常 80）可从公网访问。Gateway 必须通过 List-Watch 接收到已发布的 token 并响应 `/.well-known/acme-challenge/<token>`。
-2. **DNS-01 超时**——增大 `propagationTimeout`（设置宽松值没有代价：记录可见后轮询立即结束）；确认 `credentialRef` Secret 键正确且提供商 API 可访问。"propagation not confirmed" 失败表示到期时权威 DNS 服务器仍未提供 TXT 记录。
-3. **长期处于 `Failed`**——查看 `status.lastFailureReason`，修复原因后使用[手动触发](#手动触发)重新发起并重置重试计数器。
-4. **通配符请求被拒绝**——通配符必须使用 `challenge.type: dns-01`，HTTP-01 无法验证通配符。
-5. **被 ACME 服务器限速**——测试时切换到 staging 目录；Let's Encrypt 生产环境有严格的每域名限制。
+2. **长期处于 `Failed`**——查看 `status.lastFailureReason`，修复原因后使用[手动触发](#手动触发)重新发起并重置重试计数器。
+3. **通配符请求被拒绝**——内置 HTTP-01 不支持通配符；请使用 cert-manager 等外部工具签发，并引用生成的 TLS Secret。
+4. **被 ACME 服务器限速**——测试时切换到 staging 目录；Let's Encrypt 生产环境有严格的每域名限制。
 
 ## 获取帮助
 
@@ -375,209 +297,3 @@ AliDNS 仅删除相对名称与挑战名称一致（忽略大小写）、且值�
 - [TLS 终结](./tls-termination.md)
 - [HTTPS 监听器](../listeners/https.md)
 - [联邦 RBAC](../../federation-rbac.md)
-
-- **HTTP-01**：通过 HTTP 访问 `/.well-known/acme-challenge/<token>` 完成校验，适合单域名或非通配符。
-- **DNS-01**：通过 DNS TXT 记录完成校验，**支持通配符域名**（如 `*.example.com`）。
-- **自动续期**：按配置在到期前自动续期，失败时指数退避重试（最多 5 次）。
-- **与 EdgionTls 联动**：签发后可自动创建或更新 EdgionTls，无需手工维护证书资源。
-
-**当前限制**：
-
-- 仅支持 **ECDSA** 证书（ecdsa-p256 / ecdsa-p384）。
-- 不与 Kubernetes cert-manager 互通；证书与账号由 Edgion Controller 独立管理。
-
----
-
-## 快速开始
-
-### 前置条件
-
-- Controller 已部署且具有集群内读写 EdgionAcme、Secret、EdgionTls 的权限。
-- Gateway 已部署；若使用 HTTP-01，需有对外提供 HTTP（如 80 端口）的监听器，且域名解析到该 Gateway。
-
-### 最小示例（HTTP-01）
-
-```yaml
-apiVersion: edgion.io/v1
-kind: EdgionAcme
-metadata:
-  name: example-acme
-  namespace: default
-spec:
-  email: admin@example.com
-  domains:
-    - example.com
-    - www.example.com
-  challenge:
-    type: http-01
-    gatewayRef:
-      name: my-gateway
-      namespace: default
-  storage:
-    secretName: example-tls-cert
-  autoEdgionTls:
-    enabled: true
-    parentRefs:
-      - name: my-gateway
-        namespace: default
-```
-
-创建后，Controller 会向 ACME 服务（默认 Let's Encrypt）注册账号、发起订单、完成 HTTP-01 校验并写入证书到 `storage.secretName` 指定的 Secret，并自动创建/更新 EdgionTls。
-
----
-
-## 配置说明
-
-### 基础字段
-
-| 字段 | 类型 | 必填 | 默认值 | 说明 |
-|------|------|------|--------|------|
-| `server` | String | 否 | Let's Encrypt 生产目录 | ACME 目录 URL，如 `https://acme-v02.api.letsencrypt.org/directory`；测试可用 staging 或 Pebble。 |
-| `email` | String | **是** | - | ACME 账号联系邮箱。 |
-| `domains` | Array\<String\> | **是** | - | 要申请证书的域名；含通配符（如 `*.example.com`）时须使用 DNS-01。 |
-| `keyType` | String | 否 | `ecdsa-p256` | 证书密钥类型：`ecdsa-p256`、`ecdsa-p384`。 |
-
-### 校验方式：challenge
-
-`challenge` 是 tagged 枚举，由 `type` 区分两种形态，对应字段直接平铺在 `challenge` 下。
-
-**HTTP-01** (`type: http-01`)：
-
-| 字段 | 必填 | 说明 |
-|------|------|------|
-| `gatewayRef` | **是** | 用于提供校验响应的 Gateway 引用。 |
-
-ACME 服务会访问 `http://<domain>/.well-known/acme-challenge/<token>`。Controller 将 token 写入 EdgionAcme 的 `status.activeChallenges` 并同步到 Gateway，Gateway 仅在存在未完成校验时响应该路径，校验结束后不再拦截。
-
-**DNS-01** (`type: dns-01`)：
-
-| 字段 | 类型 | 必填 | 默认值 | 说明 |
-|------|------|------|--------|------|
-| `provider` | String | **是** | - | 支持：`cloudflare`、`alidns`；测试环境可用 `pebble`（配合 Pebble + challtestsrv）。 |
-| `credentialRef` | object | **是** | - | 存 DNS API 凭据的 Secret 引用。 |
-| `propagationTimeout` | Duration | 否 | `120s` | DNS 传播等待的时间上限（GEP-2257 时长），记录可见后立即发起校验。 |
-| `propagationCheckInterval` | Duration | 否 | `5s` | 传播检查的轮询间隔（GEP-2257 时长）。 |
-
-Controller 根据 ACME 返回的 TXT 值，调用 DNS 提供方 API 创建 `_acme-challenge.<domain>` 的 TXT 记录，轮询权威 DNS 服务器确认记录可见后再通知 ACME 校验；通过后删除 TXT。通配符域名必须使用 DNS-01。
-
-**Cloudflare**：Secret 中需提供 `api-token`（具备 Zone.DNS:Edit 权限）。
-
-**阿里云 DNS（alidns）**：Secret 中需提供 `access-key-id`、`access-key-secret`。
-
-### 续期与重试：renewal
-
-| 字段 | 类型 | 默认值 | 说明 |
-|------|------|--------|------|
-| `renewBefore` | Duration | `720h` | 在证书到期前多久开始续期（720h = 30 天）。 |
-| `checkInterval` | Duration | `24h` | 定期检查续期需求的间隔。 |
-| `failBackoff` | Duration | `5m` | 失败后首次重试的延迟基数；实际采用指数退避（5m、20m、80m…），最多重试 5 次。 |
-
-### 证书存储：storage
-
-| 字段 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| `secretName` | String | **是** | 存放 `tls.crt`、`tls.key` 的 Secret 名称。 |
-| `secretNamespace` | String | 否 | Secret 所在命名空间，缺省为 EdgionAcme 所在命名空间。 |
-
-### 自动 EdgionTls：autoEdgionTls
-
-| 字段 | 类型 | 默认值 | 说明 |
-|------|------|--------|------|
-| `enabled` | Boolean | true | 是否自动创建/更新 EdgionTls。 |
-| `name` | String | 否 | EdgionTls 名称，缺省为 `acme-<EdgionAcme 名称>`。 |
-| `parentRefs` | []ParentRef | 否 | 自动创建的 EdgionTls 绑定的 Gateway。 |
-
----
-
-## 手动触发
-
-在需要立即重新发起申请或续期时（例如修正 DNS/网络后），可以手动触发一次处理，效果等同于“让 Controller 重新处理该资源”，并会重置失败重试计数。
-
-### 方式一：修改资源（kubectl）
-
-任意修改一次 EdgionAcme 的 metadata（例如加一条 annotation），Controller 会收到变更并重新处理该资源：
-
-```bash
-kubectl annotate edgionacme example-acme -n default edgion.io/trigger="$(date +%s)" --overwrite
-```
-
-### 方式二：Admin API
-
-Controller 的 Admin API 提供专用触发接口：
-
-```bash
-curl -X POST "http://<controller-admin>:12101/api/v1/services/acme/<namespace>/<name>/trigger"
-```
-
-示例：触发 `default` 命名空间下 `example-acme` 的 ACME 流程：
-
-```bash
-curl -X POST "http://localhost:12101/api/v1/services/acme/default/example-acme/trigger"
-```
-
-返回示例：
-
-```json
-{
-  "success": true,
-  "data": "ACME check triggered for default/example-acme"
-}
-```
-
-如果 ACME 服务未运行（例如当前未持有 leadership 的 Controller 副本），请求不会入队，响应会如实报告失败，而不是返回误导性的成功：
-
-```json
-{
-  "success": false,
-  "error": "ACME service not running; trigger for default/example-acme was not queued"
-}
-```
-
----
-
-## 状态与排查
-
-### 状态阶段（status.phase）
-
-| 阶段 | 说明 |
-|------|------|
-| `Pending` | 尚未签发证书，等待首次签发或重试。 |
-| `Issuing` | 正在执行 ACME 订单（校验或签发中）。 |
-| `Ready` | 证书已签发且有效。 |
-| `Renewing` | 正在续期。 |
-| `Failed` | 最近一次操作失败；会按指数退避重试，最多 5 次。 |
-
-### 常用状态字段
-
-- `status.certificateSerial`、`status.certificateNotAfter`：当前证书序列号与过期时间（RFC 3339）。
-- `status.lastFailureReason`、`status.lastFailureTime`：最近一次失败原因与时间。
-- `status.secretName`、`status.edgionTlsName`：当前使用的 Secret 与 EdgionTls 名称。
-
-### 常见问题
-
-1. **HTTP-01 校验失败**  
-   确认域名已解析到提供 HTTP 的 Gateway，且 80 端口可从公网访问；Controller 写入 token 后，Gateway 需能通过 List-Watch 收到并响应 `/.well-known/acme-challenge/<token>`。
-
-2. **DNS-01 校验超时**  
-   适当增大 `dns01.propagationTimeout`；确认 `credentialRef` 指向的 Secret 正确且 DNS 提供方 API 可用。
-
-3. **证书一直处于 Failed**  
-   查看 `status.lastFailureReason`；修复配置或网络后，使用上文“手动触发”重新发起一次，以重置重试计数。
-
----
-
-## 示例
-
-- **HTTP-01**：见仓库 `edgion-tests/integration/conf/Services/acme/http01-example.yaml`。
-- **DNS-01（Cloudflare）**：`edgion-tests/integration/conf/Services/acme/dns01-cloudflare-example.yaml`。
-- **DNS-01（阿里云）**：`edgion-tests/integration/conf/Services/acme/dns01-alidns-example.yaml`。
-- **本地集成测试（Pebble）**：`edgion-tests/integration/conf/Services/acme/pebble/` 下的 Docker Compose 与说明。
-
-与 EdgionTls 的配合使用见 [EdgionTls 用户指南](./edgion-tls.md)。
-
-## 相关文档
-
-- [TLS 终结](./tls-termination.md)
-- [EdgionTls 扩展](./edgion-tls.md)
-- [Gateway 资源总览](../overview.md)
-- [HTTPS 监听器](../listeners/https.md)

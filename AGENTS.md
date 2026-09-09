@@ -60,6 +60,14 @@ that do NOT resolve bare are the ones in `edgion-tests` (`test_server`,
   `rustls` feature is a dormant future-development seam, not a supported build target
 - Memory allocator: `allocator-jemalloc` (default) | `allocator-mimalloc` | `allocator-system`
 
+### ACME scope
+
+Built-in ACME supports HTTP-01 only. Do not add DNS-01, DNS provider adapters,
+or DNS webhook clients without an explicitly authorized scope change. For DNS-01
+or wildcard issuance, use cert-manager or another external issuer; Edgion already
+loads and hot-reloads their standard TLS Secrets through its existing certificate
+references. See [ACME service](skills/01-architecture/01-controller/08-acme-service.md).
+
 ### Gateway rustls boundary
 
 BoringSSL is the only supported Gateway TLS backend. Do not implement rustls support

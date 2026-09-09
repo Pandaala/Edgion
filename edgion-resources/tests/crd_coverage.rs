@@ -412,6 +412,23 @@ fn acme_status_declares_active_challenges() {
 }
 
 #[test]
+fn acme_challenge_crd_matches_http01_only_runtime() {
+    use edgion_resources::resources::edgion_acme::AcmeChallenge;
+
+    let spec = crd_section("edgion_acme_crd.yaml", "spec");
+    let challenge = &spec["properties"]["challenge"];
+    let types = challenge["properties"]["type"]["enum"].as_array().unwrap();
+    assert_eq!(types, &[serde_json::json!("http-01")]);
+    assert!(has_property(&spec, "challenge.gatewayRef.name"));
+    assert!(!has_property(&spec, "dnsCredentialSecret"));
+    for kind in ["http-01", "dns-01", "tls-alpn-01"] {
+        let value = serde_json::json!({"type": kind, "gatewayRef": {"name": "gateway"}});
+        let runtime_accepts = serde_json::from_value::<AcmeChallenge>(value).is_ok();
+        assert_eq!(runtime_accepts, types.contains(&serde_json::json!(kind)), "{kind}");
+    }
+}
+
+#[test]
 fn stream_spec_declares_tls_route_plugins() {
     let spec = crd_section("edgion_stream_plugins_crd.yaml", "spec");
     assert!(

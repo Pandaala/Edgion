@@ -153,6 +153,6 @@ The following plaintext copies are **not** zeroized: `SecretStore` cache, `serde
 | Secret → Gateway | Gateway | SecretRefManager | Listener `certificateRefs` and Gateway-level backend `clientCertificateRef` |
 | Secret → EdgionTls | EdgionTls | SecretRefManager | `secret_ref` / `ca_secret_ref` |
 | Secret → EdgionPlugins | EdgionPlugins | SecretRefManager | JWT / BasicAuth / HMAC / KeyAuth / OIDC, etc. |
-| Secret → EdgionAcme | EdgionAcme | SecretRefManager | `privateKeySecretRef` (account private key, `AcmeAccountResolver`) + `dns01.credentialRef` (DNS Provider API) |
+| Secret → EdgionAcme | EdgionAcme | SecretRefManager | `privateKeySecretRef` (account private key, `AcmeAccountResolver`) |
 | Secret → LinkSys | LinkSys | SecretRefManager | `auth.secretRef` (basic/apiKey/bearer/hmac) + `tls.certs.secretRef` (mTLS private key) |
 | Secret → BackendTLSPolicy | BackendTLSPolicy | SecretRefManager | Backend TLS CA and client certificate |

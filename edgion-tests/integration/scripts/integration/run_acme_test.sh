@@ -2,12 +2,11 @@
 # =============================================================================
 # ACME Integration Test Script
 #
-# Starts Pebble (ACME test CA) + challtestsrv, runs ACME integration tests,
+# Starts Pebble (ACME test CA), runs account integration tests,
 # and cleans up.
 #
 # Usage:
 #   ./run_acme_test.sh              # Run all ACME tests
-#   ./run_acme_test.sh dns01        # Run only DNS-01 test
 #   ./run_acme_test.sh --no-build   # Require an already prepared test_client
 #   ./run_acme_test.sh --no-cleanup # Keep Pebble running after tests
 # =============================================================================
@@ -111,13 +110,6 @@ for i in $(seq 1 $MAX_WAIT); do
     fi
     sleep 1
 done
-
-# Also check challtestsrv
-if curl -s http://localhost:8055 > /dev/null 2>&1; then
-    log_success "challtestsrv is ready"
-else
-    log_warn "challtestsrv may not be ready yet, continuing..."
-fi
 
 # Extract Pebble's TLS CA certificate (needed for instant-acme to trust Pebble)
 log_info "Extracting Pebble TLS CA certificate..."

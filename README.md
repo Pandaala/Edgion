@@ -16,7 +16,7 @@ A high-performance API Gateway built on [Pingora](https://github.com/cloudflare/
 - **Dynamic hot reload** — Every change to routes, backends, plugins, or certificates propagates across all gateways instantly. No restart.
 - **Production-ready Kubernetes controller** — Full reconciliation loop, status reporting, and CRD lifecycle management out of the box.
 - **High-performance routing** — Radix tree with cache optimization and path variable support for Exact/Prefix matching. Priority-based rule evaluation per Gateway API spec.
-- **Advanced TLS** — mTLS, ACME auto-provisioning (HTTP-01 / DNS-01), per-domain TLS version and cipher suite control.
+- **Advanced TLS** — mTLS, ACME auto-provisioning (HTTP-01), per-domain TLS version and cipher suite control.
 - **Traffic management** — Weighted canary routing; multiple load balancing algorithms (Round Robin, EWMA, Least Connections, Consistent Hashing, Weighted).
 - **Powerful plugin system** — Composable via plugin reference, with a built-in DSL for custom logic.
   - HTTP plugins: Authentication · Security · Traffic management · Observability (25+)

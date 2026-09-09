@@ -40,7 +40,7 @@ that global lookup or lock it in as desired product behavior.
 
 **2. The missing coverage is D0026's acceptance, not a second finding.**
 
-Existing ACME integration coverage is account and DNS-01 oriented. Source-local
+At that audit, ACME integration coverage was account and DNS-01 oriented. The DNS-01 cases were removed with the feature on 2026-09-09; account integration and HTTP-01 store tests remain. Source-local
 store tests cannot prove Controller-to-conf-sync-to-listener ownership across
 two Gateway identities. After D0026 lands, add one new dynamic scenario there:
 two Gateway/listener ports share one challenge Host/token; selected A serves

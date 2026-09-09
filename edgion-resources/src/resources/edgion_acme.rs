@@ -1,7 +1,7 @@
 //! EdgionAcme CRD definition
 //!
 //! Manages automatic TLS certificate issuance and renewal via the ACME protocol (RFC 8555).
-//! Supports HTTP-01 and DNS-01 challenges with automatic EdgionTls/Secret creation.
+//! Supports HTTP-01 challenges with automatic EdgionTls/Secret creation.
 
 use super::common::Condition;
 
@@ -17,28 +17,14 @@ use serde::{Deserialize, Serialize};
 
 /// ACME challenge configuration.
 ///
-/// Tagged enum with `type: http-01 | dns-01` discriminator. The fields specific
-/// to each challenge are flat under the discriminator, so non-applicable fields
-/// cannot be expressed in YAML at all (the type system prevents the
-/// "type=http-01 + dns01 fields" misconfiguration).
-///
 /// ```yaml
 /// challenge:
 ///   type: http-01
 ///   gatewayRef:
 ///     name: my-gateway
 /// ```
-///
-/// ```yaml
-/// challenge:
-///   type: dns-01
-///   provider: cloudflare
-///   credentialRef:
-///     name: cf-api-token
-///   propagationTimeout: 180s
-/// ```
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(tag = "type")]
+#[serde(tag = "type", deny_unknown_fields)]
 pub enum AcmeChallenge {
     /// HTTP-01 challenge: ACME server validates domain ownership via HTTP request.
     #[serde(rename = "http-01", rename_all = "camelCase")]
@@ -48,42 +34,6 @@ pub enum AcmeChallenge {
         /// only when there are active challenges.
         gateway_ref: ParentReference,
     },
-    /// DNS-01 challenge: ACME server validates domain ownership via DNS TXT record.
-    #[serde(rename = "dns-01", rename_all = "camelCase")]
-    Dns01 {
-        /// DNS provider name: "cloudflare" or "alidns"
-        provider: String,
-
-        /// Secret reference containing DNS provider API credentials.
-        /// Expected Secret keys vary by provider:
-        ///   - cloudflare: "api-token"
-        ///   - alidns: "access-key-id", "access-key-secret"
-        credential_ref: SecretObjectReference,
-
-        /// Upper bound on the DNS propagation wait (GEP-2257 duration,
-        /// default: "120s"). The controller polls the zone's authoritative
-        /// nameservers for the challenge TXT records and activates the ACME
-        /// challenges as soon as all records are visible; this timeout caps
-        /// the poll loop (evaluated between check rounds — an in-flight
-        /// round may run slightly past it), it is not a fixed wait.
-        #[serde(default = "default_propagation_timeout")]
-        #[schemars(pattern(crate::duration::GEP2257_PATTERN))]
-        propagation_timeout: String,
-
-        /// Poll cadence for the DNS propagation check (GEP-2257 duration,
-        /// default: "5s").
-        #[serde(default = "default_propagation_check_interval")]
-        #[schemars(pattern(crate::duration::GEP2257_PATTERN))]
-        propagation_check_interval: String,
-    },
-}
-
-fn default_propagation_timeout() -> String {
-    "120s".to_string()
-}
-
-fn default_propagation_check_interval() -> String {
-    "5s".to_string()
 }
 
 // ============================================================================
@@ -274,7 +224,7 @@ pub struct EdgionAcmeSpec {
     pub private_key_secret_ref: SecretObjectReference,
 
     /// Domain names to obtain certificates for.
-    /// Wildcard domains (e.g., "*.example.com") require DNS-01 challenge.
+    /// Wildcard domains are unsupported; use an externally issued TLS Secret.
     pub domains: Vec<String>,
 
     /// Certificate key algorithm (default: ecdsa-p256)
@@ -390,12 +340,7 @@ impl EdgionAcme {
         matches!(self.spec.challenge, AcmeChallenge::Http01 { .. })
     }
 
-    /// Check if this ACME config uses DNS-01 challenge
-    pub fn is_dns01(&self) -> bool {
-        matches!(self.spec.challenge, AcmeChallenge::Dns01 { .. })
-    }
-
-    /// Check if any domain requires DNS-01 (wildcard domains)
+    /// Check if any domain is a wildcard (unsupported by built-in ACME)
     pub fn has_wildcard_domains(&self) -> bool {
         self.spec.domains.iter().any(|d| d.starts_with("*."))
     }
@@ -476,56 +421,15 @@ spec:
     }
 
     #[test]
-    fn test_dns01_yaml_deserialization() {
-        let yaml = r#"
-apiVersion: edgion.io/v1
-kind: EdgionAcme
-metadata:
-  name: wildcard-acme
-  namespace: default
-spec:
-  email: admin@example.com
-  privateKeySecretRef:
-    name: wildcard-acme-account
-  domains:
-    - "*.example.com"
-    - example.com
-  keyType: ecdsa-p384
-  challenge:
-    type: dns-01
-    provider: cloudflare
-    credentialRef:
-      name: cf-api-token
-      namespace: default
-    propagationTimeout: 180s
-  renewal:
-    renewBefore: 336h
-    checkInterval: 12h
-  storage:
-    secretName: wildcard-cert
-    secretNamespace: cert-store
-"#;
-
-        let acme: Result<EdgionAcme, _> = serde_yaml::from_str(yaml);
-        assert!(acme.is_ok(), "Failed to deserialize YAML: {:?}", acme.err());
-
-        let acme = acme.unwrap();
-        assert!(acme.is_dns01());
-        assert!(acme.has_wildcard_domains());
-        assert_eq!(acme.spec.key_type, AcmeKeyType::EcdsaP384);
-        assert_eq!(acme.spec.renewal.renew_before, "336h");
-        assert_eq!(acme.spec.renewal.check_interval, "12h");
-
-        match &acme.spec.challenge {
-            AcmeChallenge::Dns01 {
-                provider,
-                propagation_timeout,
-                ..
-            } => {
-                assert_eq!(provider, "cloudflare");
-                assert_eq!(propagation_timeout, "180s");
-            }
-            other => panic!("expected Dns01 variant, got {:?}", other),
+    fn challenge_rejects_unsupported_types_and_dns_fields() {
+        for yaml in [
+            "type: dns-01\nprovider: cloudflare\ncredentialRef:\n  name: dns-token",
+            "type: tls-alpn-01\ngatewayRef:\n  name: gw",
+            "type: http-01\ngatewayRef:\n  name: gw\nprovider: cloudflare",
+            "type: http-01\ngatewayRef:\n  name: gw\ncredentialRef:\n  name: dns-token",
+            "type: http-01\ngatewayRef:\n  name: gw\npropagationTimeout: 120s",
+        ] {
+            assert!(serde_yaml::from_str::<AcmeChallenge>(yaml).is_err(), "accepted: {yaml}");
         }
     }
 

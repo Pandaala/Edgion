@@ -1,6 +1,6 @@
 // ACME Service Integration Tests
 //
-// Validates the full ACME certificate issuance flow against Pebble
+// Validates ACME account creation and credential restoration against Pebble
 // (Let's Encrypt's official ACME test server).
 //
 // Prerequisites:
@@ -9,8 +9,6 @@
 //
 // These tests exercise:
 //   - AcmeClient account creation & credential restore
-//   - DNS-01 full certificate issuance flow
-//   - DNS-01 multi-domain (SAN) certificates
 
 mod acme;
 

@@ -10,6 +10,8 @@ knowledge_type: intentional-design
 **Linked issue**: P1-05 (closed, only the code-defect parts fixed; no architectural refactoring)
 **File**: `edgion-controller/src/services/acme/service.rs` (~1158 lines)
 
+DNS-01 was removed on 2026-09-09. DNS-specific references below are historical; the service-structure decisions continue to apply to HTTP-01.
+
 ## Already Fixed (former real defects)
 
 - Status write-back was silently dropped → now `if let Err(status_err) = update_acme_status(...)` logs `tracing::warn!` (service.rs:395-409)
@@ -19,7 +21,7 @@ These are the defect categories corrected in that historical audit, not an
 exhaustive list of valid ACME findings. The accepted choices below concern service
 structure and SSA ownership only; they do not exempt newly demonstrated security
 or correctness defects. DNS provider error disclosure is covered separately by
-[the diagnostic redaction guard](../regression-guards/dns-provider-error-redaction.md).
+[the diagnostic redaction guard](../superseded/dns01-retired.md).
 
 ## Fix Suggestions Not Accepted (after this audit)
 

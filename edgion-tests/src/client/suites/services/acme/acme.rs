@@ -1,6 +1,6 @@
 // ACME Service Integration Test Suite
 //
-// Validates the full ACME certificate issuance flow against Pebble
+// Validates ACME account creation and credential restoration against Pebble
 // (Let's Encrypt's official ACME test server).
 //
 // Prerequisites:
@@ -14,13 +14,9 @@ use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use std::time::Instant;
 
 use edgion_controller::services::acme::acme_client::AcmeClient;
-use edgion_controller::services::acme::dns_provider::{create_dns_provider, DnsProvider};
-use edgion_resources::resources::edgion_acme::AcmeKeyType;
 
 /// Pebble ACME directory URL
 const PEBBLE_DIR: &str = "https://localhost:14000/dir";
-/// challtestsrv management API
-const CHALLTEST_API: &str = "http://localhost:8055";
 /// Test email
 const TEST_EMAIL: &str = "test@example.com";
 
@@ -36,12 +32,7 @@ impl TestSuite for AcmeTestSuite {
     }
 
     fn test_cases(&self) -> Vec<TestCase> {
-        vec![
-            Self::test_pebble_ready(),
-            Self::test_account_create_and_restore(),
-            Self::test_dns01_full_flow(),
-            Self::test_dns01_multi_domain(),
-        ]
+        vec![Self::test_pebble_ready(), Self::test_account_create_and_restore()]
     }
 }
 
@@ -127,158 +118,6 @@ impl AcmeTestSuite {
             },
         )
     }
-
-    /// Test: DNS-01 full certificate issuance flow
-    fn test_dns01_full_flow() -> TestCase {
-        TestCase::new(
-            "dns01_full_flow",
-            "DNS-01 challenge: single domain certificate issuance via Pebble",
-            |_ctx: TestContext| {
-                Box::pin(async move {
-                    let start = Instant::now();
-
-                    let client = match create_pebble_client().await {
-                        Ok(c) => c,
-                        Err(e) => return TestResult::failed(start.elapsed(), format!("Client: {}", e)),
-                    };
-                    let dns_provider = create_pebble_dns_provider();
-                    let domains = vec!["dns01-test.example.com".to_string()];
-
-                    // Phase 1: Prepare order
-                    let (pending, mut order_ctx) = match client.prepare_dns01_order(&domains).await {
-                        Ok(r) => r,
-                        Err(e) => return TestResult::failed(start.elapsed(), format!("Prepare: {}", e)),
-                    };
-
-                    if pending.is_empty() {
-                        return TestResult::failed(start.elapsed(), "No pending challenges".to_string());
-                    }
-
-                    // Phase 2: Create DNS TXT records
-                    for ch in &pending {
-                        if let Err(e) = dns_provider.create_txt_record(&ch.domain, &ch.digest).await {
-                            return TestResult::failed(start.elapsed(), format!("TXT create: {}", e));
-                        }
-                    }
-
-                    // Phase 3: Wait for propagation
-                    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-
-                    // Phase 4: Activate challenges
-                    if let Err(e) = client.activate_dns01_challenges(&mut order_ctx).await {
-                        return TestResult::failed(start.elapsed(), format!("Activate: {}", e));
-                    }
-
-                    // Phase 5: Complete order
-                    let cert_result = match client
-                        .complete_dns01_order(order_ctx, &domains, &AcmeKeyType::EcdsaP256)
-                        .await
-                    {
-                        Ok(r) => r,
-                        Err(e) => return TestResult::failed(start.elapsed(), format!("Complete: {}", e)),
-                    };
-
-                    // Validate
-                    if !cert_result.certificate_pem.contains("BEGIN CERTIFICATE") {
-                        return TestResult::failed(start.elapsed(), "Missing PEM certificate".to_string());
-                    }
-                    if !cert_result.private_key_pem.contains("BEGIN") {
-                        return TestResult::failed(start.elapsed(), "Missing PEM private key".to_string());
-                    }
-
-                    // Parse cert info
-                    let msg = match x509_parser::pem::parse_x509_pem(cert_result.certificate_pem.as_bytes()) {
-                        Ok((_, pem)) => match pem.parse_x509() {
-                            Ok(cert) => format!(
-                                "Certificate issued, serial={}, not_after={:?}",
-                                cert.serial.to_str_radix(16),
-                                cert.validity().not_after,
-                            ),
-                            Err(_) => "Certificate issued (parse failed)".to_string(),
-                        },
-                        Err(_) => "Certificate issued (PEM parse failed)".to_string(),
-                    };
-
-                    // Cleanup
-                    for ch in &pending {
-                        let _ = dns_provider.remove_txt_record(&ch.domain, &ch.digest).await;
-                    }
-
-                    TestResult::passed_with_message(start.elapsed(), msg)
-                })
-            },
-        )
-    }
-
-    /// Test: DNS-01 multi-domain (SAN) certificate
-    fn test_dns01_multi_domain() -> TestCase {
-        TestCase::new(
-            "dns01_multi_domain",
-            "DNS-01 challenge: multi-domain SAN certificate (3 domains)",
-            |_ctx: TestContext| {
-                Box::pin(async move {
-                    let start = Instant::now();
-
-                    let client = match create_pebble_client().await {
-                        Ok(c) => c,
-                        Err(e) => return TestResult::failed(start.elapsed(), format!("Client: {}", e)),
-                    };
-                    let dns_provider = create_pebble_dns_provider();
-                    let domains = vec![
-                        "multi1.example.com".to_string(),
-                        "multi2.example.com".to_string(),
-                        "multi3.example.com".to_string(),
-                    ];
-
-                    // Prepare
-                    let (pending, mut order_ctx) = match client.prepare_dns01_order(&domains).await {
-                        Ok(r) => r,
-                        Err(e) => return TestResult::failed(start.elapsed(), format!("Prepare: {}", e)),
-                    };
-
-                    if pending.len() != 3 {
-                        return TestResult::failed(
-                            start.elapsed(),
-                            format!("Expected 3 challenges, got {}", pending.len()),
-                        );
-                    }
-
-                    // Create DNS records
-                    for ch in &pending {
-                        if let Err(e) = dns_provider.create_txt_record(&ch.domain, &ch.digest).await {
-                            return TestResult::failed(start.elapsed(), format!("TXT create: {}", e));
-                        }
-                    }
-
-                    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-
-                    // Activate & complete
-                    if let Err(e) = client.activate_dns01_challenges(&mut order_ctx).await {
-                        return TestResult::failed(start.elapsed(), format!("Activate: {}", e));
-                    }
-
-                    let cert_result = match client
-                        .complete_dns01_order(order_ctx, &domains, &AcmeKeyType::EcdsaP256)
-                        .await
-                    {
-                        Ok(r) => r,
-                        Err(e) => return TestResult::failed(start.elapsed(), format!("Complete: {}", e)),
-                    };
-
-                    if !cert_result.certificate_pem.contains("BEGIN CERTIFICATE") {
-                        return TestResult::failed(start.elapsed(), "Missing PEM certificate".to_string());
-                    }
-
-                    // Cleanup
-                    for ch in &pending {
-                        let _ = dns_provider.remove_txt_record(&ch.domain, &ch.digest).await;
-                    }
-
-                    TestResult::passed_with_message(start.elapsed(), "3-domain SAN certificate issued".to_string())
-                })
-            },
-        )
-    }
 }
 
 // ============================================================================
@@ -346,18 +185,4 @@ async fn download_pebble_tls_ca() -> anyhow::Result<std::path::PathBuf> {
     }
 
     Ok(path)
-}
-
-/// Create an AcmeClient connected to Pebble.
-async fn create_pebble_client() -> anyhow::Result<AcmeClient> {
-    let ca_path = download_pebble_tls_ca().await?;
-    let (client, _creds) = AcmeClient::new_with_ca(PEBBLE_DIR, TEST_EMAIL, &ca_path).await?;
-    Ok(client)
-}
-
-/// Create the Pebble DNS provider (calls challtestsrv REST API).
-fn create_pebble_dns_provider() -> Box<dyn DnsProvider> {
-    let mut creds = std::collections::HashMap::new();
-    creds.insert("api-url".to_string(), CHALLTEST_API.to_string());
-    create_dns_provider("pebble", &creds).expect("Failed to create pebble DNS provider")
 }

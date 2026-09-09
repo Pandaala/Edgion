@@ -63,7 +63,7 @@ description: Feature and configuration schema reference for all Kubernetes resou
 |----------|-------------|
 | [09-edgion-tls.md](09-edgion-tls.md) | Extended TLS: mTLS, versions, cipher suites, OCSP |
 | [12-backend-tls-policy.md](12-backend-tls-policy.md) | Upstream TLS validation, CA, SAN |
-| [17-acme.md](17-acme.md) | ACME automatic certificates: HTTP-01/DNS-01, renewal, storage |
+| [17-acme.md](17-acme.md) | ACME automatic certificates: HTTP-01, renewal, storage |
 
 ### Plugins
 

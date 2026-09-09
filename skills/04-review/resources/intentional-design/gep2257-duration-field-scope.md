@@ -11,12 +11,12 @@ knowledge_type: intentional-design
 
 ## Conclusion
 
-Exactly seven CR-surface duration fields were converted from integers to
+The historical conversion covered seven CR-surface duration fields; the two DNS-01 fields were later removed with DNS-01 on 2026-09-09. Seven fields were converted from integers to
 GEP-2257 strings (2026-07-19): `EdgionAcme` `renewal.renewBefore` (was
 `renewBeforeDays`), `renewal.checkInterval`, `renewal.failBackoff`, dns-01
 `propagationTimeout`, `propagationCheckInterval` (the latter removed
 2026-07-20 as a dead knob — see
-[acme-propagation-check-interval-removed.md](../../acme/regression-guards/acme-propagation-check-interval-removed.md));
+[acme-propagation-check-interval-removed.md](../../acme/superseded/dns01-retired.md));
 `EdgionBackendTrafficPolicy`
 `outlierDetection.ejectionTime` (was `ejectionSeconds`) and `maxEjectionTime`
 (was `maxEjectionSeconds`). Every other integer duration field in the

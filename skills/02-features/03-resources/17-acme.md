@@ -1,13 +1,13 @@
 ---
 name: acme-features
-description: Full EdgionAcme CRD schema: Let's Encrypt automatic certificate issuance, renewal, DNS-01/HTTP-01 challenges.
+description: Full EdgionAcme CRD schema: Let's Encrypt automatic certificate issuance, renewal, HTTP-01 challenges.
 ---
 
 # EdgionAcme Resource
 
 > API: `edgion.io/v1` | Scope: Namespaced
 
-EdgionAcme implements automatic certificate management via the ACME protocol (Let's Encrypt and similar), supporting HTTP-01 and DNS-01 challenges.
+EdgionAcme implements automatic certificate management via the ACME protocol (Let's Encrypt and similar), supporting HTTP-01 challenges.
 
 ## Full Schema
 
@@ -22,23 +22,15 @@ spec:
   email: "admin@example.com"                                  # Required: contact email
   domains:                                                     # Required: certificate domain list
     - "example.com"
-    - "*.example.com"                                          # Wildcard domains require DNS-01
+    - "www.example.com"
 
   keyType: ecdsa-p256                                          # Certificate key algorithm
 
-  challenge:                                                   # tagged enum: type=http-01 | dns-01
+  challenge:                                                   # tagged enum: type=http-01
     type: http-01
     gatewayRef:                                                # Gateway reference required by HTTP-01
       name: my-gateway
       namespace: default
-    # When switching to DNS-01, replace the entire section with:
-    # type: dns-01
-    # provider: cloudflare                                     # cloudflare | alidns
-    # credentialRef:
-    #   name: cloudflare-api-token
-    #   namespace: default
-    # propagationTimeout: 120s
-    # propagationCheckInterval: 5s
 
   renewal:
     renewBefore: 720h                                          # Renew this far before expiration (720h = 30 days)
@@ -83,36 +75,13 @@ spec:
 
 ### challenge — Challenge Configuration
 
-`challenge` is a `#[serde(tag = "type")]` internally tagged enum, corresponding to the Rust `AcmeChallenge`. `type` determines the variant, and the corresponding fields are flattened directly under `challenge`; there are no `http01:` / `dns01:` sub-fields. The two field groups are mutually exclusive at the type level.
+`challenge` accepts only `type: http-01` and a required `gatewayRef`. Unknown fields and other challenge types are rejected.
 
 **HTTP-01** (`type: http-01`):
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `gatewayRef` | `ParentReference` | Yes | Gateway used to respond to the ACME challenge |
-
-**DNS-01** (`type: dns-01`):
-
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `provider` | `String` | — | DNS provider: `cloudflare` / `alidns` |
-| `credentialRef` | `SecretObjectReference` | — | API credentials Secret |
-| `propagationTimeout` | `String` | `"120s"` | DNS propagation polling timeout (GEP-2257 duration; runtime minimum `10s`). Evaluated between check rounds, not a fixed wait or a hard wall-clock cutoff |
-| `propagationCheckInterval` | `String` | `"5s"` | Wait between propagation check rounds (GEP-2257 duration; runtime minimum `1s`). The last wait is shortened to the remaining timeout |
-
-After creating the challenge TXT records, the Controller polls the zone's
-authoritative nameservers; recursive resolution is used only to discover those
-servers. Validation starts as soon as every record has been confirmed visible.
-At timeout, if any remaining record was definitively observed missing and never
-subsequently confirmed present, the Controller performs best-effort TXT cleanup
-and fails into the `failBackoff` retry path. If all remaining records were only
-ever unverifiable, it logs a warning and proceeds optimistically after the full
-timeout. An in-flight check round is not interrupted, so the wait may exceed the
-configured timeout.
-
-See the [ACME operations guide](../../../docs/en/ops-guide/gateway/tls/acme.md)
-and [propagation review knowledge](../../04-review/acme/regression-guards/acme-propagation-check-interval-removed.md)
-for operational guidance and the verified polling boundaries.
 
 ### renewal — Renewal Configuration
 
@@ -173,4 +142,4 @@ status:
 
 - The ACME service only runs on the **Leader** Controller.
 - HTTP-01 challenges require port 80 of the Gateway to be reachable.
-- Wildcard domains must use the DNS-01 challenge.
+- Built-in ACME rejects wildcard domains. For DNS-01/wildcard issuance, use cert-manager or another external issuer and reference its TLS Secret through Gateway/EdgionTls. Edgion hot-reloads those Secret updates.
