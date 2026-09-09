@@ -47,6 +47,15 @@ When other resources' Handlers check cross-namespace references during the parse
 
 ReferenceGrant validation can be disabled by configuration (`is_reference_grant_validation_enabled()`), in which case all cross-namespace references are allowed by default.
 
+RequestMirror backend references use the same `RefDenied` transport contract.
+Native HTTPRoute filters authorize with the declaring route's identity, including
+delegated rule/backend filters; EdgionPlugins mirrors authorize as
+`edgion.io/EdgionPlugins`. Denial reports `ResolvedRefs=False/RefNotPermitted` on
+the owning resource and skips only the mirror before endpoint selection, leaving
+the primary request active. Both publishers register cross-namespace dependencies
+for grant-change revalidation. See the
+[mirror authorization guard](../../04-review/request-mirror/regression-guards/mirror-reference-grant-enforcement.md).
+
 ## Cross-resource relationships
 
 | Direction | Target resource | Mechanism | Notes |

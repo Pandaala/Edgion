@@ -6,6 +6,9 @@ metadata:
 spec:
   # Allow routes from edgion-default to reference Services in edgion-test
   from:
+    - group: edgion.io
+      kind: EdgionPlugins
+      namespace: edgion-default
     - group: gateway.networking.k8s.io
       kind: HTTPRoute
       namespace: edgion-default

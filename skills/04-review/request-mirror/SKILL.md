@@ -16,6 +16,8 @@ before applying a decision to current code.
 
 ## Regression guards
 
+- [Mirror backend ReferenceGrant enforcement](regression-guards/mirror-reference-grant-enforcement.md)
+
 - [Unit tests isolate the writer transport](regression-guards/unit-tests-without-network.md)
 - [Shared concurrency and retained body budgets](regression-guards/mirror-resource-budgets.md)
 - [BODY-014 — RequestMirror Uses the Committed Body Snapshot — FIXED](regression-guards/request-mirror-committed-body-snapshot.md)

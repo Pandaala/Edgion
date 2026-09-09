@@ -33,6 +33,47 @@ spec:
 
 ---
 
+## Cross-namespace authorization
+
+The default target namespace is the declaring **EdgionPlugins** resource's
+namespace. Only core Service targets (`group: ""`, `kind: Service`) are supported.
+
+With Controller ReferenceGrant validation enabled (the default), a cross-namespace
+mirror requires a grant in the target namespace. Its `from` must identify
+`group: edgion.io`, `kind: EdgionPlugins`, and the plugin resource's namespace.
+A grant for HTTPRoute does not authorize this plugin reference.
+
+```yaml
+apiVersion: gateway.networking.k8s.io/v1
+kind: ReferenceGrant
+metadata:
+  name: allow-production-plugin-mirror
+  namespace: testing
+spec:
+  from:
+    - group: edgion.io
+      kind: EdgionPlugins
+      namespace: production
+  to:
+    - group: ""
+      kind: Service
+      name: mirror-service
+```
+
+A denied target sets `ResolvedRefs=False/RefNotPermitted` on EdgionPlugins.
+Edgion skips that mirror with `mirror ref denied` in the request's plugin log;
+the primary request continues. Unsupported target groups or kinds are skipped
+and reported as `InvalidKind`. Grant changes automatically revalidate the plugin.
+New requests use the updated decision after configuration sync; already-started
+mirror tasks are not cancelled by revocation.
+
+If either the previous or incoming plugin configuration contains an enabled
+cross-namespace mirror that is not replaced by PluginPolicy, an invalid DSL/WAF
+update fails closed with HTTP 500 instead of retaining the previous plugin runtime.
+This prevents an old mirror from retaining authorization after its target is
+changed, removed, or revoked. After the configuration is valid again, ordinary
+mirror denial only skips the mirror.
+
 ## Configuration Reference
 
 | Parameter | Type | Default | Description |
@@ -41,7 +82,7 @@ spec:
 | `backendRef.name` | String | **Required** | Backend service name |
 | `backendRef.group` | String | `""` (core) | API group of the referent |
 | `backendRef.kind` | String | `Service` | Kind of the referent |
-| `backendRef.namespace` | String | same as route | Backend service namespace |
+| `backendRef.namespace` | String | same as EdgionPlugins | Backend service namespace |
 | `backendRef.port` | Integer | none | Backend service port |
 | `fraction` | Object | none (100%) | Mirror traffic fraction (Gateway API style) |
 | `fraction.numerator` | Integer | **Required** (within `fraction`) | Numerator |

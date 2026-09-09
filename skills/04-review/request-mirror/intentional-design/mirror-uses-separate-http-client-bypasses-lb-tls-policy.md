@@ -16,11 +16,12 @@ shadow copy of a request via a standalone `reqwest::Client` rather than through 
 `LbBackend` / `get_peer` upstream machinery used by the primary request. As a result the
 mirror path diverges from the primary path in three ways:
 
-1. **LB policy bypass** — `RequestMirrorPlugin::resolve_target` calls `select_roundrobin_backend_key`,
-   which is plain round-robin; the service's configured EWMA / LeastConn / ConsistentHash policy
+1. **LB policy bypass** — `RequestMirrorPlugin::resolve_target` now calls `select_service_endpoint`
+   with no explicit LB policy (the historical `select_roundrobin_backend_key` was replaced).
+   It uses the default selector; the route's configured EWMA / LeastConn / ConsistentHash policy
    does not apply to mirror traffic.
 2. **BackendTLSPolicy bypass** — the scheme is a port heuristic `port == 443 → https`
-   inside `RequestMirrorPlugin::resolve_target`, already marked `// TODO(Phase 2)`; a mirror target
+   inside `RequestMirrorPlugin::resolve_target`, marked with a BackendTLSPolicy TODO; a mirror target
    requiring mTLS never receives a client certificate, so the backend silently rejects the mirror
    connection.
 3. **Dedicated connection pool** — mirror traffic uses a process-wide `reqwest::Client` singleton
@@ -28,9 +29,15 @@ mirror path diverges from the primary path in three ways:
    reloads and shares its pool across every RequestMirror instance. (This client-sharing
    sub-aspect was fixed by the separate sibling finding F-017; see Reference Cases.)
 
-Health-check and circuit-breaker ejection ARE honored for the mirror path
-(`select_roundrobin_backend_key` → `is_backend_healthy`, `backends/selector.rs`), correcting the
-original finding's claim that they are ignored.
+The historical review found that health-check and circuit-breaker eligibility were
+not unconditionally bypassed. The current selector uses the canonical Service
+projection and `runtime_eligible`, with `ServiceDegradePolicy::Live`; live degradation
+may relax eligibility. These are existing selector semantics, not a fresh claim
+that every mirror always excludes unhealthy endpoints.
+
+This TLS/LB tradeoff never authorizes cross-namespace delivery without a grant.
+Mirror ReferenceGrant enforcement is covered by
+[the authorization regression guard](../regression-guards/mirror-reference-grant-enforcement.md).
 
 Fix suggestions of the form "route the mirror through `LbBackend` / `get_peer`", "make the
 mirror a first-class Pingora upstream request like Envoy's `request_mirror_policy`", "query
@@ -64,8 +71,8 @@ This is consistent with a medium-severity gap, not a critical one.
 
 **3. The BackendTLSPolicy gap is an acknowledged Phase-2 item, not an oversight**
 
-The port-heuristic scheme already carries an explicit `// TODO(Phase 2): Use BackendTLSPolicy to
-determine TLS instead of port heuristic.` comment in `RequestMirrorPlugin::resolve_target`. The
+The port-heuristic scheme carries an explicit `Use BackendTLSPolicy to
+determine TLS instead of port heuristic` TODO in `RequestMirrorPlugin::resolve_target`. The
 limitation is recorded at the call site; it is a deferred feature, not an undiagnosed defect, and
 re-filing it as a bug does not change the disposition.
 
@@ -107,6 +114,6 @@ Re-open this decision only if:
 - Source: `edgion-gateway/src/plugins/http/request_mirror/plugin.rs`
   (`RequestMirrorPlugin::resolve_target` for round-robin + port-heuristic scheme, and its
   `<RequestMirrorPlugin as RequestFilter>::run_request` implementation for the fire-and-forget spawn);
-  `edgion-gateway/src/backends/selector.rs` (`select_roundrobin_backend_key` → `is_backend_healthy`).
+  `edgion-gateway/src/backends/selector.rs` (`select_service_endpoint` and eligibility/degradation).
 </content>
 </invoke>

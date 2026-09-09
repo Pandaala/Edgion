@@ -66,10 +66,16 @@ Pre-release, no compat shim.
 
 ## Standing Rule for Future Reviews
 
-Any Edgion extension field embedded in a type that the **vendored Gateway API
+Any operator-facing Edgion extension field embedded in a type that the **vendored Gateway API
 CRD** serves (HTTPRoute/GRPCRoute/Gateway spec subtrees) is a silent-prune bug
 in K8s mode. New route-scoped knobs go into `edgion.io/*` annotations (or an
 Edgion-owned resource), never into the vendored-CRD-backed structs.
+
+Controller-owned transport metadata is a separate class: it remains serialized
+for conf_sync and carries `#[schemars(skip)]`. The mirror's `ref_denied` follows
+that contract; it is not a tuning field or a CRD extension. See
+[mirror authorization](../regression-guards/mirror-reference-grant-enforcement.md)
+and the [schema/transport contract](../../../01-architecture/05-resources/00-schema-transport-contract.md).
 
 ## Re-evaluation Triggers
 

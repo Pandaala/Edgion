@@ -33,13 +33,50 @@ spec:
 
 ---
 
+## 跨命名空间授权
+
+默认目标命名空间是声明镜像的 **EdgionPlugins** 资源所在命名空间。
+镜像目标仅支持核心 Service（`group: ""`、`kind: Service`）。
+
+Controller 默认启用 ReferenceGrant 校验。跨命名空间镜像需要目标命名空间
+中的授权，其 `from` 必须指定 `group: edgion.io`、
+`kind: EdgionPlugins` 和插件资源所在命名空间。
+针对 HTTPRoute 的授权不能授权这个插件引用。
+
+```yaml
+apiVersion: gateway.networking.k8s.io/v1
+kind: ReferenceGrant
+metadata:
+  name: allow-production-plugin-mirror
+  namespace: testing
+spec:
+  from:
+    - group: edgion.io
+      kind: EdgionPlugins
+      namespace: production
+  to:
+    - group: ""
+      kind: Service
+      name: mirror-service
+```
+
+目标被拒绝时，EdgionPlugins 报告 `ResolvedRefs=False/RefNotPermitted`。
+Edgion 跳过该镜像，在请求的插件日志中记录 `mirror ref denied`，主请求继续。
+不支持的目标 group 或 kind 会被跳过，并报告 `InvalidKind`。
+授权变化会自动触发插件重新校验；配置同步后，新请求使用更新的授权结果，
+但撤销授权不会取消已经启动的镜像任务。
+
+如果旧配置或新配置包含启用且未被 PluginPolicy 替代的跨命名空间镜像，无效的 DSL/WAF 更新会返回
+HTTP 500，而不会保留旧插件运行时，防止目标变更、删除或撤销授权后旧镜像仍继续发送。
+配置恢复有效后，普通镜像授权拒绝仅跳过镜像。
+
 ## 配置参数
 
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
 | `backendRef` | Object | ✅ | 无 | 镜像后端引用 |
 | `backendRef.name` | String | ✅ | 无 | 后端服务名称 |
-| `backendRef.namespace` | String | ❌ | 同路由 | 后端服务命名空间 |
+| `backendRef.namespace` | String | ❌ | 同 EdgionPlugins | 后端服务命名空间 |
 | `backendRef.port` | Integer | ❌ | 无 | 后端服务端口 |
 | `fraction` | Object | ❌ | 无 (100%) | 镜像流量比例 |
 | `fraction.numerator` | Integer | ✅ | 无 | 分子 |

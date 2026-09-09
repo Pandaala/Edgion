@@ -4,6 +4,41 @@
 
 `RequestMirror` 将部分入站请求复制到第二个后端，同时由路由的主后端正常处理原始请求。它是标准 Gateway API 过滤器，在请求阶段运行。镜像采用 fire-and-forget 模式：镜像响应被丢弃，永远不会影响客户端，因此可安全地对新服务版本进行生产流量的影子测试。
 
+## 跨命名空间授权
+
+镜像目标仅支持核心 Service（`group: ""`、`kind: Service`）。
+省略 `backendRef.namespace` 时，使用声明该过滤器的 HTTPRoute 所在命名空间；
+通过路由委派继承的过滤器也保留声明者的命名空间。
+
+Controller 默认启用 ReferenceGrant 校验。跨命名空间镜像必须由目标命名空间
+中的 ReferenceGrant 授权。例如，允许 `production` 中的 HTTPRoute 镜像到
+`testing/mirror-service`：
+
+```yaml
+apiVersion: gateway.networking.k8s.io/v1
+kind: ReferenceGrant
+metadata:
+  name: allow-production-mirror
+  namespace: testing
+spec:
+  from:
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      namespace: production
+  to:
+    - group: ""
+      kind: Service
+      name: mirror-service
+```
+
+没有匹配授权时，路由报告 `ResolvedRefs=False`，原因是 `RefNotPermitted`。
+Edgion 跳过被拒绝的镜像，在请求的插件日志中记录 `mirror ref denied`，
+主请求继续处理。规则级和后端级镜像过滤器遵循相同规则。
+不支持的目标 group 或 kind 会被跳过，并报告 `InvalidKind`。
+
+授权新增、修改和删除会触发重新校验。更新后的配置到达 Gateway 后，
+新请求采用新的授权结果；撤销授权不会取消已经启动的镜像任务。
+
 ## 配置
 
 ```yaml

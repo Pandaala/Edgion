@@ -1081,6 +1081,19 @@ pub struct BackendObjectReference {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(range(min = crate::gwapi_types::PORT_MIN, max = crate::gwapi_types::PORT_MAX))]
     pub port: Option<i32>,
+
+    /// Controller-owned authorization result, transported only to the Gateway.
+    /// A denied mirror is skipped without affecting the primary request.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
+    pub ref_denied: Option<RefDenied>,
+}
+
+impl BackendObjectReference {
+    /// Mirror endpoint selection supports only core Service references.
+    pub fn is_service(&self) -> bool {
+        self.group.is_empty() && self.kind.as_deref().unwrap_or("Service") == "Service"
+    }
 }
 
 /// Fraction represents a fraction of requests to mirror
@@ -1454,6 +1467,22 @@ pub struct RouteParentStatus {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn mirror_denial_is_transport_metadata_not_operator_schema() {
+        let backend: super::BackendObjectReference = serde_json::from_value(serde_json::json!({
+            "name": "shadow", "namespace": "target", "port": 80,
+            "refDenied": {"targetNamespace": "target", "targetName": "shadow"}
+        }))
+        .unwrap();
+        assert!(backend.is_service());
+        let wire = serde_json::to_value(&backend).unwrap();
+        assert_eq!(wire["refDenied"]["targetName"], "shadow");
+        let restored: super::BackendObjectReference = serde_json::from_value(wire).unwrap();
+        assert_eq!(restored.ref_denied, backend.ref_denied);
+        let schema = serde_json::to_value(schemars::schema_for!(super::BackendObjectReference)).unwrap();
+        assert!(schema["properties"].get("refDenied").is_none());
+    }
+
     use super::*;
     use std::time::Duration;
 

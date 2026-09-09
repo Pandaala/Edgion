@@ -277,6 +277,15 @@ impl RequestFilter for RequestMirrorPlugin {
     }
 
     async fn run_request(&self, session: &mut dyn PluginSession, log: &mut PluginLog) -> PluginRunningResult {
+        if self.config.backend_ref.ref_denied.is_some() {
+            log.push_err("mirror ref denied");
+            return PluginRunningResult::GoodNext;
+        }
+        // Never authorize one resource kind and dial a same-named Service.
+        if !self.config.backend_ref.is_service() {
+            log.push_err("mirror invalid kind");
+            return PluginRunningResult::GoodNext;
+        }
         if let Some(reason) = self.skip_reason() {
             log.push(reason);
             return PluginRunningResult::GoodNext;
@@ -674,6 +683,7 @@ mod arming_tests {
                     name: TEST_SERVICE.to_string(),
                     namespace: Some(TEST_NS.to_string()),
                     port: Some(TEST_PORT),
+                    ref_denied: None,
                 },
                 fraction: None,
                 percent: None,
@@ -763,6 +773,36 @@ mod arming_tests {
             );
             assert!(events.try_recv().is_err());
             drop(held);
+            assert_eq!(plugin.semaphore.available_permits(), plugin.tuning.max_concurrent);
+        }
+    }
+
+    #[tokio::test]
+    async fn denied_or_wrong_kind_mirror_never_arms_or_uses_session() {
+        for (denied, group, kind, diagnostic) in [
+            (true, "", "Service", "mirror ref denied"),
+            (false, "example.com", "Service", "mirror invalid kind"),
+            (false, "", "Secret", "mirror invalid kind"),
+        ] {
+            let mut plugin = test_plugin();
+            plugin.config.backend_ref.group = group.to_string();
+            plugin.config.backend_ref.kind = Some(kind.to_string());
+            plugin.config.backend_ref.ref_denied = denied.then(|| edgion_resources::resources::common::RefDenied {
+                target_namespace: TEST_NS.to_string(),
+                target_name: TEST_SERVICE.to_string(),
+                reason: None,
+            });
+            let mut events = observe_writer(&mut plugin);
+            // No session expectation is installed: even reading the request
+            // context or preparing its body before rejecting fails this test.
+            let mut session = MockPluginSession::new();
+            let mut log = PluginLog::new("RequestMirror");
+            assert_eq!(
+                plugin.run_request(&mut session, &mut log).await,
+                PluginRunningResult::GoodNext
+            );
+            assert!(log.render_for_test().contains(diagnostic));
+            assert!(events.try_recv().is_err());
             assert_eq!(plugin.semaphore.available_permits(), plugin.tuning.max_concurrent);
         }
     }

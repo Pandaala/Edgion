@@ -56,10 +56,36 @@ pub struct CompiledPlugins {
     pub is_activatable: bool,
     /// Whether an invalid update should retain the prior activatable runtime.
     ///
-    /// DSL source/bytecode is a compiled program, so a rejected program update
-    /// follows last-known-good publication. Other plugin configuration errors
-    /// keep the established fail-closed replacement behavior.
+    /// DSL/WAF programs allow last-known-good publication unless either
+    /// generation contains a cross-namespace mirror. Other plugin configuration
+    /// errors keep the established fail-closed replacement behavior.
     pub retain_previous_on_invalid_update: bool,
+}
+
+impl CompiledPlugins {
+    /// Reusing a whole runtime also reuses its mirror authorization snapshot.
+    /// Cross-namespace mirrors in either generation therefore require publishing
+    /// the incoming sealed runtime, even when a DSL/WAF update is invalid.
+    fn can_retain_previous(&self, previous: &Self) -> bool {
+        self.retain_previous_on_invalid_update
+            && previous.is_activatable
+            && !self.has_cross_namespace_mirror()
+            && !previous.has_cross_namespace_mirror()
+    }
+
+    fn has_cross_namespace_mirror(&self) -> bool {
+        let namespace = self.spec.metadata.namespace.as_deref().unwrap_or("default");
+        self.spec.spec.request_plugins.iter().flatten().any(|entry| {
+            if !entry.is_enabled() || entry.policy_action.is_some() {
+                return false;
+            }
+            matches!(
+                &entry.plugin,
+                edgion_resources::resources::edgion_plugins::EdgionPlugin::RequestMirror(config)
+                    if config.filter.backend_ref.namespace.as_deref().unwrap_or(namespace) != namespace
+            )
+        })
+    }
 }
 
 /// Build the compiled runtime for an EdgionPlugins resource.
@@ -446,7 +472,8 @@ impl PluginStore {
 
     /// Replace all compiled plugins atomically, retaining a last-known-good
     /// runtime when a reconnect snapshot contains an invalid update for the
-    /// same key. Keys absent from the new snapshot are still removed. Like
+    /// same key, unless either generation contains a cross-namespace mirror.
+    /// Keys absent from the new snapshot are still removed. Like
     /// [`Self::apply_delta`], this load-decide-store sequence relies on the
     /// serialized EdgionPlugins conf-sync writer.
     pub fn replace_all(&self, mut plugins: HashMap<String, Arc<CompiledPlugins>>) {
@@ -456,7 +483,7 @@ impl PluginStore {
                 let Some(incoming) = plugins.get(key) else {
                     continue;
                 };
-                if incoming.retain_previous_on_invalid_update && previous.is_activatable {
+                if incoming.can_retain_previous(previous) {
                     plugins.insert(key.clone(), Arc::clone(previous));
                 }
             }
@@ -489,8 +516,9 @@ impl PluginStore {
             new_map.insert(key, plugin);
         }
         for (key, plugin) in update {
-            if plugin.retain_previous_on_invalid_update
-                && new_map.get(&key).is_some_and(|previous| previous.is_activatable)
+            if new_map
+                .get(&key)
+                .is_some_and(|previous| plugin.can_retain_previous(previous))
             {
                 continue;
             }
@@ -1294,6 +1322,180 @@ mod compile_plugins_tests {
             .expect("valid WAF generation remains published");
         assert!(Arc::ptr_eq(retained, &valid));
         assert!(!Arc::ptr_eq(retained, &invalid));
+    }
+
+    fn mirror_program_resource(program: &str, valid: bool, mirror: Option<serde_json::Value>) -> EdgionPlugins {
+        let mut resource = waf_resource(if valid {
+            "SecRule REQUEST_URI \"@contains /blocked\" \"id:1,phase:1,deny\"\n"
+        } else {
+            "SecRule invalid-("
+        });
+        let mut entries = Vec::new();
+        if let Some(config) = mirror {
+            entries.push(RequestFilterEntry::new(EdgionPlugin::RequestMirror(
+                serde_json::from_value(config).expect("mirror fixture parses"),
+            )));
+        }
+        if program == "dsl" {
+            resource.spec.waf = None;
+            entries.push(RequestFilterEntry::new(EdgionPlugin::Dsl(DslConfig {
+                name: "mirror-lkg".to_string(),
+                source: Some(if valid { "let a = 1" } else { "invalid @@@" }.to_string()),
+                ..Default::default()
+            })));
+        }
+        resource.spec.request_plugins = Some(entries);
+        resource
+    }
+
+    fn mirror_config(namespace: &str, denied: bool) -> serde_json::Value {
+        let mut config = serde_json::json!({
+            "backendRef": { "name": "mirror-lkg", "namespace": namespace, "port": 8080 }
+        });
+        if denied {
+            config["backendRef"]["refDenied"] = serde_json::json!({
+                "targetNamespace": namespace, "targetName": "mirror-lkg", "reason": "NoMatchingReferenceGrant"
+            });
+        }
+        config
+    }
+
+    #[tokio::test]
+    async fn mirror_authorization_updates_never_retain_cross_namespace_lkg() {
+        for program in ["dsl", "waf"] {
+            for full_snapshot in [false, true] {
+                for incoming_mirror in [
+                    Some(mirror_config("other", true)),
+                    None,
+                    Some(mirror_config("default", false)),
+                    Some(mirror_config("retargeted", false)),
+                ] {
+                    let previous = compile_plugins(&mirror_program_resource(
+                        program,
+                        true,
+                        Some(mirror_config("other", false)),
+                    ));
+                    let incoming = compile_plugins(&mirror_program_resource(program, false, incoming_mirror));
+                    assert!(previous.is_activatable);
+                    assert!(!incoming.is_activatable);
+                    assert!(incoming.retain_previous_on_invalid_update);
+                    let key = previous.spec.key_name();
+                    let store = PluginStore::new();
+                    store.replace_all(HashMap::from([(key.clone(), Arc::clone(&previous))]));
+                    let in_flight = store.get_plugin_runtime(&key).expect("previous runtime is pinned");
+                    let replacement = HashMap::from([(key.clone(), Arc::clone(&incoming))]);
+                    if full_snapshot {
+                        store.replace_all(replacement);
+                    } else {
+                        store.apply_delta(HashMap::new(), replacement, &HashSet::new());
+                    }
+                    let active = store.get_plugin_runtime(&key).expect("sealed replacement is published");
+                    assert!(Arc::ptr_eq(&active, &incoming.plugin_runtime));
+                    assert!(Arc::ptr_eq(&in_flight, &previous.plugin_runtime));
+                    assert!(!Arc::ptr_eq(&active, &in_flight));
+                    assert_leading_reject(&incoming);
+                    let reject = active.request_plugins_iter().next().expect("reject precedes mirror");
+                    let mut session = MockPluginSession::new();
+                    let mut log = PluginLog::new(reject.name());
+                    assert!(matches!(
+                        reject.run_request(&mut session, &mut log).await,
+                        PluginRunningResult::ErrResponse { status: 500, .. }
+                    ));
+
+                    let recovered = compile_plugins(&mirror_program_resource(
+                        program,
+                        true,
+                        Some(mirror_config("other", true)),
+                    ));
+                    assert!(recovered.is_activatable);
+                    store.apply_delta(
+                        HashMap::new(),
+                        HashMap::from([(key.clone(), Arc::clone(&recovered))]),
+                        &HashSet::new(),
+                    );
+                    assert!(Arc::ptr_eq(
+                        &store.get_plugin_runtime(&key).expect("valid update recovers"),
+                        &recovered.plugin_runtime
+                    ));
+                    let mirror = recovered
+                        .plugin_runtime
+                        .request_plugins_iter()
+                        .find(|filter| filter.name() == "RequestMirror")
+                        .expect("valid denied mirror remains executable");
+                    let mut session = MockPluginSession::new();
+                    let mut log = PluginLog::new(mirror.name());
+                    assert!(matches!(
+                        mirror.run_request(&mut session, &mut log).await,
+                        PluginRunningResult::GoodNext
+                    ));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn mirror_lkg_boundary_checks_incoming_and_preserves_inert_or_local_mirrors() {
+        for program in ["dsl", "waf"] {
+            for full_snapshot in [false, true] {
+                for case in ["added", "local", "implicit", "disabled", "bypassed", "absent"] {
+                    let config = match case {
+                        "absent" | "added" => None,
+                        "implicit" => Some(serde_json::json!({"backendRef": {"name": "mirror-lkg", "port": 8080}})),
+                        "local" => Some(mirror_config("default", false)),
+                        _ => Some(mirror_config("other", false)),
+                    };
+                    let mut old_resource = mirror_program_resource(program, true, config.clone());
+                    let mut new_resource = mirror_program_resource(
+                        program,
+                        false,
+                        if case == "added" {
+                            Some(mirror_config("other", true))
+                        } else {
+                            config
+                        },
+                    );
+                    for resource in [&mut old_resource, &mut new_resource] {
+                        if case == "implicit" {
+                            resource.metadata.namespace = None;
+                        }
+                        if let Some(entry) = resource
+                            .spec
+                            .request_plugins
+                            .as_mut()
+                            .and_then(|entries| entries.first_mut())
+                        {
+                            if case == "disabled" {
+                                entry.enable = false;
+                            } else if case == "bypassed" {
+                                entry.policy_action = Some(PluginPolicyAction::Bypass);
+                            }
+                        }
+                    }
+                    let previous = compile_plugins(&old_resource);
+                    let incoming = compile_plugins(&new_resource);
+                    assert!(previous.is_activatable, "{case}");
+                    assert!(!incoming.is_activatable, "{case}");
+                    assert!(incoming.retain_previous_on_invalid_update, "{case}");
+                    let key = previous.spec.key_name();
+                    let store = PluginStore::new();
+                    store.replace_all(HashMap::from([(key.clone(), Arc::clone(&previous))]));
+                    let replacement = HashMap::from([(key.clone(), Arc::clone(&incoming))]);
+                    if full_snapshot {
+                        store.replace_all(replacement);
+                    } else {
+                        store.apply_delta(HashMap::new(), replacement, &HashSet::new());
+                    }
+                    let expected = if case == "added" { &incoming } else { &previous };
+                    assert!(
+                        Arc::ptr_eq(
+                            &store.get_plugin_runtime(&key).expect("runtime remains published"),
+                            &expected.plugin_runtime
+                        ),
+                        "{program}/{full_snapshot}/{case}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]

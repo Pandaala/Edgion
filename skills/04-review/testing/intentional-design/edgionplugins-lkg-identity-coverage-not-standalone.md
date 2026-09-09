@@ -16,6 +16,14 @@ DSL/WAF `update` retains the last activatable generation, and a compressed same-
 `add` replaces unconditionally and fails closed. A standalone blocked integration
 todo for reconnect identity coverage is not an independently actionable defect.
 
+Security exception: invalid DSL/WAF updates do not retain a previous runtime
+when either generation contains an executable request-stage cross-namespace
+RequestMirror. Both delta and full-snapshot publication use the incoming sealed
+fail-closed runtime, preventing stale mirror authorization. See
+[mirror authorization](../../request-mirror/regression-guards/mirror-reference-grant-enforcement.md).
+The ordinary retention statements below apply outside that exception; this does
+not resolve D0030's separate resource-identity contract.
+
 This closes D0031 and deletes
 `tasks/todo/add-edgionplugins-lkg-identity-integration-coverage.md`. It does **not**
 close D0030. Reconnect and relist full snapshots still key last-known-good retention

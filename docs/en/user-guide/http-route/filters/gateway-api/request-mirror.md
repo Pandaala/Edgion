@@ -4,6 +4,43 @@
 
 `RequestMirror` copies a fraction of incoming requests to a second backend while the original request is still served normally by the route's primary backend. It is a standard Gateway API filter and runs in the request stage. Mirroring is fire-and-forget: the mirrored response is discarded and never affects the client, so it is safe for shadow testing a new service version against live traffic.
 
+## Cross-namespace authorization
+
+Mirror targets support only core Services (`group: ""`, `kind: Service`).
+An omitted `backendRef.namespace` means the namespace of the HTTPRoute that
+declares the filter, including filters inherited through delegation.
+
+With the Controller's ReferenceGrant validation enabled (the default), a target
+in another namespace requires a ReferenceGrant in that target namespace. For
+example, allow HTTPRoutes in `production` to mirror to `testing/mirror-service`:
+
+```yaml
+apiVersion: gateway.networking.k8s.io/v1
+kind: ReferenceGrant
+metadata:
+  name: allow-production-mirror
+  namespace: testing
+spec:
+  from:
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      namespace: production
+  to:
+    - group: ""
+      kind: Service
+      name: mirror-service
+```
+
+Without a matching grant, the route reports `ResolvedRefs=False` with reason
+`RefNotPermitted`. Edgion skips the denied mirror, records `mirror ref denied`
+in the request's plugin log, and continues the primary request. The same rule
+applies to rule-level and backend-level mirror filters. Unsupported target
+groups or kinds are skipped and reported as `InvalidKind`.
+
+Grant creation, modification and deletion trigger revalidation. The new decision
+applies to new requests after the updated configuration reaches the Gateway;
+already-started mirror tasks are not cancelled by grant revocation.
+
 ## Configuration
 
 ```yaml

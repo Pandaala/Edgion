@@ -10,4 +10,5 @@ suite	EdgionPlugins/JsonSchemaValidation	body-buffering
 dynamic	JsonSchemaValidationDynamic	body-buffering
 dynamic	FormJsonTransformDynamic	body-buffering
 dynamic	BodyDynamic	body-buffering
+dynamic	RequestMirrorReferenceGrant	body-buffering
 dynamic	WafDynamic	body-buffering

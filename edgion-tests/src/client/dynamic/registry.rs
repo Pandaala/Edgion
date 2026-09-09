@@ -5,6 +5,7 @@ use crate::dynamic::scenario::Scenario;
 /// All registered dynamic scenarios.
 pub fn all() -> Vec<&'static Scenario> {
     vec![
+        crate::dynamic::scenarios::request_mirror_reference_grant::SCENARIO,
         crate::dynamic::scenarios::service_degrade_threshold::SCENARIO,
         crate::dynamic::scenarios::direct_endpoint_port_resolution::SCENARIO,
         crate::dynamic::scenarios::all_endpoint_status_tls::SCENARIO,

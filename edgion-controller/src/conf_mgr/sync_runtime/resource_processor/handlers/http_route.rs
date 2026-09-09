@@ -45,6 +45,7 @@ fn is_delegation_parent_ref(pr: &ParentReference) -> bool {
 /// `DelegationLookup` backed by the live controller stores.
 struct RuntimeDelegationLookup<'a> {
     runtime: &'a ControllerRuntime,
+    grant_owner: Option<ResourceRef>,
 }
 
 impl DelegationLookup for RuntimeDelegationLookup<'_> {
@@ -83,6 +84,9 @@ impl DelegationLookup for RuntimeDelegationLookup<'_> {
         name: &str,
         to_ns: &str,
     ) -> bool {
+        if let Some(owner) = &self.grant_owner {
+            self.runtime.cross_ns_ref_mgr.add_ref(to_ns.to_string(), owner.clone());
+        }
         let group = group.map(str::to_string);
         let kind = kind.map(str::to_string);
         is_cross_ns_ref_allowed(
@@ -162,19 +166,21 @@ impl HttpRouteHandler {
     ///
     /// `extra_namespaces` carries the cross-namespace targets of flattened
     /// delegation backendRefs so ReferenceGrant changes in those namespaces
-    /// requeue this parent route. Registration replaces the resource's whole
-    /// ref set, so own-rule and flattened targets must land in this single call.
+    /// requeue this parent route. Extend the set cleared at parse entry without
+    /// removing dependencies registered before mirror authorization checks.
     fn record_cross_ns_refs(route: &HTTPRoute, extra_namespaces: &HashSet<String>, ctx: &HandlerContext) {
         let route_ns = route.metadata.namespace.as_deref().unwrap_or("default");
         let resource_ref = Self::create_resource_ref(route);
         let manager = &ctx.runtime().cross_ns_ref_mgr;
 
-        // Clear old references first (handles updates)
-        manager.clear_resource_refs(&resource_ref);
-
         // Collect cross-namespace references from rules
         if let Some(rules) = &route.spec.rules {
             for rule in rules {
+                for mirror in super::request_mirror::refs(rule) {
+                    if let Some(target_ns) = mirror.namespace.as_ref().filter(|ns| ns.as_str() != route_ns) {
+                        manager.add_ref(target_ns.clone(), resource_ref.clone());
+                    }
+                }
                 if let Some(backend_refs) = &rule.backend_refs {
                     for backend_ref in backend_refs {
                         if let Some(backend_ns) = &backend_ref.namespace {
@@ -325,6 +331,8 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
     }
 
     async fn parse(&self, mut route: HTTPRoute, _ctx: &HandlerContext) -> ProcessResult<HTTPRoute> {
+        let grant_owner = Self::create_resource_ref(&route);
+        _ctx.runtime().cross_ns_ref_mgr.clear_resource_refs(&grant_owner);
         let route_ns = route.metadata.namespace.as_deref().unwrap_or("default").to_string();
         let route_ns = route_ns.as_str();
 
@@ -359,6 +367,13 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
         // the compiled copies with ref_denied=None (ReferenceGrant bypass).
         if let Some(rules) = &mut route.spec.rules {
             for rule in rules {
+                super::request_mirror::resolve_rule(rule, route_ns, |backend| {
+                    _ctx.runtime().cross_ns_ref_mgr.add_ref(
+                        backend.namespace.as_deref().unwrap_or(route_ns).to_string(),
+                        grant_owner.clone(),
+                    );
+                    super::request_mirror::allowed(backend, route_ns, ResourceKind::HTTPRoute, _ctx.runtime())
+                });
                 if let Some(backend_refs) = &mut rule.backend_refs {
                     for backend_ref in backend_refs {
                         // Delegation refs (kind: HTTPRoute) are not Service
@@ -412,6 +427,7 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
         let mut delegation_outcome = {
             let adapter = RuntimeDelegationLookup {
                 runtime: _ctx.runtime(),
+                grant_owner: Some(grant_owner.clone()),
             };
             flatten_route(&route, &adapter)
         };
@@ -475,6 +491,7 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
             if !delta.changed_namespaces.is_empty() {
                 let adapter = RuntimeDelegationLookup {
                     runtime: _ctx.runtime(),
+                    grant_owner: None,
                 };
                 for ns in &delta.changed_namespaces {
                     for key in adapter.list_route_keys_in_namespace(ns) {
@@ -494,6 +511,7 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
             {
                 let adapter = RuntimeDelegationLookup {
                     runtime: _ctx.runtime(),
+                    grant_owner: None,
                 };
                 let vanished = delegation_outcome
                     .expanded_children
@@ -621,7 +639,10 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
             }
         }
         if !removed.changed_namespaces.is_empty() {
-            let adapter = RuntimeDelegationLookup { runtime: ctx.runtime() };
+            let adapter = RuntimeDelegationLookup {
+                runtime: ctx.runtime(),
+                grant_owner: None,
+            };
             for ns in &removed.changed_namespaces {
                 for key in adapter.list_route_keys_in_namespace(ns) {
                     if key != route_key {
@@ -666,6 +687,15 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
         let ownership_accepted_errors = backend_waf_ownership_errors(route, route_ns, _ctx.runtime());
 
         let mut resolved_refs_errors = validate_http_backend_refs(route, route_ns, _ctx.runtime());
+        resolved_refs_errors.extend(super::request_mirror::errors(
+            route_ns,
+            ResourceKind::HTTPRoute,
+            route
+                .effective_rules()
+                .into_iter()
+                .flatten()
+                .flat_map(super::request_mirror::refs),
+        ));
         let ref_denied_list = collect_ref_denied_list(route);
         resolved_refs_errors.extend(super::route_utils::collect_ref_denied_errors(
             route_ns,

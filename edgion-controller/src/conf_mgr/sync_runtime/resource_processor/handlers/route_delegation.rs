@@ -456,6 +456,22 @@ fn flatten_child_rules(
             continue;
         }
 
+        // Raw child rules have not necessarily passed their own handler yet.
+        // Resolve mirrors before inheritance, using this declaring child even
+        // when a terminal rule belongs to a deeper descendant.
+        let mut resolved_rule = rule.clone();
+        let targets = super::request_mirror::resolve_rule(&mut resolved_rule, child_ns, |backend| {
+            ctx.lookup.cross_ns_ref_allowed(
+                child_ns,
+                Some(&backend.group),
+                backend.kind.as_deref(),
+                &backend.name,
+                backend.namespace.as_deref().unwrap_or(child_ns),
+            )
+        });
+        ctx.cross_ns_target_namespaces.extend(targets);
+        let rule = &resolved_rule;
+
         let is_delegating = rule
             .backend_refs
             .as_ref()
@@ -1341,6 +1357,67 @@ mod tests {
     // =====================================================================
     // Filter inheritance
     // =====================================================================
+
+    #[test]
+    fn mirror_delegation_preserves_declaring_namespace_and_revalidates_raw_children() {
+        use super::super::request_mirror;
+        for backend_filter in [false, true] {
+            for target_ns in [None, Some("infra"), Some("shadow")] {
+                let mirror = serde_json::json!({"type": "RequestMirror", "requestMirror": {
+                    "backendRef": {"name": "copy", "namespace": target_ns, "port": 80,
+                        "refDenied": {"targetNamespace": "forged", "targetName": "forged"}}
+                }});
+                let mut terminal = service_rule("/api", "primary");
+                if backend_filter {
+                    terminal["backendRefs"][0]["filters"] = serde_json::json!([mirror]);
+                } else {
+                    terminal["filters"] = serde_json::json!([mirror]);
+                }
+                let parent = simple_parent("/api", "billing", "child");
+                let child = route("billing", "child", serde_json::json!({"rules": [terminal]}));
+                for allowed in [false, true] {
+                    let mut lookup = FakeLookup::new(vec![child.clone()]);
+                    if allowed {
+                        lookup = lookup.allow_cross_ns("billing", target_ns.unwrap_or("billing"));
+                    }
+                    let result = flatten_route(&parent, &lookup);
+                    let rules = result.resolved_rules.as_ref().unwrap();
+                    assert_eq!(rules.len(), 1);
+                    let backend = request_mirror::refs(&rules[0]).next().unwrap();
+                    assert_eq!(backend.namespace.as_deref(), Some(target_ns.unwrap_or("billing")));
+                    assert_eq!(backend.ref_denied.is_some(), target_ns.is_some() && !allowed);
+                    if let Some(ns) = target_ns {
+                        assert!(result.cross_ns_target_namespaces.contains(ns));
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn mirror_inherited_from_intermediate_route_keeps_its_identity() {
+        use super::super::request_mirror;
+        let parent = simple_parent("/api", "billing", "middle");
+        let mut middle_rule = delegating_rule("/api", "leaf", "terminal");
+        middle_rule["filters"] = serde_json::json!([{"type": "RequestMirror", "requestMirror": {
+            "backendRef": {"name": "copy", "namespace": "shadow", "port": 80}
+        }}]);
+        let middle = route("billing", "middle", serde_json::json!({"rules": [middle_rule]}));
+        let leaf = route(
+            "leaf",
+            "terminal",
+            serde_json::json!({"rules": [service_rule("/api", "primary")]}),
+        );
+        for grant_from in ["infra", "leaf", "billing"] {
+            let lookup = FakeLookup::new(vec![middle.clone(), leaf.clone()]).allow_cross_ns(grant_from, "shadow");
+            let result = flatten_route(&parent, &lookup);
+            let rules = result.resolved_rules.as_ref().unwrap();
+            assert_eq!(rules.len(), 1);
+            let backend = request_mirror::refs(&rules[0]).next().unwrap();
+            assert_eq!(backend.ref_denied.is_none(), grant_from == "billing");
+            assert!(result.cross_ns_target_namespaces.contains("shadow"));
+        }
+    }
 
     #[test]
     fn parent_filters_prepended_and_extension_refs_concatenate() {

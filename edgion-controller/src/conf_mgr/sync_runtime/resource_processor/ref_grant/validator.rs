@@ -365,6 +365,7 @@ mod tests {
             name: name.to_string(),
             namespace: namespace.map(|s| s.to_string()),
             port: Some(80),
+            ref_denied: None,
         }
     }
 

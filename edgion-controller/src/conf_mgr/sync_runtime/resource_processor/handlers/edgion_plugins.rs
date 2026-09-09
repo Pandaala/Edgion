@@ -380,6 +380,20 @@ impl ProcessorHandler<EdgionPlugins> for EdgionPluginsHandler {
         // Mark cross-namespace EdgionConfigData refs as denied when no ReferenceGrant permits them.
         Self::mark_config_data_ref_denials(&mut ep, ctx);
 
+        for entry in ep.spec.request_plugins.iter_mut().flatten() {
+            if let EdgionPlugin::RequestMirror(config) = &mut entry.plugin {
+                super::request_mirror::resolve(&mut config.filter.backend_ref, &ns, |backend| {
+                    // Subscribe before reading the grant so concurrent revocation
+                    // either changes this read or requeues this resource.
+                    cross_mgr.add_ref(
+                        backend.namespace.as_deref().unwrap_or(&ns).to_string(),
+                        resource_ref.clone(),
+                    );
+                    super::request_mirror::allowed(backend, &ns, ResourceKind::EdgionPlugins, ctx.runtime())
+                });
+            }
+        }
+
         // Two ordered passes over every Condition tree: ConfigData expansion
         // (resolved_profiles / resolved_candidates / ipRefs) then credentials
         // (secretRef / HMAC). Expansion must run first so HMAC secretGroups
@@ -447,6 +461,22 @@ impl ProcessorHandler<EdgionPlugins> for EdgionPluginsHandler {
         resolved_errors.extend(resolve_ip_list_refs(ep, ctx));
         resolved_errors.extend(resolve_active_profile_refs(ep, ctx));
         resolved_errors.extend(resolve_canary_active_profile_refs(ep, ctx));
+        resolved_errors.extend(super::request_mirror::errors(
+            ep.metadata.namespace.as_deref().unwrap_or("default"),
+            ResourceKind::EdgionPlugins,
+            ep.spec
+                .request_plugins
+                .iter()
+                .flatten()
+                .filter(|entry| entry.is_enabled())
+                .filter_map(|entry| {
+                    if let EdgionPlugin::RequestMirror(config) = &entry.plugin {
+                        Some(&config.filter.backend_ref)
+                    } else {
+                        None
+                    }
+                }),
+        ));
         dedup_resolved_ref_errors(&mut resolved_errors);
         let resolved_refs = if resolved_errors.is_empty() {
             condition_true(
