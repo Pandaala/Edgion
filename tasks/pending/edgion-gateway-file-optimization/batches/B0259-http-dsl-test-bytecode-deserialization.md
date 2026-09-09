@@ -28,3 +28,4 @@
 - Target tests: 13/13; full DSL filters: 329/329 by implementer and 361/361 by reviewer; Gateway locked all-target compile; format and diff checks passed.
 - Coordinator: `cargo fmt --all`; locked workspace check; locked workspace Clippy (exit 0 with pre-existing warnings); agent docs; SSA force; metrics inventory; Pingora source policy; Gateway no-tracing; English-only; diff check; and frozen paths all passed.
 - Frozen integration manifest: 3,231 paths unchanged.
+- Commit: `d795f6e0` (`Keep DSL bytecode fixtures current`); no push.
