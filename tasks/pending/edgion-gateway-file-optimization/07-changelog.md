@@ -16,7 +16,9 @@ This is the single concise record of actual changes across the file-by-file audi
 
 ## Entries
 
-- B0265: added exact DSL gRPC-error coverage for `nil` message translation and both invalid integer-code boundaries around `0..=16`. Independent LGTM; target 4/4, full Gateway DSL 334/334, locked workspace check/Clippy, and all repository guards passed. D0138 separately owns stale response-stage documentation. Local commit pending; no production or integration change; no push.
+- B0266: added an exact pre-dial regression proving opaque DSL `http.call` bodies use the lower of the configured and physical request-body caps. Independent LGTM; target 37/37, full Gateway DSL 335/335, locked workspace check/Clippy, and all repository guards passed. D0139 separately owns a new response-stage async timeout-clamp integration scenario. Local commit pending; no production or integration change; no push.
+
+- B0265: added exact DSL gRPC-error coverage for `nil` message translation and both invalid integer-code boundaries around `0..=16`. Independent LGTM; target 4/4, full Gateway DSL 334/334, locked workspace check/Clippy, and all repository guards passed. D0138 separately owns stale response-stage documentation. Commit `0c547725`; no production or integration change; no push.
 
 - B0264: added exact unit regressions for caught VM panic under Ignore and the BodyAccess fixed-fail-close exception, including result, dye outcome/cause, and static-only PluginLog assertions. Independent LGTM; target 9/9, full Gateway DSL 333/333, locked workspace check/Clippy, and all repository guards passed. Commit `420b0905`; no production or integration change; no push.
 

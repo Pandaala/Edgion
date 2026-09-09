@@ -251,6 +251,33 @@ fn test_http_call_rejects_body_above_request_cap_before_dial() {
 }
 
 #[test]
+fn test_http_call_rejects_body_above_physical_cap_before_dial() {
+    let source = r#"
+        let http_resp = http.call("POST", "http://127.0.0.1:1", req.body)
+        return next()
+    "#;
+    let session = opaque_body_session(StaticSnapshotReader::new([Bytes::from_static(b"12345")]), 4);
+    let runtime = DslRuntime {
+        max_request_body_bytes: 1024,
+        ..DslRuntime::default()
+    };
+    let vm = make_vm(source);
+    let mut log = PluginLog::new("test");
+    let mut session = session;
+    let error = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(vm.execute(&mut session as &mut dyn PluginSession, &mut log, &runtime))
+        .expect_err("request Body above the physical cap must fail before dialing");
+    assert!(matches!(
+        error,
+        RuntimeError::BodyAccess { ref message }
+            if message == "request Body exceeds http.call limit of 4 bytes"
+    ));
+}
+
+#[test]
 fn test_http_call_body_unavailable_is_hard_body_access_error() {
     let source = r#"
         let http_resp = http.call("POST", "http://127.0.0.1:1", req.body)
