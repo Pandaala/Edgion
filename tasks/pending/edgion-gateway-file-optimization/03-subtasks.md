@@ -331,8 +331,8 @@
 | `edgion-gateway/src/plugins/http/ai_guard/evaluator.rs` | `plugins-http-ai-guard` | source | changed | B0234: borrowed evaluator serialization spans; independent LGTM, evaluator 6/6 and module 30/30 |
 | `edgion-gateway/src/plugins/http/ai_guard/mod.rs` | `plugins-http-ai-guard` | source | examined-no-change | B0235: minimal private-module facade retained; independent LGTM, AI Guard 30/30 |
 | `edgion-gateway/src/plugins/http/ai_guard/plugin.rs` | `plugins-http-ai-guard` | source | changed | B0236: saturated physical-cap conversion, lazy refusal facts and borrowed evaluator projection; independent plan/final LGTM, AI Guard 32/32 |
-| `edgion-gateway/src/plugins/http/ai_guard/rules.rs` | `plugins-http-ai-guard` | source | analysis-ready | B0237: confirmed bounded mask construction redesign; plan-first promotion follows B0236 commit |
-| `edgion-gateway/src/plugins/http/ai_guard/spans.rs` | `plugins-http-ai-guard` | source | pending | — |
+| `edgion-gateway/src/plugins/http/ai_guard/rules.rs` | `plugins-http-ai-guard` | source | changed | B0237: bounded capture expansion and live replacement accounting; independent revised-plan/final LGTM, AI Guard 40/40 |
+| `edgion-gateway/src/plugins/http/ai_guard/spans.rs` | `plugins-http-ai-guard` | source | analysis-in-progress | B0238: bounded JSON span selection, ownership and token-range analysis |
 | `edgion-gateway/src/plugins/http/ai_proxy/mod.rs` | `plugins-http-ai-proxy` | source | examined-no-change | B0064 |
 | `edgion-gateway/src/plugins/http/ai_proxy/plugin.rs` | `plugins-http-ai-proxy` | source | changed | B0064 |
 | `edgion-gateway/src/plugins/http/all_endpoint_status/mod.rs` | `plugins-http-all-endpoint-status` | source | examined-no-change | B0063 |

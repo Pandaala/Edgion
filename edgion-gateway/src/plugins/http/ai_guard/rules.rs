@@ -14,7 +14,125 @@ pub struct CompiledRule {
     regex: regex::Regex,
     action: AiGuardAction,
     roles: Option<Vec<AiGuardRole>>,
-    replacement: Option<String>,
+    replacement: Option<CompiledReplacement>,
+}
+
+/// A replacement compiled into the literal and capture operations understood
+/// by `regex`. Keeping this private representation avoids reparsing the same
+/// replacement for every matching span.
+struct CompiledReplacement {
+    tokens: Vec<ReplacementToken>,
+}
+
+enum ReplacementToken {
+    Literal(Box<str>),
+    Capture(usize),
+}
+
+impl CompiledReplacement {
+    fn compile(regex: &regex::Regex, replacement: &str) -> Self {
+        let mut tokens = Vec::new();
+        let mut literal = String::new();
+        let mut remaining = replacement;
+
+        while let Some(dollar) = remaining.find('$') {
+            literal.push_str(&remaining[..dollar]);
+            remaining = &remaining[dollar..];
+
+            if remaining.as_bytes().get(1) == Some(&b'$') {
+                literal.push('$');
+                remaining = &remaining[2..];
+                continue;
+            }
+
+            let Some((reference, end)) = capture_reference(remaining) else {
+                literal.push('$');
+                remaining = &remaining[1..];
+                continue;
+            };
+            remaining = &remaining[end..];
+
+            let capture = reference
+                .parse::<usize>()
+                .ok()
+                .or_else(|| regex.capture_names().position(|name| name == Some(reference)));
+            let Some(capture) = capture else {
+                continue;
+            };
+            if !literal.is_empty() {
+                tokens.push(ReplacementToken::Literal(std::mem::take(&mut literal).into_boxed_str()));
+            }
+            tokens.push(ReplacementToken::Capture(capture));
+        }
+        literal.push_str(remaining);
+        if !literal.is_empty() {
+            tokens.push(ReplacementToken::Literal(literal.into_boxed_str()));
+        }
+        Self { tokens }
+    }
+
+    fn replace_all_bounded(&self, regex: &regex::Regex, current: &str, limit: usize) -> Result<Option<String>, ()> {
+        let mut captures = regex.captures_iter(current);
+        let Some(first) = captures.next() else {
+            return Ok(None);
+        };
+
+        let mut rewritten = String::new();
+        let mut previous_end = 0;
+        for captures in std::iter::once(first).chain(captures) {
+            let matched = captures.get(0).ok_or(())?;
+            append_bounded(&mut rewritten, &current[previous_end..matched.start()], limit)?;
+            for token in &self.tokens {
+                match token {
+                    ReplacementToken::Literal(text) => {
+                        append_bounded(&mut rewritten, text, limit)?;
+                    }
+                    ReplacementToken::Capture(index) => {
+                        if let Some(value) = captures.get(*index) {
+                            append_bounded(&mut rewritten, value.as_str(), limit)?;
+                        }
+                    }
+                }
+            }
+            previous_end = matched.end();
+        }
+        append_bounded(&mut rewritten, &current[previous_end..], limit)?;
+        Ok(Some(rewritten))
+    }
+}
+
+/// Parse the possible capture reference beginning at `replacement[0]`.
+///
+/// This deliberately mirrors regex-automata's interpolation grammar, including
+/// its `usize` parse followed by named-capture fallback.
+fn capture_reference(replacement: &str) -> Option<(&str, usize)> {
+    let bytes = replacement.as_bytes();
+    if bytes.len() <= 1 || bytes[0] != b'$' {
+        return None;
+    }
+    if bytes[1] == b'{' {
+        let close = bytes[2..].iter().position(|byte| *byte == b'}')? + 2;
+        return Some((&replacement[2..close], close + 1));
+    }
+
+    let mut end = 1;
+    while bytes
+        .get(end)
+        .is_some_and(|byte| byte.is_ascii_alphanumeric() || *byte == b'_')
+    {
+        end += 1;
+    }
+    (end > 1).then(|| (&replacement[1..end], end))
+}
+
+fn append_bounded(output: &mut String, value: &str, limit: usize) -> Result<(), ()> {
+    let new_len = output.len().checked_add(value.len()).ok_or(())?;
+    if new_len > limit {
+        return Err(());
+    }
+    output.try_reserve_exact(value.len()).map_err(|_| ())?;
+    output.push_str(value);
+    Ok(())
 }
 
 /// The immutable compiled rule set owned by a plugin snapshot.
@@ -60,11 +178,21 @@ impl CompiledRules {
                 AiGuardMatcher::Regex { pattern } => pattern.clone(),
                 AiGuardMatcher::Pii { detector } => detector.pattern().to_string(),
             };
+            let regex = compile_guard_pattern(&pattern)?;
+            let replacement = match rule.action {
+                AiGuardAction::Mask => Some(CompiledReplacement::compile(
+                    &regex,
+                    rule.replacement
+                        .as_deref()
+                        .ok_or_else(|| "replacement is required for action mask".to_string())?,
+                )),
+                AiGuardAction::Allow | AiGuardAction::Reject => None,
+            };
             compiled.push(CompiledRule {
-                regex: compile_guard_pattern(&pattern)?,
+                regex,
                 action: rule.action,
                 roles: rule.roles.clone(),
-                replacement: rule.replacement.clone(),
+                replacement,
             });
         }
         Ok(Self { rules: compiled })
@@ -89,7 +217,7 @@ impl CompiledRules {
         }
 
         let mut masked: Vec<Option<String>> = vec![None; spans.len()];
-        let mut any_mask = false;
+        let mut live_replacement_bytes = 0_usize;
         let mut flagged = 0_usize;
 
         for rule in &self.rules {
@@ -102,61 +230,66 @@ impl CompiledRules {
                         _ => continue,
                     }
                 }
-                let current: &str = masked[index].as_deref().unwrap_or(span.current);
-                if !rule.regex.is_match(current) {
-                    continue;
-                }
                 match rule.action {
                     AiGuardAction::Reject => {
-                        return Ok(RuleOutcome {
-                            decision: GuardDecision::Reject,
-                            flagged,
-                        })
-                    }
-                    AiGuardAction::Allow => flagged = flagged.saturating_add(1),
-                    AiGuardAction::Mask => {
-                        let replacement = rule.replacement.as_deref().unwrap_or_default();
-                        let rewritten = rule.regex.replace_all(current, replacement).into_owned();
-                        // Bound each rewrite as it happens: masking rules chain,
-                        // so a replacement longer than its match compounds
-                        // across rules before any aggregate check would fire.
-                        if rewritten.len() > max_replacement_bytes {
-                            return Err(());
+                        let current = masked[index].as_deref().unwrap_or(span.current);
+                        if rule.regex.is_match(current) {
+                            return Ok(RuleOutcome {
+                                decision: GuardDecision::Reject,
+                                flagged,
+                            });
                         }
+                    }
+                    AiGuardAction::Allow => {
+                        let current = masked[index].as_deref().unwrap_or(span.current);
+                        if rule.regex.is_match(current) {
+                            flagged = flagged.saturating_add(1);
+                        }
+                    }
+                    AiGuardAction::Mask => {
+                        let old_len = masked[index].as_ref().map_or(0, String::len);
+                        let other_live = live_replacement_bytes.checked_sub(old_len).ok_or(())?;
+                        let candidate_limit = max_replacement_bytes.checked_sub(other_live).ok_or(())?;
+                        let rewritten = {
+                            let current = masked[index].as_deref().unwrap_or(span.current);
+                            rule.replacement.as_ref().ok_or(())?.replace_all_bounded(
+                                &rule.regex,
+                                current,
+                                candidate_limit,
+                            )?
+                        };
+                        let Some(rewritten) = rewritten else {
+                            continue;
+                        };
+                        let unchanged = masked[index].as_deref().unwrap_or(span.current) == rewritten;
+                        if unchanged {
+                            continue;
+                        }
+                        if rewritten == span.current {
+                            masked[index] = None;
+                            live_replacement_bytes = other_live;
+                            continue;
+                        }
+                        live_replacement_bytes = other_live.checked_add(rewritten.len()).ok_or(())?;
                         masked[index] = Some(rewritten);
-                        any_mask = true;
                     }
                 }
             }
         }
 
-        if !any_mask {
+        if masked.iter().all(Option::is_none) {
             return Ok(RuleOutcome {
                 decision: GuardDecision::Pass,
                 flagged,
             });
         }
 
-        let mut total = 0_usize;
         let mut replacements = Vec::new();
         for (index, span) in spans.iter().enumerate() {
             let Some(text) = masked[index].take() else {
                 continue;
             };
-            if text == span.current {
-                continue;
-            }
-            total = total.checked_add(text.len()).ok_or(())?;
-            if total > max_replacement_bytes {
-                return Err(());
-            }
             replacements.push((span.key, text));
-        }
-        if replacements.is_empty() {
-            return Ok(RuleOutcome {
-                decision: GuardDecision::Pass,
-                flagged,
-            });
         }
         replacements.sort_by_key(|(key, _)| *key);
         Ok(RuleOutcome {
@@ -265,11 +398,124 @@ mod tests {
 
     #[test]
     fn replacement_budget_is_inclusive_and_rejects_plus_one() {
-        let rules = CompiledRules::compile(&[rule("a", AiGuardAction::Mask, Some("bb"))]).expect("compiles");
+        let rules = CompiledRules::compile(&[rule("(a)", AiGuardAction::Mask, Some("$1$1"))]).expect("compiles");
         let input = spans(&["a"]);
-        // "a" masks to "bb": exactly two bytes.
+        // "a" expands to "aa": exactly two bytes.
         assert!(decide(&rules, &input, 2).is_ok());
         assert!(decide(&rules, &input, 1).is_err());
+    }
+
+    #[test]
+    fn compiled_replacement_matches_regex_interpolation_grammar() {
+        let regex = regex::Regex::new(r"(?P<name>a)(?P<π>c)?").expect("valid regex");
+        let input = "ac a";
+        let replacements = [
+            "$0",
+            "$1",
+            "$10",
+            "$name",
+            "${name}",
+            "$namesuffix",
+            "${name}suffix",
+            "$missing",
+            "${missing}",
+            "$2",
+            "${+0}",
+            "${+1}",
+            "${01}",
+            "${184467440737095516160}",
+            "$$",
+            "$$$1",
+            "$",
+            "$!",
+            "$é",
+            "${}",
+            "${ }",
+            "${π}",
+            "${wat $name ok",
+            "pre-$name-post",
+        ];
+
+        for replacement in replacements {
+            let compiled = CompiledReplacement::compile(&regex, replacement);
+            let actual = compiled
+                .replace_all_bounded(&regex, input, usize::MAX)
+                .expect("bounded expansion succeeds")
+                .expect("input matches");
+            let expected = regex.replace_all(input, replacement);
+            assert_eq!(actual, expected.as_ref(), "replacement {replacement:?}");
+        }
+    }
+
+    #[test]
+    fn mask_requires_a_replacement() {
+        let error = CompiledRules::compile(&[rule("a", AiGuardAction::Mask, None)])
+            .err()
+            .expect("missing replacement is invalid");
+        assert_eq!(error, "replacement is required for action mask");
+    }
+
+    #[test]
+    fn repeated_capture_amplification_stops_at_the_budget() {
+        let rules = CompiledRules::compile(&[rule("(a)", AiGuardAction::Mask, Some("$1$1$1$1"))]).expect("compiles");
+        assert!(decide(&rules, &spans(&["aaaaaaaa"]), 31).is_err());
+        assert!(decide(&rules, &spans(&["aaaaaaaa"]), 32).is_ok());
+    }
+
+    #[test]
+    fn aggregate_budget_covers_all_live_span_replacements() {
+        let rules = CompiledRules::compile(&[rule("a", AiGuardAction::Mask, Some("bb"))]).expect("compiles");
+        assert!(decide(&rules, &spans(&["a", "a"]), 3).is_err());
+        assert!(decide(&rules, &spans(&["a", "a"]), 4).is_ok());
+    }
+
+    #[test]
+    fn chained_shrink_releases_budget_for_another_span() {
+        let rules = CompiledRules::compile(&[
+            rule("^a$", AiGuardAction::Mask, Some("bbbb")),
+            rule("^bbbb$", AiGuardAction::Mask, Some("c")),
+            rule("^x$", AiGuardAction::Mask, Some("yyy")),
+        ])
+        .expect("compiles");
+
+        assert_eq!(
+            decide(&rules, &spans(&["a", "x"]), 4),
+            Ok(GuardDecision::Replace(vec![
+                (0, "c".to_string()),
+                (1, "yyy".to_string()),
+            ]))
+        );
+    }
+
+    #[test]
+    fn returning_to_original_releases_the_slot_budget() {
+        let rules = CompiledRules::compile(&[
+            rule("^a$", AiGuardAction::Mask, Some("bbbb")),
+            rule("^bbbb$", AiGuardAction::Mask, Some("a")),
+            rule("^x$", AiGuardAction::Mask, Some("zzzz")),
+        ])
+        .expect("compiles");
+
+        assert_eq!(
+            decide(&rules, &spans(&["a", "x"]), 4),
+            Ok(GuardDecision::Replace(vec![(1, "zzzz".to_string())]))
+        );
+    }
+
+    #[test]
+    fn zero_budget_keeps_an_empty_divergent_replacement() {
+        let rules = CompiledRules::compile(&[rule(".+", AiGuardAction::Mask, Some(""))]).expect("compiles");
+        assert_eq!(
+            decide(&rules, &spans(&["erase me"]), 0),
+            Ok(GuardDecision::Replace(vec![(0, String::new())]))
+        );
+    }
+
+    #[test]
+    fn oversized_no_match_is_a_pass() {
+        let rules = CompiledRules::compile(&[rule("needle", AiGuardAction::Mask, Some("x"))]).expect("compiles");
+        let input = "haystack".repeat(1024);
+        assert_eq!(decide(&rules, &spans(&[input.as_str()]), 0), Ok(GuardDecision::Pass));
     }
 
     #[test]

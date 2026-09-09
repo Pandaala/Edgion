@@ -30,4 +30,4 @@
 - Fresh independent final reviewer `b0236_final_independent_review`: LGTM, no Must Fix or Should Fix. It independently checked refusal/failure semantics, borrow lifetime, cap portability, documentation, scope and all project hard rules.
 - Verification: AI Guard 32/32; workspace format/check/Clippy (existing warnings), agent docs, SSA, metrics inventory, Pingora source, Gateway no-tracing, English-only, diff and 3,136-file freeze passed. Existing integration files were not edited by the campaign.
 - External user commit `6a5e428a` was independently proven unrelated to the three frozen B0236 paths; its sole changed integration file was reconciled exactly in [the provenance record](../external-sync-6a5e428a.md).
-- Local commit SHA is backfilled by the next batch; never push.
+- Commit: `5b050b0d`; never pushed by the campaign.

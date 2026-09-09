@@ -10,10 +10,10 @@
 | Priority | P1 |
 | Baseline commit | `d484e580` |
 | Scope | Every tracked file under `edgion-gateway/` |
-| Campaign status | in-progress; B0236 changed and passed its commit gate on external baseline `6a5e428a`; external user commits through that revision reconciled. |
-| Coverage | 548 current Gateway files: 223 changed, 181 examined-no-change, 14 deferred, 130 non-terminal; 3 historical rows are removed. HTTP conf_handler, plugin store and RequestMirror reopened after external changes; OIDC reopenings retained. |
-| Active batch | B0236 AI Guard plugin: independent plan/final review and full verification passed; exact local commit is next. Automatic local batch commits authorized, never push. |
-| Analysis queue | B0237 rules is analysis-ready and requires plan-first bounded replacement construction. D0127 tracks the independently confirmed outbound CA gap. |
+| Campaign status | in-progress; B0237 changed and passed its commit gate on `5b050b0d`; external user commits through `6a5e428a` reconciled. |
+| Coverage | 548 current Gateway files: 224 changed, 181 examined-no-change, 14 deferred, 129 non-terminal; 3 historical rows are removed. HTTP conf_handler, plugin store and RequestMirror reopened after external changes; OIDC reopenings retained. |
+| Active batch | B0237 AI Guard rules: independent revised-plan/final review and full verification passed; exact local commit is next. Automatic local batch commits authorized, never push. |
+| Analysis queue | B0238 spans is analysis-ready and requires plan-first decoded-bound and duplicate-field hardening. D0127 tracks the independently confirmed outbound CA gap. |
 | Integration freeze | 3,136 files. External test changes through `6a5e428a` were individually verified against source commits and current HEAD; only proven entries reconciled. See external-sync records. No campaign integration-test edit occurred. |
 
 ## AI guide summary
