@@ -10,11 +10,11 @@
 | Priority | P1 |
 | Baseline commit | `d484e580` |
 | Scope | Every tracked file under `edgion-gateway/` |
-| Campaign status | in-progress; B0231 deferred as D0127 and committed as `64b0b164`; external user commits through `774c63bc` reconciled. |
-| Coverage | 548 current Gateway files: 222 changed, 180 examined-no-change, 14 deferred, 132 non-terminal; 3 historical rows are removed. HTTP conf_handler reopened after external CORS enforcement; earlier OIDC/Redis reopenings retained. |
-| Active batch | B0232 Redis limiter scripts: sole serial commit gate at external `55bb2c84`; independent plan/final review and all verification passed. Automatic local batch commits authorized, never push. |
-| Analysis queue | B0233 Redis limiter module is analysis-ready and must be refreshed after B0232; B0234 AI Guard evaluator is analysis-ready. D0127 tracks the independently confirmed outbound CA gap. |
-| Integration freeze | 3,124 files. External CORS, ACME/GeoRestriction, CredentialInjector and Transport changes were individually verified against source commits and current HEAD; only proven entries reconciled. See external-sync records. No campaign integration-test edit occurred. |
+| Campaign status | in-progress; B0232 changed and committed as `e42437af`; external user commits through `72be06f1` reconciled. |
+| Coverage | 548 current Gateway files: 221 changed, 180 examined-no-change, 14 deferred, 133 non-terminal; 3 historical rows are removed. HTTP conf_handler, plugin store and RequestMirror reopened after external changes; OIDC reopenings retained. |
+| Active batch | B0233 Redis limiter module: sole serial commit gate at external `72be06f1`; refreshed independent review and all verification passed. Automatic local batch commits authorized, never push. |
+| Analysis queue | B0234 AI Guard evaluator and B0235 AI Guard facade are analysis-ready; B0235 must refresh after B0234. D0127 tracks the independently confirmed outbound CA gap. |
+| Integration freeze | 3,136 files. External test changes through `72be06f1` were individually verified against source commits and current HEAD; only proven entries reconciled. See external-sync records. No campaign integration-test edit occurred. |
 
 ## AI guide summary
 

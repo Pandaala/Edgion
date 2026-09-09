@@ -66,8 +66,9 @@ clears the previous set once at parse entry and only extends it afterwards;
 delegated reads register the root owner's dependency while authorizing the
 declaring child's identity. Thus a concurrent grant revocation either precedes
 the authorization read or finds the registered owner for requeue. This correction
-is limited to mirrors; ordinary references with check-before-register ordering
-remain tracked in the [shared race task](../../../../tasks/todo/reference-grant-dependency-registration-race.md).
+is limited to mirrors. Ordinary references with check-before-register ordering
+remain outside this correction; their dependency-registration race requires
+separate verification and repair.
 
 Gateway `plugin_store.rs::can_retain_previous` rejects whole-runtime LKG when
 either previous or incoming configuration has an executable request-stage
@@ -91,9 +92,8 @@ Grant revocation applies to new requests after the updated configuration reaches
 the Gateway. Already-started mirror tasks retain their request snapshot and are
 not cancelled retroactively. This task does not add an immediate revocation fence,
 mirror BackendTLSPolicy support, or new load-balancing policy behavior. Missing
-mirror Service status is a separate unresolved defect tracked in
-[the follow-up task](../../../../tasks/todo/request-mirror-missing-service-status.md);
-existing endpoint-resolution failures still skip the mirror. Port-status
+mirror Service status remains a separate unresolved defect; existing
+endpoint-resolution failures still skip the mirror. Port-status
 completeness is not claimed by this authorization correction.
 
 ## Verification and re-evaluation
@@ -141,7 +141,7 @@ not prove non-delivery. This is local runtime evidence, not Kubernetes admission
 or delegated-traffic integration coverage. Delegation is covered by unit tests.
 The backend-filter POST positive control uses an explicit rule-level
 RequestBodyBuffer and the existing committed-snapshot mirror path. Unbuffered
-backend mirror admission is a [separate unresolved issue](../../../../tasks/todo/backend-request-mirror-streaming-body-stage.md).
+backend mirror admission remains a separate unresolved issue.
 Mixed invalid DSL phases check HTTP 500 without primary or mirror sends, then
 valid-but-denied recovery and renewed authorization. DSL/WAF delta/full combinations
 are covered by plugin-store unit tests.

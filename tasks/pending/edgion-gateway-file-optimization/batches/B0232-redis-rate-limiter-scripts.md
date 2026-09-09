@@ -31,4 +31,4 @@
 - Added fixed-expectation, network-free tests for cadence, migration, saturation, rollback, large elapsed values, both branches and retry rounding. Updated owning knowledge and created the self-contained future real-Redis task `tasks/todo/add-redis-token-bucket-fractional-refill-integration-coverage.md`; existing integrations are untouched.
 - Fresh independent reviewer `b0232_final_review`: LGTM with no Must Fix or Should Fix at external `55bb2c84`. Reviewed source blob `590bbea526f6b67da47f0f1676cdb34d0f059840`, knowledge blob `54ab1876a1ce489b2ba7a538c8727374d1aebe18` and task blob `9930b466eec53e0f8721d4ac3cd15f381749770a`; confirmed numeric exactness, migration and preserved contracts.
 - Fresh tests: scripts 4/4, shared limiter 27/27, HTTP Redis limiter 14/14 and connection limiter 12/12. Workspace format/check/Clippy, agent docs, SSA, metrics inventory, Pingora source, Gateway no-tracing, English-only, diff and frozen-path guards passed.
-- Commit SHA is backfilled after all gates and the local commit; never push.
+- Commit: `e42437af`; never pushed by the campaign.

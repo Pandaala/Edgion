@@ -89,7 +89,7 @@
 | `observe-core` | 3 | 1 | 2 | 0 | complete |
 | `observe-metrics` | 5 | 3 | 2 | 0 | complete |
 | `observe-protocol-logs` | 7 | 4 | 3 | 0 | complete |
-| `plugins-common` | 3 | 1 | 1 | 0 | pending |
+| `plugins-common` | 3 | 2 | 1 | 0 | complete |
 | `plugins-http-ai-guard` | 5 | 0 | 0 | 0 | pending |
 | `plugins-http-ai-proxy` | 2 | 0 | 0 | 0 | pending |
 | `plugins-http-all-endpoint-status` | 3 | 1 | 1 | 0 | pending |
@@ -326,10 +326,10 @@
 | `edgion-gateway/src/observe/mod.rs` | `observe-core` | source | examined-no-change | OBS-CORE-001 / `4b1d27d5` |
 | `edgion-gateway/src/observe/request_diagnostics.rs` | `observe-core` | source | examined-no-change | OBS-CORE-001 / `4b1d27d5` |
 | `edgion-gateway/src/plugins/common/mod.rs` | `plugins-common` | source | examined-no-change | `B0061`: retained correct entry-scope compilation and identity separation |
-| `edgion-gateway/src/plugins/common/redis_rate_limiter/mod.rs` | `plugins-common` | source | analysis-ready | B0233: remove warm-path String deep copies after B0232 freshness check |
+| `edgion-gateway/src/plugins/common/redis_rate_limiter/mod.rs` | `plugins-common` | source | changed | B0233: shallow Fred input clones retain NOSCRIPT fallback; independent LGTM, 426 focused tests |
 | `edgion-gateway/src/plugins/common/redis_rate_limiter/scripts.rs` | `plugins-common` | source | changed | B0232: persisted fractional refill; independent plan/final LGTM, focused filters passed |
 | `edgion-gateway/src/plugins/http/ai_guard/evaluator.rs` | `plugins-http-ai-guard` | source | analysis-ready | B0234: borrow selected span text during capped evaluator serialization |
-| `edgion-gateway/src/plugins/http/ai_guard/mod.rs` | `plugins-http-ai-guard` | source | pending | — |
+| `edgion-gateway/src/plugins/http/ai_guard/mod.rs` | `plugins-http-ai-guard` | source | analysis-ready | B0235: minimal private-module facade; refresh after B0234 before final review |
 | `edgion-gateway/src/plugins/http/ai_guard/plugin.rs` | `plugins-http-ai-guard` | source | pending | REQ-BODY-CORE-001 follow-up: replace the 32-bit-truncating physical-cap `as usize` cast during the full plugin audit |
 | `edgion-gateway/src/plugins/http/ai_guard/rules.rs` | `plugins-http-ai-guard` | source | pending | — |
 | `edgion-gateway/src/plugins/http/ai_guard/spans.rs` | `plugins-http-ai-guard` | source | pending | — |
@@ -477,7 +477,7 @@
 | `edgion-gateway/src/plugins/http/openid_connect/token_exchange.rs` | `plugins-http-openid-connect` | source | pending | Reopened after external `74e6ccdd`; historical CACHE-001/B0091/B0093 retained |
 | `edgion-gateway/src/plugins/http/openid_connect/token_verify.rs` | `plugins-http-openid-connect` | source | pending | Reopened after external `74e6ccdd`; historical B0090/B0091 retained |
 | `edgion-gateway/src/plugins/http/openid_connect/userinfo.rs` | `plugins-http-openid-connect` | source | examined-no-change | B0093 |
-| `edgion-gateway/src/plugins/http/plugin_store.rs` | `plugins-http-framework` | source | changed | B0062; B0121 condition-publication fail-close support |
+| `edgion-gateway/src/plugins/http/plugin_store.rs` | `plugins-http-framework` | source | pending | Reopened after external `5cb0b087` cross-namespace mirror LKG policy change; B0062/B0121 history retained |
 | `edgion-gateway/src/plugins/http/proxy_rewrite/mod.rs` | `plugins-http-proxy-rewrite` | source | examined-no-change | B0095 |
 | `edgion-gateway/src/plugins/http/proxy_rewrite/plugin.rs` | `plugins-http-proxy-rewrite` | source | changed | B0095 |
 | `edgion-gateway/src/plugins/http/rate_limit/mod.rs` | `plugins-http-rate-limit` | source | examined-no-change | B0096 |
@@ -498,7 +498,7 @@
 | `edgion-gateway/src/plugins/http/request_mirror/mirror_log.rs` | `plugins-http-request-mirror` | source | examined-no-change | B0102 |
 | `edgion-gateway/src/plugins/http/request_mirror/mirror_state.rs` | `plugins-http-request-mirror` | source | examined-no-change | B0102 |
 | `edgion-gateway/src/plugins/http/request_mirror/mod.rs` | `plugins-http-request-mirror` | source | examined-no-change | B0102 |
-| `edgion-gateway/src/plugins/http/request_mirror/plugin.rs` | `plugins-http-request-mirror` | source | changed | B0102 |
+| `edgion-gateway/src/plugins/http/request_mirror/plugin.rs` | `plugins-http-request-mirror` | source | pending | Reopened after external `5cb0b087` ReferenceGrant early rejection; B0102 history retained |
 | `edgion-gateway/src/plugins/http/request_mirror/tests/plugin_test.rs` | `plugins-http-request-mirror` | test | pending | Added by external commit `90a45683`; full audit pending |
 | `edgion-gateway/src/plugins/http/request_restriction/mod.rs` | `plugins-http-request-restriction` | source | examined-no-change | B0103 |
 | `edgion-gateway/src/plugins/http/request_restriction/plugin.rs` | `plugins-http-request-restriction` | source | changed | B0103 |

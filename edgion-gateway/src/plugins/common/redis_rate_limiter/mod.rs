@@ -11,7 +11,10 @@ pub mod scripts;
 
 use crate::link_sys::providers::redis::RedisLinkClient;
 use edgion_resources::resources::edgion_plugins::{RateLimitAlgorithm, RateLimitPolicy};
-use fred::interfaces::LuaInterface;
+use fred::{
+    interfaces::LuaInterface,
+    types::{MultipleKeys, Value},
+};
 use scripts::{
     CREDENTIAL_RESERVATION_SCRIPT, CUMULATIVE_QUOTA_SCRIPT, FIXED_WINDOW_SCRIPT, SLIDING_WINDOW_SCRIPT,
     TOKEN_BUCKET_SCRIPT,
@@ -471,6 +474,8 @@ impl RedisRateLimiter {
         keys: Vec<String>,
         args: Vec<String>,
     ) -> anyhow::Result<Vec<i64>> {
+        let keys = MultipleKeys::from(keys);
+        let args = Value::Array(args.into_iter().map(Value::from).collect());
         match client
             .pool()
             .evalsha::<Vec<i64>, _, _, _>(script.sha1.as_str(), keys.clone(), args.clone())

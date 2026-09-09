@@ -16,7 +16,9 @@ This is the single concise record of actual changes across the file-by-file audi
 
 ## Entries
 
-- B0232: preserved fractional Token Bucket refill across calls with lazy state migration, exact integer retry timing, saturation/rollback handling and symmetric allow/deny persistence. Independent plan approval and final LGTM; scripts 4/4, shared 27/27, HTTP 14/14, connection 12/12 and full workspace/guard checks passed. Existing integrations unchanged; future real-Redis coverage is a standalone task. Local commit SHA pending; no push.
+- B0233: converted Redis script keys/arguments once to Fred reference-counted representations, eliminating warm EVALSHA string-content deep copies while retaining shallow outer vectors and exact NOSCRIPT fallback inputs. Independent LGTM refreshed after external source changes; Redis/DSL/AI focused tests 426/426 and all workspace/guard checks passed again at `72be06f1`. External mirror/session/L4 test provenance was reconciled; no campaign integration change. Local commit SHA pending; no push.
+
+- B0232: preserved fractional Token Bucket refill across calls with lazy state migration, exact integer retry timing, saturation/rollback handling and symmetric allow/deny persistence. Independent plan approval and final LGTM; scripts 4/4, shared 27/27, HTTP 14/14, connection 12/12 and full workspace/guard checks passed. Existing integrations unchanged; future real-Redis coverage is a standalone task. Commit `e42437af`; no push.
 
 - B0231: deferred the independently confirmed per-bundle custom-CA validation defect as D0127; no production code changed. Mixed valid/empty bundles are accepted by three canonical adapters and require a plan-first cross-adapter repair. TLS/OIDC/common tests 32/32 and workspace/guard checks passed; external CredentialInjector freeze changes were independently reconciled, with no campaign integration edit. Commit `64b0b164`; no push.
 

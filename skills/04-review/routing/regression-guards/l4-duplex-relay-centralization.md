@@ -129,9 +129,9 @@ relay or immediate-EOF policy.
 
 The initial network run exposed the short-plateau assumption corrected above.
 Two subsequent attempts were interrupted by competing worktree lifecycle
-operations; those partial runs are not the passing evidence. The separate
-[shared integration lifecycle isolation task](../../../../tasks/todo/isolate-shared-integration-process-lifecycle.md)
-retains that infrastructure issue; the successful exclusive run does not fix it.
+operations; those partial runs are not the passing evidence. Shared integration
+process lifecycle isolation remains an unresolved infrastructure concern; the
+successful exclusive run does not establish isolation between concurrent workers.
 Re-evaluate when stream wrappers, readiness/waker behavior, buffer state,
 transport buffer sizes, idle configuration, or shutdown policy changes.
 
