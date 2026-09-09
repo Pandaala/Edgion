@@ -16,6 +16,8 @@ This is the single concise record of actual changes across the file-by-file audi
 
 ## Entries
 
+- External sync: user-requested remote `7825ef03` merged cleanly as `3775e7e5`; no push. Independent provenance review reconciled exactly two frozen entries, confirmed D0084 closure and reopened only the changed HTTP conf handler. Fresh CORS filters and workspace/guard checks passed; see [reconciliation evidence](external-sync-7825ef03.md). B0229 remains valid at the merged baseline.
+
 | Batch | Date | Files | Outcome | Actual improvement | Verification | Commit | Follow-ups |
 |-------|------|-------|---------|--------------------|--------------|--------|------------|
 | [`B0033`](batches/B0033-backends-circuit-breaker.md) | 2026-08-31 | 2 | 1 changed, 1 examined-no-change | Removed the contention test's intentional permit leak and proved concurrent RAII release to zero; normalized the resumed campaign artifacts and froze existing integration-test contents | 4 focused tests; format, check, Clippy, SSA, metrics, Pingora source, no-tracing passed; 13 known external doc links remain missing | `770be849` | Existing [atomic Service snapshot task](../../todo/backend-traffic-policy-atomic-service-snapshot.md) retained |
@@ -223,7 +225,7 @@ This is the single concise record of actual changes across the file-by-file audi
 
 | [`B0227`](batches/B0227-runtime-server-header.md) | 2026-09-09 | 1 | changed (rustdoc only) | Corrected HSTS standard-header allocation explanation; retained runtime and distinct Pingora title-case rationale | Independent LGTM; four response regressions passed, workspace format/check/Clippy and all guards passed | `1456c442` | No runtime, test or integration changes |
 
-| [`B0228`](batches/B0228-runtime-gateway-store.md) | 2026-09-09 | 1 target, 1 knowledge file | examined-no-change (docs corrected) | Retained raw map and owned snapshots; corrected nonexistent API and low-frequency/derived-reader ownership | Independent LGTM; fresh workspace format/check/Clippy and all guards passed | pending | Existing D0003/D0123 remain separate; no source/integration changes |
+| [`B0228`](batches/B0228-runtime-gateway-store.md) | 2026-09-09 | 1 target, 1 knowledge file | examined-no-change (docs corrected) | Retained raw map and owned snapshots; corrected nonexistent API and low-frequency/derived-reader ownership | Independent LGTM; fresh workspace format/check/Clippy and all guards passed | `06b88877` | Existing D0003/D0123 remain separate; no source/integration changes |
 
 ### `UTIL-001` — `edgion-gateway/src/util/*`
 

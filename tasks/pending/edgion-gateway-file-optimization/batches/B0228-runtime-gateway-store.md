@@ -2,7 +2,7 @@
 
 ## Scope
 
-- Pipeline state: verified examined-no-change (owning docs corrected); awaiting local commit.
+- Pipeline state: terminal; local commit `06b88877`.
 - Active anchor crate: `edgion-gateway`.
 - Target: `edgion-gateway/src/runtime/store/gateway.rs`.
 - Baseline: `a63a88ca`.
@@ -34,4 +34,4 @@
 
 - Final reviewer LGTM; no Must Fix/Should Fix. Full raw-store/handler/cache/admin/derived-reader evidence and scoped knowledge correction independently verified. D0003/D0123 remain pending, not repaired or dismissed.
 - External Cargo work completed; fresh coordinator workspace check/Clippy passed (`/tmp/edgion-b0228-{check,clippy}.log`, existing warnings). Format, docs, SSA, metrics, Pingora source, Gateway tracing, English-only, diff and integration freeze passed. No new tests required for this documentation-only change; no historical test result presented as fresh.
-- Ledger/changelog updated; source/integrations unchanged. Commit pending, local only.
+- Ledger/changelog updated; source/integrations unchanged. Commit `06b88877`, local only.

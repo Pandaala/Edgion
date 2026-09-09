@@ -596,7 +596,7 @@
 | `edgion-gateway/src/routes/grpc/match_unit.rs` | `routes-shared` | source | changed | B0167: precompile and borrow backend policy target identity |
 | `edgion-gateway/src/routes/grpc/mod.rs` | `routes-shared` | source | changed | B0168: remove legacy singular gRPC manager alias |
 | `edgion-gateway/src/routes/grpc/routes_mgr.rs` | `routes-shared` | source | changed | B0168 removed the legacy getter; B0169 clears retained managers and removes the inner ArcSwap |
-| `edgion-gateway/src/routes/http/conf_handler_impl.rs` | `routes-shared` | source | changed | B0170: share rule and metric handles across hostname/match expansion |
+| `edgion-gateway/src/routes/http/conf_handler_impl.rs` | `routes-shared` | source | pending | Reopened after external `7825ef03` native CORS rule-scope enforcement; B0170 history retained |
 | `edgion-gateway/src/routes/http/match_engine/mod.rs` | `routes-shared` | source | changed | B0171: enforce internal matcher construction boundary |
 | `edgion-gateway/src/routes/http/match_engine/radix_path.rs` | `routes-shared` | source | changed | B0171: remove persistent fields exposed as dead by the internal boundary; B0172: move-only build value |
 | `edgion-gateway/src/routes/http/match_engine/radix_route_match.rs` | `routes-shared` | source | changed | B0172: reduce route-table build allocations |
@@ -625,7 +625,7 @@
 | `edgion-gateway/src/routes/http/proxy_http/pg_upstream_response_body_filter.rs` | `routes-shared` | source | changed | B0190: restore GRPCRoute and selected-backend read-only body-filter dispatch |
 | `edgion-gateway/src/routes/http/proxy_http/pg_upstream_response_filter.rs` | `routes-shared` | source | examined-no-change | B0191: retained final/interim attempt accounting and response-plugin lifecycle |
 | `edgion-gateway/src/routes/http/proxy_http/pg_upstream_response_trailer_filter.rs` | `routes-shared` | source | changed | B0192: prevent gateway-owned trailer failures from penalizing the selected backend |
-| `edgion-gateway/src/routes/http/proxy_http/preflight_handler.rs` | `routes-shared` | source | examined-no-change | B0193: native/plugin CORS preflight ownership retained; D0084 already owns backend scope design |
+| `edgion-gateway/src/routes/http/proxy_http/preflight_handler.rs` | `routes-shared` | source | examined-no-change | B0193: preflight ownership retained; external `7825ef03` closed D0084 through canonical rule-only CORS support |
 | `edgion-gateway/src/routes/http/redirect_http.rs` | `routes-shared` | source | changed | B0194: redact dedicated redirect access-log paths without changing the wire Location |
 | `edgion-gateway/src/routes/http/routes_mgr.rs` | `routes-shared` | source | changed | B0169: clear exact retained manager on stale/orphan removal |
 | `edgion-gateway/src/routes/http/session_persistence.rs` | `routes-shared` | source | changed | B0195: reuse multi-field cookie extraction and reject malformed expiry fallback |
@@ -669,7 +669,7 @@
 | `edgion-gateway/src/runtime/server/server_header.rs` | `runtime` | source | changed | B0227: corrected three HSTS cost rustdoc lines only; independent LGTM and four response regressions passed |
 | `edgion-gateway/src/runtime/store/gateway.rs` | `runtime` | source | examined-no-change | B0228: independent LGTM; raw store retained, owning API/frequency/snapshot knowledge corrected |
 | `edgion-gateway/src/runtime/store/listener_gateway_info.rs` | `runtime` | source | analysis-ready | B0229: borrow original annotation map for projection/DNS; preserve immutable snapshot semantics |
-| `edgion-gateway/src/runtime/store/mod.rs` | `runtime` | source | analysis-in-progress | B0230: store facade and actual raw/derived consumers/value analysis |
+| `edgion-gateway/src/runtime/store/mod.rs` | `runtime` | source | analysis-ready | B0230: no-change facade recommendation; refresh after B0229 before independent review |
 | `edgion-gateway/src/services/acme/challenge_store.rs` | `services` | source | changed | `B0060`: made the absolute expiry boundary exclusive with deterministic coverage |
 | `edgion-gateway/src/services/acme/conf_handler_impl.rs` | `services` | source | examined-no-change | `B0060`: retained real incremental atomic publication and bounded config logging |
 | `edgion-gateway/src/services/acme/mod.rs` | `services` | source | examined-no-change | `B0060`: retained the minimal live ACME facade and exports |

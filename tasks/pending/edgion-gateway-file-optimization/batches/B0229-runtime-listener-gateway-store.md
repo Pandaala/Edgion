@@ -5,7 +5,7 @@
 - Pipeline state: analysis-ready; queued, not active mutation.
 - Active anchor crate: `edgion-gateway`.
 - Target: `edgion-gateway/src/runtime/store/listener_gateway_info.rs`.
-- Baseline: `1456c442`.
+- Baseline: `3775e7e5` (freshness revalidated after the remote CORS merge).
 - Analyst: `b0229_listener_store_analysis`.
 - Inspect complete immutable flat/index publication, lookup consumers, listener specificity and Gateway generation identity. Earlier supporting edits and tests do not establish file coverage.
 - Revalidate carried `listener-gateway-info-dual-arcswap-merged-snapshot.md` examples of old `Vec<GatewayInfo>` against current Arc ownership. Do not re-open known independent D0003/D0123 publication issues as local fixes.
@@ -19,3 +19,4 @@
 - Preserve annotation absence, exact true parsing, explicit empty versus missing plugin namespace, metrics strings and canonical DNS valid-ref precedence/invalid-ref fallback/inline normalization. Add local projection matrix for these and unrelated annotations; retain existing publication/identity tests and all integrations.
 - Fresh filters before/after: listener store, route matcher, Gateway identity; optional canonical common DNS resolver-selection tests. Existing D0003/D0123 remain separate. No new issue, cache/index, tracing, metrics or shared API.
 - Original knowledge: concurrency snapshot/cross-store pages, routing prefilter, Gateway store/ConfHandler architecture, ListenerKey/DNS contracts and coding/unit-test rules. Historical cross-store timing/consequence prose is not fresh evidence.
+- Freshness: original analyst independently revalidated at `3775e7e5`; target blob and relevant knowledge/call chains remain unchanged. Merged CORS filtering does not affect annotation projection or parent-reference sharing. Direct simple implementation remains valid within the two-path allow-list.

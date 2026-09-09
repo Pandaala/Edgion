@@ -10,11 +10,11 @@
 | Priority | P1 |
 | Baseline commit | `d484e580` |
 | Scope | Every tracked file under `edgion-gateway/` |
-| Campaign status | in-progress; B0227 committed locally as `1456c442`; external source updates remain reconciled |
-| Coverage | 547 current Gateway files: 221 changed, 179 examined-no-change, 13 deferred, 134 non-terminal; 3 historical rows are removed. Six OIDC rows reopened and one new test added after `74e6ccdd`; earlier Redis reopenings retained. |
-| Active batch | B0228 raw Gateway store owning-document correction independently approved and verified; committing locally. Automatic local batch commits authorized, never push. D0119's pre-existing context layout failures remain separate. |
-| Analysis queue | B0229 listener Gateway store is analysis-ready; B0230 store facade analysis is in progress. D0126 terminal-header repair independently confirmed, not implemented by B0224. |
-| Integration freeze | 3,121 files. External updates through `53d59adb` were reconciled individually after byte/mode verification, most recently two changed files and one new DSL Redis test. No campaign integration-test edit occurred. |
+| Campaign status | in-progress; B0228 committed as `06b88877`; user-requested remote `7825ef03` merged as `3775e7e5`, reconciliation and fresh CORS verification passed |
+| Coverage | 547 current Gateway files: 220 changed, 179 examined-no-change, 13 deferred, 135 non-terminal; 3 historical rows are removed. HTTP conf_handler reopened after external CORS enforcement; earlier OIDC/Redis reopenings retained. |
+| Active batch | No active implementation; closing external-sync records before B0229 promotion. Automatic local batch commits authorized, never push. D0119's pre-existing context layout failures remain separate. |
+| Analysis queue | B0229 listener Gateway store is revalidated analysis-ready at `3775e7e5`; B0230 store facade is analysis-ready and must be refreshed after B0229. D0126 terminal-header repair independently confirmed, not implemented by B0224. |
+| Integration freeze | 3,122 files. External `7825ef03` changes to the conformance testing guide and new native-CORS scope script were individually verified against remote/HEAD bytes and file/000 mode, then only those entries reconciled. No campaign integration-test edit occurred. |
 
 ## AI guide summary
 

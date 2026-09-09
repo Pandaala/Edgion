@@ -1,0 +1,10 @@
+# External Sync — 7825ef03
+
+- User-requested merge: local `06b88877` and remote `7825ef03` merged cleanly as `3775e7e5`. No push. The coordinator's two B0228 SHA-backfill edits were stashed, restored without conflict and verified before dropping that exact stash. User-owned untracked paths were untouched.
+- Independent diagnostic: `remote_7825_reconcile` approved safe continuation and verified remote CORS rule-only enforcement across resources, Controller, Gateway and original knowledge. D0084 is closed, not duplicated or resurrected. B0193's unchanged preflight source retains its prior disposition; historical issue wording is corrected.
+- Coverage: reopen only `edgion-gateway/src/routes/http/conf_handler_impl.rs`, the sole externally changed Gateway source. Current totals are 412/547 terminal (220 changed, 179 examined-no-change, 13 deferred), 135 non-terminal; three historical removed rows remain separate.
+- Freeze reconciliation: each path's worktree Git blob equals HEAD and remote `7825ef03`; both are regular Git `100644` files, filesystem `0644`, executable bits `000`. Only the existing guide entry and new script entry were updated. No integration test was edited or run by this reconciliation.
+  - `edgion-tests/conformance/TESTING-GUIDE.md`: SHA-256 `1bfae9029b0193fd4ffee5ec00c0e0794d4fad4e2fb97fbf0d43a73f525d12cd`.
+  - `edgion-tests/integration/scripts/integration/test_native_cors_scope.py`: SHA-256 `f912ab28d17b3ca99dfa32993eea948ad75ee745f7412aebc647d32dfc048731`.
+- Queue: B0229's original analyst revalidated its exact source blob, knowledge and call chains at `3775e7e5`; simple two-path implementation remains justified. B0230's read-only facade analysis found no change; revalidate after B0229 before review.
+- Verification: fresh locked resources and Controller `backend_cors_scope` filters passed; Gateway HTTP conf-handler and preflight filters passed. Workspace format/check/Clippy, agent docs, SSA, metrics inventory, Pingora source, Gateway no-tracing, English-only, diff and frozen-path checks passed. Remote-reported historical tests are not counted as fresh verification.
