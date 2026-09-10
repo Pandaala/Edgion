@@ -34,16 +34,23 @@ material gateway-level cost and separates the outer hook from nested processor
 allocations. Also re-evaluate if an internal Pingora dispatch change removes
 most of the API burden or if a compiler/`async_trait` change removes the outer
 box. A performance-based proposal must characterize both chunk counts and
-no-work prevalence. Any predicate proposal must remain conservative for
-first-body TTFT, ordinary and Header-EOS terminal calls, upgrades, writable
-processors, HTTPRoute/GRPCRoute and selected-backend filters, Gateway/global
-filters, retries, cache admission, sink termination, and hot-reload snapshots.
-Permanent per-chunk metrics or tracing are not accepted merely to collect this
-evidence.
+no-work prevalence. Any predicate proposal must preserve the ordinary `Data`
+callback contract, including first-body TTFT and every installed processor or
+filter, and must always dispatch both typed terminal events:
+`TerminalWithoutTrailers`, including the synthetic callback after a final
+Header with EOS and the header-only path, and `TerminalBeforeTrailers`. The
+pre-trailer event flushes the streaming-processor chain while leaving the
+trailer lifecycle open for the actual trailer callback; it must not be skipped
+or collapsed into no-trailers completion. The same conservative proof must
+cover upgrades, HTTPRoute/GRPCRoute and selected-backend filters,
+Gateway/global filters, retries, cache admission, sink termination, and
+hot-reload snapshots. Permanent per-chunk metrics or tracing are not accepted
+merely to collect this evidence.
 
-The full allocation tables, lifecycle audit, candidate predicate, benchmark
-method, and implementation test plan are in
-`tasks/todo/response-body-filter-no-work-gate/01-investigation-report.md`.
+The detailed investigation was completed on 2026-08-11 and is archived in git
+history at `d484e580`. This page is the canonical maintained decision; preserve
+its conclusion and re-evaluation rule without depending on the archived raw
+report.
 
 ## Reference
 

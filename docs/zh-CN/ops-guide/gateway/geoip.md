@@ -9,8 +9,10 @@ GeoIP 允许你按客户端的地理来源限制流量，并在访问日志中�
 **一个插件 `GeoIpLocation`** 提供，以完全相同的配置结构注册进两层：
 
 - **HTTP** — `EdgionPlugins.spec.requestPlugins` 中的 `EdgionPlugin::GeoIpLocation`。
-- **L4（第一阶段 / `ConnectionFilter`，覆盖 TCP+TLS）** — `EdgionStreamPlugins.spec.plugins` 中的
-  `EdgionStreamPlugin::GeoIpLocation`。没有第二阶段（`tlsRoutePlugins`）注册。
+- **L4 Stream 生命周期** — `EdgionStreamPlugins.spec.plugins` 中的
+  `EdgionStreamPlugin::GeoIpLocation`。同一条插件链会在 Listener 接入（`Stage1`）、TCPRoute 与
+  UDP 传输路由接入（`Tcp`）以及 TLSRoute 兼容回退（`Tls`）中运行。GeoIP 不注册到
+  `tlsRoutePlugins`。
 
 **设计上不支持的能力**：不内置基线数据库（受限于数据集的再分发条款）、不支持坐标/半径地理围栏
 （MMDB 坐标是城市中心点值，`accuracy_radius` 精度较粗）、不支持 ASN 查询，也不会因数据库不可用而
@@ -175,9 +177,9 @@ spec:
         allowRuleGroups: []
 ```
 
-完全相同的 `config` 块也可以作为 `EdgionStreamPlugins.spec.plugins`（第一阶段 /
-`ConnectionFilter`）条目注册，用于 L4（TCP/TLS）判定，只有一处限制：`source: RemoteIp` 在 L4
-会被拒绝（见下文）。
+完全相同的 `config` 块也可以作为 `EdgionStreamPlugins.spec.plugins` 条目注册，用于 Listener、
+TCPRoute、UDP 传输路由和 TLS 兼容路径的判定，只有一处限制：`source: RemoteIp` 在 L4 会被拒绝
+（见下文）。
 
 **把地理判定和其他规则组合在一起，是"链式编排"而不是"内嵌"。** `GeoIpLocation` 不携带 IP
 白名单或请求头/正文谓词，`IpRestriction`/`RequestRestriction`/`RequestAccessPolicy`/
@@ -381,11 +383,16 @@ city 数据"还是"没有"——一个确实携带 city/subdivision 粒度、但
 更新周期都可能发生变化。请查看访问日志中的 `geo` 块，确认当前加载的数据库实际能解析出哪些字段，
 并据此调整你的规则分组。
 
-## L4（TCP/TLS）注册
+## L4（TCP/UDP/TLS）注册
 
-`GeoIpLocation` 作为 `EdgionStreamPlugins.spec.plugins` 条目注册——**仅限**第一阶段
-（`ConnectionFilter`，TLS 握手之前）。它没有被加入 `tlsRoutePlugins`（第二阶段），该阶段目前
-仍然只允许 `IpRestriction`。
+`GeoIpLocation` 注册在 `EdgionStreamPlugins.spec.plugins` 中，其 runtime 会在三个明确的生命周期
+层运行：
+
+- `Stage1`：Listener 的 `ConnectionFilter`，位于路由匹配和 TLS 之前。
+- `Tcp`：TCPRoute 连接接入和 UDP 传输路由创建会话的路径。
+- `Tls`：没有 `tlsRoutePlugins` runtime 处理该路由时使用的 TLSRoute 兼容回退。
+
+GeoIP 不允许出现在 `tlsRoutePlugins` 中；该位置目前仍然只允许 `IpRestriction`。
 
 L4 的配置结构与 HTTP 完全相同，但有两条特定于本层的准入规则：
 
@@ -422,13 +429,11 @@ spec:
 一致地拒绝（两者调用的是同一个共享校验函数），因为 L4 没有 `X-Forwarded-For` 可用来解析真实
 客户端。
 
-### 永远是传输层对端——地理判定没有 PROXY protocol 的顾虑
+### 始终使用物理传输层对端
 
-由于 `GeoIpLocation` 的 L4 注册仅在第一阶段生效，它看到的永远是原始传输层对端：PROXY protocol
-的解析严格发生在 `accept()` **之后**，所以第一阶段的连接过滤器永远看不到 PROXY 解析后的客户端。
-这比 `GlobalConnectionIpRestriction` 自身的 IP 规则要简单——那些规则会在全部三个 Stream 阶段
-运行，因此在第一阶段看到的是负载均衡器的地址，而在第二/三阶段看到的是 PROXY 解析后的客户端地址；
-`GeoIpLocation` 的 `DirectPeerIp` 来源没有这种歧义需要说明，因为它只会在这一个阶段运行。
+每次 L4 调用收到的都是 `StreamContext.direct_peer_ip`，即不会被 PROXY protocol 改写的物理传输层
+对端。生命周期层只决定插件链在哪里运行，不改变 `DirectPeerIp` 的含义：`Stage1`、`Tcp` 和 `Tls`
+都会判定同一个传输身份。
 
 ### 无就绪门控：运维方自行承担冷启动窗口
 
@@ -437,14 +442,14 @@ spec:
 首次加载前的退避（见下文）会把这段窗口限制在几秒钟以内，而不是完整的 `retry_interval_sec`；
 `edgion_geoip_db_loaded` 是用来告警"这个状态是否还在持续"的指标。
 
-### L4 地理拒绝永远不会被记录日志，也不携带客户端地址
+### L4 拒绝信号取决于生命周期层
 
-一次 L4 地理拒绝**在任何阶段都不会产生日志条目**，也**不会在任何地方记录客户端地址**。唯一的信号
-是计数器 `edgion_geoip_denied_total{layer,reason}`（见[指标](#指标)）。这是刻意为之的设计：
-pingora 会在其 accept 循环内直接丢弃第一阶段拒绝的连接，所以那里确实无法产生日志条目，而且在连接
-洪泛攻击下，逐连接的拒绝日志本身也是一个放大向量——统一的、仅计数的信号比逐连接细节更有价值。
-HTTP 层的地理拒绝不受此规则影响——它们保留正常的 `EdgionErrorCode` 诊断和访问日志记录，因为那里本来
-就存在逐请求的日志。
+`Stage1` Listener 拒绝会被折叠为 `ConnectionFilter` 的布尔结果。此时唯一的 GeoIP 信号是
+`edgion_geoip_denied_total{layer="stage1",reason=...}`；这个阶段没有协议上下文或标准连接日志通道。
+
+`Tcp` 和 `Tls` 路由路径保留标准 TCP、UDP 或 TLS 连接日志。写入日志前，GeoIP 拒绝会被折叠为通用的
+Stream 插件拒绝，因此日志不包含 GeoIP 事实或敏感的插件原因；有界计数器通过 `tcp` 或 `tls` layer
+以及 reason 表达分类。HTTP 拒绝仍使用普通的请求诊断和访问日志。
 
 ## 访问日志
 
@@ -485,7 +490,7 @@ HTTP 层的地理拒绝不受此规则影响——它们保留正常的 `EdgionE
 | `edgion_geoip_db_build_epoch_seconds` | Gauge | 无 | 已加载数据库的构建时间戳。对陈旧程度告警。 |
 | `edgion_geoip_update_failed_total` | Counter | `reason`（`fetch` \| `encoding` \| `size_cap` \| `stall` \| `validation` \| `rename` \| `disk` \| `deadline`） | 按分类统计的后台**更新周期**失败。`disk` 表示磁盘空间预检查拒绝启动（还没有发出任何请求）；`deadline` 表示整个周期超过了 `download_deadline_sec`（即使在持续取得进展），区别于 `stall`（在 `stall_timeout_sec` 内没有任何进展）——两者对应相反的修复方式。 |
 | `edgion_geoip_lookup_panic_total` | Counter | 无 | 一次逐请求的 MMDB 查询发生 panic（已捕获）并报告为 `Failed`。与上面的 `edgion_geoip_update_failed_total` 不同：这是查询路径上的逐请求事件，不是更新周期失败。不含 panic 的解码失败共享 `Failed` 结果，但不增加本计数器。 |
-| `edgion_geoip_denied_total` | Counter | `layer`（`stage1` \| `tcp` \| `tls`）、`reason`（`deny_country` \| `allow_miss` \| `db_unavailable` \| `lookup_failed`） | 被 `GeoIpLocation` 拒绝的 L4 连接。在当前的接入方式下 `layer` 永远是 `stage1`，因为那是该插件唯一的 L4 注册点；另外两个标签取值是为了未来兼容而保留的。永远不携带客户端地址；HTTP 拒绝刻意不计入此处——它们已经出现在访问日志中。 |
+| `edgion_geoip_denied_total` | Counter | `layer`（`stage1` \| `tcp` \| `tls`）、`reason`（`deny_country` \| `allow_miss` \| `db_unavailable` \| `lookup_failed`） | 被 `GeoIpLocation` 拒绝的 L4 判定。`stage1` 表示 Listener 接入，`tcp` 覆盖 TCPRoute 与 UDP 传输路由接入，`tls` 表示 TLS 兼容回退。指标永远不携带客户端地址；HTTP 拒绝刻意不计入此处，因为它们已经出现在访问日志中。 |
 
 ## 多副本更新行为、抖动与 `.meta` 校验器
 
@@ -529,7 +534,8 @@ HTTP 层的地理拒绝不受此规则影响——它们保留正常的 `EdgionE
 | 带翻译语言取值的 `city` 规则永远不匹配 | `city` 只会与 `names["en"]` 比较 | 使用英文城市名 |
 | 黑名单模式下、来源为 `RemoteIp` 的规则被任意客户端轻易绕过 | `RealIp` 的 `trustedIps` 配得过宽（例如 `0.0.0.0/0`）——`RemoteIp` 退化为攻击者可控输入 | 将 `trustedIps` 收窄到你真实的代理出口范围，或改用 `DirectPeerIp` |
 | L4 配置在接入/编译时被拒绝，报错提到 `RemoteIp` | L4 的 `GeoIpLocation` 配置中出现 `source: RemoteIp` 是硬性接入错误 | 改用 `source: DirectPeerIp`——L4 没有 `X-Forwarded-For` 可用来解析真实客户端 |
-| 发生了一次 L4 地理拒绝，但任何地方都找不到对应的日志行 | 符合预期——L4 地理拒绝按设计永远不会在任何阶段被记录日志 | 使用 `edgion_geoip_denied_total{layer,reason}` 作为唯一信号 |
+| Listener 阶段发生地理拒绝，但没有日志行 | 符合预期——`Stage1` 只有连接过滤器布尔结果和有界指标 | 使用 `edgion_geoip_denied_total{layer="stage1",reason=...}` |
+| TCP/UDP/TLS 路由阶段的地理拒绝日志没有 GeoIP 详情 | 符合预期——路由路径保留标准协议日志，但会将 GeoIP 事实和插件原因替换为通用 Stream 插件拒绝 | 将协议日志与 `edgion_geoip_denied_total{layer="tcp"|"tls",reason=...}` 关联分析 |
 | "拦截这个国家，除非在办公室白名单里"这类规则表现不符合预期 | 检查 `IpRestriction`/其他准入插件相对 `GeoIpLocation` 在插件列表中的顺序——组合方式是按链上顺序生效，而不是靠单一合并插件 | 调整插件列表条目的顺序；没有可配置的跨插件豁免语义 |
 
 ## 相关文档

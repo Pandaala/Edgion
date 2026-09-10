@@ -36,7 +36,7 @@ types to ensure architectural alignment.
 
 | Dimension | TCP | UDP | TLS | HTTP | gRPC |
 |-----------|-----|-----|-----|------|------|
-| **`route_cache`** | `DashMap<String, Arc<TCPRoute>>` | `DashMap<String, Arc<UDPRoute>>` | `DashMap<String, Arc<TLSRoute>>` | `DashMap<String, HTTPRoute>` | `DashMap<String, GRPCRoute>` |
+| **`route_cache`** | `DashMap<String, Arc<TcpRouteUnit>>` | `DashMap<String, Arc<UdpRouteUnit>>` | `DashMap<String, Arc<TlsRouteUnit>>` | `DashMap<String, Arc<HTTPRoute>>` | `DashMap<String, Arc<GRPCRoute>>` |
 | **`by_listener`** | `DashMap<ListenerKey, Arc<...>>` | `DashMap<ListenerKey, Arc<...>>` | `DashMap<ListenerKey, Arc<...>>` | `DashMap<ListenerKey, Arc<...>>` | `DashMap<ListenerKey, Arc<...>>` |
 | **Extra cache** | — | — | — | — | `route_units_cache: Mutex<HashMap<...>>` |
 | **Route table swap** | `ArcSwap<TcpRouteTable>` | `ArcSwap<UdpRouteTable>` | `ArcSwap<TlsRouteTable>` | `ArcSwap<DomainRouteRules>` | `ArcSwap<DomainGrpcRouteRules>` |
@@ -55,7 +55,7 @@ types to ensure architectural alignment.
 |-----------|-----|-----|-----|------|------|
 | **Has `resolved_listeners`** | Yes | Yes | Yes | Yes | Yes |
 | **Fallback when empty** | Skip (warn) | Skip (warn) | Skip (warn) | Skip (warn) | Skip (warn) |
-| **Cross-handler rebuild** | No | No | No | Yes (GatewayHandler triggers) | Yes (GatewayHandler triggers) |
+| **Cross-handler rebuild** | Yes (GatewayHandler triggers) | Yes (GatewayHandler triggers) | Yes (GatewayHandler triggers) | Yes (GatewayHandler triggers) | Yes (GatewayHandler triggers) |
 
 ### ConfHandler Behavior
 
@@ -84,17 +84,20 @@ All five protocols follow the same pattern: load per-listener route table → ma
 | Protocol | Proxy struct | Route load | Match call |
 |----------|-------------|------------|------------|
 | **TCP** | `EdgionTcpProxy` | `self.tcp_route_manager.load_route_table()` | `route_table.match_route()` → first |
-| **UDP** | `EdgionUdpProxy` | `self.udp_route_manager.load_route_table()` | `route_table.match_route()` → first |
+| **UDP** | `EdgionUdpProxy` | `self.udp_route_manager.load_route_table()` for a new client session | `route_table.match_route()` → first; established sessions use their pinned upstream |
 | **TLS** | `EdgionTlsTcpProxy` | `self.tls_route_manager.load_route_table()` | `route_table.match_route(sni)` |
-| **HTTP** | `EdgionHttpProxy` | `get_global_http_route_managers().get_or_create_listener_manager(key).load_route_table()` | `port_routes.match_route(session, ctx, &gateway_infos)` |
-| **gRPC** | `EdgionHttpProxy` (shared) | `get_global_grpc_route_managers().get_or_create_listener_manager(key).load_route_table()` | `try_match_grpc_route(&grpc_routes, session, ctx, &gateway_infos)` |
+| **HTTP** | `EdgionHttpProxy` | `self.http_route_manager.load_route_table()` | `port_routes.match_route(session, ctx, &gateway_infos)` |
+| **gRPC** | `EdgionHttpProxy` (shared) | `self.grpc_route_manager.load_route_table()` | `try_match_grpc_route(&grpc_routes, session, ctx, &gateway_infos)` |
 
-**Key difference:** TCP/UDP/TLS proxies hold `Arc<*PortRouteManager>` as a struct
-field (bound at listener creation). HTTP/gRPC look up the per-listener manager
-dynamically from the global singleton at request time via
-`get_or_create_listener_manager(key)`, where `key` is obtained from
-`EdgionHttpProxy.listener_key`. This is because HTTP/gRPC share a single
-`EdgionHttpProxy` struct and need dynamic listener resolution.
+All proxy instances hold an `Arc` to the per-listener manager selected during
+listener construction. HTTP and gRPC share `EdgionHttpProxy`, which retains both
+manager handles. The request path only loads the current inner `ArcSwap` snapshot;
+it does not resolve a manager through the global `DashMap`.
+
+When a listener registry entry is removed, rebuild clears the old manager before
+dropping it from `by_listener`. A proxy that still retains that `Arc` therefore sees
+an empty snapshot. Later recreation installs a distinct manager, so it cannot revive
+the removed generation through the old handle.
 
 ---
 
@@ -161,7 +164,7 @@ These differences exist by design and do not need unification:
 
 1. **TLS has hostname (SNI) matching within per-listener tables** — combines listener + hostname dimension; TCP/UDP have no hostname dimension
 2. **HTTP has multi-level hostname matching** — exact → wildcard → catch-all within per-listener tables; TCP/UDP/TLS have simpler matching
-3. **HTTP/gRPC load listener managers dynamically** — via `get_or_create_listener_manager(key)` at request time, because they share `EdgionHttpProxy`; TCP/UDP/TLS hold `Arc<*PortRouteManager>` in their proxy struct
+3. **HTTP and gRPC share one proxy** — `EdgionHttpProxy` retains separate HTTP and gRPC per-listener manager handles; the three L4 proxies each retain their own family-specific handle
 4. **TLS has dual logging (global + per-listener)** — historical compatibility
 5. **gRPC has `route_units_cache` with `Mutex`** — needed because gRPC pre-parses routes into `GrpcRouteRuleUnit` units; HTTP parses inline during route table build
 6. **HTTP has LB policy sync** — `sync_lb_policies_for_routes` / `cleanup_lb_policies_for_routes`; other protocols handle LB at `initialize_route` time or via `BackendSelector`
@@ -169,21 +172,19 @@ These differences exist by design and do not need unification:
 
 ---
 
-## Cross-Handler Rebuild (HTTP/gRPC only)
+## Gateway-driven rebuild (all five route families)
 
 HTTP and gRPC route full_set/partial_update may execute before or after Gateway
 full_set (independent gRPC watch streams, non-deterministic order). To handle this:
 
-`GatewayHandler::full_set()` and `partial_update()` call
-`get_global_http_route_managers().rebuild_all_listener_managers()` and
-`get_global_grpc_route_managers().rebuild_all_listener_managers()` after
-`rebuild_listener_gateway_infos()`.
+When the listener-key set changes, `GatewayHandler::full_set()` and
+`partial_update()` call `rebuild_all_listener_managers()` for HTTP, gRPC, TCP,
+TLS, and UDP after `rebuild_listener_gateway_infos()`.
 
 This ensures routes cached before Gateways arrived are redistributed to the
-correct per-listener managers once `ListenerGatewayInfoStore` is populated.
-
-TCP/UDP/TLS do not need this because they skip routes without `resolved_listeners`,
-and the controller always resolves listeners before syncing.
+correct per-listener managers once `ListenerGatewayInfoStore` is populated. For
+TCP, TLS, and UDP, the same dispatch also removes orphan manager entries and clears
+snapshots still visible through retained listener handles.
 
 ---
 
@@ -193,12 +194,12 @@ and the controller always resolves listeners before syncing.
 |---|---------|----------|----------|----------------|
 | 1 | TCP/UDP/TLS do not clear `resolved_listeners` before recompute in `parse()`; HTTP/gRPC do | Medium | Controller handlers | Add `route.spec.resolved_listeners = None` at start of `parse()` in TCP/UDP/TLS for consistency |
 | 2 | ~~TCP/UDP/TLS warn when `resolved_listeners` is empty after `parse()`; HTTP/gRPC do not~~ | ~~Low~~ | ~~Controller handlers~~ | **Resolved** — all protocols now skip+warn when `resolved_listeners` is empty (Service refactoring) |
-| 3 | HTTP/gRPC `route_cache` stores values directly (`HTTPRoute`/`GRPCRoute`); TCP/UDP/TLS wrap in `Arc` (`Arc<TCPRoute>`) | Low | Gateway route managers | Cosmetic; no functional impact. Consider unifying to `Arc` for consistency |
+| 3 | ~~HTTP/gRPC stored raw route values directly while TCP/UDP/TLS cached raw route `Arc`s~~ | ~~Low~~ | ~~Gateway route managers~~ | **Resolved by architecture evolution** — HTTP/gRPC caches now hold `Arc` schema resources; TCP/UDP/TLS caches hold compiled route units so selectors and plugin state survive listener-table rebuilds |
 | 4 | gRPC `route_units_cache` uses `Mutex`; all other caches use `DashMap` | Low | gRPC route manager | Consider `DashMap` if contention becomes measurable |
 | 5 | ~~TCP stream-plugin fail-close logged via `tracing::warn!` on the per-connection hot path; TLS used `ctx.err_log`~~ | ~~P1~~ | ~~`routes/tcp/edgion_tcp.rs`~~ | **Resolved** (gateway-routes-01, 2026-05-24) — `check_stream_plugins` now returns `StreamPluginCheck::Deny(&'static str)`; reason flows into `TcpContext.deny_reason` → `TcpLogEntry`, matching the TLS access-log channel. See [../observability/tcp-stream-plugin-no-tracing.md](../../observability/mandatory-design/tcp-stream-plugin-no-tracing.md) |
 | 6 | ~~gRPC `GrpcMatchEngine::match_route` propagated `deep_match` `Err` via `?` at every priority tier, aborting the whole match and masking lower-priority buckets; HTTP's `try_route_deep_match` deliberately swallows the `Err` and continues~~ | ~~P3~~ | ~~`routes/grpc/match_engine.rs`~~ | **Resolved** (gateway-routes-06, 2026-05-24) — added private `try_route_deep_match_unit` helper (`Ok(None) \| Err(_) => None`); all 7 tier call sites now use it instead of `?`, mirroring `routes/http/match_engine/radix_route_match.rs::try_route_deep_match`. Only `parse_grpc_path` still propagates `Err`. Latent only (today `deep_match` never returns `Err` because `match_header` always returns `Ok`) |
 | 7 | Historical mixed-case wildcard finding (`gateway-routes-03`): the recorded store-lowercasing and case-insensitive suffix fix does not describe the current implementation | Not established for canonical inputs | `runtime/matching/route.rs`, `runtime/store/listener_gateway_info.rs` | **Current scope:** PGIS preserves listener hostname bytes; wildcard matching uses case-sensitive `ends_with`, while exact matching uses `eq_ignore_ascii_case`. Canonical Gateway hostname grammar is lowercase, and HTTP host / ClientHello SNI input paths normalize case. This is not a general matcher normalization guarantee: configured `fallback_sni` is returned verbatim. The historical mixed-case configuration example does not establish a defect for canonical inputs; re-evaluate if an accepted input path violates these assumptions, without treating the old resolution claim as current evidence. |
-| 8 | ~~`TcpRouteTable::from_routes` / `UdpRouteTable::from_routes` built the route list from `HashMap::values()` (per-process randomised order) and `match_route` returned `.first()`; an over-bound listener (more than one TCP/UDPRoute, via operator misconfig or a controller event race) picked an effectively random route that flipped across reloads and pods. TLS disambiguates by SNI and HTTP/gRPC sort by specificity, so only the two L4 tables lacked a tiebreak~~ | ~~P3~~ | ~~`routes/tcp/tcp_route_table.rs`, `routes/udp/udp_route_table.rs`~~ | **Resolved** (gateway-routes-05, 2026-05-25) — both `from_routes` now sort by resource key (`namespace/name`) at build time (config-rebuild path, not the data-plane `match_route` hot path), so the pick is deterministic and mirrors Gateway API's `AlphabeticalRoute` tiebreak. Single-route listeners are unaffected. Controller conflict status remains the first line of defence; this is the data-plane fallback |
+| 8 | ~~The former schema-route table builders collected `HashMap::values()` in per-process random order while `match_route` returned `.first()`; an over-bound TCP/UDP listener could therefore select a different route across rebuilds or replicas~~ | ~~P3~~ | ~~`routes/tcp/tcp_route_table.rs`, `routes/udp/udp_route_table.rs`~~ | **Resolved** (gateway-routes-05, 2026-05-25) — the current `from_units` builders sort compiled units by resource key (`namespace/name`) before publication, so first-match is deterministic. Single-route listeners are unaffected; Controller conflict status remains the first line of defence |
 
 ---
 

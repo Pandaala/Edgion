@@ -17,5 +17,5 @@ spec:
             service: test.TestService
             method: SayHello
       backendRefs:
-        - name: test-grpc
+        - name: parentref-collision-grpc-backend
           port: 30021

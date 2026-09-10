@@ -8,6 +8,8 @@ PORTS_CONFIG="${PORTS_CONFIG:-${PROJECT_ROOT}/edgion-tests/integration/conf/port
 DYNAMIC_MANIFEST="${DYNAMIC_MANIFEST:-${SCRIPT_DIR}/k8s_dynamic_scenarios.tsv}"
 ENDPOINT_VALIDATOR="${SCRIPT_DIR}/validate_no_endpoints.sh"
 ENDPOINT_INVENTORY="${ENDPOINT_INVENTORY:-${SCRIPT_DIR}/endpoint_inventory.sh}"
+TEST_SERVER_IMAGE="${TEST_SERVER_IMAGE:-}"
+PULL_POLICY_OVERRIDE="${PULL_POLICY_OVERRIDE:-}"
 
 NAMESPACE="${NAMESPACE:-edgion-test}"
 POD="${POD:-}"
@@ -232,6 +234,7 @@ if [[ -z "${POD}" ]]; then
 fi
 
 DIRECT_ENDPOINT_IP="127.0.0.1"
+DIRECT_UNREADY_ENDPOINT_IP="127.0.0.1"
 REGION_BACKEND_IP="127.0.0.1"
 needs_endpoint_discovery=false
 for scenario_id in "${SELECTED_SCENARIOS[@]}"; do
@@ -248,6 +251,17 @@ if [[ "${needs_endpoint_discovery}" == "true" ]]; then
   if [[ -z "${DIRECT_ENDPOINT_IP}" ]]; then
     echo "ERROR: no live edgion-test-server Pod IP is available for dynamic endpoint assertions" >&2
     exit 1
+  fi
+  if printf '%s\n' "${SELECTED_SCENARIOS[@]}" | grep -Fxq DirectEndpointPortResolution; then
+    DIRECT_UNREADY_ENDPOINT_IP="$(
+      kubectl get pods -n edgion-test -l app=direct-port-unready \
+        --field-selector=status.phase=Running -o json \
+        | jq -r '[.items[] | select(.metadata.deletionTimestamp == null and .status.podIP != null) | .status.podIP] | sort | first // empty'
+    )"
+    if [[ -z "${DIRECT_UNREADY_ENDPOINT_IP}" ]]; then
+      echo "ERROR: no running direct-port-unready Pod IP is available for DirectEndpoint assertions" >&2
+      exit 1
+    fi
   fi
   REGION_BACKEND_IP="$(kubectl get service edgion-test-server -n edgion-test -o jsonpath='{.spec.clusterIP}')"
   if [[ -z "${REGION_BACKEND_IP}" || "${REGION_BACKEND_IP}" == "None" ]]; then
@@ -456,7 +470,7 @@ delete_reset_absent_resources() {
 
 restore_scenario_initial() {
   local scenario_id="$1"
-  local reset_source rendered_reset
+  local reset_source rendered_reset rendered_root=""
 
   load_scenario_metadata "${scenario_id}" || return 1
   echo "Restoring initial K8s fixtures for ${scenario_id}"
@@ -466,22 +480,61 @@ restore_scenario_initial() {
   fi
   reset_source="${CONF_ROOT}/${SCENARIO_CONF_PATH}/${SCENARIO_RESET_PATH}"
   rendered_reset="${reset_source}"
-  if [[ "${scenario_id}" == "RegionRouteValidation" ]]; then
-    rendered_reset="$(mktemp -d /tmp/edgion-k8s-dynamic-reset.XXXXXX)"
+  if [[ "${scenario_id}" == "RegionRouteValidation" \
+    || -n "${TEST_SERVER_IMAGE}" || -n "${PULL_POLICY_OVERRIDE}" ]]; then
+    rendered_root="$(mktemp -d /tmp/edgion-k8s-dynamic-reset.XXXXXX)"
+    rendered_reset="${rendered_root}/${SCENARIO_CONF_PATH}/${SCENARIO_RESET_PATH}"
+    mkdir -p "${rendered_reset}"
     cp -R "${reset_source}/." "${rendered_reset}/"
     while IFS= read -r fixture; do
       sed -i.bak "s/__EDGION_TEST_REGION_BACKEND_IP__/${REGION_BACKEND_IP}/g" "${fixture}"
       rm -f "${fixture}.bak"
     done < <(find "${rendered_reset}" -type f \( -name '*.yaml' -o -name '*.yml' \))
   fi
+  if [[ -n "${rendered_root}" && ( -n "${TEST_SERVER_IMAGE}" || -n "${PULL_POLICY_OVERRIDE}" ) ]]; then
+    python3 - "${rendered_reset}" "${TEST_SERVER_IMAGE}" "${PULL_POLICY_OVERRIDE}" <<'PY'
+import os
+import sys
+
+import yaml
+
+root, image, pull_policy = sys.argv[1:]
+for directory, _, filenames in os.walk(root):
+    for filename in filenames:
+        if not filename.endswith((".yaml", ".yml")):
+            continue
+        path = os.path.join(directory, filename)
+        with open(path, encoding="utf-8") as stream:
+            documents = list(yaml.safe_load_all(stream))
+        changed = False
+        for document in documents:
+            if not isinstance(document, dict) or document.get("kind") != "Deployment":
+                continue
+            labels = document.get("metadata", {}).get("labels", {})
+            if labels.get("edgion.io/test-server-image") != "true":
+                continue
+            containers = document.get("spec", {}).get("template", {}).get("spec", {}).get("containers", [])
+            for container in containers:
+                if container.get("name") != "test-server":
+                    continue
+                if image:
+                    container["image"] = image
+                if pull_policy:
+                    container["imagePullPolicy"] = pull_policy
+                changed = True
+        if changed:
+            with open(path, "w", encoding="utf-8") as stream:
+                yaml.safe_dump_all(documents, stream, sort_keys=False)
+PY
+  fi
   if ! kubectl apply --server-side --force-conflicts \
     --field-manager=edgion-k8s-dynamic-reset --recursive \
     -f "${rendered_reset}"; then
-    [[ "${rendered_reset}" == "${reset_source}" ]] || rm -rf "${rendered_reset}"
+    [[ -z "${rendered_root}" ]] || rm -rf "${rendered_root}"
     echo "ERROR: failed to restore initial K8s fixtures for ${scenario_id}" >&2
     return 1
   fi
-  [[ "${rendered_reset}" == "${reset_source}" ]] || rm -rf "${rendered_reset}"
+  [[ -z "${rendered_root}" ]] || rm -rf "${rendered_root}"
   wait_for_gateway_resource_version "${scenario_id}"
 }
 
@@ -602,6 +655,7 @@ run_scenario_with_phase_barriers() {
     EDGION_TEST_GATEWAY_CAPABILITIES="${GATEWAY_CAPABILITIES}" \
     EDGION_TEST_K8S_MODE=true \
     EDGION_TEST_DIRECT_ENDPOINT_IP="${DIRECT_ENDPOINT_IP}" \
+    EDGION_TEST_DIRECT_UNREADY_ENDPOINT_IP="${DIRECT_UNREADY_ENDPOINT_IP}" \
     EDGION_TEST_REGION_BACKEND_IP="${REGION_BACKEND_IP}" \
     EDGION_TEST_MIRROR_SERVER_HOST="edgion-test-server.edgion-test.svc.cluster.local" \
     EDGION_TEST_K8S_PHASE_BARRIER=true \
@@ -871,6 +925,7 @@ for scenario_id in "${SELECTED_SCENARIOS[@]}"; do
       EDGION_TEST_GATEWAY_CAPABILITIES="${GATEWAY_CAPABILITIES}" \
       EDGION_TEST_K8S_MODE=true \
       EDGION_TEST_DIRECT_ENDPOINT_IP="${DIRECT_ENDPOINT_IP}" \
+      EDGION_TEST_DIRECT_UNREADY_ENDPOINT_IP="${DIRECT_UNREADY_ENDPOINT_IP}" \
       EDGION_TEST_REGION_BACKEND_IP="${REGION_BACKEND_IP}" \
       EDGION_TEST_MIRROR_SERVER_HOST="edgion-test-server.edgion-test.svc.cluster.local" \
       sh -c 'cd "$1" && exec "$2" -g --target-host "$3" --dynamic-scenario "$4"' \

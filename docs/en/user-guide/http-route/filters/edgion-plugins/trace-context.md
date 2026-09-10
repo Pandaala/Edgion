@@ -60,10 +60,10 @@ spec:
 
 | Field | Default | Meaning |
 |-------|---------|---------|
-| `generateWhenMissing` | `true` | Generate a fresh root `traceparent` when the inbound request has none |
+| `generateWhenMissing` | `true` | Generate a fresh root `traceparent` when no trusted, valid inbound context remains |
 | `echoToClient` | `false` | Do not copy `traceparent` onto the client response |
 | `trustInbound` | `true` | Honor a well-formed inbound `traceparent` (transparent pass-through) |
-| `defaultSampled` | `false` | When generating a root span, set trace-flags to `00` (defer sampling to downstream) |
+| `defaultSampled` | `false` | When generating a root, set the W3C sampled recommendation bit to `00` |
 
 ---
 
@@ -71,10 +71,10 @@ spec:
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `generateWhenMissing` | Boolean | `true` | When `true`, if the inbound request carries no valid `traceparent` (absent or malformed), the gateway generates a fresh 128-bit trace ID and injects a valid root `traceparent` upstream. Any partial or garbage trace headers are stripped before forwarding. When `false`, the gateway takes no action when trace context is absent. |
+| `generateWhenMissing` | Boolean | `true` | When `true`, if no trusted, valid inbound `traceparent` remains (because it was absent, malformed, or discarded by `trustInbound: false`), the gateway generates a fresh 128-bit trace ID and injects a valid root `traceparent` upstream. When `false`, it generates no root; malformed or untrusted inbound trace headers are still removed. |
 | `echoToClient` | Boolean | `false` | When `true`, write the effective `traceparent` (forwarded or newly generated) back onto the HTTP response sent to the client. Useful for single-page applications or mobile clients that need to correlate their UI activity to a backend trace. |
-| `trustInbound` | Boolean | `true` | When `true`, a well-formed inbound `traceparent` is forwarded unchanged to the upstream (transparent pass-through); the gateway aligns its `x-trace-id` to the W3C 32-hex trace_id. When `false`, the gateway ignores inbound trace context entirely and always originates a fresh root — recommended for internet-edge deployments where clients cannot be trusted to supply valid trace context. |
-| `defaultSampled` | Boolean | `false` | Controls the trace-flags byte in a gateway-generated `traceparent`. `false` → `00` (not sampled; lets the downstream collector decide). `true` → `01` (sampled; forces all downstream services to sample this trace). Has no effect when an inbound `traceparent` is forwarded unchanged. |
+| `trustInbound` | Boolean | `true` | When `true`, a well-formed inbound `traceparent` is forwarded unchanged to the upstream (transparent pass-through); the gateway aligns its `x-trace-id` to the W3C 32-hex trace_id. When `false`, the gateway removes inbound `traceparent` and `tracestate`; `generateWhenMissing` then determines whether a fresh root is generated. This is recommended for internet-edge deployments where clients cannot be trusted to supply trace context. |
+| `defaultSampled` | Boolean | `false` | Controls the W3C sampled recommendation bit in a gateway-generated `traceparent`: `false` → trace-flags `00`; `true` → `01`. This communicates the gateway's sampling recommendation but does not force a downstream sampler to honor it. Has no effect when an inbound `traceparent` is forwarded unchanged. |
 
 ---
 
@@ -88,11 +88,11 @@ The gateway forwards the `traceparent` header unchanged to the upstream. `traces
 
 If `generateWhenMissing: true` (default), the gateway generates a fresh root `traceparent` with a new 128-bit trace ID and injects it upstream. The request becomes the trace root for all downstream services. Any partial or garbage `traceparent` / `tracestate` headers from the client are stripped before forwarding.
 
-If `generateWhenMissing: false`, the gateway makes no changes; no trace headers are injected.
+If `generateWhenMissing: false`, the gateway generates no root. An absent context remains absent; malformed `traceparent` and its associated `tracestate` are removed before forwarding.
 
 ### Case 3 — `trustInbound: false` (internet-edge posture)
 
-The gateway ignores any inbound `traceparent` / `tracestate` entirely, regardless of whether they are well-formed. A fresh root `traceparent` is always generated (as if the request had arrived without any trace headers). This neutralizes client trace spoofing and prevents external identifiers from polluting your internal trace trees.
+The gateway removes any inbound `traceparent` / `tracestate`, regardless of whether they are well-formed. With `generateWhenMissing: true`, it then generates a fresh root `traceparent`. With `generateWhenMissing: false`, it leaves the request without trace context. Removing external identifiers neutralizes client trace spoofing and prevents them from polluting your internal trace trees.
 
 ---
 
@@ -160,9 +160,9 @@ spec:
     - type: TraceContext
       config:
         generateWhenMissing: true
-        trustInbound: false   # internet-facing: always originate a fresh root
+        trustInbound: false   # internet-facing: discard inbound trace context
         echoToClient: true    # surface traceparent on the response for client correlation
-        defaultSampled: false # let the downstream collector decide sampling
+        defaultSampled: false # generated roots carry the W3C sampled bit as 00
 ---
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
@@ -208,7 +208,7 @@ spec:
 
 ### Q4: Should I use `defaultSampled: true`?
 
-**A**: Only when you want the gateway to force 100 % sampling for all traces it originates. This overrides any downstream sampling decision and can increase cost significantly in high-traffic environments. Prefer `false` (the default) and configure sampling rates in your collector.
+**A**: Set it to `true` when gateway-generated roots should carry the W3C sampled recommendation bit as `01`; the default `false` writes `00`. This flag communicates a recommendation and does not force downstream samplers, whose behavior remains controlled by their own configuration.
 
 ---
 

@@ -14,15 +14,36 @@ description: Plugin system architecture — 4-phase execution, PluginRuntime pre
 |-------|-------|--------|------------|------------------|--------|
 | RequestFilter | `RequestFilter` | Before forwarding to upstream | async | `run_request(&self, session, log) -> PluginRunningResult` | Can terminate the request or return a custom response |
 | UpstreamResponseFilter | `UpstreamResponseFilter` | After upstream response headers received | sync | `run_upstream_response_filter(&self, session, log) -> PluginRunningResult` | Can modify response headers, terminate |
-| UpstreamResponseBodyFilter | `UpstreamResponseBodyFilter` | Each response body chunk | sync | `run_upstream_response_body_filter(&self, body, end_of_stream, session) -> Option<Duration>` | Returns Duration for bandwidth limiting; **note: the signature deliberately omits `&mut PluginLog`** — see the "no PluginLog in body phase" constraint below |
-| UpstreamResponse | `UpstreamResponse` | After the upstream response completes | async | `run_upstream_response(&self, session, log) -> PluginRunningResult` | Async post-processing |
+| UpstreamResponseBodyFilter | `UpstreamResponseBodyFilter` | Data callbacks and confirmed no-trailers completion | sync | `run_upstream_response_body_filter(&self, body, end_of_stream, session) -> Option<Duration>` | Returns Duration for bandwidth limiting; **note: the signature deliberately omits `&mut PluginLog`** — see the "no PluginLog in body phase" constraint below |
+| UpstreamResponse | `UpstreamResponse` | On the final upstream response header, after sync response-header handling and before downstream header commit or body streaming | async | `run_upstream_response(&self, session, log) -> PluginRunningResult` | Awaitable response-header decision or mutation; no aggregated main-response body |
 
 Execution flow notes:
 - Within each phase, plugins run in registration order.
 - If any plugin returns `ErrTerminateRequest` or `ErrResponse`, the phase terminates immediately and subsequent plugins are skipped.
+- Interim informational responses are forwarded without running either response plugin chain. For the final header, the synchronous callback performs per-attempt bookkeeping, retry decisions, final-response normalization, and `UpstreamResponseFilter` processing. A response retained as the final candidate then enters `run_upstream_response_plugins_async` before the downstream header is committed and before response-body streaming begins.
+- `UpstreamResponse` may await and use the final response header/session context, but it cannot read an aggregated main upstream response. Main response bytes remain streaming and are handled separately by bounded streaming processors and the response-body hook; upstream trailers use the distinct trailer hook.
 - In the UpstreamResponseBodyFilter phase, when multiple plugins return Duration values, the maximum is used (the strictest limit takes effect).
 - After each phase completes, plugin logs are recorded into `ctx.stage_logs`, including plugin name, elapsed time, and conditional-skip information.
 - **Exception**: the UpstreamResponseBodyFilter phase **does not** write to `ctx.stage_logs` and does not push entries into `ctx.pending_edgion_plugins_logs`. This phase is invoked once per chunk; per-chunk logging would blow up log volume on long streams. See the "no PluginLog in body phase" constraint below.
+
+### Response-body and trailer callback boundaries
+
+The typed response-body driver keeps body completion and trailer delivery distinct:
+
+| Driver event | Streaming processors | Ordinary `UpstreamResponseBodyFilter` plugins | Trailer dispatch |
+|--------------|----------------------|-----------------------------------------------|------------------|
+| `Data { end_of_stream: false }` | Run on the mutable current chunk/window | Run on the immutable current chunk/window with `end_of_stream = false` | None |
+| `Data { end_of_stream: true }` | Run | Run with `end_of_stream = true` | Dispatch `None` to `UpstreamResponseTrailer` companions |
+| `TerminalWithoutTrailers` | Run the typed terminal event | Run once with `body = None` and `end_of_stream = true` | Dispatch `None` to companions; this is also the header-only response path |
+| `TerminalBeforeTrailers` | Run the typed terminal event | Do not run | Keep the trailer lifecycle open for the actual transport trailer callback |
+| Actual trailers | Already flushed at `TerminalBeforeTrailers` | Do not run | Dispatch `Some(&mut HeaderMap)` to `UpstreamResponseTrailer` companions |
+
+Thus ordinary response-body plugins never consume `TerminalBeforeTrailers` or
+the trailer map. Trailer-aware finalization belongs to request-owned
+`UpstreamResponseTrailer` companions. The main upstream response remains
+streaming throughout: a body callback exposes only its current chunk/window,
+and neither this terminal model nor the trailer hook permits full-response
+aggregation.
 
 ## PluginRuntime
 
@@ -37,7 +58,11 @@ pub struct PluginRuntime {
 }
 ```
 
-**Build timing**: HTTPRoute / GRPCRoute preparse phase (not per-request). Entry points (Gateway API standard filters) are split by scope: rule level uses `from_httproute_filters_for_rule()` / `from_grpcroute_filters_for_rule()`, backend level uses `from_httproute_filters_for_backend()` / `from_grpcroute_filters_for_backend()`. Use only these scope-specific entries. The deprecated forwarding methods still present in code are pre-release removal debt and must not be called or copied. EdgionPlugins CRD entries are loaded via `add_from_request_filters()` / `add_from_upstream_response_filters()` / `add_from_upstream_response_body_filters()` / `add_from_upstream_responses()`, each returning `Vec<String>` of validation errors. `clone()` returns an empty instance (rebuilt during preparse). Each entry may also carry an optional `alias: String` (`^[a-zA-Z0-9._-]{1,32}$`, unique within its stage array — a duplicate is a validation error in both layers), echoed verbatim into `PluginLog.alias` so multiple entries of the same plugin type can be distinguished in the access log. The alias is also the discriminator in the entry's runtime identity `<resource key>/<alias or #index>` (`plugins::common::entry_scope`), which namespaces state a plugin keeps outside its own instance — `RateLimitRedis` Redis buckets today.
+**Build timing**: HTTPRoute / GRPCRoute preparse phase (not per-request). The four public Gateway API standard-filter constructors are split by scope: rule level uses `from_httproute_filters_for_rule()` / `from_grpcroute_filters_for_rule()`, and backend level uses `from_httproute_filters_for_backend()` / `from_grpcroute_filters_for_backend()`. EdgionPlugins CRD entries are compiled in the Gateway through `add_from_request_filters()` / `add_from_upstream_response_filters()` / `add_from_upstream_response_body_filters()` / `add_from_upstream_responses()`, each returning `Vec<String>` of validation errors.
+
+`PluginRuntime` deliberately does not implement `Clone`. A runtime is built once for its route scope or EdgionPlugins resource generation and held through `Arc<PluginRuntime>`; route units and the compiled plugin store clone the `Arc` when they need another owner. The former implementation that returned an empty runtime from `clone()` was removed because it could silently discard the complete plugin chain. Rebuild a runtime through the scoped constructors or the Gateway's EdgionPlugins compilation path.
+
+Each entry may also carry an optional `alias: String` (`^[a-zA-Z0-9._-]{1,32}$`, unique within its stage array — a duplicate is a validation error in both layers), echoed verbatim into `PluginLog.alias` so multiple entries of the same plugin type can be distinguished in the access log. The alias is also the discriminator in the entry's runtime identity `<resource key>/<alias or #index>` (`plugins::common::entry_scope`), which namespaces state a plugin keeps outside its own instance — `RateLimitRedis` Redis buckets today.
 
 ## Conditional execution
 
@@ -118,20 +143,25 @@ Gateway API standard filters (added through the private `add_from_httproute_filt
 
 Skip log format: `"skip:keyExist,hdr:X-Internal"` or `"!run:keyMatch,method"`.
 
-### ⚠️ Critical constraint: regex must be compiled during preparse
+### ⚠️ Critical constraint: regex must be compiled during runtime construction
 
-`KeyMatch` supports a `regex` field. The `compiled_regex` field is annotated with `#[serde(skip)]` and is `None` after deserialization. **`compile()` MUST be called during preparse to complete compilation**; otherwise every request that hits the fallback path will execute `Regex::new()`, causing significant CPU overhead.
+`KeyMatch` supports a `regex` field. The `compiled_regex` field is annotated with `#[serde(skip)]` and is `None` after deserialization. **`compile()` MUST run before the runtime is published**; otherwise every request that hits the fallback path will execute `Regex::new()`, causing significant CPU overhead. The Controller validates the schema for status but does not build a runtime. The Gateway compiles conditions while building each EdgionPlugins resource generation.
 
-**compile call chain** (one-time, triggered when resources are received via gRPC list/watch):
+**Validation and compile call chains**:
 
 ```
-resource.pre_parse()                        # event_dispatch.rs
-  → EdgionPlugins::preparse()              # edgion_plugins/mod.rs
-      → compile_conditions()               # iterate all entries, call PluginConditions::compile()
-          → Condition::compile()           # conditions.rs
+Controller EdgionPluginsHandler::preparse()
+  → EdgionPlugins::validate_plugins()      # schema validation for resource status; no runtime is built
+
+Gateway PluginStore full_set / partial_update
+  → compile_plugins(&resource)             # clone the resource and create one PluginRuntime
+      → compile_plugin_conditions()        # compile conditions in the cloned resource
+          → Condition::compile()
               → KeyMatchCondition::compile()
                   → MatchCore::compile(normalize_paths)
-      → add_from_*()                       # plugin_runtime.rs (the cloned conditions are already compiled at this point)
+      → add_from_*()                       # build the four runtime stage chains
+      → seal_fail_closed() / seal_plugin_policy()
+      → Arc<CompiledPlugins>               # publish Arc<spec> and Arc<PluginRuntime>
 ```
 
 **When adding a new condition kind that uses regex**: add a corresponding arm to `Condition::compile()`'s match; otherwise the new kind's regex will never be compiled.
@@ -247,9 +277,9 @@ Stream plugins run at the TCP/UDP layer and use a two-stage architecture:
 
 - `StreamPlugin` trait: defines the `run_connection_filter(ctx) -> StreamPluginResult` interface.
 - `TlsRoutePlugin` trait: defines the TLS-route-level plugin interface.
-- `StreamPluginRuntime`: manages the plugin chain for the ConnectionFilter stage.
-- `TlsRoutePluginRuntime`: manages the plugin chain for the TLS-route stage.
-- `StreamPluginStore`: receives EdgionPlugins resource changes via ConfHandler.
+- `StreamPluginRuntime`: manages the plugin chain for the ConnectionFilter stage. It derives `Clone` over `Vec<Arc<dyn StreamPlugin>>`, so cloning it copies the vector of `Arc` handles and shares the plugin instances.
+- `TlsRoutePluginRuntime`: manages the plugin chain for the TLS-route stage. The runtime itself does not implement `Clone`, while its plugin-chain elements are `Arc<dyn TlsRoutePlugin>`.
+- `StreamPluginStore`: receives EdgionPlugins resource changes via ConfHandler. It builds both runtimes once and publishes them through `Arc` fields in `CompiledStreamPlugins`.
 
 ## Directory layout
 

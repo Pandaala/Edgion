@@ -1415,7 +1415,7 @@ override_suite_test_server_images() {
     return 0
   fi
 
-  local ns deployment
+  local ns deployment rollout_ready
   for ns in edgion-default edgion-test edgion-backend default; do
     if kubectl get deployment lb-multi-test-server -n "${ns}" >/dev/null 2>&1; then
       echo "Override lb-multi-test-server image in ${ns}: ${TEST_SERVER_IMAGE}"
@@ -1429,7 +1429,7 @@ override_suite_test_server_images() {
       kubectl rollout status deployment/lb-multi-test-server -n "${ns}" --timeout=300s
     fi
   done
-  while IFS=$'\t' read -r ns deployment; do
+  while IFS=$'\t' read -r ns deployment rollout_ready; do
     [[ -n "${ns}" && -n "${deployment}" ]] || continue
     echo "Override dynamic test-server image in ${ns}/${deployment}: ${TEST_SERVER_IMAGE}"
     kubectl set image "deployment/${deployment}" -n "${ns}" test-server="${TEST_SERVER_IMAGE}"
@@ -1438,9 +1438,29 @@ override_suite_test_server_images() {
         -p="[{\"op\":\"replace\",\"path\":\"/spec/template/spec/containers/0/imagePullPolicy\",\"value\":\"${PULL_POLICY_OVERRIDE}\"}]" \
         >/dev/null
     fi
-    kubectl rollout status "deployment/${deployment}" -n "${ns}" --timeout=300s
-  done < <(kubectl get deployments --all-namespaces -l edgion.io/test-server-image=true \
-    -o custom-columns=NAMESPACE:.metadata.namespace,NAME:.metadata.name --no-headers)
+    if [[ "${rollout_ready}" == "false" ]]; then
+      # DirectEndpoint needs a serving Pod whose readiness remains false so the
+      # controller excludes it from the Service's ready endpoint inventory.
+      local start_ts running
+      start_ts="$(date +%s)"
+      while true; do
+        running="$(kubectl get pods -n "${ns}" -l "app=${deployment}" -o json | jq --arg image "${TEST_SERVER_IMAGE}" \
+          '[.items[] | select(.metadata.deletionTimestamp == null and .status.phase == "Running") | select(any(.spec.containers[]; .name == "test-server" and .image == $image))] | length')"
+        if [[ "${running}" -ge 1 ]]; then
+          break
+        fi
+        if (( $(date +%s) - start_ts > 300 )); then
+          echo "Timed out waiting for ${ns}/${deployment} Pod with the overridden image to run" >&2
+          kubectl get pods -n "${ns}" -l "app=${deployment}" -o wide || true
+          return 1
+        fi
+        sleep 2
+      done
+    else
+      kubectl rollout status "deployment/${deployment}" -n "${ns}" --timeout=300s
+    fi
+  done < <(kubectl get deployments --all-namespaces -l edgion.io/test-server-image=true -o json \
+    | jq -r '.items[] | [.metadata.namespace, .metadata.name, (.metadata.labels["edgion.io/test-server-rollout-ready"] // "")] | @tsv')
 }
 
 restart_secret_dependent_workloads() {
@@ -1473,6 +1493,20 @@ patch_local_binary_deployment() {
     -p='[{"op":"remove","path":"/spec/template/spec/containers/0/readinessProbe"}]' >/dev/null 2>&1 || true
 }
 
+patch_local_binary_suite_deployments() {
+  local ns deployment patch
+  patch="$(jq -cn --arg image "${LOCAL_TEST_RUNTIME_IMAGE}" '{spec:{template:{spec:{containers:[{name:"test-server",image:$image,imagePullPolicy:"IfNotPresent",command:["sh","-c","while [ ! -x /usr/local/bin/test_server ]; do sleep 1; done; exec /usr/local/bin/test_server \"$@\"","--"]}]}}}}')"
+  while IFS=$'\t' read -r ns deployment; do
+    [[ -n "${ns}" && -n "${deployment}" ]] || continue
+    echo "Patch ${ns}/${deployment} for local suite test_server injection"
+    # Keep fixture-owned args, volumes, and probes. The shell waits for the
+    # runner to copy test_server, then execs it with the original args.
+    kubectl patch "deployment/${deployment}" -n "${ns}" --type='strategic' \
+      -p="${patch}"
+  done < <(kubectl get deployments --all-namespaces -l edgion.io/test-server-image=true -o json \
+    | jq -r '.items[] | [.metadata.namespace, .metadata.name] | @tsv')
+}
+
 patch_local_binary_test_deployments() {
   if ! local_test_binary_mode; then
     return 0
@@ -1485,6 +1519,7 @@ patch_local_binary_test_deployments() {
   patch_local_binary_deployment "edgion-grpc-deleg-dyn" "edgion-test-server" "test-server"
   patch_local_binary_deployment "${BACKEND_TEST_NAMESPACE}" "edgion-test-server" "test-server"
   patch_local_binary_deployment "edgion-default" "lb-multi-test-server" "test-server"
+  patch_local_binary_suite_deployments
 }
 
 rollout_local_binary_test_deployments() {
@@ -1558,6 +1593,61 @@ copy_local_binary_to_pods() {
     kubectl_retry kubectl cp -n "${ns}" -c "${container}" "${src}" "${pod}:/usr/local/bin/${binary}"
     kubectl_retry kubectl exec -n "${ns}" -c "${container}" "${pod}" -- chmod +x "/usr/local/bin/${binary}"
   done
+}
+
+copy_local_test_server_to_suite_pods() {
+  local namespaces ns expected pods pod start_ts
+  namespaces="$(kubectl get deployments --all-namespaces -l edgion.io/test-server-image=true -o json \
+    | jq -r '.items[].metadata.namespace' | sort -u)"
+  for ns in ${namespaces}; do
+    expected="$(kubectl get deployments -n "${ns}" -l edgion.io/test-server-image=true -o json \
+      | jq '[.items[] | (.spec.replicas // 1)] | add // 0')"
+    start_ts="$(date +%s)"
+    while true; do
+      pods="$(kubectl get pods -n "${ns}" -l edgion.io/test-server-image=true \
+        --field-selector=status.phase=Running -o json \
+        | jq -r --arg image "${LOCAL_TEST_RUNTIME_IMAGE}" \
+          '.items[] | select(.metadata.deletionTimestamp == null) | select(any(.spec.containers[]; .name == "test-server" and .image == $image)) | .metadata.name')"
+      if [[ "$(printf '%s\n' "${pods}" | sed '/^$/d' | wc -l | tr -d ' ')" -ge "${expected}" ]]; then
+        break
+      fi
+      if (( $(date +%s) - start_ts > 300 )); then
+        echo "Timed out waiting for ${expected} local-binary suite Pod(s) in ${ns}" >&2
+        return 1
+      fi
+      sleep 2
+    done
+    for pod in ${pods}; do
+      kubectl_retry kubectl cp -n "${ns}" -c test-server \
+        "${LOCAL_TEST_BIN_DIR}/test_server" "${pod}:/usr/local/bin/test_server"
+      kubectl_retry kubectl exec -n "${ns}" -c test-server "${pod}" -- chmod +x /usr/local/bin/test_server
+    done
+  done
+}
+
+wait_local_suite_test_server_deployments() {
+  local ns deployment rollout_ready start_ts running
+  while IFS=$'\t' read -r ns deployment rollout_ready; do
+    [[ -n "${ns}" && -n "${deployment}" ]] || continue
+    if [[ "${rollout_ready}" == "false" ]]; then
+      start_ts="$(date +%s)"
+      while true; do
+        running="$(kubectl get pods -n "${ns}" -l "app=${deployment}" -o json | jq --arg image "${LOCAL_TEST_RUNTIME_IMAGE}" \
+          '[.items[] | select(.metadata.deletionTimestamp == null and .status.phase == "Running") | select(any(.spec.containers[]; .name == "test-server" and .image == $image))] | length')"
+        if [[ "${running}" -ge 1 ]]; then
+          break
+        fi
+        if (( $(date +%s) - start_ts > 300 )); then
+          echo "Timed out waiting for ${ns}/${deployment} local-binary Pod to run" >&2
+          return 1
+        fi
+        sleep 2
+      done
+    else
+      kubectl rollout status "deployment/${deployment}" -n "${ns}" --timeout=300s
+    fi
+  done < <(kubectl get deployments --all-namespaces -l edgion.io/test-server-image=true -o json \
+    | jq -r '.items[] | [.metadata.namespace, .metadata.name, (.metadata.labels["edgion.io/test-server-rollout-ready"] // "")] | @tsv')
 }
 
 copy_local_core_binary_to_pods() {
@@ -1708,6 +1798,8 @@ install_local_test_binaries() {
   if kubectl get deployment lb-multi-test-server -n edgion-default >/dev/null 2>&1; then
     copy_local_binary_to_pods "edgion-default" "app=edgion-test-server-multi" "test-server" "test_server"
   fi
+  copy_local_test_server_to_suite_pods
+  wait_local_suite_test_server_deployments
 
   start_local_test_server_pods "edgion-test" "app=edgion-test-server" "true"
   start_local_test_server_pods "edgion-default" "app=edgion-test-server" "false"

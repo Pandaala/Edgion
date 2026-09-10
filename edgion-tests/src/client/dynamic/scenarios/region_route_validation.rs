@@ -563,9 +563,11 @@ async fn run_inner(ctx: &ScenarioCtx) -> Result<()> {
         .await
         .map_err(anyhow::Error::msg)?;
     if k8s_mode() {
-        let consumers = tokio::fs::read_to_string(ctx.resolve("initial/consumers.yaml")).await?;
+        let source = ctx.resolve("initial/consumers.yaml");
+        let consumers = tokio::fs::read_to_string(&source).await?;
         let consumers = consumers.replace("127.0.0.1", &backend_ip());
-        ctx.test_ctx.apply_yaml(&consumers).await.map_err(anyhow::Error::msg)?;
+        let client = crate::dynamic::apply::build_client(&ctx.controller_url)?;
+        crate::dynamic::apply::apply_yaml_documents(&client, &source, &consumers).await?;
     } else {
         ctx.apply_dir("initial").await?;
     }
@@ -643,3 +645,59 @@ pub static SCENARIO: &Scenario = &Scenario {
     run,
     phases: PHASES,
 };
+
+#[cfg(test)]
+mod tests {
+    use serde::Deserialize;
+    use serde_yaml::Value;
+
+    fn documents(content: &str) -> Vec<Value> {
+        serde_yaml::Deserializer::from_str(content)
+            .map(|document| Value::deserialize(document).unwrap())
+            .collect()
+    }
+
+    fn assert_consumer_topology(content: &str, backend_name: &str, endpoint_host: &str) {
+        let documents = documents(content);
+        let routes = documents
+            .iter()
+            .filter(|document| document["kind"] == "HTTPRoute")
+            .collect::<Vec<_>>();
+        let plugins = documents
+            .iter()
+            .filter(|document| document["kind"] == "EdgionPlugins")
+            .collect::<Vec<_>>();
+        assert_eq!(routes.len(), 2);
+        assert_eq!(plugins.len(), 3);
+        for route in routes {
+            assert_eq!(route["spec"]["rules"][0]["backendRefs"][0]["name"], backend_name);
+            assert_eq!(route["spec"]["rules"][0]["backendRefs"][0]["port"], 30001);
+        }
+        for plugin in plugins {
+            assert_eq!(
+                plugin["spec"]["requestPlugins"][0]["config"]["regions"][0]["backendEndpoint"],
+                format!("{endpoint_host}:30001")
+            );
+        }
+    }
+
+    #[test]
+    fn consumer_fixtures_keep_local_and_k8s_backend_topologies_distinct() {
+        assert_consumer_topology(
+            include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/integration/conf/EdgionPlugins/RegionRoute/DynamicTest/initial/consumers.yaml"
+            )),
+            "test-http",
+            "127.0.0.1",
+        );
+        assert_consumer_topology(
+            include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/k8s/conf/EdgionPlugins/RegionRoute/DynamicTest/initial/consumers.yaml"
+            )),
+            "edgion-test-server",
+            "__EDGION_TEST_REGION_BACKEND_IP__",
+        );
+    }
+}

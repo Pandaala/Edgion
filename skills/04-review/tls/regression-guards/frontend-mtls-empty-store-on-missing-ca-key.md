@@ -1,6 +1,6 @@
 ---
 name: frontend-mtls-empty-store-on-missing-ca-key
-description: configure_gateway_frontend_mtls now returns Err unless every ordered typed CA outcome contains a valid non-empty certificate bundle, so missing `ca.crt` material can no longer silently install an empty trust store. Reject re-reports of the silent-empty-store form.
+description: The matcher publishes StrictEffective only for a complete ordered CA set with a non-empty compiled store; all missing, mismatched, or invalid strict inputs publish StrictReject. Reject re-reports of the silent-empty-store form.
 knowledge_type: regression-guards
 ---
 
@@ -18,11 +18,11 @@ blocks, source mismatches, and partial sets publish `StrictReject` without a sto
 handshake callback only installs that immutable store or rejects; it never parses PEM or builds
 trust state per connection.
 
-Re-reports of the form "`configure_gateway_frontend_mtls` builds an empty `X509Store` and
-calls `set_verify` on it when CA Secrets lack `ca.crt`", "`add_ca_bundle_to_store`'s
-fail-closed branch is bypassed by a missing key", or "no signal when frontend CA Secrets have
-no usable PEM" are **not accepted** — verify the `certs_added == 0` guard is present before
-re-reporting.
+Re-reports of the form "the handshake callback can build or install an empty trust store" or
+"an earlier missing CA source is tolerated when a later source succeeds" are **not accepted**.
+Verify `compile_frontend_mtls`: every declared reference must have the outcome at the same index,
+with the exact source identity and a valid non-empty canonical CA bundle. Any mismatch makes the
+published outcome `StrictReject` with no store.
 
 ## What was wrong (before the fix)
 
@@ -51,26 +51,14 @@ the inner body was skipped on every iteration, `store_builder.build()` produced 
 Result: a complete client-cert barrier with no diagnostic — every TLS client was rejected at
 handshake; operators learned about the failure only from client-side errors.
 
-## Why the fix is correct
+## Why the current fix is correct
 
-The fix restores symmetry with the existing per-Secret fail-closed branch inside
-`add_ca_bundle_to_store`: "PEM present but empty/garbage" already returns `Err`. "Key absent
-from every Secret" is the same class of misconfiguration (no usable trust anchors) and should
-fail the same way. The configure-time `Err` populates `ssl_ctx.meta.err_log` via the existing
-caller arm, so the listener fails closed with a diagnostic instead of silently denying every
-handshake. Valid configurations are unaffected — `certs_added > 0` exits the guard
-immediately.
-
-Returning `Err` (over emitting `warn!` + `Ok(false)`) was preferred because:
-
-- `ssl_ctx.meta.err_log` is the project's existing channel for surfacing TLS init failures to
-  `tls.log`; the `warn!` alternative would produce a separate signal and an `Ok(false)` would
-  paint the listener as "intentional no-mTLS", which is the opposite of the operator intent.
-- The `Err` path is symmetric with the already-existing empty-PEM fail-closed inside
-  `add_ca_bundle_to_store` (same `ErrorType::InvalidCert`), so reviewers reading the function
-  see one consistent failure mode for "no usable CA bytes."
-- No data-plane `tracing` is added; the check runs once per listener at SSL-callback time,
-  not on the request hot path.
+The matcher cold path owns validation and compilation. It rejects empty reference lists,
+unresolved or partial outcome vectors, source/index mismatches, missing material, malformed or
+empty bundles, trailing content, private-key blocks, and aggregate-limit violations. Only the
+complete set becomes one immutable `X509Store`. The handshake callback performs no CA parsing or
+store construction: `StrictEffective` installs the compiled store, `StrictReject` returns an
+error, and only `NotConfigured` returns `Ok(false)`.
 
 ## Fix suggestions not accepted
 
@@ -80,26 +68,24 @@ Returning `Err` (over emitting `warn!` + `Ok(false)`) was preferred because:
 - "Downgrade to `warn!` + `Ok(false)` to keep mTLS optional" — would mask a real
   misconfiguration as a working no-mTLS listener; the operator declared `frontendValidation`,
   so a missing trust anchor is an error, not a "skip silently" signal.
-- "Add a per-Secret `data.get(CA_CERT).ok_or(...)` inside the loop" — would mis-report when a
-  later Secret carries `ca.crt` legitimately; the count-and-check-after-loop shape is the
-  only one that correctly handles a multi-Secret list.
+- "Allow a partial ordered set when at least one CA source is usable" — rejected because every
+  declared source is part of the strict trust contract and must match its projected identity.
 
 ## Re-evaluation triggers
 
 - The controller starts fencing "frontendValidation references Secrets without `ca.crt`" at
   admission time (would make the runtime guard unreachable for that exact misconfiguration,
   but the guard stays correct defense-in-depth — keep it).
-- A new key name (other than `ca.crt`) becomes a supported source of frontend CA bytes — the
-  guard would need to count any of the accepted keys, not only `CA_CERT`.
+- A new frontend CA source or material format is supported — extend the cold compiler while
+  preserving complete ordered identity validation and immutable publication.
 
 ## Reference cases
 
-- tls-F010 (`frontend-validation-is-mtls-empty-ca.md`) — sibling fix for the
-  zero-CA-refs case (return `Ok(false)`, do not stamp `is_mtls`). This entry covers the
-  adjacent case where refs exist but contain no usable PEM.
+- tls-F010 (`frontend-validation-is-mtls-empty-ca.md`) — only genuinely absent frontend
+  validation returns `Ok(false)`; strict empty references are rejected.
 - tls-F001 (`terminate-mtls-ca-ordering.md`) — same class: key the verify-mode
   install off the real CA availability, not off the function reaching its end.
-- `add_ca_bundle_to_store` empty-PEM guard (same file) — the symmetric per-Secret fail-closed.
+- `compile_frontend_mtls` in `runtime/matching/tls.rs` — complete-set validation and publication.
 
 ## Resolution references
 

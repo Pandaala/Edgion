@@ -423,8 +423,6 @@ async fn cleanup(ctx: &TestContext) -> Result<()> {
         ("Service", NS, NAME),
         ("EndpointSlice", TARGET_NS, NAME),
         ("Service", TARGET_NS, NAME),
-        ("Deployment", NS, NAME),
-        ("Deployment", TARGET_NS, NAME),
     ] {
         let mut request = ctx
             .http_client
@@ -507,3 +505,18 @@ pub static SCENARIO: &Scenario = &Scenario {
     run,
     phases: PHASES,
 };
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn k8s_initial_stream_contains_only_controller_supported_services() {
+        for namespace in ["edgion-default", "edgion-backend"] {
+            let path = format!(
+                "{}/k8s/conf/EdgionPlugins/RequestMirror/DynamicTest/initial/{namespace}.yaml",
+                env!("CARGO_MANIFEST_DIR")
+            );
+            let document: serde_yaml::Value = serde_yaml::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+            assert_eq!(document["kind"], "Service");
+        }
+    }
+}

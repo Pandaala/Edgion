@@ -77,11 +77,11 @@ These two changes do not break the centralization semantic; evaluate separately.
 **Audit date**: 2026-05-15
 **Linked issue**: g2-011 (closed, fixed)
 
-If a finding suggests `PluginRuntime` should `#[derive(Clone)]` or "implement Clone properly," **close it**. The previous empty `impl Clone` (`fn clone(&self) -> Self { Self::new() }`) was a footgun: any misuse like `runtime_arc.as_ref().clone()` would silently strip the entire plugin chain from the request path with no compile-time or runtime signal. It was removed; sharing is done exclusively via `Arc<PluginRuntime>`, and rebuilds go through the `from_*` constructors at preparse.
+If a finding suggests `PluginRuntime` should `#[derive(Clone)]` or "implement Clone properly," **close it**. The previous empty `impl Clone` (`fn clone(&self) -> Self { Self::new() }`) was a footgun: any misuse like `runtime_arc.as_ref().clone()` would silently strip the entire plugin chain from the request path with no compile-time or runtime signal. It was removed; sharing is done through `Arc<PluginRuntime>`. Gateway API runtimes are rebuilt through the four scoped `from_*` constructors during route preparse, while EdgionPlugins resource runtimes are rebuilt by the Gateway's `compile_plugins` path.
 
 A real `Clone` impl is also not feasible without forcing a `Clone` bound onto every `dyn RequestFilter` / `dyn UpstreamResponse*` trait object in the four stage `Vec`s — an unwanted constraint on every plugin implementation.
 
-Sibling types `StreamPluginRuntime` and `TlsRoutePluginRuntime` follow the same "no Clone" pattern; uniform treatment.
+Do not generalize this rule to the stream runtimes. `StreamPluginRuntime` derives `Clone` over `Vec<Arc<dyn StreamPlugin>>`, so a clone copies `Arc` handles and preserves the chain. `TlsRoutePluginRuntime` itself does not implement `Clone`, although its chain elements are `Arc<dyn TlsRoutePlugin>`. Both are also published through `Arc` fields in `CompiledStreamPlugins`.
 
 ## Resolution references
 

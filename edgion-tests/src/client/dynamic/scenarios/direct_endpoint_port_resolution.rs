@@ -23,6 +23,16 @@ fn endpoint_ip() -> Result<String> {
     }
 }
 
+fn unready_endpoint_ip() -> Result<String> {
+    if k8s_mode() {
+        let value = std::env::var("EDGION_TEST_DIRECT_UNREADY_ENDPOINT_IP")?;
+        ensure!(!value.trim().is_empty(), "Kubernetes unready endpoint IP is empty");
+        Ok(value)
+    } else {
+        endpoint_ip()
+    }
+}
+
 #[derive(Clone, Copy)]
 enum Expected {
     Absent,
@@ -46,7 +56,11 @@ async fn request(ctx: &TestContext, target: Option<&str>) -> Result<reqwest::Res
 }
 
 async fn check(ctx: &TestContext, expected: Expected) -> Result<()> {
-    let endpoint_ip = endpoint_ip()?;
+    let endpoint_ip = if matches!(expected, Expected::Unready) {
+        unready_endpoint_ip()?
+    } else {
+        endpoint_ip()?
+    };
     if matches!(expected, Expected::Absent) {
         ensure!(
             request(ctx, None).await?.status().as_u16() == 404,
@@ -313,3 +327,40 @@ pub static SCENARIO: &Scenario = &Scenario {
     run,
     phases: PHASES,
 };
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn k8s_unready_fixture_keeps_a_running_backend_out_of_ready_inventory() {
+        let deployment: serde_yaml::Value = serde_yaml::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/k8s/conf/EdgionPlugins/DirectEndpoint/DynamicTest/bootstrap/01_Deployment_unready.yaml"
+        )))
+        .unwrap();
+        let service: serde_yaml::Value = serde_yaml::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/k8s/conf/EdgionPlugins/DirectEndpoint/DynamicTest/updates/unready.yaml"
+        )))
+        .unwrap();
+
+        assert_eq!(
+            deployment["spec"]["template"]["metadata"]["labels"]["app"],
+            "direct-port-unready"
+        );
+        assert_eq!(
+            deployment["metadata"]["labels"]["edgion.io/test-server-rollout-ready"],
+            "false"
+        );
+        assert_eq!(deployment["spec"]["strategy"]["type"], "Recreate");
+        assert_eq!(
+            deployment["spec"]["template"]["spec"]["containers"][0]["ports"][0]["containerPort"],
+            30002
+        );
+        assert_eq!(
+            deployment["spec"]["template"]["spec"]["containers"][0]["readinessProbe"]["tcpSocket"]["port"],
+            39999
+        );
+        assert_eq!(service["spec"]["selector"]["app"], "direct-port-unready");
+        assert_eq!(service["spec"]["ports"][0]["targetPort"], 30002);
+    }
+}

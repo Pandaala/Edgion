@@ -35,7 +35,7 @@ These entries are backlinks only. A linked `tasks/todo` file is the editable sou
 | D0029 — Add Redis TokenBucket partial-refill integration coverage | needs-implementation | [campaign finding](D0029-redis-token-bucket-partial-refill-integration.md) |
 | D0030 — Retain EdgionPlugins last-known-good only for the same resource identity | needs-discussion | [campaign finding](D0030-edgionplugins-last-known-good-resource-identity.md) |
 | D0031 — Add EdgionPlugins LKG identity integration coverage | closed (2026-09-05) | [review rule](../../../../skills/04-review/testing/intentional-design/edgionplugins-lkg-identity-coverage-not-standalone.md) |
-| D0033 — Refresh AllEndpointStatus outbound-header review knowledge | needs-implementation | [campaign finding](D0033-all-endpoint-status-review-knowledge.md) |
+| D0033 — Refresh AllEndpointStatus outbound-header review knowledge | resolved | [campaign finding](D0033-all-endpoint-status-review-knowledge.md) |
 | D0034 — Fail closed on denied L7 named jumps | resolved | [campaign finding](D0034-l7-named-jump-denied-reference.md) |
 | D0035 — Add borrowed Authorization header access | needs-discussion | [campaign finding](D0035-auth-borrowed-authorization-header.md) |
 | D0036 — Audit auth credential-copy lifetimes | needs-discussion | [campaign finding](D0036-auth-credential-copy-lifetime-audit.md) |
@@ -91,7 +91,7 @@ These entries are backlinks only. A linked `tasks/todo` file is the editable sou
 | Fail closed on invalid Gateway BackendTLSPolicy candidates | completed | [architecture](../../../../skills/01-architecture/02-gateway/07-backends.md) |
 | Make BackendTLSPolicy publication truly incremental | pending | [task](../../../todo/backend-tls-policy-true-incremental-publication.md) |
 | Promote BackendTLSPolicy handling atomically to v1 only | resolved externally in `5cd384c6` | [maintained knowledge](../../../../skills/04-review/controller/regression-guards/backend-tls-policy-canonical-api-ingress.md) |
-| Publish Service backend traffic policy through one immutable snapshot | pending | [task](../../../todo/backend-traffic-policy-atomic-service-snapshot.md) |
+| Publish Service backend traffic policy through one immutable snapshot | completed | [review rule](../../../../skills/04-review/backends/regression-guards/ebtp-atomic-service-snapshot.md) |
 | Conf-Sync certificate watch content signature | accepted-tradeoff | [review rule](../../../../skills/04-review/conf-sync/intentional-design/conf-sync-cert-watch-mtime-length-signature.md) |
 | Conf-Sync generic watch malformed event recovery | pending | [task](../../../todo/conf-sync-generic-watch-malformed-event-recovery.md) |
 | Conf-Sync rotation transactional address selection | pending | [task](../../../todo/conf-sync-rotation-transactional-address-selection.md) |
@@ -112,7 +112,7 @@ These entries are backlinks only. A linked `tasks/todo` file is the editable sou
 | Define the Redis rate-limiter numeric domain | pending | [task](../../../todo/define-redis-rate-limiter-numeric-domain/define-redis-rate-limiter-numeric-domain.md) |
 | Add Redis TokenBucket partial-refill integration coverage | pending | [task](../../../todo/add-redis-token-bucket-partial-refill-integration-coverage.md) |
 | Retain EdgionPlugins last-known-good only for the same resource identity | needs-discussion | [campaign finding](D0030-edgionplugins-last-known-good-resource-identity.md) |
-| Refresh AllEndpointStatus outbound-header review knowledge | pending | [task](../../../todo/refresh-all-endpoint-status-header-review-records.md) |
+| Refresh AllEndpointStatus outbound-header review knowledge | completed | [campaign finding](D0033-all-endpoint-status-review-knowledge.md) |
 | Fail closed on denied L7 named jumps | completed | [review rule](../../../../skills/04-review/routing/regression-guards/denied-named-jump-fails-closed.md) |
 | Add denied named-jump integration coverage | pending | [task](../../../todo/add-denied-named-jump-integration-coverage.md) |
 | Add borrowed Authorization header access | pending | [task](../../../todo/add-borrowed-authorization-header-access.md) |
@@ -149,7 +149,7 @@ These entries are backlinks only. A linked `tasks/todo` file is the editable sou
 | Enforce TraceContext attachment cardinality | pending | [task](../../../todo/enforce-trace-context-attachment-cardinality.md) |
 | Reduce WAF header materialization | pending | [task](../../../todo/reduce-waf-header-materialization.md) |
 | Bound outbound HTTP/2 response header lists | pending | [task](../../../todo/bound-outbound-http2-response-header-lists.md) |
-| Isolate Wasm host panics at VM boundaries | completed | [task](../../../todo/isolate-wasm-host-panics-at-vm-boundaries.md) |
+| Isolate Wasm host panics at VM boundaries | completed | [campaign finding](D0073-wasm-host-panic-isolation.md) |
 | Offload Wasm OCI manifest parsing and archive extraction (D0075) | completed externally in 256733d7 | [maintained knowledge](../../../../skills/04-review/wasm/intentional-design/bounded-oci-artifact-memory-cache.md#manifest-and-archive-cpu-boundary-d0075) |
 | Fix Wasm shared-data gauge generation identity and lifecycle | pending | [task](../../../todo/wasm-shared-data-gauge-generation-lifecycle.md) |
 | Redact and bound Wasm URL source identity | pending | [task](../../../todo/wasm-source-url-label-and-error-redaction.md) |

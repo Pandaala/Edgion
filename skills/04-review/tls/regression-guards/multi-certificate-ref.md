@@ -1,6 +1,6 @@
 ---
 name: multi-certificate-ref
-description: Use when reviewing findings that a Gateway listener ignores extra certificateRefs; explains that apply_gateway_tls_cert now applies ALL resolved certs (RSA+ECDSA dual-cert) and rejects re-reports.
+description: Use when reviewing findings that a Gateway listener ignores extra certificateRefs; explains the complete compiled set and per-connection RSA/ECDSA selection contract.
 knowledge_type: regression-guards
 ---
 
@@ -15,7 +15,7 @@ A Gateway listener with multiple `certificateRefs` now serves the cert that
 matches the connecting client. **BoringSSL exposes a single certificate slot per
 `SSL` (unlike OpenSSL's per-key-type slots), so the dual-cert case requires
 explicit selection in cert_cb** — iterating `SSL_use_certificate` would only
-leave the last cert (last-wins). `select_gateway_secret` prefers the ECDSA cert
+leave the last cert (last-wins). `select_gateway_certificate` prefers the ECDSA cert
 only for **TLS 1.3** clients that advertise an ECDSA `signature_algorithm`; RSA
 otherwise. This mirrors Envoy's `default_tls_certificate_selector.cc`.
 
@@ -24,16 +24,18 @@ silently dropped" are **not accepted** — selection landed in `apply_gateway_tl
 
 ## Code shape today
 
-- `tls_pingora.rs::apply_gateway_tls_cert` — consumes the matcher-cold-path
-  `GatewayTlsEntry.compiled_serving_secrets`; each ordered outcome has already
-  been checked against its exact group/kind/namespace/name/index before
-  `select_gateway_secret` picks one and `apply_secret_to_ssl` applies it.
-- `tls_pingora.rs::select_gateway_secret` (boringssl) — single secret: no-op;
+- `runtime/matching/tls.rs::compile_serving_certificates` — requires every declared
+  reference to have a resolved outcome at the same index with the exact
+  group/kind/namespace/name identity, then parses and compiles the complete set.
+- `tls_pingora.rs::apply_gateway_tls_cert` — requires
+  `compiled_serving_certificates` to be complete and non-empty before selection.
+- `tls_pingora.rs::select_gateway_certificate` (boringssl) — single certificate: no-op;
   multiple: prefer ECDSA only when `negotiated_is_tls13(ssl)` **and**
   `client_supports_ecdsa(ssl)` and an ECDSA cert exists, else first RSA, else
-  first. Non-boringssl build: first secret.
-- `tls_pingora.rs::pick_secret_index` — pure selection rule over key-type kinds
-  (`Some(true)`=ECDSA / `Some(false)`=RSA / `None`=unparseable); unit-tested.
+  first. Non-boringssl build: first certificate.
+- `tls_pingora.rs::apply_compiled_certificate_to_ssl` — checks the compiled Unix
+  validity bounds and installs the selected immutable chain/key without parsing
+  certificate material on the handshake path.
 - `tls_pingora.rs::negotiated_is_tls13` — safe `SslRef::version2() == Some(SslVersion::TLS1_3)`.
 - `tls_pingora.rs::client_supports_ecdsa` — FFI `SSL_get0_peer_verify_algorithms`
   + `SSL_get_signature_algorithm_key_type` == `EVP_PKEY_EC`.
@@ -85,14 +87,14 @@ cert_cb fail-closed convention and the "do not silently drop" intent.
 - **TLS 1.2 dual-cert is RSA-only** by design (see gate above). True TLS 1.2
   ECDSA serving would need cipher-auth-mask inspection of the ClientHello.
 - **All-ECDSA listener under TLS 1.2**: with no RSA cert to fall back to,
-  `pick_secret_index(prefer_ecdsa=false)` returns index 0 (an ECDSA cert), so a
+  `select_gateway_certificate` returns the first certificate (ECDSA), so a
   TLS 1.2 client that offered only ECDHE-RSA ciphers still hits NO_SHARED_CIPHER.
   This is physically unsolvable without an RSA cert and is identical to pre-fix
   behavior — not a regression. (Confirmed: `SSL_version` at cert_cb returns the
   negotiated version by BoringSSL server state-machine ordering — version
   negotiation precedes cert_cb precedes cipher negotiation.)
-- **Ed25519/Ed448 leaf certs** classify as non-ECDSA (`secret_is_ecdsa` checks
-  `Id::EC` only), so they land in the RSA bucket. Out of scope for the RSA+ECDSA
+- **Ed25519/Ed448 leaf certs** classify as non-ECDSA (`key_type == Id::EC` is
+  the ECDSA test), so they land in the non-ECDSA bucket. Out of scope for the RSA+ECDSA
   feature; revisit if Ed25519 dual-cert is ever requested.
 - **Secret sync window**: matcher publication is complete-set atomic. During an
   incomplete resolution window the listener does not serve a partial subset;
@@ -110,7 +112,7 @@ cert_cb fail-closed convention and the "do not silently drop" intent.
 - Integration test: `gateway_tls_dual_cert` (TLS1.3 ECDSA/RSA sigalg pinning +
   TLS1.2 RSA guard) in
   `edgion-tests/src/client/suites/gateway/tls/gateway_tls/gateway_tls.rs`
-- Unit test: `pick_secret_index` tests in `tls_pingora.rs`
+- Unit tests for compiled certificate selection in `tls_pingora.rs`
 - Architecture: [01-architecture/02-gateway/04-tls/01-downstream-tls.md](../../../01-architecture/02-gateway/04-tls/01-downstream-tls.md)
 
 ## Resolution references

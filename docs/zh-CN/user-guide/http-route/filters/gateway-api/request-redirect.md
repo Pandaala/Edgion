@@ -2,7 +2,7 @@
 
 ## 概述
 
-`RequestRedirect` 返回 HTTP 重定向响应（301 或 302）而不将请求代理到后端。它是标准 Gateway API 过滤器，在请求阶段运行。由于会终止请求，上游永远不会被访问。可用于强制 HTTPS、将流量迁移到新主机名，或在迁移过程中重写路径。
+`RequestRedirect` 返回 HTTP 重定向响应（301、302、303、307 或 308）而不将请求代理到后端。它是标准 Gateway API 过滤器，在请求阶段运行。由于会终止请求，上游永远不会被访问。可用于强制 HTTPS、将流量迁移到新主机名，或在迁移过程中重写路径。
 
 ## 配置
 
@@ -24,7 +24,7 @@ filters:
 | `scheme` | Enum | 无 | 重定向协议方案。允许值：`http` \| `https` |
 | `hostname` | String | 无 | 重定向目标主机名；省略时保留原始主机名 |
 | `port` | Integer | 无 | 重定向目标端口；省略时使用协议默认端口 |
-| `statusCode` | Enum | `302` | 重定向状态码。允许值：`301` \| `302` |
+| `statusCode` | Enum | `302` | 重定向状态码。允许值：`301` \| `302` \| `303` \| `307` \| `308` |
 | `path` | Object | 无 | 应用于重定向目标的路径重写；见下方子字段说明 |
 
 ### `path` 子字段
@@ -62,9 +62,6 @@ spec:
             scheme: https
             port: 443
             statusCode: 301
-      backendRefs:
-        - name: api-service
-          port: 8080
 ```
 
 ### 示例 2：切换主机名并重写路径前缀
@@ -95,14 +92,13 @@ spec:
             path:
               type: ReplacePrefixMatch
               replacePrefixMatch: /v2
-      backendRefs:
-        - name: api-service
-          port: 8080
 ```
 
 ## 注意事项
 
 - `RequestRedirect` 与 [URLRewrite](./url-rewrite.md) 在同一规则中**互斥**。同时声明两者的规则将被标记为 `PartiallyInvalid` 并被禁用，但 HTTPRoute 中其他有效规则继续生效。
+- 规则级 `RequestRedirect` 是终止型过滤器，不能与同一规则中的
+  `backendRefs` 组合；Kubernetes CRD 会拒绝这种配置。
 - 由于过滤器会终止请求，其后声明的请求阶段插件不会执行，后端也不会被访问。
 - `ReplacePrefixMatch` 仅替换规则 `PathPrefix` 匹配的那部分路径，路径的其余部分得以保留。
 - 原始查询字符串始终会被保留并追加到重定向的 `Location` URL 上。例如，`http://app.example.com/login?returnTo=/dashboard` 会重定向到 `https://app.example.com/login?returnTo=/dashboard`。Gateway API 重定向过滤器没有 query 修改器，因此无论是否配置了路径修改器，客户端的 query 始终会在重定向中保留。

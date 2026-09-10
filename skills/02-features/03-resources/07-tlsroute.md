@@ -5,19 +5,23 @@ description: Full TLSRoute schema: SNI-based TLS routing.
 
 # TLSRoute Resource
 
-> API: `gateway.networking.k8s.io/v1` (v1alpha3 compatible) | Scope: Namespaced
-> Gateway API v1.5.0 Standard resource (v1alpha3 in v1.4.0 Experimental)
+> API: `gateway.networking.k8s.io/v1` | Scope: Namespaced
+> Gateway API v1.5.0 Standard resource
 
 TLSRoute routes based on the SNI (Server Name Indication) in the TLS ClientHello, supporting TLS passthrough or termination + forwarding.
 
-### Multi-version Compatibility
+### API Version Policy
 
-| Install Manifest | v1alpha3 | v1 |
-|------------------|----------|-----|
-| v1.4.0 experimental | **served=true, storage=true** | Does not exist |
-| v1.5.0 standard | served=false | **served=true, storage=true** |
+Edgion's supported TLSRoute version is `gateway.networking.k8s.io/v1` only.
+Controller watches, storage operations, status updates, and FileSystem input
+must converge on that canonical version; older versions served by an installed
+CRD are outside the support policy.
 
-The Edgion controller prefers to watch v1, falling back to v1alpha3 (single-active watch) when v1 is unavailable. v1alpha3 → v1 is a pure version promotion, with identical spec field structure. In FileSystem mode, v1alpha3 YAML is automatically normalized to v1 at the parsing entry.
+**Implementation debt:** the current Controller still probes v1alpha3 and can
+select its watch, storage, and status paths when v1 is unavailable, while
+FileSystem input still normalizes v1alpha3 to v1. These fallback paths remain
+until their atomic removal under
+[Remove the TLSRoute v1alpha3 fallback](../../../tasks/todo/remove-tlsroute-v1alpha3-fallback.md).
 
 ## Full Schema
 

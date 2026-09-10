@@ -9,7 +9,7 @@
 | Type | performance-design |
 | Priority | P3 |
 | Issue | N/A |
-| Depends on | Canonical condition evaluator and response-body no-work gate |
+| Depends on | Canonical condition evaluator and [response-body no-work-gate decision](../../skills/04-review/cpu-memory/intentional-design/async-response-body-hook-profile-before-gate.md) |
 
 ## AI guide summary
 
@@ -21,7 +21,9 @@ Design a semantics-safe way to avoid repeated owned extraction work when respons
 - Preserve dynamic time and probability evaluation and every stage-visible request-context mutation semantic.
 - Prefer borrowed extraction or narrowly classified stable stage inputs; do not introduce a second predicate model or cache implementation.
 - Preserve DirectPeerIp/RemoteIp trust boundaries, canonical KeyGet/session ownership, redaction, streaming/backpressure, and bounded memory.
-- Coordinate with `tasks/todo/response-body-filter-no-work-gate/` without duplicating its outer dispatch/future scope.
+- Coordinate with the permanent
+  [response-body no-work-gate decision](../../skills/04-review/cpu-memory/intentional-design/async-response-body-hook-profile-before-gate.md)
+  without duplicating its outer dispatch/future scope.
 - Do not modify existing integration-test files.
 
 ## Acceptance criteria

@@ -124,12 +124,10 @@ Verified on 2026-09-09:
   `cache_residue --mode fail` completed successfully (`wipe-all: total=39 errors=0`).
   Run evidence: `tmp/integration_testing/testing_20260909_154624/report.log`,
   `/tmp/edgion-mirror-dynamic.log`, and `/tmp/edgion-mirror-residue.log` (ephemeral).
-  Kubernetes end-to-end tests were not run; this scenario is explicitly local-only.
-  The optional Kubernetes suite-parity review remains failing: this new dynamic
-  scenario has no Kubernetes inventory entry, alongside pre-existing missing
-  suites. Kubernetes wiring belongs with the
-  [inventory follow-up](../../../../tasks/todo/reconcile-k8s-integration-suite-inventory.md);
-  local success is not evidence of Kubernetes parity.
+  Kubernetes inventory wiring and live end-to-end verification were completed on
+  2026-09-10. The Kubernetes `RequestMirrorReferenceGrant` scenario passed with
+  selector-backed Services and runner-owned Deployments, covering the same grant,
+  revocation, delivery, and non-delivery phases in cluster topology.
 
 The local `RequestMirrorReferenceGrant` dynamic scenario uses the shared topology
 and checks no grant, HTTPRoute-only authorization, authorization of both publishers,

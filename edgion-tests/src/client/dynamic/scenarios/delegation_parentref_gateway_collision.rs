@@ -7,7 +7,7 @@ use crate::suites::grpc_route::test::test_service_client::TestServiceClient;
 use crate::suites::grpc_route::test::{HelloRequest, NumberRequest};
 use anyhow::{ensure, Context, Result};
 use serde_json::Value;
-use std::collections::BTreeSet;
+use std::net::IpAddr;
 use std::time::{Duration, Instant};
 
 const NS: &str = "edgion-test";
@@ -20,6 +20,11 @@ const GRPC_CHILD: &str = "parentref-collision-grpc-child";
 const GRPC_PARENT_HOST: &str = "parent.parentref-collision-grpc.test";
 const GRPC_DIRECT_HOST: &str = "direct.parentref-collision-grpc.test";
 const TIMEOUT: Duration = Duration::from_secs(20);
+
+fn k8s_mode() -> bool {
+    std::env::var("EDGION_TEST_K8S_MODE")
+        .is_ok_and(|value| matches!(value.to_ascii_lowercase().as_str(), "true" | "1" | "yes"))
+}
 
 #[derive(Clone, Copy)]
 enum Generation {
@@ -447,6 +452,45 @@ async fn grpc_stream_numbers(
     }
 }
 
+fn validate_say_hello_metadata(message: &str, trace: &str, k8s: bool) -> Result<()> {
+    let metadata = message
+        .strip_prefix("Hello, ParentRefCollision! metadata=(")
+        .and_then(|value| value.strip_suffix(')'))
+        .context("unexpected SayHello envelope")?;
+    let entries = metadata
+        .split(',')
+        .map(|entry| entry.split_once('=').context("malformed SayHello metadata entry"))
+        .collect::<Result<Vec<_>>>()?;
+    ensure!(entries.len() == 3, "expected exactly three SayHello metadata entries");
+    for key in ["x-trace-id", "x-forwarded-for", "x-real-ip"] {
+        ensure!(
+            entries.iter().filter(|(actual, _)| *actual == key).count() == 1,
+            "SayHello metadata must contain {key} exactly once"
+        );
+    }
+    let value = |key: &str| {
+        entries
+            .iter()
+            .find(|(actual, _)| *actual == key)
+            .map(|(_, value)| *value)
+            .unwrap()
+    };
+    ensure!(value("x-trace-id") == trace, "SayHello trace metadata mismatch");
+    let forwarded = value("x-forwarded-for");
+    let real = value("x-real-ip");
+    if k8s {
+        let forwarded: IpAddr = forwarded.parse().context("invalid x-forwarded-for IP")?;
+        let real: IpAddr = real.parse().context("invalid x-real-ip IP")?;
+        ensure!(forwarded == real, "forwarded and real client IPs differ");
+        ensure!(!real.is_unspecified(), "client IP is unspecified");
+        ensure!(!real.is_loopback(), "Kubernetes client IP is loopback");
+    } else {
+        ensure!(forwarded == "127.0.0.1", "unexpected local x-forwarded-for");
+        ensure!(real == "127.0.0.1", "unexpected local x-real-ip");
+    }
+    Ok(())
+}
+
 async fn check_grpc(ctx: &TestContext, generation: Generation) -> Result<()> {
     assert_publication(ctx, true, generation).await?;
     let initial = matches!(generation, Generation::Initial);
@@ -462,19 +506,8 @@ async fn check_grpc(ctx: &TestContext, generation: Generation) -> Result<()> {
         ensure!(code == tonic::Code::Ok);
         let message = message.context("missing SayHello payload")?;
         let trace = trace.context("missing trace id")?;
-        let metadata = message
-            .strip_prefix("Hello, ParentRefCollision! metadata=(")
-            .and_then(|value| value.strip_suffix(')'))
-            .context("unexpected SayHello envelope")?;
-        let actual = metadata.split(',').map(str::to_string).collect::<BTreeSet<_>>();
-        let expected = [
-            format!("x-trace-id={trace}"),
-            "x-forwarded-for=127.0.0.1".to_string(),
-            "x-real-ip=127.0.0.1".to_string(),
-        ]
-        .into_iter()
-        .collect::<BTreeSet<_>>();
-        ensure!(actual == expected, "unexpected SayHello metadata: {message}");
+        validate_say_hello_metadata(&message, &trace, k8s_mode())
+            .with_context(|| format!("unexpected SayHello metadata: {message}"))?;
         (trace, "/test.TestService/SayHello")
     } else {
         ensure!(grpc_say_hello(ctx, GRPC_PARENT_HOST, false).await?.0 == tonic::Code::Unimplemented);
@@ -579,3 +612,41 @@ pub static GRPC_SCENARIO: &Scenario = &Scenario {
     run: run_grpc,
     phases: GRPC_PHASES,
 };
+
+#[cfg(test)]
+mod tests {
+    use super::validate_say_hello_metadata;
+
+    fn message(metadata: &str) -> String {
+        format!("Hello, ParentRefCollision! metadata=({metadata})")
+    }
+
+    #[test]
+    fn say_hello_metadata_is_topology_aware_and_rejects_invalid_shapes() {
+        let trace = "trace-1";
+        assert!(validate_say_hello_metadata(
+            &message("x-trace-id=trace-1,x-forwarded-for=10.0.0.8,x-real-ip=10.0.0.8"),
+            trace,
+            true
+        )
+        .is_ok());
+        assert!(validate_say_hello_metadata(
+            &message("x-trace-id=trace-1,x-forwarded-for=127.0.0.1,x-real-ip=127.0.0.1"),
+            trace,
+            false
+        )
+        .is_ok());
+
+        for metadata in [
+            "x-trace-id=trace-1,x-forwarded-for=10.0.0.8,x-forwarded-for=10.0.0.8",
+            "x-trace-id=trace-1,x-forwarded-for=10.0.0.8",
+            "x-trace-id=trace-1,x-forwarded-for=10.0.0.8,x-real-ip=10.0.0.8,x-extra=value",
+            "x-trace-id=trace-1,x-forwarded-for=bad,x-real-ip=bad",
+            "x-trace-id=trace-1,x-forwarded-for=10.0.0.8,x-real-ip=10.0.0.9",
+            "x-trace-id=trace-1,x-forwarded-for=0.0.0.0,x-real-ip=0.0.0.0",
+            "x-trace-id=trace-1,x-forwarded-for=127.0.0.1,x-real-ip=127.0.0.1",
+        ] {
+            assert!(validate_say_hello_metadata(&message(metadata), trace, true).is_err());
+        }
+    }
+}

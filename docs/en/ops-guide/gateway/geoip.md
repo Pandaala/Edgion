@@ -11,8 +11,10 @@ log with the resolved country/continent/city. Both are provided by **one plugin,
 registered with the identical config shape into both layers:
 
 - **HTTP** — `EdgionPlugin::GeoIpLocation` in `EdgionPlugins.spec.requestPlugins`.
-- **L4 (Stage 1 / `ConnectionFilter`, TCP+TLS)** — `EdgionStreamPlugin::GeoIpLocation` in
-  `EdgionStreamPlugins.spec.plugins`. There is no Stage-2 (`tlsRoutePlugins`) registration.
+- **L4 stream lifecycles** — `EdgionStreamPlugin::GeoIpLocation` in
+  `EdgionStreamPlugins.spec.plugins`. The same chain runs at listener admission (`Stage1`),
+  on TCPRoute and UDP transport-route admission (`Tcp`), and in the TLSRoute compatibility
+  fallback (`Tls`). There is no `tlsRoutePlugins` registration for GeoIP.
 
 **Not supported, by design**: no bundled baseline database (redistribution terms), no
 coordinate/radius geofencing (MMDB coordinates are city-centroid values with a coarse
@@ -193,9 +195,9 @@ spec:
         allowRuleGroups: []
 ```
 
-The identical `config` block also registers as an `EdgionStreamPlugins.spec.plugins` (Stage 1 /
-`ConnectionFilter`) entry for L4 (TCP/TLS) enforcement, with one restriction: `source: RemoteIp`
-is rejected at L4 (see below).
+The identical `config` block also registers as an `EdgionStreamPlugins.spec.plugins` entry for
+listener, TCPRoute, UDP transport-route, and TLS compatibility enforcement, with one restriction:
+`source: RemoteIp` is rejected at L4 (see below).
 
 **Combining geo with other rules is chaining, not embedding.** `GeoIpLocation` carries no
 IP-allowlist or header/body predicates, and `IpRestriction`/`RequestRestriction`/
@@ -400,7 +402,7 @@ constrained rule.
 ### `city` matches the English name only
 
 `city` is populated from `city.names["en"]` — the English localized name, never a translated
-one. A city rule matching `values: ["北京"]` (or any other non-English spelling) will never
+one. A city rule matching `values: ["Pekín"]` (or any other non-English spelling) will never
 match, because the lookup result is always the English form. `city` and `subdivision` are also
 **not globally unique** — "Cambridge" exists in multiple countries, and a bare
 `subdivision: ["CA"]` matches both California and any Canadian province coded `CA`. Always pair
@@ -431,11 +433,16 @@ depends entirely on what database the operator loads, which can change at any up
 Check the access log's `geo` block for the fields your loaded database actually resolves against
 your provider's documentation, and shape your rule groups accordingly.
 
-## L4 (TCP/TLS) registration
+## L4 (TCP/UDP/TLS) registration
 
-`GeoIpLocation` registers as an `EdgionStreamPlugins.spec.plugins` entry — Stage 1
-(`ConnectionFilter`, pre-TLS) **only**. It is not admitted in `tlsRoutePlugins` (Stage 2), which
-still allows only `IpRestriction`.
+`GeoIpLocation` registers in `EdgionStreamPlugins.spec.plugins`, whose runtime is used at three
+explicit lifecycle layers:
+
+- `Stage1`: listener `ConnectionFilter`, before route matching or TLS.
+- `Tcp`: TCPRoute connection admission and the UDP transport-route session-creation path.
+- `Tls`: the TLSRoute compatibility fallback when no `tlsRoutePlugins` runtime handles the route.
+
+GeoIP is not admitted in `tlsRoutePlugins`, which still allows only `IpRestriction`.
 
 The L4 config is the same structure as the HTTP one, with two layer-specific admission rules:
 
@@ -473,14 +480,11 @@ spec:
 ingest and at gateway construction (both call the same shared validation function) — since L4 has
 no `X-Forwarded-For` to resolve a real client from.
 
-### Always the transport peer — no PROXY-protocol caveat for geo
+### Always the physical transport peer
 
-Because `GeoIpLocation`'s L4 registration is Stage-1 only, it always sees the raw transport peer:
-PROXY-protocol parsing happens strictly after `accept()`, so the Stage-1 connection filter never
-sees a PROXY-resolved client. This is simpler than `GlobalConnectionIpRestriction`'s own IP
-rules, which run at all three stream stages and therefore see the load balancer's address at
-Stage 1 but the PROXY-resolved client's address at Stage 2/3 — `GeoIpLocation`'s `DirectPeerIp`
-source has no such ambiguity to document, since it only ever runs at the one stage.
+Every L4 invocation receives `StreamContext.direct_peer_ip`, the physical transport peer that is
+never rewritten by PROXY protocol. The lifecycle layer changes where the chain runs, not the
+meaning of `DirectPeerIp`: `Stage1`, `Tcp`, and `Tls` all evaluate that same transport identity.
 
 ### No readiness gating; the operator owns the cold-start window
 
@@ -490,16 +494,16 @@ window of unenforced geo policy, `false` accepts a window of rejected traffic. T
 backoff (see below) bounds that window to seconds, not the full `retry_interval_sec`, and
 `edgion_geoip_db_loaded` is the metric to alert on for "is this still going on."
 
-### L4 geo denials are never logged, and carry no client address
+### L4 denial signals depend on the lifecycle layer
 
-An L4 geo denial produces **no log entry at any stage**, and records **no client address
-anywhere**. The only signal is the counter `edgion_geoip_denied_total{layer,reason}` (see
-[Metrics](#metrics)). This is deliberate: pingora drops a Stage-1-denied connection inside its
-accept loop, so a log entry genuinely isn't possible there, and a per-connection denial log is
-also an amplification vector under a connection flood — uniform, counter-only signaling is worth
-more than per-connection detail. HTTP-layer geo denials are unaffected by this — they keep their
-normal `EdgionErrorCode` diagnostic and access-log record, since a per-request log already exists there
-regardless.
+A `Stage1` listener denial is reduced to the `ConnectionFilter` boolean result. Its only GeoIP
+signal is `edgion_geoip_denied_total{layer="stage1",reason=...}`; there is no protocol context or
+canonical connection-log channel at that point.
+
+The `Tcp` and `Tls` route paths retain their canonical TCP, UDP, or TLS connection logs. They
+collapse a GeoIP denial to a generic stream-plugin denial before logging, so the log contains no
+GeoIP facts or sensitive plugin reason; the bounded counter carries the `tcp` or `tls` layer and
+reason. HTTP denials remain ordinary request diagnostics and access-log entries.
 
 ## Access log
 
@@ -547,7 +551,7 @@ mechanism that lets some ext-log fields opt out of masking does not apply here; 
 | `edgion_geoip_db_build_epoch_seconds` | Gauge | none | Build timestamp of the loaded database. Alert on staleness. |
 | `edgion_geoip_update_failed_total` | Counter | `reason` (`fetch` \| `encoding` \| `size_cap` \| `stall` \| `validation` \| `rename` \| `disk` \| `deadline`) | Background *update-cycle* failures, by class. `disk` is the free-space precheck refusing to start (no request was ever issued); `deadline` is the whole cycle exceeding `download_deadline_sec` despite steady progress, distinct from `stall` (no progress within `stall_timeout_sec`) — the two call for opposite fixes. |
 | `edgion_geoip_lookup_panic_total` | Counter | none | A per-request MMDB lookup panicked (caught) and was reported as `Failed`. Distinct from `edgion_geoip_update_failed_total` above: this is a per-request event on the query path, not an update-cycle failure. Decode-without-panic failures share the `Failed` outcome but do not increment this counter. |
-| `edgion_geoip_denied_total` | Counter | `layer` (`stage1` \| `tcp` \| `tls`), `reason` (`deny_country` \| `allow_miss` \| `db_unavailable` \| `lookup_failed`) | L4 connections denied by `GeoIpLocation`. In the current wiring `layer` is always `stage1`, since that is the plugin's only L4 registration point; the other two label values are reserved for forward compatibility. Never carries a client address; HTTP denials are deliberately absent here — they already appear in the access log. |
+| `edgion_geoip_denied_total` | Counter | `layer` (`stage1` \| `tcp` \| `tls`), `reason` (`deny_country` \| `allow_miss` \| `db_unavailable` \| `lookup_failed`) | L4 decisions denied by `GeoIpLocation`. `stage1` is listener admission, `tcp` covers TCPRoute and UDP transport-route admission, and `tls` is the TLS compatibility fallback. The metric never carries a client address; HTTP denials are deliberately absent because they already appear in the access log. |
 
 ## Multi-replica update behavior, jitter, and the `.meta` validator
 
@@ -596,7 +600,8 @@ state produces an unconditional request.
 | A `city` rule with a translated-language value never matches | `city` only ever compares against `names["en"]` | Use the English city name |
 | A blacklist-mode rule sourced on `RemoteIp` is trivially bypassed by any client | `RealIp`'s `trustedIps` is scoped too broadly (e.g. `0.0.0.0/0`) — `RemoteIp` degrades to attacker-controlled input | Scope `trustedIps` to your actual proxy egress ranges, or switch the rule to `DirectPeerIp` |
 | L4 config rejected at ingest/compile mentioning `RemoteIp` | `source: RemoteIp` is a hard admission error in an L4 `GeoIpLocation` config | Use `source: DirectPeerIp` — L4 has no `X-Forwarded-For` to resolve a real client from |
-| An L4 geo deny happened but there's no log line anywhere for it | Expected — L4 geo denials are never logged at any stage, by design | Use `edgion_geoip_denied_total{layer,reason}` as the only signal |
+| A listener-stage geo denial has no log line | Expected — `Stage1` has only the connection-filter boolean and bounded metric | Use `edgion_geoip_denied_total{layer="stage1",reason=...}` |
+| A TCP/UDP/TLS route-stage geo denial log lacks GeoIP details | Expected — route paths keep canonical protocol logs but replace GeoIP facts and plugin reasons with a generic stream-plugin denial | Correlate the protocol log with `edgion_geoip_denied_total{layer="tcp"|"tls",reason=...}` |
 | A "block this country unless it's on the office allowlist" rule doesn't behave as expected | Check the ordering of `IpRestriction`/other admission plugins relative to `GeoIpLocation` on the plugin list — composition is by chain order, not by a single merged plugin | Reorder the plugin-list entries; there is no cross-plugin exemption semantics to configure |
 
 ## Related documents

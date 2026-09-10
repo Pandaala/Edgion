@@ -63,8 +63,9 @@ public dye capability is exposed. Existing integration files remain frozen.
 Three local-only historical named-jump fixtures subscribe to both reject and fallback while
 their policies permit only one; they are intentionally invalid under the approved
 strict contract. Their old outcome/anti-spoof integration assertions are therefore
-incompatible until [fixture alignment](../../../../tasks/todo/align-named-jump-dye-integration-subscriptions.md)
-is completed. Preserve those security assertions; do not grandfather unsupported
+incompatible under the current fixture definitions; the permanent security contract
+is recorded in [denied named jumps fail closed](../../routing/regression-guards/denied-named-jump-fails-closed.md).
+Preserve those security assertions; do not grandfather unsupported
 subscriptions or describe the full integration suite as passing. No logging or
 metrics are added.
 

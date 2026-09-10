@@ -1,6 +1,6 @@
 ---
 name: frontend-validation-is-mtls-empty-ca
-description: configure_gateway_frontend_mtls now returns a bool and the caller stamps is_mtls from it, so a frontendValidation listener with empty/None CA refs no longer mislabels is_mtls=true. Reject re-reports of the unconditional is_mtls=true stamp.
+description: configure_gateway_frontend_mtls returns Ok(false) only for NotConfigured; strict empty or incomplete CA projections are StrictReject, while usable modes return Ok(true). Reject re-reports of an unconditional is_mtls stamp.
 knowledge_type: regression-guards
 ---
 
@@ -11,18 +11,16 @@ knowledge_type: regression-guards
 
 ## Conclusion
 
-`apply_gateway_tls_cert` (`edgion-gateway/src/tls/runtime/gateway/tls_pingora.rs`) no longer
-stamps `ssl_ctx.meta.is_mtls = true` unconditionally on an `Ok` return from
-`configure_gateway_frontend_mtls`. The callee now returns `Result<bool, _>`: `Ok(false)` on
-the empty/None-CA-refs early return (no verify mode installed, no client cert requested) and
-`Ok(true)` only after `ssl.set_verify(...)` actually runs. The caller stamps `is_mtls` from
-that bool.
+`apply_gateway_tls_cert` (`edgion-gateway/src/tls/runtime/gateway/tls_pingora.rs`) stamps
+`ssl_ctx.meta.is_mtls` from `configure_gateway_frontend_mtls`'s `Result<bool, _>`. `Ok(false)`
+is reserved for `FrontendMtlsOutcome::NotConfigured`. `StrictEffective` and
+`InsecureFallback` install a verify mode and return `Ok(true)`; `StrictReject` returns `Err`.
+The matcher compiles strict empty, missing, incomplete, or invalid CA projections into
+`StrictReject`, so they cannot be mislabeled as intentional one-way TLS.
 
-Re-reports of the form "`apply_gateway_tls_cert` sets `is_mtls = true` even when
-`configure_gateway_frontend_mtls` installed no verify mode", "frontendValidation with empty
-`caCertificateRefs` reports mTLS while `extract_client_cert_info` returns None", or
-"is_mtls label and client-cert data disagree on the Gateway frontend path" are **not
-accepted** — verify the caller stamps `is_mtls` from the callee's bool before re-reporting.
+Re-reports of the form "`apply_gateway_tls_cert` sets `is_mtls = true` even when no verify mode
+was installed" are **not accepted** — verify both the caller's bool assignment and the compiled
+frontend outcome. Do not treat a strict empty-reference projection as `Ok(false)`.
 
 ## What was wrong (before the fix)
 
@@ -44,15 +42,13 @@ off whether a verify mode was installed, not off an `Ok` return.
 
 ## Fix suggestions not accepted
 
-- "Reject `frontendValidation` with no CA refs at the controller instead" (issue Option 2) —
-  was considered; Option 1 (runtime robustness) was chosen so the data plane is correct even
-  if a config slips through, without expanding the controller validator's scope.
+- "Treat strict empty CA refs like absent frontend validation" — rejected; operator intent is
+  strict client authentication, so the matcher publishes `StrictReject`.
 
 ## Re-evaluation triggers
 
 - A new caller of `configure_gateway_frontend_mtls` ignores the returned bool.
-- The controller starts fencing empty-CA-refs frontendValidation (would make the runtime path
-  unreachable, but the bool return stays correct defense-in-depth).
+- The frontend outcome enum or verify-mode contract changes.
 
 ## Reference cases
 

@@ -1,0 +1,38 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: direct-port-unready
+  namespace: edgion-test
+  labels:
+    app: direct-port-unready
+    edgion.io/test-server-image: "true"
+    edgion.io/test-server-rollout-ready: "false"
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: direct-port-unready
+  template:
+    metadata:
+      labels:
+        app: direct-port-unready
+        edgion.io/test-server-image: "true"
+        edgion.io/test-server-rollout-ready: "false"
+    spec:
+      containers:
+        - name: test-server
+          image: docker.io/pandaala/edgion-test-server:v0.1.1
+          imagePullPolicy: IfNotPresent
+          command: ["/usr/local/bin/test_server"]
+          args:
+            - --http-ports=30002
+          ports:
+            - name: http
+              containerPort: 30002
+          readinessProbe:
+            tcpSocket:
+              port: 39999
+            periodSeconds: 2
+            failureThreshold: 1

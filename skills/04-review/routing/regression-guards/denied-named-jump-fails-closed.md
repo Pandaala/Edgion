@@ -256,7 +256,8 @@ reviewer confirmed the registration and knowledge boundary. No production behavi
 The stage/effective-policy dye contract now rejects impossible subscriptions.
 Three frozen named-jump fixtures still subscribe to both reject and fallback
 although their policy selects only one. Their historical end-to-end dye and
-anti-spoof assertions require [fixture alignment](../../../../tasks/todo/align-named-jump-dye-integration-subscriptions.md)
-before they can pass with the new validation. The denial, legal-fallback, no
+anti-spoof assertions remain incompatible with the strict
+[stage/effective-policy dye contract](../../plugin-runtime/regression-guards/dye-stage-producer-parity.md).
+The denial, legal-fallback, no
 backend-contact, and spoofed-header assertions remain required; this is not
 acceptance of weaker security behavior or a claim of a fresh full-suite pass.

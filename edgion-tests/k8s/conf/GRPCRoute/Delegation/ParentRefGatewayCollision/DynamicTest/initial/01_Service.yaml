@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: parentref-collision-grpc-backend
+  namespace: edgion-test
+spec:
+  selector:
+    app: edgion-test-server
+  ports:
+    - name: grpc
+      port: 30021
+      targetPort: 30021
+      protocol: TCP
+      appProtocol: kubernetes.io/h2c

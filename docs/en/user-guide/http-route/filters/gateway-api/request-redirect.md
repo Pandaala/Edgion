@@ -2,7 +2,7 @@
 
 ## Overview
 
-`RequestRedirect` returns an HTTP redirect response (301 or 302) instead of proxying the request to a backend. It is a standard Gateway API filter and runs in the request stage. Because it terminates the request, the upstream is never contacted. Use it to enforce HTTPS, move traffic to a new hostname, or rewrite paths during a migration.
+`RequestRedirect` returns an HTTP redirect response (301, 302, 303, 307, or 308) instead of proxying the request to a backend. It is a standard Gateway API filter and runs in the request stage. Because it terminates the request, the upstream is never contacted. Use it to enforce HTTPS, move traffic to a new hostname, or rewrite paths during a migration.
 
 ## Configuration
 
@@ -24,7 +24,7 @@ filters:
 | `scheme` | Enum | none | Redirect scheme. Allowed values: `http` \| `https` |
 | `hostname` | String | none | Hostname to redirect to; keeps the original host when omitted |
 | `port` | Integer | none | Port to redirect to; omitted means the default for the scheme |
-| `statusCode` | Enum | `302` | Redirect status. Allowed values: `301` \| `302` |
+| `statusCode` | Enum | `302` | Redirect status. Allowed values: `301` \| `302` \| `303` \| `307` \| `308` |
 | `path` | Object | none | Path rewrite to apply to the redirect target; see below |
 
 ### `path` sub-fields
@@ -62,9 +62,6 @@ spec:
             scheme: https
             port: 443
             statusCode: 301
-      backendRefs:
-        - name: api-service
-          port: 8080
 ```
 
 ### Example 2: Move a hostname and rewrite the path prefix
@@ -95,14 +92,13 @@ spec:
             path:
               type: ReplacePrefixMatch
               replacePrefixMatch: /v2
-      backendRefs:
-        - name: api-service
-          port: 8080
 ```
 
 ## Notes
 
 - `RequestRedirect` and [URLRewrite](./url-rewrite.md) are mutually exclusive within the same rule. A rule that declares both is marked `PartiallyInvalid` and disabled, while the route's other rules keep working.
+- A rule-level `RequestRedirect` is terminal and must not be combined with
+  `backendRefs` in the same rule; the Kubernetes CRD rejects that shape.
 - Because the filter terminates the request, any request-stage plugins declared after it do not run, and the backend is never reached.
 - `ReplacePrefixMatch` replaces only the part of the path matched by the rule's `PathPrefix`; the remainder of the path is preserved.
 - The original query string is always preserved and appended to the redirect `Location`. For example, `http://app.example.com/login?returnTo=/dashboard` redirects to `https://app.example.com/login?returnTo=/dashboard`. The Gateway API redirect filter has no query modifier, so the client's query always survives, regardless of any path modifier.

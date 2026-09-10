@@ -1,6 +1,6 @@
 ---
 name: l4-relay-connect-timeout
-description: Use when reviewing L4 connect-timeout findings; covers the landed default connect timeout that bounds upstream connect on all three L4 proxies, and the rejected per-route-annotation + per-service-metric suggestions — do not re-report "TCP/TLS L4 connect is unbounded / not configurable".
+description: Use when reviewing L4 connect-timeout findings; covers the shared resolver that bounds upstream connect on all three L4 proxies, the current LocalOrigin failure classification, and the exposed tcpTimeout.connectTimeout resource field.
 status: fixed
 finding_id: listener-06
 closed: 2026-06-14
@@ -65,21 +65,21 @@ assignment. The TLS doc string of `tcpTimeout` covers all three relay types.
   `connection_timeout` option is the correct, per-route-future-proof site; the
   connector-level timeout is coarser and unnecessary.
 
-## Known related limitations (not defects in this fix)
+## Current schema and failure classification
 
-- **K8s CR pruning**: the hand-maintained `config/crd/edgion-crd/edgion_gateway_config_crd.yaml`
-  does not (yet) declare the `tcpTimeout` block, so on the K8s custom-resource path the
-  API server prunes `connectTimeout` (and the sibling `idleTimeout`) before the controller
-  sees them — the documented config is a no-op there, while file-based config works. This
-  is a systemic CRD↔struct drift (also affects `loadBalancing`, `linkSys`, `server.*`),
-  tracked in `tasks/todo/crd-struct-sync-gap-edgion-gateway-config.md`, NOT a bug in the
-  connect-timeout logic. Do not re-file the connect-timeout finding for this reason.
-- **Outlier detection**: bounding the connect means a slow-to-accept backend now books a
-  `FailureClass::Gateway` failure at the timeout instead of eventually connecting. This
-  only matters when outlier detection is explicitly enabled for the Service (via an
-  `EdgionBackendTrafficPolicy`'s `spec.outlierDetection` section; otherwise
-  `record_failure_by_addr` is a no-op); attribution and per-attempt recording are
-  pre-existing and consistent with the HTTP connect-failure path.
+- **Resource and CRD exposure**: `EdgionGatewayConfigSpec.tcp_timeout` contains
+  `TcpTimeout.connect_timeout`, serialized as `spec.tcpTimeout.connectTimeout`. The
+  hand-maintained `edgion_gateway_config_crd.yaml` declares both that block and field,
+  so Kubernetes admission preserves the operator setting. The original incident record
+  found that the CRD omitted `tcpTimeout`; that evidence explains the former config-path
+  gap but is historical and no longer describes the current schema.
+- **Outlier detection**: connect failures in plain TCP, TLS-terminated, and
+  TLS-passthrough paths are recorded as `FailureClass::LocalOrigin`. This matters only
+  when outlier detection is enabled for the Service; otherwise failure recording is a
+  no-op. The original connect-timeout fix recorded these failures as
+  `FailureClass::Gateway`; the later local-origin dimension split superseded that
+  classification. See
+  `skills/04-review/backends/regression-guards/circuit-breaker-local-origin-split.md`.
 
 ## Re-evaluation Triggers
 
@@ -87,6 +87,9 @@ Re-open this decision only if:
 
 - A new L4 proxy type is added whose connect site does NOT set
   `peer.options.connection_timeout` (it would lack the bound).
+- An L4 connect-error path stops recording `FailureClass::LocalOrigin`.
+- The resource schema or committed CRD stops exposing
+  `spec.tcpTimeout.connectTimeout`.
 - A concrete need for per-route (not gateway-wide) connect timeouts arrives —
   that is a new feature request, not a re-report of this finding.
 

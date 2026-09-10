@@ -29,10 +29,10 @@ HTTP plugins now have two distinct runtime build paths. Identify which one you a
 
 The chain is:
 
-1. The Controller's `EdgionPluginsHandler.preparse()` calls `ep.preparse()`.
-2. `EdgionPlugins::preparse()` builds `spec.plugin_runtime` and collects `preparse_errors`.
-3. The Gateway's `PluginStore` also calls `preparse()` again on `full_set` / `partial_update`.
-4. At runtime, the resource is fetched through `PluginStore` and its own `plugin_runtime` is executed.
+1. The Controller's `EdgionPluginsHandler.preparse()` runs the schema-layer `EdgionPlugins::validate_plugins()` and records validation errors for resource status. It does not build a Gateway runtime.
+2. The Gateway's `PluginStore` calls `compile_plugins()` for each resource generation. That function compiles conditions, builds one `PluginRuntime`, and collects the corresponding `preparse_errors`.
+3. `PluginStore` publishes the result as `Arc<CompiledPlugins>`, which owns the runtime as `Arc<PluginRuntime>`.
+4. At request time, the resource runtime is fetched through `PluginStore` and the `Arc`-shared runtime is executed.
 
 This path mainly serves:
 
@@ -43,7 +43,7 @@ This path mainly serves:
 
 The chain is:
 
-- During `HTTPRoute` / `GRPCRoute` preparse, the runtime is built per scope: rule-level uses `PluginRuntime::from_httproute_filters_for_rule()` / `from_grpcroute_filters_for_rule()`; backend-level uses `from_httproute_filters_for_backend()` / `from_grpcroute_filters_for_backend()`. Do not use the deprecated forwarding methods still present in code; they are pre-release removal debt, not supported extension points.
+- During `HTTPRoute` / `GRPCRoute` preparse, the runtime is built per scope: rule-level uses `PluginRuntime::from_httproute_filters_for_rule()` / `from_grpcroute_filters_for_rule()`; backend-level uses `from_httproute_filters_for_backend()` / `from_grpcroute_filters_for_backend()`. These four scoped constructors are the public Gateway API filter construction entries.
 
 This path mainly serves:
 
@@ -79,11 +79,30 @@ The most common pitfall is mixing the two paths:
 |-------|-------|--------------|-------------|
 | Request phase | `RequestFilter` | Before forwarding to upstream | Auth, RateLimit, Rewrite, Mirror, direct reject |
 | Response header phase | `UpstreamResponseFilter` | When upstream response headers arrive | Modify response headers, fast decision based on header |
-| Response body phase | `UpstreamResponseBodyFilter` | Each body chunk | Bandwidth limit, chunk inspection (**the trait signature deliberately omits `&mut PluginLog`**; the per-chunk path must allocate zero — see [05-plugin-system.md](05-plugin-system.md#-critical-constraint-no-pluginlog-in-body-phase-per-chunk-path-must-allocate-zero)) |
-| Response-end phase | `UpstreamResponse` | After the full response ends | Logic that needs the complete response context (rare) |
+| Response body phase | `UpstreamResponseBodyFilter` | Data callbacks and confirmed no-trailers completion | Bandwidth limit, current-chunk inspection (**the trait signature deliberately omits `&mut PluginLog`**; the per-chunk path must allocate zero — see [05-plugin-system.md](05-plugin-system.md#-critical-constraint-no-pluginlog-in-body-phase-per-chunk-path-must-allocate-zero)) |
+| Async response-header phase | `UpstreamResponse` | On the final upstream response header, before downstream header commit and body streaming | Awaitable response-header decisions or mutations; never aggregated main-response processing |
 
 Default to `RequestFilter`.
 If you don't need upstream response info, don't push the logic into a later phase.
+
+Both response-header plugin stages skip interim informational responses. On the final header, the synchronous callback completes response bookkeeping, retry decisions, final-response normalization, and `UpstreamResponseFilter` execution. If the response remains the final candidate, `run_upstream_response_plugins_async` then runs the `UpstreamResponse` chain before the header is committed downstream and before body streaming starts.
+
+The async stage can await and inspect or mutate the bound final response header through the session adapter. It cannot obtain the complete main upstream response body: that response is always streamed. Use the bounded response-body processor/body hook for chunk or semantic-window work, and the separate trailer hook for upstream trailers.
+
+For response-body callbacks, the driver runs writable streaming processors first
+and then ordinary `UpstreamResponseBodyFilter` plugins on each `Data` event. A
+`Data` event with `end_of_stream = true` closes a response without trailers and
+then dispatches `None` to the trailer companions. Header-only and other synthetic
+no-trailers completion arrives as `TerminalWithoutTrailers`: streaming processors
+receive that typed event, ordinary body plugins run once with `body = None` and
+`end_of_stream = true`, and the driver dispatches `None` to the trailer companions.
+
+`TerminalBeforeTrailers` is different. Only the streaming-processor chain receives
+that typed event; ordinary `UpstreamResponseBodyFilter` plugins do not run. The
+subsequent transport trailer callback passes the actual mutable trailer map to
+request-owned `UpstreamResponseTrailer` companions. Keep body processing bounded
+to the current chunk or semantic window; none of these callbacks may aggregate the
+main upstream response.
 
 ## Minimum change checklist
 
@@ -336,7 +355,7 @@ If the plugin is referenced by a route through `ExtensionRef`, focus on:
 Current behavior:
 
 - At runtime, fetch the `EdgionPlugins` from `PluginStore` by `namespace/name`.
-- Execute using `spec.plugin_runtime`.
+- Execute using the `Arc<PluginRuntime>` stored in the matching `CompiledPlugins` entry.
 - Push plugin logs into the dedicated `edgion_plugins` log structure.
 
 If you are debugging "ExtensionRef does not take effect / plugin logs are missing", start tracing from here.

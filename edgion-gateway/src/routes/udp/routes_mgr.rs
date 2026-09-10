@@ -13,7 +13,8 @@ use edgion_resources::ListenerKey;
 ///
 /// Each instance owns an atomically-swappable `UdpRouteTable` snapshot.
 /// `EdgionUdpProxy` holds an `Arc<UdpPortRouteManager>` and calls
-/// `load_route_table()` per-packet for lock-free lookups.
+/// `load_route_table()` when routing a new client session. Established sessions
+/// use their pinned upstream without another table lookup.
 ///
 /// Route data is owned by `GlobalUdpRouteManagers`; this struct only
 /// holds the compiled route snapshot for one listener.
@@ -34,7 +35,7 @@ impl UdpPortRouteManager {
         }
     }
 
-    /// Load the current route table snapshot (hot path, per-packet).
+    /// Load the current route table snapshot when routing a new client session.
     pub fn load_route_table(&self) -> arc_swap::Guard<Arc<UdpRouteTable>> {
         self.route_table.load()
     }
@@ -56,10 +57,11 @@ impl UdpPortRouteManager {
 
 /// Global wrapper managing `ListenerKey -> Arc<UdpPortRouteManager>`.
 ///
-/// Owns the canonical route cache (`resource_key -> Arc<UDPRoute>`) and
-/// implements `ConfHandler<UDPRoute>`. On every change it rebuilds all
-/// per-listener managers by resolving each route's target listeners from its
-/// `spec.resolved_listeners`.
+/// Owns the canonical compiled-unit cache
+/// (`resource_key -> Arc<UdpRouteUnit>`) used by `ConfHandler<UDPRoute>`.
+/// Full updates rebuild every listener table; partial updates publish tables
+/// only for affected listeners, using each unit's controller-resolved listener
+/// keys.
 pub struct GlobalUdpRouteManagers {
     /// Canonical route store: resource_key -> compiled Arc<UdpRouteUnit>.
     ///

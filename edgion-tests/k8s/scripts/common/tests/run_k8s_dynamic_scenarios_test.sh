@@ -88,6 +88,22 @@ EOF
 write_fixture \
   "${SAFE_CONF}/HTTPRoute/Backend/SessionPersistenceWeighted/DynamicTest/initial/resource.yaml" \
   "spw-route"
+cat > "${SAFE_CONF}/HTTPRoute/Backend/SessionPersistenceWeighted/DynamicTest/initial/test-server.yaml" <<'EOF'
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dynamic-test-server
+  namespace: test
+  labels:
+    edgion.io/test-server-image: "true"
+spec:
+  template:
+    spec:
+      containers:
+        - name: test-server
+          image: stale:test
+          imagePullPolicy: IfNotPresent
+EOF
 cat > "${SAFE_CONF}/HTTPRoute/Backend/SessionPersistenceWeighted/DynamicTest/endpoint-inventory.tsv" <<'EOF'
 initial	edgion-default	spw-a	30001	nonempty
 initial	edgion-default	spw-b	30002	nonempty
@@ -139,6 +155,19 @@ case "$*" in
     ;;
   *"apply --server-side"*)
     printf 'RESET:%s\n' "$*" >> "${KUBECTL_LOG}"
+    apply_target=""
+    previous=""
+    for argument in "$@"; do
+      if [[ "${previous}" == "-f" ]]; then
+        apply_target="${argument}"
+        break
+      fi
+      previous="${argument}"
+    done
+    if [[ -n "${apply_target}" && -d "${apply_target}" ]]; then
+      find "${apply_target}" -type f \( -name '*.yaml' -o -name '*.yml' \) -exec \
+        awk '/image: / || /imagePullPolicy: / {print "RENDERED:" $0}' {} \; >> "${KUBECTL_LOG}"
+    fi
     if [[ -n "${FAKE_RESET_FAILURE_MATCH:-}" && "$*" == *"${FAKE_RESET_FAILURE_MATCH}"* ]]; then
       exit 1
     fi
@@ -341,6 +370,7 @@ assert_not_contains "${KUBECTL_LOG}" "get gatewayclasses.gateway.networking.k8s.
 : > "${KUBECTL_LOG}"
 PATH="${FAKE_BIN}:${PATH}" POD=fake-pod KUBECTL_LOG="${KUBECTL_LOG}" PORTS_CONFIG="${PORTS_CONFIG}" \
   DYNAMIC_MANIFEST="${ENDPOINT_DYNAMIC_MANIFEST}" ENDPOINT_INVENTORY="${FAKE_ENDPOINT_INVENTORY}" \
+  TEST_SERVER_IMAGE="registry.test/test-server:current" PULL_POLICY_OVERRIDE=Never \
   FAKE_DYNAMIC_REGISTRY="SpWeighted" SYNC_TIMEOUT_SECONDS=2 SYNC_POLL_INTERVAL_SECONDS=1 \
   "${RUNNER}" --conf-root "${SAFE_CONF}" --scenario SpWeighted \
   > "${TEMP_DIR}/endpoint-phases.log" 2>&1 \
@@ -352,6 +382,8 @@ assert_contains "${TEMP_DIR}/endpoint-phases.log" "@@DYNAMIC_RESULT SpWeighted P
   || fail "test-client did not receive one EndpointSlice acknowledgement per phase"
 assert_contains "${KUBECTL_LOG}" "INVENTORY:--namespace edgion-default --service spw-b --port 30002"
 assert_contains "${KUBECTL_LOG}" "--expected-count 0"
+assert_contains "${KUBECTL_LOG}" "RENDERED:        image: registry.test/test-server:current"
+assert_contains "${KUBECTL_LOG}" "RENDERED:        imagePullPolicy: Never"
 
 : > "${KUBECTL_LOG}"
 cp "${SAFE_CONF}/HTTPRoute/Backend/SessionPersistenceWeighted/DynamicTest/endpoint-inventory.tsv" \

@@ -35,10 +35,10 @@ The shape is similar; the substrate is not:
 
 | Aspect | `TlsCertMatcher` | `GatewayTlsMatcher` |
 |---|---|---|
-| Value type | `Arc<EdgionTls>` | `GatewayTlsEntry` (carries `gateway_creation_ts`, `frontend_validation`, resolved CA secrets) |
+| Value type | `Arc<EdgionTls>` | `GatewayTlsEntry` (carries deterministic precedence metadata, compiled serving certificates, and a compiled frontend mTLS outcome/store) |
 | Container | `ArcSwap<TlsSnapshotData>` (entries and indexes together) | `ArcSwapOption<TlsMatcherData>` (`None` = empty fast-path, common case) |
 | Layers | single hostname matcher | two: `listener_map` (hostname) + `fallback_listener_map` (catch-all listeners without hostname) |
-| Rebuild source | EdgionTls CRD store | Gateway listener spec; includes intra-gateway TLS resolution + `is_listener_not_programmed` gating |
+| Rebuild source | EdgionTls CRD store | Gateway listener spec plus Controller-projected ordered serving-certificate and frontend-CA outcomes; unusable serving sets and strict frontend errors remain explicit reject entries |
 | Precedence sort | `edgion_tls_precedence` in each affected hostname/attachment slot | `tls_entry_order` (creationTimestamp, namespace, name, listener_name) for cross-Gateway collisions |
 | Collision logging | transition-bounded warnings in `TlsStore` | `warn_tls_sni_collision` at rebuild time |
 

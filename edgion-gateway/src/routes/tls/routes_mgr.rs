@@ -57,10 +57,11 @@ impl TlsRouteManager {
 
 /// Global wrapper managing `ListenerKey -> Arc<TlsRouteManager>`.
 ///
-/// Owns the canonical route cache (`resource_key -> Arc<TLSRoute>`) and
-/// implements `ConfHandler<TLSRoute>`.  On every change it rebuilds all
-/// per-listener managers by resolving each route's target listeners from its
-/// `spec.resolved_listeners`.
+/// Owns the canonical compiled-unit cache
+/// (`resource_key -> Arc<TlsRouteUnit>`) used by `ConfHandler<TLSRoute>`.
+/// Full updates rebuild every listener table; partial updates publish tables
+/// only for affected listeners, using each unit's controller-resolved listener
+/// keys.
 pub struct GlobalTlsRouteManagers {
     /// Canonical route store: resource_key -> compiled Arc<TlsRouteUnit>.
     ///

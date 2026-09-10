@@ -12,7 +12,7 @@ These are part of the Gateway API specification and are configured inline in `ru
 |---------------|--------------|-------|
 | `RequestHeaderModifier` | Set, add, or remove request headers before forwarding | Request |
 | `ResponseHeaderModifier` | Set, add, or remove response headers before returning | Response |
-| `RequestRedirect` | Return a 301/302 redirect instead of proxying | Request (terminating) |
+| `RequestRedirect` | Return a 301/302/303/307/308 redirect instead of proxying | Request (terminating) |
 | `URLRewrite` | Rewrite the request hostname and/or path before forwarding | Request |
 | `RequestMirror` | Copy a fraction of traffic to a second backend (fire-and-forget) | Request (non-blocking) |
 
@@ -95,6 +95,9 @@ Filters can be declared at two scopes:
 | BackendRef scope | `rules[].backendRefs[].filters` | Only requests routed to that backend |
 
 BackendRef-scoped filters are useful for canary deployments — for example, adding an `X-Canary` header only on the requests sent to the canary backend.
+
+A rule-level `RequestRedirect` is a terminal route action. Its rule must omit
+`backendRefs`; the Kubernetes CRD rejects a rule that combines both.
 
 ## Mutual exclusion: URLRewrite vs RequestRedirect
 

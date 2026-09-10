@@ -12,7 +12,7 @@
 |---------------|------|------|
 | `RequestHeaderModifier` | 在转发前设置、添加或删除请求头 | 请求阶段 |
 | `ResponseHeaderModifier` | 在返回前设置、添加或删除响应头 | 响应阶段 |
-| `RequestRedirect` | 返回 301/302 重定向，不代理到后端 | 请求阶段（终止） |
+| `RequestRedirect` | 返回 301/302/303/307/308 重定向，不代理到后端 | 请求阶段（终止） |
 | `URLRewrite` | 在转发前重写请求主机名和/或路径 | 请求阶段 |
 | `RequestMirror` | 将部分流量复制到第二个后端（fire-and-forget） | 请求阶段（非阻塞） |
 
@@ -95,6 +95,9 @@ spec:
 | BackendRef 级 | `rules[].backendRefs[].filters` | 仅路由到该后端的请求 |
 
 BackendRef 级过滤器适合金丝雀发布场景——例如只在发往金丝雀后端的请求上添加 `X-Canary` 请求头。
+
+规则级 `RequestRedirect` 是终止型路由动作，其规则必须省略 `backendRefs`；
+Kubernetes CRD 会拒绝同时包含两者的规则。
 
 ## 互斥限制：URLRewrite 与 RequestRedirect
 

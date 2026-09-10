@@ -56,9 +56,14 @@ Edgion is based on **Gateway API v1.5.0**, with the following support scope:
 | GRPCRoute | `gateway.networking.k8s.io/v1` | Core |
 | ReferenceGrant | `gateway.networking.k8s.io/v1` (v1beta1 compatible) | Core |
 | TCPRoute | `gateway.networking.k8s.io/v1alpha2` | Experimental |
-| TLSRoute | `gateway.networking.k8s.io/v1` | Standard (compatibility with the older alpha version depends on the install manifest) |
+| TLSRoute | `gateway.networking.k8s.io/v1` | Standard / v1 only |
 | UDPRoute | `gateway.networking.k8s.io/v1alpha2` | Experimental |
 | BackendTLSPolicy | `gateway.networking.k8s.io/v1` | Standard / v1 only |
+
+TLSRoute's supported scope is v1-only. The current Controller and FileSystem
+paths still retain a nonconforming v1alpha3 probe/watch/storage/status and
+normalization fallback, tracked for atomic removal in
+[Remove the TLSRoute v1alpha3 fallback](../../tasks/todo/remove-tlsroute-v1alpha3-fallback.md).
 
 Edgion extension resources (API group: `edgion.io`):
 

@@ -37,13 +37,14 @@ Each listener owns an independent route table, managed by `GlobalHttpRouteManage
 
 ```
 GlobalHttpRouteManagers
-├── route_cache: DashMap<String, HTTPRoute>                    # global route cache
+├── route_cache: DashMap<String, Arc<HTTPRoute>>               # global route cache
 └── by_listener: DashMap<ListenerKey, Arc<HttpPortRouteManager>>
     └── HttpPortRouteManager
         └── route_table: ArcSwap<DomainRouteRules>             # per-listener snapshot
 ```
 
-- `route_cache` holds the canonical copy of every HTTPRoute (`resource_key -> HTTPRoute`).
+- `route_cache` holds the canonical shared copy of every HTTPRoute
+  (`resource_key -> Arc<HTTPRoute>`).
 - `by_listener` keeps an `HttpPortRouteManager` per `ListenerKey`; the `ArcSwap<DomainRouteRules>` inside enables lock-free reads.
 - When the route table is updated, only affected listeners are rebuilt; other listeners are not disturbed.
 - `pg_request_filter` calls `load_route_table()` per request to obtain the current snapshot, and the reference stays stable for the entire request lifetime.
@@ -54,12 +55,12 @@ The global managers for other protocols (gRPC / TCP / TLS / UDP) follow the same
 
 The TCP, TLS, and UDP route docs all share the same listener-bucketing, rebuild, and ConfHandler mechanics. Canonical description (the per-protocol docs only call out their deltas):
 
-- **Layout**: `Global*RouteManagers { route_cache: DashMap<String, Arc<Route>>, by_listener: DashMap<ListenerKey, Arc<*PortRouteManager>> }`, with each per-listener manager holding `route_table: ArcSwap<*RouteTable>` for lock-free reads.
+- **Layout**: `Global*RouteManagers { route_cache: DashMap<String, Arc<*RouteUnit>>, by_listener: DashMap<ListenerKey, Arc<*PortRouteManager>> }`, with each per-listener manager holding `route_table: ArcSwap<*RouteTable>` for lock-free reads. The TCP, TLS, and UDP caches own compiled companion units rather than raw schema resources.
 - **Listener bucketing**: `bucket_routes_by_listener` distributes routes to listeners via `resolved_listeners` (Controller-precomputed). A route with no `resolved_listeners` logs a warning and is skipped.
 - **Rebuild strategy**: `rebuild_all_listener_managers` fully rebuilds every listener table and cleans up stale listeners with no routes; `rebuild_affected_listener_managers` rebuilds only affected listeners (incremental updates).
-- **ConfHandler**: `full_set` clears `route_cache`, replaces in full, and calls `rebuild_all_listener_managers`; `partial_update` computes affected listeners, updates `route_cache`, and calls `rebuild_affected_listener_managers`. The `ArcSwap` swap leaves in-flight connections/datagrams on the old snapshot; new ones pick up the latest.
+- **ConfHandler**: `full_set` clears `route_cache`, replaces it in full, and calls `rebuild_all_listener_managers`; `partial_update` computes affected listeners, updates `route_cache`, and calls `rebuild_affected_listener_managers`. TCP/TLS connections already matched against an old snapshot continue with their selected unit. New UDP sessions load the latest snapshot, while established UDP sessions remain pinned to their selected upstream until removal or expiry.
 
-Per-protocol deltas: **TCP** = first-match over a flat `Vec` (no hostname dimension); **TLS** = SNI-indexed `HashHost` + two proxies (terminate-to-TCP vs passthrough); **UDP** = connectionless per-datagram match, weighted backend selection.
+Per-protocol deltas: **TCP** = first-match over a flat `Vec` (no hostname dimension); **TLS** = SNI-indexed `HashHost` + two proxies (terminate-to-TCP vs passthrough); **UDP** = first-packet route match and weighted backend selection when creating a client session, followed by a pinned-session fast path.
 
 ## Domain match
 

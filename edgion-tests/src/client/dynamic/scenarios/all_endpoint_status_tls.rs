@@ -219,28 +219,6 @@ async fn cleanup_resources(ctx: &ScenarioCtx) -> Result<()> {
             Err(error) => failures.push(format!("delete {resource}: {error}")),
         }
     }
-    if std::env::var("EDGION_TEST_K8S_MODE")
-        .is_ok_and(|value| matches!(value.to_ascii_lowercase().as_str(), "true" | "1" | "yes"))
-    {
-        for name in ["aes-tls-dynamic-tls", "aes-tls-dynamic-mtls"] {
-            let mut request = ctx
-                .test_ctx
-                .http_client
-                .delete(format!(
-                    "{}/api/v1/namespaced/Deployment/edgion-test/{name}",
-                    ctx.controller_url.trim_end_matches('/')
-                ))
-                .timeout(Duration::from_secs(5));
-            if let Some(token) = token.as_ref() {
-                request = request.bearer_auth(token.as_str());
-            }
-            match request.send().await {
-                Ok(response) if response.status().is_success() || response.status().as_u16() == 404 => {}
-                Ok(response) => failures.push(format!("delete Deployment/{name}: HTTP {}", response.status())),
-                Err(error) => failures.push(format!("delete Deployment/{name}: {error}")),
-            }
-        }
-    }
     ensure!(failures.is_empty(), "cleanup failed: {}", failures.join("; "));
     Ok(())
 }
@@ -299,3 +277,31 @@ pub static SCENARIO: &Scenario = &Scenario {
     run,
     phases: PHASES,
 };
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn k8s_plaintext_transition_changes_only_the_service_endpoint_set() {
+        let transition: serde_yaml::Value = serde_yaml::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/k8s/conf/EdgionPlugins/AllEndpointStatus/DynamicTest/updates/plaintext_endpoint.yaml"
+        )))
+        .unwrap();
+        let mtls: serde_yaml::Value = serde_yaml::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/k8s/conf/EdgionPlugins/AllEndpointStatus/DynamicTest/bootstrap/02_Deployment_mtls.yaml"
+        )))
+        .unwrap();
+
+        assert_eq!(transition["kind"], "Service");
+        assert_eq!(transition["spec"]["selector"]["endpoint-set-plaintext"], "true");
+        assert_eq!(
+            mtls["spec"]["template"]["metadata"]["labels"]["endpoint-set-tls"],
+            "true"
+        );
+        assert_eq!(
+            mtls["spec"]["template"]["metadata"]["labels"]["endpoint-set-plaintext"],
+            "true"
+        );
+    }
+}

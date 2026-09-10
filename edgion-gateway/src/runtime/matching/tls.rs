@@ -1,7 +1,13 @@
 //! Gateway TLS Matcher
 //!
-//! Provides fallback TLS certificate lookup based on Gateway Listener configurations.
-//! This matcher is used when EdgionTls lookup fails.
+//! Provides TLS certificate and frontend client-auth decisions from Gateway
+//! Listener configurations. A matched frontend decision owns the connection;
+//! specifically, `FrontendMtlsOutcome::StrictReject` rejects before any
+//! EdgionTls overlay is considered. `StrictEffective` remains usable, and an
+//! EdgionTls serving-certificate overlay is accepted only when its resolved
+//! attachment identifies that exact winning Gateway listener. When the Gateway
+//! entry has no frontend decision, ordinary EdgionTls matching retains
+//! precedence and this matcher supplies the Gateway certificate fallback.
 //!
 //! ## Architecture
 //!

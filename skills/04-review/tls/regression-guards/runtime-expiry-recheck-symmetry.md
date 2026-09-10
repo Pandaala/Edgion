@@ -1,6 +1,6 @@
 ---
 name: runtime-expiry-recheck-symmetry
-description: Both cert-install paths (apply_edgion_tls_cert and apply_secret_to_ssl) now perform the same runtime expiry recheck before ssl_use_certificate. Reject re-reports framing this check as redundant.
+description: Both certificate-install paths recheck validity at handshake time; EdgionTls parses PEM and compares Asn1Time, while Gateway TLS compares cold-compiled Unix bounds before atomic identity installation.
 knowledge_type: regression-guards
 ---
 
@@ -11,18 +11,17 @@ knowledge_type: regression-guards
 
 ## Conclusion
 
-`edgion-gateway/src/tls/runtime/gateway/tls_pingora.rs` now performs an `Asn1Time::days_from_now(0)`
-recheck of `not_before` / `not_after` immediately after `X509::from_pem` in **both** cert-install
-entry points:
+`edgion-gateway/src/tls/runtime/gateway/tls_pingora.rs` rechecks `not_before` / `not_after`
+immediately before installing either serving identity, with source-specific mechanics:
 
-- `apply_edgion_tls_cert` — for `EdgionTls`-sourced certs (pre-existing).
-- `apply_secret_to_ssl` — for `GatewayTls` listener certs sourced from K8s `Secret`s (added by F-003).
-
-The check is gated by `#[cfg(feature = "boringssl")]`; the non-boring backend keeps the legacy
-install-without-recheck behavior (no `Asn1Time::days_from_now` shim wired up there).
+- `apply_edgion_tls_cert` parses the EdgionTls PEM and compares the certificate's
+  `Asn1Time` bounds with `Asn1Time::days_from_now(0)`.
+- `apply_compiled_certificate_to_ssl` compares a Gateway listener certificate's
+  cold-compiled Unix bounds with the current Unix time, then installs the immutable
+  compiled chain/key. It performs no per-handshake PEM parsing or ASN.1 construction.
 
 Re-reports of the form "expiry recheck is redundant because BoringSSL rejects expired certs during
-the handshake", "`apply_secret_to_ssl` does no recheck while `apply_edgion_tls_cert` does
+the handshake", "`apply_compiled_certificate_to_ssl` does no recheck while `apply_edgion_tls_cert` does
 (asymmetry)", or "the `cert_expired` audit signal only fires for EdgionTls" are **not accepted** —
 the asymmetry is resolved and the redundancy framing misses the point (see below).
 
@@ -42,40 +41,27 @@ correctness of the handshake outcome:
 
 ## What was wrong (before the fix)
 
-`apply_secret_to_ssl` parsed the PEM at the `X509::from_pem` site, then called
-`pingora_core::tls::ext::ssl_use_certificate` immediately, with no `Asn1Time` comparison in between.
-All expiry-related symbols (`Asn1Time`, `days_from_now`, `not_after`, `not_before`) appeared only
-inside the `apply_edgion_tls_cert` block, so a `GatewayTls` listener whose `Secret` cert expired
-between rebuilds would be installed onto the SSL slot and presented to clients on every subsequent
-handshake until the next resync, silently — no `cert_expired` audit entry.
+A Gateway listener certificate could previously be installed without a runtime validity recheck,
+so a certificate that expired between matcher rebuilds produced no server-side `cert_expired`
+audit entry. The current matcher compiles the certificate and its Unix validity bounds once; the
+handshake path checks those bounds before atomic installation.
 
-## Why the fix is minimal
+## Why the two implementations differ
 
-The fix is a textual mirror of the existing EdgionTls block:
-
-- Same `#[cfg(feature = "boringssl")]` gate.
-- Same `Asn1Time::days_from_now(0)` construction.
-- Same `not_after` / `not_before` comparisons against `now` (RFC 5280 inclusive bounds).
-  The new block uses `< now` / `> now` while the EdgionTls block still uses `< &now` /
-  `> &now`; semantically identical (`Asn1Time` and `&Asn1TimeRef` cross-compare via
-  `PartialOrd` either way). The `&` was dropped on the new block to silence
-  `clippy::op_ref` — the EdgionTls block's pre-existing lint is left alone (out of F-003 scope).
-- Same `err_log; return` failure mode (fail-closed — do not install an expired cert).
-- Same `cert_expiry_check_failed` log on `days_from_now` allocation failure.
-
-Extracting a shared helper (`install_cert_key_to_ssl`, F-010) is deliberately *not* part of F-003 —
-F-003 only restores audit symmetry. The helper extraction has since been deferred (see
-[cert-key-install-helper-deferred.md](../intentional-design/cert-key-install-helper-deferred.md)) and
-will collapse both blocks only when a re-evaluation trigger fires.
+The audit invariant is shared, while ownership differs. EdgionTls still carries source material
+that its install path parses and checks with `Asn1Time`. Gateway listener identities are validated
+and compiled on matcher rebuild; repeating PEM/key parsing or ASN.1 time construction in cert_cb
+would discard that cold-path ownership. Its install path therefore compares the stored Unix bounds
+and applies the compiled identity. Both paths set the same fail-closed audit codes before binding an
+invalid identity.
 
 ## Re-evaluation triggers
 
-- A third cert-install entry point is added — re-check that it also performs the recheck before
-  `ssl_use_certificate`. Audit symmetry is the rule, not a property of these two functions.
+- A third cert-install entry point is added — re-check that it performs the validity check before
+  binding an identity. Audit symmetry is the rule, not a property of these two functions.
 - F-010 lands and the helper is extracted — the two cfg-gated blocks should collapse into one; the
   audit-signal invariant must be preserved.
-- The `cfg(not(feature = "boringssl"))` rustls backend wires up an equivalent expiry primitive —
-  then both backends should perform the recheck on both paths (drop the `cfg` gate).
+- Compiled Gateway certificate ownership or its stored validity representation changes.
 
 ## Reference
 

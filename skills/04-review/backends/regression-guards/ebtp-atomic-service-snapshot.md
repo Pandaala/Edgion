@@ -102,7 +102,9 @@ Re-open this decision only if:
 
 ## Reference Cases
 
-- `tasks/todo/backend-traffic-policy-atomic-service-snapshot.md`
+- Historical implementation: `f5e4781e`; captured degrade-threshold correction:
+  `b179660c`. This fixed rule is the durable record after the implementation
+  task was archived.
 - `edgion-gateway/src/backends/policy/backend_traffic/store.rs`
 - `edgion-gateway/src/routes/http/proxy_http/pg_upstream_peer.rs`
 - Retry-budget window rotation is covered by

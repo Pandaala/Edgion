@@ -98,8 +98,8 @@ invalid `allowedSans.items.additionalProperties: false` declaration; the entire
 upstream Gateway API bundle remains byte-identical. The installed BackendTLSPolicy
 CRD serves v1 as storage and v1alpha3 as non-storage, while Edgion uses only v1.
 This is conditional BackendTLSPolicy verification, not evidence that the original
-complete CRD set installs. The unresolved defect remains in
-[the EdgionTls task](../../../../tasks/todo/edgion-tls-allowed-sans-structural-crd.md).
+complete CRD set installs. The unrelated EdgionTls `allowedSans` structural-schema
+defect remains unresolved, so full CRD installation must still be verified separately.
 
 The shared integration topology was reused for conformance with the `edgion`
 GatewayClass, all-namespace watches, and the same mTLS conf-sync configuration.
