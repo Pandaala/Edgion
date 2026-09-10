@@ -16,7 +16,9 @@ This is the single concise record of actual changes across the file-by-file audi
 
 ## Entries
 
-- B0276: response status accepted endpoints/Nil plus typed integer narrowing and non-Int failures with zero host calls; original three tests retained, three added. Independent LGTM; DSL 392/392, locked workspace check/Clippy and all guards passed. D0144 tracks obsolete response-snapshot knowledge separately. Pending automatic local commit; no production/integration changes or push.
+- B0277: scalar response-header UTF-8 byte limits and exact Bool/Nil result observations; original ten cases retained, two added. Independent LGTM; DSL 394/394, locked workspace check/Clippy and all guards passed. Historical worker completion acknowledgements resolved dispatch capacity without role reuse. Pending automatic local commit; no production/integration changes or push.
+
+- B0276: response status accepted endpoints/Nil plus typed integer narrowing and non-Int failures with zero host calls; original three tests retained, three added. Independent LGTM; DSL 392/392, locked workspace check/Clippy and all guards passed. D0144 tracks obsolete response-snapshot knowledge separately. Commit `5929d64e`; no production/integration changes or push.
 
 - B0275: exact unordered response header-name observations, fixed-prefix/exact-byte bounds and missing Content-Type Nil coverage; original three tests retained, three added. Independent LGTM; DSL 389/389, locked workspace check/Clippy and all guards passed. Commit `cfd8a249`; no production/integration changes or push.
 

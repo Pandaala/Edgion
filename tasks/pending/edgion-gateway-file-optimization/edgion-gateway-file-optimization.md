@@ -10,9 +10,9 @@
 | Priority | P1 |
 | Baseline commit | `d484e580` |
 | Scope | Every tracked file under `edgion-gateway/` |
-| Campaign status | in-progress at HEAD `cfd8a249`; B0276 passed all gates, automatic commit pending. |
-| Coverage | 549 current Gateway files: 256 changed, 181 examined-no-change, 14 deferred, 98 non-terminal; 3 historical rows are removed. External `78a25c3a` reopened six terminal files; four earlier `bea47373` reopens remain pending. Historical evidence is retained. |
-| Active batch | B0276 at commit gate. Automatic local commits, never push. |
+| Campaign status | in-progress at HEAD `5929d64e`: B0277 passed all gates, automatic commit pending. |
+| Coverage | 549 current Gateway files: 257 changed, 181 examined-no-change, 14 deferred, 97 non-terminal; 3 historical rows are removed. External `78a25c3a` reopened six terminal files; four earlier `bea47373` reopens remain pending. Historical evidence is retained. |
+| Active batch | B0277 at commit gate. Automatic local commits, never push. |
 | Analysis queue | None. D0127–D0144 track separate work; tasks removed by external `78a25c3a` are retired only in coordinator records. |
 | Integration freeze | 3,238 files. External `78a25c3a` refreshed 21, removed two relocated paths and added nine entries, each verified against old/new Git objects and worktree bytes/mode. Prior reconciliations remain intact. Full check passes; campaign made no integration-test edit. |
 

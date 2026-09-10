@@ -73,6 +73,52 @@ fn test_resp_header_nil() {
 }
 
 #[test]
+fn test_resp_header_exact_byte_limit() {
+    let mut session = MockPluginSession::new();
+    session
+        .expect_get_response_header()
+        .withf(|h| h == "X-B")
+        .times(1)
+        .returning(|_| Some("éñ".to_string()));
+    session
+        .expect_set_response_header()
+        .withf(|h, v| h == "X-Copy" && v == "éñ")
+        .times(1)
+        .returning(|_, _| Ok(()));
+    let result = run_with_limits(
+        r#"let v = resp.header("X-B")
+if v != nil { resp.set_header("X-Copy", v) }"#,
+        session,
+        VmLimits {
+            max_string_len: 4,
+            ..Default::default()
+        },
+    );
+    assert_eq!(result, good_next());
+}
+
+#[test]
+fn test_resp_header_over_byte_limit() {
+    let mut session = MockPluginSession::new();
+    session
+        .expect_get_response_header()
+        .withf(|h| h == "X-B")
+        .times(1)
+        .returning(|_| Some("éñ".to_string()));
+    session.expect_set_response_header().times(0);
+    let err = run_expect_runtime_err_with_limits(
+        r#"let v = resp.header("X-B")
+if v != nil { resp.set_header("X-Copy", v) }"#,
+        session,
+        VmLimits {
+            max_string_len: 3,
+            ..Default::default()
+        },
+    );
+    assert!(matches!(err, RuntimeError::StringTooLong { len: 4, limit: 3 }));
+}
+
+#[test]
 fn test_resp_has_header_true() {
     let mut session = MockPluginSession::new();
     session
@@ -97,9 +143,15 @@ fn test_resp_has_header_false() {
     session
         .expect_get_response_header()
         .withf(|h| h == "X-B")
+        .times(1)
         .returning(|_| None);
+    session
+        .expect_set_response_header()
+        .withf(|h, v| h == "X-R" && v == "no")
+        .times(1)
+        .returning(|_, _| Ok(()));
     let result = run(
-        "if resp.has_header(\"X-B\") { resp.set_header(\"X-R\", \"yes\") }",
+        "if resp.has_header(\"X-B\") == false { resp.set_header(\"X-R\", \"no\") }",
         session,
     );
     assert_eq!(result, good_next());
@@ -113,7 +165,16 @@ fn test_resp_set_header() {
         .withf(|h, v| h == "X-C" && v == "val")
         .times(1)
         .returning(|_, _| Ok(()));
-    let result = run(r#"resp.set_header("X-C", "val")"#, session);
+    session
+        .expect_set_response_header()
+        .withf(|h, v| h == "X-Result" && v == "nil")
+        .times(1)
+        .returning(|_, _| Ok(()));
+    let result = run(
+        r#"let result = resp.set_header("X-C", "val")
+if result == nil { resp.set_header("X-Result", "nil") }"#,
+        session,
+    );
     assert_eq!(result, good_next());
 }
 
@@ -125,7 +186,16 @@ fn test_resp_append_header() {
         .withf(|h, v| h == "Vary" && v == "Origin")
         .times(1)
         .returning(|_, _| Ok(()));
-    let result = run(r#"resp.append_header("Vary", "Origin")"#, session);
+    session
+        .expect_set_response_header()
+        .withf(|h, v| h == "X-Result" && v == "nil")
+        .times(1)
+        .returning(|_, _| Ok(()));
+    let result = run(
+        r#"let result = resp.append_header("Vary", "Origin")
+if result == nil { resp.set_header("X-Result", "nil") }"#,
+        session,
+    );
     assert_eq!(result, good_next());
 }
 
@@ -137,7 +207,16 @@ fn test_resp_remove_header() {
         .withf(|h| h == "X-Remove")
         .times(1)
         .returning(|_| Ok(()));
-    let result = run(r#"resp.remove_header("X-Remove")"#, session);
+    session
+        .expect_set_response_header()
+        .withf(|h, v| h == "X-Result" && v == "nil")
+        .times(1)
+        .returning(|_, _| Ok(()));
+    let result = run(
+        r#"let result = resp.remove_header("X-Remove")
+if result == nil { resp.set_header("X-Result", "nil") }"#,
+        session,
+    );
     assert_eq!(result, good_next());
 }
 

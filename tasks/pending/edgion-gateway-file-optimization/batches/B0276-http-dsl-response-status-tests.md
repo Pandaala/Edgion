@@ -22,4 +22,4 @@
 ## Verification and handoff
 
 - Full DSL 392/392 passed, including six target tests. Locked workspace check/Clippy, applied format/format check, agent docs, SSA, metrics, Pingora source, Gateway tracing boundary, English-only, diff and frozen-path guards passed. Existing Clippy warnings remain (982 Gateway lib-test warnings).
-- Ledger/changelog updated. Commit: pending automatic local commit; never push.
+- Ledger/changelog updated. Commit: `5929d64e`; no push.
