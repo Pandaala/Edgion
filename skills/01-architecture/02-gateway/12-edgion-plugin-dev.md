@@ -80,7 +80,7 @@ The most common pitfall is mixing the two paths:
 | Request phase | `RequestFilter` | Before forwarding to upstream | Auth, RateLimit, Rewrite, Mirror, direct reject |
 | Response header phase | `UpstreamResponseFilter` | When upstream response headers arrive | Modify response headers, fast decision based on header |
 | Async final response header phase | `UpstreamResponse` | After synchronous header filtering, retry arbitration, and normalization; before downstream header commit and body streaming | Await header decisions, modify headers, install bounded streaming companions |
-| Response body phase | `UpstreamResponseBodyFilter` | Each body chunk | Bandwidth limit, chunk inspection (**the trait signature deliberately omits `&mut PluginLog`**; the per-chunk path must allocate zero — see [05-plugin-system.md](05-plugin-system.md#-critical-constraint-no-pluginlog-in-body-phase-per-chunk-path-must-allocate-zero)) |
+| Response body phase | `UpstreamResponseBodyFilter` | Data callbacks and terminal completion without trailers | Bandwidth limit, chunk inspection (**the trait signature deliberately omits `&mut PluginLog`**; the per-chunk path must allocate zero — see [05-plugin-system.md](05-plugin-system.md#-critical-constraint-no-pluginlog-in-body-phase-per-chunk-path-must-allocate-zero)) |
 
 Both response-header chains skip interim 1xx (for example 100/103); 101 is a
 terminal upgrade and is not skipped as interim. `UpstreamResponse` runs from
@@ -89,6 +89,13 @@ complete-response or complete-response-body view. Keep its awaited header decisi
 separate from later body filters, bounded streaming processors, and trailer
 companions; the main upstream response always streams. The detailed ordering and
 source links are in [the execution model](05-plugin-system.md#four-phase-execution-model).
+
+`UpstreamResponseBodyFilter` also receives no-trailers terminal completion,
+including header-only responses with `body = None` and `end_of_stream = true`.
+It does not run for `TerminalBeforeTrailers`; do not treat that boundary as EOS.
+Use `UpstreamResponseTrailer` for trailer-aware finalization rather than inferring
+trailer presence from body callbacks. See [body and trailer completion](05-plugin-system.md#response-body-and-trailer-completion)
+for the event mapping and driver/trait sources.
 
 Default to `RequestFilter`.
 If you don't need upstream response info, don't push the logic into a later phase.
@@ -480,7 +487,7 @@ Keep the rules simple:
 - Data-plane plugin callbacks must not use `tracing::` macros. Use concise `PluginLog` results in
   phases that receive a log, or bounded metrics/per-request aggregation where appropriate.
 - Conditional skip (`cond_skip`) is written automatically by the conditional wrapper — do not invent your own format.
-- **No PluginLog in the `UpstreamResponseBodyFilter` phase**: the trait signature deliberately omits the log parameter; the body phase fires once per chunk, and per-chunk logging blows up. See the full constraint in [05-plugin-system.md](05-plugin-system.md#-critical-constraint-no-pluginlog-in-body-phase-per-chunk-path-must-allocate-zero).
+- **No PluginLog in the `UpstreamResponseBodyFilter` phase**: the trait signature deliberately omits the log parameter; the body phase covers data callbacks and no-trailers terminal completion, and per-callback logging blows up. See the full constraint in [05-plugin-system.md](05-plugin-system.md#-critical-constraint-no-pluginlog-in-body-phase-per-chunk-path-must-allocate-zero).
 
 ## `ErrTerminateRequest` — write the response first
 

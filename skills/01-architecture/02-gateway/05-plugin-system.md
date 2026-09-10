@@ -15,7 +15,7 @@ description: Plugin system architecture — 4-phase execution, PluginRuntime pre
 | RequestFilter | `RequestFilter` | Before forwarding to upstream | async | `run_request(&self, session, log) -> PluginRunningResult` | Can terminate the request or return a custom response |
 | UpstreamResponseFilter | `UpstreamResponseFilter` | After upstream response headers received | sync | `run_upstream_response_filter(&self, session, log) -> PluginRunningResult` | Can modify response headers, terminate |
 | UpstreamResponse | `UpstreamResponse` | Final response headers, before downstream header commit and body streaming | async | `run_upstream_response(&self, session, log) -> PluginRunningResult` | Await header decisions, modify headers, or install bounded streaming companions |
-| UpstreamResponseBodyFilter | `UpstreamResponseBodyFilter` | Each response body chunk | sync | `run_upstream_response_body_filter(&self, body, end_of_stream, session) -> Option<Duration>` | Returns Duration for bandwidth limiting; **note: the signature deliberately omits `&mut PluginLog`** — see the "no PluginLog in body phase" constraint below |
+| UpstreamResponseBodyFilter | `UpstreamResponseBodyFilter` | Data callbacks and terminal completion without trailers | sync | `run_upstream_response_body_filter(&self, body, end_of_stream, session) -> Option<Duration>` | Returns Duration for bandwidth limiting; **note: the signature deliberately omits `&mut PluginLog`** — see the "no PluginLog in body phase" constraint below |
 
 The response stages have distinct boundaries. The Gateway's
 `pg_upstream_response_filter` skips interim 1xx, arbitrates status retries,
@@ -38,7 +38,29 @@ Execution flow notes:
 - If any plugin returns `ErrTerminateRequest` or `ErrResponse`, the phase terminates immediately and subsequent plugins are skipped.
 - In the UpstreamResponseBodyFilter phase, when multiple plugins return Duration values, the maximum is used (the strictest limit takes effect).
 - After each phase completes, plugin logs are recorded into `ctx.stage_logs`, including plugin name, elapsed time, and conditional-skip information.
-- **Exception**: the UpstreamResponseBodyFilter phase **does not** write to `ctx.stage_logs` and does not push entries into `ctx.pending_edgion_plugins_logs`. This phase is invoked once per chunk; per-chunk logging would blow up log volume on long streams. See the "no PluginLog in body phase" constraint below.
+- **Exception**: the UpstreamResponseBodyFilter phase **does not** write to `ctx.stage_logs` and does not push entries into `ctx.pending_edgion_plugins_logs`. This phase runs on data callbacks and no-trailers terminal completion; per-callback logging would blow up log volume on long streams. See the "no PluginLog in body phase" constraint below.
+
+### Response body and trailer completion
+
+The typed driver keeps these events distinct:
+
+| Driver event | `UpstreamResponseBodyFilter` callback | Trailer lifecycle |
+|---|---|---|
+| `Data { end_of_stream }` | Receives the current immutable body after streaming processors, with the supplied EOS flag | If EOS is true, dispatch confirmed absence of trailers |
+| `TerminalWithoutTrailers` | Runs with `end_of_stream = true`; header-only completion can have `body = None` | Dispatch confirmed absence of trailers |
+| `TerminalBeforeTrailers` | Does not run; this boundary is not a no-trailers EOS | Streaming processors see the boundary; the real trailer callback follows |
+
+A filter must tolerate `body = None` and must not treat a missing chunk as missing
+completion. `Option<Duration>` delays forwarding or completion of the current task;
+it does not permit sleeping inside the synchronous callback. Trailer-aware
+finalization belongs to request-owned `UpstreamResponseTrailer` companions:
+`Some(trailers)` is the real trailer map, while `None` confirms normal completion
+without trailers. Neither lifecycle supplies a complete upstream body or permits
+full-response aggregation.
+
+Sources: [typed body driver](../../../edgion-gateway/src/routes/http/proxy_http/pg_upstream_response_body_filter.rs),
+[read-only body trait](../../../edgion-gateway/src/plugins/runtime/traits/upstream_response_body_filter.rs),
+and [trailer companion trait](../../../edgion-gateway/src/plugins/runtime/traits/upstream_response_trailer.rs).
 
 ## PluginRuntime
 
@@ -179,7 +201,7 @@ PluginStore::full_set() / partial_update()  # plugins/http/conf_handler_impl.rs
 
 ### ⚠️ Critical constraint: no PluginLog in body phase (per-chunk path must allocate zero)
 
-**Background**: the trait signature of `UpstreamResponseBodyFilter::run_upstream_response_body_filter` **deliberately omits** the `&mut PluginLog` parameter. The body phase fires once per chunk — for a long stream (gRPC server-streaming, large file downloads), this can mean hundreds to thousands of invocations per request. Any per-chunk log allocation accumulates at O(chunks × plugins) and has previously caused two bugs:
+**Background**: the trait signature of `UpstreamResponseBodyFilter::run_upstream_response_body_filter` **deliberately omits** the `&mut PluginLog` parameter. The body phase covers data callbacks and terminal completion without trailers — for a long stream (gRPC server-streaming, large file downloads), this can mean hundreds to thousands of invocations per request. Any per-chunk log allocation accumulates at O(chunks × plugins) and has previously caused two bugs:
 
 - `ExtensionRefFilter` called `start_edgion_plugins_log` in the body phase, pushing one entry per chunk into `ctx.pending_edgion_plugins_logs` without a stage drain — long streams leaked memory continuously (fixed, issue g2-001).
 - `run_upstream_response_body_plugins` allocated a `PluginLog::new(filter.name())` for every filter on every chunk and immediately dropped it — pure wasted allocation, plus silent loss of `cond_skip` and other diagnostics (fixed, issue g2-004).
