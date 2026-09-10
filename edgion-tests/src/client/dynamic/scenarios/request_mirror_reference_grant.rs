@@ -14,6 +14,7 @@ const NS: &str = "edgion-default";
 const TARGET_NS: &str = "edgion-backend";
 const HOST: &str = "mirror-grant-dynamic.example.com";
 const BODY: &str = "mirror authorization body";
+const CASES: &[&str] = &["native", "backend", "plugin", "backend-buffered", "backend-chunked"];
 
 fn resource(kind: &str, ns: &str, spec: Value) -> Value {
     let api = match kind {
@@ -66,18 +67,20 @@ async fn setup(ctx: &TestContext) -> Result<()> {
     buffer["metadata"]["name"] = json!(BUFFER_NAME);
     apply(ctx, buffer).await?;
     let mut rules = Vec::new();
-    for case in ["native", "backend", "plugin"] {
+    for &case in CASES {
         let filter = if case == "plugin" {
             json!({"type":"ExtensionRef","extensionRef":{"group":"edgion.io","kind":"EdgionPlugins","name":NAME}})
         } else {
             json!({"type":"RequestMirror","requestMirror":mirror})
         };
         let mut rule = json!({"matches":[{"headers":[{"name":"x-mirror-grant-case","value":case}]}],"backendRefs":[{"name":NAME,"port":30001}]});
-        if case == "backend" {
+        if case.starts_with("backend") {
             rule["backendRefs"][0]["filters"] = json!([filter]);
-            // Backend filters run after the streaming body policy freezes. Use
-            // the existing committed snapshot path to test positive POST delivery.
-            rule["filters"] = json!([{"type":"ExtensionRef","extensionRef":{"group":"edgion.io","kind":"EdgionPlugins","name":BUFFER_NAME}}]);
+            if case == "backend-buffered" {
+                // Keep the committed snapshot as a positive control alongside
+                // native fixed-length and chunked requests without capture.
+                rule["filters"] = json!([{"type":"ExtensionRef","extensionRef":{"group":"edgion.io","kind":"EdgionPlugins","name":BUFFER_NAME}}]);
+            }
         } else {
             rule["filters"] = json!([filter]);
         }
@@ -168,17 +171,23 @@ fn k8s_mode() -> bool {
 
 async fn traffic(ctx: &TestContext, allowed: bool, case: &str, invalid: bool) -> Result<()> {
     let trace = format!("mirror-grant-{case}-{}", uuid::Uuid::new_v4());
-    let response = ctx
+    let request = ctx
         .http_client
         .post(format!("{}/mirror/capture", ctx.http_url()))
         .header("host", HOST)
         .header("x-mirror-grant-case", case)
         .header("x-trace-id", &trace)
         .header("access_log", "test_store")
-        .body(BODY)
-        .timeout(Duration::from_secs(3))
-        .send()
-        .await?;
+        .timeout(Duration::from_secs(3));
+    let request = if case == "backend-chunked" {
+        let chunks = futures::stream::iter(["mirror ", "authorization ", "body"].map(Ok::<_, std::io::Error>));
+        request
+            .version(reqwest::Version::HTTP_11)
+            .body(reqwest::Body::wrap_stream(chunks))
+    } else {
+        request.body(BODY)
+    };
+    let response = request.send().await?;
     if invalid {
         ensure!(
             response.status() == 500,
@@ -310,10 +319,17 @@ async fn check(ctx: &TestContext, expected: Expected) -> Result<()> {
             "{kind}: Gateway generation has not converged"
         );
         let refs = if kind == "HTTPRoute" {
-            vec![
-                &synced["spec"]["rules"][0]["filters"][0]["requestMirror"]["backendRef"],
-                &synced["spec"]["rules"][1]["backendRefs"][0]["filters"][0]["requestMirror"]["backendRef"],
-            ]
+            CASES
+                .iter()
+                .enumerate()
+                .filter_map(|(index, case)| match *case {
+                    "plugin" => None,
+                    "native" => Some(&synced["spec"]["rules"][index]["filters"][0]["requestMirror"]["backendRef"]),
+                    _ => Some(
+                        &synced["spec"]["rules"][index]["backendRefs"][0]["filters"][0]["requestMirror"]["backendRef"],
+                    ),
+                })
+                .collect()
         } else {
             vec![&synced["spec"]["requestPlugins"][0]["config"]["backendRef"]]
         };
@@ -328,7 +344,7 @@ async fn check(ctx: &TestContext, expected: Expected) -> Result<()> {
             );
         }
     }
-    for case in ["native", "backend", "plugin"] {
+    for &case in CASES {
         let allowed = matches!(expected, Expected::Allowed | Expected::InvalidAllowed)
             || (case != "plugin" && matches!(expected, Expected::NativeAllowed));
         traffic(

@@ -354,6 +354,13 @@ pub struct PingoraSessionAdapter<'a> {
     /// Prevent repeated header/body failures from emitting duplicate transport
     /// diagnostics during one adapter-owned plugin stage.
     delivery_failure_recorded: bool,
+    /// Adapter-local permission for a read-only mirror tee during the first
+    /// backend request dispatch, before Pingora starts delivering body events.
+    backend_mirror_allowed: bool,
+}
+
+fn backend_mirror_allowed_for_attempt(attempt: Option<usize>) -> bool {
+    attempt == Some(1)
 }
 
 /// Build a fresh local-reply `ResponseHeader` + body and stash them in `ctx`
@@ -415,7 +422,20 @@ impl<'a> PingoraSessionAdapter<'a> {
             response_processor_slot: None,
             grpc_response_terminated: false,
             delivery_failure_recorded: false,
+            backend_mirror_allowed: false,
         }
+    }
+
+    /// Only the backend request dispatcher may use this constructor. Its first
+    /// canonical attempt runs before the body pump. Mirror observation changes
+    /// neither framing nor replay policy; all other body capabilities remain
+    /// subject to the request-stage freeze. Dropping this adapter revokes the
+    /// permission, including when plugin execution is cancelled.
+    pub(super) fn for_backend_request(inner: &'a mut Session, ctx: &'a mut EdgionHttpContext) -> Self {
+        let allowed = backend_mirror_allowed_for_attempt(inner.request_attempt_id().map(|id| id.get()));
+        let mut adapter = Self::new(inner, ctx);
+        adapter.backend_mirror_allowed = allowed;
+        adapter
     }
 
     #[inline]
@@ -431,6 +451,7 @@ impl<'a> PingoraSessionAdapter<'a> {
             response_processor_slot: None,
             grpc_response_terminated: false,
             delivery_failure_recorded: false,
+            backend_mirror_allowed: false,
         }
     }
 
@@ -1864,7 +1885,7 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
     }
 
     fn set_mirror_state(&mut self, state: MirrorState) -> bool {
-        if !self.ctx.request_info.in_request_body_stage {
+        if !self.ctx.request_info.in_request_body_stage && !self.backend_mirror_allowed {
             return false;
         }
         self.ctx.set_mirror_state(state);
@@ -3138,6 +3159,73 @@ mod record_outcome_tests {
 
         assert!(!adapter.set_mirror_state(MirrorState::Abandoned));
         assert!(!ctx.has_mirror_state());
+    }
+
+    #[tokio::test]
+    async fn backend_mirror_permission_is_first_attempt_only_and_adapter_local() {
+        let mut session = test_session().await;
+        let mut ctx = EdgionHttpContext::default();
+        // A session outside Pingora's attempt loop cannot grant permission.
+        assert!(!PingoraSessionAdapter::for_backend_request(&mut session, &mut ctx)
+            .set_mirror_state(MirrorState::Abandoned));
+
+        // Pingora owns the attempt ID constructor. Exercise the same decision
+        // with all boundary values; real first-attempt wiring is covered by
+        // the RequestMirrorReferenceGrant integration scenario.
+        for (attempt, allowed) in [(None, false), (Some(0), false), (Some(1), true), (Some(2), false)] {
+            let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
+            adapter.backend_mirror_allowed = backend_mirror_allowed_for_attempt(attempt);
+            assert_eq!(adapter.set_mirror_state(MirrorState::Abandoned), allowed);
+            assert_eq!(adapter.ctx.has_mirror_state(), allowed);
+            adapter.ctx.retire_request_mirror();
+        }
+
+        let mut ordinary = PingoraSessionAdapter::new(&mut session, &mut ctx);
+        assert!(!ordinary.set_mirror_state(MirrorState::Abandoned));
+    }
+
+    #[tokio::test]
+    async fn backend_mirror_permission_keeps_other_body_capabilities_frozen() {
+        let mut session = test_session_with_body(b"body").await;
+        let mut ctx = EdgionHttpContext::default();
+        ctx.request_info.body_declared = Some(true);
+        let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
+        adapter.backend_mirror_allowed = backend_mirror_allowed_for_attempt(Some(1));
+
+        assert!(matches!(
+            adapter.ensure_request_body(None).await,
+            Err(BodyReadError::NotBuffered)
+        ));
+        assert!(matches!(
+            adapter.replace_request_body_spans(0, &[]).await,
+            Err(BodyReadError::NotBuffered)
+        ));
+        assert!(!adapter.install_request_body_stream_handler(Box::new(NoopStreamHandler)));
+        assert!(!adapter.enable_waf_request_body_streaming(&Arc::new(()), 1024));
+        adapter.replace_plugin_entry_identity(crate::ctx::CurrentPluginEntryIdentity::new("AiGuard", Some("entry")));
+        assert!(!adapter.install_request_body_observer(
+            Box::new(|| panic!("a frozen observer factory must not run")),
+            crate::request_body::observer::ObserverLimits::default(),
+        ));
+        assert!(!adapter.ctx.request_body.has_cached_body());
+        assert!(!adapter.ctx.has_request_body_plugins());
+
+        let (body_tx, _body_rx) = tokio::sync::mpsc::channel(1);
+        let (cancellation, cancel_rx) = crate::ctx::MirrorCancellation::new();
+        assert!(adapter.set_mirror_state(MirrorState::Streaming {
+            body_tx,
+            writer_handle: tokio::spawn(async {}),
+            cancellation,
+            channel_full_timeout_ms: 0,
+            body_budget: crate::plugins::http::request_mirror::MirrorBodyBudget::for_test(1024),
+        }));
+        assert!(!adapter.ctx.request_info.in_request_body_stage);
+        assert!(
+            !adapter.ctx.request_body_stream_active(),
+            "a mirror must not disable replay"
+        );
+        adapter.ctx.retire_request_mirror();
+        assert!(cancel_rx.await.is_ok());
     }
 
     #[tokio::test]

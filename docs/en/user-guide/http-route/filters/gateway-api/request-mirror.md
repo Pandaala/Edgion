@@ -4,6 +4,19 @@
 
 `RequestMirror` copies a fraction of incoming requests to a second backend while the original request is still served normally by the route's primary backend. It is a standard Gateway API filter and runs in the request stage. Mirroring is fire-and-forget: the mirrored response is discarded and never affects the client, so it is safe for shadow testing a new service version against live traffic.
 
+## Request bodies and backend filters
+
+You can configure the filter under `rules[].filters` or
+`rules[].backendRefs[].filters`. A backend-level mirror runs only for the selected
+backend. Both locations support request bodies without requiring
+`RequestBodyBuffer`: bytes are copied as the primary request streams upstream,
+within the mirror's queue and byte budgets. If an earlier plugin already buffered
+or modified the request body, the mirror reads that committed body snapshot.
+
+Mirroring alone does not disable primary-request retries or change primary body
+framing. A completed or abandoned mirror is not restarted for a retry. Mirror
+failure continues to leave the primary request running.
+
 ## Cross-namespace authorization
 
 Mirror targets support only core Services (`group: ""`, `kind: Service`).

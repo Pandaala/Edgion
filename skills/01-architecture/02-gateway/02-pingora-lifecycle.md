@@ -77,7 +77,9 @@ The most complex phase, responsible for request parsing and route matching:
    request-plugin chain completes, the context closes request-body capability
    installation. BackendRef-stage plugins may read an already captured
    snapshot, but cannot first install full-body capture, mutation, an observer,
-   a streamed handler, or a mirror tee. Pingora then freezes the request-scoped
+   or a streamed handler. The first HTTP backend request dispatch has a separate
+   adapter-local permission to install a read-only mirror tee before the body
+   pump starts; it changes neither framing nor replay policy. Pingora freezes the request-scoped
    `RequestRelayPlan` before the upstream attempt loop. Ordinary requests keep
    replayable framing; any installed per-chunk handler selects the streamed,
    non-replayable plan. Retry decisions use Pingora's live
@@ -98,7 +100,9 @@ Selects the upstream backend and builds an HttpPeer:
    - `InternalJump`: looks up the BackendRef by name.
    - Regular path: `RouteRules::select_backend()` performs weighted round-robin BackendRef selection, then `get_peer()` selects a specific endpoint via LB.
 4. **BackendTLSPolicy lookup**: look up the TLS policy by Service namespace.
-5. **Backend-level plugin execution**: `backend_ref.plugin_runtime.run_request_plugins()`.
+5. **Backend-level plugin execution**: `backend_ref.plugin_runtime.run_backend_request_plugins()`.
+   The adapter permits mirror installation only for canonical Pingora attempt 1.
+   That permission expires with the adapter; all other frozen body gates remain closed.
 6. **Peer configuration**:
    - Timeouts: route-level `backend_request_timeout` overrides global `request_timeout`; uniformly sets connection / read / write timeout.
    - Idle timeout: uses the global `idle_timeout`.

@@ -1858,6 +1858,17 @@ impl PluginRuntime {
 
     /// Run request stage filters (async)
     pub async fn run_request_plugins(&self, s: &mut Session, ctx: &mut EdgionHttpContext) {
+        self.run_request_plugins_impl(s, ctx, false).await;
+    }
+
+    /// Dispatch the selected HTTP backend's filters before its body pump starts.
+    /// Only a first-attempt read-only mirror tee may be installed after the
+    /// request-body policy freeze; capture and mutation remain unavailable.
+    pub(crate) async fn run_backend_request_plugins(&self, s: &mut Session, ctx: &mut EdgionHttpContext) {
+        self.run_request_plugins_impl(s, ctx, true).await;
+    }
+
+    async fn run_request_plugins_impl(&self, s: &mut Session, ctx: &mut EdgionHttpContext, backend_request: bool) {
         if self.request_plugins.is_empty() {
             return;
         }
@@ -1866,7 +1877,11 @@ impl PluginRuntime {
         // `pg_request_filter` and not mutated during plugin execution.
         let is_grpc_request = ctx.request_info.is_grpc_request || ctx.is_grpc_route_matched;
         let mut filter_logs = Vec::new();
-        let mut session_adapter = PingoraSessionAdapter::new(s, ctx);
+        let mut session_adapter = if backend_request {
+            PingoraSessionAdapter::for_backend_request(s, ctx)
+        } else {
+            PingoraSessionAdapter::new(s, ctx)
+        };
 
         for filter in &self.request_plugins {
             let previous_identity = session_adapter.replace_plugin_entry_identity(

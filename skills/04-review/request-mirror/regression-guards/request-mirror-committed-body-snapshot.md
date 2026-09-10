@@ -1,13 +1,13 @@
 ---
 name: request-mirror-committed-body-snapshot
-description: Use when reviewing RequestMirror after an earlier request plugin mutates the body; covers immutable snapshots, cursor isolation, framing, and discarded mirror responses.
+description: Use when reviewing RequestMirror body admission at rule or backend scope, committed snapshots, cursor isolation, framing, and discarded mirror responses.
 status: fixed
 finding_id: BODY-014
 closed: 2026-07-27
 knowledge_type: regression-guards
 ---
 
-# BODY-014 — RequestMirror Uses the Committed Body Snapshot — FIXED
+# RequestMirror body admission and committed snapshots
 
 ## Conclusion
 
@@ -18,6 +18,11 @@ and isolates just the snapshot's memory segments into owned send data; disk
 segments remain streamed without whole-body materialization. The mirror never
 consumes Pingora's upstream replay cursor. With no body
 view, RequestMirror retains its original streaming tee behavior.
+
+Native HTTPRoute `backendRefs[].filters` mirrors may install that read-only tee
+during the first backend request dispatch. This does not reopen request-body
+capture or mutation and does not change the primary relay plan. The permission
+is local to `PingoraSessionAdapter`, never a persistent flag on `RequestInfo`.
 
 The mirror response is semantically irrelevant and is dropped after response
 headers arrive; it is never aggregated.
@@ -53,6 +58,35 @@ The tee additionally enforces per-mirror and process byte admission. Its owned
 chunks cannot pin arbitrarily large backing allocations through small slices.
 See [mirror resource budgets](mirror-resource-budgets.md) for ownership and limits.
 
+The backend-stage admission correction addresses
+`backend-request-mirror-streaming-body-stage`. Previously the backend filter ran
+after `RequestInfo.in_request_body_stage` became false, so without a committed
+snapshot its `set_mirror_state` call failed with `mirror body stage frozen`.
+Explicit prebuffering avoided the error but did not fix streaming admission.
+
+`pg_upstream_peer::select_http_backend` now uses the backend-specific request
+dispatcher. Its adapter grants `backend_mirror_allowed` only when Pingora's
+canonical `request_attempt_id()` is 1. In the locked fork revision `518f727`,
+`HttpProxy::proxy_to_upstream` calls `upstream_peer` before connecting and before
+any H1/H2 body relay callback. Thus the selected backend's first dispatch sees
+the entire upcoming body sequence. All other adapter construction sites deny
+this additional permission, and cancellation drops it with the adapter.
+
+The `RequestBodyPluginState` replay predicate only includes handler and WAF
+sources. Mirror observation does not alter framing, the frozen relay source,
+or replayability. Do not move the freeze or preselect a backend merely to
+install a mirror. Capture, mutation, observer/handler installation and WAF
+streaming still require the original request stage. Backend ExtensionRef
+request entries use the same adapter and inherit only this mirror permission.
+
+The selected backend is retained across ordinary retries, so its request chain
+does not rerun. A mirror that received `Complete` or `Abandoned` retires before
+replayed body callbacks; it is not restarted. A connection failure before body
+delivery may leave the original mirror waiting for a later successful attempt.
+Existing cancellation and budget rules still govern incomplete work. This
+correction does not expand the single active streaming-mirror slot into support
+for multiple simultaneous tees.
+
 **5. Mirror responses have zero aggregation budget**
 
 The mirrored response never affects the client or gateway policy. Dropping it
@@ -76,6 +110,48 @@ Re-open this decision only if:
 - RequestMirror gains response-dependent behavior.
 - Request-body versions can change after the request plugin chain.
 - The mirror transport stops accepting an independently owned immutable body.
+- Backend request dispatch moves after body delivery, starts running again on
+  retries, or Pingora changes its attempt identity or relay-callback ordering.
+
+## Verification of backend admission
+
+Verified on 2026-09-10:
+
+- `cargo test -p edgion-gateway --lib mirror`: 44 passed, including first-attempt
+  admission, adapter-local permission, frozen non-mirror capabilities, and
+  terminal retirement under replayed body events.
+- The same freshly built unit executable, filtered to
+  `plugins::runtime::session_adapter::record_outcome_tests`: 61 passed.
+- `cargo fmt --all`, workspace check/clippy with `--all-targets`, agent-doc,
+  SSA-force, metrics inventory, Pingora source policy and gateway no-tracing
+  checks passed. Clippy reported existing warnings. Agent-doc validation first
+  found an existing missing UDP documentation task; restoring that pending
+  follow-up repaired the reference without changing UDP runtime behavior.
+- Canonical `prepare.sh` completed. The local runner with
+  `--no-prepare -r EdgionPlugins -i RequestMirror --keep-alive --skip-residue-check`
+  passed; the same live topology then passed `test_client -g --dynamic-scenario
+  RequestMirrorReferenceGrant`. Fixed-length and chunked unbuffered backend
+  POSTs, the prebuffered control, primary/mirror body equality, and grant
+  creation/revocation delivery boundaries were exercised.
+- Residue validation ran after the dynamic scenario with `cache_residue --mode
+  fail`: passed (`wipe-all: total=39 errors=0`). The runner's earlier residue
+  step was deliberately deferred until both suites finished. Test services
+  were stopped by the canonical cleanup script.
+- Independent read-only review returned LGTM for code, knowledge, and the
+  restored documentation follow-up.
+
+Run evidence: `tmp/integration_testing/testing_20260910_205312/report.log`;
+`/tmp/edgion-backend-mirror-{unit,adapter,check,clippy,dynamic,residue}.log`
+(ephemeral). The standalone dynamic invocation initially lacked the runner's
+capability environment, then lost the tool-owned service process tree between
+commands; the successful run kept startup, dynamic traffic, residue validation
+and cleanup in one tool session.
+
+The retry regression drives body events directly; the dynamic scenario does
+not induce a network retry. Retry dispatch ordering was also checked against
+the locked Pingora source. No fresh Kubernetes or HTTP/2 wire run, or full
+workspace test run, is claimed. Historical BODY-014 and D0066 checks below are
+separate evidence.
 
 ## Reference Cases
 
@@ -94,3 +170,5 @@ Re-open this decision only if:
 - `D0066` / `bound-request-mirror-concurrency-and-buffering` — replaces full
   snapshot materialization with budgeted snapshot streaming. Verification is
   recorded in the resource-budget rule, not inferred from BODY-014's history.
+- `backend-request-mirror-streaming-body-stage` — fixed and verified on
+  2026-09-10; uses a first-attempt adapter permission for a read-only tee.

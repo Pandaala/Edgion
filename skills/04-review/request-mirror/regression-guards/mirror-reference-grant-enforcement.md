@@ -137,9 +137,12 @@ prove both backend listeners and the receipt store. A denial diagnostic proves
 that no asynchronous mirror writer was created; primary completion alone would
 not prove non-delivery. This is local runtime evidence, not Kubernetes admission
 or delegated-traffic integration coverage. Delegation is covered by unit tests.
-The backend-filter POST positive control uses an explicit rule-level
-RequestBodyBuffer and the existing committed-snapshot mirror path. Unbuffered
-backend mirror admission remains a separate unresolved issue.
+The historical backend-filter POST positive control used an explicit rule-level
+RequestBodyBuffer and the committed-snapshot mirror path; those runs did not
+verify unbuffered backend admission. The scenario now retains that control and
+adds unbuffered fixed-length and chunked backend POSTs. Their separate admission
+correction and current verification are recorded in
+[body admission and committed snapshots](request-mirror-committed-body-snapshot.md).
 Mixed invalid DSL phases check HTTP 500 without primary or mirror sends, then
 valid-but-denied recovery and renewed authorization. DSL/WAF delta/full combinations
 are covered by plugin-store unit tests.

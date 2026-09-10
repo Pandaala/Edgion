@@ -210,6 +210,38 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn terminal_mirror_does_not_receive_replayed_body_events() {
+        for terminal in [RequestBodyEvent::Complete, RequestBodyEvent::Abandoned] {
+            let mut ctx = EdgionHttpContext::default();
+            let (body_tx, mut body_rx) = mpsc::channel(4);
+            let (cancellation, cancel_rx) = MirrorCancellation::new();
+            ctx.set_mirror_state(MirrorState::Streaming {
+                body_tx,
+                writer_handle: tokio::spawn(async {}),
+                cancellation,
+                channel_full_timeout_ms: 0,
+                body_budget: crate::plugins::http::request_mirror::MirrorBodyBudget::for_test(1024),
+            });
+            let mut body = Some(Bytes::from_static(b"original body"));
+            mirror_body_tee(&mut body, RequestBodyEvent::Data, &mut ctx).await;
+            assert_eq!(body.as_deref(), Some(b"original body".as_slice()));
+            assert_eq!(body_rx.recv().await.unwrap().unwrap(), "original body");
+
+            mirror_body_tee(&mut None, terminal, &mut ctx).await;
+            assert!(!ctx.has_mirror_state());
+            assert!(!ctx.request_body_stream_active());
+            assert_eq!(cancel_rx.await.is_ok(), terminal == RequestBodyEvent::Abandoned);
+
+            // Pingora can replay the request into these same hooks on another
+            // attempt. A retired mirror must neither duplicate nor concatenate it.
+            mirror_body_tee(&mut body, RequestBodyEvent::Data, &mut ctx).await;
+            mirror_body_tee(&mut None, RequestBodyEvent::Complete, &mut ctx).await;
+            assert!(body_rx.recv().await.is_none());
+            assert!(!ctx.has_request_body_plugins());
+        }
+    }
+
+    #[tokio::test]
     async fn complete_body_closes_mirror_without_cancelling() {
         let (state, cancel_rx, _reason) = streaming_state();
         let mut ctx = EdgionHttpContext::default();

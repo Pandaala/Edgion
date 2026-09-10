@@ -272,9 +272,10 @@ pub async fn request_filter(
     // Body policy is request-scoped. Global, Gateway, and route request
     // plugins have now had their one opportunity to capture, mutate, observe,
     // or install streamed processing. BackendRef request plugins run later
-    // during peer selection, but may only consume an already-cached snapshot;
-    // the adapter refuses every operation that could establish or change the
-    // body relay policy after this boundary.
+    // during peer selection and may consume an already-cached snapshot. Their
+    // first-attempt dispatcher also permits a read-only mirror tee before the
+    // body pump starts; it changes neither framing nor replay policy. Capture,
+    // mutation and other body capability installation remain closed here.
     ctx.request_info.in_request_body_stage = false;
 
     Ok(false)

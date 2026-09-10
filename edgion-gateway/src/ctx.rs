@@ -1313,7 +1313,9 @@ pub struct RequestInfo {
     /// backend selection and Pingora's retry loop. This is the request-scoped
     /// body-policy freeze: backendRef plugins may read an already-cached
     /// snapshot, but cannot start capture, mutate it, install observers or
-    /// streamed handlers, or enable WAF streaming.
+    /// streamed handlers, or enable WAF streaming. The first backend request
+    /// dispatcher separately permits a read-only mirror tee before body delivery;
+    /// its adapter-local permission does not reopen this stage.
     ///
     /// Defaults to `false` (the safe/refuse direction): a `RequestInfo` built
     /// without going through the real request-entry snapshot (a bare
