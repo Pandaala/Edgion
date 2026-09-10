@@ -11,6 +11,13 @@ knowledge_type: regression-guards
 
 ## Conclusion
 
+This page describes the adapter's admission contract, not a supported full-response
+body API. `DslConfig::compile_and_validate` rejects `BuiltinId::RespBody` in both
+source and bytecode configurations. The DSL reproductions below are historical;
+the main upstream response remains streaming under `AGENTS.md`'s HTTP body
+invariant 2. The adapter's `Buffer` disposition currently returns
+`BodyReadError::Unimplemented`; it does not enable response buffering.
+
 `request_admission` and `response_admission`
 (`edgion-gateway/src/plugins/runtime/session_adapter.rs`) never let a
 plugin-mutable fact steer toward a *silent* disposition. `PassThrough` is the
@@ -24,10 +31,12 @@ silent answer, so **both** of its inputs are pre-agreed by the caller:
 | input | live (mutable) fact | pre-plugin snapshot | mutated by |
 |---|---|---|---|
 | `is_head` | `req_header().method` | `RequestInfo::method_is_head` | `set_upstream_method` |
-| `bodyless_agreed` | bound response header status | `ctx.request_info.status` | `set_response_status` |
+| `bodyless_agreed` | bound response header status | `ctx.pre_plugin_response_status` | `set_response_status` |
 
-Each is the AND of the two columns; any disagreement falls through to `Buffer`,
-which can only fail loudly. Steps 1–3 deliberately keep reading the live status
+Each is the AND of the two columns. After the refusal checks, `PassThrough`
+requires either the HEAD pair or the bodyless-status pair to agree; disagreement
+in one pair alone does not defeat agreement in the other. If neither pair agrees,
+the result is `Buffer`, which fails loudly. Steps 1–3 deliberately keep reading the live status
 alone, because they all steer toward `Refuse` — the loud direction, which a
 mutated fact may safely widen.
 
@@ -68,18 +77,26 @@ itself a bypass (the upstream genuinely receives `HEAD` and returns no body).
 The load-bearing cases are the response-stage rewrite to `HEAD` and the
 rewrite away from `HEAD`.
 
-The **status** input has the identical shape and is the easiest of the three to
-trigger — one script, two lines. `set_response_status`
+The **status** input has the same two-direction disagreement shape. `set_response_status`
 (`session_adapter.rs`) writes straight into the bound response header, and is
 reachable from DSL's `resp.set_status` (`plugins/http/dsl/lang/builtins.rs`)
 and from `response_rewrite`'s `status_code`
 (`plugins/http/response_rewrite/plugin.rs`), both at the
-`upstreamResponseFilterPlugins` stage. `resp.set_status(204)` followed by
+`upstreamResponseFilterPlugins` stage. In the historical reproduction, before
+configuration validation rejected `resp.body`, `resp.set_status(204)` followed by
 `resp.body` — or a `response_rewrite {status_code: 204}` entry ordered ahead of
-a DSL `resp.body` entry in the same array — would hand the consumer
+a DSL `resp.body` entry in the same array — could hand the consumer
 `Ok(Bytes::new())` for a response whose body is real and already on its way to
-the client. The upstream's own status is available as `ctx.request_info.status`,
-stamped in `upstream_response_filter` before any response-stage plugin runs.
+the client if admission trusted only the live status.
+
+The current snapshot is `EdgionHttpContext::pre_plugin_response_status`, an
+`Option<u16>` that is never serialized. `upstream_response_filter` calls
+`select_normalized_upstream_candidate` after response normalization and before
+the response plugin chain, so the snapshot holds the normalized, accepted
+response status, not necessarily the raw provider status. `None` cannot establish
+bodyless-status agreement. `ctx.request_info.status` instead belongs to terminal
+downstream/access-log finalization and must not serve as this safety snapshot;
+see [Final downstream/access-log status](../../../03-coding/observability/00-access-log.md#final-downstreamaccess-log-status).
 
 **2. The direction of the influence is what matters, not whether the fact is trustworthy**
 
@@ -141,7 +158,7 @@ one is alertable.
 
 ## Re-evaluation Triggers
 
-Re-open only if:
+Re-evaluate when:
 
 - A new admission input is proposed whose mutated value steers toward
   `PassThrough` or `Buffer` rather than `Refuse` — re-check the direction
@@ -149,22 +166,19 @@ Re-open only if:
 - Pingora stops deriving the downstream body-framing decision from the same
   mutable request header (`init_body_writer`), which would make the live-header
   half of the HEAD AND unnecessary.
-- `ctx.request_info.status` gains a writer that runs BEFORE the response-stage
-  plugin runners (today the only pre-runner write is
-  `pg_upstream_response_filter.rs`'s stamp of the upstream's own status; the two
-  plugin-reachable writes are gRPC-only and step 3 refuses gRPC first).
-- The interim-`1xx` asymmetry becomes reachable. `pg_upstream_response_filter.rs`
-  early-returns for an interim `1xx` (non-101) BEFORE stamping the status, but
-  `pg_response_filter.rs` has no matching guard and pingora calls
-  `response_filter` for every header task including `1xx` — so at the ASYNC
-  runners on an interim response the snapshot is unset (or holds a prior
-  attempt's value after a retry). Today nothing reaches `read_response_body`
-  there (the async array takes only `ExtProc`, whose `body_requirement()` is
-  `None`); it goes live with the F1 gate. The unset case fails toward `Buffer`,
-  the loud direction, so it is a false-loud rather than a bypass. Closed
-  2026-08-03: `pg_response_filter` now shares `is_interim_informational` with
-  the sync entry point and early-returns, so the async runners no longer execute
-  on an interim header at all — see [[response-stage-denial-must-terminate]].
+- `pre_plugin_response_status` gains a writer, becomes plugin-mutable, or its
+  capture moves across response normalization or plugin execution. Recheck retry
+  and accepted-response ownership as well; terminal `request_info.status` is not
+  a substitute.
+- Either response entry point stops skipping interim `1xx` headers (excluding
+  terminal `101`). Historical asymmetry was closed on 2026-08-03: both
+  `pg_upstream_response_filter` and `pg_response_filter` now use
+  `is_interim_informational` before their plugin runners. Recheck this guard if
+  admission becomes reachable on an interim header — see
+  [[response-stage-denial-must-terminate]].
+- A response-body consumer or DSL validation change is proposed. Recheck the
+  streaming-only authority first; this historical admission fix does not
+  authorize full-response aggregation or DSL `resp.body` support.
 - A code path is added that reaches `read_response_body` without passing
   `snapshot_body_declared` — today every such path goes through
   `build_request_metadata`, whose first statement is that snapshot.
@@ -177,15 +191,41 @@ Re-open only if:
   fixed 2026-08-03 — see [[response-stage-denial-must-terminate]]. Finding 1
   (the ungated sync `upstreamResponseFilterPlugins` array) was retired: DSL's
   `resp.body` is rejected at configuration validation, so there is no
-  response-body consumer to gate; the residue moved to
-  `tasks/todo/llm-ai-gateway/01-body-processing-runtime.md`, which is what would
-  make `resp.body` expressible in the first place.
+  DSL response-body consumer to gate. Earlier references to body-processing work
+  as a way to make `resp.body` expressible are obsolete under the current
+  streaming-only product boundary.
 - Design: `docs/superpowers/specs/2026-07-23-body-gate-admission-model-design.md`
   (R5 refusal semantics).
 - Source: `edgion-gateway/src/plugins/runtime/session_adapter.rs`
   (`request_admission`, `response_admission`, `read_response_body`),
-  `edgion-gateway/src/ctx.rs` (`RequestInfo::method_is_head`),
+  `edgion-gateway/src/ctx.rs` (`RequestInfo::method_is_head`,
+  `EdgionHttpContext::pre_plugin_response_status`),
+  `edgion-gateway/src/routes/http/proxy_http/pg_upstream_response_filter.rs`
+  (`select_normalized_upstream_candidate`),
+  `edgion-resources/src/resources/edgion_plugins/plugin_configs/dsl.rs`
+  (`DslConfig::compile_and_validate`),
   `edgion-resources/src/diagnostic.rs` (`BodyRefusedNoSnapshot`).
+
+## Documentation verification
+
+D0144 (`correct-response-body-admission-snapshot-documentation`) corrects
+documentation drift only, not a production regression. Source inspection confirms
+the separate snapshot, its normalized capture point, and the live-plus-snapshot
+agreement. Existing tests `read_response_body_ignores_plugin_rewritten_bodyless_status`
+and `read_response_body_ignores_bodyless_snapshot_when_status_rewritten_away`
+cover both status rewrite directions; DSL's
+`validation_error_rejects_streaming_upstream_response_body_read` covers configuration
+rejection. These tests were read, not rerun for this documentation-only correction.
+The historical fix dates below are not fresh runtime verification.
+
+For this correction, independent read-only review returned LGTM. `cargo fmt --all`,
+`cargo check --workspace --all-targets`, and `cargo clippy --workspace --all-targets`
+completed successfully; Clippy reported warnings in unchanged Rust files. The
+agent-doc, SSA force, metrics inventory, and Pingora source policy guards passed.
+The initial agent-doc check found an unrelated missing-task link in the listener
+admission knowledge page; its reference was repaired while preserving the UDP
+documentation conflict as unresolved, and the check then passed. No runtime or
+integration-test files changed, and no full test suite was run.
 
 ## Resolution references
 
