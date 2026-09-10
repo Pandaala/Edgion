@@ -31,4 +31,4 @@
 
 ## Handoff
 
-- Ledger/changelog updated. Commit: pending automatic local commit; never push.
+- Ledger/changelog updated. Commit: `8f282fd2`; no push.
