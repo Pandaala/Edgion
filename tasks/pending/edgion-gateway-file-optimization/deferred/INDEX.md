@@ -217,3 +217,4 @@ These entries are backlinks only. A linked `tasks/todo` file is the editable sou
 | Correct response snapshot documentation (D0144) | pending | [task](../../../todo/correct-response-body-admission-snapshot-documentation.md) |
 | Isolate DSL sandbox unit tests from network (D0145) | pending | [task](../../../todo/isolate-dsl-sandbox-unit-tests-from-network.md) |
 | Reconcile DSL terminate contract (D0146) | needs-discussion | [task](../../../todo/reconcile-dsl-terminate-contract.md) |
+| Correct DSL bytecode deserialization knowledge (D0147) | pending | [task](../../../todo/correct-dsl-bytecode-deserialization-safety-knowledge.md) |

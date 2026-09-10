@@ -1,6 +1,6 @@
 # B0280 — HTTP DSL Termination Tests
 
-- Pipeline state: terminal; deferred, pending local commit. No technical mutation.
+- Pipeline state: terminal; deferred, committed as `f8c265eb`. No technical mutation.
 - Active anchor: `edgion-gateway`; baseline `ec5eb474`.
 - Target: `edgion-gateway/src/plugins/http/dsl/tests/terminate_tests.rs`.
 - Analyst: `b0280_terminate_analysis`; defer to D0146. Four VM tests are accurate for the signal, but silent-close descriptions conflict with observed 502 fallback and mandatory bare-termination bug policy. No local behavior fix authorized; no unsafe continuation condition.

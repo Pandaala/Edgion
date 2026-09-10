@@ -403,12 +403,12 @@
 | `edgion-gateway/src/plugins/http/dsl/tests/sandbox.rs` | `plugins-http-dsl` | test | changed | B0279: exact loop/string/map errors retain Deny coverage; independent LGTM, 3 exact tests plus policy 9/9; D0145 remains deferred |
 | `edgion-gateway/src/plugins/http/dsl/tests/terminate_tests.rs` | `plugins-http-dsl` | test | deferred | B0280: D0146 termination contract conflict independently confirmed; four VM assertions preserved and passing at 9e3a276b |
 | `edgion-gateway/src/plugins/http/dsl/tests/utility_functions.rs` | `plugins-http-dsl` | test | changed | B0253: regex grammar, zero-width, exact/plus-one and amplification regressions |
-| `edgion-gateway/src/plugins/http/dsl/tests/vm_defensive_tests.rs` | `plugins-http-dsl` | test | analysis-ready | B0281: seven defensive tests examined; no-change candidate awaiting serial promotion |
+| `edgion-gateway/src/plugins/http/dsl/tests/vm_defensive_tests.rs` | `plugins-http-dsl` | test | examined-no-change | B0281: seven effective VM defenses retained; independent LGTM and 7/7 tests; D0147 knowledge correction tracked separately |
 | `edgion-gateway/src/plugins/http/dynamic_external_upstream/mod.rs` | `plugins-http-dynamic-external-upstream` | source | examined-no-change | B0073 |
 | `edgion-gateway/src/plugins/http/dynamic_external_upstream/plugin.rs` | `plugins-http-dynamic-external-upstream` | source | changed | B0073 |
 | `edgion-gateway/src/plugins/http/dynamic_internal_upstream/mod.rs` | `plugins-http-dynamic-internal-upstream` | source | examined-no-change | B0074 |
 | `edgion-gateway/src/plugins/http/dynamic_internal_upstream/plugin.rs` | `plugins-http-dynamic-internal-upstream` | source | changed | B0074 |
-| `edgion-gateway/src/plugins/http/ext_proc/attached.rs` | `plugins-http-ext-proc` | source | pending | — |
+| `edgion-gateway/src/plugins/http/ext_proc/attached.rs` | `plugins-http-ext-proc` | source | analysis-in-progress | B0282: attached ExtProc lifecycle/value analysis, read-only candidate |
 | `edgion-gateway/src/plugins/http/ext_proc/client.rs` | `plugins-http-ext-proc` | source | pending | — |
 | `edgion-gateway/src/plugins/http/ext_proc/mod.rs` | `plugins-http-ext-proc` | source | pending | — |
 | `edgion-gateway/src/plugins/http/ext_proc/mutation.rs` | `plugins-http-ext-proc` | source | pending | — |

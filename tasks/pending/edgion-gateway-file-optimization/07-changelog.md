@@ -16,7 +16,8 @@ This is the single concise record of actual changes across the file-by-file audi
 
 ## Entries
 
-- B0280: deferred the conflicting DSL termination contract to standalone D0146; four VM signal tests remain unchanged. Independent LGTM at 9e3a276b; termination 4/4, decision logs 6/6, workspace check/Clippy and all guards passed. Pending local commit; no code/integration changes or push.
+- B0281: examined vm_defensive_tests.rs without changes; seven meaningful VM/index/construction defenses retained. Independent LGTM; target 7/7, workspace check/Clippy and all guards passed. D0147 separately corrects obsolete deserialization knowledge; B0282 remains read-only candidate. Pending local commit; no technical/integration changes or push.
+- B0280: deferred the conflicting DSL termination contract to standalone D0146; four VM signal tests remain unchanged. Independent LGTM at 9e3a276b; termination 4/4, decision logs 6/6, workspace check/Clippy and all guards passed. Commit `f8c265eb`; no code/integration changes or push.
 - External ec5eb474..9e3a276b reconciliation: net frozen M33/A32/D6 verified in two stages, 3,264 entries pass; no test-file writes. Reopened eleven terminal Gateway files, retained two pending and added one new test file (550 current files). Preserved external issue resolutions and retired five removed DSL task backlinks without recreating tasks. B0280 independently revalidated against updated knowledge; fresh checks passed.
 
 - B0279: strengthened three sandbox limit errors while retaining Deny 500 checks, eliminating loop-limit false success via the step budget. Independent LGTM; three exact tests and error_policy 9/9 passed, workspace check/Clippy and all guards passed. D0145 network cases unchanged and not invoked. Commit `ec5eb474`; no production/integration changes or push.
