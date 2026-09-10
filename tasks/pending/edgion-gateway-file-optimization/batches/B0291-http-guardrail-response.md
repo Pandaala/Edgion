@@ -1,6 +1,6 @@
 # B0291 — HTTP Guardrail Response
 
-- Pipeline state: changed; corrected plan/final LGTM and all checks passed, local commit gate.
+- Pipeline state: changed; committed after corrected plan/final LGTM and all checks.
 - Active anchor: `edgion-gateway`; baseline `99069928`.
 - Target: `edgion-gateway/src/plugins/http/guardrail/response.rs`.
 - Analyst: `b0291_guardrail_response_analysis`; full target, external diff, guardrail owners, streaming/RawWindow/cap/error/access-log contracts and deterministic coverage assigned. Prior B0079 evidence is historical.
@@ -27,4 +27,4 @@
 - Two real-adapter, duplex-backed network-free tests cover discard, accepted-byte preservation, Semantic/cause/emission, bounded event/termination/summary, conflicting owner, fresh conflict summary and prior-summary first-write behavior.
 - First compile found one test-local helper shadowing error; the implementer renamed that binding and reran the full focused module successfully: 17/17 passed (40.98s build, 0.05s tests).
 - Fresh final reviewer `b0291_final_review`: LGTM, no MustFix/ShouldFix/deferred finding. Independently checked the full target, actual diff, owner/terminal/driver/RawWindow/rendering boundaries and test claims.
-- Root gates: format apply/check, locked workspace/all-targets check (11.35s), locked Clippy (16.85s, existing warnings, exit 0), agent-doc, SSA force, metrics inventory, Pingora policy, Gateway tracing, English-only, frozen integration and diff checks passed. Commit pending; no integration edit or push.
+- Root gates: format apply/check, locked workspace/all-targets check (11.35s), locked Clippy (16.85s, existing warnings, exit 0), agent-doc, SSA force, metrics inventory, Pingora policy, Gateway tracing, English-only, frozen integration and diff checks passed. Commit `3a13d625`; no integration edit or push.

@@ -4,7 +4,7 @@
 //! and the real plugin endpoint methods, not another Gateway/Controller process.
 //! They are ignored in ordinary unit runs because they perform network IO.
 //! Run with: cargo test -p edgion-gateway --lib auth_response_caps_integration -- --ignored
-//! Source: tasks/todo/oidc-auth-response-byte-caps.md (D0036).
+//! Source: skills/04-review/oidc/regression-guards/authentication-response-byte-caps.md (D0036).
 
 use super::*;
 use crate::plugins::runtime::traits::session::MockPluginSession;

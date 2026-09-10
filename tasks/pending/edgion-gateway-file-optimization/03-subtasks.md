@@ -461,7 +461,7 @@
 | `edgion-gateway/src/plugins/http/mock/mod.rs` | `plugins-http-mock` | source | examined-no-change | B0089 |
 | `edgion-gateway/src/plugins/http/mock/plugin.rs` | `plugins-http-mock` | source | changed | B0089 |
 | `edgion-gateway/src/plugins/http/mod.rs` | `plugins-http-framework` | source | examined-no-change | B0062 |
-| `edgion-gateway/src/plugins/http/openid_connect/auth_response_caps_integration.rs` | `plugins-http-openid-connect` | test | analysis-ready | B0292: replace stale deleted-task pointer with durable OIDC regression knowledge; keep ignored loopback tests |
+| `edgion-gateway/src/plugins/http/openid_connect/auth_response_caps_integration.rs` | `plugins-http-openid-connect` | test | changed | B0292: stale task pointer replaced by durable D0036 knowledge; independent LGTM and workspace gates passed, eight ignored network tests unchanged/not run |
 | `edgion-gateway/src/plugins/http/openid_connect/callback.rs` | `plugins-http-openid-connect` | source | pending | Reopened after external `74e6ccdd`; historical B0091 retained |
 | `edgion-gateway/src/plugins/http/openid_connect/config_validation.rs` | `plugins-http-openid-connect` | source | changed | B0094: borrowed claim scopes and allocation-free issuer selection |
 | `edgion-gateway/src/plugins/http/openid_connect/discovery_jwks.rs` | `plugins-http-openid-connect` | source | changed | B0092 |
