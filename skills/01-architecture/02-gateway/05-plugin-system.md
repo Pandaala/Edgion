@@ -6,7 +6,7 @@ description: Plugin system architecture — 4-phase execution, PluginRuntime pre
 # Plugin system
 
 > The plugin system is Edgion Gateway's request-handling extension mechanism.
-> Four execution phases cover the full lifecycle of a request; the PluginRuntime is built once during route preparse to avoid per-request overhead.
+> Four execution phases cover the full lifecycle of a request; the Gateway builds and shares plugin runtimes during configuration publication to avoid per-request construction.
 
 ## Four-phase execution model
 
@@ -37,7 +37,30 @@ pub struct PluginRuntime {
 }
 ```
 
-**Build timing**: HTTPRoute / GRPCRoute preparse phase (not per-request). Entry points (Gateway API standard filters) are split by scope: rule level uses `from_httproute_filters_for_rule()` / `from_grpcroute_filters_for_rule()`, backend level uses `from_httproute_filters_for_backend()` / `from_grpcroute_filters_for_backend()`. Use only these scope-specific entries. The deprecated forwarding methods still present in code are pre-release removal debt and must not be called or copied. EdgionPlugins CRD entries are loaded via `add_from_request_filters()` / `add_from_upstream_response_filters()` / `add_from_upstream_response_body_filters()` / `add_from_upstream_responses()`, each returning `Vec<String>` of validation errors. `clone()` returns an empty instance (rebuilt during preparse). Each entry may also carry an optional `alias: String` (`^[a-zA-Z0-9._-]{1,32}$`, unique within its stage array — a duplicate is a validation error in both layers), echoed verbatim into `PluginLog.alias` so multiple entries of the same plugin type can be distinguished in the access log. The alias is also the discriminator in the entry's runtime identity `<resource key>/<alias or #index>` (`plugins::common::entry_scope`), which namespaces state a plugin keeps outside its own instance — `RateLimitRedis` Redis buckets today.
+**Build timing and ownership**: the Gateway builds executable runtimes when publishing
+configuration, never per request. `HttpRouteRuleUnit::compile_http_rule` and
+`GrpcRouteRuleUnit::compile_grpc_rule` build rule and backend chains once before
+match/hostname fan-out. Gateway API filter constructors are scope-specific:
+`from_httproute_filters_for_rule()` / `from_grpcroute_filters_for_rule()` and
+`from_httproute_filters_for_backend()` / `from_grpcroute_filters_for_backend()`.
+There are no unscoped forwarding constructors. `new()` / `Default` construct an
+empty builder, including the no-filters case.
+
+For `EdgionPlugins`, the Controller calls schema-layer `validate_plugins()` and
+reports validation errors; it does not build Gateway runtimes. The Gateway's
+`compile_plugins()` builds one resource generation with `new()` and the four
+`add_from_*` stage builders, collects validation errors, and seals invalid chains
+fail-closed before returning `Arc<CompiledPlugins>`. `PluginStore` publishes an
+immutable map through `ArcSwap`, applying the resource's invalid-update policy.
+
+**Sharing**: `PluginRuntime` does not implement `Clone`. Compiled rules, backends,
+store lookups, and request reference caches share `Arc<PluginRuntime>`, preserving
+plugin state instead of rebuilding it for each reference. The removed empty-runtime
+clone silently discarded the entire policy chain; it must not return. Atomic store
+publication does not imply one request-wide generation across different references;
+see [the reference-pinning boundary](../../04-review/plugin-runtime/intentional-design/request-plugin-reference-generation-boundary.md).
+
+Each entry may also carry an optional `alias: String` (`^[a-zA-Z0-9._-]{1,32}$`, unique within its stage array — a duplicate is a validation error in both layers), echoed verbatim into `PluginLog.alias` so multiple entries of the same plugin type can be distinguished in the access log. The alias is also the discriminator in the entry's runtime identity `<resource key>/<alias or #index>` (`plugins::common::entry_scope`), which namespaces state a plugin keeps outside its own instance — `RateLimitRedis` Redis buckets today.
 
 ## Conditional execution
 
@@ -125,13 +148,15 @@ Skip log format: `"skip:keyExist,hdr:X-Internal"` or `"!run:keyMatch,method"`.
 **compile call chain** (one-time, triggered when resources are received via gRPC list/watch):
 
 ```
-resource.pre_parse()                        # event_dispatch.rs
-  → EdgionPlugins::preparse()              # edgion_plugins/mod.rs
-      → compile_conditions()               # iterate all entries, call PluginConditions::compile()
-          → Condition::compile()           # conditions.rs
+PluginStore::full_set() / partial_update()  # plugins/http/conf_handler_impl.rs
+  → compile_plugins()                     # plugins/http/plugin_store.rs
+      → compile_plugin_conditions()       # PluginConditions::compile() and validate()
+          → Condition::compile()
               → KeyMatchCondition::compile()
                   → MatchCore::compile(normalize_paths)
-      → add_from_*()                       # plugin_runtime.rs (the cloned conditions are already compiled at this point)
+      → add_from_*()                      # plugin_runtime.rs; consumes compiled conditions
+      → seal_fail_closed()
+  → publish immutable compiled snapshot
 ```
 
 **When adding a new condition kind that uses regex**: add a corresponding arm to `Condition::compile()`'s match; otherwise the new kind's regex will never be compiled.

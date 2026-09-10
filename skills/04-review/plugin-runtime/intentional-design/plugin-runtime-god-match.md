@@ -77,11 +77,27 @@ These two changes do not break the centralization semantic; evaluate separately.
 **Audit date**: 2026-05-15
 **Linked issue**: g2-011 (closed, fixed)
 
-If a finding suggests `PluginRuntime` should `#[derive(Clone)]` or "implement Clone properly," **close it**. The previous empty `impl Clone` (`fn clone(&self) -> Self { Self::new() }`) was a footgun: any misuse like `runtime_arc.as_ref().clone()` would silently strip the entire plugin chain from the request path with no compile-time or runtime signal. It was removed; sharing is done exclusively via `Arc<PluginRuntime>`, and rebuilds go through the `from_*` constructors at preparse.
+If a finding suggests `PluginRuntime` should `#[derive(Clone)]` or "implement Clone properly," **close it**. The previous empty `impl Clone` (`fn clone(&self) -> Self { Self::new() }`) was a footgun: any misuse like `runtime_arc.as_ref().clone()` would silently strip the entire plugin chain from the request path with no compile-time or runtime signal. It was removed; sharing is done exclusively via `Arc<PluginRuntime>`, and Gateway rebuilds use scoped route `from_*` constructors or `compile_plugins()` with `new()` and the stage builders at configuration publication.
 
 A real `Clone` impl is also not feasible without forcing a `Clone` bound onto every `dyn RequestFilter` / `dyn UpstreamResponse*` trait object in the four stage `Vec`s — an unwanted constraint on every plugin implementation.
 
-Sibling types `StreamPluginRuntime` and `TlsRoutePluginRuntime` follow the same "no Clone" pattern; uniform treatment.
+The stream types have a different representation: both hold ordered
+`Vec<Arc<dyn ...>>` plugin chains. `StreamPluginRuntime` derives `Clone`, which
+copies the vector and increments each plugin Arc; it preserves the chain and
+shares plugin state, without deep-cloning plugins. This is O(number of plugins),
+not an O(1) clone of the entire vector. `TlsRoutePluginRuntime` currently has no
+`Clone` implementation despite also using Arc-backed entries. Both are published
+behind outer Arcs by `compile_stream_plugins()` and shared through
+`StreamPluginStore`. Do not infer a blanket no-clone rule for stream runtimes or
+confuse a chain-preserving Arc clone with the removed empty-runtime clone.
+
+Source inspection for `correct-plugin-runtime-architecture-documentation`
+confirmed the constructor and sharing boundaries in `plugin_runtime.rs`, HTTP/gRPC
+`match_unit.rs`, `plugins/http/{conf_handler_impl,plugin_store}.rs`, request
+reference resolvers/caches, and both stream runtime implementations. The Controller
+validates the schema; executable runtime construction and immutable publication
+belong to the Gateway. This documentation correction changes no runtime behavior
+and requires no new integration-test issue.
 
 ## Resolution references
 

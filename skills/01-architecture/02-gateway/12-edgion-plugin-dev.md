@@ -29,10 +29,10 @@ HTTP plugins now have two distinct runtime build paths. Identify which one you a
 
 The chain is:
 
-1. The Controller's `EdgionPluginsHandler.preparse()` calls `ep.preparse()`.
-2. `EdgionPlugins::preparse()` builds `spec.plugin_runtime` and collects `preparse_errors`.
-3. The Gateway's `PluginStore` also calls `preparse()` again on `full_set` / `partial_update`.
-4. At runtime, the resource is fetched through `PluginStore` and its own `plugin_runtime` is executed.
+1. The Controller's handler calls schema-layer `EdgionPlugins::validate_plugins()` and reports validation errors through status. It does not construct an executable `PluginRuntime`.
+2. On Gateway `full_set` / `partial_update`, the configuration handler calls `compile_plugins()` to build conditions and all four stage chains, collect errors, and seal invalid chains fail-closed.
+3. The resulting `Arc<CompiledPlugins>` owns the resource and `Arc<PluginRuntime>`. `PluginStore` publishes an immutable snapshot, applying the resource's invalid-update policy.
+4. Runtime references share the stored `Arc<PluginRuntime>`. The runtime itself is not `Clone`; rebuilding or empty-cloning it would lose the shared policy chain or its state.
 
 This path mainly serves:
 
@@ -43,7 +43,7 @@ This path mainly serves:
 
 The chain is:
 
-- During `HTTPRoute` / `GRPCRoute` preparse, the runtime is built per scope: rule-level uses `PluginRuntime::from_httproute_filters_for_rule()` / `from_grpcroute_filters_for_rule()`; backend-level uses `from_httproute_filters_for_backend()` / `from_grpcroute_filters_for_backend()`. Do not use the deprecated forwarding methods still present in code; they are pre-release removal debt, not supported extension points.
+- During Gateway `compile_http_rule()` / `compile_grpc_rule()`, the runtime is built once per rule and backend before match/hostname fan-out: rule-level uses `PluginRuntime::from_httproute_filters_for_rule()` / `from_grpcroute_filters_for_rule()`; backend-level uses `from_httproute_filters_for_backend()` / `from_grpcroute_filters_for_backend()`. These are the only Gateway API filter constructors; unscoped forwarding constructors have been removed. Share the resulting runtime Arcs across compiled match units.
 
 This path mainly serves:
 
