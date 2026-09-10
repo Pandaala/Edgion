@@ -122,11 +122,14 @@ pub fn compile_plugins(ep: &EdgionPlugins) -> Arc<CompiledPlugins> {
     // Mirror the controller's cross-entry ordering rule into the data plane,
     // from the same shared helper and with the same message, so
     // `validate_plugins_matches_compile_plugins_error_set` stays exact. This is
-    // not cosmetic: a misordered guard means prompts reach the provider
-    // unguarded, so the resource must also fail closed here rather than only
-    // being flagged in status.
+    // not cosmetic: the resource must fail closed even when request conditions
+    // would skip the misordered guard and its local ordering check.
     if let Some(entries) = spec.spec.request_plugins.as_ref() {
+        let errors_before_ordering = errors.len();
         edgion_resources::resources::edgion_plugins::validate::collect_ai_guard_ordering_errors(entries, &mut errors);
+        if errors.len() > errors_before_ordering {
+            runtime.record_invalid_ai_guard_ordering();
+        }
     }
 
     // Sanitize `accessLogExtern` declarations: drop any entry `validation_error()`
@@ -786,6 +789,204 @@ mod compile_plugins_tests {
     };
     use edgion_resources::resources::http_route::{HTTPHeader, HTTPHeaderFilter};
     use edgion_resources::resources::plugin_policy::PluginPolicyAction;
+
+    fn ai_ordering_resource(types: &[&str]) -> EdgionPlugins {
+        let entries: Vec<serde_json::Value> = types
+            .iter()
+            .map(|kind| {
+                let config = if *kind == "AiGuard" {
+                    serde_json::json!({"rules": [{"name": "guard-rule",
+                        "match": {"type": "regex", "pattern": "private-prompt"}, "action": "reject"}]})
+                } else {
+                    serde_json::json!({})
+                };
+                serde_json::json!({"type": kind, "config": config})
+            })
+            .collect();
+        serde_json::from_value(serde_json::json!({
+            "apiVersion": "edgion.io/v1", "kind": "EdgionPlugins",
+            "metadata": {"name": "ai-ordering", "namespace": "default"},
+            "spec": {"requestPlugins": entries}
+        }))
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn ai_ordering_invalid_generation_rejects_once_before_request_plugins() {
+        for types in [
+            vec!["AiProxy", "AiGuard"],
+            vec!["AiProxy", "AiGuard", "AiGuard"],
+            vec!["AiGuard", "AiProxy", "AiGuard"],
+        ] {
+            let mut resource = ai_ordering_resource(&types);
+            // Even a guard that would skip this request cannot bypass the
+            // unconditional resource-level configuration gate.
+            resource
+                .spec
+                .request_plugins
+                .as_mut()
+                .unwrap()
+                .last_mut()
+                .unwrap()
+                .conditions = Some(conditions(serde_json::json!({
+                    "skip": {"allOf": [{"type": "probability", "ratio": 1.0}]}
+            })));
+            let compiled = compile_plugins(&resource);
+            assert_eq!(compiled.preparse_errors, resource.validate_plugins());
+            assert_eq!(compiled.preparse_errors.len(), 1);
+            assert!(!compiled.is_activatable);
+            assert!(!compiled.retain_previous_on_invalid_update);
+            assert_leading_reject(&compiled);
+            assert_eq!(
+                compiled
+                    .plugin_runtime
+                    .request_plugins_iter()
+                    .filter(|filter| filter.name() == "RejectInvalidConfig")
+                    .count(),
+                1
+            );
+
+            let reject = compiled.plugin_runtime.request_plugins_iter().next().unwrap();
+            // No session access is permitted: the reject must precede body
+            // reads, condition evaluation, evaluator calls and AI planning.
+            let mut session = MockPluginSession::new();
+            let mut log = PluginLog::new(reject.name());
+            let result = reject.run_request(&mut session, &mut log).await;
+            match result {
+                PluginRunningResult::ErrResponse { status, body } => {
+                    assert_eq!(status, 500);
+                    assert_eq!(body.unwrap().as_ref(), br#"{"message":"plugin configuration error"}"#);
+                }
+                other => panic!("expected fail-closed response, got {other:?}"),
+            }
+            let serialized = serde_json::to_value(&log).unwrap();
+            let entries = serialized["log"].as_array().unwrap();
+            assert_eq!(
+                entries
+                    .iter()
+                    .filter(|entry| entry.as_str() == Some("err: AiGuardOrdering"))
+                    .count(),
+                1
+            );
+            assert!(!serialized.to_string().contains("private-prompt"));
+        }
+    }
+
+    #[test]
+    fn ai_ordering_inert_entries_and_valid_orders_do_not_seal() {
+        for types in [vec!["AiGuard", "AiProxy"], vec!["AiGuard"], vec!["AiProxy"]] {
+            let resource = ai_ordering_resource(&types);
+            let compiled = compile_plugins(&resource);
+            assert_eq!(compiled.preparse_errors, resource.validate_plugins());
+            assert!(compiled.preparse_errors.is_empty());
+            assert!(compiled.is_activatable);
+        }
+        for index in 0..2 {
+            for (enabled, policy) in [
+                (false, None),
+                (true, Some(PluginPolicyAction::Bypass)),
+                (true, Some(PluginPolicyAction::Block { status: 403 })),
+            ] {
+                let mut resource = ai_ordering_resource(&["AiProxy", "AiGuard"]);
+                let entry = &mut resource.spec.request_plugins.as_mut().unwrap()[index];
+                entry.enable = enabled;
+                entry.policy_action = policy;
+                let compiled = compile_plugins(&resource);
+                assert_eq!(compiled.preparse_errors, resource.validate_plugins());
+                assert!(compiled.preparse_errors.is_empty());
+                assert!(compiled.is_activatable);
+                assert!(compiled
+                    .plugin_runtime
+                    .request_plugins_iter()
+                    .all(|filter| filter.name() != "RejectInvalidConfig"));
+            }
+        }
+    }
+
+    #[test]
+    fn ai_ordering_invalid_publications_replace_and_recover() {
+        let valid = compile_plugins(&ai_ordering_resource(&["AiGuard", "AiProxy"]));
+        let invalid = compile_plugins(&ai_ordering_resource(&["AiProxy", "AiGuard"]));
+        let key = "default/ai-ordering".to_string();
+        for mode in ["full", "update", "add"] {
+            let store = PluginStore::new();
+            // Include invalid first publication, recovery, valid-to-invalid,
+            // repeated invalid publication, and final recovery.
+            for incoming in [&invalid, &valid, &invalid, &invalid, &valid] {
+                let map = HashMap::from([(key.clone(), Arc::clone(incoming))]);
+                match mode {
+                    "full" => store.replace_all(map),
+                    "update" => store.apply_delta(HashMap::new(), map, &HashSet::new()),
+                    "add" => store.apply_delta(map, HashMap::new(), &HashSet::new()),
+                    _ => unreachable!(),
+                }
+                let snapshot = store.snapshot.load();
+                let published = snapshot.plugins.get(&key).unwrap();
+                assert!(Arc::ptr_eq(published, incoming), "{mode}");
+                assert_eq!(published.is_activatable, Arc::ptr_eq(incoming, &valid));
+                if !published.is_activatable {
+                    assert_leading_reject(published);
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn ai_ordering_invalid_generation_preserves_policy_block_precedence() {
+        let mut resource = ai_ordering_resource(&["AiProxy", "AiGuard", "AiGuard"]);
+        resource.spec.request_plugins.as_mut().unwrap()[2].policy_action =
+            Some(PluginPolicyAction::Block { status: 403 });
+        let compiled = compile_plugins(&resource);
+        assert_eq!(compiled.preparse_errors, resource.validate_plugins());
+        assert_eq!(compiled.preparse_errors.len(), 1);
+        assert!(!compiled.is_activatable);
+        assert!(!compiled.retain_previous_on_invalid_update);
+        let mut filters = compiled.plugin_runtime.request_plugins_iter();
+        let policy = filters.next().unwrap();
+        assert_eq!(policy.name(), "PluginPolicyBlock");
+        assert_eq!(filters.next().unwrap().name(), "RejectInvalidConfig");
+        let mut session = MockPluginSession::new();
+        let mut log = PluginLog::new(policy.name());
+        assert!(matches!(
+            policy.run_request(&mut session, &mut log).await,
+            PluginRunningResult::ErrResponse { status: 403, .. }
+        ));
+    }
+
+    #[test]
+    fn ai_ordering_failure_overrides_dsl_and_waf_retention() {
+        for program in ["dsl", "waf"] {
+            let mut resource = ai_ordering_resource(&["AiGuard", "AiProxy"]);
+            if program == "dsl" {
+                resource
+                    .spec
+                    .request_plugins
+                    .as_mut()
+                    .unwrap()
+                    .push(RequestFilterEntry::new(EdgionPlugin::Dsl(DslConfig {
+                        source: Some("invalid @@@".to_string()),
+                        ..Default::default()
+                    })));
+            } else {
+                resource.spec.waf = waf_resource("SecRule invalid-(").spec.waf;
+            }
+            let program_only = compile_plugins(&resource);
+            assert!(!program_only.is_activatable);
+            assert!(program_only.retain_previous_on_invalid_update);
+            resource.spec.request_plugins.as_mut().unwrap().swap(0, 1);
+            let mixed = compile_plugins(&resource);
+            let mut expected = resource.validate_plugins();
+            expected.sort();
+            let mut actual = mixed.preparse_errors.clone();
+            actual.sort();
+            assert_eq!(actual, expected);
+            assert!(!mixed.is_activatable);
+            assert!(!mixed.retain_previous_on_invalid_update);
+            assert_leading_reject(&mixed);
+            let valid = compile_plugins(&ai_ordering_resource(&["AiGuard", "AiProxy"]));
+            assert!(!mixed.can_retain_previous(&valid));
+        }
+    }
 
     #[test]
     fn dye_stage_policy_and_inert_entries_have_controller_gateway_parity() {
@@ -2229,8 +2430,8 @@ mod compile_plugins_tests {
             ("valid_request", mk(Some(vec![RequestFilterEntry::new(rhm())]), None)),
             (
                 // A guard ordered after AiProxy can never affect the provider
-                // body. Both paths must report it with the identical message,
-                // or the data plane silently forwards unguarded prompts.
+                // body. Both paths must report the identical message; separate
+                // publication tests verify the unconditional fail-closed gate.
                 "ai_guard_after_ai_proxy",
                 mk(Some(vec![ai_proxy(), ai_guard()]), None),
             ),

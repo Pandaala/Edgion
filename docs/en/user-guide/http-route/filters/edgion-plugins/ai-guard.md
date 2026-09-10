@@ -25,7 +25,14 @@ Three things enforce this:
    than silently forwarding an unmasked prompt.
 2. An AiGuard that runs after AiProxy fails closed with a fixed error.
 3. Placing AiGuard after AiProxy in the same `EdgionPlugins` resource is
-   reported at admission as `Accepted=False`.
+   reported at admission as `Accepted=False`. The gateway rejects requests
+   through that resource with a generic HTTP 500 before executing its plugins.
+   Disabled entries and entries bypassed or blocked by PluginPolicy do not
+   participate in the ordering check; request conditions do not exempt entries.
+   An invalid update replaces the previous configuration with this rejection,
+   even if the update also contains an invalid DSL or WAF program. Correcting
+   the order restores normal execution on the next publication. An existing
+   PluginPolicy block keeps its configured rejection status ahead of this gate.
 
 Attaching AiGuard at the GatewayClass-global or Gateway scope is also correct,
 since those chains run before route-level plugins.
@@ -34,8 +41,9 @@ since those chains run before route-level plugins.
 
 AiGuard only acts on `POST` requests whose path ends with `/chat/completions` —
 the same gate `AiProxy` uses. Every other request passes through untouched, with
-no rule evaluation and no evaluator call. A global-scope AiGuard therefore does
-not disturb ordinary traffic.
+no rule evaluation and no evaluator call. This applies to valid configurations;
+an invalid same-resource AiGuard/AiProxy order rejects all requests through that
+resource, including ordinary traffic.
 
 ## Example
 

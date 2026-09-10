@@ -34,6 +34,15 @@ Load balancer, compiled authority, panic override, retry-budget Arc, circuit-bre
 limit, and connect timeout publish together on the typed snapshot. A Pingora retry
 that re-enters `upstream_peer` must not mix those fields from two publications.
 
+The same `EffectivePolicySnapshotData` owns prepared policy resources, the typed
+target reverse index, and effective policy Arcs. `partial_update_policies` patches
+the old and new target candidate lists; `publish_generation` selects each affected
+winner from that index instead of scanning every policy per target. Equivalent
+publication retains live handles and skips derived background reconciliation.
+The immutable generation is stored before health-check and Service outlier/degrade
+side effects are reconciled. Map cloning remains part of publication; this is not
+a claim that the entire incremental update is independent of total store size.
+
 **2. Capture is per request, not per TCP keepalive**
 
 A new request on a reused connection loads the current snapshot. A retry of the
@@ -105,6 +114,8 @@ Re-open this decision only if:
 - Historical implementation: `f5e4781e`; captured degrade-threshold correction:
   `b179660c`. This fixed rule is the durable record after the implementation
   task was archived.
+- Source task ID: `backend-traffic-policy-atomic-service-snapshot` (already
+  implemented; task cleanup authorized on 2026-09-10, without a new runtime fix).
 - `edgion-gateway/src/backends/policy/backend_traffic/store.rs`
 - `edgion-gateway/src/routes/http/proxy_http/pg_upstream_peer.rs`
 - Retry-budget window rotation is covered by
@@ -122,6 +133,14 @@ Re-open this decision only if:
   verified 2026-09-08.
 
 ## Verification
+
+Task cleanup verification on 2026-09-10: independent read-only review confirmed
+the original defect is already fixed and the selected task materials contain no
+unique unfinished scope. `cargo fmt --all`, workspace check and Clippy, agent-doc
+validation, SSA-force, metrics inventory, and Pingora source-policy guards passed.
+Clippy emitted existing warnings in unchanged Rust files. This closure changes
+only task records and knowledge references; runtime tests were inspected but not
+rerun. The runtime results below remain historical verification from September 8.
 
 The correction adds `service_degrade_capture_controls_actual_selection_across_retries`
 and `captured_degrade_threshold_uses_live_health_and_a_cold_counter_at_zero_live_threshold`.

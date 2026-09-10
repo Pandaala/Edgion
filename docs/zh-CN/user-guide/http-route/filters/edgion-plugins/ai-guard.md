@@ -21,7 +21,11 @@ AiGuard 是 `requestPlugins` 条目。
    而不是静默转发未掩码的提示词。
 2. 排在 AiProxy 之后运行的 AiGuard 会以固定错误 fail-close。
 3. 在同一个 `EdgionPlugins` 资源中把 AiGuard 放在 AiProxy 之后，会在准入阶段以
-   `Accepted=False` 上报。
+   `Accepted=False` 上报。网关会在执行该资源的插件之前，以通用 HTTP 500 拒绝请求。
+   禁用条目以及被 PluginPolicy 标记为绕过或阻断的条目不参与排序检查；请求条件不能
+   豁免条目。错误更新会用拒绝行为替换旧配置，即使更新同时含有无效的 DSL 或 WAF
+   程序。修正顺序后，下一次发布恢复正常执行。已有 PluginPolicy 阻断仍优先返回其
+   配置的拒绝状态码。
 
 把 AiGuard 挂在 GatewayClass 全局或 Gateway 作用域同样正确，因为这两条链都先于
 路由级插件执行。
@@ -29,8 +33,8 @@ AiGuard 是 `requestPlugins` 条目。
 ## 非 chat completions 请求
 
 AiGuard 仅作用于路径以 `/chat/completions` 结尾的 `POST` 请求——与 `AiProxy` 使用
-同一道判定。其余请求原样放行，不做规则评估，也不调用评估服务。因此全局作用域的
-AiGuard 不会干扰普通流量。
+同一道判定。其余请求原样放行，不做规则评估，也不调用评估服务。这适用于有效配置；
+同一资源内的 AiGuard/AiProxy 顺序错误会拒绝经过该资源的所有请求，包括普通流量。
 
 ## 示例
 

@@ -315,6 +315,13 @@ impl PluginRuntime {
             .record_non_retainable(Self::get_plugin_name(plugin));
     }
 
+    /// Record the shared validator's resource-level AiGuard/AiProxy ordering
+    /// failure once, regardless of the number of offending entries. Ordering
+    /// failures replace the generation even alongside invalid DSL/WAF programs.
+    pub(crate) fn record_invalid_ai_guard_ordering(&mut self) {
+        self.invalid_plugins.record_non_retainable("AiGuardOrdering");
+    }
+
     /// Publication policy for an update that failed runtime construction.
     pub(crate) fn invalid_update_policy(&self) -> Option<InvalidUpdatePolicy> {
         self.invalid_plugins.update_policy()

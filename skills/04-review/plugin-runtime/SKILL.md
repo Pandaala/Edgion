@@ -24,6 +24,8 @@ before applying a decision to current code.
 
 ## Regression guards
 
+- [AiGuard ordering errors fail closed at publication](regression-guards/ai-guard-ordering-publication.md)
+
 - [Dye stage and producer parity](regression-guards/dye-stage-producer-parity.md)
 
 - [Invalid stream GeoIP generation denial and recovery](regression-guards/invalid-stream-geoip-generation-fail-closed.md)
