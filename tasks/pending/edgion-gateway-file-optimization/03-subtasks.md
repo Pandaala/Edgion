@@ -472,7 +472,7 @@
 | `edgion-gateway/src/plugins/http/openid_connect/mod.rs` | `plugins-http-openid-connect` | source | examined-no-change | B0094: minimal live module facade and visibility boundary retained |
 | `edgion-gateway/src/plugins/http/openid_connect/plugin.rs` | `plugins-http-openid-connect` | source | examined-no-change | B0296: external change is cfg(test)-only registration; production construction/runtime invariants independently revalidated |
 | `edgion-gateway/src/plugins/http/openid_connect/refresh_flight_registry.rs` | `plugins-http-openid-connect` | source | examined-no-change | B0092 |
-| `edgion-gateway/src/plugins/http/openid_connect/request_filter_impl.rs` | `plugins-http-openid-connect` | source | pending | Reopened after external `74e6ccdd`; historical B0093 retained |
+| `edgion-gateway/src/plugins/http/openid_connect/request_filter_impl.rs` | `plugins-http-openid-connect` | source | changed | B0297: invalid/provider-error callbacks now emit a static diagnostic and fixed 400 instead of re-entering authentication; independent plan/final LGTM |
 | `edgion-gateway/src/plugins/http/openid_connect/session_cookie.rs` | `plugins-http-openid-connect` | source | changed | B0091 |
 | `edgion-gateway/src/plugins/http/openid_connect/tests.rs` | `plugins-http-openid-connect` | test | pending | Reopened after external `bea47373` added session-refresh JWKS dye coverage; B0090/B0091/B0093/B0094 history retained |
 | `edgion-gateway/src/plugins/http/openid_connect/token_exchange.rs` | `plugins-http-openid-connect` | source | pending | Reopened after external `74e6ccdd`; historical CACHE-001/B0091/B0093 retained |

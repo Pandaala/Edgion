@@ -48,13 +48,14 @@ impl RequestFilter for OpenidConnect {
         }
 
         if session.get_path() == self.callback_path() {
-            if let Some(code) = session.get_query_param("code") {
-                if let Some(state) = session.get_query_param("state") {
-                    return self.handle_callback(session, plugin_log, &code, &state).await;
-                }
-                let _ = self.send_plain_error(session, 400, "Invalid OIDC callback state").await;
-                return PluginRunningResult::ErrTerminateRequest;
+            let code = session.get_query_param("code").filter(|value| !value.is_empty());
+            let state = session.get_query_param("state").filter(|value| !value.is_empty());
+            if let (Some(code), Some(state)) = (code, state) {
+                return self.handle_callback(session, plugin_log, &code, &state).await;
             }
+            plugin_log.push_err("invalid callback");
+            let _ = self.send_plain_error(session, 400, "Invalid OIDC callback").await;
+            return PluginRunningResult::ErrTerminateRequest;
         }
 
         let token = self.extract_bearer_token(session);

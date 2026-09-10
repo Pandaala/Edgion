@@ -779,8 +779,9 @@ async fn test_authorization_params_appends_non_reserved_params() {
     assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
 }
 
-#[tokio::test]
-async fn test_callback_path_with_code_missing_state_returns_400() {
+async fn assert_invalid_callback_rejected(code: Option<&str>, state: Option<&str>, attacker_values: &[&str]) {
+    const CALLBACK_QUERY_FIELDS: [&str; 5] = ["code", "state", "error", "error_description", "error_uri"];
+
     let mut cfg = base_config();
     cfg.bearer_only = false;
     cfg.unauth_action = UnauthAction::Auth;
@@ -793,16 +794,76 @@ async fn test_callback_path_with_code_missing_state_returns_400() {
 
     session
         .expect_get_path()
+        .times(2)
         .return_const("/.edgion/oidc/callback".to_string());
+    let code = code.map(str::to_string);
+    let state = state.map(str::to_string);
     session
         .expect_get_query_param()
-        .returning(|name| if name == "code" { Some("abc".to_string()) } else { None });
-    session.expect_write_response_header().returning(|_, _| Ok(()));
-    session.expect_write_response_body().returning(|_, _| Ok(()));
-    session.expect_shutdown().returning(|| {});
+        .times(2)
+        .returning(move |name| match name {
+            "code" => code.clone(),
+            "state" => state.clone(),
+            _ => panic!("invalid callback handling must not inspect query parameter {name}"),
+        });
+    let forbidden_values: Vec<String> = attacker_values
+        .iter()
+        .copied()
+        .chain(CALLBACK_QUERY_FIELDS)
+        .map(str::to_string)
+        .collect();
+    let header_forbidden = forbidden_values.clone();
+    session
+        .expect_write_response_header()
+        .times(1)
+        .returning(move |response, end| {
+            assert_eq!(response.status.as_u16(), 400);
+            assert!(!end);
+            assert!(response.headers.get("Location").is_none());
+            let rendered = format!("{response:?}");
+            for value in &header_forbidden {
+                assert!(!rendered.contains(value));
+            }
+            Ok(())
+        });
+    let body_forbidden = forbidden_values.clone();
+    session
+        .expect_write_response_body()
+        .times(1)
+        .returning(move |body, end| {
+            assert_eq!(body.as_deref(), Some(b"400 Invalid OIDC callback".as_slice()));
+            assert!(end);
+            let rendered = String::from_utf8_lossy(body.as_deref().unwrap_or_default());
+            for value in &body_forbidden {
+                assert!(!rendered.contains(value));
+            }
+            Ok(())
+        });
+    session.expect_shutdown().times(1).returning(|| {});
 
     let result = plugin.run_request(&mut session, &mut log).await;
     assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
+    assert_eq!(plugin_log_entries(&log), vec!["err: invalid callback"]);
+    let serialized_log = serde_json::to_string(&log).expect("plugin log must serialize");
+    for value in &forbidden_values {
+        assert!(!serialized_log.contains(value));
+    }
+}
+
+#[tokio::test]
+async fn test_invalid_callback_forms_return_fixed_400_without_authentication_fallback() {
+    for (code, state, attacker_values) in [
+        (
+            None,
+            None,
+            &["access_denied", "provider-error-detail", "provider-error-uri"][..],
+        ),
+        (Some(""), Some("attacker-state"), &["attacker-state"][..]),
+        (Some("attacker-code"), Some(""), &["attacker-code"][..]),
+        (Some("attacker-code"), None, &["attacker-code"][..]),
+    ] {
+        assert_invalid_callback_rejected(code, state, attacker_values).await;
+    }
 }
 
 #[tokio::test]
