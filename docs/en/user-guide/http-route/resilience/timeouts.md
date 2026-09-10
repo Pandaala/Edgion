@@ -39,10 +39,29 @@ The end-to-end budget for the whole transaction. It covers every retry attempt a
 
 The budget for a single attempt to a backend: from when the gateway starts sending the request until the full response is received. When the rule also has a retry policy, `backendRequest` acts as the per-try timeout: each attempt gets its own `backendRequest` budget, an attempt exceeding it is canceled and retried, and the total stays bounded by `request` (see [Retry — per-try timeout](./retry.md#per-try-timeout-via-backendrequest)).
 
-Precision: Edgion enforces both timeouts as per-I/O-operation read/write
+Precision during request/response I/O: Edgion enforces these budgets as per-operation read/write
 timeouts, so an attempt that keeps making progress is not killed mid-stream;
 see the [precision note](./retry.md#per-try-timeout-via-backendrequest) in the
 retry documentation.
+
+### Connection establishment
+
+TCP connection and upstream TLS handshake share one establishment budget:
+the minimum of the configured connect timeout, remaining route `request`
+budget, and remaining client `grpc-timeout` budget. The configured connect
+timeout comes from the selected backend policy's `connection.connectTimeout`,
+falling back to `EdgionGatewayConfig`'s `defaultConnectTimeout`.
+
+For example, with a 5-second connect timeout and only 300 ms left on the
+request, a stalled TCP connection or TLS handshake is stopped near the
+300 ms deadline, subject to timer resolution and scheduling. Expired request
+or gRPC budgets stop retries and produce HTTP 504 or gRPC `DEADLINE_EXCEEDED`;
+the request timeout owns the diagnostic when both have expired.
+
+`backendRequest` does not shorten connection establishment. Disabling the
+configured connect timeout does not disable an active request or gRPC bound.
+This establishment bound covers TCP and TLS, not subsequent HTTP/2 session
+setup, connection-pool acquisition, or a total streaming-response duration.
 
 ## Special values and behavior
 

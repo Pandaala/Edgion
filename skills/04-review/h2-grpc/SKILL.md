@@ -36,7 +36,7 @@ before applying a decision to current code.
 - [h2 Terminal-Trailer Decoder Limitation — ACCEPTED-RISK](regression-guards/h2-trailer-decoder-upstream-limitation.md)
 - [H2 writer capacity stall after response](regression-guards/h2-writer-capacity-stall-after-response.md)
 - [Negative tests need out of band observation](regression-guards/negative-tests-need-out-of-band-observation.md)
-- [h2-grpc-03 — `grpc-timeout` header is honored end-to-end](regression-guards/timeout-honored.md)
+- [h2-grpc-03 — `grpc-timeout` establishment/I/O bounds, propagation and limits](regression-guards/timeout-honored.md)
 - [Trailer batch latch cache completion](regression-guards/trailer-batch-latch-cache-completion.md)
 - [Trailer done terminal body dispatch](regression-guards/trailer-done-terminal-body-dispatch.md)
 

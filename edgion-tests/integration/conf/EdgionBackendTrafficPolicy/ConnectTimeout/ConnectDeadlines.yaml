@@ -1,0 +1,96 @@
+# The suite owns this bounded local TLS-stall backend (ports.json tcp 31974).
+# It must observe ClientHello and wait for the gateway to close the connection.
+apiVersion: v1
+kind: Service
+metadata:
+  name: ct-tls-stall
+  namespace: edgion-test
+spec:
+  ports:
+    - name: https
+      port: 31974
+      targetPort: 31974
+      protocol: TCP
+---
+apiVersion: discovery.k8s.io/v1
+kind: EndpointSlice
+metadata:
+  name: ct-tls-stall
+  namespace: edgion-test
+  labels:
+    kubernetes.io/service-name: ct-tls-stall
+addressType: IPv4
+ports:
+  - name: https
+    port: 31974
+    protocol: TCP
+endpoints:
+  - addresses: ["127.0.0.1"]
+    conditions:
+      ready: true
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: BackendTLSPolicy
+metadata:
+  name: ct-tls-stall
+  namespace: edgion-test
+spec:
+  targetRefs:
+    - group: ""
+      kind: Service
+      name: ct-tls-stall
+  validation:
+    hostname: stall.example.com
+    wellKnownCACertificates: System
+---
+apiVersion: edgion.io/v1
+kind: EdgionBackendTrafficPolicy
+metadata:
+  name: ct-tls-stall
+  namespace: edgion-test
+spec:
+  targetRefs:
+    - group: ""
+      kind: Service
+      name: ct-tls-stall
+  connection:
+    connectTimeout: "5s"
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: ct-connect-deadlines
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: ct-gateway
+  hostnames: ["connect-deadlines.example.com"]
+  rules:
+    - matches:
+        - path:
+            type: Exact
+            value: /request-deadline
+        - path:
+            type: Exact
+            value: /both-deadlines
+      timeouts:
+        request: "300ms"
+        # This must not shorten TCP/TLS establishment to a 1ms per-try timeout.
+        backendRequest: "1ms"
+      retry:
+        attempts: 2
+      backendRefs:
+        - name: ct-tls-stall
+          port: 31974
+    - matches:
+        - path:
+            type: Exact
+            value: /grpc-deadline
+      timeouts:
+        request: "0s"
+        backendRequest: "1ms"
+      retry:
+        attempts: 2
+      backendRefs:
+        - name: ct-tls-stall
+          port: 31974

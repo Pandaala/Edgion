@@ -1,5 +1,5 @@
 {
-  "current_max": 31973,
+  "current_max": 31974,
   "suites": {
     "HTTPRoute/Basic": {
       "http": 31000
@@ -355,7 +355,8 @@
       "http": 31942
     },
     "EdgionBackendTrafficPolicy/ConnectTimeout": {
-      "http": 31943
+      "http": 31943,
+      "tcp": 31974
     },
     "HTTPRoute/SseStreaming": {
       "http": 31947

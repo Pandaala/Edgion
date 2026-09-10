@@ -27,13 +27,41 @@
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use async_trait::async_trait;
-use std::time::Instant;
+use std::time::{Duration, Instant};
+use tokio::io::AsyncReadExt;
 
 pub struct ConnectTimeoutTestSuite;
 
 const HOST: &str = "connect-timeout.example.com";
 
 impl ConnectTimeoutTestSuite {
+    /// Local backend only; the Controller and Gateway remain the shared topology.
+    /// JoinSet owns the listener task and aborts it on every error/cancellation path.
+    fn test_end_to_end_deadlines_bound_tls_establishment() -> TestCase {
+        TestCase::new(
+            "end_to_end_deadlines_bound_tls_establishment",
+            "Request and gRPC deadlines terminate a confirmed stalled TLS handshake without retry",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    if !ctx.gateway || std::env::var("EDGION_TEST_K8S_MODE").as_deref() == Ok("true") {
+                        return TestResult::passed_with_message(
+                            start.elapsed(),
+                            "skipped: requires the shared local gateway topology and suite-owned loopback backend"
+                                .to_string(),
+                        );
+                    }
+                    let result = run_stalled_tls_deadlines(&ctx).await;
+                    match result {
+                    Ok(()) => TestResult::passed_with_message(start.elapsed(),
+                        "All three deadline cases observed ClientHello, bounded termination, canonical diagnostics and one attempt".to_string()),
+                    Err(error) => TestResult::failed(start.elapsed(), error),
+                }
+                })
+            },
+        )
+    }
+
     /// (1) The blackholed backend (ct-svc-a) carries a 300ms connectTimeout
     /// override. A request to it must come back with a connect-failure status
     /// (502/503/504 depending on how the data plane classifies the connect
@@ -137,6 +165,117 @@ impl TestSuite for ConnectTimeoutTestSuite {
         vec![
             Self::test_blackhole_backend_fails_fast(),
             Self::test_normal_backend_still_works(),
+            Self::test_end_to_end_deadlines_bound_tls_establishment(),
         ]
     }
+}
+
+async fn run_stalled_tls_deadlines(ctx: &TestContext) -> Result<(), String> {
+    use crate::port_config::{PortConfig, PortKind};
+    const DEADLINE_HOST: &str = "connect-deadlines.example.com";
+    let port = PortConfig::load()?.require_port("EdgionBackendTrafficPolicy/ConnectTimeout", PortKind::Tcp)?;
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .http2_prior_knowledge()
+        .resolve(DEADLINE_HOST, ([127, 0, 0, 1], ctx.http_port).into())
+        .timeout(Duration::from_secs(3))
+        .build()
+        .map_err(|e| format!("build deadline client: {e}"))?;
+
+    for (path, grpc, diagnostic) in [
+        ("request-deadline", false, "RequestTimeoutExceeded"),
+        ("grpc-deadline", true, "GrpcClientDeadlineExceeded"),
+        ("both-deadlines", true, "RequestTimeoutExceeded"),
+    ] {
+        let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, port))
+            .await
+            .map_err(|e| format!("bind TLS-stall listener: {e}"))?;
+        let mut backend = tokio::task::JoinSet::new();
+        backend.spawn(async move {
+            tokio::time::timeout(Duration::from_secs(4), async move {
+                let (mut stream, _) = listener.accept().await.map_err(|e| format!("accept TLS: {e}"))?;
+                let mut prefix = [0u8; 6];
+                stream
+                    .read_exact(&mut prefix)
+                    .await
+                    .map_err(|e| format!("read ClientHello: {e}"))?;
+                if prefix[0] != 22 || prefix[1] != 3 || prefix[5] != 1 {
+                    return Err("backend did not receive a TLS ClientHello".to_string());
+                }
+                // Never answer the handshake; observe cancellation through EOF/reset.
+                let mut buf = [0u8; 4096];
+                let mut total = prefix.len();
+                loop {
+                    match stream.read(&mut buf).await {
+                        Ok(0) => return Ok(()),
+                        Ok(n) => {
+                            total += n;
+                            if total > 64 * 1024 {
+                                return Err("TLS-stall input exceeded 64 KiB".to_string());
+                            }
+                        }
+                        Err(e) if e.kind() == std::io::ErrorKind::ConnectionReset => return Ok(()),
+                        Err(e) => return Err(format!("observe handshake cancellation: {e}")),
+                    }
+                }
+            })
+            .await
+            .map_err(|_| "TLS-stall backend did not close within 4s".to_string())?
+        });
+
+        let trace_id = format!("connect-deadline-{}", uuid::Uuid::new_v4());
+        let mut request = client
+            .post(format!("http://{DEADLINE_HOST}:{}/{path}", ctx.http_port))
+            .header("x-trace-id", &trace_id)
+            .header("access_log", "test_store");
+        if grpc {
+            request = request
+                .header("content-type", "application/grpc")
+                .header("grpc-timeout", "300m")
+                .body(vec![0u8; 5]);
+        }
+        let began = Instant::now();
+        let response = request
+            .send()
+            .await
+            .map_err(|e| format!("{path}: request failed: {e}"))?;
+        let elapsed = began.elapsed();
+        let expected_status = if grpc { 200 } else { 504 };
+        if response.status().as_u16() != expected_status {
+            return Err(format!(
+                "{path}: expected HTTP {expected_status}, got {}",
+                response.status()
+            ));
+        }
+        if grpc && response.headers().get("grpc-status").and_then(|v| v.to_str().ok()) != Some("4") {
+            return Err(format!("{path}: missing gRPC DEADLINE_EXCEEDED"));
+        }
+        response
+            .bytes()
+            .await
+            .map_err(|e| format!("{path}: response body: {e}"))?;
+        if elapsed < Duration::from_millis(150) || elapsed > Duration::from_secs(2) {
+            return Err(format!(
+                "{path}: expected ~300ms establishment deadline, took {elapsed:?}"
+            ));
+        }
+        backend
+            .join_next()
+            .await
+            .ok_or_else(|| "missing TLS-stall task".to_string())?
+            .map_err(|e| format!("TLS-stall task failed: {e}"))??;
+
+        let entry = ctx
+            .access_log_client()
+            .get_access_log_with_retry(&trace_id, 10, 200)
+            .await
+            .map_err(|e| format!("{path}: access log: {e}"))?;
+        if !entry.has_diagnostic("error", diagnostic) || entry.upstream_count() != 1 {
+            return Err(format!(
+                "{path}: expected {diagnostic} and exactly one attempt: {}",
+                entry.data
+            ));
+        }
+    }
+    Ok(())
 }

@@ -33,6 +33,28 @@ fn select_expired_connect_deadline(
     }
 }
 
+fn connect_timeout_deadline(
+    error: &ErrorType,
+    source: Option<crate::ctx::ConnectTimeoutSource>,
+    request_remaining: Option<std::time::Duration>,
+    grpc_remaining: Option<std::time::Duration>,
+) -> Option<ExpiredConnectDeadline> {
+    use crate::ctx::ConnectTimeoutSource;
+    // Pingora's timer resolution can fire just before Instant reaches the
+    // deadline. The OS also maps ETIMEDOUT to ConnectTimedout, so the configured
+    // timer owner is insufficient: its budget must be within the timer's
+    // sub-millisecond early-firing window. Other failures remain ordinary errors.
+    if !matches!(error, ErrorType::ConnectTimedout | ErrorType::TLSHandshakeTimedout) {
+        return None;
+    }
+    let (remaining, deadline) = match source {
+        Some(ConnectTimeoutSource::RequestDeadline) => (request_remaining?, ExpiredConnectDeadline::Request),
+        Some(ConnectTimeoutSource::GrpcDeadline) => (grpc_remaining?, ExpiredConnectDeadline::Grpc),
+        Some(ConnectTimeoutSource::Configured) | None => return None,
+    };
+    (remaining <= std::time::Duration::from_millis(1)).then_some(deadline)
+}
+
 fn finish_expired_connect_deadline(
     ctx: &mut EdgionHttpContext,
     deadline: ExpiredConnectDeadline,
@@ -48,7 +70,7 @@ fn finish_expired_connect_deadline(
 
     let mut timeout_error = Error::because(
         ErrorType::HTTPStatus(504),
-        "end-to-end deadline expired after upstream connect failure",
+        "end-to-end deadline exhausted during upstream connection establishment",
         error,
     );
     timeout_error.set_retry(false);
@@ -113,8 +135,19 @@ pub fn fail_to_connect(
     // (which can be tighter than the route timeout) abort retries; either
     // deadline blown means a new LB pick / connection / outlier-detection
     // counter increment would only burn resources the caller has given up on.
-    if let Some(deadline) =
-        select_expired_connect_deadline(ctx.request_timeout_exceeded(), ctx.grpc_deadline_exceeded())
+    let now = Instant::now();
+    let request_remaining = ctx
+        .request_timeout()
+        .map(|budget| budget.saturating_sub(now.saturating_duration_since(ctx.start_time)));
+    let grpc_remaining = ctx
+        .request_info
+        .grpc_client_deadline()
+        .map(|deadline| deadline.saturating_duration_since(now));
+    if let Some(deadline) = select_expired_connect_deadline(
+        request_remaining.is_some_and(|remaining| remaining.is_zero()),
+        grpc_remaining.is_some_and(|remaining| remaining.is_zero()),
+    )
+    .or_else(|| connect_timeout_deadline(e.etype(), ctx.connect_timeout_source, request_remaining, grpc_remaining))
     {
         return finish_expired_connect_deadline(ctx, deadline, e);
     }
@@ -277,6 +310,80 @@ mod tests {
         );
         assert_eq!(
             select_expired_connect_deadline(true, true),
+            Some(ExpiredConnectDeadline::Request)
+        );
+    }
+
+    #[test]
+    fn only_deadline_owned_timeout_errors_use_timer_attribution() {
+        use crate::ctx::ConnectTimeoutSource::{Configured, GrpcDeadline, RequestDeadline};
+        let near = Some(std::time::Duration::from_micros(500));
+        for error in [ErrorType::ConnectTimedout, ErrorType::TLSHandshakeTimedout] {
+            assert_eq!(super::connect_timeout_deadline(&error, None, near, near), None);
+            assert_eq!(
+                super::connect_timeout_deadline(&error, Some(Configured), near, near),
+                None
+            );
+            assert_eq!(
+                super::connect_timeout_deadline(&error, Some(RequestDeadline), near, near),
+                Some(ExpiredConnectDeadline::Request)
+            );
+            assert_eq!(
+                super::connect_timeout_deadline(&error, Some(GrpcDeadline), near, near),
+                Some(ExpiredConnectDeadline::Grpc)
+            );
+        }
+        for source in [None, Some(Configured), Some(RequestDeadline), Some(GrpcDeadline)] {
+            assert_eq!(
+                super::connect_timeout_deadline(&ErrorType::ConnectError, source, near, near),
+                None
+            );
+            assert_eq!(
+                super::connect_timeout_deadline(&ErrorType::TLSHandshakeFailure, source, near, near),
+                None
+            );
+        }
+        // An actually expired request wins even if the timer was gRPC-owned.
+        assert_eq!(
+            select_expired_connect_deadline(true, true).or_else(|| super::connect_timeout_deadline(
+                &ErrorType::ConnectTimedout,
+                Some(GrpcDeadline),
+                near,
+                near
+            )),
+            Some(ExpiredConnectDeadline::Request)
+        );
+    }
+
+    #[test]
+    fn os_connect_timeout_with_remaining_budget_keeps_ordinary_retry_policy() {
+        use crate::ctx::ConnectTimeoutSource::{GrpcDeadline, RequestDeadline};
+        // Pingora maps OS ETIMEDOUT to ConnectTimedout too. Neither a long
+        // remaining budget nor an absent deadline proves its timer expired.
+        for remaining in [
+            None,
+            Some(std::time::Duration::from_secs(30)),
+            Some(std::time::Duration::from_micros(1001)),
+        ] {
+            for source in [RequestDeadline, GrpcDeadline] {
+                assert_eq!(
+                    super::connect_timeout_deadline(&ErrorType::ConnectTimedout, Some(source), remaining, remaining),
+                    None
+                );
+            }
+        }
+        let near = Some(std::time::Duration::from_millis(1));
+        let far = Some(std::time::Duration::from_secs(30));
+        assert_eq!(
+            super::connect_timeout_deadline(&ErrorType::ConnectTimedout, Some(RequestDeadline), far, near),
+            None
+        );
+        assert_eq!(
+            super::connect_timeout_deadline(&ErrorType::ConnectTimedout, Some(GrpcDeadline), near, far),
+            None
+        );
+        assert_eq!(
+            super::connect_timeout_deadline(&ErrorType::ConnectTimedout, Some(RequestDeadline), near, far),
             Some(ExpiredConnectDeadline::Request)
         );
     }

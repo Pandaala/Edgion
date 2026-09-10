@@ -108,16 +108,20 @@ Specifics:
 
 ## Client deadline (`grpc-timeout`) handling
 
-Edgion honors the client-supplied `grpc-timeout` header end-to-end:
+Edgion propagates and applies the client-supplied `grpc-timeout` budget:
 
-1. `pg_request_filter::build_request_metadata` parses the header (format `{number}{unit}` with units `H | M | S | m | u | n`) via `grpc_timeout::parse_grpc_timeout`. The resulting deadline is stored as `ctx.request_info.grpc_client_deadline = start_time.checked_add(parsed_value)`.
+1. `pg_request_filter::build_request_metadata` parses the header (format `{number}{unit}` with units `H | M | S | m | u | n`) via `grpc_timeout::parse_grpc_timeout`. A successful `start_time.checked_add(parsed_value)` is stored in `RequestGrpcInfo.client_deadline` through `RequestInfo::set_grpc_client_deadline`.
 2. `pg_upstream_peer::upstream_peer` short-circuits with `EdgionErrorCode::GrpcClientDeadlineExceeded` (raw control status 504 → downstream HTTP 200 + `grpc-status: 4`) when the deadline is already past at peer-selection time.
-3. `pg_upstream_peer::configure_peer_timeouts` folds `grpc_remaining()` into the upstream `read/write_timeout` via `min(backend_timeout, route_request_remaining, grpc_remaining)`. The existing zero-duration guard prevents `Duration::ZERO` from reaching Pingora.
+3. `pg_upstream_peer::configure_peer_timeouts` folds the remaining budget into upstream read/write timeouts with the backend request and route request bounds. A separate connection fold uses configured connect timeout, route request remaining and gRPC remaining; it sets phase and total TCP/TLS establishment bounds and records `connect_timeout_source`. Read/write retains its zero-duration guard; the connection fold preserves expired zero budgets.
 4. `pg_upstream_request_filter` rewrites the outgoing `grpc-timeout` header to the formatted remaining time so downstream gRPC servers see a consistent deadline.
 5. Retry-decision sites (`pg_fail_to_connect`, `pg_error_while_proxy`, `pg_upstream_response_filter` status-code retry branch) treat `request_timeout_exceeded() || grpc_deadline_exceeded()` as the unified "deadline blown — do not retry" guard, so a tight client deadline blocks LB picks and circuit-breaker counter increments the caller has already given up on.
 6. `pg_upstream_peer` retry backoff bounds the sleep by `min(request_remaining, grpc_remaining)` and re-checks both deadlines after the sleep; required so that a `retry.backoff` coarser than the client `grpc-timeout` cannot extend gateway work past the caller's deadline.
 
 Coverage spans pure gRPC (`application/grpc`) and gRPC-Web (`application/grpc-web*`). Malformed headers fall back to the route-level `request_timeout` (no behavior change). See `skills/04-review/h2-grpc/regression-guards/timeout-honored.md` for the decision context.
+
+The total connection timer covers L4 and TLS, not offload dispatch, connection
+pool acquisition or subsequent HTTP/2 session setup. Read/write timeouts remain
+per-operation, so this is not one absolute timer across a streaming RPC.
 
 ## Key source files
 

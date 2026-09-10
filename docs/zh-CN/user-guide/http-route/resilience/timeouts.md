@@ -39,7 +39,23 @@ rules:
 
 单次后端请求的时间预算：从网关开始发送请求，到收到完整响应。当规则同时配置了重试策略时，`backendRequest` 充当单次尝试超时（per-try timeout）：每次尝试都有自己的 `backendRequest` 预算，超过该值的尝试会被取消并重试，总时间仍由 `request` 约束（详见 [重试策略 — 单次尝试超时](./retry.md#通过-backendrequest-实现单次尝试超时)）。
 
-精度说明：Edgion 将两个超时都实现为逐 I/O 操作的读/写超时，持续有进展的尝试不会被中途切断；详见重试文档中的[精度说明](./retry.md#通过-backendrequest-实现单次尝试超时)。
+请求与响应 I/O 阶段的精度说明：Edgion 将这些预算实现为逐操作的读/写超时，持续有进展的尝试不会被中途切断；详见重试文档中的[精度说明](./retry.md#通过-backendrequest-实现单次尝试超时)。
+
+### 连接建立
+
+TCP 连接与上游 TLS 握手共享一个建连预算：取配置的连接超时、路由 `request`
+剩余预算以及客户端 `grpc-timeout` 剩余预算中的最小值。连接超时优先使用选中
+后端策略的 `connection.connectTimeout`，未配置时使用 `EdgionGatewayConfig`
+的 `defaultConnectTimeout`。
+
+例如连接超时为 5 秒，但请求仅剩 300 毫秒，停滞的 TCP 连接或 TLS 握手会在
+约 300 毫秒后结束，实际时间受计时精度和调度影响。请求或 gRPC 预算耗尽后
+不再重试，返回 HTTP 504 或 gRPC `DEADLINE_EXCEEDED`；两者均已过期时，
+诊断优先归因于请求超时。
+
+`backendRequest` 不缩短建连预算。禁用配置的连接超时也不会禁用仍有效的
+请求或 gRPC 预算。此建连上限覆盖 TCP 与 TLS，不包含后续 HTTP/2 会话建立、
+连接池取得过程，也不是流式响应的总时长上限。
 
 ## 特殊值与行为
 

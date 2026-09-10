@@ -2338,6 +2338,15 @@ pub enum PeerTimeoutSource {
     GrpcDeadline,
 }
 
+/// Owner of the current attempt's connection-establishment bound, independent
+/// of the backend request I/O budget.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ConnectTimeoutSource {
+    Configured,
+    RequestDeadline,
+    GrpcDeadline,
+}
+
 /// A response-phase plugin denial that the response stage could not deliver on
 /// its own, carried to the abort path.
 ///
@@ -2525,6 +2534,9 @@ pub struct EdgionHttpContext {
     /// attempt's peer. Overwritten by `configure_peer_timeouts` on every
     /// attempt; `None` when no read/write bound was applied.
     pub peer_timeout_source: Option<PeerTimeoutSource>,
+
+    /// Replaced at every peer configuration, including when all bounds are disabled.
+    pub(crate) connect_timeout_source: Option<ConnectTimeoutSource>,
 
     /// Circuit-breaker admission permit for the active upstream attempt,
     /// acquired at `upstream_peer` (pre-connect) when the target backend carries
@@ -3543,6 +3555,7 @@ impl EdgionHttpContext {
             try_cnt: 0,
             retry_on_status: false,
             peer_timeout_source: None,
+            connect_timeout_source: None,
             upstream_start_time: None,
             hash_key: None,
             upstream_authority: None,

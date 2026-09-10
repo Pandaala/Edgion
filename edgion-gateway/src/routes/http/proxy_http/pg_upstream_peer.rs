@@ -1039,6 +1039,31 @@ fn effective_backend_bound(
     .filter(|d| !d.is_zero())
 }
 
+/// Bound the entire TCP/TLS establishment, not backend request I/O. A zero
+/// remaining budget is expired, unlike a disabled configured connect timeout.
+/// Deadline owners win ties, with the route request ahead of the gRPC client.
+#[inline]
+fn fold_connect_timeouts(
+    configured: Option<std::time::Duration>,
+    request_remaining: Option<std::time::Duration>,
+    grpc_remaining: Option<std::time::Duration>,
+) -> Option<(std::time::Duration, crate::ctx::ConnectTimeoutSource)> {
+    use crate::ctx::ConnectTimeoutSource;
+    let mut best = None;
+    for (candidate, source) in [
+        (request_remaining, ConnectTimeoutSource::RequestDeadline),
+        (grpc_remaining, ConnectTimeoutSource::GrpcDeadline),
+        (configured.filter(|d| !d.is_zero()), ConnectTimeoutSource::Configured),
+    ] {
+        if let Some(d) = candidate {
+            if best.is_none_or(|(b, _)| d < b) {
+                best = Some((d, source));
+            }
+        }
+    }
+    best
+}
+
 /// Replace the normal backendRequest bound with an external-jump owner override.
 /// A defensive zero override is ignored because Pingora would interpret it as
 /// an immediate timeout; valid AI backend timeouts are guaranteed positive on
@@ -1126,15 +1151,8 @@ pub fn configure_peer_timeouts(edgion_http: &EdgionHttpProxy, peer: &mut Box<Htt
     let effective_backend_timeout =
         apply_upstream_read_timeout_override(normal_backend_timeout, upstream_read_timeout_override);
 
-    // connection_timeout is the connection-ESTABLISHMENT deadline, resolved
-    // independently of the request/read/write timeouts (which are folded below).
-    // Precedence: per-backend BTP connection.connectTimeout > global defaultConnectTimeout.
-    // Intentionally NOT derived from backendRequest/request_timeout: connection
-    // establishment is infrastructure overhead, and conflating the two would let a
-    // tight per-try request bound cause spurious connect-time 504s. A zero resolved
-    // deadline (degenerate `defaultConnectTimeout: "0s"`) yields None => left unset,
-    // never an instant-fail connect. Service/gRPC use only the captured
-    // `connect_timeout`; they do not re-read the store.
+    // Resolve the configured connect bound from the captured policy generation.
+    // End-to-end deadlines may tighten it; backendRequest remains I/O-only.
     let captured_timeout = selected_effective_policy(ctx).and_then(|policy| policy.connect_timeout);
     let selected_is_logical_backend = ctx.selected_backend.as_ref().is_some_and(SelectedHttpBackend::is_ai);
     let connect_deadline = choose_typed_connect_deadline(
@@ -1143,23 +1161,31 @@ pub fn configure_peer_timeouts(edgion_http: &EdgionHttpProxy, peer: &mut Box<Htt
         captured_timeout,
         backend_timeout.connect_timeout,
     );
-    if let Some(connect_deadline) = connect_deadline {
-        peer.options.connection_timeout = Some(connect_deadline);
-    }
+    let now = std::time::Instant::now();
+    let request_remaining = ctx
+        .request_timeout()
+        .map(|req| req.saturating_sub(now.saturating_duration_since(ctx.start_time)));
+    let grpc_remaining = ctx
+        .request_info
+        .grpc_client_deadline()
+        .map(|deadline| deadline.saturating_duration_since(now));
+    let connect = fold_connect_timeouts(connect_deadline, request_remaining, grpc_remaining);
+    ctx.connect_timeout_source = connect.map(|(_, source)| source);
+    peer.options.connection_timeout = connect.map(|(duration, _)| duration);
+    // Pingora applies connection_timeout separately to TCP and TLS. This outer
+    // bound prevents the two phases from each spending the remaining budget.
+    peer.options.total_connection_timeout = peer.options.connection_timeout;
 
     // Apply request_timeout as a ceiling on read/write timeout.
     // Gateway API spec: request_timeout is end-to-end; remaining time = timeout - elapsed.
     // Filter out zero remaining time to avoid setting Duration::ZERO on the peer (undefined behaviour).
-    let request_remaining = route_timeouts
-        .and_then(|rt| rt.request_timeout.as_duration())
-        .map(|req| req.saturating_sub(std::time::Instant::now().saturating_duration_since(ctx.start_time)))
-        .filter(|r| !r.is_zero());
+    let request_remaining = request_remaining.filter(|r| !r.is_zero());
 
     // Client-supplied `grpc-timeout` is another upper bound on read/write —
     // an intermediary that ignores it leaves upstream work running after the
     // client has given up. `grpc_remaining` returns the deadline minus now,
     // so we apply the same zero-guard as request_remaining.
-    let grpc_remaining = ctx.grpc_remaining().filter(|r| !r.is_zero());
+    let grpc_remaining = grpc_remaining.filter(|r| !r.is_zero());
 
     // Fold three independent upper bounds via labeled min (see
     // `fold_peer_timeouts` for tie-break semantics):
@@ -2355,6 +2381,92 @@ mod tests {
             fold_peer_timeouts(None, s(3), s(3)),
             Some((Duration::from_secs(3), PeerTimeoutSource::RequestDeadline))
         );
+    }
+
+    #[test]
+    fn connect_bounds_preserve_disabled_expired_and_tie_semantics() {
+        use crate::ctx::ConnectTimeoutSource::{Configured, GrpcDeadline, RequestDeadline};
+        let cases = [
+            ((None, None, None), None),
+            ((Some(Duration::ZERO), None, None), None),
+            ((s(5), None, None), Some((Duration::from_secs(5), Configured))),
+            ((s(1), s(2), s(3)), Some((Duration::from_secs(1), Configured))),
+            ((s(5), s(2), s(3)), Some((Duration::from_secs(2), RequestDeadline))),
+            ((s(5), s(3), s(2)), Some((Duration::from_secs(2), GrpcDeadline))),
+            ((None, s(2), None), Some((Duration::from_secs(2), RequestDeadline))),
+            ((None, None, s(2)), Some((Duration::from_secs(2), GrpcDeadline))),
+            ((s(2), s(2), s(2)), Some((Duration::from_secs(2), RequestDeadline))),
+            ((s(2), None, s(2)), Some((Duration::from_secs(2), GrpcDeadline))),
+            ((None, s(2), s(2)), Some((Duration::from_secs(2), RequestDeadline))),
+            (
+                (s(5), Some(Duration::ZERO), s(2)),
+                Some((Duration::ZERO, RequestDeadline)),
+            ),
+            ((s(5), None, Some(Duration::ZERO)), Some((Duration::ZERO, GrpcDeadline))),
+            (
+                (None, Some(Duration::ZERO), Some(Duration::ZERO)),
+                Some((Duration::ZERO, RequestDeadline)),
+            ),
+        ];
+        for ((configured, request, grpc), expected) in cases {
+            assert_eq!(super::fold_connect_timeouts(configured, request, grpc), expected);
+        }
+    }
+
+    #[test]
+    fn configure_connect_bounds_are_independent_and_reset_for_each_peer() {
+        use crate::ctx::ConnectTimeoutSource;
+        use edgion_resources::resources::http_route::{ParsedRouteTimeouts, RouteTimeout};
+        let mut proxy = super::EdgionHttpProxy {
+            listener_port: 80,
+            is_https_listener: false,
+            listener_key: edgion_resources::ListenerKey("127.0.0.1:80/HTTP".to_string()),
+            server_header_opts: Default::default(),
+            access_logger: Arc::new(crate::observe::AccessLogger::default()),
+            edgion_gateway_config: Arc::new(edgion_resources::EdgionGatewayConfig::new("test", Default::default())),
+            request_body_config_name: None,
+            parsed_timeouts: Default::default(),
+            enable_http2: false,
+            real_ip_extractor: None,
+            preflight_handler: super::super::PreflightHandler::new(None),
+            http_route_manager: Arc::new(crate::routes::http::routes_mgr::HttpPortRouteManager::default()),
+            grpc_route_manager: Arc::new(crate::routes::grpc::GrpcPortRouteManager::default()),
+        };
+        let mut ctx = EdgionHttpContext::new();
+        let mut route = jump_route_unit(vec![]);
+        Arc::make_mut(&mut Arc::make_mut(&mut route).rule).parsed_timeouts = Some(ParsedRouteTimeouts {
+            request_timeout: RouteTimeout::Duration(Duration::from_secs(3)),
+            backend_request_timeout: RouteTimeout::Duration(Duration::from_millis(1)),
+        });
+        ctx.route_unit = Some(route);
+        ctx.start_time = Instant::now() - Duration::from_secs(2);
+        let mut peer = Box::new(HttpPeer::new("127.0.0.1:80", false, String::new()));
+        super::configure_peer_timeouts(&proxy, &mut peer, &mut ctx);
+        assert_eq!(ctx.connect_timeout_source, Some(ConnectTimeoutSource::RequestDeadline));
+        let connect = peer.options.total_connection_timeout.unwrap();
+        assert!(connect > Duration::from_millis(500) && connect <= Duration::from_secs(1));
+        assert_eq!(peer.options.connection_timeout, Some(connect));
+        assert_eq!(peer.options.read_timeout, Some(Duration::from_millis(1)));
+        assert_eq!(ctx.peer_timeout_source, Some(PeerTimeoutSource::BackendRequest));
+
+        ctx.request_info
+            .set_grpc_client_deadline(Instant::now() + Duration::from_millis(100));
+        super::configure_peer_timeouts(&proxy, &mut peer, &mut ctx);
+        assert_eq!(ctx.connect_timeout_source, Some(ConnectTimeoutSource::GrpcDeadline));
+        assert!(peer.options.total_connection_timeout.unwrap() <= Duration::from_millis(100));
+
+        ctx.start_time = Instant::now() - Duration::from_secs(4);
+        super::configure_peer_timeouts(&proxy, &mut peer, &mut ctx);
+        assert_eq!(ctx.connect_timeout_source, Some(ConnectTimeoutSource::RequestDeadline));
+        assert_eq!(peer.options.total_connection_timeout, Some(Duration::ZERO));
+
+        ctx.route_unit = None;
+        ctx.request_info = Default::default();
+        proxy.parsed_timeouts.backend.connect_timeout = Duration::ZERO;
+        super::configure_peer_timeouts(&proxy, &mut peer, &mut ctx);
+        assert_eq!(ctx.connect_timeout_source, None);
+        assert_eq!(peer.options.connection_timeout, None);
+        assert_eq!(peer.options.total_connection_timeout, None);
     }
 
     #[test]
