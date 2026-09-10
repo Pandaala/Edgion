@@ -16,7 +16,11 @@ This is the single concise record of actual changes across the file-by-file audi
 
 ## Entries
 
-- B0272: locked five request-metadata string caps at exact UTF-8 byte boundaries and added missing-value/Content-Length parse cases with strict observable execution. Original nine tests preserved. Independent PASS; full DSL 383/383, locked workspace check/Clippy and all guards passed. Commit pending automatic local commit; no production or integration changes; no push.
+- B0273: replaced the header-name loop's empty-success oracle with exact unordered multiplicities and added fixed 256-name/exact byte-cap tests. Independent code PASS; DSL 386/386, locked workspace check/Clippy and all guards passed. User-authorized standalone D0142 documents the actual TLSRoute API fallback and resolves three external doc links; separate documentation review PASS. Commit pending automatic local commit; no production/integration changes or push.
+
+- External sync `78a25c3a`: verified 21 modified, two removed and nine added integration paths against Git and worktree bytes/mode; reconciled only those freeze entries (3,238 total). Reopened six externally changed terminal Gateway files, retained historical evidence, and retired removed standalone tasks in coordinator records only. B0273 request-header brief remains valid; no campaign integration-file edit.
+
+- B0272: locked five request-metadata string caps at exact UTF-8 byte boundaries and added missing-value/Content-Length parse cases with strict observable execution. Original nine tests preserved. Independent PASS; full DSL 383/383, locked workspace check/Clippy and all guards passed. Commit `154def9f`; no production or integration changes; no push.
 
 - B0271: asserted exact Redis rate-limit map/string budget errors and added a simultaneous exact-budget provider-not-ready envelope test with strict completion observation. Independent PASS; full DSL 377/377, locked workspace check/Clippy and all guards passed. Commit `a724f56c`; no network, production or integration changes; no push.
 

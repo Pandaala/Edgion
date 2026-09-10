@@ -27,4 +27,4 @@
 
 ## Handoff
 
-- Ledger/changelog updated. Commit pending automatic local commit; never push.
+- Ledger/changelog updated. Commit `154def9f`; never pushed by the campaign.

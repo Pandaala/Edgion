@@ -394,7 +394,7 @@
 | `edgion-gateway/src/plugins/http/dsl/tests/range_and_string_ops.rs` | `plugins-http-dsl` | test | changed | B0270: typed negative assertions, Unicode split and range hard-ceiling coverage; independent PASS, DSL 376/376 |
 | `edgion-gateway/src/plugins/http/dsl/tests/redis_builtins.rs` | `plugins-http-dsl` | test | changed | B0271: exact rate-limit result budget errors and success boundary; independent PASS, DSL 377/377 |
 | `edgion-gateway/src/plugins/http/dsl/tests/req_metadata_tests.rs` | `plugins-http-dsl` | test | changed | B0272: metadata string-cap and nil/Content-Length boundary tests; independent PASS, DSL 383/383 |
-| `edgion-gateway/src/plugins/http/dsl/tests/request_builtins.rs` | `plugins-http-dsl` | test | pending | — |
+| `edgion-gateway/src/plugins/http/dsl/tests/request_builtins.rs` | `plugins-http-dsl` | test | changed | B0273: exact header-name multiplicities and cap boundaries; independent PASS, DSL 386/386; authorized D0142 resolves doc guard |
 | `edgion-gateway/src/plugins/http/dsl/tests/request_mutation.rs` | `plugins-http-dsl` | test | pending | — |
 | `edgion-gateway/src/plugins/http/dsl/tests/resp_p2_tests.rs` | `plugins-http-dsl` | test | pending | — |
 | `edgion-gateway/src/plugins/http/dsl/tests/resp_set_status_tests.rs` | `plugins-http-dsl` | test | pending | — |
@@ -506,7 +506,7 @@
 | `edgion-gateway/src/plugins/http/response_rewrite/mod.rs` | `plugins-http-response-rewrite` | source | examined-no-change | B0104 |
 | `edgion-gateway/src/plugins/http/response_rewrite/plugin.rs` | `plugins-http-response-rewrite` | source | changed | B0104 |
 | `edgion-gateway/src/plugins/http/trace_context/mod.rs` | `plugins-http-trace-context` | source | examined-no-change | B0105 |
-| `edgion-gateway/src/plugins/http/trace_context/plugin.rs` | `plugins-http-trace-context` | source | changed | B0105 |
+| `edgion-gateway/src/plugins/http/trace_context/plugin.rs` | `plugins-http-trace-context` | source | pending | Reopened after external 78a25c3a; prior B0105 evidence retained |
 | `edgion-gateway/src/plugins/http/trace_context/w3c.rs` | `plugins-http-trace-context` | source | changed | B0105 |
 | `edgion-gateway/src/plugins/http/waf/mod.rs` | `plugins-http-waf` | source | changed | B0106 |
 | `edgion-gateway/src/plugins/http/wasm/callout.rs` | `plugins-http-wasm` | source | changed | B0107 |
@@ -647,20 +647,20 @@
 | `edgion-gateway/src/routes/tls/passthrough_proxy.rs` | `routes-shared` | source | changed | B0206: released table and initial replay buffer before relay, borrowed endpoint; independent LGTM and routes 595/595 |
 | `edgion-gateway/src/routes/tls/proxy.rs` | `routes-shared` | source | changed | B0207: released table guard and avoided full TLS metadata copy; independent LGTM, routes 597/597; unrelated context assertions tracked D0119 |
 | `edgion-gateway/src/routes/tls/route_unit.rs` | `routes-shared` | source | examined-no-change | B0208: preserved compiled immutable unit and shared selector/live plugin contracts; independent approval, unit 9/9 and TLS 54/54 |
-| `edgion-gateway/src/routes/tls/routes_mgr.rs` | `routes-shared` | source | examined-no-change | B0209: serialized rebuild and retained-manager cleanup verified; independent approval, TLS 54/54 |
+| `edgion-gateway/src/routes/tls/routes_mgr.rs` | `routes-shared` | source | pending | Reopened after external 78a25c3a; prior B0209 serialized rebuild/cleanup evidence retained |
 | `edgion-gateway/src/routes/tls/sni_parser.rs` | `routes-shared` | source | changed | B0210: enforced parent-bounded declared lengths; corrected independent LGTM, parser 16/16 and routes 602/602 |
 | `edgion-gateway/src/routes/udp/conf_handler_impl.rs` | `routes-shared` | source | changed | B0211: preserved schema Arcs through full/add/update; independent LGTM, handler 10/10 and routes 605/605 |
 | `edgion-gateway/src/routes/udp/edgion_udp.rs` | `routes-shared` | source | changed | B0212: removed five session allocations and success-path IP formatting; independent LGTM, UDP 34/34; D0120–22 separate |
 | `edgion-gateway/src/routes/udp/mod.rs` | `routes-shared` | source | deferred | B0213: independent approval of D0122 shutdown ownership task; UDP 34/34 |
 | `edgion-gateway/src/routes/udp/route_unit.rs` | `routes-shared` | source | examined-no-change | B0214: runtime retained; owning plugin-key/inactivity knowledge corrected with independent LGTM |
-| `edgion-gateway/src/routes/udp/routes_mgr.rs` | `routes-shared` | source | examined-no-change | B0215: independent approval of canonical serialized publication/retained-handle cleanup; manager 6/6, handler 10/10 |
-| `edgion-gateway/src/routes/udp/udp_route_table.rs` | `routes-shared` | source | examined-no-change | B0216: deterministic owned-unit lookup and route-count contract retained; independent approval, table 4/4 |
+| `edgion-gateway/src/routes/udp/routes_mgr.rs` | `routes-shared` | source | pending | Reopened after external 78a25c3a; prior B0215 publication/cleanup evidence retained |
+| `edgion-gateway/src/routes/udp/udp_route_table.rs` | `routes-shared` | source | pending | Reopened after external 78a25c3a; prior B0216 lookup/route-count evidence retained |
 | `edgion-gateway/src/runtime/gateway_info.rs` | `runtime` | source | changed | B0217: immutable precomputed borrowed identity key; independent LGTM and gates passed; local commit authorized |
 | `edgion-gateway/src/runtime/handler.rs` | `runtime` | source | deferred | B0218: independently confirmed D0123/D0003, safe continuation; policy 12/12 and PGIS 10/10 |
 | `edgion-gateway/src/runtime/matching/mod.rs` | `runtime` | source | examined-no-change | B0219: independently verified live facade; matching 41/41, no worthwhile rewrite |
 | `edgion-gateway/src/runtime/matching/route.rs` | `runtime` | source | changed | B0220: reused parent-local Gateway lookup; independent LGTM, 19 route tests and adjacent matching gates passed |
 | `edgion-gateway/src/runtime/matching/tests/tls_test.rs` | `runtime` | test | examined-no-change | B0221: independent LGTM; retained security tests, fresh 26/26; D0124 knowledge task |
-| `edgion-gateway/src/runtime/matching/tls.rs` | `runtime` | source | examined-no-change | B0222: independent LGTM; TLS 26/26; D0125 standalone retention investigation |
+| `edgion-gateway/src/runtime/matching/tls.rs` | `runtime` | source | pending | Reopened after external 78a25c3a; prior B0222 TLS evidence and D0125 investigation retained |
 | `edgion-gateway/src/runtime/mod.rs` | `runtime` | source | examined-no-change | B0223: independent LGTM; retained explicit facade, identity 3/3 and matching 45/45 |
 | `edgion-gateway/src/runtime/server/base.rs` | `runtime` | source | changed | B0176: remove the now-unconsumed GatewayClass clone chain |
 | `edgion-gateway/src/runtime/server/error_response.rs` | `runtime` | source | changed | B0224: static HTML bytes, independent LGTM, response 11/11 and final status 8/8; D0126 separate |
@@ -687,7 +687,7 @@
 | `edgion-gateway/src/tls/runtime/backend/cert_extractor.rs` | `tls-runtime` | source | changed | TLS-RUNTIME-001 / `0090e5bf` |
 | `edgion-gateway/src/tls/runtime/backend/mod.rs` | `tls-runtime` | source | examined-no-change | TLS-RUNTIME-001 / `0090e5bf` |
 | `edgion-gateway/src/tls/runtime/gateway/mod.rs` | `tls-runtime` | source | examined-no-change | TLS-RUNTIME-001 / `0090e5bf` |
-| `edgion-gateway/src/tls/runtime/gateway/tls_pingora.rs` | `tls-runtime` | source | changed | TLS-RUNTIME-001 / `0090e5bf`; owned handoff and exactly-once fault audit deferred to `tasks/todo/tls-ssl-ctx-owned-handoff-and-exactly-once-audit.md` |
+| `edgion-gateway/src/tls/runtime/gateway/tls_pingora.rs` | `tls-runtime` | source | pending | Reopened after external 78a25c3a; prior TLS-RUNTIME-001/0090e5bf and owned-handoff/exactly-once audit evidence retained |
 | `edgion-gateway/src/tls/runtime/mod.rs` | `tls-runtime` | source | examined-no-change | TLS-RUNTIME-001 / `0090e5bf` |
 | `edgion-gateway/src/tls/store/cert_matcher.rs` | `tls-store` | source | examined-no-change | TLS-STORE-001 / `19d6e382` |
 | `edgion-gateway/src/tls/store/conf_handler.rs` | `tls-store` | source | changed | TLS-STORE-001 / `19d6e382` |

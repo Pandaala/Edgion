@@ -10,11 +10,11 @@
 | Priority | P1 |
 | Baseline commit | `d484e580` |
 | Scope | Every tracked file under `edgion-gateway/` |
-| Campaign status | in-progress; B0272 reviewed and verified, awaiting local commit. |
-| Coverage | 549 current Gateway files: 254 changed, 185 examined-no-change, 14 deferred, 96 non-terminal; 3 historical rows are removed. The new canonical bounded-regex helper is included in the current inventory. Four terminal files changed by external `bea47373` remain reopened without discarding their historical evidence. |
-| Active batch | B0272 commit gate; next target is DSL `tests/request_builtins.rs`. Automatic local batch commits authorized, never push. |
-| Analysis queue | None queued. D0127–D0141 track confirmed separate work. |
-| Integration freeze | 3,231 files. External `2c01a075` added 95 and refreshed 38 entries; `bea47373` and `5cd384c6` refreshed six more existing entries. All are byte/mode-identical to their commits, the full check passes, and the campaign made no integration-test edit. |
+| Campaign status | in-progress; B0273 code and authorized documentation support independently reviewed, all gates passed; local commit pending. |
+| Coverage | 549 current Gateway files: 253 changed, 181 examined-no-change, 14 deferred, 101 non-terminal; 3 historical rows are removed. External `78a25c3a` reopened six terminal files; four earlier `bea47373` reopens remain pending. Historical evidence is retained. |
+| Active batch | B0273 commit gate; next target is DSL `tests/request_mutation.rs`. Automatic local commits, never push. |
+| Analysis queue | None queued. D0127–D0142 track confirmed separate work; tasks removed by external `78a25c3a` are retired only in coordinator records. |
+| Integration freeze | 3,238 files. External `78a25c3a` refreshed 21, removed two relocated paths and added nine entries, each verified against old/new Git objects and worktree bytes/mode. Prior reconciliations remain intact. Full check passes; campaign made no integration-test edit. |
 
 ## AI guide summary
 
