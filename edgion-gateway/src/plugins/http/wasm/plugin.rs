@@ -66,7 +66,7 @@ impl WasmPlugin {
         let plugin = WasmPlugin {
             name: PLUGIN_NAME.to_string(),
             config: config.clone(),
-            cache_key: cache_key.clone(),
+            cache_key,
             metrics_label: config.source.metrics_label(),
             callout_allowlist: Arc::from(callout_allowlist),
         };
@@ -77,7 +77,7 @@ impl WasmPlugin {
         global_vm_manager().register_plugin(&plugin.cache_key, plugin.callout_grant());
         // Warm the module cache so the first request does not pay compile
         // latency (best-effort; lazy load covers the miss).
-        global_vm_manager().spawn_preload(config, cache_key);
+        global_vm_manager().spawn_preload(config, &plugin.cache_key);
         plugin
     }
 
@@ -519,7 +519,7 @@ impl UpstreamResponseBodyFilter for WasmPlugin {
         _session: &mut dyn PluginSession,
     ) -> Option<std::time::Duration> {
         let Some(entry) = global_vm_manager().try_get_or_schedule_refresh(&self.config, &self.cache_key) else {
-            global_vm_manager().spawn_preload(&self.config, self.cache_key.clone());
+            global_vm_manager().spawn_preload(&self.config, &self.cache_key);
             return None;
         };
         // Header-only guests pay nothing per chunk: skip the lease entirely
@@ -699,7 +699,7 @@ impl UpstreamResponseFilter for WasmPlugin {
         // Sync hook: no await available. Use the non-blocking cache lookup;
         // on miss kick a background load and apply the fail mode this time.
         let Some(entry) = global_vm_manager().try_get_or_schedule_refresh(&self.config, &self.cache_key) else {
-            global_vm_manager().spawn_preload(&self.config, self.cache_key.clone());
+            global_vm_manager().spawn_preload(&self.config, &self.cache_key);
             return self.fail_mode(session, log, "not loaded");
         };
         let lease = match entry.acquire(self.config.timeout_ms) {

@@ -90,11 +90,13 @@ metrics inventory, and Pingora source policy guards all passed. No Rust or
 existing integration-test files changed; full tests were not requested or run.
 Historical B0147 test results do not establish current throughput.
 
-An unrelated UDP architecture wording conflict remains a separate follow-up:
-reconcile `13-stream-plugin-dev.md`'s unsupported-annotation wording with the
+The separate `clarify-stream-plugin-udp-architecture-coverage` documentation task
+reconciled the architecture wording with the
 [documented UDPRoute wiring](../../routing/regression-guards/udproute-stream-plugins-annotation-wiring.md).
-The previously linked standalone task is absent; no UDP documentation correction
-or runtime change is claimed here.
+That correction preserves this decision's narrower scope: Gateway-attached
+Pingora `ConnectionFilter` admission does not cover UDP listeners, while a
+UDPRoute attachment runs the same `spec.plugins` runtime at new-session admission.
+No UDP runtime or integration-test behavior changed.
 
 Re-evaluate if a measured connection-rate target cannot be met with the existing
 mechanisms, dependency stalls cause an operator incident, another blocking

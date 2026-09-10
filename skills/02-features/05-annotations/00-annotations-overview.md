@@ -88,7 +88,12 @@ layer has no plugin chain to attach a declaration to.
 | `edgion.io/tcp-keepalive-probes` | integer string | Failed probe count before connection is declared dead; clamped 1–20; absent or invalid = 9. Only applied when `tcp-keepalive-time` is set (TCPRoute / TLSRoute) |
 | `edgion.io/log-label.<key>` | string | **TLSRoute only.** Adds `<key>=<value>` to `Rsc.labels` for `ssl.log`. The TLS handshake layer has no plugin chain, so it cannot carry an `AccessLogExtern` declaration — this prefix is TLS's only log-projection carrier. |
 
-- On `UDPRoute`, `edgion.io/edgion-stream-plugins` runs only the Stage-1 ConnectionFilter (`spec.plugins`, IP-based, fail-close); there is no TLS stage.
+- On `UDPRoute`, `edgion.io/edgion-stream-plugins` runs only `spec.plugins`
+  (connection-context, IP-based, fail-close) when admitting a new UDP session;
+  it does not use Pingora's listener `ConnectionFilter`, and there is no TLS stage.
+- A Gateway-level `edgion.io/edgion-stream-plugins` attachment does not cover a
+  UDP listener because that listener runs as a separate Tokio task rather than a
+  Pingora `Service`. Attach the policy to `UDPRoute` for UDP session admission.
 
 ### EdgionTls
 

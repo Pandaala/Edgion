@@ -4,7 +4,7 @@
 >
 > Stream 插件是 `EdgionStreamPlugins` CRD 提供的连接级（L4）插件；它们在 HTTP 解析之前运行，不属于标准 Gateway API。
 
-Stream 插件在 Pingora 的 ConnectionFilter 阶段对原始 TCP/TLS/UDP 连接应用访问控制。它们在转发任何 payload 之前决定是否允许某个连接（对于 UDP，则是一个会话）。
+Stream 插件在转发任何 payload 之前，对原始 TCP/TLS 连接或 UDP 会话应用访问控制。Gateway 级附件在基于 Pingora `Service` 的监听器上运行于 `ConnectionFilter` 阶段；UDPRoute 附件则由 UDP 代理在接纳新的来源地址会话时执行。
 
 ## 附加方式
 
@@ -16,7 +16,7 @@ metadata:
     edgion.io/edgion-stream-plugins: "edgion-test/tcp-ip-restriction-deny"
 ```
 
-同一注解适用于 `TCPRoute`、`TLSRoute`、`UDPRoute` 以及 Gateway 监听器级别。在 `UDPRoute` 上，由于 UDP 没有 TLS 握手，只会执行 Stage-1 ConnectionFilter（`spec.plugins`）。TLSRoute 只执行 `spec.tlsRoutePlugins`；引用非空的 Stage-1-only 资源会拒绝连接。详见 [TLSRoute 阶段契约](../../dev-guide/stream-plugin-development.md#tlsroute-阶段契约)。
+同一注解适用于 `TCPRoute`、`TLSRoute`、`UDPRoute` 以及 Gateway 监听器级别，但不同协议的附件生命周期不同。在 `UDPRoute` 上，由于 UDP 没有 TLS 握手，只会在接纳新会话时执行连接上下文运行时（`spec.plugins`）。Gateway 级附件不覆盖 UDP 监听器，因为 UDP 监听器不使用 Pingora `Service` 或监听器 `ConnectionFilter`；要保护 UDP 会话接入，应把资源直接附加到 `UDPRoute`。TLSRoute 只执行 `spec.tlsRoutePlugins`；引用非空的 Stage-1-only 资源会拒绝连接。详见 [TLSRoute 阶段契约](../../dev-guide/stream-plugin-development.md#tlsroute-阶段契约)。
 
 ## 支持的插件
 
@@ -24,7 +24,7 @@ metadata:
 |------|----------|------|
 | `IpRestriction` | 内联规则 | IP 允许/拒绝分组，直接嵌入插件中。 |
 | `GlobalConnectionIpRestriction` | 内联配置 + 可选 `activeProfileRef` | 完整 IP 规则集（命名 `profiles`）内联在插件中；可选的 `Selector` EdgionConfigData 用于热切换**当前激活哪个 profile**。由 Center 管理并同步到各 Controller。 |
-| `ConnectionRateLimit` | `config` 对象 | 本地监听器保护与可选的 Redis 共享限额；Gateway 挂载在 TLS 前执行。详见下文 [ConnectionRateLimit 小节](#connectionratelimit-pre-tls-连接限流)。 |
+| `ConnectionRateLimit` | `config` 对象 | 本地监听器保护与可选的 Redis 共享限额；Gateway 挂载在 TLS 前执行，UDPRoute 挂载作用于新会话准入。详见下文 [ConnectionRateLimit 小节](#connectionratelimit-连接与-udp-会话接入限流)。 |
 
 `spec.plugins` 下的每个条目都有可选的 `enable` 标志（默认 `true`）、一个 `type` 和一个 `config` 对象。
 
@@ -259,15 +259,15 @@ spec:
         defaultAction: deny
 ```
 
-## ConnectionRateLimit: pre-TLS 连接限流
+## ConnectionRateLimit: 连接与 UDP 会话接入限流
 
-`ConnectionRateLimit` 支持组合使用本地监听器保护与 Redis 共享限额。挂载到 Gateway 监听器时，检查在 TLS 握手**之前**执行；挂载到 TCPRoute 时，在路由匹配后执行。
+`ConnectionRateLimit` 支持组合使用本地监听器保护与 Redis 共享限额。挂载到 Gateway 监听器时，检查在 TLS 握手**之前**执行；挂载到 TCPRoute 时，在路由匹配后执行；挂载到 UDPRoute 时，在首个数据报尝试创建新的来源地址会话时执行。它不会统计已建立会话的数据报，Gateway 级附件也不覆盖 UDP 监听器。
 
 ### 选择本地与共享限额
 
 常规连接突发保护建议配置 `perListener`，保持 `redisDistributed: false`，使用不依赖 Redis 的本地令牌桶。需要共享限额时，同一个插件可以组合本地与 Redis 检查：先执行本地 `perListener` 门控，再执行可选的分布式 `perListener` 检查，最后执行可选的 `perSourceIp` 检查。任一步拒绝即停止；设置 `redisDistributed: true` 仍会保留本地门控。
 
-下方组合示例使用本地 `perListener` 保护与 Redis `perSourceIp` 限额。Redis 连接限流按需启用，应根据预期新连接速率与依赖延迟评估容量。HTTP 业务配额优先使用请求级限流：长连接或多路复用连接的数量不能代表请求数量。
+下方组合示例使用本地 `perListener` 保护与 Redis `perSourceIp` 限额。Redis 连接限流按需启用，应根据预期新连接或 UDP 会话准入速率与依赖延迟评估容量。HTTP 业务配额优先使用请求级限流：长连接或多路复用连接的数量不能代表请求数量。
 
 ### 为什么 `redisTimeout` 被硬上限封顶为 1s
 
@@ -275,7 +275,7 @@ spec:
 
 `redisTimeout` 默认 `100ms`，硬上限 `1s`，作用于**每个 Redis 维度**；多个维度或插件条目的等待时间可以叠加。Redis 客户端缺失或已标记不健康时立即执行失败策略；其他情况下，即使 fail-open 也可能先等待调用超时。本地过滤能降低 Redis 压力，但不能消除已通过本地检查的连接所遇到的等待。Pingora 的 `listener_tasks_per_fd` 控制 accept 并行度，与进程 FD 上限不同，也不是 `ConnectionRateLimit` 配置字段。提高并行度还会增加并发 Redis 检查，需要结合实际负载验证。握手超时在过滤结束后开始，不覆盖这段等待。
 
-> **`perSourceIp` 没有本地兜底。** 与 `perListener` 维度（即使 Redis 不可达，本地令牌桶仍然有效）不同，`perSourceIp` 没有进程内回退。进入该维度的连接需要 Redis 决策或执行配置的失败策略。如果需要 fail-close 行为，请显式设置 `onRedisFailure`。
+> **`perSourceIp` 没有本地兜底。** 与 `perListener` 维度（即使 Redis 不可达，本地令牌桶仍然有效）不同，`perSourceIp` 没有进程内回退。进入该维度的连接或 UDP 会话准入尝试需要 Redis 决策或执行配置的失败策略。如果需要 fail-close 行为，请显式设置 `onRedisFailure`。
 
 ### 配置字段
 
@@ -289,7 +289,7 @@ spec:
 
 **桶的作用域**：计数器（Redis key 与本地令牌桶都是）按拥有它的插件条目命名空间隔离，形式为 EdgionStreamPlugins 资源的 `<namespace>/<name>/#<条目下标>`。同一个监听端口上可能同时有两个 `ConnectionRateLimit` 生效（监听器级与 TCPRoute 级各挂一份、或同一资源里写了两条）；没有这层作用域，它们会共用一个计数器却各按自己的 `rate` 判断，`interval` 不同还会互相破坏窗口轮转。各 Gateway 实例从同一份资源推导出相同作用域，集群级计数不受影响，热重载也不会丢桶。调换条目顺序会改变身份：移到曾经使用过的位置，可能继承该位置保留的本地预算。需要预算连续性时，请保持名称和条目位置稳定。
 
-**热重载时的本地预算**：每个监听端口在连接首次使用新配置执行到该条目时采用新限额。切换前先按旧速率结算经过的时间；提高 `rate` 只增加容量差额，降低时将余额截断到新容量。只修改 Redis 设置（包括 `keyPrefix`）不会重置本地预算。在同一 Gateway 进程内，禁用或删除后再启用或重建，同一条目和端口仍保留本地状态；空闲时间按最后生效的本地速率累计。
+**热重载时的本地预算**：每个监听端口在连接或 UDP 会话准入尝试首次使用新配置执行到该条目时采用新限额。切换前先按旧速率结算经过的时间；提高 `rate` 只增加容量差额，降低时将余额截断到新容量。只修改 Redis 设置（包括 `keyPrefix`）不会重置本地预算。在同一 Gateway 进程内，禁用或删除后再启用或重建，同一条目和端口仍保留本地状态；空闲时间按最后生效的本地速率累计。
 
 热重载期间，已使用旧配置的准入操作可以继续完成。端口采用新本地限额后，这些操作消耗更新后的本地预算，但仍使用原来的 Redis 设置。两者是顺序检查，不是本地与 Redis 的原子事务；后续 Redis 拒绝不会退还本地令牌。在监听器和 TCPRoute 两层重复引用同一资源，仍会在两层分别执行并消耗该条目的预算。
 
@@ -297,7 +297,7 @@ spec:
 
 | 字段 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `rate` | Integer | **必填** | 每个时间窗口内的最大新建连接数。 |
+| `rate` | Integer | **必填** | 每个时间窗口内最大的 TCP/TLS 新连接数或 UDP 会话准入尝试数；不统计已建立 UDP 会话的数据报。 |
 | `interval` | String | **必填** | 时间窗口，例如 `"1s"`、`"1m"`。 |
 | `redisDistributed` | Boolean | `false` | （仅 `perListener`）为 `true` 时，在本地门控之外再通过 Redis 进行全集群范围的限额。 |
 | `onRedisFailure` | Enum | `Allow`（`perSourceIp`）/ `Deny`（`perListener`） | Redis 不可用或 `redisTimeout` 超时时的行为。`Allow` = 放行；`Deny` = 拒绝。 |

@@ -7,7 +7,9 @@ This document is for contributors who need to extend `EdgionStreamPlugins`. It e
 
 ## What This Plugin Family Is For
 
-`EdgionStreamPlugins` is Edgion's connection-layer extension mechanism. It lets the gateway apply extra logic before HTTP parsing or after TLSRoute matching at the TCP/TLS layer.
+`EdgionStreamPlugins` is Edgion's L4 extension mechanism. It lets the gateway
+apply extra logic before HTTP parsing, when admitting a UDP session, or after
+TLSRoute matching.
 
 Compared with HTTP plugins, stream plugins focus on different problems:
 
@@ -23,13 +25,18 @@ The most mature current implementation is IP restriction, with code under:
 
 Edgion currently splits stream plugins into two stages.
 
-### Stage 1: ConnectionFilter
+### Stage 1: connection-context runtime
 
 Characteristics:
 
-- runs before TLS handshake and HTTP parsing
+- runs before TLS handshake and HTTP parsing for TCP-based listeners, or before
+  forwarding the first datagram of a new UDPRoute session
 - only has access to client IP, listener port, and remote address style context
 - best for early connection-level allow/deny decisions
+
+Gateway attachments use Pingora's listener `ConnectionFilter`, but UDP listeners
+are independent Tokio tasks and do not use that bridge. UDPRoute attachments
+execute the same `spec.plugins` runtime in the UDP proxy at session admission.
 
 Typical cases:
 
@@ -78,15 +85,15 @@ graph TD
     C --> D["Controller ProcessorHandler"]
     D --> E["Config sync to Gateway"]
     E --> F["StreamPluginStore compile and publish"]
-    F --> G["Gateway / TCPRoute / TLSRoute annotation binding"]
-    G --> H["Stage 1 ConnectionFilter or Stage 2 TlsRoute runtime"]
+    F --> G["Gateway / TCPRoute / TLSRoute / UDPRoute annotation binding"]
+    G --> H["Stage 1 connection-context or Stage 2 TlsRoute runtime"]
 ```
 
 The usual failure is not “forgot to implement a trait.” It is one of the middle segments:
 
 - Gateway `compile_stream_plugins` did not construct the selected stage
 - Gateway did not actually cache and hot-reload `EdgionStreamPlugins`
-- the `Gateway` / `TCPRoute` / `TLSRoute` annotation path never reached the runtime
+- the `Gateway` / `TCPRoute` / `TLSRoute` / `UDPRoute` annotation path never reached the runtime
 
 ## Resource-Side Code Locations
 
@@ -120,6 +127,8 @@ The most important Gateway-side files are:
 - `edgion-gateway/src/runtime/server/listener_builder.rs`
 - `edgion-gateway/src/routes/tcp/conf_handler_impl.rs`
 - `edgion-gateway/src/routes/tls/proxy.rs`
+- `edgion-gateway/src/routes/udp/route_unit.rs`
+- `edgion-gateway/src/routes/udp/edgion_udp.rs`
 
 A simple mental model:
 
@@ -137,11 +146,12 @@ metadata:
     edgion.io/edgion-stream-plugins: "policy-name"
 ```
 
-It is currently used mainly on:
+It is currently used on:
 
 - `Gateway`
 - `TCPRoute`
 - `TLSRoute`
+- `UDPRoute`
 
 This is not just a documentation convention; it is the key the current implementation reads.
 The repository historically had older forms such as `edgion.io/stream-plugins`. New work should not keep copying that legacy key forward.
@@ -149,6 +159,9 @@ The repository historically had older forms such as `edgion.io/stream-plugins`. 
 On a `Gateway`, the value must be an unqualified name and resolves in the Gateway's own namespace.
 Slash-containing values are rejected by the Controller and fail closed defensively in the Gateway.
 `TCPRoute`, `TLSRoute`, and `UDPRoute` retain their separate `name` or `namespace/name` contract.
+Gateway attachment does not cover a UDP listener; attach the resource directly
+to `UDPRoute` for UDP session admission. That route check runs once for a new
+source-address session, not once per datagram, and executes only `spec.plugins`.
 For centralized data with per-namespace plugin ownership, keep a local `EdgionStreamPlugins` wrapper
 and reference shared `EdgionConfigData` through its existing authorization controls.
 
@@ -159,7 +172,7 @@ and reference shared `EdgionConfigData` through its existing authorization contr
 3. Add the new type to `EdgionStreamPlugin` or `TlsRouteStreamPlugin`.
 4. Register runtime construction in the matching runtime module.
 5. Confirm Gateway `compile_stream_plugins` constructs the selected stage before publication.
-6. Confirm the referencing `Gateway` / `TCPRoute` / `TLSRoute` really resolves a store key.
+6. Confirm the referencing `Gateway` / `TCPRoute` / `TLSRoute` / `UDPRoute` really resolves a store key and uses the correct lifecycle.
 7. Add tests and example YAML last.
 
 If you want an AI tool to implement it, start from the skill entry instead:
@@ -178,19 +191,22 @@ At minimum, cover three layers.
 ### 2. Reference Layer
 
 - `Gateway` annotations accept only a same-namespace `name`; `TCPRoute` / `TLSRoute` / `UDPRoute` annotations resolve both `name` and `namespace/name`
-- Gateway stops using stale objects after deletion
+- the store and subsequent admissions stop resolving a deleted resource; an
+  already-established UDP session remains pinned and is not immediately revoked
 
 ### 3. Runtime Layer
 
 - behavior is correct when the plugin matches
 - unrelated traffic is not blocked accidentally
-- hot reload does not leave old config behind
+- hot reload affects subsequent connections and UDP session admissions without
+  leaving a stale store generation; it does not re-authorize established UDP sessions
 
 Existing examples and integration fixtures are mainly under:
 
 - `edgion-tests/integration/conf/Gateway/StreamPlugins/`
 - `edgion-tests/integration/conf/TCPRoute/StreamPlugins/`
 - `edgion-tests/integration/conf/TLSRoute/StreamPlugins/`
+- `edgion-tests/integration/conf/UDPRoute/StreamPlugins/`
 
 ## Manual Review Checklist
 
@@ -198,7 +214,7 @@ Existing examples and integration fixtures are mainly under:
 - are enum, runtime, and module exports all wired
 - does the annotation still use `edgion.io/edgion-stream-plugins`
 - did the change reuse an existing config structure where appropriate
-- does Gateway actually hot-reload after resource update / delete
+- does Gateway actually hot-reload subsequent admissions after resource update / delete, without assuming established UDP sessions are revoked
 - do tests cover add, update, and delete
 
 ## Related Docs

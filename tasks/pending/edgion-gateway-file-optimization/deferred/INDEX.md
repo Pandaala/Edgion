@@ -169,7 +169,7 @@ These entries are backlinks only. A linked `tasks/todo` file is the editable sou
 | Investigate plugin policy and invalid-generation retention | pending | [task](../../../todo/investigate-plugin-policy-invalid-generation-retention.md) |
 | Align upstream response stage documentation | retired externally | Task removed by user-synchronized `78a25c3a`; history retained in Git. |
 | Align response-body filter terminal documentation | retired externally | Task removed by user-synchronized `78a25c3a`; history retained in Git. |
-| Avoid Wasm response in-flight cache-key allocation | pending | [task](../../../todo/avoid-wasm-response-inflight-cache-key-allocation.md) |
+| Avoid Wasm response in-flight cache-key allocation | resolved (2026-09-10) | [maintained knowledge](../../../../skills/04-review/wasm/regression-guards/preload-claim-before-owned-inputs.md) |
 | Unify terminal local-reply status validation | pending | [task](../../../todo/unify-terminal-local-reply-status-validation.md) |
 | Add native WAF response-stage invalid-status integration coverage | resolved (2026-09-09) | [maintained knowledge](../../../../skills/04-review/http-body/regression-guards/response-stage-denial-must-terminate.md) |
 | Unify response Content-Encoding classification | pending | [task](../../../todo/unify-response-content-encoding-classification.md) |

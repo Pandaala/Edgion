@@ -11,6 +11,7 @@ before applying a decision to current code.
 
 ## Regression guards
 
+- [Claim Wasm preload before copying task inputs](regression-guards/preload-claim-before-owned-inputs.md)
 - [Wasm Body Counter Assertions Use Per-Request Deltas — FIXED](regression-guards/wasm-body-counter-delta-rerun-safe.md)
 - [Wasm module cache key must fold in per-plugin runtime config — FIXED](regression-guards/wasm-module-cache-key-runtime-config.md)
 - [Wasm OCI token endpoint 5xx must honor the retry policy — FIXED](regression-guards/wasm-oci-token-5xx-retry-classification.md)

@@ -99,14 +99,15 @@ client-authored bytes.
 > verbatim, so a client can author a header and the relay launders it into a
 > trusted position.
 >
-> Note also that `edgion.io/edgion-stream-plugins` runs before the header is
-> parsed, so its IP rules match the load balancer, not the client.
+> Note also that a Gateway-level `edgion.io/edgion-stream-plugins` attachment
+> runs before the header is parsed, so its IP rules match the load balancer, not
+> the client. This listener `ConnectionFilter` path does not cover UDP listeners.
 
 ### Route / TLS / Backend
 
 | Key | Resource | Effect |
 |-----|----------|--------|
-| `edgion.io/edgion-stream-plugins` | `TCPRoute` / `TLSRoute` | Resolves an `EdgionStreamPlugins` reference |
+| `edgion.io/edgion-stream-plugins` | `TCPRoute` / `TLSRoute` / `UDPRoute` | Resolves an `EdgionStreamPlugins` reference. UDPRoute runs `spec.plugins` when admitting a new session; it does not use the Gateway listener `ConnectionFilter` |
 | `edgion.io/proxy-protocol` | `TLSRoute` | Current implementation recognizes `"v2"` |
 | `edgion.io/max-connect-retries` | `TLSRoute` | Max upstream connection attempts; default 2, capped at 5 |
 | `edgion.io/tcp-keepalive-time` | `TCPRoute` / `TLSRoute` | Idle seconds before the first TCP keepalive probe on the upstream L4 connection. Presence (positive integer, 1–7200) enables keepalive; absent = disabled (default) |
@@ -149,7 +150,7 @@ These keys are often useful during debugging, but should not usually be hand-aut
 ## Historical Drift To Watch For
 
 - The current prefix is `edgion.io`, not `edgion.com`.
-- The current stream-plugin key for Gateway/TCPRoute/TLSRoute is `edgion.io/edgion-stream-plugins`.
+- The current stream-plugin key for Gateway/TCPRoute/TLSRoute/UDPRoute is `edgion.io/edgion-stream-plugins`.
 - Older docs and examples previously used `edgion.io/stream-plugins`; do not copy that legacy form into new work.
 - `edgion.io/cert-provider` and `edgion.io/client-certificate-ref` look like annotations, but they belong to `options`.
 

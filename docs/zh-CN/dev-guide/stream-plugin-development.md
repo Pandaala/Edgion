@@ -7,7 +7,7 @@
 
 ## 这类插件解决什么问题
 
-`EdgionStreamPlugins` 是 Edgion 的连接层扩展机制，用来在 HTTP 解析之前或 TLSRoute 匹配之后，对 TCP/TLS 连接做额外处理。
+`EdgionStreamPlugins` 是 Edgion 的 L4 扩展机制，用来在 HTTP 解析之前、接纳 UDP 会话时或 TLSRoute 匹配之后执行额外处理。
 
 和 HTTP 插件相比，它的关注点不同：
 
@@ -23,13 +23,15 @@
 
 Edgion 现在把 stream plugin 分成两个阶段：
 
-### Stage 1：ConnectionFilter
+### Stage 1：连接上下文运行时
 
 特点：
 
-- 运行在 TLS 握手和 HTTP 解析之前
+- 对基于 TCP 的监听器，运行在 TLS 握手和 HTTP 解析之前；对 UDPRoute，则运行在新会话首个数据报转发之前
 - 只有客户端 IP、监听端口、远端地址等信息
 - 适合做尽早拒绝的连接级判断
+
+Gateway 级附件使用 Pingora 的监听器 `ConnectionFilter`，但 UDP 监听器是独立的 Tokio 任务，不使用该桥接。UDPRoute 附件会在 UDP 代理接纳会话时执行同一个 `spec.plugins` 运行时。
 
 典型场景：
 
@@ -71,15 +73,15 @@ graph TD
     C --> D["Controller ProcessorHandler"]
     D --> E["Config sync to Gateway"]
     E --> F["StreamPluginStore compile and publish"]
-    F --> G["Gateway / TCPRoute / TLSRoute annotation binding"]
-    G --> H["Stage 1 ConnectionFilter or Stage 2 TlsRoute runtime"]
+    F --> G["Gateway / TCPRoute / TLSRoute / UDPRoute annotation binding"]
+    G --> H["Stage 1 connection-context or Stage 2 TlsRoute runtime"]
 ```
 
 最容易漏的不是“写 trait”，而是中间这几段：
 
 - Gateway 的 `compile_stream_plugins` 是否构造了对应阶段的 runtime
 - Gateway 是否真的缓存并热更新了 `EdgionStreamPlugins`
-- `Gateway` / `TCPRoute` / `TLSRoute` 的注解引用是否真正接到运行时
+- `Gateway` / `TCPRoute` / `TLSRoute` / `UDPRoute` 的注解引用是否真正接到运行时
 
 ## 和资源定义相关的代码位置
 
@@ -113,6 +115,8 @@ Gateway 侧最关键的是这几块：
 - `edgion-gateway/src/runtime/server/listener_builder.rs`
 - `edgion-gateway/src/routes/tcp/conf_handler_impl.rs`
 - `edgion-gateway/src/routes/tls/proxy.rs`
+- `edgion-gateway/src/routes/udp/route_unit.rs`
+- `edgion-gateway/src/routes/udp/edgion_udp.rs`
 
 理解方式可以简单记成：
 
@@ -130,11 +134,12 @@ metadata:
     edgion.io/edgion-stream-plugins: "policy-name"
 ```
 
-它目前主要出现在三类位置：
+它目前用于以下位置：
 
 - `Gateway`
 - `TCPRoute`
 - `TLSRoute`
+- `UDPRoute`
 
 这不是一个纯文档约定，而是当前实现真正会读取的键。
 仓库里历史上出现过 `edgion.io/stream-plugins` 这种旧写法，新改动不应该继续沿用。
@@ -142,6 +147,7 @@ metadata:
 在 `Gateway` 上，该值必须是不带命名空间的资源名，并在 Gateway 自身命名空间内解析。
 包含 `/` 的值会被 Controller 拒绝，Gateway 还会以 fail-close 方式进行防御。
 `TCPRoute`、`TLSRoute` 和 `UDPRoute` 保留各自的 `name` 或 `namespace/name` 约定。
+Gateway 级附件不覆盖 UDP 监听器；要控制 UDP 会话接入，应把资源直接附加到 `UDPRoute`。该路由检查只在新的来源地址会话建立时执行一次，不会逐数据报执行，并且只运行 `spec.plugins`。
 如果需要集中维护数据并让各命名空间自行拥有插件策略，可为每个命名空间保留本地
 `EdgionStreamPlugins`，并通过现有授权机制引用共享 `EdgionConfigData`。
 
@@ -152,7 +158,7 @@ metadata:
 3. 把新类型接入 `EdgionStreamPlugin` 或 `TlsRouteStreamPlugin`。
 4. 在对应 runtime 中补插件对象构造逻辑。
 5. 确认 Gateway 的 `compile_stream_plugins` 在发布配置之前构造对应阶段的 runtime。
-6. 确认引用该资源的 `Gateway` / `TCPRoute` / `TLSRoute` 真正能取到 store key。
+6. 确认引用该资源的 `Gateway` / `TCPRoute` / `TLSRoute` / `UDPRoute` 真正能取到 store key，并使用正确的生命周期。
 7. 最后再补测试和样例 YAML。
 
 如果你是让 AI 来做，直接从 skill 入口开始更稳：
@@ -171,19 +177,20 @@ metadata:
 ### 2. 引用层
 
 - `Gateway` 注解只接受同命名空间的 `name`；`TCPRoute` / `TLSRoute` / `UDPRoute` 注解仍可解析 `name` 或 `namespace/name`
-- 删除资源后，Gateway 不会继续引用旧对象
+- 删除资源后，store 和后续准入不再解析该资源；已经建立的 UDP 会话仍保持固定状态，不会立即撤销
 
 ### 3. 运行层
 
 - 命中插件时行为正确
 - 未命中时不会误伤其他连接
-- 热更新后旧配置不会残留
+- 热更新会影响后续连接和 UDP 会话准入，store 不残留旧 generation；已经建立的 UDP 会话不会重新鉴权
 
 现成样例和集成测试配置主要在：
 
 - `edgion-tests/integration/conf/Gateway/StreamPlugins/`
 - `edgion-tests/integration/conf/TCPRoute/StreamPlugins/`
 - `edgion-tests/integration/conf/TLSRoute/StreamPlugins/`
+- `edgion-tests/integration/conf/UDPRoute/StreamPlugins/`
 
 ## 人工审查清单
 
@@ -191,7 +198,7 @@ metadata:
 - enum、runtime、module export 是否都接齐
 - 注解键是否仍然使用 `edgion.io/edgion-stream-plugins`
 - 是否复用了已有配置结构
-- 资源更新 / 删除后 Gateway store 是否真的热更新
+- 资源更新 / 删除后 Gateway store 是否会影响后续准入，且没有错误假设已建立的 UDP 会话会被撤销
 - 测试是否覆盖了“新增、更新、删除”三个阶段
 
 ## 相关文档

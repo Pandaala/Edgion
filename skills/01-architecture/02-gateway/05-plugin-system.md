@@ -310,12 +310,12 @@ Stream plugins run at the TCP/UDP layer and use a two-stage architecture:
 
 | Stage | Location | Timing | Plugins |
 |-------|----------|--------|---------|
-| Stage 1: ConnectionFilter | `connection_filter_bridge.rs` | pre-TLS, IP info only | `StreamIpRestriction` |
+| Stage 1: connection context | `stream_plugin_runtime.rs`; `connection_filter_bridge.rs` for Gateway listeners | pre-TLS for TCP-based listeners; new-session admission for UDPRoute; IP/port context only | `spec.plugins` (`EdgionStreamPlugin`) |
 | Stage 2: TlsRoute | `tls_route/` | post-TLS handshake, post-route match | `TlsRouteIpRestriction` |
 
-- `StreamPlugin` trait: defines the `run_connection_filter(ctx) -> StreamPluginResult` interface.
+- `StreamPlugin` trait: defines the `on_connection(ctx) -> StreamPluginResult` interface.
 - `TlsRoutePlugin` trait: defines the TLS-route-level plugin interface.
-- `StreamPluginRuntime`: manages the plugin chain for the ConnectionFilter stage. It derives `Clone` over `Vec<Arc<dyn StreamPlugin>>`, so cloning it copies the vector of `Arc` handles and shares the plugin instances.
+- `StreamPluginRuntime`: manages the Stage-1 connection-context chain. Gateway attachments invoke it through Pingora's `ConnectionFilter`; TCPRoute invokes it per connection, and UDPRoute invokes it when admitting a new session. Gateway attachment does not cover UDP listeners because they run as independent Tokio tasks. The runtime derives `Clone` over `Vec<Arc<dyn StreamPlugin>>`, so cloning it copies the vector of `Arc` handles and shares the plugin instances.
 - `TlsRoutePluginRuntime`: manages the plugin chain for the TLS-route stage. The runtime itself does not implement `Clone`, while its plugin-chain elements are `Arc<dyn TlsRoutePlugin>`.
 - `StreamPluginStore`: receives EdgionPlugins resource changes via ConfHandler. It builds both runtimes once and publishes them through `Arc` fields in `CompiledStreamPlugins`.
 

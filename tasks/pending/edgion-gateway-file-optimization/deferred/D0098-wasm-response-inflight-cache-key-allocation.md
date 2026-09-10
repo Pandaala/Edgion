@@ -1,8 +1,10 @@
 # D0098 — Avoid Wasm Response In-flight Cache-key Allocation
 
-- Status: pending
+- Status: resolved (2026-09-10)
 - Severity: low (bounded hot-path allocation)
 - Discovered in: B0144 response-body-filter trait analysis
-- Canonical task: [Avoid Wasm response in-flight cache-key allocation](../../../todo/avoid-wasm-response-inflight-cache-key-allocation.md)
+- Maintained knowledge: [Claim Wasm preload before copying task inputs](../../../../skills/04-review/wasm/regression-guards/preload-claim-before-owned-inputs.md)
 
-On a cold or in-flight Wasm module miss, the response-body filter clones its cache-key String before `prepare_preload` rejects an already claimed load. Concurrent chunks may therefore allocate while one load is already in flight. Move owned-key creation after the preload claim under a separately reviewed Wasm cache-lifecycle batch; existing integration tests remain frozen.
+The original finding concerned response misses copying their cache key before
+the canonical preload claim. The maintained knowledge owns the correction,
+evidence, and verification limits. Existing integration tests remain unchanged.

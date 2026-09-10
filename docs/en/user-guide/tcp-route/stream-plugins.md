@@ -4,9 +4,10 @@
 > 
 > Stream plugins are connection-level (L4) plugins provided by the `EdgionStreamPlugins` CRD; they run before HTTP parsing and are not part of standard Gateway API.
 
-Stream plugins apply access control to raw TCP/TLS/UDP connections at Pingora's
-ConnectionFilter stage. They decide whether a connection (or, for UDP, a
-session) is allowed before any payload is forwarded.
+Stream plugins apply access control to raw TCP/TLS connections or UDP sessions
+before any payload is forwarded. Gateway-level attachments on Pingora `Service`
+listeners run at the `ConnectionFilter` stage. UDPRoute attachments instead run
+in the UDP proxy when a new source-address session is admitted.
 
 ## How attachment works
 
@@ -23,10 +24,13 @@ metadata:
 ```
 
 The same annotation works on `TCPRoute`, `TLSRoute`, `UDPRoute`, and at the
-Gateway listener level. On `UDPRoute` only the Stage-1 ConnectionFilter
-(`spec.plugins`) runs, because UDP has no TLS handshake. TLSRoute executes only
-`spec.tlsRoutePlugins`; a nonempty Stage-1-only resource fails closed. See the
-[TLSRoute stage contract](../../dev-guide/stream-plugin-development.md#tlsroute-stage-contract).
+Gateway listener level, but attachment lifecycle differs by protocol. On
+`UDPRoute`, only the connection-context runtime (`spec.plugins`) runs, once when
+a new UDP session is admitted, because UDP has no TLS handshake. A Gateway-level
+attachment does not cover a UDP listener because UDP listeners do not use
+Pingora's `Service` or listener `ConnectionFilter`; attach the resource directly
+to `UDPRoute` instead. TLSRoute executes only `spec.tlsRoutePlugins`; a nonempty
+Stage-1-only resource fails closed. See the [TLSRoute stage contract](../../dev-guide/stream-plugin-development.md#tlsroute-stage-contract).
 
 ## Supported plugins
 
@@ -34,7 +38,7 @@ Gateway listener level. On `UDPRoute` only the Stage-1 ConnectionFilter
 |------|---------------|-------------|
 | `IpRestriction` | inline rules | IP allow/deny groups embedded directly in the plugin. |
 | `GlobalConnectionIpRestriction` | inline config + optional `activeProfileRef` | Full IP rule set (named `profiles`) inline in the plugin; an optional `Selector` EdgionConfigData hot-swaps **which profile is active**. Center-managed and synced across Controllers. |
-| `ConnectionRateLimit` | `config` object | Local per-listener protection with optional Redis shared limits. Gateway attachments run before TLS. See the [ConnectionRateLimit section](#connectionratelimit-pre-tls-connection-rate-limiting) below. |
+| `ConnectionRateLimit` | `config` object | Local per-listener protection with optional Redis shared limits. Gateway attachments run before TLS; UDPRoute attachments apply to new-session admission. See the [ConnectionRateLimit section](#connectionratelimit-connection-and-udp-session-rate-limiting) below. |
 
 Each entry under `spec.plugins` has an optional `enable` flag (default `true`),
 a `type`, and a `config` object.
@@ -276,11 +280,14 @@ spec:
         defaultAction: deny
 ```
 
-## ConnectionRateLimit: pre-TLS connection rate limiting
+## ConnectionRateLimit: connection and UDP session rate limiting
 
 `ConnectionRateLimit` supports local per-listener protection combined with
 Redis-backed shared limits. When attached to a Gateway listener, checks run
 **before** the TLS handshake. TCPRoute attachments run after route matching.
+UDPRoute attachments run when the first datagram attempts to create a new
+source-address session. They do not count packets on established sessions, and
+a Gateway-level attachment does not cover a UDP listener.
 
 ### Choosing local and shared limits
 
@@ -293,7 +300,8 @@ stops evaluation. Setting `redisDistributed: true` keeps the local gate enabled.
 
 The combined example below uses local `perListener` protection plus Redis
 `perSourceIp` limits. Redis connection limiting remains an opt-in capability;
-size it against the expected new-connection rate and dependency latency.
+size it against the expected new-connection or UDP session-admission rate and
+dependency latency.
 For HTTP business quotas, prefer request-level limits: connection counts do
 not represent request counts on persistent or multiplexed connections.
 
@@ -319,8 +327,9 @@ handshake timeout starts after filtering and does not bound this wait.
 
 > **`perSourceIp` has no local backstop.** Unlike the `perListener` dimension
 > (which has a local token bucket that stays live even when Redis is
-> unreachable), `perSourceIp` has no in-process fallback. Connections reaching
-> this dimension require a Redis decision or the configured failure policy.
+> unreachable), `perSourceIp` has no in-process fallback. Connections or UDP
+> session-admission attempts reaching this dimension require a Redis decision or
+> the configured failure policy.
 > Set `onRedisFailure` explicitly if you need
 > fail-close behavior.
 
@@ -337,7 +346,8 @@ handshake timeout starts after filtering and does not bound this wait.
 **Bucket scope**: counters — both the Redis keys and the local token bucket — are namespaced by the plugin entry that owns them, `<namespace>/<name>/#<index>` of the EdgionStreamPlugins resource and the entry's position in `plugins`. Two `ConnectionRateLimit` entries can be active on one listener port (a listener-level plus a TCPRoute-level attachment, or two entries in one resource); without this scope they would share one counter while each enforced its own `rate`, and with differing `interval` would corrupt each other's window. Every Gateway instance derives the same scope from the same resource, so cluster-wide counting is unaffected, and the scope is stable across hot reload. Reordering entries changes their identity: an entry moving to a previously used position may inherit that position's retained local budget. Keep names and positions stable when budget continuity matters.
 
 **Local budget on reload**: each listener port adopts an updated limit when a
-connection first reaches that entry with the new configuration. Elapsed time is
+connection or UDP session-admission attempt first reaches that entry with the
+new configuration. Elapsed time is
 credited at the previous rate before the change. Increasing `rate` adds only the
 capacity difference; decreasing it caps the remaining balance. Changing only
 Redis settings, including `keyPrefix`, does not reset the local budget. The same
@@ -355,7 +365,7 @@ still evaluates and consumes that entry at both levels.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `rate` | Integer | **Required** | Maximum new connections per interval. |
+| `rate` | Integer | **Required** | Maximum new TCP/TLS connections or UDP session-admission attempts per interval. Established UDP session packets are not counted. |
 | `interval` | String | **Required** | Time window, e.g. `"1s"`, `"1m"`. |
 | `redisDistributed` | Boolean | `false` | (`perListener` only) When `true`, also enforces the cap fleet-wide via Redis in addition to the local gate. |
 | `onRedisFailure` | Enum | `Allow` (`perSourceIp`) / `Deny` (`perListener`) | Behavior when Redis is unavailable or `redisTimeout` elapses. `Allow` = fail-open; `Deny` = fail-close. |

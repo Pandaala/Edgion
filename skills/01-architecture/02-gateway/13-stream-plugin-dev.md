@@ -1,14 +1,14 @@
 ---
 name: stream-plugin-development
-description: Use when implementing or extending EdgionStreamPlugins, wiring Gateway or route-level stream-plugin annotations, or debugging the ConnectionFilter and TLSRoute plugin runtimes.
+description: Use when implementing or extending EdgionStreamPlugins, wiring Gateway or route-level stream-plugin annotations, or debugging the connection-context and TLSRoute plugin runtimes.
 ---
 # Stream Plugin Development
 
 Use this to answer questions like:
 
 - How do I add or extend `EdgionStreamPlugins`?
-- Where do `edgion.io/edgion-stream-plugins` annotations on Gateway / `TCPRoute` / `TLSRoute` actually wire into?
-- What's the difference between Stage 1 `ConnectionFilter` and Stage 2 `TlsRoute` plugin runtimes?
+- Where do `edgion.io/edgion-stream-plugins` annotations on Gateway / `TCPRoute` / `TLSRoute` / `UDPRoute` actually wire into?
+- What's the difference between the Stage 1 connection-context runtime and the Stage 2 `TlsRoute` runtime?
 - Why did the YAML change but the Gateway didn't hot-reload, or the runtime result is wrong?
 
 ## Read these real entry points first
@@ -25,6 +25,8 @@ Use this to answer questions like:
 - [../../../edgion-gateway/src/runtime/server/listener_builder.rs](../../../edgion-gateway/src/runtime/server/listener_builder.rs)
 - [../../../edgion-gateway/src/routes/tcp/conf_handler_impl.rs](../../../edgion-gateway/src/routes/tcp/conf_handler_impl.rs)
 - [../../../edgion-gateway/src/routes/tls/proxy.rs](../../../edgion-gateway/src/routes/tls/proxy.rs)
+- [../../../edgion-gateway/src/routes/udp/route_unit.rs](../../../edgion-gateway/src/routes/udp/route_unit.rs)
+- [../../../edgion-gateway/src/routes/udp/edgion_udp.rs](../../../edgion-gateway/src/routes/udp/edgion_udp.rs)
 
 ## Mental model
 
@@ -35,9 +37,9 @@ The current real path in this repo is:
 2. Define serializable stage entries; the schema does not contain runtime objects.
 3. The Controller receives the resource, validates it, and writes status.
 4. The Gateway `ConfigClient` syncs the resource into `StreamPluginStore`, where `compile_stream_plugins` builds both runtimes and publishes the immutable generation.
-5. Gateway / `TCPRoute` / `TLSRoute` reference the resource through the `edgion.io/edgion-stream-plugins` annotation.
+5. Gateway / `TCPRoute` / `TLSRoute` / `UDPRoute` reference the resource through the `edgion.io/edgion-stream-plugins` annotation.
 6. The data plane runs the runtime at different stages:
-   - Stage 1: `ConnectionFilter` — pre-handshake, only IP / port and other connection context are available.
+   - Stage 1: connection-context runtime — only IP / port and other connection context are available. Gateway attachments use Pingora's pre-handshake `ConnectionFilter`; TCPRoute runs it per connection, while UDPRoute runs it when admitting a new UDP session.
    - Stage 2: `TlsRoute` — after route matching; Terminate supplies negotiated TLS identity, while Passthrough supplies inspected SNI before forwarding the handshake.
 
 ## Current code layout
@@ -59,7 +61,7 @@ edgion-gateway/src/plugins/stream/
 
 ## The two execution stages
 
-### Stage 1: ConnectionFilter
+### Stage 1: connection-context runtime
 
 - The trait lives in [../../../edgion-gateway/src/plugins/stream/stream_plugin_trait.rs](../../../edgion-gateway/src/plugins/stream/stream_plugin_trait.rs).
 - The context is `StreamContext`.
@@ -67,8 +69,9 @@ edgion-gateway/src/plugins/stream/
   - `StreamPluginResult::Allow`
   - `StreamPluginResult::Deny(String)`
 - Typical binding sites:
-  - Gateway listener level: `listener_builder.rs`.
+  - Gateway listener level for Pingora `Service` listeners: `listener_builder.rs`. UDP listeners are separate Tokio tasks and do not use this `ConnectionFilter`.
   - `TCPRoute` level: `routes/tcp/conf_handler_impl.rs`.
+  - `UDPRoute` level: `routes/udp/route_unit.rs` resolves the key and `routes/udp/edgion_udp.rs` checks it when creating a session.
 - Suitable for:
   - IP allow/deny.
   - Rejecting connections as early as possible.
@@ -202,13 +205,19 @@ Gateway namespace. TCPRoute, TLSRoute, and UDPRoute retain their separate `name`
 
 Existing binding sites:
 
-- Gateway listener level: `listener_builder.rs`.
+- Gateway listener level for Pingora `Service` listeners: `listener_builder.rs`; this does not include UDP listeners.
 - `TCPRoute`: `routes/tcp/conf_handler_impl.rs`.
 - `TLSRoute`: `routes/tls/conf_handler_impl.rs` + `routes/tls/proxy.rs` (terminate) + `routes/tls/passthrough_proxy.rs` (passthrough). `run_tls_route_plugins` fires from both proxies.
+- `UDPRoute`: `routes/udp/route_unit.rs` compiles the dynamic store key and `routes/udp/edgion_udp.rs` runs `spec.plugins` before creating a new session.
 
 If you only added the resource and the runtime but did not wire the route / listener side reference, the runtime will not fire either.
 
-I have not currently found any code in the repo that handles this annotation specifically for `UDPRoute`, so do not assume UDP is wired the same as TCP/TLS.
+UDPRoute does not use Pingora's `ConnectionFilter`: its listener is an independent
+Tokio task. The route annotation is nevertheless supported. It executes the same
+connection-context runtime once when admitting a new source-address session, before
+backend selection; established-session packets take the fast path and are not
+re-authorized. A missing referenced resource fails closed by dropping the datagram.
+Only `spec.plugins` applies because UDP has no TLS stage.
 
 ## Minimal YAML example
 
@@ -285,8 +294,9 @@ metadata:
 ## ConnectionRateLimit (L4 connection-rate gate)
 
 `EdgionStreamPlugin::ConnectionRateLimit` bounds the **rate** of new downstream
-TCP/TLS connections. Listener attachments run pre-TLS; TCP/UDP route attachments
-run at their owning route/session lifecycle. The checks are:
+TCP/TLS connections or UDP sessions. Listener attachments run pre-TLS on Pingora
+`Service` listeners; TCP/UDP route attachments run at their owning connection/session
+lifecycle. The checks are:
 
 1. **Local per-listener gate** (token bucket, process-global keyed by plugin
    entry scope and listener port; survives config hot-reload). No external dependency, so it
@@ -361,8 +371,10 @@ spec:
 - **Does NOT cover** the admin API, probe API, or the controller↔gateway gRPC
   link — those are not Pingora listeners (separate axum servers / outbound
   client) and stream plugins cannot reach them.
-- **Does NOT cover UDP** (no `ConnectionFilter` is attached; UDP is
-  connectionless).
+- **Gateway listener attachment does NOT cover UDP.** UDP listeners do not use
+  Pingora's `Service` or `ConnectionFilter`. To protect UDP admission, attach the
+  resource to `UDPRoute`; that path checks `spec.plugins` once before creating a
+  source-address session, not once per datagram.
 - **Bounds connection rate, NOT concurrent fds.** A slowloris-style adversary
   that opens connections slowly and never closes them can still exhaust fds
   without tripping any rate. Defending against that needs concurrent-count
@@ -438,7 +450,7 @@ fn validation_error_returns_field_error_without_validate_call() {
 Cover these three areas in priority order:
 
 1. Whether the resource status is correct.
-2. Whether the plugin actually fires after Gateway / `TCPRoute` / `TLSRoute` references it.
+2. Whether the plugin actually fires after Gateway / `TCPRoute` / `TLSRoute` / `UDPRoute` references it.
 3. Whether hot-reload takes effect after `EdgionStreamPlugins` is updated / deleted, and whether the old configuration leaves residue.
 
 References for existing samples:
@@ -446,6 +458,7 @@ References for existing samples:
 - [../../../edgion-tests/integration/conf/Gateway/StreamPlugins/](../../../edgion-tests/integration/conf/Gateway/StreamPlugins/)
 - [../../../edgion-tests/integration/conf/TCPRoute/StreamPlugins/](../../../edgion-tests/integration/conf/TCPRoute/StreamPlugins/)
 - [../../../edgion-tests/integration/conf/TLSRoute/StreamPlugins/](../../../edgion-tests/integration/conf/TLSRoute/StreamPlugins/)
+- [../../../edgion-tests/integration/conf/UDPRoute/StreamPlugins/](../../../edgion-tests/integration/conf/UDPRoute/StreamPlugins/)
 
 ### Item 3 entry: the dynamic scenario framework
 

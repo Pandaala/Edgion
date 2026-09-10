@@ -1,6 +1,6 @@
 ---
 name: stream-plugins-features
-description: EdgionStreamPlugins CRD schema: two-stage plugins at the TCP/TLS layer.
+description: EdgionStreamPlugins CRD schema: connection-context plugins for TCP/UDP and a separate TLSRoute stage.
 ---
 
 # EdgionStreamPlugins — Stream Plugins
@@ -18,7 +18,7 @@ metadata:
   name: my-stream-plugins
   namespace: default
 spec:
-  # Stage 1: ConnectionFilter (pre-TLS, only IP information available)
+  # Stage 1: connection context (IP/port information only)
   plugins:
     - enable: true
       type: IpRestriction
@@ -55,7 +55,7 @@ spec:
 
 | Stage | Trigger Time | Available Information | Field |
 |-------|--------------|-----------------------|-------|
-| Stage 1: ConnectionFilter | After TCP connection is established, before TLS handshake | Source IP, destination port | `spec.plugins` |
+| Stage 1: connection context | Before TLS/HTTP processing for TCP-based listeners; when admitting a new UDPRoute session | Source IP, destination port | `spec.plugins` |
 | Stage 2: TlsRoute | After route matching; post-handshake for Terminate, pre-forwarding for Passthrough | SNI and IP; TLS identity/mTLS only for Terminate | `spec.tlsRoutePlugins` |
 
 TLSRoute executes only `tlsRoutePlugins`. An absent/null Stage-2 field with
@@ -70,7 +70,7 @@ entry denies. A missing referenced resource fails closed. See the
 Bind to different levels via annotations:
 
 ```yaml
-# Gateway level — all connections
+# Gateway level — Pingora Service listeners (not UDP listeners)
 metadata:
   annotations:
     edgion.io/edgion-stream-plugins: "my-stream-plugins"
@@ -91,7 +91,14 @@ metadata:
     edgion.io/edgion-stream-plugins: "default/udp-plugins"
 ```
 
-On `UDPRoute` the binding runs only the Stage-1 ConnectionFilter (`spec.plugins`, IP-based, evaluated at session creation, fail-close); `tlsRoutePlugins` never apply because UDP has no TLS handshake. The F-016 session fast-path skips the route pipeline for established sessions, so the check runs on the first packet of each session (a denied client never establishes a session), matching TCP's per-connection model.
+On `UDPRoute` the binding runs only the Stage-1 connection-context runtime
+(`spec.plugins`, IP-based, evaluated at session creation, fail-close); it does
+not use Pingora's listener `ConnectionFilter`, and `tlsRoutePlugins` never apply
+because UDP has no TLS handshake. The F-016 session fast-path skips the route
+pipeline for established sessions, so the check runs on the first packet of each
+session (a denied client never establishes a session), matching TCP's
+per-connection model. A Gateway-level attachment does not cover a UDP listener;
+attach the resource to `UDPRoute` for UDP admission.
 
 ## Currently Supported Stream Plugins
 
@@ -99,7 +106,7 @@ On `UDPRoute` the binding runs only the Stage-1 ConnectionFilter (`spec.plugins`
 |------|-------|-------------|
 | `IpRestriction` | Stage 1 + Stage 2 | IP allow/deny list (CIDR supported); rules may be inline named `IpGroup` entries under `allow`/`deny` or referenced from a central `IpList` EdgionConfigData via `allowRefs`/`denyRefs` (merged into the same pools; a missing/disabled referenced IpList causes allowRef to fail closed). Inline `allow`/`deny` groups are **partial-good**: a bad CIDR entry is skipped (not fatal); the plugin loads with valid entries. Bad entries surface as `PartiallyInvalid` status (reason `RuleInvalid`; `Accepted` stays `True`). A skipped inline deny entry increments `edgion_ip_deny_entries_skipped_total{scope="stream_l4"|"tls_route"}`. |
 | `GlobalConnectionIpRestriction` | Stage 1 only | EdgionConfigData-referenced IP restriction. The plugin config holds `overrideRef`; referenced profiles carry the rule sets. No geo block — combine with `GeoIpLocation` (below) as a separate, ordered Stage-1 entry instead. |
-| `ConnectionRateLimit` | Stage 1 only | Limits new connections before TLS/application processing using the current connection-rate configuration. |
+| `ConnectionRateLimit` | Stage 1 only | Limits new TCP/TLS connections or UDP session-admission attempts using the current rate configuration; it does not count packets on established UDP sessions. |
 | `GeoIpLocation` | Stage 1 only | Same config shape as the HTTP `GeoIpLocation` plugin (`defaultAction`/`failOpen`/`denyRuleGroups`/`allowRuleGroups`), sharing its matching core; `source: RemoteIp` is rejected at L4 (no `X-Forwarded-For` to resolve). Parse-only mode (`config: {}`) is a true no-op at L4 — there is no per-connection access log to populate. Denials are counted via `edgion_geoip_denied_total{layer,reason}`, never logged. See `docs/en/ops-guide/gateway/geoip.md`. |
 
 Entries are flattened as `enable + type + config`; the older nested
@@ -110,10 +117,10 @@ only `IpRestriction` in the current Rust enum.
 
 | Dimension | HTTP Plugin (EdgionPlugins) | Stream Plugin (EdgionStreamPlugins) |
 |-----------|------------------------------|--------------------------------------|
-| Layer | L7 HTTP layer | L4 TCP/TLS layer |
-| Execution Position | ProxyHttp callback | ConnectionFilter |
-| Available Context | Full HTTP request | Connection information only (IP, SNI) |
-| Failure Behavior | Return HTTP error | Close connection |
+| Layer | L7 HTTP layer | L4 TCP/TLS connections and UDP sessions |
+| Execution Position | ProxyHttp callback | Gateway listener `ConnectionFilter`, TCPRoute connection admission, UDPRoute session admission, or TLSRoute stage |
+| Available Context | Full HTTP request | Stage-specific connection context (IP/port; TLSRoute also has SNI and mode-dependent TLS identity) |
+| Failure Behavior | Return HTTP error | Close/reject a TCP/TLS connection or drop the UDP session-admission datagram |
 | Binding | ExtensionRef Filter | Annotation |
 | Hot Reload Source | ClientCache → ConfHandler | Annotation parsing → Store lookup |
 

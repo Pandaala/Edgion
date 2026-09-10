@@ -785,7 +785,7 @@ impl WasmVmManager {
     /// Fire-and-forget warm-up (used at plugin construction). Requires a
     /// running tokio runtime; silently skips otherwise (the first real
     /// request will trigger a lazy load via `get_or_load`).
-    pub fn spawn_preload(&'static self, config: &WasmConfig, cache_key: String) {
+    pub fn spawn_preload(&'static self, config: &WasmConfig, cache_key: &str) {
         let Some((claim, config, cache_key)) = self.prepare_preload(config, cache_key) else {
             return;
         };
@@ -795,11 +795,7 @@ impl WasmVmManager {
         });
     }
 
-    fn prepare_preload(
-        &self,
-        config: &WasmConfig,
-        cache_key: String,
-    ) -> Option<(PreloadClaimGuard, WasmConfig, String)> {
+    fn prepare_preload(&self, config: &WasmConfig, cache_key: &str) -> Option<(PreloadClaimGuard, WasmConfig, String)> {
         // Engine initialization already emitted one process-level error. This
         // method is reachable from sync response/body misses, so stay silent
         // and inspect the field by reference: `engine()` clones the cached
@@ -811,21 +807,23 @@ impl WasmVmManager {
         if tokio::runtime::Handle::try_current().is_err() {
             return None;
         }
-        let slot = self.get_or_create_slot(config, &cache_key);
+        let slot = self.get_or_create_slot(config, cache_key);
         if slot.published.load_full().is_some() || monotonic_millis() < slot.load_retry_due_ms.load(Ordering::Acquire) {
             return None;
         }
         let Some(claim) = slot.try_claim_preload() else {
             return None;
         };
-        Some((claim, config.clone(), cache_key))
+        // Only the winning task needs owned inputs. Repeated response chunks
+        // during an in-flight load or retry window must not copy the key.
+        Some((claim, config.clone(), cache_key.to_owned()))
     }
 
     /// Test-only preload path whose task owns an `Arc` manager instead of
     /// requiring a leaked `'static` manager. Production still uses the
     /// process-global manager and its zero-allocation static borrow.
     #[cfg(test)]
-    fn spawn_preload_for_test(self: &Arc<Self>, config: &WasmConfig, cache_key: String) {
+    fn spawn_preload_for_test(self: &Arc<Self>, config: &WasmConfig, cache_key: &str) {
         let Some((claim, config, cache_key)) = self.prepare_preload(config, cache_key) else {
             return;
         };
@@ -3422,6 +3420,53 @@ mod tests {
         );
     }
 
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn borrowed_preload_inputs_survive_concurrent_misses_and_retry() {
+        let manager = Arc::new(WasmVmManager::new_for_test());
+        let mut config = WasmConfig::default();
+        config.source.inline = Some("AAAA".to_string());
+        let key = runtime_cache_key(&config);
+        let (claim, owned_config, owned_key) = manager
+            .prepare_preload(&config, &key)
+            .expect("a cold slot admits one preload");
+        assert_eq!(owned_key, key);
+        // The background task must remain independent of its caller's inputs.
+        drop(key);
+        drop(config);
+        assert_eq!(runtime_cache_key(&owned_config), owned_key);
+        let slot = manager.get_or_create_slot(&owned_config, &owned_key);
+        assert!(Arc::ptr_eq(&claim.slot, &slot));
+
+        let config = Arc::new(owned_config);
+        let key = Arc::new(owned_key);
+        let mut callers = tokio::task::JoinSet::new();
+        // Retain the winning claim until every competing response miss returns.
+        // No network, load delay, or scheduler ordering is needed for this window.
+        for _ in 0..64 {
+            let manager = manager.clone();
+            let config = config.clone();
+            let key = key.clone();
+            callers.spawn(async move { manager.prepare_preload(&config, &key).is_none() });
+        }
+        while let Some(result) = callers.join_next().await {
+            assert!(result.expect("competing caller completes"));
+        }
+        assert_eq!(manager.cache.modules.len(), 1);
+        assert!(slot.preload_in_flight.load(Ordering::Acquire));
+
+        drop(claim);
+        assert!(!slot.preload_in_flight.load(Ordering::Acquire));
+        slot.load_retry_due_ms.store(u64::MAX, Ordering::Release);
+        assert!(manager.prepare_preload(&config, &key).is_none());
+        assert!(!slot.preload_in_flight.load(Ordering::Acquire));
+        slot.load_retry_due_ms.store(0, Ordering::Release);
+        let (retry_claim, _, retry_key) = manager
+            .prepare_preload(&config, &key)
+            .expect("an expired retry deadline admits a new preload");
+        assert!(Arc::ptr_eq(&retry_claim.slot, &slot));
+        assert_eq!(retry_key, *key);
+    }
+
     #[tokio::test]
     async fn preload_is_single_flight_and_respects_negative_cache_deadline() {
         use wiremock::matchers::{method, path};
@@ -3444,7 +3489,7 @@ mod tests {
         ok.source.url = Some(format!("{}/ok.wasm", server.uri()));
         let ok_key = runtime_cache_key(&ok);
         for _ in 0..64 {
-            manager.spawn_preload_for_test(&ok, ok_key.clone());
+            manager.spawn_preload_for_test(&ok, &ok_key);
         }
         manager.wait_for_preload_for_test(&ok_key).await;
         assert_eq!(
@@ -3464,7 +3509,7 @@ mod tests {
         let bad_key = runtime_cache_key(&bad);
 
         for _ in 0..64 {
-            manager.spawn_preload_for_test(&bad, bad_key.clone());
+            manager.spawn_preload_for_test(&bad, &bad_key);
         }
         manager.wait_for_preload_for_test(&bad_key).await;
         assert_eq!(server.received_requests().await.unwrap().len(), 1);
@@ -3472,13 +3517,13 @@ mod tests {
         // During the negative-cache window no task (and therefore no request)
         // is created, even if a response-body hook reports the miss per chunk.
         for _ in 0..64 {
-            manager.spawn_preload_for_test(&bad, bad_key.clone());
+            manager.spawn_preload_for_test(&bad, &bad_key);
         }
         assert_eq!(server.received_requests().await.unwrap().len(), 1);
 
         manager.backdate_load_retry_for_test(&bad_key);
         for _ in 0..64 {
-            manager.spawn_preload_for_test(&bad, bad_key.clone());
+            manager.spawn_preload_for_test(&bad, &bad_key);
         }
         manager.wait_for_preload_for_test(&bad_key).await;
         assert_eq!(
@@ -3517,7 +3562,7 @@ mod tests {
         )));
         let mut config = WasmConfig::default();
         config.source.inline = Some("AAAA".to_string());
-        manager.spawn_preload_for_test(&config, runtime_cache_key(&config));
+        manager.spawn_preload_for_test(&config, &runtime_cache_key(&config));
         assert!(manager.cache.modules.is_empty());
     }
 
@@ -4109,7 +4154,7 @@ mod tests {
         assert!(manager.cache.modules.is_empty());
         assert!(manager.cache.tick_callouts.is_empty());
 
-        manager.spawn_preload_for_test(&config, cache_key);
+        manager.spawn_preload_for_test(&config, &cache_key);
         tokio::task::yield_now().await;
         assert!(manager.cache.modules.is_empty(), "preload created a load slot");
         assert!(manager.cache.tick_callouts.is_empty(), "preload created tick state");

@@ -85,7 +85,7 @@ namespace 的 `visibility: Cluster` 无需 grant，跨 namespace 的 `visibility
 
 | Key | 资源 | 作用 |
 |-----|------|------|
-| `edgion.io/edgion-stream-plugins` | `TCPRoute` / `TLSRoute` | 解析 `EdgionStreamPlugins` 引用 |
+| `edgion.io/edgion-stream-plugins` | `TCPRoute` / `TLSRoute` / `UDPRoute` | 解析 `EdgionStreamPlugins` 引用。UDPRoute 在接纳新会话时执行 `spec.plugins`，不使用 Gateway 监听器的 `ConnectionFilter` |
 | `edgion.io/proxy-protocol` | `TLSRoute` | 当前实现只识别 `"v2"` |
 | `edgion.io/max-connect-retries` | `TLSRoute` | 上游连接尝试次数，默认 2 次，最高 5 次 |
 | `edgion.io/tcp-keepalive-time` | `TCPRoute` / `TLSRoute` | 上游 L4 连接在发送首个 keepalive 探针前的空闲秒数（正整数，1–7200）。设置该值即启用 keepalive；不设置则禁用（默认行为） |
@@ -124,7 +124,7 @@ Service 级别的后端行为（主动健康检查、异常点检测/熔断、pa
 ## 容易踩坑的历史漂移
 
 - 当前前缀是 `edgion.io`，不是 `edgion.com`。
-- 当前 Gateway/TCPRoute/TLSRoute 使用的 stream-plugin 键是 `edgion.io/edgion-stream-plugins`。
+- 当前 Gateway/TCPRoute/TLSRoute/UDPRoute 使用的 stream-plugin 键是 `edgion.io/edgion-stream-plugins`。
 - 仓库里旧文档和旧样例曾出现 `edgion.io/stream-plugins`，新改动不要继续沿用。
 - `edgion.io/cert-provider` 和 `edgion.io/client-certificate-ref` 虽然长得像 annotation，但它们属于 `options` 字段。
 

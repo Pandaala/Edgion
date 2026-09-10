@@ -56,6 +56,13 @@ retirement races or shutdown draining. The corresponding backend-authorization
 boundary is documented in
 [Denied L4 Backend Refs Fail Closed](l4-backend-ref-denied-fail-closed.md).
 
+Gateway-level attachment is a separate lifecycle. `add_udp_listener` creates an
+independent Tokio task rather than a Pingora `Service`, so it never installs the
+listener `ConnectionFilter` built by `apply_connection_filter`. Consequently a
+Gateway annotation does not protect its UDP listener; UDP policy must be attached
+to `UDPRoute`. This does not contradict reuse of the Stage-1 `spec.plugins`
+runtime at UDP session admission.
+
 ## Verification and re-evaluation
 
 Current source evidence is the constructor/resolver, handler delegation,
@@ -91,3 +98,7 @@ the guarantee.
 - B0214: corrected current route-unit ownership, removed the inaccurate
   60-second revocation claim, and repaired the F-016 knowledge link. Runtime and
   integration-test behavior are unchanged.
+- `clarify-stream-plugin-udp-architecture-coverage`: reconciled the architecture,
+  annotation, and user documentation with the verified split between UDPRoute
+  session admission and the unsupported Gateway-level UDP listener attachment.
+  No runtime or integration-test behavior changed.

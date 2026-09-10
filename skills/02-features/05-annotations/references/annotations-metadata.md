@@ -186,8 +186,9 @@ Notes:
 
 Current implementation note:
 
-- Active annotation resolution paths verified for `Gateway`, `TCPRoute`, `TLSRoute`, and `UDPRoute`.
-- `UDPRoute` resolves the key in `GlobalUdpRouteManagers::initialize_route` and enforces it (fail-close) in `edgion_udp.rs::handle_client_packet`, mirroring the TCP path. The F-016 session fast-path returns first for established sessions, so the check runs once at session creation (a denied client never establishes a session) — like TCP's per-connection check. Only Stage-1 plugins apply (UDP has no TLS handshake).
+- Active annotation resolution paths verified for `Gateway`, `TCPRoute`, `TLSRoute`, and `UDPRoute`; attachment lifecycle still differs by protocol.
+- `UDPRoute` resolves the key in `UdpRouteUnit::from_route` and enforces it (fail-close) in `edgion_udp.rs::handle_client_packet`. The F-016 session fast-path returns first for established sessions, so the check runs once at session creation (a denied client never establishes a session), not once per datagram. Only `spec.plugins` applies because UDP has no TLS handshake.
+- A Gateway-level attachment does not cover a UDP listener: `add_udp_listener` runs an independent Tokio task and never installs Pingora's listener `ConnectionFilter`. Attach the resource to `UDPRoute` for UDP session admission.
 
 ## EdgionTls `metadata.annotations`
 
