@@ -16,7 +16,7 @@ before applying a decision to current code.
 - [`global_plugins_resolve` Dangling Refs Are Not Logged (Fixed)](mandatory-design/global-plugins-resolve-no-tracing.md)
 - [Observability Review Rules](mandatory-design/observability-review-rule.md)
 - [`PluginRuntime` `add_*` Builders Are Tracing-Free (Fixed)](mandatory-design/plugin-runtime-builder-no-tracing.md)
-- [TCP `check_stream_plugins` Fail-Close Is Not Logged via Tracing (Fixed)](mandatory-design/tcp-stream-plugin-no-tracing.md)
+- [TCP fail-close logging and GeoIP stream lifecycle boundaries](mandatory-design/tcp-stream-plugin-no-tracing.md)
 - [`run_tls_route_plugins` Stage 2 → Stage 1 Compat Fallback Is Not Logged via Tracing](mandatory-design/tls-route-fallback-no-tracing.md)
 
 ## Intentional design

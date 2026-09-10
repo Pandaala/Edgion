@@ -20,7 +20,8 @@ is empty. Fix suggestions of the form
 are **not accepted**. The compat branch's activation is already observable via
 the access-log entry written by `ctx.push_log("stream plugin allowed (compat)")`
 (allow path) and `ctx.err_log = Some(format!("stream plugin denied (compat): {reason}"))`
-(deny path) — both land in `tls.log` with the `(compat)` suffix. Tracing is the
+(deny path, except that `geo:deny:*` is masked to `stream plugin denied (compat)`) —
+both land in `tls.log` with the `(compat)` suffix when protocol logging is enabled. Tracing is the
 wrong channel.
 
 ## Core Rationale
@@ -47,7 +48,8 @@ The `(compat)` suffix on the access-log line is the canonical distinguisher:
   records `"tls route plugin allowed"` / `ctx.err_log = "tls route plugin denied: ..."`.
 - Resource has only legacy `plugins` and the Stage 1 compat ran → access-log
   records `"stream plugin allowed (compat)"` / `ctx.err_log = "stream plugin
-  denied (compat): ..."`.
+  denied (compat): ..."`. GeoIP denials omit the sensitive reason and retain only
+  `"stream plugin denied (compat)"`; they do not suppress the protocol log.
 - Resource has neither runtime populated → function returns `true` with no
   push to `ctx.push_log` / `ctx.err_log` from this branch (intentional
   no-policy pass-through, same as `stream_plugin_store_key = None`).
@@ -93,7 +95,8 @@ When a review re-reports any of:
   fallback.
 - The compat fallback still pushes `"stream plugin allowed (compat)"` /
   `"stream plugin denied (compat): {reason}"` into `ctx.push_log` /
-  `ctx.err_log` so the access-log distinguishing suffix is preserved.
+  `ctx.err_log` so the access-log distinguishing suffix is preserved, with
+  `geo:deny:*` masked to `"stream plugin denied (compat)"`.
 
 Re-report **(3)** is **not accepted**: a `OnceCell` gate would technically
 bound the log volume, but it would also mean the line never fires again after
@@ -131,4 +134,8 @@ Re-evaluate only if one of the following becomes true:
 
 ## Resolution references
 
+- `align-bilingual-geoip-stream-lifecycle-documentation` — documentation-only
+  correction: distinguish listener Stage 1 silence from TLS route compatibility
+  logging and preserve GeoIP reason masking. Current call-chain evidence and
+  verification limits live in the [shared lifecycle section](tcp-stream-plugin-no-tracing.md#geoip-stream-lifecycle-and-operator-documentation).
 - `plugins-stream-F011` — 2026-05-27 (⚠️ accepted tradeoff for tracing, 📝 doc gap fixed).

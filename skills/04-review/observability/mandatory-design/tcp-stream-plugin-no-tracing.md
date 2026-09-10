@@ -26,12 +26,61 @@ warns were removed on 2026-05-24 because:
 
 The fix mirrors the TLS pattern but keeps the reason **bounded**: the
 `StreamPluginCheck::Deny` variant now carries a `&'static str` reason
-(`"client address unparseable"`, `"stream plugin resource not found"`,
+(`"direct peer IP unparseable"`, `"stream plugin resource not found"`,
 `"stream plugin policy denied"`); the caller stamps it into
 `TcpContext.deny_reason`, which `TcpLogEntry` serializes
 (`skip_serializing_if = "Option::is_none"`) into tcp.log. No dynamic /
 client-controlled content reaches the logging path. The fail-close decision
 itself is unchanged — the connection is still rejected.
+
+## GeoIP stream lifecycle and operator documentation
+
+The no-tracing rule does not mean that every stream denial is metric-only.
+`GeoIpLocation` is registered in `EdgionStreamPlugins.spec.plugins`; the attachment
+owner determines the execution point. Current source boundaries are:
+
+- `plugins/stream/connection_filter_bridge.rs::should_accept` constructs
+  `StreamContext` with `StreamLayer::Stage1`. A denial returns `false` before a
+  protocol log context exists, so GeoIP's denial counter is its only signal.
+- `routes/tcp/edgion_tcp.rs::check_stream_plugins` uses `StreamLayer::Tcp` after
+  route matching and before backend selection. It collapses plugin reasons to
+  `stream plugin policy denied`, retained in the canonical TCP log.
+- `routes/udp/edgion_udp.rs::handle_client_packet` reuses that TCP check before session
+  creation, and logs a failure with the same bounded reason. Existing sessions
+  bypass the check; denied datagrams create no session and may be counted again
+  on subsequent attempts. The metric label remains `tcp`, not `udp`.
+- `routes/tls/mod.rs::run_tls_route_plugins` uses `StreamLayer::Tls` only in the
+  compatibility fallback when `tls_route_plugin_runtime` is empty. A nonempty
+  TLS route runtime takes precedence. GeoIP is not a `tlsRoutePlugins` variant.
+  The fallback masks `geo:deny:*` to `stream plugin denied (compat)` in the
+  canonical TLS log; see [the TLS rule](tls-route-fallback-no-tracing.md).
+
+`StreamContext.direct_peer_ip` is the physical transport peer at all these
+sites, not the PROXY-resolved `RemoteIp`. `StreamContext.layer` maps to the closed
+`stage1`/`tcp`/`tls` label set in `stream_plugin_trait.rs`; none is a future-only
+reservation. Protocol log records retain their standard peer fields, subject to
+log configuration, but contain neither GeoIP facts nor sensitive GeoIP reasons.
+Stream plugins never populate the HTTP access-log `geo` block.
+
+The bilingual operations guides previously confused the `plugins` registration
+with listener-only execution and generalized listener silence to all L4 paths.
+D0102 / `align-bilingual-geoip-stream-lifecycle-documentation` corrects those descriptions,
+including the metric table and troubleshooting, without changing runtime behavior
+or the general metrics inventory. The independent no-tracing invariant remains
+grounded in `skills/03-coding/01-log-safety.md`, not in the stale guide wording.
+The TLS fallback's old inline comment still claims all GeoIP denials are log-free;
+that wording is stale. Its actual `ctx.err_log` assignment preserves a generic
+denial record. This documentation-only correction does not edit runtime source.
+
+Source and fixture inspection on 2026-09-10 confirms the boundaries above. The
+frozen `TCPRoute/GeoRestriction/03_TCPRoute.yaml` and
+`TLSRoute/GeoRestriction/04_TLSRoute.yaml` fixtures attach ESP directly to routes;
+their client suites exercise route denials. This is not a fresh integration run
+or UDP live-test evidence. Re-evaluate when attachment resolution, session reuse,
+TLS runtime precedence, direct-peer provenance, metric labels, or log masking changes.
+No integration fixtures or runtime sources were modified for this documentation
+correction, and no integration suite was run. Source and fixture inspection
+establish the documented wiring, not fresh runtime verification.
 
 ## Decision Rule
 
@@ -87,12 +136,12 @@ three previously-proposed fixes are all closed:
   parallel "rejected-connection log" sink, which is a feature, not a fix, and
   would itself be subject to the per-connection hot-path constraint.
 
-The structural observability gap is therefore accepted. Operators that need
-counted listener-level denies should request a metric counter as a separate
-feature (Prometheus counter increment is hot-path safe and bounded-cardinality
-— `store_key` is operator-controlled, low cardinality), tracked as
-`tasks/todo/` work rather than a review-finding fix. Verify before re-
-reporting that no such counter has landed yet.
+The structural protocol-log gap is therefore accepted. The historical proposal
+concerned a generic bridge-level denial counter, not plugin-owned counters:
+GeoIP and IP-restriction plugins already record their own bounded denial metrics.
+A new generic counter requires separate feature scope and the canonical metrics
+cardinality policy; operator-controlled identifiers alone do not establish that a
+label is acceptable. Verify current bridge and plugin emitters before proposing it.
 
 ## Background Notes
 
