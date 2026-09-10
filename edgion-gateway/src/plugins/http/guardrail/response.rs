@@ -420,6 +420,10 @@ impl GuardrailResponseProcessor {
         if self.stage_head_policy_reject(sink, session) {
             return;
         }
+        if !session.try_claim_response_terminal(ResponseTerminalCause::GuardrailRejected) {
+            self.publish_terminal("superseded", "terminal-owner-conflict");
+            return;
+        }
         let emission = session
             .ai_terminal_render_context()
             .map_or(TerminalEmission::NoEvent, |(dialect, eligibility)| {
@@ -827,6 +831,10 @@ impl StreamingResponseProcessor for GuardrailResponseProcessor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ai::terminal::{
+        AiClientStreamDialect, FinalResponseEligibility, ResponseProcessorSlot, ResponseTerminalState,
+    };
+    use crate::plugins::runtime::session_adapter::PingoraSessionAdapter;
     use crate::plugins::runtime::traits::session::MockPluginSession;
     use crate::sse::window::{LogicalBucketKey, LogicalField, SemanticFragment, SemanticSource, WindowRecord};
     use crate::sse::ByteRange;
@@ -1357,6 +1365,106 @@ mod tests {
         let summary = processor.owner.take_summary_line().unwrap();
         assert!(summary.contains("outcome=reject"));
         assert!(!summary.contains("outcome=fail-open"));
+    }
+
+    #[tokio::test]
+    async fn non_hold_policy_reject_claims_semantic_terminal_before_rendering() {
+        let mut processor = processor(true);
+        processor.window.retain(semantic_record("blocked")).unwrap();
+        let (discarded, reject) = processor.apply_decision(ParsedDecision::Reject).unwrap();
+        assert!(reject);
+        assert_eq!(discarded, WindowOutput::Discard);
+
+        let accepted = Bytes::from_static(b"already accepted bytes");
+        let accepted_before = accepted.clone();
+        let mut ctx = crate::EdgionHttpContext::default();
+        let state = ctx.ensure_ai_state();
+        state.client_stream_dialect = Some(AiClientStreamDialect::OpenAiCompatibleSse);
+        state.final_response_eligibility = Some(FinalResponseEligibility {
+            method_allows_body: true,
+            status_allows_body: true,
+            stream_kind: ResponseStreamKind::Sse,
+        });
+        let mut live = live_session().await;
+        let mut sink = ResponseBodySink::new();
+        {
+            let mut session = PingoraSessionAdapter::new(&mut live, &mut ctx);
+            session.set_response_processor_slot(ResponseProcessorSlot::Semantic);
+            processor.emit_policy_reject(&mut sink, &mut session);
+        }
+
+        assert_eq!(accepted, accepted_before);
+        assert_eq!(
+            ctx.response_terminal_state,
+            ResponseTerminalState::Claimed {
+                winner: ResponseProcessorSlot::Semantic,
+                cause: ResponseTerminalCause::GuardrailRejected,
+                emission: TerminalEmission::Rendered,
+            }
+        );
+        assert!(sink.is_terminated());
+        assert_eq!(sink.peek_extra().len(), 1);
+        assert!(sink.peek_extra()[0].len() <= 4 * 1024);
+        let summary = processor.owner.take_summary_line().unwrap();
+        assert!(summary.contains("outcome=reject"));
+        assert!(summary.contains("reason=policy"));
+        assert!(processor.owner.take_summary_line().is_none());
+    }
+
+    #[tokio::test]
+    async fn non_hold_policy_reject_preserves_an_existing_terminal_owner() {
+        let mut guardrail = processor(false);
+        guardrail.window.retain(semantic_record("blocked")).unwrap();
+        let (discarded, reject) = guardrail.apply_decision(ParsedDecision::Reject).unwrap();
+        assert!(reject);
+        assert_eq!(discarded, WindowOutput::Discard);
+
+        let accepted = Bytes::from_static(b"already accepted bytes");
+        let accepted_before = accepted.clone();
+        let mut ctx = crate::EdgionHttpContext::default();
+        assert!(ctx
+            .response_terminal_state
+            .try_claim(ResponseProcessorSlot::Ai, ResponseTerminalCause::QuotaExceeded));
+        ctx.response_terminal_state.mark_emission(TerminalEmission::Rendered);
+        let expected_state = ctx.response_terminal_state;
+        let mut live = live_session().await;
+        let mut sink = ResponseBodySink::new();
+        {
+            let mut session = PingoraSessionAdapter::new(&mut live, &mut ctx);
+            session.set_response_processor_slot(ResponseProcessorSlot::Semantic);
+            guardrail.emit_policy_reject(&mut sink, &mut session);
+        }
+
+        assert_eq!(accepted, accepted_before);
+        assert_eq!(ctx.response_terminal_state, expected_state);
+        assert!(sink.peek_extra().is_empty());
+        assert!(
+            !sink.is_terminated(),
+            "the Guardrail callback must not terminate a sink owned by another terminal; the enclosing driver settles it"
+        );
+        let summary = guardrail.owner.take_summary_line().unwrap();
+        assert!(summary.contains("outcome=superseded"));
+        assert!(summary.contains("reason=terminal-owner-conflict"));
+        assert!(guardrail.owner.take_summary_line().is_none());
+
+        let mut earlier = processor(false);
+        earlier.publish_terminal("pass", "normal-eos");
+        let mut earlier_ctx = crate::EdgionHttpContext::default();
+        assert!(earlier_ctx
+            .response_terminal_state
+            .try_claim(ResponseProcessorSlot::Ai, ResponseTerminalCause::ProviderCompleted));
+        let mut earlier_live = live_session().await;
+        let mut earlier_sink = ResponseBodySink::new();
+        {
+            let mut session = PingoraSessionAdapter::new(&mut earlier_live, &mut earlier_ctx);
+            session.set_response_processor_slot(ResponseProcessorSlot::Semantic);
+            earlier.emit_policy_reject(&mut earlier_sink, &mut session);
+        }
+        let summary = earlier.owner.take_summary_line().unwrap();
+        assert!(summary.contains("outcome=pass"));
+        assert!(summary.contains("reason=normal-eos"));
+        assert!(!summary.contains("superseded"));
+        assert!(earlier.owner.take_summary_line().is_none());
     }
 
     #[tokio::test]

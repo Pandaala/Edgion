@@ -1,6 +1,6 @@
 # B0290 — HTTP Forward Auth Plugin
 
-- Pipeline state: changed; independent plan/final LGTM and all checks passed, local commit gate.
+- Pipeline state: changed; committed after independent plan/final LGTM and all checks.
 - Active anchor: `edgion-gateway`; promoted baseline `99069928` (target blob unchanged from analysis).
 - Target: `edgion-gateway/src/plugins/http/forward_auth/plugin.rs`.
 - Analyst: `b0290_forward_auth_analysis`; full current target, external changes, call chains, original rules/knowledge and deterministic test/value coverage assigned. Prior B0077 evidence is historical; external 9b787978..b297af6e reopened the file.
@@ -26,4 +26,4 @@
 - Existing denial-response mock coverage now asserts two challenges, two separate cookies, config deduplication, filtering/exclusion, status/content type/connection, body pointer/length, EOS, shutdown and termination. ForwardAuth module tests: 7/7 passed.
 - Fresh final reviewer `b0290_final_review`: LGTM, no MustFix or ShouldFix. Independently verified the full target, Pingora APIs, test assertions, knowledge and all hard gates.
 - Root gates: format apply/check, locked workspace/all-targets check (14.06s), locked Clippy (16.30s, existing warnings, exit 0), agent-doc, SSA force, metrics inventory, Pingora policy, Gateway tracing, English-only, frozen integration and diff checks passed.
-- D0153 remains the future integration owner. No integration edit. Commit pending; no push.
+- D0153 remains the future integration owner. No integration edit. Commit `0241f37c`; no push.
