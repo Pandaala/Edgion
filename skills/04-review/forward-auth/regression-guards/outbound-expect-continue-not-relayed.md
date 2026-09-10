@@ -99,11 +99,15 @@ Re-open this decision only if:
 
 ## Reference Cases
 
-- `FA-BODY-002`: split from `tasks/todo/forward-auth-content-length-leak.md`; the `Content-Length` half of that task is `FA-BODY-001`.
+- Historical provenance: `FA-BODY-002` was split from the now-removed
+  `forward-auth-content-length-leak` task; the `Content-Length` half is
+  `FA-BODY-001`, maintained in
+  [the outbound framing guard](outbound-subrequest-framing-owned-by-hop.md).
 - `edgion-gateway/src/plugins/http/common/outbound/request.rs` — `is_hop_owned_expectation_header`, unit tests `forward_all_strips_expect_continue` and `explicitly_listed_origin_expect_is_still_forwarded`.
 - `edgion-gateway/src/plugins/runtime/session_adapter.rs` — `capture_request_body` answers and strips the inbound expectation.
 - `edgion-gateway/src/plugins/http/all_endpoint_status/plugin.rs` — independent builder; `is_inbound_body_header` plus unit test `inbound_body_headers_are_content_length_and_expect`.
-- `docs/{en,zh-CN}/user-guide/edgion-plugins/forward-auth.md` — "Hop-by-Hop Header Filtering".
+- ForwardAuth user guides: [English](../../../../docs/en/user-guide/http-route/filters/edgion-plugins/forward-auth.md)
+  and [Chinese](../../../../docs/zh-CN/user-guide/http-route/filters/edgion-plugins/forward-auth.md).
 
 ## Resolution references
 
