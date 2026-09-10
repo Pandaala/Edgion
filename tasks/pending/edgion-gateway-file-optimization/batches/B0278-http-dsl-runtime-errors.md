@@ -16,4 +16,4 @@
 ## Verification and handoff
 
 - Targeted runtime-error tests 10/10 passed. Fresh locked workspace check/Clippy, applied format/format check, agent docs, SSA, metrics, Pingora source, Gateway tracing boundary, English-only, diff and frozen-path checks passed; existing Clippy warnings remain.
-- Ledger/changelog updated. Commit: pending automatic local commit; never push.
+- Ledger/changelog updated. Commit: `1edac7b7`; no push.

@@ -16,7 +16,9 @@ This is the single concise record of actual changes across the file-by-file audi
 
 ## Entries
 
-- B0278: examined runtime_errors.rs without changes; typed arithmetic/budget/stack/host errors already have meaningful coverage. Independent LGTM; targeted 10/10 and fresh workspace check/Clippy plus all guards passed. Incidental D0145 separately tracks two sandbox network-unit-test violations. Pending automatic local commit; no technical/integration changes or push.
+- B0279: strengthened three sandbox limit errors while retaining Deny 500 checks, eliminating loop-limit false success via the step budget. Independent LGTM; three exact tests and error_policy 9/9 passed, workspace check/Clippy and all guards passed. D0145 network cases unchanged and not invoked. Pending automatic local commit; no production/integration changes or push.
+
+- B0278: examined runtime_errors.rs without changes; typed arithmetic/budget/stack/host errors already have meaningful coverage. Independent LGTM; targeted 10/10 and fresh workspace check/Clippy plus all guards passed. Incidental D0145 separately tracks two sandbox network-unit-test violations. Commit `1edac7b7`; no technical/integration changes or push.
 
 - B0277: scalar response-header UTF-8 byte limits and exact Bool/Nil result observations; original ten cases retained, two added. Independent LGTM; DSL 394/394, locked workspace check/Clippy and all guards passed. Historical worker completion acknowledgements resolved dispatch capacity without role reuse. Commit `e8bd209f`; no production/integration changes or push.
 
