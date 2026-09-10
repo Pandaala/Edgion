@@ -61,15 +61,21 @@ fn redis_rate_limit_errors_are_script_visible_and_sanitized() {
 
 #[test]
 fn redis_rate_limit_result_budget_is_checked_before_io() {
-    for limits in [
-        VmLimits {
-            max_map_size: 4,
-            ..Default::default()
-        },
-        VmLimits {
-            max_string_len: 17,
-            ..Default::default()
-        },
+    for (limits, expect_map_error) in [
+        (
+            VmLimits {
+                max_map_size: 4,
+                ..Default::default()
+            },
+            true,
+        ),
+        (
+            VmLimits {
+                max_string_len: 17,
+                ..Default::default()
+            },
+            false,
+        ),
     ] {
         let vm = make_vm_with_limits("redis.rate_limit(\"cache\", \"requests\", \"key\", 1)", limits);
         let mut session = MockPluginSession::new();
@@ -80,11 +86,52 @@ fn redis_rate_limit_result_budget_is_checked_before_io() {
             .build()
             .unwrap()
             .block_on(vm.execute(&mut session, &mut log, &runtime));
-        assert!(matches!(
-            result,
-            Err(RuntimeError::MapTooLarge { .. } | RuntimeError::StringTooLong { .. })
-        ));
+        if expect_map_error {
+            assert!(
+                matches!(result, Err(RuntimeError::MapTooLarge { size: 5, limit: 4 })),
+                "{result:?}"
+            );
+        } else {
+            assert!(
+                matches!(result, Err(RuntimeError::StringTooLong { len: 18, limit: 17 })),
+                "{result:?}"
+            );
+        }
     }
+}
+
+#[test]
+fn redis_rate_limit_exact_result_budget_reaches_provider_lookup() {
+    let source = r#"let r = redis.rate_limit("cache", "requests", "key", 1)
+if r["ok"] != false || r["value"] != nil || r["error"] != "provider_not_ready" {
+    return deny(500, "bad envelope")
+}
+resp.set_header("x-budget-checked", "complete")"#;
+    let vm = make_vm_with_limits(
+        source,
+        VmLimits {
+            max_map_size: 5,
+            max_string_len: 18,
+            ..Default::default()
+        },
+    );
+    let mut session = MockPluginSession::new();
+    session
+        .expect_set_response_header()
+        .withf(|name, value| name == "x-budget-checked" && value == "complete")
+        .times(1)
+        .returning(|_, _| Ok(()));
+    let mut log = PluginLog::new("test");
+    let runtime = rate_limit_runtime();
+    let result = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(vm.execute(&mut session, &mut log, &runtime));
+    assert_eq!(
+        result.expect("exact result budgets must permit provider lookup"),
+        good_next()
+    );
 }
 
 /// Path A: alias is not present in `runtime.redis_links`. The `redis.get`

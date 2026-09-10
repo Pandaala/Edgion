@@ -16,7 +16,9 @@ This is the single concise record of actual changes across the file-by-file audi
 
 ## Entries
 
-- B0270: strengthened five split/add/range failures with raw typed errors while retaining mapped-policy assertions, added Unicode split and range hard-ceiling boundaries, and corrected a test comment. Independent PASS; full DSL 376/376, locked workspace check/Clippy and all guards passed. D0141 separately owns Trim output-limit enforcement. Commit pending automatic local commit; no production or integration edits; no push.
+- B0271: asserted exact Redis rate-limit map/string budget errors and added a simultaneous exact-budget provider-not-ready envelope test with strict completion observation. Independent PASS; full DSL 377/377, locked workspace check/Clippy and all guards passed. Commit pending automatic local commit; no network, production or integration changes; no push.
+
+- B0270: strengthened five split/add/range failures with raw typed errors while retaining mapped-policy assertions, added Unicode split and range hard-ceiling boundaries, and corrected a test comment. Independent PASS; full DSL 376/376, locked workspace check/Clippy and all guards passed. D0141 separately owns Trim output-limit enforcement. Commit `209cd8c1`; no production or integration edits; no push.
 
 - B0269: replaced valid-source property discard filters with compile-success assertions, required successful VM initialization, and checked source-map lookup against independent expanded RLE including all valid PCs and out-of-range boundaries. Independent PASS; properties 4/4, locked workspace check/Clippy and all guards passed. Commit `0d38df25`; test-only, no integration edits or push.
 

@@ -28,4 +28,4 @@
 
 ## Handoff
 
-- Ledger/changelog updated; D0141 recorded separately. Commit pending automatic local commit; never push.
+- Ledger/changelog updated; D0141 recorded separately. Commit `209cd8c1`; never pushed by the campaign.
