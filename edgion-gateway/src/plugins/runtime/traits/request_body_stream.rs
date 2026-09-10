@@ -43,7 +43,8 @@ pub enum ChunkVerdict {
         /// Exact processor-authored gRPC status. The common hook consults it
         /// only when the request's canonical classification is gRPC.
         grpc_status: Option<u16>,
-        body: Option<String>,
+        /// Raw local-response bytes; only the gRPC writer interprets UTF-8.
+        body: Option<Bytes>,
         header_ops: Vec<PendingHeaderOp>,
     },
 }

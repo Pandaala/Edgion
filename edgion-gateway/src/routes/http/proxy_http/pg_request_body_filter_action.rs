@@ -203,7 +203,7 @@ async fn write_terminate_reply(
     ctx: &mut EdgionHttpContext,
     status: u16,
     exact_grpc_status: Option<u16>,
-    reply: Option<String>,
+    reply: Option<Bytes>,
     header_ops: Vec<crate::PendingHeaderOp>,
 ) {
     // Contract obligation: when a FINAL response is already committed
@@ -232,17 +232,16 @@ async fn write_terminate_reply(
         // must carry grpc-status trailers; a bare HTTP reply is protocol-
         // invalid for gRPC clients. Same mapping as the request-stage
         // `ErrResponse` choke point.
-        let (mapped_status, default_msg) = crate::runtime::server::http_to_grpc_status(status);
-        let grpc_status = exact_grpc_status.unwrap_or(mapped_status);
-        let message = reply
-            .as_deref()
-            .or_else(|| exact_grpc_status.is_none().then_some(default_msg));
+        let (grpc_status, message, invalid_utf8) = terminate_grpc_reply(status, exact_grpc_status, reply.as_deref());
+        if invalid_utf8 {
+            adapter.note_grpc_message_body_not_utf8();
+        }
         adapter.send_grpc_error_direct(grpc_status, message).await.is_ok()
     } else if let Ok(status_code) = http::StatusCode::from_u16(status) {
         match ResponseHeader::build(status_code, Some(2)) {
             Ok(mut header) => {
                 let _ = header.insert_header("content-type", "text/plain");
-                let body = reply.map(Bytes::from);
+                let body = reply;
                 let len = body.as_ref().map(|b| b.len()).unwrap_or(0);
                 // Re-assert framing after draining queued ops, matching the
                 // request-stage writer: a queued Content-Length must not
@@ -271,13 +270,134 @@ async fn write_terminate_reply(
     }
 }
 
+/// Borrow text only at the gRPC trailer boundary. Exact statuses preserve an
+/// absent message; HTTP-mapped statuses use the canonical default instead.
+fn terminate_grpc_reply(
+    status: u16,
+    exact_grpc_status: Option<u16>,
+    reply: Option<&[u8]>,
+) -> (u16, Option<&str>, bool) {
+    let (mapped_status, default_msg) = crate::runtime::server::http_to_grpc_status(status);
+    let message = reply.and_then(|body| std::str::from_utf8(body).ok());
+    let invalid_utf8 = reply.is_some() && message.is_none();
+    (
+        exact_grpc_status.unwrap_or(mapped_status),
+        message.or_else(|| exact_grpc_status.is_none().then_some(default_msg)),
+        invalid_utf8,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::observe::RequestDiagnostic;
     use edgion_resources::resources::edgion_plugins::{WafConfig, WafMode};
+    use edgion_resources::EdgionErrorCode;
     use edgion_waf::seclang::{RequestHead, RuleEngineMode, RuntimeLimits, Transaction};
     use std::sync::Arc;
-    use tokio::io::AsyncWriteExt;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    #[test]
+    fn terminate_grpc_reply_borrows_text_and_preserves_status_semantics() {
+        let text = b"quota";
+        let (mapped_status, default_msg) = crate::runtime::server::http_to_grpc_status(403);
+        for exact in [None, Some(0), Some(8)] {
+            let expected_status = exact.unwrap_or(mapped_status);
+            let fallback = exact.is_none().then_some(default_msg);
+            assert_eq!(
+                terminate_grpc_reply(403, exact, None),
+                (expected_status, fallback, false)
+            );
+            assert_eq!(
+                terminate_grpc_reply(403, exact, Some(&[0xff])),
+                (expected_status, fallback, true)
+            );
+            assert_eq!(
+                terminate_grpc_reply(403, exact, Some(b"")),
+                (expected_status, Some(""), false)
+            );
+            let (status, message, invalid) = terminate_grpc_reply(403, exact, Some(text));
+            assert_eq!((status, message, invalid), (expected_status, Some("quota"), false));
+            assert_eq!(message.unwrap().as_ptr(), text.as_ptr());
+        }
+    }
+
+    #[tokio::test]
+    async fn terminate_http_binary_reply_preserves_body_and_framing() {
+        let (mut client, server) = tokio::io::duplex(4096);
+        let stream: pingora_core::protocols::Stream = Box::new(server);
+        let mut session = Session::new_h1(stream);
+        client
+            .write_all(b"POST / HTTP/1.1\r\nHost: test\r\nContent-Length: 1\r\n\r\n")
+            .await
+            .unwrap();
+        session.read_request().await.unwrap();
+        let mut ctx = EdgionHttpContext::default();
+        let body = Bytes::from_static(&[0, 0xff, b'a', 0x80]);
+        write_terminate_reply(
+            &mut session,
+            &mut ctx,
+            403,
+            Some(0),
+            Some(body.clone()),
+            vec![
+                crate::PendingHeaderOp::Set {
+                    name: "content-length".to_string(),
+                    value: "999".to_string(),
+                },
+                crate::PendingHeaderOp::Set {
+                    name: "transfer-encoding".to_string(),
+                    value: "chunked".to_string(),
+                },
+            ],
+        )
+        .await;
+        let header = session.response_written().unwrap();
+        assert_eq!(header.status.as_u16(), 403);
+        assert_eq!(header.headers.get("content-length").unwrap(), "4");
+        assert!(!header.headers.contains_key("transfer-encoding"));
+        assert!(!header.headers.contains_key("grpc-status"));
+        drop(session);
+        let mut wire = Vec::new();
+        client.read_to_end(&mut wire).await.unwrap();
+        let body_start = wire.windows(4).position(|bytes| bytes == b"\r\n\r\n").unwrap() + 4;
+        assert_eq!(&wire[body_start..], body.as_ref());
+    }
+
+    #[tokio::test]
+    async fn terminate_grpc_invalid_body_records_diagnostic_without_exact_message() {
+        let (mut client, server) = tokio::io::duplex(4096);
+        let stream: pingora_core::protocols::Stream = Box::new(server);
+        let mut session = Session::new_h1(stream);
+        client
+            .write_all(b"POST / HTTP/1.1\r\nHost: test\r\nContent-Length: 1\r\n\r\n")
+            .await
+            .unwrap();
+        session.read_request().await.unwrap();
+        let mut ctx = EdgionHttpContext::default();
+        ctx.is_grpc_route_matched = true;
+        write_terminate_reply(
+            &mut session,
+            &mut ctx,
+            403,
+            Some(0),
+            Some(Bytes::from_static(&[0xff])),
+            Vec::new(),
+        )
+        .await;
+        let header = session.response_written().unwrap();
+        assert_eq!(header.headers.get("grpc-status").unwrap(), "0");
+        assert!(!header.headers.contains_key("grpc-message"));
+        assert_eq!(ctx.request_info.grpc_status(), Some(0));
+        assert_eq!(
+            ctx.diagnostics
+                .entries()
+                .iter()
+                .filter(|entry| { **entry == RequestDiagnostic::Error(EdgionErrorCode::PluginGrpcMessageBodyNotUtf8) })
+                .count(),
+            1
+        );
+    }
 
     fn streaming_waf_context(body_limit: u64) -> EdgionHttpContext {
         let config = WafConfig {
@@ -404,7 +524,7 @@ mod tests {
             &mut ctx,
             403,
             Some(8),
-            Some("quota".to_string()),
+            Some(Bytes::from_static(b"quota")),
             vec![crate::PendingHeaderOp::Append {
                 name: "x-local".to_string(),
                 value: "reply".to_string(),

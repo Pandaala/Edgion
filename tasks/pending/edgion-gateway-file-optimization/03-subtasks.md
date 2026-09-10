@@ -412,9 +412,9 @@
 | `edgion-gateway/src/plugins/http/ext_proc/client.rs` | `plugins-http-ext-proc` | source | changed | B0283: reject unsupported effective TLS identity before cache/channel; independent plan/final LGTM, 11 exact tests and workspace gates passed |
 | `edgion-gateway/src/plugins/http/ext_proc/mod.rs` | `plugins-http-ext-proc` | source | examined-no-change | B0284: justified module exports and real nonnetwork processor seam; independent LGTM, exact consumer and all gates passed |
 | `edgion-gateway/src/plugins/http/ext_proc/mutation.rs` | `plugins-http-ext-proc` | source | changed | B0285: preserve current raw query through canonical URI projection; independent plan/final LGTM, mutation 12/12 and workspace gates passed |
-| `edgion-gateway/src/plugins/http/ext_proc/plugin.rs` | `plugins-http-ext-proc` | source | analysis-ready | B0286: binary ImmediateResponse body fidelity across all consumers, plan-first candidate |
+| `edgion-gateway/src/plugins/http/ext_proc/plugin.rs` | `plugins-http-ext-proc` | source | changed | B0286: byte-exact local responses across header and streamed paths; independent plan/final LGTM, 21/21 deterministic tests and workspace gates passed |
 | `edgion-gateway/src/plugins/http/ext_proc/response_streamed.rs` | `plugins-http-ext-proc` | source | analysis-ready | B0287: bounded streaming/typed completion no-change candidate; separate trailer cleanup finding |
-| `edgion-gateway/src/plugins/http/ext_proc/response_trailer.rs` | `plugins-http-ext-proc` | source | pending | — |
+| `edgion-gateway/src/plugins/http/ext_proc/response_trailer.rs` | `plugins-http-ext-proc` | source | analysis-ready | B0288: preserve settled shared-owner decisions during trailer cleanup; refresh before promotion |
 | `edgion-gateway/src/plugins/http/ext_proc/streamed.rs` | `plugins-http-ext-proc` | source | pending | — |
 | `edgion-gateway/src/plugins/http/fault_injection/mod.rs` | `plugins-http-fault-injection` | source | examined-no-change | B0075 |
 | `edgion-gateway/src/plugins/http/fault_injection/plugin.rs` | `plugins-http-fault-injection` | source | changed | B0075 |

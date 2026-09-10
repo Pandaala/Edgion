@@ -445,6 +445,40 @@ mod tests {
         ));
     }
 
+    #[tokio::test]
+    async fn immediate_response_preserves_binary_body_and_deactivates() {
+        let immediate = ProcessingResponse {
+            response: Some(processing_response::Response::ImmediateResponse(ImmediateResponse {
+                status: Some(HttpStatus { code: 403 }),
+                grpc_status: Some(edgion_common::ext_proc::proto::GrpcStatus { status: 0 }),
+                body: vec![0, 0xff, b'a', 0x80],
+                ..Default::default()
+            })),
+            mode_override: None,
+        };
+        let mut handler = handler_with(vec![Ok(immediate)], false);
+        let mut chunk = Some(Bytes::from_static(b"payload"));
+        match handler.on_chunk(&mut chunk, RequestBodyEvent::Data).await {
+            ChunkVerdict::Terminate {
+                status,
+                grpc_status,
+                body,
+                ..
+            } => {
+                assert_eq!(status, 403);
+                assert_eq!(grpc_status, Some(0));
+                assert_eq!(body.unwrap().as_ref(), &[0, 0xff, b'a', 0x80]);
+            }
+            ChunkVerdict::Continue => panic!("immediate response must terminate"),
+        }
+        assert_eq!(chunk.as_deref(), Some(&b"payload"[..]));
+        assert!(handler.take_pending_outcome().is_none());
+        assert!(matches!(
+            handler.on_chunk(&mut chunk, RequestBodyEvent::Complete).await,
+            ChunkVerdict::Continue
+        ));
+    }
+
     /// Immediate-response header mutations are carried into the terminate
     /// verdict, with protected/pseudo headers filtered out by the handler.
     #[tokio::test]

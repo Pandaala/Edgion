@@ -63,6 +63,36 @@ body doubles as the `grpc-message` trailer, so the request-stage writer gates
 it through `std::str::from_utf8` and falls back to the status-mapped default
 message rather than emitting invalid header bytes.
 
+## ExtProc follow-up (B0286)
+
+The original D0055 correction did not remove ExtProc's intermediate
+`String::from_utf8_lossy` conversion. That conversion corrupted binary
+`ImmediateResponse.body` payloads before both header-stage `ErrResponse` and
+streamed request-body `ChunkVerdict::Terminate` could render them. The old
+unification-page claim that the latter's `Option<String>` incurred no extra
+copy was incorrect.
+
+Both intermediate bodies now carry `Option<Bytes>` and take ownership of the
+protobuf `Vec<u8>`. HTTP replies preserve bytes even if the processor also
+supplies a gRPC status. For canonical gRPC requests with an exact status,
+including zero, only valid UTF-8 becomes a message; absent/invalid text leaves
+the message absent. Without an exact status, the request-stage and
+request-body writers retain the existing HTTP-to-gRPC default message.
+Invalid text records `PluginGrpcMessageBodyNotUtf8` through the existing
+request diagnostic API. Response-header-stage replacement/abort policy is
+unchanged; this follow-up does not introduce another gRPC writer there.
+
+Regression coverage lives in ExtProc's `plugin.rs` (byte/allocation ownership,
+HTTP/exact-gRPC selection), `streamed.rs` (binary termination and deactivation),
+and `pg_request_body_filter_action.rs` (borrowed text selection and in-memory
+writer framing). These deterministic tests do not establish live HTTP/2 or
+external-processor interoperability coverage.
+
+B0286 verification: 21 explicitly selected deterministic tests passed,
+including existing suppression, failure-policy, header-filtering, abandonment,
+and response-ownership guards. The four changed Rust files passed scoped
+`rustfmt`; workspace checks remain the campaign coordinator's separate gate.
+
 ## Fix Suggestions Not Accepted
 
 - Introduce a `StaticOrOwned` / `Cow<'static, [u8]>` body enum — `Bytes`

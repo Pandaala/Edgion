@@ -1,6 +1,6 @@
 # B0285 — HTTP ExtProc Mutation
 
-- Pipeline state: terminal; changed, independently reviewed and verified, pending local commit.
+- Pipeline state: terminal; changed, committed as `d26bcd5a`.
 - Active anchor: `edgion-gateway`; baseline `989d2a27`.
 - Target: `edgion-gateway/src/plugins/http/ext_proc/mutation.rs`.
 - Analyst: `b0285_extproc_mutation_analysis`; full mutation/consumer, boundary and coverage/value analysis assigned.
@@ -31,4 +31,4 @@
 
 - Final reviewer `b0285_final_review`: LGTM at 989d2a27 plus diff, no Must Fix or plan deviation. All three production consumers and real-context assertions independently verified; D0152 reconfirmed separately.
 - Mutation tests passed 12/12; workspace check passed (11.07s), Clippy passed (16.91s, existing warnings). Formatting/format check, docs, SSA, metrics, Pingora source, Gateway no-tracing, English, frozen paths and whitespace checks passed.
-- Exact technical scope remained mutation.rs plus one plugin test-helper expectation. No integration execution/edit or unrelated fixes. Ledger/changelog updated; pending local commit, never push.
+- Exact technical scope remained mutation.rs plus one plugin test-helper expectation. No integration execution/edit or unrelated fixes. Ledger/changelog updated; commit `d26bcd5a`, never push.

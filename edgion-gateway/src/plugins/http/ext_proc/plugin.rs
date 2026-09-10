@@ -23,6 +23,7 @@ use edgion_common::ext_proc::proto::{
 };
 use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::plugin_configs::{ExtProcConfig, ProcessingMode};
+use edgion_resources::EdgionErrorCode;
 
 const PLUGIN_NAME: &str = "ExtProc";
 
@@ -619,7 +620,7 @@ pub(super) struct ValidatedImmediateResponse {
     pub(super) status: u16,
     pub(super) grpc_status: Option<u16>,
     pub(super) headers: Option<edgion_common::ext_proc::proto::HeaderMutation>,
-    pub(super) body: Option<String>,
+    pub(super) body: Option<Bytes>,
 }
 
 pub(super) enum ImmediateAction {
@@ -650,7 +651,7 @@ pub(super) fn immediate_action(
         status: status as u16,
         grpc_status: grpc_status.map(|status| status as u16),
         headers: imm.headers,
-        body: (!imm.body.is_empty()).then(|| String::from_utf8_lossy(&imm.body).into_owned()),
+        body: (!imm.body.is_empty()).then(|| Bytes::from(imm.body)),
     }))
 }
 
@@ -665,15 +666,19 @@ fn immediate_reply(
     log.push_fmt("ext_proc immediate {}", la![imm.status.to_string().as_str()]);
     if session.is_grpc_request() {
         if let Some(grpc_status) = imm.grpc_status {
+            let message = imm.body.as_deref().and_then(|body| std::str::from_utf8(body).ok());
+            if imm.body.is_some() && message.is_none() {
+                session.record_error(EdgionErrorCode::PluginGrpcMessageBodyNotUtf8);
+            }
             return PluginRunningResult::ErrGrpcError {
                 grpc_status,
-                message: imm.body,
+                message: message.map(str::to_owned),
             };
         }
     }
     PluginRunningResult::ErrResponse {
         status: imm.status,
-        body: imm.body.map(Bytes::from),
+        body: imm.body,
     }
 }
 
@@ -1647,7 +1652,7 @@ mod tests {
             panic!("valid exact status must produce a reply");
         };
         assert_eq!(valid.grpc_status, Some(0));
-        assert_eq!(valid.body.as_deref(), Some("exact"));
+        assert_eq!(valid.body.as_deref(), Some(&b"exact"[..]));
     }
 
     #[test]
@@ -1662,7 +1667,7 @@ mod tests {
                 status: 403,
                 grpc_status: Some(8),
                 headers: None,
-                body: Some("quota".to_string()),
+                body: Some(Bytes::from_static(b"quota")),
             },
         );
         assert_eq!(
@@ -1683,7 +1688,7 @@ mod tests {
                 status: 403,
                 grpc_status: Some(8),
                 headers: None,
-                body: Some("denied".to_string()),
+                body: Some(Bytes::from_static(b"denied")),
             },
         );
         assert_eq!(
@@ -1704,7 +1709,7 @@ mod tests {
                 status: 403,
                 grpc_status: None,
                 headers: None,
-                body: Some("mapped".to_string()),
+                body: Some(Bytes::from_static(b"mapped")),
             },
         );
         assert_eq!(
@@ -1712,6 +1717,101 @@ mod tests {
             PluginRunningResult::ErrResponse {
                 status: 403,
                 body: Some(Bytes::from_static(b"mapped"))
+            }
+        );
+    }
+
+    #[test]
+    fn immediate_body_preserves_binary_bytes_and_allocation() {
+        let body = vec![0, 0xff, b'a', 0x80];
+        let allocation = body.as_ptr();
+        let Ok(ImmediateAction::Reply(valid)) = immediate_action(
+            ImmediateResponse {
+                status: Some(edgion_common::ext_proc::proto::HttpStatus { code: 403 }),
+                body,
+                ..Default::default()
+            },
+            false,
+        ) else {
+            panic!("binary HTTP body must be accepted");
+        };
+        let body = valid.body.unwrap();
+        assert_eq!(body.as_ref(), &[0, 0xff, b'a', 0x80]);
+        assert_eq!(body.as_ptr(), allocation);
+    }
+
+    #[test]
+    fn immediate_reply_binary_http_body_is_unchanged() {
+        for exact_status in [None, Some(0), Some(8)] {
+            let mut session = MockPluginSession::new();
+            session.expect_is_grpc_request().return_const(false);
+            session.expect_record_error().never();
+            let body = Bytes::from_static(&[0, 0xff, b'a', 0x80]);
+            assert_eq!(
+                immediate_reply(
+                    &mut session,
+                    &mut PluginLog::new("ExtProc"),
+                    ValidatedImmediateResponse {
+                        status: 403,
+                        grpc_status: exact_status,
+                        headers: None,
+                        body: Some(body.clone()),
+                    },
+                ),
+                PluginRunningResult::ErrResponse {
+                    status: 403,
+                    body: Some(body)
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn immediate_reply_exact_grpc_invalid_body_records_error_without_message() {
+        let mut session = MockPluginSession::new();
+        session.expect_is_grpc_request().return_const(true);
+        session
+            .expect_record_error()
+            .withf(|code| *code == EdgionErrorCode::PluginGrpcMessageBodyNotUtf8)
+            .times(1)
+            .return_const(());
+        assert_eq!(
+            immediate_reply(
+                &mut session,
+                &mut PluginLog::new("ExtProc"),
+                ValidatedImmediateResponse {
+                    status: 403,
+                    grpc_status: Some(0),
+                    headers: None,
+                    body: Some(Bytes::from_static(&[0xff])),
+                },
+            ),
+            PluginRunningResult::ErrGrpcError {
+                grpc_status: 0,
+                message: None
+            }
+        );
+    }
+
+    #[test]
+    fn immediate_reply_exact_grpc_absent_body_preserves_zero() {
+        let mut session = MockPluginSession::new();
+        session.expect_is_grpc_request().return_const(true);
+        session.expect_record_error().never();
+        assert_eq!(
+            immediate_reply(
+                &mut session,
+                &mut PluginLog::new("ExtProc"),
+                ValidatedImmediateResponse {
+                    status: 403,
+                    grpc_status: Some(0),
+                    headers: None,
+                    body: None,
+                },
+            ),
+            PluginRunningResult::ErrGrpcError {
+                grpc_status: 0,
+                message: None
             }
         );
     }

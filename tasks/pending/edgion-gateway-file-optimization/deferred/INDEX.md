@@ -54,7 +54,7 @@ These entries are backlinks only. A linked `tasks/todo` file is the editable sou
 | D0051 — Align JWE resolved-credential failure policy | needs-discussion | [campaign finding](D0051-jwe-resolved-credential-auth-failure.md) |
 | D0052 — Canonicalize auth claim-to-header projection | needs-discussion | [campaign finding](D0052-auth-claim-header-projection-plan.md) |
 | D0053 — Enforce LDAP dial-time egress policy | resolved | [campaign finding](D0053-ldap-auth-dial-time-egress-policy.md) |
-| D0055 — Use clone-cheap immutable local response bodies | needs-discussion | [campaign finding](D0055-clone-cheap-local-response-bodies.md) |
+| D0055 — Use clone-cheap immutable local response bodies | done (2026-09-05); canonical task removed | [campaign finding](D0055-clone-cheap-local-response-bodies.md) |
 | D0056 — Enforce OpenID Connect dial-time egress policy | resolved | [campaign finding](D0056-openid-connect-dial-time-egress-policy.md) |
 | D0057 — Add OpenID Connect egress integration coverage | pending | [campaign finding](D0057-openid-connect-egress-integration-coverage.md) |
 | D0058 — Redact OpenID Connect dependency error responses | needs-implementation | [campaign finding](D0058-openid-connect-dependency-error-redaction.md) |
