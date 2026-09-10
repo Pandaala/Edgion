@@ -133,7 +133,7 @@ Re-open only if:
 - Iron rule 3: [`../../03-coding/01-log-safety.md`](../../../03-coding/01-log-safety.md).
 - Sibling removals: [real-ip-run-request-tracing-removed.md](real-ip-run-request-tracing-removed.md),
   [wasm-request-path-tracing-removed.md](wasm-request-path-tracing-removed.md),
-  [tls-route-fallback-no-tracing.md](../mandatory-design/tls-route-fallback-no-tracing.md),
+  [tls-route-plugin-access-log.md](../mandatory-design/tls-route-plugin-access-log.md),
   [dsl-vm-execute-tracing-declined.md](../mandatory-design/dsl-vm-execute-tracing-declined.md).
 
 ## Resolution references

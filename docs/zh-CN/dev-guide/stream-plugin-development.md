@@ -17,7 +17,7 @@
 
 当前最成熟的实现是 IP 限制插件，代码入口在：
 
-- `src/core/gateway/plugins/stream/ip_restriction/`
+- `edgion-gateway/src/plugins/stream/ip_restriction/`
 
 ## 当前两阶段模型
 
@@ -40,8 +40,8 @@ Edgion 现在把 stream plugin 分成两个阶段：
 
 特点：
 
-- 运行在 TLS 握手完成、`TLSRoute` 已匹配之后
-- 可以看到 SNI、匹配到的 Route、mTLS 状态等
+- 运行在 `TLSRoute` 匹配之后：Terminate 在握手完成后执行，Passthrough 在转发端到端握手之前执行
+- 可以看到 SNI、匹配到的 Route；协商后的 TLS 身份和 mTLS 状态仅在 Terminate 下可用
 - 适合依赖 TLS 上下文的策略判断
 
 典型场景：
@@ -49,32 +49,35 @@ Edgion 现在把 stream plugin 分成两个阶段：
 - 按 SNI 或 mTLS 状态做限制
 - 只在某条 `TLSRoute` 命中后执行策略
 
-#### 向下兼容：回退到 Stage 1
+#### TLSRoute 阶段契约
 
-`run_tls_route_plugins`（`src/core/gateway/routes/tls/mod.rs`）会优先执行 Stage 2 runtime。如果引用的 `EdgionStreamPlugins` 资源里 `tlsRoutePlugins` 为空（典型情况：老资源只声明了 Stage 1 的 `plugins`），运行时会回退到在 TLS 路由层执行 Stage 1（`ConnectionFilter`）策略，从而保证只挂在 `plugins` 上的 IP 限制等策略仍然生效。
+Terminate 和 Passthrough 模式下，TLSRoute 都只执行 `spec.tlsRoutePlugins`，不会回退执行 `spec.plugins`。
 
-运维注意：
+- 未声明 `tlsRoutePlugins` 或将其设为 null，同时 `plugins` 非空时，拒绝连接。即使 Stage-1 条目全部禁用或 Bypass 也如此：这是阶段绑定错误。
+- 显式 `tlsRoutePlugins: []`、Stage-2 条目全部禁用或 Bypass，表示不执行路由阶段策略；两个字段都缺失或为空也允许连接。启用的 Stage-2 Block 条目仍然拒绝连接。
+- 引用的资源不存在时仍然拒绝连接。
+- TLSRoute 的 IP 限制应从 `plugins` 移至 `tlsRoutePlugins`。GeoIP、ConnectionRateLimit 应通过 Gateway 监听器绑定 `plugins`，它们不属于 Stage-2。共享资源可以同时声明两个字段，各绑定阶段只执行自己的字段。
+- 热更新影响新连接，不会重新校验已建立的连接。
+- TLS 访问日志记录 `tls route plugin allowed` / `tls route plugin denied`，或资源缺失、阶段绑定错误；连接路径不产生 `tracing` 或 `(compat)` 事件。
 
-- 该回退路径只通过 access log 体现，不会写 `tracing`。允许的连接会记录 `stream plugin allowed (compat)`；拒绝的连接会设置 `ctx.err_log = "stream plugin denied (compat): <reason>"`。在 TLS access log（`tls.log`）里搜 `(compat)` 后缀即可判断走的是哪一阶段。
-- 兼容路径在 hot-path 上故意保持 tracing 静默，激活时不会有 `tracing::*` 事件，与「数据面零 tracing」准则一致（见 `skills/03-coding/01-log-safety.md` Iron Rule 3）。
-- **升级时的静默切换风险**：如果之后给同一个 `EdgionStreamPlugins` 资源加上 `tlsRoutePlugins` 条目，下一次热更新后 Stage 1 兼容回退会在 TLS 路由层静默停跑 —— Stage 2 会优先生效，老的 `plugins` 列表不再被 `run_tls_route_plugins` 调用。升级前需要先决定：要么在添加第一条 Stage 2 条目前先把策略复制到 `tlsRoutePlugins`，要么接受行为变化并在热更新后用 tcp.log / tls.log 验证。
+如果资源同时包含连接阶段策略，而路由阶段确实需要无策略放行，请显式声明 `tlsRoutePlugins: []`；需要执行 IP 限制时不能以空列表替代策略。
 
 ## 当前架构里的关键链路
 
 ```mermaid
 graph TD
     A["EdgionStreamPlugins YAML"] --> B["Rust resource type"]
-    B --> C["ResourceMeta pre-parse"]
+    B --> C["Serializable stage configuration"]
     C --> D["Controller ProcessorHandler"]
     D --> E["Config sync to Gateway"]
-    E --> F["StreamPluginStore"]
+    E --> F["StreamPluginStore compile and publish"]
     F --> G["Gateway / TCPRoute / TLSRoute annotation binding"]
     G --> H["Stage 1 ConnectionFilter or Stage 2 TlsRoute runtime"]
 ```
 
 最容易漏的不是“写 trait”，而是中间这几段：
 
-- `ResourceMeta` 预处理是否初始化 runtime
+- Gateway 的 `compile_stream_plugins` 是否构造了对应阶段的 runtime
 - Gateway 是否真的缓存并热更新了 `EdgionStreamPlugins`
 - `Gateway` / `TCPRoute` / `TLSRoute` 的注解引用是否真正接到运行时
 
@@ -89,27 +92,27 @@ graph TD
 
 这里分别负责：
 
-- CRD 结构、status 和 runtime 字段
+- CRD 结构、status 和可序列化的阶段配置条目
 - Stage 1 插件枚举
 - Stage 2 插件枚举
-- 资源预处理时初始化 runtime
+- 资源元数据的 schema 层行为
 
 一个重要事实是：
 
-- 当前 runtime 初始化是在 `ResourceMeta` 预处理里做的，不是在 controller handler 里临时构造
+- Gateway 的 `StreamPluginStore` 调用 `compile_stream_plugins`，构造两个阶段的 runtime 后再发布不可变配置；Controller 传输配置，不传输 runtime 对象
 
-所以如果只改了 handler，但没让 pre-parse 初始化正确发生，Gateway 侧可能同步到了资源，却拿不到可执行 runtime。
+所以只改 Controller handler 并不够：还需要在 Gateway 的构造逻辑中接入插件，资源同步后才有对应的可执行 runtime。
 
 ## 和 Gateway 运行时相关的代码位置
 
 Gateway 侧最关键的是这几块：
 
-- `src/core/gateway/plugins/stream/stream_plugin_trait.rs`
-- `src/core/gateway/plugins/stream/stream_plugin_runtime.rs`
-- `src/core/gateway/plugins/stream/stream_plugin_store.rs`
-- `src/core/gateway/runtime/server/listener_builder.rs`
-- `src/core/gateway/routes/tcp/conf_handler_impl.rs`
-- `src/core/gateway/routes/tls/proxy.rs`
+- `edgion-gateway/src/plugins/stream/stream_plugin_trait.rs`
+- `edgion-gateway/src/plugins/stream/stream_plugin_runtime.rs`
+- `edgion-gateway/src/plugins/stream/stream_plugin_store.rs`
+- `edgion-gateway/src/runtime/server/listener_builder.rs`
+- `edgion-gateway/src/routes/tcp/conf_handler_impl.rs`
+- `edgion-gateway/src/routes/tls/proxy.rs`
 
 理解方式可以简单记成：
 
@@ -148,7 +151,7 @@ metadata:
 2. 决定配置结构是否可以复用已有配置，而不是复制一份近似类型。
 3. 把新类型接入 `EdgionStreamPlugin` 或 `TlsRouteStreamPlugin`。
 4. 在对应 runtime 中补插件对象构造逻辑。
-5. 确认 `ResourceMeta` 预处理能初始化 runtime。
+5. 确认 Gateway 的 `compile_stream_plugins` 在发布配置之前构造对应阶段的 runtime。
 6. 确认引用该资源的 `Gateway` / `TCPRoute` / `TLSRoute` 真正能取到 store key。
 7. 最后再补测试和样例 YAML。
 
@@ -163,7 +166,7 @@ metadata:
 ### 1. 资源层
 
 - 资源能被 controller 接收并写出正确 status
-- 更新后 runtime 字段能重新初始化
+- Gateway 在发布更新之前重新构造两个阶段的 runtime
 
 ### 2. 引用层
 

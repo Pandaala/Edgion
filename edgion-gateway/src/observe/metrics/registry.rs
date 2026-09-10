@@ -1130,7 +1130,7 @@ pub fn record_geoip_lookup_panic() {
 }
 
 /// L4 geo denials, which are never logged (see the design's §6.6).
-/// `layer` is stage1 | tcp | tls; `reason` is deny_country | allow_miss |
+/// `layer` is stage1 | tcp; `reason` is deny_country | allow_miss |
 /// db_unavailable | lookup_failed.
 /// Neither label carries a client address.
 pub fn record_geoip_denied(layer: StreamLayer, reason: &'static str) {

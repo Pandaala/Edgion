@@ -177,7 +177,7 @@ Notes:
 
 | Key | Resource | Value | Default | Effect |
 |-----|----------|-------|---------|--------|
-| `edgion.io/edgion-stream-plugins` | `TCPRoute`, `TLSRoute`, `UDPRoute` | `name` or `namespace/name` | none | Resolves dynamic `EdgionStreamPlugins` lookup key. Short names are expanded with the route namespace. On `UDPRoute` only the Stage-1 ConnectionFilter (`spec.plugins`, IP-based) runs — there is no TLS stage. |
+| `edgion.io/edgion-stream-plugins` | `TCPRoute`, `TLSRoute`, `UDPRoute` | `name` or `namespace/name` | none | Resolves dynamic `EdgionStreamPlugins` lookup key. Short names are expanded with the route namespace. TCP/UDP routes execute `spec.plugins`; TLSRoute executes only `spec.tlsRoutePlugins`. A TLSRoute reference to a nonempty Stage-1-only resource fails closed; explicit empty Stage-2 is a no-op. |
 | `edgion.io/proxy-protocol` | `TLSRoute` | currently `"v2"` is recognized | disabled | Sends Proxy Protocol v2 to upstream. Other values are ignored. |
 | `edgion.io/max-connect-retries` | `TLSRoute` | unsigned integer string | `2` | Max upstream connect attempts. Values below `1` are normalized to `1`; values above `5` are capped to `5`. |
 | `edgion.io/tcp-keepalive-time` | `TCPRoute`, `TLSRoute` | positive integer string | disabled (absent) | Idle seconds before the first TCP keepalive probe on the upstream L4 connection. Presence (a valid positive integer) enables keepalive; absent disables it entirely (no probes sent). Clamped to 1–7200; out-of-range values are clamped with a warning at config-load time. Mitigates half-open connections after NAT/firewall drops (~15 min silent stall without keepalive). |

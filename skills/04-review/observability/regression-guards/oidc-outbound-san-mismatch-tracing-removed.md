@@ -83,7 +83,7 @@ the same branch, not a missing capability.
 - Register the warn as a `// tracing-allow:` exception — the sanctioned exception set is
   construction/once-init/`is_integration_testing_mode()` paths; "rare because it needs a
   misconfiguration" is exactly the framing rejected in
-  [tls-route-fallback-no-tracing.md](../mandatory-design/tls-route-fallback-no-tracing.md) and
+  [tls-route-plugin-access-log.md](../mandatory-design/tls-route-plugin-access-log.md) and
   [real-ip-run-request-tracing-removed.md](real-ip-run-request-tracing-removed.md).
 - Add a `call` label (`token_exchange` / `token_refresh` / `revoke_token` / `introspection` /
   `userinfo`) to `record_outbound_tls_san_mismatch` to recover the lost dimension — it would make
@@ -134,7 +134,7 @@ Re-open only if:
   scope note + SSL-log section; `edgion-tests/integration/conf/EdgionPlugins/OpenidConnect/SanMismatch/README.md`.
 - Sibling removals: [real-ip-run-request-tracing-removed.md](real-ip-run-request-tracing-removed.md),
   [wasm-request-path-tracing-removed.md](wasm-request-path-tracing-removed.md),
-  [tls-route-fallback-no-tracing.md](../mandatory-design/tls-route-fallback-no-tracing.md),
+  [tls-route-plugin-access-log.md](../mandatory-design/tls-route-plugin-access-log.md),
   [dsl-vm-execute-tracing-declined.md](../mandatory-design/dsl-vm-execute-tracing-declined.md).
 
 ## Resolution references

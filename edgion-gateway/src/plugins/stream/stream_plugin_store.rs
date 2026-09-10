@@ -4,9 +4,8 @@
 //! the immutable `EdgionStreamPlugins` schema paired with the two gateway-built
 //! runtime families. `StreamPluginRuntime` evaluates `DirectPeerIp` plus the
 //! listener port at listener admission and TCP/UDP route session creation;
-//! TLSRoute may also invoke it through the legacy compatibility fallback,
-//! which new configurations must not rely on. The separate
-//! `TlsRoutePluginRuntime` evaluates TLSRoute context after route matching.
+//! TLSRoute exclusively invokes the separate `TlsRoutePluginRuntime`, which
+//! evaluates TLSRoute context after route matching.
 //! Both runtimes are built once per namespace/name and Arc-shared through
 //! atomic store snapshots for hot reload.
 
@@ -38,7 +37,7 @@ pub fn create_stream_plugin_handler() -> Box<dyn ConfHandler<EdgionStreamPlugins
 /// `spec` holds the raw schema (no runtime state); the two runtimes are
 /// built by `compile_stream_plugins` and Arc-shared via the store.
 pub struct CompiledStreamPlugins {
-    /// The serializable EdgionStreamPlugins schema (retained for store stats).
+    /// The serializable schema, retained for stage declaration checks and store stats.
     pub spec: Arc<EdgionStreamPlugins>,
     /// Connection-context runtime used by listener and route-owned lifecycles.
     pub stream_plugin_runtime: Arc<StreamPluginRuntime>,

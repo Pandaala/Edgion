@@ -1,6 +1,6 @@
 //! KeyAuth credential resolution.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{hash_map::Entry, HashMap, HashSet};
 
 use crate::conf_mgr::sync_runtime::resource_processor::credential::{fetch_secret, FetchOutcome, PendingReason};
 use crate::conf_mgr::sync_runtime::resource_processor::{format_secret_key, HandlerContext, ResourceRef};
@@ -10,7 +10,7 @@ use edgion_resources::resources::edgion_plugins::EdgionPlugin;
 
 /// Resolve all Secret refs for a single group, appending entries to
 /// `all_keys`. Cross-group duplicate keys follow **first-wins**: if a
-/// key already exists in `seen_groups_for_key`, the new entry is dropped
+/// key already exists in `all_keys`, the new entry is dropped
 /// and a warn is logged with both groups.
 #[allow(clippy::too_many_arguments)]
 fn resolve_group(
@@ -19,7 +19,6 @@ fn resolve_group(
     group_name: &str,
     secret_refs: &[edgion_resources::resources::gateway::SecretObjectReference],
     all_keys: &mut HashMap<String, KeyMetadata>,
-    seen_groups_for_key: &mut HashMap<String, String>,
     ep_namespace: Option<&String>,
     resource_ref: &ResourceRef,
     ctx: &HandlerContext,
@@ -101,8 +100,8 @@ fn resolve_group(
             }
         };
 
-        for key_entry in keys_list {
-            let Some(key_value) = key_entry.get(config_key_field) else {
+        for mut key_entry in keys_list {
+            let Some(key_value) = key_entry.remove(config_key_field) else {
                 tracing::warn!(
                     edgion_plugins = %resource_ref.key(),
                     secret_key = %secret_key,
@@ -113,26 +112,15 @@ fn resolve_group(
                 continue;
             };
 
-            let mut headers: HashMap<String, String> = HashMap::new();
-            for (field, value) in &key_entry {
-                if field != config_key_field && whitelist.contains(field.as_str()) {
-                    headers.insert(field.clone(), value.clone());
-                }
-            }
+            let headers = key_entry
+                .into_iter()
+                .filter(|(field, _)| whitelist.contains(field.as_str()))
+                .collect();
 
-            let inserted = first_wins_insert(
-                seen_groups_for_key,
-                all_keys,
-                key_value.clone(),
-                headers,
-                group_name.to_string(),
-            );
-
-            if !inserted {
+            if let Err(prev_group) = first_wins_insert(all_keys, key_value, headers, group_name) {
                 // first-wins rejected this entry; warn with both groups (or the
                 // single group for an intra-group duplicate). secret_key keeps
                 // operators able to locate the offending Secret entry.
-                let prev_group = seen_groups_for_key.get(key_value).cloned().unwrap_or_default();
                 if prev_group != group_name {
                     tracing::warn!(
                         edgion_plugins = %resource_ref.key(),
@@ -176,7 +164,6 @@ pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) fn resolve(
                 let key_field = config.key_field.clone();
 
                 let mut all_keys: HashMap<String, KeyMetadata> = HashMap::new();
-                let mut seen: HashMap<String, String> = HashMap::new();
 
                 for g in groups {
                     let group_name: String = g.name.clone();
@@ -186,7 +173,6 @@ pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) fn resolve(
                         &group_name,
                         &g.secret_refs,
                         &mut all_keys,
-                        &mut seen,
                         ep.metadata.namespace.as_ref(),
                         resource_ref,
                         ctx,
@@ -215,21 +201,24 @@ pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) fn resolve(
 /// Pure helper for first-wins duplicate detection.
 ///
 /// Inserts `key` into `all_keys` with the given `headers` and `group` only if
-/// `seen` does not already contain `key`. Returns `true` if inserted, `false`
-/// if the key was already present (first-wins: original entry is kept).
-fn first_wins_insert(
-    seen: &mut HashMap<String, String>,
-    all_keys: &mut HashMap<String, KeyMetadata>,
+/// `all_keys` does not already contain `key`. Returns the retained group on a
+/// duplicate (first-wins: original entry is kept), without copying its name.
+fn first_wins_insert<'a>(
+    all_keys: &'a mut HashMap<String, KeyMetadata>,
     key: String,
     headers: HashMap<String, String>,
-    group: String,
-) -> bool {
-    if seen.contains_key(&key) {
-        return false;
+    group: &str,
+) -> Result<(), &'a str> {
+    match all_keys.entry(key) {
+        Entry::Occupied(entry) => Err(&entry.into_mut().group),
+        Entry::Vacant(entry) => {
+            entry.insert(KeyMetadata {
+                headers,
+                group: group.to_string(),
+            });
+            Ok(())
+        }
     }
-    seen.insert(key.clone(), group.clone());
-    all_keys.insert(key, KeyMetadata { headers, group });
-    true
 }
 
 #[cfg(test)]
@@ -237,27 +226,146 @@ mod tests {
     use super::*;
 
     #[test]
+    fn resolution_preserves_metadata_warnings_and_replaces_credentials() {
+        use crate::conf_mgr::ControllerRuntime;
+        use edgion_resources::resources::edgion_plugins::plugin_configs::{KeyAuthConfig, KeyAuthSecretGroup};
+        use edgion_resources::resources::edgion_plugins::{EdgionPluginsSpec, RequestFilterEntry};
+        use edgion_resources::resources::gateway::SecretObjectReference;
+        use k8s_openapi::api::core::v1::Secret;
+        use k8s_openapi::ByteString;
+        use std::io::{Read, Seek};
+        use std::sync::Arc;
+
+        let secret = |name: &str, yaml: &str| Secret {
+            metadata: kube::api::ObjectMeta {
+                name: Some(name.into()),
+                namespace: Some("default".into()),
+                ..Default::default()
+            },
+            data: Some(std::collections::BTreeMap::from([(
+                "keys.yaml".into(),
+                ByteString(yaml.as_bytes().to_vec()),
+            )])),
+            ..Default::default()
+        };
+        let runtime = Arc::new(ControllerRuntime::default());
+        runtime.secret_store.replace_all(HashMap::from([
+            (
+                "default/first".into(),
+                secret("first", "- apiKey: ' private-key-é '\n  x-owner: first\n  ignored: private-metadata\n- apiKey: ' private-key-é '\n  x-owner: rejected-within\n- x-owner: missing-key\n- apiKey: ''\n  x-owner: empty-key\n"),
+            ),
+            (
+                "default/second".into(),
+                secret("second", "- apiKey: ' private-key-é '\n  x-owner: rejected-across\n- apiKey: other-key\n  x-owner: second\n"),
+            ),
+        ]));
+        let ctx = HandlerContext::new(None, None, Default::default(), 5, 20, Arc::clone(&runtime));
+        let mut ep = EdgionPlugins::new("key-ownership", EdgionPluginsSpec::default());
+        ep.metadata.namespace = Some("default".into());
+        ep.spec.request_plugins = Some(vec![RequestFilterEntry::new(EdgionPlugin::KeyAuth(KeyAuthConfig {
+            key_field: "apiKey".into(),
+            upstream_header_fields: vec!["apiKey".into(), "x-owner".into()],
+            secret_groups: Some(
+                [("group-a", "first"), ("group-b", "second")]
+                    .into_iter()
+                    .map(|(group, name)| KeyAuthSecretGroup {
+                        name: group.into(),
+                        description: None,
+                        secret_refs: vec![SecretObjectReference {
+                            group: None,
+                            kind: None,
+                            namespace: None,
+                            name: name.into(),
+                        }],
+                    })
+                    .collect(),
+            ),
+            ..Default::default()
+        }))]);
+        let owner = ResourceRef::new(
+            edgion_resources::ResourceKind::EdgionPlugins,
+            Some("default".into()),
+            "key-ownership".into(),
+        );
+        let mut log_file = tempfile::tempfile().unwrap();
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(log_file.try_clone().unwrap())
+            .with_max_level(tracing::Level::WARN)
+            .without_time()
+            .with_ansi(false)
+            .finish();
+        tracing::subscriber::with_default(subscriber, || resolve(&mut ep, &owner, &ctx));
+        log_file.rewind().unwrap();
+        let mut logs = String::new();
+        log_file.read_to_string(&mut logs).unwrap();
+        assert!(!logs.contains("private-key"));
+        assert!(!logs.contains("private-metadata"));
+        let within = logs
+            .lines()
+            .find(|line| line.contains("Duplicate API key within group"))
+            .unwrap();
+        assert!(within.contains("secret_key=default/first") && within.contains("group=group-a"));
+        let across = logs
+            .lines()
+            .find(|line| line.contains("duplicate API key across groups"))
+            .unwrap();
+        assert!(across.contains("existing_group=group-a") && across.contains("incoming_group=group-b"));
+        assert!(across.contains("secret_key=default/second"));
+        assert!(logs.contains("Key entry missing key field"));
+
+        let EdgionPlugin::KeyAuth(config) = &ep.spec.request_plugins.as_ref().unwrap()[0].plugin else {
+            panic!("expected KeyAuth")
+        };
+        let keys = config.resolved_keys.as_ref().unwrap();
+        assert_eq!(keys.len(), 3);
+        assert_eq!(keys[" private-key-é "].group, "group-a");
+        assert_eq!(
+            keys[" private-key-é "].headers,
+            HashMap::from([("x-owner".into(), "first".into())])
+        );
+        assert_eq!(keys[""].headers["x-owner"], "empty-key");
+        assert_eq!(keys["other-key"].group, "group-b");
+        for name in ["first", "second"] {
+            assert_eq!(ctx.secret_ref_manager().get_refs(&format!("default/{name}")).len(), 1);
+        }
+
+        runtime.secret_store.replace_all(HashMap::from([(
+            "default/first".into(),
+            secret("first", "- apiKey: rotated-key\n  x-owner: rotated\n"),
+        )]));
+        resolve(&mut ep, &owner, &ctx);
+        let EdgionPlugin::KeyAuth(config) = &ep.spec.request_plugins.as_ref().unwrap()[0].plugin else {
+            panic!("expected KeyAuth")
+        };
+        let keys = config.resolved_keys.as_ref().unwrap();
+        assert_eq!(keys.len(), 1);
+        assert_eq!(keys["rotated-key"].headers["x-owner"], "rotated");
+        runtime.secret_store.replace_all(HashMap::new());
+        resolve(&mut ep, &owner, &ctx);
+        let EdgionPlugin::KeyAuth(config) = &ep.spec.request_plugins.as_ref().unwrap()[0].plugin else {
+            panic!("expected KeyAuth")
+        };
+        assert!(config.resolved_keys.is_none());
+    }
+
+    #[test]
     fn first_wins_second_group_rejected() {
-        let mut seen: HashMap<String, String> = HashMap::new();
         let mut all_keys: HashMap<String, KeyMetadata> = HashMap::new();
 
         let group_a: String = "partner-a".to_string();
         let group_b: String = "partner-b".to_string();
 
         // First group inserts the key — should succeed.
-        let inserted = first_wins_insert(
-            &mut seen,
-            &mut all_keys,
-            "dup-key".to_string(),
-            HashMap::new(),
-            group_a.clone(),
-        );
-        assert!(inserted, "first insert must succeed");
+        let inserted = first_wins_insert(&mut all_keys, "dup-key".to_string(), HashMap::new(), &group_a);
+        assert!(inserted.is_ok(), "first insert must succeed");
 
         // Second group tries the same key — must be rejected.
-        let inserted_again =
-            first_wins_insert(&mut seen, &mut all_keys, "dup-key".to_string(), HashMap::new(), group_b);
-        assert!(!inserted_again, "second insert must be rejected (first-wins)");
+        let inserted_again = first_wins_insert(&mut all_keys, "dup-key".to_string(), HashMap::new(), &group_b);
+        assert_eq!(
+            inserted_again,
+            Err("partner-a"),
+            "duplicate must report the retained group"
+        );
 
         // Verify first-wins: the stored group is partner-a, not partner-b.
         assert_eq!(
@@ -266,33 +374,18 @@ mod tests {
             "first group must win"
         );
 
-        // Only one entry in seen (the second was rejected).
-        assert_eq!(seen.len(), 1, "seen must track exactly one entry");
-        assert_eq!(seen.get("dup-key").unwrap().as_str(), "partner-a");
+        assert_eq!(all_keys.len(), 1, "duplicate must not add an entry");
     }
 
     #[test]
     fn first_wins_distinct_keys_both_inserted() {
-        let mut seen: HashMap<String, String> = HashMap::new();
         let mut all_keys: HashMap<String, KeyMetadata> = HashMap::new();
 
         let group_a: String = "partner-a".to_string();
         let group_b: String = "partner-b".to_string();
 
-        assert!(first_wins_insert(
-            &mut seen,
-            &mut all_keys,
-            "key-a".to_string(),
-            HashMap::new(),
-            group_a,
-        ));
-        assert!(first_wins_insert(
-            &mut seen,
-            &mut all_keys,
-            "key-b".to_string(),
-            HashMap::new(),
-            group_b,
-        ));
+        assert!(first_wins_insert(&mut all_keys, "key-a".to_string(), HashMap::new(), &group_a,).is_ok());
+        assert!(first_wins_insert(&mut all_keys, "key-b".to_string(), HashMap::new(), &group_b,).is_ok());
 
         assert_eq!(all_keys.len(), 2);
         assert_eq!(all_keys.get("key-a").unwrap().group.as_str(), "partner-a");

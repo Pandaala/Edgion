@@ -615,7 +615,27 @@ pub static GRPC_SCENARIO: &Scenario = &Scenario {
 
 #[cfg(test)]
 mod tests {
-    use super::validate_say_hello_metadata;
+    use super::{validate_say_hello_metadata, GRPC_SCENARIO, HTTP_SCENARIO};
+    use std::path::Path;
+
+    #[test]
+    fn registered_scenario_paths_resolve_lifecycle_fixtures() {
+        for topology in ["integration", "k8s"] {
+            let conf_root = Path::new(env!("CARGO_MANIFEST_DIR")).join(topology).join("conf");
+            for (scenario, kind) in [(HTTP_SCENARIO, "HTTPRoute"), (GRPC_SCENARIO, "GRPCRoute")] {
+                let scenario_dir = conf_root.join(scenario.conf_path);
+                for relative in [
+                    "../bootstrap/01_Gateway.yaml".to_string(),
+                    format!("initial/02_{kind}_parent.yaml"),
+                    format!("initial/03_{kind}_child.yaml"),
+                    format!("updates/03_{kind}_child.yaml"),
+                ] {
+                    let fixture = scenario_dir.join(relative);
+                    assert!(fixture.is_file(), "{} is missing {}", scenario.id, fixture.display());
+                }
+            }
+        }
+    }
 
     fn message(metadata: &str) -> String {
         format!("Hello, ParentRefCollision! metadata=({metadata})")

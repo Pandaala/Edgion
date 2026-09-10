@@ -7,7 +7,7 @@ description: EdgionStreamPlugins CRD schema: two-stage plugins at the TCP/TLS la
 
 > API: `edgion.io/v1` | Scope: Namespaced
 
-EdgionStreamPlugins defines plugins at the TCP/TLS layer, executed during Pingora's ConnectionFilter stage, before HTTP parsing.
+EdgionStreamPlugins defines connection-stage plugins and a separate TLSRoute-stage chain.
 
 ## Full Schema
 
@@ -39,7 +39,7 @@ spec:
         allowRefs:
           - name: corp-allowlist   # references an IpList EdgionConfigData named "corp-allowlist"
 
-  # Stage 2: TlsRoute (post-TLS handshake, SNI/certificate information available)
+  # Stage 2: TlsRoute (post-route-match; TLS identity only after termination)
   tlsRoutePlugins:
     - enable: true
       type: IpRestriction
@@ -56,7 +56,14 @@ spec:
 | Stage | Trigger Time | Available Information | Field |
 |-------|--------------|-----------------------|-------|
 | Stage 1: ConnectionFilter | After TCP connection is established, before TLS handshake | Source IP, destination port | `spec.plugins` |
-| Stage 2: TlsRoute | After TLS handshake completes | SNI, client certificate, IP | `spec.tlsRoutePlugins` |
+| Stage 2: TlsRoute | After route matching; post-handshake for Terminate, pre-forwarding for Passthrough | SNI and IP; TLS identity/mTLS only for Terminate | `spec.tlsRoutePlugins` |
+
+TLSRoute executes only `tlsRoutePlugins`. An absent/null Stage-2 field with
+nonempty raw `plugins` fails closed, even when those Stage-1 entries are disabled
+or Bypass. Explicit `tlsRoutePlugins: []`, disabled/Bypass-only Stage-2, or both
+fields absent/empty are no-ops; none invokes Stage-1. An enabled Stage-2 Block
+entry denies. A missing referenced resource fails closed. See the
+[stage contract](../../01-architecture/02-gateway/13-stream-plugin-dev.md#stage-2-tlsroute).
 
 ## Binding
 

@@ -1,11 +1,11 @@
 # D0115 — TLSRoute Stage-1 Fallback Removal
 
-- Status: pending
+- Status: resolved (2026-09-10)
 - Severity: medium
 - Discovered in: B0205 TLS shared-module analysis
-- Canonical task: [Remove TLSRoute Stage-1 fallback coherently](../../../todo/remove-tlsroute-stage1-fallback-coherently.md)
+- Maintained outcome: [TLSRoute stage isolation](../../../../skills/04-review/tls/regression-guards/tls-route-stage-isolation.md)
 
-Architecture identifies the fallback as pre-release compatibility debt, but
-existing TLSRoute integration fixtures still depend on Stage-1-only plugins.
-Removing runtime fallback alone would turn their deny behavior into allow.
-Coordinate contract and fixture migration outside the frozen-test campaign.
+The fallback was removed outside the frozen-test campaign under the user's
+coordinated-fix authorization. TLSRoute now uses only Stage-2 plugins; nonempty
+Stage-1-only attachments fail closed. Fixtures, documentation, and dynamic
+coverage were migrated together, and the default integration sweep passed.

@@ -1,6 +1,6 @@
 //! `GeoIpLocation` stream plugin for L4 stream lifecycles.
 //!
-//! Listener attachment runs at Stage 1. TCP/UDP route and TLS compatibility
+//! Listener attachment runs at Stage 1. TCP/UDP route
 //! attachments run at their respective lifecycle points.
 //!
 //! Same config shape and matching core as the HTTP `GeoIpLocation`
@@ -14,7 +14,7 @@
 //! most one lookup (`ctx.direct_peer_ip`, the physical direct-peer address);
 //! CIDR-only rule sets perform zero lookups. Every deny is reported via
 //! `edgion_geoip_denied_total{layer,reason}`. A listener Stage 1 denial is
-//! otherwise metric-only. TCP/UDP route and TLS lifecycle denials retain their
+//! otherwise metric-only, including on TLS listeners. TCP/UDP route denials retain their
 //! canonical protocol logs, but those records contain neither GeoIP facts nor
 //! the sensitive Geo denial reason.
 

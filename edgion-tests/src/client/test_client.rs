@@ -54,6 +54,7 @@ const EXPECTED_DYNAMIC_SCENARIO_IDS: &[&str] = &[
     "CanaryHotSwap",
     "DnsResolutionFlap",
     "TcpEspReload",
+    "TlsRoutePluginsReload",
     "GcParamsFlap",
     "TlsLastKnownGood",
     "WafDynamic",
@@ -1477,6 +1478,7 @@ fn dynamic_port_contract(id: &str) -> Result<Option<(&'static str, port_config::
         "SpWeighted" => Some(("HTTPRoute/Backend/SessionPersistenceWeighted", PortKind::Http)),
         "DnsResolutionFlap" => Some(("HTTPRoute/Backend/DnsResolutionFlap", PortKind::Http)),
         "TcpEspReload" => Some(("TCPRoute/StreamPlugins/Dynamic", PortKind::Tcp)),
+        "TlsRoutePluginsReload" => Some(("TLSRoute/StreamPlugins", PortKind::Tls)),
         "TlsLastKnownGood" => Some(("EdgionTls/LastKnownGood", PortKind::Https)),
         // This scenario only inspects control-plane status and intentionally has
         // no data-plane listener.

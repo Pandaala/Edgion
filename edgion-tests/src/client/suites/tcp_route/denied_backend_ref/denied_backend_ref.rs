@@ -1,7 +1,7 @@
 // TCPRoute DeniedBackendRef suite: a cross-namespace Service backendRef
 // without a ReferenceGrant must fail closed after accept and never echo.
 //
-// Against edgion-tests/k8s/conf/TCPRoute/DeniedBackendRef/:
+// Local fixtures use edgion-test -> backend; Kubernetes fixtures use:
 // - 31954 (tcp): TCPRoute in edgion-default -> Service edgion-backend/tcp-denied-ref
 //
 // The backend EndpointSlice is real (test_server :30010). If the post-select
@@ -20,7 +20,7 @@ async fn assert_attached_and_denied(ctx: &TestContext) -> Result<(), String> {
     helpers::wait_resource_status(
         ctx,
         "TCPRoute",
-        "edgion-default",
+        helpers::l4_denied_backend_ref_namespace(),
         "tcp-denied-ref",
         Duration::from_secs(10),
         |route| {

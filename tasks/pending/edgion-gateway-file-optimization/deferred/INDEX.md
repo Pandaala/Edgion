@@ -185,7 +185,7 @@ These entries are backlinks only. A linked `tasks/todo` file is the editable sou
 | Pre-resolve L4 listener timeouts | pending | [task](../../../todo/pre-resolve-l4-listener-timeouts.md) |
 | Refresh L4 connect-timeout knowledge | retired externally | Task removed by user-synchronized `78a25c3a`; history retained in Git. |
 | Scope TLSRoute effective hostnames to attachments | pending (high) | [task](../../../todo/scope-tlsroute-effective-hostnames-to-attachments.md) |
-| Remove TLSRoute Stage-1 fallback coherently | pending | [task](../../../todo/remove-tlsroute-stage1-fallback-coherently.md) |
+| Remove TLSRoute Stage-1 fallback coherently | resolved (2026-09-10) | [maintained knowledge](../../../../skills/04-review/tls/regression-guards/tls-route-stage-isolation.md) |
 | Apply sensitive mode to TLS log surfaces | pending | [task](../../../todo/apply-sensitive-mode-to-tls-log-surfaces.md) |
 | Investigate TLS setup write deadlines | needs-investigation | [task](../../../todo/investigate-tls-setup-write-deadlines.md) |
 | Add malformed ClientHello passthrough coverage (D0118) | pending | [task](../../../todo/add-malformed-clienthello-passthrough-coverage.md) |

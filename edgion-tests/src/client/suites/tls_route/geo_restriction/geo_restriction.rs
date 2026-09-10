@@ -1,22 +1,7 @@
-// TLSRoute GeoRestriction suite: one geo-deny case, enough to prove
-// layer="tls" is wired and counted, plus a chain-order check.
-//
-// Against edgion-tests/integration/conf/TLSRoute/GeoRestriction/: a single
-// TLS listener (tls-geo-gw:31953) whose TLSRoute carries the
-// edgion.io/edgion-stream-plugins annotation directly, pointing at an ESP
-// that has the Stage-1 `plugins` shape: `GlobalConnectionIpRestriction`
-// (denying an unrelated CIDR, first) THEN `GeoIpLocation` (denying RU,
-// second) — the `GeoIpLocation` plugin owns geo exclusively post-refactor.
-// Per edgion-gateway/src/routes/tls/mod.rs::check_tls_route_plugins, an empty
-// Stage-2 tls_route_plugin_runtime falls back to running the Stage-1 runtime
-// with `StreamLayer::Tls`.
-//
-// Local source binding connects FROM 127.0.0.5 (RU) to deny and FROM
-// 127.0.0.1 (CN) to prove the listener admits an unaffected country. K8s
-// cannot bind those synthetic sources across the pod network, so it uses the
-// real pod peer and hot-swaps the denied country around the K8s-only GeoIP
-// mapping. A local bind() failure remains a hard test failure (Inconclusive),
-// never a successful denial — the same verdict discipline as the TCP suite.
+// TLS listener GeoRestriction coverage through the Gateway Stage-1 policy.
+// GlobalConnectionIpRestriction runs before GeoIpLocation. Local sources use
+// fixture GeoIP mappings; Kubernetes uses the real pod peer and policy updates.
+// Bind/connect failures and timeouts must never count as policy denial.
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use crate::suites::tls_route::basic::basic::make_tls_connector;
@@ -89,10 +74,7 @@ async fn probe(src: &str, ctx: &TestContext) -> Verdict {
     };
     let mut tls_stream = match connector.connect(sni, tcp_stream).await {
         Ok(s) => s,
-        // A pre-proxy geo deny may also surface as a handshake failure,
-        // depending on exactly where check_tls_route_plugins is wired
-        // relative to the handshake — same observed shape as the existing
-        // TLSRoute/StreamPlugins deny-all case.
+        // Gateway admission can close the connection before the TLS handshake.
         Err(e) => return Verdict::Denied(format!("TLS handshake rejected: {e}")),
     };
 
@@ -117,7 +99,7 @@ async fn geoip_denied_total(ctx: &TestContext, reason: &str) -> f64 {
     crate::metrics_helper::counter_value(
         &raw,
         "edgion_geoip_denied_total",
-        &[("layer", "tls"), ("reason", reason)],
+        &[("layer", "stage1"), ("reason", reason)],
     )
 }
 
@@ -160,7 +142,7 @@ impl TlsGeoRestrictionTestSuite {
     fn geo_deny_ru() -> TestCase {
         TestCase::new(
             "geo_deny_ru",
-            "a TLS connection sourced from an RU-mapped loopback alias is denied at layer=tls",
+            "a TLS connection sourced from an RU-mapped loopback alias is denied at layer=stage1",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -190,7 +172,7 @@ impl TlsGeoRestrictionTestSuite {
                                     );
                                 }
                                 last = format!(
-                                    "{reason} (edgion_geoip_denied_total{{layer=\"tls\",reason=\"deny_country\"}} not yet bumped: {current}, baseline {baseline})"
+                                    "{reason} (edgion_geoip_denied_total{{layer=\"stage1\",reason=\"deny_country\"}} not yet bumped: {current}, baseline {baseline})"
                                 );
                             }
                             Verdict::Echoed(n) => last = format!("unexpectedly allowed, echoed {n} bytes"),
@@ -201,7 +183,7 @@ impl TlsGeoRestrictionTestSuite {
                     TestResult::failed(
                         start.elapsed(),
                         format!(
-                            "RU source was never denied with edgion_geoip_denied_total{{layer=\"tls\",reason=\"deny_country\"}} bumped; last: {last}"
+                            "RU source was never denied with edgion_geoip_denied_total{{layer=\"stage1\",reason=\"deny_country\"}} bumped; last: {last}"
                         ),
                     )
                 })
