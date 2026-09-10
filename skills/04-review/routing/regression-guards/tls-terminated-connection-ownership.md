@@ -46,8 +46,8 @@ are introduced. Plugin decisions, denied/unsupported backend terminal gates,
 weights, endpoint safety, retry/outlier tokens, timeout policy, PROXY v2 authority
 and IPv6 handling, canonical duplex, and log output remain unchanged. Attachment
 hostname projection, Stage-2 fallback removal, timeout pre-resolution, setup-write
-deadlines, and the [TLS sensitive-log gap](../../../../tasks/todo/apply-sensitive-mode-to-tls-log-surfaces.md)
-remain separate work; ownership optimization does not resolve those findings.
+deadlines, and [TLS log address redaction](../../tls/regression-guards/tls-log-address-redaction.md)
+are separate concerns; ownership optimization did not resolve those findings.
 
 ## Verification and re-evaluation
 

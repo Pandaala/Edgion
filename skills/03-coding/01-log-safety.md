@@ -20,8 +20,15 @@
 | Category | Risk | Handling |
 |------|------|---------|
 | `client_cert_info` | subject / SAN may contain PII | Already wired into the `access_log_sensitive` global switch via `serialize_with = "masked::serialize"` |
-| `direct_peer_ip` / `remote_ip` / `path` / `x_forwarded_for` / `sni` | Physical/resolved client IP / request path | Same as above; uniformly masked when `mode=replace` or `mode=wrap` is enabled |
+| `direct_peer_ip` / `remote_ip` / `path` / `x_forwarded_for` | Physical/resolved client IP / request path | Same as above; uniformly masked when `mode=replace` or `mode=wrap` is enabled |
+| `sni` | Requested server name | HTTP access-log SNI retains its existing masking. TLS proxy and SSL handshake SNI remain plain by explicit product decision; do not apply blanket masking to these records. |
+| TLS backend connection addresses | Internal backend topology | Mask `TlsUpstreamInfo.addr` at serialization and the known destination's occurrences in connect-error text when sensitive mode is enabled; retain the independent port, error classification, reason, and retry count. |
 | Plugin log dynamic parameters | May contain username / IP / token | Use `push_fmt` + `sensitive(...)` to mark explicitly; DSL `log_warn` / `log_error` automatically go through `push_sensitive` |
+
+TLS/SSL diagnostics without demonstrated sensitive content remain readable.
+Mask a proven sensitive fragment at its origin, not the entire `err_log` or
+`LogBuffer`. See [TLS log address policy](../04-review/tls/regression-guards/tls-log-address-redaction.md)
+for evidence and the accepted plaintext-SNI scope.
 
 ### Code examples
 

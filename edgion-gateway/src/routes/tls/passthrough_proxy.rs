@@ -351,7 +351,7 @@ impl EdgionTlsPassthroughProxy {
                             crate::backends::FailureClass::LocalOrigin,
                         );
                     }
-                    last_err = format!("connect failed: {upstream_addr_str}: {e}");
+                    last_err = super::format_connect_error(&upstream_addr_str, &e);
                     if attempt + 1 < max_attempts {
                         ctx.push_log(&format!("retry {}/{max_attempts}: {last_err}", attempt + 1));
                         tokio::time::sleep(tls_connect_retry_backoff(attempt)).await;
@@ -469,9 +469,13 @@ impl EdgionTlsPassthroughProxy {
         );
         log_tls(ctx).await;
 
+        self.access_logger.send(Self::listener_log_entry(ctx).to_string()).await;
+    }
+
+    fn listener_log_entry(ctx: &TlsContext) -> serde_json::Value {
         let direct_peer_ip = edgion_resources::sensitive::apply_sensitive(&ctx.direct_peer_ip, str::to_owned);
         let remote_ip = edgion_resources::sensitive::apply_sensitive(&ctx.remote_ip, str::to_owned);
-        let log_entry = serde_json::json!({
+        serde_json::json!({
             "ts": ctx.ts,
             "mode": "passthrough",
             "listener_port": ctx.listener_port,
@@ -485,8 +489,7 @@ impl EdgionTlsPassthroughProxy {
             "log": &ctx.log,
             "err_log": &ctx.err_log,
             "status": ctx.status,
-        });
-        self.access_logger.send(log_entry.to_string()).await;
+        })
     }
 }
 
@@ -519,6 +522,14 @@ async fn replay_initial_bytes<W: AsyncWrite + Unpin>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tls_log_masks_only_backend_addresses() {
+        super::super::sensitive_log_tests::assert_log_modes(
+            concat!(module_path!(), "::tls_log_masks_only_backend_addresses"),
+            EdgionTlsPassthroughProxy::listener_log_entry,
+        );
+    }
     use edgion_resources::resources::tls_route::{TLSRoute, TLSRouteSpec};
     use kube::api::ObjectMeta;
     use std::collections::HashMap;

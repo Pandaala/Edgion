@@ -373,6 +373,13 @@ or EdgionPlugins inline configuration; standard Gateway API fields are unchanged
 
 ### access_log_sensitive
 
+TLS proxy logs (global and per listener) mask backend `upstream_info.addr` and
+the destination address inside connection errors and retries. The separate
+backend port and surrounding error diagnostics remain readable. TLS proxy and
+SSL handshake `sni` remain plain in every mode; the HTTP access-log SNI masking
+described below is unchanged. Other TLS/SSL error text is not masked as a whole.
+`wrap` marks address fragments while retaining their original values.
+
 Controls redaction of fields marked sensitive in the access log, ssl.log, and plugin log. **`mode=replace` by default** — sensitive values render `***` out of the box. This is a wider blast radius than the built-in field list alone: the nine built-in fields (`direct_peer_ip` / `remote_ip` / `path` / `x_forwarded_for` / `sni` / `request_uri` / client-cert `subject`/`sans`/`cn`), 46 `sensitive()`-marked plugin-log parameters across 13 plugins, DSL `log_warn`/`log_error` user args, ssl.log mTLS-failure cert fields, and — new — any `ext` field declared via [`AccessLogExtern`](../observability/access-log.md) that is not whitelisted in `EdgionGatewayConfig.spec.accessLogExtern.unmaskedKeys`.
 
 | Parameter | Type | Default | Description |

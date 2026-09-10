@@ -35,7 +35,10 @@ fn is_zero_u64(v: &u64) -> bool {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct TlsUpstreamInfo {
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "edgion_resources::sensitive::masked_opt::serialize"
+    )]
     pub addr: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub port: Option<u16>,
@@ -372,7 +375,7 @@ impl EdgionTlsTcpProxy {
                             crate::backends::FailureClass::LocalOrigin,
                         );
                     }
-                    last_err = format!("connect failed: {upstream_addr_str}: {e}");
+                    last_err = super::format_connect_error(&upstream_addr_str, &e);
                     if attempt + 1 < max_attempts {
                         ctx.push_log(&format!("retry {}/{max_attempts}: {last_err}", attempt + 1));
                         tokio::time::sleep(tls_connect_retry_backoff(attempt)).await;
@@ -491,9 +494,13 @@ impl EdgionTlsTcpProxy {
         log_tls(ctx).await;
 
         // Also emit to the per-listener access logger
+        self.access_logger.send(Self::listener_log_entry(ctx).to_string()).await;
+    }
+
+    fn listener_log_entry(ctx: &TlsContext) -> serde_json::Value {
         let direct_peer_ip = edgion_resources::sensitive::apply_sensitive(&ctx.direct_peer_ip, str::to_owned);
         let remote_ip = edgion_resources::sensitive::apply_sensitive(&ctx.remote_ip, str::to_owned);
-        let log_entry = serde_json::json!({
+        serde_json::json!({
             "ts": ctx.ts,
             "listener_port": ctx.listener_port,
             "direct_peer_ip": direct_peer_ip,
@@ -507,8 +514,7 @@ impl EdgionTlsTcpProxy {
             "log": &ctx.log,
             "err_log": &ctx.err_log,
             "status": ctx.status,
-        });
-        self.access_logger.send(log_entry.to_string()).await;
+        })
     }
 }
 
@@ -534,6 +540,14 @@ mod tests {
     use edgion_resources::resources::tls_route::{TLSRoute, TLSRouteSpec};
     use kube::api::ObjectMeta;
     use std::collections::HashMap;
+
+    #[test]
+    fn tls_log_masks_only_backend_addresses() {
+        super::super::sensitive_log_tests::assert_log_modes(
+            concat!(module_path!(), "::tls_log_masks_only_backend_addresses"),
+            EdgionTlsTcpProxy::listener_log_entry,
+        );
+    }
 
     fn route_unit(name: &str, hostname: &str) -> Arc<TlsRouteUnit> {
         Arc::new(TlsRouteUnit::from_route(Arc::new(TLSRoute {

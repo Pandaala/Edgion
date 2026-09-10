@@ -305,6 +305,8 @@ request_mirror:
 
 ### access_log_sensitive
 
+TLS 代理日志（全局及各 listener）会脱敏后端 `upstream_info.addr`，以及连接错误和重试信息中的目的地址片段。独立的后端端口及周围的错误诊断保持可读。TLS 代理和 SSL 握手日志中的 `sni` 在所有模式下均保持明文；下文所述 HTTP access log 的 SNI 脱敏行为保持不变。其他 TLS/SSL 错误文本不会被整段脱敏。`wrap` 仅标记地址片段，仍保留原始值。
+
 控制 access log、ssl.log、plugin log 中已标注敏感字段的脱敏行为。**默认 `mode=replace`**（已从旧默认 `off` 切换）——敏感字段开箱即渲染为 `***`。
 
 | 参数 | 类型 | 默认值 | 说明 |

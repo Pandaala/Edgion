@@ -25,6 +25,8 @@ before applying a decision to current code.
 
 ## Regression guards
 
+- [TLS log backend-address masking and plaintext SNI scope](regression-guards/tls-log-address-redaction.md)
+
 - [TLSRoute stage isolation and explicit empty configuration](regression-guards/tls-route-stage-isolation.md)
 - [Gateway backend client identity does not select TLS](regression-guards/backend-client-identity-tls-selection.md)
 - [Backend TLS connection-pool trust and identity isolation](regression-guards/backend-tls-pool-isolation.md)
