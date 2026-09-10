@@ -32,10 +32,11 @@ flowchart TD
 **File**: `pg_early_request_filter.rs`
 **Signature**: `async fn early_request_filter(session, ctx) -> Result<()>`
 
-Runs after HTTP header parsing completes, before route matching:
+Runs after HTTP header parsing completes, before Pingora's module request-header filter and route matching:
 
 1. **Client timeout setup**: set `read_timeout` and `write_timeout` from the pre-parsed `ParsedTimeouts.client`.
-2. **Keepalive management**: set keepalive_timeout normally; during shutdown (`is_process_shutting_down()`) set it to None to disable keepalive and aid traffic draining.
+2. **Keepalive management**: apply the configured timeout only while the transport still permits reuse; during shutdown (`is_process_shutting_down()`) set it to None to aid draining.
+3. **gRPC-Web bridge initialization**: classify the raw downstream headers through `detect_request_protocol`, preserving WebSocket precedence. Initialize `GrpcWebBridge` only for gRPC-Web before Pingora's module request-header filter rewrites its headers to gRPC. This early classification preserves the original protocol identity; full request metadata extraction remains in Phase 2.
 
 ### Phase 2: request_filter
 
@@ -49,7 +50,7 @@ Before route matching and plugin execution, it first builds request-level metada
 The most complex phase, responsible for request parsing and route matching:
 
 1. **Metadata extraction** (`build_request_metadata`):
-   - Protocol detection: WebSocket (Upgrade header), gRPC-Web/gRPC (Content-Type header).
+   - Protocol detection: call the same idempotent `detect_request_protocol` helper for WebSocket/gRPC-Web/gRPC; retain any Phase-1 classification instead of reclassifying rewritten gRPC-Web headers as native gRPC.
    - Address extraction: `direct_peer_ip` (`DirectPeerIp`, physical transport peer), `remote_ip` (`RemoteIp`, resolved client identity after the applicable PROXY/RealIp processing).
    - Hostname normalization: URI host → Host header → :authority header, all stripped of port, trailing dot removed, lowercased.
    - TLS metadata: extract `tls_id`, `sni`, and `client_cert_info` from `SslDigestExtension`.
@@ -112,19 +113,29 @@ Selects the upstream backend and builds an HttpPeer:
 Callback after the upstream connection is established:
 
 1. **Connect time recording**: compute `ct` (connect time, in milliseconds, from upstream attempt start to connection establishment).
-2. **LeastConn counting**: if the LB strategy is LeastConn, call `runtime_state::increment()` to add to the active connection count.
+2. **Attempt-owned LB accounting**: after backend SAN validation succeeds, call `lb::commit_attempt` on the current `UpstreamInfo`. For both LeastConn and EWMA, it increments the selected backend's outstanding count and stores a move-only `LbCommitGuard` in `lb_committed`. Other policies or attempts without an LB backend do not acquire a guard. Repeated commit while the guard is present is a no-op.
 3. **Streaming protocol log**: gRPC-Web and WebSocket requests immediately emit a `conn_est` AccessLog entry.
+
+HTTP and gRPC peer selection both call `begin_upstream_attempt`; before pushing
+the next attempt, it finalizes the previous guard through `lb::finalize_attempt`.
+The AI retry transition performs the same prior-attempt cleanup. Terminal logging
+finalizes the last attempt. Finalization consumes the guard and is idempotent;
+if cancellation bypasses logging, dropping an unresolved guard decrements exactly
+once. Failed connects that never commit do not decrement another request's count.
+These guards own outstanding-load accounting only, not EWMA latency sampling.
+See [the attempt guard](../../../edgion-gateway/src/lb/attempt.rs) and
+[peer transitions](../../../edgion-gateway/src/routes/http/proxy_http/pg_upstream_peer.rs).
 
 ### Phase 5: upstream_response_filter (sync)
 
 **File**: `pg_upstream_response_filter.rs`
 **Signature**: `fn upstream_response_filter(session, upstream_response, ctx) -> Result<()>` (note: not async)
 
-Called when the upstream response headers are received:
+Called when upstream response headers are received; interim 1xx are skipped (101 remains terminal):
 
 1. **Per-attempt status recording**: write the received code to the current `UpstreamInfo`. After retry decisions and response-stage normalization, snapshot the pre-plugin status and select the candidate final downstream status. Do not mutate `request_info.status` here.
 2. **Server header**: inject the custom Server header via `ServerHeaderOpts::apply_to_response()`.
-3. **Header time recording**: compute `ht` (header time, in milliseconds, from upstream attempt start to receiving response headers).
+3. **Header time and EWMA sampling**: compute `ht` from attempt start to final response headers. Separately, `record_lb_latency_sample` records the EWMA backend's attempt-to-header latency before retry arbitration and normalization. A subsequently retried attempt retains its sample; connection establishment (`ct`), body streaming, and terminal cleanup do not sample latency. A connect failure with no headers produces no sample. Error/retryable responses use the canonical useful-work classification, preventing fast failures from improving the score; see [Peak-EWMA sampling](../../12-algorithms/lb-peak-ewma.md#sample-point--response-headers).
 4. **Sync plugin execution**:
    - Rule level: `route_unit.rule.plugin_runtime.run_upstream_response_plugins_sync()`.
    - Backend level: `selected_backend.plugin_runtime.run_upstream_response_plugins_sync()`.
@@ -262,9 +273,7 @@ Wrap-up phase after the request completes:
    - Response body size: `session.upstream_body_bytes_received()`.
    - Write pending time: `session.upstream_write_pending_time()` (HTTP/1.x backpressure).
    - Global bandwidth counters: `add_request_bytes()` + `add_response_bytes()`.
-2. **LB runtime state update**:
-   - LeastConn: `runtime_state::decrement()` decrements the active connection count.
-   - EWMA: nothing — the latency sample is recorded earlier, at response headers.
+2. **LB attempt cleanup**: `lb_runtime_cleanup` calls `lb::finalize_attempt` on the last `UpstreamInfo`, releasing its outstanding count for both LeastConn and EWMA. Prior attempts were released on retry transitions. Repeated cleanup is a no-op, and guard drop covers cancellation. No EWMA latency sample is recorded here; that belongs to Phase 5.
 3. **Response status update**: obtain the final response status code via `session.response_written()`.
 4. **Prometheus metrics**: `record_backend_request()` records along the gateway/route/backend/protocol/status_group dimensions.
 5. **AccessLog generation**: `AccessLogEntry::from_context(ctx)` → `to_json()` → `access_logger.send()`.
