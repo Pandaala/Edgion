@@ -2,7 +2,7 @@ use super::*;
 
 impl OpenidConnect {
     pub(super) fn sanitize_redirect_target(original_url: &str) -> String {
-        if original_url.starts_with('/') && !original_url.starts_with("//") {
+        if original_url.starts_with('/') && !original_url.starts_with("//") && !original_url.contains('\\') {
             original_url.to_string()
         } else {
             "/".to_string()

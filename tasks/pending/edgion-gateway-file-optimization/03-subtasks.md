@@ -462,10 +462,10 @@
 | `edgion-gateway/src/plugins/http/mock/plugin.rs` | `plugins-http-mock` | source | changed | B0089 |
 | `edgion-gateway/src/plugins/http/mod.rs` | `plugins-http-framework` | source | examined-no-change | B0062 |
 | `edgion-gateway/src/plugins/http/openid_connect/auth_response_caps_integration.rs` | `plugins-http-openid-connect` | test | changed | B0292: stale task pointer replaced by durable D0036 knowledge; independent LGTM and workspace gates passed, eight ignored network tests unchanged/not run |
-| `edgion-gateway/src/plugins/http/openid_connect/callback.rs` | `plugins-http-openid-connect` | source | pending | Reopened after external `74e6ccdd`; historical B0091 retained |
+| `edgion-gateway/src/plugins/http/openid_connect/callback.rs` | `plugins-http-openid-connect` | source | examined-no-change | B0293: callback/state/PKCE audit retained; canonical supporting sanitizer now rejects browser authority-replacing backslashes, independent plan/final LGTM and exact test 1/1 |
 | `edgion-gateway/src/plugins/http/openid_connect/config_validation.rs` | `plugins-http-openid-connect` | source | changed | B0094: borrowed claim scopes and allocation-free issuer selection |
 | `edgion-gateway/src/plugins/http/openid_connect/discovery_jwks.rs` | `plugins-http-openid-connect` | source | changed | B0092 |
-| `edgion-gateway/src/plugins/http/openid_connect/error.rs` | `plugins-http-openid-connect` | source | pending | Reopened after external `74e6ccdd`; D0058 remains unresolved beyond response caps |
+| `edgion-gateway/src/plugins/http/openid_connect/error.rs` | `plugins-http-openid-connect` | source | analysis-ready | B0294: real dependency-detail error-model issue already owned by D0058; defer candidate |
 | `edgion-gateway/src/plugins/http/openid_connect/jwks_provider.rs` | `plugins-http-openid-connect` | source | pending | Reopened after external `bea47373` added stage-aware OIDC dye test support; B0092 history retained |
 | `edgion-gateway/src/plugins/http/openid_connect/jwt_common.rs` | `plugins-http-openid-connect` | source | changed | B0090 |
 | `edgion-gateway/src/plugins/http/openid_connect/logout.rs` | `plugins-http-openid-connect` | source | examined-no-change | B0093 |

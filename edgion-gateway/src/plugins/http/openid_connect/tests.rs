@@ -6,6 +6,7 @@ use crate::plugins::runtime::DyeOutcome;
 use crate::plugins::runtime::PluginLog;
 use crate::plugins::runtime::RequestFilter;
 use edgion_resources::filters::PluginRunningResult;
+use edgion_resources::path_normalization::{normalize_path, PathNormalizationConfig};
 use edgion_resources::resources::edgion_plugins::{OpenidConnectConfig, UnauthAction, VerificationMode};
 use jsonwebtoken::jwk::JwkSet;
 use jsonwebtoken::{Algorithm, Header};
@@ -558,6 +559,24 @@ fn path_redirect_uris_use_http_on_a_plaintext_listener() {
         plugin.resolve_redirect_uri(&session).expect("resolve redirect URI"),
         "http://api.example.com/oidc/callback"
     );
+}
+
+#[test]
+fn sanitize_redirect_target_rejects_cross_origin_forms() {
+    let normalized = normalize_path("/%5Cevil.example/path", &PathNormalizationConfig::default())
+        .expect("encoded backslash path must normalize");
+    assert_eq!(normalized, r"/\evil.example/path");
+    assert_eq!(OpenidConnect::sanitize_redirect_target(&normalized), "/");
+
+    for target in [
+        r"/\evil.example/path",
+        r"/\\evil.example/path",
+        "//evil.example/path",
+        "https://evil.example/path",
+    ] {
+        assert_eq!(OpenidConnect::sanitize_redirect_target(target), "/");
+    }
+    assert_eq!(OpenidConnect::sanitize_redirect_target("/orders?x=1"), "/orders?x=1");
 }
 
 #[test]

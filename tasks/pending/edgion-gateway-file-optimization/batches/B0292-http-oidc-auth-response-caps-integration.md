@@ -1,6 +1,6 @@
 # B0292 — HTTP OIDC Auth Response Caps Integration Tests
 
-- Pipeline state: changed; implementation/final LGTM and all checks passed, local commit gate.
+- Pipeline state: changed; committed after implementation/final LGTM and all checks.
 - Active anchor: `edgion-gateway`; promoted baseline `3a13d625`.
 - Target: `edgion-gateway/src/plugins/http/openid_connect/auth_response_caps_integration.rs`, a 272-line cfg(test)-only module with eight ignored loopback-network regressions.
 - Analyst: `b0292_oidc_caps_analysis`; full target, production clients/caps/egress, deterministic response tests and D0036 knowledge examined.
@@ -14,4 +14,4 @@
 - Changed only line 7's source pointer, retaining D0036. Exact scoped diff is one deletion/one addition; hashes excluding that line prove all test logic/helpers/macros unchanged.
 - Fresh final reviewer `b0292_final_review`: LGTM, no MustFix/ShouldFix/deferred finding. The old task is absent; replacement knowledge exists, is indexed and accurately documents the boundary.
 - Scoped rustfmt/diff checks and fresh root format, locked workspace check (10.64s), locked Clippy (24.35s, existing warnings, exit 0), agent-doc, SSA, metrics, Pingora, tracing, English, freeze and diff gates passed.
-- The eight ignored loopback-network tests were intentionally not run. No integration edit. Commit pending; no push.
+- The eight ignored loopback-network tests were intentionally not run. No integration edit. Commit `8df2871c`; no push.
