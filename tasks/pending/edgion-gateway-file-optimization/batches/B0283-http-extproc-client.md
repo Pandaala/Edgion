@@ -1,6 +1,6 @@
 # B0283 — HTTP ExtProc Client
 
-- Pipeline state: terminal; changed, independently reviewed and verified, pending local commit.
+- Pipeline state: terminal; changed, committed as `6bf48dcf`.
 - Active anchor: `edgion-gateway`; refreshed baseline `bd84aa15`.
 - Target: `edgion-gateway/src/plugins/http/ext_proc/client.rs`.
 - Analyst: `b0283_extproc_client_analysis`; change after full transport/lifecycle/shared-mechanism and coverage analysis.
@@ -33,4 +33,4 @@
 - At bd84aa15 plus implementation: four new and seven existing exact tests passed after the independently diagnosed fixture correction.
 - Workspace check passed (11.29s); Clippy passed (15.84s, existing warnings); formatting/format check, agent docs, SSA, metrics, Pingora source, Gateway no-tracing, English, frozen paths and whitespace checks passed.
 - Final reviewer `b0283_final_review`: LGTM, no Must Fix or plan-semantic disagreement. Full code, original knowledge and constructor-to-sealed-filter chain independently verified.
-- No integration execution/edit, live network test, global provider/default mutation or store publication. Ledger/changelog updated; pending local commit, never push.
+- No integration execution/edit, live network test, global provider/default mutation or store publication. Ledger/changelog updated; commit `6bf48dcf`, never push.
