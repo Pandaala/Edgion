@@ -5,19 +5,59 @@ description: Full TLSRoute schema: SNI-based TLS routing.
 
 # TLSRoute Resource
 
-> API: `gateway.networking.k8s.io/v1` (v1alpha3 compatible) | Scope: Namespaced
-> Gateway API v1.5.0 Standard resource (v1alpha3 in v1.4.0 Experimental)
+> Canonical API: `gateway.networking.k8s.io/v1` | Scope: Namespaced
+> Gateway API v1.5.0 Standard resource
 
 TLSRoute routes based on the SNI (Server Name Indication) in the TLS ClientHello, supporting TLS passthrough or termination + forwarding.
 
-### Multi-version Compatibility
+## API version contract
 
-| Install Manifest | v1alpha3 | v1 |
-|------------------|----------|-----|
-| v1.4.0 experimental | **served=true, storage=true** | Does not exist |
-| v1.5.0 standard | served=false | **served=true, storage=true** |
+Use `gateway.networking.k8s.io/v1`. The
+[atomic API-version upgrade policy](../../08-kubernetes/04-api-version-upgrade.md)
+requires one canonical version across preflight, watching, CRUD, and status
+writes, with noncanonical FileSystem/static input rejected before publication.
+Edgion does not promise older-version compatibility or authorize fallback
+watchers and conversion shims merely because an installed CRD serves them.
 
-The Edgion controller prefers to watch v1, falling back to v1alpha3 (single-active watch) when v1 is unavailable. v1alpha3 → v1 is a pure version promotion, with identical spec field structure. In FileSystem mode, v1alpha3 YAML is automatically normalized to v1 at the parsing entry.
+The committed Gateway API v1.5.0 bundles declare:
+
+| Bundle under `config/crd/gateway-api/` | TLSRoute versions served | Storage version |
+|-------------------------------------|--------------------------|-----------------|
+| `gateway-api-standard-v1.5.0.yaml` | `v1` | `v1` |
+| `gateway-api-experimental-v1.5.0.yaml` | `v1`, `v1alpha2`, `v1alpha3` | `v1` |
+
+Upstream served versions describe the API Server's schema, not an Edgion
+multi-version support contract. Historical guidance advertised v1alpha3
+fallback and automatic normalization; that described legacy implementation,
+not the required current policy.
+
+### Unresolved implementation discrepancy
+
+Source inspection for this documentation correction found the following
+remaining violations of the canonical-version contract. They require a
+separate coordinated code change; this page does not claim they are fixed:
+
+- `edgion-resources/src/resources/tls_route.rs` defines canonical `TLSRoute`
+  at `v1`, but still contains `TLSRouteAlpha3` and conversions in both directions.
+- Controller `conf_mgr/conf_center/kubernetes/version_detection.rs` probes
+  `v1` then `v1alpha3`, including preflight. `controller.rs` selects one of the
+  two typed watchers; this is single-active fallback, not simultaneous watches.
+- Kubernetes `storage.rs` independently probes the version for CRUD.
+  `resource_controller.rs` derives the status-patch version from its generic
+  resource type, while `handlers/tls_route.rs::TlsRouteAlpha3Handler` adapts
+  processing and status through the legacy type.
+- `conf_mgr/conf_center/common.rs::parse_resource_content` converts v1alpha3
+  TLSRoute input to v1. Both FileSystem and etcd resource controllers call this
+  parser. `validate_resource_api_version` currently enforces the canonical
+  boundary for BackendTLSPolicy only; it does not establish TLSRoute rejection.
+
+The existing FileSystem test `parse_tls_route_v1alpha3_into_canonical_v1` and
+resource conversion tests encode that observed legacy behavior. Their existence
+is not approval to retain it. This audit inspected source and parsed both
+committed CRDs; it did not execute tests or validate live cluster behavior.
+Re-evaluate this discrepancy when version detection, watchers, CRUD/status,
+resource types, or static-ingress validation changes. Removing only the prose
+or one fallback branch cannot establish the required atomic upgrade.
 
 ## Full Schema
 

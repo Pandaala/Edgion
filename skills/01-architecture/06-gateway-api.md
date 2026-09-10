@@ -16,7 +16,7 @@ Edgion implements the Kubernetes Gateway API v1.5.0 specification, supporting HT
 | **HTTPRoute** | gateway.networking.k8s.io/v1 | Standard | HTTP routing rules: hostname matching, path matching, header matching, request redirect/rewrite/mirror |
 | **GRPCRoute** | gateway.networking.k8s.io/v1 | Standard | gRPC routing rules: Service/Method matching, header matching |
 | **TCPRoute** | gateway.networking.k8s.io/v1alpha2 | Experimental | TCP layer-4 routing, forwarded by port to backends |
-| **TLSRoute** | gateway.networking.k8s.io/v1 (v1alpha3 compatible) | Standard / Experimental — served versions may differ between install manifests | TLS passthrough routing, forwards encrypted traffic directly after SNI matching |
+| **TLSRoute** | gateway.networking.k8s.io/v1 | Standard; canonical v1 contract | TLS passthrough routing; [remaining version-policy discrepancy](../02-features/03-resources/07-tlsroute.md#unresolved-implementation-discrepancy) |
 | **UDPRoute** | gateway.networking.k8s.io/v1alpha2 | Experimental | UDP routing, forwarded by port |
 | **ReferenceGrant** | gateway.networking.k8s.io/v1 (v1beta1 compatible) | Standard | Cross-namespace reference authorization, used only on the Controller side (no_sync_kinds) |
 | **BackendTLSPolicy** | gateway.networking.k8s.io/v1 | Standard | Backend TLS policy, configures Gateway→Backend mTLS |
