@@ -16,6 +16,7 @@ before applying a decision to current code.
 ## Regression guards
 
 - [ForwardAuth Deny Response Content-Type](regression-guards/deny-response-content-type-preserved.md)
+- [ForwardAuth Deny Responses Preserve Repeated Headers](regression-guards/deny-response-repeated-headers-preserved.md)
 - [`forwardAll` Withholds `Expect` Even Though It Is End-to-End — FIXED](regression-guards/outbound-expect-continue-not-relayed.md)
 - [Outbound Subrequest Framing Is Owned by Its HTTP Hop — FIXED](regression-guards/outbound-subrequest-framing-owned-by-hop.md)
 - [ForwardAuth Request Body Sources Are Mutually Exclusive — FIXED](regression-guards/request-body-sources-mutually-exclusive.md)

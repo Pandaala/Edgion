@@ -421,14 +421,14 @@
 | `edgion-gateway/src/plugins/http/form_json_transform/mod.rs` | `plugins-http-form-json-transform` | source | examined-no-change | B0076 |
 | `edgion-gateway/src/plugins/http/form_json_transform/plugin.rs` | `plugins-http-form-json-transform` | source | changed | B0076 |
 | `edgion-gateway/src/plugins/http/forward_auth/mod.rs` | `plugins-http-forward-auth` | source | examined-no-change | B0077 |
-| `edgion-gateway/src/plugins/http/forward_auth/plugin.rs` | `plugins-http-forward-auth` | source | analysis-ready | B0290: denial response drops repeated selected headers; complex plan-first candidate, prior B0077 retained |
+| `edgion-gateway/src/plugins/http/forward_auth/plugin.rs` | `plugins-http-forward-auth` | source | changed | B0290: preserve repeated selected denial headers; independent plan/final LGTM, 7/7 focused tests and workspace gates passed |
 | `edgion-gateway/src/plugins/http/geoip_location/mod.rs` | `plugins-http-geoip-location` | source | examined-no-change | B0078 |
 | `edgion-gateway/src/plugins/http/geoip_location/plugin.rs` | `plugins-http-geoip-location` | source | changed | B0078 |
 | `edgion-gateway/src/plugins/http/guardrail/attached.rs` | `plugins-http-guardrail` | source | examined-no-change | B0079 |
 | `edgion-gateway/src/plugins/http/guardrail/mod.rs` | `plugins-http-guardrail` | source | examined-no-change | B0079 |
 | `edgion-gateway/src/plugins/http/guardrail/plugin.rs` | `plugins-http-guardrail` | source | changed | B0079 |
 | `edgion-gateway/src/plugins/http/guardrail/protocol.rs` | `plugins-http-guardrail` | source | examined-no-change | B0079 |
-| `edgion-gateway/src/plugins/http/guardrail/response.rs` | `plugins-http-guardrail` | source | pending | External 9b787978..b297af6e requires review; prior examined-no-change: B0079 |
+| `edgion-gateway/src/plugins/http/guardrail/response.rs` | `plugins-http-guardrail` | source | analysis-ready | B0291: non-Hold rejection misses GuardrailRejected terminal claim; complex plan-first candidate |
 | `edgion-gateway/src/plugins/http/header_cert_auth/mod.rs` | `plugins-http-header-cert-auth` | source | examined-no-change | B0080 |
 | `edgion-gateway/src/plugins/http/header_cert_auth/plugin.rs` | `plugins-http-header-cert-auth` | source | changed | B0080 |
 | `edgion-gateway/src/plugins/http/hmac_auth/mod.rs` | `plugins-http-hmac-auth` | source | examined-no-change | B0081 |

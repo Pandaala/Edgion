@@ -1,6 +1,6 @@
 # B0289 — HTTP ExtProc Streamed Request
 
-- Pipeline state: examined-no-change; refreshed independent LGTM and verification passed, local commit gate.
+- Pipeline state: examined-no-change; committed after refreshed independent LGTM and verification.
 - Active anchor: `edgion-gateway`; refreshed baseline `b1bea189`.
 - Target: `edgion-gateway/src/plugins/http/ext_proc/streamed.rs`.
 - Analyst: `b0289_extproc_streamed_analysis`; independently examine the full target, ownership/driver/error/cap consumers, original knowledge and deterministic coverage. B0286 supporting Bytes changes do not establish full-file coverage.
@@ -16,4 +16,4 @@
 
 - `cargo test -p edgion-gateway --lib plugins::http::ext_proc::streamed::tests --locked`: 17/17 passed after 1m28s compilation; tests completed in 0.01s.
 - Fresh format apply/check, locked workspace/all-targets check (43.68s), locked Clippy (1m26s, existing warnings, exit 0), agent-doc, SSA force, metrics inventory, Pingora policy, Gateway tracing boundary, English-only, frozen integration and diff checks passed.
-- No target code or integration edit. Commit pending; no push.
+- No target code or integration edit. Commit `99069928`; no push.

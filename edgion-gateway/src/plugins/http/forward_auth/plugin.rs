@@ -46,6 +46,7 @@
 //!   timeoutMs: 5000
 //!   request:
 //!     headers:
+//!       forwardAll: false
 //!       origin:
 //!         - name: Authorization
 //!         - name: Cookie
@@ -141,16 +142,35 @@ impl ForwardAuth {
         let _ = resp.insert_header("Connection", "close");
 
         // Add configured client_headers from the auth service response in
-        // config order. HeaderMap::get intentionally preserves the existing
-        // first-value/replace behavior for repeated response fields.
+        // config order. The first retained value replaces any existing field,
+        // and later values remain separate response field lines.
         if let Some((auth_headers, client_headers)) = forwarded_headers {
-            for name in client_headers {
-                if let Some(value) = auth_headers.get(name.as_str()).and_then(|value| value.to_str().ok()) {
+            for (index, name) in client_headers.iter().enumerate() {
+                if client_headers[..index]
+                    .iter()
+                    .any(|prior| prior.eq_ignore_ascii_case(name))
+                {
+                    continue;
+                }
+
+                let mut inserted = false;
+                for value in auth_headers
+                    .get_all(name.as_str())
+                    .iter()
+                    .filter_map(|value| value.to_str().ok())
+                {
                     // ResponseHeader's borrowed-name conversion is restricted
                     // to static strings; keep the configured name owned at the
                     // insertion boundary while borrowing the auth value.
-                    if resp.insert_header(name.clone(), value).is_err() {
+                    let result = if inserted {
+                        resp.append_header(name.clone(), value).map(|_| ())
+                    } else {
+                        resp.insert_header(name.clone(), value)
+                    };
+                    if result.is_err() {
                         plugin_log.push_err("invalid response header");
+                    } else {
+                        inserted = true;
                     }
                 }
             }
@@ -416,7 +436,13 @@ mod tests {
     #[tokio::test]
     async fn deny_copies_client_headers_and_shortcircuits() {
         let decision = ForwardAuthDecision {
-            client_headers: vec!["x-auth-reason".to_string(), "www-authenticate".to_string()],
+            client_headers: vec![
+                "x-auth-reason".to_string(),
+                "WWW-Authenticate".to_string(),
+                "www-authenticate".to_string(),
+                "Set-Cookie".to_string(),
+                "set-cookie".to_string(),
+            ],
             ..ForwardAuthDecision::default()
         };
         let fa = make_forward_auth(decision);
@@ -424,8 +450,12 @@ mod tests {
         let mut headers = HeaderMap::new();
         headers.insert("content-type", HeaderValue::from_static("text/plain; charset=utf-8"));
         headers.insert("x-auth-reason", HeaderValue::from_static("expired"));
-        headers.append("www-authenticate", HeaderValue::from_static("Bearer"));
-        headers.append("www-authenticate", HeaderValue::from_static("ignored-second-value"));
+        headers.append("www-authenticate", HeaderValue::from_static("Bearer realm=\"primary\""));
+        headers.append("www-authenticate", HeaderValue::from_bytes(b"\xff").unwrap());
+        headers.append("www-authenticate", HeaderValue::from_static("Basic realm=\"fallback\""));
+        headers.append("set-cookie", HeaderValue::from_static("session=expired; Path=/"));
+        headers.append("set-cookie", HeaderValue::from_static("csrf=cleared; Path=/"));
+        headers.insert("x-unselected", HeaderValue::from_static("private"));
         let body = Bytes::from(Vec::from(&b"denied-body"[..]));
         let body_ptr = body.as_ptr() as usize;
         let body_len = body.len();
@@ -436,12 +466,26 @@ mod tests {
         session
             .expect_write_response_header()
             .withf(|resp, _| {
+                let challenges: Vec<&str> = resp
+                    .headers
+                    .get_all("www-authenticate")
+                    .iter()
+                    .filter_map(|value| value.to_str().ok())
+                    .collect();
+                let cookies: Vec<&str> = resp
+                    .headers
+                    .get_all("set-cookie")
+                    .iter()
+                    .filter_map(|value| value.to_str().ok())
+                    .collect();
                 resp.status.as_u16() == 401
                     && resp.headers.get("content-type").and_then(|v| v.to_str().ok())
                         == Some("text/plain; charset=utf-8")
                     && resp.headers.get("connection").and_then(|v| v.to_str().ok()) == Some("close")
                     && resp.headers.get("x-auth-reason").and_then(|v| v.to_str().ok()) == Some("expired")
-                    && resp.headers.get("www-authenticate").and_then(|v| v.to_str().ok()) == Some("Bearer")
+                    && challenges == ["Bearer realm=\"primary\"", "Basic realm=\"fallback\""]
+                    && cookies == ["session=expired; Path=/", "csrf=cleared; Path=/"]
+                    && resp.headers.get("x-unselected").is_none()
             })
             .times(1)
             .in_sequence(&mut seq)
