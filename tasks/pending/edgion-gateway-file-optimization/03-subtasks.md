@@ -476,7 +476,7 @@
 | `edgion-gateway/src/plugins/http/openid_connect/session_cookie.rs` | `plugins-http-openid-connect` | source | changed | B0091 |
 | `edgion-gateway/src/plugins/http/openid_connect/tests.rs` | `plugins-http-openid-connect` | test | deferred | B0298/D0154: 24 load-bearing default-run OIDC JWKS tests across tests.rs/jwks_provider.rs use real loopback servers; isolate without deleting coverage |
 | `edgion-gateway/src/plugins/http/openid_connect/token_exchange.rs` | `plugins-http-openid-connect` | source | examined-no-change | B0299: external bounded response handling and prepared secret/client/cache invariants independently revalidated |
-| `edgion-gateway/src/plugins/http/openid_connect/token_verify.rs` | `plugins-http-openid-connect` | source | pending | Reopened after external `74e6ccdd`; historical B0090/B0091 retained |
+| `edgion-gateway/src/plugins/http/openid_connect/token_verify.rs` | `plugins-http-openid-connect` | source | examined-no-change | B0300: external bounded introspection and Auto diagnostics independently revalidated with JWT/JWKS/cache invariants |
 | `edgion-gateway/src/plugins/http/openid_connect/userinfo.rs` | `plugins-http-openid-connect` | source | examined-no-change | B0093 |
 | `edgion-gateway/src/plugins/http/plugin_store.rs` | `plugins-http-framework` | source | pending | External ec5eb474..9e3a276b requires review; prior pending: Reopened after external `5cb0b087` cross-namespace mirror LKG policy change; B0062/B0121 history retained |
 | `edgion-gateway/src/plugins/http/proxy_rewrite/mod.rs` | `plugins-http-proxy-rewrite` | source | examined-no-change | B0095 |

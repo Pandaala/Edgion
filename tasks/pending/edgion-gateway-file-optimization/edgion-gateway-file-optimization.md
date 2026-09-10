@@ -10,10 +10,10 @@
 | Priority | P1 |
 | Baseline commit | `d484e580` |
 | Scope | Every tracked file under `edgion-gateway/` |
-| Campaign status | in-progress at HEAD `f3d7bc5d`: B0299 independently approved examined-no-change; record-only verification and commit gate active. |
-| Coverage | 550 current Gateway files: 241 changed, 187 examined-no-change, 16 deferred, 106 non-terminal; 3 historical rows are removed. External b93fd0f3..b1bea189 reopened six terminal files and retained five pending rows; earlier reopens remain pending. Historical evidence is retained. |
-| Active batch | B0299 record-only verification and automatic local commit. Never push. |
-| Analysis queue | Empty during B0299 review. D0058 and D0127–D0154 track separate work; external task removals are retired only in coordinator records. |
+| Campaign status | in-progress at HEAD `a6605470`: B0300 independently approved examined-no-change; record-only verification and commit gate active. |
+| Coverage | 550 current Gateway files: 241 changed, 188 examined-no-change, 16 deferred, 105 non-terminal; 3 historical rows are removed. External b93fd0f3..b1bea189 reopened six terminal files and retained five pending rows; earlier reopens remain pending. Historical evidence is retained. |
+| Active batch | B0300 record-only verification and automatic local commit. Never push. |
+| Analysis queue | Empty during B0300 review. D0058 and D0127–D0154 track separate work; external task removals are retired only in coordinator records. |
 | Integration freeze | 3,265 files. External b93fd0f3..b1bea189 M1 verified against old/new Git objects and worktree bytes/mode; prior reconciliations retained. Campaign made no integration-test edit. |
 
 ## AI guide summary
