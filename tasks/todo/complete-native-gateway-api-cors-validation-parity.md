@@ -16,7 +16,7 @@ Make native Gateway API `HTTPCORSFilter` validation and defaults match the vendo
 
 ## Requirements
 
-- Inventory every relevant v1.5 CORS constraint: origin scheme/host/port and length, list bounds and set semantics, wildcard exclusivity for allowed origins, methods, and request headers, allowed methods, header-name grammar, and `maxAge` minimum/default. Credentialed `exposeHeaders: ["*"]` behavior remains owned by [`decide-credentialed-native-cors-expose-headers-wildcard.md`](decide-credentialed-native-cors-expose-headers-wildcard.md).
+- Inventory every relevant v1.5 CORS constraint: origin scheme/host/port and length, list bounds and set semantics, wildcard exclusivity for allowed origins, methods, and request headers, allowed methods, header-name grammar, and `maxAge` minimum/default. Preserve the resolved [credentialed exposure policy](../../skills/04-review/cors/intentional-design/native-credentialed-exposure-policy.md): credentials-enabled native CORS rejects any exact `*` exposure entry.
 - Enforce the same semantic validator through Controller invalid-rule/status handling and Gateway construction without adding a watcher-local OpenAPI engine.
 - Make omitted `maxAge` behavior match the v1.5 default while preserving valid explicit values.
 - Keep this native Gateway API contract separate from the

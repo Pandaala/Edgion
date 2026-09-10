@@ -466,7 +466,7 @@ fn parse_http_routes_to_domain_rules(data: &HashMap<String, Arc<HTTPRoute>>) -> 
             .filter_map(|(rule_id, rule)| {
                 // Check effective rules independently of Controller status, including
                 // resolved delegation rules, before compiling or publishing a runtime.
-                if let Some(reason) = rule.unsupported_backend_cors_reason() {
+                if let Some(reason) = rule.unsupported_cors_reason() {
                     tracing::warn!(route = %resource_key, rule_id, %reason, "skipping unsupported HTTPRoute rule");
                     return None;
                 }
@@ -1316,6 +1316,37 @@ mod tests {
         let domain_rules = parse_http_routes_to_domain_rules(&data);
         let paths = domain_unit_paths(&domain_rules, "test.example.com");
         assert_eq!(paths, vec!["/spec-b"], "indices must still apply to spec.rules");
+    }
+
+    #[test]
+    fn credentialed_expose_headers_rejected_before_publication() {
+        use serde_json::json;
+        for resolved in [false, true] {
+            let mut route = route_with_paths(
+                "cors-expose",
+                "route",
+                vec!["cors.example"],
+                "2026-09-10T00:00:00Z",
+                json!([
+                    {"matches": [{"path": {"value": "/invalid"}}], "filters": [{"type": "CORS",
+                        "cors": {"allowOrigins": ["https://app.example"], "allowCredentials": true,
+                            "exposeHeaders": ["*", "X-Request-Id"]}}]},
+                    {"matches": [{"path": {"value": "/valid"}}], "filters": [{"type": "CORS",
+                        "cors": {"allowOrigins": ["https://app.example"], "allowCredentials": true,
+                            "exposeHeaders": ["X-Request-Id"]}}]}
+                ]),
+            );
+            if resolved {
+                route.spec.resolved_rules = route.spec.rules.take();
+                route.spec.invalid_rule_indices = Some(vec![1]);
+            }
+            route.pre_parse();
+            assert!(route.status.is_none());
+            let domains =
+                parse_http_routes_to_domain_rules(&HashMap::from([("cors-expose/route".into(), Arc::new(route))]));
+            assert_eq!(domain_unit_paths(&domains, "cors.example"), ["/valid"]);
+            assert_eq!(domains["cors.example"].0[0].matched_info.rule_id, 1);
+        }
     }
 
     #[test]

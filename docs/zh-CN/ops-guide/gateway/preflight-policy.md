@@ -116,6 +116,16 @@ Gateway 绑定。对于委派子路由，父路由的委派诊断会说明子规
 如果没有其他有效规则匹配，则返回 `404`。请将策略移到规则级，使其应用于该规则的
 所有后端。此限制同样适用于委派路由，修改配置后无需重启 Gateway。
 
+原生 CORS 设置 `allowCredentials: true` 时，`exposeHeaders` 必须列明响应头名称，
+例如 `exposeHeaders: ["X-Request-Id", "X-Total-Count"]`。任一条目等于 `"*"`
+（包括与明确名称混用）都会使整条规则无效，并按上述方式报告部分或整条路由拒绝。
+`allowCredentials` 为 false 或省略时，`exposeHeaders: ["*"]` 仍输出
+`Access-Control-Expose-Headers: *`；允许凭据时，明确名称以逗号分隔输出。
+空列表或省略列表不输出该响应头。这是 Edgion 的支持范围限制：Gateway API v1.5.0
+禁止凭据请求使用通配符暴露响应头，但没有强制规定拒绝配置；Fetch 在浏览器使用
+`credentials: "include"` 时不会展开该通配符。此策略在配置阶段检查，不依据
+Cookie 或 Authorization 请求头是否存在作判断。修正列表后，热加载会恢复规则。
+
 预检如何与 CORS 交互取决于路由的 CORS 配置方式：
 
 - **Gateway API 原生 `type: CORS` filter**——预检处理器**不介入**；预检由路由级 filter 链内部处理，`preflightPolicy` 对此路径无效。

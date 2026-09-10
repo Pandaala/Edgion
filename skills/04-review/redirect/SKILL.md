@@ -13,3 +13,7 @@ before applying a decision to current code.
 
 - [redirect-F001 — Redirect Host port-stripping preserves IPv6-literal brackets](regression-guards/host-split-ipv6-literal.md)
 - [redirect-FB01 — RequestRedirect filter preserves the query string](regression-guards/query-string-dropped.md)
+
+## Intentional design
+
+- [Session-owned redirect connection policy](intentional-design/session-owned-connection-policy.md)

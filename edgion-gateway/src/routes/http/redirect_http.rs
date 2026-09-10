@@ -140,6 +140,9 @@ impl ProxyHttp for EdgionHttpRedirectProxy {
     }
 
     /// Intercept all requests and return a 301 redirect
+    ///
+    /// Redirects and Host rejections retain Pingora's normal connection policy.
+    /// The session owns keepalive and generates the matching Connection header.
     async fn request_filter(&self, session: &mut Session, ctx: &mut Self::CTX) -> pingora_core::Result<bool>
     where
         Self::CTX: Send + Sync,
@@ -171,7 +174,6 @@ impl ProxyHttp for EdgionHttpRedirectProxy {
             ctx.status = 400;
             let mut resp = ResponseHeader::build(StatusCode::BAD_REQUEST, Some(2))?;
             resp.insert_header("Content-Length", "0")?;
-            resp.insert_header("Connection", "close")?;
             session.write_response_header(Box::new(resp), true).await?;
             return Ok(true);
         }
@@ -192,7 +194,6 @@ impl ProxyHttp for EdgionHttpRedirectProxy {
             ctx.status = 400;
             let mut resp = ResponseHeader::build(StatusCode::BAD_REQUEST, Some(2))?;
             resp.insert_header("Content-Length", "0")?;
-            resp.insert_header("Connection", "close")?;
             session.write_response_header(Box::new(resp), true).await?;
             return Ok(true);
         }
@@ -212,7 +213,6 @@ impl ProxyHttp for EdgionHttpRedirectProxy {
         let mut resp = ResponseHeader::build(StatusCode::MOVED_PERMANENTLY, Some(3))?;
         resp.insert_header("Location", &redirect_url)?;
         resp.insert_header("Content-Length", "0")?;
-        resp.insert_header("Connection", "close")?;
 
         // Send response and signal early return (true = don't continue to upstream)
         session.write_response_header(Box::new(resp), true).await?;
@@ -457,6 +457,71 @@ mod tests {
             SENSITIVE_MODE.store(SensitiveMode::Replace as u8, Ordering::SeqCst);
             assert!(redirect_log_json(None)["error"].is_null());
         });
+    }
+
+    #[tokio::test]
+    async fn redirect_connection_policy_matches_wire_and_stream_reuse() {
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            for (host_headers, expected_status) in [
+                ("Host: example.com\r\n", 301),
+                ("Host: example.com\r\nHost: other.example.com\r\n", 400),
+                ("Host: :8080\r\n", 400),
+            ] {
+                for client_close in [false, true] {
+                    let redirect = EdgionHttpRedirectProxy::new(443, test_access_logger(), test_gateway_config());
+                    let (mut client, server) = tokio::io::duplex(4096);
+                    let connection = if client_close { "Connection: close\r\n" } else { "" };
+                    client
+                        .write_all(format!("GET /first HTTP/1.1\r\n{host_headers}{connection}\r\n").as_bytes())
+                        .await
+                        .unwrap();
+                    let mut session = Session::new_h1(Box::new(server));
+                    assert!(session.read_request().await.unwrap());
+                    let mut ctx = redirect.new_ctx();
+                    assert!(redirect.request_filter(&mut session, &mut ctx).await.unwrap());
+                    assert_eq!(ctx.status, expected_status);
+
+                    let reusable = session.downstream_session.finish().await.unwrap();
+                    assert_eq!(reusable.is_some(), !client_close);
+                    let mut wire = Vec::new();
+                    while !wire.ends_with(b"\r\n\r\n") {
+                        wire.push(client.read_u8().await.unwrap());
+                    }
+                    let wire = String::from_utf8(wire).unwrap();
+                    assert!(wire.starts_with(&format!("HTTP/1.1 {expected_status}")));
+                    let expected_connection = if client_close { "close" } else { "keep-alive" };
+                    assert!(wire
+                        .to_ascii_lowercase()
+                        .contains(&format!("\r\nconnection: {expected_connection}\r\n")));
+                    assert!(wire.to_ascii_lowercase().contains("\r\ncontent-length: 0\r\n"));
+
+                    if let Some(reusable) = reusable {
+                        // Send only after finishing the first request: this tests reuse,
+                        // without relying on pipelining or dropping the live session.
+                        let (stream, prefix) = reusable.into_parts();
+                        assert!(prefix.is_none());
+                        client
+                            .write_all(b"GET /second HTTP/1.1\r\nHost: example.com\r\nConnection: close\r\n\r\n")
+                            .await
+                            .unwrap();
+                        let mut session = Session::new_h1(stream);
+                        assert!(session.read_request().await.unwrap());
+                        let mut ctx = redirect.new_ctx();
+                        assert!(redirect.request_filter(&mut session, &mut ctx).await.unwrap());
+                        assert!(session.downstream_session.finish().await.unwrap().is_none());
+                        let mut second_wire = String::new();
+                        client.read_to_string(&mut second_wire).await.unwrap();
+                        assert!(second_wire.starts_with("HTTP/1.1 301"));
+                        assert!(second_wire.contains("https://example.com/second"));
+                        assert!(second_wire.to_ascii_lowercase().contains("\r\nconnection: close\r\n"));
+                    } else {
+                        assert_eq!(client.read(&mut [0; 1]).await.unwrap(), 0);
+                    }
+                }
+            }
+        })
+        .await
+        .expect("redirect connection-policy exchanges must finish without waiting for peer EOF");
     }
 
     #[tokio::test]

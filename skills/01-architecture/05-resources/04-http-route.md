@@ -76,6 +76,13 @@ Generate an independent RouteParentStatus for each parentRef:
 - Child-side delegation status: each `kind: HTTPRoute` parentRef (reverse lock) gets an `Accepted` condition — True iff that parent currently delegates to this route (`DelegationAccepted` / `NoMatchingParent`, computed from `RouteDelegationIndex`)
 - Cleans up old status entries that correspond to parentRefs no longer present
 
+Native CORS also rejects `allowCredentials: true` with any exact `*` entry in
+`exposeHeaders`, including mixed lists. `HTTPRouteRule::unsupported_cors_reason`
+combines this support restriction with backend scope enforcement for Controller
+status/delegation and Gateway publication. Valid siblings survive; an authored
+violation with no effective rule uses the existing attachment rejection path.
+See the [credentialed exposure policy](../../04-review/cors/intentional-design/native-credentialed-exposure-policy.md).
+
 ## Gateway-side processing
 
 HTTPRoute's ConfHandler implements route compilation and registration:

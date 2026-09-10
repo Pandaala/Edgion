@@ -21,12 +21,10 @@ pub struct GapiCorsFilter {
 }
 
 impl GapiCorsFilter {
-    /// Create a new CORS filter, validating origin format per Gateway API v1.5 rules.
-    /// Returns an error if any origin contains path components, query strings,
-    /// fragments, or other malformed host values.
+    /// Validate origins and the supported credentialed exposure policy before activation.
     pub fn try_new(config: HTTPCORSFilter) -> Result<Self, String> {
         if let Err(errors) = config.validate() {
-            return Err(format!("CORS filter origin validation failed: {}", errors.join("; ")));
+            return Err(format!("CORS filter validation failed: {}", errors.join("; ")));
         }
         Ok(Self { config })
     }
@@ -279,6 +277,39 @@ impl UpstreamResponseFilter for GapiCorsFilter {
 mod tests {
     use super::*;
     use crate::plugins::runtime::traits::session::MockPluginSession;
+
+    #[test]
+    fn credentialed_expose_headers_validation_and_wire_values() {
+        for credentials in [None, Some(false), Some(true)] {
+            for names in [vec![], vec!["*"], vec!["X-Request-Id"], vec!["*", "X-Request-Id"]] {
+                let config = HTTPCORSFilter {
+                    allow_origins: Some(vec!["https://app.example".into()]),
+                    allow_credentials: credentials,
+                    allow_methods: None,
+                    allow_headers: None,
+                    expose_headers: Some(names.iter().map(|name| name.to_string()).collect()),
+                    max_age: 5,
+                };
+                let result = GapiCorsFilter::try_new(config);
+                if credentials == Some(true) && names.contains(&"*") {
+                    assert!(result.unwrap_err().contains("exposeHeaders"));
+                    continue;
+                }
+                let filter = result.unwrap();
+                for preflight in [false, true] {
+                    let mut session = MockPluginSession::new();
+                    let headers = filter.build_cors_headers(&mut session, "https://app.example", preflight);
+                    let exposed = headers
+                        .iter()
+                        .find(|(name, _)| *name == "Access-Control-Expose-Headers");
+                    assert_eq!(
+                        exposed.map(|(_, value)| value.clone()),
+                        (!names.is_empty()).then(|| names.join(", "))
+                    );
+                }
+            }
+        }
+    }
 
     #[test]
     fn test_origin_match_exact() {

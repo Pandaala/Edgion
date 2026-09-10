@@ -93,6 +93,10 @@ separate bounded outbound request path are unaffected by that setting.
 - Enabled via the Gateway annotation `edgion.io/http-to-https-redirect: "true"`.
 - Returns status code 301 with a `Location` header pointing to the HTTPS URL.
 - Port handling: when the HTTPS port is 443, the port number is omitted.
+- Redirects and Host-validation 400 responses use Pingora's normal session
+  keepalive policy and generated `Connection` header. They do not force closure;
+  a client-requested close is respected. See the
+  [connection-policy decision](../../../04-review/redirect/intentional-design/session-owned-connection-policy.md).
 
 ## LB policy
 

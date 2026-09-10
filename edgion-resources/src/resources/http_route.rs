@@ -194,6 +194,22 @@ pub struct HTTPRouteRule {
 }
 
 impl HTTPRouteRule {
+    /// Unsupported native CORS policies invalidate the whole rule before publication.
+    pub fn unsupported_cors_reason(&self) -> Option<String> {
+        self.unsupported_backend_cors_reason().or_else(|| {
+            self.filters.as_ref()?.iter().find_map(|filter| {
+                if filter.filter_type != HTTPRouteFilterType::CORS {
+                    return None;
+                }
+                filter
+                    .cors
+                    .as_ref()?
+                    .credentialed_expose_headers_error()
+                    .map(str::to_owned)
+            })
+        })
+    }
+
     /// Native CORS is supported only at rule scope. Reject the whole rule when
     /// any backend reference carries it, even at weight zero or alongside a
     /// rule-level policy. Preflight ownership cannot depend on backend selection.
@@ -948,6 +964,7 @@ pub struct HTTPCORSFilter {
     pub allow_headers: Option<Vec<String>>,
 
     /// ExposeHeaders defines the HTTP headers that browsers are allowed to access.
+    /// When allowCredentials is true, use explicit names; the wildcard is unsupported.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expose_headers: Option<Vec<String>>,
 
@@ -957,7 +974,18 @@ pub struct HTTPCORSFilter {
 }
 
 impl HTTPCORSFilter {
-    /// Validate the CORS filter configuration per Gateway API v1.5 tightened CEL rules.
+    /// Edgion requires explicit exposure names when the policy permits credentials.
+    /// Browser credentials mode cannot be inferred from request header presence.
+    pub fn credentialed_expose_headers_error(&self) -> Option<&'static str> {
+        (self.allow_credentials == Some(true)
+            && self
+                .expose_headers
+                .as_ref()
+                .is_some_and(|headers| headers.iter().any(|name| name == "*")))
+        .then_some("CORS exposeHeaders must not contain '*' when allowCredentials is true; use explicit header names")
+    }
+
+    /// Validate origin syntax and Edgion's credentialed exposure support restriction.
     ///
     /// Rejects origins that contain:
     /// - Path components (e.g. `https://example.com/path`)
@@ -968,6 +996,9 @@ impl HTTPCORSFilter {
     /// - Empty host (e.g. `https://`)
     pub fn validate(&self) -> Result<(), Vec<String>> {
         let mut errors = Vec::new();
+        if let Some(error) = self.credentialed_expose_headers_error() {
+            errors.push(error.to_owned());
+        }
 
         if let Some(ref origins) = self.allow_origins {
             for (i, origin) in origins.iter().enumerate() {
@@ -1467,6 +1498,37 @@ pub struct RouteParentStatus {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn credentialed_expose_headers_shared_validation() {
+        for credentials in [
+            serde_json::Value::Null,
+            serde_json::json!(false),
+            serde_json::json!(true),
+        ] {
+            for exposed in [
+                serde_json::Value::Null,
+                serde_json::json!([]),
+                serde_json::json!(["*"]),
+                serde_json::json!(["X-Request-Id"]),
+                serde_json::json!(["X-Request-Id", "*"]),
+            ] {
+                let config: super::HTTPCORSFilter = serde_json::from_value(serde_json::json!({
+                    "allowOrigins": ["https://app.example"], "allowCredentials": credentials,
+                    "exposeHeaders": exposed
+                }))
+                .unwrap();
+                let invalid = credentials == serde_json::json!(true)
+                    && exposed
+                        .as_array()
+                        .is_some_and(|names| names.contains(&serde_json::json!("*")));
+                assert_eq!(config.validate().is_err(), invalid);
+                if invalid {
+                    assert!(config.validate().unwrap_err()[0].contains("use explicit header names"));
+                }
+            }
+        }
+    }
+
     #[test]
     fn mirror_denial_is_transport_metadata_not_operator_schema() {
         let backend: super::BackendObjectReference = serde_json::from_value(serde_json::json!({

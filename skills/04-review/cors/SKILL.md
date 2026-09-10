@@ -11,6 +11,8 @@ before applying a decision to current code.
 
 ## Intentional design
 
+- [Native credentialed CORS requires explicit exposure names](intentional-design/native-credentialed-exposure-policy.md)
+
 - [Native CORS belongs to the route rule](intentional-design/native-cors-rule-scope.md)
 - [CORS `*.domain` Shorthand Matches HTTPS Only (Fixed)](intentional-design/subdomain-wildcard-https-only.md)
 

@@ -15,6 +15,15 @@
 
 ## Native CORS coverage boundary
 
+Edgion rejects `allowCredentials: true` combined with any exact `"*"` entry in
+`exposeHeaders`, including mixed lists, before the rule activates. Explicit names
+remain supported; false/omitted credentials preserve wildcard output. This is a
+documented support restriction, not a claim that Gateway API v1.5.0 mandates config
+rejection. `HTTPRouteCORS` remains enabled for the supported behavior; passing it
+does not establish support for this rejected combination. The focused cross-process
+client is `../integration/scripts/integration/test_native_cors_expose_headers.py`.
+Do not rewrite historical conformance reports as fresh verification.
+
 The module pins Gateway API types to v1.5.0 and the conformance suite to v1.5.1.
 `HTTPRouteCORS` and `HTTPRouteCORSAllowCredentialsBehavior` use only rule-level
 `filters` (seven rules in their two manifests); neither exercises backendRef CORS.

@@ -666,7 +666,7 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
         let generation = route.metadata.generation;
         let route_ns = route.metadata.namespace.as_deref().unwrap_or("default");
 
-        // Protocol attachment, backend-contract, and native CORS scope violations are per-rule findings, like a
+        // Protocol attachment, backend-contract, and unsupported native CORS policies are per-rule findings, like a
         // rewrite/redirect conflict: they drop just that rule via
         // `invalid_rule_indices` + PartiallyInvalid. They are lifted to a
         // route-level Accepted=False only when no rule is left to serve for this
@@ -680,7 +680,7 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
             .enumerate()
             .filter_map(|(index, rule)| {
                 protocol_rule_invalid_reason_with_runtime(rule, route_ns, _ctx.runtime())
-                    .or_else(|| rule.unsupported_backend_cors_reason())
+                    .or_else(|| rule.unsupported_cors_reason())
                     .map(|message| (index, message))
             })
             .collect();
@@ -788,7 +788,7 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
                 // the route at all; flipping it to False would drop the entire route
                 // from the data-plane route table.
                 //
-                // Exceptions are an AI protocol or native CORS scope violation that leaves no rule
+                // Exceptions are an AI protocol or unsupported native CORS policy that leaves no rule
                 // serving and a backend-scoped WAF ownership violation. WAF is
                 // request-wide, so a late backend attachment makes the route's
                 // election ambiguous even when a sibling rule could serve.
@@ -1017,14 +1017,14 @@ fn has_rewrite_redirect_conflict(
 
 /// Return `Some(reason)` for unsupported backendRef-scoped CORS, or a malformed
 /// rule-level `type: CORS` filter: either `cors:` config is absent, or
-/// `HTTPCORSFilter::validate()` rejects the origin format. Reason text is
+/// `HTTPCORSFilter::validate()` rejects the configuration. Reason text is
 /// operator-readable and lands in the `PartiallyInvalid` condition message.
 ///
 /// Rules flagged here go into `invalid_rule_indices`. With surviving siblings,
-/// `PartiallyInvalid=True` leaves those rules active. A backend CORS scope error
+/// `PartiallyInvalid=True` leaves those rules active. An unsupported CORS policy
 /// with no surviving effective rule escalates to `Accepted=False/UnsupportedValue`.
 fn invalid_cors_reason(rule: &edgion_resources::resources::http_route::HTTPRouteRule) -> Option<String> {
-    if let Some(reason) = rule.unsupported_backend_cors_reason() {
+    if let Some(reason) = rule.unsupported_cors_reason() {
         return Some(reason);
     }
     let filter_reason = |f: &edgion_resources::resources::http_route::HTTPRouteFilter| -> Option<String> {
@@ -3115,6 +3115,50 @@ spec:
 "#;
         let route: HTTPRoute = serde_yaml::from_str(yaml).unwrap();
         assert_eq!(indices_only(find_invalid_rule_details(&route, "default")), vec![0]);
+    }
+
+    #[test]
+    fn credentialed_expose_headers_status_rejection_and_recovery() {
+        let mut route = route_with_one_cors_rule(&["https://app.example"]);
+        route.spec.parent_refs = Some(serde_json::from_value(serde_json::json!([{"name": "gw"}])).unwrap());
+        let valid = route.spec.rules.as_ref().unwrap()[0].clone();
+        let config = route.spec.rules.as_mut().unwrap()[0].filters.as_mut().unwrap()[0]
+            .cors
+            .as_mut()
+            .unwrap();
+        config.allow_credentials = Some(true);
+        config.expose_headers = Some(vec!["*".into()]);
+        route.spec.rules.as_mut().unwrap().push(valid);
+        let handler = HttpRouteHandler::default();
+        let ctx = make_ctx();
+        handler.update_status(&mut route, &ctx, &[]);
+        assert_eq!(route.spec.invalid_rule_indices.as_deref(), Some(&[0][..]));
+        let conditions = &route.status.as_ref().unwrap().parents[0].conditions;
+        assert!(conditions.iter().any(|c| c.type_ == "PartiallyInvalid"
+            && c.status == "True"
+            && c.message.contains("exposeHeaders")
+            && c.message.contains("1 of 2 rules active")));
+        route.spec.rules.as_mut().unwrap().truncate(1);
+        handler.update_status(&mut route, &ctx, &[]);
+        assert!(route.status.as_ref().unwrap().parents[0]
+            .conditions
+            .iter()
+            .any(|c| c.type_ == "Accepted"
+                && c.status == "False"
+                // This unit fixture has no Gateway; its missing-parent reason takes precedence.
+                && c.reason == "NoMatchingParent"
+                && c.message.contains("exposeHeaders")));
+        route.spec.rules.as_mut().unwrap()[0].filters.as_mut().unwrap()[0]
+            .cors
+            .as_mut()
+            .unwrap()
+            .expose_headers = Some(vec!["X-Request-Id".into()]);
+        handler.update_status(&mut route, &ctx, &[]);
+        assert_eq!(route.spec.invalid_rule_indices, None);
+        assert!(!route.status.as_ref().unwrap().parents[0]
+            .conditions
+            .iter()
+            .any(|c| c.message.contains("exposeHeaders")));
     }
 
     #[test]

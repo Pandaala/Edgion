@@ -449,7 +449,7 @@ fn flatten_child_rules(
             ctx.issues.push(DelegationIssue::RuleDropped {
                 message: format!(
                     "child '{child_key}' rules[{idx}] dropped: {}",
-                    rule.unsupported_backend_cors_reason()
+                    rule.unsupported_cors_reason()
                         .unwrap_or_else(|| "invalid rule (see child status)".to_string())
                 ),
             });
@@ -1116,6 +1116,29 @@ mod tests {
     // =====================================================================
     // Activation & passthrough
     // =====================================================================
+
+    #[test]
+    fn credentialed_expose_headers_delegation_diagnostic_and_recovery() {
+        let parent = simple_parent("/api", "infra", "child");
+        for exposed in ["*", "X-Request-Id"] {
+            let mut rule = service_rule("/api/child", "svc");
+            rule["filters"] = serde_json::json!([{"type": "CORS", "cors": {
+                "allowOrigins": ["https://app.example"], "allowCredentials": true,
+                "exposeHeaders": [exposed]
+            }}]);
+            let child = route("infra", "child", serde_json::json!({"rules": [rule]}));
+            let outcome = flatten_route(&parent, &FakeLookup::new(vec![child]));
+            if exposed == "*" {
+                assert!(outcome.resolved_rules.as_ref().unwrap().is_empty());
+                assert!(dropped_messages(&outcome).iter().any(|message| message
+                    .contains("child 'infra/child' rules[0]")
+                    && message.contains("exposeHeaders")));
+            } else {
+                assert_eq!(rule_paths(outcome.resolved_rules.as_ref().unwrap()), ["/api/child"]);
+                assert!(outcome.issues.is_empty());
+            }
+        }
+    }
 
     #[test]
     fn no_delegation_yields_none() {

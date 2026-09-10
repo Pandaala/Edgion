@@ -130,6 +130,19 @@ the invalid rule; another valid rule may match, otherwise the response is `404`.
 Move the policy to rule scope to apply it to all backends of that rule. This also
 applies to delegated routes and updates without a Gateway restart.
 
+For native CORS, `allowCredentials: true` requires explicit names in `exposeHeaders`
+(for example, `exposeHeaders: ["X-Request-Id", "X-Total-Count"]`). Any entry equal to
+`"*"`, including a mixture with explicit names, invalidates the whole rule with the
+same partial/whole-route rejection behavior described above. With `allowCredentials`
+false or omitted, `exposeHeaders: ["*"]` continues to emit
+`Access-Control-Expose-Headers: *`; with credentials enabled, explicit names are
+emitted as a comma-separated list. An empty or omitted list emits no exposure header.
+This is an Edgion support restriction: Gateway API v1.5.0 forbids wildcard exposure
+for credentialed requests but does not mandate rejecting the configuration. Fetch
+does not expand this wildcard when the browser uses `credentials: "include"`.
+The policy is checked at configuration time, independent of Cookie or Authorization
+header presence. Correcting the list restores the rule through hot reload.
+
 How preflight interacts with CORS depends on how CORS is configured on the route:
 
 - **Gateway API native `type: CORS` filter** — the preflight handler does **not** intervene;
