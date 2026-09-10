@@ -145,6 +145,49 @@ pub struct JwksLookup {
     pub served_stale: bool,
 }
 
+impl JwksState {
+    fn publish_fetch_result(
+        &mut self,
+        fetch_result: Result<JwkSet, String>,
+        completed_at: Instant,
+        ttl: Duration,
+        min_refresh: Duration,
+    ) -> Result<JwksLookup, JwksProviderError> {
+        self.last_refresh_at = Some(completed_at);
+
+        match fetch_result {
+            Ok(jwks) => {
+                let jwks = Arc::new(jwks);
+                self.set = Some(jwks.clone());
+                self.expires_at = Some(completed_at + ttl);
+                Ok(JwksLookup {
+                    set: jwks,
+                    served_stale: false,
+                })
+            }
+            Err(err) => match self.set.clone() {
+                Some(cached) => {
+                    // Stale-while-revalidate: serve stale and let the caller record the
+                    // degradation (`discovery_jwks.rs` maps `served_stale` to a fail-open
+                    // dye outcome in the access log).
+                    // Bump expires_at by min_refresh_interval so subsequent calls within the
+                    // backoff window hit the fast path instead of re-fetching every request
+                    // during a prolonged IdP outage.
+                    self.expires_at = Some(completed_at + min_refresh);
+                    Ok(JwksLookup {
+                        set: cached,
+                        served_stale: true,
+                    })
+                }
+                None => {
+                    self.expires_at = None;
+                    Err(JwksProviderError::Other(err))
+                }
+            },
+        }
+    }
+}
+
 pub struct JwksProvider<D: DiscoveryDoc> {
     config: JwksProviderConfig,
     client: Arc<Client>,
@@ -352,35 +395,8 @@ impl<D: DiscoveryDoc> JwksProvider<D> {
         .await;
 
         let mut state = self.jwks_state.write().await;
-        state.last_refresh_at = Some(now);
-
-        match fetch_result {
-            Ok(jwks) => {
-                let jwks = Arc::new(jwks);
-                state.set = Some(jwks.clone());
-                state.expires_at = Some(now + ttl);
-                Ok(JwksLookup {
-                    set: jwks,
-                    served_stale: false,
-                })
-            }
-            Err(err) => match state.set.clone() {
-                Some(cached) => {
-                    // Stale-while-revalidate: serve stale and let the caller record the
-                    // degradation (`discovery_jwks.rs` maps `served_stale` to a fail-open
-                    // dye outcome in the access log).
-                    // Bump expires_at by min_refresh_interval so subsequent calls within the
-                    // backoff window hit the fast path instead of re-fetching every request
-                    // during a prolonged IdP outage.
-                    state.expires_at = Some(now + min_refresh);
-                    Ok(JwksLookup {
-                        set: cached,
-                        served_stale: true,
-                    })
-                }
-                None => Err(JwksProviderError::Other(err)),
-            },
-        }
+        let completed_at = Instant::now();
+        state.publish_fetch_result(fetch_result, completed_at, ttl, min_refresh)
     }
 
     fn can_refresh(last: Option<Instant>, now: Instant, min: Duration) -> bool {
@@ -412,6 +428,49 @@ impl<D: DiscoveryDoc> JwksProvider<D> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn jwks_publication_deadlines_start_at_completion() {
+        let started_at = Instant::now();
+        let completed_at = started_at + Duration::from_secs(10);
+        let ttl = Duration::from_secs(30);
+        let min_refresh = Duration::from_secs(5);
+
+        let mut successful = JwksState::default();
+        let fresh = successful
+            .publish_fetch_result(Ok(JwkSet { keys: Vec::new() }), completed_at, ttl, min_refresh)
+            .expect("successful fetch must publish the new set");
+        assert_eq!(successful.last_refresh_at, Some(completed_at));
+        assert_eq!(successful.expires_at, Some(completed_at + ttl));
+        assert!(!fresh.served_stale);
+        assert!(Arc::ptr_eq(
+            successful.set.as_ref().expect("successful fetch must cache the set"),
+            &fresh.set
+        ));
+
+        let cached = fresh.set.clone();
+        let mut stale = JwksState {
+            set: Some(cached.clone()),
+            expires_at: Some(started_at),
+            last_refresh_at: Some(started_at),
+        };
+        let fallback = stale
+            .publish_fetch_result(
+                Err("synthetic fetch failure".to_string()),
+                completed_at,
+                ttl,
+                min_refresh,
+            )
+            .expect("cached failure must serve the stale set");
+        assert_eq!(stale.last_refresh_at, Some(completed_at));
+        assert_eq!(stale.expires_at, Some(completed_at + min_refresh));
+        assert!(fallback.served_stale);
+        assert!(Arc::ptr_eq(&cached, &fallback.set));
+        assert!(Arc::ptr_eq(
+            stale.set.as_ref().expect("stale fallback must retain the cached set"),
+            &fallback.set
+        ));
+    }
 
     #[test]
     fn provider_error_display_renders_inner_message() {

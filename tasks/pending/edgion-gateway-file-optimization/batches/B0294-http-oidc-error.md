@@ -12,4 +12,4 @@
 
 - Reviewer `b0294_defer_review` independently confirmed the current-HEAD defect, cross-file scope, D0058 ownership, dynamic self-written auth response semantics and safe continuation. It required narrowing the JWKS logging statement.
 - Adjudicator `b0294_adjudication` confirmed the reviewer correction: discovery detail can reach PluginLog and `Other` detail can reach public bodies, while current JWKS projections are static. With the wording corrected, verdict is defer / LGTM.
-- No technical or integration-test file changed. Root format, locked workspace check, locked Clippy (existing warnings, exit 0), agent-doc, SSA, metrics, Pingora, Gateway tracing, English, frozen-integration and diff gates passed. Ledger/changelog updated; commit pending automatic local commit, no push.
+- No technical or integration-test file changed. Root format, locked workspace check, locked Clippy (existing warnings, exit 0), agent-doc, SSA, metrics, Pingora, Gateway tracing, English, frozen-integration and diff gates passed. Ledger/changelog updated; commit `20e9dc45`, no push.
