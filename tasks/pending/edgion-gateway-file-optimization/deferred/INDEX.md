@@ -217,3 +217,4 @@ These entries are backlinks only. A linked `tasks/todo` file is the editable sou
 | Remove TLSRoute v1alpha3 API fallback (D0142) | pending | [task](../../../todo/remove-tlsroute-v1alpha3-fallback.md) |
 | Clarify DSL request-method casing (D0143) | needs-investigation | [task](../../../todo/clarify-dsl-request-method-case-contract.md) |
 | Correct response snapshot documentation (D0144) | pending | [task](../../../todo/correct-response-body-admission-snapshot-documentation.md) |
+| Isolate DSL sandbox unit tests from network (D0145) | pending | [task](../../../todo/isolate-dsl-sandbox-unit-tests-from-network.md) |

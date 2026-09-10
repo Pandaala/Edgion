@@ -399,7 +399,7 @@
 | `edgion-gateway/src/plugins/http/dsl/tests/resp_p2_tests.rs` | `plugins-http-dsl` | test | changed | B0275: exact response names, prefix/byte limits and missing Content-Type; independent LGTM, DSL 389/389 and all gates passed |
 | `edgion-gateway/src/plugins/http/dsl/tests/resp_set_status_tests.rs` | `plugins-http-dsl` | test | changed | B0276: accepted endpoints/Nil and typed narrowing/type errors; independent LGTM, DSL 392/392; D0144 documents separate snapshot drift |
 | `edgion-gateway/src/plugins/http/dsl/tests/response_builtins.rs` | `plugins-http-dsl` | test | changed | B0277: scalar header byte bounds and exact Bool/Nil observations; independent LGTM, DSL 394/394; original ten cases retained |
-| `edgion-gateway/src/plugins/http/dsl/tests/runtime_errors.rs` | `plugins-http-dsl` | test | pending | — |
+| `edgion-gateway/src/plugins/http/dsl/tests/runtime_errors.rs` | `plugins-http-dsl` | test | examined-no-change | B0278: precise typed VM errors adequately covered; independent LGTM, 10/10 and gates passed; incidental D0145 deferred |
 | `edgion-gateway/src/plugins/http/dsl/tests/sandbox.rs` | `plugins-http-dsl` | test | pending | — |
 | `edgion-gateway/src/plugins/http/dsl/tests/terminate_tests.rs` | `plugins-http-dsl` | test | pending | — |
 | `edgion-gateway/src/plugins/http/dsl/tests/utility_functions.rs` | `plugins-http-dsl` | test | changed | B0253: regex grammar, zero-width, exact/plus-one and amplification regressions |

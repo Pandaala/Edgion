@@ -29,4 +29,4 @@
 ## Verification and handoff
 
 - DSL 394/394 passed, including all twelve target cases. Locked workspace check/Clippy, format and format check, agent docs, SSA, metrics, Pingora source, Gateway tracing boundary, English-only, diff and frozen-path guards passed. Existing Clippy warnings remain (982 Gateway lib-test warnings).
-- Ledger/changelog updated. Commit: pending automatic local commit; never push.
+- Ledger/changelog updated. Commit: `e8bd209f`; no push.
