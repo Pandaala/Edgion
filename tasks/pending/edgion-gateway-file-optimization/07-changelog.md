@@ -16,7 +16,9 @@ This is the single concise record of actual changes across the file-by-file audi
 
 ## Entries
 
-- B0273: replaced the header-name loop's empty-success oracle with exact unordered multiplicities and added fixed 256-name/exact byte-cap tests. Independent code PASS; DSL 386/386, locked workspace check/Clippy and all guards passed. User-authorized standalone D0142 documents the actual TLSRoute API fallback and resolves three external doc links; separate documentation review PASS. Commit pending automatic local commit; no production/integration changes or push.
+- B0274: six request-mutation tests now assert documented Nil results while retaining exact host calls. Initial invalid DSL fixture syntax caused six failures; diagnostic-guided correction and independent re-review passed. Targeted 6/6, DSL 386/386, locked workspace check/Clippy and all guards passed. D0143 independently tracks method-casing documentation uncertainty. Pending automatic local commit; no production/integration change or push.
+
+- B0273: replaced the header-name loop's empty-success oracle with exact unordered multiplicities and added fixed 256-name/exact byte-cap tests. Independent code PASS; DSL 386/386, locked workspace check/Clippy and all guards passed. User-authorized standalone D0142 documents the actual TLSRoute API fallback and resolves three external doc links; separate documentation review PASS. Commit `45b754fd`; no production/integration changes or push.
 
 - External sync `78a25c3a`: verified 21 modified, two removed and nine added integration paths against Git and worktree bytes/mode; reconciled only those freeze entries (3,238 total). Reopened six externally changed terminal Gateway files, retained historical evidence, and retired removed standalone tasks in coordinator records only. B0273 request-header brief remains valid; no campaign integration-file edit.
 

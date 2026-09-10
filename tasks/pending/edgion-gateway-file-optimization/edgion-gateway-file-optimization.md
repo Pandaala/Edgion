@@ -10,10 +10,10 @@
 | Priority | P1 |
 | Baseline commit | `d484e580` |
 | Scope | Every tracked file under `edgion-gateway/` |
-| Campaign status | in-progress; B0273 code and authorized documentation support independently reviewed, all gates passed; local commit pending. |
-| Coverage | 549 current Gateway files: 253 changed, 181 examined-no-change, 14 deferred, 101 non-terminal; 3 historical rows are removed. External `78a25c3a` reopened six terminal files; four earlier `bea47373` reopens remain pending. Historical evidence is retained. |
-| Active batch | B0273 commit gate; next target is DSL `tests/request_mutation.rs`. Automatic local commits, never push. |
-| Analysis queue | None queued. D0127–D0142 track confirmed separate work; tasks removed by external `78a25c3a` are retired only in coordinator records. |
+| Campaign status | in-progress at HEAD `45b754fd`; B0274 passed all gates, automatic commit pending. |
+| Coverage | 549 current Gateway files: 254 changed, 181 examined-no-change, 14 deferred, 100 non-terminal; 3 historical rows are removed. External `78a25c3a` reopened six terminal files; four earlier `bea47373` reopens remain pending. Historical evidence is retained. |
+| Active batch | B0274 at commit gate; B0275 is read-only only. Automatic local commits, never push. |
+| Analysis queue | B0275 response P2 tests analysis-in-progress. D0127–D0143 track separate work; tasks removed by external `78a25c3a` are retired only in coordinator records. |
 | Integration freeze | 3,238 files. External `78a25c3a` refreshed 21, removed two relocated paths and added nine entries, each verified against old/new Git objects and worktree bytes/mode. Prior reconciliations remain intact. Full check passes; campaign made no integration-test edit. |
 
 ## AI guide summary
