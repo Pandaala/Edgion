@@ -109,6 +109,8 @@ spec:
 - `301` and `308` are permanent redirects; `302` and `307` are temporary. `303` directs the client to retrieve the target (normally with GET). Use `307` or `308` when the client must preserve the request method and body; `301` and `302` can turn a POST into a GET.
 - The `Location` header omits port `80` for HTTP and port `443` for HTTPS. Non-default ports are included.
 - `RequestRedirect` and [URLRewrite](./url-rewrite.md) are mutually exclusive within the same rule. A rule that declares both is marked `PartiallyInvalid` and disabled, while the route's other rules keep working.
+- A rule-level `RequestRedirect` is terminal and must not be combined with
+  `backendRefs` in the same rule; the Kubernetes CRD rejects that shape.
 - Because the filter terminates the request, any request-stage plugins declared after it do not run, and the backend is never reached.
 - `ReplacePrefixMatch` replaces only the part of the path matched by the rule's `PathPrefix`; the remainder of the path is preserved. This modifier requires exactly one match in the rule, with path type `PathPrefix`.
 - The original query string is always preserved and appended to the redirect `Location`. For example, `http://app.example.com/login?returnTo=/dashboard` redirects to `https://app.example.com/login?returnTo=/dashboard`. The Gateway API redirect filter has no query modifier, so the client's query always survives, regardless of any path modifier.

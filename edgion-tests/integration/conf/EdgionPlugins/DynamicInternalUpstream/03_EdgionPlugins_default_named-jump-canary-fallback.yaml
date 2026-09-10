@@ -11,7 +11,7 @@ spec:
           - name: X-Named-Jump-Success
         response:
           - name: X-Named-Jump-Outcome
-            on: [reject, fallback]
+            on: [fallback]
       config:
         enable: true
         activeProfile: denied

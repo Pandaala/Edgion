@@ -42,10 +42,26 @@ missing default registration, and a missing targeted registration hidden by dupl
 - Require exact one-to-one registration for every aggregate suite — targeted bundle names may be
   intentionally covered by multiple finer-grained default entries.
 
+## Fixture preload coverage
+
+The EdgionPlugins fixture preload guard additionally compares complete directory
+names or recursive parent directories. Substring matching is insufficient:
+`EdgionPlugins/DslBody` does not load `EdgionPlugins/Dsl`, while
+`EdgionPlugins/PluginCondition` does cover its `AllConditions` child. The
+`suite_preload_requires_exact_directory_or_recursive_parent` regression captures
+these boundaries. This guard checks static directory coverage, not successful
+YAML submission or runtime behavior; see the
+[configuration failure gate](mandatory-integration-gates-fail-closed.md).
+
+Current verification: the `test_client` unit-test binary passed all 22 tests,
+including resource preload coverage and exact/recursive directory matching.
+This is static runner validation, not a completed live integration sweep.
+
 ## Re-evaluation Triggers
 
-Re-open this decision only if `run_integration.sh` replaces its duplicated static sweeps with one
-canonical suite registry or changes the outer `run_all_tests` branch structure.
+Re-evaluate if `run_integration.sh` replaces its duplicated static sweeps with one
+canonical suite registry, changes the outer `run_all_tests` branch structure, or
+changes fixture selection and recursive directory loading semantics.
 
 ## Reference Cases
 
@@ -56,3 +72,4 @@ canonical suite registry or changes the outer `run_all_tests` branch structure.
 ## Resolution references
 
 - `integration-suite-registration-guard` — 2026-08-30.
+- `edgionplugins-resource-sweep-config-list-drift` — exact fixture directory coverage.

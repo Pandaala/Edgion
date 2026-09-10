@@ -10,7 +10,11 @@ fn test_set_header() {
         .withf(|h, v| h == "X-A" && v == "v1")
         .times(1)
         .returning(|_, _| Ok(()));
-    let result = run(r#"req.set_header("X-A", "v1")"#, session);
+    let result = run(
+        r#"let result = req.set_header("X-A", "v1")
+           if result != nil { return deny(403, nil) }"#,
+        session,
+    );
     assert_eq!(result, good_next());
 }
 
@@ -22,7 +26,11 @@ fn test_append_header() {
         .withf(|h, v| h == "X-A" && v == "v2")
         .times(1)
         .returning(|_, _| Ok(()));
-    let result = run(r#"req.append_header("X-A", "v2")"#, session);
+    let result = run(
+        r#"let result = req.append_header("X-A", "v2")
+           if result != nil { return deny(403, nil) }"#,
+        session,
+    );
     assert_eq!(result, good_next());
 }
 
@@ -34,7 +42,11 @@ fn test_remove_header() {
         .withf(|h| h == "X-Del")
         .times(1)
         .returning(|_| Ok(()));
-    let result = run(r#"req.remove_header("X-Del")"#, session);
+    let result = run(
+        r#"let result = req.remove_header("X-Del")
+           if result != nil { return deny(403, nil) }"#,
+        session,
+    );
     assert_eq!(result, good_next());
 }
 
@@ -46,7 +58,11 @@ fn test_set_uri() {
         .withf(|u| u == "/new/path")
         .times(1)
         .returning(|_| Ok(()));
-    let result = run(r#"req.set_uri("/new/path")"#, session);
+    let result = run(
+        r#"let result = req.set_uri("/new/path")
+           if result != nil { return deny(403, nil) }"#,
+        session,
+    );
     assert_eq!(result, good_next());
 }
 
@@ -58,7 +74,11 @@ fn test_set_host() {
         .withf(|h| h == "new.host")
         .times(1)
         .returning(|_| Ok(()));
-    let result = run(r#"req.set_host("new.host")"#, session);
+    let result = run(
+        r#"let result = req.set_host("new.host")
+           if result != nil { return deny(403, nil) }"#,
+        session,
+    );
     assert_eq!(result, good_next());
 }
 
@@ -70,6 +90,10 @@ fn test_set_method() {
         .withf(|m| m == "POST")
         .times(1)
         .returning(|_| Ok(()));
-    let result = run(r#"req.set_method("POST")"#, session);
+    let result = run(
+        r#"let result = req.set_method("POST")
+           if result != nil { return deny(403, nil) }"#,
+        session,
+    );
     assert_eq!(result, good_next());
 }

@@ -5,13 +5,31 @@
 - Severity: high
 - Discovered in: B0109 analysis; resolved by independent B0108/B0109 adjudication
 - Category: panic-isolation
-- Canonical task: [`tasks/todo/isolate-wasm-host-panics-at-vm-boundaries.md`](../../../todo/isolate-wasm-host-panics-at-vm-boundaries.md)
+- Closed: 2026-09-07
+- Resolution commit: `b09156e3`
 
 ## Evidence
-Wasmtime 46 catches Rust host-function panics only to carry them safely across Wasm/JIT frames, then resumes unwinding at the typed-call boundary. Edgion currently handles returned traps/errors and poisons the lease afterward, but a resumed host panic bypasses that path. Root, request, callout-response, tick, close, and related typed-call boundaries lack a project-owned redacted panic scope, so a panic can escape toward the Pingora worker and may return a VM to the pool without poisoning.
+Before B0115, Wasmtime 46 carried Rust host-function panics safely across
+Wasm/JIT frames and resumed unwinding at the typed-call boundary. Edgion handled
+returned traps and errors but lacked a project-owned redacted panic scope around
+root, request, response, body, callout-response, tick, close, and initialization
+boundaries. A resumed host panic could therefore escape toward the Pingora
+worker and bypass VM poisoning.
 
 ## Resolution
 B0115 wrapped every Wasmtime initialization and runtime guest boundary with the canonical redacted panic catcher. Initialization panics fail before publication; runtime panics retain the existing phase metric and poison/discard the VM. Both tick failure paths stop before reading guest state, and deterministic inline host-panic tests prove redaction, discard, ordinary-trap distinction, and recovery.
 
+## Current verification
+
+Revalidated on 2026-09-10. `run_guest_boundary` still maps only caught Rust
+panics to the fixed generic error. Initialization, request/response headers and
+bodies, callout response, tick, done, and delete calls use that boundary; runtime
+errors poison the lease so it cannot return to the pool. Five focused tests
+passed: initialization redaction/nonpublication, the complete runtime phase
+matrix with discard and recovery, ordinary guest-trap distinction, direct tick
+panic discard, and tick-callout callback panic discard.
+
 ## Integration-test impact
-Existing panic recovery coverage exercises a guest trap, not a Rust host-import panic. Add a deterministic crate-local panicking-host test that proves generic error conversion, poison/discard, and recovery. No integration-test edit or separate integration issue is needed.
+Crate-local panicking-host tests cover generic error conversion,
+poison/discard, ordinary guest-trap distinction, and recovery. No integration
+test edit or separate integration issue is needed.

@@ -1,5 +1,5 @@
 # EdgionStreamPlugins: deny all via tlsRoutePlugins (Stage 2)
-# Tests the new tls_route_plugins field instead of the legacy plugins field.
+# Tests the TLSRoute-specific policy stage.
 apiVersion: edgion.io/v1
 kind: EdgionStreamPlugins
 metadata:

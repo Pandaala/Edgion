@@ -43,7 +43,7 @@ Runs after HTTP header parsing completes, before Pingora's module request-header
 **File**: `pg_request_filter.rs`
 **Signature**: `async fn request_filter(session, ctx) -> Result<bool>` (returns true to indicate the response has been sent)
 
-Before route matching and plugin execution, it first builds request-level metadata (client/remote/host/trace/raw URI/normalized path) and then handles local short-circuits:
+Before route matching and plugin execution, it builds the full request-level metadata (client/remote/host/trace/raw URI/normalized path) and then handles local short-circuits. Protocol detection is called here as part of `build_request_metadata`, but it is a no-op when Phase 1 already froze the raw-header classification needed by the gRPC-Web bridge:
 
 1. **ACME HTTP-01 challenge**: check the global `ChallengeStore` (fast path: the `is_empty()` check has zero overhead in 99.99% of requests). On a hit, send a 200 response directly and return `Ok(true)` to terminate the proxy pipeline; the access log retains metadata and the raw URI.
 

@@ -100,6 +100,20 @@ Re-open this decision only if:
 
 ## Reference Cases
 
+- The DeniedBackendRef status precondition must use the actual fixture topology:
+  local Routes are in `edgion-test` and point to `backend`; Kubernetes Routes
+  are in `edgion-default` and point to `edgion-backend`. The shared test helper
+  selects the Route namespace using `EDGION_TEST_K8S_MODE`, and its fixture-tree
+  regression verifies all four TCP/UDP/TLS Routes retain cross-namespace refs.
+  A 404 is a failed test precondition, never proof that backend access was denied.
+  The 2026-09-10 full run exposed a hardcoded Kubernetes namespace in local
+  tests; this is a test identity defect, not evidence that the runtime dial gate failed.
+  After correction, all three DeniedBackendRef suites (including both TLS modes)
+  passed in the canonical default sweep recorded at
+  `tmp/integration_testing/testing_20260910_154454/report.log` (237 passing report
+  entries, zero failures/timeouts). The fixture-tree regression passed in the
+  91-test library run. Kubernetes namespace contracts were checked against the
+  manifests; live Kubernetes was not run.
 - Original security todo closed 2026-09-06 after enforcement plus static
   L4 deny-dial e2e. Remaining coverage lives in
   `tasks/todo/denied-backend-ref-parity-and-grant-hot-reload.md`.

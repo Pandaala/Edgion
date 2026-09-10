@@ -9,11 +9,13 @@ use std::sync::Arc;
 /// most one UDPRoute, so the table stores a flat list with first-match
 /// semantics.
 ///
-/// Each entry is a gateway-side [`UdpRouteUnit`] (compiled companion) built
-/// from the cached `Arc<UDPRoute>` once at rebuild time.
+/// Each entry is a gateway-side [`UdpRouteUnit`] compiled once by the
+/// ConfHandler and cached by `GlobalUdpRouteManagers`; table rebuilds only
+/// clone unit `Arc`s into a listener snapshot.
 ///
-/// A new snapshot is built and atomically swapped on every route change,
-/// ensuring all readers always see consistent data without locking.
+/// Full updates publish all listener snapshots, while partial updates publish
+/// only affected listeners. Readers always see a consistent snapshot without
+/// locking.
 pub struct UdpRouteTable {
     routes: Vec<Arc<UdpRouteUnit>>,
 }

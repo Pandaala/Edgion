@@ -182,7 +182,11 @@ A few key facts:
   one CLI runtime and HTTP client while preserving the existing resource submission order.
 - Base configuration is loaded once, and inferred dependency suites are de-duplicated in first-seen
   order. Any batch failure aborts startup before tests run; the runner no longer continues with a
-  partially loaded topology.
+  partially loaded topology. Configuration loading checks both the CLI batch and
+  its log sink; failure identifies the suite and `logs/load_config.log` while
+  preserving the CLI's per-file diagnostics in the output. Run
+  `bash cicd/checks/tests/integration_config_load_test.sh` to check this failure
+  boundary without starting services.
 - conf_sync mTLS certs live at `${WORK_DIR}/certs/grpc/{primary,secondary}/`, generated in place
   by `conf_sync_distribute_certs "$WORK_DIR"` (the script that creates a work directory owns its
   certs — standalone scripts generate into their own `WORK_DIR`/`mktemp` dir; nothing is written

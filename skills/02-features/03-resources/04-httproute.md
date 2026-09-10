@@ -68,16 +68,6 @@ spec:
               - name: X-Powered-By
                 value: Edgion
 
-        - type: RequestRedirect
-          requestRedirect:
-            scheme: https
-            hostname: new.example.com
-            port: 443
-            statusCode: 301                        # 301 | 302
-            path:
-              type: ReplaceFullPath                # ReplaceFullPath | ReplacePrefixMatch
-              replaceFullPath: /new-path
-
         - type: URLRewrite
           urlRewrite:
             hostname: internal.example.com
@@ -220,7 +210,7 @@ spec:
 |------|-------------|-------|
 | `RequestHeaderModifier` | Modify request headers (set/add/remove) | Request stage |
 | `ResponseHeaderModifier` | Modify response headers (set/add/remove) | Response stage |
-| `RequestRedirect` | HTTP redirect (301/302) | Request stage (terminating) |
+| `RequestRedirect` | HTTP redirect (301/302/303/307/308) | Request stage (terminating) |
 | `URLRewrite` | URL rewrite (hostname/path) | Request stage |
 | `RequestMirror` | Mirror requests to a backup backend | Request stage (non-blocking) |
 | `ExtensionRef` | Reference an EdgionPlugins extension plugin | Depends on the plugin |
@@ -234,6 +224,29 @@ spec:
 3. **Cross-level**: `rule.filters` contains one and `backendRef.filters` contains the other.
 
 A rule that violates the constraint is marked `PartiallyInvalid`; that rule does not take effect, but other valid rules in the HTTPRoute continue to work.
+
+### Terminal RequestRedirect Rule
+
+A rule-level `RequestRedirect` must not also declare `backendRefs`; the committed
+Gateway API CRD enforces that terminal shape with CEL. The default status is `302`,
+and the supported values are `301`, `302`, `303`, `307`, and `308`.
+
+```yaml
+rules:
+  - matches:
+      - path:
+          type: PathPrefix
+          value: /legacy
+    filters:
+      - type: RequestRedirect
+        requestRedirect:
+          scheme: https
+          hostname: new.example.com
+          statusCode: 308
+          path:
+            type: ReplacePrefixMatch
+            replacePrefixMatch: /current
+```
 
 ### ExtensionRef Reuse Convention
 

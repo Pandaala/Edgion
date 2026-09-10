@@ -38,6 +38,17 @@ distinct direct-probe hostname, so a direct 404 or gRPC UNIMPLEMENTED result
 cannot be explained by listener hostname rejection. The same child rule succeeds
 through the delegating parent, and the access log identifies that parent Route.
 
+Both scenario registrations use
+`<RouteKind>/Delegation/ParentRefGatewayCollision/DynamicTest` as `conf_path`
+in local and Kubernetes modes. Both fixture trees place `initial/` and
+`updates/` there, while `bootstrap/` stays beside `DynamicTest/` so startup
+can publish the Gateway separately. The former local layout omitted
+`DynamicTest/`, causing initial apply to fail; moving its route generations
+also lets the static loader exclude update fixtures using its shared dynamic
+directory contract. The client unit test
+`registered_scenario_paths_resolve_lifecycle_fixtures` checks both topology
+roots against each bootstrap, initial, and update fixture.
+
 Both scenarios update only the child from explicit metadata generation 1 to 2.
 Their Gateway lives in `bootstrap/` and must be published before Gateway process
 startup because listener ports are not dynamically bound. The scenario never
@@ -53,7 +64,7 @@ changes `SayHello` to `StreamNumbers` and checks their concrete backend payloads
 All resources use one namespace, so this guard does not change or make a claim
 about ReferenceGrant authorization.
 
-Fresh verification on 2026-09-09:
+Historical verification on 2026-09-09 (not a rerun of the path correction above):
 
 - `cargo test -p edgion-gateway --lib routes::common::tests`: 34 passed.
 - `cargo test -p edgion-tests --bin test_client`: 21 passed, including dynamic
@@ -67,6 +78,14 @@ Fresh verification on 2026-09-09:
   child Route lifecycle.
 
 ## Scope and re-evaluation
+
+Fresh path-correction verification on 2026-09-10: the test-library suite passed
+91 tests, including both fixture trees; the test-client binary passed 21 harness
+checks. Both collision dynamic scenarios passed in the canonical default sweep
+(`tmp/integration_testing/testing_20260910_154454/report.log`, 237 passing report
+entries, zero failures/timeouts). Independent review returned LGTM after replacing
+the initial local-only registration change with the shared fixture layout.
+Kubernetes path contracts were checked, but live Kubernetes was not run.
 
 This guard covers Gateway-side publication and live attachment behavior. The
 Controller's broader canonical parent-status writer, retention, comparison, and

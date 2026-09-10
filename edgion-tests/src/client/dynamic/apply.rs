@@ -97,15 +97,22 @@ async fn apply_file(client: &EdgionClient, file: &Path) -> Result<()> {
     let content = tokio::fs::read_to_string(file)
         .await
         .with_context(|| format!("Failed to read apply file: {}", file.display()))?;
-    let documents = split_yaml_docs(&content);
+    apply_yaml_documents(client, file, &content).await
+}
+
+/// Apply a YAML stream in document order and stop at the first failed document.
+/// Error context identifies only the document index and source path; the YAML
+/// body may contain secrets and is never included.
+pub async fn apply_yaml_documents(client: &EdgionClient, source: &Path, content: &str) -> Result<()> {
+    let documents = split_yaml_docs(content);
     if documents.is_empty() {
-        anyhow::bail!("Empty YAML file: {}", file.display());
+        anyhow::bail!("Empty YAML file: {}", source.display());
     }
 
     for (index, document) in documents.iter().enumerate() {
-        apply_document(client, file, document)
+        apply_document(client, source, document)
             .await
-            .with_context(|| format!("Failed to apply document {} from {}", index + 1, file.display()))?;
+            .with_context(|| format!("Failed to apply document {} from {}", index + 1, source.display()))?;
     }
     Ok(())
 }
@@ -181,7 +188,12 @@ pub async fn delete_list(client: &EdgionClient, list_file: &Path) -> Result<()> 
 
 #[cfg(test)]
 mod tests {
-    use super::split_yaml_docs;
+    use super::{apply_yaml_documents, split_yaml_docs};
+    use edgion_cli::cli::client::EdgionClient;
+    use edgion_cli::cli::TargetType;
+    use std::path::Path;
+    use wiremock::matchers::{method, path, path_regex};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
 
     #[test]
     fn split_yaml_docs_preserves_each_nonempty_document() {
@@ -198,5 +210,50 @@ mod tests {
 
         assert_eq!(documents.len(), 1);
         assert!(documents[0].contains("--not-a-separator"));
+    }
+
+    #[tokio::test]
+    async fn yaml_stream_apply_is_ordered_fail_fast_and_redacts_source_bodies() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path_regex(r"^/api/v1/namespaced/configmap/test/[^/]+$"))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/api/v1/namespaced/configmap/test"))
+            .respond_with(ResponseTemplate::new(200))
+            .with_priority(1)
+            .up_to_n_times(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/api/v1/namespaced/configmap/test"))
+            .respond_with(ResponseTemplate::new(422).set_body_json(serde_json::json!({"error":"rejected"})))
+            .with_priority(2)
+            .mount(&server)
+            .await;
+
+        let client = EdgionClient::new(TargetType::Center, Some(server.uri()), None).unwrap();
+        let source = Path::new("rendered-consumers.yaml");
+        let yaml = "apiVersion: v1\nkind: ConfigMap\nmetadata: {name: first, namespace: test}\ndata: {token: secret-first}\n---\napiVersion: v1\nkind: ConfigMap\nmetadata: {name: second, namespace: test}\n---\napiVersion: v1\nkind: ConfigMap\nmetadata: {name: third, namespace: test}\n";
+        let error = apply_yaml_documents(&client, source, yaml)
+            .await
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("document 2 from rendered-consumers.yaml"));
+        assert!(!error.contains("secret-first"));
+        let requests = server.received_requests().await.unwrap();
+        let posts = requests
+            .iter()
+            .filter(|request| request.method.as_str() == "POST")
+            .collect::<Vec<_>>();
+        assert_eq!(posts.len(), 2);
+        assert!(String::from_utf8_lossy(&posts[0].body).contains("name: first"));
+        assert!(String::from_utf8_lossy(&posts[1].body).contains("name: second"));
+        assert!(!requests
+            .iter()
+            .any(|request| String::from_utf8_lossy(&request.body).contains("name: third")));
     }
 }

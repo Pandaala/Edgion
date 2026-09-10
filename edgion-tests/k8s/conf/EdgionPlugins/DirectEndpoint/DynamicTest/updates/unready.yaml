@@ -5,7 +5,7 @@ metadata:
   namespace: edgion-test
 spec:
   selector:
-    app: direct-port-no-ready-pods
+    app: direct-port-unready
   ports:
     - name: app
       port: 443

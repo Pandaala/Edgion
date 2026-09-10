@@ -1,7 +1,7 @@
 // UDPRoute DeniedBackendRef suite: a cross-namespace Service backendRef
 // without a ReferenceGrant must drop the datagram (no echo).
 //
-// Against edgion-tests/k8s/conf/UDPRoute/DeniedBackendRef/:
+// Local fixtures use edgion-test -> backend; Kubernetes fixtures use:
 // - 31955 (udp): UDPRoute in edgion-default -> Service edgion-backend/udp-denied-ref
 //
 // The backend EndpointSlice is real (test_server :30011). If the post-select
@@ -36,7 +36,7 @@ async fn assert_attached_and_denied(ctx: &TestContext) -> Result<(), String> {
     helpers::wait_resource_status(
         ctx,
         "UDPRoute",
-        "edgion-default",
+        helpers::l4_denied_backend_ref_namespace(),
         "udp-denied-ref",
         Duration::from_secs(10),
         |route| {

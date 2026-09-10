@@ -4,6 +4,24 @@ use crate::framework::TestContext;
 use serde_json::Value;
 use std::time::{Duration, Instant};
 
+/// Route namespace used by the DeniedBackendRef fixtures in the selected topology.
+/// The local fixtures use edgion-test -> backend, while Kubernetes fixtures use
+/// edgion-default -> edgion-backend. Never probe another namespace on a 404: a
+/// missing fixture must remain a failed precondition, not a skipped assertion.
+pub fn l4_denied_backend_ref_namespace() -> &'static str {
+    let k8s = std::env::var("EDGION_TEST_K8S_MODE")
+        .is_ok_and(|value| matches!(value.to_ascii_lowercase().as_str(), "true" | "1" | "yes"));
+    denied_backend_ref_namespace_for(k8s)
+}
+
+fn denied_backend_ref_namespace_for(k8s: bool) -> &'static str {
+    if k8s {
+        "edgion-default"
+    } else {
+        "edgion-test"
+    }
+}
+
 /// Fetch a namespaced resource from Controller Admin API (configserver endpoint)
 pub async fn fetch_resource_status(
     ctx: &TestContext,
@@ -194,5 +212,36 @@ fn check_conditions_with_message(
         })
     } else {
         false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::denied_backend_ref_namespace_for;
+
+    #[test]
+    fn denied_backend_ref_namespaces_match_both_fixture_trees() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        for (tree, k8s, backend_namespace) in [("integration", false, "backend"), ("k8s", true, "edgion-backend")] {
+            for route in [
+                "TCPRoute/DeniedBackendRef/04_TCPRoute.yaml",
+                "UDPRoute/DeniedBackendRef/04_UDPRoute.yaml",
+                "TLSRoute/DeniedBackendRef/07_TLSRoute_terminate.yaml",
+                "TLSRoute/DeniedBackendRef/08_TLSRoute_passthrough.yaml",
+            ] {
+                let path = root.join(tree).join("conf").join(route);
+                let yaml = std::fs::read_to_string(&path).unwrap();
+                let resource: serde_yaml::Value = serde_yaml::from_str(&yaml).unwrap();
+                let namespace = resource["metadata"]["namespace"].as_str().unwrap();
+                assert_eq!(namespace, denied_backend_ref_namespace_for(k8s), "{}", path.display());
+                let backend = &resource["spec"]["rules"][0]["backendRefs"][0]["namespace"];
+                assert_eq!(backend.as_str(), Some(backend_namespace), "{}", path.display());
+                assert_ne!(
+                    backend.as_str(),
+                    Some(namespace),
+                    "fixture must exercise a cross-namespace ref"
+                );
+            }
+        }
     }
 }

@@ -13,8 +13,8 @@
 //! (`record_connection_rate_limit_reject`) on Deny, plus the Redis-failure
 //! metric (`record_connection_rate_limit_redis_failure`) on every Redis failure
 //! (so fail-open is alertable).
-//! Listener attachment runs before inbound protocol parsing; TCP/UDP route and
-//! TLS compatibility attachments run at their respective stream lifecycles.
+//! Listener attachment runs before inbound protocol parsing; TCP/UDP route
+//! attachments run at their respective stream lifecycles.
 
 use async_trait::async_trait;
 use std::time::Duration;
@@ -41,8 +41,7 @@ pub struct ConnectionRateLimitPlugin {
     ///
     /// Every instance defaults to the same `keyPrefix`, and the limit keys carry
     /// only the listener port, so without this two `ConnectionRateLimit` entries
-    /// active on one port — two TLSRoutes with different SNIs referencing
-    /// different EdgionStreamPlugins, a listener-level plus a route-level
+    /// active on one port — a listener-level plus a TCPRoute-level
     /// attachment, or two entries in one resource — would index the same Redis
     /// counter while each checked it against its own `rate`, and with differing
     /// `interval` would corrupt each other's window rotation.

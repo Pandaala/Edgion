@@ -6,6 +6,7 @@ metadata:
 spec:
   selector:
     app: aes-tls-dynamic
+    endpoint-set-tls: "true"
   ports:
     - name: https
       port: 443

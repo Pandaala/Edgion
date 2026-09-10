@@ -5,7 +5,7 @@ metadata:
   name: tls-deny-all
   namespace: edgion-test
 spec:
-  plugins:
+  tlsRoutePlugins:
     - type: IpRestriction
       config:
         deny:

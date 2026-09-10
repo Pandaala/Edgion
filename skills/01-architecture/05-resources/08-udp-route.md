@@ -7,7 +7,10 @@ description: UDPRoute resource — L4 UDP routing, per-listener route table, cli
 
 > **Common flow**: see [00-resource-flow.md](00-resource-flow.md)
 
-UDPRoute defines L4 UDP-layer routing rules, forwarding UDP datagrams to backend Services. UDP itself is connectionless; in the client→backend direction the Gateway looks up the route per packet, and in the backend→client direction it maintains a per-client session.
+UDPRoute defines L4 UDP-layer routing rules, forwarding UDP datagrams to backend
+Services. UDP itself is connectionless, but the Gateway creates a per-client
+session: the first packet looks up the current route table and selects an upstream,
+while later packets reuse that pinned session in both directions.
 
 ## Source code locations
 
@@ -47,10 +50,14 @@ Produce a RouteParentStatus for each parentRef and set the Accepted and Resolved
 
 UDPRoute's ConfHandler compiles routes into `GlobalUdpRouteManagers`:
 
-1. **Route initialization**: call `initialize_route()` to validate and prepare the route data
+1. **Route compilation**: call `initialize_route()` to build the companion
+   `UdpRouteUnit`, including its backend selector
 2. **Per-listener management**: based on resolved_listeners, register into the route manager of the corresponding `ListenerKey`
 3. **Full / incremental updates**: full_set clears and rebuilds; partial_update collects affected listeners and rebuilds only those listeners
-4. **Data-plane model**: in client→backend direction, each packet independently loads the current route table and selects a backend; in backend→client direction, the per-client session is required to write the response back
+4. **Data-plane model**: a packet without an existing client session loads the
+   current route table, runs route/plugin/backend selection, and creates a session.
+   Established sessions bypass route lookup and keep using their pinned upstream;
+   the same session maps backend responses back to the client
 
 ### Data-plane sessions
 

@@ -1,6 +1,6 @@
 ---
 name: healthy-semantics-intentional-non-flips
-description: Use when reviewing LinkSys/AccessLogger DataSender::healthy() findings; documents which failure modes intentionally do NOT flip health (queue saturation, OTLP export) and the accepted disk-probe tradeoffs, so they are not re-flagged as I1/I5 violations.
+description: Use when reviewing LinkSys/AccessLogger queue saturation, TCP-probed OTLP health, and accepted disk-probe tradeoffs.
 status: accepted-tradeoff
 finding_id: linksys-health-04
 closed: 2026-06-16
@@ -11,7 +11,7 @@ knowledge_type: intentional-design
 
 ## Conclusion
 
-The unified `DataSender::healthy()` contract (task 04, `edgion-gateway/src/link_sys/runtime/data_sender.rs`) deliberately does **not** flip health for two failure modes, and accepts several bounded disk-probe imprecisions. These are design decisions, not bugs.
+The unified `DataSender::healthy()` contract (task 04, `edgion-gateway/src/link_sys/runtime/data_sender.rs`) deliberately does **not** flip health on queue saturation and accepts several bounded disk-probe imprecisions. OTLP health is now driven by a background TCP endpoint probe; export submission itself still provides no delivery acknowledgement.
 
 Fix suggestions of the form "queue-full must mark the sink unhealthy", "OTLP healthy is frozen `true`, that violates I1", "the 90% disk default drops all logs / is too aggressive", or "fix the `current_size` undercount after disk recovery" are **not accepted** as stated — see rules below.
 
@@ -21,9 +21,11 @@ Fix suggestions of the form "queue-full must mark the sink unhealthy", "OTLP hea
 
 `LocalFileWriter::send` (`providers/local_file/data_sender_impl.rs`) distinguishes `Full` (bounded write queue full → `record_drop` only, health unchanged) from `Disconnected` (writer thread dead → `store(false)`). A momentarily full queue means the consumer is briefly behind, not that the sink cannot deliver; flipping health on it would cause flapping under bursty load and conflicts with I5 (hot path stays non-blocking, fire-and-forget). Sustained-saturation handling (spill/replay) is **task 06**, not task 04. The drop is observable via `edgion_*_log_dropped_total`. Covered by `send_stays_healthy_when_queue_is_full`.
 
-**2. OTLP stays `true` after a successful `init`.**
+**2. OTLP endpoint health is probe-driven; export success remains unacknowledged.**
 
-`OtlpLogSender` uses `BatchLogProcessor::emit`, which is fire-and-forget and cannot observe export success/failure locally. There is no delivery-result signal to drive health from, so keeping `true` post-init avoids a regression. The real driver is a background endpoint probe in **task 05**; task 04 only makes the flag *reachable* via `health_handle() -> Arc<AtomicBool>` (the prior `set_healthy(&self)` plan was a dead hook through `Box<dyn DataSender>`). The `TODO(task 05)` in `otlp/log_sender.rs` records this. This is the documented bridge state, not a frozen-forever constant.
+`OtlpLogSender` uses `BatchLogProcessor::emit`, which is fire-and-forget and cannot observe export success/failure locally. `probe_otlp_endpoint` and the shared health-probe driver update the sender's `Arc<AtomicBool>` using TCP reachability. A successful connect does not prove TLS negotiation or OTLP export success. Startup traffic can be shed until the probe observes recovery; integration delivery assertions must establish readiness before counting a required batch.
+
+Historical scope: task 04 only exposed the health handle and temporarily left health true after init. The subsequent task-05 probe implementation supersedes that bridge-state description. The 2026-09-10 full integration run observed `link-sys recovered` after the collector started, and exposed the stale assumption in `run_otlp_test.sh`; this is not new acceptance of permanent healthy=true behavior.
 
 **3. Disk probe (LocalFile) accepted imprecisions.**
 
@@ -48,7 +50,7 @@ Fix suggestions of the form "queue-full must mark the sink unhealthy", "OTLP hea
 Re-open only if:
 
 - Task 06 (FailedCache / backpressure) lands and changes how queue saturation should surface in health.
-- Task 05 (background probes) lands — then OTLP/ES health is probe-driven and this OTLP note is superseded.
+- Endpoint probing or export acknowledgement changes. Task 05 has landed; its trigger already superseded the historical OTLP bridge state above.
 - Operators report real disk-threshold flapping (→ add hysteresis) or last-sink log loss surprises (→ revisit default).
 
 ## Reference Cases

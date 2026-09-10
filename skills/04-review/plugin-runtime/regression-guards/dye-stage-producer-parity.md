@@ -59,14 +59,20 @@ in both languages. Entry disable is inert; condition-skipped active entries keep
 anti-spoof stripping.
 
 Response aggregation and post-commit header rewriting were rejected. No new
-public dye capability is exposed. Existing integration files remain frozen.
-Three local-only historical named-jump fixtures subscribe to both reject and fallback while
-their policies permit only one; they are intentionally invalid under the approved
-strict contract. Their old outcome/anti-spoof integration assertions are therefore
-incompatible until [fixture alignment](../../../../tasks/todo/align-named-jump-dye-integration-subscriptions.md)
-is completed. Preserve those security assertions; do not grandfather unsupported
-subscriptions or describe the full integration suite as passing. No logging or
-metrics are added.
+public dye capability is exposed. At the D0083 implementation boundary, three
+frozen local-only named-jump fixtures still subscribed to both reject and fallback
+while their policies permitted only one. The user subsequently authorized fixing
+the failing integration tests. The fixture alignment and its preserved security
+assertions are recorded in
+[denied named jumps fail closed](../../routing/regression-guards/denied-named-jump-fails-closed.md).
+Unsupported subscriptions are not grandfathered. No logging or metrics are added.
+
+The 2026-09-10 fixture follow-up is now verified: all four actual named-jump
+plugin manifests pass resource validation and Gateway dye-plan compilation,
+and `EdgionPlugins_DynamicInternalUpstream` passes in the default integration
+sweep (`tmp/integration_testing/testing_20260910_154454/report.log`). The sweep
+has 237 passing report entries, no failures or timeouts; Build alone is skipped
+because canonical preparation ran separately. The fixture task is closed.
 
 ## Verification and re-evaluation
 
@@ -85,7 +91,7 @@ covering the real adapter's header rendering and sanitization paths.
 `cargo clippy --workspace --all-targets` passed (Clippy retains existing repository
 warnings). Agent-doc, SSA force, metrics inventory, and Pingora source-policy
 guards passed. Independent review returned LGTM. Full integration was not run;
-the frozen named-jump fixture incompatibility above remains explicitly tracked.
+the named-jump fixture incompatibility remained tracked at that time.
 
 Follow-up review found and corrected the session-refresh JWKS capability omission,
 invalid RegionRoute documentation examples, non-isolated collision test inputs,

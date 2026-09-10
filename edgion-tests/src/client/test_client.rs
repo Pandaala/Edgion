@@ -54,6 +54,7 @@ const EXPECTED_DYNAMIC_SCENARIO_IDS: &[&str] = &[
     "CanaryHotSwap",
     "DnsResolutionFlap",
     "TcpEspReload",
+    "TlsRoutePluginsReload",
     "GcParamsFlap",
     "TlsLastKnownGood",
     "WafDynamic",
@@ -754,7 +755,7 @@ mod capability_tests {
             if fixture_root.join(item).is_dir() {
                 checked += 1;
                 let suite = format!("EdgionPlugins/{item}");
-                if !load.contains(&suite) {
+                if !suite_is_preloaded(load, &suite) {
                     missing.push(suite);
                 }
             }
@@ -769,6 +770,22 @@ mod capability_tests {
              not preload:\n  {missing:?}\nFix: add each directory to the full EdgionPlugins \
              `suites` list in run_integration.sh."
         );
+    }
+
+    fn suite_is_preloaded(load: &str, suite: &str) -> bool {
+        load.split([',', '"', '\n'])
+            .filter(|entry| entry.starts_with("EdgionPlugins/"))
+            .any(|entry| suite == entry || suite.strip_prefix(entry).is_some_and(|suffix| suffix.starts_with('/')))
+    }
+
+    #[test]
+    fn suite_preload_requires_exact_directory_or_recursive_parent() {
+        let load = r#"suites="${base_suites},EdgionPlugins/DslBody,EdgionPlugins/PluginCondition""#;
+        assert!(suite_is_preloaded(load, "EdgionPlugins/DslBody"));
+        assert!(suite_is_preloaded(load, "EdgionPlugins/PluginCondition/AllConditions"));
+        assert!(!suite_is_preloaded(load, "EdgionPlugins/Dsl"));
+        assert!(!suite_is_preloaded(load, "EdgionPlugins/PluginConditionExtra"));
+        assert!(!suite_is_preloaded(load, "EdgionPlugins/Csrf"));
     }
 
     /// Every registered suite is actually executed by some runner path.
@@ -1477,6 +1494,7 @@ fn dynamic_port_contract(id: &str) -> Result<Option<(&'static str, port_config::
         "SpWeighted" => Some(("HTTPRoute/Backend/SessionPersistenceWeighted", PortKind::Http)),
         "DnsResolutionFlap" => Some(("HTTPRoute/Backend/DnsResolutionFlap", PortKind::Http)),
         "TcpEspReload" => Some(("TCPRoute/StreamPlugins/Dynamic", PortKind::Tcp)),
+        "TlsRoutePluginsReload" => Some(("TLSRoute/StreamPlugins", PortKind::Tls)),
         "TlsLastKnownGood" => Some(("EdgionTls/LastKnownGood", PortKind::Https)),
         // This scenario only inspects control-plane status and intentionally has
         // no data-plane listener.

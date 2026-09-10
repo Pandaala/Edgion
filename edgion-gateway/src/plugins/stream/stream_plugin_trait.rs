@@ -24,8 +24,6 @@ pub enum StreamLayer {
     Stage1,
     /// TCPRoute-level plugin execution.
     Tcp,
-    /// TLSRoute compatibility plugin execution.
-    Tls,
 }
 
 impl StreamLayer {
@@ -34,7 +32,6 @@ impl StreamLayer {
         match self {
             Self::Stage1 => "stage1",
             Self::Tcp => "tcp",
-            Self::Tls => "tls",
         }
     }
 }
@@ -90,8 +87,7 @@ impl StreamContext {
 }
 
 /// Connection-context plugin contract used at listener admission, during
-/// TCP/UDP route-owned lifecycles, and by the explicit legacy TLSRoute
-/// compatibility fallback. New TLS-route configurations use the separate
+/// TCP/UDP route-owned lifecycles. TLSRoute configurations use the separate
 /// [`crate::plugins::stream::TlsRoutePlugin`] contract.
 #[async_trait]
 pub trait StreamPlugin: Send + Sync {
@@ -110,6 +106,5 @@ mod tests {
     fn stream_layer_metric_labels_are_stable() {
         assert_eq!(StreamLayer::Stage1.as_metric_label(), "stage1");
         assert_eq!(StreamLayer::Tcp.as_metric_label(), "tcp");
-        assert_eq!(StreamLayer::Tls.as_metric_label(), "tls");
     }
 }

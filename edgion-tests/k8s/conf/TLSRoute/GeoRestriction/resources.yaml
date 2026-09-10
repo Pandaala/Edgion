@@ -32,6 +32,8 @@ kind: Gateway
 metadata:
   name: tls-geo-gw
   namespace: edgion-test
+  annotations:
+    edgion.io/edgion-stream-plugins: "tls-geo-deny"
 spec:
   gatewayClassName: public-gateway
   listeners:
@@ -66,8 +68,6 @@ kind: TLSRoute
 metadata:
   name: tls-geo-route
   namespace: edgion-test
-  annotations:
-    edgion.io/edgion-stream-plugins: "tls-geo-deny"
 spec:
   parentRefs:
     - name: tls-geo-gw

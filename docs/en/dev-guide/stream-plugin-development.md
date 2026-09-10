@@ -17,7 +17,7 @@ Compared with HTTP plugins, stream plugins focus on different problems:
 
 The most mature current implementation is IP restriction, with code under:
 
-- `src/core/gateway/plugins/stream/ip_restriction/`
+- `edgion-gateway/src/plugins/stream/ip_restriction/`
 
 ## The Current Two-Stage Model
 
@@ -40,8 +40,8 @@ Typical cases:
 
 Characteristics:
 
-- runs after TLS handshake and after `TLSRoute` matching
-- can see SNI, matched route identity, and mTLS status
+- runs after `TLSRoute` matching: after the handshake for Terminate, before forwarding the end-to-end handshake for Passthrough
+- sees SNI and matched route identity; negotiated TLS identity and mTLS status are available only for Terminate
 - best for policies that depend on TLS-specific context
 
 Typical cases:
@@ -49,32 +49,42 @@ Typical cases:
 - policies based on SNI or mTLS state
 - logic that should run only after a specific `TLSRoute` matches
 
-#### Compatibility Fallback to Stage 1
+#### TLSRoute stage contract
 
-`run_tls_route_plugins` (`src/core/gateway/routes/tls/mod.rs`) tries the Stage 2 runtime first. If the referenced `EdgionStreamPlugins` resource has an empty `tlsRoutePlugins` list — typically a legacy resource that only declares Stage 1 `plugins` — the runtime falls back to evaluating the Stage 1 (`ConnectionFilter`) policies at the TLS route level so that IP-restriction-style rules attached only to `plugins` still take effect.
+TLSRoute executes only `spec.tlsRoutePlugins`, in both Terminate and Passthrough modes.
+It never runs `spec.plugins` as a fallback.
 
-Operational notes:
+- An absent or null `tlsRoutePlugins` with a nonempty `plugins` list rejects the connection,
+  even if those Stage-1 entries are disabled or Bypass. This detects a wrong-stage attachment.
+- Explicit `tlsRoutePlugins: []`, or Stage-2 entries all disabled or Bypass, means no route-stage
+  policy. Both fields absent/empty also allow. A Stage-2 Block entry denies when enabled.
+- A referenced resource that is missing still rejects the connection.
+- Move TLSRoute IP restrictions from `plugins` to `tlsRoutePlugins`. For GeoIP or
+  ConnectionRateLimit, attach `plugins` to the Gateway listener; they are not Stage-2 plugins.
+  A shared resource may declare both fields, each consumed only by its own attachment stage.
+- Configuration updates affect new connections; established connections are not re-authorized.
+- TLS access-log diagnostics report `tls route plugin allowed` / `tls route plugin denied`,
+  or the missing-resource/wrong-stage error. No connection-path `tracing` or `(compat)` event is emitted.
 
-- The fallback is reported through the access log, not through `tracing`. Allowed connections record `stream plugin allowed (compat)`; denied connections set `ctx.err_log = "stream plugin denied (compat): <reason>"`. Grep the TLS access log (`tls.log`) for the `(compat)` suffix to confirm which stage ran.
-- The compat path is hot-path silent on purpose; no `tracing::*` event is emitted when it activates, in line with the "zero tracing on the data plane" rule (`skills/03-coding/01-log-safety.md` Iron Rule 3).
-- **Silent-stop hazard on upgrade**: if you later extend an existing `EdgionStreamPlugins` resource by adding a `tlsRoutePlugins` entry, the Stage 1 compat fallback will silently stop running at TLS route level on the next hot reload — Stage 2 takes precedence and the legacy `plugins` list is no longer consulted from `run_tls_route_plugins`. Plan the migration accordingly: either replicate the policy under `tlsRoutePlugins` before adding the first Stage 2 entry, or accept the behaviour change and verify against tcp.log / tls.log after reload.
+For an intentional no-op route stage on a resource that also has connection policies, declare
+`tlsRoutePlugins: []` explicitly; do not use it when the route is meant to enforce an IP policy.
 
 ## Key Architecture Path
 
 ```mermaid
 graph TD
     A["EdgionStreamPlugins YAML"] --> B["Rust resource type"]
-    B --> C["ResourceMeta pre-parse"]
+    B --> C["Serializable stage configuration"]
     C --> D["Controller ProcessorHandler"]
     D --> E["Config sync to Gateway"]
-    E --> F["StreamPluginStore"]
+    E --> F["StreamPluginStore compile and publish"]
     F --> G["Gateway / TCPRoute / TLSRoute annotation binding"]
     G --> H["Stage 1 ConnectionFilter or Stage 2 TlsRoute runtime"]
 ```
 
 The usual failure is not “forgot to implement a trait.” It is one of the middle segments:
 
-- `ResourceMeta` pre-parse did not initialize the runtime
+- Gateway `compile_stream_plugins` did not construct the selected stage
 - Gateway did not actually cache and hot-reload `EdgionStreamPlugins`
 - the `Gateway` / `TCPRoute` / `TLSRoute` annotation path never reached the runtime
 
@@ -89,14 +99,14 @@ When adding or extending a stream plugin, start with:
 
 These currently own:
 
-- the CRD structure, status, and runtime fields
+- the CRD structure, status, and serializable stage entries
 - the Stage 1 plugin enum
 - the Stage 2 plugin enum
-- runtime initialization during resource pre-processing
+- schema-level resource metadata behavior
 
 One important fact:
 
-- runtime initialization currently happens in `ResourceMeta` pre-parse, not as an ad hoc controller-handler step
+- Gateway `StreamPluginStore` calls `compile_stream_plugins` to build both runtimes before publishing an immutable generation; the Controller transports configuration, not runtime objects
 
 So changing only the handler is not enough. Gateway may receive the resource but still miss an executable runtime.
 
@@ -104,12 +114,12 @@ So changing only the handler is not enough. Gateway may receive the resource but
 
 The most important Gateway-side files are:
 
-- `src/core/gateway/plugins/stream/stream_plugin_trait.rs`
-- `src/core/gateway/plugins/stream/stream_plugin_runtime.rs`
-- `src/core/gateway/plugins/stream/stream_plugin_store.rs`
-- `src/core/gateway/runtime/server/listener_builder.rs`
-- `src/core/gateway/routes/tcp/conf_handler_impl.rs`
-- `src/core/gateway/routes/tls/proxy.rs`
+- `edgion-gateway/src/plugins/stream/stream_plugin_trait.rs`
+- `edgion-gateway/src/plugins/stream/stream_plugin_runtime.rs`
+- `edgion-gateway/src/plugins/stream/stream_plugin_store.rs`
+- `edgion-gateway/src/runtime/server/listener_builder.rs`
+- `edgion-gateway/src/routes/tcp/conf_handler_impl.rs`
+- `edgion-gateway/src/routes/tls/proxy.rs`
 
 A simple mental model:
 
@@ -148,7 +158,7 @@ and reference shared `EdgionConfigData` through its existing authorization contr
 2. Decide whether the config can reuse an existing type instead of duplicating nearly identical schema.
 3. Add the new type to `EdgionStreamPlugin` or `TlsRouteStreamPlugin`.
 4. Register runtime construction in the matching runtime module.
-5. Confirm `ResourceMeta` pre-parse initializes the runtime.
+5. Confirm Gateway `compile_stream_plugins` constructs the selected stage before publication.
 6. Confirm the referencing `Gateway` / `TCPRoute` / `TLSRoute` really resolves a store key.
 7. Add tests and example YAML last.
 
@@ -163,7 +173,7 @@ At minimum, cover three layers.
 ### 1. Resource Layer
 
 - controller accepts the resource and writes the expected status
-- runtime fields are rebuilt correctly after updates
+- Gateway recompiles both stage runtimes before publishing updates
 
 ### 2. Reference Layer
 

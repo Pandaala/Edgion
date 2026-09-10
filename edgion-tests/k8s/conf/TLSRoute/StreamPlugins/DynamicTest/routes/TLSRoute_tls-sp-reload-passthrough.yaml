@@ -1,0 +1,19 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: TLSRoute
+metadata:
+  name: tls-sp-reload-passthrough
+  namespace: edgion-test
+  annotations:
+    edgion.io/edgion-stream-plugins: "tls-sp-reload"
+spec:
+  parentRefs:
+    - name: tls-route-passthrough-gw
+      namespace: edgion-test
+      sectionName: tls-passthrough
+  hostnames:
+    - "reload.sandbox.example.com"
+  rules:
+    - backendRefs:
+        - name: test-https-backend
+          port: 30051
+          weight: 100

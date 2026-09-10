@@ -35,7 +35,7 @@ These entries are backlinks only. A linked `tasks/todo` file is the editable sou
 | D0029 — Add Redis TokenBucket partial-refill integration coverage | needs-implementation | [campaign finding](D0029-redis-token-bucket-partial-refill-integration.md) |
 | D0030 — Retain EdgionPlugins last-known-good only for the same resource identity | needs-discussion | [campaign finding](D0030-edgionplugins-last-known-good-resource-identity.md) |
 | D0031 — Add EdgionPlugins LKG identity integration coverage | closed (2026-09-05) | [review rule](../../../../skills/04-review/testing/intentional-design/edgionplugins-lkg-identity-coverage-not-standalone.md) |
-| D0033 — Refresh AllEndpointStatus outbound-header review knowledge | needs-implementation | [campaign finding](D0033-all-endpoint-status-review-knowledge.md) |
+| D0033 — Refresh AllEndpointStatus outbound-header review knowledge | resolved | [campaign finding](D0033-all-endpoint-status-review-knowledge.md) |
 | D0034 — Fail closed on denied L7 named jumps | resolved | [campaign finding](D0034-l7-named-jump-denied-reference.md) |
 | D0035 — Add borrowed Authorization header access | needs-discussion | [campaign finding](D0035-auth-borrowed-authorization-header.md) |
 | D0036 — Audit auth credential-copy lifetimes | needs-discussion | [campaign finding](D0036-auth-credential-copy-lifetime-audit.md) |
@@ -84,14 +84,14 @@ These entries are backlinks only. A linked `tasks/todo` file is the editable sou
 | D0090 — Complete Gateway API header-modifier validation and preparation parity | needs-implementation | [campaign finding](D0090-gateway-api-header-modifier-validation-preparation-parity.md) |
 | D0091 — Unify proxied request-header mutation and framing policy | needs-discussion | [campaign finding](D0091-proxied-request-header-mutation-framing-policy.md) |
 | D0092 — Complete Gateway API request-transform validation and preparation parity | needs-implementation | [campaign finding](D0092-gateway-api-request-transform-validation-preparation-parity.md) |
-| D0093 — Correct Gateway API RequestRedirect documentation | needs-implementation | [campaign finding](D0093-correct-gateway-api-request-redirect-documentation.md) |
+| D0093 — Correct Gateway API RequestRedirect documentation | retired externally in 78a25c3a | [campaign finding](D0093-correct-gateway-api-request-redirect-documentation.md) |
 | D0094 — Reject DSL builtin calls beyond bytecode argument capacity | needs-implementation | [campaign finding](D0094-dsl-builtin-argument-count-encoding.md) |
 | D0095 — Investigate plugin policy and invalid-generation retention | needs-investigation | [campaign finding](D0095-plugin-policy-invalid-generation-retention.md) |
 | Precompile backend port resolution and fail closed on missing mappings | fixed (2026-09-08) | [resolution](../../../../skills/04-review/backends/regression-guards/named-port-resolve-against-originating-slice.md) |
 | Fail closed on invalid Gateway BackendTLSPolicy candidates | completed | [architecture](../../../../skills/01-architecture/02-gateway/07-backends.md) |
 | Make BackendTLSPolicy publication truly incremental | pending | [task](../../../todo/backend-tls-policy-true-incremental-publication.md) |
 | Promote BackendTLSPolicy handling atomically to v1 only | resolved externally in `5cd384c6` | [maintained knowledge](../../../../skills/04-review/controller/regression-guards/backend-tls-policy-canonical-api-ingress.md) |
-| Publish Service backend traffic policy through one immutable snapshot | pending | [task](../../../todo/backend-traffic-policy-atomic-service-snapshot.md) |
+| Publish Service backend traffic policy through one immutable snapshot | completed | [review rule](../../../../skills/04-review/backends/regression-guards/ebtp-atomic-service-snapshot.md) |
 | Conf-Sync certificate watch content signature | accepted-tradeoff | [review rule](../../../../skills/04-review/conf-sync/intentional-design/conf-sync-cert-watch-mtime-length-signature.md) |
 | Conf-Sync generic watch malformed event recovery | pending | [task](../../../todo/conf-sync-generic-watch-malformed-event-recovery.md) |
 | Conf-Sync rotation transactional address selection | pending | [task](../../../todo/conf-sync-rotation-transactional-address-selection.md) |
@@ -112,7 +112,7 @@ These entries are backlinks only. A linked `tasks/todo` file is the editable sou
 | Define the Redis rate-limiter numeric domain | pending | [task](../../../todo/define-redis-rate-limiter-numeric-domain/define-redis-rate-limiter-numeric-domain.md) |
 | Add Redis TokenBucket partial-refill integration coverage | pending | [task](../../../todo/add-redis-token-bucket-partial-refill-integration-coverage.md) |
 | Retain EdgionPlugins last-known-good only for the same resource identity | needs-discussion | [campaign finding](D0030-edgionplugins-last-known-good-resource-identity.md) |
-| Refresh AllEndpointStatus outbound-header review knowledge | pending | [task](../../../todo/refresh-all-endpoint-status-header-review-records.md) |
+| Refresh AllEndpointStatus outbound-header review knowledge | completed | [campaign finding](D0033-all-endpoint-status-review-knowledge.md) |
 | Fail closed on denied L7 named jumps | completed | [review rule](../../../../skills/04-review/routing/regression-guards/denied-named-jump-fails-closed.md) |
 | Add denied named-jump integration coverage | pending | [task](../../../todo/add-denied-named-jump-integration-coverage.md) |
 | Add borrowed Authorization header access | pending | [task](../../../todo/add-borrowed-authorization-header-access.md) |
@@ -145,16 +145,16 @@ These entries are backlinks only. A linked `tasks/todo` file is the editable sou
 | Verify RegionRoute validation across hot reload and management APIs | resolved externally in `2c01a075` | [maintained knowledge](../../../../skills/04-review/routing/regression-guards/region-route-effective-table-validation.md) |
 | Isolate RequestMirror unit tests from the network | pending | [task](../../../todo/isolate-request-mirror-unit-tests-from-network.md) |
 | Unify response-header mutation policy | pending | [task](../../../todo/unify-response-header-mutation-policy.md) |
-| Correct TraceContext documentation semantics | pending | [task](../../../todo/correct-trace-context-documentation-semantics.md) |
+| Correct TraceContext documentation semantics | retired externally | Task removed by user-synchronized `78a25c3a`; history retained in Git. |
 | Enforce TraceContext attachment cardinality | pending | [task](../../../todo/enforce-trace-context-attachment-cardinality.md) |
 | Reduce WAF header materialization | pending | [task](../../../todo/reduce-waf-header-materialization.md) |
 | Bound outbound HTTP/2 response header lists | pending | [task](../../../todo/bound-outbound-http2-response-header-lists.md) |
-| Isolate Wasm host panics at VM boundaries | completed | [task](../../../todo/isolate-wasm-host-panics-at-vm-boundaries.md) |
+| Isolate Wasm host panics at VM boundaries | completed | [campaign finding](D0073-wasm-host-panic-isolation.md) |
 | Offload Wasm OCI manifest parsing and archive extraction (D0075) | completed externally in 256733d7 | [maintained knowledge](../../../../skills/04-review/wasm/intentional-design/bounded-oci-artifact-memory-cache.md#manifest-and-archive-cpu-boundary-d0075) |
 | Fix Wasm shared-data gauge generation identity and lifecycle | pending | [task](../../../todo/wasm-shared-data-gauge-generation-lifecycle.md) |
 | Redact and bound Wasm URL source identity | pending | [task](../../../todo/wasm-source-url-label-and-error-redaction.md) |
 | Emit bounded diagnostics for outbound warnIfMissing fields | pending | [task](../../../todo/outbound-warn-if-missing-diagnostics.md) |
-| Correct PluginRuntime architecture documentation | pending | [task](../../../todo/correct-plugin-runtime-architecture-documentation.md) |
+| Correct PluginRuntime architecture documentation | retired externally | Task removed by user-synchronized `78a25c3a`; history retained in Git. |
 | Reduce per-chunk response-body condition extraction cost | pending | [task](../../../todo/reduce-response-body-condition-extraction-cost.md) |
 | Fail closed on plugin IP matcher limit violations | pending | [task](../../../todo/fail-closed-plugin-ip-matcher-limit-violations.md) |
 | Fail closed on invalid AiGuard/AiProxy ordering | pending | [task](../../../todo/fail-closed-ai-guard-proxy-order-violations.md) |
@@ -166,11 +166,11 @@ These entries are backlinks only. A linked `tasks/todo` file is the editable sou
 | Complete Gateway API header-modifier validation and preparation parity | pending | [task](../../../todo/complete-gateway-api-header-modifier-validation-and-preparation-parity.md) |
 | Unify proxied request-header mutation and framing policy | pending | [task](../../../todo/unify-proxied-request-header-mutation-and-framing-policy.md) |
 | Complete Gateway API request-transform validation and preparation parity | pending | [task](../../../todo/complete-gateway-api-request-transform-validation-and-preparation-parity.md) |
-| Correct Gateway API RequestRedirect documentation | pending | [task](../../../todo/correct-gateway-api-request-redirect-documentation.md) |
+| Correct Gateway API RequestRedirect documentation | retired externally | Task removed by user-synchronized `78a25c3a`; history retained in Git. |
 | Reject DSL builtin calls beyond bytecode argument capacity | pending | [task](../../../todo/reject-dsl-builtin-calls-beyond-argument-capacity.md) |
 | Investigate plugin policy and invalid-generation retention | pending | [task](../../../todo/investigate-plugin-policy-invalid-generation-retention.md) |
-| Align upstream response stage documentation | pending | [task](../../../todo/align-upstream-response-stage-documentation.md) |
-| Align response-body filter terminal documentation | pending | [task](../../../todo/align-response-body-filter-terminal-documentation.md) |
+| Align upstream response stage documentation | retired externally | Task removed by user-synchronized `78a25c3a`; history retained in Git. |
+| Align response-body filter terminal documentation | retired externally | Task removed by user-synchronized `78a25c3a`; history retained in Git. |
 | Avoid Wasm response in-flight cache-key allocation | pending | [task](../../../todo/avoid-wasm-response-inflight-cache-key-allocation.md) |
 | Unify terminal local-reply status validation | pending | [task](../../../todo/unify-terminal-local-reply-status-validation.md) |
 | Add native WAF response-stage invalid-status integration coverage | resolved (2026-09-09) | [maintained knowledge](../../../../skills/04-review/http-body/regression-guards/response-stage-denial-must-terminate.md) |
@@ -180,12 +180,12 @@ These entries are backlinks only. A linked `tasks/todo` file is the editable sou
 | Clarify redirect connection policy | pending | [task](../../../todo/clarify-redirect-connection-policy.md) |
 | Add session cookie field integration coverage | resolved (2026-09-09) | [maintained knowledge](../../../../skills/04-review/routing/regression-guards/session-persistence-token-extraction.md) |
 | Add L4 duplex backpressure integration coverage | resolved (2026-09-09) | [maintained knowledge](../../../../skills/04-review/routing/regression-guards/l4-duplex-relay-centralization.md) |
-| Reconcile TLSRoute version guidance | pending | [task](../../../todo/reconcile-tlsroute-version-guidance.md) |
-| Reconcile route architecture ownership and rebuild documentation | pending | [task](../../../todo/route-architecture-manager-cache-documentation.md) |
+| Reconcile TLSRoute version guidance | retired externally | Task removed by user-synchronized `78a25c3a`; history retained in Git. |
+| Reconcile route architecture ownership and rebuild documentation | retired externally | Task removed by user-synchronized `78a25c3a`; history retained in Git. |
 | Pre-resolve L4 listener timeouts | pending | [task](../../../todo/pre-resolve-l4-listener-timeouts.md) |
-| Refresh L4 connect-timeout knowledge | pending | [task](../../../todo/refresh-l4-connect-timeout-knowledge.md) |
+| Refresh L4 connect-timeout knowledge | retired externally | Task removed by user-synchronized `78a25c3a`; history retained in Git. |
 | Scope TLSRoute effective hostnames to attachments | pending (high) | [task](../../../todo/scope-tlsroute-effective-hostnames-to-attachments.md) |
-| Remove TLSRoute Stage-1 fallback coherently | pending | [task](../../../todo/remove-tlsroute-stage1-fallback-coherently.md) |
+| Remove TLSRoute Stage-1 fallback coherently | resolved (2026-09-10) | [maintained knowledge](../../../../skills/04-review/tls/regression-guards/tls-route-stage-isolation.md) |
 | Apply sensitive mode to TLS log surfaces | pending | [task](../../../todo/apply-sensitive-mode-to-tls-log-surfaces.md) |
 | Investigate TLS setup write deadlines | needs-investigation | [task](../../../todo/investigate-tls-setup-write-deadlines.md) |
 | Add malformed ClientHello passthrough coverage (D0118) | pending | [task](../../../todo/add-malformed-clienthello-passthrough-coverage.md) |
@@ -194,7 +194,7 @@ These entries are backlinks only. A linked `tasks/todo` file is the editable sou
 | Validate UDP upstream response source (D0121) | pending | [task](../../../todo/validate-udp-upstream-response-source.md) |
 | Wire UDP listener process shutdown (D0122) | pending | [task](../../../todo/wire-udp-listener-process-shutdown.md) |
 | Replace Gateway generations on coalesced add (D0123) | pending | [task](../../../todo/replace-gateway-generations-on-coalesced-add.md) |
-| Reconcile Gateway frontend TLS knowledge (D0124) | pending | [task](../../../todo/reconcile-gateway-frontend-tls-knowledge.md) |
+| Reconcile Gateway frontend TLS knowledge (D0124) | retired externally | Task removed by user-synchronized `78a25c3a`; history retained in Git. |
 | Investigate Gateway TLS collision retention (D0125) | needs-investigation | [task](../../../todo/investigate-gateway-tls-collision-snapshot-retention.md) |
 | Enforce canonical gRPC terminal status headers (D0126) | pending | [task](../../../todo/enforce-canonical-grpc-terminal-status-headers.md) |
 | Reject empty individual outbound CA bundles (D0127) | pending | [task](../../../todo/reject-empty-individual-outbound-ca-bundles.md) |
@@ -214,3 +214,7 @@ These entries are backlinks only. A linked `tasks/todo` file is the editable sou
 | Add DSL response-stage async HTTP-call timeout integration coverage (D0139) | pending | [task](../../../todo/add-dsl-response-stage-http-call-timeout-integration-coverage.md) |
 | Isolate remaining sensitive-mode Gateway tests (D0140) | pending | [task](../../../todo/isolate-remaining-sensitive-mode-gateway-tests.md) |
 | Enforce DSL Trim output string limits (D0141) | pending | [task](../../../todo/enforce-dsl-trim-output-string-limit.md) |
+| Remove TLSRoute v1alpha3 API fallback (D0142) | pending | [task](../../../todo/remove-tlsroute-v1alpha3-fallback.md) |
+| Clarify DSL request-method casing (D0143) | needs-investigation | [task](../../../todo/clarify-dsl-request-method-case-contract.md) |
+| Correct response snapshot documentation (D0144) | pending | [task](../../../todo/correct-response-body-admission-snapshot-documentation.md) |
+| Isolate DSL sandbox unit tests from network (D0145) | pending | [task](../../../todo/isolate-dsl-sandbox-unit-tests-from-network.md) |

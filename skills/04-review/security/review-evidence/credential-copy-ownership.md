@@ -64,7 +64,7 @@ resolvers under `edgion-resources/src/credentials` were inspected, including DNS
 | --- | --- | --- |
 | BasicAuth | Borrow Secret UTF-8 then own trimmed fields; runtime clone takes raw users into prepared hashes; decoded password reuses String backing, separate username | Input config independent; request owns decoder output; `spawn_blocking` owns password and pinned user map until completion despite awaiter cancellation. Seen-map identity duplicates remain optional optimization |
 | HMAC and shared conditions | Borrow YAML bytes; parser Value tree then final username/secret/metadata; immutable runtime Arc map | Per-entry/Secret parser locals drop; source config and verifier generations independent. HMAC state derives from borrowed key. Removing runtime map clone requires ownership redesign |
-| KeyAuth | Borrow YAML bytes; typed parser map then configured metadata; runtime consumes raw keys into hashes | Request KeyGet String survives current filter/failure delay; future drop releases it. Parser field/seen-map duplication remains optional optimization |
+| KeyAuth | Borrow YAML bytes; move the selected key and allowed metadata out of each typed parser entry; the result map also owns first-wins detection; runtime consumes raw keys into hashes | No separate parser field clones or seen-map key copies. Source Secret/config owners remain independent. Request KeyGet String survives current filter/failure delay; future drop releases it |
 | JWT | Borrow/trim Secret bytes once into final fields; constructor consumes group maps and creates DecodingKey | Unverified iss routing and verified claims are distinct; tokens/claims/request header copies drop with owners. Per-issuer serialized duplication and KeyGet/header ownership redesign remain tracked |
 | OIDC | Final owned client/session secret, prepared TLS/cipher; refresh access/id token fields move into cookie; response and cookie DTOs remain owned | Forms/HTTP/decoded cookie/token values release with futures/requests. Access-token and refresh-result LRU TTLs bound validity, not destruction; lazy expired get/prune/eviction/clear/drop releases. TinyUFO expired lookup does not remove entries |
 | LDAP | Decoded String with username/password ranges; separate bind DN; prepared TLS and SDK bind buffers | Request-local values release on future drop; timeout does not guarantee detached driver/SDK teardown. Unbind and driver have separate completion boundaries |
@@ -112,6 +112,51 @@ Sensitive header provenance is recorded in the
   by the ownership audit and subsequently corrected at the DNS
   provider diagnostic boundary; see the [ACME DNS error redaction guard](../../acme/superseded/dns01-retired.md)
   for the separate correction, verification, and remaining cleanup limits.
+
+## KeyAuth parser ownership follow-up
+
+`auth-credential-ownership-followups` (D0036 follow-up), KeyAuth parser boundary:
+**change** approved as a low-priority copy reduction. The Controller's
+`handlers/plugins/resolve_credential/key_auth.rs::resolve_group` removes the
+configured `key_field` from each owned YAML entry and consumes allowed metadata
+into `KeyMetadata.headers`. `first_wins_insert` uses the result map's entry API;
+an occupied entry lends `KeyMetadata.group` to the unchanged duplicate warning.
+The [first-wins rule](../../key-auth/mandatory-design/dup-key-first-wins.md) remains
+the authority for duplicate handling and credential-free diagnostics.
+
+| Owner | Purpose and change | Release event and remaining owners |
+| --- | --- | --- |
+| Parsed YAML entry | Owns decoded strings; selected key and allowed fields move instead of being cloned | Rejected fields and missing-key entries drop during consumption; remaining list entries await their iteration |
+| Former `seen` map | Duplicated every accepted raw key and group solely for duplicate detection; removed | No separate buffer to retain until the end of this resolution pass |
+| `all_keys` / `KeyAuthConfig.resolved_keys` | One result map owns accepted keys and metadata, and supplies duplicate detection | Publication transfers the map into the config; independent source/config/sync generations follow their own last owners |
+
+This removes an O(total accepted key bytes) temporary owner and transient field
+copies from configuration parsing. It does not affect Gateway request work,
+redesign shared configuration, wipe freed memory, or establish a destruction
+deadline. Original Secret snapshots, serialized resources and Gateway source
+configurations remain independent. Header-map allocation is still required;
+this is not an allocation-free parser or a measured performance claim.
+
+The focused resolver tests cover distinct keys, first-wins group reporting,
+metadata retention, custom key selection (including its exclusion from forwarded
+metadata), preserved whitespace/empty-key parsing behavior, safe duplicate warnings,
+Secret reference registration, and replacement/removal on re-resolution. This is
+an in-process resolver regression, not a live watch or end-to-end hot-reload test.
+Fresh focused execution passed: `cargo test -p edgion-controller --lib`
+with filters `resolve_credential::key_auth::tests` (3 tests),
+`parse_clears_injected_auth_credentials` (2 tests), and
+`credential_parse_warnings_omit_yaml_scalars_and_jwt_identities` (1 test).
+Independent read-only review returned LGTM. `cargo fmt --all`,
+`cargo check --workspace --all-targets`, `cargo clippy --workspace --all-targets`,
+SSA-force, metrics-inventory, Pingora-source-policy, and `git diff --check` passed.
+Clippy emitted existing warnings outside the changed file; this is not a
+warning-free workspace result. Agent-doc validation remains blocked on rerun
+by three pre-existing links to the missing
+`tasks/todo/remove-tlsroute-v1alpha3-fallback.md` in the Gateway API architecture,
+TLSRoute feature page, and feature index. This unrelated task is not reconstructed
+by the KeyAuth change. Re-evaluate if parser shapes,
+duplicate policy, metadata selection, or result-map ownership changes. BasicAuth,
+HMAC, JWT, managed credentials, TLS and ACME candidates remain in the linked task.
 
 ## Zeroization decision
 

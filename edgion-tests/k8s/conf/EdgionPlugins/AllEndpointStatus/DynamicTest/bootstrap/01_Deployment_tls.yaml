@@ -1,0 +1,57 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: aes-tls-dynamic-tls
+  namespace: edgion-test
+  labels:
+    app: aes-tls-dynamic
+    role: tls
+    edgion.io/test-server-image: "true"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: aes-tls-dynamic
+      role: tls
+  template:
+    metadata:
+      labels:
+        app: aes-tls-dynamic
+        role: tls
+        endpoint-set-tls: "true"
+        edgion.io/test-server-image: "true"
+    spec:
+      containers:
+        - name: test-server
+          image: docker.io/pandaala/edgion-test-server:v0.1.1
+          imagePullPolicy: IfNotPresent
+          command: ["/usr/local/bin/test_server"]
+          args:
+            - --http-ports=30001
+            - --https-backend-port=30051
+            - --cert-file=/etc/edgion/backend-tls/tls.crt
+            - --key-file=/etc/edgion/backend-tls/tls.key
+            - --client-ca-file=/etc/edgion/client-ca/ca.crt
+          ports:
+            - name: health
+              containerPort: 30001
+            - name: https
+              containerPort: 30051
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: health
+          volumeMounts:
+            - name: backend-tls
+              mountPath: /etc/edgion/backend-tls
+              readOnly: true
+            - name: client-ca
+              mountPath: /etc/edgion/client-ca
+              readOnly: true
+      volumes:
+        - name: backend-tls
+          secret:
+            secretName: backend-server-tls
+        - name: client-ca
+          secret:
+            secretName: client-ca

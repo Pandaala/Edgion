@@ -5,7 +5,7 @@ metadata:
   name: tls-allow-localhost
   namespace: edgion-test
 spec:
-  plugins:
+  tlsRoutePlugins:
     - type: IpRestriction
       config:
         defaultAction: allow

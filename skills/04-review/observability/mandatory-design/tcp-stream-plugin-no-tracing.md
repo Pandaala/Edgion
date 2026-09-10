@@ -49,15 +49,14 @@ owner determines the execution point. Current source boundaries are:
   creation, and logs a failure with the same bounded reason. Existing sessions
   bypass the check; denied datagrams create no session and may be counted again
   on subsequent attempts. The metric label remains `tcp`, not `udp`.
-- `routes/tls/mod.rs::run_tls_route_plugins` uses `StreamLayer::Tls` only in the
-  compatibility fallback when `tls_route_plugin_runtime` is empty. A nonempty
-  TLS route runtime takes precedence. GeoIP is not a `tlsRoutePlugins` variant.
-  The fallback masks `geo:deny:*` to `stream plugin denied (compat)` in the
-  canonical TLS log; see [the TLS rule](tls-route-fallback-no-tracing.md).
+- TLSRoute dispatch uses only `tls_route_plugin_runtime`; GeoIP is not a
+  `tlsRoutePlugins` variant. TLS GeoIP enforcement belongs to the Gateway's
+  Stage-1 listener attachment. The former fallback and its `StreamLayer::Tls`
+  label were removed; see [the TLS rule](tls-route-plugin-access-log.md).
 
 `StreamContext.direct_peer_ip` is the physical transport peer at all these
 sites, not the PROXY-resolved `RemoteIp`. `StreamContext.layer` maps to the closed
-`stage1`/`tcp`/`tls` label set in `stream_plugin_trait.rs`; none is a future-only
+`stage1`/`tcp` label set in `stream_plugin_trait.rs`; neither is a future-only
 reservation. Protocol log records retain their standard peer fields, subject to
 log configuration, but contain neither GeoIP facts nor sensitive GeoIP reasons.
 Stream plugins never populate the HTTP access-log `geo` block.
@@ -68,19 +67,15 @@ D0102 / `align-bilingual-geoip-stream-lifecycle-documentation` corrects those de
 including the metric table and troubleshooting, without changing runtime behavior
 or the general metrics inventory. The independent no-tracing invariant remains
 grounded in `skills/03-coding/01-log-safety.md`, not in the stale guide wording.
-The TLS fallback's old inline comment still claims all GeoIP denials are log-free;
-that wording is stale. Its actual `ctx.err_log` assignment preserves a generic
-denial record. This documentation-only correction does not edit runtime source.
+Historical TLS fallback descriptions applied before its coordinated removal.
+The former generic denial log and obsolete inline comment no longer exist.
 
-Source and fixture inspection on 2026-09-10 confirms the boundaries above. The
-frozen `TCPRoute/GeoRestriction/03_TCPRoute.yaml` and
-`TLSRoute/GeoRestriction/04_TLSRoute.yaml` fixtures attach ESP directly to routes;
-their client suites exercise route denials. This is not a fresh integration run
-or UDP live-test evidence. Re-evaluate when attachment resolution, session reuse,
-TLS runtime precedence, direct-peer provenance, metric labels, or log masking changes.
-No integration fixtures or runtime sources were modified for this documentation
-correction, and no integration suite was run. Source and fixture inspection
-establish the documented wiring, not fresh runtime verification.
+The original 2026-09-10 documentation audit inspected route-owned TCP and TLS
+fixtures without running integration tests. The later TLS stage-isolation change
+moved TLS GeoIP enforcement to the Gateway listener; TCP remains route-owned.
+See [TLS stage isolation](../../tls/regression-guards/tls-route-stage-isolation.md)
+for that change's verification. Re-evaluate when attachment resolution, session
+reuse, direct-peer provenance, metric labels, or log masking changes.
 
 ## Decision Rule
 

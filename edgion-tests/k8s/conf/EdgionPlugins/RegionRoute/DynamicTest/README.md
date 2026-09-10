@@ -1,8 +1,9 @@
 # RegionRoute validation over hot reload and management HTTP
 
 `RegionRouteValidation` covers the D0065 integration follow-up using the shared
-Controller, Gateway, and test_server. Load `base,HTTPRoute/Basic,EdgionPlugins/base`
-before running (the Basic fixtures supply `test-http` and its EndpointSlice):
+Controller, Gateway, and test_server. The Kubernetes fixture routes use the
+deployment-owned `edgion-test-server` Service, so selective dynamic runs do not
+depend on the static `HTTPRoute/Basic` fixture:
 
 ```bash
 target/debug/test_client -g --dynamic-scenario RegionRouteValidation

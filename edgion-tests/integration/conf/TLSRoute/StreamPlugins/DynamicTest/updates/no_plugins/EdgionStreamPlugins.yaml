@@ -1,0 +1,7 @@
+apiVersion: edgion.io/v1
+kind: EdgionStreamPlugins
+metadata:
+  name: tls-sp-reload
+  namespace: edgion-test
+spec:
+  plugins: []

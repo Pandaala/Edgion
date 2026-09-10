@@ -111,6 +111,7 @@ async fn run(ctx: &TestContext) -> Result<()> {
         let name = fixture["metadata"]["name"].as_str().context("fixture name")?;
         let processed = helpers::wait_resource_status(ctx, kind, ns, name, Duration::from_secs(15), |resource| {
             resource["metadata"]["name"] == name
+                && (kind != "EdgionPlugins" || helpers::has_condition(resource, "Accepted", "True"))
         })
         .await
         .map_err(anyhow::Error::msg)
@@ -164,6 +165,46 @@ async fn run(ctx: &TestContext) -> Result<()> {
     // sibling remains present with weight zero, so a silent fallback is visible.
     check_case(ctx, "weighted-denied", DENIED, 500, None, None).await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::FIXTURES;
+    use edgion_gateway::plugins::http::compile_plugins;
+    use edgion_resources::resources::EdgionPlugins;
+    use serde_json::Value;
+
+    #[test]
+    fn named_jump_fixtures_validate_and_compile_dye_plans() {
+        let mut checked = 0;
+        for yaml in FIXTURES {
+            let fixture: Value = serde_yaml::from_str(yaml).expect("valid fixture YAML");
+            if fixture["kind"] != "EdgionPlugins" {
+                continue;
+            }
+            let plugin: EdgionPlugins = serde_yaml::from_str(yaml).expect("valid plugin resource");
+            let name = plugin.metadata.name.as_deref().expect("fixture name");
+            let errors = plugin.validate_plugins();
+            assert!(errors.is_empty(), "{name}: resource validation failed: {errors:?}");
+            let compiled = compile_plugins(&plugin);
+            assert!(
+                compiled.preparse_errors.is_empty(),
+                "{name}: Gateway compilation failed: {:?}",
+                compiled.preparse_errors
+            );
+            assert!(compiled.is_activatable, "{name}: plugin must activate");
+            assert_eq!(compiled.plugin_runtime.request_plugins_count(), 1, "{name}");
+            assert!(
+                compiled
+                    .plugin_runtime
+                    .request_plugins_iter()
+                    .all(|entry| entry.dye_plan().is_some()),
+                "{name}: compiled request entry must retain its dye plan"
+            );
+            checked += 1;
+        }
+        assert_eq!(checked, 4, "validate every named-jump plugin fixture");
+    }
 }
 
 async fn wait_gateway_resource(ctx: &TestContext, kind: &str, ns: &str, name: &str, expected: &Value) -> Result<()> {

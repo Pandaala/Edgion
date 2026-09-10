@@ -32,19 +32,19 @@ This pipeline is more than "write a trait".
 The current real path in this repo is:
 
 1. Define the `EdgionStreamPlugins` resource structure.
-2. Initialize the runtime object during `ResourceMeta` preprocessing.
+2. Define serializable stage entries; the schema does not contain runtime objects.
 3. The Controller receives the resource, validates it, and writes status.
-4. The Gateway `ConfigClient` syncs the resource into `StreamPluginStore`.
+4. The Gateway `ConfigClient` syncs the resource into `StreamPluginStore`, where `compile_stream_plugins` builds both runtimes and publishes the immutable generation.
 5. Gateway / `TCPRoute` / `TLSRoute` reference the resource through the `edgion.io/edgion-stream-plugins` annotation.
 6. The data plane runs the runtime at different stages:
    - Stage 1: `ConnectionFilter` — pre-handshake, only IP / port and other connection context are available.
-   - Stage 2: `TlsRoute` — after the TLS handshake and route match; SNI, matched route, mTLS state, etc. are available.
+   - Stage 2: `TlsRoute` — after route matching; Terminate supplies negotiated TLS identity, while Passthrough supplies inspected SNI before forwarding the handshake.
 
 ## Current code layout
 
 ```text
 edgion-resources/src/resources/edgion_stream_plugins/
-  mod.rs                    # CRD, spec/status, runtime initialization entry
+  mod.rs                    # CRD, spec/status, serializable stage entries
   stream_plugins.rs         # Stage 1 plugin enum: EdgionStreamPlugin
   tls_route_plugins.rs      # Stage 2 plugin enum: TlsRouteStreamPlugin
 
@@ -77,11 +77,18 @@ edgion-gateway/src/plugins/stream/
 ### Stage 2: TlsRoute
 
 - The Stage-2 runtime (`run_tls_route_plugins`) is invoked from **both** TLS proxies: the TLS-terminate proxy [../../../edgion-gateway/src/routes/tls/proxy.rs](../../../edgion-gateway/src/routes/tls/proxy.rs) and the TLS-passthrough proxy [../../../edgion-gateway/src/routes/tls/passthrough_proxy.rs](../../../edgion-gateway/src/routes/tls/passthrough_proxy.rs). Any binding-site change must touch both paths.
-- `tls_route_plugin_runtime` runs first.
-- Current code falls back from missing `tlsRoutePlugins` to `plugins`. This is a
-  pre-release compatibility debt, not a Stage-2 contract. New code and fixtures
-  must populate `tlsRoutePlugins`; do not depend on or extend the fallback, and
-  remove it when the corresponding code change is in scope.
+- TLSRoute executes only `tls_route_plugin_runtime`, never the connection-stage runtime.
+- If `tlsRoutePlugins` is absent (or null) and raw `plugins` is nonempty, the
+  attachment fails closed, including disabled or Bypass Stage-1 entries. This is
+  a stage-binding error, not validation of disabled entries.
+- Explicit `tlsRoutePlugins: []`, or a Stage-2 chain emptied by disabled/Bypass
+  entries, is a no-op. Both fields absent/empty is also a no-op. A missing
+  referenced resource still fails closed. Enabled Stage-2 Block entries deny.
+- Move route-owned IP restrictions to `tlsRoutePlugins`. Connection-only
+  plugins such as GeoIP and ConnectionRateLimit belong on the Gateway listener
+  (or TCP/UDP route), not on TLSRoute. Gateway and TLSRoute stages remain separate.
+- Each new connection loads the current plugin resource; existing connections
+  are not re-authorized when the resource changes.
 - Suitable for:
   - SNI-dependent logic.
   - Logic that depends on which `TLSRoute` was matched.
@@ -167,16 +174,12 @@ This is the actual "resource configuration → runtime plugin object" assembly p
 
 ## 6. Confirm preprocessing and hot-reload paths need no fixes
 
-Currently, runtime initialization for `EdgionStreamPlugins` is not done in the handler — it lives in:
-
-- [../../../edgion-resources/src/resource/meta/impls.rs](../../../edgion-resources/src/resource/meta/impls.rs)
-
-That is, the `ResourceMeta` preprocessing phase calls:
-
-- `init_stream_plugin_runtime()`
-- `init_tls_route_plugin_runtime()`
-
-The Controller handler [../../../edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/edgion_stream_plugins.rs](../../../edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/edgion_stream_plugins.rs) currently mainly handles status, not runtime construction.
+Gateway runtime construction belongs to `compile_stream_plugins` in
+`stream_plugin_store.rs`. It retains the serializable resource schema and builds
+both runtime families before atomic publication. `ResourceMeta` does not build
+runtime objects, and the Controller does not depend on Gateway plugin runtimes.
+The Controller handler resolves references, validates configuration, stamps
+plugin policy, and writes status before conf_sync transports the schema.
 
 The Gateway-side hot-reload entries are:
 
@@ -242,7 +245,7 @@ metadata:
     edgion.io/edgion-stream-plugins: tcp-allow-localhost
 ```
 
-### Reference it from a `TCPRoute` / `TLSRoute` / `UDPRoute`
+### Reference it from a `TCPRoute` / `UDPRoute`
 
 Route-level attachments retain their separate `name` or `namespace/name` contract:
 
@@ -250,6 +253,33 @@ Route-level attachments retain their separate `name` or `namespace/name` contrac
 metadata:
   annotations:
     edgion.io/edgion-stream-plugins: edgion-test/tcp-allow-localhost
+```
+
+### Reference a TLSRoute-stage resource
+
+TLSRoute requires its own stage declaration; do not attach the Stage-1-only
+resource above. The route annotation uses the same name-resolution syntax.
+
+```yaml
+apiVersion: edgion.io/v1
+kind: EdgionStreamPlugins
+metadata:
+  name: tls-allow-localhost
+  namespace: edgion-test
+spec:
+  tlsRoutePlugins:
+    - type: IpRestriction
+      config:
+        allow:
+          - name: localhost
+            cidrs: ["127.0.0.1/32"]
+        defaultAction: deny
+```
+
+```yaml
+metadata:
+  annotations:
+    edgion.io/edgion-stream-plugins: edgion-test/tls-allow-localhost
 ```
 
 ## ConnectionRateLimit (L4 connection-rate gate)
@@ -393,16 +423,21 @@ References for existing samples:
 
 ### Item 3 entry: the dynamic scenario framework
 
-Hot-reload regression must not stop at "is the new value in the store" — make the connection / route actually exercise the new behavior. The `edgion-tests/src/client/dynamic/` framework supports N-phase state-machine assertions; the built-in scenarios are HTTP-level (`gateway_dynamic`, `dsl_dynamic`, `basic_auth_dynamic`, `rate_limit_dynamic`); stream plugins **don't have a scenario template yet** — `ScenarioCtx` / `assert_phase` is scheduled by `TestSuite`, so in principle writing a `TestSuite` that emits TCP/TLS traffic is enough to reuse the entire orchestration.
+Hot-reload regression must exercise real traffic, not just store contents.
+Use `edgion-tests/src/client/dynamic/scenarios/tls_route_plugins_reload.rs` as the
+TLS example: shared Terminate/Passthrough listeners, independent healthy controls,
+allow/deny generation transitions, and cleanup. `ScenarioCtx::wait_phase` polls
+for the data-plane result; fixed sleeps are not publication barriers.
 
-How to write it: follow the structure of `edgion-tests/src/client/dynamic/scenarios/basic_auth_dynamic.rs`, replacing the phase suite with a stream-aware one (verifying connection accept/deny, TLS handshake behavior, etc.). For detailed registration sites and CLI entry, see [../../05-testing/01-integration-testing.md "Dynamic (hot reload) testing" section](../../05-testing/01-integration-testing.md).
+For registration and CLI usage, see the
+[dynamic testing guide](../../05-testing/01-integration-testing.md).
 
 ## Review checklist
 
 - Is the new plugin Stage 1, Stage 2, or both?
 - Are the enum, runtime, and module exports all wired?
 - Is an existing configuration struct reused instead of copying a near-duplicate one?
-- After `ResourceMeta` preprocessing, are the runtime fields actually initialized?
+- Does Gateway `compile_stream_plugins` build the selected stage before publishing each resource generation?
 - Does Gateway annotation parsing accept only a same-namespace `name`, while route annotation parsing still supports both `name` and `namespace/name`?
 - After updating / deleting the resource, does the Gateway store hot-reload correctly?
 

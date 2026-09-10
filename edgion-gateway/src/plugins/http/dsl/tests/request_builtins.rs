@@ -235,9 +235,77 @@ fn test_req_has_header_false() {
 #[test]
 fn test_req_header_names_for_in() {
     let mut session = MockPluginSession::new();
-    setup_header_mocks(&mut session, &[("x-a", "v1"), ("x-b", "v2"), ("x-c", "v3")]);
-    let result = run(r#"for name in req.header_names { log(name) }"#, session);
+    setup_header_mocks(
+        &mut session,
+        &[("x-a", "v1"), ("x-b", "v2"), ("x-c", "v3"), ("x-a", "v4")],
+    );
+    for (name, count) in [("x-a", 2), ("x-b", 1), ("x-c", 1)] {
+        session
+            .expect_set_request_header()
+            .withf(move |h, v| h == "X-Name" && v == name)
+            .times(count)
+            .returning(|_, _| Ok(()));
+    }
+    let result = run(
+        r#"for name in req.header_names { req.set_header("X-Name", name) }"#,
+        session,
+    );
     assert_eq!(result, good_next());
+}
+
+#[test]
+fn test_req_header_names_truncates_field_lines_at_fixed_cap() {
+    let mut session = MockPluginSession::new();
+    setup_header_mocks(&mut session, &[("x-a", "value"); 257]);
+    session
+        .expect_set_request_header()
+        .withf(|h, v| h == "X-Count" && v == "256")
+        .times(1)
+        .returning(|_, _| Ok(()));
+    let result = run_with_limits(
+        r#"req.set_header("X-Count", len(req.header_names))"#,
+        session,
+        VmLimits {
+            max_list_len: 1,
+            ..Default::default()
+        },
+    );
+    assert_eq!(result, good_next());
+}
+
+#[test]
+fn test_req_header_names_accepts_exact_name_byte_limit() {
+    let mut session = MockPluginSession::new();
+    setup_header_mocks(&mut session, &[("x-a", "value")]);
+    session
+        .expect_set_request_header()
+        .withf(|h, v| h == "X-Name" && v == "x-a")
+        .times(1)
+        .returning(|_, _| Ok(()));
+    let result = run_with_limits(
+        r#"for name in req.header_names { req.set_header("X-Name", name) }"#,
+        session,
+        VmLimits {
+            max_string_len: 3,
+            ..Default::default()
+        },
+    );
+    assert_eq!(result, good_next());
+}
+
+#[test]
+fn test_req_header_names_rejects_name_over_byte_limit() {
+    let mut session = MockPluginSession::new();
+    setup_header_mocks(&mut session, &[("x-a", "value")]);
+    let err = run_expect_runtime_err_with_limits(
+        "let names = req.header_names",
+        session,
+        VmLimits {
+            max_string_len: 2,
+            ..Default::default()
+        },
+    );
+    assert!(matches!(err, RuntimeError::StringTooLong { len: 3, limit: 2 }));
 }
 
 #[test]

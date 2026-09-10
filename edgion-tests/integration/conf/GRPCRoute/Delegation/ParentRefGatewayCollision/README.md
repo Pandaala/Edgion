@@ -7,5 +7,5 @@ the Gateway's wildcard listener must remain unmatched, while traffic through the
 parent's sole hostname reaches the child's method. The Gateway in `bootstrap/`
 must be loaded before Gateway startup because listener ports are not bound
 dynamically. The scenario leaves that Gateway intact, clears its kind-qualified
-GRPCRoutes, applies `initial/`, and then applies `updates/`, which changes only
+GRPCRoutes, applies `DynamicTest/initial/`, and then applies `DynamicTest/updates/`, which changes only
 the child generation and method.

@@ -2,8 +2,7 @@
 //!
 //! `StreamPluginRuntime` evaluates connection context (`DirectPeerIp` and the
 //! listener port) at listener admission and TCP/UDP route session creation.
-//! TLSRoute can also invoke it through a legacy compatibility fallback; new
-//! configurations must not rely on that fallback. `TlsRoutePluginRuntime` runs
+//! TLSRoute dispatch exclusively uses `TlsRoutePluginRuntime`, which runs
 //! after TLSRoute matching: terminated TLS supplies post-handshake TLS context,
 //! while passthrough supplies inspected ClientHello/SNI route context before
 //! forwarding the end-to-end handshake.

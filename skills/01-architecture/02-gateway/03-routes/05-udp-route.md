@@ -26,18 +26,22 @@ edgion-gateway/src/routes/udp/
 
 ```rust
 pub struct UdpRouteTable {
-    routes: Vec<Arc<UDPRoute>>,
+    routes: Vec<Arc<UdpRouteUnit>>,
 }
 ```
 
-- **Build**: `from_routes` collects all routes from `HashMap<String, Arc<UDPRoute>>`.
+- **Build**: the ConfHandler compiles each schema resource into one
+  `UdpRouteUnit`; `from_units` clones the cached units into the listener snapshot.
 - **Match**: `match_route()` uses first-match semantics, returning `routes.first()`.
 - No hostname dimension (UDP has no SNI-like mechanism).
 - Per the Gateway API spec, each UDP listener is typically bound to at most one UDPRoute.
 
 ## Route management, bucketing, rebuild, ConfHandler
 
-`GlobalUdpRouteManagers` (`route_cache` + `by_listener → UdpPortRouteManager → ArcSwap<UdpRouteTable>`) follows the shared L4 per-listener management pattern — identical bucketing/rebuild/ConfHandler mechanics to TCPRoute. See [SKILL.md → Shared L4 per-listener management](SKILL.md#shared-l4-per-listener-management-tcp--tls--udp).
+`GlobalUdpRouteManagers` (`route_cache: DashMap<String, Arc<UdpRouteUnit>>` +
+`by_listener → UdpPortRouteManager → ArcSwap<UdpRouteTable>`) follows the shared
+L4 per-listener management pattern — identical bucketing/rebuild/ConfHandler
+mechanics to TCPRoute. See [SKILL.md → Shared L4 per-listener management](SKILL.md#shared-l4-per-listener-management-tcp--tls--udp).
 
 ## UDP client-session proxy
 

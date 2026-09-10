@@ -44,11 +44,13 @@ Execution flow notes:
 
 The typed driver keeps these events distinct:
 
-| Driver event | `UpstreamResponseBodyFilter` callback | Trailer lifecycle |
-|---|---|---|
-| `Data { end_of_stream }` | Receives the current immutable body after streaming processors, with the supplied EOS flag | If EOS is true, dispatch confirmed absence of trailers |
-| `TerminalWithoutTrailers` | Runs with `end_of_stream = true`; header-only completion can have `body = None` | Dispatch confirmed absence of trailers |
-| `TerminalBeforeTrailers` | Does not run; this boundary is not a no-trailers EOS | Streaming processors see the boundary; the real trailer callback follows |
+| Driver event | Streaming processors | Ordinary `UpstreamResponseBodyFilter` plugins | Trailer dispatch |
+|--------------|----------------------|-----------------------------------------------|------------------|
+| `Data { end_of_stream: false }` | Run on the mutable current chunk/window | Run on the immutable current chunk/window with `end_of_stream = false` | None |
+| `Data { end_of_stream: true }` | Run | Run with `end_of_stream = true` | Dispatch `None` to `UpstreamResponseTrailer` companions |
+| `TerminalWithoutTrailers` | Run the typed terminal event | Run once with `body = None` and `end_of_stream = true` | Dispatch `None` to companions; this is also the header-only response path |
+| `TerminalBeforeTrailers` | Run the typed terminal event | Do not run | Keep the trailer lifecycle open for the actual transport trailer callback |
+| Actual trailers | Already flushed at `TerminalBeforeTrailers` | Do not run | Dispatch `Some(&mut HeaderMap)` to `UpstreamResponseTrailer` companions |
 
 A filter must tolerate `body = None` and must not treat a missing chunk as missing
 completion. `Option<Duration>` delays forwarding or completion of the current task;
@@ -179,21 +181,24 @@ Gateway API standard filters (added through the private `add_from_httproute_filt
 
 Skip log format: `"skip:keyExist,hdr:X-Internal"` or `"!run:keyMatch,method"`.
 
-### ⚠️ Critical constraint: regex must be compiled during preparse
+### ⚠️ Critical constraint: regex must be compiled during runtime construction
 
-`KeyMatch` supports a `regex` field. The `compiled_regex` field is annotated with `#[serde(skip)]` and is `None` after deserialization. **`compile()` MUST be called during preparse to complete compilation**; otherwise every request that hits the fallback path will execute `Regex::new()`, causing significant CPU overhead.
+`KeyMatch` supports a `regex` field. The `compiled_regex` field is annotated with `#[serde(skip)]` and is `None` after deserialization. **`compile()` MUST run before the runtime is published**; otherwise every request that hits the fallback path will execute `Regex::new()`, causing significant CPU overhead. The Controller validates the schema for status but does not build a runtime. The Gateway compiles conditions while building each EdgionPlugins resource generation.
 
-**compile call chain** (one-time, triggered when resources are received via gRPC list/watch):
+**Validation and compile call chains**:
 
 ```
-PluginStore::full_set() / partial_update()  # plugins/http/conf_handler_impl.rs
+Controller EdgionPluginsHandler::preparse()
+  → EdgionPlugins::validate_plugins()      # schema validation for status; no runtime
+
+Gateway PluginStore::full_set() / partial_update()  # plugins/http/conf_handler_impl.rs
   → compile_plugins()                     # plugins/http/plugin_store.rs
       → compile_plugin_conditions()       # PluginConditions::compile() and validate()
           → Condition::compile()
               → KeyMatchCondition::compile()
                   → MatchCore::compile(normalize_paths)
       → add_from_*()                      # plugin_runtime.rs; consumes compiled conditions
-      → seal_fail_closed()
+      → seal_fail_closed() / seal_plugin_policy()
   → publish immutable compiled snapshot
 ```
 
@@ -310,9 +315,9 @@ Stream plugins run at the TCP/UDP layer and use a two-stage architecture:
 
 - `StreamPlugin` trait: defines the `run_connection_filter(ctx) -> StreamPluginResult` interface.
 - `TlsRoutePlugin` trait: defines the TLS-route-level plugin interface.
-- `StreamPluginRuntime`: manages the plugin chain for the ConnectionFilter stage.
-- `TlsRoutePluginRuntime`: manages the plugin chain for the TLS-route stage.
-- `StreamPluginStore`: receives EdgionPlugins resource changes via ConfHandler.
+- `StreamPluginRuntime`: manages the plugin chain for the ConnectionFilter stage. It derives `Clone` over `Vec<Arc<dyn StreamPlugin>>`, so cloning it copies the vector of `Arc` handles and shares the plugin instances.
+- `TlsRoutePluginRuntime`: manages the plugin chain for the TLS-route stage. The runtime itself does not implement `Clone`, while its plugin-chain elements are `Arc<dyn TlsRoutePlugin>`.
+- `StreamPluginStore`: receives EdgionPlugins resource changes via ConfHandler. It builds both runtimes once and publishes them through `Arc` fields in `CompiledStreamPlugins`.
 
 ## Directory layout
 

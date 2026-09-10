@@ -1,0 +1,34 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mirror-grant-dynamic
+  namespace: edgion-default
+  labels:
+    app: mirror-grant-dynamic
+    edgion.io/test-server-image: 'true'
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mirror-grant-dynamic
+  template:
+    metadata:
+      labels:
+        app: mirror-grant-dynamic
+        edgion.io/test-server-image: 'true'
+    spec:
+      containers:
+      - name: test-server
+        image: docker.io/pandaala/edgion-test-server:v0.1.1
+        imagePullPolicy: IfNotPresent
+        command:
+        - /usr/local/bin/test_server
+        args:
+        - --http-ports=30001
+        ports:
+        - name: http
+          containerPort: 30001
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: http

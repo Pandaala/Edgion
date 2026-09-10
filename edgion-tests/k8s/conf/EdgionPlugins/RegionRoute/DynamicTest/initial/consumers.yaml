@@ -41,7 +41,7 @@ spec:
     - rrv-small.example.com
   rules:
     - backendRefs:
-        - name: test-http
+        - name: edgion-test-server
           port: 30001
       filters:
         - type: ExtensionRef
@@ -92,7 +92,7 @@ spec:
     - rrv-large.example.com
   rules:
     - backendRefs:
-        - name: test-http
+        - name: edgion-test-server
           port: 30001
       filters:
         - type: ExtensionRef
@@ -129,4 +129,3 @@ spec:
             tls: false
         overrideRef:
           name: rrv-overlay
-

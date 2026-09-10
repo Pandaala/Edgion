@@ -100,6 +100,21 @@ for the event mapping and driver/trait sources.
 Default to `RequestFilter`.
 If you don't need upstream response info, don't push the logic into a later phase.
 
+For response-body callbacks, the driver runs writable streaming processors first
+and then ordinary `UpstreamResponseBodyFilter` plugins on each `Data` event. A
+`Data` event with `end_of_stream = true` closes a response without trailers and
+then dispatches `None` to the trailer companions. Header-only and other synthetic
+no-trailers completion arrives as `TerminalWithoutTrailers`: streaming processors
+receive that typed event, ordinary body plugins run once with `body = None` and
+`end_of_stream = true`, and the driver dispatches `None` to the trailer companions.
+
+`TerminalBeforeTrailers` is different. Only the streaming-processor chain receives
+that typed event; ordinary `UpstreamResponseBodyFilter` plugins do not run. The
+subsequent transport trailer callback passes the actual mutable trailer map to
+request-owned `UpstreamResponseTrailer` companions. Keep body processing bounded
+to the current chunk or semantic window; none of these callbacks may aggregate the
+main upstream response.
+
 ## Minimum change checklist
 
 ### A regular HTTP plugin
@@ -351,7 +366,7 @@ If the plugin is referenced by a route through `ExtensionRef`, focus on:
 Current behavior:
 
 - At runtime, fetch the `EdgionPlugins` from `PluginStore` by `namespace/name`.
-- Execute using `spec.plugin_runtime`.
+- Execute using the `Arc<PluginRuntime>` stored in the matching `CompiledPlugins` entry.
 - Push plugin logs into the dedicated `edgion_plugins` log structure.
 
 If you are debugging "ExtensionRef does not take effect / plugin logs are missing", start tracing from here.

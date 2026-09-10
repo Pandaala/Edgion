@@ -13,8 +13,8 @@ use crate::resources::edgion_plugins::PluginValidation;
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct TraceContextConfig {
-    /// Generate a fresh root `traceparent` when the request carries none (or
-    /// `trustInbound` is false). Default: true.
+    /// Generate a fresh root `traceparent` when no trusted, valid inbound
+    /// context remains. When false, no root is generated. Default: true.
     #[serde(default = "default_true")]
     pub generate_when_missing: bool,
 
@@ -22,14 +22,15 @@ pub struct TraceContextConfig {
     #[serde(default)]
     pub echo_to_client: bool,
 
-    /// Honor a well-formed client-supplied `traceparent` (pass it through). Set
-    /// false at an internet edge to always originate a fresh root and ignore
-    /// (untrusted) inbound trace context. Default: true.
+    /// Honor a well-formed client-supplied `traceparent` (pass it through). When
+    /// false, remove inbound `traceparent` and `tracestate`; root generation is
+    /// then controlled by `generateWhenMissing`. Default: true.
     #[serde(default = "default_true")]
     pub trust_inbound: bool,
 
-    /// trace-flags used when generating a root: false => `00` (defer sampling to
-    /// downstream), true => `01` (force sampled). Default: false.
+    /// W3C trace-flags sampled recommendation used when generating a root:
+    /// false => `00`, true => `01`. Downstream samplers may make their own
+    /// decision. Default: false.
     #[serde(default)]
     pub default_sampled: bool,
 }

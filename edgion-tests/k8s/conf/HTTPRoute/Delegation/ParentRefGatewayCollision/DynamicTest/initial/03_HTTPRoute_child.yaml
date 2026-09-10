@@ -16,5 +16,5 @@ spec:
             type: PathPrefix
             value: /delegated/v1
       backendRefs:
-        - name: test-http
+        - name: parentref-collision-http-backend
           port: 30001

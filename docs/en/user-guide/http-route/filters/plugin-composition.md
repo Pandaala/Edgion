@@ -144,7 +144,7 @@ filters:
 
 ## Short-circuiting
 
-Any request-stage plugin can terminate the request. When a plugin returns a terminating result (a redirect, an auth rejection, a mock response, or a gRPC error), the runtime stops the request-stage loop immediately, sets the response, and skips the remaining request-stage plugins. `RequestRedirect` is a typical terminating filter: it sends a 301/302 and the upstream is never contacted.
+Any request-stage plugin can terminate the request. When a plugin returns a terminating result (a redirect, an auth rejection, a mock response, or a gRPC error), the runtime stops the request-stage loop immediately, sets the response, and skips the remaining request-stage plugins. `RequestRedirect` is a typical terminating filter: it sends a 301, 302, 303, 307, or 308 response and the upstream is never contacted. A rule-level redirect rule omits `backendRefs`; the Kubernetes CRD rejects a rule that combines both.
 
 ## Fail-closed behavior
 

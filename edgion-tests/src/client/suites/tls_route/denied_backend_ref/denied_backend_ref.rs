@@ -1,7 +1,7 @@
 // TLSRoute DeniedBackendRef suite: cross-namespace Service backendRefs
 // without a ReferenceGrant must fail closed in both proxy modes.
 //
-// Against edgion-tests/k8s/conf/TLSRoute/DeniedBackendRef/, both Routes in
+// Local fixtures use edgion-test -> backend. In Kubernetes, both Routes in
 // edgion-default reference Services in edgion-backend:
 // - 31956 (tls terminate): handshake with the gateway, then no upstream echo
 // - 31957 (tls passthrough): ClientHello is not forwarded to the HTTPS backend
@@ -26,7 +26,7 @@ async fn assert_attached_and_denied(ctx: &TestContext, name: &str) -> Result<(),
     helpers::wait_resource_status(
         ctx,
         "TLSRoute",
-        "edgion-default",
+        helpers::l4_denied_backend_ref_namespace(),
         name,
         Duration::from_secs(10),
         |route| {

@@ -1,5 +1,5 @@
 // TLSRoute StreamPlugins test suite
 
-mod stream_plugins;
+pub(crate) mod stream_plugins;
 
 pub use stream_plugins::TlsStreamPluginsTestSuite;

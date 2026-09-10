@@ -10,8 +10,7 @@
 #   2.  Lazy connect     — gateway starts even when collector is not yet running
 #   3.  Record delivery  — HTTP requests produce records at the collector
 #   4.  Record fields    — LogRecord has correct body, attributes, severity, timestamp
-#   5.  Shutdown flush   — graceful shutdown flushes buffered records
-#   6.  Known limitation — healthy() stays true when collector is down (no dropped metric)
+#   5.  Shutdown delivery — marked requests survive graceful Gateway exit
 #
 # Infrastructure:
 #   - Docker OTel Collector (otel/opentelemetry-collector-contrib:0.116.0)
@@ -498,66 +497,70 @@ else
     TESTS_FAILED=$((TESTS_FAILED + 6))
 fi
 
-# ── 4. Shutdown flush ────────────────────────────────────────────────────
-log_info "─── 4. Shutdown flush ───"
+# ── 4. Shutdown delivery ─────────────────────────────────────────────────
+log_info "─── 4. Shutdown delivery ───"
 
-# The file exporter writes one NDJSON line per batch export, each line can
-# contain multiple logRecords. Count actual records using jq instead of wc -l.
-count_records() {
+# Startup traffic may be shed while the endpoint probe is unhealthy. Once
+# delivery is established, track a distinct batch rather than counting startup
+# requests or allowing late warmup records to hide a missing shutdown record.
+count_shutdown_records() {
     local file="$1"
     [ -f "$file" ] || { echo "0"; return; }
-    jq -rs '[.[].resourceLogs[].scopeLogs[].logRecords[]] | length' "$file" 2>/dev/null || echo "0"
+    jq -rs '
+        [range(1; 6) | "otlp-shutdown-\(.)"] as $expected |
+        [.[].resourceLogs[].scopeLogs[].logRecords[].body.stringValue |
+         fromjson | .request_info["x-trace-id"] |
+         select(. as $id | $expected | index($id))] | unique | length
+    ' "$file" 2>/dev/null || echo "0"
 }
 
-# Send 5 more requests to fill the batch queue, then gracefully stop the gateway.
-# Capture the count first because the batch timer may export all five before
-# SIGTERM reaches the process; that is successful delivery, not a flush failure.
-BEFORE_REQUESTS=$(count_records "$OTEL_LOG_FILE")
 for i in $(seq 1 5); do
-    curl -sf "${GATEWAY_PROXY}/health" -H "Host: otlp-gateway.edgion-test.example.com" \
-        -o /dev/null 2>/dev/null || true
+    if ! curl --max-time 5 -sf "${GATEWAY_PROXY}/health" \
+        -H "Host: otlp-gateway.edgion-test.example.com" \
+        -H "x-trace-id: otlp-shutdown-${i}" -o /dev/null; then
+        log_error "Shutdown batch request ${i} failed"
+        exit 1
+    fi
 done
-BEFORE_SHUTDOWN=$(count_records "$OTEL_LOG_FILE")
+BEFORE_SHUTDOWN=$(count_shutdown_records "$OTEL_LOG_FILE")
 
 log_info "Sending SIGTERM to gateway for graceful shutdown..."
-GATEWAY_PID=$(cat "${PID_DIR}/gateway.pid" 2>/dev/null || echo "")
-if [ -n "$GATEWAY_PID" ]; then
-    kill -TERM "$GATEWAY_PID" 2>/dev/null || true
-    # Wait for the process to exit (SdkLoggerProvider::Drop calls shutdown() blocking flush).
-    for i in $(seq 1 15); do
-        kill -0 "$GATEWAY_PID" 2>/dev/null || break
-        sleep 1
-    done
-    log_info "Gateway exited after graceful shutdown"
+GATEWAY_PID=$(cat "${PID_DIR}/gateway.pid")
+if ! kill -TERM "$GATEWAY_PID"; then
+    log_error "Could not signal the owned Gateway process"
+    exit 1
 fi
-
-# Give the collector time to write the final batch.
-sleep 3
-
-AFTER_SHUTDOWN=$(count_records "$OTEL_LOG_FILE")
-assert_ge "At least 10 logRecords total after shutdown flush" "$AFTER_SHUTDOWN" 10
-
-TESTS_TOTAL=$((TESTS_TOTAL + 1))
-if [ "$AFTER_SHUTDOWN" -gt "$BEFORE_SHUTDOWN" ]; then
-    TESTS_PASSED=$((TESTS_PASSED + 1))
-    log_success "Shutdown flush delivered additional records (before=${BEFORE_SHUTDOWN}, after=${AFTER_SHUTDOWN})"
-elif [ "$BEFORE_SHUTDOWN" -ge $((BEFORE_REQUESTS + 5)) ]; then
-    TESTS_PASSED=$((TESTS_PASSED + 1))
-    log_success "All 5 pre-shutdown records were already exported by the batch timer"
-else
-    TESTS_FAILED=$((TESTS_FAILED + 1))
-    log_error "Pre-shutdown records were not fully delivered (initial=${BEFORE_REQUESTS}, before=${BEFORE_SHUTDOWN}, after=${AFTER_SHUTDOWN})"
+# The default Pingora grace period is 30s, followed by service shutdown.
+for i in $(seq 1 60); do
+    kill -0 "$GATEWAY_PID" 2>/dev/null || break
+    sleep 1
+done
+if kill -0 "$GATEWAY_PID" 2>/dev/null; then
+    log_error "Gateway did not exit within the 60s graceful shutdown deadline"
+    exit 1
 fi
+if ! wait "$GATEWAY_PID"; then
+    log_error "Gateway exited unsuccessfully during graceful shutdown"
+    exit 1
+fi
+log_success "Gateway exited after graceful shutdown"
 
-# ── 5. Known limitation: healthy() stays true when collector is down ────────
-log_info "─── 5. Known limitation: dropped metric (documented behavior) ───"
-log_warn "KNOWN LIMITATION: OtlpLogSender::healthy() is permanently true after init()."
-log_warn "When the OTel Collector is unreachable, the SDK batch queue fills silently."
-log_warn "The access_log_dropped Prometheus counter is NOT incremented for OTLP record loss."
-log_warn "Tracking issue: implement background health-check or SDK ForceFlush probe to flip healthy()."
-TESTS_TOTAL=$((TESTS_TOTAL + 1))
-TESTS_PASSED=$((TESTS_PASSED + 1))
-log_success "Known limitation documented (not a test failure)"
+# Collector persistence can lag the final export. Bound the wait by state.
+AFTER_SHUTDOWN=0
+for i in $(seq 1 10); do
+    AFTER_SHUTDOWN=$(count_shutdown_records "$OTEL_LOG_FILE")
+    [ "$AFTER_SHUTDOWN" -eq 5 ] && break
+    sleep 1
+done
+assert_eq "All 5 identified pre-shutdown records delivered" "5" "$AFTER_SHUTDOWN"
+log_info "Shutdown batch delivery: before signal=${BEFORE_SHUTDOWN}, after exit=${AFTER_SHUTDOWN}"
+
+# Delivery may occur through the periodic exporter during the grace period.
+# This checks end-to-end delivery across shutdown, not a provider Drop hook.
+
+# ── 5. Health evidence boundary ───────────────────────────────────────────
+log_info "OTLP endpoint health is TCP-probe driven; it does not acknowledge individual exports"
+log_info "Collector delivery and shutdown assertions above provide the wire evidence"
 
 # =============================================================================
 # ──────────────────────────── REPORT ────────────────────────────────────────

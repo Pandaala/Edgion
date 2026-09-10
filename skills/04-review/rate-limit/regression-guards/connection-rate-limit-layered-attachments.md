@@ -13,8 +13,8 @@ knowledge_type: regression-guards
 
 Gateway-level and route-level `EdgionStreamPlugins` attachments are intentionally cumulative where
 both execution stages exist. The Gateway attachment expresses a listener-wide policy, while a
-TCPRoute attachment expresses a route-specific policy. A TLSRoute attachment also runs the Stage-1
-runtime only through the compatibility fallback when its active Stage-2 runtime is empty. When the
+TCPRoute attachment expresses a route-specific policy. TLSRoute executes only `tlsRoutePlugins`,
+which does not admit ConnectionRateLimit; TLS listener rate limiting belongs on the Gateway. When the
 two layers reference different resources, their `ConnectionRateLimit` entries have different entry
 scopes and therefore independent counters. A connection must satisfy both budgets; the stricter
 result is expected policy composition, not double charging.
@@ -27,17 +27,16 @@ includes the entry index. This permits useful multi-window policies. Rejecting d
 types would remove that capability and would not fix cross-attachment evaluation.
 
 If the Gateway and a TCPRoute repeat the exact same resource reference, the same entry scope
-evaluates twice and its counter advances twice. The same is true for a TLSRoute only when its active
-Stage-2 runtime is empty and execution enters the Stage-1 compatibility fallback. This is accepted
+evaluates twice and its counter advances twice. This is accepted
 as a low-frequency configuration overlap: operators should use separate resources for global and
 route-specific budgets. Adding per-connection deduplication would require coordinating Pingora's
-listener `ConnectionFilter` with later TCP/TLS route execution across several hot paths. That cost
+listener `ConnectionFilter` with later TCP route execution across several hot paths. That cost
 and regression surface outweigh the benefit of making the accidental identical-reference shape
 behave as one attachment.
 
 ## Review Rule
 
-- Do not deduplicate different Gateway-level and TCP/TLS-route-level resources; they are separate
+- Do not deduplicate different Gateway-level and TCPRoute-level resources; they are separate
   budgets where both stages execute.
 - Do not reject multiple `ConnectionRateLimit` entries merely because their plugin type matches.
 - Reconsider identical-reference deduplication only after a real operator incident or when a shared
@@ -48,6 +47,10 @@ behave as one attachment.
 Whether a Gateway attachment may name an `EdgionStreamPlugins` resource in another namespace is a
 separate reference-authorization question. It is tracked independently and must not be coupled to
 rate-limit counter semantics.
+
+Historical TLSRoute fallback observations no longer apply after
+`remove-tlsroute-stage1-fallback-coherently`; they do not establish a supported
+TLSRoute ConnectionRateLimit attachment.
 
 ## Resolution references
 

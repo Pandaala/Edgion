@@ -1,6 +1,7 @@
 //! TraceContext plugin — W3C trace-context propagation (propagation-only).
 //!
-//! - `trustInbound` false: ignore inbound trace context, always originate a root.
+//! - `trustInbound` false: discard inbound context; originate a root only when
+//!   `generateWhenMissing` is true.
 //! - well-formed inbound `traceparent`: pass it through unchanged, align x-trace-id.
 //! - absent/malformed: strip partial/garbage headers, generate a root (if enabled).
 

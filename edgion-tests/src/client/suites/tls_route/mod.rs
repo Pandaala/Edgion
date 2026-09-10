@@ -17,5 +17,6 @@ pub use geo_restriction::TlsGeoRestrictionTestSuite;
 pub use multi_sni::TlsMultiSniTestSuite;
 pub use passthrough::TlsPassthroughTestSuite;
 pub use proxy_protocol::TlsProxyProtocolTestSuite;
+pub(crate) use stream_plugins::stream_plugins::probe_tls_policy;
 pub use stream_plugins::TlsStreamPluginsTestSuite;
 pub use unknown_kind_backend::TlsUnknownKindBackendTestSuite;

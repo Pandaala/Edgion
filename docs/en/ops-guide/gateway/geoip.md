@@ -11,9 +11,10 @@ log with the resolved country/continent/city. Both are provided by **one plugin,
 registered with the identical config shape into both layers:
 
 - **HTTP** — `EdgionPlugin::GeoIpLocation` in `EdgionPlugins.spec.requestPlugins`.
-- **L4 (TCP/UDP/TLS)** — `EdgionStreamPlugin::GeoIpLocation` in
-  `EdgionStreamPlugins.spec.plugins`, used at listener Stage 1, TCP/UDP routes, and the TLS route
-  compatibility fallback. `GeoIpLocation` is not registered in `tlsRoutePlugins`.
+- **L4 stream lifecycles** — `EdgionStreamPlugin::GeoIpLocation` in
+  `EdgionStreamPlugins.spec.plugins`. The same chain runs at listener admission (`Stage1`),
+  on TCPRoute and UDP transport-route admission (`Tcp`). TLS traffic uses the Gateway
+  listener attachment (`Stage1`); there is no `tlsRoutePlugins` registration for GeoIP.
 
 **Not supported, by design**: no bundled baseline database (redistribution terms), no
 coordinate/radius geofencing (MMDB coordinates are city-centroid values with a coarse
@@ -194,9 +195,9 @@ spec:
         allowRuleGroups: []
 ```
 
-The identical `config` block also registers as an `EdgionStreamPlugins.spec.plugins` entry
-for L4 (TCP/UDP/TLS) enforcement. In particular, `source: RemoteIp`
-is rejected at L4 (see below).
+The identical `config` block also registers as an `EdgionStreamPlugins.spec.plugins` entry for
+listener (including TLS), TCPRoute, and UDP transport-route enforcement, with one restriction:
+`source: RemoteIp` is rejected at L4 (see below).
 
 **Combining geo with other rules is chaining, not embedding.** `GeoIpLocation` carries no
 IP-allowlist or header/body predicates, and `IpRestriction`/`RequestRestriction`/
@@ -401,7 +402,7 @@ constrained rule.
 ### `city` matches the English name only
 
 `city` is populated from `city.names["en"]` — the English localized name, never a translated
-one. A city rule matching `values: ["北京"]` (or any other non-English spelling) will never
+one. A city rule matching `values: ["Pekín"]` (or any other non-English spelling) will never
 match, because the lookup result is always the English form. `city` and `subdivision` are also
 **not globally unique** — "Cambridge" exists in multiple countries, and a bare
 `subdivision: ["CA"]` matches both California and any Canadian province coded `CA`. Always pair
@@ -434,21 +435,18 @@ your provider's documentation, and shape your rule groups accordingly.
 
 ## L4 (TCP/UDP/TLS) registration
 
-`GeoIpLocation` registers as an `EdgionStreamPlugins.spec.plugins` entry. Its attachment determines
-when it runs. Reference the resource with the `edgion.io/edgion-stream-plugins` annotation:
-attachment on a Gateway applies at listener Stage 1; attachment on a TCPRoute, UDPRoute, or
-TLSRoute applies during that route's lifecycle.
+`GeoIpLocation` registers in `EdgionStreamPlugins.spec.plugins`, whose runtime is used at two
+explicit lifecycle layers:
 
-| Attachment | Execution boundary | Denial metric `layer` |
-|---|---|---|
-| Listener Stage 1 (`ConnectionFilter`) | At TCP connection admission, before route matching and the TLS handshake | `stage1` |
-| TCPRoute | Once per connection, after route matching and before backend selection | `tcp` |
-| UDPRoute | Before session creation; established sessions use the fast path without rechecking, and denied datagrams create no session | `tcp` (reuses the TCP check path) |
-| TLSRoute compatibility fallback | After TLS route matching; executes `plugins` only when the `tlsRoutePlugins` runtime is empty | `tls` |
+- `Stage1`: listener `ConnectionFilter`, before route matching or TLS.
+- `Tcp`: TCPRoute connection admission and the UDP transport-route session-creation path.
 
-`GeoIpLocation` is not registered in `tlsRoutePlugins`. If that runtime is nonempty in the same
-resource, the TLS route runs it preferentially and does not run the GeoIP policy in `plugins`.
-All three metric labels above are already emitted; there is no separate `udp` label.
+GeoIP is not admitted in `tlsRoutePlugins`, which allows only `IpRestriction`.
+For TLS traffic, bind the resource to its Gateway listener, using the Gateway annotation
+`edgion.io/edgion-stream-plugins: "geo-policy"` (a bare resource name in the Gateway namespace).
+This enforces GeoIP before the TLS handshake and route matching for every connection on
+that listener. A TLSRoute reference to a nonempty Stage-1-only resource rejects connections;
+it does not execute GeoIP.
 
 The L4 config is the same structure as the HTTP one, with two layer-specific admission rules:
 
@@ -486,12 +484,11 @@ spec:
 ingest and at gateway construction (both call the same shared validation function) — since L4 has
 no `X-Forwarded-For` to resolve a real client from.
 
-### Always the transport peer — no PROXY-protocol caveat for geo
+### Always the physical transport peer
 
-Across all these lifecycles, `GeoIpLocation` uses the physical transport peer, `DirectPeerIp`.
-Listener Stage 1 runs before PROXY-protocol parsing; later route stages also retain the original
-peer rather than replacing it with the PROXY-resolved `RemoteIp`. Behind a load balancer, GeoIP
-therefore evaluates that direct peer. UDP uses the datagram's source address.
+Every L4 invocation receives `StreamContext.direct_peer_ip`, the physical transport peer that is
+never rewritten by PROXY protocol. The lifecycle layer changes where the chain runs, not the
+meaning of `DirectPeerIp`: `Stage1` and `Tcp` both evaluate that same transport identity.
 
 ### No readiness gating; the operator owns the cold-start window
 
@@ -501,20 +498,19 @@ window of unenforced geo policy, `false` accepts a window of rejected traffic. T
 backoff (see below) bounds that window to seconds, not the full `retry_interval_sec`, and
 `edgion_geoip_db_loaded` is the metric to alert on for "is this still going on."
 
-### L4 denial metrics and protocol log boundaries
+### L4 denial signals depend on the lifecycle layer
 
-A GeoIP plugin denial increments `edgion_geoip_denied_total{layer,reason}` (see
-[Metrics](#metrics)); the metric carries no client address. Listener Stage 1 is metric-only:
-the connection is dropped in the accept path before a protocol logging context exists.
+A `Stage1` listener denial is reduced to the `ConnectionFilter` boolean result. Its only GeoIP
+signal is `edgion_geoip_denied_total{layer="stage1",reason=...}`; there is no protocol context or
+canonical connection-log channel at that point.
 
-TCP/UDP route and TLS compatibility denials retain normal protocol logs and their standard peer
-fields, but do not record GeoIP facts or the sensitive `geo:deny:*` reason. TCP/UDP use the generic
-reason `stream plugin policy denied`; the TLS compatibility fallback uses
-`stream plugin denied (compat)`. Actual log output depends on the corresponding protocol log
-configuration. Do not generalize Stage 1's metric-only boundary to all L4 paths.
-
-HTTP geo denials retain their normal `EdgionErrorCode` diagnostic and access-log record;
-stream plugins do not populate the HTTP `geo` block.
+TCP/UDP route paths retain their canonical connection logs and standard peer fields, subject to
+the protocol log configuration. They collapse a GeoIP denial to `stream plugin policy denied`
+before logging, so the log contains no GeoIP facts or sensitive plugin reason; the bounded
+counter carries the `tcp` layer and reason. UDP checks before session creation; established
+sessions bypass the check, and denied datagrams create no session. TLS listener denials use
+the Stage1 metric-only path above. HTTP denials remain ordinary request diagnostics and
+access-log entries; stream plugins do not populate the HTTP `geo` block.
 
 ## Access log
 
@@ -562,7 +558,7 @@ mechanism that lets some ext-log fields opt out of masking does not apply here; 
 | `edgion_geoip_db_build_epoch_seconds` | Gauge | none | Build timestamp of the loaded database. Alert on staleness. |
 | `edgion_geoip_update_failed_total` | Counter | `reason` (`fetch` \| `encoding` \| `size_cap` \| `stall` \| `validation` \| `rename` \| `disk` \| `deadline`) | Background *update-cycle* failures, by class. `disk` is the free-space precheck refusing to start (no request was ever issued); `deadline` is the whole cycle exceeding `download_deadline_sec` despite steady progress, distinct from `stall` (no progress within `stall_timeout_sec`) — the two call for opposite fixes. |
 | `edgion_geoip_lookup_panic_total` | Counter | none | A per-request MMDB lookup panicked (caught) and was reported as `Failed`. Distinct from `edgion_geoip_update_failed_total` above: this is a per-request event on the query path, not an update-cycle failure. Decode-without-panic failures share the `Failed` outcome but do not increment this counter. |
-| `edgion_geoip_denied_total` | Counter | `layer` (`stage1` \| `tcp` \| `tls`), `reason` (`deny_country` \| `allow_miss` \| `db_unavailable` \| `lookup_failed`) | GeoIP plugin denials: listener Stage 1 emits `stage1`, TCP/UDP routes emit `tcp`, and the TLS compatibility fallback emits `tls`. Denied UDP datagrams create no session, so later attempts can increment the counter again. The metric never carries a client address; HTTP denials are absent here because they already appear in the access log. |
+| `edgion_geoip_denied_total` | Counter | `layer` (`stage1` \| `tcp`), `reason` (`deny_country` \| `allow_miss` \| `db_unavailable` \| `lookup_failed`) | L4 decisions denied by `GeoIpLocation`. `stage1` is listener admission (including TLS), and `tcp` covers TCPRoute and UDP transport-route admission. The metric never carries a client address; HTTP denials are deliberately absent because they already appear in the access log. |
 
 ## Multi-replica update behavior, jitter, and the `.meta` validator
 
@@ -611,7 +607,8 @@ state produces an unconditional request.
 | A `city` rule with a translated-language value never matches | `city` only ever compares against `names["en"]` | Use the English city name |
 | A blacklist-mode rule sourced on `RemoteIp` is trivially bypassed by any client | `RealIp`'s `trustedIps` is scoped too broadly (e.g. `0.0.0.0/0`) — `RemoteIp` degrades to attacker-controlled input | Scope `trustedIps` to your actual proxy egress ranges, or switch the rule to `DirectPeerIp` |
 | L4 config rejected at ingest/compile mentioning `RemoteIp` | `source: RemoteIp` is a hard admission error in an L4 `GeoIpLocation` config | Use `source: DirectPeerIp` — L4 has no `X-Forwarded-For` to resolve a real client from |
-| An L4 geo deny happened but there's no matching log line | Listener Stage 1 is metric-only; TCP/UDP/TLS paths retain generic protocol denial logs without GeoIP detail | Identify the execution point with `edgion_geoip_denied_total{layer,reason}`; for route denials, also check the protocol log configuration and generic denial records |
+| A listener-stage geo denial has no log line | Expected — `Stage1` has only the connection-filter boolean and bounded metric | Use `edgion_geoip_denied_total{layer="stage1",reason=...}` |
+| A TCP/UDP route-stage geo denial log lacks GeoIP details | Expected — route paths keep canonical protocol logs but replace GeoIP facts and plugin reasons with a generic stream-plugin denial | Correlate the protocol log with `edgion_geoip_denied_total{layer="tcp",reason=...}`; TLS listener denials use the Stage1 metric-only path above |
 | A "block this country unless it's on the office allowlist" rule doesn't behave as expected | Check the ordering of `IpRestriction`/other admission plugins relative to `GeoIpLocation` on the plugin list — composition is by chain order, not by a single merged plugin | Reorder the plugin-list entries; there is no cross-plugin exemption semantics to configure |
 
 ## Related documents

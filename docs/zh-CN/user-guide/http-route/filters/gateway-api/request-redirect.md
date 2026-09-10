@@ -109,6 +109,8 @@ spec:
 - `301` 和 `308` 表示永久重定向；`302` 和 `307` 表示临时重定向。`303` 指示客户端获取目标资源（通常使用 GET）。需要客户端保留请求方法和请求体时，请使用 `307` 或 `308`；`301` 和 `302` 可能将 POST 转为 GET。
 - HTTP 的 `80` 端口和 HTTPS 的 `443` 端口不会出现在 `Location` 中；非默认端口会保留。
 - `RequestRedirect` 与 [URLRewrite](./url-rewrite.md) 在同一规则中**互斥**。同时声明两者的规则将被标记为 `PartiallyInvalid` 并被禁用，但 HTTPRoute 中其他有效规则继续生效。
+- 规则级 `RequestRedirect` 是终止型过滤器，不能与同一规则中的
+  `backendRefs` 组合；Kubernetes CRD 会拒绝这种配置。
 - 由于过滤器会终止请求，其后声明的请求阶段插件不会执行，后端也不会被访问。
 - `ReplacePrefixMatch` 仅替换规则 `PathPrefix` 匹配的那部分路径，路径的其余部分得以保留。使用此修改器时，规则必须恰好包含一个匹配项，且路径类型为 `PathPrefix`。
 - 原始查询字符串始终会被保留并追加到重定向的 `Location` URL 上。例如，`http://app.example.com/login?returnTo=/dashboard` 会重定向到 `https://app.example.com/login?returnTo=/dashboard`。Gateway API 重定向过滤器没有 query 修改器，因此无论是否配置了路径修改器，客户端的 query 始终会在重定向中保留。

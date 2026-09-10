@@ -33,4 +33,5 @@ pub mod service_degrade_threshold;
 pub mod sp_backend_change;
 pub mod sp_weighted;
 pub mod tcp_esp_reload;
+pub mod tls_route_plugins_reload;
 pub mod waf_dynamic;

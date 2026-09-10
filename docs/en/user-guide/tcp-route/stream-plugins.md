@@ -24,7 +24,9 @@ metadata:
 
 The same annotation works on `TCPRoute`, `TLSRoute`, `UDPRoute`, and at the
 Gateway listener level. On `UDPRoute` only the Stage-1 ConnectionFilter
-(`spec.plugins`) runs, because UDP has no TLS handshake.
+(`spec.plugins`) runs, because UDP has no TLS handshake. TLSRoute executes only
+`spec.tlsRoutePlugins`; a nonempty Stage-1-only resource fails closed. See the
+[TLSRoute stage contract](../../dev-guide/stream-plugin-development.md#tlsroute-stage-contract).
 
 ## Supported plugins
 
@@ -307,7 +309,7 @@ fds can accumulate.
 | `perListener` | Object | none | Per-listener rate limit with a local token-bucket backstop (available even when Redis is unreachable). |
 | `perSourceIp` | Object | none | Per-source-IP rate limit. Requires Redis — no local backstop. See caution above. |
 
-**Bucket scope**: counters — both the Redis keys and the local token bucket — are namespaced by the plugin entry that owns them, `<namespace>/<name>/#<index>` of the EdgionStreamPlugins resource and the entry's position in `plugins`. Two `ConnectionRateLimit` entries can be active on one listener port (two TLSRoutes with different SNIs referencing different resources, a listener-level plus a route-level attachment, or two entries in one resource); without this scope they would share one counter while each enforced its own `rate`, and with differing `interval` would corrupt each other's window. Every Gateway instance derives the same scope from the same resource, so cluster-wide counting is unaffected, and the scope is stable across hot reload. Reordering entries in `plugins` moves an entry to a fresh scope and restarts its counters.
+**Bucket scope**: counters — both the Redis keys and the local token bucket — are namespaced by the plugin entry that owns them, `<namespace>/<name>/#<index>` of the EdgionStreamPlugins resource and the entry's position in `plugins`. Two `ConnectionRateLimit` entries can be active on one listener port (a listener-level plus a TCPRoute-level attachment, or two entries in one resource); without this scope they would share one counter while each enforced its own `rate`, and with differing `interval` would corrupt each other's window. Every Gateway instance derives the same scope from the same resource, so cluster-wide counting is unaffected, and the scope is stable across hot reload. Reordering entries in `plugins` moves an entry to a fresh scope and restarts its counters.
 
 #### `perSourceIp` / `perListener` sub-fields
 

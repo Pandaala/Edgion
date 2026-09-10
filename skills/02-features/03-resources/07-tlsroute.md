@@ -58,6 +58,8 @@ committed CRDs; it did not execute tests or validate live cluster behavior.
 Re-evaluate this discrepancy when version detection, watchers, CRUD/status,
 resource types, or static-ingress validation changes. Removing only the prose
 or one fallback branch cannot establish the required atomic upgrade.
+The coordinated implementation is tracked in
+[Remove the TLSRoute v1alpha3 fallback](../../../tasks/todo/remove-tlsroute-v1alpha3-fallback.md).
 
 ## Full Schema
 
@@ -119,7 +121,7 @@ spec:
 
 | Annotation | Type | Default | Description |
 |------------|------|---------|-------------|
-| `edgion.io/edgion-stream-plugins` | `ns/name` | — | Bind to an EdgionStreamPlugins resource |
+| `edgion.io/edgion-stream-plugins` | `name` or `ns/name` | — | Bind to the resource's `tlsRoutePlugins` stage only; see [stage contract](14-edgion-stream-plugins.md#two-stage-model) |
 | `edgion.io/proxy-protocol` | `"v2"` | disabled | Send Proxy Protocol v2 upstream; other values are ignored |
 | `edgion.io/max-connect-retries` | `u32` | `2` | Max upstream connection attempts; values below `1` are normalized to `1`, values above `5` are capped at `5` |
 | `edgion.io/tcp-keepalive-time` | positive integer seconds | disabled | Enable upstream TCP keepalive and set idle time; clamped to 1–7200 |

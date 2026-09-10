@@ -88,7 +88,7 @@ pub struct TlsCertMatcher {
 
 ### GatewayTlsMatcher
 
-`GatewayTlsMatcher` matches the TLS configuration of Gateway listeners (acts as the fallback layer when EdgionTls matching fails):
+`GatewayTlsMatcher` matches TLS configuration and compiled serving/client-auth state for Gateway listeners. A matched Gateway frontend client-auth decision owns the connection; ordinary certificate-only Gateway entries remain the fallback after EdgionTls matching:
 
 ```rust
 struct TlsMatcherData {
@@ -96,7 +96,7 @@ struct TlsMatcherData {
 }
 ```
 
-- Extracts certificate references from Gateway resource Listener TLS configuration.
+- Extracts certificate references and resolved ordered outcomes from Gateway Listener TLS configuration, and cold-compiles a complete non-empty serving-certificate set before publication.
 - Same two-level index `ListenerKey → HashHost(hostname → GatewayTlsEntry)`.
 - `ArcSwap` for lock-free reads; the inner `Option` provides a fast path (returns immediately when no Gateway TLS configuration exists).
 - Global singleton: `GATEWAY_TLS_MATCHER`.
@@ -114,11 +114,14 @@ Trigger: BoringSSL `handshake_server.cc:694`, **earlier** than the version range
 Responsibilities (this is the only true effective point for `min_tls_version`):
 
 - Extract the SNI from ClientHello (`ch.servername(NameType::HOST_NAME)`).
-- Layer 1 match: `TlsCertMatcher::match_sni(listener_key, sni)` — query EdgionTls.
-- On hit, if `et.spec.min_tls_version` is set → `ssl.set_min_proto_version(...)` per-connection.
+- Capture both the EdgionTls and Gateway matcher results for the listener/SNI.
+- If the Gateway entry has a frontend client-auth decision, process it first. `StrictReject` closes the connection immediately; an EdgionTls certificate may overlay a usable decision only when its resolved attachment identifies that exact winning Gateway listener.
+- Otherwise use the ordinary EdgionTls match first, then the certificate-only Gateway entry as fallback.
+- When the selected EdgionTls certificate has `spec.min_tls_version`, call `ssl.set_min_proto_version(...)` per connection.
   - On failure, fail-closed: `err_log = "min ver: ..."` + `log_ssl` + return `Err(SelectCertError::ERROR)`.
-- Write the match result (`Arc<EdgionTls>` + the resolved SNI) into the SSL ex_data via `store_ssl_ctx` as a snapshot.
-- Always returns `Ok(())` (except on version-set failure), allowing the handshake to proceed to cert_cb.
+- Write the selected EdgionTls, Gateway entry, or exact Gateway/EdgionTls overlay pair plus the resolved SNI into SSL ex_data via `store_ssl_ctx` as a snapshot.
+- Return `Ok(())` only after a usable match is selected and `store_ssl_ctx` succeeds, allowing the handshake to proceed to cert_cb.
+- Return `Err(SelectCertError::ERROR)` after writing the connection audit when any early decision fails: SNI and configured fallback SNI are both absent; the Gateway frontend outcome is `StrictReject`; exact overlay selection finds a client-auth/attachment conflict; applying the selected EdgionTls minimum version fails; snapshot storage fails; or neither matcher supplies a certificate.
 
 Why `min_tls_version` cannot be set in cert_cb: BoringSSL `handshake_server.cc:710` makes it explicit — the version range is frozen immediately after select_cb; cert_cb (`L759`) is one step too late.
 
@@ -131,11 +134,12 @@ cert_cb is a **pure snapshot consumer** — all SNI resolution and Layer 1 / 2 m
 Responsibilities:
 
 1. `take_ssl_ctx` consumes the snapshot written by select_cb (consume-style read; the ex_data slot is cleared automatically). `take_ssl_ctx` returning None is unreachable in theory (guaranteed by the select_cb contract); if it happens, treat it as a BoringSSL state-machine violation, write `err_log = "no snapshot"` + `log_ssl`, and exit.
-2. Snapshot has EdgionTls: call `apply_edgion_tls_cert` directly.
-3. Snapshot has GatewayTls: call `apply_gateway_tls_cert` directly.
-4. Snapshot exists but both are None (theoretically unreachable): write `err_log = "snapshot empty"` + `log_ssl` and exit.
-5. `err_log` was set during apply (cert/key load, install, mTLS configuration failure): `log_ssl` immediately and **skip finalize** — ex_data stays null (the entry-time `take_ssl_ctx` already cleared it), BoringSSL aborts the handshake because the cert was not installed, and `free_ssl_ctx` returns immediately on a null ptr, avoiding double logging.
-6. apply succeeded: call `finalize_ssl_ctx` to stamp `tls_id` and write the SslCtx back to ex_data via `store_ssl_ctx` for `handshake_complete_callback` to consume.
+2. Snapshot has an exact Gateway/EdgionTls overlay pair: configure the Gateway frontend client-auth decision first, then call `apply_edgion_tls_cert` for the serving identity.
+3. Snapshot has EdgionTls: call `apply_edgion_tls_cert` directly.
+4. Snapshot has GatewayTls: call `apply_gateway_tls_cert` directly. It requires a complete non-empty `compiled_serving_certificates` set, selects one with `select_gateway_certificate`, configures frontend validation before binding the identity, and installs it with `apply_compiled_certificate_to_ssl`.
+5. Snapshot exists but has no usable match (theoretically unreachable): write `err_log = "snapshot empty"` + `log_ssl` and exit.
+6. `err_log` was set during apply (cert/key load, install, mTLS configuration failure): `log_ssl` immediately and **skip finalize** — ex_data stays null (the entry-time `take_ssl_ctx` already cleared it), BoringSSL aborts the handshake because the cert was not installed, and `free_ssl_ctx` returns immediately on a null ptr, avoiding double logging.
+7. Apply succeeded: call `finalize_ssl_ctx` to stamp `tls_id` and write the SslCtx back to ex_data via `store_ssl_ctx` for `handshake_complete_callback` to consume.
 
 `apply_edgion_tls_cert` does only the following inside cert_cb timing: cert/key install, mTLS verify configuration, and `configure_ciphers` (the TLS1.2 cipher list still works in cert_cb because BoringSSL chooses the cipher only after cert_cb — `handshake_server.cc:810`). **It no longer handles `min_tls_version`**.
 

@@ -253,10 +253,34 @@ reviewer confirmed the registration and knowledge boundary. No production behavi
 
 ## D0083 dye subscription alignment
 
-The stage/effective-policy dye contract now rejects impossible subscriptions.
-Three frozen named-jump fixtures still subscribe to both reject and fallback
-although their policy selects only one. Their historical end-to-end dye and
-anti-spoof assertions require [fixture alignment](../../../../tasks/todo/align-named-jump-dye-integration-subscriptions.md)
-before they can pass with the new validation. The denial, legal-fallback, no
-backend-contact, and spoofed-header assertions remain required; this is not
-acceptance of weaker security behavior or a claim of a fresh full-suite pass.
+The stage/effective-policy dye contract rejects impossible subscriptions.
+The 2026-09-10 full integration run exposed three historical fixtures that still
+subscribed to both reject and fallback although their effective policies allowed
+only one. The Controller reported a dye preparse error; Gateway compilation kept
+the plugin active but omitted its invalid dye plan. The DIU fallback therefore
+selected the correct legal sibling yet returned no outcome header.
+
+`align-named-jump-dye-integration-subscriptions` narrows the DIU fallback and
+Canary fallback fixtures to `[fallback]`, and Canary reject to `[reject]`.
+DIU reject retains `[reject, fallback]`: its explicit `onInvalid: reject` and
+default `onMissing: fallback` support both outcomes. The suite now requires
+`Accepted=True` for each plugin fixture before checking Gateway publication.
+The `named_jump_fixtures_validate_and_compile_dye_plans` regression checks all
+four actual plugin manifests through resource validation and Gateway compilation,
+including the installed request dye plan rather than activation alone.
+All denial, legal-fallback, no-backend-contact, outcome, and spoofed-header
+assertions remain intact. The suite is local-only; no K8s fixture conversion or
+production behavior change is involved. This aligns fixtures with the strict
+[stage/effective-policy dye contract](../../plugin-runtime/regression-guards/dye-stage-producer-parity.md),
+without grandfathering invalid subscriptions. Historical passes above predate
+this contract.
+
+Fresh verification on 2026-09-10: `cargo test -p edgion-tests --lib` passed
+91 tests, including the actual-fixture validation/compilation regression;
+the test-client binary passed 21 harness checks. After canonical preparation,
+the default integration sweep passed all 237 executed report entries, including
+`EdgionPlugins_DynamicInternalUpstream`, with zero failures or timeouts
+(`tmp/integration_testing/testing_20260910_154454/report.log`). Format, workspace
+check/Clippy, agent-doc, SSA, metrics, and Pingora-policy guards passed.
+Independent review completed two rounds and returned LGTM. The fixture-alignment
+task is closed; no production dye semantics changed.

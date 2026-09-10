@@ -819,7 +819,8 @@ impl TlsCallback {
     ///
     /// Ordering rule (load-bearing for fail-closed, see tls-F002 and tls-F011):
     /// every SSL-level setup that does NOT depend on cert/key state runs BEFORE
-    /// `apply_secret_to_ssl` (which is what binds cert/key on this path).
+    /// `apply_compiled_certificate_to_ssl` (which binds the selected cold-compiled
+    /// identity on this path).
     /// `TlsAccept::certificate_callback` is a `()`-returning async fn that
     /// always reports success to BoringSSL, so the only handshake-aborting
     /// effect available from inside cert_cb is "do not bind a cert/key". If a
@@ -828,10 +829,10 @@ impl TlsCallback {
     /// the audit log — the connection still completes with verify mode never
     /// installed and no client cert ever requested.
     ///
-    /// Concretely: `select_gateway_secret` runs first (it reads only the
+    /// Concretely: `select_gateway_certificate` runs first (it reads only the
     /// ClientHello sigalg extension to pick RSA vs ECDSA cert); then
     /// `frontendValidation` (pure client-verify configuration, no server
-    /// cert/key dependency); only then does `apply_secret_to_ssl` bind
+    /// cert/key dependency); only then does `apply_compiled_certificate_to_ssl` bind
     /// cert/key. If a future change adds a server cert read inside
     /// `configure_gateway_frontend_mtls` (e.g. SAN-mirror logic), this
     /// ordering decision must be revisited.
@@ -884,7 +885,8 @@ impl TlsCallback {
         // (operator-required client cert). `configure_gateway_frontend_mtls`
         // only touches client verify state (X509 store, verify mode, verify
         // depth, optional verify callback) with no server cert/key
-        // dependency, so it runs BEFORE `apply_secret_to_ssl` binds cert/key.
+        // dependency, so it runs BEFORE `apply_compiled_certificate_to_ssl`
+        // binds cert/key.
         // On Err we stamp `err_log` and `return` with no cert bound — that is
         // what aborts the handshake. The Ok branch keeps the `is_mtls`
         // stamping contract unchanged. See tls-F011.
@@ -902,7 +904,7 @@ impl TlsCallback {
         // set, matching the EdgionTls path. The Gateway API listener path has no
         // operator cipher field, so both the approved curves and the approved
         // cipher list always apply on a FIPS build (BoringSSL default
-        // otherwise). Runs BEFORE apply_secret_to_ssl binds cert/key, so a
+        // otherwise). Runs BEFORE apply_compiled_certificate_to_ssl binds cert/key, so a
         // rejected cipher/curve aborts the handshake (fail-closed) rather than
         // negotiating a wider policy.
         if crate::tls::fips_profile::fips_policy_active() {
@@ -1053,13 +1055,14 @@ impl TlsCallback {
         }
     }
 
-    /// Configure mTLS for Gateway standard frontendValidation.
-    /// Uses resolved CA secrets to verify client certificates.
+    /// Configure mTLS for Gateway standard frontendValidation from the matcher's
+    /// immutable compiled outcome and CA store.
     ///
-    /// Returns `Ok(true)` when a verify mode was actually installed, `Ok(false)`
-    /// when the listener has frontendValidation but no resolved CA secrets (so no
-    /// client cert is requested/verified). The caller stamps `is_mtls` from this
-    /// so the flag reflects the real handshake, not merely an Ok return.
+    /// Returns `Ok(false)` only for `NotConfigured`. A strict projection with
+    /// empty, missing, incomplete, or invalid CA references is compiled as
+    /// `StrictReject` and returns `Err`; it cannot become one-way TLS here.
+    /// Usable strict and explicit insecure-fallback outcomes install a verify
+    /// mode and return `Ok(true)`. The caller stamps `is_mtls` from this bool.
     fn configure_gateway_frontend_mtls(
         &self,
         ssl: &mut SslRef,
@@ -1243,12 +1246,12 @@ fn add_ca_bundle_to_store(store_builder: &mut X509StoreBuilder, ca_pem: &[u8]) -
     Ok(count)
 }
 
-/// Pure selection rule shared by `select_gateway_secret`: given each secret's
-/// key-type classification (`Some(true)` = ECDSA, `Some(false)` = RSA/other,
-/// `None` = unparseable) and whether ECDSA is preferred, return the index of the
-/// cert to serve. Prefers ECDSA when requested and available; otherwise the
-/// first RSA cert; otherwise the first secret. Returns `None` only for an empty
-/// list. Extracted as a free fn so the rule is unit-testable without an `SSL`.
+/// Pure test oracle for `select_gateway_certificate` ordering: given each
+/// compiled certificate identity's key-type classification (`Some(true)` =
+/// ECDSA, `Some(false)` = RSA/other, `None` = unknown) and whether ECDSA is
+/// preferred, return the selected index. Prefers ECDSA when requested and
+/// available; otherwise the first RSA/other certificate; otherwise the first
+/// certificate. Returns `None` only for an empty list.
 #[cfg(all(test, feature = "boringssl"))]
 fn pick_secret_index(kinds: &[Option<bool>], prefer_ecdsa: bool) -> Option<usize> {
     if kinds.is_empty() {

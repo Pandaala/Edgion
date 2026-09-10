@@ -24,7 +24,7 @@ pub use routes_mgr::{get_global_tls_route_managers, GlobalTlsRouteManagers, TlsR
 pub use conf_handler_impl::create_tls_route_handler;
 
 use crate::plugins::stream::get_global_stream_plugin_store;
-use crate::plugins::{StreamContext, StreamLayer, StreamPluginResult, TlsRouteContext};
+use crate::plugins::{StreamPluginResult, TlsRouteContext};
 use crate::routes::common::{l4_post_select, L4PostSelect};
 use crate::routes::l4_duplex::{DuplexError, DuplexHooks};
 use edgion_resources::resources::common::RefDenied;
@@ -123,8 +123,8 @@ pub(super) async fn run_tls_route_plugins(
     let Some(store_key) = store_key else {
         return true;
     };
-    // Fail-close: if either canonical address cannot be parsed
-    // to the literal "unknown" because peer extraction failed), an IP-allowlist
+    // Fail-close: if either canonical address cannot be parsed (for example,
+    // the literal "unknown" because peer extraction failed), an IP-allowlist
     // policy referenced by the rule cannot be enforced. Admitting the
     // connection here would silently bypass that policy.
     let Ok(direct_peer_ip) = ctx.direct_peer_ip.parse() else {
@@ -155,7 +155,17 @@ pub(super) async fn run_tls_route_plugins(
         return false;
     };
 
-    // Prefer Stage 2 (TlsRoute) runtime
+    // A Stage-1-only attachment cannot express TLSRoute policy. Check the
+    // declaration, not compiled runtime emptiness: disabled and Bypass entries
+    // must not silently select another stage. An explicit empty Stage 2 is a no-op.
+    if resource.spec.spec.tls_route_plugins.is_none() && resource.spec.has_plugins() {
+        ctx.err_log = Some(format!(
+            "stream plugin resource '{store_key}' requires tlsRoutePlugins for TLSRoute; rejecting (fail-close)"
+        ));
+        return false;
+    }
+
+    // TLSRoute dispatch runs only the Stage-2 runtime.
     let tls_runtime = &resource.tls_route_plugin_runtime;
     if !tls_runtime.is_empty() {
         let result = {
@@ -194,47 +204,7 @@ pub(super) async fn run_tls_route_plugins(
         };
     }
 
-    // Fall back to Stage 1 (ConnectionFilter) runtime
-    let stream_runtime = &resource.stream_plugin_runtime;
-    if !stream_runtime.is_empty() {
-        let stream_ctx = StreamContext::new(direct_peer_ip, listener_port, StreamLayer::Tls);
-        return match stream_runtime.run(&stream_ctx).await {
-            StreamPluginResult::Allow => {
-                ctx.push_log("stream plugin allowed (compat)");
-                true
-            }
-            StreamPluginResult::Deny(reason) => {
-                // Design spec §6.6: an L4 geo denial writes no log entry at any
-                // stage and records no client address — the metric
-                // (`edgion_geoip_denied_total`, already emitted by the plugin
-                // itself) is the only signal, precisely to deny a
-                // country-blocked scanner the amplification of "does logging
-                // this connection cost the gateway more than dropping it".
-                // `ctx.err_log` is emitted alongside `direct_peer_ip` in the same
-                // JSON object (`proxy.rs`), so a geo reason must never reach
-                // it — collapse it the way the TCP path
-                // (`routes/tcp/edgion_tcp.rs::check_stream_plugins`) already
-                // does for every Stage 1 reason, scoped here to geo reasons
-                // only so a non-geo IP-restriction denial keeps its detail.
-                ctx.err_log = Some(if is_geo_deny_reason(&reason) {
-                    "stream plugin denied (compat)".to_string()
-                } else {
-                    format!("stream plugin denied (compat): {reason}")
-                });
-                false
-            }
-        };
-    }
-
     true
-}
-
-/// `true` for the bounded `"geo:deny:*"` reasons emitted by
-/// `GlobalConnectionIpRestriction`'s geo tier (see
-/// `plugins/stream/global_connection_ip_restriction/plugin.rs`). Any other
-/// Stage 1 deny reason (e.g. a plain IP-restriction hit) is unaffected.
-fn is_geo_deny_reason(reason: &str) -> bool {
-    reason.starts_with("geo:deny:")
 }
 
 pub use gateway_tls_routes::TlsRouteTable;
@@ -244,149 +214,4 @@ pub use passthrough_proxy::EdgionTlsPassthroughProxy;
 pub use proxy::EdgionTlsTcpProxy;
 
 #[cfg(test)]
-mod fail_close_tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn fail_close_when_store_key_not_in_store() {
-        // Stage-2 fail-close: rule references "default/missing" but store is
-        // empty. Must reject and surface an err_log entry.
-        let store = get_global_stream_plugin_store();
-        // Avoid touching other tests' state: make sure this key is not present.
-        // (The global store is shared; we only assert the missing-key path,
-        // which never inserts anything.)
-        let key = "default/__fail_close_missing__".to_string();
-        assert!(store.get(&key).is_none(), "test precondition: key must not be in store");
-
-        let mut ctx = TlsContext::new(443, "127.0.0.1".to_string(), 50000, "127.0.0.1".to_string(), 50000);
-
-        let allowed = run_tls_route_plugins(
-            Some(key.as_str()),
-            &mut ctx,
-            "example.com",
-            443,
-            TlsRouteMode::Passthrough,
-        )
-        .await;
-        assert!(!allowed, "missing ESP must fail-close");
-        let err = ctx.err_log.as_deref().unwrap_or("");
-        assert!(
-            err.contains("fail-close"),
-            "err_log should mention fail-close, got: {err}"
-        );
-        assert!(
-            err.contains(&key),
-            "err_log should include the missing store key, got: {err}"
-        );
-    }
-
-    #[tokio::test]
-    async fn admit_when_store_key_is_none() {
-        // No ESP attached to the rule — intentional pass-through, must allow.
-        let mut ctx = TlsContext::new(443, "127.0.0.1".to_string(), 50000, "127.0.0.1".to_string(), 50000);
-        let allowed = run_tls_route_plugins(None, &mut ctx, "example.com", 443, TlsRouteMode::Passthrough).await;
-        assert!(allowed, "rule with no store_key must pass through");
-        assert!(ctx.err_log.is_none());
-    }
-
-    #[tokio::test]
-    async fn reject_when_direct_peer_ip_unparseable() {
-        // Rule references an ESP but DirectPeerIp is not a valid IP (e.g. the
-        // literal "unknown" set when Pingora cannot extract the peer addr).
-        // Without a parseable client IP we cannot evaluate an IP-allowlist
-        // policy, so the connection must be rejected (fail-close).
-        let mut ctx = TlsContext::new(443, "unknown".to_string(), 0, "unknown".to_string(), 0);
-        let allowed = run_tls_route_plugins(
-            Some("default/anything"),
-            &mut ctx,
-            "example.com",
-            443,
-            TlsRouteMode::Passthrough,
-        )
-        .await;
-        assert!(!allowed, "unparseable DirectPeerIp must fail-close");
-        let err = ctx.err_log.as_deref().unwrap_or("");
-        assert!(
-            err.contains("fail-close"),
-            "err_log should mention fail-close, got: {err}"
-        );
-        assert!(
-            err.contains("direct peer IP"),
-            "err_log should mention DirectPeerIp, got: {err}"
-        );
-    }
-
-    #[test]
-    fn apply_tls_l4_post_select_denied_sets_status_and_is_terminal() {
-        let mut ctx = TlsContext::new(443, "127.0.0.1".to_string(), 50000, "127.0.0.1".to_string(), 50000);
-        let denied = RefDenied {
-            target_namespace: "other".to_string(),
-            target_name: "svc".to_string(),
-            reason: Some("NoMatchingReferenceGrant".to_string()),
-        };
-        assert!(apply_tls_l4_post_select(
-            &mut ctx,
-            Some(&denied),
-            Some("apps"),
-            Some("Deployment")
-        ));
-        assert_eq!(ctx.status, Some(crate::routes::common::L4_BACKEND_REF_DENIED_STATUS));
-        assert_eq!(
-            ctx.err_log.as_deref(),
-            Some(crate::routes::common::L4_BACKEND_REF_DENIED_LOG)
-        );
-        let json = serde_json::to_value(&ctx).expect("TlsContext serializes");
-        assert_eq!(json["status"], "RefDenied");
-        assert_eq!(json["err_log"], "backend ref denied");
-    }
-
-    #[test]
-    fn apply_tls_l4_post_select_unsupported_kind_sets_status_and_is_terminal() {
-        let mut ctx = TlsContext::new(443, "127.0.0.1".to_string(), 50000, "127.0.0.1".to_string(), 50000);
-        assert!(apply_tls_l4_post_select(
-            &mut ctx,
-            None,
-            Some("apps"),
-            Some("Deployment")
-        ));
-        assert_eq!(
-            ctx.status,
-            Some(crate::routes::common::L4_BACKEND_UNSUPPORTED_KIND_STATUS)
-        );
-        assert_eq!(
-            ctx.err_log.as_deref(),
-            Some(crate::routes::common::L4_BACKEND_UNSUPPORTED_KIND_LOG)
-        );
-        let json = serde_json::to_value(&ctx).expect("TlsContext serializes");
-        assert_eq!(json["status"], "UnsupportedBackend");
-        assert_eq!(json["err_log"], "unsupported backend kind");
-    }
-
-    #[test]
-    fn apply_tls_l4_post_select_core_service_is_not_terminal() {
-        let mut ctx = TlsContext::new(443, "127.0.0.1".to_string(), 50000, "127.0.0.1".to_string(), 50000);
-        assert!(!apply_tls_l4_post_select(&mut ctx, None, None, None));
-        assert!(ctx.status.is_none());
-        assert!(ctx.err_log.is_none());
-        let json = serde_json::to_value(&ctx).expect("TlsContext serializes");
-        assert!(json.get("status").is_none());
-    }
-
-    #[test]
-    fn is_geo_deny_reason_matches_only_the_bounded_geo_prefix() {
-        assert!(is_geo_deny_reason("geo:deny:country"));
-        assert!(is_geo_deny_reason("geo:deny:allow-miss"));
-        assert!(is_geo_deny_reason("geo:deny:db-unavailable"));
-        assert!(!is_geo_deny_reason("stream plugin policy denied"));
-        assert!(!is_geo_deny_reason("ip restriction denied"));
-    }
-
-    // The former `tls_stage1_compat_geo_denial_never_logs_the_geo_reason`
-    // regression test drove a real `GlobalConnectionIpRestriction` geo block
-    // through this path. GCIR's geo tier was extracted (see the
-    // `2026-08-15-geoip-country-restriction` task); `is_geo_deny_reason`'s
-    // bounded-prefix filter above stays as-is (generic string matching, no
-    // GCIR dependency) for the forthcoming `GeoIpLocation` plugin to reuse,
-    // but the GCIR-specific construction this test used no longer compiles.
-    // Coverage will be restored against the new plugin's deny reason.
-}
+mod tests;

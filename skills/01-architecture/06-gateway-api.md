@@ -74,15 +74,18 @@ Conformance tests verify the following core behaviors:
 - TLS termination and TLS passthrough
 - BackendTLSPolicy backend mTLS
 
-## Multi-version Compatibility Notes
+## API Version Policy
 
-Within a single Gateway API release, `standard-install.yaml` and `experimental-install.yaml` may expose different served versions for the same resource.
+Each Gateway API resource has one canonical version across Controller watches,
+storage operations, status updates, and static input. The supported TLSRoute
+version is `gateway.networking.k8s.io/v1` only. An older version exposed by an
+installed CRD does not expand that support boundary.
 
-Practical recommendations:
-
-- The controller should prefer to watch the latest stable version
-- Older versions serve only as fallback input versions
-- When relying on the API Server's multi-version CRD conversion, do not start watchers on multiple versions of the same resource by default
+**Implementation debt:** the current TLSRoute path still probes v1alpha3 and
+can select its watch, storage, and status handling when v1 is unavailable;
+FileSystem input also still converts v1alpha3 to v1. The required atomic removal
+is tracked in
+[Remove the TLSRoute v1alpha3 fallback](../../tasks/todo/remove-tlsroute-v1alpha3-fallback.md).
 
 ## Extension Points
 

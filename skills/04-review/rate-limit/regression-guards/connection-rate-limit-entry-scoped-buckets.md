@@ -85,8 +85,8 @@ Re-open this decision only if:
 
 ## Layered attachment semantics
 
-Listener-level and TCPRoute attachments are cumulative policy layers; TLSRoute joins this shape only
-when its active Stage-2 runtime is empty and it uses the Stage-1 compatibility fallback. UDP has no
+Listener-level and TCPRoute attachments are cumulative policy layers. TLSRoute runs only its
+Stage-2 chain; it no longer falls back to the Stage-1 connection-rate-limit runtime. UDP has no
 Gateway-level `ConnectionFilter`. Multiple entries in one resource are independent budgets. The
 exact same resource attached at both applicable levels does evaluate the same entry scope twice, but
 this low-frequency configuration overlap is an accepted tradeoff; cross-stage hot-path

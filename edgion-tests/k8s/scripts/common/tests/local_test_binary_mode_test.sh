@@ -44,11 +44,36 @@ for function_name in \
   patch_local_binary_test_deployments \
   rollout_local_binary_test_deployments \
   copy_local_binary_to_pods \
+  copy_local_test_server_to_suite_pods \
+  wait_local_suite_test_server_deployments \
   start_local_test_server_pods \
   install_local_test_binaries; do
   grep -Fq "${function_name}()" "${FUNCTION_FILE}" \
     || fail "could not extract ${function_name} from the main runner"
 done
+
+K8S_ROOT="$(cd "$(dirname "${MAIN_RUNNER}")/.." && pwd)"
+python3 - "${K8S_ROOT}/conf" <<'PY'
+import pathlib
+import sys
+
+import yaml
+
+root = pathlib.Path(sys.argv[1])
+fixtures = sorted(root.glob("**/DynamicTest/bootstrap/*.yaml"))
+labeled = []
+for fixture in fixtures:
+    with fixture.open(encoding="utf-8") as stream:
+        document = yaml.safe_load(stream)
+    if document.get("metadata", {}).get("labels", {}).get("edgion.io/test-server-image") != "true":
+        continue
+    labeled.append(fixture)
+    pod_labels = document.get("spec", {}).get("template", {}).get("metadata", {}).get("labels", {})
+    if pod_labels.get("edgion.io/test-server-image") != "true":
+        raise SystemExit(f"suite image discovery label is missing from Pod template: {fixture}")
+if len(labeled) != 6:
+    raise SystemExit(f"expected 6 suite test-server bootstrap Deployments, found {len(labeled)}")
+PY
 
 # shellcheck source=/dev/null
 source "${FUNCTION_FILE}"
@@ -60,6 +85,14 @@ set -euo pipefail
 
 printf 'KUBECTL:%s\n' "$*" >> "${KUBECTL_LOG}"
 
+if [[ "$*" == "get deployments --all-namespaces -l edgion.io/test-server-image=true -o json" ]]; then
+  printf '{"items":[{"metadata":{"namespace":"edgion-test","name":"aes-tls-dynamic-tls","labels":{}}},{"metadata":{"namespace":"edgion-test","name":"direct-port-unready","labels":{"edgion.io/test-server-rollout-ready":"false"}}}]}\n'
+  exit 0
+fi
+if [[ "$*" == "get deployments -n edgion-test -l edgion.io/test-server-image=true -o json" ]]; then
+  printf '{"items":[{"spec":{"replicas":1}},{"spec":{"replicas":1}}]}\n'
+  exit 0
+fi
 if [[ "$*" == "get deployment lb-multi-test-server -n edgion-default" ]]; then
   exit 1
 fi
@@ -67,6 +100,21 @@ if [[ "$1" == "get" && "$2" == "deployment" ]]; then
   exit 0
 fi
 if [[ "$1" == "get" && "$2" == "pods" ]]; then
+  if [[ " $* " == *" -o json "* ]]; then
+    case "$*" in
+      *"-l edgion.io/test-server-image=true"*)
+        printf '{"items":[{"metadata":{"name":"suite-one"},"status":{"phase":"Running"},"spec":{"containers":[{"name":"test-server","image":"edgion-test-runtime:local"}]}},{"metadata":{"name":"terminating-suite","deletionTimestamp":"2026-09-09T00:00:00Z"},"status":{"phase":"Running"},"spec":{"containers":[{"name":"test-server","image":"edgion-test-runtime:local"}]}},{"metadata":{"name":"suite-two"},"status":{"phase":"Running"},"spec":{"containers":[{"name":"test-server","image":"edgion-test-runtime:local"}]}}]}\n'
+        ;;
+      *"-l app=direct-port-unready"*)
+        printf '{"items":[{"metadata":{"name":"direct-port-unready"},"status":{"phase":"Running"},"spec":{"containers":[{"name":"test-server","image":"edgion-test-runtime:local"}]}}]}\n'
+        ;;
+      *)
+        echo "unexpected JSON Pod selector: $*" >&2
+        exit 1
+        ;;
+    esac
+    exit 0
+  fi
   namespace=""
   while [[ "$#" -gt 0 ]]; do
     if [[ "$1" == "-n" ]]; then
@@ -119,6 +167,31 @@ for namespace in edgion-deleg-dyn edgion-grpc-deleg-dyn; do
   [[ "${start_line}" != *"--https-backend-wildcard-port"* ]] \
     || fail "${namespace} unexpectedly received TLS-only wildcard arguments"
 done
+
+suite_patch_line="$(grep -F \
+  'KUBECTL:patch deployment/aes-tls-dynamic-tls -n edgion-test --type=strategic' \
+  "${KUBECTL_LOG}")"
+[[ "${suite_patch_line}" == *'while [ ! -x /usr/local/bin/test_server ]'* ]] \
+  || fail "suite Deployment does not wait for the injected binary"
+[[ "${suite_patch_line}" == *'exec /usr/local/bin/test_server \"$@\"'* ]] \
+  || fail "suite Deployment does not preserve fixture arguments"
+[[ "${suite_patch_line}" != *'"args"'* ]] \
+  || fail "suite Deployment patch overwrote fixture arguments"
+if grep -Fq 'KUBECTL:patch deployment/direct-port-unready -n edgion-test --type=json' "${KUBECTL_LOG}"; then
+  fail "intentionally unready suite Deployment probe was removed"
+fi
+assert_contains "${KUBECTL_LOG}" \
+  "KUBECTL:cp -n edgion-test -c test-server ${LOCAL_TEST_BIN_DIR}/test_server suite-one:/usr/local/bin/test_server"
+if grep -Fq 'terminating-suite:/usr/local/bin/test_server' "${KUBECTL_LOG}"; then
+  fail "terminating suite Pod was selected for binary copy"
+fi
+assert_contains "${KUBECTL_LOG}" \
+  'KUBECTL:rollout status deployment/aes-tls-dynamic-tls -n edgion-test --timeout=300s'
+assert_contains "${KUBECTL_LOG}" \
+  'KUBECTL:get pods -n edgion-test -l app=direct-port-unready -o json'
+if grep -Fq 'KUBECTL:rollout status deployment/direct-port-unready' "${KUBECTL_LOG}"; then
+  fail "intentionally unready suite Deployment waited for readiness"
+fi
 
 tls_start_line="$(grep -F 'KUBECTL:exec -n edgion-test -c test-server pod-edgion-test -- sh -c' "${KUBECTL_LOG}" \
   | grep -F 'nohup /usr/local/bin/test_server')"

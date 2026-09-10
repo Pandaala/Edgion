@@ -16,7 +16,7 @@ The audit also found that upstream authority is a destination template but curre
 The correction is complex, design-first, and cross-cutting across resource validation, the Gateway evaluator, six consumer families, controller Secret readiness verification, error/failure contracts, bounded allocation behavior, and canonical documentation. An isolated change would either alter established consumer semantics or create a third policy path.
 
 ## Existing-task adjudication
-This finding absorbs and supersedes [`upstream-authority-bounded-template-rendering.md`](../../../todo/upstream-authority-bounded-template-rendering.md). That narrow task shares the same bounded evaluator seam and cannot run independently without duplicating the canonical mechanism; its 63/64-byte, DNS-label, suffix, and pinned-resolution acceptance remains mandatory in the new task.
+This finding absorbs and supersedes the upstream-authority bounded-rendering task in [`unify-gateway-request-template-runtime`](../../../todo/unify-gateway-request-template-runtime/unify-gateway-request-template-runtime.md). That narrow scope shares the same bounded evaluator seam and cannot run independently without duplicating the canonical mechanism; its 63/64-byte, DNS-label, suffix, and pinned-resolution acceptance remains mandatory in the canonical task.
 
 ## Integration-test impact
 Existing integration tests remain frozen. The identified policy matrix is covered most precisely with resource, controller-handler, and Gateway unit tests, while existing authority integration coverage already exercises Controller-to-Gateway wiring. No separate integration-test issue is needed unless implementation later exposes a cross-process capability/status behavior that cannot be proven locally.

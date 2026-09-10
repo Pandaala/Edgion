@@ -60,10 +60,10 @@ spec:
 
 | 字段 | 默认值 | 含义 |
 |------|--------|------|
-| `generateWhenMissing` | `true` | 入站请求不含有效 `traceparent` 时自动生成根 Span |
+| `generateWhenMissing` | `true` | 没有可信且有效的入站上下文时自动生成根 `traceparent` |
 | `echoToClient` | `false` | 不将 `traceparent` 写入客户端响应 |
 | `trustInbound` | `true` | 信任格式正确的入站 `traceparent`（透明透传） |
-| `defaultSampled` | `false` | 生成根 Span 时 trace-flags 置 `00`（由下游决定采样） |
+| `defaultSampled` | `false` | 生成根上下文时将 W3C sampled 建议位设为 `00` |
 
 ---
 
@@ -71,10 +71,10 @@ spec:
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `generateWhenMissing` | Boolean | `true` | 为 `true` 时，若入站请求不含有效 `traceparent`（缺失或格式错误），网关生成新的 128 位 Trace ID 并向上游注入合法的根 `traceparent`，同时将客户端发来的残缺或垃圾 Trace 请求头剥除。为 `false` 时，缺少 Trace 上下文则不做任何处理。 |
+| `generateWhenMissing` | Boolean | `true` | 为 `true` 时，若不存在可信且有效的入站 `traceparent`（因为缺失、格式错误或被 `trustInbound: false` 丢弃），网关生成新的 128 位 Trace ID 并向上游注入合法的根 `traceparent`。为 `false` 时不生成根上下文；格式错误或不受信任的入站 Trace 请求头仍会被移除。 |
 | `echoToClient` | Boolean | `false` | 为 `true` 时，将最终生效的 `traceparent`（透传或新生成的）写回发给客户端的 HTTP 响应。适用于需要将 UI 操作关联到后端链路的单页应用或移动端。 |
-| `trustInbound` | Boolean | `true` | 为 `true` 时，格式正确的入站 `traceparent` 原样转发给上游（透明透传），网关将 `x-trace-id` 对齐到 W3C 32 位十六进制 Trace ID。为 `false` 时，网关完全忽略入站 Trace 上下文，始终生成新的根 Span，适合互联网边缘部署，防止客户端伪造 Trace 上下文。 |
-| `defaultSampled` | Boolean | `false` | 控制网关生成的 `traceparent` 中 trace-flags 字节。`false` → `00`（未采样，由下游采集器决定）；`true` → `01`（已采样，强制所有下游服务采样该链路）。透传入站 `traceparent` 时此字段无效。 |
+| `trustInbound` | Boolean | `true` | 为 `true` 时，格式正确的入站 `traceparent` 原样转发给上游（透明透传），网关将 `x-trace-id` 对齐到 W3C 32 位十六进制 Trace ID。为 `false` 时，网关移除入站 `traceparent` 和 `tracestate`，之后由 `generateWhenMissing` 决定是否生成新的根上下文。适合互联网边缘部署，防止客户端伪造 Trace 上下文。 |
+| `defaultSampled` | Boolean | `false` | 控制网关生成的 `traceparent` 中 W3C sampled 建议位：`false` → trace-flags `00`；`true` → `01`。该位表达网关的采样建议，不会强制下游采样器接受。透传入站 `traceparent` 时此字段无效。 |
 
 ---
 
@@ -88,11 +88,11 @@ spec:
 
 若 `generateWhenMissing: true`（默认），网关生成新的根 `traceparent`（全新 128 位 Trace ID）并注入上游，该请求成为所有下游服务的链路根节点。客户端发来的残缺或垃圾 `traceparent` / `tracestate` 请求头在转发前被剥除。
 
-若 `generateWhenMissing: false`，网关不做任何修改，不注入任何 Trace 请求头。
+若 `generateWhenMissing: false`，网关不生成根上下文。原本缺失的上下文仍保持缺失；格式错误的 `traceparent` 及其关联 `tracestate` 会在转发前被移除。
 
 ### 情形 3 — `trustInbound: false`（互联网边缘部署）
 
-网关完全忽略入站的 `traceparent` / `tracestate`，无论其格式是否正确。始终生成新的根 `traceparent`（效果等同于请求不携带任何 Trace 请求头）。这可防止客户端伪造 Trace 上下文，避免外部 ID 污染内部链路树。
+网关移除所有入站 `traceparent` / `tracestate`，无论其格式是否正确。若 `generateWhenMissing: true`，随后生成新的根 `traceparent`；若为 `false`，请求将保持没有 Trace 上下文。移除外部标识可防止客户端伪造 Trace 上下文，避免外部 ID 污染内部链路树。
 
 ---
 
@@ -160,9 +160,9 @@ spec:
     - type: TraceContext
       config:
         generateWhenMissing: true
-        trustInbound: false   # 面向互联网：始终生成新根 Span
+        trustInbound: false   # 面向互联网：丢弃入站 Trace 上下文
         echoToClient: true    # 将 traceparent 写入响应，供客户端关联
-        defaultSampled: false # 由下游采集器决定采样
+        defaultSampled: false # 生成的根上下文携带 W3C sampled 位 00
 ---
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
@@ -208,7 +208,7 @@ spec:
 
 ### Q4：是否应该使用 `defaultSampled: true`？
 
-**A**：仅当你希望网关对其生成的所有链路强制 100% 采样时才使用。这会覆盖下游的所有采样决策，在高流量环境下可能显著增加成本。建议保持默认值 `false`，在采集器中配置采样率。
+**A**：当网关生成的根上下文应携带 W3C sampled 建议位 `01` 时设为 `true`；默认的 `false` 写入 `00`。该字段只表达建议，不会强制下游采样器接受；下游行为仍由各自配置决定。
 
 ---
 

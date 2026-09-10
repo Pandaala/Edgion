@@ -1053,11 +1053,11 @@ load_configs() {
     
     for suite in $suites_to_load; do
         log_info "Load $suite config..."
-        #  --wait 0  suite ，
-        if bash "$load_script" --wait 0 "$suite" 2>&1 | tee -a "${LOG_DIR}/load_config.log"; then
+        # Keep pipefail local: both the loader and the log sink must succeed.
+        if (set -o pipefail; bash "$load_script" --wait 0 "$suite" 2>&1 | tee -a "${LOG_DIR}/load_config.log"); then
             log_success "$suite configLoadcompleted"
         else
-            log_error "$suite configLoadfailed"
+            log_error "Config load or log write failed for ${suite}; see ${LOG_DIR}/load_config.log and the output above"
             failed=true
         fi
     done

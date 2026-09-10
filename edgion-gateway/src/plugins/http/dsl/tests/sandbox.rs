@@ -29,7 +29,13 @@ fn test_loop_limit_exceeded() {
         max_loop_iterations: 3,
         ..Default::default()
     };
-    let result = run_with_limits(r#"while true { }"#, session, limits);
+    let source = r#"while true { }"#;
+    let err = run_expect_runtime_err_with_limits(source, MockPluginSession::new(), limits.clone());
+    assert!(
+        matches!(err, RuntimeError::LoopLimitExceeded { limit: 3 }),
+        "expected LoopLimitExceeded with limit 3, got {err:?}"
+    );
+    let result = run_with_limits(source, session, limits);
     assert!(matches!(result, PluginRunningResult::ErrResponse { status: 500, .. }));
 }
 
@@ -40,7 +46,13 @@ fn test_string_too_long() {
         max_string_len: 5,
         ..Default::default()
     };
-    let result = run_with_limits(r#"let s = "hello" + " world""#, session, limits);
+    let source = r#"let s = "hello" + " world""#;
+    let err = run_expect_runtime_err_with_limits(source, MockPluginSession::new(), limits.clone());
+    assert!(
+        matches!(err, RuntimeError::StringTooLong { len: 11, limit: 5 }),
+        "expected StringTooLong with len 11 and limit 5, got {err:?}"
+    );
+    let result = run_with_limits(source, session, limits);
     assert!(matches!(result, PluginRunningResult::ErrResponse { status: 500, .. }));
 }
 
@@ -99,7 +111,13 @@ fn test_map_literal_too_large() {
         max_map_size: 2,
         ..Default::default()
     };
-    let result = run_with_limits(r#"let m = {"a": 1, "b": 2, "c": 3}"#, session, limits);
+    let source = r#"let m = {"a": 1, "b": 2, "c": 3}"#;
+    let err = run_expect_runtime_err_with_limits(source, MockPluginSession::new(), limits.clone());
+    assert!(
+        matches!(err, RuntimeError::MapTooLarge { size: 3, limit: 2 }),
+        "expected MapTooLarge with size 3 and limit 2, got {err:?}"
+    );
+    let result = run_with_limits(source, session, limits);
     assert!(matches!(result, PluginRunningResult::ErrResponse { status: 500, .. }));
 }
 

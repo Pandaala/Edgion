@@ -10,11 +10,11 @@
 | Priority | P1 |
 | Baseline commit | `d484e580` |
 | Scope | Every tracked file under `edgion-gateway/` |
-| Campaign status | in-progress; B0271 reviewed and verified, awaiting local commit. |
-| Coverage | 549 current Gateway files: 253 changed, 185 examined-no-change, 14 deferred, 97 non-terminal; 3 historical rows are removed. The new canonical bounded-regex helper is included in the current inventory. Four terminal files changed by external `bea47373` remain reopened without discarding their historical evidence. |
-| Active batch | B0271 commit gate. Automatic local batch commits authorized, never push. |
-| Analysis queue | B0272 request-metadata tests analysis-in-progress. D0127–D0141 track confirmed separate work. |
-| Integration freeze | 3,231 files. External `2c01a075` added 95 and refreshed 38 entries; `bea47373` and `5cd384c6` refreshed six more existing entries. All are byte/mode-identical to their commits, the full check passes, and the campaign made no integration-test edit. |
+| Campaign status | in-progress at HEAD `1edac7b7`: B0279 passed all gates, automatic commit pending. |
+| Coverage | 549 current Gateway files: 258 changed, 182 examined-no-change, 14 deferred, 95 non-terminal; 3 historical rows are removed. External `78a25c3a` reopened six terminal files; four earlier `bea47373` reopens remain pending. Historical evidence is retained. |
+| Active batch | B0279 at commit gate. Automatic local commits, never push. |
+| Analysis queue | None. D0127–D0145 track separate work; tasks removed by external `78a25c3a` are retired only in coordinator records. |
+| Integration freeze | 3,238 files. External `78a25c3a` refreshed 21, removed two relocated paths and added nine entries, each verified against old/new Git objects and worktree bytes/mode. Prior reconciliations remain intact. Full check passes; campaign made no integration-test edit. |
 
 ## AI guide summary
 
