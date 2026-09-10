@@ -652,6 +652,8 @@ If you instead want the **current** (possibly rewritten) view of a header, use a
 | `warnIfMissing` | The field is omitted, a PluginLog alert is written, and the request continues. | Fields that *should* be present — you want visibility without failing the call. |
 | `required` | The webhook call is treated as failed: WebhookKeyGet writes no value, same as any other webhook failure. | Fields the backend cannot function without. |
 
+Missing `warnIfMissing` fields share one `warn outbound field missing` PluginLog entry per outbound call, within the normal plugin-log capacity limit. The entry contains no field names or values, and retries do not repeat it. WebhookKeyGet resolves each variable with a separate call. A warning already observed is retained if a later build step or the external exchange fails; calls stopped before field evaluation produce no missing-field warning.
+
 `statusOnError` is declared on this connector's schema (it shares `ExternalHttpConnection` with the ForwardAuth plugin), but the **webhook connector itself does not read it**: on any failure — including a missing `presence: required` field — WebhookKeyGet writes no value (or its `default`), and the request continues. Setting this field on a webhook `LinkSys` has no effect; it is meaningful only when the same struct is embedded directly in a ForwardAuth plugin config.
 
 #### Custom field sources

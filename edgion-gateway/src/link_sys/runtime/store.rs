@@ -966,6 +966,9 @@ pub fn get_global_link_sys_store() -> Arc<LinkSysStore> {
 // ============================================================
 
 #[cfg(test)]
+pub(crate) static I5_DISPATCH_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use std::sync::atomic::AtomicUsize;
@@ -1408,12 +1411,9 @@ mod tests {
     // These tests mutate the process-global REDIS_RUNTIME. A full-set test
     // running concurrently with a partial-update test would wipe the map the
     // latter seeded, producing flaky failures. Serialize them through a
-    // module-local Mutex. Keys are namespaced under `i5-ns/` to avoid
+    // shared test Mutex, also used by webhook consumer tests. Keys are namespaced under `i5-ns/` to avoid
     // colliding with any future non-dispatch test.
     // ============================================================
-
-    use std::sync::Mutex as StdMutex;
-    static I5_DISPATCH_LOCK: StdMutex<()> = StdMutex::new(());
 
     /// How the injected Secret (if any) is populated — controls the
     /// `CredentialState` that `basic_state(ls)` will compute.

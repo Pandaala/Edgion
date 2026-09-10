@@ -32,6 +32,8 @@ before applying a decision to current code.
 
 ## Regression guards
 
+- [Outbound presence warnings belong to the calling plugin](regression-guards/outbound-presence-diagnostics.md)
+
 - [Streaming connection-established logs need live-connection output coverage](regression-guards/streaming-connection-established-log-coverage.md)
 - [Debug access-log wire masking and plugin lifecycle coverage](regression-guards/debug-access-log-wire-and-lifecycle.md)
 - [Generic Watch decode failure recovery and safe diagnostics](../conf-sync/regression-guards/watch-decode-error-relist.md)

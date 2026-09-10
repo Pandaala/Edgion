@@ -139,6 +139,15 @@ Webhook templates reuse the ctx-set engine (`CompiledTemplate` in `edgion-resour
 | `warnIfMissing` | field omitted, a PluginLog alert is written, request continues |
 | `required` | the webhook call is treated as **failed**, and WebhookKeyGet writes `default` or leaves the target variable unset |
 
+The shared builder records missing warning fields in the caller-owned, stack-only
+`OutboundRequestDiagnostics`. ForwardAuth and WebhookKeyGet consume it into their
+PluginLog after the call, before classifying the outcome. Each logical call emits at
+most one `warn outbound field missing` entry, without names or values, subject to
+the existing PluginLog capacity limit. Retries do not repeat it. Evidence observed
+before a later failure is retained; gates before field evaluation produce none.
+See the [diagnostic regression guard](../../04-review/observability/regression-guards/outbound-presence-diagnostics.md)
+for the consumer inventory and verification boundaries.
+
 Note: webhook connector has no fail-open mode. When a webhook call fails for any reason, `resolve_webhook_key` returns `None`, and WebhookKeyGet writes `default` or leaves the var unset — there is no `statusOnError` or automatic bypass.
 
 ## Health state semantics

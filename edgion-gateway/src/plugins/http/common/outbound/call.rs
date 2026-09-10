@@ -19,7 +19,7 @@ use crate::backends::policy::backend_traffic::authority::render_authority;
 use crate::backends::policy::backend_traffic::store::get_backend_traffic_policy_store;
 
 use super::client::{HealthState, ManagedOutboundClient};
-use super::request::sync_outbound_body_framing;
+use super::request::{sync_outbound_body_framing, OutboundRequestDiagnostics};
 use crate::plugins::runtime::PluginSession;
 
 // ============================================================
@@ -115,16 +115,32 @@ impl std::fmt::Display for OutboundCallError {
 /// 7. **Return** — always returns `Ok(OutboundResponse { status, headers, body })`
 ///    for any completed HTTP exchange. The caller classifies it via
 ///    `client.classify(&resp)`, which reads `client.success`.
+///
+/// Supply fresh `diagnostics` for each logical call and emit it at the owning
+/// logging boundary after awaiting, on both success and failure. It records
+/// only missing warning fields actually evaluated during request construction.
 pub async fn outbound_call(
     client: &ManagedOutboundClient,
     session: &dyn PluginSession,
     path_override: Option<&str>,
     global_max_bytes: usize,
     extra_headers: &[(&str, &str)],
+    diagnostics: &mut OutboundRequestDiagnostics,
 ) -> Result<OutboundResponse, OutboundCallError> {
-    outbound_call_with_body(client, session, path_override, global_max_bytes, extra_headers, None).await
+    outbound_call_with_body(
+        client,
+        session,
+        path_override,
+        global_max_bytes,
+        extra_headers,
+        None,
+        diagnostics,
+    )
+    .await
 }
 
+/// Execute a call with an optional body override and caller-owned diagnostics.
+/// See [`outbound_call`] for diagnostic lifetime and emission requirements.
 pub async fn outbound_call_with_body(
     client: &ManagedOutboundClient,
     session: &dyn PluginSession,
@@ -132,6 +148,7 @@ pub async fn outbound_call_with_body(
     global_max_bytes: usize,
     extra_headers: &[(&str, &str)],
     body_override: Option<bytes::Bytes>,
+    diagnostics: &mut OutboundRequestDiagnostics,
 ) -> Result<OutboundResponse, OutboundCallError> {
     // ── 1. Health gate ────────────────────────────────────────────────────────
     if !client.health.healthy.load(Ordering::Relaxed) && !should_halfopen_probe(client) {
@@ -185,10 +202,13 @@ pub async fn outbound_call_with_body(
     let effective_timeout = resolve_timeout(client, session);
 
     let mut template_req = Some(
-        match client
-            .compiled_request
-            .build_request(session, path_override, &base, client.resolved_secrets.as_ref())
-        {
+        match client.compiled_request.build_request(
+            session,
+            path_override,
+            &base,
+            client.resolved_secrets.as_ref(),
+            diagnostics,
+        ) {
             Ok(mut req) => {
                 *req.timeout_mut() = Some(effective_timeout);
                 // Inject caller-supplied extra headers (e.g. X-Forwarded-* from ForwardAuth).
@@ -815,7 +835,9 @@ mod tests {
         let client = make_client(&localhost_uri(&server.uri()));
 
         let session = make_session("GET", "/check");
-        let resp = outbound_call(&client, &session, None, 4096, &[]).await.unwrap();
+        let resp = outbound_call(&client, &session, None, 4096, &[], &mut Default::default())
+            .await
+            .unwrap();
         assert_eq!(resp.status, 403);
         assert_eq!(
             resp.headers.get("www-authenticate").map(|v| v.to_str().unwrap_or("")),
@@ -846,7 +868,9 @@ mod tests {
         client.timeout = Duration::from_millis(50);
 
         let session = make_session("GET", "/slow");
-        let err = outbound_call(&client, &session, None, 4096, &[]).await.unwrap_err();
+        let err = outbound_call(&client, &session, None, 4096, &[], &mut Default::default())
+            .await
+            .unwrap_err();
         assert!(
             matches!(err, OutboundCallError::Timeout),
             "expected Timeout, got {err:?}"
@@ -860,7 +884,7 @@ mod tests {
         client.health.healthy.store(false, Ordering::Relaxed);
 
         let session = MockPluginSession::new();
-        let result = outbound_call(&client, &session, None, 65536, &[]).await;
+        let result = outbound_call(&client, &session, None, 65536, &[], &mut Default::default()).await;
         assert!(
             matches!(result, Err(OutboundCallError::Unhealthy)),
             "expected Unhealthy, got {result:?}"
@@ -876,7 +900,7 @@ mod tests {
         client.rate = Some(SlidingWindowCounter::new(0, Duration::from_secs(1)));
 
         let session = MockPluginSession::new();
-        let result = outbound_call(&client, &session, None, 65536, &[]).await;
+        let result = outbound_call(&client, &session, None, 65536, &[], &mut Default::default()).await;
         assert!(
             matches!(result, Err(OutboundCallError::RateLimited)),
             "expected RateLimited, got {result:?}"
@@ -900,7 +924,7 @@ mod tests {
         client.max_response_bytes = 10; // well below 200 bytes
 
         let session = make_session("GET", "/big");
-        let result = outbound_call(&client, &session, None, 65536, &[]).await;
+        let result = outbound_call(&client, &session, None, 65536, &[], &mut Default::default()).await;
         assert!(
             matches!(result, Err(OutboundCallError::ResponseTooLarge)),
             "expected ResponseTooLarge, got {result:?}"
@@ -923,7 +947,9 @@ mod tests {
         let client = make_client(&localhost_uri(&server.uri()));
 
         let session = make_session("GET", "/ok");
-        let resp = outbound_call(&client, &session, None, 65536, &[]).await.unwrap();
+        let resp = outbound_call(&client, &session, None, 65536, &[], &mut Default::default())
+            .await
+            .unwrap();
         assert_eq!(resp.status, 200);
         assert_eq!(&resp.body[..], b"hello");
     }
@@ -965,7 +991,9 @@ mod tests {
         });
 
         let session = make_session("GET", "/retry");
-        let resp = outbound_call(&client, &session, None, 65536, &[]).await.unwrap();
+        let resp = outbound_call(&client, &session, None, 65536, &[], &mut Default::default())
+            .await
+            .unwrap();
         assert_eq!(resp.status, 200);
 
         let received = server.received_requests().await.unwrap();
@@ -1001,7 +1029,9 @@ mod tests {
         client.retry = Some(retry);
         let session = make_session("GET", "/ra");
         let start = std::time::Instant::now();
-        let resp = outbound_call(&client, &session, None, 4096, &[]).await.unwrap();
+        let resp = outbound_call(&client, &session, None, 4096, &[], &mut Default::default())
+            .await
+            .unwrap();
         assert_eq!(resp.status, 200);
         let elapsed = start.elapsed();
         assert!(
@@ -1037,7 +1067,9 @@ mod tests {
         retry.max_delay_ms = 2000;
         client.retry = Some(retry);
         let session = make_session("GET", "/ra2");
-        let resp = outbound_call(&client, &session, None, 4096, &[]).await.unwrap();
+        let resp = outbound_call(&client, &session, None, 4096, &[], &mut Default::default())
+            .await
+            .unwrap();
         assert_eq!(resp.status, 503);
         assert_eq!(
             server.received_requests().await.unwrap().len(),
@@ -1077,7 +1109,9 @@ mod tests {
         });
 
         let session = make_session("GET", "/biz");
-        let resp = outbound_call(&client, &session, None, 4096, &[]).await.unwrap();
+        let resp = outbound_call(&client, &session, None, 4096, &[], &mut Default::default())
+            .await
+            .unwrap();
         assert_eq!(resp.status, 200);
         assert!(
             !client.classify(&resp),
@@ -1127,7 +1161,9 @@ mod tests {
             // No retry configured (client.retry is None): this attempt is terminal,
             // not a retried one, so the branch under test must fire exactly once.
             let _guard = metrics::set_default_local_recorder(&recorder);
-            let resp = outbound_call(&client, &session, None, 4096, &[]).await.unwrap();
+            let resp = outbound_call(&client, &session, None, 4096, &[], &mut Default::default())
+                .await
+                .unwrap();
             assert_eq!(resp.status, 200);
         }
 
@@ -1177,14 +1213,32 @@ mod tests {
         retry.retry_on_status = vec![503];
         client.retry = Some(retry);
 
-        let session = make_session("GET", "/retry-big");
-        let resp = outbound_call(&client, &session, None, 65536, &[])
+        client
+            .compiled_request
+            .headers
+            .origin
+            .push(super::super::request::CompiledOriginField {
+                name: "x-private-metadata".into(),
+                presence: edgion_resources::resources::common::outbound_request::PresencePolicy::WarnIfMissing,
+            });
+        let mut session = make_session("GET", "/retry-big");
+        // Request construction and presence evaluation happen once, not once
+        // per attempt. The field remains absent in both outbound requests.
+        session.expect_header_value().times(1).return_const(None::<String>);
+        let mut diagnostics = OutboundRequestDiagnostics::default();
+        let resp = outbound_call(&client, &session, None, 65536, &[], &mut diagnostics)
             .await
             .expect("must retry past the oversized error body and succeed, not ResponseTooLarge");
         assert_eq!(resp.status, 200);
 
         let received = server.received_requests().await.unwrap();
         assert_eq!(received.len(), 2, "expected 2 requests (initial 503 + 1 retry)");
+        assert!(received
+            .iter()
+            .all(|request| !request.headers.contains_key("x-private-metadata")));
+        let mut log = crate::plugins::runtime::PluginLog::new("test");
+        diagnostics.emit(&mut log);
+        assert_eq!(log.render_for_test(), "warn outbound field missing");
     }
 
     /// `retry_on_body_failure` actually retries: first response fails the
@@ -1227,7 +1281,9 @@ mod tests {
         client.retry = Some(retry);
 
         let session = make_session("GET", "/biz-retry");
-        let resp = outbound_call(&client, &session, None, 4096, &[]).await.unwrap();
+        let resp = outbound_call(&client, &session, None, 4096, &[], &mut Default::default())
+            .await
+            .unwrap();
         assert_eq!(resp.status, 200);
         assert!(client.classify(&resp), "final response must classify as success");
 
@@ -1260,7 +1316,9 @@ mod tests {
         client.retry = Some(retry);
 
         let session = make_session("GET", "/not-found");
-        let resp = outbound_call(&client, &session, None, 4096, &[]).await.unwrap();
+        let resp = outbound_call(&client, &session, None, 4096, &[], &mut Default::default())
+            .await
+            .unwrap();
         assert_eq!(resp.status, 404);
 
         let received = server.received_requests().await.unwrap();
@@ -1295,7 +1353,9 @@ mod tests {
         client.retry = Some(retry);
 
         let session = make_session("GET", "/ra-body");
-        let resp = outbound_call(&client, &session, None, 4096, &[]).await.unwrap();
+        let resp = outbound_call(&client, &session, None, 4096, &[], &mut Default::default())
+            .await
+            .unwrap();
         assert_eq!(resp.status, 503);
         assert_eq!(
             server.received_requests().await.unwrap().len(),
@@ -1328,7 +1388,7 @@ mod tests {
         client.retry = Some(retry);
 
         let session = make_session("GET", "/slow");
-        let _ = outbound_call(&client, &session, None, 4096, &[]).await;
+        let _ = outbound_call(&client, &session, None, 4096, &[], &mut Default::default()).await;
 
         // Only one request should have been attempted (no timeout retry).
         assert_eq!(server.received_requests().await.unwrap().len(), 1);
@@ -1383,7 +1443,9 @@ mod tests {
         session.expect_get_request_path().return_const("/verify".to_string());
         setup_header_mocks(&mut session, &[("authorization", "Bearer test-token")]);
 
-        let resp = outbound_call(&client, &session, None, 4096, &[]).await.unwrap();
+        let resp = outbound_call(&client, &session, None, 4096, &[], &mut Default::default())
+            .await
+            .unwrap();
         assert_eq!(resp.status, 200, "authorization header should have been forwarded");
     }
 
@@ -1441,7 +1503,9 @@ mod tests {
         };
 
         let session = make_session("GET", "/api");
-        let resp = outbound_call(&client, &session, None, 4096, &[]).await.unwrap();
+        let resp = outbound_call(&client, &session, None, 4096, &[], &mut Default::default())
+            .await
+            .unwrap();
         assert_eq!(resp.status, 200, "secretRef should have resolved at runtime");
     }
 
@@ -1491,7 +1555,9 @@ mod tests {
         client.resolved_secrets = Some(ResolvedSecrets(secrets));
 
         let session = MockPluginSession::new();
-        let resp = outbound_call(&client, &session, None, 4096, &[]).await.unwrap();
+        let resp = outbound_call(&client, &session, None, 4096, &[], &mut Default::default())
+            .await
+            .unwrap();
         assert_eq!(resp.status, 200, "body + CT + secret must all match the mock");
     }
 
@@ -1524,7 +1590,9 @@ mod tests {
             .withf(|n| n == "X-Test-Timeout")
             .return_const(Some("50".to_string()));
 
-        let err = outbound_call(&client, &session, None, 4096, &[]).await.unwrap_err();
+        let err = outbound_call(&client, &session, None, 4096, &[], &mut Default::default())
+            .await
+            .unwrap_err();
         assert!(
             matches!(err, OutboundCallError::Timeout),
             "expected Timeout, got {err:?}"
@@ -1558,7 +1626,7 @@ mod tests {
             .withf(|n| n == "X-Test-Timeout")
             .return_const(Some("abc".to_string()));
 
-        let resp = outbound_call(&client, &session, None, 4096, &[])
+        let resp = outbound_call(&client, &session, None, 4096, &[], &mut Default::default())
             .await
             .expect("a garbage render must fall back to the static timeout, not fail the call");
         assert_eq!(resp.status, 200);
@@ -1590,7 +1658,7 @@ mod tests {
             .withf(|n| n == "X-Test-Timeout")
             .return_const(None::<String>);
 
-        let resp = outbound_call(&client, &session, None, 4096, &[])
+        let resp = outbound_call(&client, &session, None, 4096, &[], &mut Default::default())
             .await
             .expect("a missing header must fall back to the static timeout");
         assert_eq!(resp.status, 200);

@@ -178,6 +178,9 @@ impl CompiledEvaluator {
                 self.client.max_response_bytes.min(MAX_DECISION_RESPONSE_BYTES),
                 &[("content-type", "application/json")],
                 Some(request),
+                // Evaluator validation forbids all origin fields, so no
+                // presence-policy diagnostics can be produced here.
+                &mut Default::default(),
             )
             .await
             .map_err(|_| "evaluator dependency")

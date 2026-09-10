@@ -112,6 +112,8 @@ spec:
 | `request.headers.origin` | array | `[]` | 从原始请求选择性转发的请求头列表。每项：`{ name, presence }`。presence 策略：`skipIfMissing`（默认）、`required`、`warnIfMissing`。`Content-Length` 和 `Transfer-Encoding` 由代理管理，配置时会被拒绝。 |
 | `request.headers.custom` | array | `[]` | 从配置或 Secret 注入的自定义请求头。字面量：`{ name, value: "..." }`；模板：`{ name, template: "..." }`（可包含 `${secretRef:ns/name:key}`）。`Content-Length` 和 `Transfer-Encoding` 由代理管理，配置时会被拒绝。 |
 
+缺失的 `warnIfMissing` 原始字段会被省略，每次鉴权调用最多合并写入一条 `warn outbound field missing` PluginLog 记录，不包含字段名或值。重试不会重复记录。`skipIfMissing` 仍保持静默，`required` 仍使调用失败。失败时的告警保留与日志容量边界见[存在性策略](../../ops-guide/infrastructure/connectors.md#存在性策略)。
+
 #### `decision` — 鉴权后行为
 
 `decision` 包含以下字段：

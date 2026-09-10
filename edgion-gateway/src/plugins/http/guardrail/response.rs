@@ -289,6 +289,9 @@ impl GuardrailResponseProcessor {
                 self.client.max_response_bytes.min(MAX_DECISION_RESPONSE_BYTES),
                 &[("content-type", "application/json")],
                 Some(request),
+                // Guardrail validation forbids all origin fields. In
+                // particular, never create PluginLog entries in body callbacks.
+                &mut Default::default(),
             )
             .await
             .map_err(|_| "dependency")

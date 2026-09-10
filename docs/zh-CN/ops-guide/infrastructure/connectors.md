@@ -606,6 +606,8 @@ request:
 | `warnIfMissing` | 省略该字段，写入一条 PluginLog 告警，请求继续。 | *应当*存在的字段——你想要可见性但不想让调用失败。 |
 | `required` | webhook 调用被视为失败：WebhookKeyGet 不写入值，与其他任何 webhook 失败一样。 | 后端缺之不可的字段。 |
 
+每次出站调用中缺失的 `warnIfMissing` 字段合并为一条 `warn outbound field missing` PluginLog 记录，受插件日志的正常容量上限约束。记录不包含字段名或值，重试不会重复记录。WebhookKeyGet 的每个变量分别发起调用。若后续构造步骤或外部交换失败，已经发现的缺失告警仍会保留；在字段检查前停止的调用不会产生缺失告警。
+
 `statusOnError` 存在于该连接器的 schema 中（它与 ForwardAuth 插件共用 `ExternalHttpConnection`），但**webhook 连接器本身并不读取它**：任何失败——包括某个 `presence: required` 字段缺失——WebhookKeyGet 都不写入值（或写入其 `default`），请求继续往下走。在 webhook `LinkSys` 上设置此字段没有任何效果；它只在同一个结构体被直接嵌入 ForwardAuth 插件配置时才有意义。
 
 #### 自定义字段来源

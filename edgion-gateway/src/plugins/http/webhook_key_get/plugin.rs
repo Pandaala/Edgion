@@ -9,6 +9,7 @@ use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::resources::edgion_plugins::WebhookKeyGetConfig;
 
 use crate::link_sys::providers::webhook::resolve_webhook_key;
+use crate::plugins::http::common::outbound::request::OutboundRequestDiagnostics;
 use crate::plugins::runtime::log::la;
 use crate::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 
@@ -81,14 +82,17 @@ impl RequestFilter for WebhookKeyGet {
 
     async fn run_request(&self, session: &mut dyn PluginSession, plugin_log: &mut PluginLog) -> PluginRunningResult {
         for var in &self.config.vars {
+            let mut diagnostics = OutboundRequestDiagnostics::default();
             let resolved = resolve_webhook_key(
                 session,
                 &var.webhook_ref,
                 None,
                 var.path_override.as_deref(),
                 &var.extract,
+                &mut diagnostics,
             )
             .await;
+            diagnostics.emit(plugin_log);
             let outcome = select_outcome(resolved.as_deref(), var.default.as_deref());
             apply_outcome(session, plugin_log, &var.name, outcome);
         }

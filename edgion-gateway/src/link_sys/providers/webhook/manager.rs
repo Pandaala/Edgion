@@ -11,6 +11,7 @@ use tokio::sync::{Mutex, MutexGuard, RwLock};
 
 use crate::plugins::http::common::outbound::call::{outbound_call, OutboundCallError, OutboundResponse};
 use crate::plugins::http::common::outbound::client::ManagedOutboundClient;
+use crate::plugins::http::common::outbound::request::OutboundRequestDiagnostics;
 use edgion_resources::resources::link_sys::webhook::WebhookServiceConfig;
 
 // ============================================================
@@ -278,10 +279,13 @@ impl WebhookCallHandle {
     /// The outbound request shape is defined by the webhook resource; the caller
     /// only supplies the `session` (for origin / template lookups) and an
     /// optional `path_override` (honoured when the compiled path allows it).
+    /// The caller must consume `diagnostics` into its canonical log after the
+    /// call, including failures; use a fresh collector for each logical call.
     pub async fn call(
         &self,
         session: &dyn crate::plugins::runtime::PluginSession,
         path_override: Option<String>,
+        diagnostics: &mut OutboundRequestDiagnostics,
     ) -> Result<OutboundResponse, OutboundCallError> {
         outbound_call(
             &self.0,
@@ -289,6 +293,7 @@ impl WebhookCallHandle {
             path_override.as_deref(),
             get_webhook_global_max(),
             &[],
+            diagnostics,
         )
         .await
     }
@@ -314,6 +319,104 @@ mod tests {
         assert_eq!(get_webhook_global_max(), 65536);
         // reset to default for other tests
         configure_webhook_global_max(16384);
+    }
+
+    #[test]
+    fn webhook_presence_diagnostics_follow_each_call_and_current_generation() {
+        use crate::plugins::http::common::outbound::request::test_presence_failure_request;
+        use crate::plugins::http::webhook_key_get::WebhookKeyGet;
+        use crate::plugins::runtime::traits::session::MockPluginSession;
+        use crate::plugins::runtime::traits::test_helpers::setup_header_mocks;
+        use crate::plugins::runtime::PluginLog;
+        use edgion_resources::common::WebhookExtract;
+        use edgion_resources::filters::PluginRunningResult;
+        use edgion_resources::resources::common::outbound_request::PresencePolicy;
+        use edgion_resources::resources::edgion_plugins::{WebhookKeyGetConfig, WebhookVar};
+
+        // Acquire outside the runtime: no synchronous mutex is held across an
+        // await inside an async task. Full-set dispatch tests share this lock.
+        let _guard = crate::link_sys::runtime::store::I5_DISPATCH_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(async {
+                let key = "presence-diagnostics/webhook";
+                let plugin = WebhookKeyGet::create(&WebhookKeyGetConfig {
+                    vars: [Some("fallback"), None]
+                        .into_iter()
+                        .enumerate()
+                        .map(|(index, default)| WebhookVar {
+                            name: format!("result{index}"),
+                            webhook_ref: key.into(),
+                            path_override: None,
+                            extract: WebhookExtract::BodyText,
+                            default: default.map(str::to_owned),
+                        })
+                        .collect(),
+                });
+                for policy in [
+                    PresencePolicy::WarnIfMissing,
+                    PresencePolicy::SkipIfMissing,
+                    PresencePolicy::Required,
+                ] {
+                    let mut client = ManagedOutboundClient::test_with_static_target("http://example.test");
+                    client.compiled_request = test_presence_failure_request(policy);
+                    let client = Arc::new(client);
+                    // Use one isolated registry key; replacement exercises the resolver's
+                    // current-generation lookup without network or background health work.
+                    get_webhook_manager().services.write().await.insert(
+                        key.into(),
+                        WebhookEntry {
+                            registration: Arc::new(WebhookRegistration::new()),
+                            client: client.clone(),
+                        },
+                    );
+                    let mut session = MockPluginSession::new();
+                    setup_header_mocks(&mut session, &[]);
+                    session.expect_get_cookie().return_const(None::<String>);
+                    session
+                        .expect_set_ctx_var()
+                        .withf(|name, value| name == "result0" && value == "fallback")
+                        .times(1)
+                        .returning(|_, _| Ok(()));
+                    let mut log = PluginLog::new("WebhookKeyGet");
+                    let result = plugin.run_request(&mut session, &mut log).await;
+                    assert!(matches!(result, PluginRunningResult::GoodNext));
+                    let rendered = log.render_for_test();
+                    assert_eq!(
+                        rendered.matches("warn outbound field missing").count(),
+                        if matches!(policy, PresencePolicy::WarnIfMissing) {
+                            2
+                        } else {
+                            0
+                        }
+                    );
+                    assert!(rendered.contains("default"));
+                    assert!(rendered.contains("skip"));
+                    assert!(!rendered.contains("private"));
+
+                    // Generic callers receive the same evidence even when the call fails.
+                    let mut diagnostics = OutboundRequestDiagnostics::default();
+                    assert!(WebhookCallHandle(client)
+                        .call(&session, None, &mut diagnostics)
+                        .await
+                        .is_err());
+                    let mut log = PluginLog::new("test");
+                    diagnostics.emit(&mut log);
+                    assert_eq!(
+                        log.render_for_test(),
+                        if matches!(policy, PresencePolicy::WarnIfMissing) {
+                            "warn outbound field missing"
+                        } else {
+                            ""
+                        }
+                    );
+                }
+                get_webhook_manager().services.write().await.remove(key);
+            });
     }
 
     #[tokio::test]

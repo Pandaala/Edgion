@@ -113,6 +113,8 @@ spec:
 | `request.headers.origin` | array | `[]` | Specific headers forwarded from the original request. Each entry: `{ name, presence }`. Presence policy: `skipIfMissing` (default), `required`, `warnIfMissing`. `Content-Length` and `Transfer-Encoding` are rejected because the proxy owns outbound framing. |
 | `request.headers.custom` | array | `[]` | Headers injected from config or resolved secrets. Each entry: `{ name, value: "..." }` for a literal, or `{ name, template: "..." }` for a template (may contain `${secretRef:ns/name:key}`). `Content-Length` and `Transfer-Encoding` are rejected because the proxy owns outbound framing. |
 
+Missing `warnIfMissing` origin fields are omitted and share at most one `warn outbound field missing` PluginLog entry per auth call, with no field names or values. Retries do not duplicate it. `skipIfMissing` stays silent; `required` still fails the call. See [presence policies](../../ops-guide/infrastructure/connectors.md#presence-policies) for failure and log-capacity boundaries.
+
 #### `decision` — post-auth behavior
 
 `decision` holds only the following fields:

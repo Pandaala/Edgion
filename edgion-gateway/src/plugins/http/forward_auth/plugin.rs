@@ -272,16 +272,19 @@ impl RequestFilter for ForwardAuth {
         //   health gate → rate gate → compile+build request → retry loop →
         //   passive-health tracking → response-size cap →
         //   Ok(OutboundResponse) for any completed HTTP exchange.
-        let resp = match outbound_call_with_body(
+        let mut diagnostics = crate::plugins::http::common::outbound::request::OutboundRequestDiagnostics::default();
+        let result = outbound_call_with_body(
             &self.client,
             session,
             None,
             FORWARD_AUTH_GLOBAL_MAX_BYTES,
             extra_headers,
             body,
+            &mut diagnostics,
         )
-        .await
-        {
+        .await;
+        diagnostics.emit(plugin_log);
+        let resp = match result {
             Ok(r) => r,
             Err(_) => {
                 // Transport-level failure: connection refused, DNS, timeout, rate/health gate.
@@ -578,6 +581,60 @@ mod tests {
 
         assert!(matches!(result, PluginRunningResult::ErrTerminateRequest));
         assert_eq!(log.render_for_test(), "err: upstream unreachable");
+    }
+
+    #[tokio::test]
+    async fn presence_warning_reaches_plugin_log_without_changing_fail_close() {
+        use crate::plugins::http::common::outbound::request::test_presence_failure_request;
+        use edgion_resources::resources::common::outbound_request::PresencePolicy;
+
+        for policy in [
+            PresencePolicy::WarnIfMissing,
+            PresencePolicy::SkipIfMissing,
+            PresencePolicy::Required,
+        ] {
+            let mut client = ManagedOutboundClient::test_with_static_target("http://example.test");
+            client.compiled_request = test_presence_failure_request(policy);
+            let fa = ForwardAuth {
+                client: Arc::new(client),
+                status_on_error: 503,
+                decision: ForwardAuthDecision::default(),
+                forward_body: false,
+            };
+            let mut session = make_request_session();
+            session.expect_get_cookie().return_const(None::<String>);
+            session.expect_record_error().times(1).return_const(());
+            session
+                .expect_record_outcome()
+                .withf(|outcome, value| matches!(outcome, DyeOutcome::FailClose) && value == "auth-server-unreachable")
+                .times(1)
+                .return_const(());
+            session
+                .expect_write_response_header()
+                .withf(|response, _| response.status.as_u16() == 503)
+                .times(1)
+                .returning(|_, _| Ok(()));
+            session
+                .expect_write_response_body()
+                .withf(|body, eos| {
+                    *eos && body.as_deref() == Some(b"{\"message\":\"Auth service unavailable\"}".as_slice())
+                })
+                .times(1)
+                .returning(|_, _| Ok(()));
+            session.expect_shutdown().times(1).return_const(());
+            let mut log = PluginLog::new("ForwardAuth");
+            assert!(matches!(
+                fa.run_request(&mut session, &mut log).await,
+                PluginRunningResult::ErrTerminateRequest
+            ));
+            let rendered = log.render_for_test();
+            assert_eq!(
+                rendered.matches("warn outbound field missing").count(),
+                usize::from(matches!(policy, PresencePolicy::WarnIfMissing))
+            );
+            assert!(rendered.ends_with("err: upstream unreachable"));
+            assert!(!rendered.contains("private"));
+        }
     }
 
     #[tokio::test]

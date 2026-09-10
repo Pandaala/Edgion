@@ -4,6 +4,7 @@
 
 use crate::observe::metrics::record_webhook_resolve_error;
 use crate::plugins::http::common::outbound::call::{outbound_call, OutboundCallError, OutboundResponse};
+use crate::plugins::http::common::outbound::request::OutboundRequestDiagnostics;
 use crate::plugins::runtime::PluginSession;
 use edgion_resources::common::WebhookExtract;
 
@@ -21,12 +22,15 @@ use super::manager::{get_webhook_global_max, get_webhook_manager};
 /// `_forward_headers` is retained in the signature for the Wave C consumer
 /// migration but is no longer consumed here — headers to forward are declared
 /// on the webhook resource's `request.headers.origin` allow-list.
+/// Missing-field diagnostics are returned through the caller-owned collector,
+/// independently of whether a value is resolved; the plugin owns their emission.
 pub async fn resolve_webhook_key(
     session: &dyn PluginSession,
     webhook_ref: &str,
     _forward_headers: Option<&[String]>,
     path_override: Option<&str>,
     extract: &WebhookExtract,
+    diagnostics: &mut OutboundRequestDiagnostics,
 ) -> Option<String> {
     let client = match get_webhook_manager().get(webhook_ref).await {
         Some(c) => c,
@@ -44,6 +48,7 @@ pub async fn resolve_webhook_key(
         path_override_owned.as_deref(),
         get_webhook_global_max(),
         &[],
+        diagnostics,
     )
     .await
     {
@@ -152,7 +157,15 @@ mod tests {
         path_suffix: Option<&'a str>,
         extract: &'a edgion_resources::common::WebhookExtract,
     ) -> Option<String> {
-        super::resolve_webhook_key(session, webhook_ref, forward_headers, path_suffix, extract).await
+        super::resolve_webhook_key(
+            session,
+            webhook_ref,
+            forward_headers,
+            path_suffix,
+            extract,
+            &mut Default::default(),
+        )
+        .await
     }
 
     fn make_result(status: u16, headers: reqwest::header::HeaderMap, body: &[u8]) -> OutboundResponse {

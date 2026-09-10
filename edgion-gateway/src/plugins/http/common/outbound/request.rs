@@ -25,7 +25,27 @@ use edgion_resources::resources::edgion_plugins::plugin_configs::{CompiledTempla
 
 use crate::plugins::http::common::http_client::{connection_listed_hop_by_hop, is_hop_by_hop_or_listed};
 use crate::plugins::runtime::traits::session::RouteProto;
-use crate::plugins::runtime::{PluginSession, PluginSessionHeaderExt};
+use crate::plugins::runtime::{PluginLog, PluginSession, PluginSessionHeaderExt};
+
+/// Value-free evidence collected during one logical outbound request build.
+///
+/// A single bit bounds storage independently of configured field count. The
+/// caller owns it outside the call future so build/transport failures do not
+/// discard warnings already observed. Retries reuse the built request.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct OutboundRequestDiagnostics {
+    missing_origin: bool,
+}
+
+impl OutboundRequestDiagnostics {
+    /// Consume the evidence at the owning plugin's logging boundary, at most
+    /// once per logical call. Never records field names, values, or errors.
+    pub fn emit(self, plugin_log: &mut PluginLog) {
+        if self.missing_origin {
+            plugin_log.push("warn outbound field missing");
+        }
+    }
+}
 
 fn is_body_framing_header(name: &str) -> bool {
     name.eq_ignore_ascii_case("content-length") || name.eq_ignore_ascii_case("transfer-encoding")
@@ -243,6 +263,7 @@ impl CompiledRequest {
         path_override: Option<&str>,
         base_url: &str,
         resolved: Option<&ResolvedSecrets>,
+        diagnostics: &mut OutboundRequestDiagnostics,
     ) -> Result<reqwest::Request, String> {
         // ── 1. Determine path ──────────────────────────────────────────────
         let final_path = match &self.path {
@@ -269,7 +290,14 @@ impl CompiledRequest {
 
         // ── 3. Collect query args ─────────────────────────────────────────
         let mut query_pairs: Vec<(String, String)> = Vec::new();
-        collect_list_fields(&self.args, session, FieldKind::Query, &mut query_pairs, resolved)?;
+        collect_list_fields(
+            &self.args,
+            session,
+            FieldKind::Query,
+            &mut query_pairs,
+            resolved,
+            diagnostics,
+        )?;
 
         // ── 4. Build URL ──────────────────────────────────────────────────
         let url_base = base_url.trim_end_matches('/');
@@ -302,11 +330,18 @@ impl CompiledRequest {
         // request are forwarded, and explicit origin/custom entries are applied
         // on top (possibly overriding). When forward_all=false only the
         // explicit origin/custom entries are sent.
-        *req.headers_mut() = self.collect_headers(session, resolved)?;
+        *req.headers_mut() = self.collect_headers(session, resolved, diagnostics)?;
 
         // ── 8. Add cookies as a single Cookie header ──────────────────────
         let mut cookie_pairs: Vec<(String, String)> = Vec::new();
-        collect_list_fields(&self.cookies, session, FieldKind::Cookie, &mut cookie_pairs, resolved)?;
+        collect_list_fields(
+            &self.cookies,
+            session,
+            FieldKind::Cookie,
+            &mut cookie_pairs,
+            resolved,
+            diagnostics,
+        )?;
         if !cookie_pairs.is_empty() {
             let cookie_str = cookie_pairs
                 .iter()
@@ -381,6 +416,7 @@ impl CompiledRequest {
         &self,
         session: &dyn PluginSession,
         resolved: Option<&ResolvedSecrets>,
+        diagnostics: &mut OutboundRequestDiagnostics,
     ) -> Result<reqwest::header::HeaderMap, String> {
         let mut result = reqwest::header::HeaderMap::new();
 
@@ -407,7 +443,14 @@ impl CompiledRequest {
         // Propagate Required-field errors rather than swallowing them.
         // Pass resolved so that ${secretRef:...} templates in custom fields resolve.
         let mut pairs: Vec<(String, String)> = Vec::new();
-        collect_list_fields(&self.headers, session, FieldKind::Header, &mut pairs, resolved)?;
+        collect_list_fields(
+            &self.headers,
+            session,
+            FieldKind::Header,
+            &mut pairs,
+            resolved,
+            diagnostics,
+        )?;
         for (k, v) in pairs {
             if let (Ok(name), Ok(mut value)) = (
                 reqwest::header::HeaderName::from_bytes(k.as_bytes()),
@@ -587,6 +630,7 @@ fn collect_list_fields(
     kind: FieldKind,
     output: &mut Vec<(String, String)>,
     resolved: Option<&ResolvedSecrets>,
+    diagnostics: &mut OutboundRequestDiagnostics,
 ) -> Result<(), String> {
     // Origin fields: forwarded from the incoming request.
     for origin in &fields.origin {
@@ -594,8 +638,9 @@ fn collect_list_fields(
         match value {
             Some(v) => output.push((origin.name.clone(), v)),
             None => match origin.presence {
-                PresencePolicy::SkipIfMissing | PresencePolicy::WarnIfMissing => {
-                    // Silently omit (data-plane rule: no tracing in data plane).
+                PresencePolicy::SkipIfMissing => {}
+                PresencePolicy::WarnIfMissing => {
+                    diagnostics.missing_origin = true;
                 }
                 PresencePolicy::Required => {
                     return Err(format!(
@@ -632,12 +677,145 @@ fn get_session_field(session: &dyn PluginSession, kind: &FieldKind, name: &str) 
 // Unit tests
 // ============================================================
 
+/// Reach a deterministic build failure after inspecting the header policy,
+/// without opening a socket. Shared by consumer wiring regression tests.
+#[cfg(test)]
+pub(crate) fn test_presence_failure_request(presence: PresencePolicy) -> CompiledRequest {
+    use edgion_resources::resources::common::outbound_request::{MethodSpec, OriginField, PathSpec};
+    CompiledRequest::from_spec(&OutboundRequestSpec {
+        method: Some(MethodSpec { template: "GET".into() }),
+        path: Some(PathSpec {
+            template: "/verify".into(),
+            allow_override: false,
+        }),
+        headers: ListFields {
+            origin: vec![OriginField {
+                name: "x-private-metadata".into(),
+                presence,
+            }],
+            ..Default::default()
+        },
+        cookies: ListFields {
+            origin: vec![OriginField {
+                name: "private-session".into(),
+                presence: PresencePolicy::Required,
+            }],
+            ..Default::default()
+        },
+        ..Default::default()
+    })
+    .unwrap()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::plugins::runtime::traits::session::MockPluginSession;
     use crate::plugins::runtime::traits::test_helpers::setup_header_mocks;
     use edgion_resources::resources::common::outbound_request::ListFields;
+
+    #[test]
+    fn presence_policies_cover_missing_and_present_fields() {
+        use edgion_resources::resources::common::outbound_request::{MethodSpec, OriginField, PathSpec};
+        for kind in [FieldKind::Header, FieldKind::Query, FieldKind::Cookie] {
+            for forward_all in [false, true] {
+                for presence in [
+                    PresencePolicy::SkipIfMissing,
+                    PresencePolicy::WarnIfMissing,
+                    PresencePolicy::Required,
+                ] {
+                    for present in [false, true] {
+                        let mut spec = OutboundRequestSpec {
+                            method: Some(MethodSpec { template: "GET".into() }),
+                            path: Some(PathSpec {
+                                template: "/verify".into(),
+                                allow_override: false,
+                            }),
+                            ..Default::default()
+                        };
+                        let fields = match kind {
+                            FieldKind::Header => &mut spec.headers,
+                            FieldKind::Query => &mut spec.args,
+                            FieldKind::Cookie => &mut spec.cookies,
+                        };
+                        fields.forward_all = forward_all;
+                        fields.origin.push(OriginField {
+                            name: "x-source".into(),
+                            presence,
+                        });
+                        let compiled = CompiledRequest::from_spec(&spec).unwrap();
+                        let mut session = MockPluginSession::new();
+                        setup_header_mocks(
+                            &mut session,
+                            if present { &[("x-source", "private-value")] } else { &[] },
+                        );
+                        session
+                            .expect_get_query_param()
+                            .returning(move |_| present.then(|| "private-value".into()));
+                        session
+                            .expect_get_cookie()
+                            .returning(move |_| present.then(|| "private-value".into()));
+                        let mut diagnostics = OutboundRequestDiagnostics::default();
+                        let result =
+                            compiled.build_request(&session, None, "http://example.test", None, &mut diagnostics);
+                        assert_eq!(
+                            result.is_err(),
+                            !present && matches!(presence, PresencePolicy::Required)
+                        );
+                        if let Ok(request) = result {
+                            let forwarded = match kind {
+                                FieldKind::Header => request
+                                    .headers()
+                                    .get("x-source")
+                                    .map(|v| v.to_str().unwrap().to_owned()),
+                                FieldKind::Query => request
+                                    .url()
+                                    .query_pairs()
+                                    .find(|(k, _)| k == "x-source")
+                                    .map(|(_, v)| v.into_owned()),
+                                FieldKind::Cookie => {
+                                    request.headers().get("cookie").map(|v| v.to_str().unwrap().to_owned())
+                                }
+                            };
+                            assert_eq!(forwarded.is_some(), present);
+                            if let Some(value) = forwarded {
+                                assert!(value.contains("private-value"));
+                            }
+                        }
+                        let mut log = PluginLog::new("test");
+                        diagnostics.emit(&mut log);
+                        assert_eq!(
+                            log.render_for_test(),
+                            if !present && matches!(presence, PresencePolicy::WarnIfMissing) {
+                                "warn outbound field missing"
+                            } else {
+                                ""
+                            }
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn missing_warning_is_bounded_and_survives_later_required_failure() {
+        let mut compiled = test_presence_failure_request(PresencePolicy::WarnIfMissing);
+        compiled.headers.origin = vec![compiled.headers.origin[0].clone(); 1024];
+        compiled.args = compiled.headers.clone();
+        let mut session = MockPluginSession::new();
+        setup_header_mocks(&mut session, &[]);
+        session.expect_get_query_param().return_const(None::<String>);
+        session.expect_get_cookie().return_const(None::<String>);
+        let mut diagnostics = OutboundRequestDiagnostics::default();
+        assert!(compiled
+            .build_request(&session, None, "http://example.test", None, &mut diagnostics)
+            .is_err());
+        let mut log = PluginLog::new("test");
+        diagnostics.emit(&mut log);
+        assert_eq!(log.render_for_test(), "warn outbound field missing");
+        assert_eq!(std::mem::size_of::<OutboundRequestDiagnostics>(), 1);
+    }
 
     /// TDD test (written before implementation): `forward_all=true` forwards
     /// non-hop-by-hop headers and strips both static and dynamically-listed
@@ -674,7 +852,9 @@ mod tests {
             ],
         );
 
-        let result = compiled.collect_headers(&session, None).unwrap();
+        let result = compiled
+            .collect_headers(&session, None, &mut Default::default())
+            .unwrap();
 
         // Non-hop-by-hop headers must be present.
         assert_eq!(
@@ -749,7 +929,7 @@ mod tests {
         );
 
         let req = compiled
-            .build_request(&session, None, "http://auth.test", None)
+            .build_request(&session, None, "http://auth.test", None, &mut Default::default())
             .unwrap();
         let values = req
             .headers()
@@ -795,7 +975,9 @@ mod tests {
         let mut session = MockPluginSession::new();
         session.expect_request_header_map().return_const(headers);
 
-        let result = compiled.collect_headers(&session, None).unwrap();
+        let result = compiled
+            .collect_headers(&session, None, &mut Default::default())
+            .unwrap();
         let values: Vec<_> = result.get_all("x-custom-credential").iter().collect();
         assert_eq!(values.len(), 2);
         assert_eq!(values[0].as_bytes(), b"private-first");
@@ -848,7 +1030,13 @@ mod tests {
             "private-token".into(),
         )]));
         let request = compiled
-            .build_request(&session, None, "http://upstream.test", Some(&resolved))
+            .build_request(
+                &session,
+                None,
+                "http://upstream.test",
+                Some(&resolved),
+                &mut Default::default(),
+            )
             .unwrap();
         for (name, expected) in [
             ("x-identity", "private-user"),
@@ -889,7 +1077,7 @@ mod tests {
         );
 
         let req = compiled
-            .build_request(&session, None, "http://auth.test", None)
+            .build_request(&session, None, "http://auth.test", None, &mut Default::default())
             .unwrap();
 
         assert!(req.body().is_none());
@@ -956,7 +1144,7 @@ mod tests {
         // The session headers do not include X-Required.
         setup_header_mocks(&mut session, &[("content-type", "text/plain")]);
 
-        let result = compiled.collect_headers(&session, None);
+        let result = compiled.collect_headers(&session, None, &mut Default::default());
         assert!(result.is_err(), "Expected Err for missing Required header, got Ok");
         let msg = result.unwrap_err();
         assert!(
@@ -988,7 +1176,9 @@ mod tests {
             &[("expect", "100-continue"), ("authorization", "Bearer token123")],
         );
 
-        let result = compiled.collect_headers(&session, None).unwrap();
+        let result = compiled
+            .collect_headers(&session, None, &mut Default::default())
+            .unwrap();
 
         assert!(
             !result.contains_key("expect"),
@@ -1037,7 +1227,9 @@ mod tests {
                 .then(|| "100-continue-via-origin".to_string())
         });
 
-        let result = compiled.collect_headers(&session, None).unwrap();
+        let result = compiled
+            .collect_headers(&session, None, &mut Default::default())
+            .unwrap();
 
         assert_eq!(
             result.get("expect").and_then(|value| value.to_str().ok()),
@@ -1086,7 +1278,7 @@ mod tests {
             .return_const(Some("ali\"ce\\bob\nline2".to_string()));
 
         let req = compiled
-            .build_request(&session, None, "http://upstream.test", None)
+            .build_request(&session, None, "http://upstream.test", None, &mut Default::default())
             .unwrap();
 
         let body = req_body_string(&req);
@@ -1126,7 +1318,7 @@ mod tests {
             .return_const(Some("a&b=c d".to_string()));
 
         let req = compiled
-            .build_request(&session, None, "http://upstream.test", None)
+            .build_request(&session, None, "http://upstream.test", None, &mut Default::default())
             .unwrap();
 
         assert_eq!(req_body_string(&req), "userId=a%26b%3Dc+d&source=edgion");
@@ -1154,7 +1346,7 @@ mod tests {
             .return_const(Some("a\"b".to_string()));
 
         let req = compiled
-            .build_request(&session, None, "http://upstream.test", None)
+            .build_request(&session, None, "http://upstream.test", None, &mut Default::default())
             .unwrap();
 
         // Raw: no escaping, no auto Content-Type.
@@ -1182,7 +1374,7 @@ mod tests {
         setup_header_mocks(&mut session, &[("content-type", "text/plain")]);
 
         let req = compiled
-            .build_request(&session, None, "http://upstream.test", None)
+            .build_request(&session, None, "http://upstream.test", None, &mut Default::default())
             .unwrap();
 
         // The body-derived Content-Type must win over the forwarded incoming one.
