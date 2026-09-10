@@ -248,6 +248,74 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn blocked_bypassed_disabled_and_invalid_chains_cannot_activate_new_budgets() {
+        for mode in ["block", "bypass", "disabled", "invalid"] {
+            let key = format!("default/local-gate-inert-{mode}");
+            let mut cfg = cfg_local_only(1);
+            cfg.per_listener.as_mut().unwrap().interval = "1h".to_string();
+            let old = StreamPluginRuntime::from_stream_plugins(
+                &[entry(EdgionStreamPlugin::ConnectionRateLimit(cfg.clone()))],
+                "default",
+                &key,
+            );
+            let ctx = StreamContext::new(IpAddr::from([127, 0, 0, 1]), 18090, StreamLayer::Stage1);
+            assert!(matches!(old.run(&ctx).await, StreamPluginResult::Allow));
+            cfg.per_listener.as_mut().unwrap().rate = 100;
+            let mut candidate = entry(EdgionStreamPlugin::ConnectionRateLimit(cfg.clone()));
+            match mode {
+                "block" => candidate.policy_action = Some(PluginPolicyAction::Block { status: 503 }),
+                "bypass" => candidate.policy_action = Some(PluginPolicyAction::Bypass),
+                "disabled" => candidate.enable = false,
+                _ => {}
+            }
+            let mut entries = vec![candidate];
+            if mode == "invalid" {
+                cfg.per_listener.as_mut().unwrap().rate = 0;
+                entries.push(entry(EdgionStreamPlugin::ConnectionRateLimit(cfg)));
+            }
+            let next = StreamPluginRuntime::from_stream_plugins(&entries, "default", &key);
+            let outcome = next.run(&ctx).await;
+            if matches!(mode, "block" | "invalid") {
+                assert!(matches!(outcome, StreamPluginResult::Deny(_)));
+            } else {
+                assert!(matches!(outcome, StreamPluginResult::Allow));
+            }
+            assert!(
+                matches!(old.run(&ctx).await, StreamPluginResult::Deny(_)),
+                "{mode} activated a budget"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn repeated_listener_route_attachment_consumes_twice_and_other_entries_are_independent() {
+        let mut cfg = cfg_local_only(2);
+        cfg.per_listener.as_mut().unwrap().interval = "1h".to_string();
+        let key = "default/local-gate-layered-runtime";
+        let one = entry(EdgionStreamPlugin::ConnectionRateLimit(cfg.clone()));
+        let runtime = StreamPluginRuntime::from_stream_plugins(std::slice::from_ref(&one), "default", key);
+        let listener = StreamContext::new(IpAddr::from([127, 0, 0, 1]), 18091, StreamLayer::Stage1);
+        let route = StreamContext::new(IpAddr::from([127, 0, 0, 1]), 18091, StreamLayer::Tcp);
+        assert!(matches!(runtime.run(&listener).await, StreamPluginResult::Allow));
+        assert!(matches!(runtime.run(&route).await, StreamPluginResult::Allow));
+        assert!(matches!(runtime.run(&listener).await, StreamPluginResult::Deny(_)));
+
+        let other = StreamPluginRuntime::from_stream_plugins(
+            std::slice::from_ref(&one),
+            "default",
+            "default/local-gate-other-runtime",
+        );
+        assert!(matches!(other.run(&listener).await, StreamPluginResult::Allow));
+        // Disabled index 0 is inert; index 1 has its own untouched budget.
+        let mut disabled = one.clone();
+        disabled.enable = false;
+        let second_entry = StreamPluginRuntime::from_stream_plugins(&[disabled, one], "default", key);
+        assert!(matches!(second_entry.run(&listener).await, StreamPluginResult::Allow));
+        assert!(matches!(second_entry.run(&listener).await, StreamPluginResult::Allow));
+        assert!(matches!(second_entry.run(&listener).await, StreamPluginResult::Deny(_)));
+    }
+
     async fn assert_invalid_gate_precedes_rate_limit(
         invalid_plugin: EdgionStreamPlugin,
         expected_reason: &str,

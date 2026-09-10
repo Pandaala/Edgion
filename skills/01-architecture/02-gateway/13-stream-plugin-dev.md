@@ -307,6 +307,28 @@ Per-dimension `onRedisFailure` defaults differ on purpose:
 vanish under attack); `perSourceIp` defaults to `Allow` (fail-open — a Redis
 blip must not blanket-block legitimate sources). Both are overridable.
 
+The local runtime binds `LocalGateBinding` once during valid plugin construction.
+The existing process-lifetime registry owns an `EntryGates` per entry scope;
+connection hits resolve a sparse `u16` port map under that entry's read lock,
+release it, and enter the bucket mutex. Only first use allocates a port slot.
+The registry remains non-evicting budget state, not a general-purpose cache.
+
+`LocalRateGate` publishes an unactivated `Mutex<Option<GateState>>` slot. Its
+first locked admission initializes the generation, parameters, full balance and
+monotonic timestamp together. Every subsequent admission atomically settles old
+refill, adopts a higher runtime generation if encountered, migrates capacity,
+and consumes one token. An old runtime cannot restore its parameters. Equal
+parameters preserve the refill baseline; changed parameters start a new baseline
+after old-rate settlement. No gate lock spans Redis work or observability.
+
+Generations follow the production serial conf-sync construction order. Activation
+is lazy per port, not eager at store publication. Constructed but unexecuted
+generations have no budget effect; intermediate unobserved generations are skipped.
+Older pinned admissions consume the newest activated local budget while retaining
+their original Redis settings. This does not provide a local-plus-Redis transaction.
+See the [algorithm contract](../../12-algorithms/local-connection-token-bucket.md)
+and [local transition regression guard](../../04-review/rate-limit/regression-guards/local-connection-admission-transitions.md).
+
 ```yaml
 apiVersion: edgion.io/v1
 kind: EdgionStreamPlugins

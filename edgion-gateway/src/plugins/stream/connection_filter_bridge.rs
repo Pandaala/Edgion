@@ -105,7 +105,47 @@ impl ConnectionFilter for StreamPluginConnectionFilter {
 mod tests {
     use super::*;
     use crate::plugins::stream::compile_stream_plugins;
+    use edgion_common::conf_sync::traits::ConfHandler;
     use edgion_resources::resources::edgion_stream_plugins::EdgionStreamPlugins;
+
+    #[tokio::test]
+    async fn listener_reload_preserves_port_budget_and_missing_resource_denies() {
+        let store = Arc::new(StreamPluginStore::new());
+        let key = "default/local-gate-bridge-reload";
+        let resource = |rate| {
+            let yaml = format!(
+                r#"
+apiVersion: edgion.io/v1
+kind: EdgionStreamPlugins
+metadata: {{name: local-gate-bridge-reload, namespace: default}}
+spec:
+  plugins:
+    - type: ConnectionRateLimit
+      config:
+        perListener: {{rate: {rate}, interval: 1h}}
+"#
+            );
+            Arc::new(serde_yaml::from_str::<EdgionStreamPlugins>(&yaml).unwrap())
+        };
+        let filter = StreamPluginConnectionFilter::new(Arc::clone(&store), key.to_owned(), 18092);
+        let other_port = StreamPluginConnectionFilter::new(Arc::clone(&store), key.to_owned(), 18093);
+        let addr: SocketAddr = "10.0.0.1:54321".parse().unwrap();
+        store.full_set(&std::collections::HashMap::from([(key.to_owned(), resource(1))]));
+        assert!(filter.should_accept(Some(&addr)).await);
+        assert!(!filter.should_accept(Some(&addr)).await);
+        assert!(other_port.should_accept(Some(&addr)).await);
+
+        store.full_set(&std::collections::HashMap::from([(key.to_owned(), resource(2))]));
+        assert!(filter.should_accept(Some(&addr)).await);
+        assert!(!filter.should_accept(Some(&addr)).await);
+        assert!(other_port.should_accept(Some(&addr)).await);
+        assert!(!other_port.should_accept(Some(&addr)).await);
+
+        store.full_set(&std::collections::HashMap::new());
+        assert!(!filter.should_accept(Some(&addr)).await);
+        store.full_set(&std::collections::HashMap::from([(key.to_owned(), resource(2))]));
+        assert!(!filter.should_accept(Some(&addr)).await);
+    }
 
     fn empty_esp_yaml() -> EdgionStreamPlugins {
         let yaml = r#"

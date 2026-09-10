@@ -65,6 +65,7 @@ in-process cache selection section of [../00-design-rules.md](../00-design-rules
 | Algorithm | Source | Doc |
 |---|---|---|
 | Redis Lua rate limiter core | `edgion-gateway/src/plugins/common/redis_rate_limiter/` | not yet written |
+| Local connection token bucket with generation migration | `edgion-gateway/src/plugins/stream/connection_rate_limit/local_gate.rs` | [local-connection-token-bucket.md](local-connection-token-bucket.md) |
 | Epoch-tagged interpolated retry-budget counters | `edgion-gateway/src/backends/policy/backend_traffic/retry_budget.rs` | [retry-budget-epoch-buckets.md](retry-budget-epoch-buckets.md) |
 
 ## Entry template

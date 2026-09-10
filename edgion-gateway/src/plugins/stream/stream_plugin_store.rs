@@ -218,6 +218,112 @@ impl ConfHandler<EdgionStreamPlugins> for StreamPluginStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::plugins::stream::stream_plugin_trait::{StreamContext, StreamLayer, StreamPluginResult};
+    use std::net::IpAddr;
+
+    fn local_limit_resource(name: &str, rate: u64, enabled: bool) -> Arc<EdgionStreamPlugins> {
+        let yaml = format!(
+            r#"
+apiVersion: edgion.io/v1
+kind: EdgionStreamPlugins
+metadata: {{name: {name}, namespace: default}}
+spec:
+  plugins:
+    - type: ConnectionRateLimit
+      enable: {enabled}
+      config:
+        perListener: {{rate: {rate}, interval: 1h}}
+"#
+        );
+        Arc::new(serde_yaml::from_str(&yaml).unwrap())
+    }
+
+    #[tokio::test]
+    async fn local_budget_survives_full_delta_delete_and_disabled_generations() {
+        let store = StreamPluginStore::new();
+        let name = "local-budget-store-reload";
+        let key = format!("default/{name}");
+        let ctx = StreamContext::new(IpAddr::from([127, 0, 0, 1]), 18089, StreamLayer::Stage1);
+        store.full_set(&HashMap::from([(key.clone(), local_limit_resource(name, 2, true))]));
+        let old = store.get(&key).unwrap();
+        for _ in 0..2 {
+            assert!(matches!(
+                old.stream_plugin_runtime.run(&ctx).await,
+                StreamPluginResult::Allow
+            ));
+        }
+        assert!(matches!(
+            old.stream_plugin_runtime.run(&ctx).await,
+            StreamPluginResult::Deny(_)
+        ));
+
+        // Compiling an unused future does not activate its rate or suppress the
+        // still-serving older runtime, even with the same entry/port identity.
+        let _unpublished = compile_stream_plugins(&local_limit_resource(name, 100, true));
+        assert!(matches!(
+            old.stream_plugin_runtime.run(&ctx).await,
+            StreamPluginResult::Deny(_)
+        ));
+        store.full_set(&HashMap::from([(key.clone(), local_limit_resource(name, 2, true))]));
+        assert!(matches!(
+            store.get(&key).unwrap().stream_plugin_runtime.run(&ctx).await,
+            StreamPluginResult::Deny(_)
+        ));
+
+        store.partial_update(
+            HashMap::new(),
+            HashMap::from([(key.clone(), local_limit_resource(name, 4, true))]),
+            HashSet::new(),
+        );
+        let raised = store.get(&key).unwrap();
+        assert!(matches!(
+            raised.stream_plugin_runtime.run(&ctx).await,
+            StreamPluginResult::Allow
+        ));
+        assert!(matches!(
+            old.stream_plugin_runtime.run(&ctx).await,
+            StreamPluginResult::Allow
+        ));
+        assert!(matches!(
+            raised.stream_plugin_runtime.run(&ctx).await,
+            StreamPluginResult::Deny(_)
+        ));
+
+        store.partial_update(HashMap::new(), HashMap::new(), HashSet::from([key.clone()]));
+        assert!(store.get(&key).is_none());
+        assert!(matches!(
+            old.stream_plugin_runtime.run(&ctx).await,
+            StreamPluginResult::Deny(_)
+        ));
+        store.partial_update(
+            HashMap::from([(key.clone(), local_limit_resource(name, 4, true))]),
+            HashMap::new(),
+            HashSet::new(),
+        );
+        assert!(matches!(
+            store.get(&key).unwrap().stream_plugin_runtime.run(&ctx).await,
+            StreamPluginResult::Deny(_)
+        ));
+
+        store.partial_update(
+            HashMap::new(),
+            HashMap::from([(key.clone(), local_limit_resource(name, 100, false))]),
+            HashSet::new(),
+        );
+        assert!(matches!(
+            store.get(&key).unwrap().stream_plugin_runtime.run(&ctx).await,
+            StreamPluginResult::Allow
+        ));
+        store.partial_update(
+            HashMap::new(),
+            HashMap::from([(key.clone(), local_limit_resource(name, 4, true))]),
+            HashSet::new(),
+        );
+        assert!(matches!(
+            store.get(&key).unwrap().stream_plugin_runtime.run(&ctx).await,
+            StreamPluginResult::Deny(_)
+        ));
+    }
 
     fn fixture(name: &str) -> Arc<EdgionStreamPlugins> {
         let yaml = format!(

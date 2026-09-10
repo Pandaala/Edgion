@@ -55,8 +55,9 @@ from the committed evidence and are not a correctness premise for this guard.
   transport behavior is unchanged.
 - Script SHA1 is Redis's content identifier, not a cryptographic security claim.
 - Single-policy Lua atomicity does not make several policies one transaction.
-- This optimization does not fix D0100's local token-bucket race or HTTP CMS
-  concurrency. See the [open local-gate task](../../../../tasks/todo/make-local-rate-gate-transitions-linearizable.md).
+- This optimization did not fix D0100's local token-bucket race or HTTP CMS
+  concurrency. The local race was subsequently corrected independently; see the
+  [local admission guard](local-connection-admission-transitions.md).
 - Preserve the [token-bucket deny-balance rule](token-bucket-deny-branch-persists-balance.md)
   and [existing failure policies](../intentional-design/redis-fail-open.md).
 
@@ -91,6 +92,6 @@ cluster routing, or retry policy changes.
 
 - `redis-rate-limit-practices` — user-approved shared script-lifecycle optimization,
   implemented and verified on 2026-09-09.
-- `D0100` remains open and is not the resolved defect of this page.
+- `D0100` was corrected separately in the [local admission guard](local-connection-admission-transitions.md).
 - `CAND-P2-001` — corrected the resource configuration module's stale `OnceCell`
   architecture comment to describe shared descriptors and exact `NOSCRIPT` fallback.

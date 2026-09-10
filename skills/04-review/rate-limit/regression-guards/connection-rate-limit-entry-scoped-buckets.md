@@ -19,8 +19,10 @@ active on one port therefore shared both. Both are now namespaced by the owning 
 (`<namespace>/<name>/#<index>`, from the shared `plugins::common::entry_scope`): the plugin folds it
 into a `scoped_key_prefix`, and the gate registry is keyed by scope first, port second.
 
-Re-reports of the "two limiters on one port share a bucket" form are **not accepted**; verify
-`scoped_key_prefix` and the `LOCAL_GATES` key shape first.
+For a new sharing report, verify `scoped_key_prefix`, `LocalGateBinding` and the
+entry/port registry identity against current callers. Identity isolation alone
+does not establish the concurrency or configuration-transition contract; see the
+[local admission guard](local-connection-admission-transitions.md).
 
 ## Core Rationale
 
@@ -28,12 +30,11 @@ Re-reports of the "two limiters on one port share a bucket" form are **not accep
 
 Stream plugins attach by annotation to an `EdgionStreamPlugins` store key at two levels — listener
 level (`apply_connection_filter`, from the Gateway annotation) and route level
-(`resolve_stream_plugin_store_key`, from each TCPRoute/TLSRoute's own annotation, which explicitly
-accepts a cross-namespace key). Three reachable shapes: two TLSRoutes with different SNIs on one
-port referencing different resources (`TlsRouteTable` is per-port, keyed by hostname); a
-listener-level and a route-level attachment on the same connection; and two `ConnectionRateLimit`
-entries inside one resource (`from_stream_plugins` instantiates every entry, and neither it nor the
-controller preparse dedups by type).
+(`resolve_stream_plugin_store_key`, from TCPRoute's annotation, which accepts a
+cross-namespace key). A listener-level and a TCPRoute-level attachment can apply
+to the same connection; multiple enabled `ConnectionRateLimit` entries inside
+one resource also run independently. Historical TLSRoute examples are no longer
+applicable: TLSRoute now uses its separate Stage-2 runtime, not this limiter.
 
 **2. The consequence is worse than merged quotas**
 
@@ -46,15 +47,19 @@ boundary, losing and re-weighting counts in both directions.
 
 **3. The local gate was the same bug without Redis**
 
-`get_or_update_local_gate` is called on every connection and calls `update_params(rate, interval)`
-on the slot it finds. Keyed by port alone, two instances rewrote each other's rate and interval on
-every single connection — in the pure-local `perListener` mode, with no Redis configured at all.
-Scoping the registry fixes that; keying by scope first (then port) also keeps the per-connection
-lookup allocation-free, since `&str` borrows against the `String` key. The gate is keyed by the
-entry scope alone, **not** by the Redis-prefixed form: the local bucket is a Redis-free backstop, so
-editing `keyPrefix` — meaningless in pure `perListener` mode — must not move its registry slot and
-reset the tokens. The registry has no eviction, so a rename / reorder / recreate orphans one small
-slot for the process lifetime; accepted rather than plumbing a removal hook from the store.
+Historically `get_or_update_local_gate` applied parameters on every connection;
+with a port-only key, different entries rewrote each other's configuration even
+in pure-local mode. Entry scoping corrected that identity bug. D0100 separately
+replaces per-hit updates with construction-bound generations and coherent local
+admission; those are independent corrections.
+
+The current local registry identity remains entry scope plus port, excluding the
+Redis prefix. Editing `keyPrefix` must not reset a Redis-free local budget.
+Bindings reference the persistent registry rather than owning disposable buckets.
+No eviction is still the accepted lifetime choice: changed names/positions can
+retain unused entries for the process lifetime, while reusing the same identity
+finds its retained budget. Scope count can grow with operator churn; it is not
+globally memory-bounded.
 
 **4. Identity, not configuration, is the discriminator**
 
@@ -62,8 +67,9 @@ Same reasoning as the HTTP sibling
 ([multi-source-key-composition-injective.md](multi-source-key-composition-injective.md), rationale 5):
 the compiled runtime is built once per resource and Arc-shared, so the resource key is the sharing
 unit, and it is derived from conf_sync so every Gateway instance and every reload agrees.
-`StreamPluginEntry` has no `alias` field, so the scope always takes the `#<index>` branch —
-reordering entries therefore restarts their counters.
+`StreamPluginEntry` has no `alias` field, so the scope always takes the `#<index>`
+branch. Reordering changes which identity a policy uses; an already used index
+can retain a local budget, so reordering does not guarantee fresh counters.
 
 ## Fix Suggestions Not Accepted
 
@@ -71,17 +77,18 @@ reordering entries therefore restarts their counters.
   resource entry is.
 - Ask operators to set a distinct `keyPrefix` per resource — the default is the failure mode, and
   nothing surfaces the collision when they do not.
-- Give each plugin instance its own local gate field instead of the scoped global registry — it
-  would drop the token state on every hot reload, which the registry exists to preserve.
-- Key the registry by a `(String, u16)` tuple — forces an allocation per connection on the lookup
-  path; the nested map borrows `&str` instead.
+- Give each runtime its own disposable bucket — it would drop token state on
+  reload. A runtime field holding a binding to the persistent entry is correct.
+- Construct owned scope/port lookup keys on each connection — resolve entry
+  identity during construction and reuse its bounded port dimension.
 
 ## Re-evaluation Triggers
 
-Re-open this decision only if:
+Re-evaluate when:
 
 - `StreamPluginEntry` gains an alias (the scope should then use it, like the HTTP entries do).
 - A stream plugin other than `ConnectionRateLimit` starts writing to a shared external store.
+- Identity, registry lifetime or configuration-generation activation changes.
 
 ## Layered attachment semantics
 
@@ -104,3 +111,5 @@ deduplication is not justified without an operator incident. See
 ## Resolution references
 
 - `gw-plugin-acl-rl-04-stream` — 2026-08-03.
+- `D0100` — preserves this identity rule while correcting local admission
+  transitions; current verification is recorded in the linked admission guard.

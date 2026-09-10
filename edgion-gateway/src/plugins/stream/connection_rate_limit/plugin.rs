@@ -19,7 +19,7 @@
 use async_trait::async_trait;
 use std::time::Duration;
 
-use super::local_gate::get_or_update_local_gate;
+use super::local_gate::LocalGateBinding;
 use crate::link_sys::get_redis_client;
 use crate::observe::metrics::{record_connection_rate_limit_redis_failure, record_connection_rate_limit_reject};
 use crate::plugins::common::redis_rate_limiter::RedisRateLimiter;
@@ -46,14 +46,10 @@ pub struct ConnectionRateLimitPlugin {
     /// counter while each checked it against its own `rate`, and with differing
     /// `interval` would corrupt each other's window rotation.
     scoped_key_prefix: String,
-    /// The entry identity alone (`<namespace>/<name>/#<index>`), without the
-    /// operator's `keyPrefix`.
-    ///
-    /// The local token bucket is a Redis-free backstop, so its registry slot must
-    /// not move when a Redis-only knob changes: keying it by `scoped_key_prefix`
-    /// would reset the bucket whenever `keyPrefix` is edited — including in pure
-    /// `perListener` mode where no `redisRef` is configured at all.
-    entry_scope: String,
+    /// Persistent entry budget and this runtime's immutable local generation.
+    /// Identity excludes Redis keyPrefix; each port activates a new generation
+    /// on its first local admission, without resetting the shared budget.
+    local_gate: Option<LocalGateBinding>,
     redis_ref: Option<String>,
     // perListener
     pl_rate: Option<u64>,
@@ -72,7 +68,7 @@ impl ConnectionRateLimitPlugin {
     /// `entry_scope` is the owning EdgionStreamPlugins entry's identity; see
     /// `scoped_key_prefix`.
     pub fn new(cfg: &ConnectionRateLimitConfig, entry_scope: &str) -> Self {
-        let init_failed = if cfg.validation_error().is_some() {
+        let mut init_failed = if cfg.validation_error().is_some() {
             tracing::error!(
                 component = "stream_connection_rate_limit",
                 entry_scope,
@@ -107,11 +103,28 @@ impl ConnectionRateLimitPlugin {
             .unwrap_or(100)
             .min(edgion_resources::resources::edgion_stream_plugins::MAX_REDIS_ACCEPT_TIMEOUT_MS)
             .max(1);
+        let local_gate = if !init_failed {
+            pl_rate.and_then(|rate| {
+                let binding = LocalGateBinding::new(entry_scope, rate, pl_interval_ms);
+                if binding.is_none() {
+                    init_failed = true;
+                    tracing::error!(
+                        component = "stream_connection_rate_limit",
+                        entry_scope,
+                        error = "local gate initialization failed",
+                        "Failed to initialize ConnectionRateLimitConfig; all connections will be denied",
+                    );
+                }
+                binding
+            })
+        } else {
+            None
+        };
         Self {
             init_failed,
             algorithm: cfg.algorithm.clone(),
             scoped_key_prefix: format!("{}{}:conn:", cfg.key_prefix, entry_scope),
-            entry_scope: entry_scope.to_string(),
+            local_gate,
             redis_ref: cfg.redis_ref.clone(),
             pl_rate,
             pl_interval_ms,
@@ -187,8 +200,7 @@ impl StreamPlugin for ConnectionRateLimitPlugin {
 
         // ---- Steps 1+2: perListener (evaluated first) ----
         if let Some(rate) = self.pl_rate {
-            let gate = get_or_update_local_gate(&self.entry_scope, port, rate, self.pl_interval_ms);
-            if !gate.try_acquire() {
+            if !self.local_gate.as_ref().is_some_and(|gate| gate.try_acquire(port)) {
                 record_connection_rate_limit_reject("listener", "local");
                 return StreamPluginResult::Deny("connrate:deny:listener:local".to_string());
             }
@@ -244,6 +256,85 @@ mod tests {
             per_source_ip: None,
             redis_timeout: "100ms".to_string(),
         }
+    }
+
+    #[tokio::test]
+    async fn reload_keeps_local_budget_independent_of_redis_prefix_and_old_parameters() {
+        let mut cfg = cfg_local_only(1);
+        cfg.per_listener.as_mut().unwrap().interval = "1h".to_string();
+        let scope = "default/local-reload-prefix/#0";
+        let ctx = StreamContext::new(IpAddr::from([10, 0, 0, 1]), 64120, StreamLayer::Stage1);
+        let old = ConnectionRateLimitPlugin::new(&cfg, scope);
+        assert!(matches!(old.on_connection(&ctx).await, StreamPluginResult::Allow));
+
+        cfg.key_prefix = "different:".to_string();
+        let prefix_only = ConnectionRateLimitPlugin::new(&cfg, scope);
+        assert_ne!(prefix_only.scoped_key_prefix, old.scoped_key_prefix);
+        assert!(matches!(
+            prefix_only.on_connection(&ctx).await,
+            StreamPluginResult::Deny(_)
+        ));
+
+        cfg.per_listener.as_mut().unwrap().rate = 3;
+        let raised = ConnectionRateLimitPlugin::new(&cfg, scope);
+        assert_eq!(old.pl_rate, Some(1));
+        assert_eq!(raised.pl_rate, Some(3));
+        assert!(matches!(raised.on_connection(&ctx).await, StreamPluginResult::Allow));
+        assert!(matches!(old.on_connection(&ctx).await, StreamPluginResult::Allow));
+        for plugin in [&prefix_only, &raised, &old, &raised] {
+            assert!(matches!(plugin.on_connection(&ctx).await, StreamPluginResult::Deny(_)));
+        }
+    }
+
+    #[tokio::test]
+    async fn redis_denial_does_not_refund_local_token_and_next_attempt_stops_locally() {
+        let mut cfg = cfg_local_only(1);
+        let listener = cfg.per_listener.as_mut().unwrap();
+        listener.interval = "1h".to_string();
+        listener.redis_distributed = true;
+        cfg.redis_ref = Some("default/local-gate-test-unavailable".to_string());
+        let plugin = ConnectionRateLimitPlugin::new(&cfg, "default/local-before-redis/#0");
+        let ctx = StreamContext::new(IpAddr::from([10, 0, 0, 1]), 64121, StreamLayer::Stage1);
+        assert!(matches!(plugin.on_connection(&ctx).await,
+            StreamPluginResult::Deny(reason) if reason == "connrate:deny:listener:redis"));
+        assert!(matches!(plugin.on_connection(&ctx).await,
+            StreamPluginResult::Deny(reason) if reason == "connrate:deny:listener:local"));
+    }
+
+    #[tokio::test]
+    async fn redis_source_failure_default_allow_preserves_local_enforcement() {
+        let mut cfg = cfg_local_only(1);
+        cfg.per_listener.as_mut().unwrap().interval = "1h".to_string();
+        cfg.redis_ref = Some("default/local-source-test-unavailable".to_string());
+        cfg.per_source_ip = Some(PerSourceIpLimit {
+            rate: 1,
+            interval: "1s".to_string(),
+            on_redis_failure: OnRedisFailure::Allow,
+            interval_duration: None,
+        });
+        let plugin = ConnectionRateLimitPlugin::new(&cfg, "default/local-source-failure/#0");
+        let ctx = StreamContext::new(IpAddr::from([10, 0, 0, 1]), 64122, StreamLayer::Stage1);
+        assert!(matches!(plugin.on_connection(&ctx).await, StreamPluginResult::Allow));
+        assert!(matches!(plugin.on_connection(&ctx).await,
+            StreamPluginResult::Deny(reason) if reason == "connrate:deny:listener:local"));
+    }
+
+    #[tokio::test]
+    async fn exhausted_generation_denies_new_runtime_without_disabling_live_one() {
+        let mut cfg = cfg_local_only(2);
+        cfg.per_listener.as_mut().unwrap().interval = "1h".to_string();
+        let scope = "default/local-generation-exhaustion/#0";
+        let old = ConnectionRateLimitPlugin::new(&cfg, scope);
+        old.local_gate.as_ref().unwrap().exhaust_generations_for_test();
+        let exhausted = ConnectionRateLimitPlugin::new(&cfg, scope);
+        assert!(exhausted.init_failed);
+        assert!(exhausted.local_gate.is_none());
+        let ctx = StreamContext::new(IpAddr::from([10, 0, 0, 1]), 64123, StreamLayer::Stage1);
+        assert!(matches!(exhausted.on_connection(&ctx).await,
+            StreamPluginResult::Deny(reason) if reason == "connrate:deny:invalid-config"));
+        assert!(matches!(old.on_connection(&ctx).await, StreamPluginResult::Allow));
+        assert!(matches!(old.on_connection(&ctx).await, StreamPluginResult::Allow));
+        assert!(matches!(old.on_connection(&ctx).await, StreamPluginResult::Deny(_)));
     }
 
     #[test]

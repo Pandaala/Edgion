@@ -334,7 +334,22 @@ handshake timeout starts after filtering and does not bound this wait.
 | `perListener` | Object | none | Per-listener rate limit with a local token-bucket backstop (available even when Redis is unreachable). |
 | `perSourceIp` | Object | none | Per-source-IP rate limit. Requires Redis — no local backstop. See caution above. |
 
-**Bucket scope**: counters — both the Redis keys and the local token bucket — are namespaced by the plugin entry that owns them, `<namespace>/<name>/#<index>` of the EdgionStreamPlugins resource and the entry's position in `plugins`. Two `ConnectionRateLimit` entries can be active on one listener port (a listener-level plus a TCPRoute-level attachment, or two entries in one resource); without this scope they would share one counter while each enforced its own `rate`, and with differing `interval` would corrupt each other's window. Every Gateway instance derives the same scope from the same resource, so cluster-wide counting is unaffected, and the scope is stable across hot reload. Reordering entries in `plugins` moves an entry to a fresh scope and restarts its counters.
+**Bucket scope**: counters — both the Redis keys and the local token bucket — are namespaced by the plugin entry that owns them, `<namespace>/<name>/#<index>` of the EdgionStreamPlugins resource and the entry's position in `plugins`. Two `ConnectionRateLimit` entries can be active on one listener port (a listener-level plus a TCPRoute-level attachment, or two entries in one resource); without this scope they would share one counter while each enforced its own `rate`, and with differing `interval` would corrupt each other's window. Every Gateway instance derives the same scope from the same resource, so cluster-wide counting is unaffected, and the scope is stable across hot reload. Reordering entries changes their identity: an entry moving to a previously used position may inherit that position's retained local budget. Keep names and positions stable when budget continuity matters.
+
+**Local budget on reload**: each listener port adopts an updated limit when a
+connection first reaches that entry with the new configuration. Elapsed time is
+credited at the previous rate before the change. Increasing `rate` adds only the
+capacity difference; decreasing it caps the remaining balance. Changing only
+Redis settings, including `keyPrefix`, does not reset the local budget. The same
+entry and port retain their local state through disable/delete and re-enable/recreate
+within one Gateway process; idle time accrues at the last activated local rate.
+
+An admission already using an older configuration may finish during reload. Once
+the port adopts the new local limit, such an admission consumes the updated local
+budget but keeps its original Redis settings. These are sequential checks, not
+one atomic local-and-Redis transaction. A later Redis denial does not refund the
+local token. Repeating the same resource at both listener and TCPRoute levels
+still evaluates and consumes that entry at both levels.
 
 #### `perSourceIp` / `perListener` sub-fields
 
