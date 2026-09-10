@@ -23,4 +23,4 @@
 
 - Three changed tests each passed with exact filters; error_policy 9/9 passed. Deferred network cases were not invoked.
 - Locked workspace check/Clippy, applied format/format check, agent docs, SSA, metrics, Pingora source, Gateway tracing boundary, English-only, diff and frozen-path guards passed. Existing Clippy warnings remain (982 Gateway lib-test warnings).
-- Ledger/changelog updated. Commit: pending automatic local commit; never push.
+- Ledger/changelog updated. Commit: `ec5eb474`; no push.

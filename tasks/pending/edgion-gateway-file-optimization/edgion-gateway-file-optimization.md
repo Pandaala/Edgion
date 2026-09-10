@@ -10,11 +10,11 @@
 | Priority | P1 |
 | Baseline commit | `d484e580` |
 | Scope | Every tracked file under `edgion-gateway/` |
-| Campaign status | in-progress at HEAD `1edac7b7`: B0279 passed all gates, automatic commit pending. |
-| Coverage | 549 current Gateway files: 258 changed, 182 examined-no-change, 14 deferred, 95 non-terminal; 3 historical rows are removed. External `78a25c3a` reopened six terminal files; four earlier `bea47373` reopens remain pending. Historical evidence is retained. |
-| Active batch | B0279 at commit gate. Automatic local commits, never push. |
-| Analysis queue | None. D0127–D0145 track separate work; tasks removed by external `78a25c3a` are retired only in coordinator records. |
-| Integration freeze | 3,238 files. External `78a25c3a` refreshed 21, removed two relocated paths and added nine entries, each verified against old/new Git objects and worktree bytes/mode. Prior reconciliations remain intact. Full check passes; campaign made no integration-test edit. |
+| Campaign status | in-progress at HEAD `9e3a276b`: B0280 independently reviewed and verified, pending local commit; external reconciliation complete. |
+| Coverage | 550 current Gateway files: 248 changed, 182 examined-no-change, 14 deferred, 106 non-terminal; 3 historical rows are removed. External ec5eb474..9e3a276b reopened eleven terminal files and added one test file; earlier reopens remain pending. Historical evidence is retained. |
+| Active batch | B0280 at local commit gate; no code mutation. Automatic local commits, never push. |
+| Analysis queue | B0281 VM defense analysis-ready, awaiting serial promotion. D0127–D0146 track separate work; external task removals are retired only in coordinator records. |
+| Integration freeze | 3,264 files. External ec5eb474..9e3a276b net M33/A32/D6 reconciled in two verified stages against old/new Git objects and worktree bytes/mode. Prior reconciliations retained; complete guard passes. Campaign made no integration-test edit. |
 
 ## AI guide summary
 

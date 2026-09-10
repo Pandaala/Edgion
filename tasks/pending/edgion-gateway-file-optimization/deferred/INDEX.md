@@ -200,15 +200,15 @@ These entries are backlinks only. A linked `tasks/todo` file is the editable sou
 | Avoid DSL Redis link-key clones | pending | [task](../../../todo/avoid-dsl-redis-link-key-clones.md) |
 | Isolate shared outbound-call library unit tests from network (D0128) | pending | [task](../../../todo/isolate-shared-outbound-call-unit-tests-from-network.md) |
 | Bound DSL body reads before allocation (D0129) | pending | [task](../../../todo/bound-dsl-body-reads-before-allocation.md) |
-| Correct DSL sandbox security documentation (D0130) | pending | [task](../../../todo/correct-dsl-sandbox-security-documentation.md) |
-| Revalidate the DSL compilation trust-boundary ADR (D0131) | pending | [task](../../../todo/revalidate-dsl-compilation-trust-boundary-adr.md) |
+| Correct DSL sandbox security documentation (D0130) | retired after external completion | Task removed in synchronized history through 9e3a276b; retained in Git |
+| Revalidate the DSL compilation trust-boundary ADR (D0131) | retired after external completion | Task removed in synchronized history through 9e3a276b; retained in Git |
 | Bound DSL runtime-limit scalars (D0132) | pending | [task](../../../todo/bound-dsl-runtime-limit-scalars.md) |
-| Correct DSL guide request-plugin examples (D0133) | pending | [task](../../../todo/correct-dsl-guide-request-plugin-examples.md) |
+| Correct DSL guide request-plugin examples (D0133) | retired after external completion | Task removed in synchronized history through 9e3a276b; retained in Git |
 | Validate structured DSL bytecode control flow (D0134) | pending | [task](../../../todo/validate-structured-dsl-bytecode-control-flow.md) |
 | Avoid the DSL `ctx.get` string copy (D0135) | pending | [task](../../../todo/avoid-dsl-ctx-get-string-copy.md) |
-| Correct DSL context access-log examples (D0136) | pending | [task](../../../todo/correct-dsl-ctx-access-log-examples.md) |
+| Correct DSL context access-log examples (D0136) | retired after external completion | Task removed in synchronized history through 9e3a276b; retained in Git |
 | Add DSL request-to-response context integration coverage (D0137) | pending | [task](../../../todo/add-dsl-request-to-response-context-integration-coverage.md) |
-| Correct DSL response-stage gRPC error documentation (D0138) | pending | [task](../../../todo/correct-dsl-response-stage-grpc-error-documentation.md) |
+| Correct DSL response-stage gRPC error documentation (D0138) | retired after external completion | Task removed in synchronized history through 9e3a276b; retained in Git |
 | Add DSL response-stage async HTTP-call timeout integration coverage (D0139) | pending | [task](../../../todo/add-dsl-response-stage-http-call-timeout-integration-coverage.md) |
 | Isolate remaining sensitive-mode Gateway tests (D0140) | pending | [task](../../../todo/isolate-remaining-sensitive-mode-gateway-tests.md) |
 | Enforce DSL Trim output string limits (D0141) | pending | [task](../../../todo/enforce-dsl-trim-output-string-limit.md) |
@@ -216,3 +216,4 @@ These entries are backlinks only. A linked `tasks/todo` file is the editable sou
 | Clarify DSL request-method casing (D0143) | needs-investigation | [task](../../../todo/clarify-dsl-request-method-case-contract.md) |
 | Correct response snapshot documentation (D0144) | pending | [task](../../../todo/correct-response-body-admission-snapshot-documentation.md) |
 | Isolate DSL sandbox unit tests from network (D0145) | pending | [task](../../../todo/isolate-dsl-sandbox-unit-tests-from-network.md) |
+| Reconcile DSL terminate contract (D0146) | needs-discussion | [task](../../../todo/reconcile-dsl-terminate-contract.md) |
