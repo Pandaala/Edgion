@@ -21,4 +21,4 @@
 - Exact network-free test passed 1/1 (4,386 filtered out); scoped rustfmt and diff checks passed. No integration, outbound, error/Dye, singleflight or cancellation behavior changed.
 - Fresh child final reviewer `b0295_final_review`: LGTM, no MustFix/ShouldFix/deferred finding. It independently verified all three result branches, completion-time sampling, deadlines/Arc/outcomes, unchanged eligibility and lock/singleflight/cancellation behavior, deterministic test coverage, one-file containment and D0058 separation.
 - Root format, locked workspace check (23.40s), locked Clippy (10.06s rerun; existing warnings, exit 0), agent-doc, SSA, metrics, Pingora, Gateway tracing, English, frozen-integration and diff gates passed.
-- Ledger/changelog updated. Commit pending automatic local commit; no integration edit or push.
+- Ledger/changelog updated. Commit `418980bf`; no integration edit or push.

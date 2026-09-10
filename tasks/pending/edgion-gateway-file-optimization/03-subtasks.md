@@ -470,7 +470,7 @@
 | `edgion-gateway/src/plugins/http/openid_connect/jwt_common.rs` | `plugins-http-openid-connect` | source | changed | B0090 |
 | `edgion-gateway/src/plugins/http/openid_connect/logout.rs` | `plugins-http-openid-connect` | source | examined-no-change | B0093 |
 | `edgion-gateway/src/plugins/http/openid_connect/mod.rs` | `plugins-http-openid-connect` | source | examined-no-change | B0094: minimal live module facade and visibility boundary retained |
-| `edgion-gateway/src/plugins/http/openid_connect/plugin.rs` | `plugins-http-openid-connect` | source | pending | Reopened after external `74e6ccdd`; historical B0091 retained |
+| `edgion-gateway/src/plugins/http/openid_connect/plugin.rs` | `plugins-http-openid-connect` | source | examined-no-change | B0296: external change is cfg(test)-only registration; production construction/runtime invariants independently revalidated |
 | `edgion-gateway/src/plugins/http/openid_connect/refresh_flight_registry.rs` | `plugins-http-openid-connect` | source | examined-no-change | B0092 |
 | `edgion-gateway/src/plugins/http/openid_connect/request_filter_impl.rs` | `plugins-http-openid-connect` | source | pending | Reopened after external `74e6ccdd`; historical B0093 retained |
 | `edgion-gateway/src/plugins/http/openid_connect/session_cookie.rs` | `plugins-http-openid-connect` | source | changed | B0091 |
