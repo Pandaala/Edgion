@@ -223,3 +223,4 @@ These entries are backlinks only. A linked `tasks/todo` file is the editable sou
 | Add ExtProc unsupported TLS policy recovery integration (D0150) | pending | [task](../../../todo/add-ext-proc-unsupported-tls-policy-recovery-integration.md) |
 | Isolate ExtProc live stream unit tests (D0151) | pending | [task](../../../todo/isolate-ext-proc-live-stream-unit-tests.md) |
 | Preserve ExtProc opaque header fidelity (D0152) | pending | [task](../../../todo/preserve-ext-proc-opaque-header-fidelity.md) |
+| Add ForwardAuth denial multivalue integration (D0153) | pending | [task](../../../todo/add-forward-auth-deny-multivalue-header-integration.md) |

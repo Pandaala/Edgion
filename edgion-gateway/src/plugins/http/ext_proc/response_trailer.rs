@@ -191,14 +191,19 @@ impl UpstreamResponseTrailer for ExtProcResponseTrailer {
     fn finalize_incomplete(&mut self, reason: &'static str) {
         if !self.done {
             self.done = true;
-            self.owner.terminal("cancelled", reason);
+            // Cleanup must preserve a decision already settled by another companion.
+            if !self.owner.is_terminal() {
+                self.owner.terminal("cancelled", reason);
+            }
         }
     }
 
     fn on_terminal_preempted(&mut self, reason: &'static str) {
         if !self.done {
             self.done = true;
-            self.owner.terminal("superseded", reason);
+            if !self.owner.is_terminal() {
+                self.owner.terminal("superseded", reason);
+            }
         }
     }
 
@@ -328,6 +333,7 @@ mod tests {
     use edgion_common::ext_proc::proto::{
         HeaderValue as WireHeaderValue, HeaderValueOption, ImmediateResponse, TrailersResponse,
     };
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::Mutex;
 
     struct Scripted {
@@ -335,14 +341,21 @@ mod tests {
         requests: Mutex<Vec<(ProcessingRequest, bool)>>,
         finishes: Mutex<Vec<&'static str>>,
         terminal: Mutex<Option<(&'static str, &'static str)>>,
-        inactive: bool,
+        inactive: AtomicBool,
+        terminal_writes: AtomicUsize,
+        releases: AtomicUsize,
     }
 
     #[async_trait]
     impl TrailerExchange for Scripted {
         async fn exchange(&self, request: ProcessingRequest, last: bool) -> Result<ProcessingResponse, tonic::Status> {
             self.requests.lock().unwrap().push((request, last));
-            self.responses.lock().unwrap().remove(0)
+            let response = self.responses.lock().unwrap().remove(0);
+            if last && response.is_ok() {
+                self.inactive.store(true, Ordering::SeqCst);
+                *self.terminal.lock().unwrap() = Some(("success", "normal-eos"));
+            }
+            response
         }
 
         async fn finish_success(&self, reason: &'static str) -> Result<(), tonic::Status> {
@@ -351,13 +364,18 @@ mod tests {
         }
 
         fn terminal(&self, outcome: &'static str, reason: &'static str) {
+            self.terminal_writes.fetch_add(1, Ordering::SeqCst);
+            self.inactive.store(true, Ordering::SeqCst);
             *self.terminal.lock().unwrap() = Some((outcome, reason));
         }
 
-        fn release_inflight(&self) {}
+        fn release_inflight(&self) {
+            self.releases.fetch_add(1, Ordering::SeqCst);
+            self.inactive.store(true, Ordering::SeqCst);
+        }
 
         fn is_terminal(&self) -> bool {
-            self.inactive
+            self.inactive.load(Ordering::SeqCst)
         }
     }
 
@@ -392,7 +410,9 @@ mod tests {
             requests: Mutex::new(Vec::new()),
             finishes: Mutex::new(Vec::new()),
             terminal: Mutex::new(None),
-            inactive,
+            inactive: AtomicBool::new(inactive),
+            terminal_writes: AtomicUsize::new(0),
+            releases: AtomicUsize::new(0),
         });
         (
             ExtProcResponseTrailer {
@@ -415,6 +435,130 @@ mod tests {
             .expect_downstream_response_trailer_name_allowed()
             .return_const(allow_new);
         session
+    }
+
+    fn cleanup(processor: &mut ExtProcResponseTrailer, preempted: bool) {
+        if preempted {
+            processor.on_terminal_preempted("earlier-trailer-fail-close");
+        } else {
+            processor.finalize_incomplete("logging-fallback");
+        }
+    }
+
+    #[test]
+    fn cleanup_hooks_preserve_settled_owner_outcomes() {
+        for summary in [
+            ("fail-close", "dependency"),
+            ("superseded", "winner"),
+            ("fail-open", "dependency"),
+            ("suppressed", "immediate-disabled"),
+            ("success", "response-trailers"),
+        ] {
+            for preempted in [false, true] {
+                let (mut processor, owner) = processor(Ok(response(None)), false, true);
+                *owner.terminal.lock().unwrap() = Some(summary);
+                cleanup(&mut processor, preempted);
+                assert!(processor.done);
+                cleanup(&mut processor, preempted);
+                cleanup(&mut processor, !preempted);
+                processor.release_inflight();
+                assert_eq!(*owner.terminal.lock().unwrap(), Some(summary));
+                assert_eq!(owner.terminal_writes.load(Ordering::SeqCst), 0);
+                assert_eq!(owner.releases.load(Ordering::SeqCst), 0);
+            }
+        }
+    }
+
+    #[test]
+    fn cleanup_hooks_terminalize_active_owner_once() {
+        for (preempted, expected) in [
+            (false, ("cancelled", "logging-fallback")),
+            (true, ("superseded", "earlier-trailer-fail-close")),
+        ] {
+            let (mut processor, owner) = processor(Ok(response(None)), false, false);
+            cleanup(&mut processor, preempted);
+            assert!(processor.done);
+            assert!(owner.is_terminal());
+            cleanup(&mut processor, preempted);
+            cleanup(&mut processor, !preempted);
+            processor.release_inflight();
+            assert_eq!(*owner.terminal.lock().unwrap(), Some(expected));
+            assert_eq!(owner.terminal_writes.load(Ordering::SeqCst), 1);
+            assert_eq!(owner.releases.load(Ordering::SeqCst), 0);
+        }
+    }
+
+    #[test]
+    fn cleanup_hooks_preserve_release_only_pending_summary() {
+        for preempted in [false, true] {
+            let (mut processor, owner) = processor(Ok(response(None)), false, false);
+            *owner.terminal.lock().unwrap() = Some(("pending", "pending"));
+            // Another companion releases the owner without finalizing its summary.
+            owner.release_inflight();
+            cleanup(&mut processor, preempted);
+            assert!(processor.done);
+            cleanup(&mut processor, !preempted);
+            processor.release_inflight();
+            assert_eq!(*owner.terminal.lock().unwrap(), Some(("pending", "pending")));
+            assert_eq!(owner.terminal_writes.load(Ordering::SeqCst), 0);
+            assert_eq!(owner.releases.load(Ordering::SeqCst), 1);
+        }
+
+        let (mut processor, owner) = processor(Ok(response(None)), false, false);
+        *owner.terminal.lock().unwrap() = Some(("pending", "pending"));
+        processor.release_inflight();
+        processor.release_inflight();
+        cleanup(&mut processor, false);
+        cleanup(&mut processor, true);
+        assert!(processor.done);
+        assert!(owner.is_terminal());
+        assert_eq!(*owner.terminal.lock().unwrap(), Some(("pending", "pending")));
+        assert_eq!(owner.terminal_writes.load(Ordering::SeqCst), 0);
+        assert_eq!(owner.releases.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn invalid_mutation_corrects_transport_success_for_both_failure_policies() {
+        for fail_open in [false, true] {
+            let mutation = HeaderMutation {
+                set_headers: vec![
+                    option("x-value", b"changed", HeaderAppendAction::OverwriteIfExistsOrAdd),
+                    option("content-length", b"4", HeaderAppendAction::OverwriteIfExistsOrAdd),
+                ],
+                remove_headers: Vec::new(),
+            };
+            let (mut processor, owner) = processor(Ok(response(Some(mutation))), fail_open, false);
+            let mut trailers = HeaderMap::new();
+            trailers.insert("x-value", HeaderValue::from_static("original"));
+            let original = trailers.clone();
+            let mut session = session(false, true, true);
+            session.expect_record_outcome().times(0).return_const(());
+            let result = processor
+                .run_upstream_response_trailer(Some(&mut trailers), &mut session, &mut PluginLog::new("ExtProc"))
+                .await;
+            assert_eq!(
+                result,
+                if fail_open {
+                    UpstreamTrailerResult::Continue
+                } else {
+                    UpstreamTrailerResult::FailClose
+                }
+            );
+            assert_eq!(trailers, original);
+            assert!(processor.done);
+            assert!(owner.is_terminal());
+            let requests = owner.requests.lock().unwrap();
+            assert_eq!(requests.len(), 1);
+            assert!(requests[0].1);
+            drop(requests);
+            cleanup(&mut processor, false);
+            cleanup(&mut processor, true);
+            assert_eq!(
+                *owner.terminal.lock().unwrap(),
+                Some((if fail_open { "fail-open" } else { "fail-close" }, "bad-verdict"))
+            );
+            assert_eq!(owner.terminal_writes.load(Ordering::SeqCst), 1);
+        }
     }
 
     #[tokio::test]

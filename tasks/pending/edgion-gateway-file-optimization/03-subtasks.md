@@ -414,14 +414,14 @@
 | `edgion-gateway/src/plugins/http/ext_proc/mutation.rs` | `plugins-http-ext-proc` | source | changed | B0285: preserve current raw query through canonical URI projection; independent plan/final LGTM, mutation 12/12 and workspace gates passed |
 | `edgion-gateway/src/plugins/http/ext_proc/plugin.rs` | `plugins-http-ext-proc` | source | changed | B0286: byte-exact local responses across header and streamed paths; independent plan/final LGTM, 21/21 deterministic tests and workspace gates passed |
 | `edgion-gateway/src/plugins/http/ext_proc/response_streamed.rs` | `plugins-http-ext-proc` | source | examined-no-change | B0287: bounded per-chunk phase/terminal policy retained; independent LGTM, 11/11 deterministic tests and workspace gates passed; B0288 owns trailer finding |
-| `edgion-gateway/src/plugins/http/ext_proc/response_trailer.rs` | `plugins-http-ext-proc` | source | analysis-ready | B0288: preserve settled shared-owner decisions during trailer cleanup; refresh before promotion |
-| `edgion-gateway/src/plugins/http/ext_proc/streamed.rs` | `plugins-http-ext-proc` | source | analysis-in-progress | B0289: full request-streamed value/coverage analysis after B0286 supporting Bytes correction |
+| `edgion-gateway/src/plugins/http/ext_proc/response_trailer.rs` | `plugins-http-ext-proc` | source | changed | B0288: cleanup preserves settled shared-owner decisions; independent plan/final LGTM, 14/14 deterministic tests and workspace gates passed |
+| `edgion-gateway/src/plugins/http/ext_proc/streamed.rs` | `plugins-http-ext-proc` | source | analysis-ready | B0289: full request-streamed analysis found no worthwhile target change; 17 safe scripted tests recommended |
 | `edgion-gateway/src/plugins/http/fault_injection/mod.rs` | `plugins-http-fault-injection` | source | examined-no-change | B0075 |
 | `edgion-gateway/src/plugins/http/fault_injection/plugin.rs` | `plugins-http-fault-injection` | source | changed | B0075 |
 | `edgion-gateway/src/plugins/http/form_json_transform/mod.rs` | `plugins-http-form-json-transform` | source | examined-no-change | B0076 |
 | `edgion-gateway/src/plugins/http/form_json_transform/plugin.rs` | `plugins-http-form-json-transform` | source | changed | B0076 |
 | `edgion-gateway/src/plugins/http/forward_auth/mod.rs` | `plugins-http-forward-auth` | source | examined-no-change | B0077 |
-| `edgion-gateway/src/plugins/http/forward_auth/plugin.rs` | `plugins-http-forward-auth` | source | pending | External 9b787978..b297af6e requires review; prior changed: B0077 |
+| `edgion-gateway/src/plugins/http/forward_auth/plugin.rs` | `plugins-http-forward-auth` | source | analysis-ready | B0290: denial response drops repeated selected headers; complex plan-first candidate, prior B0077 retained |
 | `edgion-gateway/src/plugins/http/geoip_location/mod.rs` | `plugins-http-geoip-location` | source | examined-no-change | B0078 |
 | `edgion-gateway/src/plugins/http/geoip_location/plugin.rs` | `plugins-http-geoip-location` | source | changed | B0078 |
 | `edgion-gateway/src/plugins/http/guardrail/attached.rs` | `plugins-http-guardrail` | source | examined-no-change | B0079 |

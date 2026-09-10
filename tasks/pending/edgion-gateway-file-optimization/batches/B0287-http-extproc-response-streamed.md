@@ -1,6 +1,6 @@
 # B0287 — HTTP ExtProc Streamed Response
 
-- Pipeline state: examined-no-change; independent LGTM and verification passed, local commit gate.
+- Pipeline state: examined-no-change; committed after independent LGTM and verification.
 - Active anchor: `edgion-gateway`; refreshed baseline `3402cb4e`.
 - Target: `edgion-gateway/src/plugins/http/ext_proc/response_streamed.rs`.
 - Analyst: `b0287_extproc_response_streamed_analysis`; response/window ownership, terminal arbitration, bounds, consumers and coverage/value analysis assigned.
@@ -16,4 +16,4 @@
 
 - Approved module filter: 11/11 passed, 24.60s build and 0.01s test execution, no failures.
 - Fresh root gates: workspace format/apply and format check, locked workspace/all-targets check (1.06s), locked Clippy (0.38s, existing warnings, exit 0), agent-doc validation, SSA force, metrics inventory, Pingora source policy, Gateway tracing boundary, English-only, frozen integrations and diff whitespace all passed.
-- No technical or integration edits. Commit pending; no push.
+- No technical or integration edits. Commit `60374898`; no push.
