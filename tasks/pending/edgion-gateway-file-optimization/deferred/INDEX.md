@@ -216,3 +216,4 @@ These entries are backlinks only. A linked `tasks/todo` file is the editable sou
 | Enforce DSL Trim output string limits (D0141) | pending | [task](../../../todo/enforce-dsl-trim-output-string-limit.md) |
 | Remove TLSRoute v1alpha3 API fallback (D0142) | pending | [task](../../../todo/remove-tlsroute-v1alpha3-fallback.md) |
 | Clarify DSL request-method casing (D0143) | needs-investigation | [task](../../../todo/clarify-dsl-request-method-case-contract.md) |
+| Correct response snapshot documentation (D0144) | pending | [task](../../../todo/correct-response-body-admission-snapshot-documentation.md) |

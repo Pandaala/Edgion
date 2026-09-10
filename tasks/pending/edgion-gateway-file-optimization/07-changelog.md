@@ -16,7 +16,9 @@ This is the single concise record of actual changes across the file-by-file audi
 
 ## Entries
 
-- B0275: exact unordered response header-name observations, fixed-prefix/exact-byte bounds and missing Content-Type Nil coverage; original three tests retained, three added. Independent LGTM; DSL 389/389, locked workspace check/Clippy and all guards passed. Pending automatic local commit; no production/integration changes or push.
+- B0276: response status accepted endpoints/Nil plus typed integer narrowing and non-Int failures with zero host calls; original three tests retained, three added. Independent LGTM; DSL 392/392, locked workspace check/Clippy and all guards passed. D0144 tracks obsolete response-snapshot knowledge separately. Pending automatic local commit; no production/integration changes or push.
+
+- B0275: exact unordered response header-name observations, fixed-prefix/exact-byte bounds and missing Content-Type Nil coverage; original three tests retained, three added. Independent LGTM; DSL 389/389, locked workspace check/Clippy and all guards passed. Commit `cfd8a249`; no production/integration changes or push.
 
 - B0274: six request-mutation tests now assert documented Nil results while retaining exact host calls. Initial invalid DSL fixture syntax caused six failures; diagnostic-guided correction and independent re-review passed. Targeted 6/6, DSL 386/386, locked workspace check/Clippy and all guards passed. D0143 independently tracks method-casing documentation uncertainty. Commit `8f282fd2`; no production/integration change or push.
 
