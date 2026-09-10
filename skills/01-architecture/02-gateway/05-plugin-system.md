@@ -14,8 +14,24 @@ description: Plugin system architecture — 4-phase execution, PluginRuntime pre
 |-------|-------|--------|------------|------------------|--------|
 | RequestFilter | `RequestFilter` | Before forwarding to upstream | async | `run_request(&self, session, log) -> PluginRunningResult` | Can terminate the request or return a custom response |
 | UpstreamResponseFilter | `UpstreamResponseFilter` | After upstream response headers received | sync | `run_upstream_response_filter(&self, session, log) -> PluginRunningResult` | Can modify response headers, terminate |
+| UpstreamResponse | `UpstreamResponse` | Final response headers, before downstream header commit and body streaming | async | `run_upstream_response(&self, session, log) -> PluginRunningResult` | Await header decisions, modify headers, or install bounded streaming companions |
 | UpstreamResponseBodyFilter | `UpstreamResponseBodyFilter` | Each response body chunk | sync | `run_upstream_response_body_filter(&self, body, end_of_stream, session) -> Option<Duration>` | Returns Duration for bandwidth limiting; **note: the signature deliberately omits `&mut PluginLog`** — see the "no PluginLog in body phase" constraint below |
-| UpstreamResponse | `UpstreamResponse` | After the upstream response completes | async | `run_upstream_response(&self, session, log) -> PluginRunningResult` | Async post-processing |
+
+The response stages have distinct boundaries. The Gateway's
+`pg_upstream_response_filter` skips interim 1xx, arbitrates status retries,
+normalizes the selected response, and runs synchronous `UpstreamResponseFilter`
+plugins. `pg_response_filter` then runs asynchronous `UpstreamResponse` header
+decisions before committing headers or forwarding the response body. Interim
+1xx (such as 100/103) do not run either chain; 101 is a terminal upgrade response
+and is not treated as interim.
+
+Neither header stage exposes the complete main response body. The upstream body
+remains streaming: body filters and bounded streaming processors run on its later
+body path, while trailer companions run through the separate trailer dispatcher.
+Do not implement full-response aggregation in `UpstreamResponse` or treat it as
+an end-of-response hook. See the
+[`UpstreamResponse` trait](../../../edgion-gateway/src/plugins/runtime/traits/upstream_response.rs)
+and the [Gateway response driver](../../../edgion-gateway/src/routes/http/proxy_http/pg_response_filter.rs).
 
 Execution flow notes:
 - Within each phase, plugins run in registration order.
@@ -70,8 +86,8 @@ Plugins defined in EdgionPlugins are automatically wrapped with a `Conditional*`
 |---------|----------------|
 | `ConditionalRequestFilter` | `RequestFilter` |
 | `ConditionalUpstreamResponseFilter` | `UpstreamResponseFilter` |
-| `ConditionalUpstreamResponseBodyFilter` | `UpstreamResponseBodyFilter` |
 | `ConditionalUpstreamResponse` | `UpstreamResponse` |
+| `ConditionalUpstreamResponseBodyFilter` | `UpstreamResponseBodyFilter` |
 
 Condition model (`PluginConditions`):
 - `skip`: evaluate its `ConditionSet` first; a match skips plugin execution.

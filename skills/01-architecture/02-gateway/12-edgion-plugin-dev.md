@@ -79,8 +79,16 @@ The most common pitfall is mixing the two paths:
 |-------|-------|--------------|-------------|
 | Request phase | `RequestFilter` | Before forwarding to upstream | Auth, RateLimit, Rewrite, Mirror, direct reject |
 | Response header phase | `UpstreamResponseFilter` | When upstream response headers arrive | Modify response headers, fast decision based on header |
+| Async final response header phase | `UpstreamResponse` | After synchronous header filtering, retry arbitration, and normalization; before downstream header commit and body streaming | Await header decisions, modify headers, install bounded streaming companions |
 | Response body phase | `UpstreamResponseBodyFilter` | Each body chunk | Bandwidth limit, chunk inspection (**the trait signature deliberately omits `&mut PluginLog`**; the per-chunk path must allocate zero — see [05-plugin-system.md](05-plugin-system.md#-critical-constraint-no-pluginlog-in-body-phase-per-chunk-path-must-allocate-zero)) |
-| Response-end phase | `UpstreamResponse` | After the full response ends | Logic that needs the complete response context (rare) |
+
+Both response-header chains skip interim 1xx (for example 100/103); 101 is a
+terminal upgrade and is not skipped as interim. `UpstreamResponse` runs from
+Pingora's `response_filter` callback on the final response candidate. It has no
+complete-response or complete-response-body view. Keep its awaited header decision
+separate from later body filters, bounded streaming processors, and trailer
+companions; the main upstream response always streams. The detailed ordering and
+source links are in [the execution model](05-plugin-system.md#four-phase-execution-model).
 
 Default to `RequestFilter`.
 If you don't need upstream response info, don't push the logic into a later phase.
