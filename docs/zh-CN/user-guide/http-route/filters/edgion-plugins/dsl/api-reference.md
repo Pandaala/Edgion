@@ -853,7 +853,7 @@ resp.remove_header("X-Powered-By")
 
 ## 上下文存储（ctx.*）
 
-上下文变量在同一请求生命周期内跨插件共享。请求阶段设置的值在响应阶段和访问日志中均可读取。
+上下文变量在同一请求生命周期内跨插件共享。请求阶段设置的值可在响应阶段读取。访问日志投影必须显式声明 `AccessLogExtern`，并遵守其脱敏和禁止字段规则，详见下方 `ctx.set`。
 
 ### ctx.get
 
@@ -880,7 +880,7 @@ if user != nil {
 
 **签名**：`ctx.set(key, value)` → `Nil`
 
-在当前请求上下文中设置一个键值对。该值对同一请求的后续插件和访问日志可见。`value` 会被转换为字符串存储。
+在当前请求上下文中设置一个键值对，供同一请求的后续插件读取。`value` 以字符串存储。这不会自动新增访问日志字段：需在 `EdgionPlugins.spec.accessLogExtern` 中以 `from: ctx` 声明该键，终态记录日志时才会投影到 `ext`。上下文值默认脱敏；`jwt_claims`、`oidc_claims` 和 `jwe_payload` 被绝对禁止投影。声明、脱敏与挂载规则见 [AccessLogExtern](../../../../../ops-guide/observability/access-log.md)。
 
 **参数**：
 - `key`（Str）— 上下文变量键名

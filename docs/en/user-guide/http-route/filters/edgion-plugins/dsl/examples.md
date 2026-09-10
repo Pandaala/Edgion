@@ -37,7 +37,7 @@ spec:
 Notes:
 
 - `deny(401, ...)` is used for "missing credentials" and `deny(403, ...)` for "invalid credentials" — this is semantically more accurate.
-- `ctx.set("authenticated", "true")` writes the authentication result into the context; subsequent plugins can read it via `ctx.get("authenticated")`, and it will also appear in the context fields of the access log.
+- `ctx.set("authenticated", "true")` writes request context for subsequent plugins to read via `ctx.get("authenticated")`. Logging it requires an explicit `AccessLogExtern` declaration with `from: ctx`; see the audit example below.
 - `errorPolicy: deny` means that if the script itself errors, the request is also denied, preventing authentication bypass due to script exceptions.
 
 ---
@@ -620,7 +620,7 @@ spec:
 
 ### 5.1 Request Audit Logging
 
-Use `log()` to record key request information, and `ctx.set()` to write metadata into the context so it appears in the access log.
+Use `ctx.set()` to store request metadata, then explicitly select its access-log fields with `EdgionPlugins.spec.accessLogExtern`. The declaration is read at terminal logging and writes fields under `ext`; it does not execute as a request plugin.
 
 ```yaml
 apiVersion: edgion.io/v1
@@ -637,12 +637,7 @@ spec:
           let method = req.method()
           let path = req.path()
           let ip = req.remote_ip()
-          let proto = req.protocol
-
-          // Record a structured audit log entry
-          log("audit: method=" + method + " path=" + path + " ip=" + ip + " proto=" + proto)
-
-          // Write key fields into the context so they appear in the access log's ctx field
+          // Store values for the explicitly declared access-log fields
           ctx.set("audit_method", method)
           ctx.set("audit_path", path)
           ctx.set("audit_ip", ip)
@@ -663,13 +658,30 @@ spec:
           }
 
           return next()
+  accessLogExtern:
+    - key: audit_method
+      from: ctx
+      name: audit_method
+    - key: audit_path
+      from: ctx
+      name: audit_path
+    - key: audit_ip
+      from: ctx
+      name: audit_ip
+    - key: has_auth
+      from: ctx
+      name: has_auth
+    - key: user_agent_short
+      from: ctx
+      name: user_agent_short
 ```
 
 Notes:
 
-- `log()` writes to the gateway's structured logging system and is visible at INFO log level.
-- Values written with `ctx.set()` appear in the context fields of the access log, making them available for aggregation and analysis in platforms such as ELK or Loki.
-- Audit logs must **not record full credentials** (tokens, passwords, etc.) — the example above only records whether they are present.
+- Attach this EdgionPlugins resource to the route as usual. Only the declared, present context keys are projected into `ext`; other `ctx.set()` values remain request-local.
+- All `ctx` keys are masked by default (`***` in the default `replace` mode). Readable fields require an explicit, reviewed `EdgionGatewayConfig.spec.accessLogExtern.unmaskedKeys.ctx` entry; the sample does not disable masking.
+- `jwt_claims`, `oidc_claims`, and `jwe_payload` cannot be projected, even with an unmasked-key entry or a different sensitive-output mode. Do not copy credentials or full claims to another key or use `log()` to bypass this boundary.
+- See [AccessLogExtern](../../../../../ops-guide/observability/access-log.md) for attachment, masking, and blocklist details. The example records authentication presence, never the credential value.
 
 ---
 
@@ -724,13 +736,17 @@ spec:
           }
 
           return next()
+  accessLogExtern:
+    - key: upstream_latency_ms
+      from: ctx
+      name: upstream_latency_ms
 ```
 
 Notes:
 
 - `time_now()` returns a Unix millisecond timestamp (type `Int`).
 - Context variables can only store strings, so `to_str()` and `to_int()` are needed to convert numeric values back and forth.
-- `ctx.set("upstream_latency_ms", ...)` makes latency data appear in the access log, which can be used for P99 percentile statistics.
+- `ctx.set("upstream_latency_ms", ...)` stores the value in request context. The explicit `from: ctx` declaration below the script selects it for `ext`; it remains masked by default. Numeric aggregation requires a reviewed unmasked-key configuration as described in [AccessLogExtern](../../../../../ops-guide/observability/access-log.md).
 
 ---
 
@@ -757,13 +773,13 @@ source: |
 
 ### 6.2 Make Good Use of Context Variables
 
-Values written with `ctx.set()` appear in the context fields of the access log, making it easy to filter and correlate directly in log platforms. Use a consistent naming convention for context keys (e.g., lowercase with underscore separators) to simplify log queries.
+Use context variables to share values within one request. They are not automatically logged. Select only the fields you need through `AccessLogExtern from: ctx`, and retain its masking and categorical blocklist. Use consistent names such as lowercase with underscores.
 
 ```yaml
 source: |
-  ctx.set("user_id", sub)          # appears in access log
-  ctx.set("tenant_id", tenant)     # appears in access log
-  ctx.set("ab_group", group)       # appears in access log
+  ctx.set("user_id", sub)          // Request context only; logging needs an explicit declaration
+  ctx.set("tenant_id", tenant)     // Request context only; logging needs an explicit declaration
+  ctx.set("ab_group", group)       // Request context only; logging needs an explicit declaration
   return next()
 ```
 

@@ -6,7 +6,7 @@
 
 ## 概述
 
-`CtxSet` 插件用于在请求处理过程中设置上下文变量。这些变量可以被后续的插件（如 RateLimit、PluginConditions）使用，或者作为日志字段输出。
+`CtxSet` 插件用于在请求处理过程中设置上下文变量。这些变量可以被后续插件（如 RateLimit、PluginConditions）使用。若需输出访问日志，必须在 `EdgionPlugins.spec.accessLogExtern` 中显式声明 `from: ctx` 条目；默认会脱敏，敏感上下文键被绝对禁止投影。详见 [AccessLogExtern](../../ops-guide/observability/access-log.md)。
 
 CtxSet 支持从多种数据源（Header、Query、Cookie、Path、ClientIP、Method、已有上下文变量）提取数据，可选地通过正则提取、转换和值映射对结果进行重塑，并将最终值存储在命名键下供下游插件使用。
 

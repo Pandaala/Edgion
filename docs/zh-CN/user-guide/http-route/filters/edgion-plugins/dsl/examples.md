@@ -37,7 +37,7 @@ spec:
 说明：
 
 - `deny(401, ...)` 用于"凭据缺失"，`deny(403, ...)` 用于"凭据无效"，语义上更准确。
-- `ctx.set("authenticated", "true")` 将认证结果写入上下文，后续插件可通过 `ctx.get("authenticated")` 读取，也会出现在访问日志的上下文字段中。
+- `ctx.set("authenticated", "true")` 将认证结果写入请求上下文，供后续插件通过 `ctx.get("authenticated")` 读取。若需记录日志，必须显式声明 `from: ctx` 的 `AccessLogExtern` 字段，见下方审计示例。
 - `errorPolicy: deny` 表示脚本本身出错时也拒绝请求，避免因脚本异常导致认证绕过。
 
 ---
@@ -620,7 +620,7 @@ spec:
 
 ### 5.1 请求审计日志
 
-使用 `log()` 记录关键请求信息，使用 `ctx.set()` 将元数据写入上下文以便出现在访问日志中。
+使用 `ctx.set()` 存储请求元数据，再通过 `EdgionPlugins.spec.accessLogExtern` 显式选择访问日志字段。该声明在终态记录日志时读取，字段输出到 `ext`，不作为请求插件执行。
 
 ```yaml
 apiVersion: edgion.io/v1
@@ -637,12 +637,7 @@ spec:
           let method = req.method()
           let path = req.path()
           let ip = req.remote_ip()
-          let proto = req.protocol
-
-          // 记录结构化审计日志
-          log("audit: method=" + method + " path=" + path + " ip=" + ip + " proto=" + proto)
-
-          // 将关键字段写入上下文，出现在访问日志的 ctx 字段中
+          // 为显式声明的访问日志字段存储值
           ctx.set("audit_method", method)
           ctx.set("audit_path", path)
           ctx.set("audit_ip", ip)
@@ -663,13 +658,30 @@ spec:
           }
 
           return next()
+  accessLogExtern:
+    - key: audit_method
+      from: ctx
+      name: audit_method
+    - key: audit_path
+      from: ctx
+      name: audit_path
+    - key: audit_ip
+      from: ctx
+      name: audit_ip
+    - key: has_auth
+      from: ctx
+      name: has_auth
+    - key: user_agent_short
+      from: ctx
+      name: user_agent_short
 ```
 
 说明：
 
-- `log()` 输出到网关的结构化日志系统，在日志级别 INFO 下可见。
-- `ctx.set()` 的值会出现在访问日志的上下文字段中，便于在 ELK/Loki 等日志平台做聚合分析。
-- 审计日志应注意**不记录完整凭据**（Token、密码等），上例仅记录是否存在。
+- 按常规方式将此 EdgionPlugins 资源挂载到路由。只有显式声明且存在的上下文键才会投影到 `ext`；其他 `ctx.set()` 值仅保留在请求上下文中。
+- 所有 `ctx` 键默认脱敏（默认 `replace` 模式输出 `***`）。如需可读字段，必须在 `EdgionGatewayConfig.spec.accessLogExtern.unmaskedKeys.ctx` 中显式加入经过审查的键；本例不关闭脱敏。
+- `jwt_claims`、`oidc_claims` 和 `jwe_payload` 无论是否配置免脱敏键或选择其他敏感输出模式，都禁止投影。不要将凭据或完整 claims 复制到另一个键，也不要通过 `log()` 绕过该边界。
+- 挂载、脱敏及禁止字段的详细规则见 [AccessLogExtern](../../../../../ops-guide/observability/access-log.md)。本例仅记录认证信息是否存在，不记录凭据值。
 
 ---
 
@@ -724,13 +736,17 @@ spec:
           }
 
           return next()
+  accessLogExtern:
+    - key: upstream_latency_ms
+      from: ctx
+      name: upstream_latency_ms
 ```
 
 说明：
 
 - `time_now()` 返回 Unix 毫秒时间戳（`Int` 类型）。
 - 上下文变量只能存储字符串，因此需要 `to_str()` 和 `to_int()` 来回转换数值。
-- `ctx.set("upstream_latency_ms", ...)` 使耗时数据出现在访问日志中，可用于 P99 分位数统计。
+- `ctx.set("upstream_latency_ms", ...)` 将值存入请求上下文。脚本下方显式的 `from: ctx` 声明将其选入 `ext`，但默认仍会脱敏。若需数值聚合，须按 [AccessLogExtern](../../../../../ops-guide/observability/access-log.md) 配置经过审查的免脱敏键。
 
 ---
 
@@ -757,13 +773,13 @@ source: |
 
 ### 6.2 善用上下文变量
 
-`ctx.set()` 的值会出现在访问日志的上下文字段中，有助于在日志平台中直接过滤和关联。为上下文键使用统一的命名规范（如小写下划线分隔），便于日志查询。
+使用上下文变量在同一请求内共享值；这些值不会自动记录日志。仅通过 `AccessLogExtern from: ctx` 选择所需字段，并保留脱敏与绝对禁止字段规则。建议使用小写下划线等统一命名方式。
 
 ```yaml
 source: |
-  ctx.set("user_id", sub)          # 出现在访问日志
-  ctx.set("tenant_id", tenant)     # 出现在访问日志
-  ctx.set("ab_group", group)       # 出现在访问日志
+  ctx.set("user_id", sub)          // 仅存入请求上下文；记录日志需要显式声明
+  ctx.set("tenant_id", tenant)     // 仅存入请求上下文；记录日志需要显式声明
+  ctx.set("ab_group", group)       // 仅存入请求上下文；记录日志需要显式声明
   return next()
 ```
 

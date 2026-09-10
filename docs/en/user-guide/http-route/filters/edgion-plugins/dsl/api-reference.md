@@ -869,7 +869,7 @@ resp.remove_header("X-Powered-By")
 
 ## Context Storage (ctx.*)
 
-Context variables are shared across plugins within the same request lifecycle. Values set in the request phase are readable in the response phase and in access logs.
+Context variables are shared across plugins within the same request lifecycle. Values set in the request phase are readable in the response phase. Access-log projection requires an explicit `AccessLogExtern` declaration and follows its masking and blocklist rules; see `ctx.set` below.
 
 ### ctx.get
 
@@ -896,7 +896,7 @@ if user != nil {
 
 **Signature**: `ctx.set(key, value)` → `Nil`
 
-Sets a key-value pair in the current request context. The value is visible to subsequent plugins and access logs for the same request. `value` is stored as a string.
+Sets a key-value pair in the current request context for subsequent plugins. `value` is stored as a string. This does not add an access-log field: declare the key with `from: ctx` in `EdgionPlugins.spec.accessLogExtern` to project it into `ext` at terminal logging. Context values are masked by default; `jwt_claims`, `oidc_claims`, and `jwe_payload` are categorically blocked. See [AccessLogExtern](../../../../../ops-guide/observability/access-log.md) for declarations, masking, and attachment rules.
 
 **Parameters**:
 - `key` (Str) — Context variable key name

@@ -6,7 +6,7 @@
 
 ## Overview
 
-The `CtxSet` plugin sets context variables during request processing. These variables can be used by subsequent plugins (such as RateLimit, PluginConditions) or output as log fields.
+The `CtxSet` plugin sets context variables during request processing. These variables can be used by subsequent plugins (such as RateLimit, PluginConditions). Access-log output requires an explicit `from: ctx` entry in `EdgionPlugins.spec.accessLogExtern`; values are masked by default and sensitive context keys are categorically blocked. See [AccessLogExtern](../../ops-guide/observability/access-log.md).
 
 CtxSet supports extracting data from multiple sources (Header, Query, Cookie, Path, ClientIP, Method, existing context vars), optionally reshapes the value with regex extraction, transformation, and value mapping, and stores the result under a named key for downstream plugins.
 
