@@ -24,7 +24,7 @@ metadata:
 |------|----------|------|
 | `IpRestriction` | 内联规则 | IP 允许/拒绝分组，直接嵌入插件中。 |
 | `GlobalConnectionIpRestriction` | 内联配置 + 可选 `activeProfileRef` | 完整 IP 规则集（命名 `profiles`）内联在插件中；可选的 `Selector` EdgionConfigData 用于热切换**当前激活哪个 profile**。由 Center 管理并同步到各 Controller。 |
-| `ConnectionRateLimit` | `config` 对象 | 在 pre-TLS 接入路径上，基于 Redis 的按源 IP 连接限流。详见下文 [ConnectionRateLimit 小节](#connectionratelimit-pre-tls-连接限流)。 |
+| `ConnectionRateLimit` | `config` 对象 | 本地监听器保护与可选的 Redis 共享限额；Gateway 挂载在 TLS 前执行。详见下文 [ConnectionRateLimit 小节](#connectionratelimit-pre-tls-连接限流)。 |
 
 `spec.plugins` 下的每个条目都有可选的 `enable` 标志（默认 `true`）、一个 `type` 和一个 `config` 对象。
 
@@ -261,21 +261,29 @@ spec:
 
 ## ConnectionRateLimit: pre-TLS 连接限流
 
-`ConnectionRateLimit` 按源 IP 限制新建入站连接的速率。Redis 检查在 TLS 握手**之前**（Pingora 的 `ConnectionFilter` 阶段）执行，因此可以在分配任何 TLS 资源之前丢弃连接。
+`ConnectionRateLimit` 支持组合使用本地监听器保护与 Redis 共享限额。挂载到 Gateway 监听器时，检查在 TLS 握手**之前**执行；挂载到 TCPRoute 时，在路由匹配后执行。
+
+### 选择本地与共享限额
+
+常规连接突发保护建议配置 `perListener`，保持 `redisDistributed: false`，使用不依赖 Redis 的本地令牌桶。需要共享限额时，同一个插件可以组合本地与 Redis 检查：先执行本地 `perListener` 门控，再执行可选的分布式 `perListener` 检查，最后执行可选的 `perSourceIp` 检查。任一步拒绝即停止；设置 `redisDistributed: true` 仍会保留本地门控。
+
+下方组合示例使用本地 `perListener` 保护与 Redis `perSourceIp` 限额。Redis 连接限流按需启用，应根据预期新连接速率与依赖延迟评估容量。HTTP 业务配额优先使用请求级限流：长连接或多路复用连接的数量不能代表请求数量。
 
 ### 为什么 `redisTimeout` 被硬上限封顶为 1s
 
-限流检查运行在入站 pre-TLS 接入路径上，会在 Redis 往返期间一直持有已接受的文件描述符（以及持有它的 Pingora 任务）。**Redis 连接池并不能消除这种背压**：连接池是*出站*的（Gateway → Redis），而堆积的是*入站*连接（在等待 Redis 响应期间被持有的客户端 fd）。在 Redis brownout 期间，每个新入站连接最多会阻塞 `redisTimeout`，之后才由 `onRedisFailure` 接管。1s 硬上限限制了被阻塞的入站 fd 能堆积多久。
+挂载到 Gateway 监听器时，每个 Pingora accept 任务在等待过滤器期间持有一个已接受的 socket。Pingora 默认每个监听 FD 只有一个 accept 任务，等待 Redis 时后续连接会在内核 backlog 中排队。这限制了每个 accept 任务中正在过滤的 socket 数量，但可能降低新连接接入吞吐。增加 Redis 连接池容量或进程 FD 上限不能消除这种串行等待；它不会直接阻塞已经建立的连接。
 
-> **`perSourceIp` 没有本地兜底。** 与 `perListener` 维度（即使 Redis 不可达，本地令牌桶仍然有效）不同，`perSourceIp` 没有进程内回退——每个被接受的连接都必须到达 Redis。如果需要 fail-close 行为，请显式设置 `onRedisFailure`。
+`redisTimeout` 默认 `100ms`，硬上限 `1s`，作用于**每个 Redis 维度**；多个维度或插件条目的等待时间可以叠加。Redis 客户端缺失或已标记不健康时立即执行失败策略；其他情况下，即使 fail-open 也可能先等待调用超时。本地过滤能降低 Redis 压力，但不能消除已通过本地检查的连接所遇到的等待。Pingora 的 `listener_tasks_per_fd` 控制 accept 并行度，与进程 FD 上限不同，也不是 `ConnectionRateLimit` 配置字段。提高并行度还会增加并发 Redis 检查，需要结合实际负载验证。握手超时在过滤结束后开始，不覆盖这段等待。
+
+> **`perSourceIp` 没有本地兜底。** 与 `perListener` 维度（即使 Redis 不可达，本地令牌桶仍然有效）不同，`perSourceIp` 没有进程内回退。进入该维度的连接需要 Redis 决策或执行配置的失败策略。如果需要 fail-close 行为，请显式设置 `onRedisFailure`。
 
 ### 配置字段
 
 | 字段 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `redisRef` | String | **必填** | Redis LinkSys 引用，格式 `"namespace/name"`。 |
+| `redisRef` | String | 无 | 配置 `perSourceIp` 或分布式 `perListener` 时必填；Redis LinkSys 引用，格式 `"namespace/name"`。 |
 | `algorithm` | Enum | `SlidingWindow` | 限流算法：`SlidingWindow` \| `FixedWindow` \| `TokenBucket`。 |
-| `redisTimeout` | String | `"100ms"` | 接入路径 Redis 调用的总耗时上限。硬上限 `1s`。超时后执行 `onRedisFailure`。 |
+| `redisTimeout` | String | `"100ms"` | 每个 Redis 维度的调用耗时上限，硬上限 `1s`。超时后执行 `onRedisFailure`。 |
 | `perListener` | Object | 无 | 按监听器限流，带本地令牌桶兜底（即使 Redis 不可达也可用）。 |
 | `perSourceIp` | Object | 无 | 按源 IP 限流。需要 Redis——无本地兜底。见上文提示。 |
 

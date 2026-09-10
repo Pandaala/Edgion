@@ -9,6 +9,10 @@ Read [routing and classification](../knowledge-routing.md) before adding or movi
 Search these pages by behavior, symbol, or finding ID; revalidate historical evidence
 before applying a decision to current code.
 
+## Intentional design
+
+- [Serial connection admission with optional Redis limits](intentional-design/bounded-serial-connection-admission.md)
+
 ## Compatibility constraints
 
 - [Listener port set is frozen at startup; runtime rebinding is a Pingora-blocked feature — KNOWN-LIMITATION](compatibility-constraints/listener-port-set-frozen-at-startup.md)

@@ -11,5 +11,6 @@ reload can similarly publish mixed state or overwrite a concurrent transition,
 while every connection also takes the process-global registry mutex and rewrites
 parameters. Resolve these together through a separately reviewed, plan-first
 linearizable per-gate design with a cold-path registry; D0028 retains numeric
-bounds and D0099 retains listener scheduling. Existing integration tests remain
+bounds; [D0099](../../../../skills/04-review/listeners/intentional-design/bounded-serial-connection-admission.md)
+records the accepted listener scheduling limitation. Existing integration tests remain
 frozen.

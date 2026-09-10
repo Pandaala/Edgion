@@ -34,7 +34,7 @@ Gateway listener level. On `UDPRoute` only the Stage-1 ConnectionFilter
 |------|---------------|-------------|
 | `IpRestriction` | inline rules | IP allow/deny groups embedded directly in the plugin. |
 | `GlobalConnectionIpRestriction` | inline config + optional `activeProfileRef` | Full IP rule set (named `profiles`) inline in the plugin; an optional `Selector` EdgionConfigData hot-swaps **which profile is active**. Center-managed and synced across Controllers. |
-| `ConnectionRateLimit` | `config` object | Redis-backed per-source-IP connection rate limiting at the pre-TLS accept path. See the [ConnectionRateLimit section](#connectionratelimit-pre-tls-connection-rate-limiting) below. |
+| `ConnectionRateLimit` | `config` object | Local per-listener protection with optional Redis shared limits. Gateway attachments run before TLS. See the [ConnectionRateLimit section](#connectionratelimit-pre-tls-connection-rate-limiting) below. |
 
 Each entry under `spec.plugins` has an optional `enable` flag (default `true`),
 a `type`, and a `config` object.
@@ -278,34 +278,59 @@ spec:
 
 ## ConnectionRateLimit: pre-TLS connection rate limiting
 
-`ConnectionRateLimit` bounds the rate of new inbound connections per source IP.
-The Redis check runs **before** the TLS handshake (Pingora's `ConnectionFilter`
-stage), so it can shed connections before any TLS resources are allocated.
+`ConnectionRateLimit` supports local per-listener protection combined with
+Redis-backed shared limits. When attached to a Gateway listener, checks run
+**before** the TLS handshake. TCPRoute attachments run after route matching.
+
+### Choosing local and shared limits
+
+For routine connection burst protection, configure `perListener` with
+`redisDistributed: false`. This uses a local token bucket without Redis.
+When shared limits are needed, the same plugin can combine the local gate with
+Redis: evaluation proceeds through the local `perListener` gate, optional
+distributed `perListener` check, then optional `perSourceIp` check. A denial
+stops evaluation. Setting `redisDistributed: true` keeps the local gate enabled.
+
+The combined example below uses local `perListener` protection plus Redis
+`perSourceIp` limits. Redis connection limiting remains an opt-in capability;
+size it against the expected new-connection rate and dependency latency.
+For HTTP business quotas, prefer request-level limits: connection counts do
+not represent request counts on persistent or multiplexed connections.
 
 ### Why `redisTimeout` is hard-capped at 1 s
 
-The rate-limit check runs on the inbound pre-TLS accept path and holds the
-accepted file descriptor — and the Pingora task that owns it — open for the
-duration of the Redis round-trip. A Redis **connection pool does not remove
-this backpressure**: the pool is *outbound* (Gateway → Redis); the pileup is
-*inbound* (client fds held while awaiting a Redis response). During a Redis
-brownout, every new inbound connection stalls for up to `redisTimeout` before
-`onRedisFailure` takes over. The 1 s hard cap limits how long stalled inbound
-fds can accumulate.
+For Gateway listener attachments, each Pingora accept task holds one accepted
+socket while awaiting the filter. With Pingora's default one accept task per
+listening FD, later connections queue in the kernel backlog during a Redis
+wait. This bounds sockets undergoing filtering per accept task, but can reduce
+new-connection throughput. A Redis connection pool or a higher process FD limit
+does not remove this serialization. Existing established connections are not
+directly blocked by this accept-loop wait.
+
+`redisTimeout` defaults to `100ms` and is capped at `1s` **per Redis dimension**;
+multiple dimensions or plugin entries can add their waits. Missing or unhealthy
+Redis clients apply the failure policy immediately. Otherwise even fail-open
+may wait until the call times out. Local filtering reduces Redis load but does
+not remove the wait for connections that pass it. Pingora's
+`listener_tasks_per_fd` controls accept parallelism; it is distinct from the
+process FD limit and is not a `ConnectionRateLimit` field. Increasing parallelism
+also increases concurrent Redis checks and needs workload validation. The
+handshake timeout starts after filtering and does not bound this wait.
 
 > **`perSourceIp` has no local backstop.** Unlike the `perListener` dimension
 > (which has a local token bucket that stays live even when Redis is
-> unreachable), `perSourceIp` has no in-process fallback — every accepted
-> connection must reach Redis. Set `onRedisFailure` explicitly if you need
+> unreachable), `perSourceIp` has no in-process fallback. Connections reaching
+> this dimension require a Redis decision or the configured failure policy.
+> Set `onRedisFailure` explicitly if you need
 > fail-close behavior.
 
 ### Config fields
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `redisRef` | String | **Required** | Redis LinkSys reference in `"namespace/name"` format. |
+| `redisRef` | String | none | Required for `perSourceIp` or distributed `perListener`; Redis LinkSys reference in `"namespace/name"` format. |
 | `algorithm` | Enum | `SlidingWindow` | Rate-limiting algorithm: `SlidingWindow` \| `FixedWindow` \| `TokenBucket`. |
-| `redisTimeout` | String | `"100ms"` | Wall-clock deadline for the accept-path Redis call. Hard-capped at `1s`. When exceeded, `onRedisFailure` applies. |
+| `redisTimeout` | String | `"100ms"` | Deadline per Redis dimension, capped at `1s`. When exceeded, `onRedisFailure` applies. |
 | `perListener` | Object | none | Per-listener rate limit with a local token-bucket backstop (available even when Redis is unreachable). |
 | `perSourceIp` | Object | none | Per-source-IP rate limit. Requires Redis — no local backstop. See caution above. |
 

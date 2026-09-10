@@ -285,18 +285,22 @@ metadata:
 ## ConnectionRateLimit (L4 connection-rate gate)
 
 `EdgionStreamPlugin::ConnectionRateLimit` bounds the **rate** of new downstream
-TCP/TLS connections. Two-stage admission per accepted connection (pre-TLS):
+TCP/TLS connections. Listener attachments run pre-TLS; TCP/UDP route attachments
+run at their owning route/session lifecycle. The checks are:
 
-1. **Stage 1 — local per-listener gate** (token bucket, process-global keyed by
-   listener port; survives config hot-reload). No external dependency, so it
+1. **Local per-listener gate** (token bucket, process-global keyed by plugin
+   entry scope and listener port; survives config hot-reload). No external dependency, so it
    stays available under flood when Redis is the first thing to fall over.
-2. **Stage 2 — optional Redis** (sliding/fixed/token-bucket via the shared
+2. **Optional Redis** (sliding/fixed/token-bucket via the shared
    `RedisRateLimiter` core) for `perSourceIp` and, when `redisDistributed: true`,
    a fleet-wide `perListener` cap. Accept-path Redis calls are capped by the
-   configurable **`redisTimeout`** (default `100ms`, hard-capped at `1s`) so a
-   slow Redis cannot pin downstream fds. `perSourceIp` has no local backstop, so
-   every accepted connection on that dimension must reach Redis within
-   `redisTimeout`.
+   configurable **`redisTimeout`** (default `100ms`, hard-capped at `1s`) per
+   Redis dimension. Multiple dimensions or entries can accumulate waits.
+   `perSourceIp` has no local fallback; missing/unhealthy clients apply the
+   failure policy immediately. Listener-attached Redis checks still occupy
+   an accept task while awaiting a response. Local filtering reduces that load
+   but does not eliminate the wait. See the
+   [accepted admission tradeoff](../../04-review/listeners/intentional-design/bounded-serial-connection-admission.md).
 
 Per-dimension `onRedisFailure` defaults differ on purpose:
 `perListener` defaults to `Deny` (fail-close — the process backstop must not
