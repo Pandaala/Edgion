@@ -74,7 +74,7 @@ early-exit 谓词在最终 chunk 开头命中，也可能计入完整的最终 c
 ```yaml
 spec:
   requestPlugins:
-      type: Dsl
+    - type: Dsl
       config:
         name: "my-script"
         source: |

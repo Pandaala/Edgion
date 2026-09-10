@@ -102,7 +102,7 @@ metadata:
   name: auth-check
 spec:
   requestPlugins:
-      type: Dsl
+    - type: Dsl
       config:
         name: "auth-check"
         source: |
@@ -121,7 +121,7 @@ metadata:
   name: auth-check
 spec:
   requestPlugins:
-      type: Dsl
+    - type: Dsl
       config:
         name: "auth-check"
         bytecode: "BASE64_ENCODED_BYTECODE_V2"

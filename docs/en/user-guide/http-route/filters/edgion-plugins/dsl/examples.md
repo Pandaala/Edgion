@@ -18,10 +18,10 @@ metadata:
   namespace: production
 spec:
   requestPlugins:
-      type: Dsl
+    - type: Dsl
       config:
         name: "api-key-check"
-        errorPolicy: Deny
+        errorPolicy: deny
         source: |
           let key = req.header("X-API-Key")
           if key == nil {
@@ -38,7 +38,7 @@ Notes:
 
 - `deny(401, ...)` is used for "missing credentials" and `deny(403, ...)` for "invalid credentials" — this is semantically more accurate.
 - `ctx.set("authenticated", "true")` writes the authentication result into the context; subsequent plugins can read it via `ctx.get("authenticated")`, and it will also appear in the context fields of the access log.
-- `errorPolicy: Deny` means that if the script itself errors, the request is also denied, preventing authentication bypass due to script exceptions.
+- `errorPolicy: deny` means that if the script itself errors, the request is also denied, preventing authentication bypass due to script exceptions.
 
 ---
 
@@ -54,10 +54,10 @@ metadata:
   namespace: production
 spec:
   requestPlugins:
-      type: Dsl
+    - type: Dsl
       config:
         name: "jwt-claim-extractor"
-        errorPolicy: Deny
+        errorPolicy: deny
         source: |
           let auth = req.header("Authorization")
           if auth == nil {
@@ -137,10 +137,10 @@ metadata:
   namespace: production
 spec:
   requestPlugins:
-      type: Dsl
+    - type: Dsl
       config:
         name: "grpc-auth-check"
-        errorPolicy: Deny
+        errorPolicy: deny
         source: |
           // Non-gRPC requests pass through directly (handled by other plugins)
           if req.protocol != "grpc" {
@@ -192,7 +192,7 @@ metadata:
   namespace: production
 spec:
   requestPlugins:
-      type: Dsl
+    - type: Dsl
       config:
         name: "ua-client-classify"
         source: |
@@ -244,7 +244,7 @@ metadata:
   namespace: production
 spec:
   requestPlugins:
-      type: Dsl
+    - type: Dsl
       config:
         name: "path-based-upstream"
         source: |
@@ -294,7 +294,7 @@ metadata:
   namespace: production
 spec:
   requestPlugins:
-      type: Dsl
+    - type: Dsl
       config:
         name: "ab-test-marker"
         source: |
@@ -348,7 +348,7 @@ metadata:
   namespace: production
 spec:
   requestPlugins:
-      type: Dsl
+    - type: Dsl
       config:
         name: "internal-ip-bypass"
         source: |
@@ -399,7 +399,7 @@ metadata:
   namespace: production
 spec:
   requestPlugins:
-      type: Dsl
+    - type: Dsl
       config:
         name: "body-size-limit"
         source: |
@@ -432,7 +432,7 @@ metadata:
   namespace: production
 spec:
   requestPlugins:
-      type: Dsl
+    - type: Dsl
       config:
         name: "strip-internal-headers"
         source: |
@@ -484,7 +484,7 @@ metadata:
   namespace: production
 spec:
   upstreamResponseFilterPlugins:
-      type: Dsl
+    - type: Dsl
       config:
         name: "inject-security-headers"
         source: |
@@ -528,7 +528,7 @@ metadata:
   namespace: production
 spec:
   upstreamResponseFilterPlugins:
-      type: Dsl
+    - type: Dsl
       config:
         name: "cache-control-policy"
         source: |
@@ -579,7 +579,7 @@ metadata:
   namespace: production
 spec:
   upstreamResponseFilterPlugins:
-      type: Dsl
+    - type: Dsl
       config:
         name: "strip-debug-headers"
         source: |
@@ -630,7 +630,7 @@ metadata:
   namespace: production
 spec:
   requestPlugins:
-      type: Dsl
+    - type: Dsl
       config:
         name: "request-audit-log"
         source: |
@@ -685,7 +685,7 @@ metadata:
   namespace: production
 spec:
   requestPlugins:
-      type: Dsl
+    - type: Dsl
       config:
         name: "latency-marker-req"
         source: |
@@ -701,7 +701,7 @@ spec:
           return next()
 
   upstreamResponseFilterPlugins:
-      type: Dsl
+    - type: Dsl
       config:
         name: "latency-marker-resp"
         source: |
@@ -779,7 +779,7 @@ source: |
 # Security-sensitive scenario: script errors should deny the request
 config:
   name: "auth-check"
-  errorPolicy: Deny
+  errorPolicy: deny
   source: |
     ...
 
@@ -909,7 +909,7 @@ source: |
 # Wrong: grpc_error() is not supported in the response phase
 spec:
   upstreamResponseFilterPlugins:  # response phase
-      type: Dsl
+    - type: Dsl
       config:
         name: "wrong-grpc-error"
         source: |
@@ -923,7 +923,7 @@ spec:
 # Correct: gRPC error interception should be done in the request phase; in the response phase use resp.set_status() to rewrite the status code
 spec:
   upstreamResponseFilterPlugins:
-      type: Dsl
+    - type: Dsl
       config:
         name: "correct-resp-handling"
         source: |

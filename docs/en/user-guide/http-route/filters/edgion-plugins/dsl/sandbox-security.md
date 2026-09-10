@@ -81,7 +81,7 @@ constant-time.
 ```yaml
 spec:
   requestPlugins:
-      type: Dsl
+    - type: Dsl
       config:
         name: "my-script"
         source: |

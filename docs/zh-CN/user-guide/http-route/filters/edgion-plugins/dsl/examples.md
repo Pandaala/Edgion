@@ -15,13 +15,13 @@ apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
   name: api-key-check
-  namespace: default
+  namespace: production
 spec:
   requestPlugins:
-      type: Dsl
+    - type: Dsl
       config:
         name: "api-key-check"
-        errorPolicy: Deny
+        errorPolicy: deny
         source: |
           let key = req.header("X-API-Key")
           if key == nil {
@@ -38,7 +38,7 @@ spec:
 
 - `deny(401, ...)` 用于"凭据缺失"，`deny(403, ...)` 用于"凭据无效"，语义上更准确。
 - `ctx.set("authenticated", "true")` 将认证结果写入上下文，后续插件可通过 `ctx.get("authenticated")` 读取，也会出现在访问日志的上下文字段中。
-- `errorPolicy: Deny` 表示脚本本身出错时也拒绝请求，避免因脚本异常导致认证绕过。
+- `errorPolicy: deny` 表示脚本本身出错时也拒绝请求，避免因脚本异常导致认证绕过。
 
 ---
 
@@ -51,13 +51,13 @@ apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
   name: jwt-claim-extractor
-  namespace: default
+  namespace: production
 spec:
   requestPlugins:
-      type: Dsl
+    - type: Dsl
       config:
         name: "jwt-claim-extractor"
-        errorPolicy: Deny
+        errorPolicy: deny
         source: |
           let auth = req.header("Authorization")
           if auth == nil {
@@ -134,13 +134,13 @@ apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
   name: grpc-auth-check
-  namespace: default
+  namespace: production
 spec:
   requestPlugins:
-      type: Dsl
+    - type: Dsl
       config:
         name: "grpc-auth-check"
-        errorPolicy: Deny
+        errorPolicy: deny
         source: |
           // 非 gRPC 请求直接放行（由其他插件处理）
           if req.protocol != "grpc" {
@@ -189,10 +189,10 @@ apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
   name: ua-client-classify
-  namespace: default
+  namespace: production
 spec:
   requestPlugins:
-      type: Dsl
+    - type: Dsl
       config:
         name: "ua-client-classify"
         source: |
@@ -241,10 +241,10 @@ apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
   name: path-based-upstream
-  namespace: default
+  namespace: production
 spec:
   requestPlugins:
-      type: Dsl
+    - type: Dsl
       config:
         name: "path-based-upstream"
         source: |
@@ -291,10 +291,10 @@ apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
   name: ab-test-marker
-  namespace: default
+  namespace: production
 spec:
   requestPlugins:
-      type: Dsl
+    - type: Dsl
       config:
         name: "ab-test-marker"
         source: |
@@ -345,10 +345,10 @@ apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
   name: internal-ip-bypass
-  namespace: default
+  namespace: production
 spec:
   requestPlugins:
-      type: Dsl
+    - type: Dsl
       config:
         name: "internal-ip-bypass"
         source: |
@@ -396,10 +396,10 @@ apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
   name: body-size-limit
-  namespace: default
+  namespace: production
 spec:
   requestPlugins:
-      type: Dsl
+    - type: Dsl
       config:
         name: "body-size-limit"
         source: |
@@ -429,10 +429,10 @@ apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
   name: strip-internal-headers
-  namespace: default
+  namespace: production
 spec:
   requestPlugins:
-      type: Dsl
+    - type: Dsl
       config:
         name: "strip-internal-headers"
         source: |
@@ -481,10 +481,10 @@ apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
   name: security-headers
-  namespace: default
+  namespace: production
 spec:
   upstreamResponseFilterPlugins:
-      type: Dsl
+    - type: Dsl
       config:
         name: "inject-security-headers"
         source: |
@@ -525,10 +525,10 @@ apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
   name: cache-control-policy
-  namespace: default
+  namespace: production
 spec:
   upstreamResponseFilterPlugins:
-      type: Dsl
+    - type: Dsl
       config:
         name: "cache-control-policy"
         source: |
@@ -576,10 +576,10 @@ apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
   name: strip-debug-headers
-  namespace: default
+  namespace: production
 spec:
   upstreamResponseFilterPlugins:
-      type: Dsl
+    - type: Dsl
       config:
         name: "strip-debug-headers"
         source: |
@@ -627,10 +627,10 @@ apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
   name: request-audit-log
-  namespace: default
+  namespace: production
 spec:
   requestPlugins:
-      type: Dsl
+    - type: Dsl
       config:
         name: "request-audit-log"
         source: |
@@ -682,10 +682,10 @@ apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
   name: latency-marker
-  namespace: default
+  namespace: production
 spec:
   requestPlugins:
-      type: Dsl
+    - type: Dsl
       config:
         name: "latency-marker-req"
         source: |
@@ -701,7 +701,7 @@ spec:
           return next()
 
   upstreamResponseFilterPlugins:
-      type: Dsl
+    - type: Dsl
       config:
         name: "latency-marker-resp"
         source: |
@@ -779,7 +779,7 @@ source: |
 # 安全敏感场景：脚本出错应拒绝请求
 config:
   name: "auth-check"
-  errorPolicy: Deny
+  errorPolicy: deny
   source: |
     ...
 
@@ -909,7 +909,7 @@ source: |
 # 错误示范：grpc_error() 在响应阶段不被支持
 spec:
   upstreamResponseFilterPlugins:  # 响应阶段
-      type: Dsl
+    - type: Dsl
       config:
         name: "wrong-grpc-error"
         source: |
@@ -923,7 +923,7 @@ spec:
 # 正确做法：gRPC 错误拦截应在请求阶段完成，响应阶段使用 resp.set_status() 改写状态码
 spec:
   upstreamResponseFilterPlugins:
-      type: Dsl
+    - type: Dsl
       config:
         name: "correct-resp-handling"
         source: |
