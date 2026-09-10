@@ -2,30 +2,39 @@
 
 ## Overview
 
-`RequestRedirect` returns an HTTP redirect response (301 or 302) instead of proxying the request to a backend. It is a standard Gateway API filter and runs in the request stage. Because it terminates the request, the upstream is never contacted. Use it to enforce HTTPS, move traffic to a new hostname, or rewrite paths during a migration.
+`RequestRedirect` returns an HTTP redirect response (`301`, `302`, `303`, `307`, or `308`) instead of proxying the request to a backend. It is a standard Gateway API filter and runs in the request stage. Because it terminates the request, the upstream is never contacted. Use it to enforce HTTPS, move traffic to a new hostname, or rewrite paths during a migration.
 
 ## Configuration
 
 ```yaml
-filters:
-  - type: RequestRedirect
-    requestRedirect:
-      scheme: https
-      hostname: new.example.com
-      port: 443
-      statusCode: 301
-      path:
-        type: ReplaceFullPath
-        replaceFullPath: /new-path
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: redirect-route
+  namespace: production
+spec:
+  parentRefs:
+    - name: main-gateway
+  rules:
+    - filters:
+        - type: RequestRedirect
+          requestRedirect:
+            scheme: https
+            hostname: new.example.com
+            port: 443
+            statusCode: 301
+            path:
+              type: ReplaceFullPath
+              replaceFullPath: /new-path
 ```
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `scheme` | Enum | none | Redirect scheme. Allowed values: `http` \| `https` |
+| `scheme` | Enum | none | Redirect scheme. Allowed values: `http` \| `https`; uses the incoming request scheme when omitted |
 | `hostname` | String | none | Hostname to redirect to; keeps the original host when omitted |
-| `port` | Integer | none | Port to redirect to; omitted means the default for the scheme |
-| `statusCode` | Enum | `302` | Redirect status. Allowed values: `301` \| `302` |
-| `path` | Object | none | Path rewrite to apply to the redirect target; see below |
+| `port` | Integer | none | Port to redirect to (`1`–`65535`). When omitted, an explicit `scheme` selects its default port; otherwise the Gateway Listener port is preserved |
+| `statusCode` | Enum | `302` | Redirect status. Allowed values: `301` \| `302` \| `303` \| `307` \| `308` |
+| `path` | Object | none | Path rewrite to apply to the redirect target; keeps the original path when omitted |
 
 ### `path` sub-fields
 
@@ -62,9 +71,6 @@ spec:
             scheme: https
             port: 443
             statusCode: 301
-      backendRefs:
-        - name: api-service
-          port: 8080
 ```
 
 ### Example 2: Move a hostname and rewrite the path prefix
@@ -95,16 +101,16 @@ spec:
             path:
               type: ReplacePrefixMatch
               replacePrefixMatch: /v2
-      backendRefs:
-        - name: api-service
-          port: 8080
 ```
 
 ## Notes
 
+- A rule with `RequestRedirect` must omit `backendRefs`; the redirect is the terminal response.
+- `301` and `308` are permanent redirects; `302` and `307` are temporary. `303` directs the client to retrieve the target (normally with GET). Use `307` or `308` when the client must preserve the request method and body; `301` and `302` can turn a POST into a GET.
+- The `Location` header omits port `80` for HTTP and port `443` for HTTPS. Non-default ports are included.
 - `RequestRedirect` and [URLRewrite](./url-rewrite.md) are mutually exclusive within the same rule. A rule that declares both is marked `PartiallyInvalid` and disabled, while the route's other rules keep working.
 - Because the filter terminates the request, any request-stage plugins declared after it do not run, and the backend is never reached.
-- `ReplacePrefixMatch` replaces only the part of the path matched by the rule's `PathPrefix`; the remainder of the path is preserved.
+- `ReplacePrefixMatch` replaces only the part of the path matched by the rule's `PathPrefix`; the remainder of the path is preserved. This modifier requires exactly one match in the rule, with path type `PathPrefix`.
 - The original query string is always preserved and appended to the redirect `Location`. For example, `http://app.example.com/login?returnTo=/dashboard` redirects to `https://app.example.com/login?returnTo=/dashboard`. The Gateway API redirect filter has no query modifier, so the client's query always survives, regardless of any path modifier.
 
 ## Related documents
