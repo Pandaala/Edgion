@@ -66,7 +66,7 @@ pub struct ExtProc {
     failure_mode_allow: bool,
     disable_immediate_response: bool,
     allow_mode_override: bool,
-    allowed_override_modes: Vec<ProcessingMode>,
+    allowed_override_modes: Arc<[ProcessingMode]>,
 }
 
 impl ExtProc {
@@ -80,7 +80,11 @@ impl ExtProc {
                 failure_mode_allow: config.failure_mode_allow,
                 disable_immediate_response: config.disable_immediate_response,
                 allow_mode_override: config.allow_mode_override,
-                allowed_override_modes: config.allowed_override_modes.clone(),
+                allowed_override_modes: config
+                    .allowed_override_modes
+                    .iter()
+                    .map(ProcessingMode::normalized_override)
+                    .collect(),
             }),
             Err(e) => {
                 // Validation already gated the config, so a build failure here is
@@ -684,7 +688,7 @@ impl RequestFilter for ExtProc {
             self.client.clone(),
             self.mode.clone(),
             self.allow_mode_override,
-            self.allowed_override_modes.clone(),
+            Arc::clone(&self.allowed_override_modes),
         ));
         if !session.install_attached_ext_proc(
             self.identity.clone(),
@@ -1362,6 +1366,40 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn constructor_normalizes_allowed_override_modes() {
+        let mut config = test_config(false);
+        config.processing_mode.response_header_mode = HeaderSendMode::Send;
+        config.processing_mode.response_trailer_mode = HeaderSendMode::Send;
+        config.allow_mode_override = true;
+        let configured = ProcessingMode {
+            request_header_mode: HeaderSendMode::Send,
+            response_header_mode: HeaderSendMode::Send,
+            request_body_mode: BodySendMode::Skip,
+            response_body_mode: BodySendMode::Skip,
+            response_trailer_mode: HeaderSendMode::Send,
+        };
+        config.allowed_override_modes = vec![configured.clone()];
+        let ext_proc = ExtProc::build(&config).expect("build must not dial");
+        assert_eq!(
+            ext_proc.allowed_override_modes.as_ref(),
+            &[ProcessingMode {
+                request_header_mode: HeaderSendMode::Skip,
+                response_header_mode: HeaderSendMode::Send,
+                request_body_mode: BodySendMode::None,
+                response_body_mode: BodySendMode::None,
+                response_trailer_mode: HeaderSendMode::Send,
+            }]
+        );
+        assert_eq!(config.allowed_override_modes, vec![configured]);
+        assert_eq!(ext_proc.mode, config.processing_mode);
+        let companion = ext_proc.clone();
+        assert!(Arc::ptr_eq(
+            &ext_proc.allowed_override_modes,
+            &companion.allowed_override_modes
+        ));
+    }
+
+    #[tokio::test]
     async fn response_framing_reservation_remains_base_mode_derived_under_override() {
         let mut config = test_config(false);
         config.processing_mode.request_header_mode = HeaderSendMode::Skip;
@@ -1463,7 +1501,7 @@ mod tests {
             ext_proc.client.clone(),
             base,
             true,
-            vec![reduction],
+            Arc::clone(&ext_proc.allowed_override_modes),
         ));
         let mut session = MockPluginSession::new();
         session
@@ -1824,11 +1862,12 @@ mod tests {
             request_body_mode: BodySendMode::None,
             ..Default::default()
         }];
+        let ext_proc = ExtProc::build(&config).expect("build must not dial");
         let owner = AttachedExtProc::new(
-            ExtProcClient::new(&config).unwrap(),
+            ext_proc.client.clone(),
             config.processing_mode.clone(),
             true,
-            config.allowed_override_modes.clone(),
+            Arc::clone(&ext_proc.allowed_override_modes),
         );
         let before = owner.effective_mode().unwrap();
         let common = CommonResponse {

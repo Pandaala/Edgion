@@ -1,6 +1,6 @@
 # B0281 — HTTP DSL VM Defense
 
-- Pipeline state: terminal; examined-no-change, pending local commit. No technical mutation.
+- Pipeline state: terminal; examined-no-change, committed as `9b787978`. No technical mutation.
 - Active anchor: `edgion-gateway`; baseline `9e3a276b`.
 - Target: `edgion-gateway/src/plugins/http/dsl/tests/vm_defensive_tests.rs`.
 - Analyst: `b0281_vm_analysis`; examined-no-change, simple. Seven manual-bytecode tests accurately exercise VM stack/constant/regex index defenses and JSON-select construction validation. Compiler, Validator, resolve_script, execute_safe and sibling defense/property/error coverage inspected; no style-only churn justified.

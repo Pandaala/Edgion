@@ -152,12 +152,12 @@ These entries are backlinks only. A linked `tasks/todo` file is the editable sou
 | Offload Wasm OCI manifest parsing and archive extraction (D0075) | completed externally in 256733d7 | [maintained knowledge](../../../../skills/04-review/wasm/intentional-design/bounded-oci-artifact-memory-cache.md#manifest-and-archive-cpu-boundary-d0075) |
 | Fix Wasm shared-data gauge generation identity and lifecycle | pending | [task](../../../todo/wasm-shared-data-gauge-generation-lifecycle.md) |
 | Redact and bound Wasm URL source identity | pending | [task](../../../todo/wasm-source-url-label-and-error-redaction.md) |
-| Emit bounded diagnostics for outbound warnIfMissing fields | pending | [task](../../../todo/outbound-warn-if-missing-diagnostics.md) |
+| Emit bounded diagnostics for outbound warnIfMissing fields | retired after external completion | Task removed in synchronized history through b297af6e; retained in Git |
 | Correct PluginRuntime architecture documentation | retired externally | Task removed by user-synchronized `78a25c3a`; history retained in Git. |
 | Reduce per-chunk response-body condition extraction cost | pending | [task](../../../todo/reduce-response-body-condition-extraction-cost.md) |
 | Fail closed on plugin IP matcher limit violations | pending | [task](../../../todo/fail-closed-plugin-ip-matcher-limit-violations.md) |
 | Complete native Gateway API CORS validation parity | pending | [task](../../../todo/complete-native-gateway-api-cors-validation-parity.md) |
-| Decide credentialed native CORS expose-headers wildcard semantics | pending | [task](../../../todo/decide-credentialed-native-cors-expose-headers-wildcard.md) |
+| Decide credentialed native CORS expose-headers wildcard semantics | retired after external completion | Task removed in synchronized history through b297af6e; retained in Git |
 | Add debug access-log wire integration coverage | resolved externally in `bfc2691e` | [maintained knowledge](../../../../skills/04-review/observability/regression-guards/debug-access-log-wire-and-lifecycle.md) |
 | Define a bounded debug access-log response surface | pending | [task](../../../todo/define-bounded-debug-access-log-response-surface.md) |
 | Fail closed on missing Gateway API ExtensionRef configuration | pending | [task](../../../todo/fail-closed-missing-gateway-api-extensionref-configuration.md) |
@@ -175,7 +175,7 @@ These entries are backlinks only. A linked `tasks/todo` file is the editable sou
 | Unify response Content-Encoding classification | pending | [task](../../../todo/unify-response-content-encoding-classification.md) |
 | Define backendRef upstream-selection plugin semantics | pending | [task](../../../todo/define-backendref-upstream-selection-plugin-semantics.md) |
 | Add deferred-credential Connection nomination integration coverage | resolved (2026-09-09) | [maintained knowledge](../../../../skills/04-review/security/regression-guards/deferred-credential-connection-nomination.md) |
-| Clarify redirect connection policy | pending | [task](../../../todo/clarify-redirect-connection-policy.md) |
+| Clarify redirect connection policy | retired after external completion | Task removed in synchronized history through b297af6e; retained in Git |
 | Add session cookie field integration coverage | resolved (2026-09-09) | [maintained knowledge](../../../../skills/04-review/routing/regression-guards/session-persistence-token-extraction.md) |
 | Add L4 duplex backpressure integration coverage | resolved (2026-09-09) | [maintained knowledge](../../../../skills/04-review/routing/regression-guards/l4-duplex-relay-centralization.md) |
 | Reconcile TLSRoute version guidance | retired externally | Task removed by user-synchronized `78a25c3a`; history retained in Git. |
@@ -184,7 +184,7 @@ These entries are backlinks only. A linked `tasks/todo` file is the editable sou
 | Refresh L4 connect-timeout knowledge | retired externally | Task removed by user-synchronized `78a25c3a`; history retained in Git. |
 | Scope TLSRoute effective hostnames to attachments | pending (high) | [task](../../../todo/scope-tlsroute-effective-hostnames-to-attachments.md) |
 | Remove TLSRoute Stage-1 fallback coherently | resolved (2026-09-10) | [maintained knowledge](../../../../skills/04-review/tls/regression-guards/tls-route-stage-isolation.md) |
-| Apply sensitive mode to TLS log surfaces | pending | [task](../../../todo/apply-sensitive-mode-to-tls-log-surfaces.md) |
+| Apply sensitive mode to TLS log surfaces | retired after external completion | Task removed in synchronized history through b297af6e; retained in Git |
 | Investigate TLS setup write deadlines | needs-investigation | [task](../../../todo/investigate-tls-setup-write-deadlines.md) |
 | Add malformed ClientHello passthrough coverage (D0118) | pending | [task](../../../todo/add-malformed-clienthello-passthrough-coverage.md) |
 | Reconcile HTTP context layout expectations (D0119) | resolved externally in `2c01a075` | [campaign resolution](D0119-http-context-layout-expectations.md) |
@@ -218,3 +218,5 @@ These entries are backlinks only. A linked `tasks/todo` file is the editable sou
 | Isolate DSL sandbox unit tests from network (D0145) | pending | [task](../../../todo/isolate-dsl-sandbox-unit-tests-from-network.md) |
 | Reconcile DSL terminate contract (D0146) | needs-discussion | [task](../../../todo/reconcile-dsl-terminate-contract.md) |
 | Correct DSL bytecode deserialization knowledge (D0147) | pending | [task](../../../todo/correct-dsl-bytecode-deserialization-safety-knowledge.md) |
+| Terminalize ExtProc owner on body publication failure (D0148) | pending | [task](../../../todo/ext-proc-terminalize-owner-on-request-body-publication-failure.md) |
+| Correct ExtProc phase exchange knowledge (D0149) | pending | [task](../../../todo/correct-ext-proc-phase-exchange-knowledge.md) |

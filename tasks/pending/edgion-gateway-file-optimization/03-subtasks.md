@@ -293,16 +293,16 @@
 | `edgion-gateway/src/link_sys/providers/redis/mod.rs` | `link-sys-provider-redis` | source | examined-no-change | `B0052`: retained the narrow Redis provider facade and exports |
 | `edgion-gateway/src/link_sys/providers/redis/ops.rs` | `link-sys-provider-redis` | source | examined-no-change | `B0052`: retained command, lock, and canonical RedisLinkClient operation behavior |
 | `edgion-gateway/src/link_sys/providers/webhook/client.rs` | `link-sys-provider-webhook` | source | changed | `B0053`: made Webhook publication a prepared, sequence-checked store transition instead of a spawned generic lifecycle |
-| `edgion-gateway/src/link_sys/providers/webhook/manager.rs` | `link-sys-provider-webhook` | source | changed | `B0053`: serialized source generations and made one-key/full-map replacement and retirement atomic |
+| `edgion-gateway/src/link_sys/providers/webhook/manager.rs` | `link-sys-provider-webhook` | source | pending | External 9b787978..b297af6e requires review; prior changed: `B0053`: serialized source generations and made one-key/full-map replacement and retirement atomic |
 | `edgion-gateway/src/link_sys/providers/webhook/mod.rs` | `link-sys-provider-webhook` | source | changed | `B0053`: removed the obsolete manager lifecycle adapter exports |
-| `edgion-gateway/src/link_sys/providers/webhook/resolver.rs` | `link-sys-provider-webhook` | source | examined-no-change | `B0053`: retained canonical service resolution and namespace behavior |
+| `edgion-gateway/src/link_sys/providers/webhook/resolver.rs` | `link-sys-provider-webhook` | source | pending | External 9b787978..b297af6e requires review; prior examined-no-change: `B0053`: retained canonical service resolution and namespace behavior |
 | `edgion-gateway/src/link_sys/providers/webhook/runtime.rs` | `link-sys-provider-webhook` | source | deferred | `B0053` / `D0019`: window rotation and time-source semantics require a wider limiter contract |
 | `edgion-gateway/src/link_sys/readme` | `link-sys-root` | documentation | changed | `B0054`: replaced fictional TODO/configuration claims with the current typed provider, output, fallback, and backfill boundaries |
 | `edgion-gateway/src/link_sys/runtime/conf_handler.rs` | `link-sys-runtime` | source | examined-no-change | `B0057`: retained the nonblocking ordered conf-sync adapter |
 | `edgion-gateway/src/link_sys/runtime/data_sender.rs` | `link-sys-runtime` | source | changed | `B0055`: made method/path metadata a call-scoped borrowed view |
 | `edgion-gateway/src/link_sys/runtime/health_probe.rs` | `link-sys-runtime` | source | changed | `B0056`: became the sole owner of rollback-safe five-second health transition log gating |
 | `edgion-gateway/src/link_sys/runtime/mod.rs` | `link-sys-runtime` | source | examined-no-change | `B0057`: retained the live minimal module facade and visibility boundaries |
-| `edgion-gateway/src/link_sys/runtime/store.rs` | `link-sys-runtime` | source | changed | `B0053`: ordered full/partial dispatch before side effects and retired omitted, deleted, or replaced Webhook generations |
+| `edgion-gateway/src/link_sys/runtime/store.rs` | `link-sys-runtime` | source | pending | External 9b787978..b297af6e requires review; prior changed: `B0053`: ordered full/partial dispatch before side effects and retired omitted, deleted, or replaced Webhook generations |
 | `edgion-gateway/src/link_sys/template/engine.rs` | `link-sys-template` | source | deferred | `B0058` / `D0024`: canonical policy-aware evaluator migration requires a cross-consumer design |
 | `edgion-gateway/src/link_sys/template/mod.rs` | `link-sys-template` | source | deferred | `B0058` / `D0024`: facade ownership must move only with the canonical evaluator design |
 | `edgion-gateway/src/observe/access_log/backfill.rs` | `observe-access-log` | source | changed | OBS-ACCESS-001 / `9d99d213` |
@@ -328,7 +328,7 @@
 | `edgion-gateway/src/plugins/common/mod.rs` | `plugins-common` | source | examined-no-change | `B0061`: retained correct entry-scope compilation and identity separation |
 | `edgion-gateway/src/plugins/common/redis_rate_limiter/mod.rs` | `plugins-common` | source | changed | B0233: shallow Fred input clones retain NOSCRIPT fallback; independent LGTM, 426 focused tests |
 | `edgion-gateway/src/plugins/common/redis_rate_limiter/scripts.rs` | `plugins-common` | source | changed | B0232: persisted fractional refill; independent plan/final LGTM, focused filters passed |
-| `edgion-gateway/src/plugins/http/ai_guard/evaluator.rs` | `plugins-http-ai-guard` | source | changed | B0234: borrowed evaluator serialization spans; independent LGTM, evaluator 6/6 and module 30/30 |
+| `edgion-gateway/src/plugins/http/ai_guard/evaluator.rs` | `plugins-http-ai-guard` | source | pending | External 9b787978..b297af6e requires review; prior changed: B0234: borrowed evaluator serialization spans; independent LGTM, evaluator 6/6 and module 30/30 |
 | `edgion-gateway/src/plugins/http/ai_guard/mod.rs` | `plugins-http-ai-guard` | source | examined-no-change | B0235: minimal private-module facade retained; independent LGTM, AI Guard 30/30 |
 | `edgion-gateway/src/plugins/http/ai_guard/plugin.rs` | `plugins-http-ai-guard` | source | changed | B0236: saturated physical-cap conversion, lazy refusal facts and borrowed evaluator projection; independent plan/final LGTM, AI Guard 32/32 |
 | `edgion-gateway/src/plugins/http/ai_guard/rules.rs` | `plugins-http-ai-guard` | source | changed | B0237: bounded capture expansion and live replacement accounting; independent revised-plan/final LGTM, AI Guard 40/40 |
@@ -352,12 +352,12 @@
 | `edgion-gateway/src/plugins/http/common/json_request.rs` | `plugins-http-common` | source | changed | B0243: borrowed raw HeaderMap classification removes per-request header clones; independent LGTM and focused tests passed |
 | `edgion-gateway/src/plugins/http/common/bounded_regex_replacement.rs` | `plugins-http-common` | source | changed | B0253: canonical bounded regex replacement shared by DSL and AI Guard; independent plan/final LGTM |
 | `edgion-gateway/src/plugins/http/common/mod.rs` | `plugins-http-common` | source | changed | B0244/B0253: rate-limit fast paths and canonical bounded regex helper export; independent reviews passed |
-| `edgion-gateway/src/plugins/http/common/outbound/call.rs` | `plugins-http-common` | source | changed | B0245: move sole-attempt requests and use monotonic passive recovery; independent revised-plan/final approval |
+| `edgion-gateway/src/plugins/http/common/outbound/call.rs` | `plugins-http-common` | source | pending | External 9b787978..b297af6e requires review; prior changed: B0245: move sole-attempt requests and use monotonic passive recovery; independent revised-plan/final approval |
 | `edgion-gateway/src/plugins/http/common/outbound/client.rs` | `plugins-http-common` | source | changed | B0246: fail-closed active-health URL/dial validation and correct passive/active circuit ownership |
 | `edgion-gateway/src/plugins/http/common/outbound/egress.rs` | `plugins-http-common` | source | changed | B0247: saturating TTL publication and elapsed-time DNS cache expiry remove overflow/panic paths |
 | `edgion-gateway/src/plugins/http/common/outbound/mod.rs` | `plugins-http-common` | source | examined-no-change | B0248: refreshed minimal coherent facade retained; independent LGTM rejected visibility/re-export churn |
 | `edgion-gateway/src/plugins/http/common/outbound/pinned_resolver.rs` | `plugins-http-common` | source | changed | B0246: filter every pinned EndpointSlice address through canonical final-dial validation before rotation |
-| `edgion-gateway/src/plugins/http/common/outbound/request.rs` | `plugins-http-common` | source | changed | B0107: canonical framing helper reused by Wasm callouts |
+| `edgion-gateway/src/plugins/http/common/outbound/request.rs` | `plugins-http-common` | source | pending | External 9b787978..b297af6e requires review; prior changed: B0107: canonical framing helper reused by Wasm callouts |
 | `edgion-gateway/src/plugins/http/common/outbound/target.rs` | `plugins-http-common` | source | changed | B0249: canonical Service section maps configured Service ports to actual ready serving sockets |
 | `edgion-gateway/src/plugins/http/conf_handler_impl.rs` | `plugins-http-framework` | source | changed | B0062 |
 | `edgion-gateway/src/plugins/http/cors/mod.rs` | `plugins-http-cors` | source | examined-no-change | B0068 |
@@ -408,8 +408,8 @@
 | `edgion-gateway/src/plugins/http/dynamic_external_upstream/plugin.rs` | `plugins-http-dynamic-external-upstream` | source | changed | B0073 |
 | `edgion-gateway/src/plugins/http/dynamic_internal_upstream/mod.rs` | `plugins-http-dynamic-internal-upstream` | source | examined-no-change | B0074 |
 | `edgion-gateway/src/plugins/http/dynamic_internal_upstream/plugin.rs` | `plugins-http-dynamic-internal-upstream` | source | changed | B0074 |
-| `edgion-gateway/src/plugins/http/ext_proc/attached.rs` | `plugins-http-ext-proc` | source | analysis-in-progress | B0282: attached ExtProc lifecycle/value analysis, read-only candidate |
-| `edgion-gateway/src/plugins/http/ext_proc/client.rs` | `plugins-http-ext-proc` | source | pending | — |
+| `edgion-gateway/src/plugins/http/ext_proc/attached.rs` | `plugins-http-ext-proc` | source | changed | B0282: share constructor-normalized override list; request-local state retained; independent plan/final LGTM and focused 12/12 tests |
+| `edgion-gateway/src/plugins/http/ext_proc/client.rs` | `plugins-http-ext-proc` | source | analysis-ready | B0283: unsupported effective TLS identity rejection candidate; refresh before serial promotion |
 | `edgion-gateway/src/plugins/http/ext_proc/mod.rs` | `plugins-http-ext-proc` | source | pending | — |
 | `edgion-gateway/src/plugins/http/ext_proc/mutation.rs` | `plugins-http-ext-proc` | source | pending | — |
 | `edgion-gateway/src/plugins/http/ext_proc/plugin.rs` | `plugins-http-ext-proc` | source | pending | — |
@@ -421,14 +421,14 @@
 | `edgion-gateway/src/plugins/http/form_json_transform/mod.rs` | `plugins-http-form-json-transform` | source | examined-no-change | B0076 |
 | `edgion-gateway/src/plugins/http/form_json_transform/plugin.rs` | `plugins-http-form-json-transform` | source | changed | B0076 |
 | `edgion-gateway/src/plugins/http/forward_auth/mod.rs` | `plugins-http-forward-auth` | source | examined-no-change | B0077 |
-| `edgion-gateway/src/plugins/http/forward_auth/plugin.rs` | `plugins-http-forward-auth` | source | changed | B0077 |
+| `edgion-gateway/src/plugins/http/forward_auth/plugin.rs` | `plugins-http-forward-auth` | source | pending | External 9b787978..b297af6e requires review; prior changed: B0077 |
 | `edgion-gateway/src/plugins/http/geoip_location/mod.rs` | `plugins-http-geoip-location` | source | examined-no-change | B0078 |
 | `edgion-gateway/src/plugins/http/geoip_location/plugin.rs` | `plugins-http-geoip-location` | source | changed | B0078 |
 | `edgion-gateway/src/plugins/http/guardrail/attached.rs` | `plugins-http-guardrail` | source | examined-no-change | B0079 |
 | `edgion-gateway/src/plugins/http/guardrail/mod.rs` | `plugins-http-guardrail` | source | examined-no-change | B0079 |
 | `edgion-gateway/src/plugins/http/guardrail/plugin.rs` | `plugins-http-guardrail` | source | changed | B0079 |
 | `edgion-gateway/src/plugins/http/guardrail/protocol.rs` | `plugins-http-guardrail` | source | examined-no-change | B0079 |
-| `edgion-gateway/src/plugins/http/guardrail/response.rs` | `plugins-http-guardrail` | source | examined-no-change | B0079 |
+| `edgion-gateway/src/plugins/http/guardrail/response.rs` | `plugins-http-guardrail` | source | pending | External 9b787978..b297af6e requires review; prior examined-no-change: B0079 |
 | `edgion-gateway/src/plugins/http/header_cert_auth/mod.rs` | `plugins-http-header-cert-auth` | source | examined-no-change | B0080 |
 | `edgion-gateway/src/plugins/http/header_cert_auth/plugin.rs` | `plugins-http-header-cert-auth` | source | changed | B0080 |
 | `edgion-gateway/src/plugins/http/hmac_auth/mod.rs` | `plugins-http-hmac-auth` | source | examined-no-change | B0081 |
@@ -522,7 +522,7 @@
 | `edgion-gateway/src/plugins/http/wasm/shared_data.rs` | `plugins-http-wasm` | source | changed | B0114 |
 | `edgion-gateway/src/plugins/http/wasm/vm_manager.rs` | `plugins-http-wasm` | source | pending | Reopened after external 7534a9bf; prior B0115 evidence retained |
 | `edgion-gateway/src/plugins/http/webhook_key_get/mod.rs` | `plugins-http-webhook-key-get` | source | examined-no-change | `B0116`: minimal private-module/public-type facade retained |
-| `edgion-gateway/src/plugins/http/webhook_key_get/plugin.rs` | `plugins-http-webhook-key-get` | source | changed | B0117 |
+| `edgion-gateway/src/plugins/http/webhook_key_get/plugin.rs` | `plugins-http-webhook-key-get` | source | pending | External 9b787978..b297af6e requires review; prior changed: B0117 |
 | `edgion-gateway/src/plugins/mod.rs` | `plugins-root` | source | examined-no-change | `B0118`: compile-time facade and live selective re-exports retained |
 | `edgion-gateway/src/plugins/runtime/body_gate.rs` | `plugins-runtime` | source | changed | B0119 |
 | `edgion-gateway/src/plugins/runtime/conditional_filter.rs` | `plugins-runtime` | source | changed | B0120 |
@@ -532,7 +532,7 @@
 | `edgion-gateway/src/plugins/runtime/dye_plan.rs` | `plugins-runtime` | source | pending | D0083 resolved externally in `bea47373`; reopen changed file for current campaign audit; B0122 history retained |
 | `edgion-gateway/src/plugins/runtime/edgion_config_data/conf_handler.rs` | `plugins-runtime` | source | changed | B0123: decision-scoped immutable snapshot capture and torn-generation regression |
 | `edgion-gateway/src/plugins/runtime/edgion_config_data/mod.rs` | `plugins-runtime` | source | changed | B0123: crate-private snapshot API export |
-| `edgion-gateway/src/plugins/runtime/gateway_api_filters/cors_filter.rs` | `plugins-runtime` | source | changed | B0124: bounded inline CORS header pairs and validated-only construction |
+| `edgion-gateway/src/plugins/runtime/gateway_api_filters/cors_filter.rs` | `plugins-runtime` | source | pending | External 9b787978..b297af6e requires review; prior changed: B0124: bounded inline CORS header pairs and validated-only construction |
 | `edgion-gateway/src/plugins/runtime/gateway_api_filters/debug_access_log.rs` | `plugins-runtime` | source | changed | B0125: suppress raw Wrap-mode client exposure before snapshot construction |
 | `edgion-gateway/src/plugins/runtime/gateway_api_filters/extension_ref.rs` | `plugins-runtime` | source | changed | B0126: shared precomputed ExtensionRef target and non-optional prepare success |
 | `edgion-gateway/src/plugins/runtime/gateway_api_filters/header_modifier.rs` | `plugins-runtime` | source | changed | B0127: shared construction-time first-equivalent header plan |
@@ -597,7 +597,7 @@
 | `edgion-gateway/src/routes/grpc/match_unit.rs` | `routes-shared` | source | changed | B0167: precompile and borrow backend policy target identity |
 | `edgion-gateway/src/routes/grpc/mod.rs` | `routes-shared` | source | changed | B0168: remove legacy singular gRPC manager alias |
 | `edgion-gateway/src/routes/grpc/routes_mgr.rs` | `routes-shared` | source | changed | B0168 removed the legacy getter; B0169 clears retained managers and removes the inner ArcSwap |
-| `edgion-gateway/src/routes/http/conf_handler_impl.rs` | `routes-shared` | source | pending | Reopened after external `7825ef03` native CORS rule-scope enforcement; B0170 history retained |
+| `edgion-gateway/src/routes/http/conf_handler_impl.rs` | `routes-shared` | source | pending | External 9b787978..b297af6e requires review; prior pending: Reopened after external `7825ef03` native CORS rule-scope enforcement; B0170 history retained |
 | `edgion-gateway/src/routes/http/match_engine/mod.rs` | `routes-shared` | source | changed | B0171: enforce internal matcher construction boundary |
 | `edgion-gateway/src/routes/http/match_engine/radix_path.rs` | `routes-shared` | source | changed | B0171: remove persistent fields exposed as dead by the internal boundary; B0172: move-only build value |
 | `edgion-gateway/src/routes/http/match_engine/radix_route_match.rs` | `routes-shared` | source | changed | B0172: reduce route-table build allocations |
@@ -627,7 +627,7 @@
 | `edgion-gateway/src/routes/http/proxy_http/pg_upstream_response_filter.rs` | `routes-shared` | source | examined-no-change | B0191: retained final/interim attempt accounting and response-plugin lifecycle |
 | `edgion-gateway/src/routes/http/proxy_http/pg_upstream_response_trailer_filter.rs` | `routes-shared` | source | changed | B0192: prevent gateway-owned trailer failures from penalizing the selected backend |
 | `edgion-gateway/src/routes/http/proxy_http/preflight_handler.rs` | `routes-shared` | source | examined-no-change | B0193: preflight ownership retained; external `7825ef03` closed D0084 through canonical rule-only CORS support |
-| `edgion-gateway/src/routes/http/redirect_http.rs` | `routes-shared` | source | changed | B0194: redact dedicated redirect access-log paths without changing the wire Location |
+| `edgion-gateway/src/routes/http/redirect_http.rs` | `routes-shared` | source | pending | External 9b787978..b297af6e requires review; prior changed: B0194: redact dedicated redirect access-log paths without changing the wire Location |
 | `edgion-gateway/src/routes/http/routes_mgr.rs` | `routes-shared` | source | changed | B0169: clear exact retained manager on stale/orphan removal |
 | `edgion-gateway/src/routes/http/session_persistence.rs` | `routes-shared` | source | changed | B0195: reuse multi-field cookie extraction and reject malformed expiry fallback |
 | `edgion-gateway/src/routes/http/tests.rs` | `routes-shared` | test | changed | B0169: retained nonempty HTTP manager removal regressions |
@@ -643,9 +643,9 @@
 | `edgion-gateway/src/routes/tcp/tcp_route_table.rs` | `routes-shared` | source | examined-no-change | B0202: runtime retained; owning ListenerKey/order/compilation documentation corrected |
 | `edgion-gateway/src/routes/tls/conf_handler_impl.rs` | `routes-shared` | source | changed | B0203: preserve incoming TLS schema Arcs through full/delta compilation |
 | `edgion-gateway/src/routes/tls/gateway_tls_routes.rs` | `routes-shared` | source | changed | B0204: borrowed hostname inputs and winner-only published tables; independent LGTM, TLS 48/48 and routes 591/591 |
-| `edgion-gateway/src/routes/tls/mod.rs` | `routes-shared` | source | pending | External ec5eb474..9e3a276b requires review; prior deferred: B0205: D0115 coordinates Stage-1 fallback removal with frozen fixture migration; independent approval and fail-close 7/7 |
-| `edgion-gateway/src/routes/tls/passthrough_proxy.rs` | `routes-shared` | source | changed | B0206: released table and initial replay buffer before relay, borrowed endpoint; independent LGTM and routes 595/595 |
-| `edgion-gateway/src/routes/tls/proxy.rs` | `routes-shared` | source | changed | B0207: released table guard and avoided full TLS metadata copy; independent LGTM, routes 597/597; unrelated context assertions tracked D0119 |
+| `edgion-gateway/src/routes/tls/mod.rs` | `routes-shared` | source | pending | External 9b787978..b297af6e requires review; prior pending: External ec5eb474..9e3a276b requires review; prior deferred: B0205: D0115 coordinates Stage-1 fallback removal with frozen fixture migration; independent approval and fail-close 7/7 |
+| `edgion-gateway/src/routes/tls/passthrough_proxy.rs` | `routes-shared` | source | pending | External 9b787978..b297af6e requires review; prior changed: B0206: released table and initial replay buffer before relay, borrowed endpoint; independent LGTM and routes 595/595 |
+| `edgion-gateway/src/routes/tls/proxy.rs` | `routes-shared` | source | pending | External 9b787978..b297af6e requires review; prior changed: B0207: released table guard and avoided full TLS metadata copy; independent LGTM, routes 597/597; unrelated context assertions tracked D0119 |
 | `edgion-gateway/src/routes/tls/route_unit.rs` | `routes-shared` | source | examined-no-change | B0208: preserved compiled immutable unit and shared selector/live plugin contracts; independent approval, unit 9/9 and TLS 54/54 |
 | `edgion-gateway/src/routes/tls/routes_mgr.rs` | `routes-shared` | source | pending | Reopened after external 78a25c3a; prior B0209 serialized rebuild/cleanup evidence retained |
 | `edgion-gateway/src/routes/tls/sni_parser.rs` | `routes-shared` | source | changed | B0210: enforced parent-bounded declared lengths; corrected independent LGTM, parser 16/16 and routes 602/602 |

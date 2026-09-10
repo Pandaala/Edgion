@@ -1,6 +1,6 @@
 //! Request-scoped ownership for one Envoy-compatible Process stream.
 
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use super::client::{ExtProcClient, ExtProcStream};
 use edgion_common::ext_proc::proto::{processing_mode, processing_response, ProcessingRequest, ProcessingResponse};
@@ -22,7 +22,7 @@ pub struct AttachedExtProc {
     phases: Mutex<PhaseTracker>,
     effective_mode: Mutex<ConfigProcessingMode>,
     allow_mode_override: bool,
-    allowed_override_modes: Vec<ConfigProcessingMode>,
+    allowed_override_modes: Arc<[ConfigProcessingMode]>,
 }
 
 #[derive(Clone, Copy)]
@@ -52,11 +52,12 @@ struct Summary {
 }
 
 impl AttachedExtProc {
+    /// Retain the allowed override list already normalized by the plugin constructor.
     pub(super) fn new(
         client: ExtProcClient,
         base_mode: ConfigProcessingMode,
         allow_mode_override: bool,
-        allowed_override_modes: Vec<ConfigProcessingMode>,
+        allowed_override_modes: Arc<[ConfigProcessingMode]>,
     ) -> Self {
         Self {
             client,
@@ -69,10 +70,7 @@ impl AttachedExtProc {
             phases: Mutex::new(PhaseTracker::default()),
             effective_mode: Mutex::new(base_mode.normalized_override()),
             allow_mode_override,
-            allowed_override_modes: allowed_override_modes
-                .into_iter()
-                .map(|mode| mode.normalized_override())
-                .collect(),
+            allowed_override_modes,
         }
     }
 
@@ -86,7 +84,7 @@ impl AttachedExtProc {
             ExtProcClient::new(&config).expect("test target must build lazily"),
             config.processing_mode,
             false,
-            Vec::new(),
+            Arc::from([]),
         )
     }
 
@@ -546,7 +544,51 @@ mod tests {
     ) -> AttachedExtProc {
         let mut config = ExtProcConfig::default();
         config.grpc_service.target = "override.example:9000".to_string();
+        let allowed = allowed.iter().map(ConfigProcessingMode::normalized_override).collect();
         AttachedExtProc::new(ExtProcClient::new(&config).unwrap(), base, enabled, allowed)
+    }
+
+    #[tokio::test]
+    async fn shared_override_modes_keep_request_state_independent() {
+        let mut config = ExtProcConfig::default();
+        config.grpc_service.target = "shared-override.example:9000".to_string();
+        let client = ExtProcClient::new(&config).unwrap();
+        let base = ConfigProcessingMode {
+            response_body_mode: BodySendMode::Streamed,
+            ..Default::default()
+        };
+        let reduction = ConfigProcessingMode::default().normalized_override();
+        let allowed: Arc<[ConfigProcessingMode]> = Arc::from([reduction.clone()]);
+        let first = AttachedExtProc::new(client.clone(), base.clone(), true, Arc::clone(&allowed));
+        let second = AttachedExtProc::new(client, base.clone(), true, Arc::clone(&allowed));
+        assert!(Arc::ptr_eq(&allowed, &first.allowed_override_modes));
+        assert!(Arc::ptr_eq(
+            &first.allowed_override_modes,
+            &second.allowed_override_modes
+        ));
+        drop(allowed);
+
+        let wire = wire_mode(
+            processing_mode::HeaderSendMode::Default,
+            processing_mode::BodySendMode::None,
+            processing_mode::BodySendMode::None,
+            processing_mode::HeaderSendMode::Default,
+        );
+        assert_eq!(
+            first
+                .apply_mode_override(OverridePhase::RequestHeaders, Some(&wire))
+                .unwrap(),
+            reduction
+        );
+        assert_eq!(second.effective_mode().unwrap(), base.normalized_override());
+        assert!(matches!(*second.state.lock().unwrap(), StreamState::Lazy));
+        drop(first);
+        assert_eq!(
+            second
+                .apply_mode_override(OverridePhase::RequestHeaders, Some(&wire))
+                .unwrap(),
+            reduction
+        );
     }
 
     #[tokio::test]
@@ -557,7 +599,7 @@ mod tests {
             ExtProcClient::new(&config).unwrap(),
             config.processing_mode,
             false,
-            Vec::new(),
+            Arc::from([]),
         );
         assert!(matches!(*owner.state.lock().unwrap(), StreamState::Lazy));
         owner.terminalize_for_logging();
@@ -578,7 +620,7 @@ mod tests {
             ExtProcClient::new(&config).unwrap(),
             config.processing_mode,
             false,
-            Vec::new(),
+            Arc::from([]),
         );
         let headers = ProcessingRequest {
             request: Some(processing_request::Request::ResponseHeaders(HttpHeaders::default())),
