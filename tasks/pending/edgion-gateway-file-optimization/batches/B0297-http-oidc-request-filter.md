@@ -27,4 +27,4 @@
 - Exact network-free test passed 1/1 (4,386 filtered out); scoped rustfmt and diff checks passed.
 - Fresh child final reviewer `b0297_final_review`: LGTM, no MustFix/ShouldFix; D0058 remains the only deferred item. It independently verified valid/non-callback preservation, early invalid-callback termination, fixed detail-free response/diagnostic, SessionAdapter ownership, restrictive mock value and exact two-file containment.
 - Root format, locked workspace check (12.07s), locked Clippy (27.40s; existing warnings, exit 0), agent-doc, SSA, metrics, Pingora, Gateway tracing, English, frozen-integration and diff gates passed.
-- Ledger/changelog updated. Commit pending automatic local commit; no integration edit or push.
+- Ledger/changelog updated. Commit `84af258d`; no integration edit or push.
