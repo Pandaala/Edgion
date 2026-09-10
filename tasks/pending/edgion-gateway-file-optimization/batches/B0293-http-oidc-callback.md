@@ -22,4 +22,4 @@
 - The first exact filter used a stale module path and selected zero tests; the corrected exact filter `plugins::http::openid_connect::plugin::tests::sanitize_redirect_target_rejects_cross_origin_forms` passed 1/1. No network, DNS, listener, child-process or ignored test ran.
 - Fresh final reviewer `b0293_final_review`: LGTM, no MustFix, ShouldFix or deferred finding. The full authorization/callback redirect chain and separate configured-logout path were verified.
 - Scoped formatting/diff checks and fresh root format, locked workspace check (10.76s), locked Clippy (15.45s, existing warnings, exit 0), agent-doc, SSA, metrics, Pingora, Gateway tracing, English, frozen-integration and diff gates passed.
-- Ledger/changelog updated. Commit pending automatic local commit; no integration edit or push.
+- Ledger/changelog updated. Commit `309a1c94`; no integration edit or push.

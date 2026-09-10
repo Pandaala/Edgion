@@ -465,8 +465,8 @@
 | `edgion-gateway/src/plugins/http/openid_connect/callback.rs` | `plugins-http-openid-connect` | source | examined-no-change | B0293: callback/state/PKCE audit retained; canonical supporting sanitizer now rejects browser authority-replacing backslashes, independent plan/final LGTM and exact test 1/1 |
 | `edgion-gateway/src/plugins/http/openid_connect/config_validation.rs` | `plugins-http-openid-connect` | source | changed | B0094: borrowed claim scopes and allocation-free issuer selection |
 | `edgion-gateway/src/plugins/http/openid_connect/discovery_jwks.rs` | `plugins-http-openid-connect` | source | changed | B0092 |
-| `edgion-gateway/src/plugins/http/openid_connect/error.rs` | `plugins-http-openid-connect` | source | analysis-ready | B0294: real dependency-detail error-model issue already owned by D0058; defer candidate |
-| `edgion-gateway/src/plugins/http/openid_connect/jwks_provider.rs` | `plugins-http-openid-connect` | source | pending | Reopened after external `bea47373` added stage-aware OIDC dye test support; B0092 history retained |
+| `edgion-gateway/src/plugins/http/openid_connect/error.rs` | `plugins-http-openid-connect` | source | deferred | B0294: D0058 owns the cross-endpoint typed error/public-body/discovery-log redaction repair; independent review and adjudication confirmed no target-only fix |
+| `edgion-gateway/src/plugins/http/openid_connect/jwks_provider.rs` | `plugins-http-openid-connect` | source | analysis-ready | B0295: completion-time JWKS publication/backoff fix proposed after full current-HEAD audit; plan-first candidate |
 | `edgion-gateway/src/plugins/http/openid_connect/jwt_common.rs` | `plugins-http-openid-connect` | source | changed | B0090 |
 | `edgion-gateway/src/plugins/http/openid_connect/logout.rs` | `plugins-http-openid-connect` | source | examined-no-change | B0093 |
 | `edgion-gateway/src/plugins/http/openid_connect/mod.rs` | `plugins-http-openid-connect` | source | examined-no-change | B0094: minimal live module facade and visibility boundary retained |
