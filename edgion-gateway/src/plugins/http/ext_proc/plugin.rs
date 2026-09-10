@@ -1298,7 +1298,7 @@ mod tests {
 
     fn expect_empty_request_headers(session: &mut MockPluginSession) {
         session.expect_get_method().return_const("POST".to_string());
-        session.expect_get_path().return_const("/half-close".to_string());
+        session.expect_get_uri().return_const("/half-close".to_string());
         session.expect_header_value().return_const(None);
         session.expect_request_headers().return_const(Vec::new());
     }

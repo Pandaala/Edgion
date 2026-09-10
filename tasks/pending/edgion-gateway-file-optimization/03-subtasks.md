@@ -411,9 +411,9 @@
 | `edgion-gateway/src/plugins/http/ext_proc/attached.rs` | `plugins-http-ext-proc` | source | changed | B0282: share constructor-normalized override list; request-local state retained; independent plan/final LGTM and focused 12/12 tests |
 | `edgion-gateway/src/plugins/http/ext_proc/client.rs` | `plugins-http-ext-proc` | source | changed | B0283: reject unsupported effective TLS identity before cache/channel; independent plan/final LGTM, 11 exact tests and workspace gates passed |
 | `edgion-gateway/src/plugins/http/ext_proc/mod.rs` | `plugins-http-ext-proc` | source | examined-no-change | B0284: justified module exports and real nonnetwork processor seam; independent LGTM, exact consumer and all gates passed |
-| `edgion-gateway/src/plugins/http/ext_proc/mutation.rs` | `plugins-http-ext-proc` | source | analysis-ready | B0285: canonical current URI projection preserves query; complex plan-first candidate |
-| `edgion-gateway/src/plugins/http/ext_proc/plugin.rs` | `plugins-http-ext-proc` | source | analysis-in-progress | B0286: full plugin lifecycle/value analysis; prior support edits do not establish coverage |
-| `edgion-gateway/src/plugins/http/ext_proc/response_streamed.rs` | `plugins-http-ext-proc` | source | pending | — |
+| `edgion-gateway/src/plugins/http/ext_proc/mutation.rs` | `plugins-http-ext-proc` | source | changed | B0285: preserve current raw query through canonical URI projection; independent plan/final LGTM, mutation 12/12 and workspace gates passed |
+| `edgion-gateway/src/plugins/http/ext_proc/plugin.rs` | `plugins-http-ext-proc` | source | analysis-ready | B0286: binary ImmediateResponse body fidelity across all consumers, plan-first candidate |
+| `edgion-gateway/src/plugins/http/ext_proc/response_streamed.rs` | `plugins-http-ext-proc` | source | analysis-ready | B0287: bounded streaming/typed completion no-change candidate; separate trailer cleanup finding |
 | `edgion-gateway/src/plugins/http/ext_proc/response_trailer.rs` | `plugins-http-ext-proc` | source | pending | — |
 | `edgion-gateway/src/plugins/http/ext_proc/streamed.rs` | `plugins-http-ext-proc` | source | pending | — |
 | `edgion-gateway/src/plugins/http/fault_injection/mod.rs` | `plugins-http-fault-injection` | source | examined-no-change | B0075 |

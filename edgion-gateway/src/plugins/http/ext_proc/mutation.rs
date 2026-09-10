@@ -61,10 +61,11 @@ fn decoded_value(opt: &HeaderValueOption, hv: &HeaderValue) -> Option<String> {
 
 /// Build a proto `HeaderMap` from the request headers plus read-only pseudo
 /// headers (`:method`, `:path`, `:authority`).
+/// `:path` includes the current normalized path and raw current query string.
 pub fn collect_request_headers(session: &dyn PluginSession) -> HeaderMap {
     let mut headers = Vec::new();
     push_pseudo(&mut headers, ":method", session.get_method().to_string());
-    push_pseudo(&mut headers, ":path", session.get_path().to_string());
+    push_pseudo(&mut headers, ":path", session.get_uri());
     if let Some(authority) = session.header_value("host") {
         push_pseudo(&mut headers, ":authority", authority);
     }
@@ -258,6 +259,9 @@ mod tests {
     use super::*;
     use crate::plugins::runtime::traits::session::MockPluginSession;
     use crate::plugins::runtime::traits::test_helpers::setup_header_mocks;
+    use crate::EdgionHttpContext;
+    use edgion_resources::path_normalization::PathNormalizationConfig;
+    use pingora_http::RequestHeader;
 
     fn set_header_opt(key: &str, value: &str, action: HeaderAppendAction) -> HeaderValueOption {
         HeaderValueOption {
@@ -460,7 +464,7 @@ mod tests {
     fn collect_request_headers_includes_pseudo_and_preserves_duplicates() {
         let mut session = MockPluginSession::new();
         session.expect_get_method().return_const("GET".to_string());
-        session.expect_get_path().return_const("/api".to_string());
+        session.expect_get_uri().times(1).return_const("/api".to_string());
         session
             .expect_header_value()
             .withf(|n| n == "host")
@@ -478,6 +482,44 @@ mod tests {
         assert_eq!(values_for(&map, ":authority"), vec!["example.com"]);
         // Duplicate header values are preserved, not collapsed.
         assert_eq!(values_for(&map, "x-multi"), vec!["a", "b"]);
+    }
+
+    #[test]
+    fn collect_request_headers_preserves_current_uri_and_raw_query() {
+        for (current_uri, expected) in [
+            ("/api?mode=deny", "/api?mode=deny"),
+            (
+                "/api?tag=one&tag=two&value=foo%26bar&text=hello+world",
+                "/api?tag=one&tag=two&value=foo%26bar&text=hello+world",
+            ),
+            // The canonical URI accessor omits an empty query delimiter.
+            ("/api?", "/api"),
+            ("/api", "/api"),
+            ("/%61pi?mode=deny", "/api?mode=deny"),
+        ] {
+            let mut ctx = EdgionHttpContext::new();
+            ctx.request_info.entry_raw_path = "/entry".to_string();
+            ctx.request_info.entry_raw_query = Some("mode=allow".to_string());
+            let request = RequestHeader::build("GET", current_uri.as_bytes(), None).unwrap();
+            ctx.refresh_normalized_path(&request, &PathNormalizationConfig::default());
+            assert_eq!(ctx.path(), "/api");
+            assert_eq!(ctx.uri(&request), expected);
+            assert_eq!(ctx.request_uri(), "/entry?mode=allow");
+            assert_ne!(ctx.uri(&request), ctx.request_uri());
+
+            let mut session = MockPluginSession::new();
+            session.expect_get_method().return_const("GET".to_string());
+            session.expect_get_uri().times(1).returning(move || ctx.uri(&request));
+            session.expect_get_path().never();
+            session.expect_get_request_path().never();
+            session.expect_get_request_uri().never();
+            session.expect_get_query().never();
+            session.expect_header_value().return_const(None);
+            session.expect_request_headers().return_const(Vec::new());
+
+            let map = collect_request_headers(&session);
+            assert_eq!(values_for(&map, ":path"), vec![expected], "current URI: {current_uri}");
+        }
     }
 
     #[test]
