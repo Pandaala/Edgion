@@ -196,11 +196,11 @@ DSL 插件可以在两个阶段运行，不同阶段的可用 API 有所不同�
 | 阶段 | 可用 API | 不可用 API | 说明 |
 |------|---------|-----------|------|
 | `requestPlugins` | `req.*`、`ctx.*`、`deny`、`next`、`terminate`、`grpc_error` | `resp.set_status`（调用返回 `nil`，无实际效果） | 请求转发前执行 |
-| `upstreamResponseFilterPlugins` | `req.*`（只读）、`resp.*`、`ctx.*`、`deny`、`next` | `grpc_error`、`terminate` | 响应头阶段执行 |
+| `upstreamResponseFilterPlugins` | `req.*`（只读）、`resp.*`、`ctx.*`、`deny`、`next`、`grpc_error`、`terminate` | 无 | 响应头阶段执行 |
 
 在响应阶段仍可调用 `req.*`，但请求体读取只能使用请求阶段已经捕获的请求体；响应阶段的延迟读取不会重新开始从下游捕获。请求体修改方法在 `requestPlugins` 以外的阶段会在配置校验时被拒绝；`req.set_header()` 等其他请求修改也无法改变已经转发的请求。
 
-`grpc_error()` 只在请求阶段有效，因为 gRPC 状态码通过 HTTP/2 trailers 传递，而 trailers 只能在响应体发送之前设置。在响应阶段调用 `grpc_error()` 会降级为 `terminate()` 行为，并产生一条警告日志。
+在 `requestPlugins` 中，`grpc_error()` 通过统一终止响应写入器直接发送 trailers-only gRPC 响应。在 `upstreamResponseFilterPlugins` 中，它会中止上游响应，将准确的 gRPC 状态码和可选消息传递给同一写入器；上游响应不会继续转发。两个阶段的线缆 HTTP 状态均为 `200`，gRPC 应用状态则在访问日志的 `grpc_status` 中独立记录，不会从 HTTP 状态码重新推导。
 
 ## 函数级别限制汇总
 

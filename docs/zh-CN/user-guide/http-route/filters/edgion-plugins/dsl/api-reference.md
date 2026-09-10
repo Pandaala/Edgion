@@ -4,7 +4,7 @@
 
 **类型说明**：EdgionDSL 有 7 种运行时类型：`Str`（字符串）、`Int`（64 位整数）、`Bool`（布尔值）、`Nil`（空值/缺失）、`Body`（不透明的请求 body 句柄）、`List`（字符串列表，不可由用户直接构造）、`Map`（有序字符串键映射表；由 `http.call()` 返回，也可通过 `{key: expr}` 字面量构造）。
 
-**阶段说明**：部分函数仅在特定执行阶段有效。`req.*` 写操作和 `grpc_error()` 仅在请求阶段有意义；`resp.*` 读写操作仅在响应阶段有效。
+**阶段说明**：部分函数仅在特定执行阶段有效。`req.*` 写操作影响请求阶段；`resp.*` 读写操作适用于响应阶段。`grpc_error()` 在两个阶段均受支持。
 
 ---
 
@@ -2021,7 +2021,7 @@ if len(token) < 16 {
 
 ### grpc_error
 
-**签名**：`grpc_error(code, message)` — 终止请求（仅请求阶段）
+**签名**：`grpc_error(code, message)` — 以 gRPC 响应终止处理（请求或响应阶段）
 
 向客户端返回标准 gRPC 错误，通过 HTTP/2 trailers 发送 `grpc-status` 和 `grpc-message`。`code` 为 0–16 范围的 gRPC 状态码，超出范围时自动降级为 13（INTERNAL）。
 
@@ -2029,7 +2029,7 @@ if len(token) < 16 {
 - `code`（Int）— gRPC 状态码（0–16）
 - `message`（Str | Nil）— 错误消息，传 `nil` 则无消息
 
-**限制**：仅在请求阶段（`requestPlugins`）有效。在响应阶段调用会降级为 `terminate()`，因为响应头已提交，无法再追加 HTTP/2 trailers。
+在 `requestPlugins` 中，`grpc_error()` 通过统一终止响应写入器直接发送 trailers-only gRPC 响应。在 `upstreamResponseFilterPlugins` 中，它会中止上游响应，将准确的 gRPC 状态码和可选消息传递给同一写入器；上游响应不会继续转发。两个阶段的线缆 HTTP 状态均为 `200`，gRPC 应用状态则在访问日志的 `grpc_status` 中独立记录，不会从 HTTP 状态码重新推导。
 
 **常用 gRPC 状态码**：
 - `0` — OK
@@ -2057,7 +2057,7 @@ if req.protocol == "grpc" {
 
 **签名**：`terminate()` — 终止请求
 
-直接终止请求处理，不向客户端发送任何响应（连接被关闭）。通常不直接使用，主要作为 `grpc_error()` 在响应阶段的降级行为。
+终止处理。单独调用 `terminate()` 不提供响应，因此网关会使用终止响应兜底（HTTP `502`，gRPC 请求则返回对应的 gRPC 错误）。需要明确的 gRPC 状态码和可选消息时，请使用 `grpc_error()`。
 
 **示例**：
 ```

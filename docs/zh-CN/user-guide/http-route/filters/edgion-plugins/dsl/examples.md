@@ -174,7 +174,7 @@ spec:
 
 - gRPC 状态码通过 HTTP/2 trailers 传递，tonic 等客户端可正确解析。
 - 常用状态码：`7` PERMISSION_DENIED、`16` UNAUTHENTICATED。
-- `grpc_error()` **仅在请求阶段（`requestPlugins`）有效**，在响应阶段会降级为 `terminate()`，详见"常见反模式"。
+- `grpc_error()` 支持请求和响应两个阶段。请求阶段直接发送 trailers-only 响应；响应阶段中止上游响应，将准确的状态码和可选消息保留给统一终止响应写入器。线缆 HTTP 状态为 `200`，`grpc_status` 独立记录 gRPC 应用状态。
 
 ---
 
@@ -903,33 +903,24 @@ source: |
   return next()
 ```
 
-### 反模式四：在响应阶段使用 grpc_error
+## 响应阶段 gRPC 错误
+
+使用准确的 `RESOURCE_EXHAUSTED` 状态码（`8`）和消息中止失败的上游 gRPC 响应。客户端收到 HTTP `200` 和 gRPC 状态 `8`；访问日志记录 `grpc_status: 8`。
 
 ```yaml
-# 错误示范：grpc_error() 在响应阶段不被支持
-spec:
-  upstreamResponseFilterPlugins:  # 响应阶段
-    - type: Dsl
-      config:
-        name: "wrong-grpc-error"
-        source: |
-          if resp.status >= 500 {
-            return grpc_error(13, "internal error")  # 无效！响应头已提交，会降级为 terminate()
-          }
-          return next()
-```
-
-```yaml
-# 正确做法：gRPC 错误拦截应在请求阶段完成，响应阶段使用 resp.set_status() 改写状态码
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: grpc-response-error
+  namespace: production
 spec:
   upstreamResponseFilterPlugins:
     - type: Dsl
       config:
-        name: "correct-resp-handling"
+        name: grpc-response-error
         source: |
-          // 响应阶段只能修改响应头和状态码
-          if resp.status >= 500 {
-            resp.set_header("X-Error-Source", "upstream")
+          if req.protocol == "grpc" && resp.status >= 500 {
+            return grpc_error(8, "upstream capacity exhausted")
           }
           return next()
 ```

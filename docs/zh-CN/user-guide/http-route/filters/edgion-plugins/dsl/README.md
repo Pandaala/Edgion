@@ -98,7 +98,7 @@ DSL 插件在两个独立阶段运行，分别对应 `EdgionPlugins` 的不同�
 - 通过有界文本、字节范围、哈希和确定 JSONPath 操作检查不透明的请求 `Body`
 - 通过 `clear`、`append`、`prepend`、`remove` 和字面量 `replace` 事务式修改请求 body
 - 通过 `deny()` 拒绝请求并返回 HTTP 错误
-- 通过 `grpc_error()` 返回原生 gRPC 状态码（仅此阶段支持）
+- 通过 `grpc_error()` 返回原生 gRPC 状态码
 - 通过 `ctx.set()` 向后续插件传递上下文值
 
 ### `upstreamResponseFilterPlugins` — 响应阶段
@@ -114,7 +114,9 @@ DSL 插件在两个独立阶段运行，分别对应 `EdgionPlugins` 的不同�
 响应阶段的 DSL 绝不会启动请求 body 捕获。请求 body 修改若不在
 `requestPlugins` 中，会在配置校验阶段被拒绝。
 
-> **注意**：`grpc_error()` 仅在请求阶段有效。在响应阶段调用会降级为 `terminate()`，因为响应头已提交，无法再追加 HTTP/2 trailers。
+## gRPC 错误返回
+
+在 `requestPlugins` 中，`grpc_error()` 通过统一终止响应写入器直接发送 trailers-only gRPC 响应。在 `upstreamResponseFilterPlugins` 中，它会中止上游响应，将准确的 gRPC 状态码和可选消息传递给同一写入器；上游响应不会继续转发。两个阶段的线缆 HTTP 状态均为 `200`，gRPC 应用状态则在访问日志的 `grpc_status` 中独立记录，不会从 HTTP 状态码重新推导。
 
 ## 文档导航
 

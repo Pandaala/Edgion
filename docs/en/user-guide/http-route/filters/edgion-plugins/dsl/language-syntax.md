@@ -486,7 +486,7 @@ if service == "internal.AdminService" {
 }
 ```
 
-> Limitation: `grpc_error()` is only effective in the `requestPlugins` phase. When used in the response phase, trailers cannot be appended because the response headers have already been sent; the call degrades to `terminate()` behavior. See [DSL Plugin — gRPC Error Returns](./README.md#grpc-error-returns) for details.
+> Supported in both `requestPlugins` and `upstreamResponseFilterPlugins`. The request phase writes a direct trailers-only response; the response phase aborts the upstream response and preserves the exact code and optional message for the canonical terminal writer. Wire HTTP status remains `200`; `grpc_status` records the independent gRPC application status. See [DSL Plugin — gRPC Error Returns](./README.md#grpc-error-returns).
 
 ### 6.5 Implicit Return
 

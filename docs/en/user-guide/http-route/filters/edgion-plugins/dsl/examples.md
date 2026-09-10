@@ -174,7 +174,7 @@ Notes:
 
 - gRPC status codes are delivered via HTTP/2 trailers; clients such as tonic can parse them correctly.
 - Common status codes: `7` PERMISSION_DENIED, `16` UNAUTHENTICATED.
-- `grpc_error()` **is only valid in the request phase (`requestPlugins`)**. In the response phase it degrades to `terminate()` — see "Common Anti-Patterns" for details.
+- `grpc_error()` supports both request and response stages. Request-stage calls send a direct trailers-only response; response-stage calls abort the upstream response and preserve the exact code and optional message for the canonical terminal writer. Wire HTTP status is `200`; `grpc_status` records the separate gRPC application status.
 
 ---
 
@@ -903,33 +903,24 @@ source: |
   return next()
 ```
 
-### Anti-Pattern 4: Using grpc_error in the Response Phase
+## Response-stage gRPC Error
+
+Abort a failed upstream gRPC response with the exact `RESOURCE_EXHAUSTED` code (`8`) and message. The client receives HTTP `200` and gRPC status `8`; the access log records `grpc_status: 8`.
 
 ```yaml
-# Wrong: grpc_error() is not supported in the response phase
-spec:
-  upstreamResponseFilterPlugins:  # response phase
-    - type: Dsl
-      config:
-        name: "wrong-grpc-error"
-        source: |
-          if resp.status >= 500 {
-            return grpc_error(13, "internal error")  # invalid! response headers already committed; degrades to terminate()
-          }
-          return next()
-```
-
-```yaml
-# Correct: gRPC error interception should be done in the request phase; in the response phase use resp.set_status() to rewrite the status code
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: grpc-response-error
+  namespace: production
 spec:
   upstreamResponseFilterPlugins:
     - type: Dsl
       config:
-        name: "correct-resp-handling"
+        name: grpc-response-error
         source: |
-          // In the response phase you can only modify response headers and the status code
-          if resp.status >= 500 {
-            resp.set_header("X-Error-Source", "upstream")
+          if req.protocol == "grpc" && resp.status >= 500 {
+            return grpc_error(8, "upstream capacity exhausted")
           }
           return next()
 ```

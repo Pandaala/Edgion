@@ -4,7 +4,7 @@ This document lists all built-in functions in EdgionDSL, organized by category. 
 
 **Type overview**: EdgionDSL has 7 runtime types: `Str` (string), `Int` (64-bit integer), `Bool` (boolean), `Nil` (null/missing), `Body` (an opaque request-body handle), `List` (a list of strings; cannot be constructed directly by user code), and `Map` (an ordered string-keyed map; returned by `http.call()` and constructible via `{key: expr}` literals).
 
-**Phase overview**: Some functions are only valid in specific execution phases. `req.*` write operations and `grpc_error()` are only meaningful in the request phase; `resp.*` read and write operations are only valid in the response phase.
+**Phase overview**: Some functions are only valid in specific execution phases. `req.*` write operations affect the request phase; `resp.*` read and write operations apply to the response phase. `grpc_error()` is supported in both phases.
 
 ---
 
@@ -2070,7 +2070,7 @@ if len(token) < 16 {
 
 ### grpc_error
 
-**Signature**: `grpc_error(code, message)` — terminates the request (request phase only)
+**Signature**: `grpc_error(code, message)` — terminates processing with a gRPC response (request or response phase)
 
 Returns a standard gRPC error to the client, sending `grpc-status` and `grpc-message` via HTTP/2 trailers. `code` is a gRPC status code in the range 0–16; values outside this range are automatically downgraded to 13 (INTERNAL).
 
@@ -2078,7 +2078,7 @@ Returns a standard gRPC error to the client, sending `grpc-status` and `grpc-mes
 - `code` (Int) — gRPC status code (0–16)
 - `message` (Str | Nil) — Error message; pass `nil` for no message
 
-**Constraints**: Only valid in the request phase (`requestPlugins`). Calling this in the response phase degrades to `terminate()`, because the response headers have already been committed and HTTP/2 trailers can no longer be appended.
+In `requestPlugins`, `grpc_error()` sends a direct trailers-only gRPC response through the canonical terminal writer. In `upstreamResponseFilterPlugins`, it aborts the upstream response and carries the exact gRPC code and optional message to that same writer; the upstream response is not forwarded. In both phases, the wire HTTP status is `200`, while the gRPC application status is recorded separately in the access log as `grpc_status`. The code is not reconstructed from an HTTP status.
 
 **Common gRPC status codes**:
 - `0` — OK
@@ -2106,7 +2106,7 @@ if req.protocol == "grpc" {
 
 **Signature**: `terminate()` — terminates the request
 
-Terminates request processing immediately without sending any response to the client (the connection is closed). Typically not used directly; it is primarily the fallback behavior of `grpc_error()` when called in the response phase.
+Terminates processing. A bare `terminate()` does not provide a response, so the gateway uses its terminal fallback (HTTP `502`, or the corresponding gRPC error on a gRPC request). Use `grpc_error()` when you need an explicit gRPC code and optional message.
 
 **Example**:
 ```
