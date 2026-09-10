@@ -11,7 +11,7 @@ description: DSL engine architecture — data flow, source layout, plugin entry 
 
 ## 0. Design philosophy & scope boundary
 
-EdgionDSL is **not** a general-purpose embedded language (it deliberately stops short of Lua/JS). It runs in-process, on shared Pingora worker threads, and its bytecode is shipped controller→gateway as configuration. Its value is *flexible orchestration with a provable resource ceiling*, not *arbitrary computation*. Keep this boundary when evaluating any new capability:
+EdgionDSL is **not** a general-purpose embedded language (it deliberately stops short of Lua/JS). It runs in-process, on shared Pingora worker threads, and its source or bytecode is shipped controller→gateway as configuration. Its value is *flexible orchestration with a provable resource ceiling*, not *arbitrary computation*. Keep this boundary when evaluating any new capability:
 
 - **Orchestration logic** (read headers, branch on conditions, rewrite, compose/reuse predicates) → may live in the DSL, but prefer the lightest possible form.
 - **Computation / capability** (new protocols, heavy algorithms, external integrations, perf-sensitive paths) → push down into Rust as a `BuiltinId` (the `CallBuiltin` seam), never as a language feature. Adding a builtin is cheaper, safer, and more testable than growing the language.
@@ -20,31 +20,30 @@ EdgionDSL is **not** a general-purpose embedded language (it deliberately stops 
 
 ## 1. Data flow
 
-```
-                          Controller-side compile / admission
-       ┌──────────────────────────────────────────────────────────────────────┐
-       │                                                                      │
-source │   Parser ──── AST ──── Compiler ──── Bytecode (JSON, base64)         │
-text   │   (nom)      (≤2000   (type check,  Validator ↑                      │
-       │   parse      AST       regex pre-   (≤1000 instr, ≤64 locals,        │
-       │   budget     nodes,    compile,     ≤256 constants, ≤256 KB)         │
-       │   50_000,    depth     constant                                      │
-       │   ≤64 KB)    ≤64)      pool)                                         │
-       └──────────────────────────────────────────────┬───────────────────────┘
-                                                      ↓
-session ─► DslPlugin::run_request / run_upstream_response_filter
-                                                      ↓
-                                       Vm.execute(session, log, runtime)
-                                       async stack VM, per-instruction:
-                                         steps ≤10_000  loop iters ≤100
-                                         calls ≤500     stack ≤128
-                                         string ≤8 KB   list ≤1024
-                                         map ≤512
-                                         body scan ≤ physical cap × configured passes
-                                       wrapped by execute_safe → catch_unwind
+```text
+DslConfig { source?, bytecode? }             # bytecode wins if both are present
+    ├─ Controller validate_plugins
+    │    → compile_and_validate → resolve_script → static validation
+    │    → status diagnostics (no Gateway VM, no source-to-bytecode field rewrite)
+    └─ resource serialization → config sync → Gateway compile_plugins
+         → generic validation gate + DslPlugin::resolve_parts
+         → compile_and_validate → resolve_script
+              source: parser → compiler → Validator → CompiledScript
+              bytecode: bounded decode → version check → Validator → CompiledScript
+         → Gateway DslRuntime + VmLimits + Vm::new
+         → cached plugin → per-request execute_safe → Vm.execute
 ```
 
-Each stage rejects oversized or malformed input independently. Pre-compiled bytecode coming from the controller is re-validated by `Validator` after deserialization, so the data plane never trusts the controller's compile output blindly — see `edgion_dsl::resolve_script` (wrapped by `DslConfig::compile_and_validate` in `edgion-resources`) for the order: deserialize → `Validator::validate` → use.
+The source and bytecode fields remain serializable configuration; validation does
+not replace source with bytecode. Both binaries share runtime-independent static
+checks, but only the Gateway initializes the VM and builtins. Every Gateway
+constructor must validate independently: Controller acceptance cannot substitute
+for `resolve_script` or the post-decode `Validator` check. Source parsing also runs
+on the Gateway when source is the selected representation, during configuration
+construction rather than request execution. `Vm::new` remains a separate fallible
+runtime initialization boundary.
+
+See [the revalidated trust-boundary ADR](../../04-review/dsl/intentional-design/dsl-design-decisions.md#1-bytecode-must-be-serialisable-across-processes).
 
 ## 2. Source layout
 

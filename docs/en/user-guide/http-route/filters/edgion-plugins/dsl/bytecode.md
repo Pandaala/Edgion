@@ -4,11 +4,11 @@
 
 The DSL plugin supports two loading modes: `source` (source code) and `bytecode` (pre-compiled bytecode).
 
-**Source mode**: When the Controller receives a configuration, it compiles the source code into bytecode on-the-fly and pushes it to the Gateway via gRPC. Compilation is re-triggered on every configuration change or Controller restart.
+**Source mode**: The Controller compiles and statically validates source when checking the configuration, without replacing the serialized `source` field. The Gateway receives that configuration and independently compiles and validates the source when constructing the plugin.
 
-**Bytecode mode**: Pre-compiled bytecode is provided directly in the configuration. The Controller skips the compilation step and pushes the bytecode to the Gateway immediately.
+**Bytecode mode**: Supply pre-compiled bytecode in the configuration. Both Controller validation and Gateway construction decode it, check its version, and statically validate it. Bytecode skips source parsing and compilation; it does not skip validation or Gateway VM initialization.
 
-When both `source` and `bytecode` are present in the configuration, `bytecode` takes precedence and the `source` field is ignored.
+At least one of `source` and `bytecode` is required. Both may be present; `bytecode` takes precedence, even if it is invalid (there is no fallback to source). Both configured fields remain serialized. Compilation and VM construction happen during configuration processing, not per request.
 
 ## Bytecode Format
 
@@ -62,13 +62,13 @@ Each entry in the constant pool is one of the following types:
 
 - Maximum decoded size: **256 KB** (constant `MAX_DECODED_BYTECODE_LEN`)
 - Maximum Base64-encoded size: approximately **341 KB** (Base64 expansion factor ~4/3)
-- If the limit is exceeded, the Controller rejects the configuration and returns a validation error.
+- If the limit is exceeded, Controller validation reports an error, and independent Gateway validation also rejects the invalid artifact.
 
 ## Version Compatibility
 
 Bytecode carries a version number in the `version` field, which is strictly validated during deserialization.
 
-- If the version does not match, the Controller refuses to load the bytecode and reports a version conflict in the logs.
+- If the version does not match, Controller validation reports a version error; Gateway validation independently rejects it before VM initialization.
 - If the bytecode format version changes after an Edgion upgrade, existing bytecode must be recompiled.
 - It is recommended to bind bytecode to a specific Edgion version in your CI/CD pipeline to avoid version drift.
 
@@ -81,7 +81,7 @@ with the target Edgion version.
 
 ## Security Validation
 
-The following static checks are performed during deserialization. If any check fails, the bytecode is rejected:
+After bounded decoding and version checks, the shared validator performs the following static checks in both binaries. If any check fails, the bytecode is rejected:
 
 1. **Version match**: The `version` field matches the version expected by the runtime.
 2. **Constant index bounds**: All constant indices referenced by `LoadConst` instructions fall within the bounds of the constant pool.
@@ -124,12 +124,12 @@ spec:
     - type: Dsl
       config:
         name: "auth-check"
-        bytecode: "BASE64_ENCODED_BYTECODE_V2"
+        bytecode: "BASE64_ENCODED_BYTECODE_V4"
 ```
 
 ### Providing Both Source and Bytecode
 
-When both `source` and `bytecode` are configured, `bytecode` takes effect. The `source` field is retained only as a debugging reference — it may be embedded in the bytecode's own `source` field if it was included at compile time.
+When both fields are configured, `bytecode` takes effect and the configured `source` remains serialized but is not executed. The bytecode may separately contain source metadata embedded when it was compiled; loading does not copy the configuration's `source` into that metadata.
 
 ```yaml
 config:
@@ -139,7 +139,7 @@ config:
     if token == nil {
       return deny(401, "Unauthorized")
     }
-  bytecode: "BASE64_ENCODED_BYTECODE_V2"
+  bytecode: "BASE64_ENCODED_BYTECODE_V4"
 ```
 
 ## Related Documentation

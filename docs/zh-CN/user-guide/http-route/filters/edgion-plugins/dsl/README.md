@@ -60,7 +60,7 @@ spec:
 | `httpBlockPrivateIps` | Boolean | ❌ | `false` | 拦截 `http.call()` 对私有/回环/链路本地 IP 的调用 |
 | `linkSysRefs` | Vec<{namespace, name}> | ❌† | `[]` | LinkSys Redis 资源列表。每个 `name` 是作为 `redis.*` 调用第一个参数的别名 |
 
-\* `source` 和 `bytecode` 二选一，至少提供一个。
+\* `source` 和 `bytecode` 至少提供一个，也可同时配置，此时 `bytecode` 优先。两个进程会独立校验选中的表示形式，详见[字节码模式](./bytecode.md)。
 † 每个 Redis 别名都应在 `linkSysRefs` 中声明。静态检查会拒绝能够确定的未知别名；
 动态或有歧义的表达式可能在运行时返回 `ok=false`。
 `rateLimitPolicies[].link` 始终在加载时校验。

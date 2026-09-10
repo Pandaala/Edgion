@@ -4,11 +4,11 @@
 
 DSL 插件支持两种加载方式：`source`（源码）和 `bytecode`（预编译字节码）。
 
-**源码模式**：Controller 收到配置后，在线将源码编译为字节码，再通过 gRPC 推送给 Gateway。每次配置变更或 Controller 重启时均会重新编译。
+**源码模式**：Controller 检查配置时会编译源码并进行静态校验，但不会用字节码替换序列化的 `source` 字段。Gateway 收到该配置后，在构建插件时独立编译并校验源码。
 
-**字节码模式**：直接在配置中提供已编译好的字节码，Controller 跳过编译步骤，直接将字节码推送给 Gateway。
+**字节码模式**：在配置中提供预编译字节码。Controller 校验和 Gateway 构建都会解码、检查版本并进行静态校验。字节码模式跳过源码解析和编译，不会跳过校验或 Gateway 的 VM 初始化。
 
-当配置中同时提供 `source` 和 `bytecode` 时，优先使用 `bytecode`，`source` 字段会被忽略。
+`source` 和 `bytecode` 至少提供一个，也可以同时提供；此时 `bytecode` 优先，即使字节码无效也不会回退到源码。两个已配置字段都会保留在序列化配置中。编译和 VM 构建发生在配置处理期间，不会逐请求执行。
 
 ## 字节码格式
 
@@ -62,13 +62,13 @@ DSL 插件支持两种加载方式：`source`（源码）和 `bytecode`（预编
 
 - 解码后最大 **256 KB**（对应常量 `MAX_DECODED_BYTECODE_LEN`）
 - Base64 编码后约 **341 KB**（Base64 膨胀系数约 4/3）
-- 超出限制时，Controller 拒绝该配置并返回校验错误
+- 超出限制时，Controller 校验报告错误，Gateway 的独立校验也会拒绝无效制品
 
 ## 版本兼容性
 
 字节码携带版本号（`version` 字段），反序列化时严格校验。
 
-- 版本号不匹配时，Controller 拒绝加载并在日志中报告版本冲突
+- 版本号不匹配时，Controller 校验报告版本错误，Gateway 校验也会在 VM 初始化前独立拒绝该字节码
 - 升级 Edgion 后如果字节码格式版本发生变更，已有字节码需要重新编译
 - 建议在 CI/CD 中将字节码与 Edgion 版本绑定，避免版本漂移
 
@@ -80,12 +80,12 @@ DSL 插件支持两种加载方式：`source`（源码）和 `bytecode`（预编
 
 ## 安全校验
 
-反序列化阶段执行以下静态校验，任一项不通过即拒绝加载：
+完成有界解码和版本检查后，两个进程中的共享校验器执行以下静态校验，任一项不通过即拒绝加载：
 
 1. **版本号匹配**：`version` 字段与运行时期望版本一致
 2. **常量索引合法**：所有 `LoadConst` 指令引用的常量索引在常量池范围内
 3. **指令与常量类型匹配**：值加载仅接受 `Str`/`Int`；`.matches()`、字符串正则操作、`.json_get()` 和 `.json_select()` 分别要求 `StreamingRegex`、`Regex`、`JsonPath` 和 `JsonSelect` 常量
-4. **正则重建校验**：反序列化时在自动机大小受限的条件下重新编译正则，验证当前运行环境中的语法和资源限制
+4. **正则重建校验**：解码后由校验器在自动机大小受限的条件下重新编译正则，验证当前运行环境中的语法和资源限制
 5. **JSONPath 校验**：重新解析每个 `JsonPath` 常量，并要求其仍为确定性路径
 6. **JSON 多路径校验**：每个 selector 必须非空且有界，输出名必须唯一，路径必须为确定性路径
 
@@ -122,12 +122,12 @@ spec:
     - type: Dsl
       config:
         name: "auth-check"
-        bytecode: "BASE64_ENCODED_BYTECODE_V2"
+        bytecode: "BASE64_ENCODED_BYTECODE_V4"
 ```
 
 ### 同时提供源码和字节码
 
-当同时配置 `source` 和 `bytecode` 时，`bytecode` 优先生效，`source` 仅作为调试参考保留在字节码的 `source` 字段中（如果编译时已嵌入）。
+同时配置时，`bytecode` 优先生效；配置中的 `source` 仍参与序列化，但不会执行。字节码内部可以另带编译时嵌入的源码元数据；加载时不会把配置的 `source` 复制到该元数据中。
 
 ```yaml
 config:
@@ -137,7 +137,7 @@ config:
     if token == nil {
       return deny(401, "Unauthorized")
     }
-  bytecode: "BASE64_ENCODED_BYTECODE_V2"
+  bytecode: "BASE64_ENCODED_BYTECODE_V4"
 ```
 
 ## 相关文档

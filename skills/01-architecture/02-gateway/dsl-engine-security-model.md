@@ -25,7 +25,7 @@ The compile-time layers (parser, validator, compiler, bytecode loader) now live 
 | Body operation layer | runtime | cumulative scan bytes, physical body cap, bounded returned strings, mutation ranges and segment count | `request_body/body_scanners.rs`, `lang/vm.rs`, `request_body/operation.rs` |
 | Panic isolation | the whole `execute` | catches everything else | `lang/vm.rs` → `execute_safe` (`AssertUnwindSafe + catch_unwind`); see `dsl-engine.md` §5 |
 
-**Pre-compiled bytecode shipped from the controller is re-validated by `Validator::validate` on the gateway side.** The controller's compile output is never trusted blindly — see `DslConfig::compile_and_validate` → `edgion_dsl::resolve_script` for the order `deserialize → Validator::validate → use`. Hand-crafted bytecode payloads that declare `max_loop_depth: 0` while shipping deeper loops, or `MakeMap(65535)` operands, are rejected here (`edgion-dsl/src/validator.rs:220-290`).
+**Gateway validation is independent of Controller acceptance.** Config sync may carry inline source, pre-compiled bytecode, or both serialized `DslConfig` fields (bytecode wins). Controller validation does not convert the resource to bytecode-only transport. Gateway `DslConfig::compile_and_validate` → `edgion_dsl::resolve_script` parses/compiles/validates selected source, or decodes and re-validates selected bytecode through `Validator` before VM initialization. Hand-crafted bytecode cannot bypass that check by having passed Controller admission. `Vm::new` is a separate Gateway-owned initialization step, not a replacement for static validation. See [the current data flow](dsl-engine.md#1-data-flow).
 
 ## 2. Runtime limit enforcement — source map
 

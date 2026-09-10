@@ -20,7 +20,7 @@ Fix suggestions of the form "serde will handle malformed input gracefully" are *
 
 **1. Trust boundary**
 
-Bytecode is compiled by the Controller but delivered through K8s CR / gRPC sync. Any actor with `kubectl apply` rights or access to the control plane gRPC channel can supply a crafted base64 payload. The existing length bounds (`bytecode.rs:279-296`) guard against trivially oversized input, but do not prevent:
+Bytecode can be supplied directly in `DslConfig`; inline source is also accepted and remains serializable through config sync. Both Controller validation and Gateway construction resolve and statically validate the selected representation; the Controller is not the sole compilation trust boundary. See [the current DSL data flow](../../../01-architecture/02-gateway/dsl-engine.md#1-data-flow). Any actor with `kubectl apply` rights or access to the control plane gRPC channel can supply a crafted base64 payload. The existing length bounds (`bytecode.rs:279-296`) guard against trivially oversized input, but do not prevent:
 
 - Deeply nested or wide JSON that exhausts the serde-json recursion budget.
 - A `Constant::Regex` variant whose `pattern` field triggers a ReDoS during `Regex::new(...)` called inside the serde `Deserialize` impl at deserialization time.
@@ -55,7 +55,7 @@ Re-open or escalate if:
 
 - A fuzzer (once infrastructure is in place) finds a panic or OOM in `deserialize_base64`.
 - A new `Constant` variant is added that contains a compiled object (regex, pattern, etc.) and derives `Deserialize` without `Deserialize`-time bounds.
-- The delivery path for bytecode expands beyond Controller-compiled CR/gRPC to direct user upload.
+- An additional submission path expands exposure beyond the existing source-or-bytecode configuration flow.
 
 ## Reference Cases
 

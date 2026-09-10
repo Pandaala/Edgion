@@ -8,7 +8,21 @@ knowledge_type: intentional-design
 
 ## Conclusion
 
-Each enabled `DslPlugin` runs `edgion_dsl::resolve_script` (base64 decode + JSON deserialize + full `Validator` scan) **twice per config apply / hot-reload**: once in the control-plane validation gate (`DslConfig::validation_error` → `DslConfig::compile_and_validate`) and once in the data-plane constructor (`DslPlugin::from_config` / `from_config_response` → `resolve_parts` → `DslConfig::compile_and_validate`). This is **redundant work, accepted as-is**. The two-path self-validation is intentional defense-in-depth, the redundancy is off the per-request data-plane hot path, and every safe de-duplication fix is disproportionate to a Low-severity redundant-work finding.
+Static resolution may run through Controller schema validation, the Gateway's
+generic plugin validation gate, and the Gateway constructor. Do not claim exactly
+two calls across a complete config apply: path count depends on the entry's stage,
+validation outcome, and caller. `resolve_script` compiles selected source or
+decodes and validates selected bytecode. The Controller does not rewrite source
+into a bytecode-only transport representation.
+
+The accepted redundancy is between self-contained validation and construction:
+`DslConfig::validation_error` → `compile_and_validate`, and
+`DslPlugin::from_config` / `from_config_response` → `resolve_parts` →
+`compile_and_validate`. `resolve_parts` reuses the returned `CompiledScript` for
+`Vm::new` rather than resolving again inside that constructor path. Independent
+Gateway validation remains mandatory even after Controller acceptance. This work
+runs at configuration construction, not per request; see the
+[trust-boundary ADR](dsl-design-decisions.md#1-bytecode-must-be-serialisable-across-processes).
 
 Fix suggestions of the form "return the `CompiledScript` from `validate_config` and thread it into construction", "skip validation in `from_config` because `validation_error` already ran", or "cache / memoize the `CompiledScript`" are **not accepted**.
 

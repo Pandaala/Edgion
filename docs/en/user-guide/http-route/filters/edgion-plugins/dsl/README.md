@@ -60,7 +60,7 @@ spec:
 | `httpBlockPrivateIps` | Boolean | `false` | Block `http.call()` to private/loopback/link-local IPs |
 | `linkSysRefs` | Array\<Object\> | `[]` | List of LinkSys Redis resources. **Required** if any `redis.*` builtin appears in the script. Each `name` is the alias used as the first arg to `redis.*` calls |
 
-\* `source` and `bytecode` are mutually exclusive; at least one must be provided.
+\* `source` and `bytecode` require at least one value; both may be provided, with `bytecode` taking precedence. Both binaries independently validate the selected representation; see [Bytecode Mode](./bytecode.md).
 † Declare every Redis alias in `linkSysRefs`. Static checking rejects provable
 unknown aliases; dynamic or ambiguous expressions may instead return `ok=false`
 at runtime. Every `rateLimitPolicies[].link` is checked at load time.

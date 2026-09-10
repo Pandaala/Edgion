@@ -12,7 +12,7 @@ knowledge_type: intentional-design
 
 ## TL;DR
 
-Four off-the-shelf scripting engines (Rhai, mlua, rune, Boa) were evaluated end-to-end against EdgionDSL's actual constraints: Controller compiles → Gateway executes (cross-process bytecode), sandbox enforced inside the engine, no user-defined functions, no global mutable state. **No off-the-shelf engine clears all four constraints** — every candidate either lacks serializable bytecode, lacks a built-in sandbox, exposes a closure / module / dynamic-code feature that becomes attack surface, or introduces a thread-local / global interner. The custom VM is ~7k lines of safe Rust (incl. inline tests) that meets all four; replacing it would be a rewrite at equal or greater complexity to gain features that are explicitly out of scope.
+The historical engine investigation evaluated Rhai, mlua, rune, and Boa against serializable bytecode, in-engine sandboxing, no user-defined functions, and no global mutable state. Its Controller-only compilation premise was obsolete; the current source-or-bytecode flow and independent validation boundaries are corrected below. The engine comparison records that investigation, not a fresh survey of those projects. **No off-the-shelf engine clears all four constraints** — every candidate either lacks serializable bytecode, lacks a built-in sandbox, exposes a closure / module / dynamic-code feature that becomes attack surface, or introduces a thread-local / global interner. The custom VM is ~7k lines of safe Rust (incl. inline tests) that meets all four; replacing it would be a rewrite at equal or greater complexity to gain features that are explicitly out of scope.
 
 **Decision**: keep the custom bytecode VM. Specific deferred / declined alternatives are catalogued below with reverse-links.
 
@@ -46,7 +46,38 @@ Constraint legend: (1) cross-process bytecode, (2) built-in sandbox, (3) no user
 
 ### 1. Bytecode must be serialisable across processes
 
-Controller compiles DSL source on plugin reload (`Compiler::compile_with_source` → `compile_dsl_source` → base64-encoded JSON `CompiledScript`); Gateway workers only receive the bytecode via gRPC config sync and execute it. The Controller is *the* trust boundary for compilation; Gateway never parses raw source. This requires a versioned, deterministically-serialisable bytecode (current `CompiledScript` is `version: u16` + Vec of `OpCode` + constant pool + `source_map` RLE — all serde-derived, see `lang/bytecode.rs:252-267`). None of Rhai / mlua / Boa offers this as a first-class contract; rune comes closest but does not promise cross-version compatibility.
+**Current representation and transport.** `DslConfig` accepts inline `source`,
+base64-encoded JSON `bytecode`, or both; bytecode takes precedence. Both optional
+fields are serialized when present. Controller validation does not replace source
+with bytecode or strip source: ordinary config sync transports the resource's
+configured representation. `CompiledScript` can itself retain optional source
+metadata. A serializable bytecode format is supported; bytecode-only transport is
+not the current contract.
+
+**Independent validation boundaries.** The Controller's plugin handler calls
+schema-layer `validate_plugins()` → `DslConfig::validation_error()` →
+`compile_and_validate()`. That immutable validation path returns a temporary
+compiled script rather than mutating the transport fields. Gateway plugin
+construction independently calls `DslPlugin::resolve_parts()` →
+`compile_and_validate()` → `edgion_dsl::resolve_script()`: source is parsed,
+compiled, and statically validated; configured bytecode is decoded and checked by
+`Validator` before use. The Gateway's generic plugin validation gate can run this
+static path as well. Controller acceptance is never permission to bypass Gateway
+validation, including when a constructor is used independently.
+
+**Runtime ownership.** Parser/compiler/bytecode validation live in the
+runtime-independent `edgion-dsl` leaf shared by both binaries. Gateway construction
+alone builds `DslRuntime`, runtime limits, and `Vm::new`; VM initialization can
+still fail after successful static validation. The compiled plugin is reused for
+requests, with no per-request source compilation. A future source-removal or
+bytecode-only transport design requires separate authorization; this ADR neither
+implements it nor treats it as an established security guarantee.
+
+The former claims that the Controller was the sole compilation trust boundary,
+that Gateway never parsed source, and that only bytecode crossed sync are obsolete.
+The maintained [data flow](../../../01-architecture/02-gateway/dsl-engine.md#1-data-flow)
+and [security model](../../../01-architecture/02-gateway/dsl-engine-security-model.md)
+describe the independent validation contract.
 
 ### 2. Sandbox limits must live inside the engine, not the host wrapper
 
@@ -76,7 +107,7 @@ Three reasons, in priority order:
 ### Rejected (❌ not adopted)
 
 - **AST-as-runtime** — Rhai walks an `AST`; EdgionDSL compiles down to flat `OpCode` for serialisability and tight validation. Tree-walking AST cannot satisfy constraint 1.
-- **`OptimizationLevel::Full`** — Rhai's constant-folding / dead-code elimination happens at runtime per-call; EdgionDSL's `Compiler` is the only optimiser, runs once at Controller load, and emits canonical bytecode.
+- **`OptimizationLevel::Full`** — Rhai's constant-folding / dead-code elimination happens at runtime per-call; EdgionDSL's `Compiler` is the only optimiser, runs during source resolution at configuration load in either binary, never per request, and emits validated bytecode.
 - **Packages (`def_package!`)** — package registration is runtime-mutable and requires `Arc<Mutex<Map>>` lookups per call. EdgionDSL uses a closed `BuiltinId` enum (`lang/bytecode.rs:116`) with `match`-dispatch in `call_builtin`. See [architecture/builtin-dispatch-non-exhaustive-lint.md](builtin-dispatch-non-exhaustive-lint.md) for why the lint-based safeguard there was also rejected.
 - **`Module` / `import`** — see constraint 3.
 - **`Dynamic`** — Rhai's tagged-union with `TypeId` and `Box<dyn Any>` payload. EdgionDSL's `Value` enum is 24 B by construction (see [dsl-value-str/map-variant-is-boxed.md](map-variant-is-boxed.md)) and excludes user-extensible types entirely. The `assert_value_size_invariant` test locks the 24 B contract.
@@ -95,7 +126,7 @@ Three reasons, in priority order:
 - **Source-position errors at runtime** → deferred-gated; see [observability/dsl-error-line-number-declined.md](../../observability/intentional-design/dsl-error-line-number-declined.md) and `tasks/todo/dsl/03-runtime-fault-at-line.md` (still open under three gating conditions). `RuntimeError` kind + embedded `CompiledScript.source` + offline disassembly cover the realistic operator need.
 - **`tracing::*` on the DSL runtime path** → declined; see [observability/dsl-vm-execute-tracing-declined.md](../../observability/mandatory-design/dsl-vm-execute-tracing-declined.md). Data-plane zero-tracing iron rule applies; PluginLog + offline disassembly is the supported developer channel.
 - **`#[export_module]` macro-based builtin registration** (Rhai style) → declined; the closed `BuiltinId` enum with explicit `match`-dispatch gives ~0 ns dispatch overhead, compiler-checked exhaustiveness within each `match`, and a single `LoadConst → CallBuiltin` opcode pair. See [architecture/builtin-dispatch-non-exhaustive-lint.md](builtin-dispatch-non-exhaustive-lint.md) for the lint-based protection that was *also* rejected (real protection is removing `_ =>` catch-alls).
-- **`cargo-fuzz` target for bytecode deserialisation** → replaced by proptest under `tests/property_bytecode.rs`; see [deserialization/dsl-bytecode-deserialize-safety.md](../../deserialization/regression-guards/dsl-bytecode-deserialize-safety.md). proptest covers ~80% of cargo-fuzz value at stable-toolchain / zero CI-config cost; cargo-fuzz becomes worthwhile only if the threat model flips from *Controller-trusted* to *user-untrusted* (e.g., a plugin marketplace).
+- **`cargo-fuzz` target for bytecode deserialisation** → replaced by proptest under `tests/property_bytecode.rs`; see [deserialization/dsl-bytecode-deserialize-safety.md](../../deserialization/regression-guards/dsl-bytecode-deserialize-safety.md). This historical tooling choice is not evidence that configured bytecode is trusted. Gateway validation remains mandatory for operator-supplied source or bytecode; revisit fuzzing when new loader paths or adversarial inputs justify broader coverage.
 
 ## Re-investigation requests that are NOT accepted
 
@@ -105,7 +136,7 @@ Fix suggestions of the following forms are **not accepted**:
 - **"Add closures, but only when the bytecode passes a static-analysis pass that proves no capture escapes"** — the static-analysis pass would itself become attack surface (analyser bugs admit unsound captures) and bytecode size would grow even when closures aren't used. The simpler invariant is: no captures, full stop.
 - **"Add user-defined fn but disallow recursion via `max_call_depth: 1`"** — defeats the only justification for user-fn (reuse) and creates a confusing language design ("functions but not really"). The plugin-config-as-module pattern is the supported substitute.
 - **"Switch to wasm so bytecode is portable to non-Rust runtimes"** — Gateway is the only runtime; portability is a non-requirement. wasm tooling overhead (wasm-bindgen, wasmtime / wasmer host) dwarfs the current bytecode-distribution payload, and wasm sandbox is at the function-import boundary, not the bytecode-shape boundary, so constraints 2 and 3 still need a separate validator on top.
-- **"Use Rhai's serde-bytecode serializer for cross-process distribution"** — Rhai explicitly disclaims cross-version compatibility for `AST` serialisation; EdgionDSL's `BYTECODE_VERSION` + `LEGACY_BYTECODE_VERSION` handshake (with the `version` field default and the unsupported-version reject path in `deserialize_base64`) provides the contract Rhai does not.
+- **"Use Rhai's serde-bytecode serializer for cross-process distribution"** — Rhai explicitly disclaims cross-version compatibility for `AST` serialisation; EdgionDSL's current-version-only `BYTECODE_VERSION` check (currently 4; missing, older, and unsupported versions are rejected by `deserialize_base64`) provides the contract Rhai does not.
 - **"Add a `--inspect` REPL / debugger"** — out of scope. Developer debugging is served by the offline-disassembler design that consumes `CompiledScript.source` + the runtime PC; gateway-runtime introspection is forbidden by the data-plane-zero-tracing rule. Local debugging belongs in the disassembler CLI (planned, not yet built).
 
 ## Re-evaluation triggers
@@ -113,7 +144,7 @@ Fix suggestions of the following forms are **not accepted**:
 Re-open the engine-selection decision only if **any** of the following is observed:
 
 1. **A new constraint-clearing engine appears** — an off-the-shelf Rust scripting engine ships stable, cross-version bytecode + in-engine sandbox + no user-fn + no global mutable state simultaneously. None of Rhai / rune / mlua / Boa is on that trajectory as of 2026-05-15; revisit only on a concrete release announcement.
-2. **The plugin-marketplace use case is approved** — if EdgionDSL is ever opened to third-party script submission (vs the current Controller-trusted model), the threat model flips and the cost calculus of every constraint changes. Constraint 1 still holds; constraints 2/3/4 become even harder, not easier.
+2. **The plugin-marketplace use case is approved** — if EdgionDSL is opened to additional third-party script submission paths, reassess input exposure and the cost calculus of every constraint; current configured artifacts already require independent Gateway validation. Constraint 1 still holds; constraints 2/3/4 become even harder, not easier.
 3. **A profiling-driven hot spot** in the custom VM's interpreter loop (`Vm::execute` `match opcode`) shows >20% of gateway CPU under realistic load AND a JIT-backed engine (Rhai-jit, mlua-LuaJIT) demonstrably solves it on a representative workload. The current `match`-dispatch loop has never measured as a bottleneck; rebut the assumption with profile data before re-opening.
 4. **The maintenance cost of the custom compiler / validator** exceeds the cost of integrating an off-the-shelf engine plus a custom validator on top (judgement call; document the cost comparison before re-opening).
 5. **A Rust-language change** makes a constraint trivially solvable in an off-the-shelf engine (e.g., a stable `#[no_implicit_capture]` attribute that disables Rhai closures globally without a fork). At that point the constraint-3 calculus changes.
@@ -147,3 +178,12 @@ The 7-report investigation series (sub-reports deleted 2026-05-19; this section 
 - [`../01-architecture/02-gateway/dsl-engine-security-model.md`](../../../01-architecture/02-gateway/dsl-engine-security-model.md) — sandbox cap enforcement, ReDoS posture, SSRF guard rationale.
 - `edgion-gateway/src/plugins/http/dsl/lang/` — the custom VM source tree, ~7k lines of safe Rust including inline tests.
 - User-facing docs (out of scope for this internal ADR): `docs/en/user-guide/http-route/filters/edgion-plugins/dsl/`.
+
+## Trust-boundary revalidation
+
+`revalidate-dsl-compilation-trust-boundary-adr` inspected `DslConfig` serde fields
+and immutable validation, Controller plugin handling, conf-sync list/watch resource
+serialization, Gateway construction, `edgion-dsl/src/{script,validator,bytecode}.rs`,
+and `Vm::new`. This was source inspection, not a runtime or integration test.
+Re-evaluate when field serialization, representation priority, independent static
+validation, bytecode version checks, or VM initialization ownership changes.
