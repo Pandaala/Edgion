@@ -409,9 +409,9 @@
 | `edgion-gateway/src/plugins/http/dynamic_internal_upstream/mod.rs` | `plugins-http-dynamic-internal-upstream` | source | examined-no-change | B0074 |
 | `edgion-gateway/src/plugins/http/dynamic_internal_upstream/plugin.rs` | `plugins-http-dynamic-internal-upstream` | source | changed | B0074 |
 | `edgion-gateway/src/plugins/http/ext_proc/attached.rs` | `plugins-http-ext-proc` | source | changed | B0282: share constructor-normalized override list; request-local state retained; independent plan/final LGTM and focused 12/12 tests |
-| `edgion-gateway/src/plugins/http/ext_proc/client.rs` | `plugins-http-ext-proc` | source | analysis-ready | B0283: unsupported effective TLS identity rejection candidate; refresh before serial promotion |
-| `edgion-gateway/src/plugins/http/ext_proc/mod.rs` | `plugins-http-ext-proc` | source | pending | — |
-| `edgion-gateway/src/plugins/http/ext_proc/mutation.rs` | `plugins-http-ext-proc` | source | pending | — |
+| `edgion-gateway/src/plugins/http/ext_proc/client.rs` | `plugins-http-ext-proc` | source | changed | B0283: reject unsupported effective TLS identity before cache/channel; independent plan/final LGTM, 11 exact tests and workspace gates passed |
+| `edgion-gateway/src/plugins/http/ext_proc/mod.rs` | `plugins-http-ext-proc` | source | analysis-ready | B0284: module exports and real nonnetwork test seam justified; no-change candidate |
+| `edgion-gateway/src/plugins/http/ext_proc/mutation.rs` | `plugins-http-ext-proc` | source | analysis-ready | B0285: canonical current URI projection preserves query; complex plan-first candidate |
 | `edgion-gateway/src/plugins/http/ext_proc/plugin.rs` | `plugins-http-ext-proc` | source | pending | — |
 | `edgion-gateway/src/plugins/http/ext_proc/response_streamed.rs` | `plugins-http-ext-proc` | source | pending | — |
 | `edgion-gateway/src/plugins/http/ext_proc/response_trailer.rs` | `plugins-http-ext-proc` | source | pending | — |

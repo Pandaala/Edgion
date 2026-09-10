@@ -166,6 +166,9 @@ impl ExtProcClient {
         } else {
             None
         };
+        if let Some(resolved) = resolved_tls.as_ref() {
+            validate_effective_tls_capabilities(resolved)?;
+        }
         let mut hasher = Sha256::new();
         hasher.update(normalized_authority.as_bytes());
         fingerprint_effective_tls(&mut hasher, resolved_tls.as_ref());
@@ -402,6 +405,24 @@ impl ExtProcStream {
         self.sender.take();
         self.drain_clean_eof("ext_proc clean half-close timed out").await
     }
+}
+
+/// Reject effective identity policies the ExtProc transport cannot enforce.
+/// Check after inheritance is resolved and before any target runtime is reused.
+fn validate_effective_tls_capabilities(resolved: &ResolvedOutboundTls) -> Result<(), String> {
+    if let Some(validation) = resolved.san.as_ref() {
+        if validation.hostname.is_some() {
+            return Err("ext_proc TLS validation.hostname is unsupported; remove the hostname override".to_string());
+        }
+        if validation
+            .subject_alt_names
+            .as_ref()
+            .is_some_and(|names| !names.is_empty())
+        {
+            return Err("ext_proc TLS validation.subjectAltNames is unsupported; remove the SAN policy".to_string());
+        }
+    }
+    Ok(())
 }
 
 /// Build a rustls [`ClientConfig`] for the ext_proc dial from the resolved
@@ -699,6 +720,257 @@ mod tests {
                 },
             },
             ..Default::default()
+        }
+    }
+
+    fn unsupported_identity_cases() -> Vec<(OutboundTlsValidation, bool, &'static str)> {
+        use edgion_resources::resources::backend_tls_policy::{SubjectAltName, SubjectAltNameType};
+
+        let hostname = OutboundTlsValidation {
+            hostname: Some("private-processor.example".to_string()),
+            ..Default::default()
+        };
+        let san = OutboundTlsValidation {
+            subject_alt_names: Some(vec![SubjectAltName {
+                san_type: SubjectAltNameType::Hostname,
+                hostname: Some("private-processor.example".to_string()),
+                uri: None,
+            }]),
+            ..Default::default()
+        };
+        let hostname_error = "ext_proc TLS validation.hostname is unsupported; remove the hostname override";
+        let san_error = "ext_proc TLS validation.subjectAltNames is unsupported; remove the SAN policy";
+        vec![
+            (hostname.clone(), true, hostname_error),
+            (
+                OutboundTlsValidation {
+                    hostname: Some(String::new()),
+                    ..Default::default()
+                },
+                true,
+                hostname_error,
+            ),
+            (san.clone(), true, san_error),
+            (
+                OutboundTlsValidation {
+                    hostname: hostname.hostname,
+                    ..san.clone()
+                },
+                true,
+                hostname_error,
+            ),
+            (san, false, san_error),
+        ]
+    }
+
+    #[test]
+    fn unsupported_tls_identity_is_rejected_during_construction() {
+        for (validation, verify, expected) in unsupported_identity_cases() {
+            let mut config = tls_cfg();
+            config.grpc_service.tls.outbound = OutboundTlsLocal {
+                verify: Some(verify),
+                validation: Some(validation),
+                ..Default::default()
+            };
+            assert_eq!(
+                ExtProcClient::new(&config).err().expect("identity policy must fail"),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn effective_tls_identity_guard_respects_inheritance_and_whole_block_override() {
+        use edgion_common::link_sys_core::outbound_tls::resolve_outbound_tls_with_defaults;
+        use edgion_resources::resources::common::OutboundTlsConfig;
+
+        for (validation, verify, expected) in unsupported_identity_cases() {
+            let defaults = OutboundTlsConfig {
+                verify,
+                validation: Some(validation),
+                ..Default::default()
+            };
+            let inherited =
+                resolve_outbound_tls_with_defaults(&OutboundTlsLocal::default(), None, None, true, &defaults)
+                    .expect("identity policy is preserved by the shared resolver");
+            assert_eq!(validate_effective_tls_capabilities(&inherited).unwrap_err(), expected);
+            if !verify {
+                assert!(
+                    inherited.verify,
+                    "a nonempty SAN policy forces verification before rejection"
+                );
+            }
+
+            // A local validation block replaces every field of the global block.
+            for subject_alt_names in [None, Some(Vec::new())] {
+                let local = OutboundTlsLocal {
+                    validation: Some(OutboundTlsValidation {
+                        subject_alt_names,
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                };
+                let replaced = resolve_outbound_tls_with_defaults(&local, None, None, true, &defaults).unwrap();
+                validate_effective_tls_capabilities(&replaced).unwrap();
+                assert_eq!(replaced.verify, verify);
+                assert_eq!(
+                    build_rustls_config(&replaced).unwrap().alpn_protocols,
+                    vec![b"h2".to_vec()]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn supported_effective_tls_policies_build_without_global_state_changes() {
+        use edgion_common::link_sys_core::outbound_tls::resolve_outbound_tls_with_defaults;
+        use edgion_resources::constants::secret_keys::tls as tls_keys;
+        use edgion_resources::resources::common::OutboundTlsConfig;
+        use k8s_openapi::api::core::v1::Secret;
+
+        let defaults = OutboundTlsConfig::default();
+        for verify in [true, false] {
+            for validation in [
+                None,
+                Some(OutboundTlsValidation::default()),
+                Some(OutboundTlsValidation {
+                    subject_alt_names: Some(Vec::new()),
+                    ..Default::default()
+                }),
+            ] {
+                let local = OutboundTlsLocal {
+                    verify: Some(verify),
+                    validation,
+                    ..Default::default()
+                };
+                let resolved = resolve_outbound_tls_with_defaults(&local, None, None, true, &defaults).unwrap();
+                validate_effective_tls_capabilities(&resolved).unwrap();
+                assert_eq!(resolved.verify, verify);
+                assert!(matches!(resolved.ca, EffectiveCa::System));
+                assert_eq!(
+                    build_rustls_config(&resolved).unwrap().alpn_protocols,
+                    vec![b"h2".to_vec()]
+                );
+            }
+        }
+
+        let identity = rcgen::generate_simple_self_signed(vec!["processor.example".to_string()]).unwrap();
+        let certificate = identity.cert.pem().into_bytes();
+        let secret = Secret {
+            data: Some(std::collections::BTreeMap::from([
+                (
+                    tls_keys::CA_CERT.to_string(),
+                    k8s_openapi::ByteString(certificate.clone()),
+                ),
+                (tls_keys::CERT.to_string(), k8s_openapi::ByteString(certificate.clone())),
+                (
+                    tls_keys::KEY.to_string(),
+                    k8s_openapi::ByteString(identity.signing_key.serialize_pem().into_bytes()),
+                ),
+            ])),
+            ..Default::default()
+        };
+        let mut local = OutboundTlsLocal {
+            verify: Some(true),
+            validation: Some(OutboundTlsValidation {
+                ca_certificate_refs: Some(vec![BackendTLSPolicyCACertificateRef {
+                    kind: "Secret".to_string(),
+                    name: "processor-ca".to_string(),
+                    group: String::new(),
+                    namespace: None,
+                }]),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let resolved = resolve_outbound_tls_with_defaults(
+            &local,
+            Some(std::slice::from_ref(&secret)),
+            Some(&secret),
+            true,
+            &defaults,
+        )
+        .unwrap();
+        validate_effective_tls_capabilities(&resolved).unwrap();
+        assert!(matches!(&resolved.ca, EffectiveCa::Custom(bundles) if bundles == &vec![certificate]));
+        assert!(resolved.client_identity.is_some());
+        let config = build_rustls_config(&resolved).unwrap();
+        assert_eq!(config.alpn_protocols, vec![b"h2".to_vec()]);
+        assert!(config.client_auth_cert_resolver.has_certs());
+
+        local.verify = Some(false);
+        let unverified = resolve_outbound_tls_with_defaults(
+            &local,
+            Some(std::slice::from_ref(&secret)),
+            Some(&secret),
+            true,
+            &defaults,
+        )
+        .unwrap();
+        validate_effective_tls_capabilities(&unverified).unwrap();
+        assert!(!unverified.verify);
+        assert!(
+            unverified.client_identity.is_none(),
+            "canonical skip-verify omits mTLS identity"
+        );
+        let config = build_rustls_config(&unverified).unwrap();
+        assert_eq!(config.alpn_protocols, vec![b"h2".to_vec()]);
+        assert!(!config.client_auth_cert_resolver.has_certs());
+    }
+
+    #[tokio::test]
+    async fn unsupported_tls_identity_compilation_seals_generic_rejection_for_both_failure_modes() {
+        use crate::plugins::http::compile_plugins;
+        use crate::plugins::runtime::log::PluginLog;
+        use crate::plugins::runtime::traits::session::MockPluginSession;
+        use edgion_resources::filters::PluginRunningResult;
+        use edgion_resources::resources::edgion_plugins::{EdgionPlugin, EdgionPluginsSpec, RequestFilterEntry};
+        use edgion_resources::resources::EdgionPlugins;
+
+        for failure_mode_allow in [false, true] {
+            for (validation, verify, _) in unsupported_identity_cases() {
+                let mut config = tls_cfg();
+                config.failure_mode_allow = failure_mode_allow;
+                config.grpc_service.tls.outbound = OutboundTlsLocal {
+                    verify: Some(verify),
+                    validation: Some(validation),
+                    ..Default::default()
+                };
+                let resource = EdgionPlugins {
+                    metadata: Default::default(),
+                    spec: EdgionPluginsSpec {
+                        request_plugins: Some(vec![RequestFilterEntry::new(EdgionPlugin::ExtProc(config))]),
+                        ..Default::default()
+                    },
+                    status: None,
+                };
+                let compiled = compile_plugins(&resource);
+                assert!(!compiled.is_activatable);
+                assert!(!compiled.retain_previous_on_invalid_update);
+                assert_eq!(
+                    compiled.preparse_errors,
+                    vec!["requestPlugins[0] (ExtProc): plugin construction failed"]
+                );
+                let first = compiled
+                    .plugin_runtime
+                    .request_plugins_iter()
+                    .next()
+                    .expect("sealed reject");
+                assert_eq!(first.name(), "RejectInvalidConfig");
+                let result = first
+                    .run_request(
+                        &mut MockPluginSession::new(),
+                        &mut PluginLog::new("RejectInvalidConfig"),
+                    )
+                    .await;
+                match result {
+                    PluginRunningResult::ErrResponse { status, body } => {
+                        assert_eq!(status, 500);
+                        assert_eq!(body.unwrap().as_ref(), br#"{"message":"plugin configuration error"}"#);
+                    }
+                    _ => panic!("invalid TLS identity policy must reject before request processing"),
+                }
+            }
         }
     }
 

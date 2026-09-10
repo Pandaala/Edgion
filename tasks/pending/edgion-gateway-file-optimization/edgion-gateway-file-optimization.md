@@ -10,10 +10,10 @@
 | Priority | P1 |
 | Baseline commit | `d484e580` |
 | Scope | Every tracked file under `edgion-gateway/` |
-| Campaign status | in-progress at HEAD `b297af6e`: B0282 independently reviewed and verified, pending local commit. |
-| Coverage | 550 current Gateway files: 238 changed, 181 examined-no-change, 14 deferred, 117 non-terminal; 3 historical rows are removed. External 9b787978..b297af6e reopened thirteen terminal files; earlier reopens remain pending. Historical evidence is retained. |
-| Active batch | B0282 at local commit gate. Automatic local commits, never push. |
-| Analysis queue | B0283 ExtProc client analysis-ready; refresh after B0282 commit before promotion. D0127–D0149 track separate work; external task removals are retired only in coordinator records. |
+| Campaign status | in-progress at HEAD `bd84aa15`: B0283 independently reviewed and verified, pending local commit. |
+| Coverage | 550 current Gateway files: 239 changed, 181 examined-no-change, 14 deferred, 116 non-terminal; 3 historical rows are removed. External 9b787978..b297af6e reopened thirteen terminal files; earlier reopens remain pending. Historical evidence is retained. |
+| Active batch | B0283 at local commit gate. Automatic local commits, never push. |
+| Analysis queue | B0284 module and B0285 mutation analysis-ready; refresh at promotion. D0127–D0151 track separate work; external task removals are retired only in coordinator records. |
 | Integration freeze | 3,265 files. External 9b787978..b297af6e M1/A1 verified against old/new Git objects and worktree bytes/mode. Prior reconciliations retained; complete guard passes. Campaign made no integration-test edit. |
 
 ## AI guide summary

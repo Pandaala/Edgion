@@ -220,3 +220,5 @@ These entries are backlinks only. A linked `tasks/todo` file is the editable sou
 | Correct DSL bytecode deserialization knowledge (D0147) | pending | [task](../../../todo/correct-dsl-bytecode-deserialization-safety-knowledge.md) |
 | Terminalize ExtProc owner on body publication failure (D0148) | pending | [task](../../../todo/ext-proc-terminalize-owner-on-request-body-publication-failure.md) |
 | Correct ExtProc phase exchange knowledge (D0149) | pending | [task](../../../todo/correct-ext-proc-phase-exchange-knowledge.md) |
+| Add ExtProc unsupported TLS policy recovery integration (D0150) | pending | [task](../../../todo/add-ext-proc-unsupported-tls-policy-recovery-integration.md) |
+| Isolate ExtProc live stream unit tests (D0151) | pending | [task](../../../todo/isolate-ext-proc-live-stream-unit-tests.md) |

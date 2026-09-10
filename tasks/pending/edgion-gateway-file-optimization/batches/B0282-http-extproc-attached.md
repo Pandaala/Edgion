@@ -1,6 +1,6 @@
 # B0282 — HTTP ExtProc Attached
 
-- Pipeline state: terminal; changed, verified and pending local commit.
+- Pipeline state: terminal; changed, committed as `bd84aa15`.
 - Active anchor: `edgion-gateway`; baseline `9b787978`, refreshed from `f8c265eb` with unchanged ExtProc code.
 - Target: `edgion-gateway/src/plugins/http/ext_proc/attached.rs`.
 - Analyst: `b0282_extproc_attached_analysis`; change. Prepare immutable normalized override modes once and share Arc<[ProcessingMode]> with each attached owner, removing enabled-override per-request Vec allocation/copy/normalization/free. No measured throughput claim.
@@ -44,4 +44,4 @@
 
 - Current b297af6e plus reviewed diff: attached tests 9/9 and three exact plugin tests passed; no live gRPC or integration tests executed.
 - Workspace check passed (50.55s); Clippy passed (54.29s, existing warnings); formatting/format check, documentation, SSA, metrics, Pingora source, Gateway no-tracing, English, frozen paths and whitespace checks passed.
-- Technical scope remained the two approved files; plugin.rs remains pending full coverage. Ledger and changelog updated. Commit pending; never push.
+- Technical scope remained the two approved files; plugin.rs remains pending full coverage. Ledger and changelog updated. Commit `bd84aa15`; never push.
