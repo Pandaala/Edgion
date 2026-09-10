@@ -6,13 +6,13 @@
 
 EdgionDSL 的沙盒设计遵循以下核心原则：
 
-**最小能力原则**：脚本在初始状态下没有文件系统访问、没有环境变量读取、没有进程管理操作。所有与网关上下文的交互（读取请求头、拒绝请求等）都必须通过经过审计的内置函数完成，这些函数的行为是可预期且有边界的。出站网络访问仅通过 `http.call()` 内置函数提供，并受到严格的超时限制、响应体大小限制，以及可选的 SSRF 防护（`httpBlockPrivateIps`）。
+**最小能力原则**：脚本在初始状态下没有文件系统访问、没有环境变量读取、没有进程管理操作。所有与网关上下文的交互（读取请求头、拒绝请求等）都必须通过经过审计的内置函数完成，这些函数的行为是可预期且有边界的。出站 HTTP 访问通过 `http.call()` 提供，受到超时限制、响应体大小限制以及可选的 SSRF 防护（`httpBlockPrivateIps`）。Redis 访问则通过 `redis.*` 使用显式配置的 LinkSys 引用。
 
 **纵深防御**：安全保障分为两层。编译期校验在脚本加载时静态检查指令数、变量数、常量池大小等结构性限制，拒绝编译过于复杂或恶意构造的脚本；运行时限制在每次请求执行时动态追踪执行步数、循环迭代次数、函数调用次数等，防止脚本在运行时超出预期资源消耗。两层保护相互补充，单层失效不会导致整体失守。
 
-**Panic 隔离**：VM 的执行函数使用 `std::panic::catch_unwind` 包裹。即使 VM 内部出现不可预期的 panic，也不会传播到网关主进程，网关会根据配置的 `errorPolicy` 优雅降级并记录 panic 信息，以便排查。
+**Panic 隔离**：`execute_safe` 在异步 VM 执行边界捕获展开式 panic，丢弃 panic 载荷，仅记录固定分类 `vm panic`，然后应用配置的 `errorPolicy`。
 
-**可观测性**：每次执行错误、资源超限或 panic 都会产生结构化日志，包含脚本名称、错误类型和触发原因，便于在生产环境中定位问题。
+**可观测性**：运行时失败在 `PluginLog` 中使用固定分类，并通过请求访问日志输出。VM 失败条目不包含 panic 载荷、脚本名称或触发值。例如，API 失败记录 `api error`，请求体硬失败记录 `request body access error`。
 
 ## 运行时资源限制
 
@@ -92,7 +92,7 @@ spec:
 
 ## 编译期校验
 
-脚本在加载时（`source` 模式下为首次请求到达时编译，`bytecode` 模式下为网关启动时验证）会执行编译期校验。以下限制在编译阶段静态检查，不通过则拒绝加载脚本。
+脚本在加载时（配置加载期间编译 `source` 或验证 `bytecode`）会执行编译期校验。以下限制在编译阶段静态检查，不通过则拒绝加载脚本。
 
 | 限制 | 默认值 | 说明 |
 |------|--------|------|
@@ -128,11 +128,11 @@ errorPolicy:
 
 **ignore（默认）**
 
-脚本出错时，忽略错误并继续正常转发请求，就像脚本没有执行一样。这是 fail-open 策略，适合用于非关键性的增强逻辑（如注入调试头、记录上下文信息）。使用该策略时，脚本错误不会影响请求的正常处理，但会产生错误日志。
+脚本出错时，`ignore` 记录固定错误分类，并继续执行下一个插件。失败前已完成的头部或上下文修改不会回滚。这种 fail-open 策略适用于非关键增强逻辑，但不能放行 `BodyAccess` 失败。
 
-注意：`ignore` 策略仅对非预期错误生效。如果脚本主动调用 `deny()` 或 `terminate()`，该调用是脚本的正常逻辑，不受 `errorPolicy` 影响，会按照 `deny()` 和 `terminate()` 的语义执行。
+显式调用 `deny()`、`terminate()` 和 `grpc_error()` 的结果始终按照各自语义处理，不受 `errorPolicy` 影响。
 
-请求体存储、扫描预算、范围和修改失败会在内部归类为 `BodyAccess`。无论 `errorPolicy` 如何配置，这类错误都固定 fail-close：返回 HTTP 500 和客户端消息 `Request body processing failed`。这是不可配置的安全边界，不是第四种 DSL 可配置策略，也不是新增的项目级失败策略形态；具体错误只写入日志，不返回给客户端。
+请求体存储、扫描预算、范围、修改以及不透明 Body 上传读取失败在内部归类为 `BodyAccess`。这类错误绕过 `errorPolicy`，固定返回 HTTP 500 拒绝结果，客户端消息为 `Request body processing failed`（gRPC 按正常终止响应规则映射）。该 VM 失败仅记录 `request body access error`，不包含操作细节。这是固定安全边界，不是另一种可配置策略。
 
 **deny**
 
@@ -161,21 +161,19 @@ errorPolicy:
 | `StringTooLong` | 字符串过长 | 字符串拼接结果超过 `maxStringLen` |
 | `RegexError` | 正则错误 | 正则解析或执行失败 |
 | `ApiError` | API 调用或参数校验失败 | 包括 PluginSession 异常、`http.call()` 的 URL/方法/Header 无效，或直接 IP 字面量被 SSRF 预检查拒绝；连接时被拒绝的 DNS 解析地址返回 `status = 0` |
-| `BodyAccess` | 请求体存储、扫描、范围、修改或 `http.call` 流式发送失败 | 绕过 `errorPolicy`，固定返回通用 fail-close 响应 |
+| `BodyAccess` | 请求体存储、扫描、范围、修改或不透明 Body 上传读取失败 | 绕过 `errorPolicy`，固定返回通用 fail-close 响应 |
 
 `TypeError` 是最常见的运行时错误，通常由脚本逻辑处理了可能为 `nil` 的值（如请求头不存在时对其进行字符串操作）。建议在脚本中对从外部读取的值（`req.header()`、`ctx.get()` 等）进行 `nil` 检查。
 
-`ApiError` 发生在内置函数与网关内部接口交互失败时。这类错误通常是临时性的，在 `ignore` 策略下不会影响请求。
+`ApiError` 包括网关接口失败和无效参数，不一定是临时错误。它遵循 `errorPolicy`，VM 失败日志仅保留固定分类 `api error`。
+
+出站 `http.call()` 的传输或响应流失败、响应体超限以及受限响应转换失败，均返回原子失败 Map `{status: 0, body: "", headers: {}}`。不会返回部分响应，也不会触发 `errorPolicy`。响应体上限为 `min(httpMaxResponseBodyBytes, maxStringLen)`。不透明请求 `Body` 的读取或上传计量失败则不同：它会产生 `BodyAccess`，始终 fail-close。返回值契约见 [http.call](./api-reference.md#httpcall)。
 
 ## Panic 隔离
 
-VM 的 `execute_safe` 函数使用 Rust 标准库的 `std::panic::catch_unwind` 包裹整个执行过程。这意味着：
+`execute_safe` 在两个执行阶段都使用异步 `catch_unwind` 边界包裹完整 VM Future。捕获的展开式 panic 不会传播给调用方。panic 载荷会被丢弃；该边界唯一记录的 panic 诊断是在 `PluginLog` 中写入 `vm panic`，随后应用配置的 `errorPolicy`。它不会附加 panic 消息、脚本名称或触发细节。
 
-- 即使 VM 内部因为不可预期的状态触发 panic，该 panic 也不会向上传播到网关的请求处理主流程
-- panic 被 `catch_unwind` 捕获后，VM 将其转化为一个执行错误，再根据当前配置的 `errorPolicy` 决定后续行为
-- 网关会记录 panic 的详细信息（包括 panic 消息和脚本名称）到错误日志，便于排查
-
-Panic 隔离是最后一道防线，在正常的脚本逻辑和运行时错误处理均无法覆盖某个边界情况时提供保护。对于经过充分测试的脚本，在正常负载下不应触发此机制。
+此边界是兜底保护，不能替代可失败内置函数应返回的类型化错误。它捕获展开式 panic，不捕获进程中止。
 
 ## 正则表达式安全
 

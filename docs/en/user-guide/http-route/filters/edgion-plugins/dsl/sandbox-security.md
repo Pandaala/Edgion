@@ -6,13 +6,13 @@ This document describes the security mechanisms of the EdgionDSL script executio
 
 The EdgionDSL sandbox is built on the following core principles:
 
-**Minimal-capability by default**: Scripts start with no filesystem access, no environment variable reads, and no process management. All interactions with the gateway context (reading request headers, rejecting requests, etc.) must go through audited built-in functions whose behavior is well-defined and bounded. Outbound network access is available exclusively through the `http.call()` built-in, which enforces strict timeouts, response size limits, and an optional SSRF guard (`httpBlockPrivateIps`).
+**Minimal-capability by default**: Scripts start with no filesystem access, no environment variable reads, and no process management. All interactions with the gateway context (reading request headers, rejecting requests, etc.) must go through audited built-in functions whose behavior is well-defined and bounded. Outbound HTTP access uses `http.call()`, which enforces timeouts, response size limits, and an optional SSRF guard (`httpBlockPrivateIps`). Redis access uses `redis.*` through explicitly configured LinkSys references.
 
 **Defense in depth**: Security is enforced at two layers. Compile-time validation statically checks structural constraints — instruction count, variable count, constant pool size, and so on — when a script is loaded, rejecting scripts that are overly complex or maliciously crafted. Runtime limits dynamically track execution steps, loop iterations, and function call counts on every request, preventing scripts from exceeding expected resource consumption at runtime. The two layers are complementary; a failure in one does not compromise the other.
 
-**Panic isolation**: The VM's execution function wraps the entire run in `std::panic::catch_unwind`. Even if an unexpected panic occurs inside the VM, it will not propagate to the gateway's main request-handling process. The gateway gracefully degrades according to the configured `errorPolicy` and records the panic details for post-mortem analysis.
+**Panic isolation**: `execute_safe` catches unwinding panics across asynchronous VM execution, discards the panic payload, records only the fixed `vm panic` classification, and applies the configured `errorPolicy`.
 
-**Observability**: Every execution error, resource limit breach, or panic produces a structured log entry containing the script name, error type, and triggering cause, making it straightforward to diagnose issues in production.
+**Observability**: Runtime failures use fixed classifications in `PluginLog`, carried by the request access log. The VM failure entry does not include panic payloads, script names, or triggering values. For example, API failures record `api error`, and request-body hard failures record `request body access error`.
 
 ## Runtime Resource Limits
 
@@ -99,7 +99,7 @@ Using the default values is recommended for production. Only raise a specific li
 
 ## Compile-Time Validation
 
-When a script is loaded — compiled on first request in `source` mode, or validated at gateway startup in `bytecode` mode — compile-time validation is performed. The following limits are checked statically at compile time; a script that fails any of them is rejected and will not be loaded.
+When a script is loaded — compiled from `source` or validated from `bytecode` during configuration loading — compile-time validation is performed. The following limits are checked statically at compile time; a script that fails any of them is rejected and will not be loaded.
 
 | Limit | Default | Description |
 |-------|---------|-------------|
@@ -135,11 +135,11 @@ errorPolicy:
 
 **ignore (default)**
 
-When a script fails, the error is silently discarded and the request continues to be forwarded normally, as if the script had not run. This is a fail-open policy, suitable for non-critical enhancement logic (such as injecting debug headers or recording context information). Script errors do not affect normal request processing under this policy, but they are still written to the error log.
+When a script fails, `ignore` records its fixed error classification and continues to the next plugin. It does not roll back header or context changes made before the failure. This fail-open policy is suitable for non-critical enhancement logic; it does not soften `BodyAccess` failures.
 
-Note: The `ignore` policy applies only to unexpected errors. If a script explicitly calls `deny()` or `terminate()`, those calls are part of the script's normal logic and are not affected by `errorPolicy` — they execute with their defined semantics regardless.
+Explicit `deny()`, `terminate()`, and `grpc_error()` results retain their normal semantics regardless of `errorPolicy`.
 
-Request-body storage, scan-budget, range, and mutation failures are classified internally as `BodyAccess`. They always fail closed with HTTP 500 and the fixed client body `Request body processing failed`, regardless of `errorPolicy`. This is a hard safety boundary, not a fourth configurable DSL policy or a new project-wide failure-policy shape; operational detail is logged without being returned to the client.
+Request-body storage, scan-budget, range, mutation, and opaque-Body upload/read failures are classified internally as `BodyAccess`. They bypass `errorPolicy` and return the fixed HTTP 500 denial with client body `Request body processing failed` (gRPC delivery follows the normal terminal-response mapping). Only `request body access error` is recorded for this VM failure, without operational detail. This is a fixed safety boundary, not another configurable policy.
 
 **deny**
 
@@ -169,21 +169,19 @@ boundary described below.
 | `StringTooLong` | String length limit exceeded | Concatenation result exceeds `maxStringLen` |
 | `RegexError` | Regex failure | Regex parsing or execution failed |
 | `ApiError` | API call or argument validation failed | Includes PluginSession failures and invalid URL/method/headers or a direct IP literal rejected by the `http.call()` SSRF precheck; a DNS-resolved address rejected at dial time returns `status = 0` |
-| `BodyAccess` | Request-body storage, scan, range, mutation, or `http.call` streaming failure | Fixed generic fail-close response; bypasses `errorPolicy` |
+| `BodyAccess` | Request-body storage, scan, range, mutation, or opaque-Body upload/read failure | Fixed generic fail-close response; bypasses `errorPolicy` |
 
 `TypeError` is the most common runtime error, typically arising when a script operates on a value that may be `nil` — for example, performing string operations on a request header that does not exist. It is recommended to perform `nil` checks on values read from external sources (such as `req.header()` and `ctx.get()`) within the script.
 
-`ApiError` occurs when a built-in function fails to interact with the gateway's internal interfaces. These errors are generally transient and will not affect the request under the `ignore` policy.
+`ApiError` includes host-interface failures and invalid arguments; it need not be transient. It follows `errorPolicy`, retaining only the fixed `api error` classification in the VM failure log.
+
+Outbound `http.call()` transport or response-stream failures, response-body overflow, and invalid bounded response conversion return the atomic failure map `{status: 0, body: "", headers: {}}`. They return no partial response and do not invoke `errorPolicy`. The response body cap is `min(httpMaxResponseBodyBytes, maxStringLen)`. This differs from an opaque request `Body` read or upload-accounting failure, which raises `BodyAccess` and always fails closed. See [http.call](./api-reference.md#httpcall) for the result contract.
 
 ## Panic Isolation
 
-The VM's `execute_safe` function wraps the entire execution in Rust's `std::panic::catch_unwind`. This means:
+`execute_safe` uses an asynchronous `catch_unwind` boundary around the complete VM future in both execution phases. A captured unwinding panic does not escape into the caller. The panic payload is discarded; the only panic diagnostic it records is `vm panic` in `PluginLog`, followed by the configured `errorPolicy`. It does not attach the panic message, script name, or trigger details.
 
-- Even if an unexpected internal state triggers a panic inside the VM, that panic will not propagate upward to the gateway's main request-handling flow.
-- Once `catch_unwind` captures the panic, the VM converts it into an execution error, which is then handled according to the currently configured `errorPolicy`.
-- The gateway logs the panic details — including the panic message and script name — to the error log for diagnostic purposes.
-
-Panic isolation is the last line of defense, providing protection when neither normal script logic nor standard runtime error handling covers an edge case. For well-tested scripts under normal load, this mechanism should never be triggered.
+This boundary is a fallback, not a replacement for returning typed errors from fallible built-ins. It catches unwinding panics, not process aborts.
 
 ## Regex Security
 

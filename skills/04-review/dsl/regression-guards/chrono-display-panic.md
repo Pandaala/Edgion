@@ -15,7 +15,7 @@ In DSL builtins (data-plane code), do not call `.to_string()` on any `T: Display
 
 Suggestions of the form "`.to_string()` is fine because chrono usually succeeds" or "wrap it in `catch_unwind`" are **not accepted**:
 - `.to_string()` panics any time `Display::fmt` returns `Err(fmt::Error)` (e.g. chrono `DelayedFormat::fmt` for an unknown `%`-specifier).
-- `catch_unwind` masks a class of latent crashes but converts them into opaque internal errors — `write!` is shorter, has no overhead, and preserves the original error variant.
+- The current `execute_safe` boundary catches unwinding VM panics, but discards the payload and records only `vm panic`. The builtin must still use `write!` to preserve its `ApiError` contract and avoid unwinding; the boundary is fallback protection, not a substitute for fallible formatting.
 
 ## Core Rationale
 
@@ -56,7 +56,24 @@ match write!(formatted, "{}", dt.format(&format)) {  // Err is propagated, not p
 
 **3. Why this matters for the data plane**
 
-Gateway worker threads have no top-level `catch_unwind` for VM execution. A panic inside `vm.execute().await` propagates through `block_on` and crashes the worker. Even on `DslErrorPolicy::Ignore` (the default), the panic path is distinct from the `ApiError` path: `Ignore` only swallows the latter. So `to_string()` panics short-circuit the policy contract.
+Both `DslPlugin::run_request` and `run_upstream_response_filter` call
+`execute_safe` (`edgion-gateway/src/plugins/http/dsl/lang/vm.rs`). That function
+wraps the VM future in `AssertUnwindSafe(...).catch_unwind().await`. A captured
+unwinding panic does not escape the VM boundary: its payload is discarded,
+`PluginLog` receives only the fixed `vm panic` classification, and
+`apply_error_policy` applies `Ignore`, `Deny`, or `DenyWith`. The VM diagnostic
+does not include the panic message, script name, or trigger details.
+
+The earlier claim that VM execution had no top-level panic boundary and that
+`Ignore` could not handle a captured panic is superseded by this implementation.
+The formatting rule remains: invalid chrono formats must produce
+`RuntimeError::ApiError` without unwinding. `execute_safe` records the fixed
+`api error` classification for that result; it does not copy the internal
+error message (which can contain the supplied format) into `PluginLog`.
+
+This distinction preserves the builtin's typed error contract and avoids
+relying on panic handling for expected invalid input. The async boundary
+catches unwinding panics, not process aborts.
 
 ## Other suspect call sites
 
@@ -73,11 +90,13 @@ For types whose `Display::fmt` is provably infallible (returns `Ok(())` uncondit
 Re-open this decision only if:
 
 - chrono ships a version where `DelayedFormat::fmt` validates the format string up front (turning silent `Err` into a constructor error), making the panic theoretically unreachable for the chrono case specifically.
-- A `tracing`-free top-level `catch_unwind` is added around `vm.execute` so the worker-crash concern goes away (then panic-vs-`Err` becomes a code-style question rather than an availability hazard).
+- VM execution entry points stop calling `execute_safe`, or its panic classification/error-policy contract changes. Recheck the boundary independently; do not replace typed builtin errors with intentional panics.
 
 ## Reference Cases
 
 - Fix commit: `BuiltinId::TimeFormat` rewrite (`lang/builtins.rs`), 2026-05.
 - Lock-in test: `tests/p3_utility_tests.rs::test_time_format_invalid_specifier_returns_api_error`.
-- Related contract: [[builtin-error-semantics]] documents which DSL builtins are allowed to raise `ApiError` vs return nil.
+- Related contract: [builtin error semantics](../../../03-coding/dsl/builtin-error-semantics.md) documents which DSL builtins are allowed to raise `ApiError` vs return nil.
+- Current boundary evidence (source inspection, not a fresh test run): `plugin.rs` request and response entry points, plus `lang/vm.rs::execute_safe` and `apply_error_policy`.
+- The existing invalid-specifier unit test verifies `ApiError`; it does not itself test the outer panic boundary.
 - User-facing doc: `docs/en/user-guide/http-route/filters/edgion-plugins/dsl/api-reference.md` `time_format` section, which now states "an invalid format specifier raises a runtime error".
