@@ -75,6 +75,9 @@ pub enum KeyGet {
     /// No additional parameters needed.
     DirectPeerIp,
 
+    /// Standard W3C trace ID as 32 lowercase hexadecimal characters.
+    TraceId,
+
     /// Normalized request hostname (lowercased, port-stripped, trailing FQDN dot removed).
     /// No additional parameters needed.
     Host,
@@ -132,6 +135,7 @@ impl KeyGet {
             KeyGet::RemoteIp => "remote-ip".to_string(),
             KeyGet::DirectPeerIp => "direct-peer-ip".to_string(),
             KeyGet::Host => "host".to_string(),
+            KeyGet::TraceId => "trace-id".to_string(),
             KeyGet::Header { name } => format!("hdr:{}", name),
             KeyGet::Cookie { name } => format!("cookie:{}", name),
             KeyGet::Query { name } => format!("query:{}", name),
@@ -149,6 +153,7 @@ impl KeyGet {
             KeyGet::RemoteIp => "remoteIp",
             KeyGet::DirectPeerIp => "directPeerIp",
             KeyGet::Host => "host",
+            KeyGet::TraceId => "traceId",
             KeyGet::Header { .. } => "header",
             KeyGet::Cookie { .. } => "cookie",
             KeyGet::Query { .. } => "query",

@@ -190,6 +190,7 @@ impl KeyAuthConfig {
                 KeyGet::RemoteIp
                 | KeyGet::DirectPeerIp
                 | KeyGet::Host
+                | KeyGet::TraceId
                 | KeyGet::Path
                 | KeyGet::Method
                 | KeyGet::RemoteIpAndPath

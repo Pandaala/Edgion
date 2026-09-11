@@ -30,14 +30,14 @@ pub struct AcceptedResult {
 }
 
 /// Return the validation error for an EdgionPlugins backend filter whose
-/// desired resource declares the request-wide WAF.
+/// desired resource declares a plugin unavailable at backend scope.
 ///
 /// Backend filters execute only after backend selection, which is too late to
 /// participate in the Global/Gateway/Route WAF ownership election. The raw
 /// desired generation is intentional: EdgionPlugins requeues dependents before
 /// its processed cache is replaced, so the cache may still contain the prior
 /// generation during this route reconcile.
-pub(super) fn backend_waf_extension_ref_error(
+pub(super) fn backend_request_scope_extension_ref_error(
     runtime: &ControllerRuntime,
     route_namespace: &str,
     backend_index: usize,
@@ -53,9 +53,15 @@ pub(super) fn backend_waf_extension_ref_error(
     let plugins = processor
         .get_raw_any(&key)
         .and_then(|raw| raw.downcast::<EdgionPlugins>().ok())?;
-    plugins.spec.waf.as_ref()?;
+    let plugin = if plugins.spec.waf.is_some() {
+        "WAF"
+    } else if plugins.has_active_request_id() {
+        "RequestId"
+    } else {
+        return None;
+    };
     Some(format!(
-        "backendRefs[{backend_index}] EdgionPlugins ExtensionRef cannot contain WAF; attach WAF at Global, Gateway, or Route scope"
+        "backendRefs[{backend_index}] EdgionPlugins ExtensionRef cannot contain {plugin}; attach {plugin} at Global, Gateway, or Route scope"
     ))
 }
 
@@ -768,6 +774,43 @@ fn hostname_intersection<'a>(a: &'a str, b: &'a str) -> Option<&'a str> {
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn backend_request_id_rejects_only_active_entries() {
+        use super::*;
+        use crate::conf_mgr::sync_runtime::resource_processor::handlers::EdgionPluginsHandler;
+        use crate::conf_mgr::sync_runtime::resource_processor::{LocalRawStore, ResourceProcessor};
+
+        let runtime = Arc::new(ControllerRuntime::default());
+        let processor = Arc::new(ResourceProcessor::<EdgionPlugins>::new(
+            "EdgionPlugins",
+            16,
+            Arc::new(EdgionPluginsHandler::new()),
+            runtime.clone(),
+        ));
+        let raw = Arc::new(LocalRawStore::new());
+        processor.set_raw_store(raw.clone());
+        runtime.processor_registry.register(processor);
+        let reference: LocalObjectReference = serde_json::from_value(serde_json::json!({
+            "group": "edgion.io", "kind": "EdgionPlugins", "name": "ids"
+        }))
+        .unwrap();
+        for enabled in [true, false, true] {
+            let plugins: EdgionPlugins = serde_json::from_value(serde_json::json!({
+                "apiVersion": "edgion.io/v1", "kind": "EdgionPlugins",
+                "metadata": {"namespace": "apps", "name": "ids"},
+                "spec": {"requestPlugins": [{"type": "RequestId", "enable": enabled, "config": {}}]}
+            }))
+            .unwrap();
+            raw.upsert("apps/ids".to_string(), Arc::new(plugins));
+            let error = backend_request_scope_extension_ref_error(&runtime, "apps", 2, &reference);
+            assert_eq!(error.is_some(), enabled);
+            if let Some(error) = error {
+                assert!(error.contains("backendRefs[2]"));
+                assert!(error.contains("cannot contain RequestId"));
+            }
+        }
+    }
+
     use super::*;
     use edgion_resources::resources::gateway::{AllowedRoutes, RouteNamespaces};
 

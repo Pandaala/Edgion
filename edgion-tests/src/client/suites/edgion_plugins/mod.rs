@@ -53,11 +53,11 @@ mod rate_limit_redis;
 mod real_ip;
 mod region_route;
 mod request_access_policy;
+mod request_id;
 mod request_mirror;
 mod request_restriction;
 mod resolved_refs;
 mod response_rewrite;
-mod trace_context;
 mod waf;
 mod wasm;
 mod webhook_key_get;
@@ -138,11 +138,11 @@ pub use request_access_policy::{
     RequestAccessPolicyHmacDynamicDeletedTestSuite, RequestAccessPolicyHmacDynamicInitialTestSuite,
     RequestAccessPolicyHmacDynamicUpdatedTestSuite, RequestAccessPolicyTestSuite,
 };
+pub use request_id::RequestIdPluginTestSuite;
 pub use request_mirror::RequestMirrorTestSuite;
 pub use request_restriction::RequestRestrictionTestSuite;
 pub use resolved_refs::ResolvedRefsTestSuite;
 pub use response_rewrite::ResponseRewriteTestSuite;
-pub use trace_context::TraceContextPluginTestSuite;
 pub use waf::{
     WafDynamicDeletedTestSuite, WafDynamicInitialTestSuite, WafDynamicRecoveredTestSuite, WafDynamicUpdatedTestSuite,
 };

@@ -507,9 +507,9 @@ count_shutdown_records() {
     local file="$1"
     [ -f "$file" ] || { echo "0"; return; }
     jq -rs '
-        [range(1; 6) | "otlp-shutdown-\(.)"] as $expected |
+        [range(1; 6) | "4bf92f3577b34da6a3ce929d0e0e473\(.)"] as $expected |
         [.[].resourceLogs[].scopeLogs[].logRecords[].body.stringValue |
-         fromjson | .request_info["x-trace-id"] |
+         fromjson | .request_info.trace_id.w3c.trace_id |
          select(. as $id | $expected | index($id))] | unique | length
     ' "$file" 2>/dev/null || echo "0"
 }
@@ -517,7 +517,7 @@ count_shutdown_records() {
 for i in $(seq 1 5); do
     if ! curl --max-time 5 -sf "${GATEWAY_PROXY}/health" \
         -H "Host: otlp-gateway.edgion-test.example.com" \
-        -H "x-trace-id: otlp-shutdown-${i}" -o /dev/null; then
+        -H "traceparent: 00-4bf92f3577b34da6a3ce929d0e0e473${i}-0123456789abcdef-00" -o /dev/null; then
         log_error "Shutdown batch request ${i} failed"
         exit 1
     fi

@@ -81,11 +81,15 @@ impl AttachedGuardrail {
     /// Freeze the local rejection header from the final post-onion response.
     /// Only gateway-owned identity/security fields are retained; origin entity
     /// metadata cannot describe the replacement body.
-    pub(crate) fn prepare_head_replacement(&self, original: &ResponseHeader) {
+    pub(crate) fn prepare_head_replacement(
+        &self,
+        original: &ResponseHeader,
+        trace_id: &crate::request_trace_id::RequestTraceId,
+    ) {
         let Ok(mut header) = ResponseHeader::build(StatusCode::FORBIDDEN, Some(6)) else {
             return;
         };
-        for name in ["server", "strict-transport-security", "x-trace-id"] {
+        for name in ["server", "strict-transport-security"] {
             if let Some(value) = original.headers.get(name) {
                 let _ = header.insert_header(name, value.clone());
             }
@@ -93,6 +97,7 @@ impl AttachedGuardrail {
         let _ = header.insert_header("content-type", "application/json");
         let _ = header.insert_header("cache-control", "no-store");
         let _ = header.insert_header("content-length", GUARDRAIL_REJECTED_JSON.len().to_string());
+        trace_id.reconcile_response(&mut header);
         let _ = self.replacement_header.set(header);
     }
 
@@ -158,6 +163,32 @@ impl AttachedGuardrail {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn request_id_held_head_replacement_preserves_custom_echo_and_suppression() {
+        let mut ids = crate::request_trace_id::RequestTraceId::default();
+        ids.initialize(&http::HeaderMap::new());
+        ids.apply_default_patch(&edgion_resources::DefaultIdConfig {
+            enabled: Some(false),
+            ..Default::default()
+        });
+        let rule: edgion_resources::RequestIdRule = serde_json::from_value(serde_json::json!({
+            "header":"x-correlation-id", "source":{"type":"traceId"}
+        }))
+        .unwrap();
+        let compiled = crate::request_trace_id::CompiledRequestIdRule::new(&rule).unwrap();
+        let value = http::HeaderValue::from_str(ids.standard_trace_id().unwrap()).unwrap();
+        ids.apply_rule(&compiled, None, Some(value.clone()));
+        let mut original = pingora_http::ResponseHeader::build(200, None).unwrap();
+        original.insert_header("x-trace-id", "stale").unwrap();
+        let owner = super::AttachedGuardrail::new();
+        owner.prepare_head_replacement(&original, &ids);
+        let replacement = owner.replacement_header.get().unwrap();
+        assert_eq!(replacement.headers["x-correlation-id"], value);
+        assert!(!replacement.headers.contains_key("x-trace-id"));
+        assert!(!replacement.headers.contains_key("traceparent"));
+        assert_eq!(replacement.status.as_u16(), 403);
+    }
+
     use super::*;
 
     #[test]

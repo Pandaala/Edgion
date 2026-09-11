@@ -9,8 +9,7 @@ pub struct MirrorLogEntry {
     pub entry_type: &'static str,
     #[serde(rename = "ts")]
     pub timestamp: i64,
-    #[serde(rename = "x-trace-id")]
-    pub x_trace_id: String,
+    pub trace_id: String,
     pub target: String,
     pub status: &'static str,
     pub et: u64,
@@ -30,7 +29,7 @@ pub async fn emit_mirror_log(entry: MirrorLogEntry) {
 }
 
 pub fn new_entry(
-    x_trace_id: String,
+    trace_id: String,
     target: String,
     status: &'static str,
     et: u64,
@@ -41,7 +40,7 @@ pub fn new_entry(
     MirrorLogEntry {
         entry_type: "mirror",
         timestamp: Utc::now().timestamp_millis(),
-        x_trace_id,
+        trace_id,
         target,
         status,
         et,

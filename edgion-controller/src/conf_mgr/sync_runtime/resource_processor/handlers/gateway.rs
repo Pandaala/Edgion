@@ -2600,20 +2600,31 @@ fn validate_gateway_plugin_ref(gateway: &Gateway, runtime: &ControllerRuntime) -
         .as_ref()
         .and_then(|a| a.get(annotations::edgion::EDGION_PLUGINS))?;
     let gateway_ns = gateway.metadata.namespace.as_deref().unwrap_or("default");
-    let missing: Vec<String> = annotations::edgion::parse_plugin_ref_list(value, gateway_ns)
+    let errors: Vec<String> = annotations::edgion::parse_plugin_ref_list(value, gateway_ns)
         .into_iter()
-        .filter(|key| {
-            runtime
+        .flat_map(|key| {
+            let plugins = runtime
                 .processor_registry
                 .get("EdgionPlugins")
-                .and_then(|p| p.get_raw_any(key))
-                .is_none()
+                .and_then(|p| p.get_raw_any(&key))
+                .and_then(|raw| {
+                    raw.downcast::<edgion_resources::prelude_resources::EdgionPlugins>()
+                        .ok()
+                });
+            match plugins {
+                Some(plugins) => plugins
+                    .validate_request_id_early_attachment()
+                    .into_iter()
+                    .map(|error| format!("EdgionPlugins {key}: {error}"))
+                    .collect::<Vec<_>>(),
+                None => vec![format!("EdgionPlugins not found: {key}")],
+            }
         })
         .collect();
-    if missing.is_empty() {
+    if errors.is_empty() {
         None
     } else {
-        Some(format!("EdgionPlugins not found: {}", missing.join(", ")))
+        Some(errors.join("; "))
     }
 }
 

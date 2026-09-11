@@ -110,7 +110,7 @@ impl ExtensionRefFilter {
             Some(idx) => session.resolved_route_ext_ref(idx),
             None => session.pinned_backend_ext_ref(self.plugin_key()),
         }?;
-        if self.index.is_none() && runtime.has_waf() {
+        if self.index.is_none() && (runtime.has_waf() || runtime.has_request_id()) {
             return None;
         }
         Some(runtime)
@@ -154,8 +154,8 @@ impl ExtensionRefFilter {
             },
         };
 
-        if self.index.is_none() && plugin_runtime.has_waf() {
-            log.push_err("backend-scoped WAF is not supported");
+        if self.index.is_none() && (plugin_runtime.has_waf() || plugin_runtime.has_request_id()) {
+            log.push_err("backend-scoped WAF/RequestId is not supported");
             return Err(());
         }
 

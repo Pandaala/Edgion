@@ -234,7 +234,7 @@ pub fn check_plugins_san(ep: &EdgionPlugins) -> Vec<String> {
                         | EdgionPlugin::DynamicExternalUpstream(_)
                         | EdgionPlugin::Dsl(_)
                         | EdgionPlugin::RegionRoute(_)
-                        | EdgionPlugin::TraceContext(_)
+                        | EdgionPlugin::RequestId(_)
                         | EdgionPlugin::RequestAccessPolicy(_)
                         | EdgionPlugin::Canary(_)
                         | EdgionPlugin::GeoIpLocation(_)

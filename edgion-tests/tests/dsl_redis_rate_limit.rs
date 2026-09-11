@@ -161,7 +161,11 @@ impl PluginSession for ResultSession {
     fn set_remote_ip(&mut self, _addr: &str) -> PluginSessionResult<()> {
         panic!("unexpected session operation")
     }
-    fn set_trace_id(&mut self, _value: &str) -> PluginSessionResult<()> {
+    fn apply_request_ids(
+        &mut self,
+        _default: Option<&edgion_resources::DefaultIdConfig>,
+        _rules: &[edgion_gateway::request_trace_id::CompiledRequestIdRule],
+    ) -> bool {
         panic!("unexpected session operation")
     }
     fn ctx(&self) -> &EdgionHttpContext {

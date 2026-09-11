@@ -95,12 +95,14 @@ impl WebSocketTestSuite {
                             .with_context(|| format!("Open configured access log {}", ctx.access_log_path.display()))?;
                         file.seek(SeekFrom::End(0)).await.context("Seek access log to EOF")?;
                         let mut reader = BufReader::new(file).take(1024 * 1024);
-                        let trace_id = format!("ws-conn-est-{}", Uuid::new_v4());
+                        let trace_id = Uuid::new_v4().simple().to_string();
                         let mut request = ctx.websocket_url().into_client_request()?;
                         if let Some(ref host) = ctx.http_host {
                             request.headers_mut().insert("Host", host.parse()?);
                         }
-                        request.headers_mut().insert("x-trace-id", trace_id.parse()?);
+                        request
+                            .headers_mut()
+                            .insert("traceparent", format!("00-{trace_id}-0123456789abcdef-00").parse()?);
 
                         let (mut ws, _) = timeout(Duration::from_secs(5), connect_async(request))
                             .await
@@ -124,7 +126,9 @@ impl WebSocketTestSuite {
                                 if line.windows(trace_id.len()).any(|part| part == trace_id.as_bytes()) {
                                     let entry: serde_json::Value =
                                         serde_json::from_slice(&line).context("Decode this request's access log")?;
-                                    if entry["request_info"]["x-trace-id"].as_str() == Some(trace_id.as_str()) {
+                                    if entry["request_info"]["trace_id"]["w3c"]["trace_id"].as_str()
+                                        == Some(trace_id.as_str())
+                                    {
                                         ensure!(
                                             entry["conn_est"].as_bool() == Some(true),
                                             "Access log for this open WebSocket is missing conn_est: true"

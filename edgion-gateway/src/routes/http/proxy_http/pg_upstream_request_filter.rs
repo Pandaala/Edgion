@@ -64,6 +64,7 @@ pub async fn upstream_request_filter(
     // configured RemoteIp header remains authoritative even when its name
     // overlaps another locally managed header.
     finalize_forwarded_headers(&ctx.remote_ip_header, upstream_request, ctx);
+    ctx.request_info.trace_id.reconcile_request(upstream_request);
 
     // All fallible local header/framing preparation has succeeded. Crossing
     // the boundary here keeps a local preparation failure pre-dispatch.

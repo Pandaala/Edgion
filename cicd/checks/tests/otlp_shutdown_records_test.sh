@@ -11,12 +11,12 @@ eval "$selector"
 
 write_batch() {
     jq -n --argjson ids "$1" '{resourceLogs: [{scopeLogs: [{logRecords:
-        [$ids[] | {body: {stringValue: ({request_info: {"x-trace-id": .}} | tojson)}}]
+        [$ids[] | {body: {stringValue: ({request_info: {trace_id: {w3c: {trace_id: .}}}} | tojson)}}]
     }]}]}' > "${test_tmp}/records.json"
 }
-write_batch '["warmup", "otlp-shutdown-1", "otlp-shutdown-1", "otlp-shutdown-6"]'
+write_batch '["warmup", "4bf92f3577b34da6a3ce929d0e0e4731", "4bf92f3577b34da6a3ce929d0e0e4731", "4bf92f3577b34da6a3ce929d0e0e4736"]'
 [ "$(count_shutdown_records "${test_tmp}/records.json")" -eq 1 ]
-write_batch '["otlp-shutdown-1", "otlp-shutdown-2", "otlp-shutdown-3", "otlp-shutdown-4", "otlp-shutdown-5"]'
+write_batch '["4bf92f3577b34da6a3ce929d0e0e4731", "4bf92f3577b34da6a3ce929d0e0e4732", "4bf92f3577b34da6a3ce929d0e0e4733", "4bf92f3577b34da6a3ce929d0e0e4734", "4bf92f3577b34da6a3ce929d0e0e4735"]'
 [ "$(count_shutdown_records "${test_tmp}/records.json")" -eq 5 ]
 [ "$(count_shutdown_records "${test_tmp}/missing")" -eq 0 ]
 echo "PASS: unique expected markers, warmup exclusion, and incomplete delivery"

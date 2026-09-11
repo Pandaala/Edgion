@@ -204,6 +204,48 @@ fn collect_body_condition_errors(conds: &PluginConditions, label: &str, index: u
 }
 
 impl EdgionPlugins {
+    /// Whether this resource contributes RequestId rules at an active attachment.
+    pub fn has_active_request_id(&self) -> bool {
+        self.spec.request_plugins.iter().flatten().any(|entry| {
+            entry.is_enabled() && entry.policy_action.is_none() && matches!(entry.plugin, EdgionPlugin::RequestId(_))
+        })
+    }
+
+    /// Early attachments may only depend on parsed headers, method and W3C ID.
+    pub fn validate_request_id_early_attachment(&self) -> Vec<String> {
+        use super::conditions::Condition;
+        use crate::common::KeyGet;
+        let mut errors = Vec::new();
+        for (index, entry) in self.spec.request_plugins.iter().flatten().enumerate() {
+            if !entry.is_enabled() || entry.policy_action.is_some() {
+                continue;
+            }
+            let EdgionPlugin::RequestId(config) = &entry.plugin else {
+                continue;
+            };
+            let late_source = config
+                .ids
+                .iter()
+                .any(|rule| !matches!(rule.source, None | Some(KeyGet::Header { .. }) | Some(KeyGet::TraceId)));
+            let late_condition = entry
+                .conditions
+                .iter()
+                .flat_map(|conditions| conditions.skip.iter().chain(conditions.run.iter()))
+                .flat_map(|set| set.iter_conditions())
+                .any(|condition| {
+                    let key = match condition {
+                        Condition::KeyExist(c) => &c.key,
+                        Condition::KeyMatch(c) => &c.key,
+                        _ => return true,
+                    };
+                    !matches!(key, KeyGet::Header { .. } | KeyGet::Method | KeyGet::TraceId)
+                });
+            if late_source || late_condition || entry.body.is_some() || entry.dye.is_some() {
+                errors.push(format!("requestPlugins[{index}]: early RequestId requires header/traceId sources and header/method/traceId conditions, without body or dye wrappers"));
+            }
+        }
+        errors
+    }
     /// Collect the preparse validation errors for this resource WITHOUT building
     /// the gateway plugin runtime.
     ///
@@ -556,18 +598,6 @@ impl EdgionPlugins {
             if json_schema_count > 1 {
                 errors.push(format!(
                     "requestPlugins: at most one JsonSchemaValidation plugin is allowed, found {json_schema_count}"
-                ));
-            }
-
-            // Multiple active TraceContext entries would each overwrite
-            // x-trace-id (last-write-wins), which is confusing.
-            let count = entries
-                .iter()
-                .filter(|e| e.is_enabled() && e.policy_action.is_none() && e.plugin.type_name() == "TraceContext")
-                .count();
-            if count > 1 {
-                errors.push(format!(
-                    "requestPlugins: at most one TraceContext plugin is allowed, found {count}"
                 ));
             }
 
@@ -1259,7 +1289,7 @@ spec:
 }
 
 #[cfg(test)]
-mod trace_context_dup_tests {
+mod request_id_composition_tests {
     use crate::resources::edgion_plugins::EdgionPlugins;
 
     fn validate(yaml: &str) -> Vec<String> {
@@ -1268,7 +1298,23 @@ mod trace_context_dup_tests {
     }
 
     #[test]
-    fn rejects_two_trace_context() {
+    fn early_attachment_rejects_late_sources_and_inert_entries_do_not_participate() {
+        for fragment in [
+            "config: {ids: [{header: x-id, source: {type: ctx, name: order}}]}",
+            "config: {}\n      conditions: {run: {allOf: [{type: keyExist, key: {type: remoteIp}}]}}",
+        ] {
+            let yaml = format!("apiVersion: edgion.io/v1\nkind: EdgionPlugins\nmetadata: {{name: early}}\nspec:\n  requestPlugins:\n    - type: RequestId\n      {fragment}\n");
+            let mut plugins: EdgionPlugins = serde_yaml::from_str(&yaml).unwrap();
+            assert!(plugins.has_active_request_id());
+            assert_eq!(plugins.validate_request_id_early_attachment().len(), 1);
+            plugins.spec.request_plugins.as_mut().unwrap()[0].enable = false;
+            assert!(!plugins.has_active_request_id());
+            assert!(plugins.validate_request_id_early_attachment().is_empty());
+        }
+    }
+
+    #[test]
+    fn allows_two_request_id_entries() {
         let errs = validate(
             r#"
 apiVersion: edgion.io/v1
@@ -1278,20 +1324,17 @@ metadata:
   namespace: default
 spec:
   requestPlugins:
-    - type: TraceContext
+    - type: RequestId
       config: {}
-    - type: TraceContext
+    - type: RequestId
       config: {}
 "#,
         );
-        assert!(
-            errs.iter().any(|e| e.contains("at most one TraceContext")),
-            "expected duplicate error, got: {errs:?}"
-        );
+        assert!(errs.is_empty(), "incremental RequestId entries must be valid: {errs:?}");
     }
 
     #[test]
-    fn allows_single_trace_context() {
+    fn allows_single_request_id() {
         let errs = validate(
             r#"
 apiVersion: edgion.io/v1
@@ -1301,14 +1344,11 @@ metadata:
   namespace: default
 spec:
   requestPlugins:
-    - type: TraceContext
+    - type: RequestId
       config: {}
 "#,
         );
-        assert!(
-            !errs.iter().any(|e| e.contains("at most one TraceContext")),
-            "unexpected duplicate error: {errs:?}"
-        );
+        assert!(errs.is_empty(), "unexpected duplicate error: {errs:?}");
     }
 }
 

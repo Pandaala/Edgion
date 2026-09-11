@@ -180,3 +180,8 @@ pub use runtime::{
     end_response_400, end_response_404, end_response_421, end_response_500, end_response_502, end_response_503,
     end_response_grpc_unavailable, end_response_grpc_unimplemented, terminate_with_fallback,
 };
+
+pub mod request_trace_id;
+
+#[cfg(test)]
+mod request_id_tests;

@@ -112,10 +112,6 @@ pub async fn response_filter(
 
     edgion_http.server_header_opts.apply_to_response(upstream_response);
 
-    if let Some(trace_id) = &ctx.request_info.x_trace_id {
-        let _ = upstream_response.insert_header("x-trace-id", trace_id.as_str());
-    }
-
     // RFC 9110 §7.6.1 forbids forwarding hop-by-hop `Connection` headers. Injecting
     // `Connection: close` during graceful shutdown is redundant — `set_keepalive(None)` in
     // pg_early_request_filter already makes Pingora's H1 codec emit it on the downstream wire.
@@ -225,6 +221,7 @@ pub async fn response_filter(
         // and may race to reuse the already-closed socket on a later request,
         // surfacing as an intermittent transport-level send error.
         session.set_keepalive(None);
+        ctx.request_info.trace_id.reconcile_response(&mut *header);
         session.write_response_header(header, body_empty).await?;
         // Mark immediately after the header commits and before awaiting a body.
         // Pingora may cancel this hook future if the duplex pump's other side
@@ -264,6 +261,7 @@ pub async fn response_filter(
         );
         compression_ctx.adjust_level(level);
     }
+    ctx.request_info.trace_id.reconcile_response(upstream_response);
     ctx.select_final_downstream_status(upstream_response.status.as_u16());
     // The response onion and both framing-repair passes are complete. From
     // this point through body/trailer callbacks and logging, one request-local

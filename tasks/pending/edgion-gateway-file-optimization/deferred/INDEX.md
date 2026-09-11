@@ -67,8 +67,8 @@ These entries are backlinks only. A linked `tasks/todo` file is the editable sou
 | D0066 — Bound RequestMirror concurrency and buffering | fixed (2026-09-08) | [resolution](../../../../skills/04-review/request-mirror/regression-guards/mirror-resource-budgets.md) |
 | D0067 — Isolate RequestMirror unit tests from the network | needs-implementation | [campaign finding](D0067-request-mirror-unit-test-network-isolation.md) |
 | D0068 — Unify response-header mutation policy | needs-discussion | [campaign finding](D0068-response-header-mutation-policy.md) |
-| D0069 — Correct TraceContext documentation semantics | needs-implementation | [campaign finding](D0069-trace-context-documentation-semantics.md) |
-| D0070 — Enforce TraceContext attachment cardinality | needs-discussion | [campaign finding](D0070-trace-context-attachment-cardinality.md) |
+| D0069 — Correct TraceContext documentation semantics | superseded (2026-09-11) | [resolution](../../../../skills/04-review/observability/intentional-design/request-trace-id-lifecycle.md) |
+| D0070 — Enforce TraceContext attachment cardinality | fixed (2026-09-11) | [resolution](../../../../skills/04-review/observability/intentional-design/request-trace-id-lifecycle.md) |
 | D0071 — Reduce WAF header materialization | needs-investigation | [campaign finding](D0071-waf-header-materialization.md) |
 | D0072 — Bound outbound HTTP/2 response header lists | needs-investigation | [campaign finding](D0072-outbound-http2-response-header-list-bound.md) |
 | D0073 — Isolate Wasm host panics at VM boundaries | resolved | [campaign finding](D0073-wasm-host-panic-isolation.md) |
@@ -145,7 +145,6 @@ These entries are backlinks only. A linked `tasks/todo` file is the editable sou
 | Isolate RequestMirror unit tests from the network | pending | [task](../../../todo/isolate-request-mirror-unit-tests-from-network.md) |
 | Unify response-header mutation policy | pending | [task](../../../todo/unify-response-header-mutation-policy.md) |
 | Correct TraceContext documentation semantics | retired externally | Task removed by user-synchronized `78a25c3a`; history retained in Git. |
-| Enforce TraceContext attachment cardinality | pending | [task](../../../todo/enforce-trace-context-attachment-cardinality.md) |
 | Reduce WAF header materialization | pending | [task](../../../todo/reduce-waf-header-materialization.md) |
 | Bound outbound HTTP/2 response header lists | pending | [task](../../../todo/bound-outbound-http2-response-header-lists.md) |
 | Isolate Wasm host panics at VM boundaries | completed | [campaign finding](D0073-wasm-host-panic-isolation.md) |

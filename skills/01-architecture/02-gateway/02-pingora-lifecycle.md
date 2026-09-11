@@ -152,7 +152,7 @@ Called when upstream response headers are received; interim 1xx are skipped (101
 Async response handling, can perform operations that need to await:
 
 1. **Server header**: applied again (covers framework-generated error responses such as 502).
-2. **Trace ID injection**: add `x-trace-id` to the response header.
+2. **Request ID reconciliation**: stamp active response-enabled IDs and remove managed suppressed names at final header write, after response plugins. Core W3C context and default `x-trace-id` are initialized in the earliest parsed-header callback.
 3. **Graceful shutdown**: add the `Connection: close` response header during shutdown.
 4. **Async plugin execution** (UpstreamResponse phase):
    - Rule level: `run_upstream_response_plugins_async()`.
@@ -311,7 +311,7 @@ Typical uses: IP allow/deny lists, geolocation filtering, connection rate limiti
 |-------|------|-------------|
 | `start_time` | `Instant` | Request start time |
 | `gateway_info` | `GatewayInfo` | Matched Gateway metadata |
-| `request_info` | `RequestInfo` | Request metadata: direct_peer_ip, remote_ip, hostname, path, status, x_trace_id, sni, tls_id, listener_port, discover_protocol |
+| `request_info` | `RequestInfo` | Request metadata: direct_peer_ip, remote_ip, hostname, path, status, trace_id (W3C and correlation IDs), sni, tls_id, listener_port, discover_protocol |
 | `diagnostics` | `RequestDiagnostics` | Bounded, ordered information/error diagnostic history |
 | `pre_plugin_response_status` | `Option<u16>` | Upstream status snapshot used by response-body admission |
 | `final_downstream_status` | `Option<u16>` | Selected downstream status before terminal logging; private ownership state |

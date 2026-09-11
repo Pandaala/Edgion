@@ -353,11 +353,12 @@ impl RequestFilter for RequestMirrorPlugin {
             headers.remove(reqwest::header::CONTENT_LENGTH);
             headers.remove(reqwest::header::TRANSFER_ENCODING);
         }
-        let x_trace_id = session
+        let trace_id = session
             .ctx()
             .request_info
-            .x_trace_id
-            .clone()
+            .trace_id
+            .standard_trace_id()
+            .map(str::to_owned)
             .unwrap_or_else(|| "-".to_string());
 
         let cfg = self.mirror_config();
@@ -455,7 +456,7 @@ impl RequestFilter for RequestMirrorPlugin {
 
             if cfg.mirror_log {
                 let entry = new_entry(
-                    x_trace_id,
+                    trace_id,
                     target,
                     status,
                     Instant::now().saturating_duration_since(begin).as_millis() as u64,

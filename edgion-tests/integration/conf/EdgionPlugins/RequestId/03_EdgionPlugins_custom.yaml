@@ -1,0 +1,16 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: request-id-custom
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - type: RequestId
+      config:
+        defaultId:
+          enabled: false
+        ids:
+          - header: x-order-id
+            generator:
+              type: md5
+              prefix: order-

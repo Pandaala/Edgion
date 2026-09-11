@@ -198,7 +198,8 @@ Authorization: Bearer <admin-token>
 | `direct_peer_ip` | String | 下游物理传输对端（`DirectPeerIp`） |
 | `client-port` | Integer | 客户端 TCP 端口 |
 | `remote_ip` | String | 经过适用的 PROXY/RealIp 解析后的客户端 IP（`RemoteIp`） |
-| `x-trace-id` | String | 每请求追踪 ID；客户端传递相同值可关联日志 |
+| `trace_id.w3c.trace_id` | String | 标准 W3C trace ID，32 位小写十六进制 |
+| `trace_id.correlation_ids` | Object | 按头名称组织的活动自定义 ID；复制的外部值会脱敏 |
 | `host` | String | 请求 `Host` 头 |
 | `path` | String | 规范化后的请求路径 |
 | `status` | Integer | 最终下游 HTTP 状态，与 Nginx/OpenResty `$status` 语义一致；`0` 表示未观察到最终状态 |
@@ -518,7 +519,10 @@ access_log_options:
     "direct_peer_ip": "192.168.1.20",
     "client-port": 54882,
     "remote_ip": "192.168.1.20",
-    "x-trace-id": "eff524a7-10a4-483c-a534-3c50b1199aa0",
+    "trace_id": {
+      "w3c": {"trace_id": "4bf92f3577b34da6a3ce929d0e0e4736"},
+      "correlation_ids": {"x-trace-id": "4bf92f3577b34da6a3ce929d0e0e4736"}
+    },
     "host": "test.example.com",
     "path": "/health",
     "status": 200
@@ -606,7 +610,7 @@ cat logs/edgion_access.log | jq -r '[.request_info.path, .backend_context.upstre
 cat logs/edgion_access.log | jq '.stage_logs[]?.logs[]? | select(.time_cost > 100)'
 
 # 端到端追踪一个请求
-cat logs/edgion_access.log | jq 'select(.request_info["x-trace-id"] == "eff524a7-10a4-483c-a534-3c50b1199aa0")'
+cat logs/edgion_access.log | jq 'select(.request_info.trace_id.w3c.trace_id == "4bf92f3577b34da6a3ce929d0e0e4736")'
 ```
 
 重点关注的字段：
@@ -629,7 +633,7 @@ cat logs/edgion_access.log | jq 'select(.request_info["x-trace-id"] == "eff524a7
 
 ### Q3：如何关联多跳请求的日志？
 
-**A**：从客户端发送 `X-Trace-ID` 头。网关将其记录为 `x-trace-id`，可以用单个 `jq` 选择器过滤一个逻辑请求的所有条目。
+**A**：按 `request_info.trace_id.w3c.trace_id` 查找标准链路。没有合法自定义入站值时，默认响应 `x-trace-id` 就是该 ID。复制的外部关联值在 `trace_id.correlation_ids` 中脱敏；参见 [RequestId](../../user-guide/http-route/filters/edgion-plugins/request-id.md)。
 
 ### Q4：请求被插件拒绝了——看哪里？
 

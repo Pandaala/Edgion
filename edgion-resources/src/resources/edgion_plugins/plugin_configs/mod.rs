@@ -40,11 +40,11 @@ mod real_ip;
 mod region_route;
 mod request_access_policy;
 mod request_body_buffer;
+mod request_id;
 mod request_mirror;
 mod request_restriction;
 mod response_rewrite;
 mod tiny_ufo_ttl_cache_config;
-mod trace_context;
 mod upstream_fallback;
 mod waf;
 mod wasm;
@@ -138,6 +138,7 @@ pub use request_access_policy::{
     MAX_REFERENCED_IP_RULES, MAX_REFERENCED_URL_RULES,
 };
 pub use request_body_buffer::RequestBodyBufferConfig;
+pub use request_id::*;
 pub use request_mirror::RequestMirrorPluginConfig;
 pub use request_restriction::{RequestRestrictionConfig, RestrictionMode};
 pub use response_rewrite::{HeaderRename, ResponseHeaderActions, ResponseHeaderEntry, ResponseRewriteConfig};
@@ -145,7 +146,6 @@ pub use tiny_ufo_ttl_cache_config::{
     validate_tiny_ufo_effective_limits, TinyUfoTtlCacheConfig, MAX_TINY_UFO_CACHE_ENTRIES, MAX_TINY_UFO_LOGICAL_BYTES,
     TINY_UFO_WEIGHT_UNIT_BYTES,
 };
-pub use trace_context::TraceContextConfig;
 pub use upstream_fallback::UpstreamFallback;
 pub use waf::{WafConfig, WafMode};
 pub use wasm::{

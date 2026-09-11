@@ -376,11 +376,14 @@ pub trait PluginSession: Send + Sync {
     /// Used by RealIp plugin to update the extracted real client IP.
     fn set_remote_ip(&mut self, addr: &str) -> PluginSessionResult<()>;
 
-    /// Overwrite the request's trace id (`ctx.request_info.x_trace_id`).
-    ///
-    /// Used by the TraceContext plugin to align `x-trace-id` (access log +
-    /// response header) with the W3C `trace_id`.
-    fn set_trace_id(&mut self, value: &str) -> PluginSessionResult<()>;
+    /// Apply one compiled RequestId entry to the canonical request state.
+    // Mockall requires a named lifetime for a reference nested in Option.
+    #[allow(clippy::needless_lifetimes)]
+    fn apply_request_ids<'a>(
+        &mut self,
+        default: Option<&'a edgion_resources::plugin_configs::DefaultIdConfig>,
+        rules: &[crate::request_trace_id::CompiledRequestIdRule],
+    ) -> bool;
 
     /// Get mTLS client certificate info extracted during handshake.
     ///

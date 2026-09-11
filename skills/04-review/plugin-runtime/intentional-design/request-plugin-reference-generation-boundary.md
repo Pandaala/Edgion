@@ -26,7 +26,10 @@ There is no single captured PluginStore generation shared by all these lookups.
   separately. One compiled resource's runtime is shared as an Arc; references to
   different resources can resolve from different publications.
 - `routes/http/proxy_http/pg_request_filter.rs`: HTTPRoute references are captured
-  before preflight, while global, Gateway, and gRPC references are resolved later.
+  before preflight. Global references now pin in the early parsed-header callback;
+  Gateway references pin there when ownership is known, otherwise immediately
+  after route ownership resolves and before preflight. GRPCRoute references
+  retain their post-preflight capture timing. Early misses also remain pinned.
   WAF selection uses those captured runtimes and retains its selected owner.
 - `plugins/runtime/session_adapter.rs` and `ctx.rs`: backend references first
   resolve against the live store, then reuse the cached result for that key.

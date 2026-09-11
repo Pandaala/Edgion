@@ -622,14 +622,7 @@ impl AiProxy {
         session: &mut dyn PluginSession,
         log: &mut PluginLog,
     ) -> PluginRunningResult {
-        let entropy = session
-            .ctx()
-            .request_info
-            .x_trace_id
-            .as_deref()
-            .and_then(|trace_id| uuid::Uuid::parse_str(trace_id).ok())
-            .map(|trace_id| trace_id.as_u128())
-            .unwrap_or_else(|| uuid::Uuid::new_v4().as_u128());
+        let entropy = uuid::Uuid::new_v4().as_u128();
         self.run_request_with_store_and_entropy(store, entropy, session, log)
             .await
     }

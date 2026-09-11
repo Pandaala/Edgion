@@ -97,6 +97,7 @@ async fn end_ai_predispatch_error(
     if !ctx.claim_final_response(status) {
         return Ok(());
     }
+    ctx.request_info.trace_id.reconcile_response(&mut response);
     session.write_response_header(Box::new(response), false).await?;
     session.write_response_body(Some(Bytes::from(body)), true).await
 }
@@ -527,13 +528,7 @@ pub async fn upstream_peer_http(
     // AI forwarding owns a typed external peer path and never writes the
     // generic first-write-wins upstream-jump slot.
     if ctx.has_ai_attempt_plan() {
-        let entropy = ctx
-            .request_info
-            .x_trace_id
-            .as_deref()
-            .and_then(|trace_id| uuid::Uuid::parse_str(trace_id).ok())
-            .map(|trace_id| trace_id.as_u128())
-            .unwrap_or_else(|| uuid::Uuid::new_v4().as_u128());
+        let entropy = uuid::Uuid::new_v4().as_u128();
         let route_retry_cap = ctx.retry_attempts();
         if let Some(state) = ctx.ai_state_mut() {
             state.attempt_runtime.drain_pending().await;
@@ -1810,6 +1805,78 @@ mod tests {
     use std::sync::Arc;
     use std::time::{Duration, Instant};
     use tokio::io::AsyncWriteExt;
+
+    #[tokio::test]
+    async fn ai_predispatch_error_writes_current_request_ids_on_wire() {
+        use tokio::io::AsyncReadExt;
+        let proxy = super::EdgionHttpProxy {
+            listener_port: 80,
+            is_https_listener: false,
+            listener_key: edgion_resources::ListenerKey("ai-id-test/HTTP".to_string()),
+            server_header_opts: Default::default(),
+            access_logger: Arc::new(crate::observe::AccessLogger::default()),
+            edgion_gateway_config: Arc::new(edgion_resources::EdgionGatewayConfig::new("test", Default::default())),
+            request_body_config_name: None,
+            parsed_timeouts: Default::default(),
+            enable_http2: false,
+            real_ip_extractor: None,
+            preflight_handler: super::super::PreflightHandler::new(None),
+            http_route_manager: Arc::new(crate::routes::http::routes_mgr::HttpPortRouteManager::default()),
+            grpc_route_manager: Arc::new(crate::routes::grpc::GrpcPortRouteManager::default()),
+        };
+        for disable_default in [false, true] {
+            let (mut client, server) = tokio::io::duplex(8192);
+            client
+                .write_all(b"POST /v1/chat/completions HTTP/1.1\r\nHost: test\r\nContent-Length: 0\r\n\r\n")
+                .await
+                .unwrap();
+            let stream: pingora_core::protocols::Stream = Box::new(server);
+            let mut session = Session::new_h1(stream);
+            assert!(session.read_request().await.unwrap());
+            let mut ctx = EdgionHttpContext::default();
+            ctx.request_info.trace_id.initialize(&session.req_header().headers);
+            let expected = ctx.request_info.trace_id.standard_trace_id().unwrap().to_owned();
+            if disable_default {
+                let config = serde_json::from_value(serde_json::json!({
+                    "defaultId":{"enabled":false},
+                    "ids":[{"header":"x-ai-correlation-id","source":{"type":"traceId"}}]
+                }))
+                .unwrap();
+                let plugin = edgion_resources::EdgionPlugins::new(
+                    "ai-ids",
+                    edgion_resources::EdgionPluginsSpec {
+                        request_plugins: Some(vec![edgion_resources::RequestFilterEntry::new(
+                            edgion_resources::EdgionPlugin::RequestId(config),
+                        )]),
+                        ..Default::default()
+                    },
+                );
+                crate::plugins::http::compile_plugins(&plugin)
+                    .plugin_runtime
+                    .run_request_plugins(&mut session, &mut ctx)
+                    .await;
+            }
+            super::end_ai_predispatch_error(&proxy, &mut session, &mut ctx, AiProxyError::BackendUnavailable)
+                .await
+                .unwrap();
+            let mut bytes = vec![0; 4096];
+            let count = tokio::time::timeout(Duration::from_secs(1), client.read(&mut bytes))
+                .await
+                .unwrap()
+                .unwrap();
+            let wire = std::str::from_utf8(&bytes[..count]).unwrap();
+            let headers = wire.split("\r\n\r\n").next().unwrap().to_ascii_lowercase();
+            assert!(headers.starts_with("http/1.1 503"));
+            assert!(headers.contains("content-type: application/json"));
+            if disable_default {
+                assert!(!headers.contains("x-trace-id:"));
+                assert!(headers.contains(&format!("x-ai-correlation-id: {expected}")));
+            } else {
+                assert!(headers.contains(&format!("x-trace-id: {expected}")));
+            }
+            assert!(!headers.contains("traceparent:"));
+        }
+    }
 
     #[test]
     fn ai_unavailable_maps_to_fixed_openai_backend_unavailable() {

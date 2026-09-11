@@ -1,6 +1,4 @@
-use super::{
-    resolve_gateway_plugins, resolve_global_plugins, resolve_route_ext_refs, select_waf_owner, EdgionHttpProxy,
-};
+use super::{resolve_route_ext_refs, select_waf_owner, EdgionHttpProxy};
 use crate::ctx::NormalizedHostname;
 use crate::plugins::http::global_plugin_store;
 use crate::routes::grpc::{parse_grpc_timeout, try_match_grpc_route};
@@ -33,6 +31,8 @@ pub async fn request_filter(
     session: &mut Session,
     ctx: &mut EdgionHttpContext,
 ) -> pingora_core::Result<bool> {
+    // Also covers direct test callers; normal Pingora entry already ran this.
+    super::pg_early_request_filter::initialize_request_ids(edgion_http, session, ctx).await?;
     // Build request metadata (addresses, hostname, path, trace_id, protocol)
     // Validates XFF length and hostname presence, returns true if response sent
     if build_request_metadata(edgion_http, session, ctx).await? {
@@ -124,6 +124,8 @@ pub async fn request_filter(
         }
     }
 
+    super::pg_early_request_filter::initialize_gateway_request_ids(session, ctx).await?;
+
     // Capture HTTPRoute ExtensionRefs before preflight so preflight ownership
     // and every later plugin stage observe one request-coherent generation.
     // GRPCRoute keeps its existing post-preflight capture timing.
@@ -185,12 +187,6 @@ pub async fn request_filter(
     // Fetch the global plugin store once and share &PluginStore across both
     // resolve calls to avoid redundant Arc::clone on the hot path.
     let plugin_store = global_plugin_store();
-    let global_plugins = resolve_global_plugins(
-        plugin_store,
-        edgion_http.edgion_gateway_config.spec.global_plugins_ref.as_deref(),
-    );
-    ctx.install_resolved_global_plugins(global_plugins);
-
     if ctx.resolved_route_ext_refs().is_none() {
         let keys = ctx
             .grpc_route_unit
@@ -201,13 +197,6 @@ pub async fn request_filter(
             ctx.install_resolved_route_ext_refs(resolve_route_ext_refs(plugin_store, keys));
         }
     }
-
-    let gateway_plugin_keys = ctx
-        .gateway_info
-        .as_deref()
-        .map(|info| info.plugin_store_keys.as_slice())
-        .unwrap_or_default();
-    ctx.install_resolved_gateway_plugins(resolve_gateway_plugins(plugin_store, gateway_plugin_keys));
 
     let global_plugins = ctx.resolved_global_plugins();
     let gateway_plugins = ctx.resolved_gateway_plugins();
@@ -230,7 +219,7 @@ pub async fn request_filter(
             if runtime.request_plugins_count() == 0 {
                 continue;
             }
-            runtime.run_request_plugins(session, ctx).await;
+            runtime.run_request_plugins_after_early_ids(session, ctx).await;
             if ctx.plugin_terminated() {
                 let _ = terminate_with_fallback(session, ctx, &edgion_http.server_header_opts).await;
                 return Ok(true);
@@ -246,7 +235,7 @@ pub async fn request_filter(
             if runtime.request_plugins_count() == 0 {
                 continue;
             }
-            runtime.run_request_plugins(session, ctx).await;
+            runtime.run_request_plugins_after_early_ids(session, ctx).await;
             if ctx.plugin_terminated() {
                 let _ = terminate_with_fallback(session, ctx, &edgion_http.server_header_opts).await;
                 return Ok(true);
@@ -342,15 +331,6 @@ async fn build_request_metadata(
     };
     ctx.request_info.remote_ip = crate::ctx::canonicalize_ip_str(&resolved).unwrap_or(resolved);
 
-    // Generate x_trace_id before any early-return guards so 400/4xx access-log
-    // entries carry a trace id that can be correlated with tls.log.
-    ctx.request_info.x_trace_id = req_header
-        .headers
-        .get("x-trace-id")
-        .and_then(|h| h.to_str().ok())
-        .map(|s| s.to_string())
-        .or_else(|| Some(uuid::Uuid::new_v4().to_string()));
-
     // RFC 9110 §7.2: reject HTTP/1.1 requests carrying more than one Host header
     // line. Host smuggling defense — gated by `SecurityProtectConfig.reject_duplicate_host`
     // (default true), matching Envoy's effective behavior (commas in the coalesced
@@ -396,37 +376,6 @@ async fn build_request_metadata(
         .get("X-Forwarded-For")
         .and_then(|h| h.to_str().ok())
         .map(|s| s.to_string());
-
-    // Extract TLS connection id (for correlating tls.log and access.log)
-    if let Some(digest) = session.as_downstream().digest() {
-        if let Some(ssl_digest) = digest.ssl_digest.as_ref() {
-            if let Some(meta) = ssl_digest.extension.get::<TlsConnMeta>() {
-                // Extract Gateway TLS listener info for 421 Misdirected Request detection.
-                // Only set for Gateway TLS (not EdgionTls, which has no listener concept).
-                let (matched_listener, matched_gateway_key) = meta
-                    .matched
-                    .as_ref()
-                    .filter(|matched| matched.rsc.kind == "Gateway")
-                    .map(|matched| {
-                        (
-                            matched.section.clone(),
-                            Some(format_gateway_key(&matched.rsc.ns, &matched.rsc.name)),
-                        )
-                    })
-                    .unwrap_or((None, None));
-                ctx.request_info.install_tls_info(
-                    meta.tls_id.clone(),
-                    meta.sni.clone(),
-                    meta.client_cert_info.clone(),
-                    matched_listener,
-                    matched_gateway_key,
-                );
-            } else if let Some(tls_id) = ssl_digest.extension.get::<TlsConnId>() {
-                // Backward compatibility for connections created before metadata upgrade.
-                ctx.request_info.set_tls_id(tls_id.0.to_string());
-            }
-        }
-    }
 
     if let Some(status) = apply_path_normalization_entry(ctx, &raw_path, raw_query, path_norm_cfg) {
         ctx.record_error(status);
@@ -583,6 +532,7 @@ async fn try_serve_acme_challenge(
     resp.insert_header("Content-Type", "text/plain")?;
     resp.insert_header("Content-Length", key_auth.len().to_string())?;
 
+    ctx.request_info.trace_id.reconcile_response(&mut resp);
     session.write_response_header(Box::new(resp), false).await?;
     session.write_response_body(Some(key_auth), true).await?;
     ctx.record_info(EdgionInfoCode::AcmeChallengeServed);
@@ -919,4 +869,37 @@ fn extract_cors_config_from_route_filters(
     }
 
     None
+}
+
+pub(super) fn capture_tls_metadata(session: &Session, ctx: &mut EdgionHttpContext) {
+    // Extract TLS connection id (for correlating tls.log and access.log)
+    if let Some(digest) = session.as_downstream().digest() {
+        if let Some(ssl_digest) = digest.ssl_digest.as_ref() {
+            if let Some(meta) = ssl_digest.extension.get::<TlsConnMeta>() {
+                // Extract Gateway TLS listener info for 421 Misdirected Request detection.
+                // Only set for Gateway TLS (not EdgionTls, which has no listener concept).
+                let (matched_listener, matched_gateway_key) = meta
+                    .matched
+                    .as_ref()
+                    .filter(|matched| matched.rsc.kind == "Gateway")
+                    .map(|matched| {
+                        (
+                            matched.section.clone(),
+                            Some(format_gateway_key(&matched.rsc.ns, &matched.rsc.name)),
+                        )
+                    })
+                    .unwrap_or((None, None));
+                ctx.request_info.install_tls_info(
+                    meta.tls_id.clone(),
+                    meta.sni.clone(),
+                    meta.client_cert_info.clone(),
+                    matched_listener,
+                    matched_gateway_key,
+                );
+            } else if let Some(tls_id) = ssl_digest.extension.get::<TlsConnId>() {
+                // Backward compatibility for connections created before metadata upgrade.
+                ctx.request_info.set_tls_id(tls_id.0.to_string());
+            }
+        }
+    }
 }

@@ -1,0 +1,9 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: request-id-default
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - type: RequestId
+      config: {}

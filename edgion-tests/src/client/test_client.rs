@@ -42,6 +42,7 @@ const EXPECTED_DYNAMIC_SCENARIO_IDS: &[&str] = &[
     "BasicAuthDynamic",
     "BasicAuthDynamicGrouped",
     "RateLimitDynamic",
+    "RequestIdDynamic",
     "RequestAccessPolicyHmacDynamic",
     "RouteDelegationDynamic",
     "GrpcRouteDelegationDynamic",
@@ -794,7 +795,7 @@ mod capability_tests {
     /// below only compares the runner's two suite lists against each other, so a
     /// suite missing from **both** falls in its blind spot — which is exactly what
     /// happened: 25 registered suites (including `EdgionPlugins/Wasm` and
-    /// `EdgionPlugins/TraceContext`, whole plugins with real conf fixtures) were
+    /// `EdgionPlugins/RequestId`, whole plugins with real conf fixtures) were
     /// never executed by any runner, in either sweep, for an unknown length of time.
     ///
     /// Coverage is proven three ways, in order of preference:
@@ -1357,7 +1358,7 @@ fn suite_to_port_key(suite: &str) -> &str {
         "EdgionPlugins/RateLimitRedis" => "EdgionPlugins",
         "EdgionPlugins/BandwidthLimit" => "EdgionPlugins",
         "EdgionPlugins/RealIp" => "EdgionPlugins",
-        "EdgionPlugins/TraceContext" => "EdgionPlugins",
+        "EdgionPlugins/RequestId" => "EdgionPlugins",
         "EdgionPlugins/Wasm" => "EdgionPlugins",
         "EdgionPlugins/RequestMirror" => "EdgionPlugins",
         "EdgionPlugins/RequestRestriction" => "EdgionPlugins",
@@ -1475,6 +1476,7 @@ fn dynamic_port_contract(id: &str) -> Result<Option<(&'static str, port_config::
         | "JsonSchemaValidationDynamic"
         | "PmdRefFlap"
         | "RegionRouteValidation"
+        | "RequestIdDynamic"
         | "RateLimitDynamic"
         | "RequestAccessPolicyHmacDynamic" => Some(("EdgionPlugins", PortKind::Http)),
         "WafDynamic" => Some(("EdgionPlugins", PortKind::Http)),
@@ -2464,12 +2466,12 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
             }
             runner.add_suite(Box::new(suites::RealIpPluginTestSuite));
         }
-        "EdgionPlugins/TraceContext" => {
+        "EdgionPlugins/RequestId" => {
             if !gateway {
-                eprintln!("Error: EdgionPlugins/TraceContext tests require --gateway flag");
+                eprintln!("Error: EdgionPlugins/RequestId tests require --gateway flag");
                 std::process::exit(1);
             }
-            runner.add_suite(Box::new(suites::TraceContextPluginTestSuite));
+            runner.add_suite(Box::new(suites::RequestIdPluginTestSuite));
         }
         "EdgionPlugins/Wasm" => {
             if !gateway {

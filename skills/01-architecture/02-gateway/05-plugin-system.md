@@ -234,7 +234,7 @@ The schema enum `EdgionPlugin` in
 `edgion-resources/src/resources/edgion_plugins/edgion_plugin.rs` is the authoritative inventory.
 Do not rely on a hard-coded total: adding or removing an enum variant must be reflected in the
 gateway creation factory and stage support. The current inventory includes Gateway API filters and
-custom plugins such as FaultInjection, TraceContext, ExtProc, RequestAccessPolicy, Canary, and Wasm.
+custom plugins such as FaultInjection, RequestId, ExtProc, RequestAccessPolicy, Canary, and Wasm.
 The category tables below are a conceptual guide, not an exhaustive registry.
 
 ### Authentication (8)
@@ -363,3 +363,11 @@ edgion-gateway/src/plugins/
         ├── cors_filter.rs
         └── debug_access_log.rs
 ```
+
+## RequestId attachment phases
+
+W3C propagation is initialized by the core earliest parsed-header callback, independent of plugin attachment. `RequestId` is the only correlation-ID plugin; `RequestTraceId` is internal request state. Global references are pinned and their RequestId entries run early; a TLS-selected or unique Gateway owner permits the same Gateway prepass. Ambiguous shared-listener ownership defers Gateway rules until canonical route ownership is known, before preflight. Route entries run in ordinary order and apply incremental patches. BackendRef RequestId is rejected.
+
+The early projection preserves enabled/condition semantics and rejects unavailable sources, body and dye wrappers using resource-layer validation. The normal global/Gateway pass skips entries already assigned to the early phase; route occurrences of the same resource still execute normally. Pin each reference once, including empty lookup results, without capturing the entire PluginStore map. W3C state cannot be disabled or rewritten by custom rules.
+
+See [Request identity lifecycle](../../04-review/observability/intentional-design/request-trace-id-lifecycle.md) and the [RequestId user schema](../../../docs/en/user-guide/http-route/filters/edgion-plugins/request-id.md).

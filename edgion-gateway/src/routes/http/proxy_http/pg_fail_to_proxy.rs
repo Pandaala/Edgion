@@ -80,6 +80,7 @@ async fn write_proxy_error_reply(
     } else {
         let mut resp = pingora_core::protocols::http::ServerSession::generate_error(code);
         server_header_opts.apply_to_response(&mut resp);
+        ctx.request_info.trace_id.reconcile_response(&mut resp);
         if ctx.claim_final_response(code) {
             session
                 .write_error_response(resp, bytes::Bytes::default())
@@ -146,7 +147,7 @@ pub async fn fail_to_proxy(
     // was being replayed to the upstream is a body-replay failure (buffer
     // invariant violation or spill-storage read error). `upstream.err` alone
     // would show only the indistinguishable "InternalError", so record a
-    // dedicated status; the error-log line (join on x-trace-id) carries the
+    // dedicated status; the error-log line (join on the standard trace ID) carries the
     // precise cause text. Upstream-attributed errors mid-replay (e.g. a write
     // timeout while pushing the replayed body) are deliberately excluded —
     // those are upstream failures, not buffer failures.
@@ -209,6 +210,29 @@ mod tests {
             .unwrap();
         session.read_request().await.unwrap();
         (session, client)
+    }
+
+    #[tokio::test]
+    async fn request_id_error_reply_keeps_generated_framing() {
+        let (mut session, _client) = live_downstream_session().await;
+        let mut ctx = EdgionHttpContext::default();
+        ctx.request_info.trace_id.initialize(&session.req_header().headers);
+        ctx.queue_pending_response_header_op(crate::PendingHeaderOp::Set {
+            name: "content-length".into(),
+            value: "999".into(),
+        });
+        ctx.queue_pending_response_header_op(crate::PendingHeaderOp::Set {
+            name: "transfer-encoding".into(),
+            value: "chunked".into(),
+        });
+        assert!(!write_proxy_error_reply(&mut session, &mut ctx, &ServerHeaderOpts::default(), 502).await);
+        let response = session.response_written().unwrap();
+        assert_eq!(response.headers["content-length"], "0");
+        assert!(!response.headers.contains_key("transfer-encoding"));
+        assert_eq!(
+            response.headers["x-trace-id"].to_str().unwrap(),
+            ctx.request_info.trace_id.standard_trace_id().unwrap()
+        );
     }
 
     #[tokio::test]

@@ -390,12 +390,10 @@ pub(crate) fn build_response_local_reply(
     if !bodyless {
         let _ = fresh.insert_header("content-type", "text/plain");
     }
-    if let Some(tid) = ctx.request_info.x_trace_id.as_deref() {
-        let _ = fresh.insert_header("x-trace-id", tid);
-    }
     // Apply queued plugin header ops, then re-assert framing so a queued
     // Set/Remove Content-Length cannot desync the wire from the body.
     ctx.drain_pending_response_header_ops(&mut fresh);
+    ctx.request_info.trace_id.reconcile_response(&mut fresh);
     if !bodyless {
         let _ = fresh.remove_header(&http::header::TRANSFER_ENCODING);
         let _ = fresh.insert_header("content-length", body_bytes.len().to_string());
@@ -666,6 +664,7 @@ impl<'a> PingoraSessionAdapter<'a> {
         // queued content-length / transfer-encoding would be a framing inconsistency strict
         // clients reject, so remove them after draining.
         self.ctx.drain_pending_response_header_ops(&mut resp);
+        self.ctx.request_info.trace_id.reconcile_response(&mut resp);
         resp.remove_header(&http::header::CONTENT_LENGTH);
         resp.remove_header(&http::header::TRANSFER_ENCODING);
         resp.insert_header("content-type", "application/grpc")
@@ -722,6 +721,7 @@ impl<'a> PingoraSessionAdapter<'a> {
         // Drain queued response-header ops, strip framing headers, then re-assert content-type
         // LAST. See send_grpc_error_direct for why content-length / transfer-encoding are removed.
         self.ctx.drain_pending_response_header_ops(&mut resp);
+        self.ctx.request_info.trace_id.reconcile_response(&mut resp);
         resp.remove_header(&http::header::CONTENT_LENGTH);
         resp.remove_header(&http::header::TRANSFER_ENCODING);
         resp.insert_header("content-type", "application/grpc")
@@ -969,7 +969,12 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
     }
 
     fn get_request_id(&self) -> String {
-        self.ctx.request_info.x_trace_id.clone().unwrap_or_default()
+        self.ctx
+            .request_info
+            .trace_id
+            .standard_trace_id()
+            .unwrap_or_default()
+            .to_owned()
     }
 
     fn get_ctx_var(&self, key: &str) -> Option<String> {
@@ -1035,6 +1040,7 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
             let orig_cl = resp.headers.get(http::header::CONTENT_LENGTH).cloned();
             let orig_te = resp.headers.get(http::header::TRANSFER_ENCODING).cloned();
             self.ctx.drain_pending_response_header_ops(&mut resp);
+            self.ctx.request_info.trace_id.reconcile_response(resp.as_mut());
             let _ = resp.remove_header(&http::header::CONTENT_LENGTH);
             if let Some(cl) = orig_cl {
                 let _ = resp.insert_header(http::header::CONTENT_LENGTH, cl);
@@ -1044,6 +1050,7 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
                 let _ = resp.insert_header(http::header::TRANSFER_ENCODING, te);
             }
         }
+        self.ctx.request_info.trace_id.reconcile_response(resp.as_mut());
         let result = self
             .inner
             .write_response_header(resp, end_of_stream)
@@ -1302,9 +1309,38 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         Ok(())
     }
 
-    fn set_trace_id(&mut self, value: &str) -> PluginSessionResult<()> {
-        self.ctx.request_info.x_trace_id = Some(value.to_string());
-        Ok(())
+    fn apply_request_ids(
+        &mut self,
+        default: Option<&edgion_resources::plugin_configs::DefaultIdConfig>,
+        rules: &[crate::request_trace_id::CompiledRequestIdRule],
+    ) -> bool {
+        use crate::request_trace_id::{single_header, ApplyOutcome};
+        if let Some(patch) = default {
+            self.ctx.request_info.trace_id.apply_default_patch(patch);
+            self.ctx
+                .request_info
+                .trace_id
+                .reconcile_request(self.inner.req_header_mut());
+        }
+        let mut within_limit = true;
+        for rule in rules {
+            let target = single_header(&self.inner.req_header().headers, rule.header.as_str());
+            let source = rule.source.as_ref().and_then(|key| {
+                if let KeyGet::Header { name } = key {
+                    single_header(&self.inner.req_header().headers, name.as_str())
+                } else {
+                    self.key_get(key)
+                        .and_then(|value| http::HeaderValue::from_str(&value).ok())
+                }
+            });
+            let outcome = self.ctx.request_info.trace_id.apply_rule(rule, target, source);
+            within_limit &= outcome != ApplyOutcome::LimitExceeded;
+            self.ctx
+                .request_info
+                .trace_id
+                .reconcile_request(self.inner.req_header_mut());
+        }
+        within_limit
     }
 
     fn client_cert_info(&self) -> Option<crate::ctx::ClientCertInfo> {
@@ -1830,6 +1866,7 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
 
     fn key_get(&self, key: &KeyGet) -> Option<String> {
         match key {
+            KeyGet::TraceId => self.ctx.request_info.trace_id.standard_trace_id().map(str::to_owned),
             KeyGet::RemoteIp => {
                 let ip = self.remote_ip();
                 if ip.is_empty() {

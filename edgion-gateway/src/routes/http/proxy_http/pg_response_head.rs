@@ -53,7 +53,7 @@ pub(crate) fn response_head_commit_plan(
     }
 
     if let Some((_, owner)) = ctx.ai_state().and_then(|state| state.attached_guardrail.as_ref()) {
-        owner.prepare_head_replacement(response);
+        owner.prepare_head_replacement(response, &ctx.request_info.trace_id);
     }
 
     Ok(ResponseHeadCommitPlan::hold(limits))

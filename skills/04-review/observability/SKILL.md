@@ -21,6 +21,8 @@ before applying a decision to current code.
 
 ## Intentional design
 
+- [Core W3C context and incremental RequestId policies](intentional-design/request-trace-id-lifecycle.md)
+
 - [Debug access-log response header: accepted development-only limitations](intentional-design/debug-access-log-development-surface.md)
 
 - [`BandwidthLimit::create` invalid-rate path — NO RUNTIME LOG, DOC CLARIFIED](intentional-design/bandwidth-limit-invalid-rate-no-tracing.md)

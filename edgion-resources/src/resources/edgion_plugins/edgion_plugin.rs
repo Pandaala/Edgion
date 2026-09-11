@@ -12,8 +12,8 @@ use super::plugin_configs::{
     FormJsonTransformConfig, ForwardAuthConfig, GeoIpLocationConfig, GuardrailConfig, HeaderCertAuthConfig,
     HmacAuthConfig, IpRestrictionConfig, JsonSchemaValidationConfig, JweDecryptConfig, JwtAuthConfig, KeyAuthConfig,
     LdapAuthConfig, MockConfig, OpenidConnectConfig, ProxyRewriteConfig, RateLimitConfig, RateLimitRedisConfig,
-    RealIpConfig, RegionRouteConfig, RequestAccessPolicyConfig, RequestBodyBufferConfig, RequestMirrorPluginConfig,
-    RequestRestrictionConfig, ResponseRewriteConfig, TraceContextConfig, WasmConfig, WebhookKeyGetConfig,
+    RealIpConfig, RegionRouteConfig, RequestAccessPolicyConfig, RequestBodyBufferConfig, RequestIdConfig,
+    RequestMirrorPluginConfig, RequestRestrictionConfig, ResponseRewriteConfig, WasmConfig, WebhookKeyGetConfig,
     DEFAULT_INSTANCE_MAX_BYTES,
 };
 use crate::resources::http_route::{HTTPHeaderFilter, HTTPRequestRedirectFilter, HTTPURLRewriteFilter};
@@ -137,8 +137,8 @@ pub enum EdgionPlugin {
     Dsl(DslConfig),
     /// RegionRoute filter (consistent hash-range multi-region routing with optional failover)
     RegionRoute(RegionRouteConfig),
-    /// TraceContext filter (W3C trace-context propagation)
-    TraceContext(TraceContextConfig),
+    /// RequestId filter (request correlation identifiers)
+    RequestId(RequestIdConfig),
     /// ExtProc filter (external processing over a bidirectional gRPC stream)
     ExtProc(ExtProcConfig),
     /// Unary Pass/Replace/Reject decisions for canonical semantic SSE windows.
@@ -286,7 +286,7 @@ impl EdgionPlugin {
             | DynamicInternalUpstream(_)
             | DynamicExternalUpstream(_)
             | RegionRoute(_)
-            | TraceContext(_)
+            | RequestId(_)
             | ExtProc(_)
             | Guardrail(_)
             | AiGuard(_)
@@ -354,7 +354,7 @@ impl EdgionPlugin {
             EdgionPlugin::DynamicExternalUpstream(_) => "DynamicExternalUpstream",
             EdgionPlugin::Dsl(_) => "Dsl",
             EdgionPlugin::RegionRoute(_) => "RegionRoute",
-            EdgionPlugin::TraceContext(_) => "TraceContext",
+            EdgionPlugin::RequestId(_) => "RequestId",
             EdgionPlugin::ExtProc(_) => "ExtProc",
             EdgionPlugin::Guardrail(_) => "Guardrail",
             EdgionPlugin::AiGuard(_) => "AiGuard",
@@ -482,7 +482,7 @@ impl EdgionPlugin {
             | EdgionPlugin::RealIp(_)
             | EdgionPlugin::BandwidthLimit(_)
             | EdgionPlugin::AllEndpointStatus(_)
-            | EdgionPlugin::TraceContext(_)
+            | EdgionPlugin::RequestId(_)
             | EdgionPlugin::Guardrail(_)
             | EdgionPlugin::AiGuard(_)
             | EdgionPlugin::RequestAccessPolicy(_)
@@ -540,7 +540,7 @@ impl EdgionPlugin {
             | EdgionPlugin::RealIp(_)
             | EdgionPlugin::BandwidthLimit(_)
             | EdgionPlugin::AllEndpointStatus(_)
-            | EdgionPlugin::TraceContext(_)
+            | EdgionPlugin::RequestId(_)
             | EdgionPlugin::Guardrail(_)
             | EdgionPlugin::AiGuard(_)
             | EdgionPlugin::RequestAccessPolicy(_)
@@ -629,7 +629,7 @@ impl EdgionPlugin {
             | EdgionPlugin::BandwidthLimit(_)
             | EdgionPlugin::AllEndpointStatus(_)
             | EdgionPlugin::Dsl(_)
-            | EdgionPlugin::TraceContext(_)
+            | EdgionPlugin::RequestId(_)
             | EdgionPlugin::ExtProc(_)
             | EdgionPlugin::Guardrail(_)
             | EdgionPlugin::AiGuard(_)
@@ -682,7 +682,7 @@ impl EdgionPlugin {
             EdgionPlugin::RealIp(c) => c.validation_error(),
             EdgionPlugin::JwtAuth(c) => c.validation_error(),
             EdgionPlugin::DebugAccessLogToHeader(c) => c.validation_error(),
-            EdgionPlugin::TraceContext(c) => c.validation_error(),
+            EdgionPlugin::RequestId(c) => c.validation_error(),
             EdgionPlugin::ExtProc(c) => c.validation_error(),
             EdgionPlugin::Guardrail(c) => c.validation_error(),
             EdgionPlugin::AiGuard(c) => c.validation_error(),

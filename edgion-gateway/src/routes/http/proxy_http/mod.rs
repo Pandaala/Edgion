@@ -350,8 +350,8 @@ impl ProxyHttp for EdgionHttpProxy {
         // can be joined with its access-log entry instead of a heuristic
         // timestamp+path match.
         let summary = session.as_ref().request_summary();
-        match ctx.request_info.x_trace_id.as_deref() {
-            Some(trace_id) => format!("{summary}, x-trace-id: {trace_id}"),
+        match ctx.request_info.trace_id.standard_trace_id() {
+            Some(trace_id) => format!("{summary}, trace-id: {trace_id}"),
             None => summary,
         }
     }

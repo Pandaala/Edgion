@@ -1,0 +1,20 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: request-id-multiple
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - type: RequestId
+      config:
+        ids:
+          - header: x-otel-id
+            source: {type: traceId}
+            generateWhenMissing: false
+          - header: x-order-id
+            source: {type: header, name: x-business-id}
+            generateWhenMissing: false
+          - header: x-private-id
+            echoResponse: false
+          - header: x-response-id
+            forwardUpstream: false

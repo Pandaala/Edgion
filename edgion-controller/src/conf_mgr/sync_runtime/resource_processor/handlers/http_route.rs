@@ -1693,7 +1693,12 @@ fn backend_waf_invalid_reason(
                     return None;
                 }
                 filter.extension_ref.as_ref().and_then(|extension_ref| {
-                    super::route_utils::backend_waf_extension_ref_error(runtime, route_namespace, index, extension_ref)
+                    super::route_utils::backend_request_scope_extension_ref_error(
+                        runtime,
+                        route_namespace,
+                        index,
+                        extension_ref,
+                    )
                 })
             })
         })

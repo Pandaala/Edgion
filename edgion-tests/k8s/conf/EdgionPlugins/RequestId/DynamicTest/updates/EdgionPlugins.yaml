@@ -1,0 +1,16 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: request-id-dynamic
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - type: RequestId
+      config:
+        defaultId:
+          enabled: false
+        ids:
+          - header: x-dynamic-id
+            generator:
+              type: randomHex
+              prefix: v2-

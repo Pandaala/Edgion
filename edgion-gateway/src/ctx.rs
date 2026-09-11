@@ -1252,9 +1252,8 @@ pub struct RequestInfo {
         serialize_with = "edgion_resources::sensitive::masked::serialize"
     )]
     pub remote_ip: String,
-    /// Trace ID from x-trace-id header
-    #[serde(rename = "x-trace-id")]
-    pub x_trace_id: Option<String>,
+    /// Canonical W3C context and managed correlation identifiers.
+    pub trace_id: crate::request_trace_id::RequestTraceId,
     /// Normalized hostname from the Host header (lowercased, port-stripped).
     /// Construct via `NormalizedHostname::new()` — never apply `to_lowercase()` again.
     #[serde(rename = "host")]
@@ -2478,8 +2477,10 @@ pub struct EdgionHttpContext {
     /// Route misses retain only the empty pointer-sized option.
     pub gateway_info: Option<Arc<GatewayInfo>>,
 
-    /// Request information (hostname, path, x-trace-id)
+    /// Request information (hostname, path, W3C and correlation IDs)
     pub request_info: RequestInfo,
+    pub(crate) global_request_ids_initialized: bool,
+    pub(crate) gateway_request_ids_initialized: bool,
 
     /// Ordered, bounded information and error diagnostics for the request.
     pub diagnostics: RequestDiagnostics,
@@ -3543,6 +3544,8 @@ impl EdgionHttpContext {
             start_time: Instant::now(),
             gateway_info: None,
             request_info: RequestInfo::default(),
+            global_request_ids_initialized: false,
+            gateway_request_ids_initialized: false,
             diagnostics: RequestDiagnostics::default(),
             route_unit: None,
             selected_backend: None,

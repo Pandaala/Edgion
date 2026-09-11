@@ -154,6 +154,7 @@ pub(crate) async fn send_grpc_status_trailers_only(
     // discarded upstream response. Apply them after gateway defaults so
     // conditional operations observe the reply's real initial header set.
     ctx.drain_pending_response_header_ops(&mut resp);
+    ctx.request_info.trace_id.reconcile_response(&mut resp);
     // The local-reply queue is shared by all plugins. Reassert the mandatory
     // trailers-only framing and media type even if a non-ExtProc producer
     // queued an unsafe operation.
@@ -253,6 +254,7 @@ async fn send_html_error(
     resp.insert_header("Content-Type", "text/html")
         .expect("static ASCII header literal, cannot fail");
 
+    ctx.request_info.trace_id.reconcile_response(&mut resp);
     let resp_box = Box::new(resp);
     session.write_response_header(resp_box, false).await?;
     session
@@ -464,6 +466,34 @@ mod tests {
             .unwrap();
         session.read_request().await.unwrap();
         (session, client)
+    }
+
+    #[tokio::test]
+    async fn request_id_html_error_ignores_stale_queued_framing() {
+        let (mut session, mut client) = live_downstream_session().await;
+        let mut ctx = EdgionHttpContext::default();
+        ctx.request_info.trace_id.initialize(&session.req_header().headers);
+        ctx.queue_pending_response_header_op(PendingHeaderOp::Set {
+            name: "content-length".into(),
+            value: "0".into(),
+        });
+        send_html_error(
+            &mut session,
+            &mut ctx,
+            &ServerHeaderOpts::default(),
+            400,
+            b"expected-error-body",
+        )
+        .await
+        .unwrap();
+        assert!(session.response_written().unwrap().headers.contains_key("x-trace-id"));
+        drop(session);
+        let mut wire = Vec::new();
+        timeout(Duration::from_secs(2), client.read_to_end(&mut wire))
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(String::from_utf8(wire).unwrap().contains("expected-error-body"));
     }
 
     async fn live_grpc_web_session() -> (Session, tokio::io::DuplexStream) {

@@ -70,6 +70,11 @@ pub use plugin_configs::{
     MAX_JSON_POINTER_TOKENS, MAX_LRU_CACHE_CAPACITY, MAX_LRU_CACHE_SHARDS, MAX_TINY_UFO_CACHE_ENTRIES,
     MAX_TINY_UFO_LOGICAL_BYTES, TINY_UFO_WEIGHT_UNIT_BYTES,
 };
+pub use plugin_configs::{
+    valid_request_id_header, valid_request_id_value, DefaultIdConfig, RequestIdConfig, RequestIdGenerator,
+    RequestIdGeneratorKind, RequestIdRule, REQUEST_ID_MAX_COUNT, REQUEST_ID_MAX_HEADER_LEN, REQUEST_ID_MAX_PREFIX_LEN,
+    REQUEST_ID_MAX_TOTAL_VALUE_LEN, REQUEST_ID_MAX_VALUE_LEN,
+};
 pub use plugin_validation::PluginValidation;
 pub use validate::{applicable_stages_by_name, StageSet, HTTP_PLUGIN_STAGE_EXCEPTIONS};
 

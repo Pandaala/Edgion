@@ -85,6 +85,7 @@ pub async fn logging(
     // entry.timestamp is i64 milliseconds; guard negative values before casting.
     let status_code = entry.request_info.status_option();
     let meta = LogMeta {
+        trace_id: ctx.request_info.trace_id.typed_trace_id(),
         timestamp_ns: entry.timestamp.max(0) as u64 * 1_000_000,
         severity_number: LogMeta::severity_from_status(status_code),
         status_code,
@@ -122,8 +123,10 @@ pub async fn logging(
         let store = crate::observe::access_log_store::get_access_log_store();
         let trace_key = ctx
             .request_info
-            .x_trace_id
-            .clone()
+            .trace_id
+            .correlation_id("x-trace-id")
+            .or_else(|| ctx.request_info.trace_id.standard_trace_id())
+            .map(str::to_owned)
             .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
         if let Err(e) = store.store(trace_key, json_for_store) {
             tracing::warn!( // tracing-allow: access-log store send failure (registered exception, see 01-log-safety.md)

@@ -22,6 +22,8 @@ use async_trait::async_trait;
 /// actual ownership boundary.
 #[derive(Debug, Clone, Default)]
 pub struct LogMeta<'a> {
+    /// W3C trace identity, independent of custom correlation headers.
+    pub trace_id: Option<[u8; 16]>,
     /// Event timestamp in nanoseconds since Unix epoch.
     pub timestamp_ns: u64,
     /// OTel SeverityNumber (see opentelemetry-proto logs.proto).

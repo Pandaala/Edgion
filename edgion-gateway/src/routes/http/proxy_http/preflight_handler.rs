@@ -66,7 +66,8 @@ impl PreflightHandler {
             )
             .into());
         }
-        let resp = ResponseHeader::build(status, None)?;
+        let mut resp = ResponseHeader::build(status, None)?;
+        ctx.request_info.trace_id.reconcile_response(&mut resp);
         if !ctx.claim_final_response(status) {
             return Ok(true);
         }

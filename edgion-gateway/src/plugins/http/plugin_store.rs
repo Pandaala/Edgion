@@ -101,6 +101,10 @@ pub fn compile_plugins(ep: &EdgionPlugins) -> Arc<CompiledPlugins> {
     let mut spec = ep.clone();
     let mut errors = Vec::new();
     let mut runtime = PluginRuntime::new();
+    runtime.configure_request_id_scope(
+        ep.has_active_request_id(),
+        !ep.validate_request_id_early_attachment().is_empty(),
+    );
     let namespace = spec.metadata.namespace.clone().unwrap_or_else(|| "default".to_string());
     // Identity of the resource as the store keys it, so a plugin-entry scope
     // derived from it is unique exactly when the store entry is: re-deriving

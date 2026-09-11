@@ -7,7 +7,7 @@ use crate::conf_mgr::sync_runtime::resource_processor::{
     accepted_condition, condition_false, condition_types, update_condition, HandlerContext, ProcessResult,
     ProcessorHandler, ResourceRef,
 };
-use edgion_resources::prelude_resources::EdgionGatewayConfig;
+use edgion_resources::prelude_resources::{EdgionGatewayConfig, EdgionPlugins};
 use edgion_resources::resources::edgion_gateway_config::EdgionGatewayConfigStatus;
 use edgion_resources::ResourceKind;
 
@@ -44,7 +44,7 @@ impl Default for EdgionGatewayConfigHandler {
 
 #[async_trait::async_trait]
 impl ProcessorHandler<EdgionGatewayConfig> for EdgionGatewayConfigHandler {
-    fn preparse(&self, egc: &mut EdgionGatewayConfig, _ctx: &HandlerContext) -> Vec<String> {
+    fn preparse(&self, egc: &mut EdgionGatewayConfig, ctx: &HandlerContext) -> Vec<String> {
         // Phase 1 guard: reject outbound TLS subjectAltNames/hostname on
         // EdgionGatewayConfig where SAN pinning enforcement is not yet implemented.
         let mut errors = san_guard::check_egc_san(egc);
@@ -55,6 +55,23 @@ impl ProcessorHandler<EdgionGatewayConfig> for EdgionGatewayConfigHandler {
         errors.extend(egc.spec.validate_forwarded_headers());
         errors.extend(egc.spec.validate_real_ip());
         errors.extend(egc.spec.validate_preflight_policy());
+        if let Some(processor) = ctx.runtime().processor_registry.get("EdgionPlugins") {
+            for reference in egc.spec.global_plugins_ref.as_deref().unwrap_or_default() {
+                let namespace = reference.namespace.as_deref().unwrap_or("default");
+                let key = format!("{namespace}/{}", reference.name);
+                if let Some(plugins) = processor
+                    .get_raw_any(&key)
+                    .and_then(|raw| raw.downcast::<EdgionPlugins>().ok())
+                {
+                    errors.extend(
+                        plugins
+                            .validate_request_id_early_attachment()
+                            .into_iter()
+                            .map(|error| format!("globalPluginsRef {key}: {error}")),
+                    );
+                }
+            }
+        }
         errors
     }
 
@@ -71,6 +88,13 @@ impl ProcessorHandler<EdgionGatewayConfig> for EdgionGatewayConfigHandler {
             egc.metadata.name.clone().unwrap_or_default(),
         );
         ctx.secret_ref_manager().clear_resource_refs(&resource_ref);
+        ctx.runtime().plugin_ref_mgr.clear_resource_refs(&resource_ref);
+        for reference in egc.spec.global_plugins_ref.as_deref().unwrap_or_default() {
+            let namespace = reference.namespace.as_deref().unwrap_or("default");
+            ctx.runtime()
+                .plugin_ref_mgr
+                .add_ref(format!("{namespace}/{}", reference.name), resource_ref.clone());
+        }
 
         if let Some(ref mut ob) = egc.spec.outbound_tls {
             // Reset the runtime-resolved field first to avoid stale values on update.
@@ -115,6 +139,7 @@ impl ProcessorHandler<EdgionGatewayConfig> for EdgionGatewayConfigHandler {
             egc.metadata.name.clone().unwrap_or_default(),
         );
         ctx.secret_ref_manager().clear_resource_refs(&resource_ref);
+        ctx.runtime().plugin_ref_mgr.clear_resource_refs(&resource_ref);
         // A GatewayClass's ResolvedRefs/Accepted conditions depend on whether the
         // EdgionGatewayConfig it references exists, so recompute them on every EGC delete.
         requeue_all_gateway_classes(ctx).await;
@@ -159,6 +184,69 @@ mod tests {
         let runtime = Arc::new(ControllerRuntime::default());
         runtime.secret_store.replace_all(secrets);
         HandlerContext::new(None, None, Default::default(), 5, 20, runtime)
+    }
+
+    #[tokio::test]
+    async fn global_plugin_refs_replace_dependencies_and_clear_on_delete() {
+        use edgion_resources::resources::edgion_gateway_config::PluginReference;
+        let ctx = make_ctx_with_secrets(HashMap::new());
+        let handler = EdgionGatewayConfigHandler::new();
+        let mut egc = EdgionGatewayConfig::new("global", EdgionGatewayConfigSpec::default());
+        for name in ["first", "second"] {
+            egc.spec.global_plugins_ref = Some(vec![PluginReference {
+                name: name.to_string(),
+                namespace: None,
+            }]);
+            let _ = handler.parse(egc.clone(), &ctx).await;
+        }
+        assert!(ctx.runtime().plugin_ref_mgr.get_refs("default/first").is_empty());
+        assert_eq!(ctx.runtime().plugin_ref_mgr.get_refs("default/second").len(), 1);
+        handler.on_delete(&egc, &ctx).await;
+        assert!(ctx.runtime().plugin_ref_mgr.get_refs("default/second").is_empty());
+    }
+
+    #[tokio::test]
+    async fn global_request_id_validation_observes_replaced_raw_generation() {
+        use crate::conf_mgr::sync_runtime::resource_processor::handlers::EdgionPluginsHandler;
+        use crate::conf_mgr::sync_runtime::resource_processor::{LocalRawStore, ResourceProcessor};
+        use edgion_resources::resources::edgion_gateway_config::PluginReference;
+
+        let runtime = Arc::new(ControllerRuntime::default());
+        let ctx = HandlerContext::new(None, None, Default::default(), 5, 20, runtime.clone());
+        let processor = Arc::new(ResourceProcessor::<EdgionPlugins>::new(
+            "EdgionPlugins",
+            16,
+            Arc::new(EdgionPluginsHandler::new()),
+            runtime,
+        ));
+        let raw = Arc::new(LocalRawStore::new());
+        processor.set_raw_store(raw.clone());
+        ctx.runtime().processor_registry.register(processor);
+        let handler = EdgionGatewayConfigHandler::new();
+        let mut egc = EdgionGatewayConfig::new("global", EdgionGatewayConfigSpec::default());
+        egc.spec.global_plugins_ref = Some(vec![PluginReference {
+            name: "ids".to_string(),
+            namespace: None,
+        }]);
+        for source in ["traceId", "ctx", "traceId"] {
+            let source = if source == "ctx" {
+                serde_json::json!({"type": "ctx", "name": "business"})
+            } else {
+                serde_json::json!({"type": source})
+            };
+            let invalid = source["type"] == "ctx";
+            let plugins: EdgionPlugins = serde_json::from_value(serde_json::json!({
+                "apiVersion": "edgion.io/v1", "kind": "EdgionPlugins",
+                "metadata": {"namespace": "default", "name": "ids"},
+                "spec": {"requestPlugins": [{"type": "RequestId", "config": {
+                    "ids": [{"header": "x-business-id", "source": source}]
+                }}]}
+            }))
+            .unwrap();
+            raw.upsert("default/ids".to_string(), Arc::new(plugins));
+            let errors = handler.preparse(&mut egc, &ctx);
+            assert_eq!(!errors.is_empty(), invalid, "{errors:?}");
+        }
     }
 
     /// A cluster-scoped EdgionGatewayConfig whose `outboundTls.validation.caCertificateRefs` points

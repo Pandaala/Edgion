@@ -1,0 +1,12 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: request-id-nogen
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - type: RequestId
+      config:
+        ids:
+          - header: x-optional-id
+            generateWhenMissing: false

@@ -12,6 +12,18 @@ use opentelemetry_sdk::logs::SdkLoggerProvider;
 use crate::link_sys::{DataSender, LogMeta};
 use edgion_resources::output::{OtlpOutputConfig, OtlpProtocol};
 
+fn attach_request_trace_id(record: &mut impl LogRecord, trace_id: Option<[u8; 16]>) {
+    if let Some(trace_id) = trace_id {
+        // The SDK requires a SpanId; INVALID means no span association.
+        // Never label the remote parent as an exported gateway span.
+        record.set_trace_context(
+            opentelemetry::TraceId::from_bytes(trace_id),
+            opentelemetry::SpanId::INVALID,
+            None,
+        );
+    }
+}
+
 /// Parse an OTLP endpoint URL into (host, port). v1 is gRPC-only (`init` rejects
 /// every non-Grpc protocol), so there is a single supported port; default 4317
 /// when absent. Uses `http::Uri` to handle scheme, IPv6 brackets, and paths.
@@ -199,6 +211,7 @@ impl DataSender<String> for OtlpLogSender {
         let ts = SystemTime::UNIX_EPOCH + Duration::from_nanos(meta.timestamp_ns);
         let mut record = logger.create_log_record();
         record.set_body(AnyValue::String(data.into()));
+        attach_request_trace_id(&mut record, meta.trace_id);
         record.set_timestamp(ts);
         record.set_observed_timestamp(SystemTime::now());
         if let Some(sev) = numeric_to_severity(meta.severity_number) {
@@ -243,6 +256,20 @@ mod tests {
     use super::*;
     use edgion_resources::sensitive::{SensitiveMode, SENSITIVE_MODE};
     use std::sync::atomic::Ordering;
+
+    #[test]
+    fn request_trace_id_is_typed_without_claiming_a_gateway_span() {
+        let provider = SdkLoggerProvider::builder().build();
+        let logger = provider.logger("request-id-test");
+        let mut record = logger.create_log_record();
+        attach_request_trace_id(&mut record, None);
+        assert!(record.trace_context().is_none());
+        attach_request_trace_id(&mut record, Some([7; 16]));
+        let context = record.trace_context().unwrap();
+        assert_eq!(context.trace_id.to_bytes(), [7; 16]);
+        assert_eq!(context.span_id, opentelemetry::SpanId::INVALID);
+        assert_eq!(context.trace_flags, None);
+    }
 
     fn assert_sensitive_path_in_subprocess(test_name: &str, mode: SensitiveMode, expected: &str) {
         const CHILD_ENV: &str = "EDGION_OTLP_SENSITIVE_PATH_CHILD";

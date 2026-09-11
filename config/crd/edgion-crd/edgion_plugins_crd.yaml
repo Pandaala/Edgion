@@ -373,7 +373,7 @@ spec:
                           - RegionRoute
                           - RequestMirror
                           - FaultInjection
-                          - TraceContext
+                          - RequestId
                           - ExtProc
                           - Guardrail
                           - AiGuard

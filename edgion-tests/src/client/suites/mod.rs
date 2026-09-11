@@ -106,8 +106,8 @@ pub use edgion_plugins::{
     RateLimitDynamicUpdateTestSuite, RateLimitRedisTestSuite, RateLimitTestSuite, RealIpPluginTestSuite,
     RegionRouteTestSuite, RequestAccessPolicyHmacDynamicDeletedTestSuite,
     RequestAccessPolicyHmacDynamicInitialTestSuite, RequestAccessPolicyHmacDynamicUpdatedTestSuite,
-    RequestAccessPolicyTestSuite, RequestMirrorTestSuite, RequestRestrictionTestSuite, ResolvedRefsTestSuite,
-    ResponseRewriteTestSuite, TraceContextPluginTestSuite, WafDynamicDeletedTestSuite, WafDynamicInitialTestSuite,
+    RequestAccessPolicyTestSuite, RequestIdPluginTestSuite, RequestMirrorTestSuite, RequestRestrictionTestSuite,
+    ResolvedRefsTestSuite, ResponseRewriteTestSuite, WafDynamicDeletedTestSuite, WafDynamicInitialTestSuite,
     WafDynamicRecoveredTestSuite, WafDynamicUpdatedTestSuite, WasmPluginTestSuite, WebhookKeyGetTestSuite,
 };
 

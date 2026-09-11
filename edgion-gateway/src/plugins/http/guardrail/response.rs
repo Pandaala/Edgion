@@ -993,9 +993,10 @@ mod tests {
     fn pending_release_upgrades_to_precommit_replace_or_fail() {
         let mut reject = processor(false);
         reject.first_head_window_pending = false;
-        reject
-            .owner
-            .prepare_head_replacement(&pingora_http::ResponseHeader::build(200, None).unwrap());
+        reject.owner.prepare_head_replacement(
+            &pingora_http::ResponseHeader::build(200, None).unwrap(),
+            &crate::request_trace_id::RequestTraceId::default(),
+        );
         let mut reject_sink = PendingReleaseHeadSink {
             held: true,
             ..PendingReleaseHeadSink::default()

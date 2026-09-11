@@ -35,3 +35,4 @@ AllEndpointStatusTls	EdgionPlugins/AllEndpointStatus/DynamicTest	initial	edgionp
 RequestMirrorReferenceGrant	EdgionPlugins/RequestMirror	DynamicTest/initial	edgionplugins.edgion.io	edgionplugins	edgion-default	mirror-grant-dynamic
 RegionRouteValidation	EdgionPlugins/RegionRoute/DynamicTest	initial	edgionplugins.edgion.io	edgionplugins	edgion-test	rrv-small
 TlsRoutePluginsReload	TLSRoute/StreamPlugins/DynamicTest	routes	tlsroutes.gateway.networking.k8s.io	tlsroute	edgion-test	tls-sp-reload-terminate
+RequestIdDynamic	EdgionPlugins/RequestId/DynamicTest	initial	edgionplugins.edgion.io	edgionplugins	edgion-default	request-id-dynamic

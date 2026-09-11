@@ -459,17 +459,11 @@ async fn request_client_with_timeout(ctx: &ScenarioCtx, timeout: Duration) -> Re
         .context("failed to build AI backend policy request client")
 }
 
-async fn ai_request(
-    ctx: &ScenarioCtx,
-    entropy: u128,
-    mode: Option<&str>,
-    streaming: bool,
-) -> Result<reqwest::Response> {
+async fn ai_request(ctx: &ScenarioCtx, mode: Option<&str>, streaming: bool) -> Result<reqwest::Response> {
     let query = mode.map_or(String::new(), |mode| format!("?mock_mode={mode}"));
     request_client(ctx)
         .await?
         .post(format!("http://{HOST}:{AI_GATEWAY_PORT}/v1/chat/completions{query}"))
-        .header("x-trace-id", uuid::Uuid::from_u128(entropy).to_string())
         .json(&json!({"model": "fixture-model", "stream": streaming, "messages": []}))
         .send()
         .await
@@ -491,7 +485,7 @@ async fn capture_retry_request(ctx: &ScenarioCtx, fixture: &str) -> Result<reqwe
 async fn wait_unary(ctx: &ScenarioCtx, success: bool) -> Result<Value> {
     let deadline = Instant::now() + Duration::from_secs(20);
     loop {
-        let response = ai_request(ctx, 0, None, false).await?;
+        let response = ai_request(ctx, None, false).await?;
         if response.status().is_success() == success {
             return if success {
                 response.json().await.context("AI policy response was not JSON")
@@ -507,7 +501,7 @@ async fn wait_unary(ctx: &ScenarioCtx, success: bool) -> Result<Value> {
 }
 
 async fn assert_normal_eos(ctx: &ScenarioCtx) -> Result<()> {
-    let response = ai_request(ctx, 0, Some("paced"), true).await?;
+    let response = ai_request(ctx, Some("paced"), true).await?;
     anyhow::ensure!(
         response.status().is_success(),
         "paced request returned {}",
@@ -528,7 +522,7 @@ async fn assert_normal_eos(ctx: &ScenarioCtx) -> Result<()> {
 async fn wait_unary_path_prefix(ctx: &ScenarioCtx) -> Result<Value> {
     let deadline = Instant::now() + Duration::from_secs(20);
     loop {
-        let last = match ai_request(ctx, 0, None, false).await {
+        let last = match ai_request(ctx, None, false).await {
             Ok(response) if response.status().is_success() => match response.json::<Value>().await {
                 Ok(body) if body.pointer("/mock/path_has_prefix") == Some(&Value::Bool(true)) => {
                     return Ok(body);
@@ -575,7 +569,7 @@ async fn upstream_abort_sse_summary(response: reqwest::Response) -> Result<(usiz
 async fn wait_upstream_abort_ready(ctx: &ScenarioCtx) -> Result<()> {
     let deadline = Instant::now() + Duration::from_secs(20);
     loop {
-        let last = match ai_request(ctx, 0, None, true).await {
+        let last = match ai_request(ctx, None, true).await {
             Ok(response) => match upstream_abort_sse_summary(response).await {
                 Ok((3, false)) => return Ok(()),
                 Ok((events, saw_done)) => format!("events={events}, done={saw_done}"),
@@ -786,11 +780,11 @@ async fn assert_upstream_abort(ctx: &ScenarioCtx, bases: &ProviderBases) -> Resu
 async fn sample_weighted(ctx: &ScenarioCtx) -> Result<(usize, usize)> {
     let mut a = 0;
     let mut b = 0;
-    for entropy in 0..32 {
-        let response = ai_request(ctx, entropy, None, false).await?;
+    for sample in 0..512 {
+        let response = ai_request(ctx, None, false).await?;
         anyhow::ensure!(
             response.status().is_success(),
-            "weighted request {entropy} returned {}",
+            "weighted request {sample} returned {}",
             response.status()
         );
         let body: Value = response.json().await.context("weighted response was not JSON")?;
@@ -805,9 +799,46 @@ async fn sample_weighted(ctx: &ScenarioCtx) -> Result<(usize, usize)> {
     Ok((a, b))
 }
 
-async fn wait_weighted(ctx: &ScenarioCtx, expected: (usize, usize)) -> Result<()> {
-    wait_for(&format!("weighted distribution {expected:?}"), || async {
-        Ok(sample_weighted(ctx).await? == expected)
+async fn assert_weighted(ctx: &ScenarioCtx) -> Result<()> {
+    // Client correlation IDs no longer select routing entropy. A single bounded
+    // sample tests the live 1:3 policy; never retry a failed distribution until it
+    // passes. Hoeffding bounds false rejection below 2 * exp(-16) per batch.
+    // Exact integer selection remains covered by weighted_has_exact_small_integer_distribution.
+    let (a, b) = sample_weighted(ctx).await?;
+    anyhow::ensure!(
+        a + b == 512 && (64..=192).contains(&a),
+        "expected 1:3 weighted routing within 12.5 percentage points, got {a}:{b} over 512 requests"
+    );
+    Ok(())
+}
+
+async fn wait_weighted_generation(ctx: &ScenarioCtx, consecutive_errors: u64) -> Result<()> {
+    wait_for("weighted route and traffic policy publication", || async {
+        let routes = gateway_policies(ctx, "httproute").await?;
+        let policies = gateway_policies(ctx, "edgionbackendtrafficpolicy").await?;
+        let route_ready = routes
+            .iter()
+            .find(|item| resource_named(item, ROUTE))
+            .is_some_and(|route| {
+                route
+                    .pointer("/spec/rules/0/backendRefs/0/weight")
+                    .and_then(Value::as_u64)
+                    == Some(1)
+                    && route
+                        .pointer("/spec/rules/0/backendRefs/1/weight")
+                        .and_then(Value::as_u64)
+                        == Some(3)
+            });
+        let policy_ready = policies
+            .iter()
+            .find(|item| resource_named(item, TRAFFIC_POLICY))
+            .is_some_and(|policy| {
+                policy
+                    .pointer("/spec/outlierDetection/consecutiveErrors")
+                    .and_then(Value::as_u64)
+                    == Some(consecutive_errors)
+            });
+        Ok(route_ready && policy_ready)
     })
     .await
 }
@@ -950,7 +981,7 @@ async fn run_inner(ctx: &ScenarioCtx) -> Result<()> {
 
     apply(ctx, &secret_yaml(CREDENTIAL_A, "ai-provider-rotated-test-key")).await?;
     wait_for("AI credential Secret rotation", || async {
-        let response = ai_request(ctx, 0, None, false).await?;
+        let response = ai_request(ctx, None, false).await?;
         if !response.status().is_success() {
             return Ok(false);
         }
@@ -990,13 +1021,14 @@ async fn run_inner(ctx: &ScenarioCtx) -> Result<()> {
     )
     .await?;
     wait_policy_class(ctx, "edgionbackendtrafficpolicy", TRAFFIC_POLICY, Some("ai")).await?;
-    wait_weighted(ctx, (8, 24)).await?;
+    wait_weighted_generation(ctx, 3).await?;
+    assert_weighted(ctx).await?;
 
     let backend_hot =
         backend_yaml_with_max_output(BACKEND_A, CREDENTIAL_A, &format!("{}/ai/prefix", bases.mtls), Some(777));
     let policy_hot = traffic_policy_yaml(7);
     tokio::try_join!(apply(ctx, &backend_hot), apply(ctx, &policy_hot))?;
-    wait_weighted(ctx, (8, 24)).await?;
+    wait_weighted_generation(ctx, 7).await?;
     wait_for("backend and traffic policy hot reload", || async {
         let backends = gateway_policies(ctx, "edgionbackend").await?;
         Ok(backends
@@ -1009,6 +1041,7 @@ async fn run_inner(ctx: &ScenarioCtx) -> Result<()> {
             }))
     })
     .await?;
+    assert_weighted(ctx).await?;
     let policies = gateway_policies(ctx, "edgionbackendtrafficpolicy").await?;
     let policy = policies
         .iter()

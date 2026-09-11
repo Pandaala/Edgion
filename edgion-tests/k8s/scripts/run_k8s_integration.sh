@@ -2611,7 +2611,7 @@ run_all_selected_suites() {
     "EdgionPlugins/WebhookKeyGet|EdgionPlugins|WebhookKeyGet"
     "EdgionPlugins/PluginValidationStatus|EdgionPlugins|PluginValidationStatus"
     "EdgionPlugins/RequestAccessPolicy|EdgionPlugins|RequestAccessPolicy"
-    "EdgionPlugins/TraceContext|EdgionPlugins|TraceContext"
+    "EdgionPlugins/RequestId|EdgionPlugins|RequestId"
     "EdgionPlugins/Wasm|EdgionPlugins|Wasm"
     "EdgionPlugins/Dsl|EdgionPlugins|Dsl"
     "EdgionPlugins/Dsl|EdgionPlugins|DslGrpcError"

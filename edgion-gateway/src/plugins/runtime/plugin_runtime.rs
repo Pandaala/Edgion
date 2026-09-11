@@ -67,10 +67,10 @@ use crate::plugins::http::real_ip::RealIp;
 use crate::plugins::http::region_route::RegionRoute;
 use crate::plugins::http::request_access_policy::RequestAccessPolicy;
 use crate::plugins::http::request_body_buffer::RequestBodyBuffer;
+use crate::plugins::http::request_id::RequestId;
 use crate::plugins::http::request_mirror::RequestMirrorPlugin;
 use crate::plugins::http::request_restriction::RequestRestriction;
 use crate::plugins::http::response_rewrite::ResponseRewrite;
-use crate::plugins::http::trace_context::TraceContext;
 use crate::plugins::http::waf::WafPlugin;
 use crate::plugins::http::wasm::WasmPlugin;
 use crate::plugins::http::webhook_key_get::WebhookKeyGet;
@@ -145,6 +145,15 @@ pub struct PluginRuntime {
     policy_bypassed: Vec<String>,
     /// Present only when this runtime owns one compiled logical WAF.
     waf_candidate: Option<WafCandidate>,
+    has_request_id: bool,
+    invalid_early_request_id: bool,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RequestIdPhase {
+    Normal,
+    Early,
+    AfterEarly,
 }
 
 /// Result of attempting to build a stage-specific filter from an EdgionPlugin.
@@ -255,6 +264,8 @@ impl PluginRuntime {
             policy_blocks: Vec::new(),
             policy_bypassed: Vec::new(),
             waf_candidate: None,
+            has_request_id: false,
+            invalid_early_request_id: false,
         }
     }
 
@@ -289,6 +300,15 @@ impl PluginRuntime {
 
     pub(crate) fn waf_candidate(&self) -> Option<&WafCandidate> {
         self.waf_candidate.as_ref()
+    }
+
+    pub(crate) fn configure_request_id_scope(&mut self, has_request_id: bool, invalid_early: bool) {
+        self.has_request_id = has_request_id;
+        self.invalid_early_request_id = invalid_early;
+    }
+
+    pub(crate) fn has_request_id(&self) -> bool {
+        self.has_request_id
     }
 
     pub(crate) fn has_waf(&self) -> bool {
@@ -1509,7 +1529,7 @@ impl PluginRuntime {
                 CreateResult::Ok(Some(DynamicExternalUpstream::create(config)))
             }
             EdgionPlugin::RealIp(config) => CreateResult::Ok(Some(RealIp::create(config))),
-            EdgionPlugin::TraceContext(config) => CreateResult::Ok(Some(TraceContext::create(config))),
+            EdgionPlugin::RequestId(config) => CreateResult::Ok(RequestId::create(config)),
             EdgionPlugin::ExtProc(_) => CreateResult::WrongStage,
             EdgionPlugin::Guardrail(_) => CreateResult::WrongStage,
             EdgionPlugin::ForwardAuth(config) => match ForwardAuth::new(config) {
@@ -1575,7 +1595,7 @@ impl PluginRuntime {
             | EdgionPlugin::CtxSet(_)
             | EdgionPlugin::WebhookKeyGet(_)
             | EdgionPlugin::RealIp(_)
-            | EdgionPlugin::TraceContext(_)
+            | EdgionPlugin::RequestId(_)
             | EdgionPlugin::ForwardAuth(_)
             | EdgionPlugin::OpenidConnect(_)
             | EdgionPlugin::BandwidthLimit(_)
@@ -1648,7 +1668,7 @@ impl PluginRuntime {
             | EdgionPlugin::DynamicExternalUpstream(_)
             | EdgionPlugin::Dsl(_)
             | EdgionPlugin::RegionRoute(_)
-            | EdgionPlugin::TraceContext(_)
+            | EdgionPlugin::RequestId(_)
             | EdgionPlugin::RequestAccessPolicy(_)
             | EdgionPlugin::Canary(_)
             | EdgionPlugin::AiGuard(_)
@@ -1696,7 +1716,7 @@ impl PluginRuntime {
             | EdgionPlugin::CtxSet(_)
             | EdgionPlugin::WebhookKeyGet(_)
             | EdgionPlugin::RealIp(_)
-            | EdgionPlugin::TraceContext(_)
+            | EdgionPlugin::RequestId(_)
             | EdgionPlugin::ForwardAuth(_)
             | EdgionPlugin::OpenidConnect(_)
             | EdgionPlugin::DirectEndpoint(_)
@@ -1748,7 +1768,7 @@ impl PluginRuntime {
             EdgionPlugin::WebhookKeyGet(_) => "WebhookKeyGet",
             EdgionPlugin::DirectEndpoint(_) => "DirectEndpoint",
             EdgionPlugin::RealIp(_) => "RealIp",
-            EdgionPlugin::TraceContext(_) => "TraceContext",
+            EdgionPlugin::RequestId(_) => "RequestId",
             EdgionPlugin::ForwardAuth(_) => "ForwardAuth",
             EdgionPlugin::OpenidConnect(_) => "OpenidConnect",
             EdgionPlugin::DebugAccessLogToHeader(_) => "DebugAccessLogToHeader",
@@ -1858,17 +1878,39 @@ impl PluginRuntime {
 
     /// Run request stage filters (async)
     pub async fn run_request_plugins(&self, s: &mut Session, ctx: &mut EdgionHttpContext) {
-        self.run_request_plugins_impl(s, ctx, false).await;
+        self.run_request_plugins_impl(s, ctx, false, RequestIdPhase::Normal)
+            .await;
     }
 
     /// Dispatch the selected HTTP backend's filters before its body pump starts.
     /// Only a first-attempt read-only mirror tee may be installed after the
     /// request-body policy freeze; capture and mutation remain unavailable.
     pub(crate) async fn run_backend_request_plugins(&self, s: &mut Session, ctx: &mut EdgionHttpContext) {
-        self.run_request_plugins_impl(s, ctx, true).await;
+        self.run_request_plugins_impl(s, ctx, true, RequestIdPhase::Normal)
+            .await;
     }
 
-    async fn run_request_plugins_impl(&self, s: &mut Session, ctx: &mut EdgionHttpContext, backend_request: bool) {
+    pub(crate) async fn run_early_request_ids(&self, s: &mut Session, ctx: &mut EdgionHttpContext) -> bool {
+        if self.invalid_early_request_id || (self.has_request_id && !self.invalid_plugins.is_empty()) {
+            return false;
+        }
+        self.run_request_plugins_impl(s, ctx, false, RequestIdPhase::Early)
+            .await;
+        !ctx.plugin_terminated()
+    }
+
+    pub(crate) async fn run_request_plugins_after_early_ids(&self, s: &mut Session, ctx: &mut EdgionHttpContext) {
+        self.run_request_plugins_impl(s, ctx, false, RequestIdPhase::AfterEarly)
+            .await;
+    }
+
+    async fn run_request_plugins_impl(
+        &self,
+        s: &mut Session,
+        ctx: &mut EdgionHttpContext,
+        backend_request: bool,
+        phase: RequestIdPhase,
+    ) {
         if self.request_plugins.is_empty() {
             return;
         }
@@ -1884,6 +1926,12 @@ impl PluginRuntime {
         };
 
         for filter in &self.request_plugins {
+            let is_request_id = filter.name() == "RequestId";
+            if (phase == RequestIdPhase::Early && !is_request_id)
+                || (phase == RequestIdPhase::AfterEarly && is_request_id)
+            {
+                continue;
+            }
             let previous_identity = session_adapter.replace_plugin_entry_identity(
                 crate::ctx::CurrentPluginEntryIdentity::new(filter.name(), filter.alias()),
             );

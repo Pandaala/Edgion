@@ -35,3 +35,5 @@ pub mod sp_weighted;
 pub mod tcp_esp_reload;
 pub mod tls_route_plugins_reload;
 pub mod waf_dynamic;
+
+pub mod request_id_dynamic;

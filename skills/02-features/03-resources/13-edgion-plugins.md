@@ -99,7 +99,7 @@ generation. See
 | `ExtProc` | Envoy-compatible external processing. One `requestPlugins` entry owns one request-scoped Process stream across request headers/body and final response headers/body. Request bodies support `BUFFERED`/`STREAMED`; response bodies support bounded transport-window `STREAMED` only (no full-response aggregation and no semantic SSE-window claim). |
 | `Guardrail` | One bounded HTTP Pass/Replace/Reject decision per canonical semantic AI SSE window. The request-stage owner installs an internal semantic response processor after AI translation/usage and before ordinary writable processors. Pass is byte-identical; policy Reject is never failed open. See `docs/en/user-guide/http-route/filters/edgion-plugins/guardrail.md`. |
 | `Wasm` | Executes a proxy-wasm ABI v0.2 guest module (WebAssembly, run via wasmtime) in-process: header mutation, local responses, HTTP callouts (`calloutAllowlist`-gated; request phase with Pause/resume, and from `on_tick` with root-context callbacks when the module's plugins agree on one allowlist), buffered `proxy_on_request_body` when the request entry declares `body:`, read-only response-body observation, shared data (per-module KV with CAS), and `on_tick` timers. No body rewrite or gRPC callouts. Source forms: `file` / `inline` / `url` / `oci` (gateway-side pull from an OCI registry, with a content-addressed disk cache). See `docs/en/user-guide/http-route/filters/edgion-plugins/wasm.md`. |
-| `TraceContext` | W3C trace-context propagation and normalization |
+| `RequestId` | Incremental correlation IDs; W3C context is core gateway behavior |
 
 ### Routing/Backend
 
@@ -265,3 +265,11 @@ Full operator guidance — including the fleet-wide `GET /api/v1/diagnostics/unk
 endpoint and the `POST /api/v1/validate/{kind}` endpoint for building your own blocking
 gate — is in `docs/en/ops-guide/plugin-config-unknown-fields.md` and
 [Admin API — diagnostics/validate](../../01-architecture/01-controller/02-admin-api.md).
+
+## RequestId configuration and phases
+
+`defaultId` is an optional patch with `enabled`, `forwardUpstream`, and `echoResponse`; absent fields leave previous policy unchanged. `ids` adds destination headers with optional shared KeyGet `source`, `generateWhenMissing` (true), `generator`, `forwardUpstream` (true), and `echoResponse` (true). Generators are uuidV4 (default), uuidV7, randomHex (`bytes`: 8-64, default 16), nanoId (`length`: 8-128, default 21), and md5 over fresh random bytes. `prefix` applies only to newly generated values.
+
+Only Header and TraceId sources work at early Global/Gateway attachments; route entries may also use permitted Ctx keys. Early conditions accept KeyExist/KeyMatch over Header, Method or TraceId; body/dye wrappers are rejected. BackendRef scope is invalid. Schema validation is shared with the Gateway and attachment dependencies requeue after plugin updates. Rules accumulate across tiers, while disabling the implicit default does not remove explicitly configured custom IDs. Core W3C propagation remains enabled independently.
+
+See [complete RequestId examples and bounds](../../../docs/en/user-guide/http-route/filters/edgion-plugins/request-id.md).
