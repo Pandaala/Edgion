@@ -3,7 +3,7 @@
 ## Scope
 
 - Baseline: `c0ebeefc`.
-- Pipeline state: terminal candidate; changed and independently approved, with commit-gate verification active.
+- Pipeline state: terminal; changed and committed after independent approval and all gates.
 - Active anchor crate: `edgion-gateway`.
 - Target: `edgion-gateway/src/link_sys/providers/webhook/resolver.rs`.
 - Exact technical write scope is not approved during analysis. Existing `edgion-tests/**`, campaign records, unrelated modules and user-protected paths are read-only.
@@ -43,4 +43,4 @@
 ## Handoff
 
 - Ledger/changelog updated: yes.
-- Commit: pending automatic local commit.
+- Commit: `bfb8fe89`.

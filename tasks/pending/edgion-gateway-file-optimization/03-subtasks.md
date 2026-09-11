@@ -530,7 +530,7 @@
 | `edgion-gateway/src/plugins/runtime/conditions/evaluator.rs` | `plugins-runtime` | source | changed | B0121 |
 | `edgion-gateway/src/plugins/runtime/conditions/extract.rs` | `plugins-runtime` | source | examined-no-change | B0121 |
 | `edgion-gateway/src/plugins/runtime/conditions/mod.rs` | `plugins-runtime` | source | examined-no-change | B0121 |
-| `edgion-gateway/src/plugins/runtime/dye_plan.rs` | `plugins-runtime` | source | pending | D0083 resolved externally in `bea47373`; reopen changed file for current campaign audit; B0122 history retained |
+| `edgion-gateway/src/plugins/runtime/dye_plan.rs` | `plugins-runtime` | source | examined-no-change | B0308: independent LGTM; source inventory remains a bounded smoke guard backed by executable stage/producer coverage |
 | `edgion-gateway/src/plugins/runtime/edgion_config_data/conf_handler.rs` | `plugins-runtime` | source | changed | B0123: decision-scoped immutable snapshot capture and torn-generation regression |
 | `edgion-gateway/src/plugins/runtime/edgion_config_data/mod.rs` | `plugins-runtime` | source | changed | B0123: crate-private snapshot API export |
 | `edgion-gateway/src/plugins/runtime/gateway_api_filters/cors_filter.rs` | `plugins-runtime` | source | pending | External 9b787978..b297af6e requires review; prior changed: B0124: bounded inline CORS header pairs and validated-only construction |
