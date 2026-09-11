@@ -69,9 +69,9 @@ rateLimitExceeded and pluginAlias. Missing declarations caused an actual
 Controller schema rejection before the CRD was corrected. Structural CRD tests
 (14) and condition-specific guards (7) passed after correction. The complete
 CRD guard failed its pre-existing KeyGet count/traceId drift during that
-verification. The remaining cardinality issue is tracked in
-[the request-trace-id task](../../../../tasks/pending/request-trace-id/request-trace-id.md).
-Do not report that whole guard as passing without fresh verification.
+verification, so that historical run did not establish a passing complete guard.
+The later correction and current regression boundary are recorded in the
+[EdgionPlugins closed-enum guard](../../resources/regression-guards/edgion-plugins-crd-type-enum-drift.md).
 
 RateLimitLocalOverflowDynamic passed against the current Controller/Gateway binaries:
 absent, initial local allowance/Redis Deny, invalid-reference 500, repaired alias,

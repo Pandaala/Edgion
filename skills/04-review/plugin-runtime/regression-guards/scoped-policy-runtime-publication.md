@@ -94,9 +94,10 @@ The dynamic scenario needs a freshly preloaded shared topology after its final
 cleanup because of a separately recorded listener-recreation defect. Kubernetes
 prepare also encounters a separately recorded EdgionTls structural schema rejection;
 the test copy removes that one TLS declaration and preserves the EGC CRD exactly.
-The supplemental KeyGet cardinality assertion failed independently; it remains
-in the separate pending KeyGet traceId/CRD drift task and is not included in the
-passing-check claims.
+The supplemental KeyGet cardinality assertion failed independently during that
+historical verification and was not included in those passing-check claims. The
+later `traceId`/CRD correction is recorded in the
+[EdgionPlugins closed-enum guard](../../resources/regression-guards/edgion-plugins-crd-type-enum-drift.md).
 Do not infer cross-kind transactions across separately arriving inputs, fleet-wide
 atomicity, revocation of already admitted traffic, or snapshots of mutable external
 dependencies. Gateway traffic diagnostics remain in canonical access/plugin logs

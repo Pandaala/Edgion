@@ -130,3 +130,9 @@ core always generates missing context and does not expose those old controls.
 
 Re-evaluate on header write-path additions, ownership selection changes, KeyGet
 additions, exporter integration or new plugin scopes.
+
+The `KeyGet::TraceId` addition was re-evaluated on 2026-09-11. It remains a local read of the
+canonical request-owned W3C identity and is intentionally distinct from reading the complete
+`traceparent` header or the suppressible `x-trace-id` projection. The Kubernetes condition-schema
+alignment is guarded under
+[`resources/regression-guards/edgion-plugins-crd-type-enum-drift.md`](../../resources/regression-guards/edgion-plugins-crd-type-enum-drift.md).

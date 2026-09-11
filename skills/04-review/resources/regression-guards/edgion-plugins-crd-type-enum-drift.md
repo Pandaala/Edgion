@@ -1,13 +1,13 @@
 ---
 name: edgion-plugins-crd-type-enum-drift
-description: Use when reviewing findings that compare the EdgionPlugins CRD `type` enum against the Rust `EdgionPlugin` variants and claim "plugin type X is missing from the CRD / un-appliable" or "the CRD enum lists a stale/unknown type". Covers the per-stage enum design, what counts as real drift vs. intentional lenient admission, and the guard that now prevents it.
+description: Use when reviewing drift between closed EdgionPlugins CRD enums and their Rust tagged enums, including per-stage EdgionPlugin types and the shared condition KeyGet accessor.
 status: fixed
-finding_id: resource-02
+finding_id: resource-02, key-get-trace-id-condition-crd-drift
 closed: 2026-06-16
 knowledge_type: regression-guards
 ---
 
-# EdgionPlugins CRD `type` enum drifted from `EdgionPlugin` — FIXED (reconciled + guarded)
+# EdgionPlugins closed enums drifted from Rust — FIXED (reconciled + guarded)
 
 ## Conclusion
 
@@ -21,6 +21,13 @@ plugins) were absent from `requestPlugins` → hard-rejected at admission; `Exte
 `WebhookKeyGet` were dead entries (no `EdgionPlugin` variant); `ForwardAuth` was duplicated;
 and `ExtensionRef` was also a dead entry in `upstreamResponseFilterPlugins`. Fixed by
 reconciling the enums and adding `edgion-resources/tests/plugin_crd_type_coverage.rs`.
+
+The same CRD also declares a closed `KeyGet.type` enum for shared plugin conditions. When
+`KeyGet::TraceId` was added, the Rust schema and Gateway runtime accepted `traceId`, but the
+CRD and two count/snapshot assertions remained at eleven variants. Kubernetes therefore rejected
+an otherwise valid trace-ID condition. This was fixed by adding `traceId` to the anchored
+`keyGetSchema`, updating both snapshots to twelve variants, and ordering the bidirectional drift
+assertion before the count assertion so a future mismatch reports its concrete set difference.
 
 Two classes of re-report are **not accepted** as drift:
 
@@ -83,6 +90,14 @@ operator-feedback path. This is adjacent to but distinct from
 at the Gateway deserialize layer. Both reflect the same value: surface operator errors as status
 conditions where possible, and keep the typed enum strict.
 
+**4. Nested `KeyGet.type` is a separate closed-enum boundary**
+
+`KeyGet` is shared across plugins and conditions, but the condition object is outside the
+preserve-unknown `config` bag and its `type` enum is enforced by Kubernetes admission. The guard
+in `plugin_crd_condition_coverage.rs` compares `schema_for!(KeyGet)` with the CRD enum in both
+directions. Its fixed universe-size assertion is only a schema-extraction sanity pin; it must run
+after the set comparison so it cannot hide the actionable missing/stale values.
+
 ## Re-evaluation triggers
 
 - A new `EdgionPlugin` variant is added → the guard's Direction-1 fails until the variant is
@@ -90,6 +105,9 @@ conditions where possible, and keep the typed enum strict.
 - A genuine decision to make wrong-stage placement a hard admission error → then tighten the
   enums to exact-equality and upgrade the guard to a strict per-stage check (and add a `type`
   enum to `upstreamResponsePlugins`). Until then, lenient admission stands.
+- A new `KeyGet` variant is added → update every operator-facing closed enum and snapshot. The
+  bidirectional condition guard must report any missing or stale value before its universe-size
+  sanity assertion.
 
 ## Reference
 
@@ -97,7 +115,23 @@ conditions where possible, and keep the typed enum strict.
 - Rust authority: `edgion-resources/src/resources/edgion_plugins/validate.rs`
   (`HTTP_PLUGIN_STAGE_EXCEPTIONS`, `applicable_stages_by_name`), `edgion_plugin.rs`
   (`EdgionPlugin`, `type_name`)
-- Guard: `edgion-resources/tests/plugin_crd_type_coverage.rs`; stream family:
+- Guards: `edgion-resources/tests/plugin_crd_type_coverage.rs`,
+  `edgion-resources/tests/plugin_crd_condition_coverage.rs`, and the explicit KeyGet snapshot in
+  `edgion-resources/tests/crd_coverage.rs`; stream family:
   `edgion-resources/tests/stream_plugin_crd_type_coverage.rs`
 - Integration wiring: `EdgionPlugins/FaultInjection` now has a `run_test` in both sweep blocks of
   `edgion-tests/integration/scripts/integration/run_integration.sh`
+
+## Resolution references
+
+- `resource-02` — reconciled the per-stage plugin discriminator enums.
+- `key-get-trace-id-condition-crd-drift` — admitted the existing `traceId` accessor in the
+  condition CRD and corrected the two guard snapshots; focused condition and CRD coverage tests
+  passed on 2026-09-11.
+
+## Current verification
+
+On 2026-09-11, all eight `plugin_crd_condition_coverage` tests and all fifteen `crd_coverage`
+tests passed. Workspace all-target check and Clippy passed with existing warnings, as did format,
+agent-document consistency, SSA force, metrics inventory, and Pingora source-policy guards. This
+does not claim a full integration or live Kubernetes run.

@@ -112,7 +112,7 @@ spec:
                                         type:
                                           type: string
                                           description: "Key source type"
-                                          enum: [remoteIp, directPeerIp, host, header, cookie, query, path, method, ctx, remoteIpAndPath, requestPath]
+                                          enum: [remoteIp, directPeerIp, traceId, host, header, cookie, query, path, method, ctx, remoteIpAndPath, requestPath]
                                         name:
                                           type: string
                                           description: "Key name (required for header, cookie, query, ctx)"

@@ -251,6 +251,7 @@ fn plugin_key_get_enum_uses_remote_ip_names() {
         vec![
             "remoteIp",
             "directPeerIp",
+            "traceId",
             "host",
             "header",
             "cookie",

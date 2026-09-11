@@ -317,12 +317,6 @@ fn key_get_type_enum_matches_crd_both_directions() {
     let rust = rust_key_get_types();
     let crd = crd_key_get_types();
     let (d1, d2) = compare_key_get_types(&rust, &crd);
-    assert_eq!(
-        rust.len(),
-        11,
-        "expected eleven KeyGet type consts, got {}: {rust:?}",
-        rust.len()
-    );
     assert!(
         d1.is_empty() && d2.is_empty(),
         "KeyGet type-enum CRD drift:\n  \
@@ -330,6 +324,12 @@ fn key_get_type_enum_matches_crd_both_directions() {
          Direction-2 stale in CRD: {d2:?}\n\
          Fix: add the missing value(s) to conditions.skip.allOf.items.properties.key.properties.type.enum \
          in edgion_plugins_crd.yaml, or remove the stale CRD entry / unused KeyGet variant."
+    );
+    assert_eq!(
+        rust.len(),
+        12,
+        "expected twelve KeyGet type consts, got {}: {rust:?}",
+        rust.len()
     );
 }
 

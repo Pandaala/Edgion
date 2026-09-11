@@ -30,4 +30,4 @@ before applying a decision to current code.
 - [Duration schema admission patterns](regression-guards/duration-schema-admission-patterns.md)
 - [EdgionBackend unknown-field handling is mode-specific](regression-guards/edgion-backend-unknown-fields-are-mode-specific.md)
 - [EdgionGatewayConfig process-global values aggregated deterministically — FIXED](regression-guards/edgion-gateway-config-global-aggregation-deterministic.md)
-- [EdgionPlugins CRD `type` enum drifted from `EdgionPlugin` — FIXED (reconciled + guarded)](regression-guards/edgion-plugins-crd-type-enum-drift.md)
+- [EdgionPlugins closed enums drifted from Rust — FIXED (reconciled + guarded)](regression-guards/edgion-plugins-crd-type-enum-drift.md)

@@ -19,11 +19,13 @@ async per-chunk body filter, or a per-plugin webhook field are **not accepted**.
 
 ## Core Rationale
 
-**1. One extraction contract, nine local variants.**
+**1. One extraction contract, twelve local variants.**
 
-After S12, `KeyGet` has nine variants (`RemoteIp`, `Header`, `Cookie`,
-`Query`, `Path`, `Method`, `Ctx`, `RemoteIpAndPath`, `RequestPath`). `PluginSession::key_get`
-is one synchronous method. There is no `KeyGet::Webhook` and no dual
+`KeyGet` currently has twelve variants (`RemoteIp`, `DirectPeerIp`, `TraceId`, `Host`,
+`Header`, `Cookie`, `Query`, `Path`, `Method`, `Ctx`, `RemoteIpAndPath`, `RequestPath`).
+`TraceId` extracts the canonical 32-hex W3C identity rather than treating the complete
+`traceparent` wire value or optional `x-trace-id` projection as that identity.
+`PluginSession::key_get` is one synchronous method. There is no `KeyGet::Webhook` and no dual
 `key_get` / `key_get_local` pair. Outbound resolution is `WebhookKeyGet`
 writing a context variable; downstream plugins read `{ type: ctx, name: … }`.
 
