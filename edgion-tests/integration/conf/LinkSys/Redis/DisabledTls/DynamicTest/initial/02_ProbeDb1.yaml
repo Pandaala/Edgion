@@ -1,0 +1,20 @@
+apiVersion: edgion.io/v1
+kind: LinkSys
+metadata:
+  name: redis-disabled-tls-probe-1
+  namespace: default
+spec:
+  type: redis
+  config:
+    endpoints:
+      - "redis://127.0.0.1:16379"
+    db: 1
+    auth:
+      secretRef:
+        name: redis-disabled-tls-auth
+    pool:
+      size: 1
+    timeout:
+      connect: 3000
+      read: 2000
+      write: 2000

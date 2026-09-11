@@ -97,6 +97,16 @@ tls:
 
 ## Configuration by `type`
 
+### Disabled TLS blocks
+
+An absent or false `tls.enabled` makes the local TLS policy inert: Controller
+SAN/hostname checks and Secret resolution ignore it, and Gateway TLS readiness
+does not wait for its certificate references. Reconciliation clears previously
+resolved TLS Secrets and dependencies. Authentication references are independent
+and still required. Re-enabling TLS restores all reference and validation checks.
+For URL-driven transports (`https://`, `rediss://`), disabling this local block
+does not disable the secure scheme. This also applies to `credentialSource` TLS.
+
 ### `type: redis`
 
 ```yaml

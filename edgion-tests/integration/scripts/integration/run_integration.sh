@@ -1084,6 +1084,11 @@ is_redis_service_required() {
         return 0
     fi
 
+    # The Gateway family also runs LinkSysDisabledTls in the dynamic phase.
+    if [ "$G_RESOURCE" = "Gateway" ] && [ -z "$G_ITEM" ]; then
+        return 0
+    fi
+
     if [ "$G_RESOURCE" = "EdgionPlugins" ]; then
         if [ -z "$G_ITEM" ] || [ "$G_ITEM" = "Dsl" ] || [ "$G_ITEM" = "RateLimitRedis" ]; then
             return 0

@@ -95,13 +95,22 @@ tls:
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `enabled` | Boolean | `false` | Enable TLS for the connection. For URLs that already imply TLS (`https://`, `rediss://`), this only adds custom CA / client-certificate handling. |
-| `verify` | Boolean | `true` | Verify the peer TLS certificate. `verify: false` is honored (operator responsibility); a WARN is logged at startup. Redis and Etcd always verify (`verify: false` is rejected at startup — the SDK has no skip-verify API). |
+| `verify` | Boolean | `true` | Verify the peer TLS certificate when the block is enabled. `verify: false` is honored (operator responsibility); a WARN is logged at startup. Redis and Etcd reject `verify: false` in enabled blocks — their SDKs have no skip-verify API. |
 | `validation` | Object | none | Optional trust anchor configuration. Omit to use built-in webpki root CAs. |
 | `validation.caCertificateRefs` | Array | none | List of CA certificate Secret refs (each: `{ kind: Secret, name, namespace }`). The Secret must have a `ca.crt` key. For LinkSys, only `kind: Secret` is supported in this release. A custom CA **replaces** the built-in roots. |
 | `validation.wellKnownCACertificates` | String | none | Explicitly use built-in webpki root CAs. Allowed value: `System`. |
 | `clientCertificateRef` | Object | none | Kubernetes Secret holding the client mTLS identity (`tls.crt` / `tls.key` keys). |
 
 The client mTLS identity (certificate + private key) must be provided via `clientCertificateRef`.
+
+When `tls.enabled` is `false` (including its default), the block's verification
+settings and certificate references are inactive. Missing or invalid referenced
+Secrets do not prevent the connector from becoming ready. Disabling the block
+also clears previously resolved TLS certificates and their dependencies; enabling
+it again requires those references to resolve. Authentication Secrets remain
+required independently. A secure endpoint URL such as `https://` or `rediss://`
+still selects TLS, using the provider's normal defaults instead of this inactive
+block. The same rule applies to the TLS block of a `credentialSource` provider.
 
 ### Observability
 
@@ -276,7 +285,7 @@ spec:
 |-----------|------|---------|-------------|
 | `endpoints` | Array\<String\> | **Required** | Etcd endpoints; at least one. Example: `"https://etcd-1:2379"`. |
 | `auth` | Object | none | Authentication. The Secret typically provides both `username` and `password`. |
-| `tls` | Object | none | TLS configuration; see [TLS](#tls). Etcd (like Redis) rejects `verify: false` in any environment. |
+| `tls` | Object | none | TLS configuration; see [TLS](#tls). Etcd (like Redis) rejects `verify: false` in enabled TLS blocks in any environment. |
 | `namespace` | String | none | Etcd v3 key prefix. |
 | `userAgent` | String | none | HTTP User-Agent sent to etcd. Example: `"edgion-gateway/v1"`. |
 | `rejectOldCluster` | Boolean | none | Reject connecting to an outdated cluster. |
@@ -1356,7 +1365,7 @@ spec:
 
 ### Q4: Can I disable TLS verification (`verify: false`) for Redis or Etcd?
 
-**A**: No. Redis and Etcd clients do not support disabling certificate verification — `verify: false` is rejected at startup for these connectors in any environment. This is intentional: to connect to a backend with a private CA, use `tls.validation.caCertificateRefs` pointing to a Secret with a `ca.crt` key instead.
+**A**: No. Redis and Etcd clients do not support disabling certificate verification — `verify: false` in an enabled TLS block is rejected at startup in any environment. A disabled block's `verify` setting is ignored; it cannot disable verification on a URL-implied TLS connection. To connect to a backend with a private CA, enable TLS and use `tls.validation.caCertificateRefs` pointing to a Secret with a `ca.crt` key.
 
 ### Q5: What happens to active connections when I rotate a Secret?
 

@@ -22,6 +22,7 @@ static CAPABILITY_REGISTRY: OnceLock<String> = OnceLock::new();
 const KNOWN_GATEWAY_CAPABILITIES: &[&str] = &["body-buffering"];
 const EXPECTED_DYNAMIC_SCENARIO_IDS: &[&str] = &[
     "PluginPolicyDynamic",
+    "LinkSysDisabledTls",
     "DelegationParentRefGatewayCollisionHttp",
     "DelegationParentRefGatewayCollisionGrpc",
     "RequestMirrorReferenceGrant",
@@ -1507,6 +1508,8 @@ fn dynamic_port_contract(id: &str) -> Result<Option<(&'static str, port_config::
         // This scenario only inspects control-plane status and intentionally has
         // no data-plane listener.
         "GcParamsFlap" => None,
+        // Exercises LinkSys clients through the Gateway admin testing API.
+        "LinkSysDisabledTls" => None,
         _ => anyhow::bail!("dynamic scenario `{id}` has no listener contract"),
     };
     Ok(contract)

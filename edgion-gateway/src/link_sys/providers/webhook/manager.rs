@@ -182,6 +182,9 @@ impl WebhookMutationGuard<'_> {
         mut config: WebhookServiceConfig,
         linksys_ns: Option<&str>,
     ) -> anyhow::Result<PreparedWebhookEntry> {
+        // The shared engine uses TLS block presence for client and Service
+        // transport selection. Only active LinkSys policy may reach it.
+        config.conn.tls = config.conn.tls.take().filter(|tls| tls.enabled);
         if config.conn.target.url.is_none() && config.conn.target.service.namespace.is_none() {
             if let Some(ns) = linksys_ns {
                 config.conn.target.service.namespace = Some(ns.to_string());
@@ -936,6 +939,52 @@ mod tests {
         let mut config = make_config_with_target("ordered-svc");
         config.conn.target.service.port = Some(port);
         config
+    }
+
+    #[tokio::test]
+    async fn disabled_tls_preparation_ignores_material_and_preserves_target_scheme() {
+        use crate::plugins::http::common::outbound::target::ResolvedTarget;
+        use edgion_resources::resources::common::WebhookTarget;
+        use serde_json::json;
+
+        let manager = WebhookManager::new();
+        let mutation = manager.begin_mutation(1).await.unwrap();
+        for url in [None, Some("http://example.com"), Some("https://example.com")] {
+            for injected in [false, true] {
+                let mut config = config_with_port(8080);
+                if let Some(url) = url {
+                    config.conn.target = WebhookTarget {
+                        url: Some(url.to_string()),
+                        ..Default::default()
+                    };
+                }
+                let mut tls = json!({
+                    "enabled": false,
+                    "verify": true,
+                    "validation": {"caCertificateRefs": [{"kind": "Secret", "name": "missing-ca"}]},
+                    "clientCertificateRef": {"name": "missing-client"}
+                });
+                if injected {
+                    tls["resolvedCaCertificates"] = json!([{}]);
+                    tls["resolvedClientCertificate"] = json!({});
+                }
+                for enabled in [false, true, false] {
+                    tls["enabled"] = json!(enabled);
+                    config.conn.tls = Some(serde_json::from_value(tls.clone()).unwrap());
+                    let result = mutation.prepare("default/tls-toggle", config.clone(), None);
+                    if enabled {
+                        assert!(result.is_err(), "enabled invalid TLS must not prepare: {url:?}");
+                        continue;
+                    }
+                    let prepared = result.expect("disabled TLS must not block preparation");
+                    match (&prepared.client.resolved_target, url) {
+                        (ResolvedTarget::Service { scheme, .. }, None) => assert_eq!(*scheme, "http"),
+                        (ResolvedTarget::Static(actual), Some(expected)) => assert_eq!(actual, expected),
+                        (actual, expected) => panic!("unexpected target {actual:?} for {expected:?}"),
+                    }
+                }
+            }
+        }
     }
 
     async fn registered_entry(

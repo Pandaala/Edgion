@@ -213,6 +213,9 @@ impl TlsSpec for TlsConfig {
         // Reset runtime-resolved fields first to avoid stale values on update.
         self.resolved_ca_certificates = None;
         self.resolved_client_certificate = None;
+        if !self.enabled {
+            return None;
+        }
 
         // Resolve CA certificate refs (type-validated via TlsCertsResolver).
         // Note: ca_refs::resolve_ca_certificate_refs is intentionally NOT used here

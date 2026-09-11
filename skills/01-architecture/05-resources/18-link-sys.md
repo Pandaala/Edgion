@@ -74,11 +74,19 @@ The LinkSys CRD and the log-output / rotation configuration (used by link_sys ru
 
 ### parse — credential resolution
 
+`TlsSpec::resolve` first clears `resolved_ca_certificates` and
+`resolved_client_certificate`, then returns immediately for `enabled: false`.
+Since `parse` clears the owner's previous Secret dependencies before rebuilding
+them, disabling TLS also removes its old dependency edges. SAN/hostname admission
+and `credential::tls_ready` apply only to enabled TLS blocks. The credential-source
+resolver likewise excludes disabled TLS from its manager config and input revision
+list. Auth references continue through their independent resolution path.
+
 Unlike the older "pass through directly", the new parse goes through the full **credential pipeline** (`resource_processor/credential/pipeline.rs`):
 
 1. Via `AuthSpec` / `TlsSpec` traits + the generic `drive_standard`, walks every `SecretObjectReference` in the spec uniformly:
    - The `AuthSpec` trait binds "declaration → resolver selection → material extraction" to a concrete `*Auth` type (Redis/Etcd's `RedisAuth`/`EtcdAuth`; Elasticsearch's tagged-enum variants). **Webhook no longer participates here:** its handler resolves only TLS; outbound credentials are `request.headers.custom` entries using `template: "... ${secretRef:ns/name:key} ..."` — the handler scans `collect_secret_ref_names`, fetches each Secret via `fetch_secret` (ReferenceGrant enforced for cross-namespace), and embeds resolved values in `spec.resolved_secrets`, which rides the normal conf_sync path to the gateway. The ignored top-level `auth` field still present in code is removal debt, not a supported compatibility contract; see [webhook.md](../03-controller-gateway-link/webhook.md).
-   - The `TlsSpec` trait handles each provider's optional `tls.certs.secretRef` (`TlsConfig` already implements this trait, reusable directly)
+   - The `TlsSpec` trait handles enabled `TlsConfig` CA and client-certificate references (`validation.caCertificateRefs` and `clientCertificateRef`); disabled blocks contribute no references.
    - `resolve_for_spec` calls `drive_standard::<A: AuthSpec, T: TlsSpec>` to fold over all ref handling
    - Adding a new backend just needs: (1) impl `AuthSpec`; (2) add a `SystemConfig` variant; (3) add one line of `drive_standard(...)` in `resolve_for_spec`; (4) if it has TLS, `TlsConfig` already impls `TlsSpec` and can be reused directly
 2. For each ref, run the seven-step pipeline:
@@ -177,6 +185,12 @@ Constraints:
 - For tagged-enum auth (Elasticsearch), wrap with the generic `CredentialState<ResolvedCredential>`, with `ResolvedCredential` further dispatching by variant. (Webhook is no longer a tagged-enum-auth provider — its outbound credentials are per-field `request.headers.custom` secret sources resolved in the webhook provider, not via `CredentialState`.)
 
 ### TLS assembly
+
+The Webhook manager removes disabled `conn.tls` before calling
+`ManagedOutboundClient::from_parts`. The shared engine uses block presence to
+select the Service target's scheme and construct its HTTP client. This boundary
+keeps disabled LinkSys TLS inert for both business calls and active health checks,
+while URL targets retain their explicit `http` or `https` scheme.
 
 `edgion-common/src/link_sys_core/tls.rs` plugs `TlsConfig` + the resolved `TlsMaterial` into each provider's TLS configuration:
 - `ca_pem`: derived from the resolved `validation.caCertificateRefs` Secret(s) carrying a `ca.crt` key. The old inline `TlsCerts.caCert` field has been removed. A custom CA replaces the public roots entirely.

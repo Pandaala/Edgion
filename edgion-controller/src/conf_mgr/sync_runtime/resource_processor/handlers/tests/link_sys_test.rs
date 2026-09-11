@@ -132,6 +132,142 @@ fn make_credential_source(ns: &str, name: &str, secret_name: &str) -> LinkSys {
     }
 }
 
+// Exercise the real handler so dependency replacement and status transitions
+// are covered together with TLS resolution, including injected transport state.
+#[tokio::test]
+async fn disabled_tls_publication_clears_refs_and_reenabling_restores_checks() {
+    use serde_json::json;
+
+    for (provider, config, tls_path) in [
+        ("redis", json!({"endpoints": ["redis://localhost:6379"]}), "/tls"),
+        ("etcd", json!({"endpoints": ["https://localhost:2379"]}), "/tls"),
+        (
+            "elasticsearch",
+            json!({"endpoints": ["https://localhost:9200"]}),
+            "/tls",
+        ),
+        ("kafka", json!({"brokers": ["localhost:9092"]}), "/tls"),
+        ("webhook", json!({"target": {"url": "https://example.com"}}), "/tls"),
+        (
+            "httpdns",
+            json!({"preset": "aliyun", "connection": {}}),
+            "/connection/tls",
+        ),
+    ] {
+        for reference in [
+            json!({"validation": {"caCertificateRefs": [{"kind": "Secret", "name": "unused-tls"}]}}),
+            json!({"clientCertificateRef": {"name": "unused-tls"}}),
+        ] {
+            let (ctx, _) = make_ctx(HashMap::new());
+            let handler = LinkSysHandler::new();
+            let mut config = config.clone();
+            let mut tls = reference;
+            tls["enabled"] = json!(true);
+            tls["validation"]["hostname"] = json!("example.com");
+            tls["validation"]["subjectAltNames"] = json!([{"type": "Hostname", "hostname": "example.com"}]);
+            if tls_path == "/tls" {
+                config["tls"] = tls;
+            } else {
+                config["connection"]["tls"] = tls;
+            }
+            let spec = serde_json::from_value(json!({"type": provider, "config": config})).unwrap();
+            let mut ls = LinkSys::new("tls-toggle", spec);
+            ls.metadata.namespace = Some("default".into());
+
+            for enabled in [true, false, true] {
+                let mut value = serde_json::to_value(&ls).unwrap();
+                let tls = value.pointer_mut(&format!("/spec/config{tls_path}")).unwrap();
+                tls["enabled"] = json!(enabled);
+                tls["resolvedCaCertificates"] = json!([{}]);
+                tls["resolvedClientCertificate"] = json!({});
+                ls = serde_json::from_value(value).unwrap();
+                let errors = handler.preparse(&mut ls, &ctx);
+                assert_eq!(errors.is_empty(), !enabled, "{provider}: {errors:?}");
+                let ProcessResult::Continue(mut parsed) = handler.parse(ls, &ctx).await else {
+                    panic!("LinkSys must continue");
+                };
+                handler.update_status(&mut parsed, &ctx, &errors);
+                assert_eq!(
+                    find_cond(&parsed, condition_types::ACCEPTED).unwrap().status,
+                    if enabled { "False" } else { "True" }
+                );
+                let resolved = find_cond(&parsed, condition_types::RESOLVED_REFS).unwrap();
+                assert_eq!(resolved.status, if enabled { "False" } else { "True" }, "{provider}");
+                assert_eq!(
+                    !ctx.secret_ref_manager().get_refs("default/unused-tls").is_empty(),
+                    enabled,
+                    "{provider}"
+                );
+                let value = serde_json::to_value(&parsed).unwrap();
+                let tls = value.pointer(&format!("/spec/config{tls_path}")).unwrap();
+                assert!(tls.get("resolvedCaCertificates").is_none(), "{provider}");
+                assert!(tls.get("resolvedClientCertificate").is_none(), "{provider}");
+                ls = parsed;
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn disabled_tls_credential_source_ignores_invalid_inputs_without_ignoring_auth() {
+    use serde_json::json;
+
+    let (bootstrap_key, bootstrap) = make_secret(
+        "ops",
+        "bootstrap",
+        &[("clientId", b"client"), ("clientSecret", b"secret")],
+    );
+    let (tls_key, invalid_tls) = make_secret("ops", "unused-tls", &[]);
+    let (ctx, runtime) = make_ctx(HashMap::from([(bootstrap_key, bootstrap), (tls_key, invalid_tls)]));
+    let handler = LinkSysHandler::new();
+    let mut ls = make_credential_source("ops", "provider", "bootstrap");
+    for enabled in [false, true, false] {
+        let SystemConfig::CredentialSource(source) = &mut ls.spec.config else {
+            panic!("credential source expected")
+        };
+        let CredentialSourceProvider::OAuth2ClientCredentials(provider) = &mut source.provider;
+        provider.tls = Some(
+            serde_json::from_value(json!({
+                "enabled": enabled,
+                "validation": {"caCertificateRefs": [{"kind": "Secret", "name": "unused-tls"}]},
+                "clientCertificateRef": {"name": "unused-tls"},
+                "resolvedCaCertificates": [{}], "resolvedClientCertificate": {}
+            }))
+            .unwrap(),
+        );
+        let ProcessResult::Continue(parsed) = handler.parse(ls, &ctx).await else {
+            panic!("LinkSys must continue")
+        };
+        assert_eq!(
+            find_cond(&parsed, condition_types::RESOLVED_REFS).unwrap().status,
+            if enabled { "False" } else { "True" }
+        );
+        let desired = runtime.credential_source_registry.source("ops/provider");
+        if enabled {
+            assert!(desired.is_none());
+        } else {
+            let desired = desired.expect("disabled TLS must allow credential acquisition");
+            assert_eq!(desired.secret_inputs.len(), 1);
+            assert_eq!(desired.secret_inputs[0].role, "active-bootstrap");
+            assert!(ctx.secret_ref_manager().get_refs("ops/unused-tls").is_empty());
+        }
+        let value = serde_json::to_value(&parsed).unwrap();
+        let tls = value.pointer("/spec/config/provider/tls").unwrap();
+        assert!(tls.get("resolvedCaCertificates").is_none());
+        assert!(tls.get("resolvedClientCertificate").is_none());
+        ls = parsed;
+    }
+    runtime.secret_store.replace_all(HashMap::new());
+    let ProcessResult::Continue(parsed) = handler.parse(ls, &ctx).await else {
+        panic!("LinkSys must continue")
+    };
+    assert_eq!(
+        find_cond(&parsed, condition_types::RESOLVED_REFS).unwrap().status,
+        "False"
+    );
+    assert!(runtime.credential_source_registry.source("ops/provider").is_none());
+}
+
 #[tokio::test]
 async fn credential_source_registers_only_non_secret_desired_state() {
     let (key, mut secret) = make_secret(

@@ -657,7 +657,7 @@ async fn resolve_credential_source(
         }
     }
 
-    if let Some(tls) = provider.tls.as_ref() {
+    if let Some(tls) = provider.tls.as_ref().filter(|tls| tls.enabled) {
         let mut resolution_copy = tls.clone();
         if let Some(error) = resolution_copy.resolve(ctx, owner).await {
             result.errors.push(error);

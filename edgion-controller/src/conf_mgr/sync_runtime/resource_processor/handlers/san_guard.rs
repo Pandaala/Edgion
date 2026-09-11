@@ -256,25 +256,24 @@ pub fn check_plugins_san(ep: &EdgionPlugins) -> Vec<String> {
 /// Returns at most one error string (per-resource, not per-endpoint).
 pub fn check_link_sys_san(ls: &LinkSys) -> Vec<String> {
     // Extract the outbound validation block from whichever provider is configured.
-    let validation_opt: Option<&OutboundTlsValidation> = match &ls.spec.config {
-        SystemConfig::Redis(c) => c.tls.as_ref().and_then(|t| t.outbound.validation.as_ref()),
-        SystemConfig::Etcd(c) => c.tls.as_ref().and_then(|t| t.outbound.validation.as_ref()),
-        SystemConfig::Elasticsearch(c) => c.tls.as_ref().and_then(|t| t.outbound.validation.as_ref()),
-        SystemConfig::Kafka(c) => c.tls.as_ref().and_then(|t| t.outbound.validation.as_ref()),
-        SystemConfig::Webhook(c) => c.conn.tls.as_ref().and_then(|t| t.outbound.validation.as_ref()),
+    let tls = match &ls.spec.config {
+        SystemConfig::Redis(c) => c.tls.as_ref(),
+        SystemConfig::Etcd(c) => c.tls.as_ref(),
+        SystemConfig::Elasticsearch(c) => c.tls.as_ref(),
+        SystemConfig::Kafka(c) => c.tls.as_ref(),
+        SystemConfig::Webhook(c) => c.conn.tls.as_ref(),
         // httpdns `connection` reuses the same ExternalHttpConnection shape as Webhook's `conn`,
         // so its outbound TLS validation block is guarded identically (not silently skipped).
-        SystemConfig::HttpDns(c) => c
-            .connection
-            .as_ref()
-            .and_then(|conn| conn.tls.as_ref())
-            .and_then(|t| t.outbound.validation.as_ref()),
+        SystemConfig::HttpDns(c) => c.connection.as_ref().and_then(|conn| conn.tls.as_ref()),
         SystemConfig::CredentialSource(c) => match &c.provider {
             edgion_resources::resources::link_sys::credential_source::CredentialSourceProvider::OAuth2ClientCredentials(
                 oauth2,
-            ) => oauth2.tls.as_ref().and_then(|t| t.outbound.validation.as_ref()),
+            ) => oauth2.tls.as_ref(),
         },
     };
+    let validation_opt = tls
+        .filter(|tls| tls.enabled)
+        .and_then(|tls| tls.outbound.validation.as_ref());
     let provider = match &ls.spec.config {
         SystemConfig::Redis(_) => "Redis",
         SystemConfig::Etcd(_) => "Etcd",

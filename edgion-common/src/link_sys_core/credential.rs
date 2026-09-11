@@ -288,6 +288,9 @@ fn tls_ready_inner(tls: Option<&TlsConfig>) -> bool {
     let Some(tls) = tls else {
         return true;
     };
+    if !tls.enabled {
+        return true;
+    }
     // Not ready if CA certificate refs are declared but the Controller has not yet
     // injected the resolved secrets.
     let has_ca_refs = tls
@@ -307,8 +310,8 @@ fn tls_ready_inner(tls: Option<&TlsConfig>) -> bool {
 
 /// TLS readiness check (structural only).
 ///
-/// Returns `false` when the CRD declares a `clientCertificateRef` but the
-/// Controller has not yet injected the `Secret`. TLS parse failures are
+/// Disabled TLS blocks are inert. Returns `false` when an enabled block declares
+/// CA or client-certificate references that the Controller has not resolved. TLS parse failures are
 /// caught inside the provider via the outbound TLS resolver.
 pub fn tls_ready(ls: &LinkSys) -> bool {
     // Exhaustive on purpose: a `_ => None` fallback would make any webhook-shaped
@@ -646,6 +649,50 @@ mod tests {
 
     fn tls_with_unresolved_client_cert() -> edgion_resources::resources::common::TlsConfig {
         serde_json::from_str(r#"{"enabled":true,"clientCertificateRef":{"name":"id"}}"#).unwrap()
+    }
+
+    #[test]
+    fn tls_ready_disabled_references_are_inert_for_every_provider() {
+        use serde_json::json;
+
+        for (provider, mut config, tls_path) in [
+            ("redis", json!({"endpoints": ["rediss://localhost:6380"]}), "/tls"),
+            ("etcd", json!({"endpoints": ["https://localhost:2379"]}), "/tls"),
+            (
+                "elasticsearch",
+                json!({"endpoints": ["https://localhost:9200"]}),
+                "/tls",
+            ),
+            ("kafka", json!({"brokers": ["localhost:9092"]}), "/tls"),
+            ("webhook", json!({"target": {"url": "https://example.com"}}), "/tls"),
+            (
+                "httpdns",
+                json!({"preset": "aliyun", "connection": {}}),
+                "/connection/tls",
+            ),
+            (
+                "credentialSource",
+                json!({"provider": {"type": "oauth2ClientCredentials", "tokenEndpoint": "https://example.com/token", "clientAuthentication": {"activeSecretRef": {"name": "bootstrap"}}}}),
+                "/provider/tls",
+            ),
+        ] {
+            for tls in [
+                json!({"enabled": false, "validation": {"caCertificateRefs": [{"kind": "Secret", "name": "missing"}]}}),
+                json!({"enabled": false, "clientCertificateRef": {"name": "missing"}}),
+            ] {
+                match tls_path {
+                    "/connection/tls" => config["connection"]["tls"] = tls,
+                    "/provider/tls" => config["provider"]["tls"] = tls,
+                    _ => config["tls"] = tls,
+                }
+                for enabled in [false, true, false] {
+                    config.pointer_mut(tls_path).unwrap()["enabled"] = json!(enabled);
+                    let spec = serde_json::from_value(json!({"type": provider, "config": config})).unwrap();
+                    let ls = LinkSys::new("tls-readiness", spec);
+                    assert_eq!(tls_ready(&ls), !enabled, "{provider}, enabled={enabled}");
+                }
+            }
+        }
     }
 
     fn mk_httpdns_linksys(

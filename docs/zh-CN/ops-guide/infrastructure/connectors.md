@@ -94,13 +94,19 @@ tls:
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `enabled` | Boolean | `false` | 为连接启用 TLS。对于已隐含 TLS 的 URL（`https://`、`rediss://`），此字段仅添加自定义 CA / 客户端证书处理。 |
-| `verify` | Boolean | `true` | 验证对端 TLS 证书。`verify: false` 由运维人员负责，启动时记录 WARN。Redis 和 Etcd 始终验证证书（SDK 无跳过验证 API，启动时即失败）。 |
+| `verify` | Boolean | `true` | TLS 块启用时验证对端证书。`verify: false` 由运维人员负责，启动时记录 WARN。Redis 和 Etcd 拒绝启用块中的 `verify: false`，其 SDK 无跳过验证 API。 |
 | `validation` | Object | none | 可选信任锚配置。省略则使用内置 webpki 根证书。 |
 | `validation.caCertificateRefs` | Array | none | CA 证书 Secret 引用列表（每项：`{ kind: Secret, name, namespace }`）。Secret 须包含 `ca.crt` 键。LinkSys 仅支持 `kind: Secret`。自定义 CA **替换**内置根证书。 |
 | `validation.wellKnownCACertificates` | String | none | 显式使用内置 webpki 根证书。允许值：`System`。 |
 | `clientCertificateRef` | Object | none | 包含客户端 mTLS 身份（`tls.crt` / `tls.key` 键）的 Kubernetes Secret。 |
 
 客户端 mTLS 身份（证书 + 私钥）必须通过 `clientCertificateRef` 提供。
+
+当 `tls.enabled` 为 `false`（包括默认值）时，该块中的验证设置和证书引用不生效。
+引用的 Secret 缺失或无效不会阻止连接器就绪。停用时也会清空此前解析的 TLS
+证书及其依赖；重新启用后，需要重新解析这些引用。认证 Secret 仍然独立要求有效。
+`https://` 或 `rediss://` 等安全端点 URL 仍选择 TLS，并使用提供方的正常默认值，
+不会使用已停用块中的自定义设置。`credentialSource` 提供方的 TLS 块也遵循此规则。
 
 ### 可观测性
 
@@ -275,7 +281,7 @@ spec:
 |------|------|--------|------|
 | `endpoints` | Array\<String\> | **必填** | Etcd 端点，至少一个。示例：`"https://etcd-1:2379"`。 |
 | `auth` | Object | none | 认证配置。Secret 通常同时提供 `username` 和 `password`。 |
-| `tls` | Object | none | TLS 配置；详见 [TLS](#tls)。Etcd（与 Redis 一样）在任何环境下均拒绝 `verify: false`。 |
+| `tls` | Object | none | TLS 配置；详见 [TLS](#tls)。Etcd（与 Redis 一样）在任何环境下均拒绝启用 TLS 块中的 `verify: false`。 |
 | `namespace` | String | none | Etcd v3 键前缀。 |
 | `userAgent` | String | none | 发送给 etcd 的 HTTP User-Agent。示例：`"edgion-gateway/v1"`。 |
 | `rejectOldCluster` | Boolean | none | 拒绝连接到过时的集群。 |
@@ -1305,7 +1311,7 @@ spec:
 
 ### Q4：能否为 Redis 或 Etcd 禁用 TLS 验证（`verify: false`）？
 
-**A**：不能。Redis 和 Etcd 客户端不支持禁用证书验证——在任何环境下，`verify: false` 对这两种连接器均会在启动时直接失败。这是故意的设计。如需连接使用私有 CA 的后端，请通过 `tls.validation.caCertificateRefs` 引用包含 `ca.crt` 键的 Secret 来提供 CA 证书。
+**A**：不能。Redis 和 Etcd 客户端不支持禁用证书验证——在任何环境下，启用 TLS 块中的 `verify: false` 均会在启动时被拒绝。停用块中的 `verify` 设置会被忽略，无法关闭 URL 隐含 TLS 连接的证书验证。如需连接使用私有 CA 的后端，请启用 TLS，并通过 `tls.validation.caCertificateRefs` 引用包含 `ca.crt` 键的 Secret。
 
 ### Q5：轮换 Secret 后，现有连接会怎样？
 
