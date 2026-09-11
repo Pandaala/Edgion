@@ -18,7 +18,7 @@ shared free function:
 // edgion-gateway/src/plugins/http/common/mod.rs
 pub enum RateLimitKey { Resolved(String), Allow, Deny }
 
-pub async fn resolve_rate_limit_key(
+pub fn resolve_rate_limit_key(
     session: &mut dyn PluginSession,
     keys: &[KeyGet],
     default_key: Option<&str>,

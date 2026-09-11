@@ -1,0 +1,38 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: rate-limit-overflow-dynamic
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - alias: local-repaired
+      type: RateLimit
+      config:
+        rate: 1
+        interval: "1h"
+        key:
+          - type: header
+            name: X-Overflow-Key
+        onKeyMiss: Deny
+        onLimitExceeded: Continue
+        showLimitHeaders: false
+    - alias: overflow
+      type: RateLimitRedis
+      conditions:
+        run:
+          allOf:
+            - type: rateLimitExceeded
+              pluginAlias: local-repaired
+      config:
+        redisRef: edgion-default/overflow-dynamic-missing-redis
+        key:
+          - type: header
+            name: X-Overflow-Key
+        policies:
+          - rate: 100
+            interval: "1s"
+            algorithm: TokenBucket
+        onRedisFailure: Deny
+        requestTimeout: "100ms"
+        rejectStatus: 429
+        showLimitHeaders: false

@@ -303,7 +303,16 @@ fn compile_plugin_conditions(ep: &mut EdgionPlugins, errors: &mut Vec<String>, r
                                 errors.push(msg);
                             }
                         }
-                        if let Err(errs) = conds.validate() {
+                        let validation = if $label == "requestPlugins"
+                            && matches!(
+                                entry.plugin,
+                                edgion_resources::resources::edgion_plugins::EdgionPlugin::RateLimitRedis(_)
+                            ) {
+                            conds.validate_for_rate_limit_redis()
+                        } else {
+                            conds.validate()
+                        };
+                        if let Err(errs) = validation {
                             invalid = true;
                             for e in errs {
                                 let msg = format!("{}[{}] conditions: {}", $label, i, e);

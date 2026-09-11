@@ -258,6 +258,11 @@ impl ExtensionRefFilter {
 
         match stage {
             PluginRunningStage::Request => {
+                let outcome_frame = if plugin_runtime.rate_limit_outcome_slots() > 0 {
+                    session.begin_rate_limit_frame(plugin_runtime.rate_limit_outcome_slots())
+                } else {
+                    None
+                };
                 for plugin in plugin_runtime.request_plugins_iter() {
                     let previous_identity = session.replace_plugin_entry_identity(
                         crate::ctx::CurrentPluginEntryIdentity::new(plugin.name(), plugin.alias()),
@@ -284,8 +289,14 @@ impl ExtensionRefFilter {
                     }
 
                     if !matches!(result, PluginRunningResult::GoodNext | PluginRunningResult::Nothing) {
+                        if outcome_frame.is_some() {
+                            session.end_rate_limit_frame(outcome_frame);
+                        }
                         return result;
                     }
+                }
+                if outcome_frame.is_some() {
+                    session.end_rate_limit_frame(outcome_frame);
                 }
                 PluginRunningResult::GoodNext
             }

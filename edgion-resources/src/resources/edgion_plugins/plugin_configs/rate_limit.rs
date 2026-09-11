@@ -160,6 +160,16 @@ pub enum OnKeyMiss {
 
 // ========== RateLimit Configuration ==========
 
+/// Action after the local allowance is exhausted.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, Default, PartialEq, Eq)]
+pub enum OnLimitExceeded {
+    /// Reject immediately, preserving ordinary local rate limiting.
+    #[default]
+    Reject,
+    /// Continue so a later conditional Redis limiter can supply overflow allowance.
+    Continue,
+}
+
 /// RateLimit plugin configuration
 ///
 /// Uses Pingora's Count-Min Sketch algorithm for rate limiting.
@@ -248,6 +258,10 @@ pub struct RateLimitConfig {
     /// Note: If `defaultKey` is configured, it takes precedence over this setting.
     #[serde(default)]
     pub on_key_miss: OnKeyMiss,
+
+    /// Action when the local limit is exceeded (default: Reject).
+    #[serde(default)]
+    pub on_limit_exceeded: OnLimitExceeded,
 
     /// Default key to use when key cannot be extracted
     ///
@@ -376,6 +390,7 @@ impl Default for RateLimitConfig {
             interval: default_interval(),
             key: vec![KeyGet::default()],
             on_key_miss: OnKeyMiss::default(),
+            on_limit_exceeded: OnLimitExceeded::default(),
             default_key: None,
             reject_status: default_reject_status(),
             reject_message: None,

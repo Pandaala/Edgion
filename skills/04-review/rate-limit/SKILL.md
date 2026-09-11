@@ -18,6 +18,8 @@ before applying a decision to current code.
 
 ## Regression guards
 
+- [Local allowance and Redis overflow admission](regression-guards/local-allowance-redis-overflow.md)
+
 - [Local connection admission and configuration transitions](regression-guards/local-connection-admission-transitions.md)
 - [Shared Redis script descriptors and cache-miss recovery](regression-guards/redis-script-cache-lifecycle.md)
 - [ConnectionRateLimit counters must be scoped to the owning plugin entry — FIXED](regression-guards/connection-rate-limit-entry-scoped-buckets.md)

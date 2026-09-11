@@ -530,3 +530,13 @@ requestPlugins:
 - [IP 限制插件](../http-route/filters/edgion-plugins/ip-restriction.md) - IP 黑白名单
 - [CtxSet 插件](ctx-setter.md) - 构造自定义限流键
 - [HTTPRoute 总览](../http-route/overview.md) - HTTPRoute 配置总览
+## 本地超额后继续
+
+`onLimitExceeded` 支持 `Reject`（默认）和 `Continue`。`Reject` 保持原有本地拒绝
+行为；`Continue` 让超额请求继续，不写本地拒绝响应或额度响应头，但不会覆盖
+`onKeyMiss: Deny`。本地计数仍包含超额尝试，现有 scope 和时间窗口规则不变。
+仅配置 Continue 不会拒绝本地超额请求。
+
+为本地条目设置 alias，并让后续 Redis 条目通过 `conditions.run` 的
+`rateLimitExceeded` 引用它，可以仅在超额时消耗 Redis 补充额度。
+参见[完整配置](../http-route/filters/edgion-plugins/rate-limit-redis.md#本地额度与-redis-补充准入)。

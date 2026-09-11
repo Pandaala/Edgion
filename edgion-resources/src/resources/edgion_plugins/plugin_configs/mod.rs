@@ -125,7 +125,7 @@ pub use proxy_rewrite::{
     HttpMethod, JsonBodyRewrite, JsonLiteralValue, JsonPatchOperation, ProxyRewriteConfig, RegexUri,
     MAX_JSON_PATCH_OPERATIONS, MAX_JSON_PATCH_PLAN_BYTES, MAX_JSON_POINTER_BYTES, MAX_JSON_POINTER_TOKENS,
 };
-pub use rate_limit::{LimitHeaderNames, OnKeyMiss, RateLimitConfig, RateLimitScope};
+pub use rate_limit::{LimitHeaderNames, OnKeyMiss, OnLimitExceeded, RateLimitConfig, RateLimitScope};
 pub use rate_limit_redis::{OnRedisFailure, RateLimitAlgorithm, RateLimitPolicy, RateLimitRedisConfig};
 pub use real_ip::RealIpConfig;
 pub use region_route::{

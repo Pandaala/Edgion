@@ -376,3 +376,59 @@ spec:
 - [IpRestriction 插件](ip-restriction.md) — 基于 IP 的访问控制
 - [KeyAuth 插件](key-auth.md) — API Key 认证
 - [JwtAuth 插件](jwt-auth.md) — JWT 认证
+## 本地额度与 Redis 补充准入
+
+在同一 `EdgionPlugins.requestPlugins` 数组内，把 `RateLimit` 放在 Redis
+条目前面。本地额度内的请求直接继续，不调用 Redis；本地超额后，再由 Redis
+补充额度决定放行或拒绝。以下示例需要已有 `default/redis` Redis LinkSys：
+
+```yaml
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: local-with-overflow
+  namespace: default
+spec:
+  requestPlugins:
+    - alias: local-budget
+      type: RateLimit
+      config:
+        rate: 50
+        interval: "1s"
+        scope: Instance
+        key: []
+        onLimitExceeded: Continue
+        showLimitHeaders: false
+    - alias: overflow-budget
+      type: RateLimitRedis
+      conditions:
+        run:
+          allOf:
+            - type: rateLimitExceeded
+              pluginAlias: local-budget
+      config:
+        redisRef: default/redis
+        key: []
+        policies:
+          - algorithm: TokenBucket
+            rate: 100
+            interval: "1s"
+        onRedisFailure: Deny
+        requestTimeout: "100ms"
+```
+
+`key: []` 表示聚合额度；按用户或 IP 限流时，在两个条目中显式配置 key。
+如果中间插件改变 key 的输入，Redis 会使用改变后的值。
+
+`scope: Instance` 下每个副本都有独立本地额度，使用相同插件条目及策略身份的
+实例共享 Redis 补充额度。增加副本会增加本地额度，因此这里不是固定的全局
+150 请求上限。现有 `scope: Cluster` 会根据实例数量和偏斜容忍度计算各进程阈值，
+但仍是本地计数，不会改为 Redis 记账。本地 CMS 也会计入超额尝试；示例 Redis
+令牌桶容量为 100、每秒补充 100，并非任意一秒内严格最多 100 次。
+
+示例显式选择 `onRedisFailure: Deny`。现有默认值 `Allow` 不变，Redis 故障时会
+允许超额请求。超时可能发生在 Redis 已扣减额度之后，不会自动重试或退款。
+
+示例关闭本地限流响应头：本地直接放行时不报告 Redis 额度，执行 Redis 时才报告
+其自身额度，不生成合并剩余额度。额外的有效条件或禁用 Redis 条目可以主动跳过
+补充检查；`Continue` 不会强制后续限流器执行。参见[条件引用规则](./conditions.md#ratelimitexceeded)。

@@ -273,3 +273,20 @@ gate — is in `docs/en/ops-guide/plugin-config-unknown-fields.md` and
 Only Header and TraceId sources work at early Global/Gateway attachments; route entries may also use permitted Ctx keys. Early conditions accept KeyExist/KeyMatch over Header, Method or TraceId; body/dye wrappers are rejected. BackendRef scope is invalid. Schema validation is shared with the Gateway and attachment dependencies requeue after plugin updates. Rules accumulate across tiers, while disabling the implicit default does not remove explicitly configured custom IDs. Core W3C propagation remains enabled independently.
 
 See [complete RequestId examples and bounds](../../../docs/en/user-guide/http-route/filters/edgion-plugins/request-id.md).
+## Local rate-limit overflow composition
+
+RateLimit.config.onLimitExceeded is Reject (default) or Continue. Continue records
+local excess without rejecting; a later request-stage RateLimitRedis can use the
+shared Condition `rateLimitExceeded: { pluginAlias }` (tagged YAML form:
+`type: rateLimitExceeded`, `pluginAlias: local-budget`) in conditions.run.
+The alias must name an active earlier RateLimit with Continue in the same
+requestPlugins array. Other stages/consumers, skip/body/dye placement, and invalid
+references are rejected. Controller validation and Gateway sealing share this
+contract. Disabled consumers remain inert. Missing runtime producer evaluation
+fails closed before Boolean short-circuiting; WithinLimit skips Redis and Exceeded
+runs it. Extra valid conditions can intentionally bypass Redis.
+
+Outcome slots are Gateway-owned and invocation-local, not serialized operator
+fields or writable ctx variables. Existing local scope/CMS accounting and Redis
+failure policy remain unchanged. See the user-facing overflow recipe in
+docs/en/user-guide/http-route/filters/edgion-plugins/rate-limit-redis.md.

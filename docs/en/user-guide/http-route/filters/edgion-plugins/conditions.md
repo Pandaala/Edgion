@@ -235,3 +235,21 @@ conditions:
 - [Request Restriction](./request-restriction.md) — standalone allow/deny plugin using the same ConditionSet
 - [Request Access Policy](./request-access-policy.md) — L7 policy with supplemental ConditionSets
 - [Dye](./dye.md) — entry-level dye rules reuse this `conditions` block
+## `rateLimitExceeded`
+
+Use `{"type":"rateLimitExceeded","pluginAlias":"local-budget"}` in a
+request-stage `RateLimitRedis` entry's `conditions.run`. The alias must identify
+an active, earlier `RateLimit` with `onLimitExceeded: Continue` in the same
+resource's `requestPlugins` array. Aliases in other resources/stages cannot satisfy
+the reference. `skip`, body gates, dye rules, and other consumers reject this
+predicate. Invalid active conditions fail configuration validation and seal the
+resource fail-closed; disabled entries retain their existing inert behavior.
+
+The predicate is true for local excess and false for a local pass. A producer
+skipped by its own conditions, or taking `onKeyMiss: Allow` without a fallback,
+has no evaluated allowance: an active dependent consumer returns a generic 500
+instead of treating missing state as false. This check precedes skip/allOf/anyOf
+short-circuiting. Otherwise existing Boolean semantics apply, so additional valid
+conditions may intentionally skip Redis. Results are isolated per resource and
+per chain invocation, including reloads. See the
+[complete overflow example](./rate-limit-redis.md#local-allowance-before-redis-overflow-admission).

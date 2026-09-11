@@ -108,6 +108,7 @@ impl WafCandidate {
 }
 
 pub struct PluginRuntime {
+    rate_limit_outcome_slots: usize,
     /// Plugins for request stage (async)
     request_plugins: Vec<Box<dyn RequestFilter>>,
     /// Plugins for upstream_response_filter stage (sync)
@@ -266,6 +267,7 @@ impl PluginRuntime {
             waf_candidate: None,
             has_request_id: false,
             invalid_early_request_id: false,
+            rate_limit_outcome_slots: 0,
         }
     }
 
@@ -578,6 +580,44 @@ impl PluginRuntime {
         resource_key: &str,
     ) -> Vec<String> {
         let mut errors = Vec::new();
+        edgion_resources::resources::edgion_plugins::validate::collect_rate_limit_dependency_errors(
+            entries,
+            &mut errors,
+        );
+        if !errors.is_empty() {
+            self.invalid_plugins.record_non_retainable("RateLimitRedis");
+        }
+        let referenced_aliases: std::collections::HashSet<&str> = entries
+            .iter()
+            .filter(|entry| entry.is_enabled() && entry.policy_action.is_none())
+            .filter_map(|entry| entry.conditions.as_ref()?.run.as_ref())
+            .flat_map(|set| set.iter_conditions())
+            .filter_map(|condition| match condition {
+                edgion_resources::resources::edgion_plugins::conditions::Condition::RateLimitExceeded(config) => {
+                    Some(config.plugin_alias.as_str())
+                }
+                _ => None,
+            })
+            .collect();
+        let outcome_aliases: std::collections::HashMap<&str, usize> = entries
+            .iter()
+            .enumerate()
+            .filter(|(_, entry)| {
+                entry.is_enabled()
+                    && entry.policy_action.is_none()
+                    && matches!(entry.plugin, EdgionPlugin::RateLimit(_))
+            })
+            .filter_map(|(index, entry)| {
+                entry
+                    .alias
+                    .as_deref()
+                    .filter(|alias| referenced_aliases.contains(alias))
+                    .map(|alias| (alias, self.rate_limit_outcome_slots + index))
+            })
+            .collect();
+        if !outcome_aliases.is_empty() {
+            self.rate_limit_outcome_slots += entries.len();
+        }
         let mut invalid_bounded_structured_entries = vec![false; entries.len()];
         // Freeze config validation before the bounded-body prepass. A config
         // error owns the entry and suppresses later body-policy errors, matching
@@ -870,8 +910,21 @@ impl PluginRuntime {
                     continue;
                 }
 
-                match Self::create_request_filter_from_edgion(&entry.plugin, namespace, body_req.clone(), &entry_scope)
-                {
+                let created = match &entry.plugin {
+                    EdgionPlugin::RateLimit(config) => CreateResult::Ok(Some(RateLimit::create_with_outcome_slot(
+                        config,
+                        entry_alias
+                            .as_deref()
+                            .and_then(|alias| outcome_aliases.get(alias).copied()),
+                    ))),
+                    _ => Self::create_request_filter_from_edgion(
+                        &entry.plugin,
+                        namespace,
+                        body_req.clone(),
+                        &entry_scope,
+                    ),
+                };
+                match created {
                     CreateResult::Ok(Some(filter)) => {
                         // Condition-owned body HMAC on RequestRestriction and
                         // RequestAccessPolicy uses the generic plugin-level gate,
@@ -885,12 +938,13 @@ impl PluginRuntime {
                             Some(_) => filter,
                         };
                         // Wrap with ConditionalRequestFilter to support condition evaluation
-                        let conditional_filter = ConditionalRequestFilter::with_alias_and_dye(
+                        let mut conditional_filter = ConditionalRequestFilter::with_alias_and_dye(
                             gated,
                             entry.conditions.clone(),
                             entry_alias,
                             dye_plan,
                         );
+                        conditional_filter.bind_rate_limit_dependencies(&outcome_aliases);
                         self.add_request_filter(Box::new(conditional_filter));
                     }
                     CreateResult::Ok(None) => {
@@ -1882,6 +1936,10 @@ impl PluginRuntime {
             .await;
     }
 
+    pub(crate) fn rate_limit_outcome_slots(&self) -> usize {
+        self.rate_limit_outcome_slots
+    }
+
     /// Dispatch the selected HTTP backend's filters before its body pump starts.
     /// Only a first-attempt read-only mirror tee may be installed after the
     /// request-body policy freeze; capture and mutation remain unavailable.
@@ -1918,6 +1976,11 @@ impl PluginRuntime {
         // Snapshot before `ctx` is borrowed by `session_adapter`. Set in
         // `pg_request_filter` and not mutated during plugin execution.
         let is_grpc_request = ctx.request_info.is_grpc_request || ctx.is_grpc_route_matched;
+        let outcome_frame = if phase == RequestIdPhase::Early {
+            None
+        } else {
+            ctx.begin_rate_limit_frame(self.rate_limit_outcome_slots)
+        };
         let mut filter_logs = Vec::new();
         let mut session_adapter = if backend_request {
             PingoraSessionAdapter::for_backend_request(s, ctx)
@@ -2028,6 +2091,7 @@ impl PluginRuntime {
         }
 
         ctx.finish_plugin_stage("request_filters", filter_logs);
+        ctx.end_rate_limit_frame(outcome_frame);
     }
 
     /// Run upstream_response_filter stage filters (sync)
@@ -2956,14 +3020,12 @@ mod tests {
             .expect_request_body_available_len()
             .with(mockall::predicate::eq(false))
             .return_const(Ok(64 * 1024));
-        session
-            .expect_request_header_values()
-            .times(2)
-            .returning(|name| match name {
-                "content-type" => Some(vec!["application/json".to_string()]),
-                "content-encoding" => Some(Vec::new()),
-                _ => unreachable!("unexpected header name"),
-            });
+        let mut headers = http::HeaderMap::new();
+        headers.insert(
+            http::header::CONTENT_TYPE,
+            http::HeaderValue::from_static("application/json"),
+        );
+        session.expect_request_header_map().return_const(headers);
         session
             .expect_read_request_body()
             .with(mockall::predicate::eq(None))

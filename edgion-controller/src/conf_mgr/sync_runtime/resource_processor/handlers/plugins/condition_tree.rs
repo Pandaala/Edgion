@@ -267,7 +267,8 @@ fn walk_conditions_ip(
             | Condition::SecretMatch(_)
             | Condition::HmacAuth(_)
             | Condition::JwtClaimMatch(_)
-            | Condition::MtlsMatch(_) => {}
+            | Condition::MtlsMatch(_)
+            | Condition::RateLimitExceeded(_) => {}
         }
     }
 }
@@ -543,7 +544,8 @@ fn walk_conditions_credentials(
             | Condition::DirectPeerIpMatch(_)
             | Condition::RemoteIpMatch(_)
             | Condition::JwtClaimMatch(_)
-            | Condition::MtlsMatch(_) => {}
+            | Condition::MtlsMatch(_)
+            | Condition::RateLimitExceeded(_) => {}
         }
     }
 }

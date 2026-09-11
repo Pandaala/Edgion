@@ -541,3 +541,14 @@ requestPlugins:
 - [IP Restriction Plugin](../http-route/filters/edgion-plugins/ip-restriction.md) - IP allow/deny lists
 - [CtxSet Plugin](ctx-setter.md) - Construct custom rate limiting keys
 - [HTTPRoute Overview](../http-route/overview.md) - HTTPRoute configuration overview
+## Continue on local excess
+
+`onLimitExceeded` accepts `Reject` (default) or `Continue`. `Reject` retains the
+normal local rejection. `Continue` lets excess requests proceed without writing
+a local rejection or quota headers; it does not override `onKeyMiss: Deny`.
+Local counting still includes excess attempts, and existing scope/interval rules
+are unchanged. Continue alone provides no rejection for local excess.
+
+Pair it with an aliased, earlier local entry and a subsequent Redis entry using
+`conditions.run` / `rateLimitExceeded` to consume Redis only for overflow. See the
+[full configuration](../http-route/filters/edgion-plugins/rate-limit-redis.md#local-allowance-before-redis-overflow-admission).

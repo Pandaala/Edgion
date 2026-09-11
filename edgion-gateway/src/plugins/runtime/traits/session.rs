@@ -234,6 +234,37 @@ pub trait PluginSession: Send + Sync {
         String::new()
     }
 
+    /// Begin a resource-local admission frame. Unsupported adapters remain unavailable.
+    fn begin_rate_limit_frame(
+        &mut self,
+        _count: usize,
+    ) -> Option<crate::plugins::runtime::conditions::rate_limit_outcome::RateLimitFrame> {
+        None
+    }
+
+    /// Restore the enclosing resource's admission frame.
+    fn end_rate_limit_frame(
+        &mut self,
+        _frame: Option<crate::plugins::runtime::conditions::rate_limit_outcome::RateLimitFrame>,
+    ) {
+    }
+
+    /// Read a compiled producer slot without exposing it as a writable ctx variable.
+    fn rate_limit_outcome(
+        &self,
+        _slot: usize,
+    ) -> crate::plugins::runtime::conditions::rate_limit_outcome::RateLimitOutcome {
+        crate::plugins::runtime::conditions::rate_limit_outcome::RateLimitOutcome::NotEvaluated
+    }
+
+    fn set_rate_limit_outcome(
+        &mut self,
+        _slot: usize,
+        _outcome: crate::plugins::runtime::conditions::rate_limit_outcome::RateLimitOutcome,
+    ) -> bool {
+        false
+    }
+
     /// Get a context variable by key (set by plugins like KeySet)
     fn get_ctx_var(&self, key: &str) -> Option<String>;
 

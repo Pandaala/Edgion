@@ -56,3 +56,8 @@ spec:
 - [RateLimitRedis（Redis 精确集群限流）](./rate-limit-redis.md)
 - [IP 限制](./ip-restriction.md)
 - [插件组合与引用](../plugin-composition.md)
+## Redis 补充限流
+
+通过 `onLimitExceeded: Continue` 和后续 Redis 条目的 `rateLimitExceeded` 条件，
+让本地通过的请求不访问 Redis，仅超额请求使用共享补充额度。
+参见[完整配置](./rate-limit-redis.md#本地额度与-redis-补充准入)。

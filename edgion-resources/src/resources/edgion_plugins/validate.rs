@@ -24,7 +24,7 @@
 
 use std::collections::BTreeSet;
 
-use super::conditions::PluginConditions;
+use super::conditions::{Condition, PluginConditions};
 use super::edgion_plugin::{BodyStage, EdgionPlugin};
 use super::entry::{dye_set_clobber_error, RequestFilterEntry};
 use super::{EdgionPlugins, PluginValidation};
@@ -150,18 +150,81 @@ pub fn collect_ai_guard_ordering_errors(entries: &[RequestFilterEntry], errors: 
     }
 }
 
+/// Validate active Redis overflow dependencies within one request-stage array.
+/// The caller must also apply ordinary entry/condition validation. No reference
+/// lookup crosses resource or stage boundaries; inactive consumers are inert.
+pub fn collect_rate_limit_dependency_errors(entries: &[RequestFilterEntry], errors: &mut Vec<String>) {
+    for (index, entry) in entries.iter().enumerate() {
+        if !entry.is_enabled()
+            || entry.policy_action.is_some()
+            || !matches!(entry.plugin, EdgionPlugin::RateLimitRedis(_))
+        {
+            continue;
+        }
+        let Some(run) = entry.conditions.as_ref().and_then(|conditions| conditions.run.as_ref()) else {
+            continue;
+        };
+        for condition in run.iter_conditions() {
+            let Condition::RateLimitExceeded(reference) = condition else {
+                continue;
+            };
+            // Syntax errors belong to the common condition validation pass.
+            if super::entry::validate_alias_str(&reference.plugin_alias).is_some() {
+                continue;
+            }
+            let mut targets = entries.iter().enumerate().filter(|(_, candidate)| {
+                candidate.is_enabled()
+                    && candidate.policy_action.is_none()
+                    && candidate.alias.as_deref() == Some(reference.plugin_alias.as_str())
+            });
+            let target = targets.next();
+            let reason = match target {
+                None => Some("must reference an active RateLimit in the same requestPlugins array"),
+                Some(_) if targets.next().is_some() => Some("must reference a unique active alias"),
+                Some((target_index, _)) if target_index >= index => Some("must reference an earlier entry"),
+                Some((_, target)) => match &target.plugin {
+                    EdgionPlugin::RateLimit(config)
+                        if config.on_limit_exceeded == super::plugin_configs::OnLimitExceeded::Continue =>
+                    {
+                        None
+                    }
+                    EdgionPlugin::RateLimit(_) => Some("must reference a RateLimit with onLimitExceeded: Continue"),
+                    _ => Some("must reference a RateLimit entry"),
+                },
+            };
+            if let Some(reason) = reason {
+                errors.push(format!(
+                    "requestPlugins[{index}] conditions: rateLimitExceeded.pluginAlias '{}': {reason}",
+                    reference.plugin_alias
+                ));
+            }
+        }
+    }
+}
+
 /// Compile + validate the regex conditions on a single entry, pushing any
 /// errors with the same wording the gateway's `compile_plugin_conditions` uses.
 /// `compile()` mutates in place, so we operate on a clone (only the errors are
 /// wanted here).
-fn collect_condition_errors(conds: &PluginConditions, label: &str, index: usize, errors: &mut Vec<String>) {
+fn collect_condition_errors(
+    conds: &PluginConditions,
+    label: &str,
+    index: usize,
+    redis_run: bool,
+    errors: &mut Vec<String>,
+) {
     let mut conds = conds.clone();
     if let Err(errs) = conds.compile() {
         for e in errs {
             errors.push(format!("{}[{}] conditions regex: {}", label, index, e));
         }
     }
-    if let Err(errs) = conds.validate() {
+    let validation = if redis_run {
+        conds.validate_for_rate_limit_redis()
+    } else {
+        conds.validate()
+    };
+    if let Err(errs) = validation {
         for e in errs {
             errors.push(format!("{}[{}] conditions: {}", label, index, e));
         }
@@ -276,7 +339,13 @@ impl EdgionPlugins {
                             continue;
                         }
                         if let Some(conds) = entry.conditions.as_ref() {
-                            collect_condition_errors(conds, $label, i, &mut errors);
+                            collect_condition_errors(
+                                conds,
+                                $label,
+                                i,
+                                $label == "requestPlugins" && matches!(entry.plugin, EdgionPlugin::RateLimitRedis(_)),
+                                &mut errors,
+                            );
                         }
                     }
                 }
@@ -602,6 +671,7 @@ impl EdgionPlugins {
             }
 
             collect_ai_guard_ordering_errors(entries, &mut errors);
+            collect_rate_limit_dependency_errors(entries, &mut errors);
         }
 
         // Pass 3: access log extension declarations. Not a stage — no

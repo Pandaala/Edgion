@@ -34,6 +34,11 @@ pub struct ConditionalRequestFilter {
 }
 
 impl ConditionalRequestFilter {
+    pub(crate) fn bind_rate_limit_dependencies(&mut self, aliases: &std::collections::HashMap<&str, usize>) {
+        if let Some(conditions) = &mut self.conditions {
+            conditions.bind_rate_limit_dependencies(aliases);
+        }
+    }
     /// Create a new conditional request filter
     pub fn new(inner: Box<dyn RequestFilter>, conditions: Option<PluginConditions>) -> Self {
         Self {

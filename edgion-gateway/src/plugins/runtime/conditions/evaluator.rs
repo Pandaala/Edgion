@@ -77,6 +77,10 @@ impl CompiledTimeRangeCondition {
 }
 
 enum CompiledPredicate {
+    RateLimitExceeded {
+        alias: Box<str>,
+        slot: Option<usize>,
+    },
     Sync {
         condition: Condition,
         hmac: Option<HmacVerifier>,
@@ -100,6 +104,10 @@ impl CompiledCondition {
         let unresolved = condition.has_unresolved_refs();
         let descriptor = condition_descriptor(&descriptor, condition);
         let predicate = match condition {
+            Condition::RateLimitExceeded(config) => CompiledPredicate::RateLimitExceeded {
+                alias: config.plugin_alias.clone().into_boxed_str(),
+                slot: None,
+            },
             Condition::TimeRange(config) => CompiledPredicate::TimeRange(CompiledTimeRangeCondition::new(config)),
             Condition::HmacAuth(config) if config.validate_request_body && !unresolved => CompiledPredicate::HmacBody {
                 verifier: HmacVerifier::new(config, body_requirement),
@@ -125,6 +133,14 @@ impl CompiledCondition {
             return MatchState::Unresolved;
         }
         match &self.predicate {
+            CompiledPredicate::RateLimitExceeded { slot, .. } => {
+                use crate::plugins::runtime::conditions::rate_limit_outcome::RateLimitOutcome;
+                match slot.map(|slot| session.rate_limit_outcome(slot)) {
+                    Some(RateLimitOutcome::Exceeded) => MatchState::True,
+                    Some(RateLimitOutcome::WithinLimit) => MatchState::False,
+                    _ => MatchState::Unresolved,
+                }
+            }
             CompiledPredicate::Sync { condition, hmac } => {
                 let matched = match (condition, hmac) {
                     (Condition::HmacAuth(config), Some(verifier)) => apply_negate(
@@ -217,6 +233,7 @@ fn condition_descriptor(path: &str, condition: &Condition) -> String {
         Condition::HmacAuth(_) => format!("{path}:hmacAuth"),
         Condition::JwtClaimMatch(_) => format!("{path}:jwtClaimMatch"),
         Condition::MtlsMatch(_) => format!("{path}:mtlsMatch"),
+        Condition::RateLimitExceeded(_) => format!("{path}:rateLimitExceeded"),
     }
 }
 
@@ -244,6 +261,19 @@ pub(crate) struct CompiledConditionSet {
 }
 
 impl CompiledConditionSet {
+    fn visit_mut(&mut self, visitor: &mut impl FnMut(&mut CompiledCondition)) {
+        match &mut self.kind {
+            CompiledSetKind::AllOf(group) => group.predicates.iter_mut().for_each(visitor),
+            CompiledSetKind::AnyOf(clauses) => {
+                for clause in clauses {
+                    match clause {
+                        CompiledAnyOfClause::Condition(condition) => visitor(condition),
+                        CompiledAnyOfClause::AllOf(group) => group.predicates.iter_mut().for_each(&mut *visitor),
+                    }
+                }
+            }
+        }
+    }
     pub(crate) fn new(set: &ConditionSet, prefix: &str, body_requirement: Option<BodyRequirement>) -> Self {
         let mut has_unresolved_refs = false;
         let (kind, atomic_count) = match set {
@@ -502,6 +532,7 @@ pub(crate) struct CompiledPluginConditions {
     skip: Option<CompiledConditionSet>,
     run: Option<CompiledConditionSet>,
     atomic_count: usize,
+    rate_limit_dependencies: Vec<Option<usize>>,
 }
 
 impl CompiledPluginConditions {
@@ -516,10 +547,25 @@ impl CompiledPluginConditions {
             .map(|set| CompiledConditionSet::new(set, "run", None));
         let atomic_count = skip.as_ref().map_or(0, CompiledConditionSet::atomic_count)
             + run.as_ref().map_or(0, CompiledConditionSet::atomic_count);
-        Self {
+        let mut compiled = Self {
             skip,
             run,
             atomic_count,
+            rate_limit_dependencies: Vec::new(),
+        };
+        compiled.bind_rate_limit_dependencies(&std::collections::HashMap::new());
+        compiled
+    }
+
+    pub(crate) fn bind_rate_limit_dependencies(&mut self, aliases: &std::collections::HashMap<&str, usize>) {
+        self.rate_limit_dependencies.clear();
+        for set in [&mut self.skip, &mut self.run].into_iter().flatten() {
+            set.visit_mut(&mut |condition| {
+                if let CompiledPredicate::RateLimitExceeded { alias, slot } = &mut condition.predicate {
+                    *slot = aliases.get(alias.as_ref()).copied();
+                    self.rate_limit_dependencies.push(*slot);
+                }
+            });
         }
     }
 
@@ -583,6 +629,18 @@ impl CompiledPluginConditions {
         session: &mut dyn PluginSession,
         log: &mut PluginLog,
     ) -> Result<ConditionEvalResult<'a>, PluginRunningResult> {
+        use crate::plugins::runtime::conditions::rate_limit_outcome::RateLimitOutcome;
+        if self
+            .rate_limit_dependencies
+            .iter()
+            .any(|slot| slot.is_none_or(|slot| session.rate_limit_outcome(slot) == RateLimitOutcome::NotEvaluated))
+        {
+            log.push_err("local outcome unavailable");
+            return Err(PluginRunningResult::ErrResponse {
+                status: 500,
+                body: None,
+            });
+        }
         let emit = self.atomic_count > 1;
         if let Some(skip) = &self.skip {
             let eval = skip.evaluate_async(session, log, emit).await?;
@@ -706,6 +764,8 @@ impl ConditionExt for Condition {
             Condition::HmacAuth(_) => false,
             Condition::JwtClaimMatch(c) => evaluate_jwt_claim_match(c, session, log.as_deref_mut()),
             Condition::MtlsMatch(c) => evaluate_mtls_match(c, session, log.as_deref_mut()),
+            // This request-only predicate requires a bound Gateway slot.
+            Condition::RateLimitExceeded(_) => false,
         };
         matched
     }

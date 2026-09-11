@@ -42,6 +42,7 @@ const EXPECTED_DYNAMIC_SCENARIO_IDS: &[&str] = &[
     "BasicAuthDynamic",
     "BasicAuthDynamicGrouped",
     "RateLimitDynamic",
+    "RateLimitOverflowDynamic",
     "RequestIdDynamic",
     "RequestAccessPolicyHmacDynamic",
     "RouteDelegationDynamic",
@@ -1478,6 +1479,7 @@ fn dynamic_port_contract(id: &str) -> Result<Option<(&'static str, port_config::
         | "RegionRouteValidation"
         | "RequestIdDynamic"
         | "RateLimitDynamic"
+        | "RateLimitOverflowDynamic"
         | "RequestAccessPolicyHmacDynamic" => Some(("EdgionPlugins", PortKind::Http)),
         "WafDynamic" => Some(("EdgionPlugins", PortKind::Http)),
         "ServiceDegradeThreshold" => Some(("HTTPRoute/Backend/DegradeThreshold", PortKind::Http)),

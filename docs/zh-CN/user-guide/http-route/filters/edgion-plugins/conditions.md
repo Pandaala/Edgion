@@ -215,3 +215,17 @@ conditions:
 - [请求限制](./request-restriction.md) — 使用相同 ConditionSet 的独立 allow/deny 插件
 - [请求访问策略](./request-access-policy.md) — 带补充 ConditionSet 的七层策略
 - [染色](./dye.md) — 条目级染色规则复用此 `conditions` 块
+## `rateLimitExceeded`
+
+在请求阶段 `RateLimitRedis` 条目的 `conditions.run` 中使用
+`{"type":"rateLimitExceeded","pluginAlias":"local-budget"}`。alias 必须指向同一
+资源 `requestPlugins` 数组内、顺序在前、处于启用状态且配置了
+`onLimitExceeded: Continue` 的 `RateLimit`。不能引用其他资源或阶段。
+`skip`、body gate、dye 及其他消费者不支持此谓词。无效的活动条件会导致配置校验
+失败，资源在运行时拒绝请求；禁用条目继续保持不执行、不校验其内部条件的语义。
+
+本地超额时条件为真，本地通过时为假。如果本地条目被自己的条件跳过，或者缺 key
+且 `onKeyMiss: Allow` 没有使用默认 key，则没有额度判定结果；活动的依赖消费者
+返回通用 500，不把缺失状态当作假。此检查先于 skip/allOf/anyOf 短路求值。
+除此之外维持原有布尔语义，其他有效条件仍可主动跳过 Redis。结果按资源和本次
+插件链执行隔离，热更新不会混用结果。参见[完整补充限流示例](./rate-limit-redis.md#本地额度与-redis-补充准入)。

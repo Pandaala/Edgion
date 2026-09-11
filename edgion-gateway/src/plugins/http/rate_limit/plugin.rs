@@ -58,6 +58,7 @@ const CMS_HASHES: usize = 4;
 /// Each plugin instance owns its own Rate instance, which is lazily initialized
 /// on the first request. The Rate instance is NOT shared between different plugins.
 pub struct RateLimit {
+    outcome_slot: Option<usize>,
     config: RateLimitConfig,
     reject_body: Bytes,
     /// The Rate instance, lazily initialized on first use
@@ -76,6 +77,13 @@ impl RateLimit {
     /// Global configuration (default_estimator_slots, max_estimator_slots) is
     /// automatically loaded from the YAML config file via `validate()`.
     pub fn create(config: &RateLimitConfig) -> Box<dyn RequestFilter> {
+        Self::create_with_outcome_slot(config, None)
+    }
+
+    pub(crate) fn create_with_outcome_slot(
+        config: &RateLimitConfig,
+        outcome_slot: Option<usize>,
+    ) -> Box<dyn RequestFilter> {
         let mut validated_config = config.clone();
         let _ = validated_config.validate();
         let message = validated_config
@@ -85,6 +93,7 @@ impl RateLimit {
         let reject_body = Bytes::from(serde_json::json!({"message": message}).to_string());
 
         let plugin = RateLimit {
+            outcome_slot,
             config: validated_config,
             reject_body,
             rate: OnceLock::new(),
@@ -236,6 +245,31 @@ impl RequestFilter for RateLimit {
 
         // The limit_key is passed to Rate.observe() for per-key counting within the CMS.
         let curr_count = rate.observe(&limit_key, 1);
+
+        let exceeded = curr_count > rate_limit;
+        if let Some(slot) = self.outcome_slot {
+            use crate::plugins::runtime::conditions::rate_limit_outcome::RateLimitOutcome;
+            let outcome = if exceeded {
+                RateLimitOutcome::Exceeded
+            } else {
+                RateLimitOutcome::WithinLimit
+            };
+            if !session.set_rate_limit_outcome(slot, outcome) {
+                plugin_log.push_err("local outcome unavailable");
+                return PluginRunningResult::ErrResponse {
+                    status: 500,
+                    body: None,
+                };
+            }
+        }
+
+        if exceeded
+            && self.config.on_limit_exceeded
+                == edgion_resources::resources::edgion_plugins::plugin_configs::OnLimitExceeded::Continue
+        {
+            plugin_log.push("Continue local overflow");
+            return PluginRunningResult::GoodNext;
+        }
 
         let remaining = rate_limit - curr_count;
 

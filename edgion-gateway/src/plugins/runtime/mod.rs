@@ -30,3 +30,6 @@ pub use traits::{
     RequestBodyStreamHandler, RequestFilter, StreamingResponseEvent, UpstreamResponse, UpstreamResponseBodyFilter,
     UpstreamResponseFilter, UpstreamResponseTrailer, UpstreamTrailerResult,
 };
+
+#[cfg(test)]
+mod rate_limit_overflow_tests;

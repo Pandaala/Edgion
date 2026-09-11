@@ -471,3 +471,68 @@ plugin entries do not accidentally share the bucket.
 - [IpRestriction Plugin](ip-restriction.md) — IP-based access control
 - [KeyAuth Plugin](key-auth.md) — API Key authentication
 - [JwtAuth Plugin](jwt-auth.md) — JWT authentication
+## Local allowance before Redis overflow admission
+
+Use a preceding `RateLimit` to admit normal traffic locally and call Redis only
+after its allowance is exceeded. Both entries must belong to the same
+`EdgionPlugins.requestPlugins` array. This example requires a Redis LinkSys named
+`redis` in namespace `default`:
+
+```yaml
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: local-with-overflow
+  namespace: default
+spec:
+  requestPlugins:
+    - alias: local-budget
+      type: RateLimit
+      config:
+        rate: 50
+        interval: "1s"
+        scope: Instance
+        key: []
+        onLimitExceeded: Continue
+        showLimitHeaders: false
+    - alias: overflow-budget
+      type: RateLimitRedis
+      conditions:
+        run:
+          allOf:
+            - type: rateLimitExceeded
+              pluginAlias: local-budget
+      config:
+        redisRef: default/redis
+        key: []
+        policies:
+          - algorithm: TokenBucket
+            rate: 100
+            interval: "1s"
+        onRedisFailure: Deny
+        requestTimeout: "100ms"
+```
+
+Local passes skip Redis entirely. Local excess continues to Redis, which admits
+or rejects against its supplemental budget. `key: []` aggregates all requests;
+configure explicit keys in both entries for per-key budgets. If another plugin
+changes key inputs between the entries, Redis uses the changed inputs.
+
+With `scope: Instance`, each replica has its own local allowance; Redis is shared
+only among instances using the same plugin-entry/policy identity. Adding replicas
+adds local allowance, so this is not a fixed global 150-request ceiling. Existing
+`scope: Cluster` instead computes each process's local threshold using instance
+count and skew tolerance; it does not turn local counting into Redis accounting.
+The local CMS counts excess attempts too. Redis's example bucket holds 100 tokens
+and refills 100 per second, not a strict cap of 100 in every one-second window.
+
+Keep `onRedisFailure: Deny` if supplemental enforcement must survive dependency
+failure. Existing default `Allow` is unchanged and permits overflow when Redis
+fails. A timeout may occur after Redis consumed capacity; requests are not retried
+or refunded automatically.
+
+The example disables local limit headers. Locally admitted requests have no Redis
+quota headers; Redis supplies its own headers only when it runs. No combined
+remaining quota is reported. Extra valid conditions or disabling the Redis entry
+can intentionally bypass supplemental checking; `Continue` does not install a
+mandatory fallback. See [condition reference rules](./conditions.md#ratelimitexceeded).

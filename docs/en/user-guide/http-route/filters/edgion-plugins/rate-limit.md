@@ -56,6 +56,10 @@ spec:
 
 ## Related Links
 
+For local passes that avoid Redis and excess requests that use shared supplemental
+allowance, configure `onLimitExceeded: Continue` and the
+[Redis overflow condition](./rate-limit-redis.md#local-allowance-before-redis-overflow-admission).
+
 - [RateLimit Standalone Plugin Page (full configuration)](../../../edgion-plugins/rate-limit.md)
 - [RateLimitRedis (Redis-backed precise cluster rate limiting)](./rate-limit-redis.md)
 - [IP Restriction](./ip-restriction.md)

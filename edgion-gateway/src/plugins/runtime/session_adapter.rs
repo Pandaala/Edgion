@@ -1355,6 +1355,35 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         self.inner.as_downstream().digest().map(|d| d.ssl_digest.is_some())
     }
 
+    fn begin_rate_limit_frame(
+        &mut self,
+        count: usize,
+    ) -> Option<crate::plugins::runtime::conditions::rate_limit_outcome::RateLimitFrame> {
+        self.ctx.begin_rate_limit_frame(count)
+    }
+
+    fn end_rate_limit_frame(
+        &mut self,
+        frame: Option<crate::plugins::runtime::conditions::rate_limit_outcome::RateLimitFrame>,
+    ) {
+        self.ctx.end_rate_limit_frame(frame);
+    }
+
+    fn rate_limit_outcome(
+        &self,
+        slot: usize,
+    ) -> crate::plugins::runtime::conditions::rate_limit_outcome::RateLimitOutcome {
+        self.ctx.rate_limit_outcome(slot)
+    }
+
+    fn set_rate_limit_outcome(
+        &mut self,
+        slot: usize,
+        outcome: crate::plugins::runtime::conditions::rate_limit_outcome::RateLimitOutcome,
+    ) -> bool {
+        self.ctx.set_rate_limit_outcome(slot, outcome)
+    }
+
     fn ctx(&self) -> &EdgionHttpContext {
         self.ctx
     }

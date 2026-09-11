@@ -127,7 +127,17 @@ Condition kinds include:
 - `TimeRange` — whether the current time falls within a given range.
 - `Probability` — probabilistic execution (e.g., 10% sampling).
 
-Every variant carries `negate` (default false), applied after an ordinary request-value miss (missing is base false; missing + `negate: true` is true). A Controller-owned reference payload that is unresolved is a separate state and always remains a non-match; `negate` must never invert it. `keyMatch` with `key.type: path` normalizes exact `values` at load time (regex is never normalized).
+Value predicates carry `negate` (default false), applied after an ordinary request-value miss (missing is base false; missing + `negate: true` is true). A Controller-owned reference payload that is unresolved is a separate state and always remains a non-match; `negate` must never invert it. `keyMatch` with `key.type: path` normalizes exact `values` at load time (regex is never normalized).
+
+`RateLimitExceeded` is an execution-result dependency without `negate`: it is
+supported only in a request-stage RateLimitRedis entry's `run` conditions and
+references an earlier active Continue RateLimit in the same resource by alias.
+Shared validation rejects other placements and invalid references. Gateway
+compilation binds the alias to a typed, invocation-local outcome slot. Before
+the skip-first/run-second Boolean evaluation, all referenced outcomes must be
+available; NotEvaluated returns generic 500 rather than becoming a false predicate.
+Both ordinary request dispatch and ExtensionRef dispatch establish/restore frames.
+See [local overflow knowledge](../../04-review/rate-limit/regression-guards/local-allowance-redis-overflow.md).
 
 `keyMatch`, `jwtClaimMatch`, and `mtlsMatch` require at least one non-empty
 `values` or `regex` list. This invariant is enforced by the shared `Condition`

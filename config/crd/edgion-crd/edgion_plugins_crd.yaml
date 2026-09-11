@@ -99,7 +99,12 @@ spec:
                                     type:
                                       type: string
                                       description: "Condition type"
-                                      enum: [keyExist, keyMatch, timeRange, probability, directPeerIpMatch, remoteIpMatch, secretMatch, hmacAuth, jwtClaimMatch, mtlsMatch]
+                                      enum: [keyExist, keyMatch, timeRange, probability, directPeerIpMatch, remoteIpMatch, secretMatch, hmacAuth, jwtClaimMatch, mtlsMatch, rateLimitExceeded]
+                                    pluginAlias: &rateLimitPluginAliasSchema
+                                      type: string
+                                      description: "Earlier active RateLimit alias in this resource's requestPlugins array, with onLimitExceeded Continue. Valid only in RateLimitRedis run conditions; negate is not supported. Semantic checks run during plugin validation."
+                                      minLength: 1
+                                      maxLength: 32
                                     key: &keyGetSchema
                                       type: object
                                       description: "Key accessor (KeyGet) - source for reading values"
@@ -208,7 +213,8 @@ spec:
                                     type:
                                       type: string
                                       description: "Condition type"
-                                      enum: [keyExist, keyMatch, timeRange, probability, directPeerIpMatch, remoteIpMatch, secretMatch, hmacAuth, jwtClaimMatch, mtlsMatch]
+                                      enum: [keyExist, keyMatch, timeRange, probability, directPeerIpMatch, remoteIpMatch, secretMatch, hmacAuth, jwtClaimMatch, mtlsMatch, rateLimitExceeded]
+                                    pluginAlias: *rateLimitPluginAliasSchema
                                     key: *keyGetSchema
                                     values:
                                       type: array

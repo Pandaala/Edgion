@@ -2129,6 +2129,7 @@ impl Default for PluginExecutionState {
 /// state allocation.
 #[derive(Default)]
 struct PluginAuxState {
+    rate_limit_outcomes: crate::plugins::runtime::conditions::rate_limit_outcome::RateLimitOutcomes,
     ctx_map: HashMap<String, String>,
     pending_response_header_ops: Vec<PendingHeaderOp>,
     deferred_credential_mutations: DeferredCredentialMutations,
@@ -4057,9 +4058,47 @@ impl EdgionHttpContext {
             .and_then(|bc| bc.current_upstream_id.and_then(|id| bc.upstreams.get(id)))
     }
 
+    // ========== Local rate-limit condition outcomes ==========
+
+    /// Allocate condition state only for a runtime containing bound producers.
+    pub(crate) fn begin_rate_limit_frame(
+        &mut self,
+        count: usize,
+    ) -> Option<crate::plugins::runtime::conditions::rate_limit_outcome::RateLimitFrame> {
+        (count > 0).then(|| self.ensure_plugin_aux().rate_limit_outcomes.begin(count))
+    }
+
+    pub(crate) fn end_rate_limit_frame(
+        &mut self,
+        frame: Option<crate::plugins::runtime::conditions::rate_limit_outcome::RateLimitFrame>,
+    ) {
+        if let (Some(frame), Some(aux)) = (frame, self.plugin_aux_mut()) {
+            aux.rate_limit_outcomes.end(frame);
+        }
+    }
+
+    pub(crate) fn rate_limit_outcome(
+        &self,
+        slot: usize,
+    ) -> crate::plugins::runtime::conditions::rate_limit_outcome::RateLimitOutcome {
+        self.plugin_aux().map_or(
+            crate::plugins::runtime::conditions::rate_limit_outcome::RateLimitOutcome::NotEvaluated,
+            |aux| aux.rate_limit_outcomes.get(slot),
+        )
+    }
+
+    pub(crate) fn set_rate_limit_outcome(
+        &mut self,
+        slot: usize,
+        outcome: crate::plugins::runtime::conditions::rate_limit_outcome::RateLimitOutcome,
+    ) -> bool {
+        self.plugin_aux_mut()
+            .is_some_and(|aux| aux.rate_limit_outcomes.set(slot, outcome))
+    }
+
     // ========== Context variable methods ==========
 
-    /// Get a context variable by key
+    /// Get a context variable by key.
     pub fn get_ctx_var(&self, key: &str) -> Option<&str> {
         self.plugin_aux()?.ctx_map.get(key).map(String::as_str)
     }
@@ -4946,13 +4985,18 @@ mod plugin_request_state_tests {
     #[cfg(target_pointer_width = "64")]
     fn plugin_state_layout_keeps_hot_and_sparse_costs_separate() {
         assert_eq!(std::mem::size_of::<PluginExecutionState>(), 168);
-        assert_eq!(std::mem::size_of::<PluginAuxState>(), 248);
+        assert_eq!(std::mem::size_of::<PluginAuxState>(), 296);
         assert_eq!(std::mem::size_of::<Option<Box<PluginAuxState>>>(), 8);
     }
 
     #[test]
     fn ordinary_context_keeps_plugin_aux_unallocated_on_reads() {
         let mut ctx = EdgionHttpContext::new();
+        assert!(ctx.begin_rate_limit_frame(0).is_none());
+        assert_eq!(
+            ctx.rate_limit_outcome(0),
+            crate::plugins::runtime::conditions::rate_limit_outcome::RateLimitOutcome::NotEvaluated
+        );
         let (_, allocations) = crate::test_allocation_counter::count_allocation_stats(|| {
             assert!(!ctx.has_plugin_aux());
             assert!(ctx.stage_logs().is_empty());

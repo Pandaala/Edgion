@@ -101,6 +101,8 @@ pub enum ConditionValidationProfile {
     EntrySync,
     /// RequestRestriction and RequestAccessPolicy conditions.
     RequestAsync,
+    /// Request-stage RateLimitRedis entry run conditions only.
+    RateLimitRedisRun,
 }
 
 /// A fixed-depth Boolean expression over shared [`Condition`] leaves.
@@ -217,6 +219,20 @@ pub enum Condition {
 
     /// Match an mTLS client-certificate field (subject / CN / SAN).
     MtlsMatch(MtlsMatchCondition),
+
+    /// An earlier local limiter in this resource exhausted its allowance.
+    RateLimitExceeded(RateLimitExceededCondition),
+}
+
+/// Reference to a local limiter in the same request plugin array.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RateLimitExceededCondition {
+    pub plugin_alias: String,
+    /// Runtime-only, value-free diagnostic descriptor.
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub descriptor: Box<str>,
 }
 
 /// Shared exact-values / regex match fields, flattened into KeyMatch.
@@ -582,6 +598,7 @@ impl Condition {
             Condition::HmacAuth(_) => "hmacAuth",
             Condition::JwtClaimMatch(_) => "jwtClaimMatch",
             Condition::MtlsMatch(_) => "mtlsMatch",
+            Condition::RateLimitExceeded(_) => "rateLimitExceeded",
         }
     }
 
@@ -598,6 +615,7 @@ impl Condition {
             Condition::HmacAuth(c) => &c.descriptor,
             Condition::JwtClaimMatch(c) => &c.descriptor,
             Condition::MtlsMatch(c) => &c.descriptor,
+            Condition::RateLimitExceeded(c) => &c.descriptor,
         }
     }
 
@@ -607,7 +625,7 @@ impl Condition {
             Condition::KeyExist(c) => Some(c.key.as_log_str()),
             Condition::KeyMatch(c) => Some(c.key.as_log_str()),
             Condition::SecretMatch(c) => Some(c.key.as_log_str()),
-            Condition::JwtClaimMatch(_) | Condition::MtlsMatch(_) => None,
+            Condition::JwtClaimMatch(_) | Condition::MtlsMatch(_) | Condition::RateLimitExceeded(_) => None,
             Condition::TimeRange(_)
             | Condition::DirectPeerIpMatch(_)
             | Condition::RemoteIpMatch(_)
@@ -629,6 +647,7 @@ impl Condition {
             Condition::HmacAuth(c) => c.descriptor = descriptor,
             Condition::JwtClaimMatch(c) => c.descriptor = descriptor,
             Condition::MtlsMatch(c) => c.descriptor = descriptor,
+            Condition::RateLimitExceeded(c) => c.descriptor = descriptor,
         }
     }
 
@@ -685,7 +704,7 @@ impl Condition {
                 if let Some(error) = c.detect_validation_error() {
                     return Err(error);
                 }
-                if profile == ConditionValidationProfile::EntrySync && c.validate_request_body {
+                if profile != ConditionValidationProfile::RequestAsync && c.validate_request_body {
                     return Err(HMAC_BODY_ENTRY_LEVEL_ERROR.to_string());
                 }
                 Ok(())
@@ -695,6 +714,17 @@ impl Condition {
                 validate_match_core(&c.core, "jwtClaimMatch")
             }
             Condition::MtlsMatch(c) => validate_match_core(&c.core, "mtlsMatch"),
+            Condition::RateLimitExceeded(c) => {
+                if profile != ConditionValidationProfile::RateLimitRedisRun {
+                    return Err(
+                        "rateLimitExceeded is only valid in request-stage RateLimitRedis run conditions".to_string(),
+                    );
+                }
+                match super::entry::validate_alias_str(&c.plugin_alias) {
+                    Some(error) => Err(format!("rateLimitExceeded.pluginAlias: {error}")),
+                    None => Ok(()),
+                }
+            }
         }
     }
 
@@ -878,9 +908,22 @@ impl PluginConditions {
 
     /// Validate non-regex configuration. Collects every error instead of short-circuiting.
     pub fn validate(&self) -> Result<(), Vec<String>> {
+        self.validate_with_run_profile(ConditionValidationProfile::EntrySync)
+    }
+
+    /// Permit local outcome dependencies only in this Redis entry's run set.
+    pub fn validate_for_rate_limit_redis(&self) -> Result<(), Vec<String>> {
+        self.validate_with_run_profile(ConditionValidationProfile::RateLimitRedisRun)
+    }
+
+    fn validate_with_run_profile(&self, run_profile: ConditionValidationProfile) -> Result<(), Vec<String>> {
         let mut errors: Vec<String> = Vec::new();
-        for set in [&self.skip, &self.run].into_iter().flatten() {
-            if let Err(mut set_errors) = set.validate(ConditionValidationProfile::EntrySync) {
+        for (set, profile) in [
+            (&self.skip, ConditionValidationProfile::EntrySync),
+            (&self.run, run_profile),
+        ] {
+            let Some(set) = set else { continue };
+            if let Err(mut set_errors) = set.validate(profile) {
                 errors.append(&mut set_errors);
             }
         }
