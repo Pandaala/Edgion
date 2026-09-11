@@ -3,7 +3,7 @@
 ## Scope
 
 - Baseline: `26e7ec7f`.
-- Pipeline state: terminal candidate; changed and independently approved, with commit-gate verification active.
+- Pipeline state: terminal; changed and committed after independent approval and all gates.
 - Active anchor crate: `edgion-gateway`.
 - Cohesive targets: `plugins/http/wasm/oci/cache.rs`, `cache_tests.rs`, `memory_pipeline_tests.rs`, `mod.rs`, and `plugins/http/wasm/vm_manager.rs`.
 - Exact technical write scope is not approved during analysis. Existing `edgion-tests/**`, campaign records, unrelated modules and user-protected paths are read-only.
@@ -44,4 +44,4 @@
 ## Handoff
 
 - Ledger/changelog updated: yes.
-- Commit: pending automatic local commit.
+- Commit: `ed688bf3`.

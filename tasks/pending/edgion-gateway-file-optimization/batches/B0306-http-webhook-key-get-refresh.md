@@ -3,7 +3,7 @@
 ## Scope
 
 - Baseline: `26e7ec7f`.
-- Pipeline state: analysis-ready at `26e7ec7f`; B0305 retains the serial lane.
+- Pipeline state: terminal candidate; examined-no-change after fresh independent review at `ed688bf3`.
 - Active anchor crate: `edgion-gateway`.
 - Target: `edgion-gateway/src/plugins/http/webhook_key_get/plugin.rs`.
 - Exact technical write scope is not approved during analysis. Existing `edgion-tests/**`, campaign records, unrelated modules and user-protected paths are read-only.
@@ -20,3 +20,19 @@
 - Decision: examined-no-change. The one-byte diagnostics collector is stack-local per variable, contains no names/values/errors, is emitted once before outcome selection, and preserves serial context/template ordering, fallback/skip behavior and canonical PluginLog ownership.
 - Canonical outbound client/TLS/egress/redirect, response caps, immutable publication and bounded observability remain intact. No test or integration execution occurred during analysis.
 - A separate already-pending resolver row owns removal of the obsolete compatibility argument and avoidable path-override copy; B0306 does not expand into that work and creates no deferred task.
+
+## Independent review
+
+- Reviewer `b0306_webhook_key_get_review`: LGTM with no Must Fix, Should Fix or deferred finding. It independently verified the one-byte value-free collector, exactly-once emission, serial context/template ordering, fallback/skip/set behavior, canonical PluginLog ownership and current LinkSys generation lookup.
+- Canonical outbound client/TLS/egress/redirect/cap and fixed-cardinality observability remain intact. The resolver cleanup remains assigned to its pending ledger row.
+
+## Verification
+
+- Target tests passed 4/4, current-generation/presence diagnostics 1/1, resolver 10/10, outbound request 15/15 and resource validation 12/12.
+- Locked Gateway all-target check, frozen integration diff and diff check passed during independent review. No integration test was run or modified.
+- Applied format plus locked workspace all-target check and Clippy passed. Agent-doc, SSA, metrics, Pingora source, Gateway no-tracing, English-only, diff and frozen-path guards all passed; Clippy retained only existing warnings.
+
+## Handoff
+
+- Ledger/changelog updated: yes.
+- Commit: pending automatic local commit.
