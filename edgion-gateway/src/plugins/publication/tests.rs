@@ -15,7 +15,7 @@ use crate::plugins::runtime::{PluginLog, RequestFilter};
 
 fn plugin(program: &str, valid: bool) -> Arc<EdgionPlugins> {
     let mut spec = json!({"requestPlugins": [
-        {"type": "RateLimit", "config": {"rate": 100}},
+        {"type": "RateLimitLocal", "config": {"rate": 100}},
         {"type": "RequestHeaderModifier", "config": {"set": [{"name": "X-Generation", "value": if valid { "good" } else { "bad" }}]}},
     ]});
     if program == "dsl" {
@@ -128,7 +128,7 @@ async fn current_policy_wins_over_invalid_dsl_and_waf_for_delta_full_and_event_o
                 update_source(&publisher, plugin(program, true), full);
                 let first = view(&publisher);
                 assert!(first.is_activatable, "{:?}", first.preparse_errors);
-                let rate = filter(&first, "RateLimit");
+                let rate = filter(&first, "RateLimitLocal");
                 let block = json!({"deny": [{"name": "http/RequestHeaderModifier", "blockStatus": 451}]});
                 if policy_first {
                     update_policy(&publisher, block.clone(), full);
@@ -143,7 +143,7 @@ async fn current_policy_wins_over_invalid_dsl_and_waf_for_delta_full_and_event_o
                     first_result(&restricted).await,
                     PluginRunningResult::ErrResponse { status: 451, .. }
                 ));
-                assert!(Arc::ptr_eq(&rate, &filter(&restricted, "RateLimit")));
+                assert!(Arc::ptr_eq(&rate, &filter(&restricted, "RateLimitLocal")));
                 assert!(!restricted
                     .plugin_runtime
                     .request_plugins_iter()
@@ -158,12 +158,12 @@ fn revoked_candidate_slots_do_not_resurrect_on_relaxation() {
     let publisher = publisher();
     update_source(&publisher, plugin("dsl", true), false);
     let first = view(&publisher);
-    let rate = filter(&first, "RateLimit");
+    let rate = filter(&first, "RateLimitLocal");
     let weak = Arc::downgrade(&rate);
     update_source(&publisher, plugin("dsl", false), false);
     update_policy(
         &publisher,
-        json!({"deny": [{"name": "http/RateLimit", "action": "bypass"}]}),
+        json!({"deny": [{"name": "http/RateLimitLocal", "action": "bypass"}]}),
         false,
     );
     let restricted = view(&publisher);
@@ -192,7 +192,7 @@ async fn latest_new_block_and_retained_deleted_entry_both_participate() {
     let publisher = publisher();
     update_source(&publisher, plugin("dsl", true), false);
     let first = view(&publisher);
-    let original = filter(&first, "RateLimit");
+    let original = filter(&first, "RateLimitLocal");
     let mut latest = (*plugin("dsl", false)).clone();
     latest
         .spec
@@ -226,7 +226,7 @@ async fn latest_new_block_and_retained_deleted_entry_both_participate() {
         .request_plugins_iter()
         .any(|filter| filter.name() == "RequestHeaderModifier"));
     assert!(
-        Arc::ptr_eq(&original, &filter(&current, "RateLimit")),
+        Arc::ptr_eq(&original, &filter(&current, "RateLimitLocal")),
         "the selected candidate keeps its permitted state"
     );
 }
@@ -250,9 +250,9 @@ fn active_classes_share_instances_and_release_after_last_allowing_attachment() {
     let first = view(&publisher);
     let second_scope = scope(&publisher, "apps/b");
     let second = second_scope.http("apps/plugins").unwrap();
-    let rate = filter(&first, "RateLimit");
+    let rate = filter(&first, "RateLimitLocal");
     let weak = Arc::downgrade(&rate);
-    assert!(Arc::ptr_eq(&rate, &filter(&second, "RateLimit")));
+    assert!(Arc::ptr_eq(&rate, &filter(&second, "RateLimitLocal")));
     update_policy(&publisher, json!({"allow": []}), false);
     assert!(
         Arc::ptr_eq(&second_scope, &scope(&publisher, "apps/b")),
@@ -422,7 +422,7 @@ fn shared_listener_requires_equivalent_connection_views_but_not_equal_http_polic
     publisher.update_gateway_configs(
         HashMap::from([(
             "policy-b".into(),
-            config("policy-b", json!({"deny": [{"name": "http/RateLimit"}]})),
+            config("policy-b", json!({"deny": [{"name": "http/RateLimitLocal"}]})),
         )]),
         &HashSet::new(),
     );
@@ -456,18 +456,18 @@ fn another_class_cache_cannot_resurrect_a_revoked_candidate_slot() {
         &HashSet::new(),
     );
     update_source(&publisher, plugin("dsl", true), false);
-    let original = filter(&view(&publisher), "RateLimit");
+    let original = filter(&view(&publisher), "RateLimitLocal");
     update_source(&publisher, plugin("dsl", false), false);
     update_policy(
         &publisher,
-        json!({"deny": [{"name": "http/RateLimit", "action": "bypass"}]}),
+        json!({"deny": [{"name": "http/RateLimitLocal", "action": "bypass"}]}),
         false,
     );
     assert!(view(&publisher).is_activatable);
     let retained_b = scope(&publisher, "apps/b");
     assert!(Arc::ptr_eq(
         &original,
-        &filter(&retained_b.http("apps/plugins").unwrap(), "RateLimit")
+        &filter(&retained_b.http("apps/plugins").unwrap(), "RateLimitLocal")
     ));
     update_policy(&publisher, json!({}), false);
     assert!(!view(&publisher).is_activatable);

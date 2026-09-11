@@ -149,7 +149,7 @@ The following types of suites must be rewritten to be "environment-agnostic":
 Roll out in stages:
 
 1. P0: `HTTPRoute/Basic/Match/WeightedBackend/Timeout`, `GRPCRoute/Basic/Match`, `UDPRoute/Basic`, `EdgionTls/*`.
-2. P1: `EdgionPlugins` core plugins (Jwt/Jwe/Hmac/HeaderCert/KeyAuth/BasicAuth/RateLimit/RealIp).
+2. P1: `EdgionPlugins` core plugins (Jwt/Jwe/Hmac/HeaderCert/KeyAuth/BasicAuth/RateLimitLocal/RealIp).
 3. P2: `DirectEndpoint/AllEndpointStatus/StreamPlugins/Ldap/OpenidConnect`.
 
 ### Recommended execution model (already implemented in scripts)

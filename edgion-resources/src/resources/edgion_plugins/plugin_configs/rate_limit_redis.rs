@@ -11,8 +11,8 @@
 //! - EVALSHA with automatic EVAL fallback on NOSCRIPT
 //! - Process-shared immutable Lua source/SHA descriptors; EVAL fallback only on an exact NOSCRIPT error
 //!
-//! ## Complementary to RateLimit:
-//! - RateLimit: in-process CMS, ~nanosecond, approximate, per-instance
+//! ## Complementary to RateLimitLocal:
+//! - RateLimitLocal: in-process CMS, ~nanosecond, approximate, per-instance
 //! - RateLimitRedis: Redis-backed, ~0.1-1ms, precise, cluster-wide
 
 use crate::common::KeyGet;
@@ -21,7 +21,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
-use super::rate_limit::{LimitHeaderNames, OnKeyMiss};
+use super::rate_limit_local::{LimitHeaderNames, OnKeyMiss};
 
 // ========== Rate Limit Algorithm ==========
 
@@ -106,7 +106,7 @@ pub struct RateLimitPolicy {
     pub rate: u64,
 
     /// Time interval (GEP-2257 duration, e.g., "1s", "1m", "1h", "24h").
-    /// Uses the same parse_duration() as RateLimit.
+    /// Uses the same parse_duration() as RateLimitLocal.
     #[schemars(pattern(crate::duration::GEP2257_PATTERN))]
     pub interval: String,
 
@@ -163,7 +163,7 @@ pub struct RateLimitRedisConfig {
     /// ```
     pub policies: Vec<RateLimitPolicy>,
 
-    /// Key extraction sources (same KeyGet as RateLimit).
+    /// Key extraction sources (same KeyGet as RateLimitLocal).
     ///
     /// A single key is used verbatim; multiple keys are combined into an
     /// unambiguous composite key (`<byte-len>:<value>` per configured key,
@@ -196,7 +196,7 @@ pub struct RateLimitRedisConfig {
     pub show_limit_headers: bool,
 
     /// Custom header names for rate limit responses.
-    /// Reuses LimitHeaderNames from RateLimit.
+    /// Reuses LimitHeaderNames from RateLimitLocal.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub header_names: Option<LimitHeaderNames>,
 

@@ -84,7 +84,7 @@ impl EntryCache {
             entries
                 .iter()
                 .enumerate()
-                .filter(|(_, entry)| entry.is_enabled() && matches!(entry.plugin, EdgionPlugin::RateLimit(_)))
+                .filter(|(_, entry)| entry.is_enabled() && matches!(entry.plugin, EdgionPlugin::RateLimitLocal(_)))
                 .filter_map(|(index, entry)| {
                     entry
                         .alias

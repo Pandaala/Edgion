@@ -10,7 +10,7 @@ mod basic;
 mod delegation;
 mod grpc_web;
 mod r#match;
-mod rate_limit;
+mod rate_limit_local;
 mod timeout_rewrite_wire;
 mod unmatched_route;
 
@@ -22,6 +22,6 @@ pub use delegation::{
 };
 pub use grpc_web::GrpcWebTestSuite;
 pub use r#match::GrpcMatchTestSuite;
-pub use rate_limit::GrpcRateLimitTestSuite;
+pub use rate_limit_local::GrpcRateLimitLocalTestSuite;
 pub use timeout_rewrite_wire::GrpcTimeoutRewriteWireTestSuite;
 pub use unmatched_route::GrpcUnmatchedRouteTestSuite;

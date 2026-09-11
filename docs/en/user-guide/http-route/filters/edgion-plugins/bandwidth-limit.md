@@ -147,5 +147,5 @@ spec:
 
 ## Related Docs
 
-- [Rate Limit (Local)](./rate-limit.md)
+- [Rate Limit (Local)](./rate-limit-local.md)
 - [Response Rewrite](./response-rewrite.md)

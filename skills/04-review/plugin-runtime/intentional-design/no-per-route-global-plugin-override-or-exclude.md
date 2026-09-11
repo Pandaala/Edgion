@@ -42,7 +42,7 @@ semantics — that needs a design pass, not a drive-by patch.
 **2. A route-side workaround already exists**
 
 Global plugins already support `conditions` / `skip` matching (header/path/etc.) on the plugin
-itself, so an operator can exempt routes today (e.g. skip a global `RateLimit` on `/healthz`).
+itself, so an operator can exempt routes today (e.g. skip a global `RateLimitLocal` on `/healthz`).
 The gap is ergonomic, not a hard blocker: the exemption is encoded on the global plugin instead of
 on the route, which couples the plugin's config to knowledge of exempt routes. That is an
 operational inconvenience that grows with route count, not a correctness defect or a security

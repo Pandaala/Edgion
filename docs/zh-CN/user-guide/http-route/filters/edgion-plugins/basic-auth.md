@@ -354,7 +354,7 @@ filters:
 ```yaml
 filters:
   # 先按来源 IP 限流，限制枚举尝试速率
-  - type: RateLimit
+  - type: RateLimitLocal
     config:
       rate: 10           # 每秒 10 次
       burst: 20

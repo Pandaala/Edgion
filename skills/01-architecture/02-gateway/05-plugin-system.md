@@ -137,7 +137,7 @@ Value predicates carry `negate` (default false), applied after an ordinary reque
 
 `RateLimitExceeded` is an execution-result dependency without `negate`: it is
 supported only in a request-stage RateLimitRedis entry's `run` conditions and
-references an earlier active Continue RateLimit in the same resource by alias.
+references an earlier active Continue RateLimitLocal in the same resource by alias.
 Shared validation rejects other placements and invalid references. Gateway
 compilation binds the alias to a typed, invocation-local outcome slot. Before
 the skip-first/run-second Boolean evaluation, all referenced outcomes must be
@@ -279,7 +279,7 @@ The category tables below are a conceptual guide, not an exhaustive registry.
 
 | Plugin | Module | Description |
 |--------|--------|-------------|
-| RateLimit | `rate_limit` | Local in-memory rate limiting |
+| RateLimitLocal | `rate_limit_local` | Local in-memory rate limiting |
 | RateLimitRedis | `rate_limit_redis` | Distributed rate limiting based on Redis (Lua scripts) |
 | BandwidthLimit | `bandwidth_limit` | Bandwidth limiting (UpstreamResponseBodyFilter phase) |
 

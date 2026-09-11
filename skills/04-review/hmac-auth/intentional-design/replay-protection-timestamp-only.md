@@ -61,7 +61,7 @@ All three satisfied → design layering; point to the M6 FIXED (doc-only) decisi
 
 This decision belongs to the same category as the following review rules: "**layered decoupling + documentation guides operators to make corresponding configurations**":
 
-- `auth-timing/basic-auth-username-enumeration.md` (M4) — doc recommends `authFailureDelayMs` + RateLimit combination
+- `auth-timing/basic-auth-username-enumeration.md` (M4) — doc recommends `authFailureDelayMs` + RateLimitLocal combination
 - `oidc/nonce-pkce-defaults.md` (M8) — doc recommends enabling `useNonce` / `usePkce` in production
 - `real-ip/max-trusted-hops-opt-in.md` (M12) — doc recommends two-layer defense (precise trustedIps + maxTrustedHops cap)
 - This file (M6) — doc recommends HTTPS + hideCredentials + business-layer idempotency

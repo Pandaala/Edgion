@@ -145,5 +145,5 @@ spec:
 
 ## 相关文档
 
-- [限流（单实例）](./rate-limit.md)
+- [限流（单实例）](./rate-limit-local.md)
 - [响应重写](./response-rewrite.md)

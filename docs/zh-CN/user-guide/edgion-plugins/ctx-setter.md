@@ -6,7 +6,7 @@
 
 ## 概述
 
-`CtxSet` 插件用于在请求处理过程中设置上下文变量。这些变量可以被后续插件（如 RateLimit、PluginConditions）使用。若需输出访问日志，必须在 `EdgionPlugins.spec.accessLogExtern` 中显式声明 `from: ctx` 条目；默认会脱敏，敏感上下文键被绝对禁止投影。详见 [AccessLogExtern](../../ops-guide/observability/access-log.md)。
+`CtxSet` 插件用于在请求处理过程中设置上下文变量。这些变量可以被后续插件（如 RateLimitLocal、PluginConditions）使用。若需输出访问日志，必须在 `EdgionPlugins.spec.accessLogExtern` 中显式声明 `from: ctx` 条目；默认会脱敏，敏感上下文键被绝对禁止投影。详见 [AccessLogExtern](../../ops-guide/observability/access-log.md)。
 
 CtxSet 支持从多种数据源（Header、Query、Cookie、Path、ClientIP、Method、已有上下文变量）提取数据，可选地通过正则提取、转换和值映射对结果进行重塑，并将最终值存储在命名键下供下游插件使用。
 
@@ -248,9 +248,9 @@ spec:
             default: "anonymous"
 ```
 
-### 5. 链式：CtxSet 为下游 RateLimit 提供键
+### 5. 链式：CtxSet 为下游 RateLimitLocal 提供键
 
-CtxSet 在请求阶段先于 RateLimit 执行，因此它设置的变量可通过 `ctx` 键来源（`key: { type: ctx, name: <name> }`）供 RateLimit 使用。
+CtxSet 在请求阶段先于 RateLimitLocal 执行，因此它设置的变量可通过 `ctx` 键来源（`key: { type: ctx, name: <name> }`）供 RateLimitLocal 使用。
 
 ```yaml
 apiVersion: edgion.io/v1
@@ -269,8 +269,8 @@ spec:
               type: header
               name: "X-Tenant"
             default: "public"
-    # 2. RateLimit 读取上方设置的变量
-    - type: RateLimit
+    # 2. RateLimitLocal 读取上方设置的变量
+    - type: RateLimitLocal
       config:
         rate: 100
         window: 60
@@ -316,5 +316,5 @@ spec:
 
 - [CtxSet（HTTPRoute 过滤器视角）](../http-route/filters/edgion-plugins/ctx-setter.md) - 在 HTTPRoute 过滤器中使用 CtxSet
 - [Webhook KeyGet](../http-route/filters/edgion-plugins/webhook-key-get.md) - 将 LinkSys webhook 的值解析进上下文
-- [RateLimit 插件](rate-limit.md) - 可使用 CtxSet 构造限流键
+- [RateLimitLocal 插件](rate-limit-local.md) - 可使用 CtxSet 构造限流键
 - [HTTPRoute 总览](../http-route/overview.md) - HTTPRoute 配置总览

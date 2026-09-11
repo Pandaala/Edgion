@@ -7,7 +7,7 @@
 //   01_EdgionPlugins_ep-validation-jwt-auth-invalid.yaml        — JwtAuth: no credential + no anonymous
 //   02_EdgionPlugins_ep-validation-cors-invalid.yaml            — Cors: allowCredentials=true + wildcard origin
 //   03_EdgionPlugins_ep-validation-direct-endpoint-invalid.yaml — DirectEndpoint: invalid extract regex
-//   04_EdgionPlugins_ep-validation-rate-limit-invalid.yaml      — RateLimit: rate=0
+//   04_EdgionPlugins_ep-validation-rate-limit-invalid.yaml      — RateLimitLocal: rate=0
 //   05_EdgionPlugins_ep-validation-alias-invalid.yaml           — Cors entry with alias containing a space
 //   06_EdgionPlugins_ep-validation-dsl-invalid.yaml             — Dsl: uncompilable inline source
 //   07_EdgionPlugins_ep-validation-cors-regex-invalid.yaml      — Cors: allowCredentials=true + catch-all allowOriginsByRegex
@@ -191,13 +191,13 @@ impl PluginValidationStatusTestSuite {
     }
 
     // =========================================================================
-    // Scenario 4: RateLimit with rate=0 → Accepted=False/Invalid
+    // Scenario 4: RateLimitLocal with rate=0 → Accepted=False/Invalid
     // =========================================================================
 
     fn rate_limit_invalid() -> TestCase {
         TestCase::new(
             "rate_limit_invalid",
-            "RateLimit 'ep-validation-rate-limit-invalid': rate=0 → Accepted=False/Invalid",
+            "RateLimitLocal 'ep-validation-rate-limit-invalid': rate=0 → Accepted=False/Invalid",
             |ctx: TestContext| {
                 Box::pin(async move { assert_accepted_false(&ctx, "ep-validation-rate-limit-invalid", "rate").await })
             },

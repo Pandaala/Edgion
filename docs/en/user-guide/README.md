@@ -39,7 +39,7 @@ For LLM / GenAI traffic, start with the dedicated [AI Gateway](../ai-gateway/) s
     - [ProxyRewrite](./http-route/filters/edgion-plugins/proxy-rewrite.md)
     - [Request Restriction](./http-route/filters/edgion-plugins/request-restriction.md)
     - [Response Rewrite](./http-route/filters/edgion-plugins/response-rewrite.md)
-    - [Rate Limiting (Single Instance)](./http-route/filters/edgion-plugins/rate-limit.md)
+    - [Rate Limiting (Single Instance)](./http-route/filters/edgion-plugins/rate-limit-local.md)
     - [Bandwidth Limit](./http-route/filters/edgion-plugins/bandwidth-limit.md)
     - [Request Mirror](./http-route/filters/edgion-plugins/request-mirror.md)
     - [Direct Endpoint](./http-route/filters/edgion-plugins/direct-endpoint.md)
@@ -64,7 +64,7 @@ For LLM / GenAI traffic, start with the dedicated [AI Gateway](../ai-gateway/) s
 - [JWE Decrypt](./edgion-plugins/jwe-decrypt.md)
 - [LDAP Auth](./edgion-plugins/ldap-auth.md)
 - [OpenID Connect](./edgion-plugins/openid-connect.md)
-- [RateLimit (Distributed)](./edgion-plugins/rate-limit.md)
+- [RateLimitLocal (In-process)](./edgion-plugins/rate-limit-local.md)
 - [RealIP](./edgion-plugins/real-ip.md)
 
 ### GRPCRoute

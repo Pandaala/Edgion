@@ -5,7 +5,7 @@
 
 mod evaluator;
 mod extract;
-pub mod rate_limit_outcome;
+pub mod rate_limit_local_outcome;
 
 pub use evaluator::{ConditionEvalResult, EvaluationResult};
 pub use extract::{extract_jwt_claim_values, extract_mtls_values};

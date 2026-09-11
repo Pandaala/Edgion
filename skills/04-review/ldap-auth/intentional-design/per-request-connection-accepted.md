@@ -17,7 +17,7 @@ reusing connections across users requires a separate security design that
 proves identity reset, serialization, failure cleanup, and bounded concurrency.
 
 Operators should size the LDAP service for the protected request rate and use
-the existing `RateLimit` plugin to bound abusive traffic. Re-evaluate this
+the existing `RateLimitLocal` plugin to bound abusive traffic. Re-evaluate this
 decision if production evidence shows connection exhaustion, or if the LDAP
 client gains a pool with first-class per-bind identity-reset semantics.
 

@@ -58,7 +58,7 @@ pub use plugin_configs::{
     JweContentEncryption, JweDecryptConfig, JweKeyManagement, JwtAlgorithm, JwtAuthConfig, JwtIssuerGroup,
     KeyAuthConfig, KeyMetadata, LdapAuthConfig, LimitHeaderNames, LogExtSource, LruCacheConfig, MappingConfig,
     MockConfig, OnKeyMiss, OnLimitExceeded, OnRedisFailure, OnUnknownModel, OpenidConnectConfig, ProxyRewriteConfig,
-    RateLimitAlgorithm, RateLimitConfig, RateLimitPolicy, RateLimitRedisConfig, RealIpConfig, RegexUri, RegionDef,
+    RateLimitAlgorithm, RateLimitLocalConfig, RateLimitPolicy, RateLimitRedisConfig, RealIpConfig, RegexUri, RegionDef,
     RegionRouteConfig, ReplaceConfig, RequestBodyBufferConfig, RequestRestrictionConfig, ResolvedBasicAuthUser,
     ResolvedCredentialInjector, ResolvedJweCredential, ResolvedJwtCredential, ResolvedJwtIssuerGroup,
     ResponseHeaderActions, ResponseHeaderEntry, ResponseRewriteConfig, RestrictionMode, RouteRule, SanType,

@@ -39,7 +39,7 @@ LLM / GenAI 流量请优先阅读独立的 [AI Gateway](../ai-gateway/) 专栏�
     - [ProxyRewrite](./http-route/filters/edgion-plugins/proxy-rewrite.md)
     - [请求限制](./http-route/filters/edgion-plugins/request-restriction.md)
     - [响应重写](./http-route/filters/edgion-plugins/response-rewrite.md)
-    - [限流（单实例）](./http-route/filters/edgion-plugins/rate-limit.md)
+    - [限流（单实例）](./http-route/filters/edgion-plugins/rate-limit-local.md)
     - [带宽限制](./http-route/filters/edgion-plugins/bandwidth-limit.md)
     - [请求镜像](./http-route/filters/edgion-plugins/request-mirror.md)
     - [直接端点](./http-route/filters/edgion-plugins/direct-endpoint.md)
@@ -64,7 +64,7 @@ LLM / GenAI 流量请优先阅读独立的 [AI Gateway](../ai-gateway/) 专栏�
 - [JWE Decrypt](./edgion-plugins/jwe-decrypt.md)
 - [LDAP Auth](./edgion-plugins/ldap-auth.md)
 - [OpenID Connect](./edgion-plugins/openid-connect.md)
-- [RateLimit（分布式）](./edgion-plugins/rate-limit.md)
+- [RateLimitLocal（进程内）](./edgion-plugins/rate-limit-local.md)
 - [RealIP](./edgion-plugins/real-ip.md)
 
 ### GRPCRoute

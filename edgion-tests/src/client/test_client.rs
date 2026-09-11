@@ -42,8 +42,8 @@ const EXPECTED_DYNAMIC_SCENARIO_IDS: &[&str] = &[
     "FormJsonTransformDynamic",
     "BasicAuthDynamic",
     "BasicAuthDynamicGrouped",
-    "RateLimitDynamic",
-    "RateLimitOverflowDynamic",
+    "RateLimitLocalDynamic",
+    "RateLimitLocalOverflowDynamic",
     "RequestIdDynamic",
     "RequestAccessPolicyHmacDynamic",
     "RouteDelegationDynamic",
@@ -1144,7 +1144,7 @@ fn resolve_suite(resource: Option<&str>, item: Option<&str>, legacy: Option<&str
             }
             "grpc" => "GRPCRoute/Basic".to_string(),
             "grpc-match" | "grpcmatch" => "GRPCRoute/Match".to_string(),
-            "grpc-rate-limit" | "grpcratelimit" => "GRPCRoute/RateLimit".to_string(),
+            "grpc-rate-limit" | "grpcratelimit" => "GRPCRoute/RateLimitLocal".to_string(),
             "grpc-timeout-wire" | "grpctimeoutwire" => "GRPCRoute/TimeoutRewriteWire".to_string(),
             "grpc-sp" | "grpcsp" => "GRPCRoute/Backend/SessionPersistence".to_string(),
             "grpc-tls" | "grpctls" => "EdgionTls/grpctls".to_string(),
@@ -1301,7 +1301,7 @@ fn suite_to_port_key(suite: &str) -> &str {
         "GRPCRoute/Delegation" => "GRPCRoute/Delegation",
         "GRPCRoute/Match" => "GRPCRoute/Match",
         "GRPCRoute/UnmatchedRoute" => "GRPCRoute/UnmatchedRoute",
-        "GRPCRoute/RateLimit" => "GRPCRoute/RateLimit",
+        "GRPCRoute/RateLimitLocal" => "GRPCRoute/RateLimitLocal",
         "GRPCRoute/TimeoutRewriteWire" => "GRPCRoute/TimeoutRewriteWire",
         "GRPCRoute/TLS" => "EdgionTls/grpctls",
         "GRPCRoute/Backend/SessionPersistence" => "GRPCRoute/Backend/SessionPersistence",
@@ -1355,8 +1355,8 @@ fn suite_to_port_key(suite: &str) -> &str {
         "EdgionPlugins/LdapAuth" => "EdgionPlugins",
         "EdgionPlugins/LdapAuthTls" => "EdgionPlugins",
         "EdgionPlugins/ProxyRewrite" => "EdgionPlugins",
-        "EdgionPlugins/RateLimit" => "EdgionPlugins",
-        "EdgionPlugins/RateLimitDynamic" => "EdgionPlugins",
+        "EdgionPlugins/RateLimitLocal" => "EdgionPlugins",
+        "EdgionPlugins/RateLimitLocalDynamic" => "EdgionPlugins",
         "EdgionPlugins/RateLimitRedis" => "EdgionPlugins",
         "EdgionPlugins/BandwidthLimit" => "EdgionPlugins",
         "EdgionPlugins/RealIp" => "EdgionPlugins",
@@ -1480,8 +1480,8 @@ fn dynamic_port_contract(id: &str) -> Result<Option<(&'static str, port_config::
         | "PmdRefFlap"
         | "RegionRouteValidation"
         | "RequestIdDynamic"
-        | "RateLimitDynamic"
-        | "RateLimitOverflowDynamic"
+        | "RateLimitLocalDynamic"
+        | "RateLimitLocalOverflowDynamic"
         | "RequestAccessPolicyHmacDynamic" => Some(("EdgionPlugins", PortKind::Http)),
         "WafDynamic" => Some(("EdgionPlugins", PortKind::Http)),
         "ServiceDegradeThreshold" => Some(("HTTPRoute/Backend/DegradeThreshold", PortKind::Http)),
@@ -2028,12 +2028,12 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
             }
             runner.add_suite(Box::new(suites::GrpcUnmatchedRouteTestSuite));
         }
-        "GRPCRoute/RateLimit" => {
+        "GRPCRoute/RateLimitLocal" => {
             if !gateway {
-                eprintln!("Error: GRPCRoute/RateLimit tests require --gateway flag");
+                eprintln!("Error: GRPCRoute/RateLimitLocal tests require --gateway flag");
                 std::process::exit(1);
             }
-            runner.add_suite(Box::new(suites::GrpcRateLimitTestSuite));
+            runner.add_suite(Box::new(suites::GrpcRateLimitLocalTestSuite));
         }
         "GRPCRoute/TimeoutRewriteWire" => {
             if !gateway {
@@ -2431,28 +2431,28 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
             }
             runner.add_suite(Box::new(suites::ResponseRewriteTestSuite));
         }
-        "EdgionPlugins/RateLimit" => {
+        "EdgionPlugins/RateLimitLocal" => {
             if !gateway {
-                eprintln!("Error: EdgionPlugins/RateLimit tests require --gateway flag");
+                eprintln!("Error: EdgionPlugins/RateLimitLocal tests require --gateway flag");
                 std::process::exit(1);
             }
-            runner.add_suite(Box::new(suites::RateLimitTestSuite));
+            runner.add_suite(Box::new(suites::RateLimitLocalTestSuite));
         }
-        "EdgionPlugins/RateLimitDynamic" => {
+        "EdgionPlugins/RateLimitLocalDynamic" => {
             if !gateway {
-                eprintln!("Error: EdgionPlugins/RateLimitDynamic tests require --gateway flag");
+                eprintln!("Error: EdgionPlugins/RateLimitLocalDynamic tests require --gateway flag");
                 std::process::exit(1);
             }
             match phase {
                 Some("initial") => {
-                    runner.add_suite(Box::new(suites::RateLimitDynamicInitialTestSuite));
+                    runner.add_suite(Box::new(suites::RateLimitLocalDynamicInitialTestSuite));
                 }
                 Some("update") => {
-                    runner.add_suite(Box::new(suites::RateLimitDynamicUpdateTestSuite));
+                    runner.add_suite(Box::new(suites::RateLimitLocalDynamicUpdateTestSuite));
                 }
                 _ => {
-                    runner.add_suite(Box::new(suites::RateLimitDynamicInitialTestSuite));
-                    runner.add_suite(Box::new(suites::RateLimitDynamicUpdateTestSuite));
+                    runner.add_suite(Box::new(suites::RateLimitLocalDynamicInitialTestSuite));
+                    runner.add_suite(Box::new(suites::RateLimitLocalDynamicUpdateTestSuite));
                 }
             }
         }

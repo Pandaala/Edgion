@@ -426,5 +426,5 @@ spec:
 ## Related Links
 
 - [ProxyRewrite](./proxy-rewrite.md) — Request rewriting
-- [RateLimit](./rate-limit.md) — Rate limiting
+- [RateLimitLocal](./rate-limit-local.md) — Rate limiting
 - [Filters Overview](../overview.md) — All HTTPRoute filters

@@ -300,7 +300,7 @@ resp.remove_header("X-Internal-Server")
 return next()
 ```
 
-**用例 3：内网 IP 限流豁免。** 从客户端 IP 判断是否为内网请求，若是则通过上下文变量标记，供后续 RateLimit 插件跳过限流：
+**用例 3：内网 IP 限流豁免。** 从客户端 IP 判断是否为内网请求，若是则通过上下文变量标记，供后续 RateLimitLocal 插件跳过限流：
 
 ```
 // 该网络来源豁免规则故意使用物理传输对端。
@@ -383,7 +383,7 @@ Edgion 提供 28 个内置插件（26 个 HTTP + 2 个 Stream），按功能分�
 |------|------|---------|
 | **认证** | 7 | BasicAuth, KeyAuth, JwtAuth, HmacAuth, LdapAuth, ForwardAuth, OpenidConnect |
 | **安全** | 6 | Cors, Csrf, IpRestriction, RequestRestriction, JweDecrypt, HeaderCertAuth |
-| **流量管控** | 7 | RateLimit, RateLimitRedis, BandwidthLimit, ProxyRewrite, Mock, DirectEndpoint, RequestMirror |
+| **流量管控** | 7 | RateLimitLocal, RateLimitRedis, BandwidthLimit, ProxyRewrite, Mock, DirectEndpoint, RequestMirror |
 | **可编程** | 1 | DslPlugin（支持 request 和 upstream_response 两个阶段） |
 | **请求/响应变换** | 4 | RequestHeaderModifier, ResponseHeaderModifier, URLRewrite, ResponseRewrite |
 | **路由与上游** | 3 | DynamicInternalUpstream, DynamicExternalUpstream, RealIp |

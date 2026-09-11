@@ -1,7 +1,7 @@
 use crate::plugins::http::request_mirror::RequestMirrorGlobalConfig;
 use anyhow::{Context, Result};
 use clap::Args;
-use edgion_resources::rate_limit_config::RateLimitGlobalConfig;
+use edgion_resources::rate_limit_local_config::RateLimitLocalGlobalConfig;
 use edgion_resources::resources::common::parse_byte_size;
 use edgion_resources::resources::edgion_plugins::{
     validate_tiny_ufo_effective_limits, LruCacheConfig, TinyUfoTtlCacheConfig, MAX_LRU_CACHE_CAPACITY,
@@ -117,10 +117,10 @@ pub struct EdgionGatewayConfig {
     #[serde(default)]
     pub metrics: MetricsConfig,
 
-    /// RateLimit plugin global configuration
+    /// RateLimitLocal plugin global configuration
     #[arg(skip)]
-    #[serde(default, alias = "rate_limiter")]
-    pub rate_limit: RateLimitGlobalConfig,
+    #[serde(default)]
+    pub rate_limit_local: RateLimitLocalGlobalConfig,
 
     /// Startup-only RequestMirror task and retained request-body limits.
     #[arg(skip)]
@@ -1185,7 +1185,7 @@ impl EdgionGatewayConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use edgion_resources::rate_limit_config::{
+    use edgion_resources::rate_limit_local_config::{
         get_gateway_instance_count, set_gateway_instance_count, DEFAULT_ESTIMATOR_SLOTS_K,
         DEFAULT_MAX_ESTIMATOR_SLOTS_K,
     };
@@ -1260,8 +1260,8 @@ mod tests {
     }
 
     #[test]
-    fn test_rate_limit_global_config_default() {
-        let config = RateLimitGlobalConfig::default();
+    fn test_rate_limit_local_global_config_default() {
+        let config = RateLimitLocalGlobalConfig::default();
         assert_eq!(config.default_estimator_slots_k, DEFAULT_ESTIMATOR_SLOTS_K);
         assert_eq!(config.max_estimator_slots_k, DEFAULT_MAX_ESTIMATOR_SLOTS_K);
         assert_eq!(config.gateway_instance_count, 1);

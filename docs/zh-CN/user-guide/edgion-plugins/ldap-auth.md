@@ -195,7 +195,7 @@ spec:
 - 保持最终生效的 `tls.verify: true`；`false` 由运维人员负责，仅应用于测试环境
 - 开启 `hideCredentials: true`，避免凭证透传到上游
 - 在 LDAP 服务器侧启用账户锁定与防爆破策略
-- 叠加 `RateLimit` 插件，并按受保护请求速率规划 LDAP 服务容量
+- 叠加 `RateLimitLocal` 插件，并按受保护请求速率规划 LDAP 服务容量
 
 > **可接受的权衡——每请求新建 LDAP 连接。** 每次认证都会新建一条 TCP（必要时附带 TLS）连接，执行 `simple_bind` 后立即 `unbind`。当前实现不引入连接池，因为 LDAP `simple_bind` 会改变连接的认证身份；不安全的跨用户复用比连接开销更危险。
 

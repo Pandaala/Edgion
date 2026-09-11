@@ -13,10 +13,10 @@ knowledge_type: intentional-design
 
 `RequestRestriction` was fixed to route both self-written responses (the config-error 500 and
 the policy-deny) through `auth_common::send_gateway_plain_error_response`, which ends with
-`session.shutdown()`. `RateLimit` and `RateLimitRedis` keep writing their rejection responses
+`session.shutdown()`. `RateLimitLocal` and `RateLimitRedis` keep writing their rejection responses
 inline **without** `shutdown()` — that is a deliberate choice, not an oversight.
 
-Fix suggestions of the form "`RateLimit`/`RateLimitRedis` also hand-roll
+Fix suggestions of the form "`RateLimitLocal`/`RateLimitRedis` also hand-roll
 `write_response_header` → `write_response_body` → `return ErrTerminateRequest` without
 `shutdown()`, make them match the documented standard sequence" are **not accepted**.
 
@@ -54,7 +54,7 @@ response.
 
 ## Fix Suggestions Not Accepted
 
-- Add `session.shutdown().await` to `RateLimit::reject_request` — turns every 429 into a
+- Add `session.shutdown().await` to `RateLimitLocal::reject_request` — turns every 429 into a
   connection teardown, amplifying handshake cost under exactly the load the plugin sheds.
 - Add `session.shutdown().await` to `RateLimitRedis::reject_request` — same, and it additionally
   hits the `OnRedisFailure::Deny` fail-close path, where a Redis outage would then churn every

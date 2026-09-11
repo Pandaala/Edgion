@@ -134,10 +134,10 @@ impl CompiledCondition {
         }
         match &self.predicate {
             CompiledPredicate::RateLimitExceeded { slot, .. } => {
-                use crate::plugins::runtime::conditions::rate_limit_outcome::RateLimitOutcome;
-                match slot.map(|slot| session.rate_limit_outcome(slot)) {
-                    Some(RateLimitOutcome::Exceeded) => MatchState::True,
-                    Some(RateLimitOutcome::WithinLimit) => MatchState::False,
+                use crate::plugins::runtime::conditions::rate_limit_local_outcome::RateLimitLocalOutcome;
+                match slot.map(|slot| session.rate_limit_local_outcome(slot)) {
+                    Some(RateLimitLocalOutcome::Exceeded) => MatchState::True,
+                    Some(RateLimitLocalOutcome::WithinLimit) => MatchState::False,
                     _ => MatchState::Unresolved,
                 }
             }
@@ -629,12 +629,10 @@ impl CompiledPluginConditions {
         session: &mut dyn PluginSession,
         log: &mut PluginLog,
     ) -> Result<ConditionEvalResult<'a>, PluginRunningResult> {
-        use crate::plugins::runtime::conditions::rate_limit_outcome::RateLimitOutcome;
-        if self
-            .rate_limit_dependencies
-            .iter()
-            .any(|slot| slot.is_none_or(|slot| session.rate_limit_outcome(slot) == RateLimitOutcome::NotEvaluated))
-        {
+        use crate::plugins::runtime::conditions::rate_limit_local_outcome::RateLimitLocalOutcome;
+        if self.rate_limit_dependencies.iter().any(|slot| {
+            slot.is_none_or(|slot| session.rate_limit_local_outcome(slot) == RateLimitLocalOutcome::NotEvaluated)
+        }) {
             log.push_err("local outcome unavailable");
             return Err(PluginRunningResult::ErrResponse {
                 status: 500,

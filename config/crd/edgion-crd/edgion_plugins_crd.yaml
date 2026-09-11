@@ -102,7 +102,7 @@ spec:
                                       enum: [keyExist, keyMatch, timeRange, probability, directPeerIpMatch, remoteIpMatch, secretMatch, hmacAuth, jwtClaimMatch, mtlsMatch, rateLimitExceeded]
                                     pluginAlias: &rateLimitPluginAliasSchema
                                       type: string
-                                      description: "Earlier active RateLimit alias in this resource's requestPlugins array, with onLimitExceeded Continue. Valid only in RateLimitRedis run conditions; negate is not supported. Semantic checks run during plugin validation."
+                                      description: "Earlier active RateLimitLocal alias in this resource's requestPlugins array, with onLimitExceeded Continue. Valid only in RateLimitRedis run conditions; negate is not supported. Semantic checks run during plugin validation."
                                       minLength: 1
                                       maxLength: 32
                                     key: &keyGetSchema
@@ -359,7 +359,7 @@ spec:
                           - OpenidConnect
                           - Mock
                           - ProxyRewrite
-                          - RateLimit
+                          - RateLimitLocal
                           - RateLimitRedis
                           - RealIp
                           - RequestRestriction

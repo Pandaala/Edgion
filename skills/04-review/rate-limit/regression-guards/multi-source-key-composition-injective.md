@@ -12,7 +12,7 @@ knowledge_type: regression-guards
 ## Conclusion
 
 `resolve_rate_limit_key` (`edgion-gateway/src/plugins/http/common/mod.rs`, shared by
-`RateLimit` and `RateLimitRedis`) used to `parts.join("_")` over the values that resolved,
+`RateLimitLocal` and `RateLimitRedis`) used to `parts.join("_")` over the values that resolved,
 silently dropping the sources that did not. Both properties broke injectivity of the bucket
 key, so two different value tuples could land in one bucket. The composition now runs through
 `compose_rate_limit_key`: a single configured source is used verbatim, and multiple sources are
@@ -27,7 +27,7 @@ first.
 
 **1. The composed string IS the bucket identity, end to end**
 
-Neither consumer re-splits or re-hashes it: `RateLimit` passes it to `Rate::observe(&limit_key, 1)`
+Neither consumer re-splits or re-hashes it: `RateLimitLocal` passes it to `Rate::observe(&limit_key, 1)`
 (CMS counter), and `RateLimitRedis` passes it to `build_redis_key(prefix, algo, policy_idx, limit_key, suffix)`,
 which interpolates it as one opaque segment. Any ambiguity introduced at composition time
 propagates unchanged to the actual quota counter.
@@ -72,7 +72,7 @@ this request belong to?":
   `Default` impl's `vec![RemoteIp]` never runs on deserialization), so a config that omits `key`
   resolved no key, fell through to `onKeyMiss` and — with its `Allow` default — silently
   disabled the limiter. `key` now uses `#[serde(default = "default_key_sources")]` on both
-  `RateLimitConfig` and `RateLimitRedisConfig` so an omitted list matches the documented
+  `RateLimitLocalConfig` and `RateLimitRedisConfig` so an omitted list matches the documented
   `[{type: remoteIp}]`, and `resolve_rate_limit_key` treats an explicitly empty list as "one global
   bucket" (`keys.is_empty()` composes to `""`) rather than as a key miss. Nothing configured cannot
   be "missing", so `onKeyMiss` / `defaultKey` no longer apply to it.
@@ -87,11 +87,11 @@ this request belong to?":
 
   Identity, not a config digest, is the right discriminator: the compiled runtime is built once per
   EdgionPlugins resource and Arc-shared by every route referencing it, so `ns/name` already *is* the
-  sharing unit — it is exactly what the in-memory `RateLimit` gets for free from the plugin store
+  sharing unit — it is exactly what the in-memory `RateLimitLocal` gets for free from the plugin store
   being keyed by `ns/name`, and what the `rate-limit-shared` integration scenarios assert. A digest
   of the key sources was implemented first and rejected on review: it separates plugins that declare
   *different* sources but still merges the far more common case of two unrelated resources left on
-  the default configuration. `RateLimit` needs no equivalent (each instance owns its `Rate`). The stream
+  the default configuration. `RateLimitLocal` needs no equivalent (each instance owns its `Rate`). The stream
   `ConnectionRateLimit` turned out to have the same defect and was fixed the same way — see
   [connection-rate-limit-entry-scoped-buckets.md](connection-rate-limit-entry-scoped-buckets.md).
 
@@ -147,7 +147,7 @@ Re-open this decision only if:
   regression tests).
 - Sibling shared-helper decision: [key-extraction-shared-helper.md](key-extraction-shared-helper.md)
   (plugins-http-F003) — the reason this composition lives in exactly one place.
-- User docs updated in the same change: `docs/{en,zh-CN}/user-guide/edgion-plugins/rate-limit.md`,
+- User docs updated in the same change: `docs/{en,zh-CN}/user-guide/edgion-plugins/rate-limit-local.md`,
   `docs/{en,zh-CN}/user-guide/http-route/filters/edgion-plugins/rate-limit-redis.md`.
 
 ## Resolution references

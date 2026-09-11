@@ -258,8 +258,8 @@ impl ExtensionRefFilter {
 
         match stage {
             PluginRunningStage::Request => {
-                let outcome_frame = if plugin_runtime.rate_limit_outcome_slots() > 0 {
-                    session.begin_rate_limit_frame(plugin_runtime.rate_limit_outcome_slots())
+                let outcome_frame = if plugin_runtime.rate_limit_local_outcome_slots() > 0 {
+                    session.begin_rate_limit_local_frame(plugin_runtime.rate_limit_local_outcome_slots())
                 } else {
                     None
                 };
@@ -290,13 +290,13 @@ impl ExtensionRefFilter {
 
                     if !matches!(result, PluginRunningResult::GoodNext | PluginRunningResult::Nothing) {
                         if outcome_frame.is_some() {
-                            session.end_rate_limit_frame(outcome_frame);
+                            session.end_rate_limit_local_frame(outcome_frame);
                         }
                         return result;
                     }
                 }
                 if outcome_frame.is_some() {
-                    session.end_rate_limit_frame(outcome_frame);
+                    session.end_rate_limit_local_frame(outcome_frame);
                 }
                 PluginRunningResult::GoodNext
             }

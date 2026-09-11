@@ -32,7 +32,7 @@
   - [Mock](./edgion-plugins/mock.md)
   - [OpenID Connect](./edgion-plugins/openid-connect.md)
   - [ProxyRewrite](./edgion-plugins/proxy-rewrite.md)
-  - [Rate Limiting](./edgion-plugins/rate-limit.md)
+  - [Rate Limiting](./edgion-plugins/rate-limit-local.md)
   - [RealIp](./edgion-plugins/real-ip.md)
   - [RegionRoute](./edgion-plugins/region-route.md)
   - [RequestMirror](./edgion-plugins/request-mirror.md)

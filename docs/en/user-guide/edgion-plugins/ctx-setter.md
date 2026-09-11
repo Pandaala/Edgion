@@ -6,7 +6,7 @@
 
 ## Overview
 
-The `CtxSet` plugin sets context variables during request processing. These variables can be used by subsequent plugins (such as RateLimit, PluginConditions). Access-log output requires an explicit `from: ctx` entry in `EdgionPlugins.spec.accessLogExtern`; values are masked by default and sensitive context keys are categorically blocked. See [AccessLogExtern](../../ops-guide/observability/access-log.md).
+The `CtxSet` plugin sets context variables during request processing. These variables can be used by subsequent plugins (such as RateLimitLocal, PluginConditions). Access-log output requires an explicit `from: ctx` entry in `EdgionPlugins.spec.accessLogExtern`; values are masked by default and sensitive context keys are categorically blocked. See [AccessLogExtern](../../ops-guide/observability/access-log.md).
 
 CtxSet supports extracting data from multiple sources (Header, Query, Cookie, Path, ClientIP, Method, existing context vars), optionally reshapes the value with regex extraction, transformation, and value mapping, and stores the result under a named key for downstream plugins.
 
@@ -248,9 +248,9 @@ spec:
             default: "anonymous"
 ```
 
-### 5. Chain: CtxSet feeds a downstream RateLimit key
+### 5. Chain: CtxSet feeds a downstream RateLimitLocal key
 
-CtxSet runs in the request phase before RateLimit, so the variable it sets is available to RateLimit through a `ctx` key source (`key: { type: ctx, name: <name> }`).
+CtxSet runs in the request phase before RateLimitLocal, so the variable it sets is available to RateLimitLocal through a `ctx` key source (`key: { type: ctx, name: <name> }`).
 
 ```yaml
 apiVersion: edgion.io/v1
@@ -269,8 +269,8 @@ spec:
               type: header
               name: "X-Tenant"
             default: "public"
-    # 2. RateLimit reads the variable set above
-    - type: RateLimit
+    # 2. RateLimitLocal reads the variable set above
+    - type: RateLimitLocal
       config:
         rate: 100
         window: 60
@@ -316,5 +316,5 @@ spec:
 
 - [CtxSet (HTTPRoute filter view)](../http-route/filters/edgion-plugins/ctx-setter.md) - Using CtxSet within an HTTPRoute filter
 - [Webhook KeyGet](../http-route/filters/edgion-plugins/webhook-key-get.md) - Resolve a LinkSys webhook value into context
-- [RateLimit Plugin](rate-limit.md) - Can use CtxSet to construct rate limiting keys
+- [RateLimitLocal Plugin](rate-limit-local.md) - Can use CtxSet to construct rate limiting keys
 - [HTTPRoute Overview](../http-route/overview.md) - HTTPRoute configuration overview

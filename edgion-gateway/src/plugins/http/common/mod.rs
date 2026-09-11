@@ -33,7 +33,7 @@ pub use json_request::{form_request_headers_are_supported, json_request_headers_
 ///
 /// The terminal `Allow` / `Deny` variants let each caller map them to its own
 /// `PluginRunningResult`: `Allow` to `GoodNext`, `Deny` to the plugin-specific
-/// `reject_request` (whose signature differs between `RateLimit` and
+/// `reject_request` (whose signature differs between `RateLimitLocal` and
 /// `RateLimitRedis`, so the rejection itself stays caller-side).
 pub enum RateLimitKey {
     /// A key was resolved, including the intentional empty global-bucket key.
@@ -47,7 +47,7 @@ pub enum RateLimitKey {
 /// Resolve the rate-limit key from `keys` via `session.key_get`, composing the
 /// resolved parts with [`compose_rate_limit_key`].
 ///
-/// Shared by the `RateLimit` and `RateLimitRedis` plugins so the key-extraction
+/// Shared by the `RateLimitLocal` and `RateLimitRedis` plugins so the key-extraction
 /// policy (separator, default-key fallback, `OnKeyMiss` handling, and the
 /// PluginLog tags) lives in exactly one place. The PluginLog tags distinguish the
 /// three key-miss outcomes: `"key miss:default"` (rate-limited under the shared
@@ -155,7 +155,7 @@ fn compose_rate_limit_key(parts: &[Option<String>]) -> String {
 
 /// Format a duration in human-readable form (e.g., "1.5s", "500ms").
 ///
-/// Shared by the `RateLimit` and `RateLimitRedis` plugins for the
+/// Shared by the `RateLimitLocal` and `RateLimitRedis` plugins for the
 /// `retry_in` response header.
 pub fn format_duration(d: Duration) -> String {
     let secs = d.as_secs_f64();
@@ -190,7 +190,7 @@ mod tests {
     fn resolve_rate_limit_key_returns_resolved_when_key_present() {
         let mut session = MockPluginSession::new();
         session.expect_key_get().return_const(Some("user-1".to_string()));
-        let mut plugin_log = PluginLog::new("RateLimit");
+        let mut plugin_log = PluginLog::new("RateLimitLocal");
         let keys = vec![KeyGet::RemoteIp];
 
         let out = resolve_rate_limit_key(&mut session, &keys, None, &OnKeyMiss::Deny, &mut plugin_log);
@@ -202,7 +202,7 @@ mod tests {
     fn resolve_rate_limit_key_falls_back_to_default_key() {
         let mut session = MockPluginSession::new();
         session.expect_key_get().return_const(None);
-        let mut plugin_log = PluginLog::new("RateLimit");
+        let mut plugin_log = PluginLog::new("RateLimitLocal");
         let keys = vec![KeyGet::RemoteIp];
 
         let out = resolve_rate_limit_key(&mut session, &keys, Some("dflt"), &OnKeyMiss::Deny, &mut plugin_log);
@@ -215,7 +215,7 @@ mod tests {
     fn resolve_rate_limit_key_allows_on_missing_allow() {
         let mut session = MockPluginSession::new();
         session.expect_key_get().return_const(None);
-        let mut plugin_log = PluginLog::new("RateLimit");
+        let mut plugin_log = PluginLog::new("RateLimitLocal");
         let keys = vec![KeyGet::RemoteIp];
 
         let out = resolve_rate_limit_key(&mut session, &keys, None, &OnKeyMiss::Allow, &mut plugin_log);
@@ -228,7 +228,7 @@ mod tests {
     fn resolve_rate_limit_key_denies_with_canonical_tag_on_missing_deny() {
         let mut session = MockPluginSession::new();
         session.expect_key_get().return_const(None);
-        let mut plugin_log = PluginLog::new("RateLimit");
+        let mut plugin_log = PluginLog::new("RateLimitLocal");
         let keys = vec![KeyGet::RemoteIp];
 
         let out = resolve_rate_limit_key(&mut session, &keys, None, &OnKeyMiss::Deny, &mut plugin_log);
@@ -247,7 +247,7 @@ mod tests {
             KeyGet::Header { name } if name == "X-User" => user.clone(),
             _ => None,
         });
-        let mut plugin_log = PluginLog::new("RateLimit");
+        let mut plugin_log = PluginLog::new("RateLimitLocal");
         let keys = vec![
             KeyGet::Header {
                 name: "X-Tenant".to_string(),
@@ -293,7 +293,7 @@ mod tests {
     fn resolve_rate_limit_key_empty_key_list_still_rate_limits() {
         let mut session = MockPluginSession::new();
         session.expect_key_get().times(0);
-        let mut plugin_log = PluginLog::new("RateLimit");
+        let mut plugin_log = PluginLog::new("RateLimitLocal");
 
         // No configured source is not a key miss: OnKeyMiss::Allow must not
         // turn an empty `key` list into a silent bypass of the limiter.

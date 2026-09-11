@@ -106,7 +106,7 @@ udp_log:
 
 # ─── Rate limiting plugin ──────────────────────────────────────────
 
-rate_limit:
+rate_limit_local:
   default_estimator_slots_k: 64   # CMS default precision (× 1K slots)
   max_estimator_slots_k: 1024     # CMS maximum precision cap
   gateway_instance_count: 1       # Cluster rate limiting: instance count (static fallback when no Controller push)
@@ -444,7 +444,7 @@ access_log:
 When running multiple Gateway replicas, set `gateway_instance_count` to ensure accurate rate limit accounting:
 
 ```yaml
-rate_limit:
+rate_limit_local:
   default_estimator_slots_k: 64
   max_estimator_slots_k: 1024
   gateway_instance_count: 3   # Running 3 Gateway replicas

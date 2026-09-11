@@ -14,7 +14,7 @@ pub mod matcher;
 pub mod observe;
 pub mod output;
 pub mod path_normalization;
-pub mod rate_limit_config;
+pub mod rate_limit_local_config;
 pub mod redact;
 pub mod redis_rate_limit;
 pub mod resources;

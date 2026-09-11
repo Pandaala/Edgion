@@ -222,7 +222,7 @@ pub fn check_plugins_san(ep: &EdgionPlugins) -> Vec<String> {
                         | EdgionPlugin::JsonSchemaValidation(_)
                         | EdgionPlugin::FormJsonTransform(_)
                         | EdgionPlugin::ResponseRewrite(_)
-                        | EdgionPlugin::RateLimit(_)
+                        | EdgionPlugin::RateLimitLocal(_)
                         | EdgionPlugin::RateLimitRedis(_)
                         | EdgionPlugin::CtxSet(_)
                         | EdgionPlugin::RealIp(_)

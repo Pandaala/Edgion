@@ -145,7 +145,7 @@ request_mirror:
   max_concurrent: 1024                   # Process-wide, 1..=65536
   max_buffered_bytes: 64MiB              # Retained mirror bodies, 1 byte..1GiB
 
-rate_limit:
+rate_limit_local:
   default_estimator_slots_k: 64           # CMS default precision (× 64KB memory)
   max_estimator_slots_k: 1024             # CMS maximum precision cap
   gateway_instance_count: 1               # Static instance count (fallback when no Controller push)
@@ -646,6 +646,6 @@ production enablement even when the startup WARN goes unread.
 - Change system log noise: change `logging.log_level`
 - Toggle business logs: change `access_log` / `ssl_log` / `tcp_log` / `udp_log`
 - Tune Pingora workers and keepalive: change `server`
-- Tune the default RateLimit precision: change `rate_limit`
+- Tune the default RateLimitLocal precision: change `rate_limit`
 - Require BoringSSL FIPS mode at startup (FIPS builds only): change `require_fips` or set `EDGION_REQUIRE_FIPS`
 - Tune the Wasm `source.oci` memory cache / pull behavior: change `gateway.wasm_oci_cache_max_entries` / `wasm_oci_cache_ttl_secs` / `wasm_oci_cache_purge_interval_secs` / `wasm_oci_cache_max_bytes` / `wasm_oci_pull_timeout_secs` / `wasm_oci_pull_attempts`. Artifacts are not persisted across restart. Up to four OCI acquisition pipelines bound transient work separately from retained cache allocations. Last-plugin removal clears retained entries; active compiled modules follow their existing reference lifecycle.

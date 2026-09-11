@@ -176,7 +176,7 @@ If you run into problems:
 
 ### ✅ Recommended
 
-- Keep WebhookKeyGet **before** every consumer of the ctx variable (KeyAuth, RateLimit, DSL).
+- Keep WebhookKeyGet **before** every consumer of the ctx variable (KeyAuth, RateLimitLocal, DSL).
 - Point KeyAuth `keySources` at `{ type: ctx, name: … }` only when the webhook is the intended source — do not also list a client-controlled header unless that is deliberate.
 - Prefer `default` only for non-security enrichment. Do not default an auth key to a valid credential.
 

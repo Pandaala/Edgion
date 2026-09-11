@@ -56,7 +56,7 @@ mkdir -p "${CONF_ROOT}"
 cat > "${K8S_DYNAMIC_MANIFEST}" <<'EOF'
 BasicAuthDynamic	EdgionPlugins/BasicAuth/DynamicTest	initial	edgionplugins.edgion.io	edgionplugins	edgion-default	basic-auth-dynamic
 BasicAuthDynamicGrouped	EdgionPlugins/BasicAuth/DynamicTest	initial_grouped	edgionplugins.edgion.io	edgionplugins	edgion-default	basic-auth-dynamic-grouped
-RateLimitDynamic	EdgionPlugins/RateLimit/DynamicTest	initial	edgionplugins.edgion.io	edgionplugins	edgion-default	rate-limit-dynamic
+RateLimitLocalDynamic	EdgionPlugins/RateLimitLocal/DynamicTest	initial	edgionplugins.edgion.io	edgionplugins	edgion-default	rate-limit-dynamic
 EOF
 
 cat > "${FAKE_RUNNER}" <<'EOF'
@@ -67,13 +67,13 @@ case "${FAKE_DYNAMIC_MODE:-success}" in
   success)
     echo '@@DYNAMIC_RESULT BasicAuthDynamic PASS 0'
     echo '@@DYNAMIC_RESULT BasicAuthDynamicGrouped PASS 0'
-    echo '@@DYNAMIC_RESULT RateLimitDynamic PASS 0'
+    echo '@@DYNAMIC_RESULT RateLimitLocalDynamic PASS 0'
     echo '@@DYNAMIC_SUMMARY total=3 failed=0'
     ;;
   scenario-failure)
     echo '@@DYNAMIC_RESULT BasicAuthDynamic PASS 0'
     echo '@@DYNAMIC_RESULT BasicAuthDynamicGrouped PASS 0'
-    echo '@@DYNAMIC_RESULT RateLimitDynamic FAIL 7'
+    echo '@@DYNAMIC_RESULT RateLimitLocalDynamic FAIL 7'
     echo '@@DYNAMIC_SUMMARY total=3 failed=1'
     exit 1
     ;;
@@ -153,7 +153,7 @@ FAKE_DYNAMIC_MODE=scenario-failure run_manifest_dynamic_scenarios >/dev/null \
 [[ "${SELECTED_COUNT}" -eq 3 ]] || fail "failure selected count mismatch"
 [[ "${EXECUTED_COUNT}" -eq 3 ]] || fail "failure executed count mismatch"
 [[ "${FAIL_COUNT}" -eq 1 ]] || fail "failure count mismatch"
-[[ "${FAILED_SUITES[0]}" == "Dynamic/RateLimitDynamic" ]] \
+[[ "${FAILED_SUITES[0]}" == "Dynamic/RateLimitLocalDynamic" ]] \
   || fail "failed dynamic scenario was not recorded"
 
 SELECTED_COUNT=0

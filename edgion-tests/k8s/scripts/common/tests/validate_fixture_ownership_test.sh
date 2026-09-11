@@ -159,9 +159,9 @@ mkdir -p \
   "${EXCLUDED_ROOT}/Gateway/DynamicTest/updates" \
   "${EXCLUDED_ROOT}/EdgionPlugins/BasicAuth/DynamicTest/initial_grouped" \
   "${EXCLUDED_ROOT}/EdgionPlugins/BasicAuth/DynamicTest/updates_grouped" \
-  "${EXCLUDED_ROOT}/EdgionPlugins/RateLimit/DynamicTest/initial" \
-  "${EXCLUDED_ROOT}/EdgionPlugins/RateLimit/DynamicTest/updates" \
-  "${EXCLUDED_ROOT}/EdgionPlugins/RateLimit/DynamicTest/staged/delete_grouped" \
+  "${EXCLUDED_ROOT}/EdgionPlugins/RateLimitLocal/DynamicTest/initial" \
+  "${EXCLUDED_ROOT}/EdgionPlugins/RateLimitLocal/DynamicTest/updates" \
+  "${EXCLUDED_ROOT}/EdgionPlugins/RateLimitLocal/DynamicTest/staged/delete_grouped" \
   "${EXCLUDED_ROOT}/Gateway/PortConflict" \
   "${EXCLUDED_ROOT}/base" \
   "${EXCLUDED_ROOT}/active"
@@ -202,7 +202,7 @@ metadata:
 data:
   phase: updates-grouped
 EOF
-cat > "${EXCLUDED_ROOT}/EdgionPlugins/RateLimit/DynamicTest/initial/ConfigMap.yaml" <<'EOF'
+cat > "${EXCLUDED_ROOT}/EdgionPlugins/RateLimitLocal/DynamicTest/initial/ConfigMap.yaml" <<'EOF'
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -211,7 +211,7 @@ metadata:
 data:
   phase: initial
 EOF
-cat > "${EXCLUDED_ROOT}/EdgionPlugins/RateLimit/DynamicTest/updates/ConfigMap.yaml" <<'EOF'
+cat > "${EXCLUDED_ROOT}/EdgionPlugins/RateLimitLocal/DynamicTest/updates/ConfigMap.yaml" <<'EOF'
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -220,7 +220,7 @@ metadata:
 data:
   phase: updates
 EOF
-cat > "${EXCLUDED_ROOT}/EdgionPlugins/RateLimit/DynamicTest/staged/delete_grouped/ConfigMap.yaml" <<'EOF'
+cat > "${EXCLUDED_ROOT}/EdgionPlugins/RateLimitLocal/DynamicTest/staged/delete_grouped/ConfigMap.yaml" <<'EOF'
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -289,8 +289,8 @@ if "${VALIDATOR}" --include-dynamic-updates "${EXCLUDED_ROOT}" >"${TEMP_DIR}/inc
 fi
 assert_contains "${TEMP_DIR}/include-dynamic.log" "Gateway/DynamicTest/updates/Gateway.yaml#doc=1"
 assert_contains "${TEMP_DIR}/include-dynamic.log" "EdgionPlugins/BasicAuth/DynamicTest/updates_grouped/ConfigMap.yaml#doc=1"
-assert_contains "${TEMP_DIR}/include-dynamic.log" "EdgionPlugins/RateLimit/DynamicTest/updates/ConfigMap.yaml#doc=1"
-assert_contains "${TEMP_DIR}/include-dynamic.log" "EdgionPlugins/RateLimit/DynamicTest/staged/delete_grouped/ConfigMap.yaml#doc=1"
+assert_contains "${TEMP_DIR}/include-dynamic.log" "EdgionPlugins/RateLimitLocal/DynamicTest/updates/ConfigMap.yaml#doc=1"
+assert_contains "${TEMP_DIR}/include-dynamic.log" "EdgionPlugins/RateLimitLocal/DynamicTest/staged/delete_grouped/ConfigMap.yaml#doc=1"
 
 if "${VALIDATOR}" --include-bootstrap "${EXCLUDED_ROOT}" >"${TEMP_DIR}/include-bootstrap.log" 2>&1; then
   fail "--include-bootstrap did not expose the conflicting bootstrap fixture"

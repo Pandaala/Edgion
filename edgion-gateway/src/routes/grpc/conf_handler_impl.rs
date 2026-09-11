@@ -199,7 +199,7 @@ fn parse_route_to_units(resource_key: &str, route: &Arc<GRPCRoute>) -> Vec<Arc<G
 
             // Compile rule runtime ONCE per rule (plugin chains + compiled backends).
             // All match-item units of this rule share the same Arc fields so that
-            // in-memory RateLimit CMS state is never split across units.
+            // in-memory RateLimitLocal CMS state is never split across units.
             let rule_runtime: GrpcRuleRuntime = GrpcRouteRuleUnit::compile_grpc_rule(rule, route_namespace);
             let rule_plugin_runtime = rule_runtime.plugin_runtime;
             let rule_backends = rule_runtime.backends;

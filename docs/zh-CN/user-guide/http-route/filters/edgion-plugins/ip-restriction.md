@@ -746,5 +746,5 @@ curl https://api.example.com/api/data
 
 ## 相关链接
 
-- [RateLimit](./rate-limit.md) — 速率限制
+- [RateLimitLocal](./rate-limit-local.md) — 速率限制
 - [RequestRestriction](./request-restriction.md) — 请求限制

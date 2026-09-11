@@ -25,8 +25,7 @@ published binding views. Existing admitted requests/sessions keep their views.
 ## Authority and implementation
 
 The user authorized this migration on 2026-09-11. Its authority and lifecycle
-matrix are recorded in the [design](../../../../tasks/todo/plugin-policy-edgion-gateway-config/01-design.md)
-and [implementation plan](../../../../tasks/todo/plugin-policy-edgion-gateway-config/02-implementation.md).
+matrix were recorded in the now-closed design and implementation tasks.
 The [September 9 per-reference decision](../superseded/request-plugin-reference-generation-boundary.md)
 is historical; this bounded scope ownership is a newly authorized decision.
 
@@ -92,12 +91,12 @@ the two-class shared scenario is not automatically registered there. Its local
 two-class run passed. Any filter expansion remains a separate scope decision in
 the [active task](../../../../tasks/todo/investigate-plugin-policy-invalid-generation-retention.md).
 The dynamic scenario needs a freshly preloaded shared topology after its final
-cleanup: [listener recreation](../../../../tasks/todo/http-listener-recreation-stale-route-manager.md)
-is a separate existing defect. Kubernetes prepare also encounters an existing
-[EdgionTls structural schema rejection](../../../../tasks/todo/edgiontls-allowed-sans-nonstructural-crd.md);
+cleanup because of a separately recorded listener-recreation defect. Kubernetes
+prepare also encounters a separately recorded EdgionTls structural schema rejection;
 the test copy removes that one TLS declaration and preserves the EGC CRD exactly.
-The supplemental [KeyGet cardinality assertion](../../../../tasks/todo/key-get-crd-coverage-stale-cardinality.md)
-failed independently; it is not included in the passing-check claims.
+The supplemental KeyGet cardinality assertion failed independently; it remains
+in the separate pending KeyGet traceId/CRD drift task and is not included in the
+passing-check claims.
 Do not infer cross-kind transactions across separately arriving inputs, fleet-wide
 atomicity, revocation of already admitted traffic, or snapshots of mutable external
 dependencies. Gateway traffic diagnostics remain in canonical access/plugin logs

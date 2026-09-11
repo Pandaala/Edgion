@@ -34,7 +34,7 @@ re-reporting.
 
 **1. Single shared call site, caller-side enum mapping unchanged.**
 
-Both `RateLimit::run_request` and `RateLimitRedis::run_request` map
+Both `RateLimitLocal::run_request` and `RateLimitRedis::run_request` map
 `RateLimitKey::Resolved(k)` to the quota check and `RateLimitKey::Allow` to
 `GoodNext`. Only the helper's `plugin_log.push` literal changed; the enum contract
 and both callers are untouched. This is purely an observability fix — no execution or

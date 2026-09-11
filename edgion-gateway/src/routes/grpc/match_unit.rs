@@ -153,7 +153,7 @@ impl CompiledGrpcBackend {
 }
 
 /// Per-rule compiled runtime, built ONCE per rule and Arc-shared across all
-/// match-item units of that rule. In-memory RateLimit owns per-rule CMS state,
+/// match-item units of that rule. In-memory RateLimitLocal owns per-rule CMS state,
 /// so rebuilding per-unit would split the counter N×.
 pub struct GrpcRuleRuntime {
     /// Rule-level compiled plugin chain.
@@ -387,7 +387,7 @@ pub struct GrpcRouteRuleUnit {
     /// valid for the lifetime of this `Arc<GrpcRouteRuleUnit>`.
     pub metric_handles: Arc<crate::observe::metrics::route_handles::RouteMetricHandles>,
     /// Compiled rule-level plugin chain. Shared across ALL match-item units of
-    /// this rule — in-memory RateLimit owns per-rule CMS state.
+    /// this rule — in-memory RateLimitLocal owns per-rule CMS state.
     pub plugin_runtime: Arc<PluginRuntime>,
     /// Per-rule WRR selector over compiled backends (one per rule; gRPC has no
     /// hostname fan-out so there is no per-hostname duplication).
@@ -402,7 +402,7 @@ pub struct GrpcRouteRuleUnit {
 impl GrpcRouteRuleUnit {
     /// Compile a rule's runtime ONCE (rule plugin chain + compiled backends).
     /// Call once per rule, above the match-item fan-out, and share the Arc
-    /// fields into every unit — RateLimit CMS state must not be split.
+    /// fields into every unit — RateLimitLocal CMS state must not be split.
     pub fn compile_grpc_rule(rule: &GRPCRouteRule, namespace: &str) -> GrpcRuleRuntime {
         let plugin_runtime = Arc::new(match &rule.filters {
             Some(filters) => PluginRuntime::from_grpcroute_filters_for_rule(filters, namespace),

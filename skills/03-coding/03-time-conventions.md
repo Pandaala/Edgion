@@ -61,7 +61,7 @@ self-consistent and are intentionally left as-is
 - **Don't** write a bare `Utc::now().to_rfc3339()` / `.to_rfc3339_opts(...)` for those
   fields.
 - **Don't** hand-roll a duration parser or pull in `humantime` (not a workspace dep);
-  `RateLimit` already had to be migrated back once.
+  `RateLimitLocal` already had to be migrated back once.
 - **Don't** use `.elapsed()` / `.duration_since()` for elapsed measurement — always
   `Instant::now().saturating_duration_since(prior)`.
 - **Don't** convert the hot-path access-/wire-log epoch-millis timestamps to RFC3339

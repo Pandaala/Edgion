@@ -57,7 +57,7 @@ rule without echoing the realm. Disabled entries remain inert.
 | [mock.md](mock.md) | Mock response |
 | [openid-connect.md](openid-connect.md) | OpenID Connect authentication |
 | [proxy-rewrite.md](proxy-rewrite.md) | Proxy rewrite |
-| [rate-limit.md](rate-limit.md) | Rate limiting (in-memory, approximate) |
+| [rate-limit-local.md](rate-limit-local.md) | Rate limiting (in-memory, approximate) |
 | [rate-limit-redis.md](rate-limit-redis.md) | Rate limiting (Redis, precise, cluster-wide) |
 | [real-ip.md](real-ip.md) | Client real IP extraction |
 | [region-route.md](region-route.md) | Region-based routing |

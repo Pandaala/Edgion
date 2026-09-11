@@ -466,5 +466,5 @@ Edgion 的 `RequestRestriction` 把多种限制能力收进一个插件，配置
 ## 相关链接
 
 - [IpRestriction](./ip-restriction.md) — IP 访问控制
-- [RateLimit](./rate-limit.md) — 限流
+- [RateLimitLocal](./rate-limit-local.md) — 限流
 - [插件条件](./conditions.md) — 共享 Condition 词表

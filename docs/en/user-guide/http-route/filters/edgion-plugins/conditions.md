@@ -239,7 +239,7 @@ conditions:
 
 Use `{"type":"rateLimitExceeded","pluginAlias":"local-budget"}` in a
 request-stage `RateLimitRedis` entry's `conditions.run`. The alias must identify
-an active, earlier `RateLimit` with `onLimitExceeded: Continue` in the same
+an active, earlier `RateLimitLocal` with `onLimitExceeded: Continue` in the same
 resource's `requestPlugins` array. Aliases in other resources/stages cannot satisfy
 the reference. `skip`, body gates, dye rules, and other consumers reject this
 predicate. Invalid active conditions fail configuration validation and seal the

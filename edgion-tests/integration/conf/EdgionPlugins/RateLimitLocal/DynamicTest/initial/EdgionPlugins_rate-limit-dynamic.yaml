@@ -1,0 +1,21 @@
+# RateLimitLocal dynamic test - initial phase: onKeyMiss=Allow.
+# Request without X-Rate-Key header → 200 (bypass).
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: rate-limit-dynamic
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: RateLimitLocal
+      config:
+        rate: 100
+        interval: "1m"
+        key:
+          - type: header
+            name: "X-Rate-Key"
+        onKeyMiss: Allow
+        rejectStatus: 429
+        rejectMessage: "Rate limit exceeded"
+        showLimitHeaders: false

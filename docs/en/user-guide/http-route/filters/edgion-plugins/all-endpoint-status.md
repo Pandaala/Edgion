@@ -347,4 +347,4 @@ Read the `error` field to distinguish the two — it carries the failure reason 
 - [DebugAccessLogToHeader Plugin](debug-access-log.md) — Inject debug info into response headers
 - [Mock Plugin](mock.md) — Return static responses
 - [DirectEndpoint Plugin](direct-endpoint.md) — Forward to a specific endpoint
-- [RateLimit Plugin](rate-limit.md) — Rate limiting
+- [RateLimitLocal Plugin](rate-limit-local.md) — Rate limiting

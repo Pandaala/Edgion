@@ -113,7 +113,7 @@ spec:
     - type: Cors
       config:
         allowOrigins: "https://app.example.com"
-    - type: RateLimit
+    - type: RateLimitLocal
       config:
         rate: 100
         burst: 50

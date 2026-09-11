@@ -339,4 +339,4 @@ spec:
 - [DebugAccessLogToHeader 插件](debug-access-log.md) — 调试响应头注入
 - [Mock 插件](mock.md) — 静态响应返回
 - [DirectEndpoint 插件](direct-endpoint.md) — 指定单个 endpoint 转发
-- [RateLimit 插件](rate-limit.md) — 速率限制
+- [RateLimitLocal 插件](rate-limit-local.md) — 速率限制

@@ -34,7 +34,7 @@ mod lru_cache_config;
 mod mock;
 mod openid_connect;
 mod proxy_rewrite;
-mod rate_limit;
+mod rate_limit_local;
 mod rate_limit_redis;
 mod real_ip;
 mod region_route;
@@ -125,7 +125,7 @@ pub use proxy_rewrite::{
     HttpMethod, JsonBodyRewrite, JsonLiteralValue, JsonPatchOperation, ProxyRewriteConfig, RegexUri,
     MAX_JSON_PATCH_OPERATIONS, MAX_JSON_PATCH_PLAN_BYTES, MAX_JSON_POINTER_BYTES, MAX_JSON_POINTER_TOKENS,
 };
-pub use rate_limit::{LimitHeaderNames, OnKeyMiss, OnLimitExceeded, RateLimitConfig, RateLimitScope};
+pub use rate_limit_local::{LimitHeaderNames, OnKeyMiss, OnLimitExceeded, RateLimitLocalConfig, RateLimitLocalScope};
 pub use rate_limit_redis::{OnRedisFailure, RateLimitAlgorithm, RateLimitPolicy, RateLimitRedisConfig};
 pub use real_ip::RealIpConfig;
 pub use region_route::{

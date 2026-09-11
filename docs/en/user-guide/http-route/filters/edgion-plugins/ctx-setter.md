@@ -6,7 +6,7 @@
 
 ## What is a context variable?
 
-A **context variable** is a named value that one plugin computes and stores on the request, so that later plugins on the same request can read it. CtxSet extracts a value (from a header, cookie, the client IP, etc.), optionally reshapes it, and stores it under a name. Downstream plugins such as RateLimit and DSL then consume that name — for example, to build a rate-limit key per tenant.
+A **context variable** is a named value that one plugin computes and stores on the request, so that later plugins on the same request can read it. CtxSet extracts a value (from a header, cookie, the client IP, etc.), optionally reshapes it, and stores it under a name. Downstream plugins such as RateLimitLocal and DSL then consume that name — for example, to build a rate-limit key per tenant.
 
 ## Quick Start
 
@@ -186,9 +186,9 @@ spec:
               default: "tier_3"
 ```
 
-### 4. Chain: CtxSet feeds a downstream RateLimit key
+### 4. Chain: CtxSet feeds a downstream RateLimitLocal key
 
-CtxSet runs in the request phase before RateLimit, so the variable it sets is available to RateLimit through a `ctx` key source (`key: { type: ctx, name: <name> }`). Both plugins consume the unified `KeyGet` accessor.
+CtxSet runs in the request phase before RateLimitLocal, so the variable it sets is available to RateLimitLocal through a `ctx` key source (`key: { type: ctx, name: <name> }`). Both plugins consume the unified `KeyGet` accessor.
 
 ```yaml
 apiVersion: edgion.io/v1
@@ -207,8 +207,8 @@ spec:
               type: header
               name: "X-Tenant"
             default: "public"
-    # 2. RateLimit reads the variable set above
-    - type: RateLimit
+    # 2. RateLimitLocal reads the variable set above
+    - type: RateLimitLocal
       config:
         rate: 100
         window: 60
@@ -232,7 +232,7 @@ spec:
 
 ### Q3: Which downstream plugins can read these variables?
 
-**A**: Any request-phase plugin that runs after CtxSet. RateLimit reads them through its `key` (`{ type: ctx, name: <name> }`), and DSL reads them through the context API. Order matters — put CtxSet before its consumers in the same phase array.
+**A**: Any request-phase plugin that runs after CtxSet. RateLimitLocal reads them through its `key` (`{ type: ctx, name: <name> }`), and DSL reads them through the context API. Order matters — put CtxSet before its consumers in the same phase array.
 
 ---
 
@@ -281,7 +281,7 @@ spec:
             transform:
               case: lower
             default: "public"
-    - type: RateLimit
+    - type: RateLimitLocal
       config:
         rate: 100
         window: 60
@@ -294,6 +294,6 @@ spec:
 ## Related links
 
 - [Webhook KeyGet](./webhook-key-get.md)
-- [Rate Limit Plugin](./rate-limit.md)
+- [Rate Limit Plugin](./rate-limit-local.md)
 - [DSL Plugin](./dsl/README.md)
 - [Filters overview](../README.md)

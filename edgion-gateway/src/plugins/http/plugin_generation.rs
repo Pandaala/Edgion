@@ -237,23 +237,23 @@ mod tests {
     }
 
     #[test]
-    fn rate_limit_is_lazy_shared_and_released_after_the_last_scope() {
-        let source = resource(json!({"requestPlugins": [{"type": "RateLimit", "config": {"rate": 100}}]}));
+    fn rate_limit_local_is_lazy_shared_and_released_after_the_last_scope() {
+        let source = resource(json!({"requestPlugins": [{"type": "RateLimitLocal", "config": {"rate": 100}}]}));
         let mut generation = PluginGeneration::new(source.clone());
-        let blocked = restriction(&["RateLimit"], PolicyActionKind::Block);
+        let blocked = restriction(&["RateLimitLocal"], PolicyActionKind::Block);
         let restricted_view = generation.compile(Some(&blocked));
         assert!(restricted_view.is_activatable);
         assert_eq!(generation.cached_entry_count(), 0);
         assert!(restricted_view
             .plugin_runtime
             .request_plugins_iter()
-            .all(|filter| filter.name() != "RateLimit"));
+            .all(|filter| filter.name() != "RateLimitLocal"));
 
         let first = generation.compile(None);
         let second = generation.compile(None);
         assert!(first.is_activatable, "{:?}", first.preparse_errors);
-        let first_filter = request_filter(&first, "RateLimit");
-        let second_filter = request_filter(&second, "RateLimit");
+        let first_filter = request_filter(&first, "RateLimitLocal");
+        let second_filter = request_filter(&second, "RateLimitLocal");
         assert!(Arc::ptr_eq(&first_filter, &second_filter));
         let weak = Arc::downgrade(&first_filter);
 
@@ -274,21 +274,24 @@ mod tests {
         );
 
         let resumed = generation.compile(None);
-        let resumed_filter = request_filter(&resumed, "RateLimit");
+        let resumed_filter = request_filter(&resumed, "RateLimitLocal");
         assert!(!std::ptr::addr_eq(weak.as_ptr(), Arc::as_ptr(&resumed_filter)));
         let mut replacement = PluginGeneration::new(source);
         let replaced = replacement.compile(None);
-        assert!(!Arc::ptr_eq(&resumed_filter, &request_filter(&replaced, "RateLimit")));
-        assert_eq!(replaced.plugin_runtime.rate_limit_outcome_slots(), 0);
+        assert!(!Arc::ptr_eq(
+            &resumed_filter,
+            &request_filter(&replaced, "RateLimitLocal")
+        ));
+        assert_eq!(replaced.plugin_runtime.rate_limit_local_outcome_slots(), 0);
     }
 
     #[tokio::test]
-    async fn rate_limit_outcomes_are_stable_across_policy_construction_order() {
+    async fn rate_limit_local_outcomes_are_stable_across_policy_construction_order() {
         use pingora_proxy::Session;
         use tokio::io::AsyncWriteExt;
 
         let source = resource(json!({"requestPlugins": [
-            {"type": "RateLimit", "alias": "local", "config": {
+            {"type": "RateLimitLocal", "alias": "local", "config": {
                 "rate": 100, "interval": "1h", "key": [],
                 "onLimitExceeded": "Continue", "showLimitHeaders": false
             }},
@@ -301,18 +304,18 @@ mod tests {
             }}
         ]}));
         let consumer_bypass = restriction(&["RateLimitRedis"], PolicyActionKind::Bypass);
-        let producer_bypass = restriction(&["RateLimit"], PolicyActionKind::Bypass);
+        let producer_bypass = restriction(&["RateLimitLocal"], PolicyActionKind::Bypass);
         for bypass_first in [true, false] {
             let mut generation = PluginGeneration::new(source.clone());
             let first = generation.compile(bypass_first.then_some(&consumer_bypass));
             let second = generation.compile((!bypass_first).then_some(&consumer_bypass));
             assert!(Arc::ptr_eq(
-                &request_filter(&first, "RateLimit"),
-                &request_filter(&second, "RateLimit")
+                &request_filter(&first, "RateLimitLocal"),
+                &request_filter(&second, "RateLimitLocal")
             ));
             for view in [&first, &second] {
                 assert!(view.is_activatable, "{:?}", view.preparse_errors);
-                assert_eq!(view.plugin_runtime.rate_limit_outcome_slots(), 1);
+                assert_eq!(view.plugin_runtime.rate_limit_local_outcome_slots(), 1);
                 // The real runner establishes the frame. A local pass must not
                 // reach Redis, and a producer cached with a bypassed consumer
                 // must still publish the outcome read by a later allowed view.
@@ -333,12 +336,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn rate_limit_dependency_checks_original_aliases_after_policy_masking() {
+    async fn rate_limit_local_dependency_checks_original_aliases_after_policy_masking() {
         use pingora_proxy::Session;
         use tokio::io::AsyncWriteExt;
 
         for duplicate_first in [false, true] {
-            let producer = json!({"type": "RateLimit", "alias": "local", "config": {
+            let producer = json!({"type": "RateLimitLocal", "alias": "local", "config": {
                 "rate": 100, "interval": "1h", "key": [],
                 "onLimitExceeded": "Continue", "showLimitHeaders": false
             }});
@@ -518,7 +521,7 @@ mod tests {
     fn aliases_and_original_slots_do_not_change_when_an_earlier_entry_is_bypassed() {
         let mut generation = PluginGeneration::new(resource(json!({"requestPlugins": [
             {"type": "RequestHeaderModifier", "alias": "shared", "config": {}},
-            {"type": "RateLimit", "alias": "shared", "config": {"rate": 100}},
+            {"type": "RateLimitLocal", "alias": "shared", "config": {"rate": 100}},
         ]})));
         assert!(generation.source().spec.request_plugins.as_ref().unwrap()[1]
             .alias
@@ -529,9 +532,9 @@ mod tests {
         assert!(limited.is_activatable, "{:?}", limited.preparse_errors);
         assert_eq!(limited.preparse_errors.len(), 1);
         assert!(limited.preparse_errors[0].contains("requestPlugins[1]"));
-        let limited_filter = request_filter(&limited, "RateLimit");
+        let limited_filter = request_filter(&limited, "RateLimitLocal");
         assert!(limited_filter.alias().is_none());
-        assert!(Arc::ptr_eq(&limited_filter, &request_filter(&full, "RateLimit")));
+        assert!(Arc::ptr_eq(&limited_filter, &request_filter(&full, "RateLimitLocal")));
         generation.release_unneeded_entries(&generation.demand(Some(&bypass)));
         assert_eq!(
             generation.cached_entry_keys().collect::<Vec<_>>(),
@@ -605,7 +608,7 @@ mod tests {
             {"type": "RequestHeaderModifier", "config": {}},
         ]})));
         let mut candidate = PluginGeneration::new(resource(json!({"requestPlugins": [
-            {"type": "RateLimit", "config": {"rate": 100}},
+            {"type": "RateLimitLocal", "config": {"rate": 100}},
         ]})));
         let policy = PluginPolicyConfig {
             deny: vec![
@@ -615,7 +618,7 @@ mod tests {
                     block_status: Some(451),
                 },
                 PluginPolicyEntryConfig {
-                    name: "http/RateLimit".into(),
+                    name: "http/RateLimitLocal".into(),
                     action: Some(PolicyActionKind::Block),
                     block_status: Some(403),
                 },

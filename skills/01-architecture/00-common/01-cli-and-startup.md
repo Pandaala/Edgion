@@ -221,6 +221,6 @@ The CLI uses Tokio for asynchronous HTTP and file operations and exits as soon a
 | Global variable | Location | Purpose |
 |---------|------|------|
 | `CONTROLLER_CONFIG` | `edgion-controller/src/config/mod.rs` | Controller global configuration (`OnceLock`) |
-| `GATEWAY_INSTANCE_COUNT` | `edgion-resources/src/rate_limit_config.rs` | Gateway cluster instance count (`AtomicU32`, used for cluster-level rate limiting) |
+| `GATEWAY_INSTANCE_COUNT` | `edgion-resources/src/rate_limit_local_config.rs` | Gateway cluster instance count (`AtomicU32`, used for cluster-level rate limiting) |
 | `GLOBAL_TEST_MODE` | `edgion-common/src/test_mode.rs` | Test mode flag (enables metrics test features) |
 | `GLOBAL_INTEGRATION_TESTING_MODE` | `edgion-common/src/test_mode.rs` | Integration testing mode (enables AccessLog storage + metrics test data) |

@@ -1352,33 +1352,33 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         self.inner.as_downstream().digest().map(|d| d.ssl_digest.is_some())
     }
 
-    fn begin_rate_limit_frame(
+    fn begin_rate_limit_local_frame(
         &mut self,
         count: usize,
-    ) -> Option<crate::plugins::runtime::conditions::rate_limit_outcome::RateLimitFrame> {
-        self.ctx.begin_rate_limit_frame(count)
+    ) -> Option<crate::plugins::runtime::conditions::rate_limit_local_outcome::RateLimitLocalFrame> {
+        self.ctx.begin_rate_limit_local_frame(count)
     }
 
-    fn end_rate_limit_frame(
+    fn end_rate_limit_local_frame(
         &mut self,
-        frame: Option<crate::plugins::runtime::conditions::rate_limit_outcome::RateLimitFrame>,
+        frame: Option<crate::plugins::runtime::conditions::rate_limit_local_outcome::RateLimitLocalFrame>,
     ) {
-        self.ctx.end_rate_limit_frame(frame);
+        self.ctx.end_rate_limit_local_frame(frame);
     }
 
-    fn rate_limit_outcome(
+    fn rate_limit_local_outcome(
         &self,
         slot: usize,
-    ) -> crate::plugins::runtime::conditions::rate_limit_outcome::RateLimitOutcome {
-        self.ctx.rate_limit_outcome(slot)
+    ) -> crate::plugins::runtime::conditions::rate_limit_local_outcome::RateLimitLocalOutcome {
+        self.ctx.rate_limit_local_outcome(slot)
     }
 
-    fn set_rate_limit_outcome(
+    fn set_rate_limit_local_outcome(
         &mut self,
         slot: usize,
-        outcome: crate::plugins::runtime::conditions::rate_limit_outcome::RateLimitOutcome,
+        outcome: crate::plugins::runtime::conditions::rate_limit_local_outcome::RateLimitLocalOutcome,
     ) -> bool {
-        self.ctx.set_rate_limit_outcome(slot, outcome)
+        self.ctx.set_rate_limit_local_outcome(slot, outcome)
     }
 
     fn ctx(&self) -> &EdgionHttpContext {

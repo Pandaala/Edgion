@@ -60,13 +60,13 @@ EOF
 
 write_fixture "${SAFE_CONF}/EdgionPlugins/BasicAuth/DynamicTest/initial/resource.yaml" "basic-auth-k8s"
 write_fixture "${SAFE_CONF}/EdgionPlugins/BasicAuth/DynamicTest/initial_grouped/resource.yaml" "basic-auth-grouped-k8s"
-write_fixture "${SAFE_CONF}/EdgionPlugins/RateLimit/DynamicTest/initial/resource.yaml" "rate-limit-k8s"
+write_fixture "${SAFE_CONF}/EdgionPlugins/RateLimitLocal/DynamicTest/initial/resource.yaml" "rate-limit-k8s"
 printf '{"current_max":1,"suites":{}}\n' > "${PORTS_CONFIG}"
 cat > "${BASE_DYNAMIC_MANIFEST}" <<'EOF'
 # scenario_id	k8s_conf_path	reset_path	kubectl_resource	gateway_kind	namespace	name
 BasicAuthDynamic	EdgionPlugins/BasicAuth/DynamicTest	initial	edgionplugins.edgion.io	edgionplugins	edgion-default	basic-auth-dynamic
 BasicAuthDynamicGrouped	EdgionPlugins/BasicAuth/DynamicTest	initial_grouped	edgionplugins.edgion.io	edgionplugins	edgion-default	basic-auth-dynamic-grouped
-RateLimitDynamic	EdgionPlugins/RateLimit/DynamicTest	initial	edgionplugins.edgion.io	edgionplugins	edgion-default	rate-limit-dynamic
+RateLimitLocalDynamic	EdgionPlugins/RateLimitLocal/DynamicTest	initial	edgionplugins.edgion.io	edgionplugins	edgion-default	rate-limit-dynamic
 EOF
 export DYNAMIC_MANIFEST="${BASE_DYNAMIC_MANIFEST}"
 
@@ -151,7 +151,7 @@ case "$*" in
     printf 'body-buffering\n'
     ;;
   *--list-dynamic-scenarios*)
-    printf '%s\n' "${FAKE_DYNAMIC_REGISTRY:-BasicAuthDynamic BasicAuthDynamicGrouped RateLimitDynamic}" | tr ' ' '\n'
+    printf '%s\n' "${FAKE_DYNAMIC_REGISTRY:-BasicAuthDynamic BasicAuthDynamicGrouped RateLimitLocalDynamic}" | tr ' ' '\n'
     ;;
   *"apply --server-side"*)
     printf 'RESET:%s\n' "$*" >> "${KUBECTL_LOG}"
@@ -217,7 +217,7 @@ case "$*" in
     scenario_id=""
     for argument in "$@"; do
       case "${argument}" in
-        BasicAuthDynamic|BasicAuthDynamicGrouped|RateLimitDynamic|GcParamsFlap|SpWeighted)
+        BasicAuthDynamic|BasicAuthDynamicGrouped|RateLimitLocalDynamic|GcParamsFlap|SpWeighted)
           scenario_id="${argument}"
           ;;
       esac
@@ -275,11 +275,11 @@ fi
 : > "${KUBECTL_LOG}"
 if PATH="${FAKE_BIN}:${PATH}" POD=fake-pod KUBECTL_LOG="${KUBECTL_LOG}" PORTS_CONFIG="${PORTS_CONFIG}" \
   FAKE_DYNAMIC_REGISTRY="BasicAuthDynamic BasicAuthDynamicGrouped" \
-  "${RUNNER}" --conf-root "${SAFE_CONF}" --scenario RateLimitDynamic \
+  "${RUNNER}" --conf-root "${SAFE_CONF}" --scenario RateLimitLocalDynamic \
   > "${TEMP_DIR}/missing-registry.log" 2>&1; then
   fail "scenario missing from the test-client registry was accepted"
 fi
-assert_contains "${TEMP_DIR}/missing-registry.log" "dynamic registry does not contain RateLimitDynamic"
+assert_contains "${TEMP_DIR}/missing-registry.log" "dynamic registry does not contain RateLimitLocalDynamic"
 assert_not_contains "${KUBECTL_LOG}" "STAGED:"
 assert_not_contains "${KUBECTL_LOG}" "RUN:"
 
@@ -300,35 +300,35 @@ PATH="${FAKE_BIN}:${PATH}" POD=fake-pod KUBECTL_LOG="${KUBECTL_LOG}" PORTS_CONFI
   || fail "supported K8s dynamic scenarios did not run"
 assert_contains "${TEMP_DIR}/success.log" "@@DYNAMIC_RESULT BasicAuthDynamic PASS 0"
 assert_contains "${TEMP_DIR}/success.log" "@@DYNAMIC_RESULT BasicAuthDynamicGrouped PASS 0"
-assert_contains "${TEMP_DIR}/success.log" "@@DYNAMIC_RESULT RateLimitDynamic PASS 0"
+assert_contains "${TEMP_DIR}/success.log" "@@DYNAMIC_RESULT RateLimitLocalDynamic PASS 0"
 assert_contains "${TEMP_DIR}/success.log" "@@DYNAMIC_SUMMARY total=3 failed=0"
 assert_contains "${KUBECTL_LOG}" "STAGED:./EdgionPlugins/BasicAuth/DynamicTest/initial/resource.yaml"
-assert_contains "${KUBECTL_LOG}" "STAGED:./EdgionPlugins/RateLimit/DynamicTest/initial/resource.yaml"
+assert_contains "${KUBECTL_LOG}" "STAGED:./EdgionPlugins/RateLimitLocal/DynamicTest/initial/resource.yaml"
 assert_contains "${KUBECTL_LOG}" "TAR_ARGS:--no-xattrs --exclude=._* --exclude=__MACOSX"
 assert_contains "${KUBECTL_LOG}" "RUN:BasicAuthDynamic"
 assert_contains "${KUBECTL_LOG}" "EDGION_TEST_GATEWAY_CAPABILITIES=body-buffering"
 assert_contains "${KUBECTL_LOG}" "RUN:BasicAuthDynamicGrouped"
-assert_contains "${KUBECTL_LOG}" "RUN:RateLimitDynamic"
+assert_contains "${KUBECTL_LOG}" "RUN:RateLimitLocalDynamic"
 assert_not_contains "${KUBECTL_LOG}" "Endpoint"
 
 [[ "$(grep -c 'RESET:.*BasicAuth/DynamicTest/initial$' "${KUBECTL_LOG}")" -eq 2 ]] \
   || fail "BasicAuthDynamic was not reset before and after execution"
 [[ "$(grep -c 'RESET:.*BasicAuth/DynamicTest/initial_grouped$' "${KUBECTL_LOG}")" -eq 2 ]] \
   || fail "BasicAuthDynamicGrouped was not reset before and after execution"
-[[ "$(grep -c 'RESET:.*RateLimit/DynamicTest/initial$' "${KUBECTL_LOG}")" -eq 2 ]] \
-  || fail "RateLimitDynamic was not reset before and after execution"
+[[ "$(grep -c 'RESET:.*RateLimitLocal/DynamicTest/initial$' "${KUBECTL_LOG}")" -eq 2 ]] \
+  || fail "RateLimitLocalDynamic was not reset before and after execution"
 
 : > "${KUBECTL_LOG}"
 for repeat_run in 1 2; do
   PATH="${FAKE_BIN}:${PATH}" POD=fake-pod KUBECTL_LOG="${KUBECTL_LOG}" PORTS_CONFIG="${PORTS_CONFIG}" \
     SYNC_TIMEOUT_SECONDS=2 SYNC_POLL_INTERVAL_SECONDS=1 \
-    "${RUNNER}" --conf-root "${SAFE_CONF}" --scenario RateLimitDynamic \
+    "${RUNNER}" --conf-root "${SAFE_CONF}" --scenario RateLimitLocalDynamic \
     > "${TEMP_DIR}/repeat-${repeat_run}.log" 2>&1 \
     || fail "repeat run ${repeat_run} failed"
 done
-[[ "$(grep -c 'RESET:.*RateLimit/DynamicTest/initial$' "${KUBECTL_LOG}")" -eq 4 ]] \
+[[ "$(grep -c 'RESET:.*RateLimitLocal/DynamicTest/initial$' "${KUBECTL_LOG}")" -eq 4 ]] \
   || fail "repeat runs did not each reset before and after execution"
-[[ "$(grep -c 'RUN:RateLimitDynamic' "${KUBECTL_LOG}")" -eq 2 ]] \
+[[ "$(grep -c 'RUN:RateLimitLocalDynamic' "${KUBECTL_LOG}")" -eq 2 ]] \
   || fail "repeat runs did not each execute the scenario"
 
 : > "${KUBECTL_LOG}"

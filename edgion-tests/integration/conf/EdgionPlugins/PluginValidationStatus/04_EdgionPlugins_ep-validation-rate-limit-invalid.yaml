@@ -1,4 +1,4 @@
-# Scenario: RateLimit plugin with rate=0
+# Scenario: RateLimitLocal plugin with rate=0
 # Expect: Accepted=False/Invalid, message contains "rate"
 apiVersion: edgion.io/v1
 kind: EdgionPlugins
@@ -8,7 +8,7 @@ metadata:
 spec:
   requestPlugins:
     - enable: true
-      type: RateLimit
+      type: RateLimitLocal
       config:
         rate: 0
         interval: "1s"

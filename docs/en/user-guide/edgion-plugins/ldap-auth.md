@@ -211,7 +211,7 @@ allowing anonymous access, the following headers are injected:
 - Keep the effective `tls.verify: true`; `false` is operator responsibility and should only be used for testing
 - Enable `hideCredentials: true` to prevent credentials from being passed to upstream
 - Enable account lockout and brute-force protection policies on the LDAP server
-- Stack the `RateLimit` plugin and size the LDAP service for the protected request rate
+- Stack the `RateLimitLocal` plugin and size the LDAP service for the protected request rate
 
 > **Accepted tradeoff — per-request LDAP connection.** Each authentication opens a new TCP (and optional TLS) connection, runs `simple_bind`, and unbinds immediately. There is no connection pool because LDAP `simple_bind` changes the connection's authenticated identity; unsafe cross-user reuse is worse than the connection overhead.
 

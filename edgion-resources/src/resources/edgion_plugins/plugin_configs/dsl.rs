@@ -281,7 +281,7 @@ mod rate_limit_tests {
     }
 
     #[test]
-    fn redis_rate_limit_config_roundtrip_and_boundaries() {
+    fn redis_rate_limit_local_config_roundtrip_and_boundaries() {
         let config: DslConfig = serde_json::from_value(config_value()).unwrap();
         assert_eq!(config.rate_limit_policies[0].timeout_ms, 500);
         let script = config.compile_and_validate().unwrap();

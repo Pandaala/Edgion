@@ -35,7 +35,7 @@ pub mod openid_connect;
 pub(crate) mod plugin_generation;
 mod plugin_store;
 pub mod proxy_rewrite;
-pub mod rate_limit;
+pub mod rate_limit_local;
 pub mod rate_limit_redis;
 pub mod real_ip;
 pub mod region_route;
@@ -77,7 +77,7 @@ pub use mock::Mock;
 pub use openid_connect::OpenidConnect;
 pub use plugin_store::{compile_plugins, get_global_plugin_store, global_plugin_store, CompiledPlugins, PluginStore};
 pub use proxy_rewrite::ProxyRewrite;
-pub use rate_limit::RateLimit;
+pub use rate_limit_local::RateLimitLocal;
 pub use rate_limit_redis::RateLimitRedis;
 pub use real_ip::RealIp;
 pub use region_route::RegionRoute;
@@ -95,6 +95,6 @@ pub use edgion_resources::resources::edgion_plugins::{
     CredentialInjectorConfig, CsrfConfig, CtxSetConfig, DslConfig, DynamicExternalUpstreamConfig,
     DynamicInternalUpstreamConfig, FaultInjectionConfig, ForwardAuthConfig, HeaderCertAuthConfig, HmacAuthConfig,
     IpRestrictionConfig, JsonSchemaValidationConfig, JweDecryptConfig, JwtAuthConfig, KeyAuthConfig, LdapAuthConfig,
-    MockConfig, OpenidConnectConfig, ProxyRewriteConfig, RateLimitConfig, RateLimitRedisConfig, RealIpConfig,
+    MockConfig, OpenidConnectConfig, ProxyRewriteConfig, RateLimitLocalConfig, RateLimitRedisConfig, RealIpConfig,
     RegionRouteConfig, RequestRestrictionConfig, ResponseRewriteConfig,
 };

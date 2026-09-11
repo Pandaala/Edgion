@@ -62,7 +62,7 @@ use crate::plugins::http::ldap_auth::LdapAuth;
 use crate::plugins::http::mock::Mock;
 use crate::plugins::http::openid_connect::OpenidConnect;
 use crate::plugins::http::proxy_rewrite::ProxyRewrite;
-use crate::plugins::http::rate_limit::RateLimit;
+use crate::plugins::http::rate_limit_local::RateLimitLocal;
 use crate::plugins::http::rate_limit_redis::RateLimitRedis;
 use crate::plugins::http::real_ip::RealIp;
 use crate::plugins::http::region_route::RegionRoute;
@@ -109,7 +109,7 @@ impl WafCandidate {
 }
 
 pub struct PluginRuntime {
-    rate_limit_outcome_slots: usize,
+    rate_limit_local_outcome_slots: usize,
     /// Plugins for request stage (async)
     request_plugins: Vec<Arc<dyn RequestFilter>>,
     /// Plugins for upstream_response_filter stage (sync)
@@ -268,7 +268,7 @@ impl PluginRuntime {
             waf_candidate: None,
             has_request_id: false,
             invalid_early_request_id: false,
-            rate_limit_outcome_slots: 0,
+            rate_limit_local_outcome_slots: 0,
         }
     }
 
@@ -669,7 +669,7 @@ impl PluginRuntime {
         // Keep source aliases for dependency semantics even when an invalid or
         // duplicate display identity has been sanitized by the generation.
         let outcome_aliases_owned = cache
-            .prepare_request_outcomes(entries, self.rate_limit_outcome_slots)
+            .prepare_request_outcomes(entries, self.rate_limit_local_outcome_slots)
             .clone();
         let source_aliases = cache.request_source_aliases().to_vec();
         let mut dependency_entries = entries.to_vec();
@@ -690,12 +690,12 @@ impl PluginRuntime {
             .map(|(alias, slot)| (alias.as_str(), *slot))
             .collect();
         for (index, entry) in entries.iter().enumerate().filter(|(_, entry)| entry.is_enabled()) {
-            if matches!(entry.plugin, EdgionPlugin::RateLimit(_)) {
+            if matches!(entry.plugin, EdgionPlugin::RateLimitLocal(_)) {
                 if let Some(slot) = source_aliases[index]
                     .as_deref()
                     .and_then(|alias| outcome_aliases.get(alias))
                 {
-                    self.rate_limit_outcome_slots = self.rate_limit_outcome_slots.max(slot + 1);
+                    self.rate_limit_local_outcome_slots = self.rate_limit_local_outcome_slots.max(slot + 1);
                 }
             }
         }
@@ -994,12 +994,14 @@ impl PluginRuntime {
                     }
 
                     let created = match &entry.plugin {
-                        EdgionPlugin::RateLimit(config) => CreateResult::Ok(Some(RateLimit::create_with_outcome_slot(
-                            config,
-                            source_aliases[index]
-                                .as_deref()
-                                .and_then(|alias| outcome_aliases.get(alias).copied()),
-                        ))),
+                        EdgionPlugin::RateLimitLocal(config) => {
+                            CreateResult::Ok(Some(RateLimitLocal::create_with_outcome_slot(
+                                config,
+                                source_aliases[index]
+                                    .as_deref()
+                                    .and_then(|alias| outcome_aliases.get(alias).copied()),
+                            )))
+                        }
                         _ => Self::create_request_filter_from_edgion(
                             &entry.plugin,
                             namespace,
@@ -1685,7 +1687,7 @@ impl PluginRuntime {
             EdgionPlugin::RequestRestriction(config) => {
                 CreateResult::Ok(Some(RequestRestriction::create_with_body(config, body_requirement)))
             }
-            EdgionPlugin::RateLimit(config) => CreateResult::Ok(Some(RateLimit::create(config))),
+            EdgionPlugin::RateLimitLocal(config) => CreateResult::Ok(Some(RateLimitLocal::create(config))),
             EdgionPlugin::RateLimitRedis(config) => CreateResult::Ok(Some(RateLimitRedis::create(config, entry_scope))),
             EdgionPlugin::CtxSet(config) => CreateResult::Ok(Some(CtxSet::create(config))),
             EdgionPlugin::WebhookKeyGet(config) => CreateResult::Ok(Some(WebhookKeyGet::create(config))),
@@ -1758,7 +1760,7 @@ impl PluginRuntime {
             | EdgionPlugin::ProxyRewrite(_)
             | EdgionPlugin::RequestBodyBuffer(_)
             | EdgionPlugin::RequestRestriction(_)
-            | EdgionPlugin::RateLimit(_)
+            | EdgionPlugin::RateLimitLocal(_)
             | EdgionPlugin::RateLimitRedis(_)
             | EdgionPlugin::CtxSet(_)
             | EdgionPlugin::WebhookKeyGet(_)
@@ -1822,7 +1824,7 @@ impl PluginRuntime {
             | EdgionPlugin::JsonSchemaValidation(_)
             | EdgionPlugin::FormJsonTransform(_)
             | EdgionPlugin::ResponseRewrite(_)
-            | EdgionPlugin::RateLimit(_)
+            | EdgionPlugin::RateLimitLocal(_)
             | EdgionPlugin::RateLimitRedis(_)
             | EdgionPlugin::CtxSet(_)
             | EdgionPlugin::WebhookKeyGet(_)
@@ -1879,7 +1881,7 @@ impl PluginRuntime {
             | EdgionPlugin::RequestBodyBuffer(_)
             | EdgionPlugin::RequestRestriction(_)
             | EdgionPlugin::ResponseRewrite(_)
-            | EdgionPlugin::RateLimit(_)
+            | EdgionPlugin::RateLimitLocal(_)
             | EdgionPlugin::RateLimitRedis(_)
             | EdgionPlugin::CtxSet(_)
             | EdgionPlugin::WebhookKeyGet(_)
@@ -1930,7 +1932,7 @@ impl PluginRuntime {
             EdgionPlugin::ProxyRewrite(_) => "ProxyRewrite",
             EdgionPlugin::RequestBodyBuffer(_) => "RequestBodyBuffer",
             EdgionPlugin::RequestRestriction(_) => "RequestRestriction",
-            EdgionPlugin::RateLimit(_) => "RateLimit",
+            EdgionPlugin::RateLimitLocal(_) => "RateLimitLocal",
             EdgionPlugin::RateLimitRedis(_) => "RateLimitRedis",
             EdgionPlugin::CtxSet(_) => "CtxSet",
             EdgionPlugin::WebhookKeyGet(_) => "WebhookKeyGet",
@@ -2050,8 +2052,8 @@ impl PluginRuntime {
             .await;
     }
 
-    pub(crate) fn rate_limit_outcome_slots(&self) -> usize {
-        self.rate_limit_outcome_slots
+    pub(crate) fn rate_limit_local_outcome_slots(&self) -> usize {
+        self.rate_limit_local_outcome_slots
     }
 
     /// Enforce the sealed policy gate before early IDs, preflight or body work.
@@ -2106,7 +2108,7 @@ impl PluginRuntime {
         let outcome_frame = if phase == RequestIdPhase::Early {
             None
         } else {
-            ctx.begin_rate_limit_frame(self.rate_limit_outcome_slots)
+            ctx.begin_rate_limit_local_frame(self.rate_limit_local_outcome_slots)
         };
         let mut filter_logs = Vec::new();
         let mut session_adapter = if backend_request {
@@ -2218,7 +2220,7 @@ impl PluginRuntime {
         }
 
         ctx.finish_plugin_stage("request_filters", filter_logs);
-        ctx.end_rate_limit_frame(outcome_frame);
+        ctx.end_rate_limit_local_frame(outcome_frame);
     }
 
     /// Run upstream_response_filter stage filters (sync)

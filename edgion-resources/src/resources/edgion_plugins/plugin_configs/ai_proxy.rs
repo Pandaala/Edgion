@@ -11,7 +11,7 @@ use crate::duration::parse_duration;
 use crate::resources::edgion_backend::AI_MODEL_NAME_MAX_BYTES;
 use crate::resources::edgion_plugins::PluginValidation;
 
-use super::rate_limit::OnKeyMiss;
+use super::rate_limit_local::OnKeyMiss;
 use super::rate_limit_redis::OnRedisFailure;
 
 pub const AI_QUOTA_MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;

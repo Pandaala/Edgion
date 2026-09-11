@@ -44,7 +44,7 @@ pub use edgion_backend::{
 
 pub use grpc_route::{
     GrpcDelegationDynamicInitialTestSuite, GrpcDelegationDynamicUpdateTestSuite, GrpcDelegationTestSuite,
-    GrpcMatchTestSuite, GrpcRateLimitTestSuite, GrpcSessionPersistenceTestSuite, GrpcSpWeightedTestSuite,
+    GrpcMatchTestSuite, GrpcRateLimitLocalTestSuite, GrpcSessionPersistenceTestSuite, GrpcSpWeightedTestSuite,
     GrpcTestSuite, GrpcTimeoutRewriteWireTestSuite, GrpcUnmatchedRouteTestSuite, GrpcWebTestSuite,
 };
 
@@ -103,8 +103,8 @@ pub use edgion_plugins::{
     JweDecryptTestSuite, JwtAuthTestSuite, KeyAuthTestSuite, LdapAuthTestSuite, LdapAuthTlsTestSuite,
     MatchedRouteMetaTestSuite, OpenidConnectTestSuite, PathNormalizationForwardViewTestSuite,
     PathNormalizationPreserveParamTestSuite, PathNormalizationTestSuite, PluginConditionTestSuite, PluginLogsTestSuite,
-    PluginValidationStatusTestSuite, ProxyRewriteTestSuite, RateLimitDynamicInitialTestSuite,
-    RateLimitDynamicUpdateTestSuite, RateLimitRedisTestSuite, RateLimitTestSuite, RealIpPluginTestSuite,
+    PluginValidationStatusTestSuite, ProxyRewriteTestSuite, RateLimitLocalDynamicInitialTestSuite,
+    RateLimitLocalDynamicUpdateTestSuite, RateLimitLocalTestSuite, RateLimitRedisTestSuite, RealIpPluginTestSuite,
     RegionRouteTestSuite, RequestAccessPolicyHmacDynamicDeletedTestSuite,
     RequestAccessPolicyHmacDynamicInitialTestSuite, RequestAccessPolicyHmacDynamicUpdatedTestSuite,
     RequestAccessPolicyTestSuite, RequestIdPluginTestSuite, RequestMirrorTestSuite, RequestRestrictionTestSuite,

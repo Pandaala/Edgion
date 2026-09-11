@@ -422,10 +422,10 @@ log.push_fmt("OK group={} user {}", la!["partner-a", sensitive(&"jack")]);
 // KeyAuth — key not found
 log.push("Deny no-key");
 
-// RateLimit — limit triggered
+// RateLimitLocal — limit triggered
 log.push(&format!("Rate 429 k=user:{}", user_id));
 
-// RateLimit — not triggered
+// RateLimitLocal — not triggered
 log.push("OK");
 
 // BasicAuth — auth failed

@@ -133,7 +133,7 @@ Known canonical helpers (non-exhaustive):
 
 | Helper | Location | Notes |
 |--------|----------|-------|
-| `parse_duration` | `edgion-resources/src/duration.rs` | Returns `Result<Duration, ParseDurationError>`; supports `ms/s/m/h/d` and combined forms like `"1h30m"`, `"2d12h"`; rejects negatives. **Do not** reimplement — RateLimit had its own copy that diverged in unit set, error type, and combined-format support, then had to be migrated back. |
+| `parse_duration` | `edgion-resources/src/duration.rs` | Returns `Result<Duration, ParseDurationError>`; supports `ms/s/m/h/d` and combined forms like `"1h30m"`, `"2d12h"`; rejects negatives. **Do not** reimplement — RateLimitLocal had its own copy that diverged in unit set, error type, and combined-format support, then had to be migrated back. |
 | `MetadataFilter` matching | `edgion-controller/src/conf_mgr/metadata_filter.rs` | K8s label / namespace selector evaluation |
 | Real-IP extraction | `edgion-gateway/src/util/real_ip_extractor.rs` | Trusted proxy / `X-Forwarded-For` parsing |
 

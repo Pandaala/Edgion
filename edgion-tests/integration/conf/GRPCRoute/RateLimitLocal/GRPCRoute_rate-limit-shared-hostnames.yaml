@@ -1,0 +1,48 @@
+# gRPC RateLimitLocal end-to-end smoke route — HOSTNAME (H) dimension.
+#
+# ONE rule with TWO hostnames (a.shared / b.shared) and a SINGLE match-item, under
+# one rule-level RateLimitLocal. The client asserts the rule enforces ONE global budget
+# across both hostnames (11th request rejected).
+#
+# SCOPE NOTE: this is a smoke test, NOT a "rule-runtime shared across hostnames" pin.
+# RateLimitLocal is an ExtensionRef -> EdgionPlugins plugin; its CMS lives in the global
+# PluginStore keyed by EdgionPlugins identity (plugins/http/plugin_store.rs:132,173),
+# resolved per request (gateway_api_filters/extension_ref.rs:131-146). Even a future
+# per-(rule,hostname) unit fan-out that rebuilt the runtime per hostname would leave
+# both hostnames resolving the SAME global CMS, so the global-budget assertion holds
+# regardless of rule-runtime sharing. (There is also no per-hostname unit fan-out in
+# gRPC today — the flat match engine keeps `effective_hostnames` as a Vec on the
+# shared route_info — so there is no per-hostname build site to guard here at all.)
+# A fixed `x-rate-key` forces ALL requests into one CMS bucket.
+apiVersion: gateway.networking.k8s.io/v1
+kind: GRPCRoute
+metadata:
+  name: grpc-ratelimit-shared-hostnames
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: grpc-ratelimit-gateway
+      namespace: edgion-test
+      sectionName: grpc
+
+  hostnames:
+    - "a.shared.example.com"   # H = 2
+    - "b.shared.example.com"
+
+  rules:
+    # Single rule, single match-item, one rule-level RateLimitLocal filter.
+    # The two hostnames above share this rule's single PluginRuntime.
+    - matches:
+        - method:
+            type: Exact
+            service: test.TestService
+            method: SayHello
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: grpc-rate-limit-shared
+      backendRefs:
+        - name: test-grpc
+          port: 30021

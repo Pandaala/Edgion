@@ -16,7 +16,7 @@ Make every request-stage local-reply plugin reject informational status codes th
 
 ## Requirements
 
-- Reuse `edgion_resources::http_status::is_valid_final_http_status` in FaultInjection, Mock, RequestAccessPolicy, RateLimit, RateLimitRedis, IpRestriction, and RequestRestriction validation.
+- Reuse `edgion_resources::http_status::is_valid_final_http_status` in FaultInjection, Mock, RequestAccessPolicy, RateLimitLocal, RateLimitRedis, IpRestriction, and RequestRestriction validation.
 - Reject 100, 101, and 199 before publication; retain 200 through 599 according to the canonical predicate.
 - Cover both runtime-owned `ErrResponse` plugins and plugins that write their local response before returning termination.
 - Raise every affected schemars minimum from 100 to 200 so generated schema and runtime validation agree.

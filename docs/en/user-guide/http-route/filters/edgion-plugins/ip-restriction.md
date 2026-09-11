@@ -557,6 +557,6 @@ spec:
 ## Related Links
 
 - [RealIp](./real-ip.md) — Real client IP extraction (configure first when behind a proxy)
-- [RateLimit](./rate-limit.md) — Rate limiting
+- [RateLimitLocal](./rate-limit-local.md) — Rate limiting
 - [RequestRestriction](./request-restriction.md) — Request restriction
 - [Basic Auth](./basic-auth.md) — Combine with authentication

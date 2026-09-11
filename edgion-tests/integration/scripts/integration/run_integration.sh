@@ -1605,7 +1605,7 @@ run_all_tests() {
                     run_test "GRPCRoute_Basic" "${EDGION_TEST_CLIENT_BIN} -g -r GRPCRoute -i Basic" || test_failed=true
                     run_test "GRPCRoute_Delegation" "${EDGION_TEST_CLIENT_BIN} -g -r GRPCRoute -i Delegation" || test_failed=true
                     run_test "GRPCRoute_Match" "${EDGION_TEST_CLIENT_BIN} -g -r GRPCRoute -i Match" || test_failed=true
-                    run_test "GRPCRoute_RateLimit" "${EDGION_TEST_CLIENT_BIN} -g -r GRPCRoute -i RateLimit" || test_failed=true
+                    run_test "GRPCRoute_RateLimitLocal" "${EDGION_TEST_CLIENT_BIN} -g -r GRPCRoute -i RateLimitLocal" || test_failed=true
                     run_test "GRPCRoute_TimeoutRewriteWire" "${EDGION_TEST_CLIENT_BIN} -g -r GRPCRoute -i TimeoutRewriteWire" || test_failed=true
                     run_test "GRPCRoute_Backend_SessionPersistence" "${EDGION_TEST_CLIENT_BIN} -g -r GRPCRoute -i Backend/SessionPersistence" || test_failed=true
                     run_test "GRPCRoute_Backend_SessionPersistenceWeighted" "${EDGION_TEST_CLIENT_BIN} -g -r GRPCRoute -i Backend/SessionPersistenceWeighted" || test_failed=true
@@ -1715,7 +1715,7 @@ run_all_tests() {
                         log_info "Skipping complex test: EdgionPlugins_LdapAuthTls (requires --full-test)"
                     fi
                     run_test "EdgionPlugins_ProxyRewrite" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i ProxyRewrite" || test_failed=true
-                    run_test "EdgionPlugins_RateLimit" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i RateLimit" || test_failed=true
+                    run_test "EdgionPlugins_RateLimitLocal" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i RateLimitLocal" || test_failed=true
                     run_test "EdgionPlugins_RateLimitRedis" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i RateLimitRedis" || test_failed=true
                     run_token_bucket_partial_refill_redis_test || test_failed=true
                     run_test "EdgionPlugins_RealIp" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i RealIp" || test_failed=true
@@ -1918,7 +1918,7 @@ run_all_tests() {
         # GRPCRoute Tests
         run_test "GRPCRoute_Basic" "${EDGION_TEST_CLIENT_BIN} -g -r GRPCRoute -i Basic" || test_failed=true
         run_test "GRPCRoute_Match" "${EDGION_TEST_CLIENT_BIN} -g -r GRPCRoute -i Match" || test_failed=true
-        run_test "GRPCRoute_RateLimit" "${EDGION_TEST_CLIENT_BIN} -g -r GRPCRoute -i RateLimit" || test_failed=true
+        run_test "GRPCRoute_RateLimitLocal" "${EDGION_TEST_CLIENT_BIN} -g -r GRPCRoute -i RateLimitLocal" || test_failed=true
         run_test "GRPCRoute_TimeoutRewriteWire" "${EDGION_TEST_CLIENT_BIN} -g -r GRPCRoute -i TimeoutRewriteWire" || test_failed=true
         run_test "GRPCRoute_Backend_SessionPersistence" "${EDGION_TEST_CLIENT_BIN} -g -r GRPCRoute -i Backend/SessionPersistence" || test_failed=true
         run_test "GRPCRoute_Backend_SessionPersistenceWeighted" "${EDGION_TEST_CLIENT_BIN} -g -r GRPCRoute -i Backend/SessionPersistenceWeighted" || test_failed=true
@@ -1990,7 +1990,7 @@ run_all_tests() {
             log_info "Skipping complex test: EdgionPlugins_LdapAuthTls (requires --full-test)"
         fi
         run_test "EdgionPlugins_ProxyRewrite" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i ProxyRewrite" || test_failed=true
-        run_test "EdgionPlugins_RateLimit" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i RateLimit" || test_failed=true
+        run_test "EdgionPlugins_RateLimitLocal" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i RateLimitLocal" || test_failed=true
         run_test "EdgionPlugins_RateLimitRedis" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i RateLimitRedis" || test_failed=true
         run_token_bucket_partial_refill_redis_test || test_failed=true
         run_test "EdgionPlugins_RealIp" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i RealIp" || test_failed=true
@@ -2234,7 +2234,7 @@ main() {
                 # must be present or the suite either cannot connect or falls
                 # through to an unrelated GRPCRoute.
                 base_suites="${base_suites},GRPCRoute/Basic,LinkSys/Redis"
-                suites="${base_suites},EdgionBackend/SingleProvider,EdgionPlugins/DebugAccessLog,EdgionPlugins/Csrf,EdgionPlugins/PluginCondition,EdgionPlugins/CtxSet,EdgionPlugins/BasicAuth,EdgionPlugins/JwtAuth,EdgionPlugins/JweDecrypt,EdgionPlugins/HmacAuth,EdgionPlugins/HeaderCertAuth,EdgionPlugins/KeyAuth,EdgionPlugins/CredentialInjector,EdgionPlugins/ProxyRewrite,EdgionPlugins/RateLimit,EdgionPlugins/RateLimitRedis,EdgionPlugins/RealIp,EdgionPlugins/RequestMirror,EdgionPlugins/ResponseRewrite,EdgionPlugins/RequestRestriction,EdgionPlugins/RequestAccessPolicy,EdgionPlugins/Canary,EdgionPlugins/IpRestriction,EdgionPlugins/IpRestrictionPartialGood,EdgionPlugins/PathNormalization,EdgionPlugins/PathNormalization/ForwardView,EdgionPlugins/FaultInjection,EdgionPlugins/ForwardAuth,EdgionPlugins/ExtProc,EdgionPlugins/AiGuard,EdgionPlugins/Guardrail,EdgionPlugins/OpenidConnect,EdgionPlugins/BandwidthLimit,EdgionPlugins/DirectEndpoint,EdgionPlugins/DynamicInternalUpstream,EdgionPlugins/DynamicExternalUpstream,EdgionPlugins/RegionRoute,EdgionPlugins/GlobalConnectionIpRestriction,EdgionPlugins/EdgionConfigDataStatus,EdgionPlugins/ResolvedRefs,EdgionPlugins/WebhookKeyGet,EdgionPlugins/Cors,EdgionPlugins/Dsl,EdgionPlugins/DslGrpcError,EdgionPlugins/DslBody,EdgionPlugins/BodyPlugins,EdgionPlugins/JsonSchemaValidation,EdgionPlugins/AllEndpointStatus,EdgionPlugins/Wasm,EdgionPlugins/RequestId,EdgionPlugins/AccessLogExtern,EdgionPlugins/MatchedRouteMeta,EdgionPlugins/IpRestrictionRefs,EdgionPlugins/PluginValidationStatus,EdgionPlugins/GlobalPluginsSnapshot,EdgionPlugins/EdgionConfigDataManaged,EdgionPlugins/PathNormalization/PreserveParam,EdgionPlugins/GeoRestriction"
+                suites="${base_suites},EdgionBackend/SingleProvider,EdgionPlugins/DebugAccessLog,EdgionPlugins/Csrf,EdgionPlugins/PluginCondition,EdgionPlugins/CtxSet,EdgionPlugins/BasicAuth,EdgionPlugins/JwtAuth,EdgionPlugins/JweDecrypt,EdgionPlugins/HmacAuth,EdgionPlugins/HeaderCertAuth,EdgionPlugins/KeyAuth,EdgionPlugins/CredentialInjector,EdgionPlugins/ProxyRewrite,EdgionPlugins/RateLimitLocal,EdgionPlugins/RateLimitRedis,EdgionPlugins/RealIp,EdgionPlugins/RequestMirror,EdgionPlugins/ResponseRewrite,EdgionPlugins/RequestRestriction,EdgionPlugins/RequestAccessPolicy,EdgionPlugins/Canary,EdgionPlugins/IpRestriction,EdgionPlugins/IpRestrictionPartialGood,EdgionPlugins/PathNormalization,EdgionPlugins/PathNormalization/ForwardView,EdgionPlugins/FaultInjection,EdgionPlugins/ForwardAuth,EdgionPlugins/ExtProc,EdgionPlugins/AiGuard,EdgionPlugins/Guardrail,EdgionPlugins/OpenidConnect,EdgionPlugins/BandwidthLimit,EdgionPlugins/DirectEndpoint,EdgionPlugins/DynamicInternalUpstream,EdgionPlugins/DynamicExternalUpstream,EdgionPlugins/RegionRoute,EdgionPlugins/GlobalConnectionIpRestriction,EdgionPlugins/EdgionConfigDataStatus,EdgionPlugins/ResolvedRefs,EdgionPlugins/WebhookKeyGet,EdgionPlugins/Cors,EdgionPlugins/Dsl,EdgionPlugins/DslGrpcError,EdgionPlugins/DslBody,EdgionPlugins/BodyPlugins,EdgionPlugins/JsonSchemaValidation,EdgionPlugins/AllEndpointStatus,EdgionPlugins/Wasm,EdgionPlugins/RequestId,EdgionPlugins/AccessLogExtern,EdgionPlugins/MatchedRouteMeta,EdgionPlugins/IpRestrictionRefs,EdgionPlugins/PluginValidationStatus,EdgionPlugins/GlobalPluginsSnapshot,EdgionPlugins/EdgionConfigDataManaged,EdgionPlugins/PathNormalization/PreserveParam,EdgionPlugins/GeoRestriction"
                 if $FULL_TEST; then
                     suites="${suites},EdgionPlugins/LdapAuth,EdgionPlugins/LdapAuthTls"
                 fi

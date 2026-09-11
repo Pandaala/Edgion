@@ -59,7 +59,7 @@ pub struct RateLimitRedis {
     /// their quotas outright when their key sources match, and letting a client
     /// that controls one plugin's key source craft a value matching another
     /// plugin's composed key when they do not. Scoping by resource identity also
-    /// mirrors the in-memory `RateLimit`, whose `Rate` is shared exactly by the
+    /// mirrors the in-memory `RateLimitLocal`, whose `Rate` is shared exactly by the
     /// routes that reference one resource, and keeps cluster-wide sharing intact
     /// because every Gateway instance derives the same string from conf_sync.
     scoped_key_prefix: String,
@@ -247,7 +247,7 @@ impl RequestFilter for RateLimitRedis {
             return PluginRunningResult::ErrTerminateRequest;
         }
 
-        // 2. Extract key (shared with RateLimit via resolve_rate_limit_key)
+        // 2. Extract key (shared with RateLimitLocal via resolve_rate_limit_key)
         let limit_key = match resolve_rate_limit_key(
             session,
             &self.config.key,

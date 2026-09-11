@@ -45,7 +45,7 @@ x-kubernetes-validations:
 
 ---
 
-### RateLimitConfig
+### RateLimitLocalConfig
 
 ```yaml
 x-kubernetes-validations:

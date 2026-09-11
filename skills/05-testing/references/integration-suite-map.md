@@ -75,7 +75,7 @@ These directories all use the same `EdgionPlugins` listener key, only the suite 
 - `PluginCondition`
 - `DebugAccessLog`
 - `ProxyRewrite`
-- `RateLimit`
+- `RateLimitLocal`
 - `BandwidthLimit`
 - `RealIp`
 - `RequestMirror`

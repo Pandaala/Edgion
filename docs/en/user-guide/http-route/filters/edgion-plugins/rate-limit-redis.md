@@ -6,11 +6,11 @@
 
 ## What is RateLimitRedis?
 
-The [RateLimit plugin](rate-limit.md) uses an in-process Count-Min Sketch algorithm with nanosecond latency, but each gateway instance counts independently — in multi-replica deployments, the effective total throughput is the configured rate multiplied by the number of instances. RateLimitRedis uses Redis to enforce **precise** cluster-wide rate limits: all instances share the same Redis counter, so the configured rate is the actual rate for the entire cluster.
+The [RateLimitLocal plugin](rate-limit-local.md) uses an in-process Count-Min Sketch algorithm with nanosecond latency, but each gateway instance counts independently — in multi-replica deployments, the effective total throughput is the configured rate multiplied by the number of instances. RateLimitRedis uses Redis to enforce **precise** cluster-wide rate limits: all instances share the same Redis counter, so the configured rate is the actual rate for the entire cluster.
 
-### RateLimit vs. RateLimitRedis
+### RateLimitLocal vs. RateLimitRedis
 
-| Feature | RateLimit | RateLimitRedis |
+| Feature | RateLimitLocal | RateLimitRedis |
 |---------|-----------|----------------|
 | Implementation | In-process Count-Min Sketch | Redis Lua scripts (atomic) |
 | Latency | Nanoseconds | 0.1–1 ms (network RTT) |
@@ -138,7 +138,7 @@ Multiple policies are evaluated **independently** — a request is allowed only 
 
 ### Key Configuration
 
-Identical to the [RateLimit plugin](rate-limit.md). Supported key types:
+Identical to the [RateLimitLocal plugin](rate-limit-local.md). Supported key types:
 
 | type | Requires `name` | Description |
 |------|-----------------|-------------|
@@ -176,7 +176,7 @@ The resulting Redis key looks like `{keyPrefix}{pluginScope}:{algorithm}:{policy
 
 `{pluginScope}` identifies the plugin entry that owns the bucket: `<namespace>/<name>/<alias>` for the EdgionPlugins resource this plugin is declared in, or `<namespace>/<name>/#<index>` when the entry has no `alias`. Every Gateway instance derives the same string from the same resource, so cluster-wide counting is unaffected — but two unrelated EdgionPlugins resources can no longer index the same buckets, even when their `keyPrefix` and `key` sources are identical. Without it, a client that controls one plugin's key source could craft a value matching another plugin's composed key, and — more commonly — two default-configured plugins would silently share one set of per-IP buckets. Renaming the resource or its `alias`, or reordering unaliased entries, moves the plugin to a fresh namespace and restarts its counters; set an `alias` to pin the scope across reordering. An alias must be unique within its stage array: a duplicate sets `Accepted=False` on the resource, and the Gateway additionally drops the repeated alias so that entry falls back to its `#<index>` scope — a duplicate can never merge two entries' buckets.
 
-Multiple routes referencing the **same** EdgionPlugins resource share one limiter — that is how a rate limit is shared across routes, and it matches the in-memory `RateLimit`, whose counter is likewise shared per resource. Two *different* resources can no longer share a bucket by construction: to share a quota across routes, point them at one resource rather than duplicating the configuration.
+Multiple routes referencing the **same** EdgionPlugins resource share one limiter — that is how a rate limit is shared across routes, and it matches the in-memory `RateLimitLocal`, whose counter is likewise shared per resource. Two *different* resources can no longer share a bucket by construction: to share a quota across routes, point them at one resource rather than duplicating the configuration.
 
 Omitting `key` applies the default `[{type: remoteIp}]`. An explicitly empty `key: []` means "one global bucket": every request composes to the same empty key and is still rate limited — it is not treated as a key extraction failure, so `onKeyMiss` / `defaultKey` do not apply to it.
 
@@ -448,7 +448,7 @@ plugin entries do not accidentally share the bucket.
 
 ### Q2: What is the minimum `interval`?
 
-**A**: The minimum interval is 100 ms. Intervals below 100 ms are rejected during validation, because very small windows cause frequent Redis writes that can overwhelm the Redis cluster. For extremely high-frequency rate limiting, use the [RateLimit plugin](rate-limit.md) (in-process, nanosecond latency).
+**A**: The minimum interval is 100 ms. Intervals below 100 ms are rejected during validation, because very small windows cause frequent Redis writes that can overwhelm the Redis cluster. For extremely high-frequency rate limiting, use the [RateLimitLocal plugin](rate-limit-local.md) (in-process, nanosecond latency).
 
 ### Q3: Are multiple policies "OR" or "AND" logic?
 
@@ -458,22 +458,22 @@ plugin entries do not accidentally share the bucket.
 
 **A**: This follows Redis key naming conventions and clearly separates namespace segments in Redis key strings. The default `"edgion:rl:"` already conforms. If you omit the trailing `:` in a custom prefix, validation will return an error.
 
-### Q5: Can RateLimitRedis and RateLimit be used on the same route simultaneously?
+### Q5: Can RateLimitRedis and RateLimitLocal be used on the same route simultaneously?
 
-**A**: Yes. Both plugins work independently; a request must pass both to reach the backend. A common pattern: RateLimit first for coarse-grained local burst protection (fast, nanosecond-level), followed by RateLimitRedis for precise cluster-wide quota management.
+**A**: Yes. Both plugins work independently; a request must pass both to reach the backend. A common pattern: RateLimitLocal first for coarse-grained local burst protection (fast, nanosecond-level), followed by RateLimitRedis for precise cluster-wide quota management.
 
 ---
 
 ## Related Documentation
 
-- [RateLimit Plugin](rate-limit.md) — In-process approximate rate limiting (high performance, low latency)
+- [RateLimitLocal Plugin](rate-limit-local.md) — In-process approximate rate limiting (high performance, low latency)
 - [Infrastructure Connectors](../../../../ops-guide/infrastructure/connectors.md) — Defining the Redis `LinkSys` referenced by `redisRef`
 - [IpRestriction Plugin](ip-restriction.md) — IP-based access control
 - [KeyAuth Plugin](key-auth.md) — API Key authentication
 - [JwtAuth Plugin](jwt-auth.md) — JWT authentication
 ## Local allowance before Redis overflow admission
 
-Use a preceding `RateLimit` to admit normal traffic locally and call Redis only
+Use a preceding `RateLimitLocal` to admit normal traffic locally and call Redis only
 after its allowance is exceeded. Both entries must belong to the same
 `EdgionPlugins.requestPlugins` array. This example requires a Redis LinkSys named
 `redis` in namespace `default`:
@@ -487,7 +487,7 @@ metadata:
 spec:
   requestPlugins:
     - alias: local-budget
-      type: RateLimit
+      type: RateLimitLocal
       config:
         rate: 50
         interval: "1s"

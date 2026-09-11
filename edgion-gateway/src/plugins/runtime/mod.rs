@@ -33,4 +33,4 @@ pub use traits::{
 };
 
 #[cfg(test)]
-mod rate_limit_overflow_tests;
+mod rate_limit_local_overflow_tests;

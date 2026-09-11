@@ -105,7 +105,7 @@ udp_log:
 
 # ─── 限流插件全局配置 ──────────────────────────────────────────────
 
-rate_limit:
+rate_limit_local:
   default_estimator_slots_k: 64   # CMS 默认精度（× 1K slots）
   max_estimator_slots_k: 1024     # CMS 最大精度上限
   gateway_instance_count: 1       # 集群限流：实例数（无 Controller 推送时的静态 fallback）
@@ -365,7 +365,7 @@ access_log:
 当 Gateway 以多副本运行时，必须设置 `gateway_instance_count` 以确保限流计数准确：
 
 ```yaml
-rate_limit:
+rate_limit_local:
   default_estimator_slots_k: 64
   max_estimator_slots_k: 1024
   gateway_instance_count: 3   # 部署了 3 个 Gateway 副本

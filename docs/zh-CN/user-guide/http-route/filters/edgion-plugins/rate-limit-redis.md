@@ -6,11 +6,11 @@
 
 ## 什么是 RateLimitRedis？
 
-[RateLimit 插件](rate-limit.md) 使用进程内 Count-Min Sketch 算法，延迟极低（纳秒级），但每个网关实例独立计数，多副本场景下总体放量是配置值的倍数。RateLimitRedis 通过 Redis 实现跨实例的**精确**集群限流：所有实例共享同一个 Redis 计数器，配置的速率就是整个集群的实际速率。
+[RateLimitLocal 插件](rate-limit-local.md) 使用进程内 Count-Min Sketch 算法，延迟极低（纳秒级），但每个网关实例独立计数，多副本场景下总体放量是配置值的倍数。RateLimitRedis 通过 Redis 实现跨实例的**精确**集群限流：所有实例共享同一个 Redis 计数器，配置的速率就是整个集群的实际速率。
 
-### RateLimit 与 RateLimitRedis 对比
+### RateLimitLocal 与 RateLimitRedis 对比
 
-| 特性 | RateLimit | RateLimitRedis |
+| 特性 | RateLimitLocal | RateLimitRedis |
 |------|-----------|----------------|
 | 实现方式 | 进程内 Count-Min Sketch | Redis Lua 脚本（原子操作） |
 | 延迟 | 纳秒级 | 0.1–1 ms（网络 RTT） |
@@ -138,7 +138,7 @@ spec:
 
 ### Key 配置
 
-与 [RateLimit 插件](rate-limit.md) 相同，支持以下 key 类型：
+与 [RateLimitLocal 插件](rate-limit-local.md) 相同，支持以下 key 类型：
 
 | type | 需要 name | 说明 |
 |------|-----------|------|
@@ -164,7 +164,7 @@ key:
 
 `{pluginScope}` 标识拥有这个桶的插件条目：插件所在 EdgionPlugins 资源的 `<namespace>/<name>/<alias>`，条目未配 `alias` 时为 `<namespace>/<name>/#<下标>`。同一份资源在每个 Gateway 实例上推导出相同的字符串，集群级计数不受影响；但两个互不相关的 EdgionPlugins 资源再也不会落进同一批桶，哪怕它们的 `keyPrefix` 和 `key` 来源完全相同。没有它，控制了 A 插件某个 key 来源的客户端可以构造出与 B 插件复合键相同的取值；更常见的是，两个用默认配置的插件会悄悄共用同一套按 IP 的桶。重命名资源或 `alias`、或调换未配 alias 的条目顺序，都会让插件切到新命名空间、计数从零开始；配上 `alias` 即可让作用域不随条目顺序变化。alias 在同一 stage 数组内必须唯一：重复会让资源变为 `Accepted=False`，同时 Gateway 会丢弃重复的那个 alias、让该条目回落到 `#<下标>` 作用域——所以重复 alias 不可能把两个条目并进同一个桶。
 
-引用**同一个** EdgionPlugins 资源的多条路由共享同一个限流器——这正是跨路由共享限流的实现方式，也与内存版 `RateLimit`（计数器同样按资源共享）一致。两个**不同**的资源在构造上已经不可能共享桶：想跨路由共享配额，请让它们指向同一个资源，而不是复制一份配置。
+引用**同一个** EdgionPlugins 资源的多条路由共享同一个限流器——这正是跨路由共享限流的实现方式，也与内存版 `RateLimitLocal`（计数器同样按资源共享）一致。两个**不同**的资源在构造上已经不可能共享桶：想跨路由共享配额，请让它们指向同一个资源，而不是复制一份配置。
 
 不写 `key` 时套用默认值 `[{type: remoteIp}]`。显式写 `key: []` 表示「单一全局桶」：所有请求组合出同一个空键，仍然会被限流——它不算 key 提取失败，因此 `onKeyMiss` / `defaultKey` 对它不生效。
 
@@ -354,7 +354,7 @@ spec:
 
 ### Q2：`interval` 最小可以设多小？
 
-**A**：最小 100 ms。小于 100 ms 的 interval 会在校验阶段报错，原因是过小的窗口会频繁写入 Redis，可能压垮 Redis 集群。对于极高频率限流，建议使用 [RateLimit 插件](rate-limit.md)（进程内，纳秒级）。
+**A**：最小 100 ms。小于 100 ms 的 interval 会在校验阶段报错，原因是过小的窗口会频繁写入 Redis，可能压垮 Redis 集群。对于极高频率限流，建议使用 [RateLimitLocal 插件](rate-limit-local.md)（进程内，纳秒级）。
 
 ### Q3：多条策略是"OR"还是"AND"关系？
 
@@ -364,21 +364,21 @@ spec:
 
 **A**：这是 Redis key 命名规范，用于在 Redis 中清晰分隔命名空间。默认值 `"edgion:rl:"` 已符合规范。如果自定义前缀忘记加 `:`，校验时会报错。
 
-### Q5：RateLimitRedis 和 RateLimit 可以同时挂载吗？
+### Q5：RateLimitRedis 和 RateLimitLocal 可以同时挂载吗？
 
-**A**：可以。两个插件独立工作，请求必须同时通过两者才能到达后端。常见组合：RateLimit 在前做粗粒度防护（本地快速拦截流量洪峰），RateLimitRedis 在后做精确集群配额管理。
+**A**：可以。两个插件独立工作，请求必须同时通过两者才能到达后端。常见组合：RateLimitLocal 在前做粗粒度防护（本地快速拦截流量洪峰），RateLimitRedis 在后做精确集群配额管理。
 
 ---
 
 ## 相关文档
 
-- [RateLimit 插件](rate-limit.md) — 进程内近似限流（高性能、低延迟）
+- [RateLimitLocal 插件](rate-limit-local.md) — 进程内近似限流（高性能、低延迟）
 - [IpRestriction 插件](ip-restriction.md) — 基于 IP 的访问控制
 - [KeyAuth 插件](key-auth.md) — API Key 认证
 - [JwtAuth 插件](jwt-auth.md) — JWT 认证
 ## 本地额度与 Redis 补充准入
 
-在同一 `EdgionPlugins.requestPlugins` 数组内，把 `RateLimit` 放在 Redis
+在同一 `EdgionPlugins.requestPlugins` 数组内，把 `RateLimitLocal` 放在 Redis
 条目前面。本地额度内的请求直接继续，不调用 Redis；本地超额后，再由 Redis
 补充额度决定放行或拒绝。以下示例需要已有 `default/redis` Redis LinkSys：
 
@@ -391,7 +391,7 @@ metadata:
 spec:
   requestPlugins:
     - alias: local-budget
-      type: RateLimit
+      type: RateLimitLocal
       config:
         rate: 50
         interval: "1s"

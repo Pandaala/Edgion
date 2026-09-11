@@ -300,7 +300,7 @@ resp.remove_header("X-Internal-Server")
 return next()
 ```
 
-**Use case 3: Internal IP rate-limit bypass.** Determine from the client IP whether a request is internal; if so, mark it via a context variable so that a downstream RateLimit plugin can skip rate limiting:
+**Use case 3: Internal IP rate-limit bypass.** Determine from the client IP whether a request is internal; if so, mark it via a context variable so that a downstream RateLimitLocal plugin can skip rate limiting:
 
 ```
 // Deliberately use the physical peer for this network-origin bypass rule.
@@ -380,7 +380,7 @@ Edgion provides 28 built-in plugins (26 HTTP + 2 Stream), categorized by functio
 |----------|-------|--------------|
 | **Authentication** | 7 | BasicAuth, KeyAuth, JwtAuth, HmacAuth, LdapAuth, ForwardAuth, OpenidConnect |
 | **Security** | 6 | Cors, Csrf, IpRestriction, RequestRestriction, JweDecrypt, HeaderCertAuth |
-| **Traffic Control** | 7 | RateLimit, RateLimitRedis, BandwidthLimit, ProxyRewrite, Mock, DirectEndpoint, RequestMirror |
+| **Traffic Control** | 7 | RateLimitLocal, RateLimitRedis, BandwidthLimit, ProxyRewrite, Mock, DirectEndpoint, RequestMirror |
 | **Programmable** | 1 | DslPlugin (supports both request and upstream_response phases) |
 | **Request/Response Transformation** | 4 | RequestHeaderModifier, ResponseHeaderModifier, URLRewrite, ResponseRewrite |
 | **Routing and Upstream** | 3 | DynamicInternalUpstream, DynamicExternalUpstream, RealIp |

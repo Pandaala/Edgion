@@ -354,7 +354,7 @@ filters:
 ```yaml
 filters:
   # First, rate-limit by source IP to cap the enumeration probing rate
-  - type: RateLimit
+  - type: RateLimitLocal
     config:
       rate: 10           # 10 per second
       burst: 20

@@ -86,7 +86,7 @@
     "GRPCRoute/UnmatchedRoute": {
       "grpc": 31062
     },
-    "GRPCRoute/RateLimit": {
+    "GRPCRoute/RateLimitLocal": {
       "grpc": 31063
     },
     "TCPRoute/Basic": {

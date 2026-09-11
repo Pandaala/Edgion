@@ -23,7 +23,7 @@ spec:
       SecRule REQUEST_URI "@contains /blocked" "id:1,phase:1,deny,status:403"
     mode: on
   requestPlugins:
-    - type: RateLimit           # Plugin type
+    - type: RateLimitLocal           # Plugin type
       config:                   # Plugin configuration (varies by type)
         rate: 100
         burst: 200
@@ -75,7 +75,7 @@ generation. See
 
 | Type | Description |
 |------|-------------|
-| `RateLimit` | Local rate limiting (CMS algorithm) |
+| `RateLimitLocal` | Local rate limiting (CMS algorithm) |
 | `RateLimitRedis` | Distributed rate limiting (Redis backend) |
 | `BandwidthLimit` | Bandwidth limiting |
 | `FaultInjection` | Probabilistic delay and abort for controlled fault testing |
@@ -127,7 +127,7 @@ Ordinary HTTP plugins execute across Pingora's 4 stages:
 
 | Stage | Trigger Time | Typical Plugins |
 |-------|--------------|-----------------|
-| `spec.requestPlugins` (`RequestFilter`) | After the request is received and before backend selection | Auth, RateLimit, CORS, routing plugins, `RequestBodyBuffer`, `ExtProc`, `Guardrail`, `Wasm` |
+| `spec.requestPlugins` (`RequestFilter`) | After the request is received and before backend selection | Auth, RateLimitLocal, CORS, routing plugins, `RequestBodyBuffer`, `ExtProc`, `Guardrail`, `Wasm` |
 | `spec.upstreamResponseFilterPlugins` (`UpstreamResponseFilter`) | After upstream response headers are received, synchronous | ResponseHeaderModifier, DSL, `Wasm` |
 | `spec.upstreamResponseBodyFilterPlugins` (`UpstreamResponseBodyFilter`) | For each upstream response body chunk | ResponseRewrite, `Wasm` read-only observation |
 | `spec.upstreamResponsePlugins` (`UpstreamResponse`) | After upstream response headers arrive, asynchronous | No directly configurable plugin currently; ExtProc installs an internal companion from its request entry |
@@ -275,11 +275,11 @@ Only Header and TraceId sources work at early Global/Gateway attachments; route 
 See [complete RequestId examples and bounds](../../../docs/en/user-guide/http-route/filters/edgion-plugins/request-id.md).
 ## Local rate-limit overflow composition
 
-RateLimit.config.onLimitExceeded is Reject (default) or Continue. Continue records
+RateLimitLocal.config.onLimitExceeded is Reject (default) or Continue. Continue records
 local excess without rejecting; a later request-stage RateLimitRedis can use the
 shared Condition `rateLimitExceeded: { pluginAlias }` (tagged YAML form:
 `type: rateLimitExceeded`, `pluginAlias: local-budget`) in conditions.run.
-The alias must name an active earlier RateLimit with Continue in the same
+The alias must name an active earlier RateLimitLocal with Continue in the same
 requestPlugins array. Other stages/consumers, skip/body/dye placement, and invalid
 references are rejected. Controller validation and Gateway sealing share this
 contract. Disabled consumers remain inert. Missing runtime producer evaluation

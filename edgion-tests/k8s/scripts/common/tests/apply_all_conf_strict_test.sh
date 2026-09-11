@@ -149,7 +149,7 @@ write_config_map "${UNIQUE_ROOT}/root.yaml" "root-unique" "root"
 write_config_map "${UNIQUE_ROOT}/Suite/nested.yaml" "nested-unique" "nested"
 write_config_map "${UNIQUE_ROOT}/EdgionPlugins/BasicAuth/DynamicTest/initial_grouped/initial.yaml" "dynamic-initial" "initial"
 write_config_map "${UNIQUE_ROOT}/EdgionPlugins/BasicAuth/DynamicTest/updates_grouped/update.yaml" "dynamic-update" "update"
-write_config_map "${UNIQUE_ROOT}/EdgionPlugins/RateLimit/DynamicTest/staged/delete_grouped/delete.yaml" "dynamic-delete" "delete"
+write_config_map "${UNIQUE_ROOT}/EdgionPlugins/RateLimitLocal/DynamicTest/staged/delete_grouped/delete.yaml" "dynamic-delete" "delete"
 write_config_map "${UNIQUE_ROOT}/base/Secret_edgion-test_edge-tls.yaml" "runtime-secret" "runtime"
 write_config_map "${UNIQUE_ROOT}/00-namespace.yaml" "bootstrap-resource" "bootstrap"
 

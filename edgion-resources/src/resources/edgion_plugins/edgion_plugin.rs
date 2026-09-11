@@ -11,7 +11,7 @@ use super::plugin_configs::{
     DslConfig, DynamicExternalUpstreamConfig, DynamicInternalUpstreamConfig, ExtProcConfig, FaultInjectionConfig,
     FormJsonTransformConfig, ForwardAuthConfig, GeoIpLocationConfig, GuardrailConfig, HeaderCertAuthConfig,
     HmacAuthConfig, IpRestrictionConfig, JsonSchemaValidationConfig, JweDecryptConfig, JwtAuthConfig, KeyAuthConfig,
-    LdapAuthConfig, MockConfig, OpenidConnectConfig, ProxyRewriteConfig, RateLimitConfig, RateLimitRedisConfig,
+    LdapAuthConfig, MockConfig, OpenidConnectConfig, ProxyRewriteConfig, RateLimitLocalConfig, RateLimitRedisConfig,
     RealIpConfig, RegionRouteConfig, RequestAccessPolicyConfig, RequestBodyBufferConfig, RequestIdConfig,
     RequestMirrorPluginConfig, RequestRestrictionConfig, ResponseRewriteConfig, WasmConfig, WebhookKeyGetConfig,
     DEFAULT_INSTANCE_MAX_BYTES,
@@ -48,9 +48,9 @@ fn selection_policy_dye(success: bool, policies: &[super::UpstreamFallback]) -> 
 ///
 /// Naming convention:
 /// - Variant names are the user-facing `type:` values (serde `tag = "type"`), so
-///   they carry NO `Edgion` prefix — e.g. `RateLimit`, `DynamicInternalUpstream`.
+///   they carry NO `Edgion` prefix — e.g. `RateLimitLocal`, `DynamicInternalUpstream`.
 /// - Gateway API standard plugins keep their spec names (RequestHeaderModifier, etc.);
-///   custom Edgion plugins use a plain PascalCase name (RateLimit, CtxSet, etc.).
+///   custom Edgion plugins use a plain PascalCase name (RateLimitLocal, CtxSet, etc.).
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", content = "config")]
 pub enum EdgionPlugin {
@@ -109,8 +109,8 @@ pub enum EdgionPlugin {
     FormJsonTransform(FormJsonTransformConfig),
     /// Response Rewrite filter (rewrite status code and headers before returning to client)
     ResponseRewrite(ResponseRewriteConfig),
-    /// RateLimit filter (CMS algorithm for high-performance rate limiting)
-    RateLimit(RateLimitConfig),
+    /// RateLimitLocal filter (CMS algorithm for high-performance rate limiting)
+    RateLimitLocal(RateLimitLocalConfig),
     /// RateLimitRedis filter (Redis-based precise cluster-wide rate limiting)
     RateLimitRedis(RateLimitRedisConfig),
     /// CtxSet filter (set context variables from various sources with extraction, transformation, and mapping)
@@ -272,7 +272,7 @@ impl EdgionPlugin {
             | FormJsonTransform(_)
             | RequestRestriction(_)
             | ResponseRewrite(_)
-            | RateLimit(_)
+            | RateLimitLocal(_)
             | RateLimitRedis(_)
             | CtxSet(_)
             | WebhookKeyGet(_)
@@ -339,7 +339,7 @@ impl EdgionPlugin {
             EdgionPlugin::FormJsonTransform(_) => "FormJsonTransform",
             EdgionPlugin::RequestRestriction(_) => "RequestRestriction",
             EdgionPlugin::ResponseRewrite(_) => "ResponseRewrite",
-            EdgionPlugin::RateLimit(_) => "RateLimit",
+            EdgionPlugin::RateLimitLocal(_) => "RateLimitLocal",
             EdgionPlugin::RateLimitRedis(_) => "RateLimitRedis",
             EdgionPlugin::CtxSet(_) => "CtxSet",
             EdgionPlugin::WebhookKeyGet(_) => "WebhookKeyGet",
@@ -476,7 +476,7 @@ impl EdgionPlugin {
             | EdgionPlugin::JsonSchemaValidation(_)
             | EdgionPlugin::FormJsonTransform(_)
             | EdgionPlugin::ResponseRewrite(_)
-            | EdgionPlugin::RateLimit(_)
+            | EdgionPlugin::RateLimitLocal(_)
             | EdgionPlugin::CtxSet(_)
             | EdgionPlugin::WebhookKeyGet(_)
             | EdgionPlugin::RealIp(_)
@@ -534,7 +534,7 @@ impl EdgionPlugin {
             | EdgionPlugin::JsonSchemaValidation(_)
             | EdgionPlugin::FormJsonTransform(_)
             | EdgionPlugin::ResponseRewrite(_)
-            | EdgionPlugin::RateLimit(_)
+            | EdgionPlugin::RateLimitLocal(_)
             | EdgionPlugin::CtxSet(_)
             | EdgionPlugin::WebhookKeyGet(_)
             | EdgionPlugin::RealIp(_)
@@ -619,7 +619,7 @@ impl EdgionPlugin {
             | EdgionPlugin::JsonSchemaValidation(_)
             | EdgionPlugin::FormJsonTransform(_)
             | EdgionPlugin::ResponseRewrite(_)
-            | EdgionPlugin::RateLimit(_)
+            | EdgionPlugin::RateLimitLocal(_)
             | EdgionPlugin::RateLimitRedis(_)
             | EdgionPlugin::CtxSet(_)
             | EdgionPlugin::WebhookKeyGet(_)
@@ -661,7 +661,7 @@ impl EdgionPlugin {
             EdgionPlugin::JsonSchemaValidation(c) => c.validation_error(),
             EdgionPlugin::FormJsonTransform(c) => c.validation_error(),
             EdgionPlugin::RequestRestriction(c) => c.validation_error(),
-            EdgionPlugin::RateLimit(c) => c.validation_error(),
+            EdgionPlugin::RateLimitLocal(c) => c.validation_error(),
             EdgionPlugin::RateLimitRedis(c) => c.validation_error(),
             EdgionPlugin::Mock(c) => c.validation_error(),
             EdgionPlugin::Csrf(c) => c.validation_error(),

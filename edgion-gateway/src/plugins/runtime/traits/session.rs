@@ -235,32 +235,32 @@ pub trait PluginSession: Send + Sync {
     }
 
     /// Begin a resource-local admission frame. Unsupported adapters remain unavailable.
-    fn begin_rate_limit_frame(
+    fn begin_rate_limit_local_frame(
         &mut self,
         _count: usize,
-    ) -> Option<crate::plugins::runtime::conditions::rate_limit_outcome::RateLimitFrame> {
+    ) -> Option<crate::plugins::runtime::conditions::rate_limit_local_outcome::RateLimitLocalFrame> {
         None
     }
 
     /// Restore the enclosing resource's admission frame.
-    fn end_rate_limit_frame(
+    fn end_rate_limit_local_frame(
         &mut self,
-        _frame: Option<crate::plugins::runtime::conditions::rate_limit_outcome::RateLimitFrame>,
+        _frame: Option<crate::plugins::runtime::conditions::rate_limit_local_outcome::RateLimitLocalFrame>,
     ) {
     }
 
     /// Read a compiled producer slot without exposing it as a writable ctx variable.
-    fn rate_limit_outcome(
+    fn rate_limit_local_outcome(
         &self,
         _slot: usize,
-    ) -> crate::plugins::runtime::conditions::rate_limit_outcome::RateLimitOutcome {
-        crate::plugins::runtime::conditions::rate_limit_outcome::RateLimitOutcome::NotEvaluated
+    ) -> crate::plugins::runtime::conditions::rate_limit_local_outcome::RateLimitLocalOutcome {
+        crate::plugins::runtime::conditions::rate_limit_local_outcome::RateLimitLocalOutcome::NotEvaluated
     }
 
-    fn set_rate_limit_outcome(
+    fn set_rate_limit_local_outcome(
         &mut self,
         _slot: usize,
-        _outcome: crate::plugins::runtime::conditions::rate_limit_outcome::RateLimitOutcome,
+        _outcome: crate::plugins::runtime::conditions::rate_limit_local_outcome::RateLimitLocalOutcome,
     ) -> bool {
         false
     }
@@ -730,7 +730,7 @@ pub trait PluginSession: Send + Sync {
 
     /// Read one optional string from the request using a KeyGet accessor.
     ///
-    /// Synchronous and I/O-free. Used by RateLimit, Conditions, and other plugins.
+    /// Synchronous and I/O-free. Used by RateLimitLocal, Conditions, and other plugins.
     ///
     /// # Returns
     /// * `Some(String)` - The extracted value

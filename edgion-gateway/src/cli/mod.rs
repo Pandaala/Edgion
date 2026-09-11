@@ -515,11 +515,11 @@ impl EdgionGatewayCli {
             );
         }
 
-        // 5. Initialize RateLimit / cache / access-log sensitive global configurations
+        // 5. Initialize RateLimitLocal / cache / access-log sensitive global configurations
         let mirror_limits = config.request_mirror.resolve().map_err(|error| anyhow!(error))?;
         init_global_budget(&mirror_limits)
             .map_err(|error| anyhow!("Failed to initialize request_mirror budget: {error}"))?;
-        edgion_resources::rate_limit_config::init_rate_limit_global_config(&config.rate_limit);
+        edgion_resources::rate_limit_local_config::init_rate_limit_local_global_config(&config.rate_limit_local);
         config::init_lru_cache_global_config(&config.lru_cache)
             .map_err(|error| anyhow::anyhow!("Invalid lru_cache configuration: {error}"))?;
         config::init_tiny_ufo_ttl_cache_global_config(&config.tiny_ufo_ttl_cache)

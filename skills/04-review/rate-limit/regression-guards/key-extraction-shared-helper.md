@@ -1,6 +1,6 @@
 ---
 name: key-extraction-shared-helper
-description: Decision rule for findings about duplicated rate-limit key extraction across the RateLimit and RateLimitRedis plugins, divergent key-miss log tags, or proposals to change the shared helper's return type. Read this file first when reviewing those findings.
+description: Decision rule for findings about duplicated rate-limit key extraction across the RateLimitLocal and RateLimitRedis plugins, divergent key-miss log tags, or proposals to change the shared helper's return type. Read this file first when reviewing those findings.
 knowledge_type: regression-guards
 ---
 

@@ -19,7 +19,7 @@ The discriminating signal is **not only** the hash-compute time. The known-user 
 - **Dummy verify is an anti-pattern in gateway scenarios**: even with cheap hashes, running an extra verify for unknown users amplifies wasted CPU under enumeration traffic; with bcrypt-class hashes it is even worse (~200ms / 1 core per probe)
 - **Peer gateway products consistently do not implement it**: Traefik (`basicauth`), Nginx (`auth_basic`), Envoy (`basic_auth` filter), Kong (`basic-auth` plugin), HAProxy (`http-request auth`), APISIX (`basic-auth`) all do not perform code-layer dummy verify; this is "the mainstream gateway-layer practice"
 - **Spring Security / Django doing dummy verify** is because in framework-layer single-machine validation scenarios there is no CPU-amplification concern, which is not equivalent to the gateway scenario
-- **Edgion's mitigation is at the config layer**: `BasicAuthConfig.authFailureDelayMs` exists and is available; the `RateLimit` plugin can stack on top to limit enumeration rate
+- **Edgion's mitigation is at the config layer**: `BasicAuthConfig.authFailureDelayMs` exists and is available; the `RateLimitLocal` plugin can stack on top to limit enumeration rate
 
 ## Decision Rule
 

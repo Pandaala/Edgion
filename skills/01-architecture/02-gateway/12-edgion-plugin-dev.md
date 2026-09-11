@@ -77,7 +77,7 @@ The most common pitfall is mixing the two paths:
 
 | Phase | trait | When it runs | Common uses |
 |-------|-------|--------------|-------------|
-| Request phase | `RequestFilter` | Before forwarding to upstream | Auth, RateLimit, Rewrite, Mirror, direct reject |
+| Request phase | `RequestFilter` | Before forwarding to upstream | Auth, RateLimitLocal, Rewrite, Mirror, direct reject |
 | Response header phase | `UpstreamResponseFilter` | When upstream response headers arrive | Modify response headers, fast decision based on header |
 | Async final response header phase | `UpstreamResponse` | After synchronous header filtering, retry arbitration, and normalization; before downstream header commit and body streaming | Await header decisions, modify headers, install bounded streaming companions |
 | Response body phase | `UpstreamResponseBodyFilter` | Data callbacks and terminal completion without trailers | Bandwidth limit, chunk inspection (**the trait signature deliberately omits `&mut PluginLog`**; the per-chunk path must allocate zero — see [05-plugin-system.md](05-plugin-system.md#-critical-constraint-no-pluginlog-in-body-phase-per-chunk-path-must-allocate-zero)) |
@@ -635,13 +635,13 @@ Cover these four layers in priority order:
 
 ### If the plugin supports hot reload (`partial_update` / `full_set`)
 
-Verifying initial state is not enough — add a dynamic scenario that exercises the "YAML update → runtime behavior change" path. Templates: remove a credential (BasicAuth) or switch an enum field (RateLimit `onKeyMiss`).
+Verifying initial state is not enough — add a dynamic scenario that exercises the "YAML update → runtime behavior change" path. Templates: remove a credential (BasicAuth) or switch an enum field (RateLimitLocal `onKeyMiss`).
 
-- Look at existing scenarios to get started: `edgion-tests/src/client/dynamic/scenarios/basic_auth_dynamic.rs` / `rate_limit_dynamic.rs`.
+- Look at existing scenarios to get started: `edgion-tests/src/client/dynamic/scenarios/basic_auth_dynamic.rs` / `rate_limit_local_dynamic.rs`.
 - conf directory convention: `edgion-tests/integration/conf/EdgionPlugins/<Plugin>/DynamicTest/{initial,updates}/` (`load_conf.sh` automatically skips `updates/` and `delete/`).
 - For the detailed steps, CLI entry, and registration sites: [../../05-testing/01-integration-testing.md "Dynamic (hot reload) testing" section](../../05-testing/01-integration-testing.md).
 
-> **Pitfalls**: state-cached fields such as RateLimit sliding-window counters can false-pass on hot reload (the old cache hits). Prefer verifying **logic-branch** changes such as "the entire ref is removed" or "an enum field is toggled" — do not just verify "password content modified" or "a rate value changed". (BasicAuth no longer keeps a result cache after bcrypt was dropped, so the structural-reload pattern is now mostly a regression-safety template for it rather than a cache-bypass workaround.)
+> **Pitfalls**: state-cached fields such as RateLimitLocal sliding-window counters can false-pass on hot reload (the old cache hits). Prefer verifying **logic-branch** changes such as "the entire ref is removed" or "an enum field is toggled" — do not just verify "password content modified" or "a rate value changed". (BasicAuth no longer keeps a result cache after bcrypt was dropped, so the structural-reload pattern is now mostly a regression-safety template for it rather than a cache-bypass workaround.)
 
 Other references:
 

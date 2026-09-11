@@ -51,7 +51,7 @@ Gateway 对经过该资源的请求返回 HTTP 500，包括热更新为非法值
 | [mock.md](mock.md) | Mock 响应 |
 | [openid-connect.md](openid-connect.md) | OpenID Connect 认证 |
 | [proxy-rewrite.md](proxy-rewrite.md) | 代理重写 |
-| [rate-limit.md](rate-limit.md) | 限流（内存，近似） |
+| [rate-limit-local.md](rate-limit-local.md) | 限流（内存，近似） |
 | [rate-limit-redis.md](rate-limit-redis.md) | 限流（Redis，精确，集群级） |
 | [real-ip.md](real-ip.md) | 获取客户端真实 IP |
 | [region-route.md](region-route.md) | 区域路由 |

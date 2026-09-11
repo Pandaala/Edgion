@@ -5,7 +5,7 @@ AiBackendWeighted	EdgionBackend/Weighted/DynamicTest	initial	edgionplugins.edgio
 BasicAuthDynamic	EdgionPlugins/BasicAuth/DynamicTest	initial	edgionplugins.edgion.io	edgionplugins	edgion-default	basic-auth-dynamic
 BasicAuthDynamicGrouped	EdgionPlugins/BasicAuth/DynamicTest	initial_grouped	edgionplugins.edgion.io	edgionplugins	edgion-default	basic-auth-dynamic-grouped
 BodyDynamic	EdgionPlugins/BodyDynamic/DynamicTest	updates/to_reset	edgionplugins.edgion.io	edgionplugins	edgion-default	body-dynamic
-RateLimitDynamic	EdgionPlugins/RateLimit/DynamicTest	initial	edgionplugins.edgion.io	edgionplugins	edgion-default	rate-limit-dynamic
+RateLimitLocalDynamic	EdgionPlugins/RateLimitLocal/DynamicTest	initial	edgionplugins.edgion.io	edgionplugins	edgion-default	rate-limit-dynamic
 BtlspRefFlap	Status/BackendTLSPolicy/RefFlap/DynamicTest	initial	backendtlspolicies.gateway.networking.k8s.io	backendtlspolicies	edgion-test	btlsp-flap
 CanaryHotSwap	EdgionPlugins/Canary/HotSwap/DynamicTest	initial	edgionplugins.edgion.io	edgionplugins	edgion-default	canary-hotswap-switch
 ConditionRefsDynamic	EdgionPlugins/ConditionRefsDynamic/DynamicTest	initial	edgionplugins.edgion.io	edgionplugins	edgion-default	condition-refs-dynamic

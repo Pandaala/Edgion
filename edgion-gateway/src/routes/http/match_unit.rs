@@ -238,7 +238,7 @@ pub struct HttpRouteRuleUnit {
 
 /// Per-rule compiled runtime, built ONCE per rule. The `Arc<PluginRuntime>` and
 /// the per-backend `plugin_runtime`s MUST be shared across all of a rule's
-/// match-item units — some plugins (in-memory RateLimit) own per-rule mutable
+/// match-item units — some plugins (in-memory RateLimitLocal) own per-rule mutable
 /// state, so a fresh runtime per match-item would split that state. See
 /// `compile_http_rule`.
 pub struct HttpRuleRuntime {
@@ -254,7 +254,7 @@ impl HttpRouteRuleUnit {
     /// Compile a rule's runtime ONCE (rule plugin chain + compiled backends) from
     /// the rule/backend `filters`. Call once per rule (above the hostname/match
     /// fan-out) and share the resulting `Arc`s into every unit — some plugins
-    /// (in-memory RateLimit) own per-rule state, so the runtime must NOT be rebuilt
+    /// (in-memory RateLimitLocal) own per-rule state, so the runtime must NOT be rebuilt
     /// per match-item/hostname.
     pub fn compile_http_rule(rule: &HTTPRouteRule, namespace: &str) -> HttpRuleRuntime {
         // Route-level `edgion.io/mirror-*` annotation values, pre-parsed onto

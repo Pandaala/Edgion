@@ -48,7 +48,7 @@ mod path_normalization;
 mod plugin_condition;
 mod plugin_validation_status;
 mod proxy_rewrite;
-mod rate_limit;
+mod rate_limit_local;
 mod rate_limit_redis;
 mod real_ip;
 mod region_route;
@@ -130,7 +130,9 @@ pub use path_normalization::{
 pub use plugin_condition::{AllConditionsTestSuite, PluginConditionTestSuite};
 pub use plugin_validation_status::PluginValidationStatusTestSuite;
 pub use proxy_rewrite::ProxyRewriteTestSuite;
-pub use rate_limit::{RateLimitDynamicInitialTestSuite, RateLimitDynamicUpdateTestSuite, RateLimitTestSuite};
+pub use rate_limit_local::{
+    RateLimitLocalDynamicInitialTestSuite, RateLimitLocalDynamicUpdateTestSuite, RateLimitLocalTestSuite,
+};
 pub use rate_limit_redis::RateLimitRedisTestSuite;
 pub use real_ip::RealIpPluginTestSuite;
 pub use region_route::RegionRouteTestSuite;

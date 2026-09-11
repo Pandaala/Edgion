@@ -20,7 +20,7 @@
 //!
 //! - **Process-wide singletons**: `reqwest::Client` maintains an internal connection pool.
 //!   The default and RequestMirror clients each share one pool across all of their consumers.
-//! - **OnceLock lazy initialization**: Consistent with the project's pattern (e.g., RateLimit).
+//! - **OnceLock lazy initialization**: Consistent with the project's pattern (e.g., RateLimitLocal).
 //!   Each client is created only on first use.
 //! - **No automatic redirects**: Auth-type requests should not follow redirects automatically.
 //!   A 302 from an auth service typically indicates an authentication failure or redirect to login.

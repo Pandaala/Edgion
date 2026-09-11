@@ -156,7 +156,7 @@ Another common pattern is passing data through `PluginSession` ctx variables. A 
 For example:
 
 - RealIp writes normalized client information
-- RateLimit or auth-style plugins consume that context
+- RateLimitLocal or auth-style plugins consume that context
 
 If your plugin depends on earlier plugin results, prefer ctx variables instead of reparsing the whole request repeatedly.
 

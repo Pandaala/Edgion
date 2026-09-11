@@ -174,17 +174,19 @@ pub fn collect_rate_limit_dependency_errors(entries: &[RequestFilterEntry], erro
             });
             let target = targets.next();
             let reason = match target {
-                None => Some("must reference an active RateLimit in the same requestPlugins array"),
+                None => Some("must reference an active RateLimitLocal in the same requestPlugins array"),
                 Some(_) if targets.next().is_some() => Some("must reference a unique active alias"),
                 Some((target_index, _)) if target_index >= index => Some("must reference an earlier entry"),
                 Some((_, target)) => match &target.plugin {
-                    EdgionPlugin::RateLimit(config)
+                    EdgionPlugin::RateLimitLocal(config)
                         if config.on_limit_exceeded == super::plugin_configs::OnLimitExceeded::Continue =>
                     {
                         None
                     }
-                    EdgionPlugin::RateLimit(_) => Some("must reference a RateLimit with onLimitExceeded: Continue"),
-                    _ => Some("must reference a RateLimit entry"),
+                    EdgionPlugin::RateLimitLocal(_) => {
+                        Some("must reference a RateLimitLocal with onLimitExceeded: Continue")
+                    }
+                    _ => Some("must reference a RateLimitLocal entry"),
                 },
             };
             if let Some(reason) = reason {

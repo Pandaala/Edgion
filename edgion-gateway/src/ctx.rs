@@ -2131,7 +2131,7 @@ impl Default for PluginExecutionState {
 /// state allocation.
 #[derive(Default)]
 struct PluginAuxState {
-    rate_limit_outcomes: crate::plugins::runtime::conditions::rate_limit_outcome::RateLimitOutcomes,
+    rate_limit_local_outcomes: crate::plugins::runtime::conditions::rate_limit_local_outcome::RateLimitLocalOutcomes,
     ctx_map: HashMap<String, String>,
     pending_response_header_ops: Vec<PendingHeaderOp>,
     deferred_credential_mutations: DeferredCredentialMutations,
@@ -4077,39 +4077,39 @@ impl EdgionHttpContext {
     // ========== Local rate-limit condition outcomes ==========
 
     /// Allocate condition state only for a runtime containing bound producers.
-    pub(crate) fn begin_rate_limit_frame(
+    pub(crate) fn begin_rate_limit_local_frame(
         &mut self,
         count: usize,
-    ) -> Option<crate::plugins::runtime::conditions::rate_limit_outcome::RateLimitFrame> {
-        (count > 0).then(|| self.ensure_plugin_aux().rate_limit_outcomes.begin(count))
+    ) -> Option<crate::plugins::runtime::conditions::rate_limit_local_outcome::RateLimitLocalFrame> {
+        (count > 0).then(|| self.ensure_plugin_aux().rate_limit_local_outcomes.begin(count))
     }
 
-    pub(crate) fn end_rate_limit_frame(
+    pub(crate) fn end_rate_limit_local_frame(
         &mut self,
-        frame: Option<crate::plugins::runtime::conditions::rate_limit_outcome::RateLimitFrame>,
+        frame: Option<crate::plugins::runtime::conditions::rate_limit_local_outcome::RateLimitLocalFrame>,
     ) {
         if let (Some(frame), Some(aux)) = (frame, self.plugin_aux_mut()) {
-            aux.rate_limit_outcomes.end(frame);
+            aux.rate_limit_local_outcomes.end(frame);
         }
     }
 
-    pub(crate) fn rate_limit_outcome(
+    pub(crate) fn rate_limit_local_outcome(
         &self,
         slot: usize,
-    ) -> crate::plugins::runtime::conditions::rate_limit_outcome::RateLimitOutcome {
+    ) -> crate::plugins::runtime::conditions::rate_limit_local_outcome::RateLimitLocalOutcome {
         self.plugin_aux().map_or(
-            crate::plugins::runtime::conditions::rate_limit_outcome::RateLimitOutcome::NotEvaluated,
-            |aux| aux.rate_limit_outcomes.get(slot),
+            crate::plugins::runtime::conditions::rate_limit_local_outcome::RateLimitLocalOutcome::NotEvaluated,
+            |aux| aux.rate_limit_local_outcomes.get(slot),
         )
     }
 
-    pub(crate) fn set_rate_limit_outcome(
+    pub(crate) fn set_rate_limit_local_outcome(
         &mut self,
         slot: usize,
-        outcome: crate::plugins::runtime::conditions::rate_limit_outcome::RateLimitOutcome,
+        outcome: crate::plugins::runtime::conditions::rate_limit_local_outcome::RateLimitLocalOutcome,
     ) -> bool {
         self.plugin_aux_mut()
-            .is_some_and(|aux| aux.rate_limit_outcomes.set(slot, outcome))
+            .is_some_and(|aux| aux.rate_limit_local_outcomes.set(slot, outcome))
     }
 
     // ========== Context variable methods ==========
@@ -5008,10 +5008,10 @@ mod plugin_request_state_tests {
     #[test]
     fn ordinary_context_keeps_plugin_aux_unallocated_on_reads() {
         let mut ctx = EdgionHttpContext::new();
-        assert!(ctx.begin_rate_limit_frame(0).is_none());
+        assert!(ctx.begin_rate_limit_local_frame(0).is_none());
         assert_eq!(
-            ctx.rate_limit_outcome(0),
-            crate::plugins::runtime::conditions::rate_limit_outcome::RateLimitOutcome::NotEvaluated
+            ctx.rate_limit_local_outcome(0),
+            crate::plugins::runtime::conditions::rate_limit_local_outcome::RateLimitLocalOutcome::NotEvaluated
         );
         let (_, allocations) = crate::test_allocation_counter::count_allocation_stats(|| {
             assert!(!ctx.has_plugin_aux());

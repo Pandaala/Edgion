@@ -8,9 +8,9 @@ knowledge_type: regression-guards
 
 ## Conclusion and scope
 
-RateLimit.config.onLimitExceeded defaults to Reject. Continue lets local excess
+RateLimitLocal.config.onLimitExceeded defaults to Reject. Continue lets local excess
 reach later filters without a local rejection or excess quota headers. The shared
-Condition rateLimitExceeded references an earlier active Continue RateLimit by
+Condition rateLimitExceeded references an earlier active Continue RateLimitLocal by
 pluginAlias, only within the same EdgionPlugins requestPlugins array and only in
 a request RateLimitRedis entry's run conditions. Local passes skip that Redis
 consumer; excess requests use its existing admission and failure policy.
@@ -25,7 +25,7 @@ trigger engine. Shared validate::collect_rate_limit_dependency_errors and the
 placement profile preserve Controller/Gateway error parity and invalid-resource
 sealing. Gateway compiled conditions bind aliases to numeric producer slots.
 
-runtime/conditions/rate_limit_outcome.rs owns the typed outcome/frame mechanism;
+runtime/conditions/rate_limit_local_outcome.rs owns the typed outcome/frame mechanism;
 ctx.rs stores its sparse request data. Both PluginRuntime and ExtensionRef request
 dispatch establish and restore invocation frames. Without the ExtensionRef seam,
 ordinary route references would never establish the state. A reused context or
@@ -58,7 +58,7 @@ billing, or exact sliding-window bound from a token-bucket capacity.
 Current implementation verification: resource overflow tests (5), existing
 condition tests (27), Gateway runtime tests (364), request-state tests (7), and
 the real Redis integration test (1) passed. The Redis test lives in
-edgion-gateway/tests/rate_limit_overflow_redis.rs and uses the standard Redis
+edgion-gateway/tests/rate_limit_local_overflow_redis.rs and uses the standard Redis
 fixture; network IO stays outside library unit tests. Workspace all-target check
 and Clippy passed (Clippy retains existing warnings), as did formatting,
 document consistency, SSA, metrics, and Pingora-source guards.
@@ -69,11 +69,11 @@ rateLimitExceeded and pluginAlias. Missing declarations caused an actual
 Controller schema rejection before the CRD was corrected. Structural CRD tests
 (14) and condition-specific guards (7) passed after correction. The complete
 CRD guard failed its pre-existing KeyGet count/traceId drift during that
-verification. The remaining cardinality issue is tracked in
-[the separate task](../../../../tasks/todo/key-get-crd-coverage-stale-cardinality.md).
+verification. The remaining cardinality issue is tracked in the separate pending
+KeyGet traceId/CRD drift task.
 Do not report that whole guard as passing without fresh verification.
 
-RateLimitOverflowDynamic passed against the current Controller/Gateway binaries:
+RateLimitLocalOverflowDynamic passed against the current Controller/Gateway binaries:
 absent, initial local allowance/Redis Deny, invalid-reference 500, repaired alias,
 and final absence. Local execution used isolated temporary ports and the existing
 loopback-upstream override for its local backend; the registered scenario itself
@@ -87,7 +87,7 @@ whenever the context or mock/session adapter is reorganized.
 ## Resolution references
 
 - rate-limit-plus: implemented and independently reviewed; verification above.
-- edgion-gateway/src/plugins/runtime/conditions/rate_limit_outcome.rs
+- edgion-gateway/src/plugins/runtime/conditions/rate_limit_local_outcome.rs
 - edgion-gateway/src/plugins/runtime/conditions/evaluator.rs
 - edgion-gateway/src/plugins/runtime/gateway_api_filters/extension_ref.rs
 - edgion-resources/src/resources/edgion_plugins/validate.rs

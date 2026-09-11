@@ -7,7 +7,7 @@ Global plugins not bound to a specific Route type, configured independently via 
 | Document | Description |
 |----------|-------------|
 | [real-ip.md](real-ip.md) | RealIp — Obtain client real IP |
-| [rate-limit.md](rate-limit.md) | RateLimit — Global rate limiting |
+| [rate-limit-local.md](rate-limit-local.md) | RateLimitLocal — Global rate limiting |
 | [region-route.md](region-route.md) | RegionRoute — Region-based routing |
 | [openid-connect.md](openid-connect.md) | OpenID Connect — OIDC authentication |
 | [ldap-auth.md](ldap-auth.md) | LDAP Auth — LDAP authentication |

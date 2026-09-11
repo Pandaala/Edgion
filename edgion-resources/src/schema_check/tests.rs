@@ -300,7 +300,7 @@ fn pathologically_wide_document_terminates_and_stays_bounded() {
 
 use crate::resources::edgion_plugins::plugin_configs::{
     DebugAccessLogToHeaderConfig, DirectEndpointConfig, DslConfig, FaultInjectionConfig, GeoIpLocationConfig,
-    IpRestrictionConfig, ProxyRewriteConfig, RateLimitConfig, RequestBodyBufferConfig, RequestRestrictionConfig,
+    IpRestrictionConfig, ProxyRewriteConfig, RateLimitLocalConfig, RequestBodyBufferConfig, RequestRestrictionConfig,
 };
 use crate::resources::edgion_plugins::{EdgionPlugin, EdgionPluginsSpec, RequestFilterEntry};
 
@@ -310,7 +310,7 @@ fn real_schema_legitimate_config_across_ten_plugin_types_has_zero_findings() {
         RequestFilterEntry::new(EdgionPlugin::DirectEndpoint(DirectEndpointConfig::default())),
         RequestFilterEntry::new(EdgionPlugin::Dsl(DslConfig::default())),
         RequestFilterEntry::new(EdgionPlugin::ProxyRewrite(ProxyRewriteConfig::default())),
-        RequestFilterEntry::new(EdgionPlugin::RateLimit(RateLimitConfig::default())),
+        RequestFilterEntry::new(EdgionPlugin::RateLimitLocal(RateLimitLocalConfig::default())),
         RequestFilterEntry::new(EdgionPlugin::RequestRestriction(RequestRestrictionConfig::default())),
         RequestFilterEntry::new(EdgionPlugin::GeoIpLocation(GeoIpLocationConfig::default())),
         RequestFilterEntry::new(EdgionPlugin::IpRestriction(IpRestrictionConfig::default())),

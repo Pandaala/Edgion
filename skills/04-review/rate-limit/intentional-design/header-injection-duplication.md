@@ -1,6 +1,6 @@
 ---
 name: header-injection-duplication
-description: Decision rule for findings about duplicated rate-limit response-header injection across the RateLimit and RateLimitRedis plugins, or proposals to extract a shared write_rate_limit_headers / write_rate_limit_rejection_headers helper. Read this file first when reviewing those findings.
+description: Decision rule for findings about duplicated rate-limit response-header injection across the RateLimitLocal and RateLimitRedis plugins, or proposals to extract a shared write_rate_limit_headers / write_rate_limit_rejection_headers helper. Read this file first when reviewing those findings.
 knowledge_type: intentional-design
 ---
 
@@ -22,7 +22,7 @@ Fix suggestions of the form "extract `write_rate_limit_headers(session, ..)` /
 
 **1. The two emitters diverge by design, not by accident.**
 
-- **Reset on the allow path**: `rate_limit` emits `X-RateLimit-Reset`; `rate_limit_redis`
+- **Reset on the allow path**: `rate_limit_local` emits `X-RateLimit-Reset`; `rate_limit_redis`
   intentionally omits it — the Lua scripts return only `{allowed, current, remaining,
   retry_ms}`, so there is no precise window-reset timestamp for an allowed request.
 - **`Retry-After` emission contract**: both plugins now share the same RFC 7231 §7.1.3
@@ -96,11 +96,11 @@ Re-open this decision only if:
 - plugins-http-F004 (2026-05-26) — this finding, accepted tradeoff.
 - plugins-http-F003 — sibling key-extraction (extracted): [key-extraction-shared-helper.md](../regression-guards/key-extraction-shared-helper.md).
 - g4-005 — Redis `Retry-After` rounding / `ZERO` omission decision.
-- plugins-http-FB01 (2026-05-27) — local `rate_limit::reject_request` gained the same
+- plugins-http-FB01 (2026-05-27) — local `rate_limit_local::reject_request` gained the same
   `Duration::ZERO` omit + sub-second ceil guard, eliminating the RFC 7231 §7.1.3
   divergence on `OnKeyMiss::Deny`.
 - link-sys-F008 — same redundancy class, "collapse divergent arms" declined.
-- Source: `edgion-gateway/src/plugins/http/rate_limit/plugin.rs:104-202`,
+- Source: `edgion-gateway/src/plugins/http/rate_limit_local/plugin.rs:104-202`,
   `edgion-gateway/src/plugins/http/rate_limit_redis/plugin.rs:372-467`.
 </content>
 </invoke>

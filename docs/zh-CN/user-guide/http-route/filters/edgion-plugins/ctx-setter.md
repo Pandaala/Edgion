@@ -6,7 +6,7 @@
 
 ## 什么是上下文变量？
 
-**上下文变量**是一个插件在请求上计算并存储的命名值，同一请求的后续插件可以读取它。CtxSet 从请求头、Cookie、客户端 IP 等来源提取值，可选地对其进行转换，并以指定名称存储。下游插件（如 RateLimit 和 DSL）则通过该名称消费这个值——例如以租户为维度构建限流 key。
+**上下文变量**是一个插件在请求上计算并存储的命名值，同一请求的后续插件可以读取它。CtxSet 从请求头、Cookie、客户端 IP 等来源提取值，可选地对其进行转换，并以指定名称存储。下游插件（如 RateLimitLocal 和 DSL）则通过该名称消费这个值——例如以租户为维度构建限流 key。
 
 ## 快速开始
 
@@ -186,9 +186,9 @@ spec:
               default: "tier_3"
 ```
 
-### 4. 串联：CtxSet 为下游 RateLimit 提供 key
+### 4. 串联：CtxSet 为下游 RateLimitLocal 提供 key
 
-CtxSet 在请求阶段先于 RateLimit 运行，因此其设置的变量可被 RateLimit 通过 `ctx` key 来源（`key: { type: ctx, name: <name> }`）读取。两个插件均使用统一的 `KeyGet` 访问器。
+CtxSet 在请求阶段先于 RateLimitLocal 运行，因此其设置的变量可被 RateLimitLocal 通过 `ctx` key 来源（`key: { type: ctx, name: <name> }`）读取。两个插件均使用统一的 `KeyGet` 访问器。
 
 ```yaml
 apiVersion: edgion.io/v1
@@ -207,8 +207,8 @@ spec:
               type: header
               name: "X-Tenant"
             default: "public"
-    # 2. RateLimit 读取上面设置的变量
-    - type: RateLimit
+    # 2. RateLimitLocal 读取上面设置的变量
+    - type: RateLimitLocal
       config:
         rate: 100
         window: 60
@@ -232,7 +232,7 @@ spec:
 
 ### Q3：哪些下游插件可以读取这些变量？
 
-**A**：所有在 CtxSet 之后运行的请求阶段插件。RateLimit 通过 key（`{ type: ctx, name: <name> }`）读取，DSL 通过 context API 读取。顺序很重要——请将 CtxSet 放在同一阶段数组中消费者的前面。
+**A**：所有在 CtxSet 之后运行的请求阶段插件。RateLimitLocal 通过 key（`{ type: ctx, name: <name> }`）读取，DSL 通过 context API 读取。顺序很重要——请将 CtxSet 放在同一阶段数组中消费者的前面。
 
 ---
 
@@ -281,7 +281,7 @@ spec:
             transform:
               case: lower
             default: "public"
-    - type: RateLimit
+    - type: RateLimitLocal
       config:
         rate: 100
         window: 60
@@ -294,6 +294,6 @@ spec:
 ## 相关链接
 
 - [Webhook KeyGet](./webhook-key-get.md)
-- [限流插件](./rate-limit.md)
+- [限流插件](./rate-limit-local.md)
 - [DSL 插件](./dsl/README.md)
 - [过滤器目录](../README.md)

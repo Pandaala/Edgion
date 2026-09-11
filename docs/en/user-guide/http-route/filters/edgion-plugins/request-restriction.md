@@ -473,5 +473,5 @@ If you run into problems:
 ## Related Links
 
 - [IpRestriction](./ip-restriction.md) — IP access control
-- [RateLimit](./rate-limit.md) — Rate limiting
+- [RateLimitLocal](./rate-limit-local.md) — Rate limiting
 - [Plugin Conditions](./conditions.md) — shared Condition vocabulary

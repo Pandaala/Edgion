@@ -176,7 +176,7 @@ requestPlugins:
 
 ### ✅ 推荐
 
-- 把 WebhookKeyGet 放在每一个消费该 ctx 变量的插件（KeyAuth、RateLimit、DSL）**之前**。
+- 把 WebhookKeyGet 放在每一个消费该 ctx 变量的插件（KeyAuth、RateLimitLocal、DSL）**之前**。
 - 仅当 webhook 才是预期来源时，把 KeyAuth `keySources` 配成 `{ type: ctx, name: … }`——不要顺便再列一个客户端可控的 header，除非这是有意为之。
 - `default` 只用于非安全类补全。不要把认证 key 的 default 设成有效凭据。
 

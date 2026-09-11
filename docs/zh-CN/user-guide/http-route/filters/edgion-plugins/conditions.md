@@ -220,7 +220,7 @@ conditions:
 在请求阶段 `RateLimitRedis` 条目的 `conditions.run` 中使用
 `{"type":"rateLimitExceeded","pluginAlias":"local-budget"}`。alias 必须指向同一
 资源 `requestPlugins` 数组内、顺序在前、处于启用状态且配置了
-`onLimitExceeded: Continue` 的 `RateLimit`。不能引用其他资源或阶段。
+`onLimitExceeded: Continue` 的 `RateLimitLocal`。不能引用其他资源或阶段。
 `skip`、body gate、dye 及其他消费者不支持此谓词。无效的活动条件会导致配置校验
 失败，资源在运行时拒绝请求；禁用条目继续保持不执行、不校验其内部条件的语义。
 
