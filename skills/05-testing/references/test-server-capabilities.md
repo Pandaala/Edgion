@@ -246,6 +246,8 @@ Connection identity is exposed three redundant ways on purpose. "The pooled conn
 Do not build another auth mock for auth-related tests; check the following first:
 
 - `/verify`
+- `/verify-deny-multivalue` — fixed 401 with two ordered authentication challenges,
+  two separate cookies (including clearance), and an unselected-header probe
 - `/oidc/.well-known/openid-configuration`
 - `/oidc/jwks`
 - `/oidc/introspect`

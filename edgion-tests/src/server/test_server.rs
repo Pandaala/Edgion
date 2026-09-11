@@ -3579,6 +3579,7 @@ async fn start_auth_server(port: u16) -> Result<()> {
 
     let app = Router::new()
         .route("/verify", get(auth_verify_handler).post(auth_verify_handler))
+        .route("/verify-deny-multivalue", get(auth_deny_multivalue_handler))
         .route("/oidc/.well-known/openid-configuration", get(oidc_discovery_handler))
         .route("/oidc/jwks", get(oidc_jwks_handler))
         .route(
@@ -3593,6 +3594,25 @@ async fn start_auth_server(port: u16) -> Result<()> {
     axum::serve(listener, app).await?;
 
     Ok(())
+}
+
+/// Fixed denial fixture: keep repeated fields separate, including a cookie clearance.
+async fn auth_deny_multivalue_handler() -> impl IntoResponse {
+    use axum::http::{HeaderValue, StatusCode};
+
+    let mut response = (StatusCode::UNAUTHORIZED, "Authentication denied\n").into_response();
+    let headers = response.headers_mut();
+    for challenge in ["Bearer realm=\"primary\"", "Basic realm=\"fallback\""] {
+        headers.append("www-authenticate", HeaderValue::from_static(challenge));
+    }
+    for cookie in [
+        "session=renewed; Path=/; HttpOnly; SameSite=Lax",
+        "csrf=; Path=/; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT",
+    ] {
+        headers.append("set-cookie", HeaderValue::from_static(cookie));
+    }
+    headers.insert("x-auth-unselected", HeaderValue::from_static("not-for-client"));
+    response
 }
 
 async fn oidc_discovery_handler(req: AxumRequest<Body>) -> impl IntoResponse {

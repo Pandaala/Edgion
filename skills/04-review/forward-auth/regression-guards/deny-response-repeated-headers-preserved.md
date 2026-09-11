@@ -40,6 +40,46 @@ multi-value `WWW-Authenticate`, separate `Set-Cookie` fields, case-insensitive
 configured-name deduplication, invalid-text filtering, unselected exclusion,
 status and content type, zero-copy body ownership, end-of-stream, and shutdown.
 
+`ForwardAuthTestSuite::test_deny_multivalue_headers` adds real HTTP coverage through
+the shared Controller/Gateway topology and the existing auth server's dedicated
+`/verify-deny-multivalue` endpoint. Local and K8s ForwardAuth fixtures both register
+the same plugin and route. The client compares `get_all` byte sequences for two
+challenges and two cookies, including a clearance cookie with a comma-containing
+Expires attribute. It checks exact per-name order and count, duplicate and
+case-equivalent configured-name selection, unselected-header exclusion, 401,
+Content-Type, and exact body bytes without logging authentication or cookie values.
+Existing success cases retain upstream identity propagation coverage.
+
+This addition addresses the test gap tracked by
+`add-forward-auth-deny-multivalue-header-integration`; the task's original claim
+that production still selected only the first value was already superseded by
+B0290. No production behavior or configuration schema changes are required.
+The integration case does not establish HTTP/2, browser cookie-store behavior,
+or hot-reload semantics. The local runner exempts only an explicitly selected
+`EdgionPlugins/ForwardAuth` run from macOS loopback aliases: every endpoint in
+this suite, including its LB fixture, uses `127.0.0.1`. Full runs still require
+the aliases needed by multi-address LB and GeoIP suites.
+
+## Integration Verification (2026-09-11)
+
+- Canonical preparation built all integration binaries and helper executables.
+  The first run then stopped at the unrelated macOS alias prerequisite; after
+  the scoped selection correction, `run_integration.sh --no-prepare
+  -r EdgionPlugins -i ForwardAuth` passed all 26 cases, including
+  `deny_multivalue_headers` and existing success-side identity cases. The standard
+  report at `tmp/integration_testing/testing_20260911_225726/report.log` is PASS;
+  metrics-label, unknown-field, requeue-loop, and cache-residue final gates passed.
+- Workspace format, all-target check and Clippy passed; Clippy retains unrelated
+  repository warnings. Agent-doc, SSA force, metrics inventory, Pingora source,
+  English-only, Bash syntax/portability, and shell-helper checks passed.
+- Independent read-only code and knowledge review, including the runner change,
+  returned LGTM. Live K8s execution and full-workspace unit tests were not run.
+- The separate K8s inventory parity check still fails on existing missing
+  registrations for `LinkSysDisabledTls`, `PluginPolicyDynamic`, and
+  `RateLimitLocalOverflowDynamic`; its own regression test passes. The inventory
+  entries were not changed by this work. The [integration task](../../../../tasks/todo/add-forward-auth-deny-multivalue-header-integration.md)
+  remains open because the closure workflow requires successful project checks.
+
 ## Scope and Re-evaluation
 
 This guard covers only non-success ForwardAuth responses and only names selected
@@ -51,3 +91,4 @@ longer writes a Pingora `ResponseHeader` directly.
 ## Resolution References
 
 - B0290 — ForwardAuth deny-response repeated-header preservation.
+- add-forward-auth-deny-multivalue-header-integration — real HTTP regression coverage.

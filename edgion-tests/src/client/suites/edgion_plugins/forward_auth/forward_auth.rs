@@ -20,6 +20,7 @@
 //
 //   4. deny relays clientHeaders:
 //      - Auth service 401 with WWW-Authenticate → client receives the header
+//      - Repeated challenges and cookies retain exact values and per-name order
 //
 //   5. ${secretRef} in custom Authorization header:
 //      - Controller resolves K8s Secret value; gateway injects it into outbound request
@@ -51,6 +52,7 @@ const REQUIRED_ORIGIN_HOST: &str = "forward-auth-required.example.com";
 const CUSTOM_204_HOST: &str = "forward-auth-204.example.com";
 const STRICT_204_HOST: &str = "forward-auth-strict-204.example.com";
 const LB_HOST: &str = "forward-auth-lb.example.com";
+const DENY_MULTIVALUE_HOST: &str = "forward-auth-deny-multivalue.example.com";
 
 /// authFailureDelayMs configured in 03_EdgionPlugins_forward-auth-delay.yaml
 const CONFIGURED_DELAY_MS: u64 = 300;
@@ -1019,6 +1021,76 @@ impl ForwardAuthTestSuite {
     }
 
     // ============================================================
+    // Repeated denial response fields through the real HTTP chain
+    // ============================================================
+
+    fn test_deny_multivalue_headers() -> TestCase {
+        TestCase::new(
+            "deny_multivalue_headers",
+            "ForwardAuth: repeated denial headers remain separate, ordered, and selected once",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let Ok(response) = ctx
+                        .http_client
+                        .get(format!("{}/health", ctx.http_url()))
+                        .header("host", DENY_MULTIVALUE_HOST)
+                        .send()
+                        .await
+                    else {
+                        return TestResult::failed(start.elapsed(), "Denial request failed".into());
+                    };
+                    if response.status().as_u16() != 401 {
+                        return TestResult::failed(start.elapsed(), "Expected auth denial status 401".into());
+                    }
+
+                    // Compare every field as bytes: do not drop non-text values or split on commas.
+                    // Exact lengths also detect duplicate/case-equivalent config names multiplying fields.
+                    for (name, expected) in [
+                        (
+                            "www-authenticate",
+                            ["Bearer realm=\"primary\"", "Basic realm=\"fallback\""],
+                        ),
+                        (
+                            "set-cookie",
+                            [
+                                "session=renewed; Path=/; HttpOnly; SameSite=Lax",
+                                "csrf=; Path=/; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT",
+                            ],
+                        ),
+                    ] {
+                        let actual: Vec<&[u8]> =
+                            response.headers().get_all(name).iter().map(|v| v.as_bytes()).collect();
+                        if actual != expected.map(str::as_bytes) {
+                            // Never print cookie or authentication field values, even on failure.
+                            return TestResult::failed(
+                                start.elapsed(),
+                                format!("{name}: expected two separate fields in source order"),
+                            );
+                        }
+                    }
+                    if response.headers().contains_key("x-auth-unselected") {
+                        return TestResult::failed(start.elapsed(), "Unselected auth header reached client".into());
+                    }
+                    if response.headers().get("content-type").map(|v| v.as_bytes())
+                        != Some(b"text/plain; charset=utf-8".as_slice())
+                    {
+                        return TestResult::failed(start.elapsed(), "Auth denial Content-Type changed".into());
+                    }
+                    match response.bytes().await {
+                        Ok(body) if body.as_ref() == b"Authentication denied\n" => TestResult::passed_with_message(
+                            start.elapsed(),
+                            "Repeated denial headers, selection, status, content type, and body preserved".into(),
+                        ),
+                        Ok(_) => TestResult::failed(start.elapsed(), "Auth denial body changed".into()),
+                        Err(_) => TestResult::failed(start.elapsed(), "Auth denial body read failed".into()),
+                    }
+                })
+            },
+        )
+    }
+
+    // ============================================================
     // Required origin header tests (C2 regression coverage)
     // ============================================================
 
@@ -1563,6 +1635,7 @@ impl TestSuite for ForwardAuthTestSuite {
             Self::test_fail_close_with_status_on_error(),
             // deny relays clientHeaders
             Self::test_deny_relays_client_headers(),
+            Self::test_deny_multivalue_headers(),
             // ${secretRef} in custom Authorization header
             Self::test_secret_ref_injected_authorization_passes_auth(),
             // Required origin header tests (C2 regression coverage)

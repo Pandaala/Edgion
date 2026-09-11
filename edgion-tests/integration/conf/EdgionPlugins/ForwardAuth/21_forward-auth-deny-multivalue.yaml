@@ -1,0 +1,58 @@
+# Reuse the suite's auth-svc and shared Gateway for repeated denial headers.
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: forward-auth-deny-multivalue
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: ForwardAuth
+      config:
+        target:
+          name: auth-svc
+          namespace: edgion-default
+          port: 30040
+        timeoutMs: 5000
+        request:
+          path:
+            template: "/verify-deny-multivalue"
+          method:
+            template: "GET"
+          headers:
+            forwardAll: false
+        decision:
+          clientHeaders:
+            - WWW-Authenticate
+            - WWW-Authenticate
+            - www-authenticate
+            - Set-Cookie
+            - Set-Cookie
+            - set-cookie
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: forward-auth-deny-multivalue-route
+  namespace: edgion-default
+spec:
+  parentRefs:
+    - name: edgion-plugins-gateway
+      namespace: edgion-test
+  hostnames:
+    - "forward-auth-deny-multivalue.example.com"
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: forward-auth-deny-multivalue
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001
