@@ -31,7 +31,7 @@
 
 ## Deferred candidates
 - Enforce exactly one configured TransformConfig operation in shared resource validation and align its documentation; this is separate from preserving current runtime priority in B0071.
-- Design cross-module sensitive provenance or safe unmasking for ctx values derived from Authorization/Cookie data without weakening the explicit AccessLogExtern model or fixed hard-blocklist.
+- D0044: the user accepted the configuration-dependent sensitive ctx alias risk without a runtime change on 2026-09-11; see the [maintained decision](../../../../skills/04-review/observability/intentional-design/ctx-provenance-unmasking-risk.md).
 - Existing integration tests remain frozen and already cover cross-process CtxSet behavior. Neither deferred boundary requires a new integration issue at discovery time.
 
 ## Implementation
@@ -43,7 +43,7 @@
 ## Independent review
 - Code reviewer: `b0071_final_code_review`; distinct from analyst and implementer
 - Code verdict: approved with no must-fix or should-fix findings; focused tests, Gateway compile, Clippy, no-tracing, diff hygiene, and frozen paths passed
-- Deferred adjudication: D0043 is `needs-implementation` for exact one-operation validation; D0044 is `needs-discussion` for a cross-module sensitive-provenance design. Neither changes B0071 runtime compatibility or requires a new integration issue at discovery.
+- Historical deferred adjudication at B0071: D0043 was `needs-implementation` for exact one-operation validation; D0044 was `needs-discussion` for a cross-module sensitive-provenance design. Neither changed B0071 runtime compatibility or required a new integration issue at discovery. The later D0044 acceptance is linked above and does not establish that the defect was fixed.
 
 ## Verification
 | Check group | Result | Important note only |

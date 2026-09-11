@@ -21,6 +21,8 @@ before applying a decision to current code.
 
 ## Intentional design
 
+- [Sensitive ctx aliases: accepted configuration-dependent logging risk](intentional-design/ctx-provenance-unmasking-risk.md)
+
 - [Core W3C context and incremental RequestId policies](intentional-design/request-trace-id-lifecycle.md)
 
 - [Debug access-log response header: accepted development-only limitations](intentional-design/debug-access-log-development-surface.md)

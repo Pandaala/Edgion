@@ -12,6 +12,12 @@ When reviewing findings of the form "`store_claims_in_ctx` / `store_payload_in_c
 
 **Current design (2026-07-16): explicit declaration, hard-blocked at the source-type level.** A `ctx_map` value only reaches the log when an operator writes an `AccessLogExtern` entry naming it — `{key: <field>, from: ctx, name: <ctx_map key>}` on `EdgionPlugins.spec.accessLogExtern` — and that declaration is resolved only at `logging()` (never inside a request-stage filter). This superseded the 2026-06-21 `AllowlistedCtx` design (a per-route ctx-key allowlist annotation, plus a separate unified JSON log-projection annotation), both of which are now deleted entirely; there is no compatibility shim.
 
+**Validity limit:** this guard covers direct declarations of the canonical keys,
+not sensitive values copied into other ctx names. The configuration-dependent
+alias exposure remains a real defect accepted without a runtime change; see
+[sensitive ctx aliases](../../observability/intentional-design/ctx-provenance-unmasking-risk.md)
+for the user decision, source evidence, and re-evaluation triggers.
+
 The `jwt_claims` / `oidc_claims` / `jwe_payload` blocklist survives as `ACCESS_LOG_BLOCKED_CTX_KEYS`
 (`edgion-resources/src/resources/edgion_plugins/plugin_configs/access_log_extern.rs`) and enforcement
 is two-part, not a single ingest gate — **admission in this repo is lenient**: a preparse error is
@@ -29,9 +35,11 @@ gateway.
   because it was kept off the cluster.
 
 Downstream plugins still read these keys via `session.get_ctx_var` (in-memory, per request); only
-the log projection is gated. Any new `ctx_map` key that stores claims, decrypted payloads, tokens,
-or other secrets SHOULD still be added to `ACCESS_LOG_BLOCKED_CTX_KEYS` (belt-and-suspenders — it
-stays a hard, un-whitelistable block regardless of the EGC masking whitelist).
+the log projection is gated. Any new canonical `ctx_map` key that stores claims, decrypted
+payloads, tokens, or other secrets MUST be added to `ACCESS_LOG_BLOCKED_CTX_KEYS`, as required by
+[design rule A](../../../00-design-rules.md#a-sensitive-data--log-redaction). It stays a hard,
+un-whitelistable block regardless of the EGC masking whitelist. The separately accepted
+configuration-dependent alias risk does not weaken this requirement for new canonical keys.
 
 Full design: `docs/superpowers/specs/2026-07-16-access-log-extern-plugin-design.md`. Unit coverage:
 `blocked_ctx_keys_are_rejected` in `access_log_extern.rs`;
