@@ -5,6 +5,7 @@
 //! session.set_ctx_var / remove_ctx_var.
 
 use super::*;
+use crate::EdgionHttpContext;
 
 // ── Happy paths ──────────────────────────────────────────────────────────────
 
@@ -16,11 +17,10 @@ fn test_ctx_set_then_get() {
         .withf(|k, v| k == "k" && v == "v")
         .times(1)
         .returning(|_, _| Ok(()));
-    session
-        .expect_get_ctx_var()
-        .withf(|k| k == "k")
-        .times(1)
-        .returning(|_| Some("v".to_string()));
+    let mut ctx = EdgionHttpContext::new();
+    ctx.set_ctx_var("k".into(), "v".into());
+    session.expect_ctx().times(1).return_const(ctx);
+    session.expect_get_ctx_var().never();
     session
         .expect_set_request_header()
         .withf(|h, v| h == "X-Ctx" && v == "v")
@@ -48,11 +48,7 @@ fn test_ctx_set_then_remove_then_get() {
         .withf(|k| k == "k")
         .times(1)
         .returning(|_| Ok(()));
-    session
-        .expect_get_ctx_var()
-        .withf(|k| k == "k")
-        .times(1)
-        .returning(|_| None);
+    session.expect_ctx().times(1).return_const(EdgionHttpContext::new());
     session
         .expect_set_request_header()
         .withf(|h, v| h == "X-Removed" && v == "true")
@@ -71,11 +67,7 @@ if value == nil { req.set_header("X-Removed", "true") }"#,
 #[test]
 fn test_ctx_get_missing_returns_nil() {
     let mut session = MockPluginSession::new();
-    session
-        .expect_get_ctx_var()
-        .withf(|k| k == "missing")
-        .times(1)
-        .returning(|_| None);
+    session.expect_ctx().times(1).return_const(EdgionHttpContext::new());
     session
         .expect_set_request_header()
         .withf(|h, v| h == "X-NoVal" && v == "true")
@@ -92,11 +84,9 @@ if value == nil { req.set_header("X-NoVal", "true") }"#,
 #[test]
 fn test_ctx_get_value_exceeding_max_string_len_returns_exact_error() {
     let mut session = MockPluginSession::new();
-    session
-        .expect_get_ctx_var()
-        .withf(|k| k == "k")
-        .times(1)
-        .returning(|_| Some("four".to_string()));
+    let mut ctx = EdgionHttpContext::new();
+    ctx.set_ctx_var("k".into(), "four".into());
+    session.expect_ctx().times(1).return_const(ctx);
     let limits = VmLimits {
         max_string_len: 3,
         ..Default::default()
@@ -114,11 +104,9 @@ async fn test_ctx_get_reads_pre_existing_value_in_upstream_response() {
     use crate::plugins::http::dsl::config::DslConfig;
     use crate::plugins::http::dsl::plugin::DslPlugin;
     let mut session = MockPluginSession::new();
-    session
-        .expect_get_ctx_var()
-        .withf(|k| k == "k")
-        .times(1)
-        .returning(|_| Some("pre_existing".to_string()));
+    let mut ctx = EdgionHttpContext::new();
+    ctx.set_ctx_var("k".into(), "pre_existing".into());
+    session.expect_ctx().times(1).return_const(ctx);
     session
         .expect_set_response_header()
         .withf(|h, v| h == "X-Ctx-Out" && v == "pre_existing")
