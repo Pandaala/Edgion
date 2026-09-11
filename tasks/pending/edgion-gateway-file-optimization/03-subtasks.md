@@ -478,7 +478,7 @@
 | `edgion-gateway/src/plugins/http/openid_connect/token_exchange.rs` | `plugins-http-openid-connect` | source | examined-no-change | B0299: external bounded response handling and prepared secret/client/cache invariants independently revalidated |
 | `edgion-gateway/src/plugins/http/openid_connect/token_verify.rs` | `plugins-http-openid-connect` | source | examined-no-change | B0300: external bounded introspection and Auto diagnostics independently revalidated with JWT/JWKS/cache invariants |
 | `edgion-gateway/src/plugins/http/openid_connect/userinfo.rs` | `plugins-http-openid-connect` | source | examined-no-change | B0093 |
-| `edgion-gateway/src/plugins/http/plugin_store.rs` | `plugins-http-framework` | source | pending | External ec5eb474..9e3a276b requires review; prior pending: Reopened after external `5cb0b087` cross-namespace mirror LKG policy change; B0062/B0121 history retained |
+| `edgion-gateway/src/plugins/http/plugin_store.rs` | `plugins-http-framework` | source | changed | B0301: policy-stamped generations now bypass whole-runtime LKG; publication and current named-jump regressions strengthened |
 | `edgion-gateway/src/plugins/http/proxy_rewrite/mod.rs` | `plugins-http-proxy-rewrite` | source | examined-no-change | B0095 |
 | `edgion-gateway/src/plugins/http/proxy_rewrite/plugin.rs` | `plugins-http-proxy-rewrite` | source | changed | B0095 |
 | `edgion-gateway/src/plugins/http/rate_limit/mod.rs` | `plugins-http-rate-limit` | source | examined-no-change | B0096 |

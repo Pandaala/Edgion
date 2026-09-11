@@ -2,20 +2,20 @@
 
 ## Meta
 
-- Status: needs-investigation
-- Severity: high (potential enforcement impact; not independently reproduced)
+- Status: needs-implementation (narrow HTTP LKG defect mitigated in B0301; broader migration pending)
+- Severity: high
 - Discovered in: B0132 policy-filter analysis
 - Category: correctness
 - Canonical task: [Investigate plugin policy and invalid-generation retention](../../../todo/investigate-plugin-policy-invalid-generation-retention.md)
 
 ## Evidence
 
-`compile_plugins` computes `retain_previous_on_invalid_update` for invalid DSL/WAF construction before sealing the incoming policy gate. `PluginStore::apply_delta` and `replace_all` may then retain the entire prior activatable runtime. The analyst identified a possible combination of a new Block stamp and an unrelated retainable invalid entry that could leave an older unblocked generation serving. This is a code-path concern, not a reproduced defect or a conclusion about intended retention precedence.
+B0301 confirmed the HTTP publication defect and made whole-runtime LKG ineligible whenever either generation contains an enabled Controller policy stamp. Deterministic delta/full tests now cover Block, Bypass, removal and policy changes with invalid DSL/WAF generations.
 
 ## Why deferred
 
-The policy adapter itself executes the supplied decision correctly. Resolving precedence belongs to generation compilation/publication and must consider the existing last-known-good contract across update and full replacement. Independent reproduction and requirements analysis precede any change.
+Concurrent user work expanded the canonical task into the broader migration from Controller startup policy to GatewayClass-scoped `EdgionGatewayConfig.spec.pluginPolicy`. B0301 does not implement that schema, dynamic publication, Controller stamp removal, stream/TLS-route coverage, documentation, or migration verification.
 
 ## Next step
 
-Follow the canonical task. Preserve existing integration tests; prefer deterministic publication tests and record any required new integration coverage separately.
+Keep the canonical task and this backlink open until the broader migration is implemented, independently reviewed and verified. Do not duplicate the task or treat the B0301 HTTP mitigation as migration completion.

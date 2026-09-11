@@ -57,20 +57,46 @@ pub struct CompiledPlugins {
     /// Whether an invalid update should retain the prior activatable runtime.
     ///
     /// DSL/WAF programs allow last-known-good publication unless either
-    /// generation contains a cross-namespace mirror. Other plugin configuration
-    /// errors keep the established fail-closed replacement behavior.
+    /// generation contains a cross-namespace mirror or an enabled
+    /// Controller-stamped PluginPolicy action. Other plugin configuration errors
+    /// keep the established fail-closed replacement behavior.
     pub retain_previous_on_invalid_update: bool,
 }
 
 impl CompiledPlugins {
-    /// Reusing a whole runtime also reuses its mirror authorization snapshot.
-    /// Cross-namespace mirrors in either generation therefore require publishing
-    /// the incoming sealed runtime, even when a DSL/WAF update is invalid.
+    /// Reusing a whole runtime also reuses its mirror authorization and plugin
+    /// policy snapshots. Either generation carrying one of those executable
+    /// decisions therefore requires publishing the incoming sealed runtime,
+    /// even when a DSL/WAF update is invalid.
     fn can_retain_previous(&self, previous: &Self) -> bool {
         self.retain_previous_on_invalid_update
             && previous.is_activatable
             && !self.has_cross_namespace_mirror()
             && !previous.has_cross_namespace_mirror()
+            && !self.has_enabled_plugin_policy_action()
+            && !previous.has_enabled_plugin_policy_action()
+    }
+
+    fn has_enabled_plugin_policy_action(&self) -> bool {
+        self.spec
+            .request_filter_entries()
+            .iter()
+            .any(|entry| entry.is_enabled() && entry.policy_action.is_some())
+            || self
+                .spec
+                .upstream_response_filter_entries()
+                .iter()
+                .any(|entry| entry.is_enabled() && entry.policy_action.is_some())
+            || self
+                .spec
+                .upstream_response_body_filter_entries()
+                .iter()
+                .any(|entry| entry.is_enabled() && entry.policy_action.is_some())
+            || self
+                .spec
+                .upstream_response_entries()
+                .iter()
+                .any(|entry| entry.is_enabled() && entry.policy_action.is_some())
     }
 
     fn has_cross_namespace_mirror(&self) -> bool {
@@ -479,7 +505,8 @@ impl PluginStore {
 
     /// Replace all compiled plugins atomically, retaining a last-known-good
     /// runtime when a reconnect snapshot contains an invalid update for the
-    /// same key, unless either generation contains a cross-namespace mirror.
+    /// same key, unless either generation contains a cross-namespace mirror or
+    /// an enabled Controller-stamped PluginPolicy action.
     /// Keys absent from the new snapshot are still removed. Like
     /// [`Self::apply_delta`], this load-decide-store sequence relies on the
     /// serialized EdgionPlugins conf-sync writer.
@@ -786,10 +813,10 @@ mod compile_plugins_tests {
     use edgion_resources::resources::edgion_plugins::plugin_configs::access_log_extern::{
         AccessLogExternField, LogExtSource,
     };
-    use edgion_resources::resources::edgion_plugins::plugin_configs::DslConfig;
+    use edgion_resources::resources::edgion_plugins::plugin_configs::{DslConfig, RequestIdConfig};
     use edgion_resources::resources::edgion_plugins::{
         BodyRequirement, DyeOutcome, DyeRule, DyeSuite, EdgionPlugin, EdgionPluginsSpec, RequestFilterEntry,
-        UpstreamResponseFilterEntry, WafConfig, WafMode,
+        UpstreamResponseBodyFilterEntry, UpstreamResponseEntry, UpstreamResponseFilterEntry, WafConfig, WafMode,
     };
     use edgion_resources::resources::http_route::{HTTPHeader, HTTPHeaderFilter};
     use edgion_resources::resources::plugin_policy::PluginPolicyAction;
@@ -1161,34 +1188,33 @@ mod compile_plugins_tests {
     }
 
     #[test]
-    fn dye_frozen_named_jump_fixtures_reject_unreachable_subscriptions_consistently() {
-        // D0083 intentionally tightens validation. These frozen broad
-        // subscriptions need fixture alignment before their old end-to-end
-        // outcome/anti-spoof assertions can run under the new contract.
+    fn dye_named_jump_fixtures_validate_and_compile_plans() {
+        // Each fixture subscribes only to outcomes reachable under its
+        // effective policy. Keep the actual integration manifests aligned with
+        // Controller validation and Gateway dye-plan compilation.
         let fixtures = [
-            (false, include_str!("../../../../edgion-tests/integration/conf/EdgionPlugins/DynamicInternalUpstream/03_EdgionPlugins_default_named-jump-canary-fallback.yaml")),
-            (false, include_str!("../../../../edgion-tests/integration/conf/EdgionPlugins/DynamicInternalUpstream/03_EdgionPlugins_default_named-jump-canary-reject.yaml")),
-            (false, include_str!("../../../../edgion-tests/integration/conf/EdgionPlugins/DynamicInternalUpstream/03_EdgionPlugins_default_named-jump-diu-fallback.yaml")),
-            (true, include_str!("../../../../edgion-tests/integration/conf/EdgionPlugins/DynamicInternalUpstream/03_EdgionPlugins_default_named-jump-diu-reject.yaml")),
+            include_str!("../../../../edgion-tests/integration/conf/EdgionPlugins/DynamicInternalUpstream/03_EdgionPlugins_default_named-jump-canary-fallback.yaml"),
+            include_str!("../../../../edgion-tests/integration/conf/EdgionPlugins/DynamicInternalUpstream/03_EdgionPlugins_default_named-jump-canary-reject.yaml"),
+            include_str!("../../../../edgion-tests/integration/conf/EdgionPlugins/DynamicInternalUpstream/03_EdgionPlugins_default_named-jump-diu-fallback.yaml"),
+            include_str!("../../../../edgion-tests/integration/conf/EdgionPlugins/DynamicInternalUpstream/03_EdgionPlugins_default_named-jump-diu-reject.yaml"),
         ];
-        for (valid, yaml) in fixtures {
+        for yaml in fixtures {
             let resource: EdgionPlugins = serde_yaml::from_str(yaml).unwrap();
             let errors = resource.validate_plugins();
             let compiled = compile_plugins(&resource);
             assert_eq!(errors, compiled.preparse_errors);
-            assert_eq!(errors.is_empty(), valid, "{:?}: {errors:?}", resource.metadata.name);
-            if !valid {
-                assert!(errors
-                    .iter()
-                    .any(|e| e.contains("cannot render in this stage and configuration")));
-            }
-            assert!(compiled.is_activatable, "only dye is rejected");
+            assert!(errors.is_empty(), "{:?}: {errors:?}", resource.metadata.name);
+            assert!(compiled.is_activatable);
             assert_eq!(
                 compiled
                     .plugin_runtime
                     .request_plugins_iter()
-                    .any(|p| p.dye_plan().is_some()),
-                valid
+                    .filter_map(|plugin| plugin.dye_plan())
+                    .filter(|plan| !plan.response.is_empty())
+                    .count(),
+                1,
+                "{:?}: one request plugin must retain its response dye plan",
+                resource.metadata.name
             );
         }
     }
@@ -1699,6 +1725,322 @@ mod compile_plugins_tests {
         assert_eq!(compiled.plugin_runtime.upstream_response_async_plugins_count(), 1);
     }
 
+    #[derive(Clone, Copy, Debug)]
+    enum PolicyStage {
+        Request,
+        ResponseFilter,
+        ResponseBodyFilter,
+        Response,
+    }
+
+    fn add_policy_entry(
+        resource: &mut EdgionPlugins,
+        stage: PolicyStage,
+        plugin: EdgionPlugin,
+        enabled: bool,
+        action: PluginPolicyAction,
+    ) {
+        macro_rules! push_entry {
+            ($entry:ident, $field:ident) => {{
+                let mut entry = $entry::with_enable(plugin, enabled);
+                entry.policy_action = Some(action);
+                resource.spec.$field.get_or_insert_with(Vec::new).push(entry);
+            }};
+        }
+        match stage {
+            PolicyStage::Request => push_entry!(RequestFilterEntry, request_plugins),
+            PolicyStage::ResponseFilter => {
+                push_entry!(UpstreamResponseFilterEntry, upstream_response_filter_plugins)
+            }
+            PolicyStage::ResponseBodyFilter => {
+                push_entry!(UpstreamResponseBodyFilterEntry, upstream_response_body_filter_plugins)
+            }
+            PolicyStage::Response => push_entry!(UpstreamResponseEntry, upstream_response_plugins),
+        }
+    }
+
+    fn policy_program_resource(
+        program: &str,
+        valid: bool,
+        policy: Option<(PolicyStage, bool, PluginPolicyAction)>,
+    ) -> EdgionPlugins {
+        let mut resource = if program == "dsl" {
+            dsl_resource(RequestFilterEntry::new(EdgionPlugin::Dsl(DslConfig {
+                name: "policy-lkg".to_string(),
+                source: Some(if valid { "let value = 1" } else { "invalid @@@" }.to_string()),
+                ..Default::default()
+            })))
+        } else {
+            waf_resource(if valid {
+                "SecRule REQUEST_URI \"@contains /blocked\" \"id:1,phase:1,deny\"\n"
+            } else {
+                "SecRule invalid-("
+            })
+        };
+        resource.metadata.name = Some("policy-lkg".to_string());
+        if let Some((stage, enabled, action)) = policy {
+            add_policy_entry(&mut resource, stage, header_modifier(), enabled, action);
+        }
+        resource
+    }
+
+    #[test]
+    fn enabled_policy_actions_in_every_stage_disable_whole_runtime_retention() {
+        let stages = [
+            PolicyStage::Request,
+            PolicyStage::ResponseFilter,
+            PolicyStage::ResponseBodyFilter,
+            PolicyStage::Response,
+        ];
+        for program in ["dsl", "waf"] {
+            let previous = compile_plugins(&policy_program_resource(program, true, None));
+            for stage in stages {
+                for action in [PluginPolicyAction::Block { status: 451 }, PluginPolicyAction::Bypass] {
+                    let incoming =
+                        compile_plugins(&policy_program_resource(program, false, Some((stage, true, action))));
+                    assert!(!incoming.is_activatable, "{program}/{stage:?}");
+                    assert!(incoming.retain_previous_on_invalid_update, "{program}/{stage:?}");
+                    assert!(incoming.has_enabled_plugin_policy_action(), "{program}/{stage:?}");
+                    assert!(!incoming.can_retain_previous(&previous), "{program}/{stage:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn policy_add_remove_and_change_publish_invalid_program_generations() {
+        let cases = [
+            ("add block", None, Some(PluginPolicyAction::Block { status: 451 })),
+            ("add bypass", None, Some(PluginPolicyAction::Bypass)),
+            ("remove block", Some(PluginPolicyAction::Block { status: 451 }), None),
+            ("remove bypass", Some(PluginPolicyAction::Bypass), None),
+            (
+                "change action",
+                Some(PluginPolicyAction::Bypass),
+                Some(PluginPolicyAction::Block { status: 451 }),
+            ),
+            (
+                "change status",
+                Some(PluginPolicyAction::Block { status: 451 }),
+                Some(PluginPolicyAction::Block { status: 452 }),
+            ),
+        ];
+        for program in ["dsl", "waf"] {
+            for full in [false, true] {
+                let initial = compile_plugins(&policy_program_resource(
+                    program,
+                    false,
+                    Some((PolicyStage::Request, true, PluginPolicyAction::Block { status: 451 })),
+                ));
+                let recovered = compile_plugins(&policy_program_resource(program, true, None));
+                let key = initial.spec.key_name();
+                let store = PluginStore::new();
+                let initial_map = HashMap::from([(key.clone(), Arc::clone(&initial))]);
+                if full {
+                    store.replace_all(initial_map);
+                } else {
+                    store.apply_delta(HashMap::new(), initial_map, &HashSet::new());
+                }
+                assert!(Arc::ptr_eq(
+                    &store
+                        .get_plugin_runtime(&key)
+                        .expect("initial invalid runtime is published"),
+                    &initial.plugin_runtime
+                ));
+                store.apply_delta(
+                    HashMap::new(),
+                    HashMap::from([(key.clone(), Arc::clone(&recovered))]),
+                    &HashSet::new(),
+                );
+                assert!(Arc::ptr_eq(
+                    &store.get_plugin_runtime(&key).expect("valid runtime recovers"),
+                    &recovered.plugin_runtime
+                ));
+                for (name, previous_action, incoming_action) in &cases {
+                    let previous = compile_plugins(&policy_program_resource(
+                        program,
+                        true,
+                        previous_action
+                            .clone()
+                            .map(|action| (PolicyStage::Request, true, action)),
+                    ));
+                    let incoming = compile_plugins(&policy_program_resource(
+                        program,
+                        false,
+                        incoming_action
+                            .clone()
+                            .map(|action| (PolicyStage::Request, true, action)),
+                    ));
+                    assert!(!incoming.is_activatable, "{program}/{full}/{name}");
+                    assert!(incoming.retain_previous_on_invalid_update, "{program}/{full}/{name}");
+                    let key = incoming.spec.key_name();
+                    let store = PluginStore::new();
+                    store.replace_all(HashMap::from([(key.clone(), Arc::clone(&previous))]));
+                    let pinned = store.get_plugin_runtime(&key).expect("previous runtime is pinned");
+                    let replacement = HashMap::from([(key.clone(), Arc::clone(&incoming))]);
+                    if full {
+                        store.replace_all(replacement);
+                    } else {
+                        store.apply_delta(HashMap::new(), replacement, &HashSet::new());
+                    }
+                    assert!(Arc::ptr_eq(
+                        &store.get_plugin_runtime(&key).expect("incoming runtime is published"),
+                        &incoming.plugin_runtime
+                    ));
+                    assert!(Arc::ptr_eq(&pinned, &previous.plugin_runtime));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn ordinary_and_disabled_policy_entries_preserve_program_lkg() {
+        for program in ["dsl", "waf"] {
+            for full in [false, true] {
+                let previous = compile_plugins(&policy_program_resource(program, true, None));
+                for policy in [
+                    None,
+                    Some((PolicyStage::Response, false, PluginPolicyAction::Block { status: 451 })),
+                ] {
+                    let incoming = compile_plugins(&policy_program_resource(program, false, policy));
+                    assert!(!incoming.has_enabled_plugin_policy_action());
+                    let key = incoming.spec.key_name();
+                    let store = PluginStore::new();
+                    store.replace_all(HashMap::from([(key.clone(), Arc::clone(&previous))]));
+                    let replacement = HashMap::from([(key.clone(), incoming)]);
+                    if full {
+                        store.replace_all(replacement);
+                    } else {
+                        store.apply_delta(HashMap::new(), replacement, &HashSet::new());
+                    }
+                    assert!(Arc::ptr_eq(
+                        &store.get_plugin_runtime(&key).expect("previous runtime is retained"),
+                        &previous.plugin_runtime
+                    ));
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn policy_gates_keep_block_bypass_and_reject_precedence_and_diagnostics() {
+        let block = compile_plugins(&policy_program_resource(
+            "dsl",
+            false,
+            Some((PolicyStage::Request, true, PluginPolicyAction::Block { status: 451 })),
+        ));
+        let mut filters = block.plugin_runtime.request_plugins_iter();
+        let block_filter = filters.next().expect("block gate");
+        assert_eq!(block_filter.name(), "PluginPolicyBlock");
+        assert_eq!(filters.next().expect("reject gate").name(), "RejectInvalidConfig");
+        let mut session = MockPluginSession::new();
+        let mut log = PluginLog::new(block_filter.name());
+        match block_filter.run_request(&mut session, &mut log).await {
+            PluginRunningResult::ErrResponse { status, body } => {
+                assert_eq!(status, 451);
+                assert_eq!(
+                    body.expect("fixed block body").as_ref(),
+                    br#"{"message":"plugin disabled by policy"}"#
+                );
+            }
+            other => panic!("expected policy block, got {other:?}"),
+        }
+        assert_eq!(
+            serde_json::to_value(&log).unwrap()["log"],
+            serde_json::json!(["err: blocked by plugin policy", "plugin: http/RequestHeaderModifier"])
+        );
+
+        let bypass = compile_plugins(&policy_program_resource(
+            "dsl",
+            false,
+            Some((PolicyStage::Request, true, PluginPolicyAction::Bypass)),
+        ));
+        let mut filters = bypass.plugin_runtime.request_plugins_iter();
+        let bypass_filter = filters.next().expect("bypass note");
+        let reject_filter = filters.next().expect("reject gate");
+        assert_eq!(bypass_filter.name(), "PluginPolicyBypass");
+        assert_eq!(reject_filter.name(), "RejectInvalidConfig");
+        let mut bypass_log = PluginLog::new(bypass_filter.name());
+        assert!(matches!(
+            bypass_filter.run_request(&mut session, &mut bypass_log).await,
+            PluginRunningResult::Nothing
+        ));
+        let mut reject_log = PluginLog::new(reject_filter.name());
+        match reject_filter.run_request(&mut session, &mut reject_log).await {
+            PluginRunningResult::ErrResponse { status, body } => {
+                assert_eq!(status, 500);
+                assert_eq!(
+                    body.expect("fixed reject body").as_ref(),
+                    br#"{"message":"plugin configuration error"}"#
+                );
+            }
+            other => panic!("expected invalid-config rejection, got {other:?}"),
+        }
+        let logs = format!(
+            "{}{}",
+            serde_json::to_value(&bypass_log).unwrap(),
+            serde_json::to_value(&reject_log).unwrap()
+        );
+        assert!(logs.contains("bypassed: http/RequestHeaderModifier"));
+        assert!(!logs.contains("invalid @@@"));
+    }
+
+    #[test]
+    fn request_id_scope_remains_separate_from_policy_detection_and_publication() {
+        let mut stamped = policy_program_resource("dsl", false, None);
+        add_policy_entry(
+            &mut stamped,
+            PolicyStage::Request,
+            EdgionPlugin::RequestId(RequestIdConfig::default()),
+            true,
+            PluginPolicyAction::Block { status: 451 },
+        );
+        assert!(!stamped.has_active_request_id());
+        let stamped = compile_plugins(&stamped);
+        assert!(stamped.has_enabled_plugin_policy_action());
+        assert!(!stamped.plugin_runtime.has_request_id());
+        assert!(stamped
+            .plugin_runtime
+            .request_plugins_iter()
+            .all(|filter| filter.name() != "RequestId"));
+
+        let mut composed = policy_program_resource("dsl", false, None);
+        composed
+            .spec
+            .request_plugins
+            .get_or_insert_with(Vec::new)
+            .push(RequestFilterEntry::new(EdgionPlugin::RequestId(
+                RequestIdConfig::default(),
+            )));
+        add_policy_entry(
+            &mut composed,
+            PolicyStage::Request,
+            header_modifier(),
+            true,
+            PluginPolicyAction::Block { status: 451 },
+        );
+        assert!(composed.has_active_request_id());
+        let composed = compile_plugins(&composed);
+        assert!(composed.plugin_runtime.has_request_id());
+        let names: Vec<_> = composed
+            .plugin_runtime
+            .request_plugins_iter()
+            .map(|filter| filter.name())
+            .collect();
+        assert_eq!(names, ["PluginPolicyBlock", "RejectInvalidConfig", "RequestId"]);
+        let key = composed.spec.key_name();
+        let store = PluginStore::new();
+        store.replace_all(HashMap::from([(key.clone(), Arc::clone(&composed))]));
+        assert!(Arc::ptr_eq(
+            &store
+                .get_plugin_runtime(&key)
+                .expect("one runtime Arc serves both phases"),
+            &composed.plugin_runtime
+        ));
+        // The allowed RequestId may run in the early phase; the assertion above
+        // only fixes runtime ownership and the later block/reject ordering.
+    }
+
     #[test]
     fn invalid_waf_update_retains_the_last_known_good_generation() {
         let valid = compile_plugins(&waf_resource(
@@ -1891,7 +2233,15 @@ mod compile_plugins_tests {
                     } else {
                         store.apply_delta(HashMap::new(), replacement, &HashSet::new());
                     }
-                    let expected = if case == "added" { &incoming } else { &previous };
+                    if case == "bypassed" {
+                        assert!(!incoming.has_cross_namespace_mirror());
+                        assert!(incoming.has_enabled_plugin_policy_action());
+                    }
+                    let expected = if matches!(case, "added" | "bypassed") {
+                        &incoming
+                    } else {
+                        &previous
+                    };
                     assert!(
                         Arc::ptr_eq(
                             &store.get_plugin_runtime(&key).expect("runtime remains published"),

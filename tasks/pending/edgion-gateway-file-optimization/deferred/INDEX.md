@@ -85,7 +85,7 @@ These entries are backlinks only. A linked `tasks/todo` file is the editable sou
 | D0092 — Complete Gateway API request-transform validation and preparation parity | needs-implementation | [campaign finding](D0092-gateway-api-request-transform-validation-preparation-parity.md) |
 | D0093 — Correct Gateway API RequestRedirect documentation | retired externally in 78a25c3a | [campaign finding](D0093-correct-gateway-api-request-redirect-documentation.md) |
 | D0094 — Reject DSL builtin calls beyond bytecode argument capacity | needs-implementation | [campaign finding](D0094-dsl-builtin-argument-count-encoding.md) |
-| D0095 — Investigate plugin policy and invalid-generation retention | needs-investigation | [campaign finding](D0095-plugin-policy-invalid-generation-retention.md) |
+| D0095 — Migrate plugin policy after narrow HTTP LKG mitigation | needs-implementation; B0301 mitigated stamped-policy retention only | [campaign finding](D0095-plugin-policy-invalid-generation-retention.md) |
 | Precompile backend port resolution and fail closed on missing mappings | fixed (2026-09-08) | [resolution](../../../../skills/04-review/backends/regression-guards/named-port-resolve-against-originating-slice.md) |
 | Fail closed on invalid Gateway BackendTLSPolicy candidates | completed | [architecture](../../../../skills/01-architecture/02-gateway/07-backends.md) |
 | Make BackendTLSPolicy publication truly incremental | pending | [task](../../../todo/backend-tls-policy-true-incremental-publication.md) |
