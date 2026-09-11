@@ -1,3 +1,5 @@
+use crate::routes::common::{filter_accepted_parent_refs, resolve_parent_refs};
+use crate::runtime::matching::route::ResolvedParentRef;
 use std::sync::Arc;
 
 use crate::lb::BackendSelector;
@@ -18,6 +20,8 @@ use edgion_resources::ResourceMeta;
 /// suffices. `backend_finder` is built for the first rule only, matching the
 /// data-plane read path (`rules.first()`).
 pub struct TcpRouteUnit {
+    /// Accepted parent identities resolved once for logical Gateway admission.
+    pub resolved_parent_refs: Vec<ResolvedParentRef>,
     pub route: Arc<TCPRoute>,
     /// WRR selector over the first rule's backends.
     pub backend_finder: Arc<BackendSelector<TCPBackendRef>>,
@@ -35,12 +39,22 @@ impl TcpRouteUnit {
     /// HTTP/TLS conf-handlers) and builds the WRR selector from the first
     /// rule's backend refs. None of this state lives on the schema.
     pub fn from_route(route: Arc<TCPRoute>) -> Self {
+        let namespace = route.metadata.namespace.as_deref().unwrap_or("default");
+        let accepted = filter_accepted_parent_refs(
+            route.spec.parent_refs.as_deref(),
+            route.status.as_ref().map(|status| status.parents.as_slice()),
+            Some(namespace),
+        )
+        .unwrap_or_default();
+        let resolved_parent_refs = resolve_parent_refs(&accepted, namespace);
+
         let route_key = route.key_name();
         let stream_plugin_store_key = resolve_stream_plugin_store_key(&route.metadata);
         let tcp_keepalive = resolve_tcp_keepalive(route.metadata.annotations.as_ref(), &route_key);
         let backend_finder = build_backend_selector(&route);
         TcpRouteUnit {
             route,
+            resolved_parent_refs,
             backend_finder,
             stream_plugin_store_key,
             tcp_keepalive,

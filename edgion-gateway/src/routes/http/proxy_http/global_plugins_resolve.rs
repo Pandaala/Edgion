@@ -14,28 +14,14 @@
 use std::sync::Arc;
 
 use crate::ctx::{WafLogSource, WafSelection};
-use crate::plugins::http::PluginStore;
+use crate::plugins::publication::PluginScope;
 use crate::plugins::runtime::PluginRuntime;
+#[cfg(test)]
 use edgion_resources::resources::edgion_gateway_config::PluginReference;
 
-/// Resolve `EdgionGatewayConfig.spec.global_plugins_ref` to a Vec of plugin
-/// runtimes, preserving order. Dangling refs are silently dropped from the
-/// output — no logging, this runs on the data-plane hot path.
-///
-/// Takes `&PluginStore` so the caller can fetch the global store once per
-/// request and share it across multiple resolve calls, avoiding redundant
-/// `Arc::clone` of `GLOBAL_PLUGIN_STORE`.
-pub fn resolve_global_plugins(store: &PluginStore, refs: Option<&[PluginReference]>) -> Vec<Arc<PluginRuntime>> {
-    let Some(refs) = refs else { return Vec::new() };
-    let mut out = Vec::with_capacity(refs.len());
-    for r in refs {
-        let ns = r.namespace.as_deref().unwrap_or("default");
-        let key = format!("{}/{}", ns, r.name);
-        if let Some(rt) = store.get_plugin_runtime(&key) {
-            out.push(rt);
-        }
-    }
-    out
+/// Resolve the global references precomputed for this captured class scope.
+pub(crate) fn resolve_global_plugins(scope: &PluginScope) -> Vec<Arc<PluginRuntime>> {
+    resolve_gateway_plugins(scope, &scope.global_keys)
 }
 
 /// Resolve a rule's ExtensionRef keys (built by
@@ -45,13 +31,16 @@ pub fn resolve_global_plugins(store: &PluginStore, refs: Option<&[PluginReferenc
 /// `ExtensionRefFilter.index` directly indexes into this Vec. Dangling refs
 /// are not logged here — this runs on the data-plane hot path.
 ///
-/// Takes `&PluginStore` so the caller can fetch the global store once per
+/// Takes the captured `&PluginScope` so all references share the same policy within a
 /// request and share it across multiple resolve calls.
-pub fn resolve_route_ext_refs(store: &PluginStore, keys: &[(String, String)]) -> Vec<Option<Arc<PluginRuntime>>> {
+pub(crate) fn resolve_route_ext_refs(
+    store: &PluginScope,
+    keys: &[(String, String)],
+) -> Vec<Option<Arc<PluginRuntime>>> {
     let mut out = Vec::with_capacity(keys.len());
     for (ns, name) in keys {
         let key = format!("{}/{}", ns, name);
-        out.push(store.get_plugin_runtime(&key));
+        out.push(store.http(&key).map(|compiled| Arc::clone(&compiled.plugin_runtime)));
     }
     out
 }
@@ -59,10 +48,10 @@ pub fn resolve_route_ext_refs(store: &PluginStore, keys: &[(String, String)]) ->
 /// Resolve already-formed "namespace/name" store keys (from a Gateway's
 /// `edgion.io/edgion-plugins` annotation) into plugin runtimes, preserving order and
 /// dropping dangling refs (hot path: no logging).
-pub fn resolve_gateway_plugins(store: &PluginStore, keys: &[String]) -> Vec<Arc<PluginRuntime>> {
+pub(crate) fn resolve_gateway_plugins(store: &PluginScope, keys: &[String]) -> Vec<Arc<PluginRuntime>> {
     let mut out = Vec::with_capacity(keys.len());
     for key in keys {
-        if let Some(rt) = store.get_plugin_runtime(key) {
+        if let Some(rt) = store.http(key).map(|compiled| Arc::clone(&compiled.plugin_runtime)) {
             out.push(rt);
         }
     }
@@ -121,6 +110,7 @@ pub(crate) fn select_waf_owner(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::plugins::http::PluginStore;
     use edgion_resources::resources::edgion_plugins::{
         EdgionPlugin, EdgionPlugins, EdgionPluginsSpec, RequestFilterEntry,
     };
@@ -204,6 +194,15 @@ mod tests {
         assert!(select_waf_owner(&[], &[], &[]).is_none());
     }
 
+    fn install_global_refs(store: &PluginStore, refs: Vec<PluginReference>) -> Arc<PluginScope> {
+        let mut config = (**store.scope().config.as_ref().unwrap()).clone();
+        config.spec.global_plugins_ref = Some(refs);
+        store
+            .publisher()
+            .replace_gateway_configs(HashMap::from([("plugin-store-test".into(), Arc::new(config))]));
+        store.scope()
+    }
+
     fn pref(name: &str, ns: Option<&str>) -> PluginReference {
         PluginReference {
             name: name.to_string(),
@@ -214,7 +213,7 @@ mod tests {
     #[test]
     fn resolve_global_plugins_empty_when_none() {
         let store = PluginStore::new();
-        let resolved = resolve_global_plugins(&store, None);
+        let resolved = resolve_global_plugins(&store.scope());
         assert!(resolved.is_empty());
     }
 
@@ -230,7 +229,7 @@ mod tests {
             pref("p2", Some("ns1")), // dangling
             pref("p3", Some("ns1")),
         ];
-        let resolved = resolve_global_plugins(&store, Some(&refs));
+        let resolved = resolve_global_plugins(&install_global_refs(&store, refs));
         assert_eq!(resolved.len(), 2, "dangling p2 should be dropped");
         assert!(Arc::ptr_eq(&resolved[0], &p1));
         assert!(Arc::ptr_eq(&resolved[1], &p3));
@@ -244,7 +243,7 @@ mod tests {
             .get_plugin_runtime("default/global1")
             .expect("global1 is installed");
         let refs = vec![pref("global1", None)];
-        let resolved = resolve_global_plugins(&store, Some(&refs));
+        let resolved = resolve_global_plugins(&install_global_refs(&store, refs));
         assert_eq!(resolved.len(), 1);
         assert!(Arc::ptr_eq(&resolved[0], &global1));
     }
@@ -259,7 +258,7 @@ mod tests {
             ("ns1".to_string(), "missing".to_string()),
             ("ns1".to_string(), "p1".to_string()), // duplicate ok
         ];
-        let resolved = resolve_route_ext_refs(&store, &keys);
+        let resolved = resolve_route_ext_refs(&store.scope(), &keys);
         assert_eq!(resolved.len(), 3);
         assert!(Arc::ptr_eq(resolved[0].as_ref().expect("p1 resolves"), &p1));
         assert!(resolved[1].is_none(), "dangling slot must be None");
@@ -269,7 +268,7 @@ mod tests {
     #[test]
     fn resolve_route_ext_refs_empty_keys_yields_empty_vec() {
         let store = PluginStore::new();
-        let resolved = resolve_route_ext_refs(&store, &[]);
+        let resolved = resolve_route_ext_refs(&store.scope(), &[]);
         assert!(resolved.is_empty());
     }
 }
@@ -277,18 +276,19 @@ mod tests {
 #[cfg(test)]
 mod gateway_plugins_resolve_tests {
     use super::*;
+    use crate::plugins::http::PluginStore;
 
     #[test]
     fn empty_keys_yield_empty() {
         let store = PluginStore::new();
-        assert!(resolve_gateway_plugins(&store, &[]).is_empty());
+        assert!(resolve_gateway_plugins(&store.scope(), &[]).is_empty());
     }
 
     #[test]
     fn dangling_keys_dropped() {
         let store = PluginStore::new();
         // A key that does not exist in the empty store is dropped.
-        let out = resolve_gateway_plugins(&store, &["nope/missing".to_string()]);
+        let out = resolve_gateway_plugins(&store.scope(), &["nope/missing".to_string()]);
         assert!(out.is_empty());
     }
 }

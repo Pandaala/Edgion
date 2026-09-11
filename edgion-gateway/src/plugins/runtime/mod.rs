@@ -5,6 +5,7 @@ pub mod conditional_filter;
 pub mod conditions;
 pub mod dye_plan;
 pub mod edgion_config_data;
+pub(crate) mod entry_bundle;
 pub mod gateway_api_filters;
 pub mod log;
 mod plugin_runtime;

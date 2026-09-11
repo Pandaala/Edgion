@@ -460,14 +460,13 @@ impl UpstreamResponse for ExtensionRefFilter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::plugins::http::{compile_plugins, get_global_plugin_store};
+    use crate::plugins::http::compile_plugins;
     use crate::plugins::runtime::traits::session::MockPluginSession;
     use edgion_resources::resources::edgion_plugins::EdgionPlugin;
     use edgion_resources::resources::edgion_plugins::{EdgionPlugins, EdgionPluginsSpec, RequestFilterEntry};
     use edgion_resources::resources::http_route::HTTPHeaderFilter;
     use kube::core::ObjectMeta;
     use mockall::predicate::eq;
-    use std::collections::HashMap;
 
     #[test]
     fn plugin_key_accessor_is_allocation_free() {
@@ -488,7 +487,7 @@ mod tests {
         assert_eq!(allocations.calls, 0);
     }
 
-    fn make_plugin(key_ns: &str, name: &str) {
+    fn make_plugin(key_ns: &str, name: &str) -> Arc<PluginRuntime> {
         let ep = EdgionPlugins {
             metadata: ObjectMeta {
                 namespace: Some(key_ns.to_string()),
@@ -508,9 +507,7 @@ mod tests {
             status: None,
         };
 
-        let mut map = HashMap::new();
-        map.insert(format!("{}/{}", key_ns, name), compile_plugins(&ep));
-        get_global_plugin_store().replace_all(map);
+        Arc::clone(&compile_plugins(&ep).plugin_runtime)
     }
 
     fn make_terminating_plugin(key_ns: &str, name: &str) -> Arc<crate::plugins::runtime::PluginRuntime> {
@@ -646,8 +643,7 @@ mod tests {
         use crate::plugins::runtime::log::EdgionPluginsLogToken;
 
         // Prepare store with plugin
-        make_plugin("ns", "p1");
-        let runtime = get_global_plugin_store().get_plugin_runtime("ns/p1").unwrap();
+        let runtime = make_plugin("ns", "p1");
 
         let mut session = MockPluginSession::new();
         session

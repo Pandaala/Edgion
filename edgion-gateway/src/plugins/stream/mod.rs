@@ -12,6 +12,7 @@ pub mod connection_rate_limit;
 pub mod geoip_location;
 pub mod global_connection_ip_restriction;
 pub mod ip_restriction;
+pub(crate) mod plugin_generation;
 mod stream_plugin_runtime;
 mod stream_plugin_store;
 mod stream_plugin_trait;

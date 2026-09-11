@@ -1,10 +1,9 @@
 //! Status stamping for operator-authored unknown config fields.
 //!
-//! Mirrors `plugin_policy_stamp.rs`, which already solves this exact shape:
-//! an Edgion-specific advisory condition, upserted on hits and **removed**
+//! An Edgion-specific advisory condition, upserted on hits and **removed**
 //! entirely on zero hits. Callers MUST remove the condition themselves when
 //! there are no findings — an upsert-only pipeline wedges otherwise, because
-//! a resource the operator fixed would keep a stale `True` forever. See
+//! a resource the operator fixed would keep a stale `True` forever.
 //! It remains a dedicated condition rather than changing `Accepted`, because
 //! unknown fields are advisory and do not block synchronization.
 

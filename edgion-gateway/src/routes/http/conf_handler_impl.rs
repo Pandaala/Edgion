@@ -75,9 +75,6 @@ impl ConfHandler<HTTPRoute> for GlobalHttpRouteManagers {
             // Step 2: Rebuild all per-listener managers (lock already held above).
             self.rebuild_all_listener_managers_locked();
         }
-        if std::ptr::eq(self, get_global_http_route_managers()) {
-            crate::ai::replace_adaptive_route_contributions(data);
-        }
 
         let elapsed = Instant::now().saturating_duration_since(start_time);
         tracing::info!(
@@ -85,6 +82,20 @@ impl ConfHandler<HTTPRoute> for GlobalHttpRouteManagers {
             ms = elapsed.as_millis(),
             "full set done"
         );
+        crate::plugins::publication::global_publisher().replace_routes(
+            crate::plugins::publication::inputs::RouteKind::Http,
+            data.iter()
+                .map(|(key, route)| {
+                    (
+                        key.clone(),
+                        crate::plugins::publication::inputs::RouteInput::from_http(Arc::clone(route)),
+                    )
+                })
+                .collect(),
+        );
+        if std::ptr::eq(self, get_global_http_route_managers()) {
+            crate::ai::replace_adaptive_route_contributions(data);
+        }
     }
 
     fn partial_update(
@@ -93,6 +104,17 @@ impl ConfHandler<HTTPRoute> for GlobalHttpRouteManagers {
         update: HashMap<String, Arc<HTTPRoute>>,
         remove: HashSet<String>,
     ) {
+        let policy_inputs = add
+            .iter()
+            .chain(update.iter())
+            .map(|(key, route)| {
+                (
+                    key.clone(),
+                    crate::plugins::publication::inputs::RouteInput::from_http(Arc::clone(route)),
+                )
+            })
+            .collect();
+        let policy_removed = remove.clone();
         // Serialize against a concurrent Gateway-driven rebuild_all (see rebuild_lock).
         // Covers the affected-set computation, route_cache mutation, and rebuild as one
         // critical section so rebuild_all cannot interleave on a stale snapshot.
@@ -148,15 +170,20 @@ impl ConfHandler<HTTPRoute> for GlobalHttpRouteManagers {
 
             self.rebuild_affected_listener_managers(&affected_listeners);
         }
-        if std::ptr::eq(self, get_global_http_route_managers()) {
-            crate::ai::update_adaptive_route_contributions(&add_or_update, &remove);
-        }
 
         tracing::info!(
             component = "http_route_manager",
             ms = Instant::now().saturating_duration_since(start_time).as_millis(),
             "partial update done"
         );
+        crate::plugins::publication::global_publisher().update_routes(
+            crate::plugins::publication::inputs::RouteKind::Http,
+            policy_inputs,
+            &policy_removed,
+        );
+        if std::ptr::eq(self, get_global_http_route_managers()) {
+            crate::ai::update_adaptive_route_contributions(&add_or_update, &remove);
+        }
     }
 }
 

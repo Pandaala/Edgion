@@ -86,7 +86,7 @@ Destination names are limited to 128 bytes. Credential, routing, framing, protoc
 
 For each rule, the first valid destination value wins. If it is absent, the gateway reads `source`; if that is absent or invalid, `generateWhenMissing` controls generation. Prefixes do not modify inherited or copied values. Forwarding the chosen value allows subsequent gateways to preserve it.
 
-Core defaults and global rules run before normal request validation. Gateway rules run early when TLS metadata or a unique listener owner identifies the Gateway. A shared listener with ambiguous ownership uses core/global IDs until normal routing establishes the owner, then applies Gateway rules before preflight and later plugins. No Gateway is selected arbitrarily for a malformed or unmatched request.
+Core W3C initialization and default IDs run before normal request validation. Configured global and Gateway rules run only after unambiguous Gateway ownership and admission under its current plugin policy. On a shared listener with ambiguous ownership, both configured tiers wait for normal routing; core IDs remain available. TLS handshake metadata alone does not authorize a class. Once routing establishes ownership, configured rules run before preflight and later plugins. No Gateway is selected arbitrarily for a malformed or unmatched request.
 
 This lifecycle applies to the main HTTP proxy, including gRPC and WebSocket handshakes. The separate HTTP-to-HTTPS redirect service does not run the RequestId plugin chain. Failures before parsed HTTP headers or before a request context exists cannot guarantee response IDs.
 

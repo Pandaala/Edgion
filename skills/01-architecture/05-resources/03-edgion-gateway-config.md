@@ -20,7 +20,10 @@ EdgionGatewayConfig is a cluster-scoped Edgion-extension resource used to config
 ### parse
 
 `preparse` rejects unsupported outbound TLS SAN pinning and validates that DNS resolver
-`linkSysRef` and inline servers are mutually exclusive.
+`linkSysRef` and inline servers are mutually exclusive. It also validates
+`spec.pluginPolicy` with the shared pure compiler; invalid names, duplicate
+entries, action/status combinations and out-of-range statuses surface as
+source validation errors.
 
 `parse` checks removed/deprecated fields, clears prior Secret registrations, resolves the
 cluster-wide `outboundTls.validation.caCertificateRefs` through runtime material stores with
@@ -36,10 +39,20 @@ on EdgionGatewayConfig existence; delete also clears Secret registrations.
 
 ## Gateway-side processing
 
-After EdgionGatewayConfig is synced to the Gateway side, its configuration items apply to the global behavior of all Gateway instances (e.g., default timeouts, buffer sizes, and other global parameters).
+The plugin-policy publisher resolves `spec.pluginPolicy` only through each
+GatewayClass parametersRef. Unreferenced EGC resources do not contribute policy;
+classes sharing one EGC share its policy while retaining their own attachment
+scope. Policy, global plugin references, source generations and attachments
+produce one immutable scope. EGC/class/binding changes rebuild affected views
+without restarting listeners. Missing/invalid referenced configuration denies
+new admission; no parametersRef selects the explicit default scope.
+
+This scope rule is specific to plugin execution policy and does not imply that
+all existing EGC configuration stores have been redesigned. See
+[plugin publication](../../04-review/plugin-runtime/regression-guards/scoped-policy-runtime-publication.md).
 
 ## Cross-resource relationships
 
 | Direction | Target resource | Mechanism | Notes |
 |---------|---------|---------|------|
-| EdgionGatewayConfig → Gateway | Gateway | global | Global configuration affects the behavior of all Gateways |
+| EdgionGatewayConfig → GatewayClass → Gateway | GatewayClass parametersRef | scoped publication | Plugin execution policy affects only bound classes and their Gateways |

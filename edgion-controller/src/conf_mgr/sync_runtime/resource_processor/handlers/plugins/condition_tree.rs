@@ -94,7 +94,7 @@ pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) fn resolve_c
 fn walk_all_ip_refs(ep: &mut EdgionPlugins, resolve_ctx: &ResolveCtx<'_>) {
     if let Some(entries) = ep.spec.request_plugins.as_mut() {
         for entry in entries {
-            if !entry.is_enabled() || entry.policy_action.is_some() {
+            if !entry.is_enabled() {
                 continue;
             }
             walk_request_entry_ip_refs(entry, resolve_ctx);
@@ -102,7 +102,7 @@ fn walk_all_ip_refs(ep: &mut EdgionPlugins, resolve_ctx: &ResolveCtx<'_>) {
     }
     if let Some(entries) = ep.spec.upstream_response_filter_plugins.as_mut() {
         for entry in entries {
-            if !entry.is_enabled() || entry.policy_action.is_some() {
+            if !entry.is_enabled() {
                 continue;
             }
             walk_upstream_filter_entry_ip_refs(entry, resolve_ctx);
@@ -110,7 +110,7 @@ fn walk_all_ip_refs(ep: &mut EdgionPlugins, resolve_ctx: &ResolveCtx<'_>) {
     }
     if let Some(entries) = ep.spec.upstream_response_body_filter_plugins.as_mut() {
         for entry in entries {
-            if !entry.is_enabled() || entry.policy_action.is_some() {
+            if !entry.is_enabled() {
                 continue;
             }
             walk_upstream_body_entry_ip_refs(entry, resolve_ctx);
@@ -118,7 +118,7 @@ fn walk_all_ip_refs(ep: &mut EdgionPlugins, resolve_ctx: &ResolveCtx<'_>) {
     }
     if let Some(entries) = ep.spec.upstream_response_plugins.as_mut() {
         for entry in entries {
-            if !entry.is_enabled() || entry.policy_action.is_some() {
+            if !entry.is_enabled() {
                 continue;
             }
             walk_upstream_response_entry_ip_refs(entry, resolve_ctx);
@@ -402,7 +402,7 @@ fn walk_all_credentials(
 ) {
     if let Some(entries) = ep.spec.request_plugins.as_mut() {
         for entry in entries {
-            if !entry.is_enabled() || entry.policy_action.is_some() {
+            if !entry.is_enabled() {
                 continue;
             }
             walk_plugin_conditions_credentials(entry.conditions.as_mut(), owner_namespace, resource_ref, ctx);
@@ -426,7 +426,7 @@ fn walk_all_credentials(
     }
     if let Some(entries) = ep.spec.upstream_response_filter_plugins.as_mut() {
         for entry in entries {
-            if !entry.is_enabled() || entry.policy_action.is_some() {
+            if !entry.is_enabled() {
                 continue;
             }
             walk_plugin_conditions_credentials(entry.conditions.as_mut(), owner_namespace, resource_ref, ctx);
@@ -435,7 +435,7 @@ fn walk_all_credentials(
     }
     if let Some(entries) = ep.spec.upstream_response_body_filter_plugins.as_mut() {
         for entry in entries {
-            if !entry.is_enabled() || entry.policy_action.is_some() {
+            if !entry.is_enabled() {
                 continue;
             }
             walk_plugin_conditions_credentials(entry.conditions.as_mut(), owner_namespace, resource_ref, ctx);
@@ -444,7 +444,7 @@ fn walk_all_credentials(
     }
     if let Some(entries) = ep.spec.upstream_response_plugins.as_mut() {
         for entry in entries {
-            if !entry.is_enabled() || entry.policy_action.is_some() {
+            if !entry.is_enabled() {
                 continue;
             }
             walk_plugin_conditions_credentials(entry.conditions.as_mut(), owner_namespace, resource_ref, ctx);
@@ -624,7 +624,7 @@ pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) fn for_each_
 ) {
     if let Some(entries) = ep.spec.request_plugins.as_ref() {
         for entry in entries {
-            if !entry.is_enabled() || entry.policy_action.is_some() {
+            if !entry.is_enabled() {
                 continue;
             }
             visit_plugin_conditions_secret_matches(entry.conditions.as_ref(), &mut visit);
@@ -670,7 +670,7 @@ pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) fn for_each_
     }
     if let Some(entries) = ep.spec.upstream_response_filter_plugins.as_ref() {
         for entry in entries {
-            if !entry.is_enabled() || entry.policy_action.is_some() {
+            if !entry.is_enabled() {
                 continue;
             }
             visit_plugin_conditions_secret_matches(entry.conditions.as_ref(), &mut visit);
@@ -679,7 +679,7 @@ pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) fn for_each_
     }
     if let Some(entries) = ep.spec.upstream_response_body_filter_plugins.as_ref() {
         for entry in entries {
-            if !entry.is_enabled() || entry.policy_action.is_some() {
+            if !entry.is_enabled() {
                 continue;
             }
             visit_plugin_conditions_secret_matches(entry.conditions.as_ref(), &mut visit);
@@ -688,7 +688,7 @@ pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) fn for_each_
     }
     if let Some(entries) = ep.spec.upstream_response_plugins.as_ref() {
         for entry in entries {
-            if !entry.is_enabled() || entry.policy_action.is_some() {
+            if !entry.is_enabled() {
                 continue;
             }
             visit_plugin_conditions_secret_matches(entry.conditions.as_ref(), &mut visit);
@@ -740,7 +740,7 @@ pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) fn for_each_
 ) {
     if let Some(entries) = ep.spec.request_plugins.as_ref() {
         for entry in entries {
-            if !entry.is_enabled() || entry.policy_action.is_some() {
+            if !entry.is_enabled() {
                 continue;
             }
             visit_plugin_conditions_ip_refs(entry.conditions.as_ref(), &mut visit);
@@ -758,7 +758,7 @@ pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) fn for_each_
     }
     if let Some(entries) = ep.spec.upstream_response_filter_plugins.as_ref() {
         for entry in entries {
-            if !entry.is_enabled() || entry.policy_action.is_some() {
+            if !entry.is_enabled() {
                 continue;
             }
             visit_plugin_conditions_ip_refs(entry.conditions.as_ref(), &mut visit);
@@ -767,7 +767,7 @@ pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) fn for_each_
     }
     if let Some(entries) = ep.spec.upstream_response_body_filter_plugins.as_ref() {
         for entry in entries {
-            if !entry.is_enabled() || entry.policy_action.is_some() {
+            if !entry.is_enabled() {
                 continue;
             }
             visit_plugin_conditions_ip_refs(entry.conditions.as_ref(), &mut visit);
@@ -776,7 +776,7 @@ pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) fn for_each_
     }
     if let Some(entries) = ep.spec.upstream_response_plugins.as_ref() {
         for entry in entries {
-            if !entry.is_enabled() || entry.policy_action.is_some() {
+            if !entry.is_enabled() {
                 continue;
             }
             visit_plugin_conditions_ip_refs(entry.conditions.as_ref(), &mut visit);

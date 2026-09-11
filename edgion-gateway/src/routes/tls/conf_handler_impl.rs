@@ -47,6 +47,18 @@ impl ConfHandler<TLSRoute> for GlobalTlsRouteManagers {
             ms = Instant::now().saturating_duration_since(start_time).as_millis(),
             "full set done"
         );
+        drop(_guard);
+        crate::plugins::publication::global_publisher().replace_routes(
+            crate::plugins::publication::inputs::RouteKind::Tls,
+            data.iter()
+                .map(|(key, route)| {
+                    (
+                        key.clone(),
+                        crate::plugins::publication::inputs::RouteInput::from_tls(route),
+                    )
+                })
+                .collect(),
+        );
     }
 
     fn partial_update(
@@ -55,6 +67,17 @@ impl ConfHandler<TLSRoute> for GlobalTlsRouteManagers {
         update: HashMap<String, Arc<TLSRoute>>,
         remove: HashSet<String>,
     ) {
+        let policy_inputs = add
+            .iter()
+            .chain(update.iter())
+            .map(|(key, route)| {
+                (
+                    key.clone(),
+                    crate::plugins::publication::inputs::RouteInput::from_tls(route),
+                )
+            })
+            .collect();
+        let policy_removed = remove.clone();
         // Serialize against a concurrent Gateway-driven rebuild_all (see rebuild_lock).
         let _guard = self.lock_rebuild();
         tracing::info!(
@@ -81,6 +104,12 @@ impl ConfHandler<TLSRoute> for GlobalTlsRouteManagers {
                 })
             },
             |affected| self.rebuild_affected_listener_managers(affected),
+        );
+        drop(_guard);
+        crate::plugins::publication::global_publisher().update_routes(
+            crate::plugins::publication::inputs::RouteKind::Tls,
+            policy_inputs,
+            &policy_removed,
         );
     }
 }

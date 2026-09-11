@@ -3,7 +3,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use super::{compile_plugins, get_global_plugin_store, CompiledPlugins, PluginStore};
+use super::{get_global_plugin_store, PluginStore};
 use edgion_common::conf_sync::traits::ConfHandler;
 use edgion_resources::resources::EdgionPlugins;
 
@@ -12,17 +12,11 @@ pub fn create_plugin_handler() -> Box<dyn ConfHandler<EdgionPlugins> + Send + Sy
     Box::new(get_global_plugin_store())
 }
 
-/// Compile every incoming EdgionPlugins into its gateway runtime companion,
-/// keyed by the same map key. The runtime is built once per (ns/name) here.
-fn compile_map(data: HashMap<String, Arc<EdgionPlugins>>) -> HashMap<String, Arc<CompiledPlugins>> {
-    data.into_iter().map(|(k, v)| (k, compile_plugins(&v))).collect()
-}
-
 impl ConfHandler<EdgionPlugins> for PluginStore {
     fn full_set(&self, data: &HashMap<String, Arc<EdgionPlugins>>) {
-        tracing::info!(component = "plugin_store", cnt = data.len(), "full set");
-        let compiled = data.iter().map(|(k, v)| (k.clone(), compile_plugins(v))).collect();
-        self.replace_all(compiled);
+        #[cfg(test)]
+        self.prepare_test_scope(data.keys().cloned().collect());
+        self.publisher().replace_http_plugins(data.clone());
         if std::ptr::eq(self, super::global_plugin_store()) {
             crate::ai::reconcile_all_adaptive_plugin_dependents();
         }
@@ -34,19 +28,15 @@ impl ConfHandler<EdgionPlugins> for PluginStore {
         update: HashMap<String, Arc<EdgionPlugins>>,
         remove: HashSet<String>,
     ) {
-        tracing::info!(
-            component = "plugin_store",
-            add = add.len(),
-            update = update.len(),
-            rm = remove.len(),
-            "partial update"
-        );
-
         let changed_keys: HashSet<_> = add.keys().chain(update.keys()).chain(remove.iter()).cloned().collect();
-        let compiled_add = compile_map(add);
-        let compiled_update = compile_map(update);
-
-        self.apply_delta(compiled_add, compiled_update, &remove);
+        #[cfg(test)]
+        {
+            let mut keys: HashSet<_> = self.publisher().snapshot().http_sources().keys().cloned().collect();
+            keys.extend(add.keys().chain(update.keys()).cloned());
+            keys.retain(|key| !remove.contains(key));
+            self.prepare_test_scope(keys);
+        }
+        self.publisher().update_http_plugins(add, update, &remove);
         if std::ptr::eq(self, super::global_plugin_store()) {
             crate::ai::reconcile_adaptive_plugin_keys(&changed_keys);
         }
@@ -229,7 +219,10 @@ mod tests {
         let retained_runtime = store
             .get_plugin_runtime("default/plugin1")
             .expect("last-known-good runtime should be retained");
-        assert!(Arc::ptr_eq(&previous_runtime, &retained_runtime));
+        assert!(Arc::ptr_eq(
+            previous_runtime.request_plugins_iter().next().unwrap(),
+            retained_runtime.request_plugins_iter().next().unwrap(),
+        ));
     }
 
     #[test]
@@ -295,7 +288,10 @@ mod tests {
         let retained_runtime = store
             .get_plugin_runtime("default/kept")
             .expect("last-known-good runtime should be retained");
-        assert!(Arc::ptr_eq(&previous_runtime, &retained_runtime));
+        assert!(Arc::ptr_eq(
+            previous_runtime.request_plugins_iter().next().unwrap(),
+            retained_runtime.request_plugins_iter().next().unwrap(),
+        ));
         assert!(!store.contains("default/removed"));
     }
 

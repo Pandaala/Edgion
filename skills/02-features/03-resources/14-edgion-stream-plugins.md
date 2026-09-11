@@ -134,18 +134,16 @@ status:
       reason: Valid
 ```
 
-## Controller Plugin Policy (Allowlist / Denylist)
+## GatewayClass plugin execution policy
 
-An operator can restrict which `stream/<Type>` (connection stage) and
-`tls-route/<Type>` (TLS-route stage) plugin types the Gateway is allowed
-to instantiate via the Controller's optional `validation.plugin_policy`
-config section (absent by default = allow all). A restricted entry is
-stamped, not force-disabled, and is reported via a `PluginPolicyRestricted`
-status condition; on the data plane a Block closes the connection (the
-configured status is ignored) and a Bypass skips the plugin. See
-[validation.plugin_policy](../02-config/00-controller-config.md#validationplugin_policy)
-for the config schema and `docs/en/ops-guide/plugin-policy.md` for the
-operator guide.
+`EdgionGatewayConfig.spec.pluginPolicy` governs `stream/<Type>` connection entries and `tls-route/<Type>` TLSRoute entries.
+The actual GatewayClass binding selects the policy, so shared plugin resources
+can be allowed in one class and restricted in another. The Gateway publishes
+compatible views dynamically; the Controller neither stamps entries nor emits
+a global restriction condition on the shared plugin resource.
+
+See [spec.pluginPolicy](../02-config/02-edgion-gateway-config.md#specpluginpolicy)
+for allow/deny semantics, lifecycle boundaries and unavailable-policy behavior.
 
 ## Unknown config keys (`UnknownConfigFields` condition)
 

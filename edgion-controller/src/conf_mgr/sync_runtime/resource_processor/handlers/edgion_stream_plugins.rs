@@ -185,17 +185,11 @@ impl Default for EdgionStreamPluginsHandler {
 #[async_trait::async_trait]
 impl ProcessorHandler<EdgionStreamPlugins> for EdgionStreamPluginsHandler {
     fn preparse(&self, esp: &mut EdgionStreamPlugins, _ctx: &HandlerContext) -> Vec<String> {
-        // Plugin policy: clear any inbound policy_action and re-stamp from the
-        // compiled policy. Runs before validation; hits surface via the
-        // PluginPolicyRestricted condition in update_status, NOT as
-        // validation errors (Accepted keeps meaning "valid and synced").
-        let _ = super::super::plugin_policy_stamp::stamp_stream_entries(esp);
-
         // Unknown-field diagnostic: `spec.unknown_fields` was already
         // populated by the ingest hook, loader, or Admin API seam, so this
         // is a pure read — no re-walk here. Warn once on the apply path; the
         // status-side UnknownConfigFields condition is stamped in
-        // update_status, mirroring PluginPolicyRestricted. Advisory only:
+        // update_status. Advisory only:
         // this never touches `Accepted` or blocks the resource from syncing.
         if !esp.spec.unknown_fields.is_empty() {
             let paths = bounded_unknown_field_paths(&esp.spec.unknown_fields);
@@ -400,17 +394,12 @@ impl ProcessorHandler<EdgionStreamPlugins> for EdgionStreamPluginsHandler {
             partially_invalid_condition(Some(msg), generation)
         };
 
-        // Computed before the mutable `status` borrow below (collect_policy_hits_stream
-        // needs a shared borrow of `esp`, which would otherwise overlap it).
-        let policy_hits = super::super::plugin_policy_stamp::collect_policy_hits_stream(esp);
-
         let status = esp
             .status
             .get_or_insert_with(|| EdgionStreamPluginsStatus { conditions: vec![] });
         update_condition(&mut status.conditions, accepted);
         update_condition(&mut status.conditions, resolved_refs);
         update_condition(&mut status.conditions, partially_invalid);
-        super::super::plugin_policy_stamp::apply_policy_condition(&mut status.conditions, &policy_hits, generation);
         super::super::unknown_fields_stamp::apply_unknown_fields_condition(
             &mut status.conditions,
             &esp.spec.unknown_fields,
@@ -1232,45 +1221,6 @@ spec:
         let status = esp.status.as_ref().unwrap();
         let accepted = status.conditions.iter().find(|c| c.type_ == "Accepted").unwrap();
         assert_eq!(accepted.reason, "Invalid");
-    }
-
-    // ── PluginPolicyRestricted condition removal (Task 4) ───────────────────
-
-    #[test]
-    fn update_status_removes_stale_policy_condition_when_no_hits() {
-        // Simulates the K8s watch echo: object arrives with a live
-        // PluginPolicyRestricted condition but the (absent) policy stamps
-        // nothing. update_status must remove the stale condition.
-        use crate::conf_mgr::sync_runtime::resource_processor::status_utils::{
-            condition_reasons, condition_true, condition_types,
-        };
-        use edgion_resources::resources::edgion_stream_plugins::EdgionStreamPluginsSpec;
-
-        let spec = EdgionStreamPluginsSpec {
-            plugins: None,
-            tls_route_plugins: None,
-            unknown_fields: Vec::new(),
-        };
-        let mut esp = EdgionStreamPlugins::new("policy-restricted-esp", spec);
-        esp.metadata.namespace = Some("default".to_string());
-        esp.status = Some(EdgionStreamPluginsStatus {
-            conditions: vec![condition_true(
-                condition_types::PLUGIN_POLICY_RESTRICTED,
-                condition_reasons::RESTRICTED_BY_POLICY,
-                "stale",
-                Some(1),
-            )],
-        });
-
-        let handler = EdgionStreamPluginsHandler::new();
-        handler.update_status(&mut esp, &make_ctx(), &[]);
-
-        assert!(esp
-            .status
-            .unwrap()
-            .conditions
-            .iter()
-            .all(|c| c.type_ != condition_types::PLUGIN_POLICY_RESTRICTED));
     }
 
     // ── UnknownConfigFields condition ───────────────────────────────────────

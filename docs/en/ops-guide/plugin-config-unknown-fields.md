@@ -147,6 +147,5 @@ in your GitOps pipeline, or a pre-`kubectl apply` check in your own tooling.
   — provider schemas, open boundaries, and status behavior.
 - [Admin API — diagnostics and validate endpoints](https://github.com/Pandaala/Edgion/blob/main/skills/01-architecture/01-controller/02-admin-api.md)
   — the full endpoint reference.
-- [Plugin Policy (Allowlist / Denylist)](./plugin-policy.md) — the neighboring
-  operator-visible plugin-resource advisory feature this detector's condition/metric
-  discipline mirrors.
+- [Plugin Policy (Allowlist / Denylist)](./plugin-policy.md) — GatewayClass-scoped execution control in EdgionGatewayConfig;
+  this is enforced policy, distinct from unknown-field advisory status.

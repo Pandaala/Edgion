@@ -97,6 +97,11 @@ pub const EDGION_API_GROUP: &str = "edgion.io";
 #[derive(Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct HTTPRouteRule {
+    /// Controller-resolved source facts for scoped Gateway AI admission.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
+    pub resolved_ai_admission: Option<super::http_route_ai_admission::ResolvedAiAdmission>,
+
     /// Name identifies this rule for observability and status correlation
     /// Support: Extended
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -231,6 +236,7 @@ impl HTTPRouteRule {
 impl Clone for HTTPRouteRule {
     fn clone(&self) -> Self {
         Self {
+            resolved_ai_admission: self.resolved_ai_admission.clone(),
             name: self.name.clone(),
             matches: self.matches.clone(),
             filters: self.filters.clone(),

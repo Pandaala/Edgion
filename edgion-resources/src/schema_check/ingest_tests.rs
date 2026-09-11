@@ -14,12 +14,12 @@
 //! run the same checker at their raw-document seams without using this gate.
 //! A controller-resolved document
 //! (one carrying a populated `#[schemars(skip)]` field such as
-//! `policy_action` or a plugin's `resolved_*` credential map) travels only
+//! a plugin's `resolved_*` credential map) travels only
 //! over conf_sync to the gateway, where the gate is always `false`. If a
 //! future change ever feeds a resolved document into a gated seam, its
 //! `#[schemars(skip)]` fields would surface as false-positive findings —
 //! that is the tripwire to watch for. See `realistic_reingest_round_trip_has_zero_findings`
-//! and `operator_written_policy_action_is_reported_by_design` below for why
+//! and `operator_written_unknown_entry_field_is_reported` below for why
 //! this holds today.
 
 use parking_lot::Mutex;
@@ -135,7 +135,7 @@ fn gate_on_reports_typo_in_stream_plugin_config() {
 // Test 4a — the realistic re-ingest round trip has zero findings.
 //
 // Every `#[schemars(skip)]`-but-serialized field in this crate (the
-// `policy_action` family and the `resolved_*` credential fields, e.g.
+// `resolved_*` credential fields, e.g.
 // `KeyAuthConfig::resolved_keys`) also carries `skip_serializing_if`, so a
 // freshly-parsed, NOT-YET-RESOLVED object serializes without any of them.
 // The only re-ingest that actually happens at a gated seam is: Admin API
@@ -145,7 +145,7 @@ fn gate_on_reports_typo_in_stream_plugin_config() {
 // plugin that HAS a `resolved_*` field, left at its natural `None`), turn
 // it into a `Value`, and feed the value back through the gated path.
 //
-// Deliberately does NOT hand-populate `policy_action` or any `resolved_*`
+// Deliberately does NOT hand-populate any `resolved_*`
 // field: the architecture never produces that input at a gated ingress (see
 // the module doc for the full invariant). A resolved document exists only
 // on the conf_sync wire, where the gate is always off.
@@ -173,8 +173,8 @@ fn realistic_reingest_round_trip_has_zero_findings() {
         ]
     });
 
-    // First parse: an operator-authored document, no `resolved_*` /
-    // `policy_action` fields present — exactly what an Admin API write
+    // First parse: an operator-authored document, no `resolved_*`
+    // fields present — exactly what an Admin API write
     // parses.
     let parsed: EdgionPluginsSpec = serde_json::from_value(doc).expect("realistic operator document parses cleanly");
     assert_eq!(
@@ -197,18 +197,12 @@ fn realistic_reingest_round_trip_has_zero_findings() {
 }
 
 // ============================================================
-// Test 4b — an operator-written `policyAction` IS reported, by design.
-//
-// `policy_action` is controller-owned: `plugin_policy_stamp.rs:25`
-// documents an "unconditional anti-spoofing clear" on every preparse, so a
-// hand-written `policyAction:` in the submitted document is silently
-// discarded regardless of what this checker does. Reporting it is exactly
-// on-message for this feature — "the key you wrote has no effect" — not a
-// false positive to suppress.
+// Test 4b — an unknown entry-level control is reported rather than silently
+// becoming an execution switch. Operator ingress does not accept runtime policy.
 // ============================================================
 
 #[test]
-fn operator_written_policy_action_is_reported_by_design() {
+fn operator_written_unknown_entry_field_is_reported() {
     let _guard = GateGuard::set(&GATE_LOCK, true);
 
     let doc = json!({
@@ -216,7 +210,7 @@ fn operator_written_policy_action_is_reported_by_design() {
             {
                 "type": "IpRestriction",
                 "config": {"defaultAction": "allow"},
-                "policyAction": {"action": "bypass"}
+                "executionOverride": {"action": "bypass"}
             }
         ]
     });
@@ -224,9 +218,8 @@ fn operator_written_policy_action_is_reported_by_design() {
     let spec: EdgionPluginsSpec = serde_json::from_value(doc).expect("well-formed aside from the operator field");
     assert_eq!(
         spec.unknown_fields,
-        vec!["requestPlugins[0].policyAction".to_string()],
-        "an operator-supplied policyAction is controller-owned and unconditionally cleared \
-         (plugin_policy_stamp.rs anti-spoofing); reporting it tells the operator the key has no effect"
+        vec!["requestPlugins[0].executionOverride".to_string()],
+        "an unknown entry control must be reported because it has no effect"
     );
 }
 

@@ -70,10 +70,10 @@ and [trailer companion trait](../../../edgion-gateway/src/plugins/runtime/traits
 
 ```rust
 pub struct PluginRuntime {
-    request_plugins: Vec<Box<dyn RequestFilter>>,
-    upstream_response_plugins: Vec<Box<dyn UpstreamResponseFilter>>,
-    upstream_response_body_plugins: Vec<Box<dyn UpstreamResponseBodyFilter>>,
-    upstream_response_async_plugins: Vec<Box<dyn UpstreamResponse>>,
+    request_plugins: Vec<Arc<dyn RequestFilter>>,
+    upstream_response_plugins: Vec<Arc<dyn UpstreamResponseFilter>>,
+    upstream_response_body_plugins: Vec<Arc<dyn UpstreamResponseBodyFilter>>,
+    upstream_response_async_plugins: Vec<Arc<dyn UpstreamResponse>>,
 }
 ```
 
@@ -86,19 +86,25 @@ match/hostname fan-out. Gateway API filter constructors are scope-specific:
 There are no unscoped forwarding constructors. `new()` / `Default` construct an
 empty builder, including the no-filters case.
 
-For `EdgionPlugins`, the Controller calls schema-layer `validate_plugins()` and
-reports validation errors; it does not build Gateway runtimes. The Gateway's
-`compile_plugins()` builds one resource generation with `new()` and the four
-`add_from_*` stage builders, collects validation errors, and seals invalid chains
-fail-closed before returning `Arc<CompiledPlugins>`. `PluginStore` publishes an
-immutable map through `ArcSwap`, applying the resource's invalid-update policy.
+For `EdgionPlugins`, the Controller calls schema-layer `validate_plugins()` for
+source diagnostics and resolves references without applying execution policy.
+Gateway `PluginPublisher` receives source resources plus GatewayClass/EGC and
+attachment inputs. `PluginGeneration` owns immutable source and a demand-owned
+entry cache. It masks disabled/restricted entries before effective validation,
+shares permitted constructors and their response companions, and seals each
+class view with the current Block/Bypass/invalid gates. `PluginStore` is the
+source inventory adapter; it no longer owns a second executable publication.
 
-**Sharing**: `PluginRuntime` does not implement `Clone`. Compiled rules, backends,
-store lookups, and request reference caches share `Arc<PluginRuntime>`, preserving
-plugin state instead of rebuilding it for each reference. The removed empty-runtime
-clone silently discarded the entire policy chain; it must not return. Atomic store
-publication does not imply one request-wide generation across different references;
-see [the reference-pinning boundary](../../04-review/plugin-runtime/intentional-design/request-plugin-reference-generation-boundary.md).
+**Sharing**: `PluginRuntime` does not implement `Clone`. Entry filters and their
+companions use shared Arcs so multiple scopes do not reset state such as rate
+limits. HTTP requests capture one bounded class scope and use it for global,
+Gateway, route and delayed backend references. Backend ExtensionRefs execute
+only on first use of the selected backend; unselected candidates cannot cause
+early policy rejection. Response and body stages keep
+those selected runtime Arcs; they do not load policy again. Configured early
+RequestId runs only after unambiguous Gateway ownership and the scope gate.
+Atomic publication does not make separately arriving configuration events a
+cross-kind transaction. See [scoped policy publication](../../04-review/plugin-runtime/regression-guards/scoped-policy-runtime-publication.md).
 
 Each entry may also carry an optional `alias: String` (`^[a-zA-Z0-9._-]{1,32}$`, unique within its stage array — a duplicate is a validation error in both layers), echoed verbatim into `PluginLog.alias` so multiple entries of the same plugin type can be distinguished in the access log. The alias is also the discriminator in the entry's runtime identity `<resource key>/<alias or #index>` (`plugins::common::entry_scope`), which namespaces state a plugin keeps outside its own instance — `RateLimitRedis` Redis buckets today.
 
@@ -201,15 +207,16 @@ Skip log format: `"skip:keyExist,hdr:X-Internal"` or `"!run:keyMatch,method"`.
 Controller EdgionPluginsHandler::preparse()
   → EdgionPlugins::validate_plugins()      # schema validation for status; no runtime
 
-Gateway PluginStore::full_set() / partial_update()  # plugins/http/conf_handler_impl.rs
-  → compile_plugins()                     # plugins/http/plugin_store.rs
-      → compile_plugin_conditions()       # PluginConditions::compile() and validate()
-          → Condition::compile()
-              → KeyMatchCondition::compile()
-                  → MatchCore::compile(normalize_paths)
-      → add_from_*()                      # plugin_runtime.rs; consumes compiled conditions
-      → seal_fail_closed() / seal_plugin_policy()
-  → publish immutable compiled snapshot
+Gateway HTTP/stream source and EGC/binding/attachment callbacks
+  → PluginPublisher                       # plugins/publication/
+      → PluginGeneration::compile(policy) # source slots masked by current scope
+          → permitted entry cache         # constructors/companions shared by source
+          → compile_plugin_conditions()   # compile once, never on request path
+          → effective cross-entry validation
+          → seal_fail_closed() / seal_plugin_policy()
+      → current-policy retention checks
+  → publish immutable class/connection views
+  → request/session captures its applicable view
 ```
 
 **When adding a new condition kind that uses regex**: add a corresponding arm to `Condition::compile()`'s match; otherwise the new kind's regex will never be compiled.
@@ -327,7 +334,7 @@ Stream plugins run at the TCP/UDP layer and use a two-stage architecture:
 - `TlsRoutePlugin` trait: defines the TLS-route-level plugin interface.
 - `StreamPluginRuntime`: manages the Stage-1 connection-context chain. Gateway attachments invoke it through Pingora's `ConnectionFilter`; TCPRoute invokes it per connection, and UDPRoute invokes it when admitting a new session. Gateway attachment does not cover UDP listeners because they run as independent Tokio tasks. The runtime derives `Clone` over `Vec<Arc<dyn StreamPlugin>>`, so cloning it copies the vector of `Arc` handles and shares the plugin instances.
 - `TlsRoutePluginRuntime`: manages the plugin chain for the TLS-route stage. The runtime itself does not implement `Clone`, while its plugin-chain elements are `Arc<dyn TlsRoutePlugin>`.
-- `StreamPluginStore`: receives EdgionPlugins resource changes via ConfHandler. It builds both runtimes once and publishes them through `Arc` fields in `CompiledStreamPlugins`.
+- `StreamPluginStore`: forwards EdgionStreamPlugins source changes to `PluginPublisher`; `StreamPluginGeneration` shares demanded stage instances across class views. Listener admission compares serving Gateway views, while matched route admission captures its owning class.
 
 ## Directory layout
 
@@ -341,7 +348,9 @@ edgion-gateway/src/plugins/
 │   ├── ...
 │   ├── common/                    # shared plugin utilities (auth_common, http_client)
 │   ├── conf_handler_impl.rs       # EdgionPlugins ConfHandler implementation
-│   └── plugin_store.rs            # HTTP plugin resource store
+│   ├── plugin_generation.rs       # immutable source and demand-owned entry cache
+│   └── plugin_store.rs            # source adapter and effective runtime assembly
+├── publication/                   # canonical class/binding publication and captured views
 ├── stream/                        # TCP/UDP layer plugins
 │   ├── ip_restriction/            # Stream IP-restriction implementation
 │   ├── tls_route/                 # TLS-route-level plugins
@@ -350,7 +359,8 @@ edgion-gateway/src/plugins/
 │   │   └── tls_route_plugin_trait.rs
 │   ├── connection_filter_bridge.rs # Pingora ConnectionFilter bridge
 │   ├── stream_plugin_runtime.rs   # stream plugin runtime
-│   ├── stream_plugin_store.rs     # stream plugin resource store
+│   ├── plugin_generation.rs       # demanded stage entry cache
+│   ├── stream_plugin_store.rs     # stream source adapter
 │   └── stream_plugin_trait.rs     # StreamPlugin trait definition
 └── runtime/                       # plugin framework
     ├── plugin_runtime.rs          # PluginRuntime core (4-phase management + plugin creation factory)
@@ -376,8 +386,8 @@ edgion-gateway/src/plugins/
 
 ## RequestId attachment phases
 
-W3C propagation is initialized by the core earliest parsed-header callback, independent of plugin attachment. `RequestId` is the only correlation-ID plugin; `RequestTraceId` is internal request state. Global references are pinned and their RequestId entries run early; a TLS-selected or unique Gateway owner permits the same Gateway prepass. Ambiguous shared-listener ownership defers Gateway rules until canonical route ownership is known, before preflight. Route entries run in ordinary order and apply incremental patches. BackendRef RequestId is rejected.
+W3C propagation is initialized by the core earliest parsed-header callback, independent of plugin attachment. `RequestId` is the only correlation-ID plugin; `RequestTraceId` is internal request state. Configured global and Gateway RequestId entries run after unambiguous logical Gateway ownership and scoped policy admission. Ambiguous shared listeners defer both tiers until canonical route ownership is known, before preflight; TLS handshake evidence alone cannot select a class. Route entries run in ordinary order and apply incremental patches. BackendRef RequestId is rejected.
 
-The early projection preserves enabled/condition semantics and rejects unavailable sources, body and dye wrappers using resource-layer validation. The normal global/Gateway pass skips entries already assigned to the early phase; route occurrences of the same resource still execute normally. Pin each reference once, including empty lookup results, without capturing the entire PluginStore map. W3C state cannot be disabled or rewritten by custom rules.
+The early projection preserves enabled/condition semantics and rejects unavailable sources, body and dye wrappers using resource-layer validation. The normal global/Gateway pass skips entries already assigned to the early phase; route occurrences of the same resource still execute normally. Resolve every tier from the captured class scope, including missing results and delayed backend references. A later route owned by a different Gateway fails closed before borrowing another scope. W3C state cannot be disabled or rewritten by custom rules.
 
 See [Request identity lifecycle](../../04-review/observability/intentional-design/request-trace-id-lifecycle.md) and the [RequestId user schema](../../../docs/en/user-guide/http-route/filters/edgion-plugins/request-id.md).

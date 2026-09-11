@@ -104,6 +104,17 @@ impl ConfHandler<Gateway> for GatewayHandler {
             get_global_tls_route_managers().rebuild_all_listener_managers();
             get_global_udp_route_managers().rebuild_all_listener_managers();
         }
+        crate::plugins::publication::global_publisher().replace_gateways(
+            data.iter()
+                .map(|(key, gateway)| {
+                    (
+                        key.clone(),
+                        crate::plugins::publication::inputs::GatewayInput::from_gateway(gateway),
+                    )
+                })
+                .collect(),
+        );
+        crate::ai::reconcile_all_adaptive_plugin_dependents();
     }
 
     fn partial_update(
@@ -112,6 +123,17 @@ impl ConfHandler<Gateway> for GatewayHandler {
         update: HashMap<String, Arc<Gateway>>,
         remove: HashSet<String>,
     ) {
+        let policy_inputs = add
+            .iter()
+            .chain(update.iter())
+            .map(|(key, gateway)| {
+                (
+                    key.clone(),
+                    crate::plugins::publication::inputs::GatewayInput::from_gateway(gateway),
+                )
+            })
+            .collect();
+        let policy_removed = remove.clone();
         if !add.is_empty() || !update.is_empty() || !remove.is_empty() {
             let prospective = prospective_gateway_snapshot(&add, &update, &remove);
             if matches!(
@@ -253,6 +275,8 @@ impl ConfHandler<Gateway> for GatewayHandler {
                 get_global_udp_route_managers().rebuild_all_listener_managers();
             }
         }
+        crate::plugins::publication::global_publisher().update_gateways(policy_inputs, &policy_removed);
+        crate::ai::reconcile_all_adaptive_plugin_dependents();
     }
 }
 

@@ -25,6 +25,7 @@ use super::conditional_filter::{
     ConditionalRequestFilter, ConditionalUpstreamResponse, ConditionalUpstreamResponseBodyFilter,
     ConditionalUpstreamResponseFilter,
 };
+use super::entry_bundle::{EntryBundle, EntryCache, EntryOutcome, EntrySlot, EntryStage};
 use super::log::PluginLog;
 use super::reject_filter::RejectFilter;
 use super::session_adapter::PingoraSessionAdapter;
@@ -110,13 +111,13 @@ impl WafCandidate {
 pub struct PluginRuntime {
     rate_limit_outcome_slots: usize,
     /// Plugins for request stage (async)
-    request_plugins: Vec<Box<dyn RequestFilter>>,
+    request_plugins: Vec<Arc<dyn RequestFilter>>,
     /// Plugins for upstream_response_filter stage (sync)
-    upstream_response_plugins: Vec<Box<dyn UpstreamResponseFilter>>,
+    upstream_response_plugins: Vec<Arc<dyn UpstreamResponseFilter>>,
     /// Plugins for upstream_response_body_filter stage (sync, bandwidth throttling)
-    upstream_response_body_plugins: Vec<Box<dyn UpstreamResponseBodyFilter>>,
+    upstream_response_body_plugins: Vec<Arc<dyn UpstreamResponseBodyFilter>>,
     /// Plugins for response_filter stage (async)
-    upstream_response_async_plugins: Vec<Box<dyn UpstreamResponse>>,
+    upstream_response_async_plugins: Vec<Arc<dyn UpstreamResponse>>,
     /// (namespace, name) of every ExtensionRef in this runtime, in build order.
     /// Position == index assigned via `ExtensionRefFilter::set_index`. Empty
     /// when this runtime is built via the backend-scope path
@@ -138,11 +139,11 @@ pub struct PluginRuntime {
     /// prepend a single request-stage `RejectFilter`, so the whole route fails
     /// closed with 500 instead of silently dropping the misconfigured plugin.
     invalid_plugins: InvalidPlugins,
-    /// Qualified names + status of Block-stamped entries, in spec order across
+    /// Qualified names + status of policy-blocked entries, in spec order across
     /// all four stages (builders run request → urf → urbf → ur). The first
     /// element's status is the one the gate returns.
     policy_blocks: Vec<(String, u16)>,
-    /// Qualified names of Bypass-stamped entries.
+    /// Qualified names of policy-bypassed entries.
     policy_bypassed: Vec<String>,
     /// Present only when this runtime owns one compiled logical WAF.
     waf_candidate: Option<WafCandidate>,
@@ -181,8 +182,8 @@ pub(crate) enum InvalidUpdatePolicy {
     RetainPrevious,
 }
 
-#[derive(Debug, Default)]
-struct InvalidPlugins {
+#[derive(Debug, Default, Clone)]
+pub(crate) struct InvalidPlugins {
     names: Vec<&'static str>,
     update_policy: Option<InvalidUpdatePolicy>,
 }
@@ -268,6 +269,81 @@ impl PluginRuntime {
             has_request_id: false,
             invalid_early_request_id: false,
             rate_limit_outcome_slots: 0,
+        }
+    }
+
+    fn into_entry_outcome(self, errors: Vec<String>) -> EntryOutcome {
+        let failed = !self.invalid_plugins.is_empty();
+        let bundle = EntryBundle {
+            request: self.request_plugins,
+            response_filter: self.upstream_response_plugins,
+            response_body: self.upstream_response_body_plugins,
+            response: self.upstream_response_async_plugins,
+            cors: self.cors_config,
+            waf: self.waf_candidate,
+            invalid: self.invalid_plugins,
+            errors,
+        };
+        if failed {
+            EntryOutcome::Failed(bundle)
+        } else {
+            EntryOutcome::Ready(bundle)
+        }
+    }
+
+    fn append_entry_bundle(&mut self, bundle: &EntryBundle) {
+        self.request_plugins.extend(bundle.request.iter().cloned());
+        self.upstream_response_plugins
+            .extend(bundle.response_filter.iter().cloned());
+        self.upstream_response_body_plugins
+            .extend(bundle.response_body.iter().cloned());
+        self.upstream_response_async_plugins
+            .extend(bundle.response.iter().cloned());
+        if self.cors_config.is_none() {
+            self.cors_config = bundle.cors.clone();
+        }
+        if bundle.waf.is_some() {
+            self.waf_candidate = bundle.waf.clone();
+        }
+        if let Some(policy) = bundle.invalid.update_policy() {
+            for name in &bundle.invalid.names {
+                self.invalid_plugins.record_with_policy(name, policy);
+            }
+        }
+    }
+
+    pub(crate) fn add_waf_with_cache(&mut self, config: &WafConfig, cache: &mut EntryCache) -> Vec<String> {
+        let slot = EntrySlot {
+            stage: EntryStage::Waf,
+            index: 0,
+        };
+        if let Some(outcome) = cache.get(slot) {
+            self.append_entry_bundle(outcome.bundle());
+            return outcome.bundle().errors.clone();
+        }
+        let mut runtime = Self::new();
+        let errors = runtime
+            .add_waf(config)
+            .err()
+            .into_iter()
+            .map(|error| format!("waf: {error}"))
+            .collect::<Vec<_>>();
+        let outcome = runtime.into_entry_outcome(errors.clone());
+        self.append_entry_bundle(outcome.bundle());
+        cache.insert(slot, outcome);
+        errors
+    }
+
+    pub(crate) fn record_policy_action(
+        &mut self,
+        name: &str,
+        action: edgion_resources::resources::plugin_policy::PluginPolicyAction,
+    ) {
+        use edgion_resources::resources::plugin_policy::PluginPolicyAction;
+        let qualified = format!("http/{name}");
+        match action {
+            PluginPolicyAction::Block { status } => self.policy_blocks.push((qualified, status)),
+            PluginPolicyAction::Bypass => self.policy_bypassed.push(qualified),
         }
     }
 
@@ -365,7 +441,7 @@ impl PluginRuntime {
             return;
         }
         let reject = RejectFilter::new(std::mem::take(&mut self.invalid_plugins.names));
-        self.request_plugins.insert(0, Box::new(reject));
+        self.request_plugins.insert(0, Arc::new(reject));
     }
 
     /// Prepend policy enforcement filters. MUST be called AFTER
@@ -374,12 +450,12 @@ impl PluginRuntime {
     pub fn seal_plugin_policy(&mut self) {
         if !self.policy_bypassed.is_empty() {
             let note = super::policy_filter::PolicyBypassNote::new(std::mem::take(&mut self.policy_bypassed));
-            self.request_plugins.insert(0, Box::new(note));
+            self.request_plugins.insert(0, Arc::new(note));
         }
         if let Some((plugin, status)) = self.policy_blocks.first().cloned() {
             self.policy_blocks.clear();
             let gate = super::policy_filter::PolicyBlockFilter::new(plugin, status);
-            self.request_plugins.insert(0, Box::new(gate));
+            self.request_plugins.insert(0, Arc::new(gate));
         }
     }
 
@@ -579,44 +655,49 @@ impl PluginRuntime {
         namespace: &str,
         resource_key: &str,
     ) -> Vec<String> {
+        self.add_from_request_filters_with_cache(entries, namespace, resource_key, &mut EntryCache::default())
+    }
+
+    pub(crate) fn add_from_request_filters_with_cache(
+        &mut self,
+        entries: &[RequestFilterEntry],
+        namespace: &str,
+        resource_key: &str,
+        cache: &mut EntryCache,
+    ) -> Vec<String> {
         let mut errors = Vec::new();
+        // Keep source aliases for dependency semantics even when an invalid or
+        // duplicate display identity has been sanitized by the generation.
+        let outcome_aliases_owned = cache
+            .prepare_request_outcomes(entries, self.rate_limit_outcome_slots)
+            .clone();
+        let source_aliases = cache.request_source_aliases().to_vec();
+        let mut dependency_entries = entries.to_vec();
+        for (entry, alias) in dependency_entries.iter_mut().zip(&source_aliases) {
+            entry.alias = alias.clone();
+        }
         edgion_resources::resources::edgion_plugins::validate::collect_rate_limit_dependency_errors(
-            entries,
+            &dependency_entries,
             &mut errors,
         );
         if !errors.is_empty() {
             self.invalid_plugins.record_non_retainable("RateLimitRedis");
         }
-        let referenced_aliases: std::collections::HashSet<&str> = entries
+        // Binding belongs to the immutable source, not the first policy view
+        // that happens to construct a shared producer or consumer.
+        let outcome_aliases: std::collections::HashMap<&str, usize> = outcome_aliases_owned
             .iter()
-            .filter(|entry| entry.is_enabled() && entry.policy_action.is_none())
-            .filter_map(|entry| entry.conditions.as_ref()?.run.as_ref())
-            .flat_map(|set| set.iter_conditions())
-            .filter_map(|condition| match condition {
-                edgion_resources::resources::edgion_plugins::conditions::Condition::RateLimitExceeded(config) => {
-                    Some(config.plugin_alias.as_str())
-                }
-                _ => None,
-            })
+            .map(|(alias, slot)| (alias.as_str(), *slot))
             .collect();
-        let outcome_aliases: std::collections::HashMap<&str, usize> = entries
-            .iter()
-            .enumerate()
-            .filter(|(_, entry)| {
-                entry.is_enabled()
-                    && entry.policy_action.is_none()
-                    && matches!(entry.plugin, EdgionPlugin::RateLimit(_))
-            })
-            .filter_map(|(index, entry)| {
-                entry
-                    .alias
+        for (index, entry) in entries.iter().enumerate().filter(|(_, entry)| entry.is_enabled()) {
+            if matches!(entry.plugin, EdgionPlugin::RateLimit(_)) {
+                if let Some(slot) = source_aliases[index]
                     .as_deref()
-                    .filter(|alias| referenced_aliases.contains(alias))
-                    .map(|alias| (alias, self.rate_limit_outcome_slots + index))
-            })
-            .collect();
-        if !outcome_aliases.is_empty() {
-            self.rate_limit_outcome_slots += entries.len();
+                    .and_then(|alias| outcome_aliases.get(alias))
+                {
+                    self.rate_limit_outcome_slots = self.rate_limit_outcome_slots.max(slot + 1);
+                }
+            }
         }
         let mut invalid_bounded_structured_entries = vec![false; entries.len()];
         // Freeze config validation before the bounded-body prepass. A config
@@ -626,7 +707,7 @@ impl PluginRuntime {
         let config_validation_errors: Vec<Option<String>> = entries
             .iter()
             .map(|entry| {
-                if entry.is_enabled() && entry.policy_action.is_none() {
+                if entry.is_enabled() {
                     Self::plugin_validation_error(&entry.plugin)
                 } else {
                     None
@@ -637,15 +718,11 @@ impl PluginRuntime {
         // Mirror the schema-layer JsonSchemaValidation list/entry invariants
         // before constructing any filters. The Gateway must remain fail-closed
         // even if an invalid resource reaches it without Controller admission.
-        // Disabled and PluginPolicy-stamped entries are inert and do not
+        // Disabled entries in the effective view are inert and do not
         // participate.
         let json_schema_count = entries
             .iter()
-            .filter(|entry| {
-                entry.is_enabled()
-                    && entry.policy_action.is_none()
-                    && matches!(entry.plugin, EdgionPlugin::JsonSchemaValidation(_))
-            })
+            .filter(|entry| entry.is_enabled() && matches!(entry.plugin, EdgionPlugin::JsonSchemaValidation(_)))
             .count();
         if json_schema_count > 1 {
             errors.push(format!(
@@ -656,7 +733,6 @@ impl PluginRuntime {
 
         for (index, entry) in entries.iter().enumerate() {
             if !entry.is_enabled()
-                || entry.policy_action.is_some()
                 || config_validation_errors[index].is_some()
                 || !matches!(
                     entry.plugin,
@@ -695,282 +771,293 @@ impl PluginRuntime {
                 if invalid_bounded_structured_entries[index] {
                     continue;
                 }
-                // Plugin policy: a stamped entry is never instantiated and is
-                // deliberately NOT recorded in invalid_plugins (that would turn
-                // Bypass into a fail-closed 500 via seal_fail_closed).
-                if let Some(action) = &entry.policy_action {
-                    let qualified = format!("http/{}", Self::get_plugin_name(&entry.plugin));
-                    match action {
-                        edgion_resources::resources::plugin_policy::PluginPolicyAction::Block { status } => {
-                            self.policy_blocks.push((qualified, *status));
-                        }
-                        edgion_resources::resources::plugin_policy::PluginPolicyAction::Bypass => {
-                            self.policy_bypassed.push(qualified);
-                        }
-                    }
+
+                let slot = EntrySlot {
+                    stage: EntryStage::Request,
+                    index,
+                };
+                if let Some(outcome) = cache.get(slot) {
+                    self.append_entry_bundle(outcome.bundle());
+                    errors.extend(outcome.bundle().errors.iter().cloned());
                     continue;
                 }
-
-                // Reject plugins whose config fails validation: record the name,
-                // surface the error, and skip construction so an invalid config
-                // can never run in the request path. `seal_fail_closed` later
-                // turns a non-empty `invalid_plugins` into a fail-closed 500.
-                if let Some(error) = &config_validation_errors[index] {
-                    let plugin_name = Self::get_plugin_name(&entry.plugin);
-                    errors.push(format!("requestPlugins[{}] ({}): {}", index, plugin_name, error));
-                    self.invalid_plugins.record(&entry.plugin);
-                    continue;
-                }
-
-                // A Deny restriction with any unresolved condition reference
-                // is invalid as a whole. Record it before entry conditions are
-                // wrapped so an outer skip can never bypass the generic 500.
-                if let EdgionPlugin::RequestRestriction(config) = &entry.plugin {
-                    if RequestRestriction::would_fail_construction(config) {
-                        errors.push(format!(
-                            "requestPlugins[{}] (RequestRestriction): restriction config invalid",
-                            index
-                        ));
-                        self.invalid_plugins.record_non_retainable("RequestRestriction");
-                        continue;
+                let mut entry_runtime = Self::new();
+                let errors_before = errors.len();
+                'build_entry: {
+                    // Reject plugins whose config fails validation: record the name,
+                    // surface the error, and skip construction so an invalid config
+                    // can never run in the request path. `seal_fail_closed` later
+                    // turns a non-empty `invalid_plugins` into a fail-closed 500.
+                    if let Some(error) = &config_validation_errors[index] {
+                        let plugin_name = Self::get_plugin_name(&entry.plugin);
+                        errors.push(format!("requestPlugins[{}] ({}): {}", index, plugin_name, error));
+                        entry_runtime.invalid_plugins.record(&entry.plugin);
+                        break 'build_entry;
                     }
-                }
 
-                // Cache the first enabled CORS config so the global preflight
-                // handler can delegate to the normal route plugin pipeline.
-                // Initialize the `#[serde(skip)]` runtime fields (origins_cache /
-                // compiled_origins_regex / compiled_timing_regex) here: the
-                // cached representation stays ready for any config inspection,
-                // even though the preflight handler currently uses only its
-                // presence. On failure keep the uncompiled (deny-safe) config.
-                if self.cors_config.is_none() {
-                    if let EdgionPlugin::Cors(cfg) = &entry.plugin {
-                        let mut cfg = cfg.clone();
-                        if let Err(e) = cfg.validate_and_init() {
-                            tracing::warn!(
-                                error = %e,
-                                label = "HTTP plugin",
-                                "Failed to initialize cached CorsConfig for preflight handler; \
-                                 regex/cache origins will be ignored (deny-safe)",
-                            );
+                    // A Deny restriction with any unresolved condition reference
+                    // is invalid as a whole. Record it before entry conditions are
+                    // wrapped so an outer skip can never bypass the generic 500.
+                    if let EdgionPlugin::RequestRestriction(config) = &entry.plugin {
+                        if RequestRestriction::would_fail_construction(config) {
+                            errors.push(format!(
+                                "requestPlugins[{}] (RequestRestriction): restriction config invalid",
+                                index
+                            ));
+                            entry_runtime
+                                .invalid_plugins
+                                .record_non_retainable("RequestRestriction");
+                            break 'build_entry;
                         }
-                        self.cors_config = Some(Arc::new(cfg));
                     }
-                }
 
-                // Validate optional entry-level alias. On failure, surface
-                // the error and drop the alias so an unvalidated value never
-                // reaches the access log.
-                let mut entry_alias = match entry.validate_alias() {
-                    None => entry.alias.clone(),
-                    Some(err) => {
+                    // Cache the first enabled CORS config so the global preflight
+                    // handler can delegate to the normal route plugin pipeline.
+                    // Initialize the `#[serde(skip)]` runtime fields (origins_cache /
+                    // compiled_origins_regex / compiled_timing_regex) here: the
+                    // cached representation stays ready for any config inspection,
+                    // even though the preflight handler currently uses only its
+                    // presence. On failure keep the uncompiled (deny-safe) config.
+                    if entry_runtime.cors_config.is_none() {
+                        if let EdgionPlugin::Cors(cfg) = &entry.plugin {
+                            let mut cfg = cfg.clone();
+                            if let Err(e) = cfg.validate_and_init() {
+                                tracing::warn!(
+                                    error = %e,
+                                    label = "HTTP plugin",
+                                    "Failed to initialize cached CorsConfig for preflight handler; \
+                                     regex/cache origins will be ignored (deny-safe)",
+                                );
+                            }
+                            entry_runtime.cors_config = Some(Arc::new(cfg));
+                        }
+                    }
+
+                    // Validate optional entry-level alias. On failure, surface
+                    // the error and drop the alias so an unvalidated value never
+                    // reaches the access log.
+                    let mut entry_alias = match entry.validate_alias() {
+                        None => entry.alias.clone(),
+                        Some(err) => {
+                            let plugin_name = Self::get_plugin_name(&entry.plugin);
+                            errors.push(format!("requestPlugins[{}] ({}): {}", index, plugin_name, err));
+                            None
+                        }
+                    };
+
+                    // Alias uniqueness within this stage array: the alias is the
+                    // discriminator in the entry identity that namespaces state kept
+                    // outside the plugin instance (RateLimitRedis buckets), so a
+                    // duplicate must not survive into the runtime.
+                    if let Some(err) = edgion_resources::resources::edgion_plugins::duplicate_alias_error(
+                        &mut seen_aliases,
+                        entry_alias.as_deref(),
+                    ) {
                         let plugin_name = Self::get_plugin_name(&entry.plugin);
                         errors.push(format!("requestPlugins[{}] ({}): {}", index, plugin_name, err));
+                        // Drop it exactly like an invalid alias, so the entry falls back
+                        // to the `#index` form of its scope. Reporting alone would not be
+                        // enough: lenient admission keeps an `Accepted=False` resource
+                        // synced and serving, and the two entries would still share one
+                        // bucket namespace and one access-log label.
+                        entry_alias = None;
+                    }
+
+                    // Validate the optional entry-level dye suite. Same severity as
+                    // the alias check above: non-fatal, surfaced as a preparse error.
+                    // Only compile a runtime plan when the schema-level check passed
+                    // (see `compile_entry_dye_plan` doc comment for the severity split).
+                    let dye_validation_err = entry.validate_dye();
+                    if let Some(err) = &dye_validation_err {
+                        let plugin_name = Self::get_plugin_name(&entry.plugin);
+                        errors.push(format!("requestPlugins[{}] ({}): {}", index, plugin_name, err));
+                    }
+                    let dye_plan = if dye_validation_err.is_none() {
+                        let plugin_name = Self::get_plugin_name(&entry.plugin);
+                        Self::compile_entry_dye_plan(
+                            entry.dye.as_ref(),
+                            &entry.plugin,
+                            &format!("requestPlugins[{}] ({})", index, plugin_name),
+                            &mut errors,
+                            &mut entry_runtime.invalid_plugins,
+                        )
+                    } else {
                         None
+                    };
+
+                    // Validate the optional operator body requirement. `body:` only
+                    // applies to plugins that consume the body in their current config;
+                    // reject it elsewhere so it is never a silent no-op. Non-fatal: the
+                    // plugin still runs (ungated), but the error is surfaced.
+                    if entry.body.is_some() {
+                        let plugin_name = Self::get_plugin_name(&entry.plugin);
+                        if !entry
+                            .plugin
+                            .accepts_body(edgion_resources::resources::edgion_plugins::BodyStage::Request)
+                        {
+                            errors.push(format!(
+                                "requestPlugins[{}] ({}): body: plugin does not consume a body",
+                                index, plugin_name
+                            ));
+                        } else if let Some(err) = entry.body.as_ref().and_then(|b| b.validation_error()) {
+                            errors.push(format!("requestPlugins[{}] ({}): body: {}", index, plugin_name, err));
+                        }
                     }
-                };
 
-                // Alias uniqueness within this stage array: the alias is the
-                // discriminator in the entry identity that namespaces state kept
-                // outside the plugin instance (RateLimitRedis buckets), so a
-                // duplicate must not survive into the runtime.
-                if let Some(err) = edgion_resources::resources::edgion_plugins::duplicate_alias_error(
-                    &mut seen_aliases,
-                    entry_alias.as_deref(),
-                ) {
-                    let plugin_name = Self::get_plugin_name(&entry.plugin);
-                    errors.push(format!("requestPlugins[{}] ({}): {}", index, plugin_name, err));
-                    // Drop it exactly like an invalid alias, so the entry falls back
-                    // to the `#index` form of its scope. Reporting alone would not be
-                    // enough: lenient admission keeps an `Accepted=False` resource
-                    // synced and serving, and the two entries would still share one
-                    // bucket namespace and one access-log label.
-                    entry_alias = None;
-                }
-
-                // Validate the optional entry-level dye suite. Same severity as
-                // the alias check above: non-fatal, surfaced as a preparse error.
-                // Only compile a runtime plan when the schema-level check passed
-                // (see `compile_entry_dye_plan` doc comment for the severity split).
-                let dye_validation_err = entry.validate_dye();
-                if let Some(err) = &dye_validation_err {
-                    let plugin_name = Self::get_plugin_name(&entry.plugin);
-                    errors.push(format!("requestPlugins[{}] ({}): {}", index, plugin_name, err));
-                }
-                let dye_plan = if dye_validation_err.is_none() {
-                    let plugin_name = Self::get_plugin_name(&entry.plugin);
-                    Self::compile_entry_dye_plan(
-                        entry.dye.as_ref(),
+                    let body_req = Self::resolve_body_requirement(
                         &entry.plugin,
-                        &format!("requestPlugins[{}] ({})", index, plugin_name),
-                        &mut errors,
-                        &mut self.invalid_plugins,
-                    )
-                } else {
-                    None
-                };
-
-                // Validate the optional operator body requirement. `body:` only
-                // applies to plugins that consume the body in their current config;
-                // reject it elsewhere so it is never a silent no-op. Non-fatal: the
-                // plugin still runs (ungated), but the error is surfaced.
-                if entry.body.is_some() {
-                    let plugin_name = Self::get_plugin_name(&entry.plugin);
-                    if !entry
-                        .plugin
-                        .accepts_body(edgion_resources::resources::edgion_plugins::BodyStage::Request)
-                    {
-                        errors.push(format!(
-                            "requestPlugins[{}] ({}): body: plugin does not consume a body",
-                            index, plugin_name
-                        ));
-                    } else if let Some(err) = entry.body.as_ref().and_then(|b| b.validation_error()) {
-                        errors.push(format!("requestPlugins[{}] ({}): body: {}", index, plugin_name, err));
-                    }
-                }
-
-                let body_req = Self::resolve_body_requirement(
-                    &entry.plugin,
-                    entry.body.clone(),
-                    edgion_resources::resources::edgion_plugins::BodyStage::Request,
-                );
-
-                let entry_scope = crate::plugins::common::entry_scope(resource_key, entry_alias.as_deref(), index);
-
-                if let EdgionPlugin::ExtProc(config) = &entry.plugin {
-                    let identity = format!(
-                        "{resource_key}/requestPlugins/{}",
-                        entry_alias
-                            .as_deref()
-                            .map_or_else(|| format!("#{index}"), str::to_string)
+                        entry.body.clone(),
+                        edgion_resources::resources::edgion_plugins::BodyStage::Request,
                     );
-                    match ExtProc::create_attached(config, identity) {
-                        Some((request, response)) => {
+
+                    let entry_scope = crate::plugins::common::entry_scope(resource_key, entry_alias.as_deref(), index);
+
+                    if let EdgionPlugin::ExtProc(config) = &entry.plugin {
+                        let identity = format!(
+                            "{resource_key}/requestPlugins/{}",
+                            entry_alias
+                                .as_deref()
+                                .map_or_else(|| format!("#{index}"), str::to_string)
+                        );
+                        match ExtProc::create_attached(config, identity) {
+                            Some((request, response)) => {
+                                let gated: Box<dyn RequestFilter> = match body_req {
+                                    Some(req) => Box::new(BodyGatedRequestFilter::new(request, req)),
+                                    None => request,
+                                };
+                                entry_runtime.add_request_filter(Box::new(
+                                    ConditionalRequestFilter::with_alias_and_dye(
+                                        gated,
+                                        entry.conditions.clone(),
+                                        entry_alias.clone(),
+                                        dye_plan.clone(),
+                                    ),
+                                ));
+                                // Conditions are request-owned. The companion only
+                                // observes the exact attached identity installed by
+                                // the matched request wrapper.
+                                entry_runtime.add_upstream_response(Box::new(
+                                    ConditionalUpstreamResponse::with_alias_and_dye(
+                                        response,
+                                        None,
+                                        entry_alias,
+                                        dye_plan,
+                                    ),
+                                ));
+                            }
+                            None => {
+                                errors.push(format!(
+                                    "requestPlugins[{}] (ExtProc): plugin construction failed",
+                                    index
+                                ));
+                                entry_runtime.invalid_plugins.record(&entry.plugin);
+                            }
+                        }
+                        break 'build_entry;
+                    }
+
+                    if let EdgionPlugin::Guardrail(config) = &entry.plugin {
+                        let identity = format!(
+                            "{resource_key}/requestPlugins/{}",
+                            entry_alias
+                                .as_deref()
+                                .map_or_else(|| format!("#{index}"), str::to_string)
+                        );
+                        match Guardrail::create_attached(config, identity) {
+                            Some((request, response)) => {
+                                entry_runtime.add_request_filter(Box::new(
+                                    ConditionalRequestFilter::with_alias_and_dye(
+                                        request,
+                                        entry.conditions.clone(),
+                                        entry_alias.clone(),
+                                        dye_plan.clone(),
+                                    ),
+                                ));
+                                entry_runtime.add_upstream_response(Box::new(
+                                    ConditionalUpstreamResponse::with_alias_and_dye(
+                                        response,
+                                        None,
+                                        entry_alias,
+                                        dye_plan,
+                                    ),
+                                ));
+                            }
+                            None => {
+                                errors.push(format!(
+                                    "requestPlugins[{}] (Guardrail): plugin construction failed",
+                                    index
+                                ));
+                                entry_runtime.invalid_plugins.record(&entry.plugin);
+                            }
+                        }
+                        break 'build_entry;
+                    }
+
+                    let created = match &entry.plugin {
+                        EdgionPlugin::RateLimit(config) => CreateResult::Ok(Some(RateLimit::create_with_outcome_slot(
+                            config,
+                            source_aliases[index]
+                                .as_deref()
+                                .and_then(|alias| outcome_aliases.get(alias).copied()),
+                        ))),
+                        _ => Self::create_request_filter_from_edgion(
+                            &entry.plugin,
+                            namespace,
+                            body_req.clone(),
+                            &entry_scope,
+                        ),
+                    };
+                    match created {
+                        CreateResult::Ok(Some(filter)) => {
+                            // Condition-owned body HMAC on RequestRestriction and
+                            // RequestAccessPolicy uses the generic plugin-level gate,
+                            // so capture happens before Boolean branch evaluation.
+                            // The dedicated HmacAuth plugin remains the sole exception:
+                            // it performs cheap header authentication before capture.
+                            let generic_body_gate = Self::use_generic_body_gate(&entry.plugin);
                             let gated: Box<dyn RequestFilter> = match body_req {
-                                Some(req) => Box::new(BodyGatedRequestFilter::new(request, req)),
-                                None => request,
+                                Some(req) if generic_body_gate => Box::new(BodyGatedRequestFilter::new(filter, req)),
+                                None => filter,
+                                Some(_) => filter,
                             };
-                            self.add_request_filter(Box::new(ConditionalRequestFilter::with_alias_and_dye(
+                            // Wrap with ConditionalRequestFilter to support condition evaluation
+                            let mut conditional_filter = ConditionalRequestFilter::with_alias_and_dye(
                                 gated,
                                 entry.conditions.clone(),
-                                entry_alias.clone(),
-                                dye_plan.clone(),
-                            )));
-                            // Conditions are request-owned. The companion only
-                            // observes the exact attached identity installed by
-                            // the matched request wrapper.
-                            self.add_upstream_response(Box::new(ConditionalUpstreamResponse::with_alias_and_dye(
-                                response,
-                                None,
                                 entry_alias,
                                 dye_plan,
-                            )));
+                            );
+                            conditional_filter.bind_rate_limit_dependencies(&outcome_aliases);
+                            entry_runtime.add_request_filter(Box::new(conditional_filter));
                         }
-                        None => {
+                        CreateResult::Ok(None) => {
+                            // Applicable stage but the constructor declined to build the
+                            // plugin (e.g. DSL VM init failure). `Ok(None)` means
+                            // "should have run but did not" — always fail-closed.
+                            // Record it so `seal_fail_closed` fires.
+                            let plugin_name = Self::get_plugin_name(&entry.plugin);
                             errors.push(format!(
-                                "requestPlugins[{}] (ExtProc): plugin construction failed",
-                                index
+                                "requestPlugins[{}] ({}): plugin construction failed",
+                                index, plugin_name
                             ));
-                            self.invalid_plugins.record(&entry.plugin);
+                            entry_runtime.invalid_plugins.record(&entry.plugin);
                         }
-                    }
-                    continue;
-                }
-
-                if let EdgionPlugin::Guardrail(config) = &entry.plugin {
-                    let identity = format!(
-                        "{resource_key}/requestPlugins/{}",
-                        entry_alias
-                            .as_deref()
-                            .map_or_else(|| format!("#{index}"), str::to_string)
-                    );
-                    match Guardrail::create_attached(config, identity) {
-                        Some((request, response)) => {
-                            self.add_request_filter(Box::new(ConditionalRequestFilter::with_alias_and_dye(
-                                request,
-                                entry.conditions.clone(),
-                                entry_alias.clone(),
-                                dye_plan.clone(),
-                            )));
-                            self.add_upstream_response(Box::new(ConditionalUpstreamResponse::with_alias_and_dye(
-                                response,
-                                None,
-                                entry_alias,
-                                dye_plan,
-                            )));
-                        }
-                        None => {
+                        CreateResult::WrongStage => {
+                            // A plugin placed in the wrong stage array is a misconfiguration:
+                            // fail closed alongside validation_error failures rather than
+                            // silently no-op'ing.
+                            let plugin_name = Self::get_plugin_name(&entry.plugin);
                             errors.push(format!(
-                                "requestPlugins[{}] (Guardrail): plugin construction failed",
-                                index
+                                "requestPlugins[{}] ({}): plugin is not valid for request stage",
+                                index, plugin_name
                             ));
-                            self.invalid_plugins.record(&entry.plugin);
+                            entry_runtime.invalid_plugins.record(&entry.plugin);
                         }
                     }
-                    continue;
                 }
-
-                let created = match &entry.plugin {
-                    EdgionPlugin::RateLimit(config) => CreateResult::Ok(Some(RateLimit::create_with_outcome_slot(
-                        config,
-                        entry_alias
-                            .as_deref()
-                            .and_then(|alias| outcome_aliases.get(alias).copied()),
-                    ))),
-                    _ => Self::create_request_filter_from_edgion(
-                        &entry.plugin,
-                        namespace,
-                        body_req.clone(),
-                        &entry_scope,
-                    ),
-                };
-                match created {
-                    CreateResult::Ok(Some(filter)) => {
-                        // Condition-owned body HMAC on RequestRestriction and
-                        // RequestAccessPolicy uses the generic plugin-level gate,
-                        // so capture happens before Boolean branch evaluation.
-                        // The dedicated HmacAuth plugin remains the sole exception:
-                        // it performs cheap header authentication before capture.
-                        let generic_body_gate = Self::use_generic_body_gate(&entry.plugin);
-                        let gated: Box<dyn RequestFilter> = match body_req {
-                            Some(req) if generic_body_gate => Box::new(BodyGatedRequestFilter::new(filter, req)),
-                            None => filter,
-                            Some(_) => filter,
-                        };
-                        // Wrap with ConditionalRequestFilter to support condition evaluation
-                        let mut conditional_filter = ConditionalRequestFilter::with_alias_and_dye(
-                            gated,
-                            entry.conditions.clone(),
-                            entry_alias,
-                            dye_plan,
-                        );
-                        conditional_filter.bind_rate_limit_dependencies(&outcome_aliases);
-                        self.add_request_filter(Box::new(conditional_filter));
-                    }
-                    CreateResult::Ok(None) => {
-                        // Applicable stage but the constructor declined to build the
-                        // plugin (e.g. DSL VM init failure). `Ok(None)` means
-                        // "should have run but did not" — always fail-closed.
-                        // Record it so `seal_fail_closed` fires.
-                        let plugin_name = Self::get_plugin_name(&entry.plugin);
-                        errors.push(format!(
-                            "requestPlugins[{}] ({}): plugin construction failed",
-                            index, plugin_name
-                        ));
-                        self.invalid_plugins.record(&entry.plugin);
-                    }
-                    CreateResult::WrongStage => {
-                        // A plugin placed in the wrong stage array is a misconfiguration:
-                        // fail closed alongside validation_error failures rather than
-                        // silently no-op'ing.
-                        let plugin_name = Self::get_plugin_name(&entry.plugin);
-                        errors.push(format!(
-                            "requestPlugins[{}] ({}): plugin is not valid for request stage",
-                            index, plugin_name
-                        ));
-                        self.invalid_plugins.record(&entry.plugin);
-                    }
-                }
+                let outcome = entry_runtime.into_entry_outcome(errors[errors_before..].to_vec());
+                self.append_entry_bundle(outcome.bundle());
+                cache.insert(slot, outcome);
             }
         }
 
@@ -988,138 +1075,147 @@ impl PluginRuntime {
         entries: &[UpstreamResponseFilterEntry],
         namespace: &str,
     ) -> Vec<String> {
+        self.add_from_upstream_response_filters_with_cache(entries, namespace, &mut EntryCache::default())
+    }
+
+    pub(crate) fn add_from_upstream_response_filters_with_cache(
+        &mut self,
+        entries: &[UpstreamResponseFilterEntry],
+        namespace: &str,
+        cache: &mut EntryCache,
+    ) -> Vec<String> {
         let mut errors = Vec::new();
 
         // Per-stage-array alias accumulator; see `duplicate_alias_error`.
         let mut seen_aliases = std::collections::HashSet::new();
         for (index, entry) in entries.iter().enumerate() {
             if entry.is_enabled() {
-                // Plugin policy: a stamped entry is never instantiated and is
-                // deliberately NOT recorded in invalid_plugins (that would turn
-                // Bypass into a fail-closed 500 via seal_fail_closed).
-                if let Some(action) = &entry.policy_action {
-                    let qualified = format!("http/{}", Self::get_plugin_name(&entry.plugin));
-                    match action {
-                        edgion_resources::resources::plugin_policy::PluginPolicyAction::Block { status } => {
-                            self.policy_blocks.push((qualified, *status));
-                        }
-                        edgion_resources::resources::plugin_policy::PluginPolicyAction::Bypass => {
-                            self.policy_bypassed.push(qualified);
-                        }
+                let slot = EntrySlot {
+                    stage: EntryStage::ResponseFilter,
+                    index,
+                };
+                if let Some(outcome) = cache.get(slot) {
+                    self.append_entry_bundle(outcome.bundle());
+                    errors.extend(outcome.bundle().errors.iter().cloned());
+                    continue;
+                }
+                let mut entry_runtime = Self::new();
+                let errors_before = errors.len();
+                'build_entry: {
+                    // Reject plugins whose config fails validation: record the name,
+                    // surface the error, and skip construction so an invalid config
+                    // can never run in the request path. `seal_fail_closed` later
+                    // turns a non-empty `invalid_plugins` into a fail-closed 500.
+                    if let Some(error) = Self::plugin_validation_error(&entry.plugin) {
+                        let plugin_name = Self::get_plugin_name(&entry.plugin);
+                        errors.push(format!(
+                            "upstreamResponseFilterPlugins[{}] ({}): {}",
+                            index, plugin_name, error
+                        ));
+                        entry_runtime.invalid_plugins.record(&entry.plugin);
+                        break 'build_entry;
                     }
-                    continue;
-                }
 
-                // Reject plugins whose config fails validation: record the name,
-                // surface the error, and skip construction so an invalid config
-                // can never run in the request path. `seal_fail_closed` later
-                // turns a non-empty `invalid_plugins` into a fail-closed 500.
-                if let Some(error) = Self::plugin_validation_error(&entry.plugin) {
-                    let plugin_name = Self::get_plugin_name(&entry.plugin);
-                    errors.push(format!(
-                        "upstreamResponseFilterPlugins[{}] ({}): {}",
-                        index, plugin_name, error
-                    ));
-                    self.invalid_plugins.record(&entry.plugin);
-                    continue;
-                }
+                    // Validate optional entry-level alias. On failure, surface
+                    // the error and drop the alias so an unvalidated value never
+                    // reaches the access log.
+                    let mut entry_alias = match entry.validate_alias() {
+                        None => entry.alias.clone(),
+                        Some(err) => {
+                            let plugin_name = Self::get_plugin_name(&entry.plugin);
+                            errors.push(format!(
+                                "upstreamResponseFilterPlugins[{}] ({}): {}",
+                                index, plugin_name, err
+                            ));
+                            None
+                        }
+                    };
 
-                // Validate optional entry-level alias. On failure, surface
-                // the error and drop the alias so an unvalidated value never
-                // reaches the access log.
-                let mut entry_alias = match entry.validate_alias() {
-                    None => entry.alias.clone(),
-                    Some(err) => {
+                    // Alias uniqueness within this stage array: the alias is the
+                    // discriminator in the entry identity that namespaces state kept
+                    // outside the plugin instance (RateLimitRedis buckets), so a
+                    // duplicate must not survive into the runtime.
+                    if let Some(err) = edgion_resources::resources::edgion_plugins::duplicate_alias_error(
+                        &mut seen_aliases,
+                        entry_alias.as_deref(),
+                    ) {
                         let plugin_name = Self::get_plugin_name(&entry.plugin);
                         errors.push(format!(
                             "upstreamResponseFilterPlugins[{}] ({}): {}",
                             index, plugin_name, err
                         ));
-                        None
+                        // Drop it exactly like an invalid alias, so the entry falls back
+                        // to the `#index` form of its scope. Reporting alone would not be
+                        // enough: lenient admission keeps an `Accepted=False` resource
+                        // synced and serving, and the two entries would still share one
+                        // bucket namespace and one access-log label.
+                        entry_alias = None;
                     }
-                };
 
-                // Alias uniqueness within this stage array: the alias is the
-                // discriminator in the entry identity that namespaces state kept
-                // outside the plugin instance (RateLimitRedis buckets), so a
-                // duplicate must not survive into the runtime.
-                if let Some(err) = edgion_resources::resources::edgion_plugins::duplicate_alias_error(
-                    &mut seen_aliases,
-                    entry_alias.as_deref(),
-                ) {
-                    let plugin_name = Self::get_plugin_name(&entry.plugin);
-                    errors.push(format!(
-                        "upstreamResponseFilterPlugins[{}] ({}): {}",
-                        index, plugin_name, err
-                    ));
-                    // Drop it exactly like an invalid alias, so the entry falls back
-                    // to the `#index` form of its scope. Reporting alone would not be
-                    // enough: lenient admission keeps an `Accepted=False` resource
-                    // synced and serving, and the two entries would still share one
-                    // bucket namespace and one access-log label.
-                    entry_alias = None;
-                }
-
-                // Validate the optional entry-level dye suite. Same severity as
-                // the alias check above: non-fatal, surfaced as a preparse error.
-                // Only compile a runtime plan when the schema-level check passed
-                // (see `compile_entry_dye_plan` doc comment for the severity split).
-                let dye_validation_err = entry.validate_dye();
-                if let Some(err) = &dye_validation_err {
-                    let plugin_name = Self::get_plugin_name(&entry.plugin);
-                    errors.push(format!(
-                        "upstreamResponseFilterPlugins[{}] ({}): {}",
-                        index, plugin_name, err
-                    ));
-                }
-                let dye_plan = if dye_validation_err.is_none() {
-                    let plugin_name = Self::get_plugin_name(&entry.plugin);
-                    Self::compile_entry_dye_plan(
-                        entry.dye.as_ref(),
-                        &entry.plugin,
-                        &format!("upstreamResponseFilterPlugins[{}] ({})", index, plugin_name),
-                        &mut errors,
-                        &mut self.invalid_plugins,
-                    )
-                } else {
-                    None
-                };
-
-                match Self::create_upstream_response_filter_from_edgion(&entry.plugin, namespace) {
-                    CreateResult::Ok(Some(filter)) => {
-                        // Wrap with ConditionalUpstreamResponseFilter to support condition evaluation
-                        let conditional_filter = ConditionalUpstreamResponseFilter::with_alias_and_dye(
-                            filter,
-                            entry.conditions.clone(),
-                            entry_alias,
-                            dye_plan,
-                        );
-                        self.add_upstream_response_filter(Box::new(conditional_filter));
-                    }
-                    CreateResult::Ok(None) => {
-                        // Applicable stage but the constructor declined to build the
-                        // plugin (e.g. DSL VM init failure). `Ok(None)` means
-                        // "should have run but did not" — always fail-closed.
-                        // Record it so `seal_fail_closed` fires.
+                    // Validate the optional entry-level dye suite. Same severity as
+                    // the alias check above: non-fatal, surfaced as a preparse error.
+                    // Only compile a runtime plan when the schema-level check passed
+                    // (see `compile_entry_dye_plan` doc comment for the severity split).
+                    let dye_validation_err = entry.validate_dye();
+                    if let Some(err) = &dye_validation_err {
                         let plugin_name = Self::get_plugin_name(&entry.plugin);
                         errors.push(format!(
-                            "upstreamResponseFilterPlugins[{}] ({}): plugin construction failed",
-                            index, plugin_name
+                            "upstreamResponseFilterPlugins[{}] ({}): {}",
+                            index, plugin_name, err
                         ));
-                        self.invalid_plugins.record(&entry.plugin);
                     }
-                    CreateResult::WrongStage => {
-                        // A plugin placed in the wrong stage array is a misconfiguration:
-                        // fail closed alongside validation_error failures rather than
-                        // silently no-op'ing.
+                    let dye_plan = if dye_validation_err.is_none() {
                         let plugin_name = Self::get_plugin_name(&entry.plugin);
-                        errors.push(format!(
+                        Self::compile_entry_dye_plan(
+                            entry.dye.as_ref(),
+                            &entry.plugin,
+                            &format!("upstreamResponseFilterPlugins[{}] ({})", index, plugin_name),
+                            &mut errors,
+                            &mut entry_runtime.invalid_plugins,
+                        )
+                    } else {
+                        None
+                    };
+
+                    match Self::create_upstream_response_filter_from_edgion(&entry.plugin, namespace) {
+                        CreateResult::Ok(Some(filter)) => {
+                            // Wrap with ConditionalUpstreamResponseFilter to support condition evaluation
+                            let conditional_filter = ConditionalUpstreamResponseFilter::with_alias_and_dye(
+                                filter,
+                                entry.conditions.clone(),
+                                entry_alias,
+                                dye_plan,
+                            );
+                            entry_runtime.add_upstream_response_filter(Box::new(conditional_filter));
+                        }
+                        CreateResult::Ok(None) => {
+                            // Applicable stage but the constructor declined to build the
+                            // plugin (e.g. DSL VM init failure). `Ok(None)` means
+                            // "should have run but did not" — always fail-closed.
+                            // Record it so `seal_fail_closed` fires.
+                            let plugin_name = Self::get_plugin_name(&entry.plugin);
+                            errors.push(format!(
+                                "upstreamResponseFilterPlugins[{}] ({}): plugin construction failed",
+                                index, plugin_name
+                            ));
+                            entry_runtime.invalid_plugins.record(&entry.plugin);
+                        }
+                        CreateResult::WrongStage => {
+                            // A plugin placed in the wrong stage array is a misconfiguration:
+                            // fail closed alongside validation_error failures rather than
+                            // silently no-op'ing.
+                            let plugin_name = Self::get_plugin_name(&entry.plugin);
+                            errors.push(format!(
                             "upstreamResponseFilterPlugins[{}] ({}): plugin is not valid for upstream response filter stage",
                             index, plugin_name
                         ));
-                        self.invalid_plugins.record(&entry.plugin);
+                            entry_runtime.invalid_plugins.record(&entry.plugin);
+                        }
                     }
                 }
+                let outcome = entry_runtime.into_entry_outcome(errors[errors_before..].to_vec());
+                self.append_entry_bundle(outcome.bundle());
+                cache.insert(slot, outcome);
             }
         }
 
@@ -1133,160 +1229,169 @@ impl PluginRuntime {
     /// # Returns
     /// A vector of validation error messages (empty if all plugins are valid)
     pub fn add_from_upstream_responses(&mut self, entries: &[UpstreamResponseEntry], namespace: &str) -> Vec<String> {
+        self.add_from_upstream_responses_with_cache(entries, namespace, &mut EntryCache::default())
+    }
+
+    pub(crate) fn add_from_upstream_responses_with_cache(
+        &mut self,
+        entries: &[UpstreamResponseEntry],
+        namespace: &str,
+        cache: &mut EntryCache,
+    ) -> Vec<String> {
         let mut errors = Vec::new();
 
         // Per-stage-array alias accumulator; see `duplicate_alias_error`.
         let mut seen_aliases = std::collections::HashSet::new();
         for (index, entry) in entries.iter().enumerate() {
             if entry.is_enabled() {
-                // Plugin policy: a stamped entry is never instantiated and is
-                // deliberately NOT recorded in invalid_plugins (that would turn
-                // Bypass into a fail-closed 500 via seal_fail_closed).
-                if let Some(action) = &entry.policy_action {
-                    let qualified = format!("http/{}", Self::get_plugin_name(&entry.plugin));
-                    match action {
-                        edgion_resources::resources::plugin_policy::PluginPolicyAction::Block { status } => {
-                            self.policy_blocks.push((qualified, *status));
-                        }
-                        edgion_resources::resources::plugin_policy::PluginPolicyAction::Bypass => {
-                            self.policy_bypassed.push(qualified);
-                        }
+                let slot = EntrySlot {
+                    stage: EntryStage::Response,
+                    index,
+                };
+                if let Some(outcome) = cache.get(slot) {
+                    self.append_entry_bundle(outcome.bundle());
+                    errors.extend(outcome.bundle().errors.iter().cloned());
+                    continue;
+                }
+                let mut entry_runtime = Self::new();
+                let errors_before = errors.len();
+                'build_entry: {
+                    // Reject plugins whose config fails validation: record the name,
+                    // surface the error, and skip construction so an invalid config
+                    // can never run in the request path. `seal_fail_closed` later
+                    // turns a non-empty `invalid_plugins` into a fail-closed 500.
+                    if let Some(error) = Self::plugin_validation_error(&entry.plugin) {
+                        let plugin_name = Self::get_plugin_name(&entry.plugin);
+                        errors.push(format!(
+                            "upstreamResponsePlugins[{}] ({}): {}",
+                            index, plugin_name, error
+                        ));
+                        entry_runtime.invalid_plugins.record(&entry.plugin);
+                        break 'build_entry;
                     }
-                    continue;
-                }
 
-                // Reject plugins whose config fails validation: record the name,
-                // surface the error, and skip construction so an invalid config
-                // can never run in the request path. `seal_fail_closed` later
-                // turns a non-empty `invalid_plugins` into a fail-closed 500.
-                if let Some(error) = Self::plugin_validation_error(&entry.plugin) {
-                    let plugin_name = Self::get_plugin_name(&entry.plugin);
-                    errors.push(format!(
-                        "upstreamResponsePlugins[{}] ({}): {}",
-                        index, plugin_name, error
-                    ));
-                    self.invalid_plugins.record(&entry.plugin);
-                    continue;
-                }
+                    // Validate the optional operator body requirement. `body:` only
+                    // applies to plugins that consume the body in their current config;
+                    // reject it elsewhere so it is never a silent no-op. Non-fatal.
+                    if entry.body.is_some()
+                        && !entry
+                            .plugin
+                            .accepts_body(edgion_resources::resources::edgion_plugins::BodyStage::Response)
+                    {
+                        let plugin_name = Self::get_plugin_name(&entry.plugin);
+                        errors.push(format!(
+                            "upstreamResponsePlugins[{}] ({}): body: plugin does not consume a body",
+                            index, plugin_name
+                        ));
+                    } else if let Some(err) = entry.body.as_ref().and_then(|b| b.validation_error()) {
+                        let plugin_name = Self::get_plugin_name(&entry.plugin);
+                        errors.push(format!(
+                            "upstreamResponsePlugins[{}] ({}): body: {}",
+                            index, plugin_name, err
+                        ));
+                    }
 
-                // Validate the optional operator body requirement. `body:` only
-                // applies to plugins that consume the body in their current config;
-                // reject it elsewhere so it is never a silent no-op. Non-fatal.
-                if entry.body.is_some()
-                    && !entry
-                        .plugin
-                        .accepts_body(edgion_resources::resources::edgion_plugins::BodyStage::Response)
-                {
-                    let plugin_name = Self::get_plugin_name(&entry.plugin);
-                    errors.push(format!(
-                        "upstreamResponsePlugins[{}] ({}): body: plugin does not consume a body",
-                        index, plugin_name
-                    ));
-                } else if let Some(err) = entry.body.as_ref().and_then(|b| b.validation_error()) {
-                    let plugin_name = Self::get_plugin_name(&entry.plugin);
-                    errors.push(format!(
-                        "upstreamResponsePlugins[{}] ({}): body: {}",
-                        index, plugin_name, err
-                    ));
-                }
+                    let mut entry_alias = match entry.validate_alias() {
+                        None => entry.alias.clone(),
+                        Some(err) => {
+                            let plugin_name = Self::get_plugin_name(&entry.plugin);
+                            errors.push(format!("upstreamResponsePlugins[{}] ({}): {}", index, plugin_name, err));
+                            None
+                        }
+                    };
 
-                let mut entry_alias = match entry.validate_alias() {
-                    None => entry.alias.clone(),
-                    Some(err) => {
+                    // Alias uniqueness within this stage array: the alias is the
+                    // discriminator in the entry identity that namespaces state kept
+                    // outside the plugin instance (RateLimitRedis buckets), so a
+                    // duplicate must not survive into the runtime.
+                    if let Some(err) = edgion_resources::resources::edgion_plugins::duplicate_alias_error(
+                        &mut seen_aliases,
+                        entry_alias.as_deref(),
+                    ) {
                         let plugin_name = Self::get_plugin_name(&entry.plugin);
                         errors.push(format!("upstreamResponsePlugins[{}] ({}): {}", index, plugin_name, err));
-                        None
+                        // Drop it exactly like an invalid alias, so the entry falls back
+                        // to the `#index` form of its scope. Reporting alone would not be
+                        // enough: lenient admission keeps an `Accepted=False` resource
+                        // synced and serving, and the two entries would still share one
+                        // bucket namespace and one access-log label.
+                        entry_alias = None;
                     }
-                };
 
-                // Alias uniqueness within this stage array: the alias is the
-                // discriminator in the entry identity that namespaces state kept
-                // outside the plugin instance (RateLimitRedis buckets), so a
-                // duplicate must not survive into the runtime.
-                if let Some(err) = edgion_resources::resources::edgion_plugins::duplicate_alias_error(
-                    &mut seen_aliases,
-                    entry_alias.as_deref(),
-                ) {
-                    let plugin_name = Self::get_plugin_name(&entry.plugin);
-                    errors.push(format!("upstreamResponsePlugins[{}] ({}): {}", index, plugin_name, err));
-                    // Drop it exactly like an invalid alias, so the entry falls back
-                    // to the `#index` form of its scope. Reporting alone would not be
-                    // enough: lenient admission keeps an `Accepted=False` resource
-                    // synced and serving, and the two entries would still share one
-                    // bucket namespace and one access-log label.
-                    entry_alias = None;
-                }
-
-                // Validate the optional entry-level dye suite. Same severity as
-                // the alias check above: non-fatal, surfaced as a preparse error.
-                // Only compile a runtime plan when the schema-level check passed
-                // (see `compile_entry_dye_plan` doc comment for the severity split).
-                let dye_validation_err = entry.validate_dye();
-                if let Some(err) = &dye_validation_err {
-                    let plugin_name = Self::get_plugin_name(&entry.plugin);
-                    errors.push(format!("upstreamResponsePlugins[{}] ({}): {}", index, plugin_name, err));
-                }
-                let dye_plan = if dye_validation_err.is_none() {
-                    let plugin_name = Self::get_plugin_name(&entry.plugin);
-                    Self::compile_entry_dye_plan(
-                        entry.dye.as_ref(),
-                        &entry.plugin,
-                        &format!("upstreamResponsePlugins[{}] ({})", index, plugin_name),
-                        &mut errors,
-                        &mut self.invalid_plugins,
-                    )
-                } else {
-                    None
-                };
-
-                match Self::create_upstream_response_from_edgion(&entry.plugin, namespace) {
-                    CreateResult::Ok(Some(filter)) => {
-                        // Resolve the effective body requirement (operator tunes
-                        // size/conditions but cannot downgrade an intrinsic
-                        // fail-close) and wrap in a response body gate inside the
-                        // Conditional wrapper.
-                        let body_req = Self::resolve_body_requirement(
+                    // Validate the optional entry-level dye suite. Same severity as
+                    // the alias check above: non-fatal, surfaced as a preparse error.
+                    // Only compile a runtime plan when the schema-level check passed
+                    // (see `compile_entry_dye_plan` doc comment for the severity split).
+                    let dye_validation_err = entry.validate_dye();
+                    if let Some(err) = &dye_validation_err {
+                        let plugin_name = Self::get_plugin_name(&entry.plugin);
+                        errors.push(format!("upstreamResponsePlugins[{}] ({}): {}", index, plugin_name, err));
+                    }
+                    let dye_plan = if dye_validation_err.is_none() {
+                        let plugin_name = Self::get_plugin_name(&entry.plugin);
+                        Self::compile_entry_dye_plan(
+                            entry.dye.as_ref(),
                             &entry.plugin,
-                            entry.body.clone(),
-                            edgion_resources::resources::edgion_plugins::BodyStage::Response,
-                        );
-                        let gated: Box<dyn UpstreamResponse> = match body_req {
-                            Some(req) => Box::new(BodyGatedUpstreamResponse::new(filter, req)),
-                            None => filter,
-                        };
-                        // Wrap with ConditionalUpstreamResponse to support condition evaluation
-                        let conditional_filter = ConditionalUpstreamResponse::with_alias_and_dye(
-                            gated,
-                            entry.conditions.clone(),
-                            entry_alias,
-                            dye_plan,
-                        );
-                        self.add_upstream_response(Box::new(conditional_filter));
-                    }
-                    CreateResult::Ok(None) => {
-                        // Applicable stage but the constructor declined to build the
-                        // plugin (e.g. DSL VM init failure). `Ok(None)` means
-                        // "should have run but did not" — always fail-closed.
-                        // Record it so `seal_fail_closed` fires.
-                        let plugin_name = Self::get_plugin_name(&entry.plugin);
-                        errors.push(format!(
-                            "upstreamResponsePlugins[{}] ({}): plugin construction failed",
-                            index, plugin_name
-                        ));
-                        self.invalid_plugins.record(&entry.plugin);
-                    }
-                    CreateResult::WrongStage => {
-                        // A plugin placed in the wrong stage array is a misconfiguration:
-                        // fail closed alongside validation_error failures rather than
-                        // silently no-op'ing.
-                        let plugin_name = Self::get_plugin_name(&entry.plugin);
-                        errors.push(format!(
-                            "upstreamResponsePlugins[{}] ({}): plugin is not valid for upstream response stage",
-                            index, plugin_name
-                        ));
-                        self.invalid_plugins.record(&entry.plugin);
+                            &format!("upstreamResponsePlugins[{}] ({})", index, plugin_name),
+                            &mut errors,
+                            &mut entry_runtime.invalid_plugins,
+                        )
+                    } else {
+                        None
+                    };
+
+                    match Self::create_upstream_response_from_edgion(&entry.plugin, namespace) {
+                        CreateResult::Ok(Some(filter)) => {
+                            // Resolve the effective body requirement (operator tunes
+                            // size/conditions but cannot downgrade an intrinsic
+                            // fail-close) and wrap in a response body gate inside the
+                            // Conditional wrapper.
+                            let body_req = Self::resolve_body_requirement(
+                                &entry.plugin,
+                                entry.body.clone(),
+                                edgion_resources::resources::edgion_plugins::BodyStage::Response,
+                            );
+                            let gated: Box<dyn UpstreamResponse> = match body_req {
+                                Some(req) => Box::new(BodyGatedUpstreamResponse::new(filter, req)),
+                                None => filter,
+                            };
+                            // Wrap with ConditionalUpstreamResponse to support condition evaluation
+                            let conditional_filter = ConditionalUpstreamResponse::with_alias_and_dye(
+                                gated,
+                                entry.conditions.clone(),
+                                entry_alias,
+                                dye_plan,
+                            );
+                            entry_runtime.add_upstream_response(Box::new(conditional_filter));
+                        }
+                        CreateResult::Ok(None) => {
+                            // Applicable stage but the constructor declined to build the
+                            // plugin (e.g. DSL VM init failure). `Ok(None)` means
+                            // "should have run but did not" — always fail-closed.
+                            // Record it so `seal_fail_closed` fires.
+                            let plugin_name = Self::get_plugin_name(&entry.plugin);
+                            errors.push(format!(
+                                "upstreamResponsePlugins[{}] ({}): plugin construction failed",
+                                index, plugin_name
+                            ));
+                            entry_runtime.invalid_plugins.record(&entry.plugin);
+                        }
+                        CreateResult::WrongStage => {
+                            // A plugin placed in the wrong stage array is a misconfiguration:
+                            // fail closed alongside validation_error failures rather than
+                            // silently no-op'ing.
+                            let plugin_name = Self::get_plugin_name(&entry.plugin);
+                            errors.push(format!(
+                                "upstreamResponsePlugins[{}] ({}): plugin is not valid for upstream response stage",
+                                index, plugin_name
+                            ));
+                            entry_runtime.invalid_plugins.record(&entry.plugin);
+                        }
                     }
                 }
+                let outcome = entry_runtime.into_entry_outcome(errors[errors_before..].to_vec());
+                self.append_entry_bundle(outcome.bundle());
+                cache.insert(slot, outcome);
             }
         }
 
@@ -1304,138 +1409,147 @@ impl PluginRuntime {
         entries: &[UpstreamResponseBodyFilterEntry],
         namespace: &str,
     ) -> Vec<String> {
+        self.add_from_upstream_response_body_filters_with_cache(entries, namespace, &mut EntryCache::default())
+    }
+
+    pub(crate) fn add_from_upstream_response_body_filters_with_cache(
+        &mut self,
+        entries: &[UpstreamResponseBodyFilterEntry],
+        namespace: &str,
+        cache: &mut EntryCache,
+    ) -> Vec<String> {
         let mut errors = Vec::new();
 
         // Per-stage-array alias accumulator; see `duplicate_alias_error`.
         let mut seen_aliases = std::collections::HashSet::new();
         for (index, entry) in entries.iter().enumerate() {
             if entry.is_enabled() {
-                // Plugin policy: a stamped entry is never instantiated and is
-                // deliberately NOT recorded in invalid_plugins (that would turn
-                // Bypass into a fail-closed 500 via seal_fail_closed).
-                if let Some(action) = &entry.policy_action {
-                    let qualified = format!("http/{}", Self::get_plugin_name(&entry.plugin));
-                    match action {
-                        edgion_resources::resources::plugin_policy::PluginPolicyAction::Block { status } => {
-                            self.policy_blocks.push((qualified, *status));
-                        }
-                        edgion_resources::resources::plugin_policy::PluginPolicyAction::Bypass => {
-                            self.policy_bypassed.push(qualified);
-                        }
+                let slot = EntrySlot {
+                    stage: EntryStage::ResponseBody,
+                    index,
+                };
+                if let Some(outcome) = cache.get(slot) {
+                    self.append_entry_bundle(outcome.bundle());
+                    errors.extend(outcome.bundle().errors.iter().cloned());
+                    continue;
+                }
+                let mut entry_runtime = Self::new();
+                let errors_before = errors.len();
+                'build_entry: {
+                    // Reject plugins whose config fails validation: record the name,
+                    // surface the error, and skip construction so an invalid config
+                    // can never run in the request path. `seal_fail_closed` later
+                    // turns a non-empty `invalid_plugins` into a fail-closed 500.
+                    if let Some(error) = Self::plugin_validation_error(&entry.plugin) {
+                        let plugin_name = Self::get_plugin_name(&entry.plugin);
+                        errors.push(format!(
+                            "upstreamResponseBodyFilterPlugins[{}] ({}): {}",
+                            index, plugin_name, error
+                        ));
+                        entry_runtime.invalid_plugins.record(&entry.plugin);
+                        break 'build_entry;
                     }
-                    continue;
-                }
 
-                // Reject plugins whose config fails validation: record the name,
-                // surface the error, and skip construction so an invalid config
-                // can never run in the request path. `seal_fail_closed` later
-                // turns a non-empty `invalid_plugins` into a fail-closed 500.
-                if let Some(error) = Self::plugin_validation_error(&entry.plugin) {
-                    let plugin_name = Self::get_plugin_name(&entry.plugin);
-                    errors.push(format!(
-                        "upstreamResponseBodyFilterPlugins[{}] ({}): {}",
-                        index, plugin_name, error
-                    ));
-                    self.invalid_plugins.record(&entry.plugin);
-                    continue;
-                }
+                    // Validate optional entry-level alias. On failure, surface
+                    // the error and drop the alias so an unvalidated value never
+                    // reaches the access log.
+                    let mut entry_alias = match entry.validate_alias() {
+                        None => entry.alias.clone(),
+                        Some(err) => {
+                            let plugin_name = Self::get_plugin_name(&entry.plugin);
+                            errors.push(format!(
+                                "upstreamResponseBodyFilterPlugins[{}] ({}): {}",
+                                index, plugin_name, err
+                            ));
+                            None
+                        }
+                    };
 
-                // Validate optional entry-level alias. On failure, surface
-                // the error and drop the alias so an unvalidated value never
-                // reaches the access log.
-                let mut entry_alias = match entry.validate_alias() {
-                    None => entry.alias.clone(),
-                    Some(err) => {
+                    // Alias uniqueness within this stage array: the alias is the
+                    // discriminator in the entry identity that namespaces state kept
+                    // outside the plugin instance (RateLimitRedis buckets), so a
+                    // duplicate must not survive into the runtime.
+                    if let Some(err) = edgion_resources::resources::edgion_plugins::duplicate_alias_error(
+                        &mut seen_aliases,
+                        entry_alias.as_deref(),
+                    ) {
                         let plugin_name = Self::get_plugin_name(&entry.plugin);
                         errors.push(format!(
                             "upstreamResponseBodyFilterPlugins[{}] ({}): {}",
                             index, plugin_name, err
                         ));
-                        None
+                        // Drop it exactly like an invalid alias, so the entry falls back
+                        // to the `#index` form of its scope. Reporting alone would not be
+                        // enough: lenient admission keeps an `Accepted=False` resource
+                        // synced and serving, and the two entries would still share one
+                        // bucket namespace and one access-log label.
+                        entry_alias = None;
                     }
-                };
 
-                // Alias uniqueness within this stage array: the alias is the
-                // discriminator in the entry identity that namespaces state kept
-                // outside the plugin instance (RateLimitRedis buckets), so a
-                // duplicate must not survive into the runtime.
-                if let Some(err) = edgion_resources::resources::edgion_plugins::duplicate_alias_error(
-                    &mut seen_aliases,
-                    entry_alias.as_deref(),
-                ) {
-                    let plugin_name = Self::get_plugin_name(&entry.plugin);
-                    errors.push(format!(
-                        "upstreamResponseBodyFilterPlugins[{}] ({}): {}",
-                        index, plugin_name, err
-                    ));
-                    // Drop it exactly like an invalid alias, so the entry falls back
-                    // to the `#index` form of its scope. Reporting alone would not be
-                    // enough: lenient admission keeps an `Accepted=False` resource
-                    // synced and serving, and the two entries would still share one
-                    // bucket namespace and one access-log label.
-                    entry_alias = None;
-                }
-
-                // Validate the optional entry-level dye suite. Same severity as
-                // the alias check above: non-fatal, surfaced as a preparse error.
-                // Only compile a runtime plan when the schema-level check passed
-                // (see `compile_entry_dye_plan` doc comment for the severity split).
-                let dye_validation_err = entry.validate_dye();
-                if let Some(err) = &dye_validation_err {
-                    let plugin_name = Self::get_plugin_name(&entry.plugin);
-                    errors.push(format!(
-                        "upstreamResponseBodyFilterPlugins[{}] ({}): {}",
-                        index, plugin_name, err
-                    ));
-                }
-                let dye_plan = if dye_validation_err.is_none() {
-                    let plugin_name = Self::get_plugin_name(&entry.plugin);
-                    Self::compile_entry_dye_plan(
-                        entry.dye.as_ref(),
-                        &entry.plugin,
-                        &format!("upstreamResponseBodyFilterPlugins[{}] ({})", index, plugin_name),
-                        &mut errors,
-                        &mut self.invalid_plugins,
-                    )
-                } else {
-                    None
-                };
-
-                match Self::create_upstream_response_body_filter_from_edgion(&entry.plugin, namespace) {
-                    CreateResult::Ok(Some(filter)) => {
-                        // Wrap with ConditionalUpstreamResponseBodyFilter to support condition evaluation
-                        let conditional_filter = ConditionalUpstreamResponseBodyFilter::with_alias_and_dye(
-                            filter,
-                            entry.conditions.clone(),
-                            entry_alias,
-                            dye_plan,
-                        );
-                        self.add_upstream_response_body_filter(Box::new(conditional_filter));
-                    }
-                    CreateResult::Ok(None) => {
-                        // Applicable stage but the constructor declined to build the
-                        // plugin (e.g. DSL VM init failure). `Ok(None)` means
-                        // "should have run but did not" — always fail-closed.
-                        // Record it so `seal_fail_closed` fires.
+                    // Validate the optional entry-level dye suite. Same severity as
+                    // the alias check above: non-fatal, surfaced as a preparse error.
+                    // Only compile a runtime plan when the schema-level check passed
+                    // (see `compile_entry_dye_plan` doc comment for the severity split).
+                    let dye_validation_err = entry.validate_dye();
+                    if let Some(err) = &dye_validation_err {
                         let plugin_name = Self::get_plugin_name(&entry.plugin);
                         errors.push(format!(
-                            "upstreamResponseBodyFilterPlugins[{}] ({}): plugin construction failed",
-                            index, plugin_name
+                            "upstreamResponseBodyFilterPlugins[{}] ({}): {}",
+                            index, plugin_name, err
                         ));
-                        self.invalid_plugins.record(&entry.plugin);
                     }
-                    CreateResult::WrongStage => {
-                        // A plugin placed in the wrong stage array is a misconfiguration:
-                        // fail closed alongside validation_error failures rather than
-                        // silently no-op'ing.
+                    let dye_plan = if dye_validation_err.is_none() {
                         let plugin_name = Self::get_plugin_name(&entry.plugin);
-                        errors.push(format!(
+                        Self::compile_entry_dye_plan(
+                            entry.dye.as_ref(),
+                            &entry.plugin,
+                            &format!("upstreamResponseBodyFilterPlugins[{}] ({})", index, plugin_name),
+                            &mut errors,
+                            &mut entry_runtime.invalid_plugins,
+                        )
+                    } else {
+                        None
+                    };
+
+                    match Self::create_upstream_response_body_filter_from_edgion(&entry.plugin, namespace) {
+                        CreateResult::Ok(Some(filter)) => {
+                            // Wrap with ConditionalUpstreamResponseBodyFilter to support condition evaluation
+                            let conditional_filter = ConditionalUpstreamResponseBodyFilter::with_alias_and_dye(
+                                filter,
+                                entry.conditions.clone(),
+                                entry_alias,
+                                dye_plan,
+                            );
+                            entry_runtime.add_upstream_response_body_filter(Box::new(conditional_filter));
+                        }
+                        CreateResult::Ok(None) => {
+                            // Applicable stage but the constructor declined to build the
+                            // plugin (e.g. DSL VM init failure). `Ok(None)` means
+                            // "should have run but did not" — always fail-closed.
+                            // Record it so `seal_fail_closed` fires.
+                            let plugin_name = Self::get_plugin_name(&entry.plugin);
+                            errors.push(format!(
+                                "upstreamResponseBodyFilterPlugins[{}] ({}): plugin construction failed",
+                                index, plugin_name
+                            ));
+                            entry_runtime.invalid_plugins.record(&entry.plugin);
+                        }
+                        CreateResult::WrongStage => {
+                            // A plugin placed in the wrong stage array is a misconfiguration:
+                            // fail closed alongside validation_error failures rather than
+                            // silently no-op'ing.
+                            let plugin_name = Self::get_plugin_name(&entry.plugin);
+                            errors.push(format!(
                             "upstreamResponseBodyFilterPlugins[{}] ({}): plugin is not valid for upstream response body filter stage",
                             index, plugin_name
                         ));
-                        self.invalid_plugins.record(&entry.plugin);
+                            entry_runtime.invalid_plugins.record(&entry.plugin);
+                        }
                     }
                 }
+                let outcome = entry_runtime.into_entry_outcome(errors[errors_before..].to_vec());
+                self.append_entry_bundle(outcome.bundle());
+                cache.insert(slot, outcome);
             }
         }
 
@@ -1875,19 +1989,19 @@ impl PluginRuntime {
     }
 
     fn add_request_filter(&mut self, filter: Box<dyn RequestFilter>) {
-        self.request_plugins.push(filter);
+        self.request_plugins.push(Arc::from(filter));
     }
 
     fn add_upstream_response_filter(&mut self, filter: Box<dyn UpstreamResponseFilter>) {
-        self.upstream_response_plugins.push(filter);
+        self.upstream_response_plugins.push(Arc::from(filter));
     }
 
     fn add_upstream_response_body_filter(&mut self, filter: Box<dyn UpstreamResponseBodyFilter>) {
-        self.upstream_response_body_plugins.push(filter);
+        self.upstream_response_body_plugins.push(Arc::from(filter));
     }
 
     fn add_upstream_response(&mut self, filter: Box<dyn UpstreamResponse>) {
-        self.upstream_response_async_plugins.push(filter);
+        self.upstream_response_async_plugins.push(Arc::from(filter));
     }
 
     /// Get request stage plugin count
@@ -1911,22 +2025,22 @@ impl PluginRuntime {
     }
 
     /// Iterate over request stage filters
-    pub fn request_plugins_iter(&self) -> impl Iterator<Item = &Box<dyn RequestFilter>> {
+    pub fn request_plugins_iter(&self) -> impl Iterator<Item = &Arc<dyn RequestFilter>> {
         self.request_plugins.iter()
     }
 
     /// Iterate over upstream_response_filter stage filters (sync)
-    pub fn upstream_response_plugins_iter(&self) -> impl Iterator<Item = &Box<dyn UpstreamResponseFilter>> {
+    pub fn upstream_response_plugins_iter(&self) -> impl Iterator<Item = &Arc<dyn UpstreamResponseFilter>> {
         self.upstream_response_plugins.iter()
     }
 
     /// Iterate over upstream_response_body_filter stage filters (sync)
-    pub fn upstream_response_body_plugins_iter(&self) -> impl Iterator<Item = &Box<dyn UpstreamResponseBodyFilter>> {
+    pub fn upstream_response_body_plugins_iter(&self) -> impl Iterator<Item = &Arc<dyn UpstreamResponseBodyFilter>> {
         self.upstream_response_body_plugins.iter()
     }
 
     /// Iterate over response_filter stage filters (async)
-    pub fn upstream_response_async_plugins_iter(&self) -> impl Iterator<Item = &Box<dyn UpstreamResponse>> {
+    pub fn upstream_response_async_plugins_iter(&self) -> impl Iterator<Item = &Arc<dyn UpstreamResponse>> {
         self.upstream_response_async_plugins.iter()
     }
 
@@ -1938,6 +2052,19 @@ impl PluginRuntime {
 
     pub(crate) fn rate_limit_outcome_slots(&self) -> usize {
         self.rate_limit_outcome_slots
+    }
+
+    /// Enforce the sealed policy gate before early IDs, preflight or body work.
+    /// The normal runner owns the response, access-log record and metric.
+    pub(crate) async fn run_policy_gate(&self, s: &mut Session, ctx: &mut EdgionHttpContext) {
+        if !ctx.plugin_terminated()
+            && self
+                .request_plugins
+                .first()
+                .is_some_and(|filter| filter.name() == "PluginPolicyBlock")
+        {
+            self.run_request_plugins(s, ctx).await;
+        }
     }
 
     /// Dispatch the selected HTTP backend's filters before its body pump starts.
@@ -2331,6 +2458,24 @@ mod tests {
     use edgion_resources::EdgionErrorCode;
     use std::sync::Mutex;
     use tokio::io::AsyncWriteExt;
+
+    fn compile_scoped_request_entries(
+        entries: Vec<RequestFilterEntry>,
+        deny: serde_json::Value,
+    ) -> Arc<crate::plugins::http::CompiledPlugins> {
+        use crate::plugins::http::plugin_generation::PluginGeneration;
+        use edgion_resources::resources::edgion_plugins::{EdgionPlugins, EdgionPluginsSpec};
+        use edgion_resources::resources::plugin_policy::PluginPolicyConfig;
+        let policy: PluginPolicyConfig = serde_json::from_value(serde_json::json!({"deny": deny})).unwrap();
+        PluginGeneration::new(EdgionPlugins::new(
+            "scoped-test",
+            EdgionPluginsSpec {
+                request_plugins: Some(entries),
+                ..Default::default()
+            },
+        ))
+        .compile(Some(&policy.compile().unwrap()))
+    }
 
     #[test]
     fn elapsed_micros_saturates_a_future_start_to_zero() {
@@ -2940,56 +3085,45 @@ mod tests {
     #[test]
     fn bypassed_json_schema_is_inert_for_body_validation_and_cardinality() {
         use edgion_resources::resources::edgion_plugins::BodyRequirement;
-        use edgion_resources::resources::plugin_policy::PluginPolicyAction;
-
-        let mut bypassed = json_schema_entry(
+        let malformed = json_schema_entry(
             Some(BodyRequirement {
-                max_body_size: Some("invalid".to_string()),
-                ..BodyRequirement::default()
+                max_body_size: Some("invalid".into()),
+                ..Default::default()
             }),
             true,
         );
-        bypassed.policy_action = Some(PluginPolicyAction::Bypass);
-        let normal = json_schema_entry(None, true);
-
-        let mut runtime = PluginRuntime::new();
-        let errors = runtime.add_from_request_filters(&[bypassed, normal], "default", "test-plugins");
-        assert!(errors.is_empty(), "policy-stamped entries are inert: {errors:?}");
-        assert!(runtime.invalid_plugins.is_empty());
-
-        runtime.seal_fail_closed();
-        assert_eq!(runtime.request_plugins_count(), 1);
+        let compiled = compile_scoped_request_entries(
+            vec![malformed, json_schema_entry(None, true)],
+            serde_json::json!([{"name":"http/JsonSchemaValidation","action":"bypass"}]),
+        );
+        assert!(compiled.preparse_errors.is_empty());
+        assert!(compiled.is_activatable);
+        assert_eq!(compiled.plugin_runtime.request_plugins_count(), 1);
         assert_eq!(
-            runtime.request_plugins_iter().next().map(|filter| filter.name()),
-            Some("JsonSchemaValidation")
+            compiled.plugin_runtime.request_plugins_iter().next().unwrap().name(),
+            "PluginPolicyBypass"
         );
     }
 
     #[test]
     fn blocked_json_schema_is_inert_for_body_validation_and_cardinality() {
         use edgion_resources::resources::edgion_plugins::BodyRequirement;
-        use edgion_resources::resources::plugin_policy::PluginPolicyAction;
-
-        let mut blocked = json_schema_entry(
+        let malformed = json_schema_entry(
             Some(BodyRequirement {
                 conditions: Some(Default::default()),
-                ..BodyRequirement::default()
+                ..Default::default()
             }),
             true,
         );
-        blocked.policy_action = Some(PluginPolicyAction::Block { status: 451 });
-        let normal = json_schema_entry(None, true);
-
-        let mut runtime = PluginRuntime::new();
-        let errors = runtime.add_from_request_filters(&[blocked, normal], "default", "test-plugins");
-        assert!(errors.is_empty(), "policy-stamped entries are inert: {errors:?}");
-        assert!(runtime.invalid_plugins.is_empty());
-
-        runtime.seal_fail_closed();
-        runtime.seal_plugin_policy();
+        let compiled = compile_scoped_request_entries(
+            vec![malformed, json_schema_entry(None, true)],
+            serde_json::json!([{"name":"http/JsonSchemaValidation","blockStatus":451}]),
+        );
+        assert!(compiled.preparse_errors.is_empty());
+        assert!(compiled.is_activatable);
         assert_eq!(
-            runtime.request_plugins_iter().next().map(|filter| filter.name()),
-            Some("PluginPolicyBlock")
+            compiled.plugin_runtime.request_plugins_iter().next().unwrap().name(),
+            "PluginPolicyBlock"
         );
     }
 
@@ -3025,7 +3159,7 @@ mod tests {
             http::header::CONTENT_TYPE,
             http::HeaderValue::from_static("application/json"),
         );
-        session.expect_request_header_map().return_const(headers);
+        session.expect_request_header_map().times(1).return_const(headers);
         session
             .expect_read_request_body()
             .with(mockall::predicate::eq(None))
@@ -3356,52 +3490,49 @@ mod tests {
     }
 
     #[test]
-    fn policy_stamped_entries_are_not_instantiated_and_not_invalid() {
+    fn scoped_restrictions_do_not_instantiate_or_invalidate_entries() {
         use edgion_resources::resources::edgion_plugins::{CorsConfig, MockConfig};
-        use edgion_resources::resources::plugin_policy::PluginPolicyAction;
-
-        let mut blocked = RequestFilterEntry::new(EdgionPlugin::KeyAuth(KeyAuthConfig::default()));
-        blocked.policy_action = Some(PluginPolicyAction::Block { status: 451 });
-        let mut bypassed = RequestFilterEntry::new(EdgionPlugin::Cors(CorsConfig::default()));
-        bypassed.policy_action = Some(PluginPolicyAction::Bypass);
-        let normal = RequestFilterEntry::new(EdgionPlugin::Mock(MockConfig::default()));
-
-        let mut runtime = PluginRuntime::new();
-        let errors = runtime.add_from_request_filters(&[blocked, bypassed, normal], "default", "test-plugins");
-        assert!(errors.is_empty(), "policy stamps are not validation errors: {errors:?}");
-
-        // Only the normal plugin was instantiated.
-        assert_eq!(runtime.request_plugins.len(), 1);
-        // Stamped entries never enter invalid_plugins (Bypass must not 500).
-        assert!(runtime.invalid_plugins.is_empty());
-
-        runtime.seal_fail_closed();
-        runtime.seal_plugin_policy();
-        // Block gate + bypass note prepended; block gate is FIRST.
-        assert_eq!(runtime.request_plugins.len(), 3);
-        assert_eq!(runtime.request_plugins[0].name(), "PluginPolicyBlock");
-        assert_eq!(runtime.request_plugins[1].name(), "PluginPolicyBypass");
+        let compiled = compile_scoped_request_entries(
+            vec![
+                RequestFilterEntry::new(EdgionPlugin::KeyAuth(KeyAuthConfig::default())),
+                RequestFilterEntry::new(EdgionPlugin::Cors(CorsConfig::default())),
+                RequestFilterEntry::new(EdgionPlugin::Mock(MockConfig::default())),
+            ],
+            serde_json::json!([
+                {"name":"http/KeyAuth","blockStatus":451},
+                {"name":"http/Cors","action":"bypass"}
+            ]),
+        );
+        assert!(compiled.preparse_errors.is_empty());
+        assert!(compiled.is_activatable);
+        let names: Vec<_> = compiled
+            .plugin_runtime
+            .request_plugins_iter()
+            .map(|p| p.name())
+            .collect();
+        assert_eq!(names, vec!["PluginPolicyBlock", "PluginPolicyBypass", "Mock"]);
     }
 
     #[test]
     fn policy_block_gate_precedes_fail_closed_reject() {
-        // A chain with BOTH an invalid plugin and a policy block: policy wins.
-        use edgion_resources::resources::plugin_policy::PluginPolicyAction;
-
-        let mut blocked = RequestFilterEntry::new(EdgionPlugin::KeyAuth(KeyAuthConfig::default()));
-        blocked.policy_action = Some(PluginPolicyAction::Block { status: 451 });
-        let mut invalid_alias = RequestFilterEntry::new(EdgionPlugin::KeyAuth(KeyAuthConfig::default()));
-        invalid_alias.alias = Some("bad alias with spaces".to_string());
-
-        let mut runtime = PluginRuntime::new();
-        let _ = runtime.add_from_request_filters(&[blocked, invalid_alias], "default", "test-plugins");
-        runtime.seal_fail_closed();
-        runtime.seal_plugin_policy();
-        assert_eq!(runtime.request_plugins[0].name(), "PluginPolicyBlock");
+        let compiled = compile_scoped_request_entries(
+            vec![
+                RequestFilterEntry::new(EdgionPlugin::KeyAuth(KeyAuthConfig::default())),
+                RequestFilterEntry::new(EdgionPlugin::Dsl(DslConfig {
+                    source: Some("invalid @@@".into()),
+                    ..Default::default()
+                })),
+            ],
+            serde_json::json!([{"name":"http/KeyAuth","blockStatus":451}]),
+        );
+        assert!(!compiled.is_activatable);
+        let mut filters = compiled.plugin_runtime.request_plugins_iter();
+        assert_eq!(filters.next().unwrap().name(), "PluginPolicyBlock");
+        assert_eq!(filters.next().unwrap().name(), "RejectInvalidConfig");
     }
 
     #[test]
-    fn no_stamps_means_no_policy_filters() {
+    fn unrestricted_entries_have_no_policy_filters() {
         use edgion_resources::resources::edgion_plugins::MockConfig;
 
         let normal = RequestFilterEntry::new(EdgionPlugin::Mock(MockConfig::default()));

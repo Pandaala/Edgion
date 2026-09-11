@@ -95,7 +95,7 @@ generation. See
 | `RealIp` | Real IP extraction |
 | `CtxSet` | Set context variables |
 | `CredentialInjector` | Inject an upstream bearer or custom header from a Secret or a `credentialSource` LinkSys (`credentialRef.group: edgion.io`, `kind: LinkSys`). Default publication writes a generated Secret; `publication.persist: false` keeps generations in Controller memory (no generated Secret; see [18-link-sys.md](18-link-sys.md)). Header names and prefixes are static and never evaluate expressions. One EdgionPlugins resource may contain at most one enabled LinkSys-backed injector; static Secret-backed entries do not count toward that limit. |
-| `WebhookKeyGet` | Resolve webhook vars into request context (once per request). Addressable in EdgionGatewayConfig `validation.plugin_policy` allow/deny lists. |
+| `WebhookKeyGet` | Resolve webhook vars into request context (once per request). Addressable in EdgionGatewayConfig `spec.pluginPolicy` allow/deny lists. |
 | `ExtProc` | Envoy-compatible external processing. One `requestPlugins` entry owns one request-scoped Process stream across request headers/body and final response headers/body. Request bodies support `BUFFERED`/`STREAMED`; response bodies support bounded transport-window `STREAMED` only (no full-response aggregation and no semantic SSE-window claim). |
 | `Guardrail` | One bounded HTTP Pass/Replace/Reject decision per canonical semantic AI SSE window. The request-stage owner installs an internal semantic response processor after AI translation/usage and before ordinary writable processors. Pass is byte-identical; policy Reject is never failed open. See `docs/en/user-guide/http-route/filters/edgion-plugins/guardrail.md`. |
 | `Wasm` | Executes a proxy-wasm ABI v0.2 guest module (WebAssembly, run via wasmtime) in-process: header mutation, local responses, HTTP callouts (`calloutAllowlist`-gated; request phase with Pause/resume, and from `on_tick` with root-context callbacks when the module's plugins agree on one allowlist), buffered `proxy_on_request_body` when the request entry declares `body:`, read-only response-body observation, shared data (per-module KV with CAS), and `on_tick` timers. No body rewrite or gRPC callouts. Source forms: `file` / `inline` / `url` / `oci` (gateway-side pull from an OCI registry, with a bounded content-addressed process-memory cache). See `docs/en/user-guide/http-route/filters/edgion-plugins/wasm.md`. |
@@ -224,16 +224,16 @@ The following plugin types read Secret data from `ControllerRuntime.secret_store
 
 Secret changes automatically trigger reprocessing of EdgionPlugins via SecretRefManager.
 
-## Controller Plugin Policy (Allowlist / Denylist)
+## GatewayClass plugin execution policy
 
-An operator can restrict which `http/<Type>` plugin types the Gateway is
-allowed to instantiate via the Controller's optional
-`validation.plugin_policy` config section (absent by default = allow all).
-A restricted entry is stamped, not force-disabled, and is reported via a
-`PluginPolicyRestricted` status condition. See
-[validation.plugin_policy](../02-config/00-controller-config.md#validationplugin_policy)
-for the config schema and `docs/en/ops-guide/plugin-policy.md` for the
-operator guide.
+`EdgionGatewayConfig.spec.pluginPolicy` governs `http/<Type>` entries in all four HTTP stages.
+The actual GatewayClass binding selects the policy, so shared plugin resources
+can be allowed in one class and restricted in another. The Gateway publishes
+compatible views dynamically; the Controller neither stamps entries nor emits
+a global restriction condition on the shared plugin resource.
+
+See [spec.pluginPolicy](../02-config/02-edgion-gateway-config.md#specpluginpolicy)
+for allow/deny semantics, lifecycle boundaries and unavailable-policy behavior.
 
 ## Unknown config keys (`UnknownConfigFields` condition)
 

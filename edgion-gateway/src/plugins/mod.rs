@@ -2,6 +2,7 @@
 
 pub mod common;
 pub mod http;
+pub(crate) mod publication;
 pub mod runtime;
 pub mod stream;
 

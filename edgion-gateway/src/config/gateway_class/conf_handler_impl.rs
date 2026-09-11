@@ -56,6 +56,9 @@ impl ConfHandler<GatewayClass> for GatewayClassHandler {
         );
         let mut store = GATEWAY_CLASS_STORE.write();
         *store = arc_map_to_owned(data);
+        drop(store);
+        crate::plugins::publication::global_publisher().replace_gateway_classes(data.clone());
+        crate::ai::reconcile_all_adaptive_plugin_dependents();
     }
 
     fn partial_update(
@@ -64,6 +67,11 @@ impl ConfHandler<GatewayClass> for GatewayClassHandler {
         update: HashMap<String, Arc<GatewayClass>>,
         remove: HashSet<String>,
     ) {
+        let policy_inputs = add
+            .iter()
+            .chain(update.iter())
+            .map(|(key, value)| (key.clone(), Arc::clone(value)))
+            .collect();
         let mut store = GATEWAY_CLASS_STORE.write();
 
         if !add.is_empty() {
@@ -105,6 +113,9 @@ impl ConfHandler<GatewayClass> for GatewayClassHandler {
                 }
             }
         }
+        drop(store);
+        crate::plugins::publication::global_publisher().update_gateway_classes(policy_inputs, &remove);
+        crate::ai::reconcile_all_adaptive_plugin_dependents();
     }
 }
 

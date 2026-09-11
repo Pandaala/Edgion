@@ -1,0 +1,12 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: pp-response
+  namespace: edgion-test
+spec:
+  upstreamResponseFilterPlugins:
+  - type: ResponseHeaderModifier
+    config:
+      set:
+      - name: X-Policy-Response
+        value: active

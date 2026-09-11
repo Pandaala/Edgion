@@ -80,7 +80,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 /// **Invariant every gated ingress relies on**: the document reaching a
 /// gated `Deserialize` call is always OPERATOR-AUTHORED — never a
 /// controller-resolved object. A resolved object (one carrying a populated
-/// `#[schemars(skip)]` field, e.g. `policy_action` or a plugin's
+/// `#[schemars(skip)]` field, e.g. a plugin's
 /// `resolved_*` credential map) travels only over conf_sync to the gateway,
 /// where this flag is always `false`. Should a future change ever feed a
 /// resolved object into a gated seam, its skip-only fields would surface as

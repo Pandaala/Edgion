@@ -46,7 +46,7 @@
 
 ### 插件策略
 
-- [插件策略（允许清单 / 拒绝清单）](./plugin-policy.md)：Controller 侧插件允许清单/拒绝清单——限制 Gateway 可执行的插件类型，支持 block/bypass 动作、状态上报，以及启用前必读的升级顺序警告。
+- [插件策略（允许清单 / 拒绝清单）](./plugin-policy.md)：在 EdgionGatewayConfig 中配置 GatewayClass 作用域执行策略，支持动态 Block/Bypass 更新及无效配置保留边界。
 - [未知配置字段检测](./plugin-config-unknown-fields.md)：检测 `EdgionPlugins`、`EdgionStreamPlugins`、类型化 `EdgionConfigData` 和 `LinkSys` 配置块中无法识别的键——通过日志、状态条件和诊断接口发出警告，从不阻断；并提供 `POST /api/v1/validate/{kind}` 接口用于搭建你自己的阻断关卡。
 
 ### 联邦

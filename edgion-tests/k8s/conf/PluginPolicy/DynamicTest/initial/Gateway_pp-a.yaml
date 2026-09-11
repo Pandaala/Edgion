@@ -1,0 +1,32 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: pp-a
+  namespace: edgion-test
+spec:
+  gatewayClassName: pp-a
+  listeners:
+  - name: http
+    protocol: HTTP
+    port: 58330
+  - name: tcp
+    protocol: TCP
+    port: 58331
+  - name: terminate
+    protocol: TLS
+    port: 58334
+    hostname: pp-a.example.com
+    tls:
+      mode: Terminate
+      certificateRefs:
+      - name: edge-tls
+        namespace: edgion-test
+  - name: passthrough
+    protocol: TLS
+    port: 58335
+    hostname: pp-a.example.com
+    tls:
+      mode: Passthrough
+  - name: udp
+    protocol: UDP
+    port: 58338

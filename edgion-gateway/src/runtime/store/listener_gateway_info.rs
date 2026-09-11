@@ -69,11 +69,8 @@ impl GatewayInfoIndex {
         self.gateways.iter().map(|(k, v)| (k.as_str(), v))
     }
 
-    /// Test-only builder mirroring the single insertion path in `rebuild`.
-    /// Lets route-matching tests assemble an index without constructing whole
-    /// `Gateway` resources.
-    #[cfg(test)]
-    pub(crate) fn from_entries_for_test(entries: Vec<(String, ListenerEntry)>) -> Self {
+    /// Build an index from owned listener facts without reading another store.
+    pub(crate) fn from_entries(entries: Vec<(String, ListenerEntry)>) -> Self {
         let mut index = Self::new();
         for (gateway_key, entry) in entries {
             index
@@ -83,6 +80,11 @@ impl GatewayInfoIndex {
                 .add(entry);
         }
         index
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_entries_for_test(entries: Vec<(String, ListenerEntry)>) -> Self {
+        Self::from_entries(entries)
     }
 }
 

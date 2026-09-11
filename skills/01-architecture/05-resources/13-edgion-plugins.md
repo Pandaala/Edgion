@@ -51,7 +51,18 @@ Note: `ResolvedRefs` currently checks only Secret **existence**, not whether the
 
 ## Gateway-side processing
 
-After EdgionPlugins is synced to the Gateway side, it is stored in plugin-configuration storage. HTTPRoute / GRPCRoute references EdgionPlugins via ExtensionRef; during route preparse, a `PluginRuntime` execution chain is built. During request handling, plugins are executed in the configured execution stages (request_plugins / response_plugins) in order.
+The source store forwards EdgionPlugins to the canonical plugin publisher.
+EGC global references, Gateway annotations and route/backend ExtensionRefs
+contribute attachment demand. Each immutable source generation owns shared
+entry constructors; the publisher masks entries by current GatewayClass policy
+and builds effective views. HTTP requests use their captured class scope across
+all four stages and delayed backend lookups. Invalid DSL/WAF retention must pass
+current policy and mirror guards; it cannot restore excluded entries.
+
+Controller status describes enabled source configuration and resolved references,
+not the execution decision of every class sharing this resource. No global
+policy-restriction condition or serialized entry action is produced. See
+[scoped publication](../../04-review/plugin-runtime/regression-guards/scoped-policy-runtime-publication.md).
 
 ## Cross-resource relationships
 

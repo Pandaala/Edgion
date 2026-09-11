@@ -53,8 +53,6 @@ debug:
 validation:
   enable_reference_grant_validation: true   # Enable cross-namespace ReferenceGrant validation
   # Optional plugin allowlist/denylist. Absent (default) = allow all plugins.
-  # See "[validation.plugin_policy]" below for the full schema.
-  # plugin_policy:
   #   mode: denylist
   #   plugins:
   #     - name: http/Wasm
@@ -179,89 +177,11 @@ The tagged enum accepts exactly `file_system`, `kubernetes`, or `etcd`.
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `enable_reference_grant_validation` | `bool` | `true` | Enable ReferenceGrant validation; disabling lifts cross-namespace reference restrictions |
-| `plugin_policy` | `PluginPolicyConfig?` | `None` (allow all) | Controller-side plugin allowlist/denylist. See [validation.plugin_policy](#validationplugin_policy) below. |
 
-### [validation.plugin_policy]
-
-**Source:** `edgion-controller/src/config/plugin_policy.rs` (schema, fail-fast validation, compiled lookup); field lives on `ValidationConfig` in `edgion-controller/src/config/mod.rs`.
-
-Optional Controller-side allowlist/denylist that restricts which plugin
-types the Gateway is allowed to instantiate. `plugin_policy` is absent by
-default — every existing configuration is unaffected, no plugin is
-stamped, no status condition is emitted, and the Gateway takes the
-existing zero-overhead path. The feature only activates when an operator
-explicitly adds this section. **Config-file only (no CLI flag); changes
-require a Controller restart** — there is no hot reload for this section.
-
-Full example (all fields shown):
-
-```yaml
-validation:
-  plugin_policy:
-    mode: denylist            # denylist | allowlist (required)
-    default_action: block     # block | bypass (default: block)
-    default_block_status: 503 # HTTP status for block (default: 503)
-    plugins:
-      - name: http/Wasm                 # shorthand: uses default_action
-      - name: http/Dsl
-        action: block
-        block_status: 403               # per-entry status override
-      - name: stream/ConnectionRateLimit
-        action: bypass
-```
-
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `mode` | `"denylist" \| "allowlist"` | **Required** | See "Semantics" below. |
-| `default_action` | `"block" \| "bypass"` | `block` | Action applied to a restricted entry that has no per-entry `action`. |
-| `default_block_status` | `u16` (400–599) | `503` | HTTP status returned by a restricted entry that has no per-entry `block_status`. Stream/TLS-route stages ignore this — a restricted connection is simply closed. |
-| `plugins` | `Vec<{name, action?, block_status?}>` | `[]` | Qualified plugin names this policy applies to. In `allowlist` mode a listed entry means "allowed" and MUST NOT set `action`/`block_status` (startup error if it does). |
-
-**Qualified names** — `<family>/<Type>`, exactly three families, exact
-case-sensitive match against the serde tag, no wildcards:
-
-| Family | Enum | Governs |
-|--------|------|---------|
-| `http` | `EdgionPlugin` | All four HTTP stages of `EdgionPlugins` (`requestPlugins`, `upstreamResponseFilterPlugins`, `upstreamResponseBodyFilterPlugins`, `upstreamResponsePlugins`) |
-| `stream` | `EdgionStreamPlugin` | Connection stage (`spec.plugins`) of `EdgionStreamPlugins` |
-| `tls-route` | `TlsRouteStreamPlugin` | TLS-route stage (`spec.tlsRoutePlugins`) of `EdgionStreamPlugins` |
-
-Gateway API standard filter variants inside `EdgionPlugins`
-(`RequestHeaderModifier`, `RequestRedirect`, `UrlRewrite`, ...) are ordinary
-`EdgionPlugin` variants and are governed like any other `http/` plugin —
-there is no exemption list. Allowlist users must list the standard filters
-they use. The canonical name sets are extracted once at startup from
-`schema_for!` of the three enums (the same technique as
-`edgion-resources/tests/plugin_crd_type_coverage.rs`) — there is no
-hand-maintained list to drift.
-
-**Semantics:**
-
-- Policy absent (default) → allow all: every plugin runs, unchanged behavior.
-- `denylist` → listed plugins are restricted; everything else runs.
-- `allowlist` → **global** across all three families: any plugin not
-  listed, in any family, is restricted and handled with `default_action`.
-  There is no per-family carve-out — forgetting to list a family fails
-  safe (visible restriction), not silently-allow.
-- Policy changes require a Controller restart.
-
-**Fail-fast (Controller startup fails on):**
-
-- unknown family or unknown plugin name;
-- duplicate entries;
-- `block_status` (default or per-entry) outside `400..=599`;
-- `action` / `block_status` present on an allowlist-mode entry.
-
-**Effect on a restricted plugin entry:** the Controller does not flip the
-entry's `enable` field or block the resource from being cached/synced. It
-stamps an internal `policy_action` marker (never operator-facing —
-`#[schemars(skip)]`, not present in the CRD schema) and reports a
-`PluginPolicyRestricted=True` status condition listing the hits;
-`Accepted` is unaffected. Enforcement (blocking or bypassing the plugin at
-request time) happens on the Gateway. See `docs/en/ops-guide/plugin-policy.md`
-(`docs/zh-CN/ops-guide/plugin-policy.md` for the Chinese version) for the
-full operator guide, including the mandatory upgrade-order warning before
-enabling this feature on a fleet with mixed Gateway versions.
+Plugin execution policy belongs to
+[`EdgionGatewayConfig.spec.pluginPolicy`](02-edgion-gateway-config.md#specpluginpolicy).
+It is dynamically scoped by GatewayClass, not a Controller startup setting.
+The removed `validation.plugin_policy` key is rejected as an unknown field.
 
 ### [conf_sync]
 

@@ -1,0 +1,15 @@
+apiVersion: edgion.io/v1
+kind: EdgionTls
+metadata:
+  name: pp-b
+  namespace: edgion-test
+spec:
+  parentRefs:
+  - name: pp-b
+    namespace: edgion-test
+    sectionName: terminate
+  hosts:
+  - pp-b.example.com
+  secretRef:
+    name: edge-tls
+    namespace: edgion-test

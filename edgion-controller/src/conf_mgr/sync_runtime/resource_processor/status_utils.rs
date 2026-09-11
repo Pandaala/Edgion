@@ -28,10 +28,6 @@ pub mod condition_types {
     pub const PARTIALLY_INVALID: &str = "PartiallyInvalid";
     /// Listener configuration has been sent to the data plane (listener-level)
     pub const PROGRAMMED: &str = "Programmed";
-    /// One or more plugin entries are restricted by the controller plugin
-    /// policy (Edgion-specific, not a Gateway API condition). True = hits
-    /// exist; the condition is removed entirely when there are no hits.
-    pub const PLUGIN_POLICY_RESTRICTED: &str = "PluginPolicyRestricted";
     /// The operator-authored document carries one or more keys the schema
     /// does not recognize (Edgion-specific, not a Gateway API condition).
     /// True = findings exist; the condition is removed entirely when there
@@ -143,9 +139,6 @@ pub mod condition_reasons {
     pub const RULE_INVALID: &str = "RuleInvalid";
     pub const INVALID_CREDENTIALS: &str = "InvalidCredentials";
     pub const ALL_RULES_VALID: &str = "AllRulesValid";
-
-    /// Reason for PluginPolicyRestricted=True.
-    pub const RESTRICTED_BY_POLICY: &str = "RestrictedByPolicy";
 
     /// Reason for UnknownConfigFields=True.
     pub const UNKNOWN_FIELDS_DETECTED: &str = "UnknownFieldsDetected";

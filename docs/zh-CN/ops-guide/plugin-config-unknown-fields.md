@@ -137,5 +137,5 @@ POST /api/v1/validate/EdgionPlugins
   ——provider schema、开放边界与状态行为。
 - [Admin API —— diagnostics 与 validate 接口](https://github.com/Pandaala/Edgion/blob/main/skills/01-architecture/01-controller/02-admin-api.md)
   ——完整的接口参考。
-- [插件策略（允许清单 / 拒绝清单）](./plugin-policy.md)——同为插件资源上、面向运维人员可见
-  的提示性功能，本检测器的条件/指标处理方式与之保持一致。
+- [插件策略（允许清单 / 拒绝清单）](./plugin-policy.md)——EdgionGatewayConfig 中的 GatewayClass 作用域执行控制；
+  这是实际执行的策略，与未知字段的提示性状态不同。

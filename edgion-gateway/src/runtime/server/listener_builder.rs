@@ -20,7 +20,7 @@ use std::sync::Arc;
 use tokio::net::UdpSocket;
 
 use crate::observe::AccessLogger;
-use crate::plugins::stream::{get_global_stream_plugin_store, StreamPluginConnectionFilter};
+use crate::plugins::stream::StreamPluginConnectionFilter;
 use crate::routes::http::{EdgionHttpProxy, EdgionHttpRedirectProxy};
 use crate::routes::tcp::{get_global_tcp_route_managers, EdgionTcpProxy};
 use crate::routes::tls::{get_global_tls_route_managers, EdgionTlsPassthroughProxy, EdgionTlsTcpProxy};
@@ -609,65 +609,15 @@ fn apply_connection_filter<A>(service: &mut Service<A>, context: &ListenerContex
 }
 
 fn build_stream_connection_filter(context: &ListenerContext) -> Option<Arc<dyn ConnectionFilter>> {
-    let annotation_value = context.gateway_annotations.get(edgion::EDGION_STREAM_PLUGINS)?;
-
-    // The store is keyed by `namespace/name`, but Gateway-level attachments are
-    // same-namespace only. Use an impossible store key for a qualified annotation so
-    // bypassing Controller validation still fails closed in the data plane.
-    let store_key = match resolve_gateway_stream_plugin_store_key(
-        annotation_value,
-        context.gateway_namespace.as_deref().unwrap_or("default"),
-    ) {
-        Ok(Some(store_key)) => store_key,
-        Ok(None) => return None,
-        Err(()) => {
-            tracing::warn!(
-            gateway=%context.gateway_key,
-            listener=%context.listener.name,
-            "Gateway edgion-stream-plugins reference must be an unqualified resource name; connections will be rejected"
-            );
-            String::new()
-        }
-    };
-
-    let store = get_global_stream_plugin_store();
-    let port = context.listener.port as u16;
-
-    if !store.contains(&store_key) {
-        tracing::warn!(
-            gateway=%context.gateway_key,
-            listener=%context.listener.name,
-            store_key=%store_key,
-            "edgion-stream-plugins reference not found in gateway store; \
-             connections will be rejected until resource is synced (fail-close)"
-        );
-    }
-
-    let filter = Arc::new(StreamPluginConnectionFilter::new(store, store_key.clone(), port));
-
-    tracing::info!(
-        gateway=%context.gateway_key,
-        listener=%context.listener.name,
-        store_key=%store_key,
-        "ConnectionFilter enabled via edgion-stream-plugins annotation"
-    );
-    Some(filter)
-}
-
-fn resolve_gateway_stream_plugin_store_key(value: &str, gateway_ns: &str) -> Result<Option<String>, ()> {
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        Ok(None)
-    } else if trimmed.contains('/') {
-        Err(())
-    } else {
-        Ok(Some(format!("{}/{}", gateway_ns, trimmed)))
-    }
+    Some(Arc::new(StreamPluginConnectionFilter::new(
+        context.listener_key.clone(),
+        context.listener.port as u16,
+    )))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::resolve_gateway_stream_plugin_store_key;
+    use crate::routes::common::resolve_gateway_stream_plugin_store_key;
 
     #[test]
     fn gateway_stream_plugin_store_key_uses_gateway_namespace() {

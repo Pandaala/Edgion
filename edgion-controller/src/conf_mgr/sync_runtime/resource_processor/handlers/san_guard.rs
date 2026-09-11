@@ -139,7 +139,7 @@ pub fn check_plugins_san(ep: &EdgionPlugins) -> Vec<String> {
         ($stage:expr) => {
             if let Some(entries) = &$stage {
                 for entry in entries {
-                    if !entry.is_enabled() || entry.policy_action.is_some() {
+                    if !entry.is_enabled() {
                         continue;
                     }
                     match &entry.plugin {
@@ -409,16 +409,14 @@ mod tests {
     }
 
     #[test]
-    fn policy_stamped_plugin_is_inert_for_san_guard() {
+    fn enabled_plugin_source_is_validated_for_san_guard() {
         use edgion_resources::resources::edgion_plugins::{
             EdgionPlugin, EdgionPluginsSpec, ExtProcConfig, RequestFilterEntry,
         };
-        use edgion_resources::resources::plugin_policy::PluginPolicyAction;
 
         let mut config = ExtProcConfig::default();
         config.grpc_service.tls.outbound.validation = Some(hostname_only());
-        let mut entry = RequestFilterEntry::new(EdgionPlugin::ExtProc(config));
-        entry.policy_action = Some(PluginPolicyAction::Bypass);
+        let entry = RequestFilterEntry::new(EdgionPlugin::ExtProc(config));
         let plugins = EdgionPlugins {
             metadata: Default::default(),
             spec: EdgionPluginsSpec {
@@ -428,7 +426,7 @@ mod tests {
             status: None,
         };
 
-        assert!(check_plugins_san(&plugins).is_empty());
+        assert!(!check_plugins_san(&plugins).is_empty());
     }
 
     #[test]

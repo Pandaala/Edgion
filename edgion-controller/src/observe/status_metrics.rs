@@ -26,7 +26,7 @@ use std::sync::{Arc, OnceLock};
 use crate::conf_mgr::sync_runtime::resource_processor::raw_store::RawStore;
 
 pub(crate) const METRIC_NAME: &str = "edgion_controller_resource_abnormal";
-pub(crate) const METRIC_HELP: &str = "Resource currently has at least one False status condition. The `err` label is a JSON array of err-level condition triggers (Accepted/ResolvedRefs/Programmed:False, Conflicted/ListenersNotValid/PluginPolicyRestricted:True). The `warn` label is a JSON array of warn-level condition triggers (Ready:False, PartiallyInvalid:True). Empty string means no condition at that severity.";
+pub(crate) const METRIC_HELP: &str = "Resource currently has at least one False status condition. The `err` label is a JSON array of err-level condition triggers (Accepted/ResolvedRefs/Programmed:False, Conflicted/ListenersNotValid:True). The `warn` label is a JSON array of warn-level condition triggers (Ready:False, PartiallyInvalid:True). Empty string means no condition at that severity.";
 
 pub(crate) const COND_COUNT_METRIC_NAME: &str = "edgion_controller_status_conditions_max";
 pub(crate) const COND_COUNT_METRIC_HELP: &str = "Largest single .status.conditions array length on a resource. Emitted only when it reaches the configured threshold (default 20), so healthy fleets emit nothing. A bounded conditions array that keeps growing is a status-write loop (single-controller death-loop) or cross-controller condition pollution; the value is the array length.";
@@ -132,8 +132,8 @@ pub(crate) struct Condition {
 ///
 /// Err triggers:
 /// - `Accepted:False`, `ResolvedRefs:False`, `Programmed:False`
-/// - `Conflicted:True`, `ListenersNotValid:True`, `PluginPolicyRestricted:True`
-///   (inverse semantics — True is bad for these three)
+/// - `Conflicted:True`, `ListenersNotValid:True`
+///   (inverse semantics — True is bad for these two)
 ///
 /// Warn triggers:
 /// - `Ready:False`
@@ -146,8 +146,7 @@ pub(crate) fn classify(conditions: &[Condition]) -> Option<(Vec<ConditionRef>, V
         // in both severities. It
         // reports an operator typo in a document that still syncs to the
         // data plane unchanged — not resource ill-health — so it must not
-        // move the `edgion_controller_resource_abnormal` gauge the way
-        // `PluginPolicyRestricted` does. The `_ => {}` arm below already
+        // move the `edgion_controller_resource_abnormal` gauge. The `_ => {}` arm already
         // ignores it correctly; do not "complete" this match by adding an
         // arm for it. See
         // `status_metrics_test.rs::classify_tests::unknown_config_fields_true_produces_no_series`
@@ -157,8 +156,7 @@ pub(crate) fn classify(conditions: &[Condition]) -> Option<(Vec<ConditionRef>, V
             | ("ResolvedRefs", "False")
             | ("Programmed", "False")
             | ("Conflicted", "True")
-            | ("ListenersNotValid", "True")
-            | ("PluginPolicyRestricted", "True") => err_list.push(ConditionRef {
+            | ("ListenersNotValid", "True") => err_list.push(ConditionRef {
                 type_: c.type_.clone(),
                 status: c.status.clone(),
             }),

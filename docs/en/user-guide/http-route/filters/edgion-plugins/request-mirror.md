@@ -68,7 +68,8 @@ New requests use the updated decision after configuration sync; already-started
 mirror tasks are not cancelled by revocation.
 
 If either the previous or incoming plugin configuration contains an enabled
-cross-namespace mirror that is not replaced by PluginPolicy, an invalid DSL/WAF
+cross-namespace mirror permitted by the current GatewayClass
+`EdgionGatewayConfig.spec.pluginPolicy`, an invalid DSL/WAF
 update fails closed with HTTP 500 instead of retaining the previous plugin runtime.
 This prevents an old mirror from retaining authorization after its target is
 changed, removed, or revoked. After the configuration is valid again, ordinary

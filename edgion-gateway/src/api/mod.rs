@@ -384,6 +384,8 @@ async fn clear_access_logs() -> Json<ApiResponse<String>> {
 /// Response for /api/v1/debug/store-stats
 #[derive(Serialize)]
 struct StoreStatsResponse {
+    plugin_publication: crate::plugins::publication::PublicationStats,
+    plugin_publication_inventory: crate::plugins::publication::PublicationInventory,
     wasm_oci_cache: crate::plugins::http::wasm::oci::cache::OciMemoryCacheStats,
     http_routes: crate::routes::http::HttpRouteManagerStats,
     grpc_routes: crate::routes::grpc::GrpcRouteManagerStats,
@@ -587,7 +589,10 @@ async fn store_stats(State(client): State<Arc<ConfigClient>>) -> Json<ApiRespons
         by_kind: stream_plugin_store_ref.count_by_kind(),
     };
 
+    let publication = crate::plugins::publication::global_publisher().snapshot();
     Json(ApiResponse::ok_body(StoreStatsResponse {
+        plugin_publication: publication.stats(),
+        plugin_publication_inventory: publication.inventory().clone(),
         wasm_oci_cache,
         http_routes,
         grpc_routes,
@@ -1884,6 +1889,8 @@ mod store_stats_tests {
     #[test]
     fn store_stats_response_serializes() {
         let resp = StoreStatsResponse {
+            plugin_publication: Default::default(),
+            plugin_publication_inventory: Default::default(),
             wasm_oci_cache: crate::plugins::http::wasm::oci::cache::OciMemoryCacheStats {
                 entries: 0,
                 keys: Vec::new(),

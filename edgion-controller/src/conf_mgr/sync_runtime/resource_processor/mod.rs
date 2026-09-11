@@ -25,7 +25,6 @@ mod handler;
 pub mod handlers;
 pub mod listener_port_manager;
 pub mod namespace_store;
-pub(crate) mod plugin_policy_stamp;
 mod processor;
 pub mod proxy_protocol_listener_policy;
 pub mod raw_store;

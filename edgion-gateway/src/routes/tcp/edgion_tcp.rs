@@ -12,7 +12,9 @@ use crate::backends::{
     select_service_endpoint, service_section_key_from_port, validate_endpoint_backend_addr, ServiceDegradePolicy,
 };
 use crate::observe::{log_tcp, TcpLogEntry};
-use crate::plugins::stream::get_global_stream_plugin_store;
+use crate::plugins::publication::global_publisher;
+use crate::plugins::stream::connection_filter_bridge::resolve_route_scope;
+use crate::plugins::stream::CompiledStreamPlugins;
 use crate::plugins::{StreamContext, StreamLayer, StreamPluginResult};
 use crate::routes::common::{
     classify_l4_selected_backend, L4SelectedBackend, L4_BACKEND_REF_DENIED_LOG, L4_BACKEND_REF_DENIED_STATUS,
@@ -160,9 +162,29 @@ impl EdgionTcpProxy {
             return;
         }
 
-        // 3. Execute stream plugins (dynamic lookup from StreamPluginStore)
+        let publication = global_publisher().snapshot();
+        let Some(scope) = resolve_route_scope(
+            &publication,
+            &self.listener_key,
+            &unit.resolved_parent_refs,
+            "",
+            tcp_route.metadata.namespace.as_deref().unwrap_or("default"),
+            "TCPRoute",
+        ) else {
+            ctx.status = TcpStatus::PluginDenied;
+            ctx.deny_reason = Some("plugin policy unavailable");
+            return;
+        };
+        let resource = unit
+            .stream_plugin_store_key
+            .as_deref()
+            .and_then(|key| scope.stream(key));
+        // Admission pins only the selected executable view across the await.
+        drop(scope);
+        drop(publication);
         if let StreamPluginCheck::Deny(reason) = check_stream_plugins(
             unit.stream_plugin_store_key.as_deref(),
+            resource.as_deref(),
             &ctx.direct_peer_ip,
             self.listener_port,
         )
@@ -172,6 +194,8 @@ impl EdgionTcpProxy {
             ctx.deny_reason = Some(reason);
             return;
         }
+
+        drop(resource);
 
         // 4. Select backend
         let backend_ref = match unit.backend_finder.select() {
@@ -349,26 +373,17 @@ pub(crate) enum StreamPluginCheck {
     Deny(&'static str),
 }
 
-/// Stage-1 stream plugin enforcement for TCPRoute.
-///
-/// Fail-close: if a rule references an `EdgionStreamPlugins` (ESP) resource
-/// but the policy cannot be evaluated (client IP unparseable, ESP missing
-/// from the global store), reject the connection rather than admitting it.
-/// Silently admitting traffic past a configured allowlist would be a
-/// security bypass. Startup-time sync race is gated by
-/// `ConfigClient::is_ready()` before listeners bind, so reaching the
-/// missing-ESP branch implies misconfiguration or hot-delete.
-///
-/// Pass-through cases (return `Allow`):
-/// - rule has no `stream_plugin_store_key` (no ESP attached);
-/// - ESP exists but its runtime is empty (operator intent: declare an ESP
-///   with no rules to act as a no-op).
+/// Execute the scoped Stage-1 view after logical Gateway admission.
+/// A missing attachment is a no-op; a declared reference without a selected
+/// executable view fails closed. The caller owns the availability gate even
+/// when no plugin is attached.
 pub(crate) async fn check_stream_plugins(
     store_key: Option<&str>,
+    resource: Option<&CompiledStreamPlugins>,
     direct_peer_ip: &str,
     listener_port: u16,
 ) -> StreamPluginCheck {
-    let Some(store_key) = store_key else {
+    let Some(_) = store_key else {
         return StreamPluginCheck::Allow;
     };
 
@@ -379,8 +394,7 @@ pub(crate) async fn check_stream_plugins(
         return StreamPluginCheck::Deny("direct peer IP unparseable");
     };
 
-    let store = get_global_stream_plugin_store();
-    let Some(resource) = store.get(store_key) else {
+    let Some(resource) = resource else {
         return StreamPluginCheck::Deny("stream plugin resource not found");
     };
 
@@ -553,13 +567,11 @@ mod tests {
 
     #[tokio::test]
     async fn fail_close_when_store_key_missing_in_tcp() {
-        // Rule references an ESP but the global store does not contain it.
+        // Rule references an ESP but the admitted scope has no executable view.
         // Must reject (fail-close) with the bounded reason.
-        let store = get_global_stream_plugin_store();
         let key = "default/__tcp_fail_close_missing__";
-        assert!(store.get(key).is_none(), "test precondition: key must not be in store");
 
-        let result = check_stream_plugins(Some(key), "127.0.0.1", 9000).await;
+        let result = check_stream_plugins(Some(key), None, "127.0.0.1", 9000).await;
         assert_eq!(
             result,
             StreamPluginCheck::Deny("stream plugin resource not found"),
@@ -571,7 +583,7 @@ mod tests {
     async fn fail_close_when_tcp_direct_peer_ip_unparseable() {
         // Rule references an ESP but DirectPeerIp is not a valid IP literal
         // (e.g. peer addr extraction returned "unknown"). Must reject.
-        let result = check_stream_plugins(Some("default/something"), "unknown", 9000).await;
+        let result = check_stream_plugins(Some("default/something"), None, "unknown", 9000).await;
         assert_eq!(
             result,
             StreamPluginCheck::Deny("direct peer IP unparseable"),
@@ -582,7 +594,7 @@ mod tests {
     #[tokio::test]
     async fn pass_through_when_store_key_none() {
         // No ESP attached at all — section 3 is a no-op. Must allow.
-        let result = check_stream_plugins(None, "127.0.0.1", 9000).await;
+        let result = check_stream_plugins(None, None, "127.0.0.1", 9000).await;
         assert_eq!(
             result,
             StreamPluginCheck::Allow,

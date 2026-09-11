@@ -1,3 +1,5 @@
+use crate::routes::common::{filter_accepted_parent_refs, resolve_parent_refs};
+use crate::runtime::matching::route::ResolvedParentRef;
 use std::sync::Arc;
 
 use super::{cap_tls_connect_retries, DEFAULT_TLS_CONNECT_RETRIES, MAX_TLS_CONNECT_RETRIES};
@@ -20,6 +22,8 @@ use edgion_resources::ResourceMeta;
 /// route shares one rule set, so the compiled runtime is built from the first
 /// rule (matching the data-plane read path `rules.first()`).
 pub struct TlsRouteUnit {
+    /// Accepted parent identities resolved once for logical Gateway admission.
+    pub resolved_parent_refs: Vec<ResolvedParentRef>,
     pub route: Arc<TLSRoute>,
     /// WRR selector over the first rule's backends (one per route, shared
     /// across all SNI hostnames that map to this route).
@@ -46,6 +50,15 @@ impl TlsRouteUnit {
     /// (single source of truth shared with the HTTP/TCP conf-handlers) and
     /// builds the WRR selector from the first rule's backend refs.
     pub fn from_route(route: Arc<TLSRoute>) -> Self {
+        let namespace = route.metadata.namespace.as_deref().unwrap_or("default");
+        let accepted = filter_accepted_parent_refs(
+            route.spec.parent_refs.as_deref(),
+            route.status.as_ref().map(|status| status.parents.as_slice()),
+            Some(namespace),
+        )
+        .unwrap_or_default();
+        let resolved_parent_refs = resolve_parent_refs(&accepted, namespace);
+
         let route_key = route.key_name();
         let annotations = route.metadata.annotations.as_ref();
 
@@ -79,6 +92,7 @@ impl TlsRouteUnit {
 
         TlsRouteUnit {
             route,
+            resolved_parent_refs,
             backend_finder,
             stream_plugin_store_key,
             proxy_protocol_version,

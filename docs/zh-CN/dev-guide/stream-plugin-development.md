@@ -72,14 +72,16 @@ graph TD
     B --> C["Serializable stage configuration"]
     C --> D["Controller ProcessorHandler"]
     D --> E["Config sync to Gateway"]
-    E --> F["StreamPluginStore compile and publish"]
-    F --> G["Gateway / TCPRoute / TLSRoute / UDPRoute annotation binding"]
-    G --> H["Stage 1 connection-context or Stage 2 TlsRoute runtime"]
+    E --> F["StreamPluginStore source adapter"]
+    P["EGC policy and GatewayClass bindings"] --> Q["Canonical scoped publication"]
+    F --> Q
+    G["Gateway / TCPRoute / TLSRoute / UDPRoute attachments"] --> Q
+    Q --> H["Captured Stage 1 or Stage 2 admission view"]
 ```
 
 最容易漏的不是“写 trait”，而是中间这几段：
 
-- Gateway 的 `compile_stream_plugins` 是否构造了对应阶段的 runtime
+- Gateway 的作用域发布是否为对应阶段建立需求并构造 runtime
 - Gateway 是否真的缓存并热更新了 `EdgionStreamPlugins`
 - `Gateway` / `TCPRoute` / `TLSRoute` / `UDPRoute` 的注解引用是否真正接到运行时
 
@@ -101,7 +103,7 @@ graph TD
 
 一个重要事实是：
 
-- Gateway 的 `StreamPluginStore` 调用 `compile_stream_plugins`，构造两个阶段的 runtime 后再发布不可变配置；Controller 传输配置，不传输 runtime 对象
+- Gateway 的 `StreamPluginStore` 将源配置交给统一发布器；`StreamPluginGeneration` 仅构造有需求且被策略允许的阶段条目，并在 class 视图之间共享实例。Controller 传输解析后的源配置并报告自身校验状态，不写入执行策略标记
 
 所以只改 Controller handler 并不够：还需要在 Gateway 的构造逻辑中接入插件，资源同步后才有对应的可执行 runtime。
 
@@ -157,7 +159,7 @@ Gateway 级附件不覆盖 UDP 监听器；要控制 UDP 会话接入，应把�
 2. 决定配置结构是否可以复用已有配置，而不是复制一份近似类型。
 3. 把新类型接入 `EdgionStreamPlugin` 或 `TlsRouteStreamPlugin`。
 4. 在对应 runtime 中补插件对象构造逻辑。
-5. 确认 Gateway 的 `compile_stream_plugins` 在发布配置之前构造对应阶段的 runtime。
+5. 确认作用域发布在准入之前构造被策略允许的对应阶段 runtime。
 6. 确认引用该资源的 `Gateway` / `TCPRoute` / `TLSRoute` / `UDPRoute` 真正能取到 store key，并使用正确的生命周期。
 7. 最后再补测试和样例 YAML。
 
@@ -172,7 +174,7 @@ Gateway 级附件不覆盖 UDP 监听器；要控制 UDP 会话接入，应把�
 ### 1. 资源层
 
 - 资源能被 controller 接收并写出正确 status
-- Gateway 在发布更新之前重新构造两个阶段的 runtime
+- Gateway 一起发布当前 class 策略和有需求的阶段 runtime
 
 ### 2. 引用层
 

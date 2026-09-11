@@ -2,7 +2,6 @@ use edgion_resources::resources::edgion_plugins::conditions::{
     Condition, ConditionSet, ConditionValidationProfile, PluginConditions,
 };
 use edgion_resources::resources::edgion_plugins::{EdgionPlugins, EdgionPluginsSpec, OnLimitExceeded, RateLimitConfig};
-use edgion_resources::resources::plugin_policy::PluginPolicyAction;
 use serde_json::{json, Value};
 
 fn local() -> Value {
@@ -87,9 +86,6 @@ fn overflow_dependencies_reject_invalid_targets() {
             "{errors:?}"
         );
     }
-    let mut blocked = resource(vec![local(), redis()]);
-    blocked.spec.request_plugins.as_mut().unwrap()[0].policy_action = Some(PluginPolicyAction::Bypass);
-    assert!(!blocked.validate_plugins().is_empty());
 }
 
 #[test]
@@ -98,9 +94,6 @@ fn overflow_dormant_consumers_are_inert_and_continue_needs_no_consumer() {
     let mut disabled = redis();
     disabled["enable"] = json!(false);
     assert!(resource(vec![disabled]).validate_plugins().is_empty());
-    let mut bypassed = resource(vec![redis()]);
-    bypassed.spec.request_plugins.as_mut().unwrap()[0].policy_action = Some(PluginPolicyAction::Bypass);
-    assert!(bypassed.validate_plugins().is_empty());
 }
 
 #[test]

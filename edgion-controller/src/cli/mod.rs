@@ -483,11 +483,6 @@ impl EdgionControllerCli {
         // Initialize global controller config for runtime access (e.g., by ReferenceGrant validator)
         crate::config::init_controller_config(config.clone());
 
-        // Compile and install the plugin policy (fail-fast: aborts startup on
-        // a malformed `validation.plugin_policy` config). Must run right after
-        // `init_controller_config` and before any plugin resource is preparsed.
-        crate::config::plugin_policy::init_compiled_plugin_policy(config.validation.plugin_policy.as_ref())?;
-
         // Initialize test mode if enabled via CLI --test-mode
         // This affects: metrics test features
         edgion_common::test_mode::init_global_test_mode(self.config.test_mode);

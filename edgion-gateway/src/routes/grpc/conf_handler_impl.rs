@@ -37,6 +37,18 @@ impl ConfHandler<GRPCRoute> for GlobalGrpcRouteManagers {
             ms = Instant::now().saturating_duration_since(start_time).as_millis(),
             "full set done"
         );
+        drop(_guard);
+        crate::plugins::publication::global_publisher().replace_routes(
+            crate::plugins::publication::inputs::RouteKind::Grpc,
+            data.iter()
+                .map(|(key, route)| {
+                    (
+                        key.clone(),
+                        crate::plugins::publication::inputs::RouteInput::from_grpc(route),
+                    )
+                })
+                .collect(),
+        );
     }
 
     fn partial_update(
@@ -45,6 +57,17 @@ impl ConfHandler<GRPCRoute> for GlobalGrpcRouteManagers {
         update: HashMap<String, Arc<GRPCRoute>>,
         remove: HashSet<String>,
     ) {
+        let policy_inputs = add
+            .iter()
+            .chain(update.iter())
+            .map(|(key, route)| {
+                (
+                    key.clone(),
+                    crate::plugins::publication::inputs::RouteInput::from_grpc(route),
+                )
+            })
+            .collect();
+        let policy_removed = remove.clone();
         // Serialize against a concurrent Gateway-driven rebuild_all (see rebuild_lock).
         let _guard = self.lock_rebuild();
         let start_time = Instant::now();
@@ -106,6 +129,12 @@ impl ConfHandler<GRPCRoute> for GlobalGrpcRouteManagers {
             component = "grpc_route_manager",
             ms = Instant::now().saturating_duration_since(start_time).as_millis(),
             "partial update done"
+        );
+        drop(_guard);
+        crate::plugins::publication::global_publisher().update_routes(
+            crate::plugins::publication::inputs::RouteKind::Grpc,
+            policy_inputs,
+            &policy_removed,
         );
     }
 }

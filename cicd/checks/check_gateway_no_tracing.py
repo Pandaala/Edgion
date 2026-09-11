@@ -146,7 +146,7 @@ COLD_FUNCTION_REGISTRATIONS = [
     ("plugins/http/request_access_policy/plugin.rs", "RequestAccessPolicy", "create", "plugin construction"),
     ("plugins/http/request_mirror/plugin.rs", "RequestMirrorPlugin", "new", "plugin construction"),
     ("plugins/http/wasm/plugin.rs", "WasmPlugin", "build", "plugin construction"),
-    ("plugins/runtime/plugin_runtime.rs", "PluginRuntime", "add_from_request_filters", "plugin runtime assembly"),
+    ("plugins/runtime/plugin_runtime.rs", "PluginRuntime", "add_from_request_filters_with_cache", "configuration publication assembles cached plugin entries"),
     (
         "plugins/stream/ip_restriction/stream_ip_restriction.rs",
         "<free>",
@@ -162,16 +162,10 @@ COLD_FUNCTION_REGISTRATIONS = [
     (
         "plugins/stream/stream_plugin_runtime.rs",
         "StreamPluginRuntime",
-        "from_stream_plugins",
-        "plugin runtime assembly",
+        "from_cached_entries",
+        "configuration publication assembles cached stream entries",
     ),
     ("plugins/stream/tls_route/ip_restriction.rs", "TlsRouteIpRestriction", "new", "plugin construction"),
-    (
-        "plugins/stream/tls_route/tls_route_plugin_runtime.rs",
-        "TlsRoutePluginRuntime",
-        "from_entries",
-        "plugin runtime assembly",
-    ),
     ("routes/grpc/match_engine.rs", "GrpcMatchEngine", "new", "route matcher construction"),
     ("routes/grpc/match_unit.rs", "GrpcMatchInfo", "new", "route matcher construction"),
     ("routes/http/match_engine/radix_path.rs", "RadixPath", "new", "route matcher construction"),

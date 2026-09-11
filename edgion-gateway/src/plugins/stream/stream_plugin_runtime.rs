@@ -6,7 +6,10 @@ use crate::plugins::stream::{
 };
 use edgion_resources::resources::edgion_plugins::PluginValidation;
 use edgion_resources::resources::edgion_stream_plugins::{EdgionStreamPlugin, StreamPluginEntry};
+use edgion_resources::resources::plugin_policy::{CompiledPluginPolicy, PluginFamily};
 use std::sync::Arc;
+
+pub(super) type StreamEntryOutcome = Result<Arc<dyn StreamPlugin>, &'static str>;
 
 /// Runtime for executing stream plugins
 #[derive(Clone)]
@@ -45,23 +48,28 @@ impl StreamPluginRuntime {
     /// gives `ConnectionRateLimit` the identity it needs to namespace its Redis
     /// buckets and its local gate (see `plugins::common::entry_scope`).
     pub fn from_stream_plugins(entries: &[StreamPluginEntry], parent_namespace: &str, resource_key: &str) -> Self {
-        let record_invalid_config =
-            |invalid_config_reason: &mut Option<String>, plugin: &'static str, reason: &'static str| {
-                tracing::error!(
-                    component = "stream_plugin_runtime",
-                    plugin,
-                    resource_key,
-                    error_class = "invalid configuration",
-                    "Invalid stream plugin configuration; all connections will be denied",
-                );
-                if invalid_config_reason.is_none() {
-                    *invalid_config_reason = Some(reason.to_string());
-                }
-            };
+        Self::from_cached_entries(
+            entries,
+            parent_namespace,
+            resource_key,
+            None,
+            &mut vec![None; entries.len()],
+        )
+    }
+
+    /// The caller binds these slots to one immutable source generation. Only
+    /// allowed entries acquire executable references in the resulting view.
+    pub(super) fn from_cached_entries(
+        entries: &[StreamPluginEntry],
+        parent_namespace: &str,
+        resource_key: &str,
+        policy: Option<&CompiledPluginPolicy>,
+        cache: &mut [Option<StreamEntryOutcome>],
+    ) -> Self {
         let mut plugins: Vec<Arc<dyn StreamPlugin>> = Vec::new();
-        // First Block-stamped reason encountered, if any. Inserted at the
+        // First policy Block reason encountered, if any. Inserted at the
         // front of `plugins` after the loop so it dominates the chain
-        // regardless of the stamped entry's original position (mirrors the
+        // regardless of the restricted entry's original position (mirrors the
         // HTTP "gate first" semantics).
         let mut policy_block_reason: Option<String> = None;
         let mut invalid_config_reason: Option<String> = None;
@@ -71,13 +79,10 @@ impl StreamPluginRuntime {
                 continue;
             }
 
-            // Plugin policy: stamped entries are never instantiated. Block
-            // denies the connection; no HTTP status exists in stream plugin
-            // lifecycles, so the stamped status is ignored per spec §5.
-            // Bypass skips silently
-            // at the chain level; visibility comes from the controller's
-            // PluginPolicyRestricted condition and a compile-time log line.
-            match &entry.policy_action {
+            // Policy is selected by the admitted Gateway scope before entry
+            // construction. Stream admission has no HTTP response status.
+            let action = policy.and_then(|policy| policy.action_for(PluginFamily::Stream, entry.type_name()));
+            match action {
                 Some(edgion_resources::resources::plugin_policy::PluginPolicyAction::Block { .. }) => {
                     if policy_block_reason.is_none() {
                         policy_block_reason = Some(format!("plugin disabled by policy: stream/{}", entry.type_name()));
@@ -85,66 +90,30 @@ impl StreamPluginRuntime {
                     continue;
                 }
                 Some(edgion_resources::resources::plugin_policy::PluginPolicyAction::Bypass) => {
-                    tracing::info!(plugin = %entry.type_name(), "stream plugin bypassed by plugin policy");
                     continue;
                 }
                 None => {}
             }
 
-            let plugin: Arc<dyn StreamPlugin> = match &entry.plugin {
-                EdgionStreamPlugin::IpRestriction(rules) => {
-                    if !rules.legacy_http_fields().is_empty() || rules.validation_error().is_some() {
-                        record_invalid_config(
-                            &mut invalid_config_reason,
-                            "IpRestriction",
-                            "invalid stream/IpRestriction configuration",
-                        );
-                        continue;
-                    }
-                    Arc::new(StreamIpRestriction::new(rules, parent_namespace))
+            let outcome = cache[index].get_or_insert_with(|| {
+                let outcome = Self::build_entry(entry, parent_namespace, resource_key, index);
+                if outcome.is_err() {
+                    tracing::error!(
+                        component = "stream_plugin_runtime",
+                        plugin = entry.type_name(),
+                        resource_key,
+                        error_class = "invalid configuration",
+                        "Invalid stream plugin configuration; all connections will be denied",
+                    );
                 }
-                EdgionStreamPlugin::GlobalConnectionIpRestriction(gcir) => {
-                    match GlobalConnectionIpRestrictionPlugin::new(gcir, parent_namespace) {
-                        Ok(p) => Arc::new(p),
-                        Err(_) => {
-                            record_invalid_config(
-                                &mut invalid_config_reason,
-                                "GlobalConnectionIpRestriction",
-                                "invalid stream/GlobalConnectionIpRestriction configuration",
-                            );
-                            continue;
-                        }
-                    }
+                outcome
+            });
+            match outcome {
+                Ok(plugin) => plugins.push(Arc::clone(plugin)),
+                Err(reason) => {
+                    invalid_config_reason.get_or_insert_with(|| (*reason).to_owned());
                 }
-                EdgionStreamPlugin::ConnectionRateLimit(cfg) => {
-                    if cfg.validation_error().is_some() {
-                        record_invalid_config(
-                            &mut invalid_config_reason,
-                            "ConnectionRateLimit",
-                            "invalid stream/ConnectionRateLimit configuration",
-                        );
-                        continue;
-                    }
-                    Arc::new(ConnectionRateLimitPlugin::new(
-                        cfg,
-                        // Stream entries carry no alias, so the scope always uses the index form.
-                        &crate::plugins::common::entry_scope(resource_key, None, index),
-                    ))
-                }
-                EdgionStreamPlugin::GeoIpLocation(cfg) => match GeoIpLocationStreamPlugin::new(cfg) {
-                    Ok(p) => Arc::new(p),
-                    Err(_) => {
-                        record_invalid_config(
-                            &mut invalid_config_reason,
-                            "GeoIpLocation",
-                            "invalid stream/GeoIpLocation configuration",
-                        );
-                        continue;
-                    }
-                },
-            };
-
-            plugins.push(plugin);
+            }
         }
 
         if let Some(reason) = policy_block_reason.or(invalid_config_reason) {
@@ -152,6 +121,34 @@ impl StreamPluginRuntime {
         }
 
         Self { plugins }
+    }
+
+    fn build_entry(entry: &StreamPluginEntry, namespace: &str, resource_key: &str, index: usize) -> StreamEntryOutcome {
+        match &entry.plugin {
+            EdgionStreamPlugin::IpRestriction(config) => {
+                if !config.legacy_http_fields().is_empty() || config.validation_error().is_some() {
+                    return Err("invalid stream/IpRestriction configuration");
+                }
+                Ok(Arc::new(StreamIpRestriction::new(config, namespace)))
+            }
+            EdgionStreamPlugin::GlobalConnectionIpRestriction(config) => {
+                GlobalConnectionIpRestrictionPlugin::new(config, namespace)
+                    .map(|plugin| Arc::new(plugin) as Arc<dyn StreamPlugin>)
+                    .map_err(|_| "invalid stream/GlobalConnectionIpRestriction configuration")
+            }
+            EdgionStreamPlugin::ConnectionRateLimit(config) => {
+                if config.validation_error().is_some() {
+                    return Err("invalid stream/ConnectionRateLimit configuration");
+                }
+                Ok(Arc::new(ConnectionRateLimitPlugin::new(
+                    config,
+                    &crate::plugins::common::entry_scope(resource_key, None, index),
+                )))
+            }
+            EdgionStreamPlugin::GeoIpLocation(config) => GeoIpLocationStreamPlugin::new(config)
+                .map(|plugin| Arc::new(plugin) as Arc<dyn StreamPlugin>)
+                .map_err(|_| "invalid stream/GeoIpLocation configuration"),
+        }
     }
 
     /// Execute all plugins in order
@@ -202,9 +199,22 @@ mod tests {
     use edgion_resources::resources::edgion_stream_plugins::{
         ConnectionIpRestrictionRules, ConnectionRateLimitConfig, GlobalConnectionIpRestrictionConfig, PerListenerLimit,
     };
-    use edgion_resources::resources::plugin_policy::PluginPolicyAction;
+    use edgion_resources::resources::plugin_policy::{PluginPolicyConfig, PolicyActionKind};
     use std::collections::HashMap;
     use std::net::IpAddr;
+
+    fn policy_runtime(entries: &[StreamPluginEntry], key: &str, action: PolicyActionKind) -> StreamPluginRuntime {
+        let mut policy = PluginPolicyConfig::default();
+        policy
+            .deny
+            .push(edgion_resources::resources::plugin_policy::PluginPolicyEntryConfig {
+                name: "stream/ConnectionRateLimit".to_string(),
+                action: Some(action),
+                block_status: None,
+            });
+        let policy = policy.compile().unwrap();
+        StreamPluginRuntime::from_cached_entries(entries, "default", key, Some(&policy), &mut vec![None; entries.len()])
+    }
 
     fn cfg_local_only(rate: u64) -> ConnectionRateLimitConfig {
         ConnectionRateLimitConfig {
@@ -241,11 +251,7 @@ mod tests {
     }
 
     fn entry(plugin: EdgionStreamPlugin) -> StreamPluginEntry {
-        StreamPluginEntry {
-            enable: true,
-            policy_action: None,
-            plugin,
-        }
+        StreamPluginEntry { enable: true, plugin }
     }
 
     #[tokio::test]
@@ -263,18 +269,19 @@ mod tests {
             assert!(matches!(old.run(&ctx).await, StreamPluginResult::Allow));
             cfg.per_listener.as_mut().unwrap().rate = 100;
             let mut candidate = entry(EdgionStreamPlugin::ConnectionRateLimit(cfg.clone()));
-            match mode {
-                "block" => candidate.policy_action = Some(PluginPolicyAction::Block { status: 503 }),
-                "bypass" => candidate.policy_action = Some(PluginPolicyAction::Bypass),
-                "disabled" => candidate.enable = false,
-                _ => {}
+            if mode == "disabled" {
+                candidate.enable = false;
             }
             let mut entries = vec![candidate];
             if mode == "invalid" {
                 cfg.per_listener.as_mut().unwrap().rate = 0;
                 entries.push(entry(EdgionStreamPlugin::ConnectionRateLimit(cfg)));
             }
-            let next = StreamPluginRuntime::from_stream_plugins(&entries, "default", &key);
+            let next = match mode {
+                "block" => policy_runtime(&entries, &key, PolicyActionKind::Block),
+                "bypass" => policy_runtime(&entries, &key, PolicyActionKind::Bypass),
+                _ => StreamPluginRuntime::from_stream_plugins(&entries, "default", &key),
+            };
             let outcome = next.run(&ctx).await;
             if matches!(mode, "block" | "invalid") {
                 assert!(matches!(outcome, StreamPluginResult::Deny(_)));
@@ -350,13 +357,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn block_stamp_denies_connection_bypass_stamp_skips() {
+    async fn block_policy_denies_connection_bypass_policy_skips() {
         let blocked = StreamPluginEntry {
             enable: true,
-            policy_action: Some(PluginPolicyAction::Block { status: 503 }),
             plugin: EdgionStreamPlugin::ConnectionRateLimit(cfg_local_only(10)),
         };
-        let runtime = StreamPluginRuntime::from_stream_plugins(&[blocked], "default", "default/test-esp");
+        let runtime = policy_runtime(&[blocked], "default/test-esp", PolicyActionKind::Block);
         let ctx = StreamContext::new(IpAddr::from([127, 0, 0, 1]), 8080, StreamLayer::Stage1);
         match runtime.run(&ctx).await {
             StreamPluginResult::Deny(reason) => assert!(reason.contains("plugin disabled by policy")),
@@ -365,28 +371,24 @@ mod tests {
 
         let bypassed = StreamPluginEntry {
             enable: true,
-            policy_action: Some(PluginPolicyAction::Bypass),
             plugin: EdgionStreamPlugin::ConnectionRateLimit(cfg_local_only(10)),
         };
-        let runtime = StreamPluginRuntime::from_stream_plugins(&[bypassed], "default", "default/test-esp");
+        let runtime = policy_runtime(&[bypassed], "default/test-esp", PolicyActionKind::Bypass);
         assert!(runtime.is_empty(), "bypassed plugin must not be instantiated");
     }
 
     #[tokio::test]
-    async fn block_stamp_dominates_regardless_of_entry_position() {
-        // A Block-stamped entry after a normal plugin must still gate first:
-        // the deny must fire before the earlier, unstamped plugin ever runs.
+    async fn block_policy_dominates_regardless_of_entry_position() {
+        // A restricted entry after a normal plugin must still gate first.
         let normal = StreamPluginEntry {
             enable: true,
-            policy_action: None,
-            plugin: EdgionStreamPlugin::ConnectionRateLimit(cfg_local_only(1_000_000)),
+            plugin: EdgionStreamPlugin::GeoIpLocation(valid_geoip_config()),
         };
         let blocked = StreamPluginEntry {
             enable: true,
-            policy_action: Some(PluginPolicyAction::Block { status: 503 }),
             plugin: EdgionStreamPlugin::ConnectionRateLimit(cfg_local_only(10)),
         };
-        let runtime = StreamPluginRuntime::from_stream_plugins(&[normal, blocked], "default", "default/test-esp");
+        let runtime = policy_runtime(&[normal, blocked], "default/test-esp", PolicyActionKind::Block);
         let ctx = StreamContext::new(IpAddr::from([127, 0, 0, 1]), 8081, StreamLayer::Stage1);
         match runtime.run(&ctx).await {
             StreamPluginResult::Deny(reason) => {
@@ -456,19 +458,20 @@ mod tests {
     async fn disabled_and_policy_bypassed_invalid_entries_remain_inert() {
         let disabled = StreamPluginEntry {
             enable: false,
-            policy_action: None,
             plugin: EdgionStreamPlugin::IpRestriction(ConnectionIpRestrictionRules::default()),
         };
         let mut invalid_rate = cfg_local_only(1);
         invalid_rate.per_listener = None;
         let bypassed = StreamPluginEntry {
             enable: true,
-            policy_action: Some(PluginPolicyAction::Bypass),
             plugin: EdgionStreamPlugin::ConnectionRateLimit(invalid_rate),
         };
 
-        let runtime =
-            StreamPluginRuntime::from_stream_plugins(&[disabled, bypassed], "default", "default/inert-invalid-entries");
+        let runtime = policy_runtime(
+            &[disabled, bypassed],
+            "default/inert-invalid-entries",
+            PolicyActionKind::Bypass,
+        );
         assert!(runtime.is_empty());
     }
 
@@ -476,7 +479,6 @@ mod tests {
     async fn invalid_geoip_config_installs_an_always_deny_gate() {
         let invalid = StreamPluginEntry {
             enable: true,
-            policy_action: None,
             plugin: EdgionStreamPlugin::GeoIpLocation(GeoIpLocationConfig::default()),
         };
         let runtime = StreamPluginRuntime::from_stream_plugins(&[invalid], "default", "default/test-esp");
@@ -496,12 +498,10 @@ mod tests {
             [
                 StreamPluginEntry {
                     enable: true,
-                    policy_action: None,
                     plugin: EdgionStreamPlugin::GeoIpLocation(GeoIpLocationConfig::default()),
                 },
                 StreamPluginEntry {
                     enable: true,
-                    policy_action: None,
                     plugin: EdgionStreamPlugin::GeoIpLocation(valid_geoip_config()),
                 },
             ]
@@ -517,12 +517,11 @@ mod tests {
 
         let blocked = StreamPluginEntry {
             enable: true,
-            policy_action: Some(PluginPolicyAction::Block { status: 503 }),
             plugin: EdgionStreamPlugin::ConnectionRateLimit(cfg_local_only(10)),
         };
         let mut entries = geo_entries().to_vec();
         entries.push(blocked);
-        let runtime = StreamPluginRuntime::from_stream_plugins(&entries, "default", "default/test-esp");
+        let runtime = policy_runtime(&entries, "default/test-esp", PolicyActionKind::Block);
 
         assert!(matches!(
             runtime.run(&ctx).await,
@@ -532,10 +531,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn unstamped_entries_behave_as_before() {
+    async fn standalone_entries_are_allowed() {
         let entry = StreamPluginEntry {
             enable: true,
-            policy_action: None,
             plugin: EdgionStreamPlugin::ConnectionRateLimit(cfg_local_only(1_000_000)),
         };
         let runtime = StreamPluginRuntime::from_stream_plugins(&[entry], "default", "default/test-esp");

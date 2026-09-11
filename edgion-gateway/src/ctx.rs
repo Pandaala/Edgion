@@ -2098,6 +2098,7 @@ pub(crate) struct DeferredCredentialMutations {
 /// and nullable `Arc`s do not allocate, while the inline layout avoids an
 /// extra branch and heap indirection at every plugin callback.
 struct PluginExecutionState {
+    scope: Option<Arc<crate::plugins::publication::GatewayScope>>,
     stage_logs: Vec<StageLogs>,
     pending_edgion_plugins_logs: Vec<EdgionPluginsLog>,
     terminated: bool,
@@ -2110,6 +2111,7 @@ struct PluginExecutionState {
 impl Default for PluginExecutionState {
     fn default() -> Self {
         Self {
+            scope: None,
             stage_logs: Vec::new(),
             pending_edgion_plugins_logs: Vec::new(),
             terminated: false,
@@ -2938,6 +2940,20 @@ impl EdgionHttpContext {
         if remove_request_body_state {
             self.request_body_plugins = None;
         }
+    }
+
+    #[inline]
+    pub(crate) fn plugin_scope(&self) -> Option<&Arc<crate::plugins::publication::GatewayScope>> {
+        self.plugin_execution.scope.as_ref()
+    }
+
+    /// Capture one logical Gateway and keep its policy for this request.
+    pub(crate) fn capture_plugin_scope(&mut self, scope: Arc<crate::plugins::publication::GatewayScope>) -> bool {
+        if let Some(current) = self.plugin_execution.scope.as_ref() {
+            return current.gateway_key == scope.gateway_key;
+        }
+        self.plugin_execution.scope = Some(scope);
+        true
     }
 
     #[inline]
@@ -4984,7 +5000,7 @@ mod plugin_request_state_tests {
     #[test]
     #[cfg(target_pointer_width = "64")]
     fn plugin_state_layout_keeps_hot_and_sparse_costs_separate() {
-        assert_eq!(std::mem::size_of::<PluginExecutionState>(), 168);
+        assert_eq!(std::mem::size_of::<PluginExecutionState>(), 176);
         assert_eq!(std::mem::size_of::<PluginAuxState>(), 296);
         assert_eq!(std::mem::size_of::<Option<Box<PluginAuxState>>>(), 8);
     }

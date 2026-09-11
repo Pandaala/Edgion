@@ -170,6 +170,68 @@ fn gateway_config_spec_has_no_uncovered_fields() {
 }
 
 #[test]
+fn gateway_plugin_policy_preserves_defaults_overrides_and_status_bounds() {
+    use edgion_resources::resources::plugin_policy::PluginPolicyConfig;
+    fn enum_values(schema: &Value) -> Value {
+        if let Some(values) = schema.get("enum") {
+            return values.clone();
+        }
+        Value::Array(
+            schema["oneOf"]
+                .as_array()
+                .expect("enum must declare enum values or oneOf constants")
+                .iter()
+                .map(|variant| variant["const"].clone())
+                .collect(),
+        )
+    }
+    let generated = serde_json::to_value(schema_for!(PluginPolicyConfig)).unwrap();
+    let defs = generated["$defs"].as_object().unwrap();
+    let crd = crd_section("edgion_gateway_config_crd.yaml", "spec");
+    let actual = &crd["properties"]["pluginPolicy"]["properties"];
+    let expected = &generated["properties"];
+    for field in ["defaultAction", "deniedAction"] {
+        assert_eq!(
+            actual[field]["enum"],
+            enum_values(resolve(&expected[field], defs)),
+            "{field}"
+        );
+        assert_eq!(actual[field]["default"], expected[field]["default"], "{field}");
+    }
+    assert_eq!(actual["deny"]["default"], serde_json::json!([]));
+    assert!(
+        actual["allow"].get("default").is_none(),
+        "default [] would enable deny-all"
+    );
+    assert!(expected["allow"].get("default").is_none());
+    assert_eq!(actual["blockStatus"]["default"], serde_json::json!(503));
+    assert_eq!(actual["blockStatus"]["default"], expected["blockStatus"]["default"]);
+
+    let expected_entry = resolve(&expected["deny"]["items"], defs);
+    let actual_entry = &actual["deny"]["items"];
+    assert_eq!(actual_entry["required"], serde_json::json!(["name"]));
+    let expected_entry = &expected_entry["properties"];
+    let actual_entry = &actual_entry["properties"];
+    for field in ["action", "blockStatus"] {
+        assert!(actual_entry[field].get("default").is_none(), "{field} must inherit");
+        assert!(expected_entry[field].get("default").is_none(), "{field} must inherit");
+    }
+    assert_eq!(
+        actual_entry["action"]["enum"],
+        enum_values(resolve(unwrap_nullable(&expected_entry["action"]), defs))
+    );
+    for (actual_status, expected_status) in [
+        (&actual["blockStatus"], &expected["blockStatus"]),
+        (&actual_entry["blockStatus"], &expected_entry["blockStatus"]),
+    ] {
+        for (bound, value) in [("minimum", 400.0), ("maximum", 599.0)] {
+            assert_eq!(actual_status[bound].as_f64(), Some(value));
+            assert_eq!(expected_status[bound].as_f64(), Some(value));
+        }
+    }
+}
+
+#[test]
 fn plugin_key_get_enum_uses_remote_ip_names() {
     let spec = crd_section("edgion_plugins_crd.yaml", "spec");
     let values = spec["properties"]["requestPlugins"]["items"]["properties"]["conditions"]["properties"]["skip"]

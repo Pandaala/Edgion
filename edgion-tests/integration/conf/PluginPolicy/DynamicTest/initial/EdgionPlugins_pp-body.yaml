@@ -1,0 +1,10 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: pp-body
+  namespace: edgion-test
+spec:
+  upstreamResponseBodyFilterPlugins:
+  - type: BandwidthLimit
+    config:
+      rate: 100mb

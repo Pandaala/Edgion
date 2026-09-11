@@ -1,0 +1,13 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: pp-async
+  namespace: edgion-test
+spec:
+  upstreamResponsePlugins:
+  - type: Mock
+    config:
+      statusCode: 200
+      terminate: true
+      contentType: text/plain
+      body: PP-MOCK-TERMINATED

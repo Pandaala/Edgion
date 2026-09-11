@@ -50,12 +50,19 @@ Uses `k8s_openapi::Condition`, writing three conditions:
 
 ## Gateway-side processing
 
-After EdgionStreamPlugins is synced to the Gateway side, it runs during connection establishment. Typical Stream plugins include:
+The source store forwards EdgionStreamPlugins to `PluginPublisher`.
+`StreamPluginGeneration` shares demanded entry instances across effective
+GatewayClass views. Controller validation remains policy-independent; class
+policy from `EdgionGatewayConfig.spec.pluginPolicy` masks `stream/` and
+`tlsRoute/` entries at publication. Block denies the applicable new admission;
+Bypass excludes the entry before construction.
 
-- **IP restriction**: allowlist/denylist control based on the client IP address
-- **TLS route selection**: route selection based on the SNI in the TLS ClientHello
-
-These plugins run at the TCP-connection level and do not require HTTP protocol parsing.
+Listener connection views compare all serving Gateway candidates before routing.
+Equivalent views run once; incompatible views deny new connections. Matched
+TCP/UDP/TLS routes use the owning Gateway's published view. Established sessions
+retain their admitted runtime, and policy edits do not rebuild listeners.
+`tlsRoutePlugins` remains a separate stage; no Stage-1 fallback is introduced.
+See [scoped publication](../../04-review/plugin-runtime/regression-guards/scoped-policy-runtime-publication.md).
 
 ## Cross-resource relationships
 

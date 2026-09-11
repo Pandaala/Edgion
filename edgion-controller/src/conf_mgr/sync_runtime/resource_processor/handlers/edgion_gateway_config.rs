@@ -55,6 +55,7 @@ impl ProcessorHandler<EdgionGatewayConfig> for EdgionGatewayConfigHandler {
         errors.extend(egc.spec.validate_forwarded_headers());
         errors.extend(egc.spec.validate_real_ip());
         errors.extend(egc.spec.validate_preflight_policy());
+        errors.extend(egc.spec.validate_plugin_policy());
         if let Some(processor) = ctx.runtime().processor_registry.get("EdgionPlugins") {
             for reference in egc.spec.global_plugins_ref.as_deref().unwrap_or_default() {
                 let namespace = reference.namespace.as_deref().unwrap_or("default");
@@ -423,6 +424,25 @@ mod tests {
             errors.iter().any(|e| e.contains("maxBodySize")),
             "expected a maxBodySize preparse error; got: {errors:?}"
         );
+    }
+
+    #[test]
+    fn egc_plugin_policy_invalid_names_surface_in_preparse() {
+        let ctx = make_ctx_with_secrets(HashMap::new());
+        let spec: EdgionGatewayConfigSpec =
+            serde_yaml::from_str("pluginPolicy:\n  deny:\n    - name: http/Unknown").unwrap();
+        let mut egc = EdgionGatewayConfig::new("cluster-egc-policy", spec);
+        let errors = EdgionGatewayConfigHandler::new().preparse(&mut egc, &ctx);
+        assert!(errors
+            .iter()
+            .any(|error| error.contains("pluginPolicy: unknown plugin")));
+        assert!(
+            egc.spec.plugin_policy.is_some(),
+            "advisory validation must retain policy input"
+        );
+
+        egc.spec.plugin_policy = Some(serde_yaml::from_str("allow: []").unwrap());
+        assert!(EdgionGatewayConfigHandler::new().preparse(&mut egc, &ctx).is_empty());
     }
 
     #[test]

@@ -3,6 +3,7 @@
 use super::tls_route_plugin_trait::{TlsRouteContext, TlsRoutePlugin};
 use crate::plugins::stream::stream_plugin_trait::StreamPluginResult;
 use edgion_resources::resources::edgion_stream_plugins::{TlsRoutePluginEntry, TlsRouteStreamPlugin};
+use edgion_resources::resources::plugin_policy::{CompiledPluginPolicy, PluginFamily};
 use std::sync::Arc;
 
 use super::ip_restriction::TlsRouteIpRestriction;
@@ -33,24 +34,31 @@ impl TlsRoutePluginRuntime {
 
     /// Build runtime from TLS route plugin entries.
     pub fn from_entries(entries: &[TlsRoutePluginEntry], parent_namespace: &str) -> Self {
+        Self::from_cached_entries(entries, parent_namespace, None, &mut vec![None; entries.len()])
+    }
+
+    pub(crate) fn from_cached_entries(
+        entries: &[TlsRoutePluginEntry],
+        parent_namespace: &str,
+        policy: Option<&CompiledPluginPolicy>,
+        cache: &mut [Option<Arc<dyn TlsRoutePlugin>>],
+    ) -> Self {
         let mut plugins: Vec<Arc<dyn TlsRoutePlugin>> = Vec::new();
-        // First Block-stamped reason encountered, if any. Inserted at the
+        // First policy Block reason encountered, if any. Inserted at the
         // front of `plugins` after the loop so it dominates the chain
-        // regardless of the stamped entry's original position (mirrors the
+        // regardless of the restricted entry's original position (mirrors the
         // HTTP "gate first" semantics).
         let mut policy_block_reason: Option<String> = None;
 
-        for entry in entries {
+        for (index, entry) in entries.iter().enumerate() {
             if !entry.is_enabled() {
                 continue;
             }
 
-            // Plugin policy: stamped entries are never instantiated. Block
-            // denies the connection (no HTTP status exists pre-TLS; the
-            // stamped status is ignored per spec §5). Bypass skips silently
-            // at the chain level; visibility comes from the controller's
-            // PluginPolicyRestricted condition and a compile-time log line.
-            match &entry.policy_action {
+            // Policy is selected by the admitted Gateway scope before entry
+            // construction. Stream admission has no HTTP response status.
+            let action = policy.and_then(|policy| policy.action_for(PluginFamily::TlsRoute, entry.type_name()));
+            match action {
                 Some(edgion_resources::resources::plugin_policy::PluginPolicyAction::Block { .. }) => {
                     if policy_block_reason.is_none() {
                         policy_block_reason =
@@ -59,19 +67,18 @@ impl TlsRoutePluginRuntime {
                     continue;
                 }
                 Some(edgion_resources::resources::plugin_policy::PluginPolicyAction::Bypass) => {
-                    tracing::info!(plugin = %entry.type_name(), "tls-route plugin bypassed by plugin policy");
                     continue;
                 }
                 None => {}
             }
 
-            let plugin: Arc<dyn TlsRoutePlugin> = match &entry.plugin {
+            let plugin = cache[index].get_or_insert_with(|| match &entry.plugin {
                 TlsRouteStreamPlugin::IpRestriction(config) => {
                     Arc::new(TlsRouteIpRestriction::new(config, parent_namespace))
                 }
-            };
+            });
 
-            plugins.push(plugin);
+            plugins.push(Arc::clone(plugin));
         }
 
         if let Some(reason) = policy_block_reason {
@@ -101,7 +108,7 @@ impl TlsRoutePluginRuntime {
     }
 }
 
-/// Always-deny placeholder for a Block-stamped TLS route plugin entry.
+/// Always-deny placeholder for a policy-blocked TLS route plugin entry.
 struct PolicyBlockTlsRoutePlugin {
     reason: String,
 }
@@ -118,8 +125,21 @@ mod tests {
     use super::*;
     use edgion_resources::resources::edgion_config_data::IpGroup;
     use edgion_resources::resources::edgion_plugins::{DefaultAction, IpRestrictionConfig};
-    use edgion_resources::resources::plugin_policy::PluginPolicyAction;
+    use edgion_resources::resources::plugin_policy::{PluginPolicyConfig, PolicyActionKind};
     use std::net::IpAddr;
+
+    fn policy_runtime(entries: &[TlsRoutePluginEntry], action: PolicyActionKind) -> TlsRoutePluginRuntime {
+        let mut policy = PluginPolicyConfig::default();
+        policy
+            .deny
+            .push(edgion_resources::resources::plugin_policy::PluginPolicyEntryConfig {
+                name: "tls-route/IpRestriction".to_string(),
+                action: Some(action),
+                block_status: None,
+            });
+        let policy = policy.compile().unwrap();
+        TlsRoutePluginRuntime::from_cached_entries(entries, "default", Some(&policy), &mut vec![None; entries.len()])
+    }
 
     fn make_ctx(rsc: &crate::Rsc) -> TlsRouteContext<'_> {
         TlsRouteContext {
@@ -154,7 +174,7 @@ mod tests {
     /// least one of allow/deny/allowRefs/denyRefs) that denies an unrelated
     /// range and default-allows everything else — so `make_ctx()`'s
     /// 127.0.0.1 client passes through when the plugin actually runs.
-    fn ip_restriction_entry(policy_action: Option<PluginPolicyAction>) -> TlsRoutePluginEntry {
+    fn ip_restriction_entry() -> TlsRoutePluginEntry {
         let config = IpRestrictionConfig {
             deny: Some(vec![IpGroup {
                 name: "blocked".to_string(),
@@ -166,15 +186,14 @@ mod tests {
         };
         TlsRoutePluginEntry {
             enable: true,
-            policy_action,
             plugin: TlsRouteStreamPlugin::IpRestriction(config),
         }
     }
 
     #[tokio::test]
-    async fn block_stamp_denies_connection_bypass_stamp_skips() {
-        let blocked = ip_restriction_entry(Some(PluginPolicyAction::Block { status: 503 }));
-        let runtime = TlsRoutePluginRuntime::from_entries(&[blocked], "default");
+    async fn block_policy_denies_connection_bypass_policy_skips() {
+        let blocked = ip_restriction_entry();
+        let runtime = policy_runtime(&[blocked], PolicyActionKind::Block);
         let rsc = crate::Rsc::new("TLSRoute", "default", "test-route");
         let ctx = make_ctx(&rsc);
         match runtime.run(&ctx).await {
@@ -182,16 +201,16 @@ mod tests {
             other => panic!("expected Deny, got {other:?}"),
         }
 
-        let bypassed = ip_restriction_entry(Some(PluginPolicyAction::Bypass));
-        let runtime = TlsRoutePluginRuntime::from_entries(&[bypassed], "default");
+        let bypassed = ip_restriction_entry();
+        let runtime = policy_runtime(&[bypassed], PolicyActionKind::Bypass);
         assert!(runtime.is_empty(), "bypassed plugin must not be instantiated");
     }
 
     #[tokio::test]
-    async fn block_stamp_dominates_regardless_of_entry_position() {
-        let normal = ip_restriction_entry(None);
-        let blocked = ip_restriction_entry(Some(PluginPolicyAction::Block { status: 503 }));
-        let runtime = TlsRoutePluginRuntime::from_entries(&[normal, blocked], "default");
+    async fn block_policy_collapses_multiple_restricted_entries() {
+        let normal = ip_restriction_entry();
+        let blocked = ip_restriction_entry();
+        let runtime = policy_runtime(&[normal, blocked], PolicyActionKind::Block);
         let rsc = crate::Rsc::new("TLSRoute", "default", "test-route");
         let ctx = make_ctx(&rsc);
         match runtime.run(&ctx).await {
@@ -203,8 +222,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn unstamped_entries_behave_as_before() {
-        let entry = ip_restriction_entry(None);
+    async fn standalone_entries_are_allowed() {
+        let entry = ip_restriction_entry();
         let runtime = TlsRoutePluginRuntime::from_entries(&[entry], "default");
         assert!(!runtime.is_empty());
         assert_eq!(runtime.plugin_count(), 1);

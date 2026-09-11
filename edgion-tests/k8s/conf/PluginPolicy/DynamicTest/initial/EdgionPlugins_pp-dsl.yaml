@@ -1,0 +1,18 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: pp-dsl
+  namespace: edgion-test
+spec:
+  requestPlugins:
+  - type: Mock
+    config:
+      statusCode: 200
+      terminate: true
+      contentType: text/plain
+      body: PP-MOCK-TERMINATED
+  - type: Dsl
+    config:
+      name: policy-generation
+      source: let value = 1
+      errorPolicy: deny

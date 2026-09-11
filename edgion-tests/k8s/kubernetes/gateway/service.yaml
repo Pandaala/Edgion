@@ -643,3 +643,43 @@ spec:
     port: 31973
     targetPort: 31973
     protocol: TCP
+  - name: p58330
+    port: 58330
+    targetPort: 58330
+    protocol: TCP
+  - name: p58331
+    port: 58331
+    targetPort: 58331
+    protocol: TCP
+  - name: p58332
+    port: 58332
+    targetPort: 58332
+    protocol: TCP
+  - name: p58333
+    port: 58333
+    targetPort: 58333
+    protocol: TCP
+  - name: p58334
+    port: 58334
+    targetPort: 58334
+    protocol: TCP
+  - name: p58335
+    port: 58335
+    targetPort: 58335
+    protocol: TCP
+  - name: p58336
+    port: 58336
+    targetPort: 58336
+    protocol: TCP
+  - name: p58337
+    port: 58337
+    targetPort: 58337
+    protocol: TCP
+  - name: p58338-udp
+    port: 58338
+    targetPort: 58338
+    protocol: UDP
+  - name: p58339-udp
+    port: 58339
+    targetPort: 58339
+    protocol: UDP

@@ -12,3 +12,4 @@ dynamic	FormJsonTransformDynamic	body-buffering
 dynamic	BodyDynamic	body-buffering
 dynamic	RequestMirrorReferenceGrant	body-buffering
 dynamic	WafDynamic	body-buffering
+dynamic	PluginPolicyDynamic	body-buffering

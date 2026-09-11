@@ -416,7 +416,7 @@ pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) async fn res
             active_link_sys_count += $entries
                 .iter()
                 .flatten()
-                .filter(|entry| entry.is_enabled() && entry.policy_action.is_none())
+                .filter(|entry| entry.is_enabled())
                 .filter(|entry| {
                     matches!(
                         &entry.plugin,
@@ -438,7 +438,7 @@ pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) async fn res
         return;
     };
     for entry in entries {
-        if !entry.is_enabled() || entry.policy_action.is_some() {
+        if !entry.is_enabled() {
             continue;
         }
         let EdgionPlugin::CredentialInjector(config) = &mut entry.plugin else {

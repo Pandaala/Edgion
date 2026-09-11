@@ -286,6 +286,19 @@ pub(crate) fn resolve_stream_plugin_store_key(metadata: &ObjectMeta) -> Option<S
     Some(store_key)
 }
 
+/// Gateway stream attachments are same-namespace references. Route attachments
+/// use the separate resolver above and may be explicitly namespace-qualified.
+pub(crate) fn resolve_gateway_stream_plugin_store_key(value: &str, gateway_ns: &str) -> Result<Option<String>, ()> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        Ok(None)
+    } else if trimmed.contains('/') {
+        Err(())
+    } else {
+        Ok(Some(format!("{}/{}", gateway_ns, trimmed)))
+    }
+}
+
 /// Inclusive bounds for the keepalive annotation values. Out-of-range inputs
 /// are clamped (not rejected) with a WARN, mirroring `cap_tls_connect_retries`.
 ///

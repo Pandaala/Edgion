@@ -1,6 +1,5 @@
 use super::{resolve_route_ext_refs, select_waf_owner, EdgionHttpProxy};
 use crate::ctx::NormalizedHostname;
-use crate::plugins::http::global_plugin_store;
 use crate::routes::grpc::{parse_grpc_timeout, try_match_grpc_route};
 use crate::runtime::hostname_matches_listener;
 use crate::runtime::store::get_listener_gateway_info_store;
@@ -33,6 +32,10 @@ pub async fn request_filter(
 ) -> pingora_core::Result<bool> {
     // Also covers direct test callers; normal Pingora entry already ran this.
     super::pg_early_request_filter::initialize_request_ids(edgion_http, session, ctx).await?;
+    if ctx.plugin_terminated() {
+        let _ = terminate_with_fallback(session, ctx, &edgion_http.server_header_opts).await;
+        return Ok(true);
+    }
     // Build request metadata (addresses, hostname, path, trace_id, protocol)
     // Validates XFF length and hostname presence, returns true if response sent
     if build_request_metadata(edgion_http, session, ctx).await? {
@@ -124,18 +127,59 @@ pub async fn request_filter(
         }
     }
 
-    super::pg_early_request_filter::initialize_gateway_request_ids(session, ctx).await?;
-
-    // Capture HTTPRoute ExtensionRefs before preflight so preflight ownership
-    // and every later plugin stage observe one request-coherent generation.
-    // GRPCRoute keeps its existing post-preflight capture timing.
-    if let Some(route_unit) = ctx.route_unit.as_ref() {
-        let plugin_store = global_plugin_store();
-        let keys = route_unit.plugin_runtime.ext_ref_keys();
-        if !keys.is_empty() {
-            ctx.install_resolved_route_ext_refs(resolve_route_ext_refs(plugin_store, keys));
+    super::pg_early_request_filter::capture_matched_scope(ctx)?;
+    let owner = ctx.plugin_scope().cloned().expect("matched scope was captured");
+    if !owner.scope.available {
+        crate::end_response_503(session, ctx, &edgion_http.server_header_opts).await?;
+        return Ok(true);
+    }
+    if !ctx.global_request_ids_initialized {
+        ctx.install_resolved_global_plugins(super::resolve_global_plugins(&owner.scope));
+    }
+    if !ctx.gateway_request_ids_initialized {
+        ctx.install_resolved_gateway_plugins(super::resolve_gateway_plugins(&owner.scope, &owner.http_keys));
+    }
+    let keys = ctx
+        .route_unit
+        .as_ref()
+        .map(|unit| unit.plugin_runtime.ext_ref_keys())
+        .or_else(|| {
+            ctx.grpc_route_unit
+                .as_ref()
+                .map(|unit| unit.plugin_runtime.ext_ref_keys())
+        })
+        .unwrap_or_default();
+    if !keys.is_empty() {
+        ctx.install_resolved_route_ext_refs(resolve_route_ext_refs(&owner.scope, keys));
+    }
+    // Later-stage restrictions already have a request admission gate. Run it
+    // before early configured IDs, AI validation, CORS, WAF or body access.
+    let global = ctx.resolved_global_plugins();
+    let gateway = ctx.resolved_gateway_plugins();
+    let route = ctx.resolved_route_ext_refs();
+    for runtime in global
+        .iter()
+        .flat_map(|plugins| plugins.iter())
+        .chain(gateway.iter().flat_map(|plugins| plugins.iter()))
+        .chain(route.iter().flat_map(|plugins| plugins.iter().flatten()))
+    {
+        runtime.run_policy_gate(session, ctx).await;
+        if ctx.plugin_terminated() {
+            let _ = terminate_with_fallback(session, ctx, &edgion_http.server_header_opts).await;
+            return Ok(true);
         }
     }
+    if let Some(unit) = ctx.route_unit.as_ref() {
+        if !unit
+            .route
+            .as_ref()
+            .is_some_and(|source| owner.scope.ai_rule(source, unit.specificity.rule_index as usize))
+        {
+            end_response_500(session, ctx, &edgion_http.server_header_opts).await?;
+            return Ok(true);
+        }
+    }
+    super::pg_early_request_filter::initialize_gateway_request_ids(session, ctx).await?;
 
     // Step 1.5: Handle preflight requests (before plugin execution)
     if edgion_http.preflight_handler.is_preflight(session) {
@@ -179,22 +223,6 @@ pub async fn request_filter(
                     return Ok(true);
                 }
             }
-        }
-    }
-
-    // Per-request resolve: populate the lazy plugin state once here; later stages read
-    // directly without paying any format!() / store-lookup cost.
-    // Fetch the global plugin store once and share &PluginStore across both
-    // resolve calls to avoid redundant Arc::clone on the hot path.
-    let plugin_store = global_plugin_store();
-    if ctx.resolved_route_ext_refs().is_none() {
-        let keys = ctx
-            .grpc_route_unit
-            .as_ref()
-            .map(|unit| unit.plugin_runtime.ext_ref_keys())
-            .unwrap_or_default();
-        if !keys.is_empty() {
-            ctx.install_resolved_route_ext_refs(resolve_route_ext_refs(plugin_store, keys));
         }
     }
 

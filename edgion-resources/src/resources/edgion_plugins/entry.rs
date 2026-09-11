@@ -203,14 +203,6 @@ pub struct RequestFilterEntry {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub alias: Option<String>,
 
-    /// Set by the controller when the plugin policy matches this entry.
-    /// Never operator-facing: skipped in the CRD schema, carried to the
-    /// data plane via conf_sync. The controller clears and re-stamps it on
-    /// every preparse, so a hand-written value can never survive.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[schemars(skip)]
-    pub policy_action: Option<crate::resources::plugin_policy::PluginPolicyAction>,
-
     /// Optional body requirement. When set (by the operator) or declared
     /// intrinsically by the plugin, the runtime wraps the plugin in a body gate
     /// that buffers the request body (OpenResty-style, at the request phase) and
@@ -235,7 +227,6 @@ impl RequestFilterEntry {
             enable: true,
             conditions: None,
             alias: None,
-            policy_action: None,
             body: None,
             dye: None,
             plugin,
@@ -248,7 +239,6 @@ impl RequestFilterEntry {
             enable,
             conditions: None,
             alias: None,
-            policy_action: None,
             body: None,
             dye: None,
             plugin,
@@ -309,14 +299,6 @@ pub struct UpstreamResponseFilterEntry {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub alias: Option<String>,
 
-    /// Set by the controller when the plugin policy matches this entry.
-    /// Never operator-facing: skipped in the CRD schema, carried to the
-    /// data plane via conf_sync. The controller clears and re-stamps it on
-    /// every preparse, so a hand-written value can never survive.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[schemars(skip)]
-    pub policy_action: Option<crate::resources::plugin_policy::PluginPolicyAction>,
-
     /// Entry-level dye suite (traffic tagging on outcomes). See
     /// `edgion_plugins/dye.rs` and `skills/01-architecture/02-gateway/entry-level-dye.md`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -334,7 +316,6 @@ impl UpstreamResponseFilterEntry {
             enable: true,
             conditions: None,
             alias: None,
-            policy_action: None,
             dye: None,
             plugin,
         }
@@ -346,7 +327,6 @@ impl UpstreamResponseFilterEntry {
             enable,
             conditions: None,
             alias: None,
-            policy_action: None,
             dye: None,
             plugin,
         }
@@ -410,14 +390,6 @@ pub struct UpstreamResponseBodyFilterEntry {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub alias: Option<String>,
 
-    /// Set by the controller when the plugin policy matches this entry.
-    /// Never operator-facing: skipped in the CRD schema, carried to the
-    /// data plane via conf_sync. The controller clears and re-stamps it on
-    /// every preparse, so a hand-written value can never survive.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[schemars(skip)]
-    pub policy_action: Option<crate::resources::plugin_policy::PluginPolicyAction>,
-
     /// Entry-level dye suite (traffic tagging on outcomes). See
     /// `edgion_plugins/dye.rs` and `skills/01-architecture/02-gateway/entry-level-dye.md`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -435,7 +407,6 @@ impl UpstreamResponseBodyFilterEntry {
             enable: true,
             conditions: None,
             alias: None,
-            policy_action: None,
             dye: None,
             plugin,
         }
@@ -447,7 +418,6 @@ impl UpstreamResponseBodyFilterEntry {
             enable,
             conditions: None,
             alias: None,
-            policy_action: None,
             dye: None,
             plugin,
         }
@@ -511,14 +481,6 @@ pub struct UpstreamResponseEntry {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub alias: Option<String>,
 
-    /// Set by the controller when the plugin policy matches this entry.
-    /// Never operator-facing: skipped in the CRD schema, carried to the
-    /// data plane via conf_sync. The controller clears and re-stamps it on
-    /// every preparse, so a hand-written value can never survive.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[schemars(skip)]
-    pub policy_action: Option<crate::resources::plugin_policy::PluginPolicyAction>,
-
     /// Reserved body requirement. Proxied upstream responses are
     /// streaming-only, so validation rejects this field for every currently
     /// supported response-stage plugin.
@@ -542,7 +504,6 @@ impl UpstreamResponseEntry {
             enable: true,
             conditions: None,
             alias: None,
-            policy_action: None,
             body: None,
             dye: None,
             plugin,
@@ -555,7 +516,6 @@ impl UpstreamResponseEntry {
             enable,
             conditions: None,
             alias: None,
-            policy_action: None,
             body: None,
             dye: None,
             plugin,

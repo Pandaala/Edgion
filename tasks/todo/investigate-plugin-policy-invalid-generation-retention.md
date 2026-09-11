@@ -5,7 +5,7 @@
 | Key | Value |
 |-----|-------|
 | Created | 2026-09-08 |
-| Status | pending |
+| Status | in-progress |
 | Type | refactor |
 | Priority | P1 |
 | Issue | N/A |
@@ -17,14 +17,26 @@ GatewayClass-scoped EdgionGatewayConfig resource. The user approved this directi
 on 2026-09-10 and requested a plan, not implementation. The design must provide
 dynamic policy publication across HTTP, stream, and TLS-route consumers while
 preserving shared plugin state and preventing invalid DSL/WAF retention from
-restoring an obsolete policy. Implementation remains pending detailed plan approval.
+restoring an obsolete policy. On 2026-09-11 the user authorized completing the
+detailed plan and starting implementation, explicitly without compatibility work.
+
+On 2026-09-11 the user clarified that binding plugin execution policy to
+EdgionGatewayConfig is a required configuration-ownership decision that enables
+dynamic management. Its value does not depend on how often emergency disables
+occur. A retention-only D0095 fix does not satisfy the migration requirement;
+implementation cost should guide scope control, not substitute for that outcome.
 
 ## Plan documents
 
 - [Design and impact](plugin-policy-edgion-gateway-config/01-design.md)
 - [Implementation sequence and verification](plugin-policy-edgion-gateway-config/03-subtasks.md)
+- [Optional Kubernetes class-list scope proposal](plugin-policy-edgion-gateway-config/04-kubernetes-class-list-proposal.md)
 
-## Problem and evidence
+## Original finding and pre-migration evidence
+
+Source: D0095 / `plugin-policy-invalid-generation-retention`. The upstream
+retention-only fix closed its separate campaign finding. The historical evidence
+below predates that fix; this authorized configuration migration remains open.
 
 `compile_plugins` computes `retain_previous_on_invalid_update` from invalid DSL/WAF
 construction. Policy markers do not change that flag. `can_retain_previous` checks
@@ -59,7 +71,8 @@ precisely as the migration proposal below.
 - Explicitly resolve missing/deleted/invalid policies, removal/relaxation, new
   requests on existing connections, Controller admission, and status ownership.
 - Keep this task open until implementation, independent review, and required
-  verification finish. The current authorization is planning only.
+  verification finish. Planning and implementation are authorized;
+  Git commit and push are not.
 - Trace Controller policy stamps, Gateway compilation and `retain_previous_on_invalid_update`, policy sealing, and both `PluginStore::apply_delta` and `replace_all`.
 - Reproduce an existing activatable unblocked generation followed by a new Block stamp plus an unrelated retainable invalid DSL/WAF entry. Observe the actually published runtime.
 - Verify intended precedence between operator policy and whole-resource retention from original requirements and review knowledge; do not infer it solely from current code.
@@ -70,6 +83,33 @@ precisely as the migration proposal below.
   scenario and its dispatch/fixtures, because the current canonical runner invokes
   a test of the Controller setting being removed. This exception is part of the
   detailed plan approval, not permission already exercised.
+
+## Current implementation status
+
+The 2026-09-11 implementation now uses GatewayClass-scoped EGC publication across
+HTTP and stream consumers, transports policy-independent AI admission facts, and
+removes the Controller policy source and per-entry stamps. The original defect
+was dynamically reproduced in four DSL/WAF × delta/full unit cases before the
+migration; the updated HTTP store module now passes 36 scoped-publication tests.
+The [implementation checkpoint](plugin-policy-edgion-gateway-config/03-subtasks.md#implementation-checkpoint--2026-09-11)
+records focused results and outstanding failures without claiming final closure.
+
+Independent code/knowledge review returned LGTM. Local shared dynamic integration,
+workspace check/Clippy and project guards passed. Live Kubernetes single-managed-
+class policy tests also passed (all HTTP stages, status changes, EGC deletion/
+recreation and class rebinding), with unchanged Controller/Gateway Pod UID and
+restart counts. Local and Kubernetes cache-residue validators passed in fail mode.
+
+The two-class Kubernetes shared scenario cannot run with the existing mandatory
+single `conf_center.gateway_class` filter. Its automatic K8s registration is withheld;
+the local two-class scenario remains registered and passed. Expanding the startup
+filter to an explicit nonempty `gateway_classes` list is a separate scope decision
+presented to the user, not an implemented or implicitly enabled all-class mode.
+The committed EGC CRD was used unchanged in Kubernetes; an unrelated EdgionTls
+structural rejection needed a temporary TLS-only test copy. A supplemental KeyGet
+coverage assertion also fails on its existing enum count. These limitations and
+separate follow-ups remain recorded in the implementation checkpoint. This task
+remains open; no commit or push has been made or authorized.
 
 ## Acceptance criteria
 
@@ -89,8 +129,8 @@ precisely as the migration proposal below.
 The user accepted expanding this investigation into the EdgionGatewayConfig
 migration plan. Schema/CRD, Controller validation and policy-dependent route
 handling, Gateway publication and consumers, focused tests, and corresponding
-English/Chinese documentation are in the planned scope. Existing integration
-tests remain untouched during planning. A specific migration-only exception is
-proposed in the plan; all unrelated scenarios remain frozen. No production code,
-CRD, existing test, or runtime
-configuration is changed by the planning deliverable. No commit or push is authorized.
+English/Chinese documentation are in scope. On 2026-09-11 the user authorized
+the detailed plan and implementation without compatibility aliases. The
+policy-specific integration scenario and its fixture/dispatch migration are
+necessary supporting work; all unrelated scenarios remain frozen. No commit
+or push is authorized.

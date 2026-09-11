@@ -70,8 +70,8 @@ EdgionBackend 保留独立的撤销策略。
 | edgion_wasm_modules_loaded | Gauge | gateway | none | self | Number of compiled Wasm modules currently held in the global cache (sizing input for pooling-allocator capacity) | - |
 | edgion_wasm_shared_data_bytes | Gauge | gateway | module | self | Current shared-data byte total for a Wasm module | - |
 | edgion_wasm_body_pause_unsupported_total | Counter | gateway | module | self | A Wasm guest returned `Action::Pause` from the response-body hook, which this host cannot honor (per-chunk window, not a cumulative buffer) — the guest silently observes only the current chunk | alert on this counter (no fixed threshold) |
-| edgion_gateway_plugin_policy_blocked_total | Counter | gateway | plugin | self | A request was rejected because its plugin chain contains a Block-stamped plugin under controller policy | - |
-| edgion_gateway_plugin_policy_bypassed_total | Counter | gateway | plugin | self | A request passed through a chain with a Bypass-stamped plugin skipped under controller policy | - |
+| edgion_gateway_plugin_policy_blocked_total | Counter | gateway | plugin | self | A request was rejected because its plugin chain contains an entry blocked by the captured GatewayClass policy | - |
+| edgion_gateway_plugin_policy_bypassed_total | Counter | gateway | plugin | self | A request passed through a chain with an entry bypassed by the captured GatewayClass policy | - |
 | edgion_geoip_db_loaded | Gauge | gateway | none | self | 1 when a GeoIP database is loaded, 0 otherwise — the alerting signal for the dangerous silent failure where geo rules are configured but the security control is not running | alert on `edgion_geoip_db_loaded == 0` while geo rules are configured |
 | edgion_geoip_db_build_epoch_seconds | Gauge | gateway | none | self | Build timestamp of the loaded GeoIP database | alert on staleness |
 | edgion_geoip_update_failed_total | Counter | gateway | reason (fetch/encoding/size_cap/stall/validation/rename/disk/deadline) | self | GeoIP database update failures by class (background updater task only) | - |

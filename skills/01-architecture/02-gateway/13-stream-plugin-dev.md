@@ -177,17 +177,26 @@ This is the actual "resource configuration → runtime plugin object" assembly p
 
 ## 6. Confirm preprocessing and hot-reload paths need no fixes
 
-Gateway runtime construction belongs to `compile_stream_plugins` in
-`stream_plugin_store.rs`. It retains the serializable resource schema and builds
-both runtime families before atomic publication. `ResourceMeta` does not build
-runtime objects, and the Controller does not depend on Gateway plugin runtimes.
-The Controller handler resolves references, validates configuration, stamps
-plugin policy, and writes status before conf_sync transports the schema.
+Gateway `StreamPluginStore` forwards immutable source inputs to the canonical
+`PluginPublisher`. `StreamPluginGeneration` constructs only enabled, permitted
+entries demanded by attached class/stage views and shares their cached instances.
+`ResourceMeta` and Controller handlers never build Gateway runtime objects.
+The Controller resolves references, validates enabled source configuration and
+writes status; it does not stamp execution policy into transported entries.
 
-The Gateway-side hot-reload entries are:
+`EdgionGatewayConfig.spec.pluginPolicy` controls `stream/` and `tlsRoute/` names
+through GatewayClass parametersRef. Block closes new applicable admissions;
+Bypass never constructs or runs the restricted entry for that scope. Listener
+admission compares every serving Gateway candidate's effective connection view,
+allowing one execution only when those views are equivalent. TCP/UDP/TLS-route
+admission uses the matched logical Gateway. Existing admitted sessions remain
+unchanged; policy edits do not restart listeners.
 
-- [../../../edgion-gateway/src/plugins/stream/stream_plugin_store.rs](../../../edgion-gateway/src/plugins/stream/stream_plugin_store.rs)
-- [../../../edgion-gateway/src/conf_sync/conf_client/config_client.rs](../../../edgion-gateway/src/conf_sync/conf_client/config_client.rs)
+Hot-reload source adapters live in
+[stream_plugin_store.rs](../../../edgion-gateway/src/plugins/stream/stream_plugin_store.rs)
+and [publication](../../../edgion-gateway/src/plugins/publication/mod.rs).
+See [scoped publication](../../04-review/plugin-runtime/regression-guards/scoped-policy-runtime-publication.md)
+for retention, constructor ownership and verification limits.
 
 ## 7. Bind via YAML annotation and verify the reference path
 

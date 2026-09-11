@@ -1,10 +1,9 @@
 //! Regression tests for TLS route plugin dispatch and shared route gates.
 
 use super::*;
-use crate::plugins::stream::create_stream_plugin_handler;
+use crate::plugins::stream::plugin_generation::{StreamPluginGeneration, StreamStages};
 use edgion_resources::resources::edgion_stream_plugins::{EdgionStreamPlugins, StreamPluginEntry, TlsRoutePluginEntry};
-use edgion_resources::resources::plugin_policy::PluginPolicyAction;
-use std::collections::{HashMap, HashSet};
+use edgion_resources::resources::plugin_policy::{PluginPolicyConfig, PluginPolicyEntryConfig, PolicyActionKind};
 use std::sync::Arc;
 
 fn stage1_entry() -> StreamPluginEntry {
@@ -20,10 +19,18 @@ fn stage2_entry(deny: bool) -> TlsRoutePluginEntry {
     .unwrap()
 }
 
-async fn assert_dispatch(key: &str, allowed: bool, error: Option<&str>) {
+async fn assert_dispatch(resource: Option<&CompiledStreamPlugins>, allowed: bool, error: Option<&str>) {
     for mode in [TlsRouteMode::Terminated, TlsRouteMode::Passthrough] {
         let mut ctx = TlsContext::new(443, "127.0.0.1".into(), 50000, "203.0.113.7".into(), 50000);
-        let actual = run_tls_route_plugins(Some(key), &mut ctx, "example.com", 443, mode).await;
+        let actual = run_tls_route_plugins(
+            Some("tls-stage-contract/policy"),
+            resource,
+            &mut ctx,
+            "example.com",
+            443,
+            mode,
+        )
+        .await;
         assert_eq!(actual, allowed, "unexpected result: {:?}", ctx.err_log);
         if let Some(error) = error {
             assert!(ctx.err_log.as_deref().unwrap_or_default().contains(error));
@@ -33,83 +40,99 @@ async fn assert_dispatch(key: &str, allowed: bool, error: Option<&str>) {
     }
 }
 
-// Keep all global-store mutations in one serial test: the production handler
-// relies on conf-sync's single writer, so distinct keys alone are not isolation.
-#[tokio::test]
-async fn tls_route_stage_contract_survives_hot_updates_and_delete() {
-    let key = "tls-stage-contract/policy";
-    let handler = create_stream_plugin_handler();
-    let mut resource: EdgionStreamPlugins = serde_yaml::from_str(
-        "apiVersion: edgion.io/v1\nkind: EdgionStreamPlugins\nmetadata:\n  name: policy\n  namespace: tls-stage-contract\nspec: {}\n",
+fn compile_stage_view(
+    resource: &EdgionStreamPlugins,
+    family: &str,
+    action: Option<PolicyActionKind>,
+) -> Arc<CompiledStreamPlugins> {
+    // Exercise the conf-sync representation, including an explicit Some([]).
+    let wire = serde_json::to_vec(resource).unwrap();
+    let received = Arc::new(serde_json::from_slice(&wire).unwrap());
+    let mut policy = PluginPolicyConfig::default();
+    if let Some(action) = action {
+        policy.deny.push(PluginPolicyEntryConfig {
+            name: format!("{family}/IpRestriction"),
+            action: Some(action),
+            block_status: None,
+        });
+    }
+    StreamPluginGeneration::new(received).compile(
+        &policy.compile().unwrap(),
+        StreamStages {
+            connection: false,
+            tls_route: true,
+        },
     )
-    .unwrap();
-    let publish = |resource: &EdgionStreamPlugins| {
-        // Exercise the actual conf-sync serialization shape, including Some([]).
-        let wire = serde_json::to_vec(resource).unwrap();
-        let received = serde_json::from_slice(&wire).unwrap();
-        handler.partial_update(
-            HashMap::new(),
-            HashMap::from([(key.to_string(), Arc::new(received))]),
-            HashSet::new(),
-        );
-    };
-    publish(&resource);
-    assert_dispatch(key, true, None).await;
+}
+
+#[tokio::test]
+async fn tls_route_stage_contract_survives_generations_and_scope_policy() {
+    let mut resource: EdgionStreamPlugins = serde_yaml::from_str(
+        "apiVersion: edgion.io/v1\nkind: EdgionStreamPlugins\nmetadata: {name: policy, namespace: tls-stage-contract}\nspec: {}\n",
+    ).unwrap();
+    assert_dispatch(Some(&compile_stage_view(&resource, "stream", None)), true, None).await;
     resource.spec.plugins = Some(vec![]);
-    publish(&resource);
-    assert_dispatch(key, true, None).await;
+    assert_dispatch(Some(&compile_stage_view(&resource, "stream", None)), true, None).await;
 
     for (enabled, action) in [
         (true, None),
         (false, None),
-        (true, Some(PluginPolicyAction::Bypass)),
-        (true, Some(PluginPolicyAction::Block { status: 503 })),
+        (true, Some(PolicyActionKind::Bypass)),
+        (true, Some(PolicyActionKind::Block)),
     ] {
         let mut stage1 = stage1_entry();
         stage1.enable = enabled;
-        stage1.policy_action = action;
         resource.spec.plugins = Some(vec![stage1]);
-        publish(&resource);
-        assert_dispatch(key, false, Some("requires tlsRoutePlugins")).await;
+        assert_dispatch(
+            Some(&compile_stage_view(&resource, "stream", action)),
+            false,
+            Some("requires tlsRoutePlugins"),
+        )
+        .await;
     }
 
-    // A denying Stage 1 must never execute after a deliberate Stage-2 no-op.
+    // A denying Stage 1 must never run after a deliberate Stage-2 no-op.
     resource.spec.plugins = Some(vec![stage1_entry()]);
     resource.spec.tls_route_plugins = Some(vec![]);
-    publish(&resource);
-    assert_dispatch(key, true, None).await;
-    for (enabled, action) in [(false, None), (true, Some(PluginPolicyAction::Bypass))] {
+    assert_dispatch(Some(&compile_stage_view(&resource, "tls-route", None)), true, None).await;
+    for (enabled, action) in [(false, None), (true, Some(PolicyActionKind::Bypass))] {
         let mut stage2 = stage2_entry(true);
         stage2.enable = enabled;
-        stage2.policy_action = action;
         resource.spec.tls_route_plugins = Some(vec![stage2]);
-        publish(&resource);
-        assert_dispatch(key, true, None).await;
+        assert_dispatch(Some(&compile_stage_view(&resource, "tls-route", action)), true, None).await;
     }
-
     resource.spec.tls_route_plugins = Some(vec![stage2_entry(false)]);
-    publish(&resource);
-    assert_dispatch(key, true, None).await;
+    assert_dispatch(Some(&compile_stage_view(&resource, "tls-route", None)), true, None).await;
     resource.spec.tls_route_plugins = Some(vec![stage2_entry(true)]);
-    publish(&resource);
-    assert_dispatch(key, false, Some("tls route plugin denied: ip:deny:")).await;
-    let mut blocked = stage2_entry(false);
-    blocked.policy_action = Some(PluginPolicyAction::Block { status: 503 });
-    resource.spec.tls_route_plugins = Some(vec![stage2_entry(false), blocked]);
-    publish(&resource);
-    assert_dispatch(key, false, Some("plugin disabled by policy")).await;
+    assert_dispatch(
+        Some(&compile_stage_view(&resource, "tls-route", None)),
+        false,
+        Some("tls route plugin denied: ip:deny:"),
+    )
+    .await;
+    resource.spec.tls_route_plugins = Some(vec![stage2_entry(false), stage2_entry(false)]);
+    assert_dispatch(
+        Some(&compile_stage_view(
+            &resource,
+            "tls-route",
+            Some(PolicyActionKind::Block),
+        )),
+        false,
+        Some("plugin disabled by policy"),
+    )
+    .await;
 
     resource.spec.tls_route_plugins = None;
-    publish(&resource);
-    assert_dispatch(key, false, Some("requires tlsRoutePlugins")).await;
-    handler.partial_update(HashMap::new(), HashMap::new(), HashSet::from([key.to_string()]));
-    assert_dispatch(key, false, Some("not found")).await;
+    assert_dispatch(
+        Some(&compile_stage_view(&resource, "tls-route", None)),
+        false,
+        Some("requires tlsRoutePlugins"),
+    )
+    .await;
+    assert_dispatch(None, false, Some("not found")).await;
     resource.spec.plugins = None;
     resource.spec.tls_route_plugins = Some(vec![stage2_entry(false)]);
-    publish(&resource);
-    assert_dispatch(key, true, None).await;
-    handler.partial_update(HashMap::new(), HashMap::new(), HashSet::from([key.to_string()]));
-    assert!(get_global_stream_plugin_store().get(key).is_none());
+    assert_dispatch(Some(&compile_stage_view(&resource, "tls-route", None)), true, None).await;
 }
 
 #[tokio::test]
@@ -120,7 +143,7 @@ async fn both_tls_modes_reject_invalid_canonical_addresses() {
             ("127.0.0.1", "unknown", "remote IP"),
         ] {
             let mut ctx = TlsContext::new(443, direct.into(), 50000, remote.into(), 50000);
-            assert!(!run_tls_route_plugins(Some("default/anything"), &mut ctx, "example.com", 443, mode).await);
+            assert!(!run_tls_route_plugins(Some("default/anything"), None, &mut ctx, "example.com", 443, mode).await);
             assert!(ctx.err_log.as_deref().unwrap().contains(error));
             assert!(ctx.err_log.as_deref().unwrap().contains("fail-close"));
         }
@@ -131,17 +154,13 @@ async fn both_tls_modes_reject_invalid_canonical_addresses() {
 async fn fail_close_when_store_key_not_in_store() {
     // Stage-2 fail-close: rule references "default/missing" but store is
     // empty. Must reject and surface an err_log entry.
-    let store = get_global_stream_plugin_store();
-    // Avoid touching other tests' state: make sure this key is not present.
-    // (The global store is shared; we only assert the missing-key path,
-    // which never inserts anything.)
     let key = "default/__fail_close_missing__".to_string();
-    assert!(store.get(&key).is_none(), "test precondition: key must not be in store");
 
     let mut ctx = TlsContext::new(443, "127.0.0.1".to_string(), 50000, "127.0.0.1".to_string(), 50000);
 
     let allowed = run_tls_route_plugins(
         Some(key.as_str()),
+        None,
         &mut ctx,
         "example.com",
         443,
@@ -164,7 +183,7 @@ async fn fail_close_when_store_key_not_in_store() {
 async fn admit_when_store_key_is_none() {
     // No ESP attached to the rule — intentional pass-through, must allow.
     let mut ctx = TlsContext::new(443, "127.0.0.1".to_string(), 50000, "127.0.0.1".to_string(), 50000);
-    let allowed = run_tls_route_plugins(None, &mut ctx, "example.com", 443, TlsRouteMode::Passthrough).await;
+    let allowed = run_tls_route_plugins(None, None, &mut ctx, "example.com", 443, TlsRouteMode::Passthrough).await;
     assert!(allowed, "rule with no store_key must pass through");
     assert!(ctx.err_log.is_none());
 }
@@ -178,6 +197,7 @@ async fn reject_when_direct_peer_ip_unparseable() {
     let mut ctx = TlsContext::new(443, "unknown".to_string(), 0, "unknown".to_string(), 0);
     let allowed = run_tls_route_plugins(
         Some("default/anything"),
+        None,
         &mut ctx,
         "example.com",
         443,

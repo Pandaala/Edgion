@@ -34,7 +34,7 @@ pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) fn expand(
         return;
     };
     for entry in entries {
-        if !entry.is_enabled() || entry.policy_action.is_some() {
+        if !entry.is_enabled() {
             continue;
         }
         let EdgionPlugin::RequestAccessPolicy(config) = &mut entry.plugin else {

@@ -25,10 +25,12 @@ Three things enforce this:
    than silently forwarding an unmasked prompt.
 2. An AiGuard that runs after AiProxy fails closed with a fixed error.
 3. Placing AiGuard after AiProxy in the same `EdgionPlugins` resource is
-   reported at admission as `Accepted=False`. The gateway rejects requests
-   through that resource with a generic HTTP 500 before executing its plugins.
-   Disabled entries and entries bypassed or blocked by PluginPolicy do not
-   participate in the ordering check; request conditions do not exempt entries.
+   reported by the Controller as `Accepted=False` for enabled source entries.
+   The Gateway separately checks entries permitted by the current GatewayClass
+   `EdgionGatewayConfig.spec.pluginPolicy`. If that effective order is invalid,
+   it rejects requests with a generic HTTP 500 before executing the plugins.
+   Disabled entries and scope-restricted entries do not participate in Gateway
+   ordering validation; request conditions do not exempt permitted entries.
    An invalid update replaces the previous configuration with this rejection,
    even if the update also contains an invalid DSL or WAF program. Correcting
    the order restores normal execution on the next publication. An existing

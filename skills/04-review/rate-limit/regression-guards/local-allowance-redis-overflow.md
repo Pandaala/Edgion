@@ -68,9 +68,10 @@ preserves unknown fields. Both direct and nested atomic schemas must declare
 rateLimitExceeded and pluginAlias. Missing declarations caused an actual
 Controller schema rejection before the CRD was corrected. Structural CRD tests
 (14) and condition-specific guards (7) passed after correction. The complete
-CRD guard still fails its pre-existing KeyGet count/traceId drift, tracked in
-[the separate task](../../../../tasks/todo/key-get-trace-id-condition-crd-drift.md).
-Do not report that whole guard as passing.
+CRD guard failed its pre-existing KeyGet count/traceId drift during that
+verification. The remaining cardinality issue is tracked in
+[the separate task](../../../../tasks/todo/key-get-crd-coverage-stale-cardinality.md).
+Do not report that whole guard as passing without fresh verification.
 
 RateLimitOverflowDynamic passed against the current Controller/Gateway binaries:
 absent, initial local allowance/Redis Deny, invalid-reference 500, repaired alias,

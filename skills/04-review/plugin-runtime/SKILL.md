@@ -11,8 +11,6 @@ before applying a decision to current code.
 
 ## Intentional design
 
-- [HTTP request plugin reference generation boundary](intentional-design/request-plugin-reference-generation-boundary.md)
-
 - [plugin_runtime `add_from_*` Builder Duplication — Extract-Helper — DESIGN-TRADEOFF](intentional-design/add-from-builders-duplication.md)
 - [No Per-Route Override or Exclusion of Global Plugins (Envoy typed_per_filter_config) — DESIGN-TRADEOFF (accepted)](intentional-design/no-per-route-global-plugin-override-or-exclude.md)
 - [plugin_runtime.rs Central Match Dispatch — Audited Design Tradeoff](intentional-design/plugin-runtime-god-match.md)
@@ -24,6 +22,8 @@ before applying a decision to current code.
 
 ## Regression guards
 
+- [GatewayClass-scoped policy and runtime publication](regression-guards/scoped-policy-runtime-publication.md)
+
 - [AiGuard ordering errors fail closed at publication](regression-guards/ai-guard-ordering-publication.md)
 
 - [Dye stage and producer parity](regression-guards/dye-stage-producer-parity.md)
@@ -32,3 +32,7 @@ before applying a decision to current code.
 - [EdgionConfigData partial publication is incremental and atomic](regression-guards/edgion-config-data-incremental-atomic-publication.md)
 - [HTTPRoute Native ExternalAuth Construction Failures Must Seal Fail-Closed — FIXED](regression-guards/gw-plugin-runtime-01-httproute-external-auth-invalid-plugins-never-sealed.md)
 - [Stream plugin key normalization](regression-guards/stream-plugin-key-normalization.md)
+
+## Superseded
+
+- [Historical per-reference HTTP generation boundary](superseded/request-plugin-reference-generation-boundary.md)

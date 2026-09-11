@@ -38,3 +38,5 @@ pub mod tls_route_plugins_reload;
 pub mod waf_dynamic;
 
 pub mod request_id_dynamic;
+
+pub mod plugin_policy;

@@ -10,6 +10,7 @@ pub mod http_route;
 mod l4_duplex;
 pub mod link_sys;
 pub use l4_duplex::L4DuplexTestSuite;
+pub mod plugin_policy;
 pub mod services;
 pub mod status;
 pub mod tcp_route;

@@ -32,6 +32,7 @@ pub mod key_auth;
 pub mod ldap_auth;
 pub mod mock;
 pub mod openid_connect;
+pub(crate) mod plugin_generation;
 mod plugin_store;
 pub mod proxy_rewrite;
 pub mod rate_limit;

@@ -1,0 +1,15 @@
+apiVersion: gateway.networking.k8s.io/v1alpha2
+kind: TCPRoute
+metadata:
+  name: pp-b
+  namespace: edgion-test
+  annotations:
+    edgion.io/edgion-stream-plugins: pp-stream
+spec:
+  parentRefs:
+  - name: pp-b
+    sectionName: tcp
+  rules:
+  - backendRefs:
+    - name: pp-backend
+      port: 30010

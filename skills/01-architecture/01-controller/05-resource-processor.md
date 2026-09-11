@@ -239,7 +239,7 @@ Choose the view by the field being consumed:
   the current resource inside `on_change` because cache save happens afterward.
 - Use `get_cached_any` when the decision must match the object sent through
   conf_sync or must observe Controller-derived fields populated by `preparse`
-  or `parse` (for example, PluginPolicy stamps or resolved references).
+  or `parse` (for example, resolved references or credential projections).
 - Never combine a ServerCache existence check with RawStore content. That can
   validate one generation/view while the Gateway consumes another.
 
@@ -253,7 +253,7 @@ to an external response.
 |---|---|---|
 | `lookup_gateway` | `route_utils.rs` | `runtime.processor_registry.get("Gateway")?...downcast::<Gateway>()` |
 | `lookup_service_cluster_ip` | `gateway.rs` | `runtime.processor_registry.get("Service")?...downcast::<Service>()` |
-| `ai_proxy_admission_state` | `http_route.rs` | Processed `EdgionPlugins` with Controller-stamped `policy_action` |
+| `ai_proxy_admission_state` | `http_route.rs` | Processed `EdgionPlugins` enabled AiProxy source configuration; execution policy belongs to Gateway class scopes |
 
 ### Key Files
 

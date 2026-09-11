@@ -1,3 +1,5 @@
+use crate::plugins::publication::global_publisher;
+use crate::plugins::stream::connection_filter_bridge::resolve_route_scope;
 use async_trait::async_trait;
 use std::net::IpAddr;
 use std::sync::Arc;
@@ -245,13 +247,38 @@ impl EdgionTlsTcpProxy {
             return;
         }
 
-        // 3. Execute TLS route plugins (Stage 2: post-handshake, post-route-match)
-        if !self
-            .run_tls_route_plugins(unit.stream_plugin_store_key.as_deref(), ctx, sni)
-            .await
+        let publication = global_publisher().snapshot();
+        let Some(scope) = resolve_route_scope(
+            &publication,
+            &self.listener_key,
+            &unit.resolved_parent_refs,
+            sni,
+            tls_route.metadata.namespace.as_deref().unwrap_or("default"),
+            "TLSRoute",
+        ) else {
+            ctx.err_log = Some("plugin policy unavailable".to_string());
+            return;
+        };
+        let resource = unit
+            .stream_plugin_store_key
+            .as_deref()
+            .and_then(|key| scope.stream(key));
+        drop(scope);
+        drop(publication);
+        if !super::run_tls_route_plugins(
+            unit.stream_plugin_store_key.as_deref(),
+            resource.as_deref(),
+            ctx,
+            sni,
+            self.listener_port,
+            super::TlsRouteMode::Terminated,
+        )
+        .await
         {
             return;
         }
+
+        drop(resource);
 
         // 4. Connect upstream with retry
         let max_attempts = unit.max_connect_retries;
@@ -448,11 +475,6 @@ impl EdgionTlsTcpProxy {
         }
         ctx.push_log("PP2 sent");
         true
-    }
-
-    /// Execute TLS route plugins (Stage 2).
-    async fn run_tls_route_plugins(&self, store_key: Option<&str>, ctx: &mut TlsContext, sni: &str) -> bool {
-        super::run_tls_route_plugins(store_key, ctx, sni, self.listener_port, super::TlsRouteMode::Terminated).await
     }
 
     /// Bidirectional data transfer between downstream (TLS-terminated) and upstream (TCP)

@@ -72,7 +72,7 @@ Generate an independent RouteParentStatus for each parentRef:
   If an authored rule has this scope error and no effective rule survives, the
   Gateway attachment uses `Accepted=False/UnsupportedValue` instead. Delegating
   parents include the rejected child rule's backend CORS reason in their diagnostics.
-- **Per-rule findings never flip `Accepted` while a sibling rule still serves** — `Accepted=False` removes the whole route from the gateway route table (`filter_accepted_parent_refs`), so a rule-level problem rides `PartiallyInvalid` instead. AI attachment/retry-cap violations and authored native backend CORS scope violations escalate on a route where **no** effective rule serves any more: then `Accepted=False/UnsupportedValue` lists the offending `rules[i]: <reason>` and `PartiallyInvalid` is never set True (an earlier True is cleared to False with reason `UnsupportedValue`), so the two conditions cannot contradict each other
+- **Per-rule findings never flip `Accepted` while a sibling rule still serves** — `Accepted=False` removes the whole route from the gateway route table (`filter_accepted_parent_refs`), so a rule-level problem rides `PartiallyInvalid` instead. Independent delegation drops and authored native backend CORS scope violations escalate on a route where **no** effective rule serves any more: then `Accepted=False/UnsupportedValue` lists the offending `rules[i]: <reason>` and `PartiallyInvalid` is never set True (an earlier True is cleared to False with reason `UnsupportedValue`), so the two conditions cannot contradict each other
 - Child-side delegation status: each `kind: HTTPRoute` parentRef (reverse lock) gets an `Accepted` condition — True iff that parent currently delegates to this route (`DelegationAccepted` / `NoMatchingParent`, computed from `RouteDelegationIndex`)
 - Cleans up old status entries that correspond to parentRefs no longer present
 
@@ -82,6 +82,24 @@ combines this support restriction with backend scope enforcement for Controller
 status/delegation and Gateway publication. Valid siblings survive; an authored
 violation with no effective rule uses the existing attachment rejection path.
 See the [credentialed exposure policy](../../04-review/cors/intentional-design/native-credentialed-exposure-policy.md).
+
+### AI source diagnostics and execution admission
+
+After resolving references and delegated rules, the Controller attaches bounded
+`resolved_ai_admission` backend facts to both authored and flattened rules.
+These transport-only fields are hidden from CRD schema and carry no backend
+credentials. Shared pure AI validation produces intrinsic source diagnostics;
+those findings do not drop the matched rule or flip parent acceptance merely
+because no policy-free AI shape is valid.
+
+Gateway publication combines these facts with effective AiProxy entries from the
+class scope and records a route-generation-specific rule gate. A current Block
+wins before that gate. Bypassed AiProxy with incompatible AI targets returns the
+matched rule's generic 500 instead of ordinary upstream or another rule fallback.
+Missing required facts and mismatched route generations fail closed. Backend
+ExtensionRef execution remains first-use admission of the selected backend under
+the captured scope; restrictions on unselected candidates do not reject early. Independent
+backend WAF/native CORS/delegation rejection behavior remains unchanged.
 
 ## Gateway-side processing
 

@@ -84,14 +84,16 @@ graph TD
     B --> C["Serializable stage configuration"]
     C --> D["Controller ProcessorHandler"]
     D --> E["Config sync to Gateway"]
-    E --> F["StreamPluginStore compile and publish"]
-    F --> G["Gateway / TCPRoute / TLSRoute / UDPRoute annotation binding"]
-    G --> H["Stage 1 connection-context or Stage 2 TlsRoute runtime"]
+    E --> F["StreamPluginStore source adapter"]
+    P["EGC policy and GatewayClass bindings"] --> Q["Canonical scoped publication"]
+    F --> Q
+    G["Gateway / TCPRoute / TLSRoute / UDPRoute attachments"] --> Q
+    Q --> H["Captured Stage 1 or Stage 2 admission view"]
 ```
 
 The usual failure is not “forgot to implement a trait.” It is one of the middle segments:
 
-- Gateway `compile_stream_plugins` did not construct the selected stage
+- Gateway scoped publication did not demand/construct the selected stage
 - Gateway did not actually cache and hot-reload `EdgionStreamPlugins`
 - the `Gateway` / `TCPRoute` / `TLSRoute` / `UDPRoute` annotation path never reached the runtime
 
@@ -113,7 +115,7 @@ These currently own:
 
 One important fact:
 
-- Gateway `StreamPluginStore` calls `compile_stream_plugins` to build both runtimes before publishing an immutable generation; the Controller transports configuration, not runtime objects
+- Gateway `StreamPluginStore` forwards source inputs to the canonical publisher; `StreamPluginGeneration` constructs only demanded, permitted stage entries and shares their instances across class views. The Controller transports resolved source configuration and reports intrinsic status; it never stamps execution-policy actions
 
 So changing only the handler is not enough. Gateway may receive the resource but still miss an executable runtime.
 
@@ -171,7 +173,7 @@ and reference shared `EdgionConfigData` through its existing authorization contr
 2. Decide whether the config can reuse an existing type instead of duplicating nearly identical schema.
 3. Add the new type to `EdgionStreamPlugin` or `TlsRouteStreamPlugin`.
 4. Register runtime construction in the matching runtime module.
-5. Confirm Gateway `compile_stream_plugins` constructs the selected stage before publication.
+5. Confirm scoped publication constructs the permitted selected stage before admission.
 6. Confirm the referencing `Gateway` / `TCPRoute` / `TLSRoute` / `UDPRoute` really resolves a store key and uses the correct lifecycle.
 7. Add tests and example YAML last.
 
@@ -186,7 +188,7 @@ At minimum, cover three layers.
 ### 1. Resource Layer
 
 - controller accepts the resource and writes the expected status
-- Gateway recompiles both stage runtimes before publishing updates
+- Gateway publishes the current class policy and demanded stage runtimes together
 
 ### 2. Reference Layer
 

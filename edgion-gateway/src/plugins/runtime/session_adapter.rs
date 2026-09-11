@@ -14,7 +14,6 @@ use super::traits::session::{BodyReadError, BodyReadResult, RequestBodySnapshotR
 use super::traits::{DyeOutcome, PluginSession, PluginSessionError, PluginSessionResult};
 use crate::ai::{AiAttemptPlan, AiRequestContext};
 use crate::link_sys::template::evaluate_template;
-use crate::plugins::http::get_global_plugin_store;
 use crate::request_body::BodyStorage;
 use crate::request_body::{BodyOperationError, BodyScanResult};
 use crate::runtime::server::{http_to_grpc_status, send_grpc_trailers_only_frame};
@@ -318,27 +317,25 @@ mod backend_ext_ref_pin_tests {
         initial.insert(key.to_string(), Arc::clone(&generation_a));
         store.apply_delta(HashMap::new(), initial, &HashSet::new());
 
+        let published_a = store.get_plugin_runtime(key).unwrap();
         let mut ctx = EdgionHttpContext::new();
         let pinned_a = ctx
             .pinned_backend_ext_ref(key, || store.get_plugin_runtime(key))
             .unwrap();
-        assert!(Arc::ptr_eq(&pinned_a, &generation_a.plugin_runtime));
+        assert!(Arc::ptr_eq(&pinned_a, &published_a));
 
         let generation_b = compile_plugins(&EdgionPlugins::new("credential-provider-b", Default::default()));
-        assert!(!Arc::ptr_eq(&generation_a.plugin_runtime, &generation_b.plugin_runtime));
         let mut update = HashMap::new();
         update.insert(key.to_string(), Arc::clone(&generation_b));
         store.apply_delta(HashMap::new(), update, &HashSet::new());
-        assert!(Arc::ptr_eq(
-            &store.get_plugin_runtime(key).unwrap(),
-            &generation_b.plugin_runtime
-        ));
+        let published_b = store.get_plugin_runtime(key).unwrap();
+        assert!(!Arc::ptr_eq(&published_a, &published_b));
 
         let retry_runtime = ctx
             .pinned_backend_ext_ref(key, || store.get_plugin_runtime(key))
             .unwrap();
-        assert!(Arc::ptr_eq(&retry_runtime, &generation_a.plugin_runtime));
-        assert!(!Arc::ptr_eq(&retry_runtime, &generation_b.plugin_runtime));
+        assert!(Arc::ptr_eq(&retry_runtime, &published_a));
+        assert!(!Arc::ptr_eq(&retry_runtime, &published_b));
     }
 }
 
@@ -1874,8 +1871,13 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
     }
 
     fn pinned_backend_ext_ref(&mut self, key: &str) -> Option<std::sync::Arc<crate::plugins::runtime::PluginRuntime>> {
-        self.ctx
-            .pinned_backend_ext_ref(key, || get_global_plugin_store().get_plugin_runtime(key))
+        let scope = self.ctx.plugin_scope().cloned();
+        self.ctx.pinned_backend_ext_ref(key, || {
+            scope?
+                .scope
+                .http(key)
+                .map(|compiled| Arc::clone(&compiled.plugin_runtime))
+        })
     }
 
     fn push_edgion_plugins_log(&mut self, log: EdgionPluginsLog) {

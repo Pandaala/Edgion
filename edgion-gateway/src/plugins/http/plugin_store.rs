@@ -1,33 +1,28 @@
-//! Global store for EdgionPlugins resources.
+//! Plugin source inventory and scoped-view compilation.
 //!
-//! The store holds **compiled** plugins (`Arc<CompiledPlugins>`): the immutable
-//! serializable `EdgionPlugins` schema paired with the gateway-built
-//! `PluginRuntime`. The runtime is built once per (namespace/name) by
-//! `compile_plugins` and Arc-shared via the store — never duplicated, because
-//! in-memory `RateLimit` owns per-instance CMS state that a second build would
-//! split. This side-table indirection (dynamic store key, not a compiled-in
-//! reference) is what supports hot reload.
+//! The canonical publisher owns all executable views and shares stateful entry
+//! implementations across GatewayClass scopes. This adapter exposes source counts
+//! and submits conf-sync inputs; requests retain their selected Gateway scope.
 
-use arc_swap::ArcSwap;
-use std::collections::{BTreeMap, HashMap, HashSet};
+#[cfg(test)]
+use std::collections::HashMap;
+use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
 use std::sync::LazyLock;
 
 use crate::plugins::runtime::conditions::PluginConditionsExt;
+use crate::plugins::runtime::entry_bundle::EntryCache;
 use crate::plugins::runtime::{InvalidUpdatePolicy, PluginRuntime};
 use edgion_resources::resource::meta::ResourceMeta;
 use edgion_resources::resources::EdgionPlugins;
 
-static GLOBAL_PLUGIN_STORE: LazyLock<Arc<PluginStore>> = LazyLock::new(|| Arc::new(PluginStore::new()));
+static GLOBAL_PLUGIN_STORE: LazyLock<Arc<PluginStore>> = LazyLock::new(|| Arc::new(PluginStore { isolated: None }));
 
 pub fn get_global_plugin_store() -> Arc<PluginStore> {
     GLOBAL_PLUGIN_STORE.clone()
 }
 
-/// Borrow the global store without paying the `Arc` clone (an atomic RMW pair).
-/// Prefer this over [`get_global_plugin_store`] on the per-request hot path — e.g.
-/// `log_ext::collect`, which reads `has_access_log_extern()` on every request and
-/// must not pay a clone before its own fast-path check.
+/// Borrow the source-inventory and conf-sync adapter.
 pub fn global_plugin_store() -> &'static PluginStore {
     &GLOBAL_PLUGIN_STORE
 }
@@ -42,7 +37,8 @@ pub struct CompiledPlugins {
     /// for the spec copy — request-time execution uses `plugin_runtime`, not the
     /// spec's conditions; the spec is retained for store stats / lookups).
     pub spec: Arc<EdgionPlugins>,
-    /// The compiled plugin runtime, built once per (ns/name) and Arc-shared.
+    /// One immutable effective runtime view. Its entry filters may be shared
+    /// with other views of the same source generation.
     pub plugin_runtime: Arc<PluginRuntime>,
     /// Gateway-side preparse/validation diagnostics collected while building
     /// the runtime. The Controller independently mirrors static diagnostics via
@@ -57,52 +53,27 @@ pub struct CompiledPlugins {
     /// Whether an invalid update should retain the prior activatable runtime.
     ///
     /// DSL/WAF programs allow last-known-good publication unless either
-    /// generation contains a cross-namespace mirror or an enabled
-    /// Controller-stamped PluginPolicy action. Other plugin configuration errors
-    /// keep the established fail-closed replacement behavior.
+    /// generation contains a cross-namespace mirror. Other plugin configuration
+    /// errors keep the established fail-closed replacement behavior. The scoped
+    /// publisher reapplies the current execution policy to retained source entries.
     pub retain_previous_on_invalid_update: bool,
 }
 
 impl CompiledPlugins {
-    /// Reusing a whole runtime also reuses its mirror authorization and plugin
-    /// policy snapshots. Either generation carrying one of those executable
-    /// decisions therefore requires publishing the incoming sealed runtime,
-    /// even when a DSL/WAF update is invalid.
-    fn can_retain_previous(&self, previous: &Self) -> bool {
+    /// Reusing a whole runtime also reuses its mirror authorization snapshot.
+    /// Cross-namespace mirrors in either generation therefore require publishing
+    /// the incoming sealed runtime, even when a DSL/WAF update is invalid.
+    pub(crate) fn can_retain_previous(&self, previous: &Self) -> bool {
         self.retain_previous_on_invalid_update
             && previous.is_activatable
             && !self.has_cross_namespace_mirror()
             && !previous.has_cross_namespace_mirror()
-            && !self.has_enabled_plugin_policy_action()
-            && !previous.has_enabled_plugin_policy_action()
-    }
-
-    fn has_enabled_plugin_policy_action(&self) -> bool {
-        self.spec
-            .request_filter_entries()
-            .iter()
-            .any(|entry| entry.is_enabled() && entry.policy_action.is_some())
-            || self
-                .spec
-                .upstream_response_filter_entries()
-                .iter()
-                .any(|entry| entry.is_enabled() && entry.policy_action.is_some())
-            || self
-                .spec
-                .upstream_response_body_filter_entries()
-                .iter()
-                .any(|entry| entry.is_enabled() && entry.policy_action.is_some())
-            || self
-                .spec
-                .upstream_response_entries()
-                .iter()
-                .any(|entry| entry.is_enabled() && entry.policy_action.is_some())
     }
 
     fn has_cross_namespace_mirror(&self) -> bool {
         let namespace = self.spec.metadata.namespace.as_deref().unwrap_or("default");
         self.spec.spec.request_plugins.iter().flatten().any(|entry| {
-            if !entry.is_enabled() || entry.policy_action.is_some() {
+            if !entry.is_enabled() {
                 return false;
             }
             matches!(
@@ -121,11 +92,21 @@ impl CompiledPlugins {
 /// `seal_fail_closed` so any invalid plugin makes every request through this
 /// resource fail closed with HTTP 500.
 ///
-/// Built **once per (ns/name)** and Arc-shared via the store; never per request
-/// or per referencing route.
+/// Standalone construction for an unscoped resource. Scoped publication uses
+/// `PluginGeneration` to share entry construction; neither path runs per request.
 pub fn compile_plugins(ep: &EdgionPlugins) -> Arc<CompiledPlugins> {
+    compile_plugins_with_cache(ep, &mut EntryCache::default(), &[], Vec::new())
+}
+
+/// Compile an effective, equal-length view of one cache-bound source generation.
+/// Callers must keep source indices and normalized aliases fixed across masks.
+pub(crate) fn compile_plugins_with_cache(
+    ep: &EdgionPlugins,
+    cache: &mut EntryCache,
+    policy_actions: &[(&str, edgion_resources::resources::plugin_policy::PluginPolicyAction)],
+    mut errors: Vec<String>,
+) -> Arc<CompiledPlugins> {
     let mut spec = ep.clone();
-    let mut errors = Vec::new();
     let mut runtime = PluginRuntime::new();
     runtime.configure_request_id_scope(
         ep.has_active_request_id(),
@@ -139,9 +120,7 @@ pub fn compile_plugins(ep: &EdgionPlugins) -> Arc<CompiledPlugins> {
     let resource_key = spec.key_name();
 
     if let Some(waf) = spec.spec.waf.as_ref() {
-        if let Err(error) = runtime.add_waf(waf) {
-            errors.push(format!("waf: {error}"));
-        }
+        errors.extend(runtime.add_waf_with_cache(waf, cache));
     }
 
     // Compile regex conditions on all plugin entries once, before building the
@@ -195,16 +174,20 @@ pub fn compile_plugins(ep: &EdgionPlugins) -> Arc<CompiledPlugins> {
     }
 
     if let Some(request_plugins) = &spec.spec.request_plugins {
-        errors.extend(runtime.add_from_request_filters(request_plugins, &namespace, &resource_key));
+        errors.extend(runtime.add_from_request_filters_with_cache(request_plugins, &namespace, &resource_key, cache));
     }
     if let Some(filter_plugins) = &spec.spec.upstream_response_filter_plugins {
-        errors.extend(runtime.add_from_upstream_response_filters(filter_plugins, &namespace));
+        errors.extend(runtime.add_from_upstream_response_filters_with_cache(filter_plugins, &namespace, cache));
     }
     if let Some(body_filter_plugins) = &spec.spec.upstream_response_body_filter_plugins {
-        errors.extend(runtime.add_from_upstream_response_body_filters(body_filter_plugins, &namespace));
+        errors.extend(runtime.add_from_upstream_response_body_filters_with_cache(
+            body_filter_plugins,
+            &namespace,
+            cache,
+        ));
     }
     if let Some(response_plugins) = &spec.spec.upstream_response_plugins {
-        errors.extend(runtime.add_from_upstream_responses(response_plugins, &namespace));
+        errors.extend(runtime.add_from_upstream_responses_with_cache(response_plugins, &namespace, cache));
     }
 
     // Resource-level dye "set clobber" check: a failure rule's response
@@ -213,21 +196,21 @@ pub fn compile_plugins(ep: &EdgionPlugins) -> Arc<CompiledPlugins> {
     // semantics and would silently wipe an appended failure value queued
     // earlier by a different entry. Runs once over all four stage arrays
     // chained, mirroring the schema-layer `EdgionPlugins::validate_plugins`
-    // check (only active, non-policy-stamped entries participate, matching
+    // check (only active, effective enabled entries participate, matching
     // `add_from_*` above).
     let all_dye_suites = spec
         .spec
         .request_plugins
         .iter()
         .flatten()
-        .filter(|e| e.is_enabled() && e.policy_action.is_none())
+        .filter(|e| e.is_enabled())
         .map(|e| e.dye.as_ref())
         .chain(
             spec.spec
                 .upstream_response_filter_plugins
                 .iter()
                 .flatten()
-                .filter(|e| e.is_enabled() && e.policy_action.is_none())
+                .filter(|e| e.is_enabled())
                 .map(|e| e.dye.as_ref()),
         )
         .chain(
@@ -235,7 +218,7 @@ pub fn compile_plugins(ep: &EdgionPlugins) -> Arc<CompiledPlugins> {
                 .upstream_response_body_filter_plugins
                 .iter()
                 .flatten()
-                .filter(|e| e.is_enabled() && e.policy_action.is_none())
+                .filter(|e| e.is_enabled())
                 .map(|e| e.dye.as_ref()),
         )
         .chain(
@@ -243,7 +226,7 @@ pub fn compile_plugins(ep: &EdgionPlugins) -> Arc<CompiledPlugins> {
                 .upstream_response_plugins
                 .iter()
                 .flatten()
-                .filter(|e| e.is_enabled() && e.policy_action.is_none())
+                .filter(|e| e.is_enabled())
                 .map(|e| e.dye.as_ref()),
         );
     if let Some(err) = edgion_resources::resources::edgion_plugins::dye_set_clobber_error(all_dye_suites) {
@@ -259,6 +242,10 @@ pub fn compile_plugins(ep: &EdgionPlugins) -> Arc<CompiledPlugins> {
     // rejected with 500 before reaching upstream, rather than silently running
     // with the misconfigured plugin absent from the chain.
     runtime.seal_fail_closed();
+
+    for (name, action) in policy_actions {
+        runtime.record_policy_action(name, *action);
+    }
 
     // Plugin policy enforcement gates (block ahead of fail-closed reject).
     runtime.seal_plugin_policy();
@@ -287,10 +274,10 @@ fn compile_plugin_conditions(ep: &mut EdgionPlugins, errors: &mut Vec<String>, r
         ($entries:expr, $label:expr) => {
             if let Some(entries) = &mut $entries {
                 for (i, entry) in entries.iter_mut().enumerate() {
-                    // Disabled and PluginPolicy-stamped entries are never built
+                    // Entries disabled in the effective scoped view are never built
                     // or run, so dormant conditions must not produce a preparse
                     // error. This stays in lockstep with schema validation.
-                    if !entry.is_enabled() || entry.policy_action.is_some() {
+                    if !entry.is_enabled() {
                         continue;
                     }
                     let mut invalid = false;
@@ -355,7 +342,7 @@ fn compile_plugin_conditions(ep: &mut EdgionPlugins, errors: &mut Vec<String>, r
                 for (i, entry) in entries.iter_mut().enumerate() {
                     // An inert entry's dormant body conditions must not flip
                     // Accepted=False, matching the entry-level conditions rule.
-                    if !entry.is_enabled() || entry.policy_action.is_some() {
+                    if !entry.is_enabled() {
                         continue;
                     }
                     let mut invalid = false;
@@ -396,7 +383,7 @@ fn compile_plugin_conditions(ep: &mut EdgionPlugins, errors: &mut Vec<String>, r
         ($entries:expr, $label:expr) => {
             if let Some(entries) = &mut $entries {
                 for (i, entry) in entries.iter_mut().enumerate() {
-                    if !entry.is_enabled() || entry.policy_action.is_some() {
+                    if !entry.is_enabled() {
                         continue;
                     }
                     let mut invalid = false;
@@ -440,145 +427,25 @@ fn compile_plugin_conditions(ep: &mut EdgionPlugins, errors: &mut Vec<String>, r
     compile_dye_entries!(ep.spec.upstream_response_plugins, "upstreamResponsePlugins");
 }
 
-/// Type alias for the compiled-plugin map (key: namespace/name)
-type PluginMap = HashMap<String, Arc<CompiledPlugins>>;
-
-/// One immutable plugin-store generation.
-///
-/// The access-log hint is derived from `plugins`, so both values must be
-/// published together. A reader that loads this snapshot once can never
-/// observe the hint from one generation and the map from another.
-struct PluginStoreSnapshot {
-    plugins: PluginMap,
-    has_access_log_extern: bool,
-}
-
-impl PluginStoreSnapshot {
-    fn new(plugins: PluginMap) -> Self {
-        let has_access_log_extern = any_declares_access_log_extern(&plugins);
-        Self {
-            plugins,
-            has_access_log_extern,
-        }
-    }
-}
-
+/// Source inventory and conf-sync adapter. Executable views belong exclusively
+/// to the canonical policy publication, and requests access their captured scope.
 pub struct PluginStore {
-    snapshot: ArcSwap<PluginStoreSnapshot>,
-}
-
-impl Default for PluginStore {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-/// Whether any compiled plugin in the map declares a non-empty `accessLogExtern`.
-fn any_declares_access_log_extern(map: &PluginMap) -> bool {
-    map.values().any(|c| !c.spec.access_log_extern_fields().is_empty())
+    isolated: Option<Arc<crate::plugins::publication::PluginPublisher>>,
 }
 
 impl PluginStore {
-    pub fn new() -> Self {
-        Self {
-            snapshot: ArcSwap::from_pointee(PluginStoreSnapshot::new(HashMap::new())),
-        }
+    pub(crate) fn publisher(&self) -> &crate::plugins::publication::PluginPublisher {
+        self.isolated
+            .as_deref()
+            .unwrap_or_else(|| crate::plugins::publication::global_publisher())
     }
 
-    /// Fast-path hint for `log_ext::collect`: true when at least one stored
-    /// `EdgionPlugins` declares a non-empty `accessLogExtern`. When false, the
-    /// caller can skip the plugin-store lookups entirely for this request.
-    pub fn has_access_log_extern(&self) -> bool {
-        self.snapshot.load().has_access_log_extern
-    }
-
-    /// Check if a plugin exists
     pub fn contains(&self, key: &str) -> bool {
-        let snapshot = self.snapshot.load();
-        snapshot.plugins.contains_key(key)
+        self.publisher().snapshot().http_sources().contains_key(key)
     }
 
-    /// Execute a function with the compiled plugins reference
-    pub fn with_plugin<F, R>(&self, key: &str, f: F) -> Option<R>
-    where
-        F: FnOnce(&CompiledPlugins) -> R,
-    {
-        let snapshot = self.snapshot.load();
-        snapshot.plugins.get(key).map(|c| f(c))
-    }
-
-    /// Get the plugin runtime Arc for a given key
-    pub fn get_plugin_runtime(&self, key: &str) -> Option<Arc<PluginRuntime>> {
-        self.with_plugin(key, |c| Arc::clone(&c.plugin_runtime))
-    }
-
-    /// Replace all compiled plugins atomically, retaining a last-known-good
-    /// runtime when a reconnect snapshot contains an invalid update for the
-    /// same key, unless either generation contains a cross-namespace mirror or
-    /// an enabled Controller-stamped PluginPolicy action.
-    /// Keys absent from the new snapshot are still removed. Like
-    /// [`Self::apply_delta`], this load-decide-store sequence relies on the
-    /// serialized EdgionPlugins conf-sync writer.
-    pub fn replace_all(&self, mut plugins: HashMap<String, Arc<CompiledPlugins>>) {
-        {
-            let current = self.snapshot.load();
-            for (key, previous) in current.plugins.iter() {
-                let Some(incoming) = plugins.get(key) else {
-                    continue;
-                };
-                if incoming.can_retain_previous(previous) {
-                    plugins.insert(key.clone(), Arc::clone(previous));
-                }
-            }
-        }
-        self.publish(plugins);
-    }
-
-    /// Apply one serialized conf-sync delta and publish exactly one generation.
-    ///
-    /// `CacheData` invokes the EdgionPlugins handler while holding its
-    /// per-resource-type write lock, so this load-clone-store sequence has one
-    /// production writer. Adds replace unconditionally because a compressed
-    /// add may represent delete-to-create for the same key. Last-known-good
-    /// retention is therefore update-only.
-    pub(crate) fn apply_delta(
-        &self,
-        add: HashMap<String, Arc<CompiledPlugins>>,
-        update: HashMap<String, Arc<CompiledPlugins>>,
-        remove: &HashSet<String>,
-    ) {
-        let mut new_map = {
-            let current = self.snapshot.load();
-            current.plugins.clone()
-        };
-
-        for key in remove {
-            new_map.remove(key);
-        }
-        for (key, plugin) in add {
-            new_map.insert(key, plugin);
-        }
-        for (key, plugin) in update {
-            if new_map
-                .get(&key)
-                .is_some_and(|previous| plugin.can_retain_previous(previous))
-            {
-                continue;
-            }
-            new_map.insert(key, plugin);
-        }
-
-        self.publish(new_map);
-    }
-
-    fn publish(&self, plugins: PluginMap) {
-        self.snapshot.store(Arc::new(PluginStoreSnapshot::new(plugins)));
-    }
-
-    /// Get total count of compiled plugins
     pub fn count(&self) -> usize {
-        let snapshot = self.snapshot.load();
-        snapshot.plugins.len()
+        self.publisher().snapshot().http_sources().len()
     }
 
     /// Per-kind plugin entry count across all stored EdgionPlugins resources.
@@ -589,9 +456,8 @@ impl PluginStore {
     /// upstreamResponsePlugins. All stages are counted.
     pub fn count_by_kind(&self) -> BTreeMap<String, usize> {
         let mut out = BTreeMap::new();
-        let snapshot = self.snapshot.load();
-        for compiled in snapshot.plugins.values() {
-            let ep = &compiled.spec;
+        let snapshot = self.publisher().snapshot();
+        for ep in snapshot.http_sources().values() {
             for entry in ep.request_filter_entries() {
                 *out.entry(entry.plugin.type_name().to_string()).or_insert(0) += 1;
             }
@@ -612,9 +478,8 @@ impl PluginStore {
     #[allow(dead_code)] // Consumed by validator/sample-diagnostics (Task 15); allow until then.
     pub fn keys_by_kind(&self, kind: &str) -> Vec<String> {
         let mut out = Vec::new();
-        let snapshot = self.snapshot.load();
-        for (key, compiled) in snapshot.plugins.iter() {
-            let ep = &compiled.spec;
+        let snapshot = self.publisher().snapshot();
+        for (key, ep) in snapshot.http_sources().iter() {
             let has_kind = ep.request_filter_entries().iter().any(|e| e.plugin.type_name() == kind)
                 || ep
                     .upstream_response_filter_entries()
@@ -633,6 +498,114 @@ impl PluginStore {
             }
         }
         out
+    }
+}
+
+#[cfg(test)]
+impl PluginStore {
+    pub fn new() -> Self {
+        let store = Self {
+            isolated: Some(Arc::new(crate::plugins::publication::PluginPublisher::new())),
+        };
+        store.prepare_test_scope(HashSet::new());
+        store
+    }
+
+    pub(crate) fn prepare_test_scope(&self, keys: HashSet<String>) {
+        if self.isolated.is_none() {
+            return;
+        }
+        use crate::plugins::publication::inputs::GatewayInput;
+        use edgion_resources::{EdgionGatewayConfig, Gateway, GatewayClass};
+        let publisher = self.publisher();
+        let mut config: EdgionGatewayConfig = serde_json::from_value(serde_json::json!({
+            "apiVersion":"edgion.io/v1", "kind":"EdgionGatewayConfig", "metadata":{"name":"plugin-store-test"},
+            "spec":{"globalPluginsRef": keys.iter().map(|key| {
+                let (namespace, name) = key.split_once('/').unwrap_or(("default",key));
+                serde_json::json!({"namespace":namespace,"name":name})
+            }).collect::<Vec<_>>()}
+        }))
+        .unwrap();
+        let class: GatewayClass = serde_json::from_value(serde_json::json!({
+            "apiVersion":"gateway.networking.k8s.io/v1","kind":"GatewayClass","metadata":{"name":"plugin-store-test"},
+            "spec":{"controllerName":"edgion.io/gateway-controller","parametersRef":{"group":"edgion.io","kind":"EdgionGatewayConfig","name":"plugin-store-test"}}
+        })).unwrap();
+        let gateway: Gateway = serde_json::from_value(serde_json::json!({
+            "apiVersion":"gateway.networking.k8s.io/v1","kind":"Gateway","metadata":{"name":"scope","namespace":"plugin-store-test"},
+            "spec":{"gatewayClassName":"plugin-store-test","listeners":[{"name":"http","port":18089,"protocol":"HTTP"}]}
+        })).unwrap();
+        config.spec.plugin_policy = publisher
+            .snapshot()
+            .gateway("plugin-store-test/scope")
+            .and_then(|gateway| {
+                gateway
+                    .scope
+                    .config
+                    .as_ref()
+                    .and_then(|config| config.spec.plugin_policy.clone())
+            });
+        publisher.replace_gateway_configs(HashMap::from([("plugin-store-test".into(), Arc::new(config))]));
+        publisher.replace_gateway_classes(HashMap::from([("plugin-store-test".into(), Arc::new(class))]));
+        publisher.replace_gateways(HashMap::from([(
+            "plugin-store-test/scope".into(),
+            GatewayInput::from_gateway(&gateway),
+        )]));
+    }
+
+    pub(crate) fn scope(&self) -> Arc<crate::plugins::publication::PluginScope> {
+        self.publisher()
+            .snapshot()
+            .gateway("plugin-store-test/scope")
+            .unwrap()
+            .scope
+            .clone()
+    }
+
+    pub(crate) fn set_test_policy(
+        &self,
+        policy: Option<edgion_resources::resources::plugin_policy::PluginPolicyConfig>,
+    ) {
+        let mut config = self.scope().config.as_ref().unwrap().as_ref().clone();
+        config.spec.plugin_policy = policy;
+        self.publisher()
+            .replace_gateway_configs(HashMap::from([("plugin-store-test".into(), Arc::new(config))]));
+    }
+
+    pub fn with_plugin<R>(&self, key: &str, f: impl FnOnce(&CompiledPlugins) -> R) -> Option<R> {
+        self.scope().http(key).map(|compiled| f(&compiled))
+    }
+
+    pub fn get_plugin_runtime(&self, key: &str) -> Option<Arc<PluginRuntime>> {
+        self.with_plugin(key, |compiled| Arc::clone(&compiled.plugin_runtime))
+    }
+
+    pub fn replace_all(&self, plugins: HashMap<String, Arc<CompiledPlugins>>) {
+        use edgion_common::conf_sync::traits::ConfHandler;
+        self.full_set(
+            &plugins
+                .into_iter()
+                .map(|(key, compiled)| (key, Arc::clone(&compiled.spec)))
+                .collect(),
+        );
+    }
+
+    pub(crate) fn apply_delta(
+        &self,
+        add: HashMap<String, Arc<CompiledPlugins>>,
+        update: HashMap<String, Arc<CompiledPlugins>>,
+        remove: &HashSet<String>,
+    ) {
+        use edgion_common::conf_sync::traits::ConfHandler;
+        self.partial_update(
+            add.into_iter()
+                .map(|(key, compiled)| (key, Arc::clone(&compiled.spec)))
+                .collect(),
+            update
+                .into_iter()
+                .map(|(key, compiled)| (key, Arc::clone(&compiled.spec)))
+                .collect(),
+            remove.clone(),
+        );
     }
 }
 
@@ -685,10 +658,21 @@ mod access_log_extern_flag_tests {
     }
 
     fn assert_snapshot_coherent(store: &PluginStore) {
-        let snapshot = store.snapshot.load();
+        let snapshot = store.publisher().snapshot();
+        let gateway = snapshot.gateway("plugin-store-test/scope").unwrap();
         assert_eq!(
-            snapshot.has_access_log_extern,
-            any_declares_access_log_extern(&snapshot.plugins)
+            gateway.scope.has_access_log_extern,
+            gateway
+                .scope
+                .global_keys
+                .iter()
+                .filter_map(|key| gateway.scope.http(key))
+                .any(|view| view
+                    .spec
+                    .spec
+                    .access_log_extern
+                    .as_ref()
+                    .is_some_and(|fields| !fields.is_empty()))
         );
     }
 
@@ -698,7 +682,7 @@ mod access_log_extern_flag_tests {
     #[test]
     fn flag_flips_as_the_store_gains_and_loses_an_access_log_extern_declaration() {
         let store = PluginStore::new();
-        assert!(!store.has_access_log_extern(), "empty store must report false");
+        assert!(!store.scope().has_access_log_extern, "empty store must report false");
         assert_snapshot_coherent(&store);
 
         let mut plugins = HashMap::new();
@@ -708,7 +692,7 @@ mod access_log_extern_flag_tests {
         );
         store.replace_all(plugins);
         assert!(
-            !store.has_access_log_extern(),
+            !store.scope().has_access_log_extern,
             "a store with plugins but no accessLogExtern must report false"
         );
         assert_snapshot_coherent(&store);
@@ -718,7 +702,7 @@ mod access_log_extern_flag_tests {
         add.insert("ns/with-ext".to_string(), compile_plugins(&ep_with_access_log_extern()));
         store.apply_delta(add, HashMap::new(), &HashSet::new());
         assert!(
-            store.has_access_log_extern(),
+            store.scope().has_access_log_extern,
             "adding a resource with accessLogExtern must flip the flag to true"
         );
         assert_snapshot_coherent(&store);
@@ -728,7 +712,7 @@ mod access_log_extern_flag_tests {
         remove.insert("ns/with-ext".to_string());
         store.apply_delta(HashMap::new(), HashMap::new(), &remove);
         assert!(
-            !store.has_access_log_extern(),
+            !store.scope().has_access_log_extern,
             "removing the only resource with accessLogExtern must flip the flag back to false"
         );
         assert_snapshot_coherent(&store);
@@ -746,14 +730,14 @@ mod access_log_extern_flag_tests {
         full.insert("ns/with-ext".to_string(), compile_plugins(&ep_with_access_log_extern()));
         store.replace_all(full);
         assert!(
-            store.has_access_log_extern(),
+            store.scope().has_access_log_extern,
             "replace_all with an accessLogExtern resource must set the flag"
         );
 
         // replace_all with an empty set must clear the flag.
         store.replace_all(HashMap::new());
         assert!(
-            !store.has_access_log_extern(),
+            !store.scope().has_access_log_extern,
             "replace_all with an empty set must clear the flag"
         );
     }
@@ -796,8 +780,21 @@ mod access_log_extern_flag_tests {
                 scope.spawn(move || {
                     start.wait();
                     for _ in 0..READS {
-                        let snapshot = store.snapshot.load();
-                        if snapshot.has_access_log_extern != any_declares_access_log_extern(&snapshot.plugins) {
+                        let snapshot = store.publisher().snapshot();
+                        let gateway = snapshot.gateway("plugin-store-test/scope").unwrap();
+                        let declares = gateway
+                            .scope
+                            .global_keys
+                            .iter()
+                            .filter_map(|key| gateway.scope.http(key))
+                            .any(|view| {
+                                view.spec
+                                    .spec
+                                    .access_log_extern
+                                    .as_ref()
+                                    .is_some_and(|fields| !fields.is_empty())
+                            });
+                        if gateway.scope.has_access_log_extern != declares {
                             failed.store(true, Ordering::Relaxed);
                         }
                     }
@@ -822,13 +819,41 @@ mod compile_plugins_tests {
     use edgion_resources::resources::edgion_plugins::plugin_configs::access_log_extern::{
         AccessLogExternField, LogExtSource,
     };
-    use edgion_resources::resources::edgion_plugins::plugin_configs::{DslConfig, RequestIdConfig};
+    use edgion_resources::resources::edgion_plugins::plugin_configs::DslConfig;
     use edgion_resources::resources::edgion_plugins::{
         BodyRequirement, DyeOutcome, DyeRule, DyeSuite, EdgionPlugin, EdgionPluginsSpec, RequestFilterEntry,
-        UpstreamResponseBodyFilterEntry, UpstreamResponseEntry, UpstreamResponseFilterEntry, WafConfig, WafMode,
+        UpstreamResponseFilterEntry, WafConfig, WafMode,
     };
     use edgion_resources::resources::http_route::{HTTPHeader, HTTPHeaderFilter};
     use edgion_resources::resources::plugin_policy::PluginPolicyAction;
+
+    fn policy_config(
+        kind: &str,
+        action: PluginPolicyAction,
+    ) -> edgion_resources::resources::plugin_policy::PluginPolicyConfig {
+        let rule = match action {
+            PluginPolicyAction::Bypass => {
+                serde_json::json!({"name":format!("http/{kind}"),"action":"bypass"})
+            }
+            PluginPolicyAction::Block { status } => {
+                serde_json::json!({"name":format!("http/{kind}"),"blockStatus":status})
+            }
+        };
+        serde_json::from_value(serde_json::json!({"deny":[rule]})).unwrap()
+    }
+
+    fn compile_with_policy(
+        resource: &EdgionPlugins,
+        kind: &str,
+        action: Option<PluginPolicyAction>,
+    ) -> Arc<CompiledPlugins> {
+        let policy = action.map(|action| policy_config(kind, action).compile().unwrap());
+        super::super::plugin_generation::PluginGeneration::new(resource.clone()).compile(policy.as_ref())
+    }
+
+    fn first_filter(runtime: &PluginRuntime) -> &Arc<dyn crate::plugins::runtime::RequestFilter> {
+        runtime.request_plugins_iter().next().unwrap()
+    }
 
     fn ai_ordering_resource(types: &[&str]) -> EdgionPlugins {
         let entries: Vec<serde_json::Value> = types
@@ -930,9 +955,11 @@ mod compile_plugins_tests {
                 let mut resource = ai_ordering_resource(&["AiProxy", "AiGuard"]);
                 let entry = &mut resource.spec.request_plugins.as_mut().unwrap()[index];
                 entry.enable = enabled;
-                entry.policy_action = policy;
-                let compiled = compile_plugins(&resource);
-                assert_eq!(compiled.preparse_errors, resource.validate_plugins());
+                let kind = entry.plugin.type_name();
+                let compiled = compile_with_policy(&resource, kind, policy);
+                if policy.is_none() {
+                    assert_eq!(compiled.preparse_errors, resource.validate_plugins());
+                }
                 assert!(compiled.preparse_errors.is_empty());
                 assert!(compiled.is_activatable);
                 assert!(compiled
@@ -960,12 +987,12 @@ mod compile_plugins_tests {
                     "add" => store.apply_delta(map, HashMap::new(), &HashSet::new()),
                     _ => unreachable!(),
                 }
-                let snapshot = store.snapshot.load();
-                let published = snapshot.plugins.get(&key).unwrap();
-                assert!(Arc::ptr_eq(published, incoming), "{mode}");
+                let snapshot = store.scope();
+                let published = snapshot.http(&key).unwrap();
+                assert_eq!(published.preparse_errors, incoming.preparse_errors, "{mode}");
                 assert_eq!(published.is_activatable, Arc::ptr_eq(incoming, &valid));
                 if !published.is_activatable {
-                    assert_leading_reject(published);
+                    assert_leading_reject(&published);
                 }
             }
         }
@@ -973,10 +1000,24 @@ mod compile_plugins_tests {
 
     #[tokio::test]
     async fn ai_ordering_invalid_generation_preserves_policy_block_precedence() {
-        let mut resource = ai_ordering_resource(&["AiProxy", "AiGuard", "AiGuard"]);
-        resource.spec.request_plugins.as_mut().unwrap()[2].policy_action =
-            Some(PluginPolicyAction::Block { status: 403 });
-        let compiled = compile_plugins(&resource);
+        let mut resource = ai_ordering_resource(&["AiProxy", "AiGuard"]);
+        resource
+            .spec
+            .request_plugins
+            .as_mut()
+            .unwrap()
+            .push(RequestFilterEntry::new(EdgionPlugin::RequestHeaderModifier(
+                HTTPHeaderFilter {
+                    set: None,
+                    add: None,
+                    remove: None,
+                },
+            )));
+        let compiled = compile_with_policy(
+            &resource,
+            "RequestHeaderModifier",
+            Some(PluginPolicyAction::Block { status: 403 }),
+        );
         assert_eq!(compiled.preparse_errors, resource.validate_plugins());
         assert_eq!(compiled.preparse_errors.len(), 1);
         assert!(!compiled.is_activatable);
@@ -1072,7 +1113,6 @@ mod compile_plugins_tests {
                             ($ty:ident, $field:ident) => {{
                                 let mut entry = $ty::new(plugin);
                                 entry.enable = enable;
-                                entry.policy_action = policy;
                                 entry.dye = dye;
                                 resource.spec.$field = Some(vec![entry]);
                             }};
@@ -1085,11 +1125,19 @@ mod compile_plugins_tests {
                             DyeStage::UpstreamResponseBodyFilter => {
                                 entry!(UpstreamResponseBodyFilterEntry, upstream_response_body_filter_plugins)
                             }
-                            DyeStage::UpstreamResponse => entry!(UpstreamResponseEntry, upstream_response_plugins),
+                            DyeStage::UpstreamResponse => {
+                                entry!(UpstreamResponseEntry, upstream_response_plugins)
+                            }
                         }
-                        let schema = resource.validate_plugins();
-                        let compiled = compile_plugins(&resource);
-                        assert_eq!(schema, compiled.preparse_errors, "{stage:?} {outcome:?} {fail_open}");
+                        let source_errors = resource.validate_plugins();
+                        let compiled = compile_with_policy(&resource, "Wasm", policy);
+                        if policy.is_none() {
+                            assert_eq!(
+                                source_errors, compiled.preparse_errors,
+                                "{stage:?} {outcome:?} {fail_open}"
+                            );
+                        }
+                        let schema = &compiled.preparse_errors;
                         assert_eq!(
                             schema
                                 .iter()
@@ -1197,33 +1245,49 @@ mod compile_plugins_tests {
     }
 
     #[test]
-    fn dye_named_jump_fixtures_validate_and_compile_plans() {
-        // Each fixture subscribes only to outcomes reachable under its
-        // effective policy. Keep the actual integration manifests aligned with
-        // Controller validation and Gateway dye-plan compilation.
+    fn dye_named_jump_fixtures_reject_unreachable_subscriptions_consistently() {
+        // The integration manifests now subscribe only to supported outcomes.
+        // Restore broad subscriptions in memory to retain D0083 negative coverage.
         let fixtures = [
-            include_str!("../../../../edgion-tests/integration/conf/EdgionPlugins/DynamicInternalUpstream/03_EdgionPlugins_default_named-jump-canary-fallback.yaml"),
-            include_str!("../../../../edgion-tests/integration/conf/EdgionPlugins/DynamicInternalUpstream/03_EdgionPlugins_default_named-jump-canary-reject.yaml"),
-            include_str!("../../../../edgion-tests/integration/conf/EdgionPlugins/DynamicInternalUpstream/03_EdgionPlugins_default_named-jump-diu-fallback.yaml"),
-            include_str!("../../../../edgion-tests/integration/conf/EdgionPlugins/DynamicInternalUpstream/03_EdgionPlugins_default_named-jump-diu-reject.yaml"),
+            (false, include_str!("../../../../edgion-tests/integration/conf/EdgionPlugins/DynamicInternalUpstream/03_EdgionPlugins_default_named-jump-canary-fallback.yaml")),
+            (false, include_str!("../../../../edgion-tests/integration/conf/EdgionPlugins/DynamicInternalUpstream/03_EdgionPlugins_default_named-jump-canary-reject.yaml")),
+            (false, include_str!("../../../../edgion-tests/integration/conf/EdgionPlugins/DynamicInternalUpstream/03_EdgionPlugins_default_named-jump-diu-fallback.yaml")),
+            (true, include_str!("../../../../edgion-tests/integration/conf/EdgionPlugins/DynamicInternalUpstream/03_EdgionPlugins_default_named-jump-diu-reject.yaml")),
         ];
-        for yaml in fixtures {
-            let resource: EdgionPlugins = serde_yaml::from_str(yaml).unwrap();
+        for (valid, yaml) in fixtures {
+            let mut resource: EdgionPlugins = serde_yaml::from_str(yaml).unwrap();
+            let fixture = compile_plugins(&resource);
+            assert!(resource.validate_plugins().is_empty());
+            assert!(fixture.preparse_errors.is_empty());
+            assert!(fixture.is_activatable);
+            assert!(fixture
+                .plugin_runtime
+                .request_plugins_iter()
+                .any(|plugin| plugin.dye_plan().is_some()));
+            if !valid {
+                resource.spec.request_plugins.as_mut().unwrap()[0]
+                    .dye
+                    .as_mut()
+                    .unwrap()
+                    .response[0]
+                    .on = vec![DyeOutcome::Reject, DyeOutcome::Fallback];
+            }
             let errors = resource.validate_plugins();
             let compiled = compile_plugins(&resource);
             assert_eq!(errors, compiled.preparse_errors);
-            assert!(errors.is_empty(), "{:?}: {errors:?}", resource.metadata.name);
-            assert!(compiled.is_activatable);
+            assert_eq!(errors.is_empty(), valid, "{:?}: {errors:?}", resource.metadata.name);
+            if !valid {
+                assert!(errors
+                    .iter()
+                    .any(|e| e.contains("cannot render in this stage and configuration")));
+            }
+            assert!(compiled.is_activatable, "only dye is rejected");
             assert_eq!(
                 compiled
                     .plugin_runtime
                     .request_plugins_iter()
-                    .filter_map(|plugin| plugin.dye_plan())
-                    .filter(|plan| !plan.response.is_empty())
-                    .count(),
-                1,
-                "{:?}: one request plugin must retain its response dye plan",
-                resource.metadata.name
+                    .any(|p| p.dye_plan().is_some()),
+                valid
             );
         }
     }
@@ -1295,11 +1359,15 @@ mod compile_plugins_tests {
                 &HashSet::new(),
             );
             assert!(store
-                .with_plugin(&key, |published| std::ptr::eq(published, compiled.as_ref()))
+                .with_plugin(&key, |published| published.is_activatable
+                    && published.preparse_errors.is_empty()
+                    && published.plugin_runtime.request_plugins_count() == 1)
                 .unwrap());
             store.replace_all(HashMap::from([(key.clone(), Arc::clone(&compiled))]));
             assert!(store
-                .with_plugin(&key, |published| std::ptr::eq(published, compiled.as_ref()))
+                .with_plugin(&key, |published| published.is_activatable
+                    && published.preparse_errors.is_empty()
+                    && published.plugin_runtime.request_plugins_count() == 1)
                 .unwrap());
         }
     }
@@ -1534,11 +1602,11 @@ mod compile_plugins_tests {
             &HashSet::new(),
         );
 
-        let snapshot = store.snapshot.load();
-        let published = snapshot.plugins.get(&key).expect("updated generation is published");
-        assert!(Arc::ptr_eq(published, &invalid));
-        assert!(!Arc::ptr_eq(published, &valid));
-        assert_leading_reject(published);
+        let snapshot = store.scope();
+        let published = snapshot.http(&key).expect("updated generation is published");
+        assert!(!published.is_activatable);
+        assert_eq!(published.preparse_errors, invalid.preparse_errors);
+        assert_leading_reject(&published);
     }
 
     #[tokio::test]
@@ -1598,7 +1666,7 @@ mod compile_plugins_tests {
     }
 
     #[test]
-    fn inactive_and_policy_stamped_malformed_conditions_remain_inert() {
+    fn disabled_and_scoped_bypass_malformed_conditions_remain_inert() {
         for (name, mut entry) in [("disabled", body_dsl_entry()), ("policy bypass", body_dsl_entry())] {
             entry.conditions = Some(malformed_time_range_conditions());
             entry.body = Some(BodyRequirement {
@@ -1608,13 +1676,12 @@ mod compile_plugins_tests {
             entry.dye = Some(response_dye(vec![malformed_time_range_conditions()]));
             if name == "disabled" {
                 entry.enable = false;
-            } else {
-                entry.policy_action = Some(PluginPolicyAction::Bypass);
             }
 
             let resource = dsl_resource(entry);
-            assert!(resource.validate_plugins().is_empty(), "{name}");
-            let compiled = compile_plugins(&resource);
+            let action = (name != "disabled").then_some(PluginPolicyAction::Bypass);
+            assert_eq!(resource.validate_plugins().is_empty(), name == "disabled");
+            let compiled = compile_with_policy(&resource, "Dsl", action);
             assert!(
                 compiled.preparse_errors.is_empty(),
                 "{name}: {:?}",
@@ -1694,7 +1761,9 @@ mod compile_plugins_tests {
                 HashMap::from([(key.clone(), Arc::clone(&next))]),
                 &HashSet::new(),
             );
-            assert!(Arc::ptr_eq(store.snapshot.load().plugins.get(&key).unwrap(), &next));
+            let published = store.scope().http(&key).unwrap();
+            assert_eq!(published.is_activatable, expected_active);
+            assert_eq!(published.preparse_errors, next.preparse_errors);
         }
         let disabled = resource("bad\0realm", false);
         assert!(disabled.validate_plugins().is_empty());
@@ -1734,322 +1803,6 @@ mod compile_plugins_tests {
         assert_eq!(compiled.plugin_runtime.upstream_response_async_plugins_count(), 1);
     }
 
-    #[derive(Clone, Copy, Debug)]
-    enum PolicyStage {
-        Request,
-        ResponseFilter,
-        ResponseBodyFilter,
-        Response,
-    }
-
-    fn add_policy_entry(
-        resource: &mut EdgionPlugins,
-        stage: PolicyStage,
-        plugin: EdgionPlugin,
-        enabled: bool,
-        action: PluginPolicyAction,
-    ) {
-        macro_rules! push_entry {
-            ($entry:ident, $field:ident) => {{
-                let mut entry = $entry::with_enable(plugin, enabled);
-                entry.policy_action = Some(action);
-                resource.spec.$field.get_or_insert_with(Vec::new).push(entry);
-            }};
-        }
-        match stage {
-            PolicyStage::Request => push_entry!(RequestFilterEntry, request_plugins),
-            PolicyStage::ResponseFilter => {
-                push_entry!(UpstreamResponseFilterEntry, upstream_response_filter_plugins)
-            }
-            PolicyStage::ResponseBodyFilter => {
-                push_entry!(UpstreamResponseBodyFilterEntry, upstream_response_body_filter_plugins)
-            }
-            PolicyStage::Response => push_entry!(UpstreamResponseEntry, upstream_response_plugins),
-        }
-    }
-
-    fn policy_program_resource(
-        program: &str,
-        valid: bool,
-        policy: Option<(PolicyStage, bool, PluginPolicyAction)>,
-    ) -> EdgionPlugins {
-        let mut resource = if program == "dsl" {
-            dsl_resource(RequestFilterEntry::new(EdgionPlugin::Dsl(DslConfig {
-                name: "policy-lkg".to_string(),
-                source: Some(if valid { "let value = 1" } else { "invalid @@@" }.to_string()),
-                ..Default::default()
-            })))
-        } else {
-            waf_resource(if valid {
-                "SecRule REQUEST_URI \"@contains /blocked\" \"id:1,phase:1,deny\"\n"
-            } else {
-                "SecRule invalid-("
-            })
-        };
-        resource.metadata.name = Some("policy-lkg".to_string());
-        if let Some((stage, enabled, action)) = policy {
-            add_policy_entry(&mut resource, stage, header_modifier(), enabled, action);
-        }
-        resource
-    }
-
-    #[test]
-    fn enabled_policy_actions_in_every_stage_disable_whole_runtime_retention() {
-        let stages = [
-            PolicyStage::Request,
-            PolicyStage::ResponseFilter,
-            PolicyStage::ResponseBodyFilter,
-            PolicyStage::Response,
-        ];
-        for program in ["dsl", "waf"] {
-            let previous = compile_plugins(&policy_program_resource(program, true, None));
-            for stage in stages {
-                for action in [PluginPolicyAction::Block { status: 451 }, PluginPolicyAction::Bypass] {
-                    let incoming =
-                        compile_plugins(&policy_program_resource(program, false, Some((stage, true, action))));
-                    assert!(!incoming.is_activatable, "{program}/{stage:?}");
-                    assert!(incoming.retain_previous_on_invalid_update, "{program}/{stage:?}");
-                    assert!(incoming.has_enabled_plugin_policy_action(), "{program}/{stage:?}");
-                    assert!(!incoming.can_retain_previous(&previous), "{program}/{stage:?}");
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn policy_add_remove_and_change_publish_invalid_program_generations() {
-        let cases = [
-            ("add block", None, Some(PluginPolicyAction::Block { status: 451 })),
-            ("add bypass", None, Some(PluginPolicyAction::Bypass)),
-            ("remove block", Some(PluginPolicyAction::Block { status: 451 }), None),
-            ("remove bypass", Some(PluginPolicyAction::Bypass), None),
-            (
-                "change action",
-                Some(PluginPolicyAction::Bypass),
-                Some(PluginPolicyAction::Block { status: 451 }),
-            ),
-            (
-                "change status",
-                Some(PluginPolicyAction::Block { status: 451 }),
-                Some(PluginPolicyAction::Block { status: 452 }),
-            ),
-        ];
-        for program in ["dsl", "waf"] {
-            for full in [false, true] {
-                let initial = compile_plugins(&policy_program_resource(
-                    program,
-                    false,
-                    Some((PolicyStage::Request, true, PluginPolicyAction::Block { status: 451 })),
-                ));
-                let recovered = compile_plugins(&policy_program_resource(program, true, None));
-                let key = initial.spec.key_name();
-                let store = PluginStore::new();
-                let initial_map = HashMap::from([(key.clone(), Arc::clone(&initial))]);
-                if full {
-                    store.replace_all(initial_map);
-                } else {
-                    store.apply_delta(HashMap::new(), initial_map, &HashSet::new());
-                }
-                assert!(Arc::ptr_eq(
-                    &store
-                        .get_plugin_runtime(&key)
-                        .expect("initial invalid runtime is published"),
-                    &initial.plugin_runtime
-                ));
-                store.apply_delta(
-                    HashMap::new(),
-                    HashMap::from([(key.clone(), Arc::clone(&recovered))]),
-                    &HashSet::new(),
-                );
-                assert!(Arc::ptr_eq(
-                    &store.get_plugin_runtime(&key).expect("valid runtime recovers"),
-                    &recovered.plugin_runtime
-                ));
-                for (name, previous_action, incoming_action) in &cases {
-                    let previous = compile_plugins(&policy_program_resource(
-                        program,
-                        true,
-                        previous_action
-                            .clone()
-                            .map(|action| (PolicyStage::Request, true, action)),
-                    ));
-                    let incoming = compile_plugins(&policy_program_resource(
-                        program,
-                        false,
-                        incoming_action
-                            .clone()
-                            .map(|action| (PolicyStage::Request, true, action)),
-                    ));
-                    assert!(!incoming.is_activatable, "{program}/{full}/{name}");
-                    assert!(incoming.retain_previous_on_invalid_update, "{program}/{full}/{name}");
-                    let key = incoming.spec.key_name();
-                    let store = PluginStore::new();
-                    store.replace_all(HashMap::from([(key.clone(), Arc::clone(&previous))]));
-                    let pinned = store.get_plugin_runtime(&key).expect("previous runtime is pinned");
-                    let replacement = HashMap::from([(key.clone(), Arc::clone(&incoming))]);
-                    if full {
-                        store.replace_all(replacement);
-                    } else {
-                        store.apply_delta(HashMap::new(), replacement, &HashSet::new());
-                    }
-                    assert!(Arc::ptr_eq(
-                        &store.get_plugin_runtime(&key).expect("incoming runtime is published"),
-                        &incoming.plugin_runtime
-                    ));
-                    assert!(Arc::ptr_eq(&pinned, &previous.plugin_runtime));
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn ordinary_and_disabled_policy_entries_preserve_program_lkg() {
-        for program in ["dsl", "waf"] {
-            for full in [false, true] {
-                let previous = compile_plugins(&policy_program_resource(program, true, None));
-                for policy in [
-                    None,
-                    Some((PolicyStage::Response, false, PluginPolicyAction::Block { status: 451 })),
-                ] {
-                    let incoming = compile_plugins(&policy_program_resource(program, false, policy));
-                    assert!(!incoming.has_enabled_plugin_policy_action());
-                    let key = incoming.spec.key_name();
-                    let store = PluginStore::new();
-                    store.replace_all(HashMap::from([(key.clone(), Arc::clone(&previous))]));
-                    let replacement = HashMap::from([(key.clone(), incoming)]);
-                    if full {
-                        store.replace_all(replacement);
-                    } else {
-                        store.apply_delta(HashMap::new(), replacement, &HashSet::new());
-                    }
-                    assert!(Arc::ptr_eq(
-                        &store.get_plugin_runtime(&key).expect("previous runtime is retained"),
-                        &previous.plugin_runtime
-                    ));
-                }
-            }
-        }
-    }
-
-    #[tokio::test]
-    async fn policy_gates_keep_block_bypass_and_reject_precedence_and_diagnostics() {
-        let block = compile_plugins(&policy_program_resource(
-            "dsl",
-            false,
-            Some((PolicyStage::Request, true, PluginPolicyAction::Block { status: 451 })),
-        ));
-        let mut filters = block.plugin_runtime.request_plugins_iter();
-        let block_filter = filters.next().expect("block gate");
-        assert_eq!(block_filter.name(), "PluginPolicyBlock");
-        assert_eq!(filters.next().expect("reject gate").name(), "RejectInvalidConfig");
-        let mut session = MockPluginSession::new();
-        let mut log = PluginLog::new(block_filter.name());
-        match block_filter.run_request(&mut session, &mut log).await {
-            PluginRunningResult::ErrResponse { status, body } => {
-                assert_eq!(status, 451);
-                assert_eq!(
-                    body.expect("fixed block body").as_ref(),
-                    br#"{"message":"plugin disabled by policy"}"#
-                );
-            }
-            other => panic!("expected policy block, got {other:?}"),
-        }
-        assert_eq!(
-            serde_json::to_value(&log).unwrap()["log"],
-            serde_json::json!(["err: blocked by plugin policy", "plugin: http/RequestHeaderModifier"])
-        );
-
-        let bypass = compile_plugins(&policy_program_resource(
-            "dsl",
-            false,
-            Some((PolicyStage::Request, true, PluginPolicyAction::Bypass)),
-        ));
-        let mut filters = bypass.plugin_runtime.request_plugins_iter();
-        let bypass_filter = filters.next().expect("bypass note");
-        let reject_filter = filters.next().expect("reject gate");
-        assert_eq!(bypass_filter.name(), "PluginPolicyBypass");
-        assert_eq!(reject_filter.name(), "RejectInvalidConfig");
-        let mut bypass_log = PluginLog::new(bypass_filter.name());
-        assert!(matches!(
-            bypass_filter.run_request(&mut session, &mut bypass_log).await,
-            PluginRunningResult::Nothing
-        ));
-        let mut reject_log = PluginLog::new(reject_filter.name());
-        match reject_filter.run_request(&mut session, &mut reject_log).await {
-            PluginRunningResult::ErrResponse { status, body } => {
-                assert_eq!(status, 500);
-                assert_eq!(
-                    body.expect("fixed reject body").as_ref(),
-                    br#"{"message":"plugin configuration error"}"#
-                );
-            }
-            other => panic!("expected invalid-config rejection, got {other:?}"),
-        }
-        let logs = format!(
-            "{}{}",
-            serde_json::to_value(&bypass_log).unwrap(),
-            serde_json::to_value(&reject_log).unwrap()
-        );
-        assert!(logs.contains("bypassed: http/RequestHeaderModifier"));
-        assert!(!logs.contains("invalid @@@"));
-    }
-
-    #[test]
-    fn request_id_scope_remains_separate_from_policy_detection_and_publication() {
-        let mut stamped = policy_program_resource("dsl", false, None);
-        add_policy_entry(
-            &mut stamped,
-            PolicyStage::Request,
-            EdgionPlugin::RequestId(RequestIdConfig::default()),
-            true,
-            PluginPolicyAction::Block { status: 451 },
-        );
-        assert!(!stamped.has_active_request_id());
-        let stamped = compile_plugins(&stamped);
-        assert!(stamped.has_enabled_plugin_policy_action());
-        assert!(!stamped.plugin_runtime.has_request_id());
-        assert!(stamped
-            .plugin_runtime
-            .request_plugins_iter()
-            .all(|filter| filter.name() != "RequestId"));
-
-        let mut composed = policy_program_resource("dsl", false, None);
-        composed
-            .spec
-            .request_plugins
-            .get_or_insert_with(Vec::new)
-            .push(RequestFilterEntry::new(EdgionPlugin::RequestId(
-                RequestIdConfig::default(),
-            )));
-        add_policy_entry(
-            &mut composed,
-            PolicyStage::Request,
-            header_modifier(),
-            true,
-            PluginPolicyAction::Block { status: 451 },
-        );
-        assert!(composed.has_active_request_id());
-        let composed = compile_plugins(&composed);
-        assert!(composed.plugin_runtime.has_request_id());
-        let names: Vec<_> = composed
-            .plugin_runtime
-            .request_plugins_iter()
-            .map(|filter| filter.name())
-            .collect();
-        assert_eq!(names, ["PluginPolicyBlock", "RejectInvalidConfig", "RequestId"]);
-        let key = composed.spec.key_name();
-        let store = PluginStore::new();
-        store.replace_all(HashMap::from([(key.clone(), Arc::clone(&composed))]));
-        assert!(Arc::ptr_eq(
-            &store
-                .get_plugin_runtime(&key)
-                .expect("one runtime Arc serves both phases"),
-            &composed.plugin_runtime
-        ));
-        // The allowed RequestId may run in the early phase; the assertion above
-        // only fixes runtime ownership and the later block/reject ordering.
-    }
-
     #[test]
     fn invalid_waf_update_retains_the_last_known_good_generation() {
         let valid = compile_plugins(&waf_resource(
@@ -2066,19 +1819,22 @@ mod compile_plugins_tests {
             HashMap::new(),
             &HashSet::new(),
         );
+        let previous_runtime = store.get_plugin_runtime("default/native-waf").unwrap();
         store.apply_delta(
             HashMap::new(),
             HashMap::from([("default/native-waf".to_string(), Arc::clone(&invalid))]),
             &HashSet::new(),
         );
 
-        let snapshot = store.snapshot.load();
+        let snapshot = store.scope();
         let retained = snapshot
-            .plugins
-            .get("default/native-waf")
+            .http("default/native-waf")
             .expect("valid WAF generation remains published");
-        assert!(Arc::ptr_eq(retained, &valid));
-        assert!(!Arc::ptr_eq(retained, &invalid));
+        assert!(retained.is_activatable);
+        assert!(Arc::ptr_eq(
+            first_filter(&retained.plugin_runtime),
+            first_filter(&previous_runtime)
+        ));
     }
 
     fn mirror_program_resource(program: &str, valid: bool, mirror: Option<serde_json::Value>) -> EdgionPlugins {
@@ -2118,6 +1874,102 @@ mod compile_plugins_tests {
     }
 
     #[tokio::test]
+    async fn policy_restriction_survives_invalid_program_publication() {
+        for program in ["dsl", "waf"] {
+            for full_snapshot in [false, true] {
+                for case in [
+                    "current-block",
+                    "new-current-block",
+                    "retained-only-block",
+                    "bypass",
+                    "removal",
+                ] {
+                    let entry = RequestFilterEntry::new(EdgionPlugin::RequestHeaderModifier(HTTPHeaderFilter {
+                        set: None,
+                        add: None,
+                        remove: None,
+                    }));
+                    let mut old = mirror_program_resource(program, true, None);
+                    if case != "new-current-block" {
+                        old.spec.request_plugins.as_mut().unwrap().push(entry.clone());
+                    }
+                    let mut incoming = mirror_program_resource(program, false, None);
+                    if case != "retained-only-block" {
+                        incoming.spec.request_plugins.as_mut().unwrap().push(entry);
+                    }
+                    let key = old.key_name();
+                    let store = PluginStore::new();
+                    store.replace_all(HashMap::from([(key.clone(), compile_plugins(&old))]));
+                    let in_flight = store.get_plugin_runtime(&key).unwrap();
+                    let action = if case == "bypass" {
+                        PluginPolicyAction::Bypass
+                    } else {
+                        PluginPolicyAction::Block { status: 451 }
+                    };
+                    store.set_test_policy(Some(policy_config("RequestHeaderModifier", action)));
+                    let update = HashMap::from([(key.clone(), compile_plugins(&incoming))]);
+                    if full_snapshot {
+                        store.replace_all(update);
+                    } else {
+                        store.apply_delta(HashMap::new(), update, &HashSet::new());
+                    }
+                    if case == "removal" {
+                        store.set_test_policy(None);
+                    }
+                    let scope = store.scope();
+                    let published = scope.http(&key).unwrap();
+                    assert_eq!(
+                        published.is_activatable,
+                        case != "removal",
+                        "{program}/{full_snapshot}/{case}"
+                    );
+                    let names: Vec<_> = published
+                        .plugin_runtime
+                        .request_plugins_iter()
+                        .map(|p| p.name())
+                        .collect();
+                    assert_eq!(
+                        names.contains(&"RejectInvalidConfig"),
+                        case == "removal",
+                        "{case}: {names:?}"
+                    );
+                    assert_eq!(
+                        in_flight
+                            .request_plugins_iter()
+                            .any(|p| p.name() == "RequestHeaderModifier"),
+                        case != "new-current-block"
+                    );
+                    if case == "removal" {
+                        assert_eq!(names[0], "RejectInvalidConfig");
+                        assert!(!names.contains(&"PluginPolicyBlock"));
+                        let mut session = MockPluginSession::new();
+                        let mut log = PluginLog::new("RejectInvalidConfig");
+                        assert!(matches!(
+                            first_filter(&published.plugin_runtime)
+                                .run_request(&mut session, &mut log)
+                                .await,
+                            PluginRunningResult::ErrResponse { status: 500, .. }
+                        ));
+                    } else if case == "bypass" {
+                        assert!(names.contains(&"PluginPolicyBypass"));
+                        assert!(!names.contains(&"RequestHeaderModifier"));
+                    } else {
+                        assert_eq!(names[0], "PluginPolicyBlock");
+                        let mut session = MockPluginSession::new();
+                        let mut log = PluginLog::new("PluginPolicyBlock");
+                        assert!(matches!(
+                            first_filter(&published.plugin_runtime)
+                                .run_request(&mut session, &mut log)
+                                .await,
+                            PluginRunningResult::ErrResponse { status: 451, .. }
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
     async fn mirror_authorization_updates_never_retain_cross_namespace_lkg() {
         for program in ["dsl", "waf"] {
             for full_snapshot in [false, true] {
@@ -2147,8 +1999,8 @@ mod compile_plugins_tests {
                         store.apply_delta(HashMap::new(), replacement, &HashSet::new());
                     }
                     let active = store.get_plugin_runtime(&key).expect("sealed replacement is published");
-                    assert!(Arc::ptr_eq(&active, &incoming.plugin_runtime));
-                    assert!(Arc::ptr_eq(&in_flight, &previous.plugin_runtime));
+                    assert_eq!(first_filter(&active).name(), "RejectInvalidConfig");
+                    assert!(in_flight.request_plugins_iter().any(|p| p.name() == "RequestMirror"));
                     assert!(!Arc::ptr_eq(&active, &in_flight));
                     assert_leading_reject(&incoming);
                     let reject = active.request_plugins_iter().next().expect("reject precedes mirror");
@@ -2170,12 +2022,9 @@ mod compile_plugins_tests {
                         HashMap::from([(key.clone(), Arc::clone(&recovered))]),
                         &HashSet::new(),
                     );
-                    assert!(Arc::ptr_eq(
-                        &store.get_plugin_runtime(&key).expect("valid update recovers"),
-                        &recovered.plugin_runtime
-                    ));
-                    let mirror = recovered
-                        .plugin_runtime
+                    let recovered_runtime = store.get_plugin_runtime(&key).expect("valid update recovers");
+                    assert!(!Arc::ptr_eq(&active, &recovered_runtime));
+                    let mirror = recovered_runtime
                         .request_plugins_iter()
                         .find(|filter| filter.name() == "RequestMirror")
                         .expect("valid denied mirror remains executable");
@@ -2223,41 +2072,46 @@ mod compile_plugins_tests {
                         {
                             if case == "disabled" {
                                 entry.enable = false;
-                            } else if case == "bypassed" {
-                                entry.policy_action = Some(PluginPolicyAction::Bypass);
                             }
                         }
                     }
-                    let previous = compile_plugins(&old_resource);
-                    let incoming = compile_plugins(&new_resource);
+                    let action = (case == "bypassed").then_some(PluginPolicyAction::Bypass);
+                    let previous = compile_with_policy(&old_resource, "RequestMirror", action);
+                    let incoming = compile_with_policy(&new_resource, "RequestMirror", action);
                     assert!(previous.is_activatable, "{case}");
                     assert!(!incoming.is_activatable, "{case}");
                     assert!(incoming.retain_previous_on_invalid_update, "{case}");
-                    let key = previous.spec.key_name();
+                    // Global references always use a namespace; the source still has
+                    // no namespace in the implicit-local mirror case.
+                    let key = "default/native-waf".to_string();
                     let store = PluginStore::new();
-                    store.replace_all(HashMap::from([(key.clone(), Arc::clone(&previous))]));
-                    let replacement = HashMap::from([(key.clone(), Arc::clone(&incoming))]);
+                    store.set_test_policy(action.map(|action| policy_config("RequestMirror", action)));
+                    store.replace_all(HashMap::from([(key.clone(), compile_plugins(&old_resource))]));
+                    let previous_runtime = store.get_plugin_runtime(&key).unwrap();
+                    let replacement = HashMap::from([(key.clone(), compile_plugins(&new_resource))]);
                     if full_snapshot {
                         store.replace_all(replacement);
                     } else {
                         store.apply_delta(HashMap::new(), replacement, &HashSet::new());
                     }
-                    if case == "bypassed" {
-                        assert!(!incoming.has_cross_namespace_mirror());
-                        assert!(incoming.has_enabled_plugin_policy_action());
-                    }
-                    let expected = if matches!(case, "added" | "bypassed") {
-                        &incoming
+                    let active = store.get_plugin_runtime(&key).expect("runtime remains published");
+                    if case == "added" {
+                        assert_eq!(first_filter(&active).name(), "RejectInvalidConfig");
                     } else {
-                        &previous
-                    };
-                    assert!(
-                        Arc::ptr_eq(
-                            &store.get_plugin_runtime(&key).expect("runtime remains published"),
-                            &expected.plugin_runtime
-                        ),
-                        "{program}/{full_snapshot}/{case}"
-                    );
+                        // Compare an executable entry, excluding freshly assembled policy gates.
+                        let active_entry = active
+                            .request_plugins_iter()
+                            .find(|p| !p.name().starts_with("PluginPolicy"))
+                            .unwrap();
+                        let previous_entry = previous_runtime
+                            .request_plugins_iter()
+                            .find(|p| !p.name().starts_with("PluginPolicy"))
+                            .unwrap();
+                        assert!(
+                            Arc::ptr_eq(active_entry, previous_entry),
+                            "{program}/{full_snapshot}/{case}"
+                        );
+                    }
                 }
             }
         }
@@ -2283,10 +2137,10 @@ mod compile_plugins_tests {
             &HashSet::new(),
         );
 
-        let snapshot = store.snapshot.load();
-        let replacement = snapshot.plugins.get(&key).expect("invalid add remains stored");
-        assert!(Arc::ptr_eq(replacement, &invalid));
-        assert!(!Arc::ptr_eq(replacement, &valid));
+        let snapshot = store.scope();
+        let replacement = snapshot.http(&key).expect("invalid add remains stored");
+        assert_eq!(replacement.preparse_errors, invalid.preparse_errors);
+        assert_leading_reject(&replacement);
         assert!(!replacement.is_activatable);
     }
 
@@ -2314,15 +2168,19 @@ mod compile_plugins_tests {
             &HashSet::new(),
         );
         let in_flight_second = store.get_plugin_runtime(&key).expect("second generation is published");
-        assert!(Arc::ptr_eq(&in_flight_first, &first.plugin_runtime));
-        assert!(Arc::ptr_eq(&in_flight_second, &second.plugin_runtime));
+        assert_eq!(in_flight_first.request_plugins_count(), 1);
+        assert_eq!(in_flight_second.request_plugins_count(), 1);
+        assert!(!Arc::ptr_eq(
+            first_filter(&in_flight_first),
+            first_filter(&in_flight_second)
+        ));
         assert!(!Arc::ptr_eq(&in_flight_first, &in_flight_second));
 
         store.replace_all(HashMap::from([(key.clone(), invalid)]));
         let retained = store
             .get_plugin_runtime(&key)
             .expect("invalid full snapshot retains the second generation");
-        assert!(Arc::ptr_eq(&retained, &in_flight_second));
+        assert!(Arc::ptr_eq(first_filter(&retained), first_filter(&in_flight_second)));
 
         store.apply_delta(
             HashMap::new(),
@@ -2332,7 +2190,10 @@ mod compile_plugins_tests {
         let active_recovered = store
             .get_plugin_runtime(&key)
             .expect("recovered generation is published");
-        assert!(Arc::ptr_eq(&active_recovered, &recovered.plugin_runtime));
+        assert!(!Arc::ptr_eq(
+            first_filter(&active_recovered),
+            first_filter(&in_flight_second)
+        ));
 
         store.apply_delta(HashMap::new(), HashMap::new(), &HashSet::from([key.clone()]));
         assert!(store.get_plugin_runtime(&key).is_none());
@@ -2358,17 +2219,17 @@ mod compile_plugins_tests {
             for _ in 0..4 {
                 let store = Arc::clone(&store);
                 let key = key.clone();
-                let first_runtime = Arc::clone(&first.plugin_runtime);
-                let second_runtime = Arc::clone(&second.plugin_runtime);
                 scope.spawn(move || {
                     for _ in 0..10_000 {
-                        let runtime = store
-                            .get_plugin_runtime(&key)
-                            .expect("reload never removes the active WAF");
-                        assert!(
-                            Arc::ptr_eq(&runtime, &first_runtime) || Arc::ptr_eq(&runtime, &second_runtime),
-                            "only complete valid generations may be observed"
-                        );
+                        let published = store.scope().http(&key).expect("reload never removes the active WAF");
+                        let runtime = &published.plugin_runtime;
+                        let rules = &published.spec.spec.waf.as_ref().unwrap().rules;
+                        assert!(published.is_activatable);
+                        assert!(rules.contains("/first") || rules.contains("/second"));
+                        assert_eq!(runtime.request_plugins_count(), 1);
+                        assert_eq!(first_filter(runtime).name(), "Waf");
+                        assert_eq!(runtime.upstream_response_plugins_count(), 1);
+                        assert_eq!(runtime.upstream_response_async_plugins_count(), 1);
                     }
                 });
             }
@@ -2397,7 +2258,8 @@ mod compile_plugins_tests {
         let active = store
             .get_plugin_runtime(&key)
             .expect("a complete generation remains after the storm");
-        assert!(Arc::ptr_eq(&active, &first.plugin_runtime) || Arc::ptr_eq(&active, &second.plugin_runtime));
+        assert_eq!(active.request_plugins_count(), 1);
+        assert_eq!(first_filter(&active).name(), "Waf");
     }
 
     /// A `ResponseHeaderModifier` plugin placed under `requestPlugins` is a
@@ -2730,9 +2592,8 @@ mod compile_plugins_tests {
             });
             e
         }
-        fn policy_bypassed_invalid_json_schema() -> RequestFilterEntry {
+        fn disabled_invalid_json_schema() -> RequestFilterEntry {
             use edgion_resources::resources::edgion_plugins::JsonSchemaValidationConfig;
-            use edgion_resources::resources::plugin_policy::PluginPolicyAction;
 
             let mut entry = json_schema_entry_with_body(Some("notasize"), true);
             entry.plugin = EdgionPlugin::JsonSchemaValidation(JsonSchemaValidationConfig {
@@ -2740,7 +2601,7 @@ mod compile_plugins_tests {
             });
             entry.alias = Some("invalid alias".to_string());
             entry.conditions = disabled_with_bad_condition().conditions;
-            entry.policy_action = Some(PluginPolicyAction::Bypass);
+            entry.enable = false;
             entry
         }
         fn mk(
@@ -2991,10 +2852,10 @@ mod compile_plugins_tests {
                 ),
             ),
             (
-                "policy_bypassed_invalid_json_schema_is_inert",
+                "disabled_invalid_json_schema_is_inert",
                 mk(
                     Some(vec![
-                        policy_bypassed_invalid_json_schema(),
+                        disabled_invalid_json_schema(),
                         RequestFilterEntry::new(json_schema()),
                     ]),
                     None,

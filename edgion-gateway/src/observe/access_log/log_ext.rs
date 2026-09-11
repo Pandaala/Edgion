@@ -17,7 +17,6 @@ use serde::{ser::SerializeMap, Serialize, Serializer};
 use std::collections::BTreeMap;
 use std::sync::LazyLock;
 
-use crate::routes::http::proxy_http::EdgionHttpProxy;
 use crate::EdgionHttpContext;
 use edgion_resources::resources::edgion_gateway_config::UnmaskedKeys;
 use edgion_resources::resources::edgion_plugins::{AccessLogExternField, LogExtSource};
@@ -143,29 +142,21 @@ static DEFAULT_UNMASKED: LazyLock<UnmaskedKeys> = LazyLock::new(UnmaskedKeys::de
 /// Runs at `logging()`, so it sees every request — including the ones that never
 /// reached a plugin chain (404, 421, the 400 family, gRPC UNIMPLEMENTED, ACME,
 /// CORS preflight) and the ones an earlier Deny terminated (403 / 429).
-pub fn collect(edgion_http: &EdgionHttpProxy, session: &Session, ctx: &EdgionHttpContext) -> LogExt {
+pub fn collect(session: &Session, ctx: &EdgionHttpContext) -> LogExt {
     let mut ext = LogExt::default();
 
     // Borrow the store rather than cloning its `Arc` (an atomic RMW pair) — every
     // request reaches this point, and the common case is the fast path just below,
     // which must cost a single lock-free snapshot load and nothing more.
-    let store = crate::plugins::http::global_plugin_store();
-
-    // Fast path: no stored EdgionPlugins declares a non-empty `accessLogExtern`
-    // anywhere in the fleet. This is the common case — a deployment using
-    // rate-limit / CORS / auth plugins but no AccessLogExtern still reaches this
-    // point on every request, so the check must be a single lock-free snapshot load,
-    // not a per-ref plugin-store lookup.
-    if !store.has_access_log_extern() {
+    let Some(owner) = ctx.plugin_scope() else {
+        return ext;
+    };
+    let store = &owner.scope;
+    if !store.has_access_log_extern {
         return ext;
     }
-
-    let global_refs = edgion_http.edgion_gateway_config.spec.global_plugins_ref.as_deref();
-    let gateway_keys = ctx
-        .gateway_info
-        .as_deref()
-        .map(|info| info.plugin_store_keys.as_slice())
-        .unwrap_or_default();
+    let global_keys = &store.global_keys;
+    let gateway_keys = &owner.http_keys;
     let route_keys: &[(String, String)] = match (&ctx.route_unit, &ctx.grpc_route_unit) {
         (Some(u), _) => u.plugin_runtime.ext_ref_keys(),
         (_, Some(u)) => u.plugin_runtime.ext_ref_keys(),
@@ -174,25 +165,20 @@ pub fn collect(edgion_http: &EdgionHttpProxy, session: &Session, ctx: &EdgionHtt
 
     // No ref from this request into any EdgionPlugins at all: nothing to resolve
     // regardless of what the fleet-wide flag above says.
-    if global_refs.is_none_or(|r| r.is_empty()) && gateway_keys.is_empty() && route_keys.is_empty() {
+    if global_keys.is_empty() && gateway_keys.is_empty() && route_keys.is_empty() {
         return ext;
     }
 
-    let whitelist = edgion_http
-        .edgion_gateway_config
-        .spec
-        .access_log_extern
+    let whitelist = store
+        .config
         .as_ref()
-        .map(|p| &p.unmasked_keys)
+        .and_then(|config| config.spec.access_log_extern.as_ref())
+        .map(|policy| &policy.unmasked_keys)
         .unwrap_or(&DEFAULT_UNMASKED);
 
-    // Tier 1: GatewayClass-global (EdgionGatewayConfig.spec.globalPluginsRef).
-    if let Some(refs) = global_refs {
-        for r in refs {
-            let ns = r.namespace.as_deref().unwrap_or("default");
-            let key = format!("{}/{}", ns, r.name);
-            apply_declarations(store, &key, whitelist, session, ctx, &mut ext);
-        }
+    // Tier 1: declarations from the request's captured GatewayClass scope.
+    for key in global_keys {
+        apply_declarations(store, key, whitelist, session, ctx, &mut ext);
     }
     // Tier 2: Gateway annotation (edgion.io/edgion-plugins).
     for key in gateway_keys {
@@ -212,21 +198,21 @@ pub fn collect(edgion_http: &EdgionHttpProxy, session: &Session, ctx: &EdgionHtt
 /// A dangling ref is silently skipped: this is the data-plane path, where
 /// `tracing` is forbidden.
 fn apply_declarations(
-    store: &crate::plugins::http::PluginStore,
+    store: &crate::plugins::publication::PluginScope,
     key: &str,
     whitelist: &UnmaskedKeys,
     session: &Session,
     ctx: &EdgionHttpContext,
     ext: &mut LogExt,
 ) {
-    store.with_plugin(key, |compiled| {
+    if let Some(compiled) = store.http(key) {
         for field in compiled.spec.access_log_extern_fields() {
             if let Some(value) = resolve_field(field, session, ctx) {
                 let sensitive = should_mask(whitelist, field.from, &field.name);
                 ext.insert(&field.key, value, sensitive);
             }
         }
-    });
+    }
 }
 
 /// Read one field's value from its source. `None` means "the source had no

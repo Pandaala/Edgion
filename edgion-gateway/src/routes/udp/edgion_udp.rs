@@ -1,3 +1,5 @@
+use crate::plugins::publication::global_publisher;
+use crate::plugins::stream::connection_filter_bridge::resolve_route_scope;
 use dashmap::{mapref::entry::Entry, DashMap};
 use parking_lot::Mutex;
 use pingora_core::protocols::l4::socket::SocketAddr as PingoraSocketAddr;
@@ -231,18 +233,34 @@ impl EdgionUdpProxy {
             return;
         }
 
-        // Stream plugin enforcement (dynamic lookup from StreamPluginStore, fail-close).
-        // Mirrors the TCPRoute path: a packet whose rule references an
-        // EdgionStreamPlugins resource is dropped unless the policy admits it.
-        // Only packets that reach the pipeline are checked — the fast path above
-        // returns first for established sessions, so the check runs once at
-        // session creation (like TCP's per-connection check). A denied client is
-        // dropped before get_or_create_session and therefore never establishes a
-        // session. A rule with no annotation has store_key None, so the check
-        // returns Allow immediately and the non-annotated path pays only one
-        // Option check.
+        // Established sessions returned above; only new sessions acquire policy.
+        let publication = global_publisher().snapshot();
+        let Some(scope) = resolve_route_scope(
+            &publication,
+            &self.listener_key,
+            &unit.resolved_parent_refs,
+            "",
+            unit.route.metadata.namespace.as_deref().unwrap_or("default"),
+            "UDPRoute",
+        ) else {
+            log_udp(&UdpLogEntry::failure(
+                self.listener_port,
+                direct_peer_ip,
+                direct_peer_port,
+                "plugin policy unavailable",
+            ))
+            .await;
+            return;
+        };
+        let resource = unit
+            .stream_plugin_store_key
+            .as_deref()
+            .and_then(|key| scope.stream(key));
+        drop(scope);
+        drop(publication);
         if let StreamPluginCheck::Deny(reason) = check_stream_plugins(
             unit.stream_plugin_store_key.as_deref(),
+            resource.as_deref(),
             &direct_peer_ip,
             self.listener_port,
         )
@@ -257,6 +275,8 @@ impl EdgionUdpProxy {
             .await;
             return;
         }
+
+        drop(resource);
 
         let backend_ref = match unit.backend_finder.select() {
             Ok(backend) => backend,

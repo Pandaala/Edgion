@@ -1,0 +1,16 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: pp-waf
+  namespace: edgion-test
+spec:
+  waf:
+    mode: 'on'
+    rules: SecRule REQUEST_HEADERS:X-Policy-Waf "@streq blocked" "id:940001,phase:1,deny,status:403"
+  requestPlugins:
+  - type: Mock
+    config:
+      statusCode: 200
+      terminate: true
+      contentType: text/plain
+      body: PP-MOCK-TERMINATED

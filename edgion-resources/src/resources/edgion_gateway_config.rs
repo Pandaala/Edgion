@@ -6,6 +6,7 @@
 use super::common::Condition;
 use super::edgion_plugins::plugin_configs::LinkSysRef;
 use super::edgion_plugins::{LogExtSource, RealIpConfig};
+use super::plugin_policy::PluginPolicyConfig;
 use kube::CustomResource;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -50,6 +51,10 @@ pub struct EdgionGatewayConfigSpec {
     /// GatewayClass-wide request-body buffering policy.
     #[serde(default)]
     pub request_body: RequestBodyConfig,
+
+    /// GatewayClass-scoped plugin execution policy. Absence permits all plugins.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugin_policy: Option<PluginPolicyConfig>,
 
     /// Global plugins references that apply to all routes using this GatewayClass
     /// These plugins are executed before route-level plugins
@@ -545,6 +550,7 @@ impl Default for EdgionGatewayConfigSpec {
             forwarded_headers: ForwardedHeadersConfig::default(),
             security_protect: None,
             request_body: RequestBodyConfig::default(),
+            plugin_policy: None,
             global_plugins_ref: None,
             access_log_extern: None,
             preflight_policy: None,
@@ -823,6 +829,15 @@ impl UnmaskedKeys {
 }
 
 impl EdgionGatewayConfigSpec {
+    /// Validate plugin policy with the same pure compiler used by the Gateway.
+    pub fn validate_plugin_policy(&self) -> Vec<String> {
+        self.plugin_policy
+            .as_ref()
+            .and_then(|policy| policy.compile().err())
+            .into_iter()
+            .collect()
+    }
+
     /// Validate the status emitted by the built-in preflight response.
     pub fn validate_preflight_policy(&self) -> Vec<String> {
         self.preflight_policy

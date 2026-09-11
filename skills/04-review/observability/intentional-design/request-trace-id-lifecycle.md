@@ -25,9 +25,10 @@ parent ID must not be reported as a gateway span ID.
 
 - Core default x-trace-id always uses the W3C ID, replacing conflicting incoming
   values. Custom destinations named x-trace-id are rejected case-insensitively.
-- Global RequestId entries execute before normal request validation. Gateway
-  entries execute early when TLS evidence or unique listener ownership identifies
-  the owner; ambiguous shared listeners defer until canonical routing knows it.
+- Core W3C initialization is unconditional. Configured global and Gateway
+  RequestId entries run early only after unambiguous logical Gateway ownership
+  and scoped policy admission. Ambiguous shared listeners defer them until
+  canonical routing; TLS handshake evidence alone does not authorize a class.
 - Route entries run at their ordinary request position. Their patches are
   incremental; a rejection before them prevents their effects. BackendRef
   RequestId is unsupported and rejected on Controller and Gateway.
@@ -57,11 +58,14 @@ cannot guarantee HTTP response IDs.
 
 ## Generation and observability boundaries
 
-Preserve the accepted [per-reference runtime generation boundary](../../plugin-runtime/intentional-design/request-plugin-reference-generation-boundary.md).
-An early reference and its later ordinary pass retain the same Arc, including
-empty/missing resolution results. The same resource attached at another scope is
-another occurrence. No execution flag belongs on a shared PluginRuntime and no
-whole-map snapshot is added.
+The 2026-09-11 plugin-policy migration supersedes the earlier
+[per-reference generation decision](../../plugin-runtime/superseded/request-plugin-reference-generation-boundary.md)
+with a [captured class scope](../../plugin-runtime/regression-guards/scoped-policy-runtime-publication.md).
+Early and later passes use the same scope and retain selected runtime Arcs,
+including missing results. The same resource attached at another tier is another
+occurrence. Execution flags stay request-owned, never on shared PluginRuntime.
+A later route owned by a different Gateway cannot reuse already-executed early
+policy; it fails closed before executing that other Gateway's plugins.
 
 RequestInfo owns a flat `trace_id` map: `trace_id["x-trace-id"]` is the W3C ID,
 and other names are active custom IDs with log masking for copied
@@ -88,8 +92,8 @@ Implementation sources are `request_trace_id/`, `ctx.rs`, `plugins/http/request_
 `plugins/runtime/plugin_runtime.rs`, `routes/http/proxy_http/`, and the shared
 RequestId schema/Controller attachment validators.
 
-Historical verification of the initial nested implementation on 2026-09-11:
-27 focused core/OTLP tests, 11 final RequestId/response
+Historical verification of the initial nested implementation on 2026-09-11
+(before the scoped-policy migration): 27 focused core/OTLP tests, 11 final RequestId/response
 regressions, nine early-dispatch tests, eight schema tests, three Controller
 attachment/reference tests, and six plugin CRD checks passed. The RequestId
 static integration suite passed all nine cases; RequestIdDynamic passed initial,

@@ -10,9 +10,10 @@ knowledge_type: regression-guards
 
 An active AiGuard after an active AiProxy in one EdgionPlugins request stage
 invalidates that compiled resource. `collect_ai_guard_ordering_errors` remains
-the sole ordering-policy authority for Controller and Gateway. Disabled and
-PluginPolicy-stamped entries are inert for this check; runtime conditions do not
-exempt entries from static ordering validation.
+the sole ordering validator for Controller and Gateway. Controller source
+validation skips disabled entries only. Gateway effective validation additionally
+masks entries restricted by the current EGC scope before invoking that validator;
+runtime conditions do not exempt entries from static ordering validation.
 
 `compile_plugins` records one `AiGuardOrdering` identity per invalid resource,
 independent of how many entries violate the order. It sets `is_activatable=false`
@@ -34,7 +35,7 @@ Existing PluginPolicy block precedence remains intact.
 - `PluginRuntime::record_invalid_ai_guard_ordering` records a static, non-secret
   resource identity through `InvalidPlugins::record_non_retainable`.
   `ReplaceFailClosed` dominates mixed DSL/WAF `RetainPrevious` failures.
-- `PluginStore::{replace_all,apply_delta}` publish the incoming sealed runtime
+- The canonical `PluginPublisher`, fed by source full/delta callbacks, publishes the incoming sealed runtime
   for initial/add/update/reconnect cases. Corrected incoming configurations
   recover normally. Requests already holding older runtime Arcs keep them;
   this change does not revoke in-flight generations.
@@ -62,7 +63,7 @@ one redacted rejection identity, disabled/bypassed/blocked entries, valid and
 single-sided lists, first publication, full/delta/add replacement and recovery,
 mixed DSL/WAF retention precedence, and PluginPolicy block precedence.
 
-Verified on 2026-09-10:
+Historical verification on 2026-09-10, before scoped-policy publication:
 
 - `cargo test -p edgion-gateway --lib plugins::http::plugin_store::compile_plugins_tests`:
   31 passed, including all five new `ai_ordering_*` tests and existing diagnostic
@@ -83,6 +84,11 @@ Controller-to-Gateway hot-reload and provider-observation coverage is tracked in
 Re-evaluate when the shared validator emits different failure categories,
 publication retention policy changes, request-stage gate precedence changes,
 or ordering support extends across resources.
+
+The 2026-09-11 migration re-ran the full plugin-store module: 36 passed, with
+policy tests using actual EGC compilation/publication instead of entry stamps.
+See [scoped policy publication](scoped-policy-runtime-publication.md) for current
+ownership and the remaining final-review/integration boundary.
 
 ## Resolution references
 

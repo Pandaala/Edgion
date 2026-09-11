@@ -116,14 +116,6 @@ pub struct StreamPluginEntry {
     #[serde(default = "default_true", skip_serializing_if = "is_true")]
     pub enable: bool,
 
-    /// Set by the controller when the plugin policy matches this entry.
-    /// Never operator-facing: skipped in the CRD schema, carried to the
-    /// data plane via conf_sync. The controller clears and re-stamps it on
-    /// every preparse, so a hand-written value can never survive.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[schemars(skip)]
-    pub policy_action: Option<crate::resources::plugin_policy::PluginPolicyAction>,
-
     /// The actual plugin configuration
     #[serde(flatten)]
     pub plugin: EdgionStreamPlugin,
@@ -156,14 +148,6 @@ impl StreamPluginEntry {
 pub struct TlsRoutePluginEntry {
     #[serde(default = "default_true", skip_serializing_if = "is_true")]
     pub enable: bool,
-
-    /// Set by the controller when the plugin policy matches this entry.
-    /// Never operator-facing: skipped in the CRD schema, carried to the
-    /// data plane via conf_sync. The controller clears and re-stamps it on
-    /// every preparse, so a hand-written value can never survive.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[schemars(skip)]
-    pub policy_action: Option<crate::resources::plugin_policy::PluginPolicyAction>,
 
     #[serde(flatten)]
     pub plugin: TlsRouteStreamPlugin,

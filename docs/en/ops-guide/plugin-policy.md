@@ -1,162 +1,131 @@
-# Plugin Policy (Allowlist / Denylist)
+# GatewayClass plugin execution policy
 
-The Controller can restrict which plugin types the Gateway is allowed to
-execute, via an optional allowlist or denylist configured in
-`validation.plugin_policy`. A restricted plugin is never instantiated by
-the Gateway; depending on the configured action, requests that depend on
-it are either **blocked** with a configurable status code or **allowed
-through with the plugin skipped** — in both cases observably, via access
-log, Gateway metrics, a resource status condition, and the Controller
-abnormal-resource metric.
+Configure plugin execution in `EdgionGatewayConfig.spec.pluginPolicy`. The
+`GatewayClass.spec.parametersRef` binding selects the policy for its Gateways.
+The same EdgionPlugins or EdgionStreamPlugins resource can run under different
+policies in different classes. Edits take effect through normal configuration
+sync without restarting Controller, Gateway, or existing listeners.
 
-This document is the operator guide: what the policy does, how to
-configure it safely, and the warnings you must read before enabling it.
-For the field-by-field config schema, see
-[Controller Configuration — validation.plugin_policy](https://github.com/Pandaala/Edgion/blob/main/skills/02-features/02-config/00-controller-config.md#validationplugin_policy).
-
-## How it works
-
-- **Controller (identify + report)**: validates the policy at startup
-  (fail-fast on any error), stamps matching plugin entries with an
-  internal marker during preparse, and reports a dedicated
-  `PluginPolicyRestricted` status condition listing the hits. It does
-  **not** flip the entry's `enable` field and does **not** stop the
-  resource from being cached or synced to the Gateway.
-- **Gateway (enforce + observe)**: a stamped entry is never instantiated
-  (no Wasm VM init, no external connections, etc.). A `Block` entry
-  rejects the request; a `Bypass` entry is skipped and the request
-  proceeds without it.
-
-Policy absent (the default) means allow all: every compiled plugin type
-remains usable by every resource, nothing is stamped, no condition is
-emitted, and the Gateway takes the existing zero-overhead code path. The
-feature only activates when an operator explicitly adds the
-`plugin_policy` section below.
-
-## Configuration
+## Configure and bind
 
 ```yaml
-validation:
-  plugin_policy:
-    mode: denylist       # denylist | allowlist
-    plugins:
-      - name: http/Wasm  # <family>/<Type>; shorthand uses default_action
+apiVersion: edgion.io/v1alpha1
+kind: EdgionGatewayConfig
+metadata:
+  name: public-policy
+spec:
+  pluginPolicy:
+    deny:
+      - name: http/Wasm
+      - name: http/Dsl
+        action: block
+        blockStatus: 451
+      - name: stream/ConnectionRateLimit
+        action: bypass
+    defaultAction: allow
+    deniedAction: block
+    blockStatus: 503
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: public
+spec:
+  controllerName: edgion.io/gateway-controller
+  parametersRef:
+    group: edgion.io
+    kind: EdgionGatewayConfig
+    name: public-policy
 ```
 
-Config-file only (no CLI flag). **Policy changes require a Controller
-restart** — there is no hot reload for this section.
+A Gateway using `gatewayClassName: public` receives this policy. Change the EGC
+resource to update all Gateways in that class. To cover multiple classes, bind
+them to the same EGC. An unreferenced EGC has no effect on plugin execution.
+Install the updated structural CRD before setting `pluginPolicy` in Kubernetes;
+otherwise an API server using the old schema can prune the field.
 
-Entries are named `<family>/<Type>` across three families (`http`,
-`stream`, `tls-route`). `denylist` restricts only the listed plugins;
-`allowlist` restricts every plugin not listed, **globally** across all
-three families — there is no per-family carve-out. The Controller
-validates the policy at startup and refuses to start on a malformed
-entry (unknown family/type, duplicate, out-of-range `block_status`, or
-an `action`/`block_status` set on an `allowlist` entry). For the full
-field reference, the qualified-name table, and the complete
-allowlist/denylist semantics, see
-[Controller Configuration — validation.plugin_policy](https://github.com/Pandaala/Edgion/blob/main/skills/02-features/02-config/00-controller-config.md#validationplugin_policy).
+The current Kubernetes Controller startup setting `conf_center.gateway_class`
+still selects one GatewayClass per Controller. Policy binding does not widen that
+resource ownership. Multiple-class publication is available to configuration
+centers that supply those Gateways, including filesystem mode.
 
-## What the operator sees
+Names are exact, case-sensitive `<family>/<Type>` values: `http` covers all four
+HTTP stages, `stream` covers the connection stage, and `tls-route` covers the
+TLSRoute stage. For example, `http/IpRestriction` and
+`tls-route/IpRestriction` are distinct names. Unknown names and duplicates are
+invalid; there are no wildcard names.
 
-### Resource status
+`deny` wins over `allow`. Supplying `allow` enables an allow list across all three
+families; `allow: []` restricts every name. Without an allow list, unmatched names
+follow `defaultAction` (`allow` by default). Restricted entries follow
+`deniedAction` (`block` by default), with optional per-deny-entry overrides.
+`blockStatus` must be between 400 and 599. A deny entry using or inheriting
+`bypass` cannot also specify `blockStatus`.
 
-When at least one entry in a resource is stamped, the resource gets a
-dedicated condition:
+The [field reference](../../../skills/02-features/02-config/02-edgion-gateway-config.md#specpluginpolicy)
+contains the complete schema. There is no Controller startup policy setting;
+`validation.plugin_policy` is rejected, with no compatibility alias.
 
-```yaml
-status:
-  conditions:
-    - type: PluginPolicyRestricted
-      status: "True"
-      reason: RestrictedByPolicy
-      message: "requestPlugins[2] http/Wasm -> block(503); plugins[0] stream/ConnectionRateLimit -> bypass"
-```
+## Runtime behavior
 
-`Accepted` is not touched by this — it keeps meaning "resource valid and
-synced". When a policy is relaxed (or removed) and the Controller
-restarts, the next preparse actively removes a stale
-`PluginPolicyRestricted` condition instead of leaving it wedged.
+**Block** rejects the plugin chain unconditionally, ahead of per-entry conditions
+and invalid-configuration gates. HTTP uses the configured status and the generic
+body `{"message":"plugin disabled by policy"}`. Even a response-stage Block is
+known at request admission. Within one resource, the first blocked entry in
+request, response-header, response-body, then async-response order determines
+the status. Stream and TLSRoute Block deny admission; an HTTP status has no
+meaning at those stages.
 
-### Controller metric
+**Bypass** skips the restricted implementation and continues the chain. Bypassing
+an authentication plugin also removes its authentication check. Policy does not
+remove code from the binary, govern native Gateway API filters, or govern the
+separate resource-level native WAF configuration.
 
-`edgion_controller_resource_abnormal` classifies `PluginPolicyRestricted:True`
-as an **err**-level trigger — both `block` and `bypass` hits count, since
-any use of a restricted plugin is outside expectations regardless of the
-action taken. This surfacing is **Kubernetes-mode only**: it depends on
-the resource's live status having round-tripped through the watch. In
-FileSystem/Etcd mode the scanner reads the pre-processing object and
-never sees status conditions (a pre-existing property of this metric, not
-specific to plugin policy).
+The Gateway constructs entries only when a serving scope permits and references
+them. Allowed scopes share stateful implementations of the same source generation.
+A policy edit releases implementations no longer needed by current scopes;
+already admitted requests can retain their old instances until completion.
 
-### Gateway behavior — HTTP
+Invalid DSL/WAF updates retain a compatible previous valid source when permitted
+by existing reload rules. Current restrictions apply to both the incoming source
+and the retained candidate. A new Block cannot disappear behind last-known-good
+retention. Relaxing policy while the latest program is still invalid cannot
+resurrect an excluded old entry; that case can return the ordinary configuration
+error 500 until the source is repaired. Cross-namespace mirror and other
+non-retainable validation errors keep their fail-closed replacement rules.
 
-- **Block**: the request is rejected with the configured status code and
-  a fixed generic body, `{"message":"plugin disabled by policy"}` — the
-  plugin name is never sent to the client. The block gate sits at the
-  request stage and short-circuits the whole chain regardless of which
-  stage the restricted plugin was actually configured in: a route that
-  depends on a blocked response-stage plugin is failed closed at ingress
-  rather than after a wasted upstream round trip. When several entries in
-  a chain are blocked, the first one in spec order (`requestPlugins`,
-  `upstreamResponseFilterPlugins`, `upstreamResponseBodyFilterPlugins`,
-  `upstreamResponsePlugins`, in list order within each stage) determines
-  the status code returned.
-- **Bypass**: the plugin is skipped; the chain continues normally.
-- Access log: a blocked request carries a `PluginPolicyBlock` plugin log
-  entry naming the qualified plugin; a bypassed request carries a
-  `PluginPolicyBypass` entry listing the skipped plugin(s). No hits, no
-  entries.
-- Metrics: `edgion_gateway_plugin_policy_blocked_total` and
-  `edgion_gateway_plugin_policy_bypassed_total`, both labeled by the
-  qualified plugin name.
+## Update boundaries
 
-### Gateway behavior — Stream / TLS-route
+- No parametersRef, or a present EGC with no `pluginPolicy`, means allow all.
+- A referenced EGC that is missing, deleted, or semantically invalid makes the
+  scope unavailable: HTTP returns 503 and new stream admissions are denied.
+  A resource rejected before typed publication leaves the prior typed input in
+  place; it is not a successful policy update.
+- Each HTTP request captures the actual logical Gateway scope. Later response,
+  body and backend plugin lookups use that scope. New keep-alive/H2 requests
+  observe new publications. Existing requests and stream/UDP sessions are not
+  forcibly revoked. Backend ExtensionRefs run only when the selected backend is
+  first used, under that captured scope. A restriction on an unselected backend
+  candidate does not reject the request before selection.
+- A shared physical listener runs a connection-stage chain only when every
+  serving Gateway has an equivalent effective chain. Conflicts deny new
+  connections. Configured early RequestId entries wait for route ownership when
+  multiple logical Gateways share the listener.
+- Configuration delivery is asynchronous across processes and resource kinds.
+  This does not provide a fleet-wide atomic switch or a multi-resource transaction.
 
-- **Block**: the connection is closed. There is no way to send an HTTP
-  status pre-TLS or mid-stream, so `block_status` is ignored for
-  `stream/` and `tls-route/` entries.
-- **Bypass**: the plugin is skipped; the stream log records the marker,
-  and the resource's `PluginPolicyRestricted` condition gives
-  resource-level visibility.
+## Observe and verify
 
-## Operator warnings — read before enabling
+The Controller validates `pluginPolicy` on the EGC and reports configuration
+errors there. Shared plugin resources retain source-validation diagnostics;
+they do not carry a global `PluginPolicyRestricted` condition. Controller status
+is not an acknowledgement that every Gateway has applied a policy.
 
-1. **Bypassing an authentication/authorization plugin makes the affected
-   routes less restrictive**, not more. If a route's security posture
-   depends on a plugin (e.g. `JwtAuth`, `BasicAuth`, `IpRestriction`,
-   `KeyAuth`), restrict it with `action: block`, not `bypass` — bypassing
-   an auth plugin lets requests that would have been rejected reach the
-   backend unauthenticated.
-2. **This is execution control only.** Restricting a plugin type does not
-   remove its code or its dependencies from the Gateway binary — it only
-   prevents that plugin instance from being instantiated and run. Do not
-   treat `plugin_policy` as a substitute for a build without a given
-   plugin compiled in.
-3. **Upgrade order matters.** Deploy the new Gateway binary (the one that
-   understands the internal policy marker) to **every** Gateway in the
-   fleet *before* enabling `plugin_policy` on the Controller. An older
-   Gateway binary does not know about the marker field — serde silently
-   skips the unknown key — and runs the plugin normally. That is
-   **fail-open**: a plugin you believe is blocked on every Gateway may
-   still be running unrestricted on any Gateway that has not yet been
-   upgraded.
-4. **The policy does not cover native `HTTPRoute` filters.** It governs
-   plugins configured through `EdgionPlugins` / `EdgionStreamPlugins`
-   only. A filter you deny as, say, `http/RequestRedirect` is still fully
-   expressible as a native Gateway API `HTTPRoute` filter — the policy
-   does not (and cannot) restrict that path. If you need to prohibit a
-   behavior outright, denying it here is not sufficient on its own.
-5. **A `block` gate is unconditional.** It rejects a request even when
-   that request's per-entry `conditions` (e.g. a time-window condition)
-   would have skipped the plugin anyway. If you rely on time-windowed or
-   otherwise conditional plugin execution, be aware that policy-blocking
-   that plugin type overrides the condition entirely — the chain is
-   rejected regardless of whether the plugin would have actually run for
-   that particular request.
-
-## Related documentation
-
-- [Controller Configuration — validation.plugin_policy](https://github.com/Pandaala/Edgion/blob/main/skills/02-features/02-config/00-controller-config.md#validationplugin_policy) — full field reference.
-- [EdgionPlugins — HTTP Plugins](https://github.com/Pandaala/Edgion/blob/main/skills/02-features/03-resources/13-edgion-plugins.md) — HTTP plugin catalog (`http/` family names).
-- [EdgionStreamPlugins — Stream Plugins](https://github.com/Pandaala/Edgion/blob/main/skills/02-features/03-resources/14-edgion-stream-plugins.md) — stream/TLS-route plugin catalog (`stream/` and `tls-route/` family names).
+HTTP rejection and bypass use the normal `PluginPolicyBlock` / `PluginPolicyBypass`
+access-log entries. Gateway counters
+`edgion_gateway_plugin_policy_blocked_total` and
+`edgion_gateway_plugin_policy_bypassed_total` use bounded qualified-name labels.
+Stream results remain in the existing stream log path. Verify the desired
+behavior with fresh requests or connections to each affected Gateway class.
+The admin store-statistics endpoint includes publication ownership counts and
+inventories for cleanup diagnostics.

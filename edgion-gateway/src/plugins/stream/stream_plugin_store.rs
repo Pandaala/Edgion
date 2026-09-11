@@ -1,15 +1,9 @@
-//! Global store for EdgionStreamPlugins resources.
+//! Source inventory and conf-sync adapter for EdgionStreamPlugins.
 //!
-//! The store holds **compiled** stream plugins (`Arc<CompiledStreamPlugins>`):
-//! the immutable `EdgionStreamPlugins` schema paired with the two gateway-built
-//! runtime families. `StreamPluginRuntime` evaluates `DirectPeerIp` plus the
-//! listener port at listener admission and TCP/UDP route session creation;
-//! TLSRoute exclusively invokes the separate `TlsRoutePluginRuntime`, which
-//! evaluates TLSRoute context after route matching.
-//! Both runtimes are built once per namespace/name and Arc-shared through
-//! atomic store snapshots for hot reload.
+//! The canonical publisher owns connection and TLSRoute executable views.
+//! Each admission resolves its logical Gateway scope and selects the matching
+//! runtime family; allowed views share source-generation entry instances.
 
-use arc_swap::ArcSwap;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::LazyLock;
@@ -21,7 +15,7 @@ use edgion_resources::resource::meta::ResourceMeta;
 use edgion_resources::resources::EdgionStreamPlugins;
 
 static GLOBAL_STREAM_PLUGIN_STORE: LazyLock<Arc<StreamPluginStore>> =
-    LazyLock::new(|| Arc::new(StreamPluginStore::new()));
+    LazyLock::new(|| Arc::new(StreamPluginStore { isolated: None }));
 
 pub fn get_global_stream_plugin_store() -> Arc<StreamPluginStore> {
     GLOBAL_STREAM_PLUGIN_STORE.clone()
@@ -69,61 +63,24 @@ pub fn compile_stream_plugins(esp: &EdgionStreamPlugins) -> Arc<CompiledStreamPl
     })
 }
 
-/// Type alias for the compiled stream plugin map (key: namespace/name)
-type StreamPluginMap = HashMap<String, Arc<CompiledStreamPlugins>>;
-
+/// Source inventory and conf-sync adapter for the canonical scoped publication.
 pub struct StreamPluginStore {
-    plugins: ArcSwap<StreamPluginMap>,
+    isolated: Option<Arc<crate::plugins::publication::PluginPublisher>>,
 }
 
 impl StreamPluginStore {
-    pub fn new() -> Self {
-        Self {
-            plugins: ArcSwap::from_pointee(HashMap::new()),
-        }
+    fn publisher(&self) -> &crate::plugins::publication::PluginPublisher {
+        self.isolated
+            .as_deref()
+            .unwrap_or_else(|| crate::plugins::publication::global_publisher())
     }
 
-    /// Check if a stream plugin exists
     pub fn contains(&self, key: &str) -> bool {
-        let map = self.plugins.load();
-        map.contains_key(key)
+        self.publisher().snapshot().stream_sources().contains_key(key)
     }
 
-    /// Get the compiled stream plugins by key (namespace/name)
-    pub fn get(&self, key: &str) -> Option<Arc<CompiledStreamPlugins>> {
-        let map = self.plugins.load();
-        map.get(key).cloned()
-    }
-
-    /// Publish one complete generation for conf-sync full sets and crate tests.
-    pub(crate) fn replace_all(&self, plugins: HashMap<String, Arc<CompiledStreamPlugins>>) {
-        self.plugins.store(Arc::new(plugins));
-    }
-
-    /// Apply one serialized conf-sync delta with one atomic publication.
-    ///
-    /// Loading and cloning the current map before `store` is correct because
-    /// `CacheData` holds the per-resource-type writer lock across production
-    /// `full_set` and `partial_update` calls. This method is not safe for
-    /// independent concurrent direct writers.
-    fn apply_delta(&self, add_or_update: HashMap<String, Arc<CompiledStreamPlugins>>, remove: &HashSet<String>) {
-        let current = self.plugins.load();
-        let mut new_map = (**current).clone();
-
-        for (key, plugin) in add_or_update {
-            new_map.insert(key, plugin);
-        }
-
-        for key in remove {
-            new_map.remove(key);
-        }
-
-        self.plugins.store(Arc::new(new_map));
-    }
-
-    /// Get total count of stream plugins
     pub fn count(&self) -> usize {
-        self.plugins.load().len()
+        self.publisher().snapshot().stream_sources().len()
     }
 
     /// Per-kind plugin entry count across all stored EdgionStreamPlugins resources.
@@ -133,9 +90,9 @@ impl StreamPluginStore {
     /// Both Stage 1 (ConnectionFilter) and Stage 2 (TlsRoute) entries are counted.
     pub fn count_by_kind(&self) -> BTreeMap<String, usize> {
         let mut out = BTreeMap::new();
-        let map = self.plugins.load();
-        for compiled in map.values() {
-            let esp = &compiled.spec;
+        let snapshot = self.publisher().snapshot();
+        let map = snapshot.stream_sources();
+        for esp in map.values() {
             if let Some(entries) = &esp.spec.plugins {
                 for entry in entries {
                     *out.entry(entry.plugin.type_name().to_string()).or_insert(0) += 1;
@@ -154,9 +111,9 @@ impl StreamPluginStore {
     #[allow(dead_code)] // Reserved for validator/sample-diagnostics; not yet called from production paths.
     pub fn keys_by_kind(&self, kind: &str) -> Vec<String> {
         let mut out = Vec::new();
-        let map = self.plugins.load();
-        for (key, compiled) in map.iter() {
-            let esp = &compiled.spec;
+        let snapshot = self.publisher().snapshot();
+        let map = snapshot.stream_sources();
+        for (key, esp) in map.iter() {
             let in_stage1 = esp
                 .spec
                 .plugins
@@ -175,25 +132,11 @@ impl StreamPluginStore {
     }
 }
 
-impl Default for StreamPluginStore {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-/// Compile every incoming EdgionStreamPlugins into its gateway runtime companion.
-fn compile_map(data: HashMap<String, Arc<EdgionStreamPlugins>>) -> HashMap<String, Arc<CompiledStreamPlugins>> {
-    data.into_iter().map(|(k, v)| (k, compile_stream_plugins(&v))).collect()
-}
-
 impl ConfHandler<EdgionStreamPlugins> for StreamPluginStore {
     fn full_set(&self, data: &HashMap<String, Arc<EdgionStreamPlugins>>) {
-        tracing::info!(component = "stream_plugin_store", cnt = data.len(), "full set");
-        let compiled = data
-            .iter()
-            .map(|(k, v)| (k.clone(), compile_stream_plugins(v)))
-            .collect();
-        self.replace_all(compiled);
+        #[cfg(test)]
+        self.prepare_test_scope(data.keys().cloned().collect());
+        self.publisher().replace_stream_plugins(data.clone());
     }
 
     fn partial_update(
@@ -202,16 +145,60 @@ impl ConfHandler<EdgionStreamPlugins> for StreamPluginStore {
         update: HashMap<String, Arc<EdgionStreamPlugins>>,
         remove: HashSet<String>,
     ) {
-        tracing::info!(
-            component = "stream_plugin_store",
-            add = add.len(),
-            update = update.len(),
-            rm = remove.len(),
-            "partial update"
-        );
-        let mut add_or_update = compile_map(add);
-        add_or_update.extend(compile_map(update));
-        self.apply_delta(add_or_update, &remove);
+        let mut upserts = add;
+        upserts.extend(update);
+        #[cfg(test)]
+        {
+            let mut keys: HashSet<_> = self.publisher().snapshot().stream_sources().keys().cloned().collect();
+            keys.extend(upserts.keys().cloned());
+            keys.retain(|key| !remove.contains(key));
+            self.prepare_test_scope(keys);
+        }
+        self.publisher().update_stream_plugins(upserts, &remove);
+    }
+}
+
+#[cfg(test)]
+impl StreamPluginStore {
+    pub fn new() -> Self {
+        Self {
+            isolated: Some(Arc::new(crate::plugins::publication::PluginPublisher::new())),
+        }
+    }
+
+    fn prepare_test_scope(&self, keys: HashSet<String>) {
+        if self.isolated.is_none() {
+            return;
+        }
+        use crate::plugins::publication::inputs::GatewayInput;
+        use edgion_resources::{Gateway, GatewayClass};
+        let class: GatewayClass = serde_json::from_value(serde_json::json!({
+            "apiVersion":"gateway.networking.k8s.io/v1","kind":"GatewayClass","metadata":{"name":"stream-store-test"},
+            "spec":{"controllerName":"edgion.io/gateway-controller"}
+        }))
+        .unwrap();
+        let gateway: Gateway = serde_json::from_value(serde_json::json!({
+            "apiVersion":"gateway.networking.k8s.io/v1","kind":"Gateway","metadata":{"name":"scope","namespace":"stream-store-test"},
+            "spec":{"gatewayClassName":"stream-store-test","listeners":[{"name":"tcp","port":18089,"protocol":"TCP"}]}
+        })).unwrap();
+        let base = GatewayInput::from_gateway(&gateway);
+        let mut gateways = HashMap::from([("stream-store-test/scope".into(), base.clone())]);
+        for (index, key) in keys.into_iter().enumerate() {
+            let mut input = base.clone();
+            input.connection_key = Some(key);
+            gateways.insert(format!("stream-store-test/attachment-{index}"), input);
+        }
+        self.publisher()
+            .replace_gateway_classes(HashMap::from([("stream-store-test".into(), Arc::new(class))]));
+        self.publisher().replace_gateways(gateways);
+    }
+
+    pub fn get(&self, key: &str) -> Option<Arc<CompiledStreamPlugins>> {
+        self.publisher()
+            .snapshot()
+            .gateway("stream-store-test/scope")?
+            .scope
+            .stream(key)
     }
 }
 
@@ -379,9 +366,11 @@ spec: {{}}
 
         let old_replaced = store.get(&replace_key).expect("replacement predecessor must exist");
         let old_kept = store.get(&keep_key).expect("unaffected entry must exist");
+        let mut changed = (*fixture("replace")).clone();
+        changed.spec.plugins = Some(Vec::new());
         store.partial_update(
             HashMap::from([("default/add".to_string(), fixture("add"))]),
-            HashMap::from([(replace_key.clone(), fixture("replace"))]),
+            HashMap::from([(replace_key.clone(), Arc::new(changed))]),
             HashSet::from([remove_key.clone()]),
         );
 

@@ -6,6 +6,16 @@
 
 Stream 插件在转发任何 payload 之前，对原始 TCP/TLS 连接或 UDP 会话应用访问控制。Gateway 级附件在基于 Pingora `Service` 的监听器上运行于 `ConnectionFilter` 阶段；UDPRoute 附件则由 UDP 代理在接纳新的来源地址会话时执行。
 
+## GatewayClass 执行策略
+
+`EdgionGatewayConfig.spec.pluginPolicy` 决定绑定 GatewayClass 下的 `stream/`
+和 `tlsRoute/` 插件能否执行。`block` 拒绝适用的新连接或会话，`bypass` 跳过该条目。
+策略修改无需重启监听器，对新的准入生效；已建立的 TCP/TLS 连接和 UDP 会话保留原有行为。
+
+共享监听器在路由之前要求所有服务中的 Gateway 具有等效的连接策略视图；视图不兼容时拒绝新连接。
+路由准入使用实际匹配的 Gateway 所属 class。配置示例及策略缺失、无效时的处理见
+[插件策略指南](../../ops-guide/plugin-policy.md)。
+
 ## 附加方式
 
 Stream 插件**不**内联在路由中。你先定义一个 `EdgionStreamPlugins` 资源，然后通过路由上的 `edgion.io/edgion-stream-plugins` 注解引用它。注解的值为 `namespace/name`（若插件与路由位于同一命名空间，则只写 `name`）。

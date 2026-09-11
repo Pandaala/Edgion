@@ -235,6 +235,55 @@ spec:
                       description: "Non-zero wall-clock deadline shared by admission and execution of one request-body storage file operation."
 
                 # ============================================
+                # Plugin Execution Policy
+                # ============================================
+                pluginPolicy:
+                  type: object
+                  description: "GatewayClass-scoped plugin execution policy, dynamically applied by the Gateway."
+                  properties:
+                    allow:
+                      type: array
+                      description: "Exact qualified names permitted to execute. Presence enables allow-list mode; an empty list restricts every plugin."
+                      items:
+                        type: string
+                    deny:
+                      type: array
+                      default: []
+                      description: "Exact-name restrictions; deny takes precedence over allow."
+                      items:
+                        type: object
+                        required: [name]
+                        properties:
+                          name:
+                            type: string
+                            description: "Case-sensitive qualified plugin name: http/Type, stream/Type, or tls-route/Type."
+                          action:
+                            type: string
+                            enum: [block, bypass]
+                            description: "Optional override of deniedAction."
+                          blockStatus:
+                            type: integer
+                            minimum: 400
+                            maximum: 599
+                            description: "Optional override of blockStatus; forbidden for an effective bypass action."
+                    defaultAction:
+                      type: string
+                      enum: [allow, deny]
+                      default: allow
+                      description: "Unmatched-name action when no allow list is configured."
+                    deniedAction:
+                      type: string
+                      enum: [block, bypass]
+                      default: block
+                      description: "Execution behavior for restricted plugins unless an entry overrides it."
+                    blockStatus:
+                      type: integer
+                      minimum: 400
+                      maximum: 599
+                      default: 503
+                      description: "Default HTTP status for block actions; stream stages ignore it."
+
+                # ============================================
                 # Global Plugins Reference
                 # ============================================
                 globalPluginsRef:

@@ -664,12 +664,11 @@ fn with_global_sources(
     route_keys: impl IntoIterator<Item = String>,
 ) -> HashSet<AdaptiveTelemetryKey> {
     let backends = super::global_ai_backend_store().snapshot();
+    let publication = crate::plugins::publication::global_publisher().snapshot();
     let mut plugin_uses_adaptive = |plugin_key: &str| {
-        crate::plugins::http::global_plugin_store()
-            .with_plugin(plugin_key, |compiled| {
-                request_plugins_use_adaptive_selection(compiled.spec.spec.request_plugins.as_deref())
-            })
-            .unwrap_or(false)
+        publication.any_http(plugin_key, |compiled| {
+            request_plugins_use_adaptive_selection(compiled.spec.spec.request_plugins.as_deref())
+        })
     };
     let mut logical_models = |target: &PolicyTargetKey| {
         let key = format!("{}/{}", target.namespace, target.name);

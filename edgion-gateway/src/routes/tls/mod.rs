@@ -23,7 +23,7 @@ pub use routes_mgr::{get_global_tls_route_managers, GlobalTlsRouteManagers, TlsR
 
 pub use conf_handler_impl::create_tls_route_handler;
 
-use crate::plugins::stream::get_global_stream_plugin_store;
+use crate::plugins::stream::CompiledStreamPlugins;
 use crate::plugins::{StreamPluginResult, TlsRouteContext};
 use crate::routes::common::{l4_post_select, L4PostSelect};
 use crate::routes::l4_duplex::{DuplexError, DuplexHooks};
@@ -125,6 +125,7 @@ pub(super) enum TlsRouteMode {
 
 pub(super) async fn run_tls_route_plugins(
     store_key: Option<&str>,
+    resource: Option<&CompiledStreamPlugins>,
     ctx: &mut TlsContext,
     sni: &str,
     listener_port: u16,
@@ -152,8 +153,7 @@ pub(super) async fn run_tls_route_plugins(
         return false;
     };
 
-    let store = get_global_stream_plugin_store();
-    let Some(resource) = store.get(store_key) else {
+    let Some(resource) = resource else {
         // Fail-close: TLSRoute rule references an ESP but it is not in the
         // store. The policy (typically an IP allowlist) cannot be enforced;
         // silently admitting traffic would be a security bypass. Startup-time

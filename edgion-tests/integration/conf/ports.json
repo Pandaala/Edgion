@@ -1,6 +1,12 @@
 {
   "current_max": 31974,
   "suites": {
+    "PluginPolicy": {
+      "udp": 58338,
+      "http": 58330,
+      "tcp": 58331,
+      "tls": 58334
+    },
     "HTTPRoute/Basic": {
       "http": 31000
     },

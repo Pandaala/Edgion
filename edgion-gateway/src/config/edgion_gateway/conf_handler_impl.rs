@@ -287,6 +287,9 @@ impl ConfHandler<EdgionGatewayConfig> for EdgionGatewayConfigHandler {
         let configs = arc_map_to_owned(data);
         recompute_global_config(&configs);
         EDGION_GATEWAY_CONFIG_STORE.store(Arc::new(EdgionGatewayConfigSnapshot::new(configs)));
+        drop(_write_guard);
+        crate::plugins::publication::global_publisher().replace_gateway_configs(data.clone());
+        crate::ai::reconcile_all_adaptive_plugin_dependents();
     }
 
     fn partial_update(
@@ -295,6 +298,11 @@ impl ConfHandler<EdgionGatewayConfig> for EdgionGatewayConfigHandler {
         update: HashMap<String, Arc<EdgionGatewayConfig>>,
         remove: HashSet<String>,
     ) {
+        let policy_inputs = add
+            .iter()
+            .chain(update.iter())
+            .map(|(key, value)| (key.clone(), Arc::clone(value)))
+            .collect();
         let _write_guard = EDGION_GATEWAY_CONFIG_WRITE_LOCK.lock();
         let mut configs = EDGION_GATEWAY_CONFIG_STORE.load_full().configs.clone();
 
@@ -343,6 +351,9 @@ impl ConfHandler<EdgionGatewayConfig> for EdgionGatewayConfigHandler {
         // the default once no config carries the field.
         recompute_global_config(&configs);
         EDGION_GATEWAY_CONFIG_STORE.store(Arc::new(EdgionGatewayConfigSnapshot::new(configs)));
+        drop(_write_guard);
+        crate::plugins::publication::global_publisher().update_gateway_configs(policy_inputs, &remove);
+        crate::ai::reconcile_all_adaptive_plugin_dependents();
     }
 }
 
@@ -372,6 +383,7 @@ mod tests {
                 security_protect: None,
                 request_body: Default::default(),
                 global_plugins_ref: None,
+                plugin_policy: None,
                 access_log_extern: None,
                 preflight_policy: None,
                 link_sys: None,

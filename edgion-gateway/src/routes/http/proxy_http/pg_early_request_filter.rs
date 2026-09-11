@@ -2,6 +2,7 @@ use super::EdgionHttpProxy;
 use crate::EdgionHttpContext;
 use pingora_core::modules::http::grpc_web::GrpcWebBridge;
 use pingora_proxy::Session;
+#[cfg(test)]
 use std::sync::Arc;
 
 fn invalid_request_id_attachment() -> Box<pingora_core::Error> {
@@ -11,20 +12,20 @@ fn invalid_request_id_attachment() -> Box<pingora_core::Error> {
     )
 }
 
-/// Pin each attachment once, including misses, before application-level rejects.
+/// Capture policy only when the publication has one serving logical Gateway.
 pub(super) async fn initialize_request_ids(
     proxy: &EdgionHttpProxy,
     session: &mut Session,
     ctx: &mut EdgionHttpContext,
 ) -> pingora_core::Result<()> {
-    initialize_request_ids_with_store(proxy, session, ctx, crate::plugins::http::global_plugin_store()).await
+    initialize_request_ids_with_publisher(proxy, session, ctx, crate::plugins::publication::global_publisher()).await
 }
 
-async fn initialize_request_ids_with_store(
+async fn initialize_request_ids_with_publisher(
     proxy: &EdgionHttpProxy,
     session: &mut Session,
     ctx: &mut EdgionHttpContext,
-    store: &crate::plugins::http::PluginStore,
+    publisher: &crate::plugins::publication::PluginPublisher,
 ) -> pingora_core::Result<()> {
     if ctx.global_request_ids_initialized {
         return Ok(());
@@ -32,74 +33,84 @@ async fn initialize_request_ids_with_store(
     ctx.request_info.trace_id.initialize(&session.req_header().headers);
     ctx.request_info.trace_id.reconcile_request(session.req_header_mut());
     super::pg_request_filter::capture_tls_metadata(session, ctx);
-    if !ctx.global_request_ids_initialized {
-        ctx.global_request_ids_initialized = true;
-        let plugins =
-            super::resolve_global_plugins(store, proxy.edgion_gateway_config.spec.global_plugins_ref.as_deref());
-        ctx.install_resolved_global_plugins(plugins);
-        if let Some(plugins) = ctx.resolved_global_plugins() {
-            for runtime in plugins.iter() {
-                if !runtime.run_early_request_ids(session, ctx).await {
-                    return Err(invalid_request_id_attachment());
-                }
-            }
+    if ctx.plugin_scope().is_none() {
+        if let Some(scope) = publisher.snapshot().unique_gateway(&proxy.listener_key) {
+            ctx.capture_plugin_scope(scope);
         }
     }
-    if !ctx.gateway_request_ids_initialized && ctx.gateway_info.is_none() {
-        let index = crate::runtime::store::get_listener_gateway_info_store().get_index(&proxy.listener_key);
-        let tls_owner = ctx
-            .request_info
-            .gateway_tls_match()
-            .and_then(|(listener, gateway)| index.get(gateway, listener).map(|entry| Arc::clone(&entry.info)));
-        let owner = tls_owner.or_else(|| {
-            // Multiple listeners of one Gateway share its plugin references.
-            // Multiple Gateways need canonical routing to establish ownership.
-            let mut gateways = index.iter_gateways();
-            let (_, gateway) = gateways.next()?;
-            if gateways.next().is_some() {
-                return None;
-            }
-            gateway.iter().next().map(|entry| Arc::clone(&entry.info))
-        });
-        if let Some(owner) = owner {
-            return initialize_gateway_ids_for(&owner, session, ctx, store).await;
+    initialize_scoped_request_ids(session, ctx).await
+}
+
+pub(super) fn capture_matched_scope(ctx: &mut EdgionHttpContext) -> pingora_core::Result<()> {
+    capture_matched_scope_with_publisher(ctx, crate::plugins::publication::global_publisher())
+}
+
+fn capture_matched_scope_with_publisher(
+    ctx: &mut EdgionHttpContext,
+    publisher: &crate::plugins::publication::PluginPublisher,
+) -> pingora_core::Result<()> {
+    let gateway = ctx.gateway_info.as_ref().ok_or_else(invalid_request_id_attachment)?;
+    let key = gateway.gateway_key();
+    if let Some(scope) = ctx.plugin_scope() {
+        if scope.gateway_key != key {
+            return Err(invalid_request_id_attachment());
         }
+        return Ok(());
     }
-    initialize_gateway_request_ids_with_store(session, ctx, store).await
+    let scope = publisher.snapshot().gateway(key).ok_or_else(unavailable_policy)?;
+    ctx.capture_plugin_scope(scope);
+    Ok(())
+}
+
+fn unavailable_policy() -> Box<pingora_core::Error> {
+    pingora_core::Error::explain(pingora_core::ErrorType::HTTPStatus(503), "plugin policy unavailable")
 }
 
 pub(super) async fn initialize_gateway_request_ids(
     session: &mut Session,
     ctx: &mut EdgionHttpContext,
 ) -> pingora_core::Result<()> {
-    initialize_gateway_request_ids_with_store(session, ctx, crate::plugins::http::global_plugin_store()).await
+    initialize_scoped_request_ids(session, ctx).await
 }
 
-async fn initialize_gateway_request_ids_with_store(
-    session: &mut Session,
-    ctx: &mut EdgionHttpContext,
-    store: &crate::plugins::http::PluginStore,
-) -> pingora_core::Result<()> {
-    if ctx.gateway_request_ids_initialized {
-        return Ok(());
-    }
-    let Some(gateway) = ctx.gateway_info.clone() else {
+async fn initialize_scoped_request_ids(session: &mut Session, ctx: &mut EdgionHttpContext) -> pingora_core::Result<()> {
+    let Some(owner) = ctx.plugin_scope().cloned() else {
         return Ok(());
     };
-    initialize_gateway_ids_for(&gateway, session, ctx, store).await
-}
-
-async fn initialize_gateway_ids_for(
-    gateway: &crate::runtime::GatewayInfo,
-    session: &mut Session,
-    ctx: &mut EdgionHttpContext,
-    store: &crate::plugins::http::PluginStore,
-) -> pingora_core::Result<()> {
-    let plugins = super::resolve_gateway_plugins(store, &gateway.plugin_store_keys);
-    ctx.gateway_request_ids_initialized = true;
-    ctx.install_resolved_gateway_plugins(plugins);
-    if let Some(plugins) = ctx.resolved_gateway_plugins() {
-        for runtime in plugins.iter() {
+    if !owner.scope.available {
+        return Err(unavailable_policy());
+    }
+    if !ctx.global_request_ids_initialized {
+        let plugins = super::resolve_global_plugins(&owner.scope);
+        ctx.install_resolved_global_plugins(plugins);
+    }
+    if !ctx.gateway_request_ids_initialized {
+        let plugins = super::resolve_gateway_plugins(&owner.scope, &owner.http_keys);
+        ctx.install_resolved_gateway_plugins(plugins);
+    }
+    let global = ctx.resolved_global_plugins();
+    let gateway = ctx.resolved_gateway_plugins();
+    for runtime in global
+        .iter()
+        .flat_map(|plugins| plugins.iter())
+        .chain(gateway.iter().flat_map(|plugins| plugins.iter()))
+    {
+        runtime.run_policy_gate(session, ctx).await;
+        if ctx.plugin_terminated() {
+            return Ok(());
+        }
+    }
+    if !ctx.global_request_ids_initialized {
+        ctx.global_request_ids_initialized = true;
+        for runtime in global.iter().flat_map(|plugins| plugins.iter()) {
+            if !runtime.run_early_request_ids(session, ctx).await {
+                return Err(invalid_request_id_attachment());
+            }
+        }
+    }
+    if !ctx.gateway_request_ids_initialized {
+        ctx.gateway_request_ids_initialized = true;
+        for runtime in gateway.iter().flat_map(|plugins| plugins.iter()) {
             if !runtime.run_early_request_ids(session, ctx).await {
                 return Err(invalid_request_id_attachment());
             }
@@ -371,7 +382,7 @@ mod tests {
         EdgionHttpProxy {
             listener_port: 18089,
             is_https_listener: false,
-            listener_key: edgion_resources::ListenerKey("early-id-test-isolated/HTTP".to_owned()),
+            listener_key: edgion_resources::ListenerKey("0.0.0.0:18089/HTTP".to_owned()),
             server_header_opts: Default::default(),
             access_logger: Arc::new(crate::observe::AccessLogger::default()),
             edgion_gateway_config: Arc::new(config),
@@ -415,22 +426,55 @@ mod tests {
         ))
     }
 
+    fn configure_owners(
+        store: &crate::plugins::http::PluginStore,
+        proxy: &EdgionHttpProxy,
+        ambiguous: bool,
+        gateway_keys: &[&str],
+    ) {
+        use crate::plugins::publication::inputs::GatewayInput;
+        use std::collections::HashMap;
+        let mut config = (*proxy.edgion_gateway_config).clone();
+        config.metadata.name = Some("plugin-store-test".into());
+        store
+            .publisher()
+            .replace_gateway_configs(HashMap::from([("plugin-store-test".into(), Arc::new(config))]));
+        let gateway: edgion_resources::Gateway = serde_json::from_value(serde_json::json!({
+            "apiVersion":"gateway.networking.k8s.io/v1","kind":"Gateway","metadata":{"name":"gateway","namespace":"early-id-test"},
+            "spec":{"gatewayClassName":"plugin-store-test","listeners":[{"name":"http","port":18089,"protocol":"HTTP"}]}
+        })).unwrap();
+        let mut input = GatewayInput::from_gateway(&gateway);
+        input.http_keys = gateway_keys.iter().map(|key| (*key).to_string()).collect();
+        let mut gateways = HashMap::from([("early-id-test/gateway".into(), input.clone())]);
+        if ambiguous {
+            gateways.insert("early-id-test/other".into(), input);
+        }
+        store.publisher().replace_gateways(gateways);
+    }
+
     #[tokio::test]
     async fn early_global_generation_and_missing_reference_stay_pinned() {
         let store = crate::plugins::http::PluginStore::new();
-        let first = id_plugin("x-first-id");
         store.replace_all(std::collections::HashMap::from([(
-            "early-id-test/present".to_owned(),
-            Arc::clone(&first),
+            "early-id-test/present".into(),
+            id_plugin("x-first-id"),
         )]));
         let proxy = id_proxy(&["present", "missing"]);
+        configure_owners(&store, &proxy, false, &[]);
+        let first = store
+            .publisher()
+            .snapshot()
+            .gateway("early-id-test/gateway")
+            .unwrap()
+            .scope
+            .http("early-id-test/present")
+            .unwrap();
         let mut session = session_from_request(b"GET / HTTP/1.1\r\nHost: test\r\n\r\n").await;
         let mut ctx = EdgionHttpContext::default();
-        initialize_request_ids_with_store(&proxy, &mut session, &mut ctx, &store)
+        initialize_request_ids_with_publisher(&proxy, &mut session, &mut ctx, store.publisher())
             .await
             .unwrap();
-        assert!(ctx.global_request_ids_initialized);
-        assert!(!ctx.gateway_request_ids_initialized);
+        assert!(ctx.global_request_ids_initialized && ctx.gateway_request_ids_initialized);
         assert!(session.req_header().headers.contains_key("x-trace-id"));
         assert!(session.req_header().headers.contains_key("x-first-id"));
         assert!(Arc::ptr_eq(
@@ -438,10 +482,11 @@ mod tests {
             &first.plugin_runtime
         ));
         store.replace_all(std::collections::HashMap::from([
-            ("early-id-test/present".to_owned(), id_plugin("x-reloaded-id")),
-            ("early-id-test/missing".to_owned(), id_plugin("x-was-missing-id")),
+            ("early-id-test/present".into(), id_plugin("x-reloaded-id")),
+            ("early-id-test/missing".into(), id_plugin("x-was-missing-id")),
         ]));
-        initialize_request_ids_with_store(&proxy, &mut session, &mut ctx, &store)
+        configure_owners(&store, &proxy, false, &[]);
+        initialize_request_ids_with_publisher(&proxy, &mut session, &mut ctx, store.publisher())
             .await
             .unwrap();
         assert_eq!(ctx.resolved_global_plugins().unwrap().len(), 1);
@@ -451,63 +496,65 @@ mod tests {
         ));
         assert!(!session.req_header().headers.contains_key("x-reloaded-id"));
         assert!(!session.req_header().headers.contains_key("x-was-missing-id"));
-        let mut next_session = session_from_request(b"GET / HTTP/1.1\r\nHost: test\r\n\r\n").await;
-        let mut next_ctx = EdgionHttpContext::default();
-        initialize_request_ids_with_store(&proxy, &mut next_session, &mut next_ctx, &store)
+        let mut next = session_from_request(b"GET / HTTP/1.1\r\nHost: test\r\n\r\n").await;
+        initialize_request_ids_with_publisher(&proxy, &mut next, &mut EdgionHttpContext::default(), store.publisher())
             .await
             .unwrap();
-        assert!(next_session.req_header().headers.contains_key("x-reloaded-id"));
-        assert!(next_session.req_header().headers.contains_key("x-was-missing-id"));
+        assert!(next.req_header().headers.contains_key("x-reloaded-id"));
+        assert!(next.req_header().headers.contains_key("x-was-missing-id"));
     }
 
     #[tokio::test]
     async fn deferred_gateway_owner_pins_hits_and_misses_when_first_known() {
         let store = crate::plugins::http::PluginStore::new();
-        let first = id_plugin("x-gateway-first-id");
         store.replace_all(std::collections::HashMap::from([(
-            "early-id-test/gateway-present".to_owned(),
-            Arc::clone(&first),
+            "early-id-test/gateway-present".into(),
+            id_plugin("x-gateway-first-id"),
         )]));
         let proxy = id_proxy(&[]);
+        let keys = ["early-id-test/gateway-present", "early-id-test/gateway-missing"];
+        configure_owners(&store, &proxy, true, &keys);
         let mut session = session_from_request(b"GET / HTTP/1.1\r\nHost: test\r\n\r\n").await;
         let mut ctx = EdgionHttpContext::default();
-        initialize_request_ids_with_store(&proxy, &mut session, &mut ctx, &store)
+        initialize_request_ids_with_publisher(&proxy, &mut session, &mut ctx, store.publisher())
             .await
             .unwrap();
-        assert!(!ctx.gateway_request_ids_initialized);
+        assert!(ctx.plugin_scope().is_none());
         assert!(!session.req_header().headers.contains_key("x-gateway-first-id"));
-        ctx.gateway_info = Some(id_gateway(&[
-            "early-id-test/gateway-present",
-            "early-id-test/gateway-missing",
-        ]));
-        initialize_gateway_request_ids_with_store(&mut session, &mut ctx, &store)
-            .await
-            .unwrap();
-        assert!(ctx.gateway_request_ids_initialized);
+        ctx.gateway_info = Some(id_gateway(&keys));
+        capture_matched_scope_with_publisher(&mut ctx, store.publisher()).unwrap();
+        initialize_gateway_request_ids(&mut session, &mut ctx).await.unwrap();
+        let first = ctx.resolved_gateway_plugins().unwrap()[0].clone();
         assert!(session.req_header().headers.contains_key("x-gateway-first-id"));
-        assert!(Arc::ptr_eq(
-            &ctx.resolved_gateway_plugins().unwrap()[0],
-            &first.plugin_runtime
-        ));
         store.replace_all(std::collections::HashMap::from([
             (
-                "early-id-test/gateway-present".to_owned(),
+                "early-id-test/gateway-present".into(),
                 id_plugin("x-gateway-reloaded-id"),
             ),
             (
-                "early-id-test/gateway-missing".to_owned(),
+                "early-id-test/gateway-missing".into(),
                 id_plugin("x-gateway-was-missing-id"),
             ),
         ]));
-        initialize_gateway_request_ids_with_store(&mut session, &mut ctx, &store)
-            .await
-            .unwrap();
+        configure_owners(&store, &proxy, true, &keys);
+        initialize_gateway_request_ids(&mut session, &mut ctx).await.unwrap();
         assert_eq!(ctx.resolved_gateway_plugins().unwrap().len(), 1);
-        assert!(Arc::ptr_eq(
-            &ctx.resolved_gateway_plugins().unwrap()[0],
-            &first.plugin_runtime
-        ));
+        assert!(Arc::ptr_eq(&ctx.resolved_gateway_plugins().unwrap()[0], &first));
         assert!(!session.req_header().headers.contains_key("x-gateway-reloaded-id"));
         assert!(!session.req_header().headers.contains_key("x-gateway-was-missing-id"));
+        ctx.gateway_info = Some(Arc::new(crate::runtime::GatewayInfo::new(
+            Some("early-id-test".into()),
+            "other".into(),
+            Some("http".into()),
+            None,
+            None,
+            None,
+            Vec::new(),
+            None,
+        )));
+        assert!(
+            capture_matched_scope_with_publisher(&mut ctx, store.publisher()).is_err(),
+            "a different matched Gateway cannot inherit the captured policy"
+        );
     }
 }

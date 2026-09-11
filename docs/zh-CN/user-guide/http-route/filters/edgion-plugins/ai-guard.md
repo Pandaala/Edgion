@@ -20,10 +20,11 @@ AiGuard 是 `requestPlugins` 条目。
    修改了请求体（例如中间夹了一个 `Dsl` 或 `ProxyRewrite` 条目），请求会 fail-close，
    而不是静默转发未掩码的提示词。
 2. 排在 AiProxy 之后运行的 AiGuard 会以固定错误 fail-close。
-3. 在同一个 `EdgionPlugins` 资源中把 AiGuard 放在 AiProxy 之后，会在准入阶段以
-   `Accepted=False` 上报。网关会在执行该资源的插件之前，以通用 HTTP 500 拒绝请求。
-   禁用条目以及被 PluginPolicy 标记为绕过或阻断的条目不参与排序检查；请求条件不能
-   豁免条目。错误更新会用拒绝行为替换旧配置，即使更新同时含有无效的 DSL 或 WAF
+3. 在同一个 `EdgionPlugins` 资源中把启用的 AiGuard 放在 AiProxy 之后，Controller
+   会针对源配置上报 `Accepted=False`。Gateway 单独检查当前 GatewayClass 的
+   `EdgionGatewayConfig.spec.pluginPolicy` 允许执行的条目；若实际顺序无效，
+   会在执行插件之前以通用 HTTP 500 拒绝请求。禁用条目和被当前作用域策略限制的
+   条目不参与 Gateway 排序检查；请求条件不能豁免已允许的条目。错误更新会用拒绝行为替换旧配置，即使更新同时含有无效的 DSL 或 WAF
    程序。修正顺序后，下一次发布恢复正常执行。已有 PluginPolicy 阻断仍优先返回其
    配置的拒绝状态码。
 

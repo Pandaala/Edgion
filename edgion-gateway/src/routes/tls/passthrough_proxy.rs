@@ -5,6 +5,8 @@
 //! then transparently relays all bytes (including the original ClientHello)
 //! to the selected upstream.
 
+use crate::plugins::publication::global_publisher;
+use crate::plugins::stream::connection_filter_bridge::resolve_route_scope;
 use async_trait::async_trait;
 use std::net::IpAddr;
 use std::sync::Arc;
@@ -29,8 +31,6 @@ use crate::observe::log_tls;
 use crate::observe::AccessLogger;
 use crate::routes::common::UNSAFE_UPSTREAM_ADDRESS_LOG;
 use crate::routes::l4_duplex::bidirectional_relay;
-use crate::runtime::matching::route::hostname_matches_listener;
-use crate::runtime::store::get_listener_gateway_info_store;
 use crate::util::proxy_protocol::ProxyProtocolV2Builder;
 use crate::{MatchedInfo, Rsc};
 use edgion_resources::resources::edgion_gateway_config::EdgionGatewayConfig;
@@ -183,16 +183,6 @@ impl EdgionTlsPassthroughProxy {
     /// downstream. These must be forwarded to upstream before starting the
     /// bidirectional relay.
     async fn handle_connection(&self, downstream: Stream, ctx: &mut TlsContext, sni: &str, initial_bytes: Vec<u8>) {
-        // 0. Verify SNI is accepted by at least one listener on this port.
-        //    Multiple Gateways share the same physical port, so the route table
-        //    is a union of all their TLSRoutes. Without this check, an SNI that
-        //    only matches a wildcard route from a different Gateway would be
-        //    incorrectly forwarded.
-        if !self.sni_accepted_by_any_listener(sni) {
-            ctx.err_log = Some("no listener accepts SNI".to_string());
-            return;
-        }
-
         // 1. Match TLSRoute unit by SNI
         let unit = match select_route_unit(&self.tls_route_manager, sni) {
             Some(unit) => unit,
@@ -221,9 +211,27 @@ impl EdgionTlsPassthroughProxy {
             return;
         }
 
-        // 3. Execute TLS route plugins (Stage 2: post-route-match)
+        let publication = global_publisher().snapshot();
+        let Some(scope) = resolve_route_scope(
+            &publication,
+            &self.listener_key,
+            &unit.resolved_parent_refs,
+            sni,
+            tls_route.metadata.namespace.as_deref().unwrap_or("default"),
+            "TLSRoute",
+        ) else {
+            ctx.err_log = Some("plugin policy unavailable".to_string());
+            return;
+        };
+        let resource = unit
+            .stream_plugin_store_key
+            .as_deref()
+            .and_then(|key| scope.stream(key));
+        drop(scope);
+        drop(publication);
         if !super::run_tls_route_plugins(
             unit.stream_plugin_store_key.as_deref(),
+            resource.as_deref(),
             ctx,
             sni,
             self.listener_port,
@@ -233,6 +241,8 @@ impl EdgionTlsPassthroughProxy {
         {
             return;
         }
+
+        drop(resource);
 
         // 4. Connect upstream with retry
         let max_attempts = unit.max_connect_retries;
@@ -413,31 +423,6 @@ impl EdgionTlsPassthroughProxy {
             self.edgion_gateway_config.spec.tcp_timeout.as_ref(),
         );
         bidirectional_relay(downstream, upstream, TlsDuplexHooks { ctx }, idle).await;
-    }
-
-    /// Check if any listener on this port accepts the given SNI hostname.
-    ///
-    /// A listener with `hostname: None` (catch-all) accepts any SNI.
-    /// A listener with a concrete or wildcard hostname must match via
-    /// `hostname_matches_listener`.
-    fn sni_accepted_by_any_listener(&self, sni: &str) -> bool {
-        let store = get_listener_gateway_info_store();
-        let index = store.get_index(&self.listener_key);
-        if index.is_empty() {
-            return true;
-        }
-
-        for (_, gw_listeners) in index.iter_gateways() {
-            for entry in gw_listeners.iter() {
-                match entry.hostname.as_deref() {
-                    None => return true,
-                    Some(h) if hostname_matches_listener(sni, h) => return true,
-                    _ => {}
-                }
-            }
-        }
-
-        false
     }
 
     fn is_tls_proxy_log_enabled(&self) -> bool {

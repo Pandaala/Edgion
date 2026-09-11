@@ -624,7 +624,6 @@ run_isolated_scenarios() {
         "gateway_admin_auth"
         "fips_policy"
         "geoip_db_states"
-        "plugin_policy"
         "unknown_config_fields"
         "proxy_protocol_policy_lifecycle"
         "oidc_egress"
@@ -634,7 +633,6 @@ run_isolated_scenarios() {
         "${SCRIPT_DIR}/test_gateway_admin_auth.sh"
         "${SCRIPT_DIR}/test_fips_policy.sh"
         "${SCRIPT_DIR}/test_geoip_db_states.sh"
-        "${SCRIPT_DIR}/test_plugin_policy.sh"
         "${SCRIPT_DIR}/test_unknown_config_fields.sh"
         "${SCRIPT_DIR}/test_proxy_protocol_policy_lifecycle.sh"
         "${SCRIPT_DIR}/test_oidc_egress.sh"
@@ -2661,18 +2659,7 @@ main() {
     # actually happened — there is no admin-endpoint snapshot), writes
     # <db_path>.meta, and leaves no <db_path>.tmp.
 
-    # Step 1.10: Controller plugin policy (allowlist/denylist) end-to-end
-    # (standalone, boots its own minimal test_server + file_system Controller +
-    # Gateway on isolated 583xx ports and restarts ONLY the Controller between
-    # phases). Only runs in the default full sweep (no -r / -i targeting).
-    # Isolated on purpose: the policy lives in the Controller config
-    # (validation.plugin_policy) and is compiled once at startup, so exercising
-    # block / bypass / relaxation requires Controller restarts that must not
-    # disturb the main sweep's single shared Gateway. Verifies denylist block
-    # (HTTP 451 + stream connection closed), denylist bypass (upstream
-    # reached), status conditions (PluginPolicyRestricted + Accepted), and
-    # relaxation (policy removed -> condition cleared, plugin runs again, plus
-    # a stream positive control proving the earlier close was policy-driven).
+    # EGC plugin-policy edits run as PluginPolicyDynamic on the shared topology.
 
     # Step 1.11: Unknown config fields -- presence proof (standalone, boots its
     # own minimal file_system Controller, no gateway, no K8s, on isolated

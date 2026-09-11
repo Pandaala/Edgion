@@ -12,7 +12,7 @@ description: EdgionGatewayConfig CRD schema: GatewayClass-level runtime configur
 Change here, instead of the Gateway YAML, when:
 
 - A specific GatewayClass needs its own server / timeout / security defaults
-- You want to configure global plugin references
+- You want to configure global plugin references or dynamic plugin execution policy
 - You want to enable a preflight policy
 - You want real IP / ReferenceGrant validation as a GatewayClass-level policy
 
@@ -269,6 +269,67 @@ Admin output while remaining available to conf_sync.
 
 `linkSysRef` and `servers` are mutually exclusive and validated at ingest. This is the
 data-plane fallback; Controller-side resolution uses Controller YAML.
+
+### spec.pluginPolicy
+
+The sole runtime execution policy for plugins attached to this GatewayClass.
+`GatewayClass.spec.parametersRef` selects this cluster-scoped resource. Updating
+it publishes a new policy and compatible executable views without restarting
+Controller, Gateway, or listeners. A request captures its logical Gateway scope;
+new stream connections and UDP sessions resolve policy at admission.
+
+```yaml
+pluginPolicy:
+  # allow: []                 # Presence means allow-list mode; empty denies all
+  deny:
+    - name: http/Wasm
+    - name: http/Dsl
+      action: block
+      blockStatus: 451
+    - name: stream/ConnectionRateLimit
+      action: bypass
+  defaultAction: allow        # allow | deny for unmatched names without allow
+  deniedAction: block         # block | bypass for restricted names
+  blockStatus: 503            # 400..599, HTTP only
+```
+
+| Field | Default | Meaning |
+|---|---|---|
+| `allow` | absent | Exact qualified names allowed to execute; an explicit empty list denies every name |
+| `deny` | `[]` | Exact-name restrictions, evaluated before `allow` |
+| `defaultAction` | `allow` | Decision for names unmatched by a configured list |
+| `deniedAction` | `block` | Execution behavior for restrictions without an entry override |
+| `blockStatus` | `503` | Default HTTP rejection status |
+| `deny[].action` | inherited | Overrides `deniedAction` |
+| `deny[].blockStatus` | inherited | Overrides status; forbidden when the effective entry action is `bypass` |
+
+Qualified names are case-sensitive `<family>/<Type>` from the actual enums:
+`http` covers all four EdgionPlugins stages, `stream` covers connection plugins,
+and `tls-route` covers TLSRoute plugins. There are no wildcard names or aliases.
+Unknown names, duplicates and invalid status values are rejected. `allow` has no
+CRD default: omission and an explicit empty list have different meanings.
+
+No parametersRef, or a present EGC with no pluginPolicy, means allow all. A
+referenced EGC that is missing, deleted, or has a semantically invalid policy is
+unavailable: HTTP admission returns 503 and stream admission denies. API-server
+or deserialization rejection does not publish a new typed resource. EGC status
+reports Controller validation, not Gateway acknowledgement or fleet convergence.
+
+A restricted entry is absent from the scoped executable view and is never
+constructed solely for a denied scope. Stateful entries are shared by allowed
+scopes of the same source generation. Block precedes conditions, invalid-program
+gates and matched-rule AI checks. Bypass skips execution; bypassing authentication
+also removes that authentication check. Native Gateway API filters and the
+resource-level native WAF are outside the named plugin catalog.
+
+Invalid DSL/WAF updates may retain permitted entries from the previous valid
+source. Current policy applies to both sources; a new restriction cannot be lost
+to retention. Relaxing policy while the latest source remains invalid cannot
+resurrect an old excluded entry and may return the ordinary invalid-config 500.
+Existing admitted requests and sessions are not revoked. There is no cross-kind
+or fleet-wide atomic update guarantee.
+
+See [the operator guide](../../../docs/en/ops-guide/plugin-policy.md).
 
 ### spec.globalPluginsRef
 

@@ -20,6 +20,7 @@ pub mod gateway_class;
 pub mod grpc_route;
 pub mod health_check;
 pub mod http_route;
+pub mod http_route_ai_admission;
 pub mod http_route_preparse;
 pub mod lb_policy;
 pub mod link_sys;

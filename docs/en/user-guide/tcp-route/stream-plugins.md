@@ -9,6 +9,20 @@ before any payload is forwarded. Gateway-level attachments on Pingora `Service`
 listeners run at the `ConnectionFilter` stage. UDPRoute attachments instead run
 in the UDP proxy when a new source-address session is admitted.
 
+## GatewayClass execution policy
+
+`EdgionGatewayConfig.spec.pluginPolicy` controls whether named `stream/` and
+`tlsRoute/` plugins may execute for a bound GatewayClass. `block` denies new
+applicable connections or sessions; `bypass` skips the entry. Policy edits apply
+to new admissions without restarting listeners. Established TCP/TLS connections
+and UDP sessions keep their admitted behavior.
+
+Before routing on a shared listener, every serving Gateway must have an
+equivalent connection policy view; incompatible views deny new connections.
+Route admission then uses the matched Gateway's class. See the
+[plugin-policy guide](../../ops-guide/plugin-policy.md) for configuration and
+missing/invalid-policy behavior.
+
 ## How attachment works
 
 Stream plugins are **not** inline in the route. You define an
