@@ -22,6 +22,8 @@ before applying a decision to current code.
 
 ## Regression guards
 
+- [Borrowed request-header access](regression-guards/borrowed-request-header-access.md)
+
 - [Header modifier validation and construction](regression-guards/header-modifier-validation.md)
 
 - [GatewayClass-scoped policy and runtime publication](regression-guards/scoped-policy-runtime-publication.md)

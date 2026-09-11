@@ -65,7 +65,7 @@ resolvers under `edgion-resources/src/credentials` were inspected, including DNS
 | BasicAuth | Borrow Secret UTF-8 then own trimmed fields; runtime clone takes raw users into prepared hashes; decoded password reuses String backing, separate username | Input config independent; request owns decoder output; `spawn_blocking` owns password and pinned user map until completion despite awaiter cancellation. Seen-map identity duplicates remain optional optimization |
 | HMAC and shared conditions | Borrow YAML bytes; parser Value tree then final username/secret/metadata; immutable runtime Arc map | Per-entry/Secret parser locals drop; source config and verifier generations independent. HMAC state derives from borrowed key. Removing runtime map clone requires ownership redesign |
 | KeyAuth | Borrow YAML bytes; move the selected key and allowed metadata out of each typed parser entry; the result map also owns first-wins detection; runtime consumes raw keys into hashes | No separate parser field clones or seen-map key copies. Source Secret/config owners remain independent. Request KeyGet String survives current filter/failure delay; future drop releases it |
-| JWT | Borrow/trim Secret bytes once into final fields; constructor consumes group maps and creates DecodingKey | Unverified iss routing and verified claims are distinct; tokens/claims/request header copies drop with owners. Per-issuer serialized duplication and KeyGet/header ownership redesign remain tracked |
+| JWT | Borrow/trim Secret bytes once into final fields; constructor consumes group maps and creates DecodingKey; request extraction borrows the header before owning the selected token | Unverified iss routing and verified claims are distinct; tokens/claims drop with owners. Per-issuer serialized duplication and broader KeyGet/token-result ownership questions remain tracked |
 | OIDC | Final owned client/session secret, prepared TLS/cipher; refresh access/id token fields move into cookie; response and cookie DTOs remain owned | Forms/HTTP/decoded cookie/token values release with futures/requests. Access-token and refresh-result LRU TTLs bound validity, not destruction; lazy expired get/prune/eviction/clear/drop releases. TinyUFO expired lookup does not remove entries |
 | LDAP | Decoded String with username/password ranges; separate bind DN; prepared TLS and SDK bind buffers | Request-local values release on future drop; timeout does not guarantee detached driver/SDK teardown. Unbind and driver have separate completion boundaries |
 | ForwardAuth / Guardrail / AiGuard / templates | `ResolvedSecrets` owns configured substitutions; prepared client and retry template own request values; response capped by shared outbound exchange | Template retained across attempts/delays; response/request owners drop on completion/cancel, SDK owners separately. Logs/Debug must not format values |
@@ -82,6 +82,10 @@ Direct and nested formatting corrections are recorded in the
 [credential Debug guard](../regression-guards/credential-material-debug-redaction.md).
 Sensitive header provenance is recorded in the
 [header-value rule](../mandatory-design/secret-header-values-must-be-sensitive.md).
+The `auth-borrowed-authorization-header` / D0035 shared-accessor follow-up is
+already implemented; its current consumer scope and residual ownership limits
+are maintained in the
+[borrowed request-header guard](../../plugin-runtime/regression-guards/borrowed-request-header-access.md).
 
 ## Adjacent managed credentials, SDKs, and ACME
 
@@ -183,8 +187,8 @@ That correction does not establish credential erasure or full public-error redac
 Re-evaluate on new auth consumers, changed stores/serialization/retry tasks, new
 Debug implementations, typed header conversions, or dependency behavior changes.
 
-The recovery task `credential-audit-missing-followups` is superseded by the four
-tracked original task files. Current checkout inspection confirms their presence;
+The recovery task `credential-audit-missing-followups` was superseded by the four
+tracked original task files. Inspection at that recovery review confirmed their presence;
 the claim that they are absent from both the checkout and available Git history
 no longer applies. The HMAC quick-start and ACME DNS diagnostic corrections have
 the semantic guards linked above, although their original task metadata still
