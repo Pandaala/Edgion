@@ -118,10 +118,12 @@ registry is also separate from both caches.
 | `setIdTokenHeader` | Boolean | `false` | Whether to pass the ID token to upstream |
 | `setUserinfoHeader` | Boolean | `false` | Whether to pass userinfo to upstream |
 | `accessTokenInAuthorizationHeader` | Boolean | `false` | Whether to set the access token in the upstream `Authorization: Bearer` header |
-| `claimsToHeaders` | Object | none | Claims-to-header mapping (supports dot-notation, e.g., `user.name`) |
+| `claimsToHeaders` | Object | none | Claims-to-header mapping (supports dot-notation, e.g., `user.name`). Destination names are case-insensitive and must be unique within this plugin instance |
 | `storeClaimsInCtx` | Boolean | `false` | Whether to store claims in the ctx variable `oidc_claims` (read by downstream plugins via `get_ctx_var`; excluded from the access log so claims are not persisted) |
 | `maxHeaderValueBytes` | Integer | `4096` | Maximum size per mapped header value in bytes |
 | `maxTotalHeaderBytes` | Integer | `16384` | Maximum total size for all mapped headers in bytes |
+
+Claim-header destinations are canonicalized and ordered before request processing. Case variants such as `X-User` and `x-user` therefore conflict within one OpenID Connect plugin configuration and are rejected. Separate plugins retain execution-order, last-write-wins behavior.
 
 ### Security Parameters
 

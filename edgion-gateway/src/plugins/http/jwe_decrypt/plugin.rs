@@ -15,7 +15,7 @@ use crate::plugins::http::common::auth_common::{
 use crate::plugins::runtime::{PluginLog, PluginSession, PluginSessionHeaderExt, RequestFilter};
 use edgion_common::secret::get_secret;
 use edgion_resources::filters::PluginRunningResult;
-use edgion_resources::resources::edgion_plugins::{JweContentEncryption, JweDecryptConfig};
+use edgion_resources::resources::edgion_plugins::{ClaimHeaderProjectionPlan, JweContentEncryption, JweDecryptConfig};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum JweFailure {
@@ -92,6 +92,7 @@ enum RequestDecryptor<'a> {
 pub struct JweDecrypt {
     name: String,
     config: JweDecryptConfig,
+    claim_header_projection: ClaimHeaderProjectionPlan,
     decryptor: PreparedDecryptor,
 }
 
@@ -99,10 +100,12 @@ impl JweDecrypt {
     /// Create plugin from config and namespace.
     pub fn new(config: &JweDecryptConfig, plugin_namespace: String) -> Self {
         let mut config = config.clone();
+        let claim_header_projection = config.compile_claim_header_projection().unwrap_or_default();
         let decryptor = Self::prepare_decryptor(&mut config, &plugin_namespace);
         Self {
             name: "JweDecrypt".to_string(),
             config,
+            claim_header_projection,
             decryptor,
         }
     }
@@ -375,12 +378,12 @@ impl RequestFilter for JweDecrypt {
             return self.reject(session, plugin_log, JweFailure::InvalidFormat).await;
         }
 
-        if let Some(mapping) = &self.config.payload_to_headers {
+        if !self.claim_header_projection.entries().is_empty() {
             if let Ok(payload_json) = serde_json::from_str::<serde_json::Value>(&plaintext) {
                 set_claims_headers(
                     session,
                     &payload_json,
-                    mapping,
+                    &self.claim_header_projection,
                     self.config.max_header_value_bytes,
                     self.config.max_total_header_bytes,
                 );
@@ -676,7 +679,7 @@ mod tests {
         let mut config = config_with_key(&test_key());
         config.hide_credentials = true;
         config.store_payload_in_ctx = true;
-        config.payload_to_headers = Some(HashMap::from([("sub".to_string(), "x-sub".to_string())]));
+        config.payload_to_headers = Some(HashMap::from([("sub".to_string(), "X-Sub".to_string())]));
         let plugin = JweDecrypt::new(&config, "default".to_string());
         let plaintext = r#"{"sub":"alice"}"#;
         let protected = r#"{ "enc":"A256GCM", "x-private":"accepted", "alg":"dir" }"#;
@@ -715,6 +718,61 @@ mod tests {
         let result = plugin.run_request(&mut session, &mut log).await;
         assert_eq!(result, PluginRunningResult::GoodNext);
         assert_eq!(log.render_for_test(), "OK");
+    }
+
+    #[test]
+    fn construction_compiles_payload_projection_in_canonical_order() {
+        let mut config = config_with_key(&test_key());
+        config.payload_to_headers = Some(HashMap::from([
+            ("tenant".to_string(), "X-Tenant".to_string()),
+            ("subject".to_string(), "X-Subject".to_string()),
+        ]));
+
+        let plugin = JweDecrypt::new(&config, "default".to_string());
+        let entries = plugin.claim_header_projection.entries();
+        assert_eq!(entries[0].claim_path(), "subject");
+        assert_eq!(entries[0].header_name(), "x-subject");
+        assert_eq!(entries[1].claim_path(), "tenant");
+        assert_eq!(entries[1].header_name(), "x-tenant");
+    }
+
+    #[tokio::test]
+    async fn payload_projection_enforces_its_own_exact_and_plus_one_caps() {
+        let plaintext = r#"{"sub":"alice"}"#;
+        let token = encrypt_compact_jwe(plaintext, &test_key(), "A256GCM");
+
+        for (max_value, max_total, writes_projection) in [(5, 10, true), (4, 10, false), (5, 9, false)] {
+            let mut config = config_with_key(&test_key());
+            config.payload_to_headers = Some(HashMap::from([("sub".to_string(), "X-Sub".to_string())]));
+            config.max_header_value_bytes = max_value;
+            config.max_total_header_bytes = max_total;
+            let plugin = JweDecrypt::new(&config, "default".to_string());
+            let header_value = format!("Bearer {token}");
+            let mut session = MockPluginSession::new();
+            setup_header_mocks(&mut session, &[("authorization", header_value.as_str())]);
+            let mut sequence = Sequence::new();
+
+            session
+                .expect_set_request_header_value()
+                .withf(move |name, value| name == "x-decrypted-auth" && value == plaintext && value.is_sensitive())
+                .times(1)
+                .in_sequence(&mut sequence)
+                .returning(|_, _| Ok(()));
+            if writes_projection {
+                session
+                    .expect_set_request_header_value()
+                    .withf(|name, value| name == "x-sub" && value == "alice" && value.is_sensitive())
+                    .times(1)
+                    .in_sequence(&mut sequence)
+                    .returning(|_, _| Ok(()));
+            }
+
+            let mut log = PluginLog::new("JweDecrypt");
+            assert_eq!(
+                plugin.run_request(&mut session, &mut log).await,
+                PluginRunningResult::GoodNext
+            );
+        }
     }
 
     #[tokio::test]

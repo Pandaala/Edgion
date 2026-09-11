@@ -54,7 +54,7 @@ A JOSE header `kid` or `keyid` is not a credential selector. The selector is rea
 | `authFailureDelayMs` | Integer | `0` | Delay before missing-token and invalid-token 401 responses |
 | `realm` | String | `jwt` | Realm used in the Bearer `WWW-Authenticate` challenge |
 | `storeClaimsInCtx` | Boolean | `false` | Stores verified claims in `jwt_claims` for downstream plugins |
-| `claimsToHeaders` | Object | none | Explicitly maps verified claims to bounded upstream request headers |
+| `claimsToHeaders` | Object | none | Explicitly maps verified claims to bounded upstream request headers; destinations are case-insensitive and unique per plugin instance |
 
 Kubernetes always removes the outer `.data` Base64 encoding before the Controller reads a Secret value. With `base64Secret: false`, JwtAuth uses the resulting UTF-8 `secret` bytes directly. With `base64Secret: true`, that UTF-8 string must itself be standard Base64 and is decoded again into the actual HMAC key bytes.
 

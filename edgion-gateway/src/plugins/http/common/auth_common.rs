@@ -3,11 +3,12 @@
 use crate::plugins::runtime::PluginSessionHeaderExt;
 use bytes::Bytes;
 use edgion_resources::resources::edgion_plugins::auth_realm::validate_auth_realm;
+use edgion_resources::resources::edgion_plugins::ClaimHeaderProjectionPlan;
 use edgion_resources::uri_utils::url_decode;
 use pingora_http::ResponseHeader;
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
-use std::collections::HashMap;
+use std::fmt::Write;
 use std::time::Duration;
 
 use crate::plugins::runtime::PluginSession;
@@ -337,74 +338,350 @@ pub fn resolve_claim_path<'a>(value: &'a serde_json::Value, path: &str) -> Optio
 pub fn set_claims_headers(
     session: &mut dyn PluginSession,
     claims: &serde_json::Value,
-    mapping: &HashMap<String, String>,
+    plan: &ClaimHeaderProjectionPlan,
     max_header_value_bytes: usize,
     max_total_header_bytes: usize,
 ) {
     let mut total_bytes: usize = 0;
 
-    for (claim_path, header_name) in mapping {
-        if header_name.is_empty() {
-            continue;
-        }
-        if header_name.bytes().any(|b| b == b'\r' || b == b'\n' || b == b'\0') {
-            continue;
-        }
-
-        let Some(value) = resolve_claim_path(claims, claim_path) else {
+    for entry in plan.entries() {
+        let Some(value) = resolve_claim_path(claims, entry.claim_path()) else {
             continue;
         };
-
-        let header_value = match value {
-            serde_json::Value::String(s) => s.clone(),
-            serde_json::Value::Number(n) => n.to_string(),
-            serde_json::Value::Bool(b) => b.to_string(),
-            serde_json::Value::Array(arr) => arr
-                .iter()
-                .filter_map(|v| match v {
-                    serde_json::Value::String(s) => Some(s.clone()),
-                    serde_json::Value::Number(n) => Some(n.to_string()),
-                    serde_json::Value::Bool(b) => Some(b.to_string()),
-                    _ => None,
-                })
-                .collect::<Vec<_>>()
-                .join(","),
-            _ => continue,
+        let remaining_total_bytes = max_total_header_bytes.saturating_sub(total_bytes);
+        let remaining_value_bytes = remaining_total_bytes.saturating_sub(entry.header_name().len());
+        let header_value = match format_claim_header_value(value, max_header_value_bytes, remaining_value_bytes) {
+            Ok(Some(value)) => value,
+            Ok(None) => continue,
+            Err(AggregateHeaderBudgetExceeded) => break,
         };
 
-        if header_value.is_empty() {
-            continue;
+        let added_bytes = entry.header_name().len() + header_value.len();
+
+        if set_sensitive_request_header(session, entry.header_name(), &header_value).is_ok() {
+            total_bytes += added_bytes;
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct ClaimHeaderValueMeasure {
+    bytes: usize,
+    has_scalar: bool,
+    unsafe_value: bool,
+}
+
+#[derive(Debug)]
+struct AggregateHeaderBudgetExceeded;
+
+fn scalar_measure(value: &serde_json::Value) -> Option<(usize, bool)> {
+    match value {
+        serde_json::Value::String(value) => Some((
+            value.len(),
+            value.bytes().any(|byte| matches!(byte, b'\r' | b'\n' | b'\0')),
+        )),
+        serde_json::Value::Number(value) => {
+            let mut counter = HeaderValueByteCounter::default();
+            write!(&mut counter, "{value}").ok()?;
+            Some((counter.bytes, false))
+        }
+        serde_json::Value::Bool(true) => Some((4, false)),
+        serde_json::Value::Bool(false) => Some((5, false)),
+        _ => None,
+    }
+}
+
+fn measure_claim_header_value(value: &serde_json::Value) -> Option<ClaimHeaderValueMeasure> {
+    if let serde_json::Value::Array(values) = value {
+        let mut measure = ClaimHeaderValueMeasure {
+            bytes: 0,
+            has_scalar: false,
+            unsafe_value: false,
+        };
+
+        for value in values {
+            let Some((scalar_bytes, unsafe_value)) = scalar_measure(value) else {
+                continue;
+            };
+            if measure.has_scalar {
+                measure.bytes = measure.bytes.checked_add(1)?;
+            }
+            measure.bytes = measure.bytes.checked_add(scalar_bytes)?;
+            measure.has_scalar = true;
+            measure.unsafe_value |= unsafe_value;
         }
 
-        // Header injection protection.
-        if header_value.bytes().any(|b| b == b'\r' || b == b'\n' || b == b'\0') {
-            continue;
-        }
+        return Some(measure);
+    }
 
-        if header_value.len() > max_header_value_bytes {
-            continue;
-        }
+    let (bytes, unsafe_value) = scalar_measure(value)?;
+    Some(ClaimHeaderValueMeasure {
+        bytes,
+        has_scalar: true,
+        unsafe_value,
+    })
+}
 
-        total_bytes = total_bytes.saturating_add(header_name.len() + header_value.len());
-        if total_bytes > max_total_header_bytes {
-            break;
-        }
+fn write_scalar(output: &mut impl Write, value: &serde_json::Value) -> std::fmt::Result {
+    match value {
+        serde_json::Value::String(value) => output.write_str(value),
+        serde_json::Value::Number(value) => write!(output, "{value}"),
+        serde_json::Value::Bool(value) => write!(output, "{value}"),
+        _ => Ok(()),
+    }
+}
 
-        let _ = set_sensitive_request_header(session, header_name, &header_value);
+fn materialize_claim_header_value(value: &serde_json::Value, measured_bytes: usize) -> Option<Cow<'_, str>> {
+    match value {
+        serde_json::Value::String(value) => return Some(Cow::Borrowed(value)),
+        serde_json::Value::Bool(true) => return Some(Cow::Borrowed("true")),
+        serde_json::Value::Bool(false) => return Some(Cow::Borrowed("false")),
+        _ => {}
+    }
+
+    let mut output = String::with_capacity(measured_bytes);
+    if let serde_json::Value::Array(values) = value {
+        let mut has_scalar = false;
+        for value in values {
+            if scalar_measure(value).is_none() {
+                continue;
+            }
+            if has_scalar {
+                output.push(',');
+            }
+            write_scalar(&mut output, value).ok()?;
+            has_scalar = true;
+        }
+    } else {
+        write_scalar(&mut output, value).ok()?;
+    }
+    debug_assert_eq!(output.len(), measured_bytes);
+    Some(Cow::Owned(output))
+}
+
+fn format_claim_header_value(
+    value: &serde_json::Value,
+    max_value_bytes: usize,
+    remaining_aggregate_value_bytes: usize,
+) -> Result<Option<Cow<'_, str>>, AggregateHeaderBudgetExceeded> {
+    let Some(measure) = measure_claim_header_value(value) else {
+        return Ok(None);
+    };
+    if !measure.has_scalar || measure.bytes == 0 || measure.unsafe_value || measure.bytes > max_value_bytes {
+        return Ok(None);
+    }
+    if measure.bytes > remaining_aggregate_value_bytes {
+        return Err(AggregateHeaderBudgetExceeded);
+    }
+
+    Ok(materialize_claim_header_value(value, measure.bytes))
+}
+
+#[derive(Default)]
+struct HeaderValueByteCounter {
+    bytes: usize,
+}
+
+impl std::fmt::Write for HeaderValueByteCounter {
+    fn write_str(&mut self, value: &str) -> std::fmt::Result {
+        self.bytes = self.bytes.checked_add(value.len()).ok_or(std::fmt::Error)?;
+        Ok(())
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        escape_quoted_string, plan_cookie_strip, resolve_claim_path, send_gateway_auth_error_response, strip_cookie,
-        strip_query_param, Claims, CookieStripPlan,
+        escape_quoted_string, format_claim_header_value, plan_cookie_strip, resolve_claim_path,
+        send_gateway_auth_error_response, set_claims_headers, strip_cookie, strip_query_param,
+        AggregateHeaderBudgetExceeded, Claims, CookieStripPlan,
     };
     use crate::plugins::runtime::traits::session::MockPluginSession;
     use crate::plugins::runtime::traits::test_helpers::setup_header_mocks;
     use mockall::Sequence;
+    use parking_lot::Mutex;
     use serde_json::json;
     use std::borrow::Cow;
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    use edgion_resources::resources::edgion_plugins::compile_claim_header_projection;
+
+    #[test]
+    fn claim_header_array_formatting_is_bounded_and_preserves_scalar_order() {
+        let value = json!(["alpha", {"ignored": true}, 7, false]);
+        let expected = "alpha,7,false";
+
+        assert_eq!(
+            format_claim_header_value(&value, expected.len(), expected.len())
+                .unwrap()
+                .as_deref(),
+            Some(expected)
+        );
+        assert!(format_claim_header_value(&value, expected.len() - 1, usize::MAX)
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn claim_header_array_preserves_empty_comma_utf8_and_unsafe_semantics() {
+        let value = json!(["", "a,b", "é", 7, false, {"ignored": true}]);
+        let expected = ",a,b,é,7,false";
+        assert_eq!(
+            format_claim_header_value(&value, expected.len(), expected.len())
+                .unwrap()
+                .as_deref(),
+            Some(expected)
+        );
+
+        let unsafe_value = json!(["safe", "bad\nvalue"]);
+        assert!(
+            format_claim_header_value(&unsafe_value, usize::MAX, 1)
+                .unwrap()
+                .is_none(),
+            "unsafe values must skip rather than consume aggregate order"
+        );
+    }
+
+    #[test]
+    fn formatting_distinguishes_per_value_skip_from_aggregate_stop_before_allocation() {
+        let value = json!(["abc", "def"]);
+        assert!(
+            format_claim_header_value(&value, 6, usize::MAX).unwrap().is_none(),
+            "per-value overflow must skip the candidate"
+        );
+        assert!(matches!(
+            format_claim_header_value(&value, 7, 6),
+            Err(AggregateHeaderBudgetExceeded)
+        ));
+    }
+
+    #[test]
+    fn claim_header_scalar_value_enforces_exact_byte_cap() {
+        let value = json!("é");
+        assert_eq!(format_claim_header_value(&value, 2, 2).unwrap().as_deref(), Some("é"));
+        assert!(format_claim_header_value(&value, 1, usize::MAX).unwrap().is_none());
+    }
+
+    #[test]
+    fn failed_header_write_does_not_consume_aggregate_budget() {
+        let mapping = HashMap::from([
+            ("first".to_string(), "x-a".to_string()),
+            ("second".to_string(), "x-b".to_string()),
+        ]);
+        let plan = compile_claim_header_projection(Some(&mapping)).unwrap();
+        let claims = json!({"first": "1", "second": "2"});
+        let mut session = MockPluginSession::new();
+        let mut sequence = Sequence::new();
+
+        session
+            .expect_set_request_header_value()
+            .withf(|name, value| name == "x-a" && value == "1" && value.is_sensitive())
+            .times(1)
+            .in_sequence(&mut sequence)
+            .returning(|_, _| Err(std::io::Error::other("injected write failure").into()));
+        session
+            .expect_set_request_header_value()
+            .withf(|name, value| name == "x-b" && value == "2" && value.is_sensitive())
+            .times(1)
+            .in_sequence(&mut sequence)
+            .returning(|_, _| Ok(()));
+
+        set_claims_headers(&mut session, &claims, &plan, 1, 4);
+    }
+
+    #[test]
+    fn aggregate_cap_uses_the_plan_order_at_exact_boundary() {
+        let mapping = HashMap::from([
+            ("second".to_string(), "x-b".to_string()),
+            ("first".to_string(), "x-a".to_string()),
+        ]);
+        let plan = compile_claim_header_projection(Some(&mapping)).unwrap();
+        let claims = json!({"first": "1", "second": "2"});
+        let mut session = MockPluginSession::new();
+
+        session
+            .expect_set_request_header_value()
+            .withf(|name, value| name == "x-a" && value == "1" && value.is_sensitive())
+            .times(1)
+            .returning(|_, _| Ok(()));
+
+        set_claims_headers(&mut session, &claims, &plan, 1, 4);
+    }
+
+    #[test]
+    fn shuffled_mapping_construction_and_execution_produce_identical_writes() {
+        let source = [
+            ("claim_c", "X-C", "c"),
+            ("claim_a", "X-A", "a"),
+            ("claim_b", "X-B", "b"),
+        ];
+
+        for rotation in 0..source.len() {
+            let mut mapping = HashMap::new();
+            let mut claims = serde_json::Map::new();
+            for offset in 0..source.len() {
+                let (claim, header, value) = source[(rotation + offset) % source.len()];
+                mapping.insert(claim.to_string(), header.to_string());
+                claims.insert(claim.to_string(), json!(value));
+            }
+
+            let plan = compile_claim_header_projection(Some(&mapping)).unwrap();
+            let writes = Arc::new(Mutex::new(Vec::new()));
+            let captured = writes.clone();
+            let mut session = MockPluginSession::new();
+            session
+                .expect_set_request_header_value()
+                .times(3)
+                .returning(move |name, value| {
+                    assert!(value.is_sensitive());
+                    captured
+                        .lock()
+                        .push((name.to_string(), value.to_str().unwrap().to_string()));
+                    Ok(())
+                });
+
+            set_claims_headers(&mut session, &serde_json::Value::Object(claims), &plan, 8, 64);
+            assert_eq!(
+                *writes.lock(),
+                vec![
+                    ("x-a".to_string(), "a".to_string()),
+                    ("x-b".to_string(), "b".to_string()),
+                    ("x-c".to_string(), "c".to_string()),
+                ]
+            );
+        }
+    }
+
+    #[test]
+    fn aggregate_cap_rejects_the_first_candidate_at_plus_one() {
+        let mapping = HashMap::from([("first".to_string(), "x-a".to_string())]);
+        let plan = compile_claim_header_projection(Some(&mapping)).unwrap();
+        let claims = json!({"first": "1"});
+        let mut session = MockPluginSession::new();
+        session.expect_set_request_header_value().never();
+
+        set_claims_headers(&mut session, &claims, &plan, 1, 3);
+    }
+
+    #[test]
+    fn invalid_header_value_does_not_consume_aggregate_budget() {
+        let mapping = HashMap::from([
+            ("unsafe".to_string(), "x-a".to_string()),
+            ("safe".to_string(), "x-b".to_string()),
+        ]);
+        let plan = compile_claim_header_projection(Some(&mapping)).unwrap();
+        let claims = json!({"unsafe": "bad\u{7f}", "safe": "2"});
+        let mut session = MockPluginSession::new();
+
+        session
+            .expect_set_request_header_value()
+            .withf(|name, value| name == "x-b" && value == "2" && value.is_sensitive())
+            .times(1)
+            .returning(|_, _| Ok(()));
+
+        set_claims_headers(&mut session, &claims, &plan, 4, 7);
+    }
 
     #[tokio::test]
     async fn auth_realm_challenges_escape_data_and_preserve_response_contract() {

@@ -125,7 +125,8 @@ pub struct JweDecryptConfig {
     #[serde(default)]
     pub store_payload_in_ctx: bool,
 
-    /// Map JSON payload fields to upstream request headers.
+    /// Map JSON payload fields to upstream request headers. Destination header
+    /// names are case-insensitive and must be unique within this plugin instance.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub payload_to_headers: Option<HashMap<String, String>>,
 
@@ -196,6 +197,13 @@ impl Default for JweDecryptConfig {
 }
 
 impl JweDecryptConfig {
+    pub fn compile_claim_header_projection(&self) -> Result<super::ClaimHeaderProjectionPlan, &'static str> {
+        super::compile_claim_header_projection_with_owned_destinations(
+            self.payload_to_headers.as_ref(),
+            &[self.forward_header.as_str()],
+        )
+    }
+
     pub fn detect_validation_error(&self) -> Option<String> {
         if self.secret_ref.is_none() && self.resolved_credential.is_none() {
             return Some("secretRef is required".to_string());
@@ -217,6 +225,9 @@ impl JweDecryptConfig {
         }
         if self.max_total_header_bytes < self.max_header_value_bytes {
             return Some("maxTotalHeaderBytes must be >= maxHeaderValueBytes".to_string());
+        }
+        if let Err(error) = self.compile_claim_header_projection() {
+            return Some(error.to_string());
         }
         if let Some(allowed) = &self.allowed_algorithms {
             if allowed.is_empty() {
@@ -346,6 +357,48 @@ mod tests {
         assert_eq!(
             config.validation_error(),
             Some("resolvedCredential.secret is required".to_string())
+        );
+    }
+
+    #[test]
+    fn validation_rejects_case_insensitive_payload_header_destination_collision() {
+        let config = JweDecryptConfig {
+            secret_ref: Some(SecretObjectReference {
+                group: None,
+                kind: None,
+                name: "jwe-secret".to_string(),
+                namespace: None,
+            }),
+            payload_to_headers: Some(HashMap::from([
+                ("sub".to_string(), "X-Identity".to_string()),
+                ("email".to_string(), "x-identity".to_string()),
+            ])),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            config.validation_error().as_deref(),
+            Some(super::super::DUPLICATE_HEADER_DESTINATION)
+        );
+    }
+
+    #[test]
+    fn validation_rejects_payload_destination_owned_by_forward_header() {
+        let config = JweDecryptConfig {
+            secret_ref: Some(SecretObjectReference {
+                group: None,
+                kind: None,
+                name: "jwe-secret".to_string(),
+                namespace: None,
+            }),
+            forward_header: "X-Decrypted".to_string(),
+            payload_to_headers: Some(HashMap::from([("sub".to_string(), "x-decrypted".to_string())])),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            config.validation_error().as_deref(),
+            Some(super::super::DUPLICATE_HEADER_DESTINATION)
         );
     }
 }

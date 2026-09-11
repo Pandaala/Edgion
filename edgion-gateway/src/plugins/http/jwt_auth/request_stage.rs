@@ -54,13 +54,13 @@ impl JwtAuth {
 
     /// Set headers from JWT claims based on claims_to_headers configuration.
     pub(super) fn set_claims_headers(&self, session: &mut dyn PluginSession, claims: &serde_json::Value) {
-        if let Some(ref mapping) = self.config.claims_to_headers {
+        if !self.claim_header_projection.entries().is_empty() {
             // Enforce hardcoded size limits to prevent a valid JWT from injecting arbitrarily
             // large claim values into upstream headers.
             set_common_claims_headers(
                 session,
                 claims,
-                mapping,
+                &self.claim_header_projection,
                 MAX_JWT_CLAIM_HEADER_VALUE_BYTES,
                 MAX_JWT_CLAIM_TOTAL_HEADER_BYTES,
             );

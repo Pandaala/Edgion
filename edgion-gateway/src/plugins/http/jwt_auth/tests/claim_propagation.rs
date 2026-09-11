@@ -51,9 +51,9 @@ async fn test_claims_to_headers() {
     assert_eq!(r, PluginRunningResult::GoodNext);
 
     let headers = headers_set.lock();
-    assert_eq!(headers.get("X-User-ID"), Some(&"user123".to_string()));
-    assert_eq!(headers.get("X-User-Email"), Some(&"user@example.com".to_string()));
-    assert_eq!(headers.get("X-User-Roles"), Some(&"admin,user".to_string()));
+    assert_eq!(headers.get("x-user-id"), Some(&"user123".to_string()));
+    assert_eq!(headers.get("x-user-email"), Some(&"user@example.com".to_string()));
+    assert_eq!(headers.get("x-user-roles"), Some(&"admin,user".to_string()));
 }
 
 #[tokio::test]

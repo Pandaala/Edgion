@@ -194,7 +194,8 @@ pub struct JwtAuthConfig {
     #[serde(default)]
     pub store_claims_in_ctx: bool,
 
-    /// Map JWT claims to request headers for upstream.
+    /// Map JWT claims to request headers for upstream. Destination header names
+    /// are case-insensitive and must be unique within this plugin instance.
     /// Key is the claim name (e.g., "sub", "email"), value is the header name (e.g., "X-User-ID").
     /// Example: {"sub": "X-User-ID", "email": "X-User-Email"}
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -258,6 +259,12 @@ impl Default for JwtAuthConfig {
     }
 }
 
+impl JwtAuthConfig {
+    pub fn compile_claim_header_projection(&self) -> Result<super::ClaimHeaderProjectionPlan, &'static str> {
+        super::compile_claim_header_projection(self.claims_to_headers.as_ref())
+    }
+}
+
 use crate::resources::edgion_plugins::auth_realm::validate_auth_realm;
 use crate::resources::edgion_plugins::PluginValidation;
 
@@ -311,6 +318,10 @@ impl PluginValidation for JwtAuthConfig {
         }
         if self.cookie.trim().is_empty() {
             return Some("cookie must not be empty".to_string());
+        }
+
+        if let Err(error) = self.compile_claim_header_projection() {
+            return Some(error.to_string());
         }
 
         // 3. Final gate: anonymous or groups required
@@ -552,5 +563,22 @@ mod tests {
         let err = config.validation_error().unwrap();
         assert!(err.contains("iss must be unique across groups"), "got: {}", err);
         assert!(err.contains(dup_iss), "got: {}", err);
+    }
+
+    #[test]
+    fn validation_rejects_case_insensitive_claim_header_destination_collision() {
+        let config = JwtAuthConfig {
+            anonymous: Some("anonymous".to_string()),
+            claims_to_headers: Some(HashMap::from([
+                ("sub".to_string(), "X-Identity".to_string()),
+                ("email".to_string(), "x-identity".to_string()),
+            ])),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            config.validation_error().as_deref(),
+            Some(super::super::DUPLICATE_HEADER_DESTINATION)
+        );
     }
 }

@@ -2320,6 +2320,33 @@ fn test_apply_upstream_headers_rejects_unsafe_userinfo_header_value() {
     );
 }
 
+#[test]
+fn claim_projection_uses_canonical_header_name_and_failed_fixed_write_preserves_budget() {
+    let mut cfg = base_config();
+    cfg.set_access_token_header = true;
+    cfg.claims_to_headers = Some(HashMap::from([("sub".to_string(), "X-Sub".to_string())]));
+    cfg.max_header_value_bytes = 15;
+    cfg.max_total_header_bytes = 15;
+    let plugin = OpenidConnect::new(&cfg, "default".to_string());
+    let mut session = MockPluginSession::new();
+    let mut sequence = mockall::Sequence::new();
+
+    session
+        .expect_set_request_header_value()
+        .withf(|name, value| name == "X-Access-Token" && value == "a" && value.is_sensitive())
+        .times(1)
+        .in_sequence(&mut sequence)
+        .returning(|_, _| Err(std::io::Error::other("injected write failure").into()));
+    session
+        .expect_set_request_header_value()
+        .withf(|name, value| name == "x-sub" && value == "u" && value.is_sensitive())
+        .times(1)
+        .in_sequence(&mut sequence)
+        .returning(|_, _| Ok(()));
+
+    plugin.apply_upstream_headers(&mut session, "a", None, None, &json!({"sub": "u"}));
+}
+
 #[tokio::test]
 async fn test_fetch_userinfo_json_returns_none_without_userinfo_endpoint() {
     let mut cfg = base_config();

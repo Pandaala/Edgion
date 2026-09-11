@@ -8,7 +8,7 @@ use crate::plugins::http::common::auth_common::apply_auth_failure_delay;
 use crate::plugins::runtime::log::{la, sensitive};
 use crate::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 use edgion_resources::filters::PluginRunningResult;
-use edgion_resources::resources::edgion_plugins::JwtAuthConfig;
+use edgion_resources::resources::edgion_plugins::{ClaimHeaderProjectionPlan, JwtAuthConfig};
 
 use async_trait::async_trait;
 
@@ -19,6 +19,7 @@ use super::verify;
 /// JWT Authentication plugin
 pub struct JwtAuth {
     pub(super) config: JwtAuthConfig,
+    pub(super) claim_header_projection: ClaimHeaderProjectionPlan,
     /// Issuer-group store built once at construction from resolved_groups_by_iss
     pub(super) store: JwtIssuerGroupStore,
 }
@@ -27,6 +28,7 @@ impl JwtAuth {
     /// Create from JwtAuthConfig with plugin namespace
     pub fn new(config: &JwtAuthConfig, _plugin_namespace: String) -> Self {
         let mut config = config.clone();
+        let claim_header_projection = config.compile_claim_header_projection().unwrap_or_default();
         let resolved_groups_by_iss = config.resolved_groups_by_iss.take().unwrap_or_default();
         JwtAuth {
             store: JwtIssuerGroupStore::new(
@@ -34,6 +36,7 @@ impl JwtAuth {
                 config.base64_secret,
                 config.lifetime_grace_period,
             ),
+            claim_header_projection,
             config,
         }
     }

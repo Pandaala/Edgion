@@ -18,8 +18,9 @@ success path, and does not define a multi-plugin sanitization order.
 This closes D0037 and D0038 as written. It does **not** close reports that a *configured*
 JwtAuth / OpenID Connect `claimsToHeaders` destination survives when the shared helper skips
 the write (missing claim, empty value, control characters, or size cap). That skip-vs-strip
-gap is Envoy `claim_to_headers` sanitize-then-add parity and requires separate
-claim-projection work if it is pursued.
+gap is Envoy `claim_to_headers` sanitize-then-add parity and remains a separate product
+decision. D0052 fixed deterministic projection order and per-mapping destination ownership;
+it deliberately did not change skip-vs-strip behavior.
 
 Fix suggestions of the form "unify identity-header sanitization across every auth plugin",
 "always strip client-supplied `X-Consumer-Username` / `X-Anonymous-Consumer` before auth",
@@ -81,8 +82,7 @@ Re-open this decision only if:
 - A supported multi-auth composition is added that requires complementary clears because
   last-write-wins of hardcoded names is no longer acceptable.
 
-Do not use those triggers to swallow D0052 skip-write leftovers on configured claim
-destinations.
+Do not infer sanitize-before-rules behavior from the D0052 projection-order correction.
 
 ## Reference Cases
 
@@ -91,7 +91,7 @@ destinations.
 - `edgion-gateway/src/plugins/http/common/auth_common.rs` (`set_claims_headers` skip-write)
 - `edgion-gateway/src/plugins/http/ldap_auth/plugin.rs` (`apply_authenticated_headers` clears the configured anonymous marker)
 - `docs/en/user-guide/http-route/filters/edgion-plugins/jwt-auth.md` (no default consumer header)
-- Configured claim destination ownership remains separate work.
+- [D0052 deterministic configured claim projection](../regression-guards/auth-claim-header-projection.md)
 - Envoy `jwt_authn` replace-on-write plus configured-name sanitize-before-rules
 - Kong `set_consumer` set-or-clear of the consumer / anonymous header family
 
@@ -99,3 +99,4 @@ destinations.
 
 - `D0037` — 2026-09-05 (accepted tradeoff).
 - `D0038` — 2026-09-05 (accepted tradeoff).
+- `D0052` — 2026-09-11 (deterministic projection fixed; skip-write behavior unchanged).

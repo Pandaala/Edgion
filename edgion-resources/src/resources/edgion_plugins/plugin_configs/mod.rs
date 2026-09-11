@@ -2,6 +2,7 @@ pub mod access_log_extern;
 mod ai_guard;
 mod ai_proxy;
 pub mod all_endpoint_status;
+mod auth_header_projection;
 mod bandwidth_limit;
 mod basic_auth;
 mod canary;
@@ -70,6 +71,10 @@ pub use ai_proxy::{
     AI_MODEL_ROUTE_MAX_COUNT, AI_MODEL_ROUTE_MAX_HEADERS, AI_QUOTA_MAX_SAFE_INTEGER,
 };
 pub use all_endpoint_status::AllEndpointStatusConfig;
+pub use auth_header_projection::{
+    compile_claim_header_projection, compile_claim_header_projection_with_owned_destinations,
+    ClaimHeaderProjectionEntry, ClaimHeaderProjectionPlan, DUPLICATE_HEADER_DESTINATION, INVALID_HEADER_DESTINATION,
+};
 pub use bandwidth_limit::BandwidthLimitConfig;
 pub use basic_auth::{BasicAuthConfig, BasicAuthSecretGroup, ResolvedBasicAuthUser};
 pub use canary::CanaryConfig;

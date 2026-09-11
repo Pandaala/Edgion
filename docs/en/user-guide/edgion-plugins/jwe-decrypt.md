@@ -93,11 +93,13 @@ spec:
 | `base64Secret` | Boolean | `false` | Decode the Secret value as base64 one additional time (for double-encoded keys) |
 | `maxTokenSize` | Integer | `8192` | Maximum token length in bytes |
 | `allowedAlgorithms` | Array\<Enum\> | none | Content encryption algorithm allowlist; must include `contentEncryptionAlgorithm` if set |
-| `payloadToHeaders` | Object | none | Map decrypted JSON payload fields to upstream request headers (supports dot-path, e.g. `user.department`) |
+| `payloadToHeaders` | Object | none | Map decrypted JSON payload fields to upstream request headers (supports dot-path, e.g. `user.department`). Destination names are case-insensitive and must be unique within this plugin instance |
 | `maxHeaderValueBytes` | Integer | `4096` | Maximum size per mapped header value |
 | `maxTotalHeaderBytes` | Integer | `16384` | Maximum total size for all mapped headers |
 | `storePayloadInCtx` | Boolean | `false` | Store the decrypted payload in the `jwe_payload` context variable (readable by downstream plugins; excluded from access log) |
 | `authFailureDelayMs` | Integer | `0` | Delay in milliseconds before sending an auth failure response (reduces timing side-channels) |
+
+Payload-header destinations are canonicalized and ordered before request processing. Case variants such as `X-User` and `x-user` therefore conflict within one JweDecrypt plugin configuration and are rejected. Separate plugins retain execution-order, last-write-wins behavior.
 
 ## Common Configuration Scenarios
 

@@ -28,9 +28,11 @@ impl OpenidConnect {
             return;
         }
 
-        *total_added_bytes = total_added_bytes.saturating_add(add);
-        let _ =
-            crate::plugins::http::common::auth_common::set_sensitive_request_header(session, header_name, header_value);
+        if crate::plugins::http::common::auth_common::set_sensitive_request_header(session, header_name, header_value)
+            .is_ok()
+        {
+            *total_added_bytes = total_added_bytes.saturating_add(add);
+        }
     }
 
     pub(super) fn apply_upstream_headers(
@@ -74,10 +76,16 @@ impl OpenidConnect {
             }
         }
 
-        if let Some(ref mapping) = self.config.claims_to_headers {
+        if !self.claim_header_projection.entries().is_empty() {
             let remaining_total = max_total.saturating_sub(total_added);
             if remaining_total > 0 {
-                set_common_claims_headers(session, claims, mapping, max_value, remaining_total);
+                set_common_claims_headers(
+                    session,
+                    claims,
+                    &self.claim_header_projection,
+                    max_value,
+                    remaining_total,
+                );
             }
         }
     }

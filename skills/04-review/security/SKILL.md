@@ -21,6 +21,7 @@ before applying a decision to current code.
 
 ## Regression guards
 
+- [Authentication claim header projection is precompiled and deterministic](regression-guards/auth-claim-header-projection.md)
 - [Deferred credential Connection nominations fail before materialization](regression-guards/deferred-credential-connection-nomination.md)
 - [Credential material Debug redaction](regression-guards/credential-material-debug-redaction.md)
 - [Authentication challenge realm quoted strings](regression-guards/auth-challenge-realm-quoted-strings.md)

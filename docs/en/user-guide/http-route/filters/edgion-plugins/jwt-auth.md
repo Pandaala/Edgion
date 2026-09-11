@@ -79,7 +79,7 @@ stringData:
 | `authFailureDelayMs` | Integer | `0` | Delay before a failed authentication response (milliseconds). Applies to missing and invalid tokens |
 | `realm` | String | `jwt` | Realm used in the Bearer `WWW-Authenticate` challenge; [Character rules](README.md#authentication-realm) |
 | `storeClaimsInCtx` | Boolean | `false` | Store verified claims in the ctx variable `jwt_claims` (read by downstream plugins via `get_ctx_var`; excluded from the access log so claims are not persisted) |
-| `claimsToHeaders` | Object | none | Map JWT claim names to upstream request header names |
+| `claimsToHeaders` | Object | none | Map JWT claim names to upstream request header names. Destination names are case-insensitive and must be unique within this plugin instance |
 
 **Constraint**: `issuerGroups` is required when `anonymous` is not set.
 
@@ -350,7 +350,7 @@ Kubernetes always decodes the outer Secret `.data` Base64 layer before the Contr
 
 ### Authentication Success
 
-JwtAuth adds no consumer header by default. To forward `sub`, configure an explicit claim mapping such as `claimsToHeaders: {sub: X-Consumer-Username}`. The mapping uses bounded header values and replaces the configured destination header.
+JwtAuth adds no consumer header by default. To forward `sub`, configure an explicit claim mapping such as `claimsToHeaders: {sub: X-Consumer-Username}`. The mapping uses bounded header values and replaces the configured destination header. Destination names are canonicalized case-insensitively before request processing, so mappings such as `X-User` and `x-user` in one plugin configuration are rejected as duplicates. Separate plugins retain normal execution-order, last-write-wins behavior.
 
 ### Authentication Failure
 

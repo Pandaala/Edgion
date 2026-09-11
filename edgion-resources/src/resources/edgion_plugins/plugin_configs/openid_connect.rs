@@ -170,6 +170,7 @@ pub struct OpenidConnectConfig {
     pub set_userinfo_header: bool,
     #[serde(default)]
     pub access_token_in_authorization_header: bool,
+    /// Map claims to case-insensitively unique upstream request-header destinations.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub claims_to_headers: Option<HashMap<String, String>>,
     #[serde(default)]
@@ -381,6 +382,26 @@ impl Default for OpenidConnectConfig {
 }
 
 impl OpenidConnectConfig {
+    pub fn compile_claim_header_projection(&self) -> Result<super::ClaimHeaderProjectionPlan, &'static str> {
+        let mut owned_destinations = Vec::with_capacity(4);
+        if self.set_access_token_header {
+            owned_destinations.push("X-Access-Token");
+        }
+        if self.set_id_token_header {
+            owned_destinations.push("X-ID-Token");
+        }
+        if self.set_userinfo_header {
+            owned_destinations.push("X-Userinfo");
+        }
+        if self.access_token_in_authorization_header {
+            owned_destinations.push("Authorization");
+        }
+        super::compile_claim_header_projection_with_owned_destinations(
+            self.claims_to_headers.as_ref(),
+            &owned_destinations,
+        )
+    }
+
     /// Validate configuration and return first error.
     pub fn get_validation_error(&self) -> Option<&str> {
         if let Err(error) = validate_auth_realm(&self.realm) {
@@ -477,6 +498,9 @@ impl OpenidConnectConfig {
         }
         if self.max_total_header_bytes < self.max_header_value_bytes {
             return Some("maxTotalHeaderBytes must be >= maxHeaderValueBytes");
+        }
+        if let Err(error) = self.compile_claim_header_projection() {
+            return Some(error);
         }
         if self.verification_mode == VerificationMode::JwksOnly && !self.use_jwks {
             return Some("useJwks must be true when verificationMode is JwksOnly");
@@ -854,5 +878,52 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(c.tls.verify, Some(false));
+    }
+
+    #[test]
+    fn validation_rejects_case_insensitive_claim_header_destination_collision() {
+        let cfg = OpenidConnectConfig {
+            discovery: "https://idp.example.com/.well-known/openid-configuration".to_string(),
+            client_id: "my-api".to_string(),
+            bearer_only: true,
+            verification_mode: VerificationMode::JwksOnly,
+            claims_to_headers: Some(HashMap::from([
+                ("sub".to_string(), "X-Identity".to_string()),
+                ("email".to_string(), "x-identity".to_string()),
+            ])),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            cfg.get_validation_error(),
+            Some(super::super::DUPLICATE_HEADER_DESTINATION)
+        );
+    }
+
+    #[test]
+    fn validation_rejects_claim_destination_owned_by_enabled_fixed_header() {
+        for destination in ["x-access-token", "x-id-token", "x-userinfo", "authorization"] {
+            let mut cfg = OpenidConnectConfig {
+                discovery: "https://idp.example.com/.well-known/openid-configuration".to_string(),
+                client_id: "my-api".to_string(),
+                bearer_only: true,
+                verification_mode: VerificationMode::JwksOnly,
+                claims_to_headers: Some(HashMap::from([("sub".to_string(), destination.to_string())])),
+                ..Default::default()
+            };
+            match destination {
+                "x-access-token" => cfg.set_access_token_header = true,
+                "x-id-token" => cfg.set_id_token_header = true,
+                "x-userinfo" => cfg.set_userinfo_header = true,
+                "authorization" => cfg.access_token_in_authorization_header = true,
+                _ => unreachable!(),
+            }
+
+            assert_eq!(
+                cfg.get_validation_error(),
+                Some(super::super::DUPLICATE_HEADER_DESTINATION),
+                "destination: {destination}"
+            );
+        }
     }
 }

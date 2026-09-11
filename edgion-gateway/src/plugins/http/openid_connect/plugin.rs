@@ -47,7 +47,7 @@ use edgion_resources::path_normalization::normalize_config_path;
 use edgion_resources::resources::backend_tls_policy::SubjectAltName;
 use edgion_resources::resources::common::TlsConfig;
 use edgion_resources::resources::edgion_plugins::{
-    EndpointAuthMethod, OpenidConnectConfig, UnauthAction, VerificationMode,
+    ClaimHeaderProjectionPlan, EndpointAuthMethod, OpenidConnectConfig, UnauthAction, VerificationMode,
 };
 
 type OidcError = Box<dyn std::error::Error + Send + Sync>;
@@ -270,6 +270,7 @@ impl LogicalWeight for IntrospectionCacheEntry {
 pub struct OpenidConnect {
     name: &'static str,
     config: OpenidConnectConfig,
+    claim_header_projection: ClaimHeaderProjectionPlan,
     callback_path: String,
     prepared_secrets: PreparedOidcSecrets,
     /// Per-instance outbound HTTP client. Built at construction with the plugin's
@@ -296,6 +297,7 @@ impl OpenidConnect {
         // config-side and request-side paths inhabit the same normalized space.
         // See docs/superpowers/specs/2026-04-26-uri-normalization-design.md §3.5.
         let mut config = config.clone();
+        let claim_header_projection = config.compile_claim_header_projection().map_err(str::to_owned)?;
         let path_cfg = edgion_resources::path_normalization::get_path_normalization_config();
         let normalized_logout_path = normalize_config_path(&config.logout_path, path_cfg);
         if normalized_logout_path != config.logout_path {
@@ -441,6 +443,7 @@ impl OpenidConnect {
         Ok(Self {
             name: PLUGIN_NAME,
             config,
+            claim_header_projection,
             callback_path,
             prepared_secrets,
             client: outbound_client,
