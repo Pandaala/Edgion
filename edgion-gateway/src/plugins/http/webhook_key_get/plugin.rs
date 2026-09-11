@@ -86,7 +86,6 @@ impl RequestFilter for WebhookKeyGet {
             let resolved = resolve_webhook_key(
                 session,
                 &var.webhook_ref,
-                None,
                 var.path_override.as_deref(),
                 &var.extract,
                 &mut diagnostics,

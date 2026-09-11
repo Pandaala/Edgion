@@ -100,15 +100,16 @@ WebhookVar {
 pub async fn resolve_webhook_key(
     session: &dyn PluginSession,
     webhook_ref: &str,
-    _forward_headers: Option<&[String]>,   // retained in signature, no longer consumed
     path_override: Option<&str>,
     extract: &WebhookExtract,
+    diagnostics: &mut OutboundRequestDiagnostics,
 ) -> Option<String>
 ```
 
 - `forward_headers` / `path_suffix` are **removed** from consumer config. Headers to forward must be declared on the webhook resource's `request.headers.origin` allow-list; per-call paths use `path_override`.
 - `path_override` is **only honored** when the webhook resource declares `request.path.allowOverride: true`. Otherwise it is silently ignored (not an error).
 - `extract` (response-side header/cookie/body extractor) is **kept** — it parses the response, unrelated to outbound construction.
+- Request construction receives `session` and `path_override`; the caller owns `diagnostics` and emits it through its `PluginLog` after the call.
 - Consumers that need dynamic per-call values set them into the gateway context first (via a preceding CtxSet entry), then WebhookKeyGet runs and the webhook templates read `${ctx:NAME}`. CtxSet local vars and WebhookKeyGet vars must not share one plugin entry. No new "invoker arg" concept was added.
 
 ## Template engine reference

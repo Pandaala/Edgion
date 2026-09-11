@@ -295,7 +295,7 @@
 | `edgion-gateway/src/link_sys/providers/webhook/client.rs` | `link-sys-provider-webhook` | source | changed | `B0053`: made Webhook publication a prepared, sequence-checked store transition instead of a spawned generic lifecycle |
 | `edgion-gateway/src/link_sys/providers/webhook/manager.rs` | `link-sys-provider-webhook` | source | pending | External 9b787978..b297af6e requires review; prior changed: `B0053`: serialized source generations and made one-key/full-map replacement and retirement atomic |
 | `edgion-gateway/src/link_sys/providers/webhook/mod.rs` | `link-sys-provider-webhook` | source | changed | `B0053`: removed the obsolete manager lifecycle adapter exports |
-| `edgion-gateway/src/link_sys/providers/webhook/resolver.rs` | `link-sys-provider-webhook` | source | pending | External 9b787978..b297af6e requires review; prior examined-no-change: `B0053`: retained canonical service resolution and namespace behavior |
+| `edgion-gateway/src/link_sys/providers/webhook/resolver.rs` | `link-sys-provider-webhook` | source | changed | B0307: remove obsolete compatibility argument and ignored-override allocation |
 | `edgion-gateway/src/link_sys/providers/webhook/runtime.rs` | `link-sys-provider-webhook` | source | deferred | `B0053` / `D0019`: window rotation and time-source semantics require a wider limiter contract |
 | `edgion-gateway/src/link_sys/readme` | `link-sys-root` | documentation | changed | `B0054`: replaced fictional TODO/configuration claims with the current typed provider, output, fallback, and backfill boundaries |
 | `edgion-gateway/src/link_sys/runtime/conf_handler.rs` | `link-sys-runtime` | source | examined-no-change | `B0057`: retained the nonblocking ordered conf-sync adapter |
@@ -523,7 +523,7 @@
 | `edgion-gateway/src/plugins/http/wasm/shared_data.rs` | `plugins-http-wasm` | source | changed | B0114 |
 | `edgion-gateway/src/plugins/http/wasm/vm_manager.rs` | `plugins-http-wasm` | source | examined-no-change | B0305: independent LGTM; bounded permits, LKG and atomic VM generations retained |
 | `edgion-gateway/src/plugins/http/webhook_key_get/mod.rs` | `plugins-http-webhook-key-get` | source | examined-no-change | `B0116`: minimal private-module/public-type facade retained |
-| `edgion-gateway/src/plugins/http/webhook_key_get/plugin.rs` | `plugins-http-webhook-key-get` | source | examined-no-change | B0306: independent LGTM; bounded per-variable outbound diagnostics and serial ctx/template semantics retained |
+| `edgion-gateway/src/plugins/http/webhook_key_get/plugin.rs` | `plugins-http-webhook-key-get` | source | changed | B0307 support call-site cleanup; B0306 diagnostics/ordering evidence retained |
 | `edgion-gateway/src/plugins/mod.rs` | `plugins-root` | source | examined-no-change | `B0118`: compile-time facade and live selective re-exports retained |
 | `edgion-gateway/src/plugins/runtime/body_gate.rs` | `plugins-runtime` | source | changed | B0119 |
 | `edgion-gateway/src/plugins/runtime/conditional_filter.rs` | `plugins-runtime` | source | changed | B0120 |

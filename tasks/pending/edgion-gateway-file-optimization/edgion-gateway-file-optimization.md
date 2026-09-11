@@ -10,10 +10,10 @@
 | Priority | P1 |
 | Baseline commit | `d484e580` |
 | Scope | Every tracked file under `edgion-gateway/` |
-| Campaign status | in-progress at HEAD `ed688bf3`: B0306 WebhookKeyGet refresh is independently approved as examined-no-change and passed all commit gates. |
-| Coverage | 551 current Gateway files: 233 changed, 193 examined-no-change, 16 deferred, 109 non-terminal; 5 historical rows are removed and 1 renamed. External `79b72bb3` added RequestId/request-trace-id ownership, removed attachable TraceContext and reopened 18 affected terminal files. Historical evidence is retained. |
-| Active batch | B0306 exact staging and automatic local commit. Never push. |
-| Analysis queue | Select the next pending Gateway batch only after B0306 commits. D0058 and D0127–D0155 track separate work. |
+| Campaign status | in-progress at HEAD `c0ebeefc`: B0307 webhook resolver allocation/API cleanup passed independent review and all commit gates. |
+| Coverage | 551 current Gateway files: 235 changed, 192 examined-no-change, 16 deferred, 108 non-terminal; 5 historical rows are removed and 1 renamed. External `79b72bb3` added RequestId/request-trace-id ownership, removed attachable TraceContext and reopened 18 affected terminal files. Historical evidence is retained. |
+| Active batch | B0307 exact staging and automatic local commit. Never push. |
+| Analysis queue | No later batch may enter the serial mutation/review lane before B0307 completes. D0058 and D0127–D0155 track separate work. |
 | Integration freeze | 3,274 files. External `79b72bb3` integration changes were verified against the commit and clean worktree, then reconciled path-by-path; prior reconciliations retained. Campaign made no integration-test edit. |
 
 ## AI guide summary

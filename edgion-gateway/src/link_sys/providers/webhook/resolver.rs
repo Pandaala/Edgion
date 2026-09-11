@@ -15,19 +15,15 @@ use super::manager::{get_webhook_global_max, get_webhook_manager};
 /// This is the main entry point called by the WebhookKeyGet plugin.
 ///
 /// The outbound request shape (method, path, query args, headers, cookies) is
-/// now defined entirely by the webhook resource's `request` block and applied
+/// defined entirely by the webhook resource's `request` block and applied
 /// inside `outbound_call`. The consumer only supplies the `session` (for origin
 /// and template lookups) and an optional `path_override`.
 ///
-/// `_forward_headers` is retained in the signature for the Wave C consumer
-/// migration but is no longer consumed here — headers to forward are declared
-/// on the webhook resource's `request.headers.origin` allow-list.
 /// Missing-field diagnostics are returned through the caller-owned collector,
 /// independently of whether a value is resolved; the plugin owns their emission.
 pub async fn resolve_webhook_key(
     session: &dyn PluginSession,
     webhook_ref: &str,
-    _forward_headers: Option<&[String]>,
     path_override: Option<&str>,
     extract: &WebhookExtract,
     diagnostics: &mut OutboundRequestDiagnostics,
@@ -40,12 +36,10 @@ pub async fn resolve_webhook_key(
         }
     };
 
-    let path_override_owned = path_override.map(|s| s.to_string());
-
     match outbound_call(
         &client,
         session,
-        path_override_owned.as_deref(),
+        path_override,
         get_webhook_global_max(),
         &[],
         diagnostics,
@@ -138,10 +132,6 @@ fn extract_value_from_response(result: &OutboundResponse, extract: &WebhookExtra
     }
 }
 
-// NOTE: extract_value_from_response tests require a real HTTP server (mockito).
-// These are covered by integration tests instead.
-// See edgion-tests/src/client/suites/edgion_plugins/webhook_key_get/ for full integration tests.
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -153,19 +143,10 @@ mod tests {
     async fn _type_check<'a>(
         session: &'a dyn crate::plugins::runtime::PluginSession,
         webhook_ref: &'a str,
-        forward_headers: Option<&'a [String]>,
-        path_suffix: Option<&'a str>,
+        path_override: Option<&'a str>,
         extract: &'a edgion_resources::common::WebhookExtract,
     ) -> Option<String> {
-        super::resolve_webhook_key(
-            session,
-            webhook_ref,
-            forward_headers,
-            path_suffix,
-            extract,
-            &mut Default::default(),
-        )
-        .await
+        super::resolve_webhook_key(session, webhook_ref, path_override, extract, &mut Default::default()).await
     }
 
     fn make_result(status: u16, headers: reqwest::header::HeaderMap, body: &[u8]) -> OutboundResponse {
@@ -257,19 +238,6 @@ mod tests {
         let result = make_result(200, reqwest::header::HeaderMap::new(), b"");
         let extract = WebhookExtract::BodyText;
         assert_eq!(extract_value_from_response(&result, &extract), None);
-    }
-
-    // P1 — hop-by-hop header filtering
-    /// Verifies that is_hop_by_hop correctly identifies hop-by-hop headers,
-    /// locking in the behavior used in resolve_webhook_key's forwardHeaders filtering.
-    #[test]
-    fn is_hop_by_hop_filters_connection() {
-        use crate::plugins::http::common::http_client::is_hop_by_hop;
-        assert!(is_hop_by_hop("Connection"));
-        assert!(is_hop_by_hop("Transfer-Encoding"));
-        assert!(is_hop_by_hop("Keep-Alive"));
-        assert!(!is_hop_by_hop("Authorization"));
-        assert!(!is_hop_by_hop("X-Tenant-Id"));
     }
 
     /// TDD: a completed response with non-success status records `status_error` metric and returns None.
