@@ -783,6 +783,43 @@ async fn assert_upstream_abort(ctx: &ScenarioCtx, bases: &ProviderBases) -> Resu
     Ok(())
 }
 
+async fn wait_weighted_traffic_ready(ctx: &ScenarioCtx) -> Result<()> {
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let stable_window = Duration::from_millis(500);
+    let mut stable_since = Instant::now();
+    let mut saw_a = false;
+    let mut saw_b = false;
+    loop {
+        let response = ai_request(ctx, None, false).await?;
+        if response.status().is_success() {
+            let body: Value = response
+                .json()
+                .await
+                .context("weighted readiness response was not JSON")?;
+            match body.pointer("/mock/credential_generation").and_then(Value::as_str) {
+                Some("a") => saw_a = true,
+                Some("b") => saw_b = true,
+                _ => {
+                    stable_since = Instant::now();
+                    saw_a = false;
+                    saw_b = false;
+                }
+            }
+        } else {
+            stable_since = Instant::now();
+            saw_a = false;
+            saw_b = false;
+        }
+        if saw_a && saw_b && stable_since.elapsed() >= stable_window {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            anyhow::bail!("timed out waiting for stable weighted traffic across both backends");
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+}
+
 async fn sample_weighted(ctx: &ScenarioCtx) -> Result<(usize, usize)> {
     let mut a = 0;
     let mut b = 0;
@@ -1008,7 +1045,9 @@ async fn run_inner(ctx: &ScenarioCtx) -> Result<()> {
         "backend.example.com",
         true,
     );
-    tokio::try_join!(apply(ctx, &backend_mtls), apply(ctx, &policy_mtls))?;
+    apply(ctx, &backend_mtls).await?;
+    wait_unary(ctx, false).await?;
+    apply(ctx, &policy_mtls).await?;
     let mtls = wait_unary(ctx, true).await?;
     anyhow::ensure!(
         mtls.pointer("/mock/host_is_expected") == Some(&Value::Bool(true)),
@@ -1028,6 +1067,7 @@ async fn run_inner(ctx: &ScenarioCtx) -> Result<()> {
     .await?;
     wait_policy_class(ctx, "edgionbackendtrafficpolicy", TRAFFIC_POLICY, Some("ai")).await?;
     wait_weighted_generation(ctx, 3).await?;
+    wait_weighted_traffic_ready(ctx).await?;
     assert_weighted(ctx).await?;
 
     let backend_hot =
@@ -1047,6 +1087,7 @@ async fn run_inner(ctx: &ScenarioCtx) -> Result<()> {
             }))
     })
     .await?;
+    wait_weighted_traffic_ready(ctx).await?;
     assert_weighted(ctx).await?;
     let policies = gateway_policies(ctx, "edgionbackendtrafficpolicy").await?;
     let policy = policies

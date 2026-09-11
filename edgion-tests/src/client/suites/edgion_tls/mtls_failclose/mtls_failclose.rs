@@ -19,7 +19,9 @@
 // handshake-completion check inline makes the audit site self-contained.
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
+use crate::suites::status::helpers;
 use async_trait::async_trait;
+use serde_json::Value;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
@@ -96,7 +98,7 @@ fn get_tls_info(host: &str, port: u16, servername: &str) -> Result<TlsConnection
         .or_else(|| extract_field(&combined, "Cipher:"))
         .unwrap_or_default();
 
-    let connected = combined.contains("CONNECTED") && !cipher.is_empty() && cipher != "(NONE)";
+    let connected = combined.contains("CONNECTED");
 
     Ok(TlsConnectionInfo {
         connected,
@@ -110,6 +112,26 @@ fn get_tls_info(host: &str, port: u16, servername: &str) -> Result<TlsConnection
 /// cipher/cipher.rs helper.
 fn handshake_truly_completed(info: &TlsConnectionInfo) -> bool {
     info.connected && info.cipher != "0000" && info.cipher != "(NONE)" && !info.cipher.is_empty()
+}
+
+fn listener_has_condition(
+    gateway: &Value,
+    listener_name: &str,
+    condition_type: &str,
+    expected_status: &str,
+    expected_reason: &str,
+) -> bool {
+    gateway["status"]["listeners"]
+        .as_array()
+        .and_then(|listeners| listeners.iter().find(|listener| listener["name"] == listener_name))
+        .and_then(|listener| listener["conditions"].as_array())
+        .is_some_and(|conditions| {
+            conditions.iter().any(|condition| {
+                condition["type"] == condition_type
+                    && condition["status"] == expected_status
+                    && condition["reason"] == expected_reason
+            })
+        })
 }
 
 fn is_k8s_mode() -> bool {
@@ -176,6 +198,27 @@ fn assert_ssl_log_err_log(ctx: &TestContext, servername: &str, expected_prefix: 
     }
 }
 
+async fn wait_for_ssl_log_err_log(
+    ctx: &TestContext,
+    servername: &str,
+    expected_prefixes: &[&str],
+) -> Result<String, String> {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        let mut last_error = String::new();
+        for expected_prefix in expected_prefixes {
+            match assert_ssl_log_err_log(ctx, servername, expected_prefix) {
+                Ok(entry) => return Ok(entry),
+                Err(error) => last_error = error,
+            }
+        }
+        if Instant::now() >= deadline {
+            return Err(last_error);
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+}
+
 impl MtlsFailcloseTestSuite {
     // Case 1: EdgionTls caSecretRef points to a Secret that doesn't exist.
     // ca_cert_pem() returns "CA secret not loaded by controller", configure_mtls
@@ -212,7 +255,7 @@ impl MtlsFailcloseTestSuite {
                                     ),
                                 );
                             }
-                            match assert_ssl_log_err_log(&ctx, hostname, "mtls config:") {
+                            match wait_for_ssl_log_err_log(&ctx, hostname, &["mtls config:"]).await {
                                 Ok(_) => TestResult::passed_with_message(
                                     start.elapsed(),
                                     format!(
@@ -265,7 +308,7 @@ impl MtlsFailcloseTestSuite {
                                     ),
                                 );
                             }
-                            match assert_ssl_log_err_log(&ctx, hostname, "mtls config:") {
+                            match wait_for_ssl_log_err_log(&ctx, hostname, &["mtls config:"]).await {
                                 Ok(_) => TestResult::passed_with_message(
                                     start.elapsed(),
                                     format!(
@@ -285,9 +328,8 @@ impl MtlsFailcloseTestSuite {
     }
 
     // Case 3: Gateway listener frontendValidation references a Secret whose
-    // ca.crt is garbage. add_ca_bundle_to_store returns Err; the caller stamps
-    // err_log = "frontend mTLS error: ..." (different prefix than the EdgionTls
-    // path) and returns BEFORE apply_secret_to_ssl binds cert/key.
+    // ca.crt is garbage. The Controller marks that listener unprogrammed, and
+    // the listener connection gate rejects it before TLS callbacks run.
     fn test_frontend_mtls_garbage_ca_pem_failclosed() -> TestCase {
         TestCase::new(
             "frontend_mtls_garbage_ca_pem_failclosed",
@@ -310,23 +352,42 @@ impl MtlsFailcloseTestSuite {
                                     ),
                                 );
                             }
-                            if is_k8s_mode() {
-                                return TestResult::passed_with_message(
+                            if !info.connected {
+                                return TestResult::failed(
                                     start.elapsed(),
-                                    format!(
-                                        "Handshake aborted in K8s mode (Protocol={}, Cipher={}); gateway ssl.log is not mounted in the test-client pod",
-                                        info.protocol, info.cipher
-                                    ),
+                                    "frontendValidation test did not reach the Gateway listener".to_string(),
                                 );
                             }
-                            match assert_ssl_log_err_log(&ctx, hostname, "frontend mTLS error:").or_else(|_| {
-                                assert_ssl_log_err_log(&ctx, hostname, "controller rejected gateway tls transport")
-                            }) {
+
+                            match helpers::wait_resource_status(
+                                &ctx,
+                                "Gateway",
+                                "edgion-test",
+                                "mtls-failclose-gateway",
+                                Duration::from_secs(5),
+                                |gateway| {
+                                    listener_has_condition(
+                                        gateway,
+                                        "https-frontend-mtls-failclose",
+                                        "ResolvedRefs",
+                                        "False",
+                                        "InvalidCACertificateRef",
+                                    ) && listener_has_condition(
+                                        gateway,
+                                        "https-frontend-mtls-failclose",
+                                        "Programmed",
+                                        "False",
+                                        "Invalid",
+                                    )
+                                },
+                            )
+                            .await
+                            {
                                 Ok(_) => TestResult::passed_with_message(
                                     start.elapsed(),
                                     format!(
-                                        "Handshake aborted (Protocol={}, Cipher={}) and ssl.log recorded \
-                                         a fail-closed frontend CA rejection",
+                                        "Handshake aborted (Protocol={}, Cipher={}) and listener status recorded \
+                                         the invalid frontend CA rejection",
                                         info.protocol, info.cipher
                                     ),
                                 ),

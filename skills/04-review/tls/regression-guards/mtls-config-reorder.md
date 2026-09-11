@@ -17,8 +17,13 @@ verification **before** binding cert/key to the SSL. When `configure_mtls`
 returns Err (CA Secret missing, garbage CA PEM, store build failure),
 `apply_edgion_tls_cert` stamps `err_log = Some(format!("mtls config: {e}"))`
 and returns; cert/key have not yet been bound, BoringSSL has no cert to serve,
-and the handshake aborts. The same applies on the Gateway-listener
-`frontendValidation` path with `err_log = "frontend mTLS error: ..."`.
+and the handshake aborts. The same runtime defense applies on the
+Gateway-listener `frontendValidation` path with
+`err_log = "frontend mTLS error: ..."`. The Controller now validates resolved
+frontend CA material first, marks a listener with malformed CA PEM as
+`Programmed=False`, and the listener connection gate rejects it before TLS
+callbacks run. The callback ordering remains required as defense in depth for
+any strict rejection that reaches the TLS matcher.
 
 Re-reports of the form "Mutual mTLS silently downgrades to anonymous accepted
 when caSecretRef points to a missing Secret", "configure_mtls Err is fail-open",
@@ -103,11 +108,15 @@ SAN-mirror logic), the ordering decision must be revisited.
   `ca.crt = 'not a pem'`, asserting the same shape via the
   `add_ca_bundle_to_store` Err leg.
 - `..::test_frontend_mtls_garbage_ca_pem_failclosed` drives the standard Gateway
-  `spec.tls.frontend.perPort` path with a garbage `ca.crt`, asserting
-  the handshake aborts and `ssl.log` `err_log` starts with `frontend mTLS error:`.
+  `spec.tls.frontend.perPort` path with a garbage `ca.crt`, asserting the
+  connection reaches the bound listener but the handshake aborts, while the
+  listener reports `ResolvedRefs=False/InvalidCACertificateRef` and
+  `Programmed=False/Invalid`. No `ssl.log` entry is expected because the
+  connection gate rejects an unprogrammed listener before TLS callbacks run.
 
-Pre-fix, all three tests would have failed (handshake completed with a real
-cipher); the reorder is what flips them green.
+Before the runtime reorder, a malformed EdgionTls CA could complete a handshake
+with a real cipher. The standard Gateway path now has the additional Controller
+admission and connection-gate protection described above.
 
 ## Relationship to siblings
 
