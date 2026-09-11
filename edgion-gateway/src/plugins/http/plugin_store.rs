@@ -1770,6 +1770,47 @@ mod compile_plugins_tests {
         assert!(compile_plugins(&disabled).is_activatable);
     }
 
+    #[test]
+    fn header_modifier_invalid_reload_replaces_valid_generation_and_recovers() {
+        for (stage, kind) in [
+            ("requestPlugins", "RequestHeaderModifier"),
+            ("upstreamResponseFilterPlugins", "ResponseHeaderModifier"),
+        ] {
+            let resource = |value: &str| -> EdgionPlugins {
+                serde_json::from_value(serde_json::json!({
+                    "apiVersion": "edgion.io/v1", "kind": "EdgionPlugins",
+                    "metadata": {"name": "headers", "namespace": "default"},
+                    "spec": {stage: [{"type": kind, "config": {
+                        "set": [{"name": "x-test", "value": value}]
+                    }}]}
+                }))
+                .unwrap()
+            };
+            let store = PluginStore::new();
+            let key = "default/headers".to_string();
+            let initial = compile_plugins(&resource("initial"));
+            assert!(initial.is_activatable);
+            store.replace_all(HashMap::from([(key.clone(), initial)]));
+            let captured = store.scope().http(&key).unwrap();
+            for (value, expected_active) in [("private\r\nvalue", false), ("recovered", true)] {
+                let source = resource(value);
+                let next = compile_plugins(&source);
+                assert_eq!(next.preparse_errors, source.validate_plugins());
+                assert_eq!(next.is_activatable, expected_active);
+                assert!(!next.retain_previous_on_invalid_update);
+                store.apply_delta(HashMap::new(), HashMap::from([(key.clone(), next)]), &HashSet::new());
+                let published = store.scope().http(&key).unwrap();
+                assert_eq!(published.is_activatable, expected_active);
+                if !expected_active {
+                    assert_leading_reject(&published);
+                    assert!(!published.preparse_errors.join(";").contains("private"));
+                }
+                // An already captured generation remains valid through reload.
+                assert!(captured.is_activatable);
+            }
+        }
+    }
+
     fn waf_resource(rules: &str) -> EdgionPlugins {
         EdgionPlugins {
             metadata: kube::api::ObjectMeta {

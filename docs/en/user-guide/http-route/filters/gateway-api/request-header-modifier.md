@@ -96,9 +96,12 @@ spec:
 ## Notes
 
 - Header names are case-insensitive.
-- Supported Gateway API configuration assigns each case-insensitive header name to exactly one action and contains no equivalent duplicate names.
-- **Defensive behavior for invalid input:** if a non-admission source supplies duplicates, the Gateway keeps only the first case-insensitive equivalent entry within each of `set`, `add`, and `remove`, then applies the lists in `set` → `add` → `remove` order. This fallback does not make duplicate or cross-action names supported configuration.
+- Names must be valid HTTP header tokens of 1–256 bytes; values must be valid HTTP header values of 1–4096 characters. CR, LF, NUL, and other invalid control characters are rejected.
+- Each of `set`, `add`, and `remove` accepts at most 16 entries. A case-insensitive name cannot appear in more than one action. For equivalent names within one list supplied outside native Kubernetes admission, the first entry is used; every entry still has to pass validation. Operations execute in `set` → `add` → `remove` order.
+- Native HTTPRoute and GRPCRoute filters must pair their `type` with exactly the corresponding configuration field. Each request/response modifier type can occur only once in one rule or backend filter list. A rule-level modifier and a backend-level modifier are separate lists.
+- Validation also applies to EdgionPlugins and filesystem/etcd configuration. Invalid native modifiers invalidate the owning rule while valid sibling rules remain available; status reports the invalid configuration. If invalid configuration reaches Gateway construction, the affected runtime rejects requests with a generic configuration error instead of silently skipping the modifier.
 - Values are treated as literals; path parameters (`:name`) and template variables are **not** expanded here. If you need dynamic substitution, use the [ProxyRewrite plugin](../edgion-plugins/proxy-rewrite.md).
+- For AI provider backend filters, use unique names within each list; the first-equivalent fallback is not currently guaranteed.
 - To modify response headers instead, use [ResponseHeaderModifier](./response-header-modifier.md).
 
 ## Related documents

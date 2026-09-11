@@ -22,7 +22,8 @@ HTTPRoute is the most complex resource in Edgion. It defines HTTP-layer routing 
 
 ### validate
 
-1. Calls `validate_http_route_if_enabled()` (currently a no-op; cross-namespace validation is handled via `ref_denied` in the parse stage)
+1. Calls `validate_http_route_if_enabled()` for matcher enum/regex validation; cross-namespace validation is handled via `ref_denied` in the parse stage.
+2. Per-rule header modifier validation uses the shared `HTTPRouteRule::header_modifier_error()` in the invalid-rule path, including backend filters and delegation source rules. Invalid rules are excluded while valid siblings survive; all-invalid header rules reject attachment. See [header modifier validation](../../04-review/plugin-runtime/regression-guards/header-modifier-validation.md).
 
 ### preparse (type level)
 

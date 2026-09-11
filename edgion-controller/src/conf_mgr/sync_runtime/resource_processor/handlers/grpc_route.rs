@@ -571,6 +571,29 @@ impl ProcessorHandler<GRPCRoute> for GrpcRouteHandler {
         let invalid_indices = find_controller_invalid_rule_indices(route, route_ns, _ctx.runtime());
         let total_rules = route.spec.rules.as_ref().map_or(0, |r| r.len());
         let valid_rules = total_rules - invalid_indices.len();
+        let serves_no_rule = match &route.spec.resolved_rules {
+            Some(resolved) => resolved.is_empty(),
+            None => valid_rules == 0,
+        };
+        // Header modifier errors withdraw only the offending rule. Reject the
+        // attachment when no effective rule survives, and retain valid siblings.
+        let header_errors: Vec<(usize, &'static str)> = route
+            .spec
+            .rules
+            .iter()
+            .flatten()
+            .enumerate()
+            .filter_map(|(index, rule)| rule.header_modifier_error().map(|message| (index, message)))
+            .collect();
+        let header_rejects_route = serves_no_rule && !header_errors.is_empty();
+        if header_rejects_route {
+            validation_accepted_errors.extend(header_errors.iter().map(|(index, message)| {
+                AcceptedError::UnsupportedValue {
+                    message: format!("rules[{index}]: {message}"),
+                }
+            }));
+        }
+        let route_rejected = ownership_rejects_route || header_rejects_route;
 
         route.spec.invalid_rule_indices = if invalid_indices.is_empty() {
             None
@@ -629,13 +652,18 @@ impl ProcessorHandler<GRPCRoute> for GrpcRouteHandler {
                 // delegation drops — a dropped delegated rule never flips
                 // Accepted, matching the per-rule precedent above).
                 let own_invalid = !invalid_indices.is_empty() && valid_rules > 0;
-                if !ownership_rejects_route && (own_invalid || !delegation_dropped.is_empty()) {
+                if !route_rejected && (own_invalid || !delegation_dropped.is_empty()) {
                     let mut reasons: Vec<String> = Vec::new();
                     if own_invalid {
                         reasons.push(format!(
                             "Rules at indices {:?} are invalid; {} of {} rules are active",
                             invalid_indices, valid_rules, total_rules
                         ));
+                        reasons.extend(
+                            header_errors
+                                .iter()
+                                .map(|(index, message)| format!("rules[{index}]: {message}")),
+                        );
                     }
                     reasons.extend(delegation_dropped.iter().cloned());
                     let message = reasons.join("; ");
@@ -653,6 +681,11 @@ impl ProcessorHandler<GRPCRoute> for GrpcRouteHandler {
                         (
                             condition_reasons::UNSUPPORTED_VALUE,
                             "Route not accepted; backend-scoped WAF cannot join the request-wide ownership election",
+                        )
+                    } else if header_rejects_route {
+                        (
+                            condition_reasons::UNSUPPORTED_VALUE,
+                            "Route not accepted; no valid rule remains after header modifier validation",
                         )
                     } else {
                         (condition_reasons::ALL_RULES_VALID, "All rules are valid")
@@ -790,36 +823,6 @@ fn delegation_accepted_condition(
     }
 }
 
-/// Check if a filter list has the same single-instance filter type more than once.
-///
-/// Per Gateway API spec for GRPCRoute, "specifying the same filter multiple times
-/// is not supported unless explicitly indicated in the filter."
-/// `ExtensionRef` is explicitly allowed to repeat;
-/// `RequestHeaderModifier` and `ResponseHeaderModifier` are not.
-fn has_duplicate_filter_conflict(filters: Option<&Vec<GRPCRouteFilter>>) -> bool {
-    let Some(filters) = filters else { return false };
-    let mut seen_request_header = false;
-    let mut seen_response_header = false;
-    for f in filters {
-        match f.filter_type {
-            GRPCRouteFilterType::RequestHeaderModifier => {
-                if seen_request_header {
-                    return true;
-                }
-                seen_request_header = true;
-            }
-            GRPCRouteFilterType::ResponseHeaderModifier => {
-                if seen_response_header {
-                    return true;
-                }
-                seen_response_header = true;
-            }
-            GRPCRouteFilterType::ExtensionRef => {}
-        }
-    }
-    false
-}
-
 /// True if any `ExtensionRef` filter in the list points at a kind that is not
 /// recognized.
 ///
@@ -850,8 +853,8 @@ fn has_unsupported_extension_ref(filters: Option<&Vec<GRPCRouteFilter>>) -> bool
 
 /// Find rule indices where the rule is invalid.
 ///
-/// A rule is invalid if it (or any of its backend refs) has a duplicate single-instance
-/// filter type within a single filter list. Rules with invalid backends (non-Service kind
+/// A rule is invalid if it (or any of its backend refs) has a malformed or repeated
+/// header modifier within a single filter list. Rules with invalid backends (non-Service kind
 /// or non-existent) are NOT marked as invalid here — the Gateway still registers them so
 /// requests match and get an error response (per Gateway API spec).
 ///
@@ -864,7 +867,7 @@ pub(crate) fn find_invalid_rule_indices(route: &GRPCRoute, _route_ns: &str) -> V
     let mut invalid_indices = Vec::new();
     if let Some(rules) = &route.spec.rules {
         for (idx, rule) in rules.iter().enumerate() {
-            if has_duplicate_filter_conflict(rule.filters.as_ref()) {
+            if rule.header_modifier_error().is_some() {
                 invalid_indices.push(idx);
                 continue;
             }
@@ -885,10 +888,9 @@ pub(crate) fn find_invalid_rule_indices(route: &GRPCRoute, _route_ns: &str) -> V
                 continue;
             }
             if let Some(backend_refs) = &rule.backend_refs {
-                let backend_conflict = backend_refs.iter().any(|br| {
-                    has_duplicate_filter_conflict(br.filters.as_ref())
-                        || has_unsupported_extension_ref(br.filters.as_ref())
-                });
+                let backend_conflict = backend_refs
+                    .iter()
+                    .any(|br| has_unsupported_extension_ref(br.filters.as_ref()));
                 if backend_conflict {
                     invalid_indices.push(idx);
                 }
@@ -1141,6 +1143,52 @@ mod tests {
             }
         ]));
         assert_eq!(super::find_invalid_rule_indices(&route, "default"), vec![0]);
+    }
+
+    #[test]
+    fn header_modifier_status_preserves_siblings_rejects_empty_route_and_recovers() {
+        let mut route = route_with_rules(json!([
+            {"filters": [{"type": "RequestHeaderModifier", "requestHeaderModifier": {
+                "set": [{"name": "x-test", "value": "secret-marker\r\ninvalid"}]
+            }}]},
+            {"backendRefs": [{"name": "svc", "port": 80, "filters": [
+                {"type": "ResponseHeaderModifier"}
+            ]}]},
+            {"filters": [{"type": "RequestHeaderModifier", "requestHeaderModifier": {
+                "set": [{"name": "x-valid", "value": "yes"}]
+            }}]}
+        ]));
+        route.spec.parent_refs = Some(serde_json::from_value(json!([{"name": "gw"}])).unwrap());
+        let handler = GrpcRouteHandler::default();
+        let ctx = make_ctx();
+        handler.update_status(&mut route, &ctx, &[]);
+        assert_eq!(route.spec.invalid_rule_indices.as_deref(), Some(&[0, 1][..]));
+        let conditions = &route.status.as_ref().unwrap().parents[0].conditions;
+        assert!(conditions.iter().any(|c| c.type_ == "PartiallyInvalid"
+            && c.status == "True"
+            && c.message.contains("1 of 3 rules are active")));
+        assert!(!conditions.iter().any(|c| c.message.contains("secret-marker")));
+
+        route.spec.rules.as_mut().unwrap().truncate(2);
+        handler.update_status(&mut route, &ctx, &[]);
+        let conditions = &route.status.as_ref().unwrap().parents[0].conditions;
+        assert!(conditions.iter().any(|c| c.type_ == "Accepted"
+            && c.status == "False"
+            && c.message.contains("rules[0]")
+            && c.message.contains("rules[1]")));
+        assert!(conditions
+            .iter()
+            .any(|c| c.type_ == "PartiallyInvalid" && c.status == "False"));
+
+        route.spec.rules.as_mut().unwrap()[0].filters = None;
+        route.spec.rules.as_mut().unwrap()[1].backend_refs.as_mut().unwrap()[0].filters = None;
+        handler.update_status(&mut route, &ctx, &[]);
+        assert!(route.spec.invalid_rule_indices.is_none());
+        let conditions = &route.status.as_ref().unwrap().parents[0].conditions;
+        assert!(conditions
+            .iter()
+            .any(|c| c.type_ == "PartiallyInvalid" && c.status == "False" && c.reason == "AllRulesValid"));
+        assert!(!conditions.iter().any(|c| c.message.contains("rules[0]")));
     }
 
     #[test]

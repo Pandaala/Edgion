@@ -21,7 +21,8 @@ GRPCRoute defines gRPC-layer routing rules. Its Controller-side processing is hi
 
 ### validate
 
-1. Calls `validate_grpc_route_if_enabled()` (currently a no-op; cross-namespace validation is handled via `ref_denied` in the parse stage)
+1. Calls `validate_grpc_route_if_enabled()` for matcher enum/regex validation; cross-namespace validation is handled via `ref_denied` in the parse stage.
+   Per-rule header modifier validation uses the shared `GRPCRouteRule::header_modifier_error()`, including backend filters and delegation source rules. Invalid rules are excluded while valid siblings survive; all-invalid header rules reject attachment. See [header modifier validation](../../04-review/plugin-runtime/regression-guards/header-modifier-validation.md).
 2. Calls `validate_backend_refs()` to validate all backendRefs
 
 ### parse

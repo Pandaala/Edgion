@@ -1823,6 +1823,48 @@ mod tests {
     // =====================================================================
 
     #[test]
+    fn malformed_parent_header_modifier_drops_only_its_delegating_rule() {
+        let mut bad = delegating_rule("svc.Billing", "billing", "child");
+        bad["filters"] = serde_json::json!([{"type": "RequestHeaderModifier"}]);
+        let parent = parent_with_rules(serde_json::json!([bad, service_rule("svc.Health", "healthy")]));
+        let child = route(
+            "billing",
+            "child",
+            serde_json::json!({"rules": [service_rule("svc.Billing", "child-svc")]}),
+        );
+        let outcome = flatten_route(&parent, &FakeLookup::new(vec![child]));
+        let rules = outcome.resolved_rules.unwrap();
+        assert_eq!(rules.len(), 1);
+        assert_eq!(rules[0].backend_refs.as_ref().unwrap()[0].name, "healthy");
+        assert!(outcome.expanded_children.is_empty());
+    }
+
+    #[test]
+    fn malformed_child_header_modifiers_drop_only_offending_rules() {
+        let parent = simple_parent("svc.Billing", "billing", "child");
+        let mut bad_rule = service_rule("svc.Billing", "bad-rule");
+        bad_rule["filters"] = serde_json::json!([{"type": "RequestHeaderModifier", "requestHeaderModifier": {
+            "set": [{"name": "x-test", "value": "bad\r\nvalue"}]
+        }}]);
+        let mut bad_backend = service_rule("svc.Billing", "bad-backend");
+        bad_backend["backendRefs"][0]["filters"] = serde_json::json!([{"type": "ResponseHeaderModifier"}]);
+        let child = route(
+            "billing",
+            "child",
+            serde_json::json!({"rules": [
+                bad_rule, bad_backend, service_rule("svc.Billing", "healthy")
+            ]}),
+        );
+        let outcome = flatten_route(&parent, &FakeLookup::new(vec![child]));
+        let rules = outcome.resolved_rules.as_ref().unwrap();
+        assert_eq!(rules.len(), 1);
+        assert_eq!(rules[0].backend_refs.as_ref().unwrap()[0].name, "healthy");
+        let drops = dropped_messages(&outcome);
+        assert_eq!(drops.len(), 2);
+        assert!(drops[0].contains("rules[0]") && drops[1].contains("rules[1]"));
+    }
+
+    #[test]
     fn invalid_child_rule_dropped_with_issue_valid_sibling_flattens() {
         let parent = simple_parent("svc.Billing", "billing", "child");
         // rules[0] is invalid per find_invalid_rule_indices (duplicate

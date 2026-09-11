@@ -18,6 +18,7 @@ pub mod edgion_tls;
 pub mod gateway;
 pub mod gateway_class;
 pub mod grpc_route;
+pub mod header_modifier;
 pub mod health_check;
 pub mod http_route;
 pub mod http_route_ai_admission;

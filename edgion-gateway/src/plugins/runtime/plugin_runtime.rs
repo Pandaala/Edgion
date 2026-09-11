@@ -12,6 +12,7 @@ use crate::EdgionHttpContext;
 use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::filters::PluginRunningResult::ErrTerminateRequest;
 use edgion_resources::resources::edgion_plugins::{CorsConfig, WafConfig};
+use edgion_resources::resources::header_modifier::{validate_grpc_filter_list, validate_http_filter_list};
 use edgion_resources::resources::http_route::MirrorTuning;
 use edgion_resources::resources::{
     EdgionPlugin, GRPCRouteFilter, GRPCRouteFilterType, HTTPRouteFilter, HTTPRouteFilterType,
@@ -139,6 +140,8 @@ pub struct PluginRuntime {
     /// prepend a single request-stage `RejectFilter`, so the whole route fails
     /// closed with 500 instead of silently dropping the misconfigured plugin.
     invalid_plugins: InvalidPlugins,
+    /// Persistent construction outcome after the error list moves into RejectFilter.
+    invalid_config_sealed: bool,
     /// Qualified names + status of policy-blocked entries, in spec order across
     /// all four stages (builders run request → urf → urbf → ur). The first
     /// element's status is the one the gate returns.
@@ -263,6 +266,7 @@ impl PluginRuntime {
             ext_ref_keys: Vec::new(),
             cors_config: None,
             invalid_plugins: InvalidPlugins::default(),
+            invalid_config_sealed: false,
             policy_blocks: Vec::new(),
             policy_bypassed: Vec::new(),
             waf_candidate: None,
@@ -402,6 +406,12 @@ impl PluginRuntime {
         !self.invalid_plugins.is_empty()
     }
 
+    /// Whether publication installed the invalid-configuration request gate.
+    /// Direct consumers such as AI backend header dispatch do not run that chain.
+    pub(crate) fn rejects_invalid_config(&self) -> bool {
+        self.invalid_config_sealed
+    }
+
     /// Record an active plugin entry whose conditions cannot be activated.
     ///
     /// The plugin store detects condition compile/validation failures and
@@ -440,6 +450,7 @@ impl PluginRuntime {
         if self.invalid_plugins.is_empty() {
             return;
         }
+        self.invalid_config_sealed = true;
         let reject = RejectFilter::new(std::mem::take(&mut self.invalid_plugins.names));
         self.request_plugins.insert(0, Arc::new(reject));
     }
@@ -513,16 +524,26 @@ impl PluginRuntime {
         assign_indices: bool,
         mirror_tuning: &MirrorTuning,
     ) {
+        if validate_http_filter_list(filters).is_err() {
+            self.invalid_plugins.record_non_retainable("HeaderModifier");
+            return;
+        }
         for filter in filters {
             match filter.filter_type {
                 HTTPRouteFilterType::RequestHeaderModifier => {
                     if let Some(config) = &filter.request_header_modifier {
-                        self.add_request_filter(Box::new(RequestHeaderModifierFilter::new(config.clone())));
+                        match RequestHeaderModifierFilter::new(config.clone()) {
+                            Ok(filter) => self.add_request_filter(Box::new(filter)),
+                            Err(_) => self.invalid_plugins.record_non_retainable("RequestHeaderModifier"),
+                        }
                     }
                 }
                 HTTPRouteFilterType::ResponseHeaderModifier => {
                     if let Some(config) = &filter.response_header_modifier {
-                        self.add_upstream_response_filter(Box::new(ResponseHeaderModifierFilter::new(config.clone())));
+                        match ResponseHeaderModifierFilter::new(config.clone()) {
+                            Ok(filter) => self.add_upstream_response_filter(Box::new(filter)),
+                            Err(_) => self.invalid_plugins.record_non_retainable("ResponseHeaderModifier"),
+                        }
                     }
                 }
                 HTTPRouteFilterType::RequestRedirect => {
@@ -591,6 +612,7 @@ impl PluginRuntime {
     pub fn from_grpcroute_filters_for_rule(filters: &[GRPCRouteFilter], namespace: &str) -> Self {
         let mut runtime = Self::new();
         runtime.add_from_grpcroute_filters_inner(filters, namespace, true);
+        runtime.seal_fail_closed();
         runtime
     }
 
@@ -599,22 +621,31 @@ impl PluginRuntime {
     pub fn from_grpcroute_filters_for_backend(filters: &[GRPCRouteFilter], namespace: &str) -> Self {
         let mut runtime = Self::new();
         runtime.add_from_grpcroute_filters_inner(filters, namespace, false);
+        runtime.seal_fail_closed();
         runtime
     }
 
     fn add_from_grpcroute_filters_inner(&mut self, filters: &[GRPCRouteFilter], namespace: &str, assign_indices: bool) {
+        if validate_grpc_filter_list(filters).is_err() {
+            self.invalid_plugins.record_non_retainable("HeaderModifier");
+            return;
+        }
         for filter in filters {
             match filter.filter_type {
                 GRPCRouteFilterType::RequestHeaderModifier => {
                     if let Some(config) = &filter.request_header_modifier {
-                        self.add_request_filter(Box::new(RequestHeaderModifierFilter::new_from_grpc(config.clone())));
+                        match RequestHeaderModifierFilter::new_from_grpc(config.clone()) {
+                            Ok(filter) => self.add_request_filter(Box::new(filter)),
+                            Err(_) => self.invalid_plugins.record_non_retainable("RequestHeaderModifier"),
+                        }
                     }
                 }
                 GRPCRouteFilterType::ResponseHeaderModifier => {
                     if let Some(config) = &filter.response_header_modifier {
-                        self.add_upstream_response_filter(Box::new(ResponseHeaderModifierFilter::new_from_grpc(
-                            config.clone(),
-                        )));
+                        match ResponseHeaderModifierFilter::new_from_grpc(config.clone()) {
+                            Ok(filter) => self.add_upstream_response_filter(Box::new(filter)),
+                            Err(_) => self.invalid_plugins.record_non_retainable("ResponseHeaderModifier"),
+                        }
                     }
                 }
                 GRPCRouteFilterType::ExtensionRef => {
@@ -1638,9 +1669,11 @@ impl PluginRuntime {
         entry_scope: &str,
     ) -> CreateResult<Box<dyn RequestFilter>> {
         match plugin {
-            EdgionPlugin::RequestHeaderModifier(config) => {
-                CreateResult::Ok(Some(Box::new(RequestHeaderModifierFilter::new(config.clone()))))
-            }
+            EdgionPlugin::RequestHeaderModifier(config) => CreateResult::Ok(
+                RequestHeaderModifierFilter::new(config.clone())
+                    .ok()
+                    .map(|filter| Box::new(filter) as Box<dyn RequestFilter>),
+            ),
             EdgionPlugin::RequestRedirect(config) => {
                 CreateResult::Ok(Some(Box::new(RequestRedirectFilter::new(config.clone()))))
             }
@@ -1728,9 +1761,11 @@ impl PluginRuntime {
         _namespace: &str,
     ) -> CreateResult<Box<dyn UpstreamResponseFilter>> {
         match plugin {
-            EdgionPlugin::ResponseHeaderModifier(config) => {
-                CreateResult::Ok(Some(Box::new(ResponseHeaderModifierFilter::new(config.clone()))))
-            }
+            EdgionPlugin::ResponseHeaderModifier(config) => CreateResult::Ok(
+                ResponseHeaderModifierFilter::new(config.clone())
+                    .ok()
+                    .map(|filter| Box::new(filter) as Box<dyn UpstreamResponseFilter>),
+            ),
             EdgionPlugin::DebugAccessLogToHeader(config) => {
                 CreateResult::Ok(Some(Box::new(DebugAccessLogToHeaderFilter::new(config))))
             }
@@ -3796,6 +3831,133 @@ mod condition_body_requirement_tests {
             runtime.request_plugins_iter().next().map(|filter| filter.name()),
             Some("RejectInvalidConfig")
         );
+    }
+}
+
+#[cfg(test)]
+mod header_modifier_validation_tests {
+    use super::*;
+    use crate::plugins::runtime::traits::session::MockPluginSession;
+    use serde_json::json;
+
+    async fn assert_rejected(runtime: &PluginRuntime) {
+        assert!(runtime.rejects_invalid_config());
+        let filter = runtime.request_plugins_iter().next().expect("rejection filter");
+        assert_eq!(filter.name(), "RejectInvalidConfig");
+        let mut session = MockPluginSession::new();
+        let mut log = PluginLog::new(filter.name());
+        let result = filter.run_request(&mut session, &mut log).await;
+        assert_eq!(
+            result,
+            PluginRunningResult::ErrResponse {
+                status: 500,
+                body: Some(bytes::Bytes::from_static(
+                    br#"{"message":"plugin configuration error"}"#
+                )),
+            }
+        );
+        assert!(!log.render_for_test().contains("private-value"));
+    }
+
+    #[tokio::test]
+    async fn header_modifier_invalid_native_lists_seal_all_four_constructors() {
+        for filters in [
+            json!([{"type": "RequestHeaderModifier"}]),
+            json!([{"type": "ResponseHeaderModifier"}]),
+            json!([{"type": "RequestHeaderModifier", "requestHeaderModifier": {
+                "set": [{"name": "bad name", "value": "private-value"}]
+            }}]),
+            json!([{"type": "ResponseHeaderModifier", "responseHeaderModifier": {
+                "add": [{"name": "x-test", "value": "private-value\r\ninvalid"}]
+            }}]),
+            json!([{"type": "RequestHeaderModifier", "requestHeaderModifier": {
+                "remove": ["bad name"]
+            }}]),
+            json!([{"type": "RequestHeaderModifier", "responseHeaderModifier": {}}]),
+            json!([
+                {"type": "RequestHeaderModifier", "requestHeaderModifier": {}},
+                {"type": "RequestHeaderModifier", "requestHeaderModifier": {}}
+            ]),
+            json!([{"type": "ResponseHeaderModifier", "responseHeaderModifier": {
+                "set": [{"name": "X-Same", "value": "ok"}], "remove": ["x-same"]
+            }}]),
+        ] {
+            let http: Vec<HTTPRouteFilter> = serde_json::from_value(filters.clone()).unwrap();
+            let grpc: Vec<GRPCRouteFilter> = serde_json::from_value(filters).unwrap();
+            let tuning = MirrorTuning::default();
+            for runtime in [
+                PluginRuntime::from_httproute_filters_for_rule(&http, "default", &tuning),
+                PluginRuntime::from_httproute_filters_for_backend(&http, "default", &tuning),
+                PluginRuntime::from_grpcroute_filters_for_rule(&grpc, "default"),
+                PluginRuntime::from_grpcroute_filters_for_backend(&grpc, "default"),
+            ] {
+                assert_rejected(&runtime).await;
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn header_modifier_edgion_entries_reject_invalid_but_disabled_entries_are_inert() {
+        let config: edgion_resources::HTTPHeaderFilter = serde_json::from_value(json!({
+            "set": [{"name": "bad name", "value": "private-value"}]
+        }))
+        .unwrap();
+        for enabled in [true, false] {
+            let mut request = PluginRuntime::new();
+            let errors = request.add_from_request_filters(
+                &[RequestFilterEntry::with_enable(
+                    EdgionPlugin::RequestHeaderModifier(config.clone()),
+                    enabled,
+                )],
+                "default",
+                "headers",
+            );
+            request.seal_fail_closed();
+            assert_eq!(errors.is_empty(), !enabled);
+            let mut response_entry =
+                UpstreamResponseFilterEntry::new(EdgionPlugin::ResponseHeaderModifier(config.clone()));
+            response_entry.enable = enabled;
+            let mut response = PluginRuntime::new();
+            let errors = response.add_from_upstream_response_filters(&[response_entry], "default");
+            response.seal_fail_closed();
+            assert_eq!(errors.is_empty(), !enabled);
+            for runtime in [request, response] {
+                if enabled {
+                    assert_rejected(&runtime).await;
+                } else {
+                    assert!(!runtime.has_invalid_plugins());
+                    assert_eq!(runtime.request_plugins_count(), 0);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn header_modifier_valid_generation_keeps_native_operations() {
+        let config = json!([
+            {"type": "RequestHeaderModifier", "requestHeaderModifier": {
+                "set": [{"name": "X-Set", "value": "ok"}]
+            }},
+            {"type": "ResponseHeaderModifier", "responseHeaderModifier": {
+                "add": [{"name": "X-Add", "value": "ok"}]
+            }}
+        ]);
+        let http: Vec<HTTPRouteFilter> = serde_json::from_value(config.clone()).unwrap();
+        let grpc: Vec<GRPCRouteFilter> = serde_json::from_value(config).unwrap();
+        for runtime in [
+            PluginRuntime::from_httproute_filters_for_rule(&http, "default", &MirrorTuning::default()),
+            PluginRuntime::from_httproute_filters_for_backend(&http, "default", &MirrorTuning::default()),
+            PluginRuntime::from_grpcroute_filters_for_rule(&grpc, "default"),
+            PluginRuntime::from_grpcroute_filters_for_backend(&grpc, "default"),
+        ] {
+            assert!(!runtime.has_invalid_plugins());
+            assert_eq!(runtime.request_plugins_count(), 1);
+            assert_eq!(
+                runtime.request_plugins_iter().next().unwrap().name(),
+                "RequestHeaderModifier"
+            );
+            assert_eq!(runtime.upstream_response_plugins.len(), 1);
+        }
     }
 }
 

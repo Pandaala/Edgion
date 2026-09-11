@@ -707,6 +707,11 @@ fn apply_backend_request_headers(
     ctx: &mut EdgionHttpContext,
     backend: &crate::routes::http::match_unit::CompiledBackend,
 ) -> Result<(), AiDispatchError> {
+    // AI dispatch applies native headers directly rather than executing the
+    // backend plugin chain. Honor that chain's publication-time validation.
+    if backend.plugin_runtime.rejects_invalid_config() {
+        return Err(AiDispatchError::InvalidConfiguration);
+    }
     let mut adapter = PingoraSessionAdapter::new(session, ctx);
     for filter in backend.schema.filters.as_deref().unwrap_or_default() {
         match filter.filter_type {
@@ -1097,6 +1102,34 @@ mod tests {
             .then_some(())
             .expect("request must be present");
         session
+    }
+
+    #[tokio::test]
+    async fn header_modifier_invalid_ai_backend_is_rejected_before_header_mutation() {
+        let rule: HTTPRouteRule = serde_json::from_value(serde_json::json!({
+            "backendRefs": [{
+                "group": "edgion.io",
+                "kind": "EdgionBackend",
+                "name": "provider",
+                "filters": [
+                    {"type": "RequestHeaderModifier", "requestHeaderModifier": {
+                        "set": [{"name": "x-first", "value": "must-not-install"}]
+                    }},
+                    {"type": "ResponseHeaderModifier", "responseHeaderModifier": {
+                        "set": [{"name": "bad name", "value": "private-value"}]
+                    }}
+                ]
+            }]
+        }))
+        .unwrap();
+        let runtime = HttpRouteRuleUnit::compile_http_rule(&rule, "default");
+        let mut session = test_session().await;
+        let mut ctx = EdgionHttpContext::new();
+        assert!(matches!(
+            apply_backend_request_headers(&mut session, &mut ctx, &runtime.backends[0]),
+            Err(AiDispatchError::InvalidConfiguration)
+        ));
+        assert!(session.req_header().headers.get("x-first").is_none());
     }
 
     #[tokio::test]

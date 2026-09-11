@@ -22,6 +22,8 @@ before applying a decision to current code.
 
 ## Regression guards
 
+- [Header modifier validation and construction](regression-guards/header-modifier-validation.md)
+
 - [GatewayClass-scoped policy and runtime publication](regression-guards/scoped-policy-runtime-publication.md)
 
 - [AiGuard ordering errors fail closed at publication](regression-guards/ai-guard-ordering-publication.md)

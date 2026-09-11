@@ -10,12 +10,14 @@ pub(super) struct HeaderModifierPlan {
 }
 
 impl HeaderModifierPlan {
-    pub(super) fn from_http(config: HTTPHeaderFilter) -> Self {
-        Self::from_parts(config.set, config.add, config.remove)
+    pub(super) fn from_http(config: HTTPHeaderFilter) -> Result<Self, &'static str> {
+        config.validate()?;
+        Ok(Self::from_parts(config.set, config.add, config.remove))
     }
 
-    pub(super) fn from_grpc(config: GRPCHeaderFilter) -> Self {
-        Self::from_parts(config.set, config.add, config.remove)
+    pub(super) fn from_grpc(config: GRPCHeaderFilter) -> Result<Self, &'static str> {
+        config.validate()?;
+        Ok(Self::from_parts(config.set, config.add, config.remove))
     }
 
     fn from_parts(set: Option<Vec<HTTPHeader>>, add: Option<Vec<HTTPHeader>>, remove: Option<Vec<String>>) -> Self {
@@ -121,12 +123,14 @@ mod tests {
             set: Some(set_entries()),
             add: Some(add_entries()),
             remove: Some(remove_entries()),
-        });
+        })
+        .expect("valid header modifier");
         let grpc = HeaderModifierPlan::from_grpc(GRPCHeaderFilter {
             set: Some(set_entries()),
             add: Some(add_entries()),
             remove: Some(remove_entries()),
-        });
+        })
+        .expect("valid header modifier");
 
         assert_prepared_plan(&http);
         assert_prepared_plan(&grpc);
@@ -138,12 +142,14 @@ mod tests {
             set: None,
             add: None,
             remove: None,
-        });
+        })
+        .expect("valid header modifier");
         let empty = HeaderModifierPlan::from_grpc(GRPCHeaderFilter {
             set: Some(Vec::new()),
             add: Some(Vec::new()),
             remove: Some(Vec::new()),
-        });
+        })
+        .expect("valid header modifier");
 
         assert!(absent.set().is_empty());
         assert!(absent.add().is_empty());
@@ -154,16 +160,14 @@ mod tests {
     }
 
     #[test]
-    fn invalid_cross_action_same_name_is_retained_once_per_list_as_defensive_fallback() {
+    fn cross_action_same_name_is_rejected_before_preparation() {
         let plan = HeaderModifierPlan::from_http(HTTPHeaderFilter {
             set: Some(vec![header("X-Same", "set")]),
             add: Some(vec![header("x-same", "add")]),
             remove: Some(vec!["X-SAME".to_string()]),
         });
 
-        assert_eq!(plan.set().len(), 1);
-        assert_eq!(plan.add().len(), 1);
-        assert_eq!(plan.remove().len(), 1);
+        assert!(plan.is_err());
     }
 
     #[test]
@@ -172,7 +176,8 @@ mod tests {
             set: Some(vec![header("X-Set", "set")]),
             add: Some(vec![header("X-Add", "add")]),
             remove: Some(vec!["X-Remove".to_string()]),
-        });
+        })
+        .expect("valid header modifier");
 
         let (_, allocations) = crate::test_allocation_counter::count_allocation_stats(|| {
             std::hint::black_box((plan.set(), plan.add(), plan.remove()))

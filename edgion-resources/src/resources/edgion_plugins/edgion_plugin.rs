@@ -691,11 +691,11 @@ impl EdgionPlugin {
             EdgionPlugin::Canary(c) => c.validation_error(),
             EdgionPlugin::Wasm(c) => c.validation_error(),
             EdgionPlugin::RequestMirror(c) => c.validation_error(),
-            // Gateway API filter variants (foreign types): no PluginValidation impl.
-            EdgionPlugin::RequestHeaderModifier(_)
-            | EdgionPlugin::ResponseHeaderModifier(_)
-            | EdgionPlugin::RequestRedirect(_)
-            | EdgionPlugin::UrlRewrite(_) => None,
+            EdgionPlugin::RequestHeaderModifier(c) | EdgionPlugin::ResponseHeaderModifier(c) => {
+                c.validate().err().map(str::to_owned)
+            }
+            // These Gateway API filter variants have no shared validation yet.
+            EdgionPlugin::RequestRedirect(_) | EdgionPlugin::UrlRewrite(_) => None,
         }
     }
 }

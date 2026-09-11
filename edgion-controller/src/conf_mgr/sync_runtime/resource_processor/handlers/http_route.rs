@@ -672,8 +672,8 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
         let generation = route.metadata.generation;
         let route_ns = route.metadata.namespace.as_deref().unwrap_or("default");
 
-        // Unsupported native CORS policies are per-rule findings, like a
-        // rewrite/redirect conflict: they drop just that rule via
+        // Unsupported native CORS policies and malformed header modifiers are
+        // per-rule findings, like a rewrite/redirect conflict: they drop just that rule via
         // `invalid_rule_indices` + PartiallyInvalid. They are lifted to a
         // route-level Accepted=False only when no rule is left to serve for this
         // parent (`attachment_rejects_route` below). Emitting both would advertise
@@ -684,7 +684,11 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
             .iter()
             .flatten()
             .enumerate()
-            .filter_map(|(index, rule)| rule.unsupported_cors_reason().map(|message| (index, message)))
+            .filter_map(|(index, rule)| {
+                rule.unsupported_cors_reason()
+                    .or_else(|| rule.header_modifier_error().map(str::to_string))
+                    .map(|message| (index, message))
+            })
             .collect();
         let ownership_accepted_errors = backend_waf_ownership_errors(route, route_ns, _ctx.runtime());
 
@@ -757,7 +761,7 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
             Some(resolved) => resolved.is_empty(),
             None => valid_rules == 0,
         };
-        // Independent delegation/CORS drops still reject an empty attachment.
+        // Independent delegation/CORS/header-modifier drops reject an empty attachment.
         // AI source diagnostics never withdraw a rule or participate here.
         let attachment_rejects_route =
             (!attachment_invalid_rules.is_empty() || !delegation_dropped.is_empty()) && serves_no_rule;
@@ -1422,6 +1426,7 @@ fn backend_waf_ownership_errors(
 /// A rule is invalid if:
 /// - It has conflicting URLRewrite + RequestRedirect filters (rule-level, per-backendRef, or cross-level)
 /// - It has backendRef-scoped CORS, or malformed rule-level CORS (missing `cors:` block or invalid origin)
+/// - It has malformed or repeated native header modifiers in a rule or backend filter list
 /// - It has an ExtensionRef filter targeting an unsupported kind (only EdgionPlugins is supported)
 ///
 /// The reason string is rendered into the `PartiallyInvalid` condition message
@@ -1436,6 +1441,10 @@ pub(crate) fn find_invalid_rule_details(route: &HTTPRoute, _route_ns: &str) -> V
         return details;
     };
     for (idx, rule) in rules.iter().enumerate() {
+        if let Some(reason) = rule.header_modifier_error() {
+            details.push((idx, reason.to_string()));
+            continue;
+        }
         if has_rewrite_redirect_conflict(rule.filters.as_ref()) {
             details.push((idx, "filter conflict: URLRewrite + RequestRedirect".to_string()));
             continue;
@@ -2891,6 +2900,57 @@ spec:
             "PartiallyInvalid message must include valid/total rule count; got: {}",
             partial.message
         );
+    }
+
+    #[test]
+    fn header_modifier_status_preserves_siblings_rejects_empty_route_and_recovers() {
+        let mut route: HTTPRoute = serde_json::from_value(serde_json::json!({
+            "apiVersion": "gateway.networking.k8s.io/v1", "kind": "HTTPRoute",
+            "metadata": {"name": "headers", "namespace": "default"},
+            "spec": {"parentRefs": [{"name": "gw"}], "rules": [
+                {"filters": [{"type": "RequestHeaderModifier", "requestHeaderModifier": {
+                    "set": [{"name": "bad name", "value": "secret-marker"}]
+                }}]},
+                {"backendRefs": [{"name": "svc", "port": 80, "filters": [
+                    {"type": "ResponseHeaderModifier"}
+                ]}]},
+                {"filters": [{"type": "RequestHeaderModifier", "requestHeaderModifier": {
+                    "set": [{"name": "x-valid", "value": "yes"}]
+                }}]}
+            ]}
+        }))
+        .unwrap();
+        let handler = HttpRouteHandler::default();
+        let ctx = make_ctx();
+        handler.update_status(&mut route, &ctx, &[]);
+        assert_eq!(route.spec.invalid_rule_indices.as_deref(), Some(&[0, 1][..]));
+        let conditions = &route.status.as_ref().unwrap().parents[0].conditions;
+        let partial = conditions.iter().find(|c| c.type_ == "PartiallyInvalid").unwrap();
+        assert_eq!(partial.status, "True");
+        assert!(partial.message.contains("rules[0]") && partial.message.contains("rules[1]"));
+        assert!(partial.message.contains("1 of 3 rules active"));
+        assert!(!partial.message.contains("secret-marker"));
+
+        route.spec.rules.as_mut().unwrap().truncate(2);
+        handler.update_status(&mut route, &ctx, &[]);
+        let conditions = &route.status.as_ref().unwrap().parents[0].conditions;
+        assert!(conditions.iter().any(|c| c.type_ == "Accepted"
+            && c.status == "False"
+            && c.message.contains("rules[0]")
+            && c.message.contains("rules[1]")));
+        assert!(conditions
+            .iter()
+            .any(|c| c.type_ == "PartiallyInvalid" && c.status == "False"));
+
+        route.spec.rules.as_mut().unwrap()[0].filters = None;
+        route.spec.rules.as_mut().unwrap()[1].backend_refs.as_mut().unwrap()[0].filters = None;
+        handler.update_status(&mut route, &ctx, &[]);
+        assert!(route.spec.invalid_rule_indices.is_none());
+        let conditions = &route.status.as_ref().unwrap().parents[0].conditions;
+        assert!(conditions
+            .iter()
+            .any(|c| c.type_ == "PartiallyInvalid" && c.status == "False" && c.reason == "AllRulesValid"));
+        assert!(!conditions.iter().any(|c| c.message.contains("rules[0]")));
     }
 
     #[test]

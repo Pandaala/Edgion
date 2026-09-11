@@ -15,17 +15,17 @@ pub struct RequestHeaderModifierFilter {
 }
 
 impl RequestHeaderModifierFilter {
-    pub fn new(config: HTTPHeaderFilter) -> Self {
-        Self {
-            plan: HeaderModifierPlan::from_http(config),
-        }
+    pub fn new(config: HTTPHeaderFilter) -> Result<Self, &'static str> {
+        Ok(Self {
+            plan: HeaderModifierPlan::from_http(config)?,
+        })
     }
 
     /// Create from GRPCHeaderFilter (which has the same structure as HTTPHeaderFilter)
-    pub fn new_from_grpc(config: GRPCHeaderFilter) -> Self {
-        Self {
-            plan: HeaderModifierPlan::from_grpc(config),
-        }
+    pub fn new_from_grpc(config: GRPCHeaderFilter) -> Result<Self, &'static str> {
+        Ok(Self {
+            plan: HeaderModifierPlan::from_grpc(config)?,
+        })
     }
 }
 
@@ -121,20 +121,26 @@ mod tests {
 
     #[test]
     fn http_add_appends_to_preexisting_field_lines_and_ignores_equivalent_duplicate() {
-        assert_add_appends_without_replacing(RequestHeaderModifierFilter::new(http_filter(
-            None,
-            Some(vec![header("X-Trace", "edge"), header("x-trace", "ignored")]),
-            None,
-        )));
+        assert_add_appends_without_replacing(
+            RequestHeaderModifierFilter::new(http_filter(
+                None,
+                Some(vec![header("X-Trace", "edge"), header("x-trace", "ignored")]),
+                None,
+            ))
+            .expect("valid header modifier"),
+        );
     }
 
     #[test]
     fn grpc_add_appends_to_preexisting_field_lines_and_ignores_equivalent_duplicate() {
-        assert_add_appends_without_replacing(RequestHeaderModifierFilter::new_from_grpc(grpc_filter(
-            None,
-            Some(vec![header("X-Trace", "edge"), header("x-trace", "ignored")]),
-            None,
-        )));
+        assert_add_appends_without_replacing(
+            RequestHeaderModifierFilter::new_from_grpc(grpc_filter(
+                None,
+                Some(vec![header("X-Trace", "edge"), header("x-trace", "ignored")]),
+                None,
+            ))
+            .expect("valid header modifier"),
+        );
     }
 
     #[test]
@@ -143,7 +149,8 @@ mod tests {
             Some(vec![header("X-Set", "set")]),
             Some(vec![header("X-Add", "add")]),
             Some(vec!["X-Remove".to_string()]),
-        ));
+        ))
+        .expect("valid header modifier");
         let mut session = MockPluginSession::new();
         let mut sequence = Sequence::new();
         session
@@ -179,7 +186,8 @@ mod tests {
             Some(vec![header("X-Set", "set")]),
             Some(vec![header("X-Add", "add")]),
             Some(vec!["X-Remove".to_string()]),
-        ));
+        ))
+        .expect("valid header modifier");
         let mut session = MockPluginSession::new();
         session
             .expect_set_request_header()
@@ -208,7 +216,8 @@ mod tests {
             Some(vec![header("X-Set", "first"), header("x-set", "ignored")]),
             Some(vec![header("X-Add", "first"), header("x-add", "ignored")]),
             Some(vec!["X-Remove".to_string(), "x-remove".to_string()]),
-        ));
+        ))
+        .expect("valid header modifier");
         let mut session = MockPluginSession::new();
         session
             .expect_set_request_header()

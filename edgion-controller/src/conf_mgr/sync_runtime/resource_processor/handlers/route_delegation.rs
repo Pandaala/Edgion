@@ -1118,6 +1118,48 @@ mod tests {
     // =====================================================================
 
     #[test]
+    fn malformed_parent_header_modifier_drops_only_its_delegating_rule() {
+        let mut bad = delegating_rule("/api", "infra", "child");
+        bad["filters"] = serde_json::json!([{"type": "RequestHeaderModifier"}]);
+        let parent = parent_with_rules(serde_json::json!([bad, service_rule("/health", "healthy")]));
+        let child = route(
+            "infra",
+            "child",
+            serde_json::json!({"rules": [service_rule("/api", "child-svc")]}),
+        );
+        let outcome = flatten_route(&parent, &FakeLookup::new(vec![child]));
+        let rules = outcome.resolved_rules.unwrap();
+        assert_eq!(rules.len(), 1);
+        assert_eq!(rules[0].backend_refs.as_ref().unwrap()[0].name, "healthy");
+        assert!(outcome.expanded_children.is_empty());
+    }
+
+    #[test]
+    fn malformed_child_header_modifiers_drop_only_offending_rules() {
+        let parent = simple_parent("/api", "infra", "child");
+        let mut bad_rule = service_rule("/api/bad-rule", "bad-rule");
+        bad_rule["filters"] = serde_json::json!([{"type": "RequestHeaderModifier", "requestHeaderModifier": {
+            "set": [{"name": "bad name", "value": "yes"}]
+        }}]);
+        let mut bad_backend = service_rule("/api/bad-backend", "bad-backend");
+        bad_backend["backendRefs"][0]["filters"] = serde_json::json!([{"type": "ResponseHeaderModifier"}]);
+        let child = route(
+            "infra",
+            "child",
+            serde_json::json!({"rules": [
+                bad_rule, bad_backend, service_rule("/api/good", "healthy")
+            ]}),
+        );
+        let outcome = flatten_route(&parent, &FakeLookup::new(vec![child]));
+        let rules = outcome.resolved_rules.as_ref().unwrap();
+        assert_eq!(rules.len(), 1);
+        assert_eq!(rules[0].backend_refs.as_ref().unwrap()[0].name, "healthy");
+        let drops = dropped_messages(&outcome);
+        assert_eq!(drops.len(), 2);
+        assert!(drops[0].contains("rules[0]") && drops[1].contains("rules[1]"));
+    }
+
+    #[test]
     fn credentialed_expose_headers_delegation_diagnostic_and_recovery() {
         let parent = simple_parent("/api", "infra", "child");
         for exposed in ["*", "X-Request-Id"] {

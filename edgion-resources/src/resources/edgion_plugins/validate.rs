@@ -1230,8 +1230,7 @@ mod tests {
 
     #[test]
     fn response_only_plugin_in_request_stage_is_wrong_stage() {
-        // ResponseHeaderModifier has no preparse validation_error, so the only
-        // error surfaced is the wrong-stage placement.
+        // The header configuration is valid, so only placement is rejected.
         let ep = with_request_plugins(vec![RequestFilterEntry::new(EdgionPlugin::ResponseHeaderModifier(
             header_filter(),
         ))]);
@@ -1247,6 +1246,33 @@ mod tests {
             EdgionPlugin::ResponseHeaderModifier(header_filter()),
             false,
         )]);
+        assert!(ep.validate_plugins().is_empty());
+    }
+
+    #[test]
+    fn header_modifier_validation_reports_invalid_content_and_skips_disabled_entries() {
+        let mut invalid = header_filter();
+        invalid.remove = Some(vec!["invalid name".to_string()]);
+        let mut ep = with_request_plugins(vec![RequestFilterEntry::new(EdgionPlugin::RequestHeaderModifier(
+            invalid.clone(),
+        ))]);
+        let mut response = UpstreamResponseFilterEntry::new(EdgionPlugin::ResponseHeaderModifier(invalid.clone()));
+        ep.spec.upstream_response_filter_plugins = Some(vec![response.clone()]);
+        let errors = ep.validate_plugins();
+        assert_eq!(errors.len(), 2);
+        assert!(errors[0].contains("RequestHeaderModifier"));
+        assert!(errors[1].contains("ResponseHeaderModifier"));
+        assert!(errors
+            .iter()
+            .all(|error| error.ends_with(invalid.validate().unwrap_err())));
+        assert!(errors.iter().all(|error| !error.contains("invalid name")));
+
+        ep.spec.request_plugins = Some(vec![RequestFilterEntry::with_enable(
+            EdgionPlugin::RequestHeaderModifier(invalid),
+            false,
+        )]);
+        response.enable = false;
+        ep.spec.upstream_response_filter_plugins = Some(vec![response]);
         assert!(ep.validate_plugins().is_empty());
     }
 
