@@ -72,6 +72,7 @@ CRD guard failed its pre-existing KeyGet count/traceId drift during that
 verification, so that historical run did not establish a passing complete guard.
 The later correction and current regression boundary are recorded in the
 [EdgionPlugins closed-enum guard](../../resources/regression-guards/edgion-plugins-crd-type-enum-drift.md).
+Do not report that whole guard as passing without fresh verification.
 
 RateLimitLocalOverflowDynamic passed against the current Controller/Gateway binaries:
 absent, initial local allowance/Redis Deny, invalid-reference 500, repaired alias,

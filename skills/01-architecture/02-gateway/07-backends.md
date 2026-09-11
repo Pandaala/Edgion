@@ -142,8 +142,7 @@ submitted I/O is in flight and cancelled best effort; coordinator identity check
 reject stale results. Complete active-config equality includes resolved material.
 
 A standalone TLS-handshake type, custom checkers and separate healthy/unhealthy
-intervals remain out of scope. See the [transport decision](../../04-review/backends/intentional-design/active-health-check-transport-is-independent.md)
-and [implementation design](../../../tasks/pending/independent-encrypted-active-health-check-protocols/01-design.md).
+intervals remain out of scope. See the [transport decision](../../04-review/backends/intentional-design/active-health-check-transport-is-independent.md).
 
 ### Runtime health identity
 

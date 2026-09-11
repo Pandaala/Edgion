@@ -2458,6 +2458,7 @@ impl TestSuite for DslTestSuite {
             Self::test_cookie_read_absent(),
             Self::test_ctx_chain_with_tenant(),
             Self::test_ctx_chain_without_tenant(),
+            super::context::request_response_context(),
             Self::test_multi_header_ops(),
             Self::test_uri_rewrite_v1(),
             Self::test_uri_rewrite_v2_unchanged(),

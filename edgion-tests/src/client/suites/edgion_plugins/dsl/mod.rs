@@ -1,6 +1,7 @@
 // DSL Plugin Test Module
 
 mod body;
+mod context;
 mod dsl;
 mod dynamic;
 mod grpc_error;
