@@ -1,0 +1,91 @@
+# Fixed Remaining Gateway Scope
+
+## Authority
+
+- Frozen by user direction on 2026-09-11 at `a26215be`.
+- These 78 paths are the complete remaining target set for this campaign.
+- Analysis starts from one of these targets. Callers, callees, tests, and knowledge may be read as context, but they do not become coverage targets.
+- A supporting edit outside this list requires direct correctness evidence and an exact batch allow-list. It does not add a coverage row or authorize unrelated cleanup.
+- Newly created or discovered Gateway files remain outside this campaign unless the user explicitly revises this list.
+- AI-owned paths and standalone `edgion-gateway/tests/**` paths are excluded. Existing `edgion-tests/**` files remain frozen.
+
+## Remaining targets
+
+- `edgion-gateway/Cargo.toml`
+- `edgion-gateway/benches/lru_expiration.rs`
+- `edgion-gateway/build.rs`
+- `edgion-gateway/src/api/admin_auth.rs`
+- `edgion-gateway/src/api/mod.rs`
+- `edgion-gateway/src/backends/discovery/coordinator.rs`
+- `edgion-gateway/src/backends/degrade_threshold.rs`
+- `edgion-gateway/src/backends/policy/backend_traffic/store.rs`
+- `edgion-gateway/src/backends/selector.rs`
+- `edgion-gateway/src/backends/tests/backend_tls_pool_test.rs`
+- `edgion-gateway/src/cli/config.rs`
+- `edgion-gateway/src/cli/mod.rs`
+- `edgion-gateway/src/cli/pingora.rs`
+- `edgion-gateway/src/config/edgion_gateway/conf_handler_impl.rs`
+- `edgion-gateway/src/ctx.rs`
+- `edgion-gateway/src/lb/attempt.rs`
+- `edgion-gateway/src/lb/backend.rs`
+- `edgion-gateway/src/lb/backend_selector/mod.rs`
+- `edgion-gateway/src/lb/backend_selector/selector.rs`
+- `edgion-gateway/src/lb/backend_selector/weighted_selector.rs`
+- `edgion-gateway/src/lb/compiled_selector.rs`
+- `edgion-gateway/src/lb/ewma/mod.rs`
+- `edgion-gateway/src/lb/ewma/score.rs`
+- `edgion-gateway/src/lb/leastconn/cleaner.rs`
+- `edgion-gateway/src/lb/leastconn/mod.rs`
+- `edgion-gateway/src/lb/mod.rs`
+- `edgion-gateway/src/lb/runtime_state/mod.rs`
+- `edgion-gateway/src/lb/sample.rs`
+- `edgion-gateway/src/lb/selection/consistent_hash.rs`
+- `edgion-gateway/src/lb/selection/mod.rs`
+- `edgion-gateway/src/lb/selection/p2c.rs`
+- `edgion-gateway/src/lb/selection/round_robin.rs`
+- `edgion-gateway/src/lib.rs`
+- `edgion-gateway/src/link_sys/providers/otlp/log_sender.rs`
+- `edgion-gateway/src/link_sys/providers/webhook/manager.rs`
+- `edgion-gateway/src/link_sys/runtime/data_sender.rs`
+- `edgion-gateway/src/link_sys/runtime/store.rs`
+- `edgion-gateway/src/observe/metrics/registry.rs`
+- `edgion-gateway/src/plugins/http/common/outbound/call.rs`
+- `edgion-gateway/src/plugins/http/common/outbound/request.rs`
+- `edgion-gateway/src/plugins/http/mod.rs`
+- `edgion-gateway/src/plugins/runtime/gateway_api_filters/extension_ref.rs`
+- `edgion-gateway/src/plugins/runtime/plugin_runtime.rs`
+- `edgion-gateway/src/plugins/runtime/session_adapter.rs`
+- `edgion-gateway/src/plugins/runtime/traits/session.rs`
+- `edgion-gateway/src/plugins/stream/connection_filter_bridge.rs`
+- `edgion-gateway/src/plugins/stream/connection_rate_limit/local_gate.rs`
+- `edgion-gateway/src/plugins/stream/connection_rate_limit/plugin.rs`
+- `edgion-gateway/src/plugins/stream/geoip_location/plugin.rs`
+- `edgion-gateway/src/plugins/stream/mod.rs`
+- `edgion-gateway/src/plugins/stream/stream_plugin_runtime.rs`
+- `edgion-gateway/src/plugins/stream/stream_plugin_store.rs`
+- `edgion-gateway/src/plugins/stream/stream_plugin_trait.rs`
+- `edgion-gateway/src/plugins/stream/tls_route/mod.rs`
+- `edgion-gateway/src/routes/http/conf_handler_impl.rs`
+- `edgion-gateway/src/routes/http/proxy_http/mod.rs`
+- `edgion-gateway/src/routes/http/proxy_http/pg_early_request_filter.rs`
+- `edgion-gateway/src/routes/http/proxy_http/pg_fail_to_connect.rs`
+- `edgion-gateway/src/routes/http/proxy_http/pg_fail_to_proxy.rs`
+- `edgion-gateway/src/routes/http/proxy_http/pg_logging.rs`
+- `edgion-gateway/src/routes/http/proxy_http/pg_request_body_filter.rs`
+- `edgion-gateway/src/routes/http/proxy_http/pg_request_filter.rs`
+- `edgion-gateway/src/routes/http/proxy_http/pg_response_filter.rs`
+- `edgion-gateway/src/routes/http/proxy_http/pg_response_head.rs`
+- `edgion-gateway/src/routes/http/proxy_http/pg_upstream_peer.rs`
+- `edgion-gateway/src/routes/http/proxy_http/pg_upstream_request_filter.rs`
+- `edgion-gateway/src/routes/http/proxy_http/preflight_handler.rs`
+- `edgion-gateway/src/routes/http/redirect_http.rs`
+- `edgion-gateway/src/routes/tls/mod.rs`
+- `edgion-gateway/src/routes/tls/passthrough_proxy.rs`
+- `edgion-gateway/src/routes/tls/proxy.rs`
+- `edgion-gateway/src/routes/tls/routes_mgr.rs`
+- `edgion-gateway/src/routes/tls/tests.rs`
+- `edgion-gateway/src/routes/udp/routes_mgr.rs`
+- `edgion-gateway/src/routes/udp/udp_route_table.rs`
+- `edgion-gateway/src/runtime/matching/tls.rs`
+- `edgion-gateway/src/runtime/server/error_response.rs`
+- `edgion-gateway/src/tls/runtime/gateway/tls_pingora.rs`

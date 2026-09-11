@@ -16,12 +16,12 @@
 4. Configuration, conf-sync, and runtime stores.
 5. TLS, backends, and load balancing.
 6. LinkSys, GeoIP, and services.
-7. Plugin runtime/framework, then AI core and adapters.
+7. Plugin runtime/framework. AI core and adapters are outside the user-fixed remaining scope.
 8. Leaf HTTP plugins; review JWT and OIDC separately.
 9. Complex plugins: ExtProc, DSL, and Wasm.
 10. Stream plugins.
 11. Routes: shared/gRPC, HTTP matching/manager, Pingora lifecycle, and L4 families.
-12. Admin API, CLI/startup, crate roots, tests, and final reconciliation.
+12. Admin API, CLI/startup, crate roots, and final reconciliation. Standalone `edgion-gateway/tests/**` targets are outside the user-fixed remaining scope.
 
 ## States
 
@@ -40,9 +40,9 @@
 
 | Batch | Expected | Changed | No change | Other closed | Status |
 |-------|---------:|----------:|----------:|-------------:|--------|
-| `ai-anthropic` | 3 | 0 | 0 | 0 | pending |
-| `ai-core` | 16 | 0 | 0 | 0 | pending |
-| `ai-quota` | 2 | 0 | 0 | 0 | pending |
+| `ai-anthropic` | 3 | 0 | 0 | 3 | complete |
+| `ai-core` | 16 | 0 | 0 | 16 | complete |
+| `ai-quota` | 2 | 0 | 0 | 2 | complete |
 | `api` | 2 | 0 | 0 | 0 | pending |
 | `backends-circuit-breaker` | 2 | 1 | 1 | 0 | complete |
 | `backends-core` | 8 | 5 | 2 | 1 | complete |
@@ -66,7 +66,7 @@
 | `config-root` | 1 | 0 | 1 | 0 | complete |
 | `crate-entry` | 2 | 0 | 2 | 0 | complete |
 | `crate-root` | 2 | 0 | 0 | 0 | pending |
-| `external-tests` | 3 | 0 | 0 | 0 | pending |
+| `external-tests` | 3 | 0 | 0 | 3 | complete |
 | `geoip` | 5 | 2 | 2 | 1 | complete |
 | `http-context` | 1 | 0 | 0 | 0 | pending |
 | `lb-backend-selector` | 3 | 0 | 0 | 0 | pending |
@@ -90,8 +90,8 @@
 | `observe-metrics` | 5 | 3 | 2 | 0 | complete |
 | `observe-protocol-logs` | 7 | 4 | 3 | 0 | complete |
 | `plugins-common` | 3 | 2 | 1 | 0 | complete |
-| `plugins-http-ai-guard` | 5 | 1 | 1 | 0 | pending |
-| `plugins-http-ai-proxy` | 2 | 0 | 0 | 0 | pending |
+| `plugins-http-ai-guard` | 5 | 3 | 1 | 1 | complete |
+| `plugins-http-ai-proxy` | 2 | 0 | 1 | 1 | complete |
 | `plugins-http-all-endpoint-status` | 3 | 1 | 1 | 0 | pending |
 | `plugins-http-bandwidth-limit` | 2 | 0 | 0 | 0 | pending |
 | `plugins-http-basic-auth` | 3 | 1 | 2 | 0 | complete |
@@ -111,7 +111,7 @@
 | `plugins-http-forward-auth` | 2 | 1 | 1 | 0 | complete |
 | `plugins-http-framework` | 3 | 0 | 0 | 0 | pending |
 | `plugins-http-geoip-location` | 2 | 1 | 1 | 0 | complete |
-| `plugins-http-guardrail` | 5 | 1 | 4 | 0 | complete |
+| `plugins-http-guardrail` | 5 | 1 | 2 | 2 | complete |
 | `plugins-http-header-cert-auth` | 2 | 1 | 1 | 0 | complete |
 | `plugins-http-hmac-auth` | 2 | 1 | 1 | 0 | complete |
 | `plugins-http-ip-restriction` | 2 | 1 | 1 | 0 | complete |
@@ -159,27 +159,27 @@
 | `edgion-gateway/Cargo.toml` | `crate-root` | manifest | pending | — |
 | `edgion-gateway/benches/lru_expiration.rs` | `crate-root` | benchmark | pending | Added by external commit `ab8074d0`; full audit pending |
 | `edgion-gateway/build.rs` | `crate-root` | source | pending | — |
-| `edgion-gateway/src/ai/adaptive.rs` | `ai-core` | source | pending | — |
-| `edgion-gateway/src/ai/anthropic/mod.rs` | `ai-anthropic` | source | pending | — |
-| `edgion-gateway/src/ai/anthropic/request.rs` | `ai-anthropic` | source | pending | — |
-| `edgion-gateway/src/ai/anthropic/response.rs` | `ai-anthropic` | source | pending | — |
-| `edgion-gateway/src/ai/attempt.rs` | `ai-core` | source | pending | — |
-| `edgion-gateway/src/ai/attempt_plan.rs` | `ai-core` | source | pending | — |
-| `edgion-gateway/src/ai/attempt_runtime.rs` | `ai-core` | source | pending | — |
-| `edgion-gateway/src/ai/backend_store.rs` | `ai-core` | source | pending | — |
-| `edgion-gateway/src/ai/canonical_sse.rs` | `ai-core` | source | pending | — |
-| `edgion-gateway/src/ai/circuit_breaker.rs` | `ai-core` | source | pending | — |
-| `edgion-gateway/src/ai/credential_outlier.rs` | `ai-core` | source | pending | — |
-| `edgion-gateway/src/ai/dispatch.rs` | `ai-core` | source | pending | — |
-| `edgion-gateway/src/ai/error.rs` | `ai-core` | source | pending | — |
-| `edgion-gateway/src/ai/json_span.rs` | `ai-core` | source | pending | — |
-| `edgion-gateway/src/ai/mod.rs` | `ai-core` | source | pending | — |
-| `edgion-gateway/src/ai/model_router.rs` | `ai-core` | source | pending | — |
-| `edgion-gateway/src/ai/quota/mod.rs` | `ai-quota` | source | pending | — |
-| `edgion-gateway/src/ai/quota/runtime.rs` | `ai-quota` | source | pending | — |
-| `edgion-gateway/src/ai/routing.rs` | `ai-core` | source | pending | — |
-| `edgion-gateway/src/ai/terminal.rs` | `ai-core` | source | pending | — |
-| `edgion-gateway/src/ai/usage.rs` | `ai-core` | source | pending | — |
+| `edgion-gateway/src/ai/adaptive.rs` | `ai-core` | source | excluded-with-reason | User-fixed scope revision on 2026-09-11 excludes AI-owned targets |
+| `edgion-gateway/src/ai/anthropic/mod.rs` | `ai-anthropic` | source | excluded-with-reason | User-fixed scope revision on 2026-09-11 excludes AI-owned targets |
+| `edgion-gateway/src/ai/anthropic/request.rs` | `ai-anthropic` | source | excluded-with-reason | User-fixed scope revision on 2026-09-11 excludes AI-owned targets |
+| `edgion-gateway/src/ai/anthropic/response.rs` | `ai-anthropic` | source | excluded-with-reason | User-fixed scope revision on 2026-09-11 excludes AI-owned targets |
+| `edgion-gateway/src/ai/attempt.rs` | `ai-core` | source | excluded-with-reason | User-fixed scope revision on 2026-09-11 excludes AI-owned targets |
+| `edgion-gateway/src/ai/attempt_plan.rs` | `ai-core` | source | excluded-with-reason | User-fixed scope revision on 2026-09-11 excludes AI-owned targets |
+| `edgion-gateway/src/ai/attempt_runtime.rs` | `ai-core` | source | excluded-with-reason | User-fixed scope revision on 2026-09-11 excludes AI-owned targets |
+| `edgion-gateway/src/ai/backend_store.rs` | `ai-core` | source | excluded-with-reason | User-fixed scope revision on 2026-09-11 excludes AI-owned targets |
+| `edgion-gateway/src/ai/canonical_sse.rs` | `ai-core` | source | excluded-with-reason | User-fixed scope revision on 2026-09-11 excludes AI-owned targets |
+| `edgion-gateway/src/ai/circuit_breaker.rs` | `ai-core` | source | excluded-with-reason | User-fixed scope revision on 2026-09-11 excludes AI-owned targets |
+| `edgion-gateway/src/ai/credential_outlier.rs` | `ai-core` | source | excluded-with-reason | User-fixed scope revision on 2026-09-11 excludes AI-owned targets |
+| `edgion-gateway/src/ai/dispatch.rs` | `ai-core` | source | excluded-with-reason | User-fixed scope revision on 2026-09-11 excludes AI-owned targets |
+| `edgion-gateway/src/ai/error.rs` | `ai-core` | source | excluded-with-reason | User-fixed scope revision on 2026-09-11 excludes AI-owned targets |
+| `edgion-gateway/src/ai/json_span.rs` | `ai-core` | source | excluded-with-reason | User-fixed scope revision on 2026-09-11 excludes AI-owned targets |
+| `edgion-gateway/src/ai/mod.rs` | `ai-core` | source | excluded-with-reason | User-fixed scope revision on 2026-09-11 excludes AI-owned targets |
+| `edgion-gateway/src/ai/model_router.rs` | `ai-core` | source | excluded-with-reason | User-fixed scope revision on 2026-09-11 excludes AI-owned targets |
+| `edgion-gateway/src/ai/quota/mod.rs` | `ai-quota` | source | excluded-with-reason | User-fixed scope revision on 2026-09-11 excludes AI-owned targets |
+| `edgion-gateway/src/ai/quota/runtime.rs` | `ai-quota` | source | excluded-with-reason | User-fixed scope revision on 2026-09-11 excludes AI-owned targets |
+| `edgion-gateway/src/ai/routing.rs` | `ai-core` | source | excluded-with-reason | User-fixed scope revision on 2026-09-11 excludes AI-owned targets |
+| `edgion-gateway/src/ai/terminal.rs` | `ai-core` | source | excluded-with-reason | User-fixed scope revision on 2026-09-11 excludes AI-owned targets |
+| `edgion-gateway/src/ai/usage.rs` | `ai-core` | source | excluded-with-reason | User-fixed scope revision on 2026-09-11 excludes AI-owned targets |
 | `edgion-gateway/src/api/admin_auth.rs` | `api` | source | pending | — |
 | `edgion-gateway/src/api/mod.rs` | `api` | source | pending | Reopened after external 7534a9bf; prior B0168 evidence retained |
 | `edgion-gateway/src/backends/circuit_breaker/concurrency_integration_tests.rs` | `backends-circuit-breaker` | test | changed | `B0033`: concurrent winner permits now prove RAII release to zero without leaking handles |
@@ -328,13 +328,13 @@
 | `edgion-gateway/src/plugins/common/mod.rs` | `plugins-common` | source | examined-no-change | `B0061`: retained correct entry-scope compilation and identity separation |
 | `edgion-gateway/src/plugins/common/redis_rate_limiter/mod.rs` | `plugins-common` | source | changed | B0233: shallow Fred input clones retain NOSCRIPT fallback; independent LGTM, 426 focused tests |
 | `edgion-gateway/src/plugins/common/redis_rate_limiter/scripts.rs` | `plugins-common` | source | changed | B0232: persisted fractional refill; independent plan/final LGTM, focused filters passed |
-| `edgion-gateway/src/plugins/http/ai_guard/evaluator.rs` | `plugins-http-ai-guard` | source | pending | External 9b787978..b297af6e requires review; prior changed: B0234: borrowed evaluator serialization spans; independent LGTM, evaluator 6/6 and module 30/30 |
+| `edgion-gateway/src/plugins/http/ai_guard/evaluator.rs` | `plugins-http-ai-guard` | source | excluded-with-reason | User-fixed scope revision on 2026-09-11 excludes AI-owned targets; prior B0234 evidence retained |
 | `edgion-gateway/src/plugins/http/ai_guard/mod.rs` | `plugins-http-ai-guard` | source | examined-no-change | B0235: minimal private-module facade retained; independent LGTM, AI Guard 30/30 |
 | `edgion-gateway/src/plugins/http/ai_guard/plugin.rs` | `plugins-http-ai-guard` | source | changed | B0236: saturated physical-cap conversion, lazy refusal facts and borrowed evaluator projection; independent plan/final LGTM, AI Guard 32/32 |
 | `edgion-gateway/src/plugins/http/ai_guard/rules.rs` | `plugins-http-ai-guard` | source | changed | B0237: bounded capture expansion and live replacement accounting; independent revised-plan/final LGTM, AI Guard 40/40 |
 | `edgion-gateway/src/plugins/http/ai_guard/spans.rs` | `plugins-http-ai-guard` | source | changed | B0238: decoded-bound correctness, duplicate-part fail-close and bounded discriminator decoding; independent plan/final LGTM, AI Guard 49/49 |
 | `edgion-gateway/src/plugins/http/ai_proxy/mod.rs` | `plugins-http-ai-proxy` | source | examined-no-change | B0064 |
-| `edgion-gateway/src/plugins/http/ai_proxy/plugin.rs` | `plugins-http-ai-proxy` | source | pending | External 79b72bb3 RequestId/request-trace-id migration also changed this pending target; prior evidence retained |
+| `edgion-gateway/src/plugins/http/ai_proxy/plugin.rs` | `plugins-http-ai-proxy` | source | excluded-with-reason | User-fixed scope revision on 2026-09-11 excludes AI-owned targets; prior evidence retained |
 | `edgion-gateway/src/plugins/http/all_endpoint_status/mod.rs` | `plugins-http-all-endpoint-status` | source | examined-no-change | B0063 |
 | `edgion-gateway/src/plugins/http/all_endpoint_status/plugin.rs` | `plugins-http-all-endpoint-status` | source | changed | B0063 |
 | `edgion-gateway/src/plugins/http/all_endpoint_status/transport.rs` | `plugins-http-all-endpoint-status` | source | examined-no-change | B0239: request/endpoint isolation and canonical egress/TLS/bounds retained; independent LGTM, focused tests 18/18 |
@@ -424,11 +424,11 @@
 | `edgion-gateway/src/plugins/http/forward_auth/plugin.rs` | `plugins-http-forward-auth` | source | changed | B0290: preserve repeated selected denial headers; independent plan/final LGTM, 7/7 focused tests and workspace gates passed |
 | `edgion-gateway/src/plugins/http/geoip_location/mod.rs` | `plugins-http-geoip-location` | source | examined-no-change | B0078 |
 | `edgion-gateway/src/plugins/http/geoip_location/plugin.rs` | `plugins-http-geoip-location` | source | changed | B0078 |
-| `edgion-gateway/src/plugins/http/guardrail/attached.rs` | `plugins-http-guardrail` | source | pending | Reopened after external 79b72bb3 RequestId/request-trace-id migration; prior terminal evidence retained |
+| `edgion-gateway/src/plugins/http/guardrail/attached.rs` | `plugins-http-guardrail` | source | excluded-with-reason | User-fixed scope revision on 2026-09-11 excludes AI-owned targets; prior evidence retained |
 | `edgion-gateway/src/plugins/http/guardrail/mod.rs` | `plugins-http-guardrail` | source | examined-no-change | B0079 |
 | `edgion-gateway/src/plugins/http/guardrail/plugin.rs` | `plugins-http-guardrail` | source | changed | B0079 |
 | `edgion-gateway/src/plugins/http/guardrail/protocol.rs` | `plugins-http-guardrail` | source | examined-no-change | B0079 |
-| `edgion-gateway/src/plugins/http/guardrail/response.rs` | `plugins-http-guardrail` | source | pending | Reopened after external 79b72bb3 RequestId/request-trace-id migration; prior terminal evidence retained |
+| `edgion-gateway/src/plugins/http/guardrail/response.rs` | `plugins-http-guardrail` | source | excluded-with-reason | User-fixed scope revision on 2026-09-11 excludes AI-owned targets; prior evidence retained |
 | `edgion-gateway/src/plugins/http/header_cert_auth/mod.rs` | `plugins-http-header-cert-auth` | source | examined-no-change | B0080 |
 | `edgion-gateway/src/plugins/http/header_cert_auth/plugin.rs` | `plugins-http-header-cert-auth` | source | changed | B0080 |
 | `edgion-gateway/src/plugins/http/hmac_auth/mod.rs` | `plugins-http-hmac-auth` | source | examined-no-change | B0081 |
@@ -535,7 +535,7 @@
 | `edgion-gateway/src/plugins/runtime/edgion_config_data/mod.rs` | `plugins-runtime` | source | changed | B0123: crate-private snapshot API export |
 | `edgion-gateway/src/plugins/runtime/gateway_api_filters/cors_filter.rs` | `plugins-runtime` | source | examined-no-change | B0309: independent LGTM; B0124 inline bounds and resolved D0086 credentialed exposure policy retained |
 | `edgion-gateway/src/plugins/runtime/gateway_api_filters/debug_access_log.rs` | `plugins-runtime` | source | changed | B0125: suppress raw Wrap-mode client exposure before snapshot construction |
-| `edgion-gateway/src/plugins/runtime/gateway_api_filters/extension_ref.rs` | `plugins-runtime` | source | pending | Reopened after external 79b72bb3 RequestId/request-trace-id migration; prior terminal evidence retained |
+| `edgion-gateway/src/plugins/runtime/gateway_api_filters/extension_ref.rs` | `plugins-runtime` | source | analysis-in-progress | B0310; reopened after external 79b72bb3 RequestId/request-trace-id migration; prior terminal evidence retained |
 | `edgion-gateway/src/plugins/runtime/gateway_api_filters/header_modifier.rs` | `plugins-runtime` | source | changed | B0127: shared construction-time first-equivalent header plan |
 | `edgion-gateway/src/plugins/runtime/gateway_api_filters/mod.rs` | `plugins-runtime` | source | examined-no-change | B0126: minimal Gateway API filter façade retained |
 | `edgion-gateway/src/plugins/runtime/gateway_api_filters/path_modifier.rs` | `plugins-runtime` | source | changed | B0128: shared path-element replacement, root/trailing-slash and UTF-8 parameter regressions; verified |
@@ -545,17 +545,17 @@
 | `edgion-gateway/src/plugins/runtime/gateway_api_filters/url_rewrite.rs` | `plugins-runtime` | source | changed | B0128: shared element-aware replacement preserving raw query and URI finalization; verified |
 | `edgion-gateway/src/plugins/runtime/log.rs` | `plugins-runtime` | source | changed | B0129: bounded formatting/redaction and shared DSL strings; verified |
 | `edgion-gateway/src/plugins/runtime/mod.rs` | `plugins-runtime` | source | examined-no-change | B0130: compile-time facade retained; independent review and gates passed |
-| `edgion-gateway/src/plugins/runtime/plugin_runtime.rs` | `plugins-runtime` | source | pending | External 79b72bb3 RequestId/request-trace-id migration also changed this pending target; prior evidence retained |
+| `edgion-gateway/src/plugins/runtime/plugin_runtime.rs` | `plugins-runtime` | source | analysis-in-progress | B0310; external 79b72bb3 RequestId/request-trace-id migration also changed this target; prior evidence retained |
 | `edgion-gateway/src/plugins/runtime/policy_filter.rs` | `plugins-runtime` | source | examined-no-change | B0132: static Block/Bypass adapter retained after independent review |
 | `edgion-gateway/src/plugins/runtime/reject_filter.rs` | `plugins-runtime` | source | changed | B0133: corrected fail-closed ownership and lenient-admission documentation |
-| `edgion-gateway/src/plugins/runtime/session_adapter.rs` | `plugins-runtime` | source | pending | External 79b72bb3 RequestId/request-trace-id migration also changed this pending target; prior evidence retained |
+| `edgion-gateway/src/plugins/runtime/session_adapter.rs` | `plugins-runtime` | source | analysis-in-progress | B0310; external 79b72bb3 RequestId/request-trace-id migration also changed this target; prior evidence retained |
 | `edgion-gateway/src/plugins/runtime/session_adapter/storage_io_tests.rs` | `plugins-runtime` | test | changed | B0135: independent watchdogs for deliberately blocked storage tests |
 | `edgion-gateway/src/plugins/runtime/tests/body_gate_test.rs` | `plugins-runtime` | test | changed | `B0119`: externalized body-gate and compiled-policy coverage |
 | `edgion-gateway/src/plugins/runtime/traits/header_ext.rs` | `plugins-runtime` | source | changed | B0136: exact per-name versus cross-name HeaderMap ordering contract |
 | `edgion-gateway/src/plugins/runtime/traits/mod.rs` | `plugins-runtime` | source | examined-no-change | B0137: live layered facade and named lower-level paths retained |
 | `edgion-gateway/src/plugins/runtime/traits/request_body_stream.rs` | `plugins-runtime` | source | changed | B0138: removed unused handler name API; supporting implementations retain separate coverage |
 | `edgion-gateway/src/plugins/runtime/traits/request_filter.rs` | `plugins-runtime` | source | examined-no-change | B0139: object-safe conservative request-stage contract retained |
-| `edgion-gateway/src/plugins/runtime/traits/session.rs` | `plugins-runtime` | source | pending | Reopened after external 79b72bb3 RequestId/request-trace-id migration; prior terminal evidence retained |
+| `edgion-gateway/src/plugins/runtime/traits/session.rs` | `plugins-runtime` | source | analysis-in-progress | B0310; reopened after external 79b72bb3 RequestId/request-trace-id migration; prior terminal evidence retained |
 | `edgion-gateway/src/plugins/runtime/traits/streaming_response_processor.rs` | `plugins-runtime` | source | changed | B0141: removed unused name API and repaired streaming design reference; support files retain separate coverage |
 | `edgion-gateway/src/plugins/runtime/traits/test_helpers.rs` | `plugins-runtime` | source | examined-no-change | B0142: coherent strict test helpers retained |
 | `edgion-gateway/src/plugins/runtime/traits/upstream_response.rs` | `plugins-runtime` | source | changed | B0143: correct final-response-header lifecycle contract |
@@ -710,6 +710,6 @@
 | `edgion-gateway/src/util/proxy_protocol.rs` | `util` | source | changed | UTIL-001 / `a909f16f` |
 | `edgion-gateway/src/util/real_ip_extractor.rs` | `util` | source | changed | UTIL-001 / `a909f16f`; support reopened in B0098 |
 | `edgion-gateway/src/util/redacted.rs` | `util` | source | examined-no-change | UTIL-001 / `a909f16f` |
-| `edgion-gateway/tests/conf_sync_failover.rs` | `external-tests` | test | pending | Added by external commit `715e20d5`; full audit pending |
-| `edgion-gateway/tests/geoip_fixture_readback.rs` | `external-tests` | test | pending | — |
-| `edgion-gateway/tests/tls_passthrough_clienthello.rs` | `external-tests` | test | pending | Added by external commit `55bb2c84`; full audit pending |
+| `edgion-gateway/tests/conf_sync_failover.rs` | `external-tests` | test | excluded-with-reason | User-fixed scope revision on 2026-09-11 excludes standalone `edgion-gateway/tests/**` targets |
+| `edgion-gateway/tests/geoip_fixture_readback.rs` | `external-tests` | test | excluded-with-reason | User-fixed scope revision on 2026-09-11 excludes standalone `edgion-gateway/tests/**` targets |
+| `edgion-gateway/tests/tls_passthrough_clienthello.rs` | `external-tests` | test | excluded-with-reason | User-fixed scope revision on 2026-09-11 excludes standalone `edgion-gateway/tests/**` targets |

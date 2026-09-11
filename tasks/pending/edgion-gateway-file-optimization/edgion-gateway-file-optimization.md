@@ -9,16 +9,16 @@
 | Type | refactor |
 | Priority | P1 |
 | Baseline commit | `d484e580` |
-| Scope | Every tracked file under `edgion-gateway/` |
-| Campaign status | in-progress at HEAD `fea8d812`: B0309 native Gateway API CORS refresh is independently approved as examined-no-change and passed all commit gates. |
-| Coverage | 551 current Gateway files: 235 changed, 194 examined-no-change, 16 deferred, 106 non-terminal; 5 historical rows are removed and 1 renamed. External `79b72bb3` added RequestId/request-trace-id ownership, removed attachable TraceContext and reopened 18 affected terminal files. Historical evidence is retained. |
-| Active batch | B0309 exact staging and automatic local commit. Never push. |
-| Analysis queue | No later batch may enter the serial mutation/review lane before B0309 completes. D0058 and D0127–D0155 track separate work. |
+| Scope | The 78 paths frozen in `04-fixed-scope.md`; optimization starts from those files only. AI-owned targets and standalone `edgion-gateway/tests/**` targets are excluded. |
+| Campaign status | in-progress at HEAD `4ee46a76`: the user-fixed remaining scope is committed and B0310 is under read-only analysis. |
+| Coverage | 551 current Gateway files: 235 changed, 194 examined-no-change, 16 deferred, 28 excluded-with-reason, and 78 non-terminal; 5 historical rows are removed and 1 renamed. The 2026-09-11 scope revision excluded 25 AI-owned pending targets and 3 standalone test targets. |
+| Active batch | None. Never push. |
+| Analysis queue | B0310 analyzes four RequestId-affected plugin-runtime targets from the fixed scope. D0058 and D0127–D0155 track separate work. |
 | Integration freeze | 3,274 files. External `79b72bb3` integration changes were verified against the commit and clean worktree, then reconciled path-by-path; prior reconciliations retained. Campaign made no integration-test edit. |
 
 ## AI guide summary
 
-Audit `edgion-gateway` file by file in cohesive, dependency-aware batches. Make only evidence-backed, behavior-preserving improvements to local structure, duplication, type and error modeling, and bounded hot-path efficiency. Every implementation batch is independently reviewed, verified, recorded in one changelog, and committed locally without pushing.
+Audit the user-fixed remaining Gateway paths file by file in cohesive, dependency-aware batches. Make only evidence-backed, behavior-preserving improvements to local structure, duplication, type and error modeling, and bounded hot-path efficiency. Every implementation batch is independently reviewed, verified, recorded in one changelog, and committed locally without pushing.
 
 The current coverage plan was refreshed after external `79b72bb3`: RequestId and request-trace-id are separate cohesive ownership modules, the removed TraceContext paths remain historical rows, and externally affected terminal files are reopened without re-auditing unrelated code.
 
@@ -28,7 +28,9 @@ The user explicitly reaffirmed standing authorization: commit every batch locall
 
 The user concurrently resolves standalone `tasks/todo/` issues through other agents. Preserve and reconcile those external commits without reopening resolved issue bodies or treating HEAD movement alone as a blocker. This campaign directory is coordinator-owned; each repair task is self-contained and must not reference or require updates to a shared global task index. Only the coordinator maintains campaign status/backlinks here.
 
-- Cover every tracked file under `edgion-gateway/`; a reviewed file may legitimately need no change.
+- Cover exactly the 78 remaining targets in `04-fixed-scope.md`; a reviewed file may legitimately need no change.
+- Do not add newly discovered or newly created Gateway files to this campaign. Read callers and callees as context, but optimize from a fixed target only. A necessary supporting edit requires explicit call-chain evidence and an exact batch allow-list; it does not expand coverage.
+- Exclude AI-owned targets (`src/ai/**`, `src/plugins/http/ai_guard/**`, `src/plugins/http/ai_proxy/**`, and `src/plugins/http/guardrail/**`) and standalone `edgion-gateway/tests/**` targets from all future batches in this campaign.
 - Preserve the Controller/Gateway split, conf-sync semantics, `EdgionHttpContext`, access-log architecture, Pingora lifecycle, and existing public behavior.
 - Prefer small local extractions and existing shared mechanisms over new frameworks or broad redesigns.
 - Use an implementation subagent for each batch and a separate review subagent after implementation.
@@ -66,6 +68,7 @@ The user concurrently resolves standalone `tasks/todo/` issues through other age
 |----------|--------|---------|
 | `00-context.md` | done | Mandatory context and validation references |
 | `03-subtasks.md` | in-progress | Complete per-file coverage ledger and batch assignment |
+| `04-fixed-scope.md` | frozen | Authoritative 78-file remaining target allow-list |
 | `07-changelog.md` | in-progress | Unified record of actual optimizations and verification |
 | `integration-freeze.tsv` | done | Content and mode fingerprints for the immutable integration-test floor |
 | `batches/` | in-progress | Decision, scope, review, and verification record for each new-format batch |
@@ -73,7 +76,7 @@ The user concurrently resolves standalone `tasks/todo/` issues through other age
 
 ## Completion evidence
 
-- Every row in `03-subtasks.md` has a terminal campaign status or a documented pending batch.
+- Every path in `04-fixed-scope.md` reaches a terminal campaign status in `03-subtasks.md`.
 - Every changed batch has an independent review result, verification evidence, and local commit in `07-changelog.md`.
 - No existing integration-test file was modified or deleted relative to the baseline.
 - The final repository-wide required checks pass.
