@@ -661,7 +661,7 @@
 | `edgion-gateway/src/runtime/matching/mod.rs` | `runtime` | source | examined-no-change | B0219: independently verified live facade; matching 41/41, no worthwhile rewrite |
 | `edgion-gateway/src/runtime/matching/route.rs` | `runtime` | source | changed | B0220: reused parent-local Gateway lookup; independent LGTM, 19 route tests and adjacent matching gates passed |
 | `edgion-gateway/src/runtime/matching/tests/tls_test.rs` | `runtime` | test | examined-no-change | B0221: independent LGTM; retained security tests, fresh 26/26; D0124 knowledge task |
-| `edgion-gateway/src/runtime/matching/tls.rs` | `runtime` | source | pending | Reopened after external 78a25c3a; prior B0222 TLS evidence and D0125 investigation retained |
+| `edgion-gateway/src/runtime/matching/tls.rs` | `runtime` | source | pending | Reopened after external 78a25c3a; prior B0222 TLS evidence retained; D0125 [configuration-memory cost accepted](../../../skills/04-review/tls/intentional-design/gateway-tls-candidate-ownership.md) |
 | `edgion-gateway/src/runtime/mod.rs` | `runtime` | source | examined-no-change | B0223: independent LGTM; retained explicit facade, identity 3/3 and matching 45/45 |
 | `edgion-gateway/src/runtime/server/base.rs` | `runtime` | source | changed | B0176: remove the now-unconsumed GatewayClass clone chain |
 | `edgion-gateway/src/runtime/server/error_response.rs` | `runtime` | source | changed | B0224: static HTML bytes, independent LGTM, response 11/11 and final status 8/8; D0126 separate |

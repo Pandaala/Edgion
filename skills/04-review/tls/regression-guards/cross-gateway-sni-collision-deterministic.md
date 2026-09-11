@@ -107,10 +107,14 @@ collisions reach the data plane unguarded.
 ## Known limitations (not fixed here)
 
 - **No cert-failover on collision.** Selection picks `entries.first()` and the losing
-  entries are discarded; the consumption side (`apply_gateway_tls_cert`) fails closed
+  entries are not considered for that handshake; the consumption side (`apply_gateway_tls_cert`) fails closed
   if the winner's cert is unusable rather than falling through to a runner-up. This is a
   same-hostname misconfiguration path, and fail-closed is the safe behavior, but the
   deterministic winner is not "the entry that happens to have a valid cert".
+  Gateway TLS still retains the complete candidate vectors in its published
+  snapshot. Its configuration-memory cost is
+  [accepted separately](../intentional-design/gateway-tls-candidate-ownership.md);
+  the TLSRoute winner-only publication described above does not apply to it.
 - **Status-condition feedback is out of scope.** Surfacing the collision as a
   Gateway/Listener `Conflicted`/`Overlapping` status condition is architecturally
   infeasible from the data plane (the `ConfigSync` gRPC channel is pull-only — no

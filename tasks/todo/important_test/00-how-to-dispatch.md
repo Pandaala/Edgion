@@ -65,17 +65,19 @@ actual pass count. Whole-binary runs are not evidence for an individual test:
 this suite once shipped a case that passed in-suite and failed **5 of 6**
 isolated runs, and whose assertion was vacuous besides.
 
-For the Edgion integration suite, the runner collapses when invoked
-back-to-back (a known pre-existing harness defect — the gateway ignores SIGTERM,
-is SIGKILLed, and its port lingers). Always:
+For the Edgion integration suite, run the selected scenario directly and retain
+its canonical report:
 
 ```bash
-./edgion-tests/integration/scripts/utils/kill_all.sh >/dev/null 2>&1
 ./edgion-tests/integration/scripts/integration/run_integration.sh --no-prepare -r <R> -i <I>
 ```
 
 A run that reports no summary is a **collapse**, not a pass. Say so; do not
-count it. See `tasks/todo/integration-suite-back-to-back-run-collapse.md`.
+count it. The former claim that a cleanup SIGKILL retained the Gateway's listen
+socket was disproved; see the evidence boundary in
+`skills/04-review/testing/regression-guards/integration-suite-lifecycle-errors-must-fail.md`.
+If a collapse returns, preserve both adjacent runs' teardown and startup logs
+instead of hiding the failure with an extra cleanup command.
 
 ## 4. When a test fails
 

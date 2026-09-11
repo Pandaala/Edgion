@@ -11,6 +11,7 @@ before applying a decision to current code.
 
 ## Intentional design
 
+- [Gateway TLS collision candidate ownership](intentional-design/gateway-tls-candidate-ownership.md)
 - [tls-F010 (cert/key install dup) — Shared `install_cert_key_to_ssl` extraction deferred](intentional-design/cert-key-install-helper-deferred.md)
 - [tls-F007 (duplication) — Two SNI matchers stay separate; semantics changes apply to both](intentional-design/cert-matcher-duplication-accepted.md)
 - [tls-07 — `revocationCheck` / `ocspStapling` are reserved schema, not implemented](intentional-design/revocation-config-not-implemented.md)

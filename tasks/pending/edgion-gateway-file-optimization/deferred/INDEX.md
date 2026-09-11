@@ -192,7 +192,6 @@ These entries are backlinks only. A linked `tasks/todo` file is the editable sou
 | Wire UDP listener process shutdown (D0122) | pending | [task](../../../todo/wire-udp-listener-process-shutdown.md) |
 | Replace Gateway generations on coalesced add (D0123) | pending | [task](../../../todo/replace-gateway-generations-on-coalesced-add.md) |
 | Reconcile Gateway frontend TLS knowledge (D0124) | retired externally | Task removed by user-synchronized `78a25c3a`; history retained in Git. |
-| Investigate Gateway TLS collision retention (D0125) | needs-investigation | [task](../../../todo/investigate-gateway-tls-collision-snapshot-retention.md) |
 | Enforce canonical gRPC terminal status headers (D0126) | pending | [task](../../../todo/enforce-canonical-grpc-terminal-status-headers.md) |
 | Reject empty individual outbound CA bundles (D0127) | pending | [task](../../../todo/reject-empty-individual-outbound-ca-bundles.md) |
 | Bound and redact DSL Redis error results | pending | [task](../../../todo/bound-and-redact-dsl-redis-error-results.md) |

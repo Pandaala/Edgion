@@ -40,7 +40,37 @@ The other six standalone jobs passed in the preceding aggregate run. The main
 job remained blocked by missing host loopback aliases; these results do not
 establish a successful full main sweep.
 
+## Evidence boundary: back-to-back local runs
+
+`integration-suite-back-to-back-run-collapse` recorded a historical macOS
+symptom in which most cases immediately failed to connect on some consecutive
+local runs. Its proposed mechanism is not a valid lifecycle rule: the test
+cleanup waits five seconds before escalating the Gateway from TERM to KILL,
+while the Gateway defaults to a 30-second Pingora grace period followed by a
+10-second graceful-shutdown timeout. Escalation at five seconds therefore does
+not show that the Gateway ignored TERM. Nor does a terminated listening socket
+remain bound merely because established TCP connections can enter TIME_WAIT.
+
+Current startup independently kills stale test binaries, waits, checks the
+shared stack ports, and then requires the Gateway process, admin and probe
+listeners, cache readiness, and resource convergence before executing cases.
+On 2026-09-10, three immediate back-to-back
+`HTTPRoute/Transport` runs passed after each preceding cleanup escalated the
+Gateway to KILL. No bind failure or target-listener connection refusal appeared.
+This disproved the recorded causal claim and did not reproduce the historical
+failure rate; it does not prove that all platforms or future runner revisions
+are immune to lifecycle failures. This section limits the evidence that can
+support the lifecycle rule above; it is not a separate assertion that the
+runner can never collapse.
+
+If the collapse returns, preserve both runs' teardown and startup logs and
+identify the failed bind, owning PID, and listener before proposing a fix. A
+`SIGKILL after 5s` line alone is not evidence of port retention. Continue to
+fail closed on an actual startup, readiness, or listener-contract failure.
+
 ## Resolution references
 
 - `ITEST-009` — 2026-08-26.
+- `integration-suite-back-to-back-run-collapse` — closed as stale/incorrectly
+  attributed on 2026-09-10; no runtime or runner change.
 - `edgionplugins-resource-sweep-config-list-drift` — full-suite follow-up: OTLP shutdown delivery assertions.
