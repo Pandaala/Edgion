@@ -43,7 +43,7 @@ pub struct OutboundTlsValidation {
     pub subject_alt_names: Option<Vec<SubjectAltName>>,
 }
 
-#[derive(Deserialize, Serialize, Clone, Debug, Default, JsonSchema)]
+#[derive(Deserialize, Serialize, Clone, Debug, Default, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct OutboundTlsLocal {
     #[serde(default, skip_serializing_if = "Option::is_none")]

@@ -1,4 +1,5 @@
 use super::config_store::{get_hc_config_store, HealthCheckConfigStore};
+use super::encrypted::EncryptedProbeTransport;
 use super::probes::{build_http_probe_client, probe_grpc, probe_http, probe_http_with_client, probe_tcp, ProbeError};
 use super::status_store::{get_health_status_store, HealthStatusStore};
 use crate::backends::discovery::endpoint_slice::get_roundrobin_store;
@@ -93,6 +94,8 @@ impl HealthCheckManager {
         let task_service_key = service_key.clone();
         let config = policy.config.clone();
         let policy_identity = Arc::clone(&policy.identity);
+        // Reconciliation is serialized; retire the old task before admitting its replacement.
+        self.cancel_task(&service_key);
         let handle = runtime_handle.spawn(async move {
             health_check_loop(task_service_key, config, policy_identity, health_store).await;
         });
@@ -157,6 +160,10 @@ async fn health_check_loop(
     // `HealthCheckManager::reconcile_service`.
     let http_host = resolve_probe_host(&service_key, config.host.clone());
     let grpc_service_name = config.grpc_service_name.clone().unwrap_or_default();
+    let encrypted = matches!(config.r#type, HealthCheckType::Https | HealthCheckType::Grpcs).then(|| {
+        let namespace = service_key.split_once('/').map_or("", |(namespace, _)| namespace);
+        EncryptedProbeTransport::build(&config, namespace)
+    });
 
     let mut http_client = if matches!(config.r#type, HealthCheckType::Http) {
         match build_http_probe_client(timeout) {
@@ -198,6 +205,7 @@ async fn health_check_loop(
         expected_statuses: http_expected_statuses,
         grpc_service_name,
         timeout,
+        encrypted,
     });
 
     loop {
@@ -253,10 +261,23 @@ async fn health_check_loop(
             let semaphore = semaphore.clone();
             let params = probe_params.clone();
             let client = http_client.clone();
+            let config_store = get_hc_config_store();
+            let captured_service_key = &service_key;
+            let captured_policy_identity = &policy_identity;
             probes.push(async move {
-                let permit = semaphore.acquire().await.expect("probe semaphore closed");
-                let result = probe_backend(&params, client.as_ref(), addr).await;
-                drop(permit);
+                let probe = async {
+                    let permit = semaphore.acquire().await.expect("probe semaphore closed");
+                    let result = probe_backend(&params, client.as_ref(), addr).await;
+                    drop(permit);
+                    result
+                };
+                let result = if params.encrypted.is_some() {
+                    config_store
+                        .with_current_generation(captured_service_key, captured_policy_identity, probe)
+                        .await
+                } else {
+                    probe.await
+                };
                 (addr, runtime_identity, membership_identity, result)
             });
         }
@@ -299,6 +320,7 @@ struct ProbeParams {
     expected_statuses: Vec<u16>,
     grpc_service_name: String,
     timeout: Duration,
+    encrypted: Option<Result<EncryptedProbeTransport, ProbeError>>,
 }
 
 /// Run one probe against `addr` for the given probe parameters. When the probe
@@ -336,6 +358,37 @@ async fn probe_backend(
         },
         HealthCheckType::Tcp => probe_tcp(addr, params.port, params.timeout).await,
         HealthCheckType::Grpc => probe_grpc(addr, params.port, &params.grpc_service_name, params.timeout).await,
+        HealthCheckType::Https | HealthCheckType::Grpcs => {
+            let transport = params
+                .encrypted
+                .as_ref()
+                .and_then(|transport| transport.as_ref().ok())
+                .ok_or(ProbeError::InvalidTlsConfig)?;
+            let address = std::net::SocketAddr::new(addr.ip(), params.port.unwrap_or(addr.port()));
+            tokio::time::timeout(params.timeout, async {
+                match params.kind {
+                    HealthCheckType::Https => {
+                        transport
+                            .https(
+                                address,
+                                &params.path,
+                                params.host.as_deref(),
+                                &params.expected_statuses,
+                                params.timeout,
+                            )
+                            .await
+                    }
+                    HealthCheckType::Grpcs => {
+                        transport
+                            .grpcs(address, &params.grpc_service_name, params.timeout)
+                            .await
+                    }
+                    _ => unreachable!("encrypted probe branch"),
+                }
+            })
+            .await
+            .map_err(|_| ProbeError::Timeout)?
+        }
     }
 }
 

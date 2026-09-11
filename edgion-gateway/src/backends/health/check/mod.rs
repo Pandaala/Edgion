@@ -1,4 +1,5 @@
 pub mod config_store;
+mod encrypted;
 pub mod manager;
 pub mod probes;
 pub mod status_store;

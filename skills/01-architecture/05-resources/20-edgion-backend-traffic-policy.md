@@ -25,6 +25,14 @@ The Controller registers typed dependencies, validates target existence and capa
 arbitrates conflicts by oldest creation timestamp then policy name. Apply/delete requeues only
 affected policies through the EBTP workqueue.
 
+For Service active checks, HTTPS and GRPCS own health-local TLS configuration.
+The Controller clears and resolves CA Secret/ConfigMap and client Secret material
+on every parse and registers unresolved references for requeue. References must
+remain in the policy namespace. Resolved material is redacted in admin output
+and excluded from the CRD schema. TLS validation/reference failures are separate
+from target eligibility: the winning check remains attached and fails until its
+own configuration recovers. See [active probe transport](../02-gateway/07-backends.md#transport-ownership).
+
 The Gateway publishes one immutable ArcSwap snapshot keyed by typed target. AI requests capture the
 complete effective-policy Arc for the selected backend at plan time. Core Service HTTP/gRPC
 requests capture the same Arc once at first `begin_upstream_attempt` onto

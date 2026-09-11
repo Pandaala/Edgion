@@ -6,7 +6,7 @@
 
 ## 概述
 
-主动健康检查会在网关侧周期性探测后端实例（HTTP/TCP/gRPC），并在负载均衡选择时自动跳过不健康实例。
+主动健康检查会在网关侧周期性探测后端实例（HTTP/HTTPS/TCP/gRPC/GRPCS），并在负载均衡选择时自动跳过不健康实例。
 该功能主要用于后端可达但应用层异常、或非 K8s 场景下的就绪判断补充。
 
 健康检查通过挂载到目标 `Service` 的 `EdgionBackendTrafficPolicy` 资源的 `spec.healthCheck` 字段配置——不再是 Service 注解。同一个 `EdgionBackendTrafficPolicy` 还承载了同一 Service 的[异常点检测（熔断）](./circuit-breaker.md)与[负载均衡算法](../lb-algorithms.md)；三者的完整 schema 参考见 [full schema reference](https://github.com/Pandaala/Edgion/blob/main/skills/02-features/03-resources/20-edgion-backend-traffic-policy.md)（英文）。
@@ -59,16 +59,78 @@ spec:
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `type` | Enum | `http` | 探测类型。允许值：`http` / `tcp` / `grpc` |
-| `path` | String | `/` | HTTP 探测路径（仅 `http` 有效） |
+| `type` | Enum | `http` | 探测类型。允许值：`http` / `https` / `tcp` / `grpc` / `grpcs` |
+| `path` | String | `/` | HTTP 探测路径（`http` 和 `https` 有效） |
 | `port` | Integer | 使用后端端口 | 探测端口覆盖 |
 | `interval` | Duration | `10s` | 探测周期 |
 | `timeout` | Duration | `3s` | 单次探测超时 |
 | `healthyThreshold` | Integer | `2` | 连续成功多少次恢复健康 |
 | `unhealthyThreshold` | Integer | `3` | 连续失败多少次标记不健康 |
-| `expectedStatuses` | Array\<Integer\> | `[200]` | HTTP 期望状态码（仅 `http` 有效） |
-| `host` | String | 无 | HTTP Host 头覆盖（仅 `http` 有效） |
-| `grpcServiceName` | String | `""`（整个服务器） | gRPC Health Check 的 service name（仅 `grpc` 有效） |
+| `expectedStatuses` | Array\<Integer\> | `[200]` | HTTP 期望状态码（`http` 和 `https` 有效） |
+| `host` | String | 无 | HTTP Host 头覆盖（`http` 和 `https` 有效） |
+| `grpcServiceName` | String | `""`（整个服务器） | gRPC Health Check 的 service name（`grpc` 和 `grpcs` 有效） |
+| `tls` | Object | 无 | `https` 和 `grpcs` 必填的本地 TLS 配置 |
+
+## 加密健康检查
+
+选择 `https` 执行 TLS 上的 HTTP GET，或选择 `grpcs` 执行 TLS 上的 gRPC Health Check
+Protocol。两者都必须提供独立的 `tls` 配置。`http`、`tcp`、`grpc` 保持现有明文或仅连接检查语义。
+添加或修改 `BackendTLSPolicy` 不会改变探针安全配置，也不会触发探针客户端重建。
+
+在策略所在命名空间中创建 CA 和可选的客户端身份 Secret：
+
+```bash
+kubectl -n production create secret generic health-ca --from-file=ca.crt=health-ca.pem
+kubectl -n production create secret tls health-client --cert=client.pem --key=client-key.pem
+```
+
+以下配置适用于已存在的 `my-backend` Service，其健康检查监听端口为 8443：
+
+```yaml
+apiVersion: edgion.io/v1
+kind: EdgionBackendTrafficPolicy
+metadata:
+  name: encrypted-health
+  namespace: production
+spec:
+  targetRefs:
+    - kind: Service
+      name: my-backend
+  healthCheck:
+    active:
+      type: https
+      port: 8443
+      path: /healthz
+      interval: 10s
+      timeout: 3s
+      tls:
+        validation:
+          hostname: health.internal.example.com
+          caCertificateRefs:
+            - kind: Secret
+              name: health-ca
+        clientCertificateRef:
+          name: health-client
+```
+
+使用 GRPCS 时，将 `type` 改为 `grpcs`，设置健康检查监听端口，并按需设置 `grpcServiceName`。
+`path`、`host`、`expectedStatuses` 仅用于 HTTP(S)。健康服务器不要求 mTLS 时，移除 `clientCertificateRef`。
+
+| TLS 参数 | 类型 | 默认值 | 说明 |
+|----------|------|--------|------|
+| `validation.hostname` | String | 必填 | 证书验证和 SNI 使用的 DNS 名称，必须与健康服务器证书匹配 |
+| `validation.caCertificateRefs` | Array | 无 | 同命名空间中包含 `ca.crt` 的 Secret 或 ConfigMap；自定义 CA 替换公共根证书 |
+| `validation.wellKnownCACertificates` | Enum | 无 CA 引用时为 `System` | 使用内置公共根证书，不能与自定义 CA 引用同时配置 |
+| `validation.subjectAltNames` | Array | 无 | 正常证书验证后的附加 SAN 约束 |
+| `clientCertificateRef` | Object | 无 | 同命名空间中包含 `tls.crt` 和 `tls.key` 的客户端 Secret |
+| `verify` | Boolean | `true` | 必须验证证书；`false` 为无效配置 |
+
+连接固定到选中的后端 endpoint，同时验证配置的 TLS hostname。HTTP `host` 覆盖只改变 HTTP authority。
+全局 `outboundTls` 默认配置不会为健康检查提供信任或客户端身份。
+
+修改 TLS 配置或引用的 Secret／ConfigMap 会自动替换探针代际。TLS 材料缺失或损坏时探测失败，
+不会重试明文连接。失败的检查仍保持启用，并使用正常的不健康阈值；祖先状态会报告配置或引用错误。
+如果 Service 的 panic／降级策略允许，请求仍可能使用不健康 endpoint；需要严格排除时应关闭降级。
 
 ## 行为细节
 

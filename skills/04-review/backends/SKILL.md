@@ -11,6 +11,7 @@ before applying a decision to current code.
 
 ## Intentional design
 
+- [Active health-check transport is independent of BackendTLSPolicy](intentional-design/active-health-check-transport-is-independent.md)
 - [ExternalName DNS Miss Coalescing Is Not Implemented (task-externalname-dns-miss-coalescing) — DESIGN-TRADEOFF](intentional-design/externalname-dns-miss-coalescing-not-implemented.md)
 - [backends-F016 — Probe semaphore acquired per probe, not per cycle](intentional-design/probe-semaphore-per-cycle.md)
 

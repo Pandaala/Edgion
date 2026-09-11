@@ -69,8 +69,8 @@ rateLimitExceeded and pluginAlias. Missing declarations caused an actual
 Controller schema rejection before the CRD was corrected. Structural CRD tests
 (14) and condition-specific guards (7) passed after correction. The complete
 CRD guard failed its pre-existing KeyGet count/traceId drift during that
-verification. The remaining cardinality issue is tracked in the separate pending
-KeyGet traceId/CRD drift task.
+verification. The remaining cardinality issue is tracked in
+[the request-trace-id task](../../../../tasks/pending/request-trace-id/request-trace-id.md).
 Do not report that whole guard as passing without fresh verification.
 
 RateLimitLocalOverflowDynamic passed against the current Controller/Gateway binaries:

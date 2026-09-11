@@ -6,7 +6,7 @@
 
 ## Overview
 
-Active health checks periodically probe backend instances (HTTP/TCP/gRPC) from the gateway side, and automatically skip unhealthy instances during load balancing selection.
+Active health checks periodically probe backend instances (HTTP/HTTPS/TCP/gRPC/GRPCS) from the gateway side, and automatically skip unhealthy instances during load balancing selection.
 This feature is primarily used when backends are reachable but the application layer is abnormal, or as a supplementary readiness check in non-Kubernetes scenarios.
 
 Health checks are configured via the `spec.healthCheck` section of an `EdgionBackendTrafficPolicy` resource attached to the target `Service` — not a Service annotation. `EdgionBackendTrafficPolicy` also carries [outlier detection](./circuit-breaker.md) and the [load balancing algorithm](../lb-algorithms.md) for the same Service; see the [full schema reference](https://github.com/Pandaala/Edgion/blob/main/skills/02-features/03-resources/20-edgion-backend-traffic-policy.md) for all three sections together.
@@ -59,16 +59,84 @@ The policy must live in the **same namespace** as the target Service (`spec.targ
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `type` | Enum | `http` | Probe type. Allowed values: `http` / `tcp` / `grpc` |
-| `path` | String | `/` | HTTP probe path (only effective for `http`) |
+| `type` | Enum | `http` | Probe type. Allowed values: `http` / `https` / `tcp` / `grpc` / `grpcs` |
+| `path` | String | `/` | HTTP probe path (effective for `http` and `https`) |
 | `port` | Integer | uses backend port | Probe port override |
 | `interval` | Duration | `10s` | Probe interval |
 | `timeout` | Duration | `3s` | Single probe timeout |
 | `healthyThreshold` | Integer | `2` | Number of consecutive successes to recover healthy status |
 | `unhealthyThreshold` | Integer | `3` | Number of consecutive failures to mark unhealthy |
-| `expectedStatuses` | Array\<Integer\> | `[200]` | Expected HTTP status codes (only effective for `http`) |
-| `host` | String | none | HTTP Host header override (only effective for `http`) |
-| `grpcServiceName` | String | `""` (whole server) | gRPC Health Check service name (only effective for `grpc`) |
+| `expectedStatuses` | Array\<Integer\> | `[200]` | Expected HTTP status codes (effective for `http` and `https`) |
+| `host` | String | none | HTTP Host header override (effective for `http` and `https`) |
+| `grpcServiceName` | String | `""` (whole server) | gRPC Health Check service name (effective for `grpc` and `grpcs`) |
+| `tls` | Object | none | Required local TLS configuration for `https` and `grpcs` |
+
+## Encrypted Health Checks
+
+Select `https` for an HTTP GET over TLS or `grpcs` for the gRPC Health Check
+Protocol over TLS. Both require their own `tls` block. `http`, `tcp`, and `grpc`
+retain their plaintext/connect-only behavior. Attaching or changing a
+`BackendTLSPolicy` does not change probe security or reload probe clients.
+
+Create the trust and optional client identity Secrets in the policy namespace:
+
+```bash
+kubectl -n production create secret generic health-ca --from-file=ca.crt=health-ca.pem
+kubectl -n production create secret tls health-client --cert=client.pem --key=client-key.pem
+```
+
+For an existing `my-backend` Service with a health listener on port 8443:
+
+```yaml
+apiVersion: edgion.io/v1
+kind: EdgionBackendTrafficPolicy
+metadata:
+  name: encrypted-health
+  namespace: production
+spec:
+  targetRefs:
+    - kind: Service
+      name: my-backend
+  healthCheck:
+    active:
+      type: https
+      port: 8443
+      path: /healthz
+      interval: 10s
+      timeout: 3s
+      tls:
+        validation:
+          hostname: health.internal.example.com
+          caCertificateRefs:
+            - kind: Secret
+              name: health-ca
+        clientCertificateRef:
+          name: health-client
+```
+
+For GRPCS, change `type` to `grpcs`, set the health listener's `port`, and optionally
+set `grpcServiceName`. `path`, `host`, and `expectedStatuses` apply only to HTTP(S).
+Remove `clientCertificateRef` when the health server does not require mTLS.
+
+| TLS parameter | Type | Default | Description |
+|---------------|------|---------|-------------|
+| `validation.hostname` | String | required | DNS name for certificate verification and SNI; must match the health server certificate |
+| `validation.caCertificateRefs` | Array | none | Same-namespace Secret or ConfigMap references containing `ca.crt`; custom roots replace public roots |
+| `validation.wellKnownCACertificates` | Enum | `System` when no CA refs | Built-in public roots; cannot be combined with custom CA refs |
+| `validation.subjectAltNames` | Array | none | Additional SAN constraints after normal certificate verification |
+| `clientCertificateRef` | Object | none | Same-namespace client Secret containing `tls.crt` and `tls.key` |
+| `verify` | Boolean | `true` | Verification is mandatory; `false` is invalid |
+
+The TLS hostname is verified while the connection is pinned to the selected
+backend endpoint. An HTTP `host` override changes only the HTTP authority.
+Global `outboundTls` defaults do not supply trust or credentials for health checks.
+
+Updates to the TLS configuration or referenced Secret/ConfigMap replace the
+probe generation automatically. Missing or malformed TLS material causes failed
+probes; there is no plaintext retry. The failed check remains configured and
+uses the normal unhealthy threshold. Ancestor status reports configuration or
+reference failures. Requests may still use unhealthy endpoints if the Service's
+panic/degrade policy allows it; disable degradation when strict exclusion is needed.
 
 ## Behavior Details
 

@@ -28,6 +28,7 @@ const EXPECTED_DYNAMIC_SCENARIO_IDS: &[&str] = &[
     "ServiceDegradeThreshold",
     "DirectEndpointPortResolution",
     "AllEndpointStatusTls",
+    "EncryptedActiveHealthChecks",
     "AiBackendLifecycle",
     "AiBackendPolicyIntegration",
     "AiBackendSecretRotation",
@@ -1465,6 +1466,7 @@ fn dynamic_port_contract(id: &str) -> Result<Option<(&'static str, port_config::
             Some(("EdgionBackend/SingleProvider", PortKind::Http))
         }
         "AllEndpointStatusTls"
+        | "EncryptedActiveHealthChecks"
         | "RequestMirrorReferenceGrant"
         | "DirectEndpointPortResolution"
         | "BasicAuthDynamic"

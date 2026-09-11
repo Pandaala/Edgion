@@ -73,7 +73,7 @@ inet sockets; generic explicitly configured Unix upstreams retain their separate
 health/
 ├── check/
 │   ├── manager.rs        # HealthCheckManager — manages a check task per service
-│   ├── probes.rs         # Probe implementations (HTTP/TCP/gRPC)
+│   ├── probes.rs         # Plaintext probe implementations (HTTP/TCP/gRPC)
 │   ├── config_store.rs   # HealthCheckConfigStore — health-check configuration store
 │   └── status_store.rs   # HealthStatusStore — health status store
 └── mod.rs
@@ -99,9 +99,51 @@ health/
 
 | Type | Function | Description |
 |------|----------|-------------|
-| HTTP | `probe_http()` / `probe_http_with_client()` | HTTP GET check, supports a custom client |
-| TCP | `probe_tcp()` | TCP connection check |
-| gRPC | `probe_grpc()` | gRPC Health Check Protocol (grpc.health.v1.Health/Check), implemented with hand-written prost structs, no proto file needed |
+| HTTP | `probe_http()` / `probe_http_with_client()` | Plaintext HTTP GET check, supports a custom client |
+| HTTPS | `EncryptedProbeTransport::https()` | Verified HTTP GET over health-local TLS, pinned to the exact endpoint |
+| TCP | `probe_tcp()` | Plain TCP connection check; it does not perform a TLS handshake or application-level validation |
+| gRPC | `probe_grpc()` | Plaintext gRPC Health Check Protocol (`grpc.health.v1.Health/Check`), implemented with hand-written prost structs, no proto file needed |
+| GRPCS | `EncryptedProbeTransport::grpcs()` | Health RPC over verified health-local TLS, h2 ALPN and HTTPS origin |
+
+### Transport ownership
+
+Active health-check transport is owned entirely by
+`EdgionBackendTrafficPolicy.spec.healthCheck.active`. It is independent of the
+Service's request-path `BackendTLSPolicy`: the health manager does not use that
+policy to select a protocol, inherit CA or client identity, set SNI, or trigger
+task replacement. This is deliberate because a probe may use a different
+protocol and port from application traffic; a TLS application backend commonly
+uses a plaintext HTTP endpoint or a TCP connect probe.
+
+The type names are exact transport contracts: `http` and `grpc` are plaintext,
+`tcp` stops after connect, and `https`/`grpcs` require their own verified TLS
+configuration. The health-local `OutboundTlsLocal` resolves through
+`resolve_outbound_tls_with_defaults` with explicit default roots and no global
+identity. `build_verified_outbound_tls` enforces CA, expiry, hostname, additional
+SAN constraints and optional client authentication. This uses the health client's
+supported rustls runtime and does not touch the Pingora upstream-rustls seam.
+
+HTTPS clients use the canonical outbound factory and endpoint-pinned resolver;
+GRPCS uses a pinned tokio-rustls connector with h2 ALPN and the tonic health codec.
+Each exchange has its own client/channel, while the task shares its immutable
+TLS configuration. No connection pool can cross endpoint or TLS generations.
+Proxy pickup is disabled, redirects are denied, and errors expose stable classes.
+
+Controller parse clears resolved material and old Secret dependencies before
+resolving the current health-local refs. Missing references stay registered for
+requeue. TLS failures are separate from attachment eligibility: the valid target
+marker and winning check remain, while status reports the error and the encrypted
+transport fails. This prevents missing trust from silently removing checking.
+
+A local publication gate serializes health-config replacement with encrypted
+probe polling. Every poll verifies the captured identity under the gate; no guard
+survives Pending. Old queued probes cannot start after publication. Already
+submitted I/O is in flight and cancelled best effort; coordinator identity checks
+reject stale results. Complete active-config equality includes resolved material.
+
+A standalone TLS-handshake type, custom checkers and separate healthy/unhealthy
+intervals remain out of scope. See the [transport decision](../../04-review/backends/intentional-design/active-health-check-transport-is-independent.md)
+and [implementation design](../../../tasks/pending/independent-encrypted-active-health-check-protocols/01-design.md).
 
 ### Runtime health identity
 

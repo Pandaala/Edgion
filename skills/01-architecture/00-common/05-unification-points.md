@@ -68,7 +68,7 @@ is a bug" rule also gets a line there.
 The factory accepts either schema-level `tls` or `preconfigured_tls`, never both.
 Verified HTTPS clients needing SAN constraints use the shared Gateway
 `tls::validation::build_verified_outbound_tls` builder and the latter input.
-OIDC and AllEndpointStatus use this path without bypassing outbound transport
+OIDC, AllEndpointStatus and encrypted active health checks use this path without bypassing outbound transport
 policy. TLS/client construction failure must never select an unconfigured client.
 
 ### 2. Outbound request semantics (`ExternalHttpConnection`) — Unified for its class
@@ -107,7 +107,7 @@ policy. TLS/client construction failure must never select an unconfigured client
 - **Verified consumers**: the reqwest factory, ext_proc (tonic channel with a
   custom hyper connector), ldap_auth (ldap3), the redis provider (fred), the
   kafka provider (rskafka), the etcd link provider, openid_connect token
-  exchange.
+  exchange, and health-local HTTPS/GRPCS probes (explicit defaults).
 
 ### 4. Egress safety (SSRF) — Unified mechanisms, per-path adoption
 

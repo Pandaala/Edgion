@@ -256,6 +256,11 @@ def parse_local_final(text):
 
 def parse_scope_exceptions(text, project_root, canonical, covered):
     allowed_reasons = {
+        "local_certificate_fixture": {
+            "path": "edgion-tests/src/client/dynamic/scenarios/encrypted_active_health_checks.rs",
+            "symbol": "LocalCertificates",
+            "tokens": ("edgion-tests/certs", "expired-client.crt", "30043"),
+        },
         "host_log_topology": {
             "path": "edgion-tests/src/client/suites/l4_duplex.rs",
             "symbol": "LogProbe",

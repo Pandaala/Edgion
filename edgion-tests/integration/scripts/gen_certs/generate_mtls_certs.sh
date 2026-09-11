@@ -56,6 +56,7 @@ mkdir -p "$MTLS_SECRET_DIR" "$BACKEND_TLS_SECRET_DIR" "$HEADER_CERT_AUTH_SECRET_
 
 all_required_certs_exist() {
     local cert_files=(
+        "expired-client.crt"
         "valid-client.crt"
         "valid-client.key"
         "invalid-client.crt"
@@ -284,6 +285,28 @@ EOF
         -extfile "$TEMP_DIR/valid-client.ext" \
         2>/dev/null
 
+    # A trusted identity differing only in validity dates isolates expiry rejection.
+    touch "$TEMP_DIR/expired-index"
+    printf '1000\n' > "$TEMP_DIR/expired-serial"
+    cat > "$TEMP_DIR/expired-ca.conf" <<EOF
+[ca]
+default_ca = test_ca
+[test_ca]
+database = $TEMP_DIR/expired-index
+serial = $TEMP_DIR/expired-serial
+new_certs_dir = $TEMP_DIR
+certificate = $TEMP_DIR/client-ca.crt
+private_key = $TEMP_DIR/client-ca.key
+default_md = sha256
+policy = client_policy
+[client_policy]
+commonName = supplied
+EOF
+    openssl ca -batch -notext -config "$TEMP_DIR/expired-ca.conf" \
+        -in "$TEMP_DIR/valid-client.csr" -out "$TEMP_DIR/expired-client.crt" \
+        -startdate 20200101000000Z -enddate 20200102000000Z \
+        -extfile "$TEMP_DIR/valid-client.ext" 2>/dev/null
+
     # Step 3: Invalid client cert (untrusted CA)
     openssl req -x509 -newkey rsa:2048 -nodes \
         -keyout "$TEMP_DIR/untrusted-ca.key" \
@@ -397,6 +420,7 @@ EOF
         -addext "subjectAltName=DNS:fv-mtls.example.com" \
         2>/dev/null
 
+    cp "$TEMP_DIR/expired-client.crt" "$CERTS_DIR/"
     cp "$TEMP_DIR/valid-client.crt" "$CERTS_DIR/"
     cp "$TEMP_DIR/valid-client.key" "$CERTS_DIR/"
     cp "$TEMP_DIR/invalid-client.crt" "$CERTS_DIR/"

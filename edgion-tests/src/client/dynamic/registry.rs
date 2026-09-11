@@ -12,6 +12,7 @@ pub fn all() -> Vec<&'static Scenario> {
         crate::dynamic::scenarios::service_degrade_threshold::SCENARIO,
         crate::dynamic::scenarios::direct_endpoint_port_resolution::SCENARIO,
         crate::dynamic::scenarios::all_endpoint_status_tls::SCENARIO,
+        crate::dynamic::scenarios::encrypted_active_health_checks::SCENARIO,
         crate::dynamic::scenarios::ai_backend_lifecycle::SCENARIO,
         crate::dynamic::scenarios::ai_backend_policy_integration::SCENARIO,
         crate::dynamic::scenarios::ai_backend_secret_rotation::SCENARIO,

@@ -2928,6 +2928,7 @@ impl GrpcHealthService {
 #[derive(Debug, Clone)]
 struct GrpcHealthServer {
     inner: std::sync::Arc<GrpcHealthService>,
+    expected_scheme: &'static str,
 }
 
 impl tonic::server::NamedService for GrpcHealthServer {
@@ -2948,6 +2949,16 @@ where
     }
 
     fn call(&mut self, req: http::Request<B>) -> Self::Future {
+        if req.uri().scheme_str() != Some(self.expected_scheme) {
+            return Box::pin(async {
+                Ok(http::Response::builder()
+                    .status(200)
+                    .header("grpc-status", "13")
+                    .header("content-type", "application/grpc")
+                    .body(tonic::body::empty_body())
+                    .expect("static health response headers are valid"))
+            });
+        }
         #[allow(non_camel_case_types)]
         struct CheckSvc(std::sync::Arc<GrpcHealthService>);
         impl tonic::server::UnaryService<grpc_health::HealthCheckRequest> for CheckSvc {
@@ -2994,6 +3005,7 @@ async fn start_grpc_server(port: u16) -> Result<()> {
         .add_service(TestServiceServer::new(service))
         .add_service(GrpcHealthServer {
             inner: std::sync::Arc::new(GrpcHealthService),
+            expected_scheme: "http",
         })
         .serve(addr)
         .await?;
@@ -3310,6 +3322,10 @@ mod ext_proc_server {
         Server::builder()
             .tls_config(tls)?
             .add_service(ExternalProcessorServer::new(FakeProcessor))
+            .add_service(super::GrpcHealthServer {
+                inner: std::sync::Arc::new(super::GrpcHealthService),
+                expected_scheme: "https",
+            })
             .serve(addr)
             .await?;
         Ok(())

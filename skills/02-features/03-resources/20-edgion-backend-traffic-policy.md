@@ -35,6 +35,49 @@ targets; Service policies retain their existing fan-out behavior.
 
 Unsupported sections reject the whole policy.
 
+## Active health-check transport
+
+`healthCheck.active.type` is the complete selector for the probe transport. The
+values are `http`, `https`, `tcp`, `grpc`, and `grpcs`: HTTP and gRPC are plaintext,
+HTTPS and GRPCS use verified TLS, and TCP checks only whether the socket can be connected. Probe `port` may differ
+from the application port.
+
+Active checks do not discover, inherit, or react to `BackendTLSPolicy`. In
+particular, attaching a `BackendTLSPolicy` to the same Service does not convert
+an HTTP probe to HTTPS, add SNI or CA validation, supply a client certificate,
+or respawn the probe task. This separation lets operators use a simple
+plaintext or TCP health endpoint for an otherwise TLS-protected application
+backend and keeps each configuration's behavior locally understandable.
+
+Encrypted probes require `active.tls`, reusing the shared `OutboundTlsLocal`
+shape. `tls.validation.hostname` is an explicit DNS name used for SNI and
+certificate verification; the actual dial address remains the selected endpoint.
+The HTTP `host` override does not change TLS verification. Numeric hostname
+spellings are rejected. `verify: false` is rejected; omitted verification is true.
+
+| TLS field | Contract |
+|-----------|----------|
+| `validation.hostname` | Required DNS verification name and SNI |
+| `validation.caCertificateRefs` | Same-namespace Secret or ConfigMap refs containing `ca.crt`; all must resolve |
+| `validation.wellKnownCACertificates` | `System`; mutually exclusive with custom CA refs |
+| `validation.subjectAltNames` | Optional additional SAN constraints, enforced after normal chain/hostname verification |
+| `clientCertificateRef` | Optional same-namespace Secret containing `tls.crt` and `tls.key` |
+
+Custom CA bundles replace public roots. Without a custom CA source, built-in
+public roots apply. Global `outboundTls` defaults are not inherited. Resolved
+material is Controller-owned, omitted from CRDs and redacted in admin output.
+
+TLS configuration or Secret/ConfigMap changes replace the probe generation.
+Invalid TLS or missing material keeps the winning encrypted check active and
+produces probe failures; it does not disable checking or promote another policy.
+The Controller reports configuration/reference failures through ancestor status.
+Handshake errors use the configured unhealthy threshold. Existing panic/degrade
+selection remains independent; operators needing strict unhealthy exclusion
+should disable degradation for the Service.
+
+See the [architecture contract](../../01-architecture/02-gateway/07-backends.md#transport-ownership)
+and [user examples](../../../docs/en/user-guide/http-route/backends/health-check.md).
+
 For AI traffic, passive outlier state is isolated by typed backend and credential alias.
 `circuitBreaker.maxParallelRequests` is an aggregate limit for the direct AI backend.
 `connection.connectTimeout` bounds provider connection establishment.

@@ -78,8 +78,8 @@ spec:
                       properties:
                         type:
                           type: string
-                          description: "Probe type: \"http\" (default), \"tcp\", or \"grpc\""
-                          enum: ["http", "tcp", "grpc"]
+                          description: "Independent probe protocol; HTTPS and GRPCS require local TLS"
+                          enum: ["http", "https", "tcp", "grpc", "grpcs"]
                           default: "http"
                         path:
                           type: string
@@ -125,7 +125,82 @@ spec:
                           type: string
                           description: |
                             gRPC Health Check service name. Empty string (default) checks the
-                            overall server health. Only used when type is "grpc".
+                            overall server health. Only used when type is "grpc" or "grpcs".
+                        tls:
+                          type: object
+                          description: "Independent TLS for HTTPS and GRPCS; certificate verification is required"
+                          properties:
+                            verify:
+                              type: boolean
+                              description: "Certificate verification; false is invalid for encrypted health checks"
+                            validation:
+                              type: object
+                              description: "CA trust configuration for outbound TLS connections"
+                              properties:
+                                caCertificateRefs:
+                                  type: array
+                                  description: "References to CA certificate resources (Secret or ConfigMap)"
+                                  items:
+                                    type: object
+                                    properties:
+                                      group:
+                                        type: string
+                                        description: "Group of the referent; defaults to empty string (core)"
+                                      kind:
+                                        type: string
+                                        description: "Kind of the referent; e.g. Secret or ConfigMap"
+                                      name:
+                                        type: string
+                                        description: "Name of the referent"
+                                      namespace:
+                                        type: string
+                                        description: "Namespace of the referent; must equal the policy namespace"
+                                    required: [kind, name]
+                                wellKnownCACertificates:
+                                  type: string
+                                  description: "Use well-known system CA certificates (e.g. Mozilla roots)"
+                                  enum: [System]
+                                hostname:
+                                  type: string
+                                  description: "Required DNS hostname for SNI and certificate verification"
+                                  maxLength: 253
+                                  pattern: '^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$'
+                                subjectAltNames:
+                                  type: array
+                                  description: "Subject alternative names to verify in the server certificate"
+                                  items:
+                                    type: object
+                                    properties:
+                                      type:
+                                        type: string
+                                        description: "SAN type"
+                                        enum: [Hostname, URI]
+                                      hostname:
+                                        type: string
+                                        description: "Hostname SAN value (used when type is Hostname)"
+                                        maxLength: 253
+                                        pattern: '^(\*\.)?[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$'
+                                      uri:
+                                        type: string
+                                        description: "URI SAN value (used when type is URI)"
+                                    required: [type]
+                            clientCertificateRef:
+                              type: object
+                              description: "Reference to a kubernetes.io/tls Secret for mTLS client identity"
+                              properties:
+                                group:
+                                  type: string
+                                  description: "Group of the referent; defaults to empty string (core)"
+                                kind:
+                                  type: string
+                                  description: "Kind of the referent; defaults to Secret"
+                                name:
+                                  type: string
+                                  description: "Name of the referent"
+                                namespace:
+                                  type: string
+                                  description: "Namespace of the referent"
+                              required: [name]
                 outlierDetection:
                   type: object
                   description: "Outlier detection (passive ejection) for Service endpoints or AI credential targets"

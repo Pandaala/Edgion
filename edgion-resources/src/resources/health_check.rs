@@ -1,4 +1,6 @@
 use crate::duration::parse_duration;
+use crate::resources::common::OutboundTlsLocal;
+use k8s_openapi::api::core::v1::Secret;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
@@ -17,14 +19,16 @@ pub struct ServiceHealthCheck {
 #[serde(rename_all = "lowercase")]
 pub enum HealthCheckType {
     Http,
+    Https,
     Tcp,
     Grpc,
+    Grpcs,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[derive(Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ActiveHealthCheckConfig {
-    /// Probe type: "http" (default), "tcp", or "grpc".
+    /// Probe type: "http" (default), "https", "tcp", "grpc", or "grpcs".
     #[serde(default = "default_hc_type")]
     pub r#type: HealthCheckType,
 
@@ -66,9 +70,143 @@ pub struct ActiveHealthCheckConfig {
 
     /// gRPC Health Check service name.
     /// Empty string (default) checks the overall server health.
-    /// Only used when type is "grpc".
+    /// Only used when type is "grpc" or "grpcs".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub grpc_service_name: Option<String>,
+
+    /// Independent TLS configuration, required for HTTPS and GRPCS probes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tls: Option<OutboundTlsLocal>,
+
+    /// Controller-resolved CA bundles, carried only on the trusted sync channel.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "crate::redact::redact_opt::serialize"
+    )]
+    #[schemars(skip)]
+    pub resolved_ca_certificates: Option<Vec<Secret>>,
+
+    /// Controller-resolved mTLS identity, carried only on the trusted sync channel.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "crate::redact::redact_opt::serialize"
+    )]
+    #[schemars(skip)]
+    pub resolved_client_certificate: Option<Secret>,
+
+    /// Stable, non-sensitive TLS resolution failure for this generation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
+    pub resolved_tls_error: Option<String>,
+}
+
+crate::redact::impl_redacted_debug!(ActiveHealthCheckConfig);
+
+impl ActiveHealthCheckConfig {
+    /// Validate TLS independently of policy attachment eligibility. A broken
+    /// encrypted checker must continue failing instead of withdrawing the policy.
+    pub fn tls_validation_error(&self) -> Option<&'static str> {
+        use crate::resources::backend_tls_policy::{
+            backend_tls_identity_validation_errors, BackendTLSPolicyValidation,
+        };
+        use crate::resources::common::is_core_api_group;
+        if !matches!(self.r#type, HealthCheckType::Https | HealthCheckType::Grpcs) {
+            return None;
+        }
+        let Some(tls) = &self.tls else {
+            return Some("encrypted health checks require tls");
+        };
+        if tls.verify == Some(false) {
+            return Some("encrypted health checks require certificate verification");
+        }
+        let Some(validation) = &tls.validation else {
+            return Some("encrypted health checks require tls.validation.hostname");
+        };
+        let Some(hostname) = &validation.hostname else {
+            return Some("encrypted health checks require tls.validation.hostname");
+        };
+        let identity = BackendTLSPolicyValidation {
+            hostname: hostname.clone(),
+            ca_certificate_refs: None,
+            well_known_ca_certificates: None,
+            subject_alt_names: validation.subject_alt_names.clone(),
+        };
+        if !backend_tls_identity_validation_errors(&identity).is_empty() {
+            return Some("health check TLS hostname or subjectAltNames is invalid");
+        }
+        // The URL parser also recognizes shortened, octal, hex and integer IP
+        // spellings. Reject all of them so endpoint DNS pinning cannot be bypassed.
+        if !valid_reference_name(hostname) || !matches!(url::Host::parse(hostname), Ok(url::Host::Domain(_))) {
+            return Some("health check TLS hostname must be a DNS name");
+        }
+        if let Some(refs) = &validation.ca_certificate_refs {
+            if refs.is_empty() || validation.well_known_ca_certificates.is_some() {
+                return Some("health check CA references must be nonempty and exclusive with system CA");
+            }
+            for reference in refs {
+                if !is_core_api_group(&reference.group)
+                    || !matches!(reference.kind.as_str(), "Secret" | "ConfigMap")
+                    || !valid_reference_name(&reference.name)
+                    || reference
+                        .namespace
+                        .as_deref()
+                        .is_some_and(|ns| !valid_reference_namespace(ns))
+                {
+                    return Some("health check CA reference is invalid");
+                }
+            }
+        }
+        if let Some(reference) = &tls.client_certificate_ref {
+            if !is_core_api_group(reference.group.as_deref().unwrap_or_default())
+                || reference.kind.as_deref().is_some_and(|kind| kind != "Secret")
+                || !valid_reference_name(&reference.name)
+                || reference
+                    .namespace
+                    .as_deref()
+                    .is_some_and(|ns| !valid_reference_namespace(ns))
+            {
+                return Some("health check client certificate reference is invalid");
+            }
+        }
+        None
+    }
+
+    /// Both Controller and Gateway enforce the same-namespace reference boundary.
+    pub fn tls_namespace_validation_error(&self, policy_namespace: &str) -> Option<&'static str> {
+        if !matches!(self.r#type, HealthCheckType::Https | HealthCheckType::Grpcs) {
+            return None;
+        }
+        let tls = self.tls.as_ref()?;
+        let cross_namespace = tls
+            .validation
+            .as_ref()
+            .and_then(|v| v.ca_certificate_refs.as_ref())
+            .is_some_and(|refs| {
+                refs.iter()
+                    .any(|reference| reference.namespace.as_deref().is_some_and(|ns| ns != policy_namespace))
+            })
+            || tls
+                .client_certificate_ref
+                .as_ref()
+                .is_some_and(|reference| reference.namespace.as_deref().is_some_and(|ns| ns != policy_namespace));
+        cross_namespace.then_some("health check TLS references must use the policy namespace")
+    }
+}
+
+fn valid_reference_namespace(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 63
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+        && value.as_bytes()[0].is_ascii_alphanumeric()
+        && value.as_bytes()[value.len() - 1].is_ascii_alphanumeric()
+}
+
+fn valid_reference_name(value: &str) -> bool {
+    !value.is_empty() && value.len() <= 253 && value.split('.').all(valid_reference_namespace)
 }
 
 fn default_hc_type() -> HealthCheckType {
@@ -106,6 +244,10 @@ impl Default for ActiveHealthCheckConfig {
             expected_statuses: default_expected_statuses(),
             host: None,
             grpc_service_name: None,
+            tls: None,
+            resolved_ca_certificates: None,
+            resolved_client_certificate: None,
+            resolved_tls_error: None,
         }
     }
 }
@@ -132,7 +274,7 @@ impl ServiceHealthCheck {
             _ => return Some("timeout must be a valid non-zero duration"),
         }
 
-        if matches!(active.r#type, HealthCheckType::Http) {
+        if matches!(active.r#type, HealthCheckType::Http | HealthCheckType::Https) {
             if active.path.as_deref().is_some_and(|p| p.is_empty()) {
                 return Some("path must not be empty");
             }
@@ -279,11 +421,107 @@ active:
                 expected_statuses: vec![200, 204],
                 host: Some("svc.local".to_string()),
                 grpc_service_name: None,
+                tls: None,
+                resolved_ca_certificates: None,
+                resolved_client_certificate: None,
+                resolved_tls_error: None,
             }),
         };
 
         let yaml = serde_yaml::to_string(&original).expect("serialize");
         let decoded: ServiceHealthCheck = serde_yaml::from_str(&yaml).expect("deserialize");
         assert_eq!(decoded.active, original.active);
+    }
+    #[test]
+    fn encrypted_tls_validation_is_independent_of_attachment() {
+        for protocol in ["https", "grpcs"] {
+            let mut active: ActiveHealthCheckConfig = serde_json::from_value(serde_json::json!({
+                "type": protocol, "tls": {"validation": {"hostname": "health.example.com"}}
+            }))
+            .unwrap();
+            assert!(active.tls_validation_error().is_none());
+            assert!(active.tls_namespace_validation_error("ns").is_none());
+            for hostname in [
+                "127.0.0.1",
+                "127.1",
+                "2130706433",
+                "0x7f000001",
+                "0177.0.0.1",
+                "*.example.com",
+                "bad host",
+            ] {
+                active.tls.as_mut().unwrap().validation.as_mut().unwrap().hostname = Some(hostname.into());
+                assert!(active.tls_validation_error().is_some(), "hostname: {hostname}");
+                assert!(ServiceHealthCheck {
+                    active: Some(active.clone())
+                }
+                .get_validation_error()
+                .is_none());
+            }
+            active.tls = None;
+            assert!(active.tls_validation_error().is_some());
+        }
+        // Existing plaintext protocols remain literal, even with an irrelevant TLS block.
+        for protocol in ["http", "tcp", "grpc"] {
+            let active: ActiveHealthCheckConfig =
+                serde_json::from_value(serde_json::json!({"type": protocol, "tls": {"verify": false}})).unwrap();
+            assert!(active.tls_validation_error().is_none());
+        }
+    }
+
+    #[test]
+    fn encrypted_tls_rejects_invalid_trust_reference_and_san_shapes() {
+        for tls in [
+            serde_json::json!({"verify": false, "validation": {"hostname": "health.example.com"}}),
+            serde_json::json!({"validation": {"hostname": "health.example.com", "caCertificateRefs": []}}),
+            serde_json::json!({"validation": {"hostname": "health.example.com", "caCertificateRefs": [{"kind": "Secret", "name": "ca"}], "wellKnownCACertificates": "System"}}),
+            serde_json::json!({"validation": {"hostname": "health.example.com", "caCertificateRefs": [{"group": "foreign.io", "kind": "Secret", "name": "ca"}]}}),
+            serde_json::json!({"validation": {"hostname": "health.example.com", "subjectAltNames": [{"type": "Hostname", "uri": "spiffe://example/health"}]}}),
+            serde_json::json!({"validation": {"hostname": "health.example.com"}, "clientCertificateRef": {"kind": "ConfigMap", "name": "identity"}}),
+        ] {
+            let active: ActiveHealthCheckConfig =
+                serde_json::from_value(serde_json::json!({"type": "https", "tls": tls})).unwrap();
+            assert!(active.tls_validation_error().is_some());
+        }
+        let active: ActiveHealthCheckConfig = serde_json::from_value(serde_json::json!({"type": "https", "tls": {
+            "validation": {"hostname": "health.example.com", "caCertificateRefs": [{"kind": "ConfigMap", "name": "ca", "namespace": "other"}]}
+        }})).unwrap();
+        assert!(active.tls_validation_error().is_none());
+        assert!(active.tls_namespace_validation_error("ns").is_some());
+        assert!(active.tls_namespace_validation_error("other").is_none());
+    }
+
+    #[test]
+    fn encrypted_tls_material_is_redacted_and_not_operator_schema() {
+        let secret: Secret = serde_json::from_value(serde_json::json!({"data": {"tls.key": "c2VjcmV0"}})).unwrap();
+        let active = ActiveHealthCheckConfig {
+            resolved_ca_certificates: Some(vec![secret.clone()]),
+            resolved_client_certificate: Some(secret),
+            resolved_tls_error: Some("health check CA reference is unresolved".into()),
+            ..Default::default()
+        };
+        let schema = serde_json::to_value(schemars::schema_for!(ActiveHealthCheckConfig)).unwrap();
+        for key in [
+            "resolvedCaCertificates",
+            "resolvedClientCertificate",
+            "resolvedTlsError",
+        ] {
+            assert!(schema["properties"].get(key).is_none());
+        }
+        assert!(schema["properties"].get("tls").is_some());
+        let sync = serde_json::to_value(&active).unwrap();
+        assert_eq!(sync["resolvedClientCertificate"]["data"]["tls.key"], "c2VjcmV0");
+        let decoded: ActiveHealthCheckConfig = serde_json::from_value(sync).unwrap();
+        assert_eq!(decoded, active);
+        let admin = {
+            let _guard = crate::redact::AdminRedactGuard::new();
+            serde_json::to_value(&active).unwrap()
+        };
+        assert_eq!(admin["resolvedClientCertificate"], "[redacted]");
+        assert_eq!(admin["resolvedCaCertificates"], "[redacted]");
+        assert!(!format!("{active:?}").contains("c2VjcmV0"));
+        let mut changed = active.clone();
+        changed.resolved_client_certificate = None;
+        assert_ne!(changed, active, "identity rotation must affect generation equality");
     }
 }

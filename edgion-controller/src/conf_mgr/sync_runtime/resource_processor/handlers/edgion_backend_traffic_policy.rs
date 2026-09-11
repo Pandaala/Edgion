@@ -281,6 +281,92 @@ fn evaluate_policy(p: &EdgionBackendTrafficPolicy, ctx: &HandlerContext) -> Poli
     evaluation
 }
 
+/// TLS failures are deliberately excluded from `evaluate_policy`: a winning
+/// encrypted check stays attached and fails until its own trust/identity recovers.
+fn health_tls_shape_error(p: &EdgionBackendTrafficPolicy) -> Option<&'static str> {
+    let active = p.spec.health_check.as_ref()?.active.as_ref()?;
+    active
+        .tls_validation_error()
+        .or_else(|| active.tls_namespace_validation_error(p.metadata.namespace.as_deref().unwrap_or("default")))
+}
+
+fn resolve_health_tls(p: &mut EdgionBackendTrafficPolicy, ctx: &HandlerContext, owner: &ResourceRef) {
+    use crate::conf_mgr::sync_runtime::resource_processor::credential::{
+        fetch_secret, resolve_ca_certificate_refs, CaFetchStrategy, FetchOutcome,
+    };
+    use edgion_common::tls_validation::{check_key_matches_cert, parse_canonical_ca_bundle};
+    use edgion_resources::resources::health_check::HealthCheckType;
+
+    ctx.secret_ref_manager().clear_resource_refs(owner);
+    let Some(active) = p.spec.health_check.as_mut().and_then(|health| health.active.as_mut()) else {
+        return;
+    };
+    active.resolved_ca_certificates = None;
+    active.resolved_client_certificate = None;
+    active.resolved_tls_error = None;
+    if !matches!(active.r#type, HealthCheckType::Https | HealthCheckType::Grpcs) {
+        return;
+    }
+    let namespace = p.metadata.namespace.as_deref().unwrap_or("default");
+    if let Some(error) = active.tls_namespace_validation_error(namespace) {
+        active.resolved_tls_error = Some(error.to_string());
+        return;
+    }
+    if active.tls_validation_error().is_some() {
+        return;
+    }
+    let Some(tls) = &active.tls else {
+        return;
+    };
+    let refs = tls
+        .validation
+        .as_ref()
+        .and_then(|validation| validation.ca_certificate_refs.as_deref())
+        .unwrap_or_default();
+    if !refs.is_empty() {
+        let secrets = resolve_ca_certificate_refs(ctx, owner, Some(namespace), refs, CaFetchStrategy::DirectSameNs);
+        if secrets.len() != refs.len() {
+            active.resolved_tls_error = Some("health check CA reference is unresolved".to_string());
+        } else if secrets.iter().any(|secret| {
+            secret
+                .data
+                .as_ref()
+                .and_then(|data| data.get("ca.crt"))
+                .is_none_or(|pem| parse_canonical_ca_bundle(&pem.0).is_err())
+        }) {
+            active.resolved_tls_error = Some("health check CA certificate material is invalid".to_string());
+        }
+        active.resolved_ca_certificates = (!secrets.is_empty()).then_some(secrets);
+    }
+    if let Some(reference) = &tls.client_certificate_ref {
+        match fetch_secret(ctx, owner, "edgion.io", "EdgionBackendTrafficPolicy", reference) {
+            FetchOutcome::Ok(secret) => {
+                let identity_valid = secret.type_.as_deref() == Some("kubernetes.io/tls")
+                    && secret.data.as_ref().is_some_and(|data| {
+                        let Some(cert) = data.get("tls.crt").and_then(|pem| std::str::from_utf8(&pem.0).ok()) else {
+                            return false;
+                        };
+                        let Some(key) = data.get("tls.key").and_then(|pem| std::str::from_utf8(&pem.0).ok()) else {
+                            return false;
+                        };
+                        check_key_matches_cert(cert, key).is_ok()
+                    });
+                if !identity_valid {
+                    active
+                        .resolved_tls_error
+                        .get_or_insert_with(|| "health check client certificate material is invalid".to_string());
+                }
+                active.resolved_client_certificate = Some(secret);
+            }
+            FetchOutcome::Pending(_) => {
+                active
+                    .resolved_tls_error
+                    .get_or_insert_with(|| "health check client certificate reference is unresolved".to_string());
+            }
+        }
+    }
+}
+
 /// EdgionBackendTrafficPolicy handler.
 pub struct EdgionBackendTrafficPolicyHandler {
     /// Stamped into every `PolicyAncestorStatus.controller_name`; per
@@ -314,6 +400,18 @@ impl ProcessorHandler<EdgionBackendTrafficPolicy> for EdgionBackendTrafficPolicy
                 .into_iter()
                 .map(|target| format!("policy target {target} was not found")),
         );
+        if let Some(error) = health_tls_shape_error(p) {
+            errors.push(error.to_string());
+        }
+        if let Some(error) = p
+            .spec
+            .health_check
+            .as_ref()
+            .and_then(|health| health.active.as_ref())
+            .and_then(|active| active.resolved_tls_error.as_ref())
+        {
+            errors.push(error.clone());
+        }
         errors
     }
 
@@ -323,6 +421,7 @@ impl ProcessorHandler<EdgionBackendTrafficPolicy> for EdgionBackendTrafficPolicy
         ctx: &HandlerContext,
     ) -> ProcessResult<EdgionBackendTrafficPolicy> {
         let resource_ref = Self::resource_ref(&p);
+        resolve_health_tls(&mut p, ctx, &resource_ref);
         let state = &ctx.runtime().edgion_backend_traffic_policy;
 
         // Snapshot precedence-relevant inputs BEFORE mutating any state so we can
@@ -417,6 +516,7 @@ impl ProcessorHandler<EdgionBackendTrafficPolicy> for EdgionBackendTrafficPolicy
 
         state.target_mgr().clear_resource_refs(&resource_ref);
         state.remove_timestamp(&resource_ref.resource_key());
+        ctx.secret_ref_manager().clear_resource_refs(&resource_ref);
         ctx.runtime().service_ref_mgr.clear_resource_refs(&resource_ref);
         ctx.runtime().backend_ref_mgr.clear_resource_refs(&resource_ref);
 
@@ -465,6 +565,13 @@ impl ProcessorHandler<EdgionBackendTrafficPolicy> for EdgionBackendTrafficPolicy
             BTreeSet::new()
         };
         let missing_targets = evaluation.missing_targets.clone();
+        let tls_shape_error = health_tls_shape_error(p);
+        let tls_resolution_error = p
+            .spec
+            .health_check
+            .as_ref()
+            .and_then(|health| health.active.as_ref())
+            .and_then(|active| active.resolved_tls_error.clone());
 
         let status = p.status.get_or_insert_with(EdgionBackendTrafficPolicyStatus::default);
 
@@ -522,6 +629,8 @@ impl ProcessorHandler<EdgionBackendTrafficPolicy> for EdgionBackendTrafficPolicy
                     bounded_status_message(evaluation.errors.join("; ")),
                     generation,
                 )
+            } else if let Some(error) = tls_shape_error {
+                condition_false(condition_types::ACCEPTED, condition_reasons::INVALID, error, generation)
             } else if !conflicted_here.is_empty() {
                 condition_false(
                     condition_types::ACCEPTED,
@@ -544,7 +653,14 @@ impl ProcessorHandler<EdgionBackendTrafficPolicy> for EdgionBackendTrafficPolicy
 
             // ResolvedRefs — existence of the targets reaching THIS
             // ancestor (a route may reference a Service that does not exist).
-            let resolved = if missing_here.is_empty() {
+            let resolved = if let Some(error) = &tls_resolution_error {
+                condition_false(
+                    condition_types::RESOLVED_REFS,
+                    "InvalidCertificateRef",
+                    error.clone(),
+                    generation,
+                )
+            } else if missing_here.is_empty() {
                 condition_true(
                     condition_types::RESOLVED_REFS,
                     condition_reasons::RESOLVED_REFS,
@@ -1511,5 +1627,261 @@ mod tests {
         assert!(message.len() <= STATUS_MESSAGE_MAX_BYTES);
         assert!(message.ends_with(STATUS_TRUNCATION_SUFFIX));
         assert!(std::str::from_utf8(message.as_bytes()).is_ok());
+    }
+    fn encrypted_policy(ca_kind: &str) -> EdgionBackendTrafficPolicy {
+        let mut policy = make_policy("health", "payments", "2026-01-01T00:00:00Z");
+        policy.spec.health_check = Some(serde_json::from_value(json!({"active": {
+            "type": "https", "tls": {
+                "validation": {"hostname": "health.example.com", "caCertificateRefs": [{"kind": ca_kind, "name": "health-ca"}]},
+                "clientCertificateRef": {"name": "health-client"}
+            }
+        }})).unwrap());
+        policy
+    }
+
+    fn health_active(
+        policy: &EdgionBackendTrafficPolicy,
+    ) -> &edgion_resources::resources::health_check::ActiveHealthCheckConfig {
+        policy.spec.health_check.as_ref().unwrap().active.as_ref().unwrap()
+    }
+
+    async fn parse_health_policy(
+        handler: &EdgionBackendTrafficPolicyHandler,
+        policy: EdgionBackendTrafficPolicy,
+        ctx: &HandlerContext,
+    ) -> EdgionBackendTrafficPolicy {
+        match handler.parse(policy, ctx).await {
+            ProcessResult::Continue(policy) => policy,
+            ProcessResult::Skip { reason } => panic!("unexpected skip: {reason}"),
+        }
+    }
+
+    fn install_health_material(runtime: &ControllerRuntime, ca_kind: &str) {
+        use k8s_openapi::api::core::v1::{ConfigMap, Secret};
+        use k8s_openapi::ByteString;
+        use std::collections::{BTreeMap, HashMap};
+        let key = rcgen::KeyPair::generate().unwrap();
+        let mut params = rcgen::CertificateParams::new(vec!["health.example.com".to_string()]).unwrap();
+        params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+        let cert = params.self_signed(&key).unwrap();
+        let cert_pem = cert.pem();
+        let mut secrets = HashMap::new();
+        secrets.insert(
+            "ns/health-client".to_string(),
+            Secret {
+                metadata: kube::api::ObjectMeta {
+                    name: Some("health-client".into()),
+                    namespace: Some("ns".into()),
+                    ..Default::default()
+                },
+                type_: Some("kubernetes.io/tls".into()),
+                data: Some(BTreeMap::from([
+                    ("tls.crt".into(), ByteString(cert_pem.as_bytes().to_vec())),
+                    ("tls.key".into(), ByteString(key.serialize_pem().into_bytes())),
+                ])),
+                ..Default::default()
+            },
+        );
+        let metadata = kube::api::ObjectMeta {
+            name: Some("health-ca".into()),
+            namespace: Some("ns".into()),
+            ..Default::default()
+        };
+        if ca_kind == "Secret" {
+            secrets.insert(
+                "ns/health-ca".into(),
+                Secret {
+                    metadata,
+                    data: Some(BTreeMap::from([("ca.crt".into(), ByteString(cert_pem.into_bytes()))])),
+                    ..Default::default()
+                },
+            );
+        } else {
+            runtime.configmap_store.replace_all(HashMap::from([(
+                "ns/health-ca".into(),
+                ConfigMap {
+                    metadata,
+                    data: Some(BTreeMap::from([("ca.crt".into(), cert_pem)])),
+                    ..Default::default()
+                },
+            )]));
+        }
+        runtime.secret_store.replace_all(secrets);
+    }
+
+    #[tokio::test]
+    async fn encrypted_health_material_missing_rotated_deleted_and_restored_keeps_attachment() {
+        for ca_kind in ["Secret", "ConfigMap"] {
+            let (ctx, runtime) = make_ctx();
+            let handler = make_handler();
+            wire_service_to_gateway(&runtime, "ns", "payments", "route", "gw");
+            let mut policy = parse_health_policy(&handler, encrypted_policy(ca_kind), &ctx).await;
+            assert!(health_active(&policy).resolved_tls_error.is_some());
+            assert_eq!(
+                policy.spec.resolved_target_class,
+                Some(ResolvedPolicyTargetClass::Service)
+            );
+            assert_eq!(ctx.secret_ref_manager().get_refs("ns/health-ca").len(), 1);
+            assert_eq!(ctx.secret_ref_manager().get_refs("ns/health-client").len(), 1);
+            assert!(runtime
+                .edgion_backend_traffic_policy
+                .is_winner("ns/health", "/Service/ns/payments"));
+            handler.update_status(&mut policy, &ctx, &[]);
+            assert_eq!(
+                ancestor_condition(&policy, "gw", condition_types::RESOLVED_REFS).status,
+                "False"
+            );
+            assert_eq!(
+                ancestor_condition(&policy, "gw", condition_types::ACCEPTED).status,
+                "True"
+            );
+
+            install_health_material(&runtime, ca_kind);
+            policy = parse_health_policy(&handler, policy, &ctx).await;
+            assert!(health_active(&policy).resolved_tls_error.is_none());
+            let first_generation = health_active(&policy).clone();
+            handler.update_status(&mut policy, &ctx, &[]);
+            assert_eq!(
+                ancestor_condition(&policy, "gw", condition_types::RESOLVED_REFS).status,
+                "True"
+            );
+            install_health_material(&runtime, ca_kind);
+            policy = parse_health_policy(&handler, policy, &ctx).await;
+            assert_ne!(
+                health_active(&policy),
+                &first_generation,
+                "CA and identity rotation must change active config identity"
+            );
+
+            runtime.secret_store.replace_all(Default::default());
+            runtime.configmap_store.replace_all(Default::default());
+            policy = parse_health_policy(&handler, policy, &ctx).await;
+            assert!(health_active(&policy).resolved_tls_error.is_some());
+            assert!(health_active(&policy).resolved_ca_certificates.is_none());
+            assert!(health_active(&policy).resolved_client_certificate.is_none());
+            assert_eq!(
+                policy.spec.resolved_target_class,
+                Some(ResolvedPolicyTargetClass::Service)
+            );
+            install_health_material(&runtime, ca_kind);
+            policy = parse_health_policy(&handler, policy, &ctx).await;
+            assert!(health_active(&policy).resolved_tls_error.is_none());
+            handler.on_delete(&policy, &ctx).await;
+            assert!(ctx.secret_ref_manager().get_refs("ns/health-ca").is_empty());
+            assert!(ctx.secret_ref_manager().get_refs("ns/health-client").is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn encrypted_health_invalid_tls_and_dependency_replacement_preserve_winner() {
+        let (ctx, runtime) = make_ctx();
+        let handler = make_handler();
+        wire_service_to_gateway(&runtime, "ns", "payments", "route", "gw");
+        let mut policy = parse_health_policy(&handler, encrypted_policy("Secret"), &ctx).await;
+        install_health_material(&runtime, "Secret");
+        let mut material = runtime.secret_store.get(Some("ns"), "health-ca").unwrap();
+        material.data.as_mut().unwrap().get_mut("ca.crt").unwrap().0 = b"invalid certificate".to_vec();
+        let identity = runtime.secret_store.get(Some("ns"), "health-client").unwrap();
+        runtime.secret_store.replace_all(std::collections::HashMap::from([
+            ("ns/health-ca".into(), material),
+            ("ns/health-client".into(), identity),
+        ]));
+        policy = parse_health_policy(&handler, policy, &ctx).await;
+        assert_eq!(
+            health_active(&policy).resolved_tls_error.as_deref(),
+            Some("health check CA certificate material is invalid")
+        );
+        handler.update_status(&mut policy, &ctx, &[]);
+        assert_eq!(
+            ancestor_condition(&policy, "gw", condition_types::RESOLVED_REFS).status,
+            "False"
+        );
+
+        policy
+            .spec
+            .health_check
+            .as_mut()
+            .unwrap()
+            .active
+            .as_mut()
+            .unwrap()
+            .tls
+            .as_mut()
+            .unwrap()
+            .client_certificate_ref
+            .as_mut()
+            .unwrap()
+            .name = "replacement".into();
+        policy = parse_health_policy(&handler, policy, &ctx).await;
+        assert!(ctx.secret_ref_manager().get_refs("ns/health-client").is_empty());
+        assert_eq!(ctx.secret_ref_manager().get_refs("ns/replacement").len(), 1);
+        policy
+            .spec
+            .health_check
+            .as_mut()
+            .unwrap()
+            .active
+            .as_mut()
+            .unwrap()
+            .tls
+            .as_mut()
+            .unwrap()
+            .verify = Some(false);
+        policy = parse_health_policy(&handler, policy, &ctx).await;
+        handler.update_status(&mut policy, &ctx, &[]);
+        assert_eq!(
+            ancestor_condition(&policy, "gw", condition_types::ACCEPTED).status,
+            "False"
+        );
+        assert_eq!(
+            policy.spec.resolved_target_class,
+            Some(ResolvedPolicyTargetClass::Service)
+        );
+        assert!(runtime
+            .edgion_backend_traffic_policy
+            .is_winner("ns/health", "/Service/ns/payments"));
+        assert!(health_active(&policy).resolved_ca_certificates.is_none());
+        assert!(ctx.secret_ref_manager().get_refs("ns/replacement").is_empty());
+
+        policy.spec.health_check = None;
+        let _ = parse_health_policy(&handler, policy, &ctx).await;
+        assert!(ctx.secret_ref_manager().get_refs("ns/health-ca").is_empty());
+    }
+
+    #[tokio::test]
+    async fn encrypted_health_cross_namespace_references_are_rejected_without_resolution() {
+        let (ctx, runtime) = make_ctx();
+        let handler = make_handler();
+        install_health_material(&runtime, "Secret");
+        let mut policy = encrypted_policy("Secret");
+        policy
+            .spec
+            .health_check
+            .as_mut()
+            .unwrap()
+            .active
+            .as_mut()
+            .unwrap()
+            .tls
+            .as_mut()
+            .unwrap()
+            .validation
+            .as_mut()
+            .unwrap()
+            .ca_certificate_refs
+            .as_mut()
+            .unwrap()[0]
+            .namespace = Some("other".into());
+        let policy = parse_health_policy(&handler, policy, &ctx).await;
+        assert!(health_active(&policy).resolved_ca_certificates.is_none());
+        assert_eq!(
+            health_active(&policy).resolved_tls_error.as_deref(),
+            Some("health check TLS references must use the policy namespace")
+        );
+        assert!(!handler.validate(&policy, &ctx).is_empty());
+        assert_eq!(
+            policy.spec.resolved_target_class,
+            Some(ResolvedPolicyTargetClass::Service)
+        );
     }
 }

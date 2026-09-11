@@ -14,7 +14,11 @@ pub enum ProbeError {
     InvalidUri,
     GrpcConnectionFailed(tonic::transport::Error),
     GrpcNotServing(i32),
-    GrpcCallFailed(tonic::Status),
+    GrpcCallFailed(Box<tonic::Status>),
+    InvalidTlsConfig,
+    Superseded,
+    UnsafeEndpoint,
+    ClientUnavailable,
 }
 
 impl ProbeError {
@@ -30,13 +34,17 @@ impl ProbeError {
             Self::GrpcConnectionFailed(_) => "grpc-connection-failed",
             Self::GrpcNotServing(_) => "grpc-not-serving",
             Self::GrpcCallFailed(_) => "grpc-call-failed",
+            Self::InvalidTlsConfig => "invalid-tls-config",
+            Self::Superseded => "superseded",
+            Self::UnsafeEndpoint => "unsafe-endpoint",
+            Self::ClientUnavailable => "client-unavailable",
         }
     }
 }
 
 /// gRPC Health Check protocol structures (grpc.health.v1).
 /// Hand-written prost definitions — no proto file needed for this standard protocol.
-mod grpc_health_proto {
+pub(super) mod grpc_health_proto {
     #[derive(prost::Message)]
     pub struct HealthCheckRequest {
         #[prost(string, tag = "1")]
@@ -161,7 +169,7 @@ pub async fn probe_grpc(
     let response = tokio::time::timeout(timeout, grpc_client.unary(request, path, codec))
         .await
         .map_err(|_| ProbeError::Timeout)?
-        .map_err(ProbeError::GrpcCallFailed)?;
+        .map_err(|error| ProbeError::GrpcCallFailed(Box::new(error)))?;
 
     let status = response.into_inner().status;
     if status == SERVING {
@@ -397,7 +405,7 @@ mod tests {
     #[test]
     fn test_grpc_call_error_class_does_not_expose_status_message() {
         const SENTINEL: &str = "sentinel tonic status detail";
-        let err = ProbeError::GrpcCallFailed(tonic::Status::internal(SENTINEL));
+        let err = ProbeError::GrpcCallFailed(Box::new(tonic::Status::internal(SENTINEL)));
 
         assert_eq!(err.class(), "grpc-call-failed");
         assert!(!err.class().contains(SENTINEL));

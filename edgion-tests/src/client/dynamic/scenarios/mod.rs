@@ -18,6 +18,7 @@ pub mod dns_resolution_flap;
 pub mod dsl_dynamic;
 pub mod edgion_config_data_ref_flap;
 pub mod edgion_tls_last_known_good;
+pub mod encrypted_active_health_checks;
 pub mod form_json_transform;
 pub mod gateway_class_params_flap;
 pub mod gateway_dynamic;
