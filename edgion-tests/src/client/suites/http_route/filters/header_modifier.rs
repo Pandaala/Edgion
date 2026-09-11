@@ -413,7 +413,7 @@ impl HeaderModifierTestSuite {
                                     let expected = [
                                         ("X-Custom-Auth", "Bearer token123"),
                                         ("X-Request-Source", "gateway"),
-                                        ("X-Trace-Id", "trace-abc"),
+                                        ("X-Custom-Trace-Id", "trace-abc"),
                                         ("X-Span-Id", "span-xyz"),
                                     ];
 

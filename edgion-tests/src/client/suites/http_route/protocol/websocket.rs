@@ -126,7 +126,7 @@ impl WebSocketTestSuite {
                                 if line.windows(trace_id.len()).any(|part| part == trace_id.as_bytes()) {
                                     let entry: serde_json::Value =
                                         serde_json::from_slice(&line).context("Decode this request's access log")?;
-                                    if entry["request_info"]["trace_id"]["w3c"]["trace_id"].as_str()
+                                    if entry["request_info"]["trace_id"]["x-trace-id"].as_str()
                                         == Some(trace_id.as_str())
                                     {
                                         ensure!(

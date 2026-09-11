@@ -124,8 +124,7 @@ pub async fn logging(
         let trace_key = ctx
             .request_info
             .trace_id
-            .correlation_id("x-trace-id")
-            .or_else(|| ctx.request_info.trace_id.standard_trace_id())
+            .standard_trace_id()
             .map(str::to_owned)
             .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
         if let Err(e) = store.store(trace_key, json_for_store) {

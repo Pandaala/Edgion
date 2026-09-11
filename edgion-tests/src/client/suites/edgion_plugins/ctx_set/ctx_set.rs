@@ -26,7 +26,10 @@ impl CtxSetTestSuite {
                     .get(url)
                     .header("host", "ctx-setter.example.com")
                     .header("X-Tenant-Id", "acme-corp")
-                    .header("x-trace-id", &trace_id)
+                    .header(
+                        "traceparent",
+                        crate::access_log_client::traceparent_for_marker(&trace_id),
+                    )
                     .header("access_log", "test_store")
                     .send()
                     .await;
@@ -85,7 +88,10 @@ impl CtxSetTestSuite {
                 let response = client
                     .get(url)
                     .header("host", "ctx-setter.example.com")
-                    .header("x-trace-id", &trace_id)
+                    .header(
+                        "traceparent",
+                        crate::access_log_client::traceparent_for_marker(&trace_id),
+                    )
                     .header("access_log", "test_store")
                     .send()
                     .await;
@@ -145,7 +151,10 @@ impl CtxSetTestSuite {
                     let response = client
                         .get(url)
                         .header("host", "ctx-setter.example.com")
-                        .header("x-trace-id", &trace_id)
+                        .header(
+                            "traceparent",
+                            crate::access_log_client::traceparent_for_marker(&trace_id),
+                        )
                         .header("access_log", "test_store")
                         .send()
                         .await;
@@ -204,7 +213,10 @@ impl CtxSetTestSuite {
                     .get(url)
                     .header("host", "ctx-setter.example.com")
                     .header("X-Plan", "premium")
-                    .header("x-trace-id", &trace_id)
+                    .header(
+                        "traceparent",
+                        crate::access_log_client::traceparent_for_marker(&trace_id),
+                    )
                     .header("access_log", "test_store")
                     .send()
                     .await;
@@ -265,7 +277,10 @@ impl CtxSetTestSuite {
                         .get(url)
                         .header("host", "ctx-setter.example.com")
                         .header("X-Plan", "unknown-plan")
-                        .header("x-trace-id", &trace_id)
+                        .header(
+                            "traceparent",
+                            crate::access_log_client::traceparent_for_marker(&trace_id),
+                        )
                         .header("access_log", "test_store")
                         .send()
                         .await;

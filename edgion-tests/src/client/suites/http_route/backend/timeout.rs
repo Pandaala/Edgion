@@ -30,7 +30,10 @@ impl TimeoutTestSuite {
                         .http_client
                         .get(format!("{}/echo", ctx.http_url()))
                         .header("Host", "timeout-backend.example.com")
-                        .header("x-trace-id", &trace_id)
+                        .header(
+                            "traceparent",
+                            crate::access_log_client::traceparent_for_marker(&trace_id),
+                        )
                         .header("access_log", "test_store");
 
                     match request.send().await {
@@ -94,7 +97,10 @@ impl TimeoutTestSuite {
                         .http_client
                         .get(format!("{}/delay/2", ctx.http_url()))
                         .header("Host", "timeout-backend.example.com")
-                        .header("x-trace-id", &trace_id)
+                        .header(
+                            "traceparent",
+                            crate::access_log_client::traceparent_for_marker(&trace_id),
+                        )
                         .header("access_log", "test_store");
 
                     match request.send().await {
@@ -337,7 +343,10 @@ impl TimeoutTestSuite {
                         .get(format!("{}/delay/3", ctx.http_url()))
                         .timeout(std::time::Duration::from_secs(5))
                         .header("Host", "timeout-client.example.com")
-                        .header("x-trace-id", &trace_id)
+                        .header(
+                            "traceparent",
+                            crate::access_log_client::traceparent_for_marker(&trace_id),
+                        )
                         .header("access_log", "test_store");
 
                     match request.send().await {

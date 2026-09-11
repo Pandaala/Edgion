@@ -237,7 +237,10 @@ async fn poll_mirrored_body(ctx: &TestContext, trace_id: &str) -> Result<String,
         for host in &hosts {
             let response = ctx
                 .http_client
-                .get(format!("http://{host}:30001/mirror/query/{trace_id}"))
+                .get(format!(
+                    "http://{host}:30001/mirror/query/{}",
+                    crate::access_log_client::trace_id_for_marker(trace_id)
+                ))
                 .send()
                 .await;
             if let Ok(response) = response {
@@ -1249,7 +1252,10 @@ impl BodyPluginsTestSuite {
             .post(format!("{}/mirror/capture", ctx.http_url()))
             .header("host", host)
             .header("content-type", "application/json")
-            .header("x-trace-id", &trace_id)
+            .header(
+                "traceparent",
+                crate::access_log_client::traceparent_for_marker(&trace_id),
+            )
             .body(original)
             .send()
             .await;
@@ -1576,7 +1582,10 @@ impl BodyPluginsTestSuite {
                         .post(format!("{}/mirror/capture", ctx.http_url()))
                         .header("host", "wasm-body-mirror.example.com")
                         .header("x-wasm-rewrite-body", "1")
-                        .header("x-trace-id", &trace_id)
+                        .header(
+                            "traceparent",
+                            crate::access_log_client::traceparent_for_marker(&trace_id),
+                        )
                         .body("abcdef")
                         .send()
                         .await;

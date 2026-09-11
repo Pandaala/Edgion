@@ -962,7 +962,10 @@ async fn shape_recorder_self_test(
         combo,
         "POST",
         "/self-test",
-        &ctrl(&[("x-up-behavior", "echo"), ("x-trace-id", &trace)]),
+        &ctrl(&[
+            ("x-up-behavior", "echo"),
+            ("traceparent", &crate::access_log_client::traceparent_for_marker(&trace)),
+        ]),
         BodyPlan::ContentLength(body.clone()),
         Duration::from_secs(10),
     )
@@ -1056,7 +1059,7 @@ async fn shape_upstream_early_response(
             ("x-up-at-bytes", "0"),
             ("x-up-drain", "true"),
             ("x-up-status", "200"),
-            ("x-trace-id", &trace),
+            ("traceparent", &crate::access_log_client::traceparent_for_marker(&trace)),
         ]),
         BodyPlan::Chunked {
             chunks: chunks_of(5, 32, b'e'),
@@ -1128,7 +1131,7 @@ async fn shape_upstream_half_close(
             ("x-up-behavior", "half-close"),
             ("x-up-at-bytes", "32"),
             ("x-up-drain", "true"),
-            ("x-trace-id", &trace),
+            ("traceparent", &crate::access_log_client::traceparent_for_marker(&trace)),
         ]),
         BodyPlan::Chunked {
             chunks: chunks_of(6, 16, b'h'),
@@ -1266,7 +1269,10 @@ async fn shape_upstream_reset_after_response(
             ("x-up-after-response", "reset"),
             ("x-up-reset-code", "NO_ERROR"),
             ("x-up-resp-len", &RESET_RESP_LEN.to_string()),
-            ("x-trace-id", &trace_a),
+            (
+                "traceparent",
+                &crate::access_log_client::traceparent_for_marker(&trace_a),
+            ),
         ]),
         BodyPlan::ChunkedUntilResponse {
             chunks: chunks_of(12, 64, b'q'),
@@ -1326,7 +1332,13 @@ async fn shape_upstream_reset_after_response(
         combo,
         "POST",
         "/reset-after-response",
-        &ctrl(&[("x-up-behavior", "echo"), ("x-trace-id", &trace_b)]),
+        &ctrl(&[
+            ("x-up-behavior", "echo"),
+            (
+                "traceparent",
+                &crate::access_log_client::traceparent_for_marker(&trace_b),
+            ),
+        ]),
         BodyPlan::ContentLength(b"follow-up".to_vec()),
         Duration::from_secs(10),
     )
@@ -1391,7 +1403,7 @@ async fn shape_upstream_reset_at_offset(
             ("x-up-behavior", "reset"),
             ("x-up-at-bytes", "48"),
             ("x-up-reset-code", "INTERNAL_ERROR"),
-            ("x-trace-id", &trace),
+            ("traceparent", &crate::access_log_client::traceparent_for_marker(&trace)),
         ]),
         BodyPlan::Chunked {
             chunks: chunks_of(8, 16, b'r'),
@@ -1479,7 +1491,7 @@ async fn shape_upstream_never_responds(
         &ctrl(&[
             ("x-up-behavior", "hang"),
             ("x-up-drain", "true"),
-            ("x-trace-id", &trace),
+            ("traceparent", &crate::access_log_client::traceparent_for_marker(&trace)),
         ]),
         BodyPlan::ContentLength(b"this-body-arrives-but-no-response-ever-does".to_vec()),
         Duration::from_secs(15),
@@ -1544,7 +1556,10 @@ async fn shape_upstream_request_framing(
         combo,
         "POST",
         "/framing",
-        &ctrl(&[("x-up-behavior", "echo"), ("x-trace-id", &trace)]),
+        &ctrl(&[
+            ("x-up-behavior", "echo"),
+            ("traceparent", &crate::access_log_client::traceparent_for_marker(&trace)),
+        ]),
         BodyPlan::ContentLength(body.clone()),
         Duration::from_secs(10),
     )
@@ -1655,7 +1670,10 @@ async fn shape_bodyless_streamed_coercion(
         combo,
         "GET",
         "/bodyless",
-        &ctrl(&[("x-up-behavior", "echo"), ("x-trace-id", &trace)]),
+        &ctrl(&[
+            ("x-up-behavior", "echo"),
+            ("traceparent", &crate::access_log_client::traceparent_for_marker(&trace)),
+        ]),
         BodyPlan::Bodyless,
         Duration::from_secs(10),
     )
@@ -1750,7 +1768,7 @@ async fn shape_upstream_malformed_framing(
             &ctrl(&[
                 ("x-up-behavior", behavior),
                 ("x-up-resp-len", "16"),
-                ("x-trace-id", &trace),
+                ("traceparent", &crate::access_log_client::traceparent_for_marker(&trace)),
             ]),
             BodyPlan::ContentLength(b"malformed-framing-probe".to_vec()),
             Duration::from_secs(8),
@@ -1823,7 +1841,13 @@ async fn shape_upstream_connection_reuse(
         combo,
         "POST",
         "/reuse",
-        &ctrl(&[("x-up-behavior", "echo"), ("x-trace-id", &trace_a)]),
+        &ctrl(&[
+            ("x-up-behavior", "echo"),
+            (
+                "traceparent",
+                &crate::access_log_client::traceparent_for_marker(&trace_a),
+            ),
+        ]),
         BodyPlan::ContentLength(b"first".to_vec()),
         Duration::from_secs(10),
     )
@@ -1839,7 +1863,13 @@ async fn shape_upstream_connection_reuse(
         combo,
         "POST",
         "/reuse",
-        &ctrl(&[("x-up-behavior", "echo"), ("x-trace-id", &trace_b)]),
+        &ctrl(&[
+            ("x-up-behavior", "echo"),
+            (
+                "traceparent",
+                &crate::access_log_client::traceparent_for_marker(&trace_b),
+            ),
+        ]),
         BodyPlan::ContentLength(b"second".to_vec()),
         Duration::from_secs(10),
     )
@@ -1865,7 +1895,13 @@ async fn shape_upstream_connection_reuse(
         .iter()
         .find(|c| c.listener == combo.up_listener() && c.conn == head_a.conn)
         .ok_or_else(|| format!("no connection summary for conn {}\n{snapshot_b}", head_a.conn))?;
-    if !carrier.traces.contains(&trace_a) || !carrier.traces.contains(&trace_b) {
+    if !carrier
+        .traces
+        .contains(&crate::access_log_client::trace_id_for_marker(&trace_a))
+        || !carrier
+            .traces
+            .contains(&crate::access_log_client::trace_id_for_marker(&trace_b))
+    {
         return Err(format!(
             "expected both traces on one connection, connection {} carried {:?}\n{snapshot_b}",
             carrier.conn, carrier.traces
@@ -1915,7 +1951,10 @@ async fn shape_unfinished_body_poisons_pool(
             &[
                 ("Transfer-Encoding", "chunked"),
                 ("x-up-behavior", "echo"),
-                ("x-trace-id", &trace_a),
+                (
+                    "traceparent",
+                    &crate::access_log_client::traceparent_for_marker(&trace_a),
+                ),
             ],
         )
         .await?;
@@ -1947,7 +1986,13 @@ async fn shape_unfinished_body_poisons_pool(
             combo,
             "POST",
             "/poison",
-            &ctrl(&[("x-up-behavior", "echo"), ("x-trace-id", &trace_b)]),
+            &ctrl(&[
+                ("x-up-behavior", "echo"),
+                (
+                    "traceparent",
+                    &crate::access_log_client::traceparent_for_marker(&trace_b),
+                ),
+            ]),
             BodyPlan::ContentLength(b"follow-up-after-poison".to_vec()),
             Duration::from_secs(10),
         )
@@ -1993,7 +2038,7 @@ async fn shape_client_disconnect_mid_upload(
     let control = ctrl(&[
         ("x-up-behavior", "echo"),
         ("x-up-drain", "true"),
-        ("x-trace-id", &trace),
+        ("traceparent", &crate::access_log_client::traceparent_for_marker(&trace)),
     ]);
 
     match combo.down {
@@ -2081,7 +2126,10 @@ async fn shape_client_sends_trailers(
         combo,
         "POST",
         "/trailers",
-        &ctrl(&[("x-up-behavior", "echo"), ("x-trace-id", &trace)]),
+        &ctrl(&[
+            ("x-up-behavior", "echo"),
+            ("traceparent", &crate::access_log_client::traceparent_for_marker(&trace)),
+        ]),
         BodyPlan::ChunkedWithTrailers {
             chunks: chunks_of(2, 24, b't'),
             trailers: vec![("x-client-trailer".to_string(), "present".to_string())],
@@ -2184,7 +2232,10 @@ async fn shape_client_pipelines(ctx: TestContext, combo: Combo, probe: Arc<Trans
             &[
                 ("x-up-behavior", "echo"),
                 ("x-up-resp-len", "8"),
-                ("x-trace-id", &trace_a),
+                (
+                    "traceparent",
+                    &crate::access_log_client::traceparent_for_marker(&trace_a)
+                ),
             ],
         ),
         render_h1_head(
@@ -2194,7 +2245,10 @@ async fn shape_client_pipelines(ctx: TestContext, combo: Combo, probe: Arc<Trans
             &[
                 ("x-up-behavior", "echo"),
                 ("x-up-resp-len", "9"),
-                ("x-trace-id", &trace_b),
+                (
+                    "traceparent",
+                    &crate::access_log_client::traceparent_for_marker(&trace_b)
+                ),
             ],
         ),
     );
@@ -2265,7 +2319,10 @@ async fn shape_client_pipelines(ctx: TestContext, combo: Combo, probe: Arc<Trans
         &ctrl(&[
             ("x-up-behavior", "echo"),
             ("x-up-resp-len", "9"),
-            ("x-trace-id", &trace_resent),
+            (
+                "traceparent",
+                &crate::access_log_client::traceparent_for_marker(&trace_resent),
+            ),
         ]),
         BodyPlan::Bodyless,
         Duration::from_secs(10),
@@ -2344,7 +2401,7 @@ async fn shape_expect_100_continue(
             ("Content-Length", &length),
             ("Expect", "100-continue"),
             ("x-up-behavior", "echo"),
-            ("x-trace-id", &trace),
+            ("traceparent", &crate::access_log_client::traceparent_for_marker(&trace)),
         ],
     )
     .await?;

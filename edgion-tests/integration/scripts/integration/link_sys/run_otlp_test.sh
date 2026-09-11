@@ -509,7 +509,7 @@ count_shutdown_records() {
     jq -rs '
         [range(1; 6) | "4bf92f3577b34da6a3ce929d0e0e473\(.)"] as $expected |
         [.[].resourceLogs[].scopeLogs[].logRecords[].body.stringValue |
-         fromjson | .request_info.trace_id.w3c.trace_id |
+         fromjson | .request_info.trace_id["x-trace-id"] |
          select(. as $id | $expected | index($id))] | unique | length
     ' "$file" 2>/dev/null || echo "0"
 }

@@ -86,7 +86,7 @@ spec:
               - name: "X-Request-Source"
                 value: "gateway"
             add:
-              - name: "X-Trace-Id"
+              - name: "X-Custom-Trace-Id"
                 value: "trace-abc"
               - name: "X-Span-Id"
                 value: "span-xyz"

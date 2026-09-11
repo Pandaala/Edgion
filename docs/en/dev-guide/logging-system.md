@@ -465,7 +465,7 @@ All logs are output in JSON format, one record per line. Below are format exampl
     "method": "GET",
     "path": "/api/v1/users",
     "status": 200,
-    "trace_id": {"w3c": {"trace_id": "4bf92f3577b34da6a3ce929d0e0e4736"}, "correlation_ids": {"x-trace-id": "4bf92f3577b34da6a3ce929d0e0e4736"}},
+    "trace_id": {"x-trace-id": "4bf92f3577b34da6a3ce929d0e0e4736"},
     "host": "example.com",
     "user_agent": "curl/7.88.0"
   },

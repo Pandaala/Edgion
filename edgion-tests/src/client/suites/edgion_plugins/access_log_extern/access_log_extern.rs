@@ -103,7 +103,10 @@ impl AccessLogExternTestSuite {
                         .get(&url)
                         .header("host", "accesslogextern-404.example.com")
                         .header("x-tenant", "acme-global-404")
-                        .header("x-trace-id", &trace_id)
+                        .header(
+                            "traceparent",
+                            crate::access_log_client::traceparent_for_marker(&trace_id),
+                        )
                         .header("access_log", "test_store")
                         .send()
                         .await;
@@ -166,7 +169,10 @@ impl AccessLogExternTestSuite {
                         .http_client
                         .get(&url)
                         .header("host", "accesslogextern-deny.example.com")
-                        .header("x-trace-id", &trace_id)
+                        .header(
+                            "traceparent",
+                            crate::access_log_client::traceparent_for_marker(&trace_id),
+                        )
                         .header("access_log", "test_store")
                         .send()
                         .await;
@@ -227,7 +233,10 @@ impl AccessLogExternTestSuite {
                         .header("host", "accesslogextern-cors.example.com")
                         .header("origin", "https://preflight-client.example.com")
                         .header("access-control-request-method", "GET")
-                        .header("x-trace-id", &trace_id)
+                        .header(
+                            "traceparent",
+                            crate::access_log_client::traceparent_for_marker(&trace_id),
+                        )
                         .header("access_log", "test_store")
                         .send()
                         .await;
@@ -288,7 +297,10 @@ impl AccessLogExternTestSuite {
                         .http_client
                         .get(&url)
                         .header("host", "accesslogextern-globalctx.example.com")
-                        .header("x-trace-id", &trace_id)
+                        .header(
+                            "traceparent",
+                            crate::access_log_client::traceparent_for_marker(&trace_id),
+                        )
                         .header("access_log", "test_store")
                         .send()
                         .await;
@@ -345,7 +357,10 @@ impl AccessLogExternTestSuite {
                         .header("host", "accesslogextern-sources.example.com")
                         .header("x-src-header", "header-value")
                         .header("cookie", "srccookie=cookie-value")
-                        .header("x-trace-id", &trace_id)
+                        .header(
+                            "traceparent",
+                            crate::access_log_client::traceparent_for_marker(&trace_id),
+                        )
                         .header("access_log", "test_store")
                         .send()
                         .await;
@@ -420,7 +435,10 @@ impl AccessLogExternTestSuite {
                         .http_client
                         .get(&url)
                         .header("host", "accesslogextern-queryrewrite.example.com")
-                        .header("x-trace-id", &trace_id)
+                        .header(
+                            "traceparent",
+                            crate::access_log_client::traceparent_for_marker(&trace_id),
+                        )
                         .header("access_log", "test_store")
                         .send()
                         .await;
@@ -489,7 +507,10 @@ impl AccessLogExternTestSuite {
                         .get(&url)
                         .header("host", "accesslogextern-timeout.example.com")
                         .header("x-req-marker", "req-value")
-                        .header("x-trace-id", &trace_id)
+                        .header(
+                            "traceparent",
+                            crate::access_log_client::traceparent_for_marker(&trace_id),
+                        )
                         .header("access_log", "test_store")
                         .send()
                         .await;
@@ -566,7 +587,10 @@ impl AccessLogExternTestSuite {
                         .header("x-global-val", "global-value")
                         .header("x-gateway-val", "gateway-value")
                         .header("x-route-val", "route-value")
-                        .header("x-trace-id", &trace_id)
+                        .header(
+                            "traceparent",
+                            crate::access_log_client::traceparent_for_marker(&trace_id),
+                        )
                         .header("access_log", "test_store")
                         .send()
                         .await;
@@ -616,7 +640,10 @@ impl AccessLogExternTestSuite {
                         .get(&url)
                         .header("host", "accesslogextern-truncate.example.com")
                         .header("x-big-header", &big_value)
-                        .header("x-trace-id", &trace_id)
+                        .header(
+                            "traceparent",
+                            crate::access_log_client::traceparent_for_marker(&trace_id),
+                        )
                         .header("access_log", "test_store")
                         .send()
                         .await;
@@ -670,7 +697,10 @@ impl AccessLogExternTestSuite {
                         .get(&url)
                         .header("host", "accesslogextern-forge.example.com")
                         .header("user-agent", payload)
-                        .header("x-trace-id", &trace_id)
+                        .header(
+                            "traceparent",
+                            crate::access_log_client::traceparent_for_marker(&trace_id),
+                        )
                         .header("access_log", "test_store")
                         .send()
                         .await;

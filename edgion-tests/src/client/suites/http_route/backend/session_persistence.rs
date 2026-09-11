@@ -190,7 +190,10 @@ impl SessionPersistenceTestSuite {
                     let resp = match client
                         .get(&url)
                         .header("host", "sp-cookie.example.com")
-                        .header("x-trace-id", "sp-cookie-init")
+                        .header(
+                            "traceparent",
+                            crate::access_log_client::traceparent_for_marker("sp-cookie-init"),
+                        )
                         .send()
                         .await
                     {
@@ -251,7 +254,10 @@ impl SessionPersistenceTestSuite {
                             .get(&url)
                             .header("host", "sp-cookie.example.com")
                             .header("cookie", &cookie_value)
-                            .header("x-trace-id", format!("sp-cookie-{}", i))
+                            .header(
+                                "traceparent",
+                                crate::access_log_client::traceparent_for_marker(format!("sp-cookie-{}", i)),
+                            )
                             .send()
                             .await;
 
@@ -306,7 +312,10 @@ impl SessionPersistenceTestSuite {
                     let resp = match client
                         .get(&url)
                         .header("host", "sp-header.example.com")
-                        .header("x-trace-id", "sp-header-init")
+                        .header(
+                            "traceparent",
+                            crate::access_log_client::traceparent_for_marker("sp-header-init"),
+                        )
                         .send()
                         .await
                     {
@@ -345,7 +354,10 @@ impl SessionPersistenceTestSuite {
                             .get(&url)
                             .header("host", "sp-header.example.com")
                             .header("x-session-id", &token)
-                            .header("x-trace-id", format!("sp-header-{}", i))
+                            .header(
+                                "traceparent",
+                                crate::access_log_client::traceparent_for_marker(format!("sp-header-{}", i)),
+                            )
                             .send()
                             .await;
 

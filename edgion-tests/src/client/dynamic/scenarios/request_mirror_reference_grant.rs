@@ -152,7 +152,10 @@ async fn receipts(ctx: &TestContext, trace: &str) -> Result<Vec<Value>> {
     for host in hosts {
         let response: Value = ctx
             .http_client
-            .get(format!("http://{host}/mirror/query/{trace}"))
+            .get(format!(
+                "http://{host}/mirror/query/{}",
+                crate::access_log_client::trace_id_for_marker(trace)
+            ))
             .timeout(Duration::from_secs(3))
             .send()
             .await?
@@ -176,7 +179,7 @@ async fn traffic(ctx: &TestContext, allowed: bool, case: &str, invalid: bool) ->
         .post(format!("{}/mirror/capture", ctx.http_url()))
         .header("host", HOST)
         .header("x-mirror-grant-case", case)
-        .header("x-trace-id", &trace)
+        .header("traceparent", crate::access_log_client::traceparent_for_marker(&trace))
         .header("access_log", "test_store")
         .timeout(Duration::from_secs(3));
     let request = if case == "backend-chunked" {
@@ -476,7 +479,7 @@ fn run(ctx: ScenarioCtx) -> ScenarioRunFuture {
                     } else {
                         format!("http://{}:{port}/mirror/capture", ctx.test_ctx.target_host)
                     })
-                    .header("x-trace-id", &trace)
+                    .header("x-trace-id", crate::access_log_client::trace_id_for_marker(&trace))
                     .body(BODY)
                     .timeout(Duration::from_secs(3))
                     .send()

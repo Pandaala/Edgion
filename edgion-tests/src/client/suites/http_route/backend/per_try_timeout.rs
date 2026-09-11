@@ -62,7 +62,10 @@ impl PerTryTimeoutTestSuite {
                         .http_client
                         .get(format!("{}/retry-sequence/{}/200d3000,200", ctx.http_url(), test_id))
                         .header("Host", "per-try.example.com")
-                        .header("x-trace-id", &test_id)
+                        .header(
+                            "traceparent",
+                            crate::access_log_client::traceparent_for_marker(&test_id),
+                        )
                         .header("access_log", "test_store")
                         .timeout(Duration::from_secs(15))
                         .send()
@@ -213,7 +216,10 @@ impl PerTryTimeoutTestSuite {
                         .http_client
                         .get(format!("{}/retry-sequence/{}/200d3000,200", ctx.http_url(), test_id))
                         .header("Host", "per-try-noretry.example.com")
-                        .header("x-trace-id", &test_id)
+                        .header(
+                            "traceparent",
+                            crate::access_log_client::traceparent_for_marker(&test_id),
+                        )
                         .timeout(Duration::from_secs(15))
                         .send()
                         .await;
@@ -275,7 +281,10 @@ impl PerTryTimeoutTestSuite {
                         .http_client
                         .get(format!("{}/retry-sequence/{}/200d3000", ctx.http_url(), test_id))
                         .header("Host", "per-try.example.com")
-                        .header("x-trace-id", &test_id)
+                        .header(
+                            "traceparent",
+                            crate::access_log_client::traceparent_for_marker(&test_id),
+                        )
                         .timeout(Duration::from_secs(15))
                         .send()
                         .await;
@@ -344,7 +353,10 @@ impl PerTryTimeoutTestSuite {
                         .http_client
                         .get(format!("{}/stream-stall/{}", ctx.http_url(), test_id))
                         .header("Host", "per-try.example.com")
-                        .header("x-trace-id", &test_id)
+                        .header(
+                            "traceparent",
+                            crate::access_log_client::traceparent_for_marker(&test_id),
+                        )
                         .header("access_log", "test_store")
                         .timeout(Duration::from_secs(15))
                         .send()
@@ -479,7 +491,10 @@ impl PerTryTimeoutTestSuite {
                         .http_client
                         .get(format!("{}/stream-trickle/{}/4/500", ctx.http_url(), test_id))
                         .header("Host", "per-try.example.com")
-                        .header("x-trace-id", &test_id)
+                        .header(
+                            "traceparent",
+                            crate::access_log_client::traceparent_for_marker(&test_id),
+                        )
                         .timeout(Duration::from_secs(15))
                         .send()
                         .await;
@@ -579,7 +594,7 @@ impl PerTryTimeoutTestSuite {
                         .http_client
                         .get(format!("{}/retry-sequence/{}/200d3000", ctx.http_url(), test_id))
                         .header("Host", "per-try-deadline.example.com")
-                        .header("x-trace-id", &test_id)
+                        .header("traceparent", crate::access_log_client::traceparent_for_marker(&test_id))
                         .header("access_log", "test_store")
                         .timeout(Duration::from_secs(15))
                         .send()
@@ -695,7 +710,10 @@ impl PerTryTimeoutTestSuite {
                         .http_client
                         .get(format!("{}/retry-sequence/{}/200d3000", ctx.http_url(), test_id))
                         .header("Host", "per-try.example.com")
-                        .header("x-trace-id", &test_id)
+                        .header(
+                            "traceparent",
+                            crate::access_log_client::traceparent_for_marker(&test_id),
+                        )
                         .header("access_log", "test_store")
                         .timeout(Duration::from_millis(500))
                         .send()
@@ -785,7 +803,10 @@ impl PerTryTimeoutTestSuite {
                     let r1 = match client
                         .get(format!("{}/test", ctx.http_url()))
                         .header("Host", "per-try-sp.example.com")
-                        .header("x-trace-id", format!("{}-init", seq_id))
+                        .header(
+                            "traceparent",
+                            crate::access_log_client::traceparent_for_marker(format!("{}-init", seq_id)),
+                        )
                         .send()
                         .await
                     {
@@ -820,7 +841,7 @@ impl PerTryTimeoutTestSuite {
                         .get(format!("{}/retry-sequence/{}/200d3000,200", ctx.http_url(), seq_id))
                         .header("Host", "per-try-sp.example.com")
                         .header("cookie", &cookie1)
-                        .header("x-trace-id", &seq_id)
+                        .header("traceparent", crate::access_log_client::traceparent_for_marker(&seq_id))
                         .header("access_log", "test_store")
                         .send()
                         .await
@@ -990,7 +1011,10 @@ impl PerTryTimeoutTestSuite {
                     let r1 = match client
                         .get(format!("{}/test", ctx.http_url()))
                         .header("Host", "strict-sp.example.com")
-                        .header("x-trace-id", format!("{}-init", seq_id))
+                        .header(
+                            "traceparent",
+                            crate::access_log_client::traceparent_for_marker(format!("{}-init", seq_id)),
+                        )
                         .send()
                         .await
                     {
@@ -1021,7 +1045,7 @@ impl PerTryTimeoutTestSuite {
                         .get(format!("{}/retry-sequence/{}/200d3000,200", ctx.http_url(), seq_id))
                         .header("Host", "strict-sp.example.com")
                         .header("cookie", &cookie1)
-                        .header("x-trace-id", &seq_id)
+                        .header("traceparent", crate::access_log_client::traceparent_for_marker(&seq_id))
                         .header("access_log", "test_store")
                         .send()
                         .await
@@ -1205,7 +1229,7 @@ impl PerTryTimeoutTestSuite {
                     let resp = match client
                         .get(format!("{}/retry-sequence/{}/503,200", ctx.http_url(), seq_id))
                         .header("Host", "per-try-sp.example.com")
-                        .header("x-trace-id", &seq_id)
+                        .header("traceparent", crate::access_log_client::traceparent_for_marker(&seq_id))
                         .header("access_log", "test_store")
                         .send()
                         .await

@@ -78,7 +78,10 @@ async fn post(
     }
     if let Some(trace_id) = trace_id {
         request = request
-            .header("x-trace-id", trace_id)
+            .header(
+                "traceparent",
+                crate::access_log_client::traceparent_for_marker(trace_id),
+            )
             .header("access_log", "test_store");
     }
     request

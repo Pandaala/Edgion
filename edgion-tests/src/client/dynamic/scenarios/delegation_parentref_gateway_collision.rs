@@ -342,7 +342,9 @@ async fn http_request(
         .header("host", host)
         .timeout(Duration::from_secs(3));
     if let Some(trace) = &trace {
-        request = request.header("x-trace-id", trace).header("access_log", "test_store");
+        request = request
+            .header("traceparent", crate::access_log_client::traceparent_for_marker(trace))
+            .header("access_log", "test_store");
     }
     let response = request.send().await?;
     let status = response.status().as_u16();
@@ -410,7 +412,10 @@ async fn grpc_say_hello(
         name: "ParentRefCollision".to_string(),
     });
     if let Some(trace) = &trace {
-        request.metadata_mut().insert("x-trace-id", trace.parse()?);
+        request.metadata_mut().insert(
+            "traceparent",
+            crate::access_log_client::traceparent_for_marker(&trace).parse()?,
+        );
         request.metadata_mut().insert("access_log", "test_store".parse()?);
     }
     match client.say_hello(request).await {
@@ -436,7 +441,10 @@ async fn grpc_stream_numbers(
     let trace = logged.then(|| format!("parentref-collision-grpc-{}", uuid::Uuid::new_v4()));
     let mut request = tonic::Request::new(NumberRequest { count: 2 });
     if let Some(trace) = &trace {
-        request.metadata_mut().insert("x-trace-id", trace.parse()?);
+        request.metadata_mut().insert(
+            "traceparent",
+            crate::access_log_client::traceparent_for_marker(&trace).parse()?,
+        );
         request.metadata_mut().insert("access_log", "test_store".parse()?);
     }
     match client.stream_numbers(request).await {
@@ -475,7 +483,10 @@ fn validate_say_hello_metadata(message: &str, trace: &str, k8s: bool) -> Result<
             .map(|(_, value)| *value)
             .unwrap()
     };
-    ensure!(value("x-trace-id") == trace, "SayHello trace metadata mismatch");
+    ensure!(
+        value("x-trace-id") == crate::access_log_client::trace_id_for_marker(trace),
+        "SayHello trace metadata mismatch"
+    );
     let forwarded = value("x-forwarded-for");
     let real = value("x-real-ip");
     if k8s {
@@ -638,6 +649,7 @@ mod tests {
     }
 
     fn message(metadata: &str) -> String {
+        let metadata = metadata.replace("trace-1", &crate::access_log_client::trace_id_for_marker("trace-1"));
         format!("Hello, ParentRefCollision! metadata=({metadata})")
     }
 

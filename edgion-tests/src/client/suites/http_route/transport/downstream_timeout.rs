@@ -75,7 +75,7 @@ async fn run(ctx: &TestContext, proto: Proto) -> Result<(), String> {
     let headers = [
         ("x-up-behavior", "echo"),
         ("x-up-drain", "true"),
-        ("x-trace-id", trace),
+        ("traceparent", &crate::access_log_client::traceparent_for_marker(trace)),
         ("access_log", "test_store"),
         ("Content-Length", "1024"),
     ];
@@ -176,7 +176,10 @@ async fn run(ctx: &TestContext, proto: Proto) -> Result<(), String> {
         .http_client
         .post(format!("{}/backend-close", ctx.http_url()))
         .header("Host", &host)
-        .header("x-trace-id", &control_trace)
+        .header(
+            "traceparent",
+            crate::access_log_client::traceparent_for_marker(&control_trace),
+        )
         .header("x-up-behavior", "reset")
         .header("x-up-reset-code", "INTERNAL_ERROR")
         .header("x-up-at-bytes", "1")

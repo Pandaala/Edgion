@@ -45,7 +45,10 @@ impl RealIpPluginTestSuite {
                         .get(&url)
                         .header("host", HOST)
                         .header("x-forwarded-for", "203.0.113.1, 10.0.0.5, 192.168.1.1")
-                        .header("x-trace-id", "test-real-ip-plugin-xff");
+                        .header(
+                            "traceparent",
+                            crate::access_log_client::traceparent_for_marker("test-real-ip-plugin-xff"),
+                        );
 
                     match request.send().await {
                         Ok(resp) => {
@@ -116,10 +119,10 @@ impl RealIpPluginTestSuite {
                     let client = &ctx.http_client;
                     let url = format!("{}/headers", ctx.http_url());
 
-                    let request = client
-                        .get(&url)
-                        .header("host", HOST)
-                        .header("x-trace-id", "test-real-ip-plugin-direct");
+                    let request = client.get(&url).header("host", HOST).header(
+                        "traceparent",
+                        crate::access_log_client::traceparent_for_marker("test-real-ip-plugin-direct"),
+                    );
 
                     match request.send().await {
                         Ok(resp) => {
@@ -201,7 +204,10 @@ impl RealIpPluginTestSuite {
                         .get(&url)
                         .header("host", HOST)
                         .header("x-forwarded-for", "192.168.1.1, 10.0.0.1, 172.16.0.1")
-                        .header("x-trace-id", "test-real-ip-plugin-all-trusted");
+                        .header(
+                            "traceparent",
+                            crate::access_log_client::traceparent_for_marker("test-real-ip-plugin-all-trusted"),
+                        );
 
                     match request.send().await {
                         Ok(resp) => {
@@ -275,7 +281,10 @@ impl RealIpPluginTestSuite {
                         .get(&url)
                         .header("host", HOST)
                         .header("x-forwarded-for", "203.0.113.1, 10.0.0.5")
-                        .header("x-trace-id", &trace_id)
+                        .header(
+                            "traceparent",
+                            crate::access_log_client::traceparent_for_marker(&trace_id),
+                        )
                         .header("access_log", "test_store")
                         .send()
                         .await;

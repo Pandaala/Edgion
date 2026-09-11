@@ -95,7 +95,10 @@ impl RegionRouteTestSuite {
                         .get(&url)
                         .header("host", BROKEN_REF_HOST)
                         .header("X-Direct-Region", "virginia")
-                        .header("x-trace-id", &trace_id)
+                        .header(
+                            "traceparent",
+                            crate::access_log_client::traceparent_for_marker(&trace_id),
+                        )
                         .header("access_log", "test_store")
                         .send()
                         .await
@@ -195,7 +198,10 @@ impl RegionRouteTestSuite {
                         .get(&url)
                         .header("host", MAIN_HOST)
                         .header("X-Account-Id", "acct-001")
-                        .header("x-trace-id", &trace_id)
+                        .header(
+                            "traceparent",
+                            crate::access_log_client::traceparent_for_marker(&trace_id),
+                        )
                         .header("access_log", "test_store")
                         .send()
                         .await
@@ -250,7 +256,10 @@ impl RegionRouteTestSuite {
                             .get(&url)
                             .header("host", MAIN_HOST)
                             .header("X-Account-Id", account_id)
-                            .header("x-trace-id", &trace_id)
+                            .header(
+                                "traceparent",
+                                crate::access_log_client::traceparent_for_marker(&trace_id),
+                            )
                             .header("access_log", "test_store")
                             .send()
                             .await;
@@ -324,7 +333,10 @@ impl RegionRouteTestSuite {
                         .get(&url)
                         .header("host", MAIN_HOST)
                         .header("X-Direct-Region", "virginia")
-                        .header("x-trace-id", &trace_id)
+                        .header(
+                            "traceparent",
+                            crate::access_log_client::traceparent_for_marker(&trace_id),
+                        )
                         .header("access_log", "test_store")
                         .send()
                         .await
@@ -368,7 +380,10 @@ impl RegionRouteTestSuite {
                         .get(&url)
                         .header("host", MAIN_HOST)
                         .header("X-Direct-Region", "ohio")
-                        .header("x-trace-id", &trace_id)
+                        .header(
+                            "traceparent",
+                            crate::access_log_client::traceparent_for_marker(&trace_id),
+                        )
                         .header("access_log", "test_store")
                         .send()
                         .await
@@ -414,7 +429,10 @@ impl RegionRouteTestSuite {
                         .header("host", MAIN_HOST)
                         .header("X-Direct-Region", "invalid")
                         .header("X-Account-Id", "acct-fallthrough")
-                        .header("x-trace-id", &trace_id)
+                        .header(
+                            "traceparent",
+                            crate::access_log_client::traceparent_for_marker(&trace_id),
+                        )
                         .header("access_log", "test_store")
                         .send()
                         .await
@@ -475,7 +493,10 @@ impl RegionRouteTestSuite {
                         .get(&url)
                         .header("host", MAIN_HOST)
                         .header("X-Account-Id", "vip-va")
-                        .header("x-trace-id", &trace_id)
+                        .header(
+                            "traceparent",
+                            crate::access_log_client::traceparent_for_marker(&trace_id),
+                        )
                         .header("access_log", "test_store")
                         .send()
                         .await
@@ -523,7 +544,10 @@ impl RegionRouteTestSuite {
                         .get(&url)
                         .header("host", MAIN_HOST)
                         .header("X-Account-Id", "vip-oh")
-                        .header("x-trace-id", &trace_id)
+                        .header(
+                            "traceparent",
+                            crate::access_log_client::traceparent_for_marker(&trace_id),
+                        )
                         .header("access_log", "test_store")
                         .send()
                         .await
@@ -570,7 +594,10 @@ impl RegionRouteTestSuite {
                         .get(&url)
                         .header("host", MAIN_HOST)
                         .header("X-Account-Id", "not-in-map")
-                        .header("x-trace-id", &trace_id)
+                        .header(
+                            "traceparent",
+                            crate::access_log_client::traceparent_for_marker(&trace_id),
+                        )
                         .header("access_log", "test_store")
                         .send()
                         .await
@@ -628,7 +655,10 @@ impl RegionRouteTestSuite {
                         .header("host", MAIN_HOST)
                         // x_region_hash=100 → falls in [0,600] → virginia
                         .header("Cookie", "x_region_hash=100")
-                        .header("x-trace-id", &trace_id)
+                        .header(
+                            "traceparent",
+                            crate::access_log_client::traceparent_for_marker(&trace_id),
+                        )
                         .header("access_log", "test_store")
                         .send()
                         .await
@@ -675,7 +705,10 @@ impl RegionRouteTestSuite {
                         .header("host", MAIN_HOST)
                         // x_region_hash=800 → falls in [601,1000] → ohio
                         .header("Cookie", "x_region_hash=800")
-                        .header("x-trace-id", &trace_id)
+                        .header(
+                            "traceparent",
+                            crate::access_log_client::traceparent_for_marker(&trace_id),
+                        )
                         .header("access_log", "test_store")
                         .send()
                         .await
@@ -722,7 +755,10 @@ impl RegionRouteTestSuite {
                         .header("host", MAIN_HOST)
                         .header("Cookie", "x_region_hash=1001") // invalid: >= modulo → ignored
                         .header("X-Account-Id", "acct-oor")
-                        .header("x-trace-id", &trace_id)
+                        .header(
+                            "traceparent",
+                            crate::access_log_client::traceparent_for_marker(&trace_id),
+                        )
                         .header("access_log", "test_store")
                         .send()
                         .await
@@ -854,7 +890,10 @@ impl RegionRouteTestSuite {
                         .get(&url)
                         .header("host", MYREGION_HOST)
                         .header("X-Direct-Region", "ohio")
-                        .header("x-trace-id", &trace_id)
+                        .header(
+                            "traceparent",
+                            crate::access_log_client::traceparent_for_marker(&trace_id),
+                        )
                         .header("access_log", "test_store")
                         .send()
                         .await
@@ -909,7 +948,10 @@ impl RegionRouteTestSuite {
                         .get(&url)
                         .header("host", MYREGION_HOST)
                         .header("X-Direct-Region", "europe")
-                        .header("x-trace-id", &trace_id)
+                        .header(
+                            "traceparent",
+                            crate::access_log_client::traceparent_for_marker(&trace_id),
+                        )
                         .header("access_log", "test_store")
                         .send()
                         .await
@@ -974,7 +1016,10 @@ impl RegionRouteTestSuite {
                         .get(&url)
                         .header("host", MAIN_HOST)
                         .header("X-Account-Id", "acct-wb")
-                        .header("x-trace-id", &trace_id)
+                        .header(
+                            "traceparent",
+                            crate::access_log_client::traceparent_for_marker(&trace_id),
+                        )
                         .header("access_log", "test_store")
                         .send()
                         .await

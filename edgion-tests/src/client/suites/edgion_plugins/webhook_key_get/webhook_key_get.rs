@@ -19,7 +19,7 @@
 //
 // Verification model
 // ------------------
-// Every request carries `access_log: test_store` + a unique `x-trace-id`; the
+// Every request carries `access_log: test_store` + a unique W3C `traceparent`; the
 // gateway stores the access-log entry (integration-testing mode) keyed by that
 // trace id. Every WebhookKeyGet (and CtxSet) var is flattened to a top-level key in the access-log
 // JSON, so asserting `"<var>":"<value>"` proves the resolved value.
@@ -124,7 +124,10 @@ async fn send_gw(
         .http_client
         .get(gw_url(ctx, path))
         .header("host", host)
-        .header("x-trace-id", trace_id)
+        .header(
+            "traceparent",
+            crate::access_log_client::traceparent_for_marker(trace_id),
+        )
         .header("access_log", "test_store");
     for (k, v) in headers {
         rb = rb.header(*k, *v);
@@ -488,7 +491,7 @@ impl WebhookKeyGetTestSuite {
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
-                    // Send WITHOUT X-Trace-Id (the warnIfMissing origin field).
+                    // Send WITHOUT X-Optional-Trace-Id (the warnIfMissing origin field).
                     run_case(&ctx, "wh6.example.com", "/test/wh6", &[], "wh6", start, true, |log| {
                         // Field omitted, request proceeds → webhook resolves uid-unknown
                         // (no tenant declared). warnIfMissing never escalates to failure.

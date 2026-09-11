@@ -53,7 +53,10 @@ impl LBLeastConnRetryOnStatusTestSuite {
                             client
                                 .get(&url)
                                 .header("host", "lb-lc-rs.example.com")
-                                .header("x-trace-id", &trace_id)
+                                .header(
+                                    "traceparent",
+                                    crate::access_log_client::traceparent_for_marker(&trace_id),
+                                )
                                 .send()
                                 .await
                                 .map(|r| r.status().as_u16())
@@ -107,7 +110,10 @@ impl LBLeastConnRetryOnStatusTestSuite {
                             client
                                 .get(&url)
                                 .header("host", "lb-lc-rs.example.com")
-                                .header("x-trace-id", &trace_id)
+                                .header(
+                                    "traceparent",
+                                    crate::access_log_client::traceparent_for_marker(&trace_id),
+                                )
                                 .send()
                                 .await
                                 .map(|r| r.status().as_u16())

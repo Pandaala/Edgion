@@ -22,6 +22,7 @@ pub struct RequestIdConfig {
 }
 
 /// Omitted fields leave the policy established by earlier attachments unchanged.
+/// Controls the reserved W3C `x-trace-id` header; its access-log identity is always retained.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct DefaultIdConfig {
@@ -36,6 +37,7 @@ pub struct DefaultIdConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct RequestIdRule {
+    /// Custom correlation header; `x-trace-id` is reserved for the W3C trace ID.
     pub header: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<KeyGet>,
@@ -110,6 +112,7 @@ pub fn valid_request_id_header(name: &str) -> bool {
             | "upgrade"
             | "traceparent"
             | "tracestate"
+            | "x-trace-id"
             | "forwarded"
             | "via"
             | "expect"
@@ -220,6 +223,8 @@ mod tests {
             "Host",
             "traceparent",
             "tracestate",
+            "x-trace-id",
+            "X-Trace-Id",
             "Connection",
             "X-Forwarded-For",
             "Cookie",

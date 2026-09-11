@@ -1,7 +1,7 @@
 # Scenario 6: presence-warn
 # ---------------------------------------------------------------------------
-# An origin header (X-Trace-Id) with presence: warnIfMissing.
-# Test sends a request WITHOUT X-Trace-Id -> the field is omitted from the
+# An origin header (X-Optional-Trace-Id) with presence: warnIfMissing.
+# Test sends a request WITHOUT X-Optional-Trace-Id -> the field is omitted from the
 # outbound request, a PluginLog alert is written, and the request PROCEEDS
 # (webhook still resolves successfully): warnIfMissing never escalates to a
 # failure.
@@ -56,7 +56,7 @@ spec:
         template: "GET"
       headers:
         origin:
-          - name: X-Trace-Id
+          - name: X-Optional-Trace-Id
             presence: warnIfMissing
     timeoutMs: 5000
     success:

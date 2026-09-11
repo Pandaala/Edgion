@@ -12,6 +12,10 @@ The user approved this design on 2026-09-10 while replacing the attachable
 TraceContext plugin. There is one RequestId plugin. RequestTraceId is the internal
 request-owned data structure; it is not another configurable plugin.
 
+On 2026-09-11 the user approved a flat access-log ID map and reserved
+`x-trace-id` for the canonical W3C identity. This supersedes the initial nested
+log shape and the initial preservation of conflicting inbound `x-trace-id`.
+
 Core propagation preserves valid incoming W3C context and creates context when it
 is missing or invalid. Generated roots have the sampled bit unset. This does not
 enable span creation/export or add a configurable trust/sampling policy. A remote
@@ -19,7 +23,8 @@ parent ID must not be reported as a gateway span ID.
 
 ## Composition contract
 
-- Core default x-trace-id preserves a valid destination value or uses the W3C ID.
+- Core default x-trace-id always uses the W3C ID, replacing conflicting incoming
+  values. Custom destinations named x-trace-id are rejected case-insensitively.
 - Global RequestId entries execute before normal request validation. Gateway
   entries execute early when TLS evidence or unique listener ownership identifies
   the owner; ambiguous shared listeners defer until canonical routing knows it.
@@ -28,16 +33,18 @@ parent ID must not be reported as a gateway span ID.
   RequestId is unsupported and rejected on Controller and Gateway.
 - Early sources/conditions must only use available parsed-header data and the
   canonical trace ID. Body/dye and late context dependencies are rejected.
-- A valid established destination value wins. Default disable applies only to
-  the implicit default, not to an explicitly configured custom rule of that name.
-  Suppression must survive backend echo and later response plugins until an
-  authorized RequestId rule adds the name again.
+- A valid established custom destination value wins. Default disable removes
+  the reserved wire header but retains W3C identity in the access log. Suppression
+  must survive backend echo and later response plugins; only a default-policy
+  patch can re-enable the reserved header.
 - Reconcile managed upstream and response headers from live request state at
   final write boundaries. Do not enqueue a stale response value during early
   execution. Do not automatically echo traceparent or tracestate.
 - At most 16 managed names include suppression tombstones; active values have a
   4096-byte aggregate limit. The usual single-ID case uses a Vec serialized as a
-  JSON map. Copied external values are masked in logs, not on the wire.
+  JSON map. Copied custom values follow the log masking policy without altering
+  wire values. The reserved key is emitted once from W3C state before the custom
+  entries, even when its header is disabled; it is not treated as a copied ID.
 
 The first-set rule applies to correlation headers, not a new W3C wire protocol.
 Removing a header at one gateway cannot prevent the next gateway from generating
@@ -56,8 +63,10 @@ empty/missing resolution results. The same resource attached at another scope is
 another occurrence. No execution flag belongs on a shared PluginRuntime and no
 whole-map snapshot is added.
 
-RequestInfo owns `trace_id.w3c.trace_id` and `trace_id.correlation_ids`; the latter
-is a map with log masking for copied client/header/context values. W3C trace IDs
+RequestInfo owns a flat `trace_id` map: `trace_id["x-trace-id"]` is the W3C ID,
+and other names are active custom IDs with log masking for copied
+client/header/context values. Header sources observe current managed headers;
+no original incoming x-trace-id snapshot is retained. W3C trace IDs
 and business IDs may repeat across requests and must not become unique storage
 keys. Gateway traffic observability remains in the canonical access log without
 new data-plane tracing macros.
@@ -79,7 +88,8 @@ Implementation sources are `request_trace_id/`, `ctx.rs`, `plugins/http/request_
 `plugins/runtime/plugin_runtime.rs`, `routes/http/proxy_http/`, and the shared
 RequestId schema/Controller attachment validators.
 
-Verification on 2026-09-11: 27 focused core/OTLP tests, 11 final RequestId/response
+Historical verification of the initial nested implementation on 2026-09-11:
+27 focused core/OTLP tests, 11 final RequestId/response
 regressions, nine early-dispatch tests, eight schema tests, three Controller
 attachment/reference tests, and six plugin CRD checks passed. The RequestId
 static integration suite passed all nine cases; RequestIdDynamic passed initial,
@@ -95,6 +105,20 @@ is not a claim of a full integration sweep, a live Kubernetes run, a live OTLP
 collector test or a physical multi-gateway deployment. A three-hop state-machine unit test covers sequential initialization and
 reconciliation with generated and inherited IDs; HTTP forwarding is covered by
 the echo-backend integration suite.
+
+Flat-map follow-up verification on 2026-09-11: 28 core tests, 12 RequestId/
+response regressions, eight schema tests and 92 test-client library tests passed.
+The shared topology passed RequestId (9), RequestIdDynamic, WebhookKeyGet (18),
+RequestMirror (11) and HeaderModifier (9). Transport reported 74 successful
+entries: 62 executed cases plus 12 existing explicit protocol-inapplicable
+skips. Workspace check/Clippy, format, repository guards and the OTLP shutdown
+script regression passed. Two independent reviewers reached LGTM after test
+consumer corrections. The initial runner stopped on unavailable macOS loopback
+aliases; LBRoundRobin was not run. The remaining suites used the existing shared
+start/stop scripts with 127.0.0.1 fixtures. A missing Filters/base Gateway was
+added to the test invocation before the successful rerun. No full sweep, live
+Kubernetes/OTLP collector, physical multi-gateway or cache-residue coverage is
+claimed. See `tasks/pending/request-trace-id/flat-access-log.md` for scope.
 
 D0069's old TraceContext documentation gap is superseded by removing its plugin
 and options, not by accepting its old trust/generation/sampling wording. The new

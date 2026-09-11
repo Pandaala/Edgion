@@ -52,7 +52,10 @@ impl H2MtlsPersistenceTestSuite {
                     let resp = match client
                         .get(&url)
                         .header("host", "h2-mtls-sp.example.com")
-                        .header("x-trace-id", "h2-mtls-handshake")
+                        .header(
+                            "traceparent",
+                            crate::access_log_client::traceparent_for_marker("h2-mtls-handshake"),
+                        )
                         .send()
                         .await
                     {
@@ -131,7 +134,10 @@ impl H2MtlsPersistenceTestSuite {
                     let resp1 = match client
                         .get(&url)
                         .header("host", "h2-mtls-sp.example.com")
-                        .header("x-trace-id", "h2-mtls-sp-init")
+                        .header(
+                            "traceparent",
+                            crate::access_log_client::traceparent_for_marker("h2-mtls-sp-init"),
+                        )
                         .send()
                         .await
                     {
@@ -181,7 +187,10 @@ impl H2MtlsPersistenceTestSuite {
                             .get(&url)
                             .header("host", "h2-mtls-sp.example.com")
                             .header("cookie", &cookie_value)
-                            .header("x-trace-id", format!("h2-mtls-sp-repeat-{}", i))
+                            .header(
+                                "traceparent",
+                                crate::access_log_client::traceparent_for_marker(format!("h2-mtls-sp-repeat-{}", i)),
+                            )
                             .send()
                             .await
                         {
@@ -257,7 +266,10 @@ impl H2MtlsPersistenceTestSuite {
                     let resp1 = match client
                         .get(&url)
                         .header("host", "h2-mtls-sp.example.com")
-                        .header("x-trace-id", "h2-mtls-version-init")
+                        .header(
+                            "traceparent",
+                            crate::access_log_client::traceparent_for_marker("h2-mtls-version-init"),
+                        )
                         .send()
                         .await
                     {
@@ -298,10 +310,10 @@ impl H2MtlsPersistenceTestSuite {
 
                     // Follow-up requests with the session cookie.
                     for i in 0..3u32 {
-                        let mut req = client
-                            .get(&url)
-                            .header("host", "h2-mtls-sp.example.com")
-                            .header("x-trace-id", format!("h2-mtls-version-{}", i));
+                        let mut req = client.get(&url).header("host", "h2-mtls-sp.example.com").header(
+                            "traceparent",
+                            crate::access_log_client::traceparent_for_marker(format!("h2-mtls-version-{}", i)),
+                        );
 
                         if let Some(ref cv) = cookie_value {
                             req = req.header("cookie", cv.clone());

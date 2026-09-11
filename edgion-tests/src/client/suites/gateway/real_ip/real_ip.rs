@@ -44,7 +44,12 @@ impl RealIpTestSuite {
                         "x-forwarded-for",
                         "203.0.113.1, 198.51.100.2, 192.168.1.1".parse().unwrap(),
                     );
-                    headers.insert("x-trace-id", "test-real-ip-xff".parse().unwrap());
+                    headers.insert(
+                        "traceparent",
+                        crate::access_log_client::traceparent_for_marker("test-real-ip-xff")
+                            .parse()
+                            .unwrap(),
+                    );
 
                     if let Some(host) = &ctx.http_host {
                         headers.insert("host", host.parse().unwrap());
@@ -152,7 +157,10 @@ impl RealIpTestSuite {
                     let client = reqwest::Client::builder().no_proxy().build().unwrap();
                     let url = format!("{}/headers", ctx.http_url());
 
-                    let mut request = client.get(&url).header("x-trace-id", "test-real-ip-direct");
+                    let mut request = client.get(&url).header(
+                        "traceparent",
+                        crate::access_log_client::traceparent_for_marker("test-real-ip-direct"),
+                    );
 
                     if let Some(host) = &ctx.http_host {
                         request = request.header("host", host);

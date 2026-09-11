@@ -18,25 +18,46 @@ impl TestSuite for Phase {
                 Box::pin(async move {
                     let start = Instant::now();
                     let result: Result<(), String> = async {
+                        let trace = uuid::Uuid::new_v4().simple().to_string();
                         let response = ctx
                             .http_client
                             .get(format!("{}/headers", ctx.http_url()))
                             .header("host", "request-id-dynamic.example.com")
+                            .header("traceparent", format!("00-{trace}-0123456789abcdef-00"))
+                            .header("access_log", "test_store")
                             .send()
                             .await
                             .map_err(|e| e.to_string())?;
+                        let status = response.status();
+                        let headers = response.headers().clone();
+                        let bytes = response.bytes().await.map_err(|e| e.to_string())?;
+                        let log = ctx
+                            .access_log_client()
+                            .get_access_log_with_retry(&trace, 30, 50)
+                            .await
+                            .map_err(|e| e.to_string())?;
+                        let ids = &log.data["request_info"]["trace_id"];
+                        if ids["x-trace-id"] != trace
+                            || !ids
+                                .as_object()
+                                .is_some_and(|map| map.values().all(serde_json::Value::is_string))
+                        {
+                            return Err("flat log map must retain W3C identity in every phase".into());
+                        }
                         if phase == "deleted" {
-                            return if response.status() == 404 && response.headers().contains_key("x-trace-id") {
+                            return if status == 404
+                                && headers.get("x-trace-id").and_then(|v| v.to_str().ok()) == Some(trace.as_str())
+                                && ids.get("x-dynamic-id").is_none()
+                            {
                                 Ok(())
                             } else {
                                 Err("route must be absent while core default survives".into())
                             };
                         }
-                        if response.status() != 200 {
-                            return Err(format!("expected 200, got {}", response.status()));
+                        if status != 200 {
+                            return Err(format!("expected 200, got {status}"));
                         }
-                        let headers = response.headers().clone();
-                        let body: serde_json::Value = response.json().await.map_err(|e| e.to_string())?;
+                        let body: serde_json::Value = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
                         let id = headers
                             .get("x-dynamic-id")
                             .and_then(|v| v.to_str().ok())
@@ -44,6 +65,9 @@ impl TestSuite for Phase {
                         let prefix = if phase == "initial" { "v1-" } else { "v2-" };
                         if !id.starts_with(prefix) || body["headers"]["x-dynamic-id"].as_str() != Some(id) {
                             return Err("generator generation or upstream/response identity differs".into());
+                        }
+                        if ids["x-dynamic-id"] != id {
+                            return Err("custom ID differs between response and access log".into());
                         }
                         let default_expected = phase == "initial";
                         if headers.contains_key("x-trace-id") != default_expected

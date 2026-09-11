@@ -1904,7 +1904,10 @@ impl ExtProcTestSuite {
                         .header("x-ext-proc-case-id", &case_id)
                         .header("x-ext-proc-test-mode", "interop")
                         .header("x-expected-body-sha256", sha256_hex(processed))
-                        .header("x-trace-id", &case_id)
+                        .header(
+                            "traceparent",
+                            crate::access_log_client::traceparent_for_marker(&case_id),
+                        )
                         .header("access_log", "test_store")
                         .timeout(EXTERNAL_REQUEST_TIMEOUT)
                         .body(original.to_vec())
@@ -2134,7 +2137,10 @@ impl ExtProcTestSuite {
                         .header("host", EXTERNAL_STREAMED_HOST)
                         .header("x-ext-proc-case-id", &case_id)
                         .header("x-ext-proc-test-mode", "interop")
-                        .header("x-trace-id", &case_id)
+                        .header(
+                            "traceparent",
+                            crate::access_log_client::traceparent_for_marker(&case_id),
+                        )
                         .header("access_log", "test_store")
                         .timeout(EXTERNAL_REQUEST_TIMEOUT)
                         .body(original.to_vec())

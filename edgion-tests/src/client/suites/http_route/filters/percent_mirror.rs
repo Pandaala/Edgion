@@ -39,7 +39,11 @@ async fn poll_mirror_received(
     retries: u32,
     interval_ms: u64,
 ) -> Result<Vec<Value>, String> {
-    let direct_url = format!("http://{}:30001/mirror/query/{}", mirror_server_host(ctx), trace_id);
+    let direct_url = format!(
+        "http://{}:30001/mirror/query/{}",
+        mirror_server_host(ctx),
+        crate::access_log_client::trace_id_for_marker(&trace_id)
+    );
     let client = &ctx.http_client;
 
     for attempt in 0..=retries {
@@ -99,7 +103,10 @@ impl PercentMirrorTestSuite {
                         .http_client
                         .get(&url)
                         .header("host", HOST_100)
-                        .header("x-trace-id", &trace_id)
+                        .header(
+                            "traceparent",
+                            crate::access_log_client::traceparent_for_marker(&trace_id),
+                        )
                         .send()
                         .await
                     {
@@ -165,7 +172,10 @@ impl PercentMirrorTestSuite {
                         .http_client
                         .get(&url)
                         .header("host", HOST_0)
-                        .header("x-trace-id", &trace_id)
+                        .header(
+                            "traceparent",
+                            crate::access_log_client::traceparent_for_marker(&trace_id),
+                        )
                         .send()
                         .await
                     {
@@ -180,7 +190,11 @@ impl PercentMirrorTestSuite {
 
                     sleep(Duration::from_millis(800)).await;
 
-                    let direct_url = format!("http://{}:30001/mirror/query/{}", mirror_server_host(&ctx), trace_id);
+                    let direct_url = format!(
+                        "http://{}:30001/mirror/query/{}",
+                        mirror_server_host(&ctx),
+                        crate::access_log_client::trace_id_for_marker(&trace_id)
+                    );
                     match ctx.http_client.get(&direct_url).send().await {
                         Ok(resp) => match resp.json::<Value>().await {
                             Ok(body) => {
@@ -228,7 +242,7 @@ impl PercentMirrorTestSuite {
                             .http_client
                             .get(&url)
                             .header("host", HOST_FRAC50)
-                            .header("x-trace-id", &tid)
+                            .header("traceparent", crate::access_log_client::traceparent_for_marker(&tid))
                             .send()
                             .await;
                     }
@@ -237,7 +251,11 @@ impl PercentMirrorTestSuite {
 
                     let mut received = 0u32;
                     for tid in &trace_ids {
-                        let direct = format!("http://{}:30001/mirror/query/{}", mirror_server_host(&ctx), tid);
+                        let direct = format!(
+                            "http://{}:30001/mirror/query/{}",
+                            mirror_server_host(&ctx),
+                            crate::access_log_client::trace_id_for_marker(&tid)
+                        );
                         if let Ok(resp) = ctx.http_client.get(&direct).send().await {
                             if let Ok(body) = resp.json::<Value>().await {
                                 if body["found"].as_bool().unwrap_or(false) {
@@ -292,7 +310,7 @@ impl PercentMirrorTestSuite {
                             .http_client
                             .get(&url)
                             .header("host", HOST_20)
-                            .header("x-trace-id", &tid)
+                            .header("traceparent", crate::access_log_client::traceparent_for_marker(&tid))
                             .send()
                             .await;
                     }
@@ -301,7 +319,11 @@ impl PercentMirrorTestSuite {
 
                     let mut received = 0u32;
                     for tid in &trace_ids {
-                        let direct = format!("http://{}:30001/mirror/query/{}", mirror_server_host(&ctx), tid);
+                        let direct = format!(
+                            "http://{}:30001/mirror/query/{}",
+                            mirror_server_host(&ctx),
+                            crate::access_log_client::trace_id_for_marker(&tid)
+                        );
                         if let Ok(resp) = ctx.http_client.get(&direct).send().await {
                             if let Ok(body) = resp.json::<Value>().await {
                                 if body["found"].as_bool().unwrap_or(false) {

@@ -4,7 +4,7 @@
 
 网关默认处理 W3C `traceparent` 和 `tracestate`，不需要挂载插件。合法入站上下文保持不变；缺失或无效时创建新上下文，生成时 sampled 位为 false。上下文传播不会自动开启 span 记录或 OTLP 导出。
 
-默认保留合法的入站 `x-trace-id`，缺失时使用 W3C trace ID（32 位小写十六进制），向上游转发并回传响应。已有自定义 ID 可以与 W3C ID 不同。这些 ID 都不能用于身份认证。
+`x-trace-id` 是保留名称，始终表示 W3C trace ID（32 位小写十六进制）。默认向上游转发并回传响应，覆盖与 W3C ID 不同的入站 `x-trace-id`。业务关联 ID 使用其他头名称。这些 ID 都不能用于身份认证。
 
 只有一个 **RequestId 插件**，用于调整默认 ID 或增加业务关联 ID。`RequestTraceId` 是内部请求数据结构，不是插件或资源。旧 TraceContext 插件已移除。
 
@@ -64,7 +64,7 @@ spec:
 
 | 参数 | 类型 | 默认值 | 说明 |
 |---|---|---|---|
-| `defaultId.enabled` | Boolean | 保持前层设置；初始 true | 开启或关闭隐式 `x-trace-id` |
+| `defaultId.enabled` | Boolean | 保持前层设置；初始 true | 开启或关闭默认 `x-trace-id` 头；日志仍保留标准 ID |
 | `defaultId.forwardUpstream` | Boolean | 保持前层设置；初始 true | 向上游转发隐式默认 ID |
 | `defaultId.echoResponse` | Boolean | 保持前层设置；初始 true | 回传隐式默认 ID |
 | `ids` | Array | 空 | 按顺序执行的自定义规则 |
@@ -92,7 +92,7 @@ spec:
 
 路由规则在普通请求阶段按插件顺序执行，与已有 ID 增量合并。前面的插件提前拒绝后，后面的路由规则不会执行。不支持 BackendRef 挂载。早期来源仅支持 header/traceId，条件仅支持基于 header/method/traceId 的键条件；body、dye、路由上下文等不可用条件会被拒绝。
 
-设置 `defaultId.enabled: false` 可去掉隐式默认值，再用 `ids` 添加自己的 ID，也允许显式配置 `x-trace-id`。后续关闭隐式默认值，不会删除已显式配置的自定义规则。关闭后的默认 ID 不再转发、回传或记录到关联 ID 日志，上游回显也不能恢复它。删除只作用于当前网关：下一跳看到头缺失时仍可能生成自己的默认 ID。
+设置 `defaultId.enabled: false` 可关闭默认头，再用 `ids` 添加其他名称的业务 ID。自定义目标名 `x-trace-id` 不区分大小写，Controller 和 Gateway 都会拒绝。关闭后不再向上游转发或响应回传默认头，上游回显也不能恢复它；日志仍保留标准 W3C ID。关闭只作用于当前网关，下一跳仍可根据传播的 W3C 上下文输出默认头。Header 来源读取当前受管理的头，不保留原始入站 `x-trace-id` 快照；业务 ID 应通过不同名称传入。
 
 ```yaml
 apiVersion: edgion.io/v1
@@ -119,7 +119,13 @@ spec:
 
 `echoResponse: false` 会移除该受管理的响应头，包括上游回显；`forwardUpstream: false` 会从上游请求中移除它。两者都不会关闭 W3C 传播。
 
-访问日志包含 `request_info.trace_id.w3c.trace_id` 和按头名称组织的 JSON 对象 `request_info.trace_id.correlation_ids`。复制的客户端/header/ctx 值在日志中脱敏，转发和响应值不变。生成值与标准 W3C ID 可用于关联；自定义值脱敏时，可按 W3C 字段查找。OTLP 日志导出仍需单独配置。
+访问日志中的 `request_info.trace_id` 是一个扁平 JSON 对象：
+
+```json
+{"x-trace-id":"4bf92f3577b34da6a3ce929d0e0e4736","x-order-id":"order-123"}
+```
+
+保留项 `x-trace-id` 始终是标准 W3C ID，即使默认头被关闭也会记录。其他项是活动业务 ID；复制的客户端/header/ctx 值按配置的日志模式脱敏，线上转发和响应值不变。生成值可用于关联。标准链路按 `request_info.trace_id["x-trace-id"]` 查找。OTLP 直接使用内部类型化 W3C ID，日志导出仍需单独配置。
 
 ## 相关链接
 

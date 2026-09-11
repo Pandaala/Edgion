@@ -74,7 +74,6 @@ struct CorrelationId {
     value: Option<HeaderValue>,
     forward_upstream: bool,
     echo_response: bool,
-    implicit_default: bool,
     sensitive: bool,
 }
 
@@ -140,18 +139,13 @@ impl RequestTraceId {
         });
         self.default_forward = true;
         self.default_echo = true;
-        let incoming = single_header(headers, DEFAULT_HEADER).filter(valid_value);
-        let sensitive = incoming.is_some();
-        let value = incoming.unwrap_or_else(|| {
-            HeaderValue::from_str(self.standard_trace_id().unwrap_or_default()).expect("validated trace ID")
-        });
+        let value = HeaderValue::from_str(self.standard_trace_id().unwrap_or_default()).expect("validated trace ID");
         self.correlation_ids.push(CorrelationId {
             key: HeaderName::from_static(DEFAULT_HEADER),
             value: Some(value),
             forward_upstream: true,
             echo_response: true,
-            implicit_default: true,
-            sensitive,
+            sensitive: false,
         });
     }
 
@@ -174,7 +168,7 @@ impl RequestTraceId {
             .and_then(|value| value.to_str().ok())
     }
 
-    /// Apply only explicitly supplied fields; explicit replacement rules are unaffected.
+    /// Patch default header emission; the canonical log identity is always retained.
     pub fn apply_default_patch(&mut self, patch: &DefaultIdConfig) {
         if self.w3c.is_none() {
             return;
@@ -188,9 +182,6 @@ impl RequestTraceId {
         let Some(index) = self.correlation_ids.iter().position(|id| id.key == DEFAULT_HEADER) else {
             return;
         };
-        if !self.correlation_ids[index].implicit_default {
-            return;
-        }
         self.correlation_ids[index].forward_upstream = self.default_forward;
         self.correlation_ids[index].echo_response = self.default_echo;
         match patch.enabled {
@@ -246,14 +237,11 @@ impl RequestTraceId {
         } else {
             ApplyOutcome::Absent
         };
-        let implicit_default =
-            value.is_none() && index.is_some_and(|index| self.correlation_ids[index].implicit_default);
         let id = CorrelationId {
             key: rule.header.clone(),
             value,
             forward_upstream: rule.forward_upstream,
             echo_response: rule.echo_response,
-            implicit_default,
             sensitive,
         };
         if let Some(index) = index {
@@ -461,32 +449,22 @@ impl Serialize for RequestTraceId {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         let mut map = serializer.serialize_map(None)?;
         if let Some(id) = self.standard_trace_id() {
-            #[derive(Serialize)]
-            struct W3c<'a> {
-                trace_id: &'a str,
-            }
-            map.serialize_entry("w3c", &W3c { trace_id: id })?;
+            map.serialize_entry(DEFAULT_HEADER, id)?;
         }
-        if self.correlation_ids.iter().any(|id| id.value.is_some()) {
-            struct Ids<'a>(&'a [CorrelationId]);
-            impl Serialize for Ids<'_> {
-                fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-                    let mut map = serializer.serialize_map(None)?;
-                    for id in self.0 {
-                        if let Some(value) = id.value.as_ref().and_then(|value| value.to_str().ok()) {
-                            if id.sensitive {
-                                edgion_resources::sensitive::apply_sensitive(value, |masked| {
-                                    map.serialize_entry(id.key.as_str(), masked)
-                                })?;
-                            } else {
-                                map.serialize_entry(id.key.as_str(), value)?;
-                            }
-                        }
-                    }
-                    map.end()
+        for id in &self.correlation_ids {
+            // The reserved key is emitted from W3C state even when its wire header is disabled.
+            if id.key == DEFAULT_HEADER {
+                continue;
+            }
+            if let Some(value) = id.value.as_ref().and_then(|value| value.to_str().ok()) {
+                if id.sensitive {
+                    edgion_resources::sensitive::apply_sensitive(value, |masked| {
+                        map.serialize_entry(id.key.as_str(), masked)
+                    })?;
+                } else {
+                    map.serialize_entry(id.key.as_str(), value)?;
                 }
             }
-            map.serialize_entry("correlation_ids", &Ids(&self.correlation_ids))?;
         }
         map.end()
     }
@@ -509,7 +487,7 @@ mod tests {
     }
 
     #[test]
-    fn initializes_once_and_preserves_business_id() {
+    fn initializes_once_and_replaces_conflicting_default_with_w3c() {
         let mut state = RequestTraceId::default();
         assert!(state.is_empty());
         assert_eq!(serde_json::to_value(&state).unwrap(), serde_json::json!({}));
@@ -518,7 +496,7 @@ mod tests {
         headers.insert("x-trace-id", HeaderValue::from_static("legacy-123"));
         state.initialize(&headers);
         state.initialize(&HeaderMap::new());
-        assert_eq!(state.correlation_id("X-Trace-Id"), Some("legacy-123"));
+        assert_eq!(state.correlation_id("X-Trace-Id"), state.standard_trace_id());
         assert_eq!(state.standard_trace_id(), Some("4bf92f3577b34da6a3ce929d0e0e4736"));
         assert_eq!(
             state.typed_trace_id().map(|id| lower_hex(&id)).as_deref(),
@@ -526,10 +504,15 @@ mod tests {
         );
         state.reconcile_request(&mut headers);
         assert_eq!(headers["traceparent"], PARENT);
+        assert_eq!(headers[DEFAULT_HEADER], state.standard_trace_id().unwrap());
+        assert_eq!(
+            serde_json::to_value(&state).unwrap()[DEFAULT_HEADER],
+            state.standard_trace_id().unwrap()
+        );
     }
 
     #[test]
-    fn three_gateway_hops_preserve_generated_and_inherited_ids() {
+    fn three_gateway_hops_preserve_w3c_and_first_custom_id() {
         for incoming_default in [None, Some("legacy-business-id")] {
             let mut wire = HeaderMap::new();
             wire.insert("traceparent", HeaderValue::from_static(PARENT));
@@ -550,10 +533,7 @@ mod tests {
                 let expected_custom = first_custom.get_or_insert_with(|| wire["x-order-id"].clone());
                 assert!(expected_custom.to_str().unwrap().starts_with("first-"));
                 assert_eq!(&wire["x-order-id"], expected_custom);
-                assert_eq!(
-                    wire[DEFAULT_HEADER],
-                    incoming_default.unwrap_or("4bf92f3577b34da6a3ce929d0e0e4736")
-                );
+                assert_eq!(wire[DEFAULT_HEADER], "4bf92f3577b34da6a3ce929d0e0e4736");
                 assert_eq!(wire["traceparent"], PARENT);
                 assert_eq!(wire["tracestate"], "vendor=state");
 
@@ -586,7 +566,7 @@ mod tests {
     }
 
     #[test]
-    fn suppression_survives_stale_backend_and_explicit_replacement() {
+    fn disabled_default_suppresses_wire_headers_but_retains_log_identity() {
         let mut state = state();
         let patch: DefaultIdConfig = serde_json::from_value(serde_json::json!({"enabled":false})).unwrap();
         state.apply_default_patch(&patch);
@@ -594,18 +574,18 @@ mod tests {
         headers.insert("x-trace-id", HeaderValue::from_static("stale"));
         state.reconcile_response(&mut headers);
         assert!(!headers.contains_key("x-trace-id"));
-        let replacement = rule(serde_json::json!({"header":"x-trace-id","generateWhenMissing":false}));
+        state.reconcile_request(&mut headers);
+        assert!(!headers.contains_key(DEFAULT_HEADER));
+        assert_eq!(headers["traceparent"], PARENT);
         assert_eq!(
-            state.apply_rule(
-                &replacement,
-                Some(HeaderValue::from_static("stale")),
-                Some(HeaderValue::from_static("replacement"))
-            ),
-            ApplyOutcome::Established
+            serde_json::to_value(&state).unwrap(),
+            serde_json::json!({
+                "x-trace-id": "4bf92f3577b34da6a3ce929d0e0e4736"
+            })
         );
         state.apply_default_patch(&patch);
         state.reconcile_response(&mut headers);
-        assert_eq!(headers["x-trace-id"], "replacement");
+        assert!(!headers.contains_key(DEFAULT_HEADER));
         assert!(state.standard_trace_id().is_some());
     }
 
@@ -722,14 +702,33 @@ mod tests {
 
     #[test]
     fn serialization_uses_named_map_and_excludes_wire_context() {
-        let state = state();
+        let mut state = state();
+        let custom = rule(serde_json::json!({"header":"x-order-id","source":{"type":"traceId"}}));
+        state.apply_rule(
+            &custom,
+            None,
+            Some(HeaderValue::from_static("4bf92f3577b34da6a3ce929d0e0e4736")),
+        );
         let serialized = serde_json::to_value(&state).unwrap();
         assert_eq!(
-            serialized["correlation_ids"]["x-trace-id"],
-            state.standard_trace_id().unwrap()
+            serialized,
+            serde_json::json!({
+                "x-trace-id": "4bf92f3577b34da6a3ce929d0e0e4736",
+                "x-order-id": "4bf92f3577b34da6a3ce929d0e0e4736"
+            })
         );
-        assert!(serialized["correlation_ids"].is_object());
-        assert_eq!(serialized["w3c"].as_object().unwrap().len(), 1);
+        assert_eq!(
+            serde_json::to_string(&state).unwrap().matches("\"x-trace-id\"").count(),
+            1
+        );
+    }
+
+    #[test]
+    fn compiled_rule_rejects_reserved_default_name() {
+        for header in ["x-trace-id", "X-Trace-ID"] {
+            let config: RequestIdRule = serde_json::from_value(serde_json::json!({"header":header})).unwrap();
+            assert!(CompiledRequestIdRule::new(&config).is_err());
+        }
     }
 
     #[test]

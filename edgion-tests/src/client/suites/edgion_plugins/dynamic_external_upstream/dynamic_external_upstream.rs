@@ -164,7 +164,10 @@ impl DynamicExternalUpstreamTestSuite {
                         .get(&url)
                         .header("host", SKIP_HOST)
                         .header("X-Target-Region", "eu")
-                        .header("x-trace-id", &trace_id)
+                        .header(
+                            "traceparent",
+                            crate::access_log_client::traceparent_for_marker(&trace_id),
+                        )
                         .header("access_log", "test_store")
                         .send()
                         .await
@@ -213,7 +216,10 @@ impl DynamicExternalUpstreamTestSuite {
                         .get(&url)
                         .header("host", SKIP_HOST)
                         .header("X-Target-Region", "zz-unknown")
-                        .header("x-trace-id", &trace_id)
+                        .header(
+                            "traceparent",
+                            crate::access_log_client::traceparent_for_marker(&trace_id),
+                        )
                         .header("access_log", "test_store")
                         .send()
                         .await
@@ -378,7 +384,10 @@ impl DynamicExternalUpstreamTestSuite {
                         .get(&url)
                         .header("host", REGEX_HOST)
                         .header("X-Cluster-Target", "cluster=us-west;priority=high")
-                        .header("x-trace-id", &trace_id)
+                        .header(
+                            "traceparent",
+                            crate::access_log_client::traceparent_for_marker(&trace_id),
+                        )
                         .header("access_log", "test_store")
                         .send()
                         .await
@@ -461,7 +470,10 @@ impl DynamicExternalUpstreamTestSuite {
                         .get(&url)
                         .header("host", REGEX_HOST)
                         .header("X-Cluster-Target", "cluster=eu-central;priority=low")
-                        .header("x-trace-id", &trace_id)
+                        .header(
+                            "traceparent",
+                            crate::access_log_client::traceparent_for_marker(&trace_id),
+                        )
                         .header("access_log", "test_store")
                         .send()
                         .await
@@ -512,7 +524,10 @@ impl DynamicExternalUpstreamTestSuite {
                         .get(&url)
                         .header("host", SKIP_HOST)
                         .header("X-Target-Region", "ap")
-                        .header("x-trace-id", &trace_id)
+                        .header(
+                            "traceparent",
+                            crate::access_log_client::traceparent_for_marker(&trace_id),
+                        )
                         .header("access_log", "test_store")
                         .send()
                         .await

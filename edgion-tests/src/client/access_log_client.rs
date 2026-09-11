@@ -10,6 +10,56 @@ use anyhow::{anyhow, Result};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 
+/// Convert a readable test marker into a stable, nonzero W3C trace ID.
+/// Existing valid IDs are unchanged, so callers may normalize more than once.
+pub fn trace_id_for_marker(marker: impl AsRef<str>) -> String {
+    use sha2::{Digest, Sha256};
+    let marker = marker.as_ref();
+    if marker.len() == 32
+        && marker
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        && marker.bytes().any(|byte| byte != b'0')
+    {
+        return marker.to_owned();
+    }
+    let digest = Sha256::digest(marker.as_bytes());
+    let mut id = format!("{:032x}", u128::from_be_bytes(digest[..16].try_into().unwrap()));
+    if id.bytes().all(|byte| byte == b'0') {
+        id.replace_range(31..32, "1");
+    }
+    id
+}
+
+/// Carry a test marker through the gateway's canonical W3C identity path.
+pub fn traceparent_for_marker(marker: impl AsRef<str>) -> String {
+    format!("00-{}-0123456789abcdef-00", trace_id_for_marker(marker))
+}
+
+#[cfg(test)]
+mod marker_tests {
+    use super::{trace_id_for_marker, traceparent_for_marker};
+
+    #[test]
+    fn markers_preserve_repeated_lookup_and_valid_w3c_identity() {
+        let id = trace_id_for_marker("repeat-request-marker");
+        assert_eq!(id, trace_id_for_marker("repeat-request-marker"));
+        assert_eq!(id, trace_id_for_marker(&id));
+        assert_ne!(id, trace_id_for_marker("another-request-marker"));
+        assert_eq!(id.len(), 32);
+        assert!(id
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase()));
+        assert_eq!(&traceparent_for_marker("repeat-request-marker")[3..35], id);
+        assert_ne!(
+            trace_id_for_marker("00000000000000000000000000000000"),
+            "00000000000000000000000000000000"
+        );
+        let existing = "4bf92f3577b34da6a3ce929d0e0e4736";
+        assert_eq!(trace_id_for_marker(existing), existing);
+    }
+}
+
 /// Access log entry returned from the gateway
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AccessLogEntry {
@@ -287,8 +337,9 @@ impl AccessLogClient {
 
     /// Get access log by trace_id
     ///
-    /// The trace_id should match the `x-trace-id` header sent with the request.
+    /// Accepts a W3C trace ID or the marker supplied to `traceparent_for_marker`.
     pub async fn get_access_log(&self, trace_id: &str) -> Result<AccessLogEntry> {
+        let trace_id = trace_id_for_marker(trace_id);
         let url = format!("{}/api/v1/testing/access-log/{}", self.base_url, trace_id);
         let response = self.authed(self.client.get(&url)).send().await?;
 
@@ -334,6 +385,7 @@ impl AccessLogClient {
 
     /// Delete access log by trace_id
     pub async fn delete_access_log(&self, trace_id: &str) -> Result<bool> {
+        let trace_id = trace_id_for_marker(trace_id);
         let url = format!("{}/api/v1/testing/access-log/{}", self.base_url, trace_id);
         let response = self.authed(self.client.delete(&url)).send().await?;
 

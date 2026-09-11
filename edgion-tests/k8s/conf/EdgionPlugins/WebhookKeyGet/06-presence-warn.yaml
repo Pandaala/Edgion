@@ -1,6 +1,6 @@
 # Scenario 6: presence-warn (K8s mode)
 # ---------------------------------------------------------------------------
-# An origin header (X-Trace-Id) with presence: warnIfMissing. Missing field is
+# An origin header (X-Optional-Trace-Id) with presence: warnIfMissing. Missing field is
 # omitted from the outbound request but the webhook still resolves.
 # Backend via Service (real selector) + auto EndpointSlice.
 apiVersion: v1
@@ -38,7 +38,7 @@ spec:
         template: "GET"
       headers:
         origin:
-          - name: X-Trace-Id
+          - name: X-Optional-Trace-Id
             presence: warnIfMissing
     timeoutMs: 5000
     success:

@@ -2,7 +2,7 @@
 //
 // Tests access log data captured by --integration-testing-mode via the Access Log Store.
 // Instead of reading X-Debug-Access-Log response header, tests now:
-// 1. Send a request with a unique x-trace-id header
+// 1. Send a request with a unique W3C traceparent derived from a test marker
 // 2. Query the Access Log Store Admin API with that trace_id
 // 3. Verify the complete access log JSON structure
 //
@@ -74,7 +74,10 @@ async fn send_and_fetch_log(ctx: &TestContext, trace_id: &str, host: &str, path:
     let response = client
         .get(&url)
         .header("host", host)
-        .header("x-trace-id", trace_id)
+        .header(
+            "traceparent",
+            crate::access_log_client::traceparent_for_marker(trace_id),
+        )
         .header("access_log", "test_store")
         .send()
         .await

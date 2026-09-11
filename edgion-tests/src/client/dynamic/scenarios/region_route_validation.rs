@@ -384,7 +384,7 @@ async fn check_traffic(ctx: &TestContext, name: &str, phase: Phase, small: bool)
         .get(format!("{}/echo", ctx.http_url()))
         .header("host", format!("{name}.example.com"))
         .header("X-Region-Hash", "10")
-        .header("x-trace-id", &trace)
+        .header("traceparent", crate::access_log_client::traceparent_for_marker(&trace))
         .header("access_log", "test_store")
         .timeout(Duration::from_secs(3));
     if matches!(phase, Phase::OneHop | Phase::Chain) {

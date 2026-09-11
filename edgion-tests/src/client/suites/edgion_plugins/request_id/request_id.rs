@@ -3,8 +3,18 @@ use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use serde_json::Value;
 use std::time::Instant;
 
-const TRACE: &str = "4bf92f3577b34da6a3ce929d0e0e4736";
-const PARENT: &str = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
+async fn check_log(ctx: &TestContext, trace: &str) -> Result<Value, String> {
+    let entry = ctx
+        .access_log_client()
+        .get_access_log_with_retry(trace, 30, 50)
+        .await
+        .map_err(|e| e.to_string())?;
+    let ids = &entry.data["request_info"]["trace_id"];
+    if ids["x-trace-id"] != trace || !ids.as_object().is_some_and(|map| map.values().all(Value::is_string)) {
+        return Err(format!("expected flat ID map with canonical W3C identity: {ids}"));
+    }
+    Ok(ids.clone())
+}
 
 pub struct RequestIdPluginTestSuite;
 
@@ -30,6 +40,8 @@ fn case(name: &'static str, mode: &'static str) -> TestCase {
             Box::pin(async move {
                 let start = Instant::now();
                 let result: Result<(), String> = async {
+                    let trace = uuid::Uuid::new_v4().simple().to_string();
+                    let incoming_parent = format!("00-{trace}-00f067aa0ba902b7-01");
                     let host = match mode {
                         "custom" => "request-id-custom.example.com",
                         "multiple" | "source" => "request-id-multiple.example.com",
@@ -40,10 +52,11 @@ fn case(name: &'static str, mode: &'static str) -> TestCase {
                     let mut request = ctx
                         .http_client
                         .get(format!("{}/headers", ctx.http_url()))
+                        .header("access_log", "test_store")
                         .header("host", host);
                     if matches!(mode, "passthrough" | "multiple" | "source" | "custom") {
                         request = request
-                            .header("traceparent", PARENT)
+                            .header("traceparent", &incoming_parent)
                             .header("tracestate", "vendor=value");
                     }
                     if mode == "passthrough" {
@@ -66,7 +79,9 @@ fn case(name: &'static str, mode: &'static str) -> TestCase {
                             .header("tracestate", "vendor=orphan");
                     }
                     if mode == "duplicate" {
-                        request = request.header("traceparent", PARENT).header("traceparent", PARENT);
+                        request = request
+                            .header("traceparent", &incoming_parent)
+                            .header("traceparent", &incoming_parent);
                     }
                     let response = request.send().await.map_err(|e| e.to_string())?;
                     let status = response.status().as_u16();
@@ -83,6 +98,9 @@ fn case(name: &'static str, mode: &'static str) -> TestCase {
                                 "early 404 must retain default ID: status={status}, id={response_id:?}"
                             ));
                         }
+                        let trace = response_id.unwrap().to_owned();
+                        response.bytes().await.map_err(|e| e.to_string())?;
+                        check_log(&ctx, &trace).await?;
                         return Ok(());
                     }
                     if status != 200 {
@@ -96,7 +114,7 @@ fn case(name: &'static str, mode: &'static str) -> TestCase {
                         return Err(format!("invalid parent: {parent}"));
                     }
                     if matches!(mode, "passthrough" | "multiple" | "source" | "custom") {
-                        if parent != PARENT || get("tracestate") != Some("vendor=value") {
+                        if parent != incoming_parent || get("tracestate") != Some("vendor=value") {
                             return Err("valid W3C context changed".into());
                         }
                     } else if !parent.ends_with("-00") {
@@ -105,10 +123,11 @@ fn case(name: &'static str, mode: &'static str) -> TestCase {
                     if matches!(mode, "malformed" | "duplicate") && get("tracestate").is_some() {
                         return Err("orphan tracestate survived".into());
                     }
+                    let ids = check_log(&ctx, &parent[3..35]).await?;
                     match mode {
                         "passthrough" => {
-                            if response_id != Some("first-gateway-id") || get("x-trace-id") != response_id {
-                                return Err("existing correlation ID must survive independently of W3C trace ID".into());
+                            if response_id != Some(trace.as_str()) || get("x-trace-id") != response_id {
+                                return Err("conflicting inbound x-trace-id must be replaced by the W3C ID".into());
                             }
                         }
                         "custom" => {
@@ -122,10 +141,13 @@ fn case(name: &'static str, mode: &'static str) -> TestCase {
                             if !order.starts_with("order-") || order.len() != 38 || get("x-order-id") != Some(order) {
                                 return Err("custom MD5 prefix/forwarding differs".into());
                             }
+                            if ids["x-order-id"] != order {
+                                return Err("generated custom ID missing from flat log map".into());
+                            }
                         }
                         "multiple" | "source" => {
-                            if get("x-otel-id") != Some(TRACE)
-                                || headers.get("x-otel-id").and_then(|v| v.to_str().ok()) != Some(TRACE)
+                            if get("x-otel-id") != Some(trace.as_str())
+                                || headers.get("x-otel-id").and_then(|v| v.to_str().ok()) != Some(trace.as_str())
                             {
                                 return Err("traceId source differs".into());
                             }
@@ -173,7 +195,7 @@ impl TestSuite for RequestIdPluginTestSuite {
     fn test_cases(&self) -> Vec<TestCase> {
         vec![
             case("request_id_default", "default"),
-            case("request_id_first_gateway_wins", "passthrough"),
+            case("request_id_conflicting_default_uses_w3c", "passthrough"),
             case("request_id_malformed_w3c", "malformed"),
             case("request_id_duplicate_w3c", "duplicate"),
             case("request_id_custom_no_generate", "nogen"),

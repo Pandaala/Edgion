@@ -89,7 +89,12 @@ async fn grpc_call(ctx: &TestContext, trace: &str, reset_first: Option<usize>) -
     });
     let metadata = request.metadata_mut();
     metadata.insert("grpc-timeout", CLIENT_TIMEOUT.parse().unwrap());
-    metadata.insert("x-trace-id", trace.parse().map_err(|e| format!("trace metadata: {e}"))?);
+    metadata.insert(
+        "traceparent",
+        crate::access_log_client::traceparent_for_marker(&trace)
+            .parse()
+            .map_err(|e| format!("trace metadata: {e}"))?,
+    );
     metadata.insert("x-up-behavior", "grpc-say-hello".parse().unwrap());
     metadata.insert("x-up-reset-code", "REFUSED_STREAM".parse().unwrap());
     if let Some(count) = reset_first {
@@ -266,7 +271,10 @@ impl GrpcTimeoutRewriteWireTestSuite {
                         .header("host", GRPC_WEB_HOST)
                         .header("content-type", "application/grpc-web+proto")
                         .header("grpc-timeout", CLIENT_TIMEOUT)
-                        .header("x-trace-id", probe.trace_id())
+                        .header(
+                            "traceparent",
+                            crate::access_log_client::traceparent_for_marker(probe.trace_id()),
+                        )
                         .header("x-up-behavior", "grpc-say-hello")
                         .body(frame_request(&HelloRequest {
                             name: "TimeoutWire".to_string(),

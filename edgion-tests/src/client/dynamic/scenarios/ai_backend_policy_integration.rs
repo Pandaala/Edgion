@@ -474,7 +474,10 @@ async fn capture_retry_request(ctx: &ScenarioCtx, fixture: &str) -> Result<reqwe
     request_client_with_timeout(ctx, Duration::from_secs(135))
         .await?
         .post(format!("http://{HOST}:{AI_GATEWAY_PORT}/v1/chat/completions"))
-        .header("x-trace-id", uuid::Uuid::new_v4().to_string())
+        .header(
+            "traceparent",
+            crate::access_log_client::traceparent_for_marker(uuid::Uuid::new_v4().to_string()),
+        )
         .header("x-resilience-fixture-id", fixture)
         .json(&json!({"model": "fixture-model", "stream": false, "messages": []}))
         .send()
@@ -721,7 +724,7 @@ async fn assert_client_abort(ctx: &ScenarioCtx, provider_http_base: &str) -> Res
         .post(format!(
             "http://{HOST}:{AI_GATEWAY_PORT}/v1/chat/completions?mock_mode=long"
         ))
-        .header("x-trace-id", &trace)
+        .header("traceparent", crate::access_log_client::traceparent_for_marker(&trace))
         .json(&json!({"model": "fixture-model", "stream": true, "messages": []}))
         .send()
         .await
@@ -743,7 +746,10 @@ async fn assert_client_abort(ctx: &ScenarioCtx, provider_http_base: &str) -> Res
     let observation_bases = provider_control_bases(provider_http_base)?;
     wait_for("provider observes downstream client abort", || async {
         for base in &observation_bases {
-            let url = format!("{base}/ai-long-stream/observation/{trace}");
+            let url = format!(
+                "{base}/ai-long-stream/observation/{}",
+                crate::access_log_client::trace_id_for_marker(&trace)
+            );
             if let Ok(response) = ctx.test_ctx.http_client.get(&url).send().await {
                 if let Ok(value) = response.json::<Value>().await {
                     if value.pointer("/observation/upstream_cancelled") == Some(&Value::Bool(true)) {

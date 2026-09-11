@@ -132,7 +132,10 @@ async fn post_inner(
     }
     if let Some(trace_id) = trace_id {
         request = request
-            .header("x-trace-id", trace_id)
+            .header(
+                "traceparent",
+                crate::access_log_client::traceparent_for_marker(trace_id),
+            )
             .header("access_log", "test_store");
     }
     request
@@ -196,7 +199,10 @@ async fn post_with_quota_identity_on_host(
         .json(&body);
     if let Some(trace_id) = trace_id {
         request = request
-            .header("x-trace-id", trace_id)
+            .header(
+                "traceparent",
+                crate::access_log_client::traceparent_for_marker(trace_id),
+            )
             .header("access_log", "test_store");
     }
     request
@@ -306,7 +312,10 @@ async fn long_stream_observation(ctx: &TestContext, trace_id: &str) -> Result<Va
     for host in test_backend_hosts(ctx) {
         let response = ctx
             .http_client
-            .get(format!("http://{host}:30001/ai-long-stream/observation/{trace_id}"))
+            .get(format!(
+                "http://{host}:30001/ai-long-stream/observation/{}",
+                crate::access_log_client::trace_id_for_marker(trace_id)
+            ))
             .send()
             .await
             .map_err(|error| format!("long-stream observation request failed for {host}: {error}"))?;
@@ -1100,7 +1109,7 @@ fn streaming_client_disconnect_finalizes_once(
                 client
                     .post(request_url(&ctx, QUOTA_HOST, PATH, "?mock_mode=long"))
                     .header("x-quota-user", &identity)
-                    .header("x-trace-id", &trace)
+                    .header("traceparent", crate::access_log_client::traceparent_for_marker(&trace))
                     .header("access_log", "test_store")
                     .json(&json!({"model":"fixture-model","stream":true,"messages":[]}))
                     .send()
@@ -1210,7 +1219,7 @@ fn streaming_client_disconnect_finalizes_once(
         let matching = listed
             .data
             .iter()
-            .filter(|item| item.trace_id == trace)
+            .filter(|item| item.trace_id == crate::access_log_client::trace_id_for_marker(&trace))
             .collect::<Vec<_>>();
         if matching.len() != 1 || matching[0].store_count != 1 {
             return TestResult::failed(
@@ -2261,7 +2270,10 @@ fn repeated_malformed_sse_events_fail_quota_enforcement_closed(
                     ("content-type", "application/json"),
                     ("content-length", content_length.as_str()),
                     ("x-quota-user", identity.as_str()),
-                    ("x-trace-id", trace.as_str()),
+                    (
+                        "traceparent",
+                        &crate::access_log_client::traceparent_for_marker(trace.as_str()),
+                    ),
                     ("access_log", "test_store"),
                 ],
             )

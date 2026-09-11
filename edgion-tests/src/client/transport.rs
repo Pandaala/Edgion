@@ -657,7 +657,7 @@ impl TransportEvent {
     }
 
     pub fn tagged(&self, trace_id: &str) -> bool {
-        self.trace_id.as_deref() == Some(trace_id)
+        self.trace_id.as_deref() == Some(crate::access_log_client::trace_id_for_marker(trace_id).as_str())
     }
 }
 
@@ -869,6 +869,7 @@ impl TransportProbe {
     }
 
     pub async fn snapshot_of(&self, trace_id: &str) -> Result<TransportSnapshot, String> {
+        let trace_id = crate::access_log_client::trace_id_for_marker(trace_id);
         let response = self
             .client
             .get(format!("{}/transport/query/{trace_id}", self.base))
@@ -1010,7 +1011,7 @@ mod tests {
         TransportEvent {
             seq,
             kind: kind.to_string(),
-            trace_id: trace.map(str::to_string),
+            trace_id: trace.map(crate::access_log_client::trace_id_for_marker),
             ..Default::default()
         }
     }
@@ -1031,7 +1032,8 @@ mod tests {
           "conn_accepted_total": {"h1": 1},
           "dropped": 0
         }"#;
-        let snapshot: TransportSnapshot = serde_json::from_str(raw).expect("snapshot must deserialize");
+        let raw = raw.replace("t1", &crate::access_log_client::trace_id_for_marker("t1"));
+        let snapshot: TransportSnapshot = serde_json::from_str(&raw).expect("snapshot must deserialize");
         assert!(snapshot.found);
         assert_eq!(snapshot.count, 3);
         assert_eq!(snapshot.events().len(), 3);

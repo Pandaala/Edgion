@@ -457,7 +457,10 @@ impl JwtAuthTestSuite {
                         .get(&url)
                         .header("host", "jwt-test.example.com")
                         .header("Authorization", format!("Bearer {}", jwt))
-                        .header("x-trace-id", &trace_id)
+                        .header(
+                            "traceparent",
+                            crate::access_log_client::traceparent_for_marker(&trace_id),
+                        )
                         .header("access_log", "test_store")
                         .send()
                         .await;

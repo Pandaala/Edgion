@@ -32,7 +32,10 @@ impl RetryOnStatusTestSuite {
                         .http_client
                         .get(format!("{}/retry-sequence/{}/502,200", ctx.http_url(), test_id))
                         .header("Host", "retry-on-status.example.com")
-                        .header("x-trace-id", &test_id)
+                        .header(
+                            "traceparent",
+                            crate::access_log_client::traceparent_for_marker(&test_id),
+                        )
                         .header("access_log", "test_store")
                         .send()
                         .await;
@@ -108,7 +111,10 @@ impl RetryOnStatusTestSuite {
                         .http_client
                         .get(format!("{}/retry-sequence/{}/503,503,200", ctx.http_url(), test_id))
                         .header("Host", "retry-on-status.example.com")
-                        .header("x-trace-id", &test_id)
+                        .header(
+                            "traceparent",
+                            crate::access_log_client::traceparent_for_marker(&test_id),
+                        )
                         .send()
                         .await;
 
@@ -152,7 +158,10 @@ impl RetryOnStatusTestSuite {
                         .http_client
                         .get(format!("{}/retry-sequence/{}/200", ctx.http_url(), test_id))
                         .header("Host", "retry-on-status.example.com")
-                        .header("x-trace-id", &test_id)
+                        .header(
+                            "traceparent",
+                            crate::access_log_client::traceparent_for_marker(&test_id),
+                        )
                         .send()
                         .await;
 
@@ -196,7 +205,10 @@ impl RetryOnStatusTestSuite {
                         .http_client
                         .get(format!("{}/retry-sequence/{}/502,502,502,502", ctx.http_url(), test_id))
                         .header("Host", "retry-on-status.example.com")
-                        .header("x-trace-id", &test_id)
+                        .header(
+                            "traceparent",
+                            crate::access_log_client::traceparent_for_marker(&test_id),
+                        )
                         .send()
                         .await;
 
@@ -244,7 +256,10 @@ impl RetryOnStatusTestSuite {
                         .http_client
                         .get(format!("{}/retry-sequence/{}/500,200", ctx.http_url(), test_id))
                         .header("Host", "retry-on-status.example.com")
-                        .header("x-trace-id", &test_id)
+                        .header(
+                            "traceparent",
+                            crate::access_log_client::traceparent_for_marker(&test_id),
+                        )
                         .send()
                         .await;
 

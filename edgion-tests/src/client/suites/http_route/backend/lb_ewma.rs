@@ -52,7 +52,10 @@ impl LBEwmaTestSuite {
                             client
                                 .get(&url)
                                 .header("host", "lb-ewma.example.com")
-                                .header("x-trace-id", &trace_id)
+                                .header(
+                                    "traceparent",
+                                    crate::access_log_client::traceparent_for_marker(&trace_id),
+                                )
                                 .send()
                                 .await
                         });

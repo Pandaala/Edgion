@@ -136,7 +136,10 @@ async fn send_successful_requests(
             .http_client
             .get(format!("{}/test", ctx.http_url()))
             .header("host", host)
-            .header("x-trace-id", trace_id)
+            .header(
+                "traceparent",
+                crate::access_log_client::traceparent_for_marker(trace_id),
+            )
             .send()
             .await
             .map_err(|error| {

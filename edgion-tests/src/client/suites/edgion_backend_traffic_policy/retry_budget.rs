@@ -97,7 +97,10 @@ impl RetryBudgetTestSuite {
                             .http_client
                             .get(&url)
                             .header("Host", HOST)
-                            .header("x-trace-id", &trace_id)
+                            .header(
+                                "traceparent",
+                                crate::access_log_client::traceparent_for_marker(&trace_id),
+                            )
                             .header("access_log", "test_store")
                             .send()
                             .await
@@ -174,7 +177,10 @@ impl RetryBudgetTestSuite {
                             client
                                 .get(&url)
                                 .header("Host", HOST)
-                                .header("x-trace-id", format!("rb-load-{i}"))
+                                .header(
+                                    "traceparent",
+                                    crate::access_log_client::traceparent_for_marker(format!("rb-load-{i}")),
+                                )
                                 .send()
                                 .await
                                 .map(|r| r.status().as_u16())

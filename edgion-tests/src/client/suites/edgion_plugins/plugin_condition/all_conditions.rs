@@ -122,7 +122,10 @@ async fn send_request_and_get_log(
 
     request_builder = request_builder
         .header("host", host)
-        .header("x-trace-id", &trace_id)
+        .header(
+            "traceparent",
+            crate::access_log_client::traceparent_for_marker(&trace_id),
+        )
         .header("access_log", "test_store");
 
     for (key, value) in extra_headers {

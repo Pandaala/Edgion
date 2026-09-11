@@ -278,7 +278,7 @@ class Topology:
             require(len(header_values) == 1, f"{label}: expected exactly one debug header")
             snapshot = decode_json(header_values[0])
             require(isinstance(snapshot, dict), "Debug snapshot must be a JSON object")
-            require(snapshot["request_info"]["trace_id"]["w3c"]["trace_id"] == trace, "Debug snapshot trace mismatch")
+            require(snapshot["request_info"]["trace_id"]["x-trace-id"] == trace, "Debug snapshot trace mismatch")
             for field in ("direct_peer_ip", "remote_ip", "path"):
                 require(snapshot["request_info"][field] == MASK, f"Unmasked debug request field: {field}")
             require(snapshot.get("request_uri") == MASK, "Raw URI projection was not replaced")
@@ -288,7 +288,7 @@ class Topology:
         else:
             require(not header_values, f"{label}: unexpected debug response header")
         terminal = self.terminal_log(trace)
-        require(terminal["request_info"]["trace_id"]["w3c"]["trace_id"] == trace, "Terminal trace mismatch")
+        require(terminal["request_info"]["trace_id"]["x-trace-id"] == trace, "Terminal trace mismatch")
         require(terminal["request_info"]["status"] == status, "Terminal status differs from response")
         logs = [log for stage in terminal.get("stage_logs", [])
                 for group in stage.get("edgion_plugins", []) for log in group.get("logs", [])

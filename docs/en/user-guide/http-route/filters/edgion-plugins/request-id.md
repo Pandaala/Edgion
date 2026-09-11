@@ -4,7 +4,7 @@
 
 The gateway always processes W3C `traceparent` and `tracestate`. No plugin is needed to enable propagation. A valid incoming context is preserved; a missing or invalid context starts a new trace with the sampled bit unset. Propagation does not enable span recording or OTLP export.
 
-By default, the gateway preserves a valid incoming `x-trace-id`, or fills it with the W3C trace ID (32 lowercase hexadecimal characters). It forwards this ID upstream and returns it in the response. An existing custom ID can differ from the W3C ID. Neither ID authenticates the caller.
+The reserved `x-trace-id` always represents the W3C trace ID (32 lowercase hexadecimal characters). By default, the gateway forwards it upstream and returns it in the response, replacing any conflicting incoming `x-trace-id`. Use other header names for business IDs. These identifiers do not authenticate the caller.
 
 Use the single RequestId plugin to adjust this default or add business correlation IDs. `RequestTraceId` is internal request data, not another plugin or resource. The former TraceContext plugin has been removed.
 
@@ -64,7 +64,7 @@ spec:
 
 | Parameter | Type | Default | Description |
 |---|---|---|---|
-| `defaultId.enabled` | Boolean | Unchanged; initially true | Disable or enable the implicit `x-trace-id` rule |
+| `defaultId.enabled` | Boolean | Unchanged; initially true | Disable or enable the default `x-trace-id` wire header; its log identity remains |
 | `defaultId.forwardUpstream` | Boolean | Unchanged; initially true | Forward the implicit default ID upstream |
 | `defaultId.echoResponse` | Boolean | Unchanged; initially true | Return the implicit default ID to the client |
 | `ids` | Array | Empty | Additional rules, in declaration order |
@@ -92,7 +92,7 @@ This lifecycle applies to the main HTTP proxy, including gRPC and WebSocket hand
 
 Route rules run at their normal request-stage position. They add IDs to the existing state; they do not replace all Gateway rules. An earlier rejection prevents later route rules from running. BackendRef attachments are unsupported. Early rules may only use header/trace-ID sources and header/method/trace-ID key conditions; body, dye, route context and other unavailable predicates are rejected.
 
-To remove the implicit default and use your own ID, set `defaultId.enabled: false` and configure `ids`. An explicit `x-trace-id` rule is allowed. Later disabling the implicit default does not delete an explicitly configured custom rule. Disabling removes the managed default from forwarding, response and correlation logs; an upstream echo cannot restore it. Removal applies to this gateway: another gateway may generate its own default when it sees no header.
+To disable the default header and use your own business headers, set `defaultId.enabled: false` and configure `ids` with other names. Custom destinations named `x-trace-id` are rejected case-insensitively by both Controller and Gateway. Disabling removes the default header from forwarding and responses; an upstream echo cannot restore it. The standard W3C ID remains in the access log. Removal applies to this gateway: another gateway may emit its own default header from the propagated W3C context. Header sources read current managed headers, not an original incoming `x-trace-id` snapshot; send business IDs under distinct names.
 
 ```yaml
 apiVersion: edgion.io/v1
@@ -119,7 +119,13 @@ The gateway does not automatically return `traceparent` or `tracestate`. Return 
 
 `echoResponse: false` removes that managed response header, including an upstream echo. `forwardUpstream: false` removes it from the managed upstream request. These flags do not turn off W3C propagation.
 
-Access logs contain `request_info.trace_id.w3c.trace_id` and `request_info.trace_id.correlation_ids`, a JSON object keyed by header name. Copied client/header/context values are masked in logs; propagation and response values are unchanged. Generated values and the canonical W3C ID remain available for correlation. Use the W3C field for trace lookup when a custom value is masked. Exporting logs to OTLP remains a separate configuration choice.
+Access logs serialize `request_info.trace_id` as one flat JSON object:
+
+```json
+{"x-trace-id":"4bf92f3577b34da6a3ce929d0e0e4736","x-order-id":"order-123"}
+```
+
+The reserved `x-trace-id` always contains the canonical W3C ID, including when the default header is disabled. Custom entries contain active business IDs; copied client/header/context values follow the configured log masking mode without changing wire values. Generated IDs remain available for correlation. Query `request_info.trace_id["x-trace-id"]` for the standard trace. OTLP uses the internal typed W3C ID directly; exporting logs to OTLP remains a separate configuration choice.
 
 ## Related links
 

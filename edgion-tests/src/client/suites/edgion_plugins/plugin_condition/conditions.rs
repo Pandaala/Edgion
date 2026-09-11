@@ -63,7 +63,10 @@ impl PluginConditionTestSuite {
                         .get(&url)
                         .header("host", "condition-test.example.com")
                         .header("origin", "http://example.com")
-                        .header("x-trace-id", &trace_id)
+                        .header(
+                            "traceparent",
+                            crate::access_log_client::traceparent_for_marker(&trace_id),
+                        )
                         .header("access_log", "test_store");
 
                     match request.send().await {
@@ -156,7 +159,10 @@ impl PluginConditionTestSuite {
                         .get(&url)
                         .header("host", "condition-test.example.com")
                         .header("X-Skip-Cors", "true") //  skip
-                        .header("x-trace-id", &trace_id)
+                        .header(
+                            "traceparent",
+                            crate::access_log_client::traceparent_for_marker(&trace_id),
+                        )
                         .header("access_log", "test_store");
 
                     match request.send().await {
@@ -259,7 +265,10 @@ impl PluginConditionTestSuite {
                         .header("host", "condition-test.example.com")
                         .header("X-Multi-A", "1")
                         .header("X-Multi-B", "1")
-                        .header("x-trace-id", &trace_id)
+                        .header(
+                            "traceparent",
+                            crate::access_log_client::traceparent_for_marker(&trace_id),
+                        )
                         .header("access_log", "test_store")
                         .send()
                         .await;

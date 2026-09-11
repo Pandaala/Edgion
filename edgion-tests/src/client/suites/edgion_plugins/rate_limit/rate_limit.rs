@@ -626,7 +626,10 @@ impl RateLimitTestSuite {
                         .get(&url)
                         .header("host", "rate-limit.example.com")
                         .header("X-Rate-Key", &test_key)
-                        .header("x-trace-id", &trace_id)
+                        .header(
+                            "traceparent",
+                            crate::access_log_client::traceparent_for_marker(&trace_id),
+                        )
                         .header("access_log", "test_store")
                         .send()
                         .await;

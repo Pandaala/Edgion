@@ -198,7 +198,10 @@ async fn request(ctx: &ScenarioCtx, entropy: u128) -> Result<(reqwest::StatusCod
         .context("failed to build weighted AI request client")?;
     let response = client
         .post(format!("http://{HOST}:{AI_GATEWAY_PORT}/v1/chat/completions"))
-        .header("x-trace-id", uuid::Uuid::from_u128(entropy).to_string())
+        .header(
+            "traceparent",
+            crate::access_log_client::traceparent_for_marker(uuid::Uuid::from_u128(entropy).to_string()),
+        )
         .json(&json!({"model": "fixture-model", "messages": []}))
         .send()
         .await

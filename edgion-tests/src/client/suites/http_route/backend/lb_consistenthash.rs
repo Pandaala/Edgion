@@ -57,7 +57,10 @@ impl LBConsistentHashTestSuite {
                                     .get(&url)
                                     .header("host", "lb-ch-header-eps.example.com")
                                     .header("x-user-id", &user_id)
-                                    .header("x-trace-id", &trace_id)
+                                    .header(
+                                        "traceparent",
+                                        crate::access_log_client::traceparent_for_marker(&trace_id),
+                                    )
                                     .send()
                                     .await
                             });
@@ -138,7 +141,10 @@ impl LBConsistentHashTestSuite {
                                     .get(&url)
                                     .header("host", "lb-ch-cookie.example.com")
                                     .header("cookie", &cookie)
-                                    .header("x-trace-id", &trace_id)
+                                    .header(
+                                        "traceparent",
+                                        crate::access_log_client::traceparent_for_marker(&trace_id),
+                                    )
                                     .send()
                                     .await
                             });
@@ -216,7 +222,10 @@ impl LBConsistentHashTestSuite {
                                 client
                                     .get(&url)
                                     .header("host", "lb-ch-arg.example.com")
-                                    .header("x-trace-id", &trace_id)
+                                    .header(
+                                        "traceparent",
+                                        crate::access_log_client::traceparent_for_marker(&trace_id),
+                                    )
                                     .send()
                                     .await
                             });
@@ -297,7 +306,10 @@ impl LBConsistentHashTestSuite {
                                     .get(&url)
                                     .header("host", "lb-ch-multi.example.com")
                                     .header("x-user-id", &user_id)
-                                    .header("x-trace-id", &trace_id)
+                                    .header(
+                                        "traceparent",
+                                        crate::access_log_client::traceparent_for_marker(&trace_id),
+                                    )
                                     .send()
                                     .await
                             });
@@ -374,7 +386,10 @@ impl LBConsistentHashTestSuite {
                             client
                                 .get(&url)
                                 .header("host", "lb-ch-sourceip.example.com")
-                                .header("x-trace-id", &trace_id)
+                                .header(
+                                    "traceparent",
+                                    crate::access_log_client::traceparent_for_marker(&trace_id),
+                                )
                                 .send()
                                 .await
                         });

@@ -455,7 +455,10 @@ impl BasicAuthTestSuite {
                         .get(&url)
                         .header("host", TEST_HOST)
                         .header("Authorization", &auth)
-                        .header("x-trace-id", &trace_id)
+                        .header(
+                            "traceparent",
+                            crate::access_log_client::traceparent_for_marker(&trace_id),
+                        )
                         .header("access_log", "test_store")
                         .send()
                         .await;

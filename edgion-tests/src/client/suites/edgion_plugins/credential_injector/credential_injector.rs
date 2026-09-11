@@ -26,7 +26,10 @@ async fn connection_request(
         .get(format!("{}{path}", ctx.http_url()))
         .version(reqwest::Version::HTTP_11)
         .header("host", host)
-        .header("x-trace-id", trace_id)
+        .header(
+            "traceparent",
+            crate::access_log_client::traceparent_for_marker(trace_id),
+        )
         .timeout(Duration::from_secs(2));
     if host == CONNECTION_CONFLICT_HOST {
         request = request.header("access_log", "test_store");
@@ -51,7 +54,10 @@ async fn connection_captures(ctx: &TestContext, trace_id: &str) -> Result<Vec<Va
     for host in mirror_backend_hosts(ctx) {
         let response = ctx
             .http_client
-            .get(format!("http://{host}:30001/mirror/query/{trace_id}"))
+            .get(format!(
+                "http://{host}:30001/mirror/query/{}",
+                crate::access_log_client::trace_id_for_marker(trace_id)
+            ))
             .timeout(Duration::from_secs(2))
             .send()
             .await
@@ -361,7 +367,10 @@ async fn poll_main_and_mirror_captures(ctx: &TestContext, trace_id: &str) -> Res
         for host in &hosts {
             let response = ctx
                 .http_client
-                .get(format!("http://{host}:30001/mirror/query/{trace_id}"))
+                .get(format!(
+                    "http://{host}:30001/mirror/query/{}",
+                    crate::access_log_client::trace_id_for_marker(trace_id)
+                ))
                 .send()
                 .await;
             if let Ok(response) = response {
@@ -394,7 +403,10 @@ async fn assert_mirror_isolation(ctx: TestContext) -> TestResult {
         .http_client
         .get(format!("{}/mirror/capture", ctx.http_url()))
         .header("host", MIRROR_HOST)
-        .header("x-trace-id", &trace_id)
+        .header(
+            "traceparent",
+            crate::access_log_client::traceparent_for_marker(&trace_id),
+        )
         .header("authorization", "Bearer client-spoof")
         .send()
         .await

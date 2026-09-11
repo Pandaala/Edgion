@@ -229,7 +229,7 @@ async fn bucket_usage(ctx: &TestContext, bucket: &CredentialBucket) -> Result<(u
 async fn post(ctx: &TestContext, trace: &str) -> Result<(reqwest::StatusCode, Value), String> {
     let response = gateway_client(ctx)?
         .post(format!("http://{HOST}:{}{PATH}", ctx.http_port))
-        .header("x-trace-id", trace)
+        .header("traceparent", crate::access_log_client::traceparent_for_marker(trace))
         .header("access_log", "test_store")
         .json(&json!({
             "model": "fixture-model",

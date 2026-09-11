@@ -119,7 +119,10 @@ impl DnsResolutionFailureTestSuite {
                         .get(format!("{}/echo", ctx.http_url()))
                         .timeout(std::time::Duration::from_secs(10))
                         .header("Host", "dns-fail.example.com")
-                        .header("x-trace-id", &trace_id)
+                        .header(
+                            "traceparent",
+                            crate::access_log_client::traceparent_for_marker(&trace_id),
+                        )
                         .header("access_log", "test_store")
                         .send()
                         .await;

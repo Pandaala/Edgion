@@ -63,7 +63,7 @@ async fn post_in_fixture(
 ) -> Result<reqwest::Response, String> {
     client(ctx, host)?
         .post(format!("http://{host}:{}{}", ctx.http_port, PATH))
-        .header("x-trace-id", trace)
+        .header("traceparent", crate::access_log_client::traceparent_for_marker(trace))
         .header("x-resilience-fixture-id", fixture_id)
         .header("x-resilience-case", "cross-provider")
         .header("access_log", "test_store")

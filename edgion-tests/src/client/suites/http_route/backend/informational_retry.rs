@@ -29,7 +29,7 @@ async fn assert_wire(ctx: &TestContext, trace: &str) -> Result<(), String> {
         &[
             ("Connection", "close"),
             ("x-up-behavior", BEHAVIOR),
-            ("x-trace-id", trace),
+            ("traceparent", &crate::access_log_client::traceparent_for_marker(trace)),
             ("access_log", "test_store"),
         ],
     )

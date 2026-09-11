@@ -84,7 +84,11 @@ async fn poll_mirror_received(
 
     for attempt in 0..=retries {
         for host in &hosts {
-            let direct_url = format!("http://{}:30001/mirror/query/{}", host, trace_id);
+            let direct_url = format!(
+                "http://{}:30001/mirror/query/{}",
+                host,
+                crate::access_log_client::trace_id_for_marker(&trace_id)
+            );
             match client.get(&direct_url).send().await {
                 Ok(resp) => {
                     if let Ok(body) = resp.json::<Value>().await {
@@ -151,7 +155,10 @@ impl RequestMirrorTestSuite {
                         .http_client
                         .get(&url)
                         .header("host", HOST_BASIC)
-                        .header("x-trace-id", &trace_id)
+                        .header(
+                            "traceparent",
+                            crate::access_log_client::traceparent_for_marker(&trace_id),
+                        )
                         .header("x-custom-header", "hello-mirror")
                         .send()
                         .await
@@ -220,7 +227,10 @@ impl RequestMirrorTestSuite {
                         .http_client
                         .post(&url)
                         .header("host", HOST_BASIC)
-                        .header("x-trace-id", &trace_id)
+                        .header(
+                            "traceparent",
+                            crate::access_log_client::traceparent_for_marker(&trace_id),
+                        )
                         .header("content-type", "application/json")
                         .body(body_content.to_string())
                         .send()
@@ -282,7 +292,10 @@ impl RequestMirrorTestSuite {
                         .http_client
                         .get(&url)
                         .header("host", HOST_BASIC)
-                        .header("x-trace-id", &trace_id)
+                        .header(
+                            "traceparent",
+                            crate::access_log_client::traceparent_for_marker(&trace_id),
+                        )
                         // These are hop-by-hop headers that should be stripped
                         .header("connection", "keep-alive")
                         .header("proxy-authorization", "Basic secret")
@@ -316,7 +329,7 @@ impl RequestMirrorTestSuite {
                                 );
                             }
                             let trace_fwd = headers["x-trace-id"].as_str().unwrap_or("");
-                            if trace_fwd != trace_id {
+                            if trace_fwd != crate::access_log_client::trace_id_for_marker(&trace_id) {
                                 return TestResult::failed(
                                     start.elapsed(),
                                     format!("x-trace-id not forwarded (got '{}')", trace_fwd),
@@ -351,7 +364,10 @@ impl RequestMirrorTestSuite {
                         .http_client
                         .get(&url)
                         .header("host", HOST_BASIC)
-                        .header("x-trace-id", gen_trace_id("main-unaffected"))
+                        .header(
+                            "traceparent",
+                            crate::access_log_client::traceparent_for_marker(gen_trace_id("main-unaffected")),
+                        )
                         .send()
                         .await
                     {
@@ -403,7 +419,10 @@ impl RequestMirrorTestSuite {
                         .http_client
                         .get(&url)
                         .header("host", HOST_BASIC)
-                        .header("x-trace-id", &trace_id)
+                        .header(
+                            "traceparent",
+                            crate::access_log_client::traceparent_for_marker(&trace_id),
+                        )
                         .send()
                         .await;
 
@@ -438,7 +457,10 @@ impl RequestMirrorTestSuite {
                         .http_client
                         .get(&url)
                         .header("host", HOST_BASIC)
-                        .header("x-trace-id", &trace_id)
+                        .header(
+                            "traceparent",
+                            crate::access_log_client::traceparent_for_marker(&trace_id),
+                        )
                         .header("access_log", "test_store")
                         .send()
                         .await
@@ -534,7 +556,7 @@ impl RequestMirrorTestSuite {
                             .http_client
                             .get(&url)
                             .header("host", HOST_SAMPLED)
-                            .header("x-trace-id", &tid)
+                            .header("traceparent", crate::access_log_client::traceparent_for_marker(&tid))
                             .send()
                             .await;
                     }
@@ -548,7 +570,11 @@ impl RequestMirrorTestSuite {
                     let mut received = 0u32;
                     for tid in &trace_ids {
                         for host in &mirror_hosts {
-                            let direct = format!("http://{}:30001/mirror/query/{}", host, tid);
+                            let direct = format!(
+                                "http://{}:30001/mirror/query/{}",
+                                host,
+                                crate::access_log_client::trace_id_for_marker(&tid)
+                            );
                             if let Ok(resp) = ctx.http_client.get(&direct).send().await {
                                 if let Ok(body) = resp.json::<Value>().await {
                                     if body["found"].as_bool().unwrap_or(false) {
@@ -603,7 +629,10 @@ impl RequestMirrorTestSuite {
                         .http_client
                         .get(&url)
                         .header("host", HOST_TIMEOUT)
-                        .header("x-trace-id", gen_trace_id("chan-full-timeout"))
+                        .header(
+                            "traceparent",
+                            crate::access_log_client::traceparent_for_marker(gen_trace_id("chan-full-timeout")),
+                        )
                         .send()
                         .await
                     {
@@ -653,7 +682,10 @@ impl RequestMirrorTestSuite {
                         .http_client
                         .get(&url)
                         .header("host", HOST_BASIC)
-                        .header("x-trace-id", &trace_id)
+                        .header(
+                            "traceparent",
+                            crate::access_log_client::traceparent_for_marker(&trace_id),
+                        )
                         .send()
                         .await;
 
@@ -707,7 +739,10 @@ impl RequestMirrorTestSuite {
                         .http_client
                         .get(&url)
                         .header("host", HOST_BASIC)
-                        .header("x-trace-id", &trace_id)
+                        .header(
+                            "traceparent",
+                            crate::access_log_client::traceparent_for_marker(&trace_id),
+                        )
                         .send()
                         .await;
 
@@ -786,7 +821,10 @@ impl RequestMirrorTestSuite {
                         .http_client
                         .get(&url)
                         .header("host", HOST_REJECT)
-                        .header("x-trace-id", &trace_id)
+                        .header(
+                            "traceparent",
+                            crate::access_log_client::traceparent_for_marker(&trace_id),
+                        )
                         .send()
                         .await
                     {

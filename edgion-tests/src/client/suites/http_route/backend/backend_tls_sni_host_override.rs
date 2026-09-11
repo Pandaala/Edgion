@@ -57,7 +57,10 @@ impl BackendTlsSniHostOverrideTestSuite {
                     let resp = match client
                         .get(&url)
                         .header("host", "host-a.example.com")
-                        .header("x-trace-id", "btls-sni-a")
+                        .header(
+                            "traceparent",
+                            crate::access_log_client::traceparent_for_marker("btls-sni-a"),
+                        )
                         .send()
                         .await
                     {
@@ -116,7 +119,10 @@ impl BackendTlsSniHostOverrideTestSuite {
                     let resp = match client
                         .get(&url)
                         .header("host", "host-b.example.com")
-                        .header("x-trace-id", "btls-sni-b")
+                        .header(
+                            "traceparent",
+                            crate::access_log_client::traceparent_for_marker("btls-sni-b"),
+                        )
                         .send()
                         .await
                     {
@@ -181,7 +187,10 @@ impl BackendTlsSniHostOverrideTestSuite {
                             let resp = match client
                                 .get(&url)
                                 .header("host", host)
-                                .header("x-trace-id", &trace_id)
+                                .header(
+                                    "traceparent",
+                                    crate::access_log_client::traceparent_for_marker(&trace_id),
+                                )
                                 .send()
                                 .await
                             {

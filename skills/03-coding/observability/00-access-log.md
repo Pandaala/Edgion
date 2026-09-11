@@ -38,8 +38,8 @@ Each access log entry must contain enough information for an operator to locate 
 | `remote_ip` | Resolved client IP (`RemoteIp`) after the applicable PROXY/RealIp processing |
 | `host` / `path` | Request host and the **normalized** current path (no query) |
 | `request_uri` | **Optional** — client-entry **raw URI** (raw path + raw query); only emitted when `access_log_options.includeRawUri: true` |
-| `trace_id.w3c.trace_id` | canonical W3C ID, 32 lowercase hexadecimal characters |
-| `trace_id.correlation_ids` | active correlation IDs serialized as a map; copied external values are masked |
+| `trace_id["x-trace-id"]` | canonical W3C ID, 32 lowercase hexadecimal characters; present even when its wire header is disabled |
+| `trace_id["<custom-header>"]` | active custom IDs in the same flat map; copied external values follow the log masking policy |
 | `status` | Nginx/OpenResty `$status` analogue; final downstream response or terminal error status, with 0 meaning Nginx `000` unknown |
 | `sni` | TLS SNI (HTTPS connections) |
 | `tls_id` | TLS connection ID (used to correlate tls_access.log) |
@@ -711,4 +711,4 @@ Spec: `docs/superpowers/specs/2026-06-16-plugin-log-tokens-design.md`.
 
 ### Request identity ownership
 
-`RequestInfo.trace_id: RequestTraceId` owns the W3C context and bounded vector of correlation IDs. Serialize the vector as a JSON object, never duplicate the old `x-trace-id` top-level field. Preserve origin metadata: inherited or copied external values require log masking without altering wire propagation. Managed suppression affects final logs as well as headers. A business ID or W3C trace ID is not a unique per-request storage key; multiple requests may share it. See [lifecycle contract](../../04-review/observability/intentional-design/request-trace-id-lifecycle.md).
+`RequestInfo.trace_id: RequestTraceId` owns the internal W3C context and bounded vector of correlation IDs. Serialize one flat JSON object: emit the reserved `x-trace-id` from W3C state once, then active custom names. Disabling the default header does not remove the standard log identity. Custom destinations cannot reuse the reserved name. Preserve origin metadata: copied custom values require log masking without altering wire propagation. Suppressed custom IDs are omitted. A business ID or W3C trace ID is not a unique per-request storage key; multiple requests may share it. See [lifecycle contract](../../04-review/observability/intentional-design/request-trace-id-lifecycle.md).

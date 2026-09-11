@@ -11,7 +11,7 @@ eval "$selector"
 
 write_batch() {
     jq -n --argjson ids "$1" '{resourceLogs: [{scopeLogs: [{logRecords:
-        [$ids[] | {body: {stringValue: ({request_info: {trace_id: {w3c: {trace_id: .}}}} | tojson)}}]
+        [$ids[] | {body: {stringValue: ({request_info: {trace_id: {"x-trace-id": .}}} | tojson)}}]
     }]}]}' > "${test_tmp}/records.json"
 }
 write_batch '["warmup", "4bf92f3577b34da6a3ce929d0e0e4731", "4bf92f3577b34da6a3ce929d0e0e4731", "4bf92f3577b34da6a3ce929d0e0e4736"]'

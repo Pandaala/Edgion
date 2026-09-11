@@ -130,3 +130,21 @@ async fn inherited_target_wins_and_duplicates_fall_back_to_standard_source() {
         assert_eq!(session.req_header().headers.get_all("x-custom-id").iter().count(), 1);
     }
 }
+
+#[test]
+fn reserved_default_is_rejected_by_schema_and_gateway_runtime() {
+    for header in ["x-trace-id", "X-Trace-ID"] {
+        let plugin = EdgionPlugin::RequestId(serde_json::from_value(json!({"ids":[{"header":header}]})).unwrap());
+        let resource = EdgionPlugins::new(
+            "reserved-id",
+            EdgionPluginsSpec {
+                request_plugins: Some(vec![RequestFilterEntry::new(plugin)]),
+                ..Default::default()
+            },
+        );
+        assert!(!resource.validate_plugins().is_empty());
+        let compiled = compile_plugins(&resource);
+        assert!(!compiled.preparse_errors.is_empty());
+        assert!(!compiled.is_activatable);
+    }
+}

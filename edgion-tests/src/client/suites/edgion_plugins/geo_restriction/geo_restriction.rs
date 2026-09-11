@@ -99,7 +99,9 @@ async fn get(
         req = req.header("X-Forwarded-For", xff);
     }
     if let Some(trace) = trace {
-        req = req.header("x-trace-id", trace).header("access_log", "test_store");
+        req = req
+            .header("traceparent", crate::access_log_client::traceparent_for_marker(trace))
+            .header("access_log", "test_store");
     }
     req.send().await.map_err(|e| format!("request failed: {e}"))
 }

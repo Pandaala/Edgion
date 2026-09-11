@@ -226,7 +226,10 @@ async fn run_stalled_tls_deadlines(ctx: &TestContext) -> Result<(), String> {
         let trace_id = format!("connect-deadline-{}", uuid::Uuid::new_v4());
         let mut request = client
             .post(format!("http://{DEADLINE_HOST}:{}/{path}", ctx.http_port))
-            .header("x-trace-id", &trace_id)
+            .header(
+                "traceparent",
+                crate::access_log_client::traceparent_for_marker(&trace_id),
+            )
             .header("access_log", "test_store");
         if grpc {
             request = request

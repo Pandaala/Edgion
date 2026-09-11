@@ -441,7 +441,7 @@ metrics:
         before = len(recorder.snapshot())
         metrics_before = self.metrics()
         trace = uuid.uuid4().hex
-        headers.update(Authorization=AUTH, **{"x-trace-id": trace, "access_log": "test_store"})
+        headers.update(Authorization=AUTH, **{"traceparent": f"00-{trace}-0123456789abcdef-00", "access_log": "test_store"})
         status, response_headers, body = request(self.ports["http"], f"/{phase}", headers)
         require(status == expected, f"{phase}: expected {expected}, got {status}: {body!r}")
         if expected == 503:

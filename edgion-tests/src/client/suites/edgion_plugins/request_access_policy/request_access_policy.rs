@@ -294,7 +294,10 @@ impl RequestAccessPolicyTestSuite {
                         .get(&url)
                         .header("host", "gac.example.com")
                         .header("X-CF-Secret", "cf-origin-token-123")
-                        .header("x-trace-id", &trace_id)
+                        .header(
+                            "traceparent",
+                            crate::access_log_client::traceparent_for_marker(&trace_id),
+                        )
                         .header("access_log", "test_store");
 
                     match request.send().await {
@@ -369,7 +372,10 @@ impl RequestAccessPolicyTestSuite {
                     let request = client
                         .get(&url)
                         .header("host", "gac.example.com")
-                        .header("x-trace-id", &trace_id)
+                        .header(
+                            "traceparent",
+                            crate::access_log_client::traceparent_for_marker(&trace_id),
+                        )
                         .header("access_log", "test_store");
 
                     match request.send().await {

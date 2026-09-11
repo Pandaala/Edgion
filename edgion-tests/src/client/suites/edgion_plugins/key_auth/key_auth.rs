@@ -810,7 +810,10 @@ impl KeyAuthTestSuite {
                         .get(&url)
                         .header("host", DUAL_ALIAS_HOST)
                         .header("X-API-Key", VALID_KEY_JACK)
-                        .header("x-trace-id", &trace_id)
+                        .header(
+                            "traceparent",
+                            crate::access_log_client::traceparent_for_marker(&trace_id),
+                        )
                         .header("access_log", "test_store")
                         .send()
                         .await

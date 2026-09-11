@@ -34,7 +34,10 @@ impl LBEwmaRetryOnStatusTestSuite {
                         .http_client
                         .get(format!("http://{}:{port}/status/503", ctx.target_host))
                         .header("host", "lb-ewma-rs.example.com")
-                        .header("x-trace-id", &trace_id)
+                        .header(
+                            "traceparent",
+                            crate::access_log_client::traceparent_for_marker(&trace_id),
+                        )
                         .header("access_log", "test_store")
                         .send()
                         .await;

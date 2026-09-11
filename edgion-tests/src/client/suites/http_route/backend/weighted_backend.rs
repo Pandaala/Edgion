@@ -37,7 +37,10 @@ impl WeightedBackendTestSuite {
                             .http_client
                             .get(format!("{}/echo", ctx.http_url()))
                             .header("Host", "weighted-backend.example.com")
-                            .header("x-trace-id", &trace_id)
+                            .header(
+                                "traceparent",
+                                crate::access_log_client::traceparent_for_marker(&trace_id),
+                            )
                             .header("access_log", "test_store");
 
                         match request.send().await {
@@ -115,7 +118,10 @@ impl WeightedBackendTestSuite {
                             .http_client
                             .get(format!("{}/echo", ctx.http_url()))
                             .header("Host", "weighted-backend.example.com")
-                            .header("x-trace-id", &trace_id)
+                            .header(
+                                "traceparent",
+                                crate::access_log_client::traceparent_for_marker(&trace_id),
+                            )
                             .header("access_log", "test_store");
 
                         match request.send().await {

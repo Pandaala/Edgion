@@ -23,7 +23,7 @@ documents this checkpoint. Production behavior and structures are unchanged.
 
 - `edgion-gateway/src/routes/http/proxy_http/pg_request_filter.rs` detects the
   protocol into `RequestInfo.discover_protocol` and reads or generates
-  `RequestInfo.trace_id` (canonical field `request_info.trace_id.w3c.trace_id`; externally copied correlation values are masked).
+  `RequestInfo.trace_id` (canonical field `request_info.trace_id["x-trace-id"]`; externally copied correlation values are masked).
 - `edgion-gateway/src/routes/http/proxy_http/pg_connected_to_upstream.rs` calls
   `AccessLogEntry::set_conn_est` and sends the canonical JSON directly.
 - `edgion-gateway/src/routes/http/proxy_http/pg_logging.rs` writes the optional

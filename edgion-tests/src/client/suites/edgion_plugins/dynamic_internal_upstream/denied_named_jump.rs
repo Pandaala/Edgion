@@ -126,7 +126,7 @@ async fn run(ctx: &TestContext) -> Result<()> {
         let response = ctx
             .http_client
             .get(format!("http://{}:{port}/mirror/capture", ctx.target_host))
-            .header("x-trace-id", &trace)
+            .header("x-trace-id", crate::access_log_client::trace_id_for_marker(&trace))
             .send()
             .await?;
         ensure!(response.status() == 200, "Backend {port} control failed");
@@ -241,7 +241,11 @@ async fn wait_gateway_resource(ctx: &TestContext, kind: &str, ns: &str, name: &s
 async fn receipts(ctx: &TestContext, trace: &str) -> Result<Value> {
     Ok(ctx
         .http_client
-        .get(format!("http://{}:30001/mirror/query/{trace}", ctx.target_host))
+        .get(format!(
+            "http://{}:30001/mirror/query/{}",
+            ctx.target_host,
+            crate::access_log_client::trace_id_for_marker(trace)
+        ))
         .send()
         .await?
         .error_for_status()?
@@ -264,7 +268,7 @@ async fn check_case(
         .header("host", HOST)
         .header("x-named-jump-case", case)
         .header("x-backend-target", target)
-        .header("x-trace-id", &trace)
+        .header("traceparent", crate::access_log_client::traceparent_for_marker(&trace))
         .header("access_log", "test_store");
     if outcome.is_some() {
         request = request.header("x-named-jump-success", "spoofed");
