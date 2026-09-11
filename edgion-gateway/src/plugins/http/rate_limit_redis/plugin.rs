@@ -31,6 +31,14 @@ use edgion_resources::resources::edgion_plugins::{OnRedisFailure, RateLimitRedis
 #[cfg(test)]
 use edgion_resources::resources::edgion_plugins::{RateLimitAlgorithm, RateLimitPolicy};
 
+fn absolute_reset_timestamp_secs(now: SystemTime, retry_after: Duration) -> Option<u64> {
+    let deadline = now.checked_add(retry_after)?;
+    let since_epoch = deadline.duration_since(UNIX_EPOCH).ok()?;
+    since_epoch
+        .as_secs()
+        .checked_add(u64::from(since_epoch.subsec_nanos() > 0))
+}
+
 // ========== RateLimitRedis Plugin ==========
 
 /// Redis-based precise rate limiting plugin.
@@ -155,10 +163,7 @@ impl RateLimitRedis {
         // Add rate limit headers (all controlled by show_limit_headers)
         if self.config.show_limit_headers {
             if let Some(r) = result {
-                let reset_timestamp = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .map(|d| d.as_secs() + retry_after.as_secs())
-                    .unwrap_or(0);
+                let reset_timestamp = absolute_reset_timestamp_secs(SystemTime::now(), retry_after);
 
                 if let Some(headers) = self.config.get_header_names() {
                     if let Some(limit_header) = headers.limit_header() {
@@ -167,7 +172,7 @@ impl RateLimitRedis {
                     if let Some(remaining_header) = headers.remaining_header() {
                         resp.insert_header(remaining_header.to_string(), "0").ok();
                     }
-                    if let Some(reset_header) = headers.reset_header() {
+                    if let (Some(reset_header), Some(reset_timestamp)) = (headers.reset_header(), reset_timestamp) {
                         resp.insert_header(reset_header.to_string(), reset_timestamp.to_string())
                             .ok();
                     }
@@ -178,8 +183,10 @@ impl RateLimitRedis {
                 } else {
                     resp.insert_header("X-RateLimit-Limit", r.limit.to_string()).ok();
                     resp.insert_header("X-RateLimit-Remaining", "0").ok();
-                    resp.insert_header("X-RateLimit-Reset", reset_timestamp.to_string())
-                        .ok();
+                    if let Some(reset_timestamp) = reset_timestamp {
+                        resp.insert_header("X-RateLimit-Reset", reset_timestamp.to_string())
+                            .ok();
+                    }
                 }
             }
         }
@@ -385,6 +392,37 @@ mod tests {
     fn test_format_duration_milliseconds() {
         assert_eq!(format_duration(Duration::from_millis(500)), "500ms");
         assert_eq!(format_duration(Duration::from_millis(50)), "50ms");
+    }
+
+    #[test]
+    fn absolute_reset_timestamp_ceils_sub_second_deadline() {
+        assert_eq!(
+            absolute_reset_timestamp_secs(UNIX_EPOCH, Duration::from_millis(500)),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn absolute_reset_timestamp_includes_fractional_current_second() {
+        let now = UNIX_EPOCH + Duration::from_millis(1_750);
+        assert_eq!(absolute_reset_timestamp_secs(now, Duration::from_millis(500)), Some(3));
+    }
+
+    #[test]
+    fn absolute_reset_timestamp_preserves_exact_second_deadline() {
+        let now = UNIX_EPOCH + Duration::from_secs(10);
+        assert_eq!(absolute_reset_timestamp_secs(now, Duration::from_secs(2)), Some(12));
+    }
+
+    #[test]
+    fn absolute_reset_timestamp_omits_pre_epoch_deadline() {
+        let now = UNIX_EPOCH - Duration::from_nanos(1);
+        assert_eq!(absolute_reset_timestamp_secs(now, Duration::ZERO), None);
+    }
+
+    #[test]
+    fn absolute_reset_timestamp_omits_unrepresentable_deadline() {
+        assert_eq!(absolute_reset_timestamp_secs(SystemTime::now(), Duration::MAX), None);
     }
 
     #[tokio::test]

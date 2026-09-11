@@ -248,7 +248,7 @@
 | `edgion-gateway/src/config/gateway_class/conf_handler_impl.rs` | `config-gateway-class` | source | examined-no-change | CONFIG-001 / `4621d075` |
 | `edgion-gateway/src/config/gateway_class/mod.rs` | `config-gateway-class` | source | examined-no-change | CONFIG-001 / `4621d075` |
 | `edgion-gateway/src/config/mod.rs` | `config-root` | source | examined-no-change | CONFIG-001 / `4621d075` |
-| `edgion-gateway/src/ctx.rs` | `http-context` | source | pending | External ec5eb474..b1bea189 requires review; prior pending evidence retained |
+| `edgion-gateway/src/ctx.rs` | `http-context` | source | pending | External 79b72bb3 RequestId/request-trace-id migration also changed this pending target; prior evidence retained |
 | `edgion-gateway/src/geoip/config.rs` | `geoip` | source | changed | `B0059`: rejected enabled zero updater durations and byte cap |
 | `edgion-gateway/src/geoip/info.rs` | `geoip` | source | examined-no-change | `B0059`: retained request-owned projection and IPv4-mapped normalization |
 | `edgion-gateway/src/geoip/mod.rs` | `geoip` | source | examined-no-change | `B0059`: retained startup initialization, same-directory guard, and atomic provider publication |
@@ -271,7 +271,7 @@
 | `edgion-gateway/src/lb/selection/mod.rs` | `lb-selection` | source | pending | — |
 | `edgion-gateway/src/lb/selection/p2c.rs` | `lb-selection` | source | pending | — |
 | `edgion-gateway/src/lb/selection/round_robin.rs` | `lb-selection` | source | pending | — |
-| `edgion-gateway/src/lib.rs` | `crate-entry` | source | examined-no-change | `B0045`: compile guards, allocator test support, capability output, and root exports retained |
+| `edgion-gateway/src/lib.rs` | `crate-entry` | source | pending | Reopened after external 79b72bb3 RequestId/request-trace-id migration; prior terminal evidence retained |
 | `edgion-gateway/src/link_sys/mod.rs` | `link-sys-root` | source | changed | `B0046`: corrected LinkSys provider and crate-ownership documentation |
 | `edgion-gateway/src/link_sys/providers/elasticsearch/bulk.rs` | `link-sys-provider-elasticsearch` | source | examined-no-change | `B0047`: bounded batching, retry, shutdown, and item-result behavior reviewed; D0007 tracks wider retry semantics |
 | `edgion-gateway/src/link_sys/providers/elasticsearch/client.rs` | `link-sys-provider-elasticsearch` | source | examined-no-change | `B0047`: canonical outbound client, lifecycle, and health behavior retained |
@@ -286,7 +286,7 @@
 | `edgion-gateway/src/link_sys/providers/local_file/mod.rs` | `link-sys-provider-local-file` | source | examined-no-change | `B0049`: retained the narrow provider facade and exports |
 | `edgion-gateway/src/link_sys/providers/local_file/rotation.rs` | `link-sys-provider-local-file` | source | changed | `B0049`: made size-index parsing safe when base-name prefix and suffix overlap |
 | `edgion-gateway/src/link_sys/providers/mod.rs` | `link-sys-providers-root` | source | examined-no-change | `B0050`: retained the accurate provider facade, shared Etcd ownership, and live canonical exports |
-| `edgion-gateway/src/link_sys/providers/otlp/log_sender.rs` | `link-sys-provider-otlp` | source | changed | `B0055`: materialized method/path only at OTLP attribute construction while retaining B0051 sensitive-path masking |
+| `edgion-gateway/src/link_sys/providers/otlp/log_sender.rs` | `link-sys-provider-otlp` | source | pending | Reopened after external 79b72bb3 RequestId/request-trace-id migration; prior terminal evidence retained |
 | `edgion-gateway/src/link_sys/providers/otlp/mod.rs` | `link-sys-provider-otlp` | source | examined-no-change | `B0051`: retained the narrow OTLP sender facade and re-export |
 | `edgion-gateway/src/link_sys/providers/redis/client.rs` | `link-sys-provider-redis` | source | examined-no-change | `B0052`: retained canonical client ownership, hot-reload publication, and lifecycle behavior |
 | `edgion-gateway/src/link_sys/providers/redis/config_mapping.rs` | `link-sys-provider-redis` | source | changed | `B0052`: made `rediss://` transport TLS effective and rejected ambiguous mixed active transports |
@@ -299,7 +299,7 @@
 | `edgion-gateway/src/link_sys/providers/webhook/runtime.rs` | `link-sys-provider-webhook` | source | deferred | `B0053` / `D0019`: window rotation and time-source semantics require a wider limiter contract |
 | `edgion-gateway/src/link_sys/readme` | `link-sys-root` | documentation | changed | `B0054`: replaced fictional TODO/configuration claims with the current typed provider, output, fallback, and backfill boundaries |
 | `edgion-gateway/src/link_sys/runtime/conf_handler.rs` | `link-sys-runtime` | source | examined-no-change | `B0057`: retained the nonblocking ordered conf-sync adapter |
-| `edgion-gateway/src/link_sys/runtime/data_sender.rs` | `link-sys-runtime` | source | changed | `B0055`: made method/path metadata a call-scoped borrowed view |
+| `edgion-gateway/src/link_sys/runtime/data_sender.rs` | `link-sys-runtime` | source | pending | Reopened after external 79b72bb3 RequestId/request-trace-id migration; prior terminal evidence retained |
 | `edgion-gateway/src/link_sys/runtime/health_probe.rs` | `link-sys-runtime` | source | changed | `B0056`: became the sole owner of rollback-safe five-second health transition log gating |
 | `edgion-gateway/src/link_sys/runtime/mod.rs` | `link-sys-runtime` | source | examined-no-change | `B0057`: retained the live minimal module facade and visibility boundaries |
 | `edgion-gateway/src/link_sys/runtime/store.rs` | `link-sys-runtime` | source | pending | External 9b787978..b297af6e requires review; prior changed: `B0053`: ordered full/partial dispatch before side effects and retired omitted, deleted, or replaced Webhook generations |
@@ -334,7 +334,7 @@
 | `edgion-gateway/src/plugins/http/ai_guard/rules.rs` | `plugins-http-ai-guard` | source | changed | B0237: bounded capture expansion and live replacement accounting; independent revised-plan/final LGTM, AI Guard 40/40 |
 | `edgion-gateway/src/plugins/http/ai_guard/spans.rs` | `plugins-http-ai-guard` | source | changed | B0238: decoded-bound correctness, duplicate-part fail-close and bounded discriminator decoding; independent plan/final LGTM, AI Guard 49/49 |
 | `edgion-gateway/src/plugins/http/ai_proxy/mod.rs` | `plugins-http-ai-proxy` | source | examined-no-change | B0064 |
-| `edgion-gateway/src/plugins/http/ai_proxy/plugin.rs` | `plugins-http-ai-proxy` | source | pending | Reopened after external `bea47373` removed undeclared dye producers; B0064 history retained |
+| `edgion-gateway/src/plugins/http/ai_proxy/plugin.rs` | `plugins-http-ai-proxy` | source | pending | External 79b72bb3 RequestId/request-trace-id migration also changed this pending target; prior evidence retained |
 | `edgion-gateway/src/plugins/http/all_endpoint_status/mod.rs` | `plugins-http-all-endpoint-status` | source | examined-no-change | B0063 |
 | `edgion-gateway/src/plugins/http/all_endpoint_status/plugin.rs` | `plugins-http-all-endpoint-status` | source | changed | B0063 |
 | `edgion-gateway/src/plugins/http/all_endpoint_status/transport.rs` | `plugins-http-all-endpoint-status` | source | examined-no-change | B0239: request/endpoint isolation and canonical egress/TLS/bounds retained; independent LGTM, focused tests 18/18 |
@@ -424,11 +424,11 @@
 | `edgion-gateway/src/plugins/http/forward_auth/plugin.rs` | `plugins-http-forward-auth` | source | changed | B0290: preserve repeated selected denial headers; independent plan/final LGTM, 7/7 focused tests and workspace gates passed |
 | `edgion-gateway/src/plugins/http/geoip_location/mod.rs` | `plugins-http-geoip-location` | source | examined-no-change | B0078 |
 | `edgion-gateway/src/plugins/http/geoip_location/plugin.rs` | `plugins-http-geoip-location` | source | changed | B0078 |
-| `edgion-gateway/src/plugins/http/guardrail/attached.rs` | `plugins-http-guardrail` | source | examined-no-change | B0079 |
+| `edgion-gateway/src/plugins/http/guardrail/attached.rs` | `plugins-http-guardrail` | source | pending | Reopened after external 79b72bb3 RequestId/request-trace-id migration; prior terminal evidence retained |
 | `edgion-gateway/src/plugins/http/guardrail/mod.rs` | `plugins-http-guardrail` | source | examined-no-change | B0079 |
 | `edgion-gateway/src/plugins/http/guardrail/plugin.rs` | `plugins-http-guardrail` | source | changed | B0079 |
 | `edgion-gateway/src/plugins/http/guardrail/protocol.rs` | `plugins-http-guardrail` | source | examined-no-change | B0079 |
-| `edgion-gateway/src/plugins/http/guardrail/response.rs` | `plugins-http-guardrail` | source | changed | B0291: non-Hold rejection claims GuardrailRejected before rendering; corrected plan/final LGTM, 17/17 tests and workspace gates passed |
+| `edgion-gateway/src/plugins/http/guardrail/response.rs` | `plugins-http-guardrail` | source | pending | Reopened after external 79b72bb3 RequestId/request-trace-id migration; prior terminal evidence retained |
 | `edgion-gateway/src/plugins/http/header_cert_auth/mod.rs` | `plugins-http-header-cert-auth` | source | examined-no-change | B0080 |
 | `edgion-gateway/src/plugins/http/header_cert_auth/plugin.rs` | `plugins-http-header-cert-auth` | source | changed | B0080 |
 | `edgion-gateway/src/plugins/http/hmac_auth/mod.rs` | `plugins-http-hmac-auth` | source | examined-no-change | B0081 |
@@ -460,7 +460,7 @@
 | `edgion-gateway/src/plugins/http/ldap_auth/plugin.rs` | `plugins-http-ldap-auth` | source | changed | B0088 |
 | `edgion-gateway/src/plugins/http/mock/mod.rs` | `plugins-http-mock` | source | examined-no-change | B0089 |
 | `edgion-gateway/src/plugins/http/mock/plugin.rs` | `plugins-http-mock` | source | changed | B0089 |
-| `edgion-gateway/src/plugins/http/mod.rs` | `plugins-http-framework` | source | examined-no-change | B0062 |
+| `edgion-gateway/src/plugins/http/mod.rs` | `plugins-http-framework` | source | pending | Reopened after external 79b72bb3 RequestId/request-trace-id migration; prior terminal evidence retained |
 | `edgion-gateway/src/plugins/http/openid_connect/auth_response_caps_integration.rs` | `plugins-http-openid-connect` | test | changed | B0292: stale task pointer replaced by durable D0036 knowledge; independent LGTM and workspace gates passed, eight ignored network tests unchanged/not run |
 | `edgion-gateway/src/plugins/http/openid_connect/callback.rs` | `plugins-http-openid-connect` | source | examined-no-change | B0293: callback/state/PKCE audit retained; canonical supporting sanitizer now rejects browser authority-replacing backslashes, independent plan/final LGTM and exact test 1/1 |
 | `edgion-gateway/src/plugins/http/openid_connect/config_validation.rs` | `plugins-http-openid-connect` | source | changed | B0094: borrowed claim scopes and allocation-free issuer selection |
@@ -484,7 +484,7 @@
 | `edgion-gateway/src/plugins/http/rate_limit/mod.rs` | `plugins-http-rate-limit` | source | examined-no-change | B0096 |
 | `edgion-gateway/src/plugins/http/rate_limit/plugin.rs` | `plugins-http-rate-limit` | source | changed | B0096 |
 | `edgion-gateway/src/plugins/http/rate_limit_redis/mod.rs` | `plugins-http-rate-limit-redis` | source | examined-no-change | B0097 |
-| `edgion-gateway/src/plugins/http/rate_limit_redis/plugin.rs` | `plugins-http-rate-limit-redis` | source | pending | Reopened after external `264847df`; historical B0097 retained |
+| `edgion-gateway/src/plugins/http/rate_limit_redis/plugin.rs` | `plugins-http-rate-limit-redis` | source | changed | B0302: reset timestamp now ceils the absolute deadline consistently with Retry-After |
 | `edgion-gateway/src/plugins/http/real_ip/mod.rs` | `plugins-http-real-ip` | source | examined-no-change | B0098 |
 | `edgion-gateway/src/plugins/http/real_ip/plugin.rs` | `plugins-http-real-ip` | source | changed | B0098 |
 | `edgion-gateway/src/plugins/http/region_route/log_consts.rs` | `plugins-http-region-route` | source | examined-no-change | B0099 |
@@ -494,20 +494,21 @@
 | `edgion-gateway/src/plugins/http/request_access_policy/plugin.rs` | `plugins-http-request-access-policy` | source | changed | B0100 |
 | `edgion-gateway/src/plugins/http/request_body_buffer/mod.rs` | `plugins-http-request-body-buffer` | source | examined-no-change | B0101 |
 | `edgion-gateway/src/plugins/http/request_body_buffer/plugin.rs` | `plugins-http-request-body-buffer` | source | examined-no-change | B0101 |
+| `edgion-gateway/src/plugins/http/request_id/mod.rs` | `plugins-http-request-id` | source | analysis-ready | B0303: examined-no-change candidate within cohesive request-identity batch |
 | `edgion-gateway/src/plugins/http/request_mirror/budget.rs` | `plugins-http-request-mirror` | source | pending | Added by external commit `90a45683`; full audit pending |
 | `edgion-gateway/src/plugins/http/request_mirror/config.rs` | `plugins-http-request-mirror` | source | pending | Added by external commit `90a45683`; full audit pending |
-| `edgion-gateway/src/plugins/http/request_mirror/mirror_log.rs` | `plugins-http-request-mirror` | source | examined-no-change | B0102 |
+| `edgion-gateway/src/plugins/http/request_mirror/mirror_log.rs` | `plugins-http-request-mirror` | source | pending | Reopened after external 79b72bb3 RequestId/request-trace-id migration; prior terminal evidence retained |
 | `edgion-gateway/src/plugins/http/request_mirror/mirror_state.rs` | `plugins-http-request-mirror` | source | examined-no-change | B0102 |
 | `edgion-gateway/src/plugins/http/request_mirror/mod.rs` | `plugins-http-request-mirror` | source | examined-no-change | B0102 |
-| `edgion-gateway/src/plugins/http/request_mirror/plugin.rs` | `plugins-http-request-mirror` | source | pending | Reopened after external `5cb0b087` ReferenceGrant early rejection; B0102 history retained |
+| `edgion-gateway/src/plugins/http/request_mirror/plugin.rs` | `plugins-http-request-mirror` | source | pending | External 79b72bb3 RequestId/request-trace-id migration also changed this pending target; prior evidence retained |
 | `edgion-gateway/src/plugins/http/request_mirror/tests/plugin_test.rs` | `plugins-http-request-mirror` | test | pending | Added by external commit `90a45683`; full audit pending |
 | `edgion-gateway/src/plugins/http/request_restriction/mod.rs` | `plugins-http-request-restriction` | source | examined-no-change | B0103 |
 | `edgion-gateway/src/plugins/http/request_restriction/plugin.rs` | `plugins-http-request-restriction` | source | changed | B0103 |
 | `edgion-gateway/src/plugins/http/response_rewrite/mod.rs` | `plugins-http-response-rewrite` | source | examined-no-change | B0104 |
 | `edgion-gateway/src/plugins/http/response_rewrite/plugin.rs` | `plugins-http-response-rewrite` | source | changed | B0104 |
-| `edgion-gateway/src/plugins/http/trace_context/mod.rs` | `plugins-http-trace-context` | source | examined-no-change | B0105 |
-| `edgion-gateway/src/plugins/http/trace_context/plugin.rs` | `plugins-http-trace-context` | source | pending | Reopened after external 78a25c3a; prior B0105 evidence retained |
-| `edgion-gateway/src/plugins/http/trace_context/w3c.rs` | `plugins-http-trace-context` | source | changed | B0105 |
+| `edgion-gateway/src/plugins/http/trace_context/mod.rs` | `plugins-http-trace-context` | source | removed | Removed by external 79b72bb3 during the RequestId migration; prior B0105 evidence retained |
+| `edgion-gateway/src/plugins/http/trace_context/plugin.rs` | `plugins-http-trace-context` | source | removed | Removed by external 79b72bb3 during the RequestId migration; prior B0105 evidence retained |
+| `edgion-gateway/src/plugins/http/trace_context/w3c.rs` | `plugins-http-trace-context` | source | renamed | Renamed to edgion-gateway/src/request_trace_id/w3c.rs by external 79b72bb3; prior B0105 evidence retained |
 | `edgion-gateway/src/plugins/http/waf/mod.rs` | `plugins-http-waf` | source | changed | B0106 |
 | `edgion-gateway/src/plugins/http/wasm/callout.rs` | `plugins-http-wasm` | source | changed | B0107 |
 | `edgion-gateway/src/plugins/http/wasm/host_abi.rs` | `plugins-http-wasm` | source | changed | B0108 |
@@ -534,7 +535,7 @@
 | `edgion-gateway/src/plugins/runtime/edgion_config_data/mod.rs` | `plugins-runtime` | source | changed | B0123: crate-private snapshot API export |
 | `edgion-gateway/src/plugins/runtime/gateway_api_filters/cors_filter.rs` | `plugins-runtime` | source | pending | External 9b787978..b297af6e requires review; prior changed: B0124: bounded inline CORS header pairs and validated-only construction |
 | `edgion-gateway/src/plugins/runtime/gateway_api_filters/debug_access_log.rs` | `plugins-runtime` | source | changed | B0125: suppress raw Wrap-mode client exposure before snapshot construction |
-| `edgion-gateway/src/plugins/runtime/gateway_api_filters/extension_ref.rs` | `plugins-runtime` | source | changed | B0126: shared precomputed ExtensionRef target and non-optional prepare success |
+| `edgion-gateway/src/plugins/runtime/gateway_api_filters/extension_ref.rs` | `plugins-runtime` | source | pending | Reopened after external 79b72bb3 RequestId/request-trace-id migration; prior terminal evidence retained |
 | `edgion-gateway/src/plugins/runtime/gateway_api_filters/header_modifier.rs` | `plugins-runtime` | source | changed | B0127: shared construction-time first-equivalent header plan |
 | `edgion-gateway/src/plugins/runtime/gateway_api_filters/mod.rs` | `plugins-runtime` | source | examined-no-change | B0126: minimal Gateway API filter façade retained |
 | `edgion-gateway/src/plugins/runtime/gateway_api_filters/path_modifier.rs` | `plugins-runtime` | source | changed | B0128: shared path-element replacement, root/trailing-slash and UTF-8 parameter regressions; verified |
@@ -544,17 +545,17 @@
 | `edgion-gateway/src/plugins/runtime/gateway_api_filters/url_rewrite.rs` | `plugins-runtime` | source | changed | B0128: shared element-aware replacement preserving raw query and URI finalization; verified |
 | `edgion-gateway/src/plugins/runtime/log.rs` | `plugins-runtime` | source | changed | B0129: bounded formatting/redaction and shared DSL strings; verified |
 | `edgion-gateway/src/plugins/runtime/mod.rs` | `plugins-runtime` | source | examined-no-change | B0130: compile-time facade retained; independent review and gates passed |
-| `edgion-gateway/src/plugins/runtime/plugin_runtime.rs` | `plugins-runtime` | source | pending | External ec5eb474..b1bea189 requires review; prior B0131/B0121 evidence retained |
+| `edgion-gateway/src/plugins/runtime/plugin_runtime.rs` | `plugins-runtime` | source | pending | External 79b72bb3 RequestId/request-trace-id migration also changed this pending target; prior evidence retained |
 | `edgion-gateway/src/plugins/runtime/policy_filter.rs` | `plugins-runtime` | source | examined-no-change | B0132: static Block/Bypass adapter retained after independent review |
 | `edgion-gateway/src/plugins/runtime/reject_filter.rs` | `plugins-runtime` | source | changed | B0133: corrected fail-closed ownership and lenient-admission documentation |
-| `edgion-gateway/src/plugins/runtime/session_adapter.rs` | `plugins-runtime` | source | pending | External b19975ed requires review; prior B0134 and REQ-BODY-CORE-001 evidence retained |
+| `edgion-gateway/src/plugins/runtime/session_adapter.rs` | `plugins-runtime` | source | pending | External 79b72bb3 RequestId/request-trace-id migration also changed this pending target; prior evidence retained |
 | `edgion-gateway/src/plugins/runtime/session_adapter/storage_io_tests.rs` | `plugins-runtime` | test | changed | B0135: independent watchdogs for deliberately blocked storage tests |
 | `edgion-gateway/src/plugins/runtime/tests/body_gate_test.rs` | `plugins-runtime` | test | changed | `B0119`: externalized body-gate and compiled-policy coverage |
 | `edgion-gateway/src/plugins/runtime/traits/header_ext.rs` | `plugins-runtime` | source | changed | B0136: exact per-name versus cross-name HeaderMap ordering contract |
 | `edgion-gateway/src/plugins/runtime/traits/mod.rs` | `plugins-runtime` | source | examined-no-change | B0137: live layered facade and named lower-level paths retained |
 | `edgion-gateway/src/plugins/runtime/traits/request_body_stream.rs` | `plugins-runtime` | source | changed | B0138: removed unused handler name API; supporting implementations retain separate coverage |
 | `edgion-gateway/src/plugins/runtime/traits/request_filter.rs` | `plugins-runtime` | source | examined-no-change | B0139: object-safe conservative request-stage contract retained |
-| `edgion-gateway/src/plugins/runtime/traits/session.rs` | `plugins-runtime` | source | changed | B0140: request-only capture and streaming-response contracts corrected |
+| `edgion-gateway/src/plugins/runtime/traits/session.rs` | `plugins-runtime` | source | pending | Reopened after external 79b72bb3 RequestId/request-trace-id migration; prior terminal evidence retained |
 | `edgion-gateway/src/plugins/runtime/traits/streaming_response_processor.rs` | `plugins-runtime` | source | changed | B0141: removed unused name API and repaired streaming design reference; support files retain separate coverage |
 | `edgion-gateway/src/plugins/runtime/traits/test_helpers.rs` | `plugins-runtime` | source | examined-no-change | B0142: coherent strict test helpers retained |
 | `edgion-gateway/src/plugins/runtime/traits/upstream_response.rs` | `plugins-runtime` | source | changed | B0143: correct final-response-header lifecycle contract |
@@ -588,6 +589,9 @@
 | `edgion-gateway/src/request_body/state/enabled.rs` | `request-body` | source | changed | REQ-BODY-CORE-001 / `a408d7fd`; REQ-BODY-BLOCKING-001 / `1eb48138` |
 | `edgion-gateway/src/request_body/storage.rs` | `request-body` | source | changed | REQ-BODY-CORE-001 / `a408d7fd`; full audit REQ-BODY-STORAGE-001 / `ae283e46`; REQ-BODY-BLOCKING-001 / `1eb48138` |
 | `edgion-gateway/src/request_body/storage_io_tests.rs` | `request-body` | test | changed | REQ-BODY-STORAGE-001 / `ae283e46` |
+| `edgion-gateway/src/request_id_tests.rs` | `request-trace-id` | test | analysis-ready | B0303: examined-no-change candidate within cohesive request-identity batch |
+| `edgion-gateway/src/request_trace_id/mod.rs` | `request-trace-id` | source | analysis-ready | B0303: bounded hot-path allocation improvements proposed |
+| `edgion-gateway/src/request_trace_id/w3c.rs` | `request-trace-id` | source | analysis-ready | B0303: generated traceparent ownership transfer proposed |
 | `edgion-gateway/src/response_processor_driver.rs` | `response-processing` | source | examined-no-change | B0161: request-local processor ownership, cancellation leases and finalization retained |
 | `edgion-gateway/src/routes/common.rs` | `routes-shared` | source | changed | B0162: filter delegation reverse-lock refs from listener attachment |
 | `edgion-gateway/src/routes/grpc/conf_handler_impl.rs` | `routes-shared` | source | changed | B0163: share immutable rule-level metric handles across match units |
@@ -606,27 +610,27 @@
 | `edgion-gateway/src/routes/http/mod.rs` | `routes-shared` | source | changed | B0171: restrict the match engine to crate visibility |
 | `edgion-gateway/src/routes/http/proxy_http/content_type.rs` | `routes-shared` | source | examined-no-change | B0174: retain zero-allocation protocol/media-type classification |
 | `edgion-gateway/src/routes/http/proxy_http/global_plugins_resolve.rs` | `routes-shared` | source | changed | B0175: borrow the canonical plugin store and isolate resolver tests |
-| `edgion-gateway/src/routes/http/proxy_http/mod.rs` | `routes-shared` | source | changed | B0176: retain only derived listener facts and default-disabled subrequests |
+| `edgion-gateway/src/routes/http/proxy_http/mod.rs` | `routes-shared` | source | pending | Reopened after external 79b72bb3 RequestId/request-trace-id migration; prior terminal evidence retained |
 | `edgion-gateway/src/routes/http/proxy_http/parse_timeout.rs` | `routes-shared` | source | changed | B0177: preserve finite nonzero subsecond keepalive bounds |
 | `edgion-gateway/src/routes/http/proxy_http/pg_connected_to_upstream.rs` | `routes-shared` | source | examined-no-change | B0178: SAN, attempt accounting, and immediate stream logging are already minimal and correct |
-| `edgion-gateway/src/routes/http/proxy_http/pg_early_request_filter.rs` | `routes-shared` | source | changed | B0179: timeout/shutdown/framing retained; B0183: freeze raw protocol classification before Pingora module rewrite |
+| `edgion-gateway/src/routes/http/proxy_http/pg_early_request_filter.rs` | `routes-shared` | source | pending | Reopened after external 79b72bb3 RequestId/request-trace-id migration; prior terminal evidence retained |
 | `edgion-gateway/src/routes/http/proxy_http/pg_error_while_proxy.rs` | `routes-shared` | source | changed | B0180: preserve per-try timeout retry after non-terminal informational responses |
 | `edgion-gateway/src/routes/http/proxy_http/pg_fail_to_connect.rs` | `routes-shared` | source | pending | External ec5eb474..9e3a276b requires review; prior changed: B0181: preserve typed deadline outcome after connection failure |
-| `edgion-gateway/src/routes/http/proxy_http/pg_fail_to_proxy.rs` | `routes-shared` | source | changed | B0182: classify downstream read timeout as 408 without backend failure attribution |
+| `edgion-gateway/src/routes/http/proxy_http/pg_fail_to_proxy.rs` | `routes-shared` | source | pending | Reopened after external 79b72bb3 RequestId/request-trace-id migration; prior terminal evidence retained |
 | `edgion-gateway/src/routes/http/proxy_http/pg_init_downstream_modules.rs` | `routes-shared` | source | changed | B0183: keep the gRPC-Web bridge independent of frontend HTTP/2 enablement |
-| `edgion-gateway/src/routes/http/proxy_http/pg_logging.rs` | `routes-shared` | source | changed | `B0055`: borrowed live method and canonical normalized path without per-request String allocation; response-processor finalization retained |
+| `edgion-gateway/src/routes/http/proxy_http/pg_logging.rs` | `routes-shared` | source | pending | Reopened after external 79b72bb3 RequestId/request-trace-id migration; prior terminal evidence retained |
 | `edgion-gateway/src/routes/http/proxy_http/pg_new_ctx.rs` | `routes-shared` | source | examined-no-change | OBS-METRICS-001 / `96f8ac6a`; B0176 support: consume derived listener port |
 | `edgion-gateway/src/routes/http/proxy_http/pg_request_body_filter.rs` | `routes-shared` | source | pending | External b19975ed requires review; prior B0184 evidence retained |
 | `edgion-gateway/src/routes/http/proxy_http/pg_request_body_filter_action.rs` | `routes-shared` | source | examined-no-change | B0185: retained ordered allocation-free body action dispatch after B0184 freshness review |
-| `edgion-gateway/src/routes/http/proxy_http/pg_request_filter.rs` | `routes-shared` | source | pending | External b19975ed requires review; prior B0175/B0176/B0183 evidence retained |
-| `edgion-gateway/src/routes/http/proxy_http/pg_response_filter.rs` | `routes-shared` | source | changed | B0186: fail closed on unclaimable staged replies and skip disabled/SSE compression header scans |
-| `edgion-gateway/src/routes/http/proxy_http/pg_response_head.rs` | `routes-shared` | source | examined-no-change | B0187: retained bounded response-head Hold/Release/Replace and final-writer ownership |
-| `edgion-gateway/src/routes/http/proxy_http/pg_upstream_peer.rs` | `routes-shared` | source | pending | External ec5eb474..b1bea189 requires review; prior B0188 evidence retained |
-| `edgion-gateway/src/routes/http/proxy_http/pg_upstream_request_filter.rs` | `routes-shared` | source | changed | B0189: guard deferred credentials against Connection nomination and avoid backend attribution for local failures |
+| `edgion-gateway/src/routes/http/proxy_http/pg_request_filter.rs` | `routes-shared` | source | pending | External 79b72bb3 RequestId/request-trace-id migration also changed this pending target; prior evidence retained |
+| `edgion-gateway/src/routes/http/proxy_http/pg_response_filter.rs` | `routes-shared` | source | pending | Reopened after external 79b72bb3 RequestId/request-trace-id migration; prior terminal evidence retained |
+| `edgion-gateway/src/routes/http/proxy_http/pg_response_head.rs` | `routes-shared` | source | pending | Reopened after external 79b72bb3 RequestId/request-trace-id migration; prior terminal evidence retained |
+| `edgion-gateway/src/routes/http/proxy_http/pg_upstream_peer.rs` | `routes-shared` | source | pending | External 79b72bb3 RequestId/request-trace-id migration also changed this pending target; prior evidence retained |
+| `edgion-gateway/src/routes/http/proxy_http/pg_upstream_request_filter.rs` | `routes-shared` | source | pending | Reopened after external 79b72bb3 RequestId/request-trace-id migration; prior terminal evidence retained |
 | `edgion-gateway/src/routes/http/proxy_http/pg_upstream_response_body_filter.rs` | `routes-shared` | source | changed | B0190: restore GRPCRoute and selected-backend read-only body-filter dispatch |
 | `edgion-gateway/src/routes/http/proxy_http/pg_upstream_response_filter.rs` | `routes-shared` | source | examined-no-change | B0191: retained final/interim attempt accounting and response-plugin lifecycle |
 | `edgion-gateway/src/routes/http/proxy_http/pg_upstream_response_trailer_filter.rs` | `routes-shared` | source | changed | B0192: prevent gateway-owned trailer failures from penalizing the selected backend |
-| `edgion-gateway/src/routes/http/proxy_http/preflight_handler.rs` | `routes-shared` | source | examined-no-change | B0193: preflight ownership retained; external `7825ef03` closed D0084 through canonical rule-only CORS support |
+| `edgion-gateway/src/routes/http/proxy_http/preflight_handler.rs` | `routes-shared` | source | pending | Reopened after external 79b72bb3 RequestId/request-trace-id migration; prior terminal evidence retained |
 | `edgion-gateway/src/routes/http/redirect_http.rs` | `routes-shared` | source | pending | External 9b787978..b297af6e requires review; prior changed: B0194: redact dedicated redirect access-log paths without changing the wire Location |
 | `edgion-gateway/src/routes/http/routes_mgr.rs` | `routes-shared` | source | changed | B0169: clear exact retained manager on stale/orphan removal |
 | `edgion-gateway/src/routes/http/session_persistence.rs` | `routes-shared` | source | changed | B0195: reuse multi-field cookie extraction and reject malformed expiry fallback |
@@ -664,7 +668,7 @@
 | `edgion-gateway/src/runtime/matching/tls.rs` | `runtime` | source | pending | Reopened after external 78a25c3a; prior B0222 TLS evidence retained; D0125 [configuration-memory cost accepted](../../../skills/04-review/tls/intentional-design/gateway-tls-candidate-ownership.md) |
 | `edgion-gateway/src/runtime/mod.rs` | `runtime` | source | examined-no-change | B0223: independent LGTM; retained explicit facade, identity 3/3 and matching 45/45 |
 | `edgion-gateway/src/runtime/server/base.rs` | `runtime` | source | changed | B0176: remove the now-unconsumed GatewayClass clone chain |
-| `edgion-gateway/src/runtime/server/error_response.rs` | `runtime` | source | changed | B0224: static HTML bytes, independent LGTM, response 11/11 and final status 8/8; D0126 separate |
+| `edgion-gateway/src/runtime/server/error_response.rs` | `runtime` | source | pending | Reopened after external 79b72bb3 RequestId/request-trace-id migration; prior terminal evidence retained |
 | `edgion-gateway/src/runtime/server/listener_builder.rs` | `runtime` | source | changed | B0176: derive minimal immutable listener facts at construction |
 | `edgion-gateway/src/runtime/server/mod.rs` | `runtime` | source | examined-no-change | B0225: independent LGTM; explicit writer/server facade retained; server tests 26/26 |
 | `edgion-gateway/src/runtime/server/proxy_protocol_policy.rs` | `runtime` | source | examined-no-change | B0226: independent LGTM; policy 12/12, listener trust 1/1, CLI 2/2; frozen trust lifecycle retained |

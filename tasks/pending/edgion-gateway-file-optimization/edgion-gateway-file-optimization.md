@@ -10,15 +10,17 @@
 | Priority | P1 |
 | Baseline commit | `d484e580` |
 | Scope | Every tracked file under `edgion-gateway/` |
-| Campaign status | in-progress at HEAD `6b34abd2`: B0301 PluginPolicy/LKG fix passed review and all commit gates; automatic local commit is active. |
-| Coverage | 550 current Gateway files: 242 changed, 188 examined-no-change, 16 deferred, 104 non-terminal; 3 historical rows are removed. External b93fd0f3..b1bea189 reopened six terminal files and retained five pending rows; earlier reopens remain pending. Historical evidence is retained. |
-| Active batch | B0301 HTTP plugin store exact staging and automatic local commit. Never push. |
-| Analysis queue | Empty while B0301 owns the serial lane. D0058 and D0127–D0154 track separate work; external task removals are retired only in coordinator records. |
+| Campaign status | in-progress at HEAD `e62956dc`: B0302 Redis reset-deadline correction passed all gates; automatic local commit is active. |
+| Coverage | 551 current Gateway files: 230 changed, 181 examined-no-change, 16 deferred, 124 non-terminal; 5 historical rows are removed and 1 renamed. External `79b72bb3` added RequestId/request-trace-id ownership, removed attachable TraceContext and reopened 18 affected terminal files. Historical evidence is retained. |
+| Active batch | B0302 Redis rate-limit exact staging and automatic local commit. Never push. |
+| Analysis queue | B0303 cohesive request-identity migration analysis-ready at `e62956dc`; promote only after B0302 commits and current-HEAD refresh. D0058 and D0127–D0154 track separate work. |
 | Integration freeze | 3,274 files. External `79b72bb3` integration changes were verified against the commit and clean worktree, then reconciled path-by-path; prior reconciliations retained. Campaign made no integration-test edit. |
 
 ## AI guide summary
 
 Audit `edgion-gateway` file by file in cohesive, dependency-aware batches. Make only evidence-backed, behavior-preserving improvements to local structure, duplication, type and error modeling, and bounded hot-path efficiency. Every implementation batch is independently reviewed, verified, recorded in one changelog, and committed locally without pushing.
+
+The current coverage plan was refreshed after external `79b72bb3`: RequestId and request-trace-id are separate cohesive ownership modules, the removed TraceContext paths remain historical rows, and externally affected terminal files are reopened without re-auditing unrelated code.
 
 ## Requirements
 

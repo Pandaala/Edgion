@@ -1,6 +1,6 @@
 # B0301 — HTTP Plugin Store
 
-- Pipeline state: in-progress; current-HEAD freshness and frozen integrations passed before plan-first promotion.
+- Pipeline state: terminal; changed and committed after current-HEAD freshness, independent review and all gates.
 - Active anchor: `edgion-gateway`; implementation baseline `6b34abd2` after current-HEAD refresh.
 - Target: `edgion-gateway/src/plugins/http/plugin_store.rs`, reopened after cross-namespace mirror LKG and later sync changes; B0062/B0121 history is evidence to revalidate.
 - Analyst must audit store publication, generation/lifecycle ownership, dependency resolution and LKG behavior across plugin compilation, conf-sync and request consumers, including all relevant external changes and tests.
@@ -44,4 +44,4 @@
 ## Handoff
 
 - Ledger/changelog updated: yes.
-- Commit: pending automatic local commit after all gates passed.
+- Commit: `e62956dc`.
