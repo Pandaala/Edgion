@@ -1,0 +1,35 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: dsl-response-http-timeout
+  namespace: edgion-default
+spec:
+  upstreamResponseFilterPlugins:
+    # A successful slow call proves that the same destination is reachable and
+    # the synchronous response hook can drive an async call through suspension.
+    - enable: true
+      type: Dsl
+      config:
+        name: "response-http-control"
+        source: |
+          let result = http.call("GET", "http://127.0.0.1:30001/delay/1", nil, 3000)
+          if result["status"] == 200 && result["body"] == "Delayed 1 seconds" {
+              resp.set_header("X-Dsl-Response-Http-Control", "ok")
+          } else {
+              resp.set_header("X-Dsl-Response-Http-Control", "failed")
+          }
+        errorPolicy: deny
+        httpMaxTimeoutMs: 3000
+    - enable: true
+      type: Dsl
+      config:
+        name: "response-http-timeout"
+        source: |
+          let result = http.call("GET", "http://127.0.0.1:30001/delay/1", nil, 3000)
+          if result["status"] == 0 && result["body"] == "" && len(result["headers"]) == 0 {
+              resp.set_header("X-Dsl-Response-Http-Result", "timeout")
+          } else {
+              resp.set_header("X-Dsl-Response-Http-Result", "unexpected")
+          }
+        errorPolicy: deny
+        httpMaxTimeoutMs: 10

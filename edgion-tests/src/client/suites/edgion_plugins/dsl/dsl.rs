@@ -2500,6 +2500,7 @@ impl TestSuite for DslTestSuite {
             Self::test_hmac_verify_valid_sig(),
             // Scenario 24: http.call — real external HTTP call from DSL script
             Self::test_http_call_success(),
+            super::response_http_timeout::response_http_timeout(),
             // Scenario 25: redis.* builtins — LinkSys-backed Redis operations
             Self::test_redis_roundtrip(),
             Self::test_redis_incr(),

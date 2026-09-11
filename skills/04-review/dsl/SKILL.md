@@ -25,6 +25,8 @@ before applying a decision to current code.
 
 ## Regression guards
 
+- [Response-stage HTTP suspension and timeout enforcement](regression-guards/response-stage-http-timeout.md)
+
 - [Request-to-response context continuity and request isolation](regression-guards/request-response-context-continuity.md)
 
 - [DSL Redis rate-limit policy contract](regression-guards/redis-rate-limit-policy-contract.md)
