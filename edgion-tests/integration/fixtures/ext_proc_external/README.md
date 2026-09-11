@@ -136,7 +136,12 @@ successfully bound during this process startup.
 ## TLS identity and rotation
 
 `GET /v1/tls` returns only public SHA-256 fingerprints, current A/B generation,
-listener readiness, active connection counts, and the fixture stream capacity.
+listener readiness, active connection counts, cumulative `accepted_connections`
+and `rpc_calls`, and the fixture stream capacity. TCP accepts are counted before
+the TLS handshake, including failed handshakes; RPCs include calls on reused
+connections and do not depend on request headers. Neither counter is reset by
+case reset or certificate rotation. The TLS policy recovery scenario uses their
+deltas to distinguish no-dial/no-call rejection from handshake or RPC failure.
 It never returns PEM or private-key content. Stream observations add:
 
 - `transport`: `plain`, `tls`, or `mtls`

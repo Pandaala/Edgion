@@ -66,11 +66,44 @@ tests. The initial test build failed because its new rcgen fixture referenced
 `key_pair`; the locked API uses `signing_key`. After correcting that fixture,
 the original exact test and the remaining selected tests passed.
 
-Builder success is not TLS handshake evidence. These tests use explicit defaults
-or local policies and do not establish live config reload, store publication,
-absence of network activity in a deployed Gateway, valid-invalid-valid recovery,
-or isolation of live stream tests from the unit tier. Those gaps require
-standalone work; existing integration files remain unchanged.
+Builder success is not TLS handshake evidence. The unit tests above use explicit
+defaults or local policies and do not establish live publication, absence of
+network activity, or recovery. Their historical results do not substitute for
+running the dedicated integration scenario.
+
+The `ExtProcTlsPolicyRecovery` dynamic scenario addresses task
+`add-ext-proc-unsupported-tls-policy-recovery-integration`. It uses the shared
+Controller/Gateway topology and the existing full-tier independent Go processor.
+Both failure modes exercise local hostname/SAN rejection, supported-policy
+recovery, inherited hostname/SAN rejection, whole-block local replacement, and
+supported inherited-policy recovery. It separately checks Controller advisory
+status, the published plugin phase and policy, generic HTTP 500 rejection, and
+successful TLS request/response header processing. Raw ConfigClient values are
+not a runtime publication acknowledgement: the scenario also waits for new
+per-resource IDs in `plugin_publication_inventory.http_generations`, route
+inventory/table counts, and actual EdgionGatewayConfig store counts. For the
+global policy, deleting/recreating the dedicated config provides an observable
+count transition after `recompute_global_config`; it does not restart processes.
+
+The fixture's cumulative TCP accept counter increments before TLS handshakes;
+its RPC counter counts calls even over reused connections and without test
+headers. Invalid-generation assertions compare both counters across plugin
+publication (including global changes) and traffic, alongside absent per-case processor observations. A
+successful phase waits for a completed TLS stream. The scenario restores global
+defaults by deleting its own config and polls for raw/runtime removal of its own resources
+on success and failure. Existing static scenarios remain intact.
+
+Scope limits: the global aggregator currently adopts a validation block from a
+unique CA-declaring config, so the fixture explicitly supplies a CA reference.
+This is not evidence about identity-only global aggregation. Each inherited
+phase publishes a new plugin entry after its global resource arrives; it does
+not establish global-only invalidation of an already compiled plugin. Endpoint
+counters require serial shared-topology execution. The external fixture stays
+in the full tier; fast dynamic sweeps report an explicit skip.
+
+Current validation of the new scenario is recorded after its integration and
+repository checks complete. See the scenario's
+[run contract](../../../../edgion-tests/integration/conf/EdgionPlugins/ExtProc/DynamicTest/README.md).
 
 Re-evaluate this guard when ExtProc implements either identity capability or when
 canonical TLS precedence, constructor failure handling, or publication policy

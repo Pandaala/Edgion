@@ -5,6 +5,7 @@ use crate::dynamic::scenario::Scenario;
 /// All registered dynamic scenarios.
 pub fn all() -> Vec<&'static Scenario> {
     vec![
+        crate::dynamic::scenarios::ext_proc_tls_policy_recovery::SCENARIO,
         crate::dynamic::scenarios::plugin_policy::SCENARIO,
         crate::dynamic::scenarios::delegation_parentref_gateway_collision::HTTP_SCENARIO,
         crate::dynamic::scenarios::delegation_parentref_gateway_collision::GRPC_SCENARIO,

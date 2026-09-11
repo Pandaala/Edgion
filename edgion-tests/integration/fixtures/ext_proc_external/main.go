@@ -372,6 +372,8 @@ type rotatingTLSListener struct {
 	active   map[uint64]*trackedConnection
 	byRemote map[string]connectionIdentity
 	nextID   atomic.Uint64
+	accepted atomic.Uint64
+	rpcCalls atomic.Uint64
 }
 
 func newRotatingTLSListener(base net.Listener, transport string, mutualTLS bool, materials *tlsMaterials) *rotatingTLSListener {
@@ -403,6 +405,8 @@ func (l *rotatingTLSListener) Accept() (net.Conn, error) {
 		if err != nil {
 			return nil, err
 		}
+		// Count before the handshake, including rejected or short-lived dials.
+		l.accepted.Add(1)
 		l.mu.Lock()
 		generation := l.current
 		leaf := l.materials.servers[generation]
@@ -497,7 +501,11 @@ type connectionStatsHandler struct{ listener *rotatingTLSListener }
 func (h connectionStatsHandler) TagRPC(ctx context.Context, _ *stats.RPCTagInfo) context.Context {
 	return ctx
 }
-func (h connectionStatsHandler) HandleRPC(context.Context, stats.RPCStats)   {}
+func (h connectionStatsHandler) HandleRPC(_ context.Context, event stats.RPCStats) {
+	if _, ok := event.(*stats.Begin); ok {
+		h.listener.rpcCalls.Add(1)
+	}
+}
 func (h connectionStatsHandler) HandleConn(context.Context, stats.ConnStats) {}
 func (h connectionStatsHandler) TagConn(ctx context.Context, info *stats.ConnTagInfo) context.Context {
 	identity, ok := h.listener.identityForRemote(info.RemoteAddr.String())
@@ -515,6 +523,8 @@ type tlsListenerSnapshot struct {
 	GenerationALeafSHA256 string `json:"generation_a_leaf_sha256,omitempty"`
 	GenerationBLeafSHA256 string `json:"generation_b_leaf_sha256,omitempty"`
 	ActiveConnections     int    `json:"active_connections"`
+	AcceptedConnections   uint64 `json:"accepted_connections"`
+	RPCCalls              uint64 `json:"rpc_calls"`
 }
 
 type tlsIdentitySnapshot struct {
@@ -560,6 +570,8 @@ func listenerSnapshot(listener *rotatingTLSListener, materials *tlsMaterials) tl
 		GenerationALeafSHA256: materials.servers["a"].fingerprint,
 		GenerationBLeafSHA256: materials.servers["b"].fingerprint,
 		ActiveConnections:     len(listener.active),
+		AcceptedConnections:   listener.accepted.Load(),
+		RPCCalls:              listener.rpcCalls.Load(),
 	}
 }
 

@@ -1012,6 +1012,41 @@ func TestTLSProcessUsesExactAcceptedServerLeaf(t *testing.T) {
 	}
 }
 
+func TestTLSCountersIncludeFailedHandshakesAndReusedRPCs(t *testing.T) {
+	fixture := startTestTLSFixture(t, false)
+	raw, err := net.DialTimeout("tcp", fixture.listener.Addr().String(), time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer raw.Close()
+	_ = raw.SetDeadline(time.Now().Add(2 * time.Second))
+	if _, err := raw.Write([]byte("not a TLS handshake")); err != nil {
+		t.Fatal(err)
+	}
+	buffer := make([]byte, 32)
+	if _, err := raw.Read(buffer); err != io.EOF {
+		t.Fatalf("invalid handshake was not closed: %v", err)
+	}
+	initial := listenerSnapshot(fixture.listener, fixture.materials)
+	if initial.AcceptedConnections != 1 || initial.ActiveConnections != 0 || initial.RPCCalls != 0 {
+		t.Fatalf("failed handshake counters = %+v", initial)
+	}
+	roots := serverRootPool(t, fixture.materialDirectory)
+	connection := dialFixture(t, fixture.listener.Addr().String(), roots, nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	for _, id := range []string{"counter-first", "counter-reused"} {
+		if err := processOnce(ctx, connection, id); err != nil {
+			t.Fatal(err)
+		}
+		terminalStream(t, fixture.store, id)
+	}
+	final := listenerSnapshot(fixture.listener, fixture.materials)
+	if final.AcceptedConnections != 2 || final.RPCCalls != 2 {
+		t.Fatalf("reused RPC counters = %+v", final)
+	}
+}
+
 func TestMTLSAttributesExactClientAAndBLeafs(t *testing.T) {
 	fixture := startTestTLSFixture(t, true)
 	roots := serverRootPool(t, fixture.materialDirectory)

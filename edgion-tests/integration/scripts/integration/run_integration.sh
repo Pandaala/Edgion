@@ -142,6 +142,11 @@ is_external_ext_proc_required() {
         return 1
     fi
 
+    # The resource-wide Gateway sweep includes the full-only TLS recovery scenario.
+    if [ "$G_RESOURCE" = "Gateway" ] && [ -z "$G_ITEM" ]; then
+        return 0
+    fi
+
     # Resource selection controls which tests execute even when --suites
     # overrides config loading, so an EdgionPlugins sweep/exact target always
     # needs the fixture.
@@ -606,6 +611,11 @@ run_dynamic_scenarios() {
 
     local scenario
     for scenario in $ids; do
+        if [ "$scenario" = "ExtProcTlsPolicyRecovery" ] && ! $FULL_TEST; then
+            log_info "Skipping ${scenario}: independent Go processor requires --full-test"
+            report_test "Dyn_${scenario}" "SKIP" "0"
+            continue
+        fi
         run_test "Dyn_${scenario}" \
             "${test_client} -g --dynamic-scenario ${scenario}" || test_failed=true
     done
@@ -2096,6 +2106,12 @@ run_all_tests() {
         run_dynamic_scenarios || test_failed=true
     fi
 
+    if $FULL_TEST && [ "$G_RESOURCE" = "EdgionPlugins" ] \
+        && { [ -z "$G_ITEM" ] || [ "$G_ITEM" = "ExtProc" ]; }; then
+        run_test "Dyn_ExtProcTlsPolicyRecovery" \
+            "${EDGION_TEST_CLIENT_BIN} -g --dynamic-scenario ExtProcTlsPolicyRecovery" || test_failed=true
+    fi
+
     if $test_failed; then
         return 1
     fi
@@ -2568,7 +2584,7 @@ main() {
     if { [ "$G_RESOURCE" = "EdgionBackend" ] && { [ -z "$G_ITEM" ] || [ "$G_ITEM" = "SingleProvider" ] || [ "$G_ITEM" = "AnthropicProvider" ] || [ "$G_ITEM" = "Resilience" ] || [ "$G_ITEM" = "CredentialExhaustion" ]; }; } \
         || { [ "$G_RESOURCE" = "GRPCRoute" ] && [ "$G_ITEM" = "TimeoutRewriteWire" ]; } \
         || { [ "$G_RESOURCE" = "HTTPRoute" ] && [ "$G_ITEM" = "Backend/InformationalRetry" ]; } \
-        || { [ "$G_RESOURCE" = "EdgionPlugins" ] && { [ "$G_ITEM" = "Waf" ] || [ "$G_ITEM" = "ForwardAuth" ]; }; }; then
+        || { [ "$G_RESOURCE" = "EdgionPlugins" ] && { [ "$G_ITEM" = "Waf" ] || [ "$G_ITEM" = "ForwardAuth" ] || [ "$G_ITEM" = "ExtProc" ]; }; }; then
         log_info "Skipping loopback-alias check for ${G_RESOURCE}${G_ITEM:+/${G_ITEM}}"
         report_test "Preflight_LoopbackAliases" "SKIP" "0" "not required by selected suites"
     elif ! ensure_loopback_aliases; then

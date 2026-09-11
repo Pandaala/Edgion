@@ -169,6 +169,11 @@ A few key facts:
   The added cases cover official Envoy v3 protobuf interoperability, header and body mutation,
   `ImmediateResponse`, clean terminal half-close, and a wall-clock long-idle stream. The default
   targeted run remains Go-free and fast.
+- `ExtProcTlsPolicyRecovery` is a full-tier dynamic scenario using that same
+  processor. Full ExtProc targets and full dynamic sweeps include it; a full
+  resource-wide Gateway run also prepares the fixture. Fast dynamic sweeps
+  report an explicit skip. It observes unsupported local/inherited TLS policy
+  rejection, zero TCP/RPC deltas, and recovery without restarting the topology.
 - `run_integration.sh` first checks `ulimit -n` and tries to raise it to `65535` if insufficient
 - `start_all_with_conf.sh` exports `EDGION_WORK_DIR` and `EDGION_GENERATED_SECRET_DIR`
 - The default full sweep runs its isolated standalone scenarios through a bounded parallel queue.

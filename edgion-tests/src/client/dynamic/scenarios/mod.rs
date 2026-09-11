@@ -41,4 +41,5 @@ pub mod waf_dynamic;
 
 pub mod request_id_dynamic;
 
+pub mod ext_proc_tls_policy_recovery;
 pub mod plugin_policy;

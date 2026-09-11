@@ -1,0 +1,19 @@
+# Rendered only by ExtProcTlsPolicyRecovery; never preloaded by static suites.
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: ext-proc-tls-recovery-close
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - type: ExtProc
+      config:
+        grpcService:
+          target: rendered-from-managed-fixture
+          timeoutMs: 2000
+          tls:
+            enabled: true
+        processingMode:
+          requestHeaderMode: SEND
+          responseHeaderMode: SEND
+        failureModeAllow: false

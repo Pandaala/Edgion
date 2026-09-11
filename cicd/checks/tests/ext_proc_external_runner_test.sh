@@ -85,10 +85,13 @@ expect_not_required() {
 }
 
 expect_required "" "" ""
+expect_required "Gateway" "" "Gateway"
 expect_required "EdgionPlugins" "" "base"
 expect_required "EdgionPlugins" "ExtProc" "base"
 expect_required "HTTPRoute" "Basic" "base,EdgionPlugins/ExtProc"
 expect_not_required false "EdgionPlugins" "ExtProc" "EdgionPlugins/ExtProc"
+expect_not_required false "Gateway" "" "Gateway"
+expect_not_required true "Gateway" "Security" "Gateway/Security"
 expect_not_required true "HTTPRoute" "Basic" "base,HTTPRoute/Basic"
 
 grep -Fq 'export EDGION_EXT_PROC_EXTERNAL_REQUIRED=1' "$RUNNER" \

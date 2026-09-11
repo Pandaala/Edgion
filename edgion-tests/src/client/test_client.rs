@@ -21,6 +21,7 @@ static INIT: Once = Once::new();
 static CAPABILITY_REGISTRY: OnceLock<String> = OnceLock::new();
 const KNOWN_GATEWAY_CAPABILITIES: &[&str] = &["body-buffering"];
 const EXPECTED_DYNAMIC_SCENARIO_IDS: &[&str] = &[
+    "ExtProcTlsPolicyRecovery",
     "PluginPolicyDynamic",
     "LinkSysDisabledTls",
     "DelegationParentRefGatewayCollisionHttp",
@@ -1468,6 +1469,7 @@ fn dynamic_port_contract(id: &str) -> Result<Option<(&'static str, port_config::
         }
         "AllEndpointStatusTls"
         | "EncryptedActiveHealthChecks"
+        | "ExtProcTlsPolicyRecovery"
         | "RequestMirrorReferenceGrant"
         | "DirectEndpointPortResolution"
         | "BasicAuthDynamic"
