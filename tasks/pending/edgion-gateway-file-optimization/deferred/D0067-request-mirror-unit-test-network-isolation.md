@@ -1,17 +1,17 @@
 # D0067 — Isolate RequestMirror Unit Tests from the Network
 
 ## Meta
-- Status: needs-implementation
+- Status: closed
 - Severity: medium
 - Discovered in: B0102, RequestMirror analysis
 - Category: test-isolation
-- Canonical task: [`tasks/todo/isolate-request-mirror-unit-tests-from-network.md`](../../../todo/isolate-request-mirror-unit-tests-from-network.md)
+- Resolution: [RequestMirror unit tests isolate the writer transport](../../../../skills/04-review/request-mirror/regression-guards/unit-tests-without-network.md)
 
 ## Evidence
-Four RequestMirror arming unit tests start the detached reqwest writer against TEST-NET destinations. Their synchronous assertions remain useful, but the spawned work violates the repository rule that unit tests must not make real network attempts and can create environment-dependent background behavior.
+The Gateway now substitutes only the detached writer's HTTP exchange with an in-memory consumer under `cfg(test)`. RequestMirror tests still exercise real sampling, endpoint selection, semaphore ownership, header preparation, committed snapshots, streaming, cancellation and outcome mapping without dialing a socket.
 
-## Why deferred
-The correct fix needs a narrow decision/writer seam that proves arming without dialing while retaining body-tee, cancellation, semaphore, and access-log ownership. Deleting the tests or weakening their assertions would lose important coverage, and this is separate from the shared-client lifecycle change in B0102.
+## Resolution
+The four arming paths await deterministic prepared/chunk/finished events and verify permit release. Production retains the canonical outbound writer, and the historical task was removed after completion. The maintained regression guard records the implementation boundary and verification evidence.
 
 ## Integration-test impact
 None. This is unit-test isolation; existing frozen RequestMirror integration coverage remains unchanged.

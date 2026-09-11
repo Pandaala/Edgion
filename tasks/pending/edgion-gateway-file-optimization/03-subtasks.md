@@ -495,13 +495,13 @@
 | `edgion-gateway/src/plugins/http/request_body_buffer/mod.rs` | `plugins-http-request-body-buffer` | source | examined-no-change | B0101 |
 | `edgion-gateway/src/plugins/http/request_body_buffer/plugin.rs` | `plugins-http-request-body-buffer` | source | examined-no-change | B0101 |
 | `edgion-gateway/src/plugins/http/request_id/mod.rs` | `plugins-http-request-id` | source | examined-no-change | B0303: bounded adapter and prepared-rule dispatch retained after cohesive migration review |
-| `edgion-gateway/src/plugins/http/request_mirror/budget.rs` | `plugins-http-request-mirror` | source | analysis-ready | B0304: examined-no-change candidate within cohesive RequestMirror refresh |
-| `edgion-gateway/src/plugins/http/request_mirror/config.rs` | `plugins-http-request-mirror` | source | analysis-ready | B0304: examined-no-change candidate within cohesive RequestMirror refresh |
-| `edgion-gateway/src/plugins/http/request_mirror/mirror_log.rs` | `plugins-http-request-mirror` | source | analysis-ready | B0304: examined-no-change candidate within cohesive RequestMirror refresh |
+| `edgion-gateway/src/plugins/http/request_mirror/budget.rs` | `plugins-http-request-mirror` | source | examined-no-change | B0304: independent LGTM; bounded process/instance admission retained |
+| `edgion-gateway/src/plugins/http/request_mirror/config.rs` | `plugins-http-request-mirror` | source | examined-no-change | B0304: independent LGTM; immutable bounded tuning retained |
+| `edgion-gateway/src/plugins/http/request_mirror/mirror_log.rs` | `plugins-http-request-mirror` | source | examined-no-change | B0304: independent LGTM; binary-owned access-log sink retained |
 | `edgion-gateway/src/plugins/http/request_mirror/mirror_state.rs` | `plugins-http-request-mirror` | source | examined-no-change | B0102 |
 | `edgion-gateway/src/plugins/http/request_mirror/mod.rs` | `plugins-http-request-mirror` | source | examined-no-change | B0102 |
-| `edgion-gateway/src/plugins/http/request_mirror/plugin.rs` | `plugins-http-request-mirror` | source | analysis-ready | B0304: examined-no-change candidate within cohesive RequestMirror refresh |
-| `edgion-gateway/src/plugins/http/request_mirror/tests/plugin_test.rs` | `plugins-http-request-mirror` | test | analysis-ready | B0304: examined-no-change candidate within cohesive RequestMirror refresh |
+| `edgion-gateway/src/plugins/http/request_mirror/plugin.rs` | `plugins-http-request-mirror` | source | examined-no-change | B0304: independent LGTM; body, egress, grant, trace and failure-isolation invariants retained |
+| `edgion-gateway/src/plugins/http/request_mirror/tests/plugin_test.rs` | `plugins-http-request-mirror` | test | examined-no-change | B0304: independent LGTM; deterministic no-network coverage retained |
 | `edgion-gateway/src/plugins/http/request_restriction/mod.rs` | `plugins-http-request-restriction` | source | examined-no-change | B0103 |
 | `edgion-gateway/src/plugins/http/request_restriction/plugin.rs` | `plugins-http-request-restriction` | source | changed | B0103 |
 | `edgion-gateway/src/plugins/http/response_rewrite/mod.rs` | `plugins-http-response-rewrite` | source | examined-no-change | B0104 |

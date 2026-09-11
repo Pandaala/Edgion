@@ -3,7 +3,7 @@
 ## Scope
 
 - Baseline: `8ae7f72f`.
-- Pipeline state: analysis-ready at `8ae7f72f`; refresh against current HEAD before promotion.
+- Pipeline state: terminal candidate; examined-no-change after fresh independent review at `bf5e3a6e`.
 - Active anchor crate: `edgion-gateway`.
 - Cohesive targets: `request_mirror/budget.rs`, `config.rs`, `mirror_log.rs`, `plugin.rs`, and `tests/plugin_test.rs`.
 - Exact technical write scope is not approved during analysis. Existing `edgion-tests/**`, campaign records, unrelated modules and user-protected paths are read-only.
@@ -20,3 +20,21 @@
 - One wider finding requires independent confirmation before task creation: RequestMirror standard fields lack consistent semantic validation across EdgionPlugins and non-Kubernetes HTTPRoute inputs. Its proper scope is resource/controller validation parity, not this Gateway batch.
 - The analyst also reported stale RequestMirror observability prose and a potentially stale D0067 tracking entry. These remain coordinator candidates until the independent reviewer verifies the current sources and knowledge records.
 - No integration edit or execution is proposed; existing integration files remain frozen.
+
+## Independent review
+
+- Reviewer `b0304_request_mirror_review`: LGTM with no Must Fix for the five targets. Per-instance/process admission, retained-body ownership, committed snapshots, ReferenceGrant, canonical egress/client controls, trace/access-log ownership, bounded labels and primary-request failure isolation remain coherent.
+- Fresh RequestMirror tests passed 26/26; Gateway no-tracing, metrics inventory, frozen paths and diff checks passed. No network or integration test ran.
+- The reviewer confirmed one broader correctness task, D0155, covering standard sampling validation plus Service status/dependency lifecycle across HTTPRoute and EdgionPlugins. It also approved the directly related metric-status prose correction and closure of externally completed D0067.
+
+## Handoff
+
+- All five ledger rows are terminal `examined-no-change`.
+- D0155 task/finding created; D0067 tracking reconciled without recreating its deleted task.
+- Commit: pending automatic local commit.
+
+## Verification
+
+- RequestMirror tests passed 26/26 during independent review.
+- Applied format plus locked workspace all-target check and Clippy passed. Agent-doc, SSA, metrics, Pingora source, Gateway no-tracing, English-only, diff and frozen-path guards all passed; Clippy retained only existing warnings.
+- No integration test was run or modified.

@@ -65,7 +65,7 @@ These entries are backlinks only. A linked `tasks/todo` file is the editable sou
 | D0063 — Validate rate-limit response header names canonically | needs-implementation | [campaign finding](D0063-rate-limit-response-header-validation.md) |
 | D0064 — Validate RealIp header names canonically | needs-implementation | [campaign finding](D0064-real-ip-header-name-validation.md) |
 | D0066 — Bound RequestMirror concurrency and buffering | fixed (2026-09-08) | [resolution](../../../../skills/04-review/request-mirror/regression-guards/mirror-resource-budgets.md) |
-| D0067 — Isolate RequestMirror unit tests from the network | needs-implementation | [campaign finding](D0067-request-mirror-unit-test-network-isolation.md) |
+| D0067 — Isolate RequestMirror unit tests from the network | closed | [resolution](../../../../skills/04-review/request-mirror/regression-guards/unit-tests-without-network.md) |
 | D0068 — Unify response-header mutation policy | needs-discussion | [campaign finding](D0068-response-header-mutation-policy.md) |
 | D0069 — Correct TraceContext documentation semantics | superseded (2026-09-11) | [resolution](../../../../skills/04-review/observability/intentional-design/request-trace-id-lifecycle.md) |
 | D0070 — Enforce TraceContext attachment cardinality | fixed (2026-09-11) | [resolution](../../../../skills/04-review/observability/intentional-design/request-trace-id-lifecycle.md) |
@@ -142,7 +142,7 @@ These entries are backlinks only. A linked `tasks/todo` file is the editable sou
 | Validate rate-limit response header names canonically | pending | [task](../../../todo/validate-rate-limit-response-header-names.md) |
 | Validate RealIp header names canonically | pending | [task](../../../todo/validate-real-ip-header-names.md) |
 | Verify RegionRoute validation across hot reload and management APIs | resolved externally in `2c01a075` | [maintained knowledge](../../../../skills/04-review/routing/regression-guards/region-route-effective-table-validation.md) |
-| Isolate RequestMirror unit tests from the network | pending | [task](../../../todo/isolate-request-mirror-unit-tests-from-network.md) |
+| Isolate RequestMirror unit tests from the network | completed | [resolution](../../../../skills/04-review/request-mirror/regression-guards/unit-tests-without-network.md) |
 | Unify response-header mutation policy | pending | [task](../../../todo/unify-response-header-mutation-policy.md) |
 | Correct TraceContext documentation semantics | retired externally | Task removed by user-synchronized `78a25c3a`; history retained in Git. |
 | Reduce WAF header materialization | pending | [task](../../../todo/reduce-waf-header-materialization.md) |
@@ -223,3 +223,4 @@ These entries are backlinks only. A linked `tasks/todo` file is the editable sou
 | Preserve ExtProc opaque header fidelity (D0152) | pending | [task](../../../todo/preserve-ext-proc-opaque-header-fidelity.md) |
 | Add ForwardAuth denial multivalue integration (D0153) | pending | [task](../../../todo/add-forward-auth-deny-multivalue-header-integration.md) |
 | Isolate OpenID Connect JWKS unit tests from network (D0154) | pending | [task](../../../todo/isolate-openid-connect-jwks-unit-tests-from-network.md) |
+| Complete RequestMirror standard validation and Service status (D0155) | pending | [task](../../../todo/complete-request-mirror-standard-validation-and-service-status.md) |

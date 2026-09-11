@@ -10,10 +10,10 @@
 | Priority | P1 |
 | Baseline commit | `d484e580` |
 | Scope | Every tracked file under `edgion-gateway/` |
-| Campaign status | in-progress at HEAD `8ae7f72f`: B0303 request-identity hot-path improvement passed independent review and all commit gates. |
-| Coverage | 551 current Gateway files: 232 changed, 183 examined-no-change, 16 deferred, 120 non-terminal; 5 historical rows are removed and 1 renamed. External `79b72bb3` added RequestId/request-trace-id ownership, removed attachable TraceContext and reopened 18 affected terminal files. Historical evidence is retained. |
-| Active batch | B0303 exact staging and automatic local commit. Never push. |
-| Analysis queue | B0304 cohesive RequestMirror refresh is analysis-ready at `8ae7f72f`; refresh only after B0303 commits. D0058 and D0127–D0154 track separate work. |
+| Campaign status | in-progress at HEAD `bf5e3a6e`: B0304 RequestMirror refresh is independently approved as examined-no-change and passed all commit gates. |
+| Coverage | 551 current Gateway files: 232 changed, 188 examined-no-change, 16 deferred, 115 non-terminal; 5 historical rows are removed and 1 renamed. External `79b72bb3` added RequestId/request-trace-id ownership, removed attachable TraceContext and reopened 18 affected terminal files. Historical evidence is retained. |
+| Active batch | B0304 exact staging and automatic local commit. Never push. |
+| Analysis queue | Select the next pending Gateway batch only after B0304 commits. D0058 and D0127–D0155 track separate work. |
 | Integration freeze | 3,274 files. External `79b72bb3` integration changes were verified against the commit and clean worktree, then reconciled path-by-path; prior reconciliations retained. Campaign made no integration-test edit. |
 
 ## AI guide summary

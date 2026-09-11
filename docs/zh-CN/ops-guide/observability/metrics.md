@@ -66,7 +66,7 @@ scrape_configs:
 | `edgion_backend_requests_total` | Counter | 可配置（见下文） | 唯一的单请求计数器。网关级总量和失败数通过 `sum(...)` 和 `status` 标签派生 |
 | `edgion_ctx_active` | Gauge | none | 当前进行中的请求上下文数 |
 | `edgion_gateway_request_duration_ms` | Histogram | none | 端到端请求延迟（数据面唯一的 Histogram），**默认禁用** |
-| `edgion_mirror_requests_total` | Counter | `status` | 请求镜像结果。`status` ∈ `ok` / `body_abandoned` / `channel_full` / `connect_err` / `connect_timeout` / `write_err` / `timeout`；`body_abandoned` 表示镜像停止前下游传输没有到达真实 EOS，Edgion 主动取消镜像，避免镜像目标把不完整上传当成完整 body。只有请求头携带传输层 EOS 才能证明空 body 已完整；HTTP/2 中仅有 `Content-Length: 0` 声明并不能提供该保证。镜像缓冲区满则是独立的 `channel_full` |
+| `edgion_mirror_requests_total` | Counter | `status` | 请求镜像结果。`status` ∈ `ok` / `body_abandoned` / `channel_full` / `buffer_limit` / `connect_err` / `connect_timeout` / `write_err` / `timeout`；`body_abandoned` 表示镜像停止前下游传输没有到达真实 EOS，Edgion 主动取消镜像，避免镜像目标把不完整上传当成完整 body。只有请求头携带传输层 EOS 才能证明空 body 已完整；HTTP/2 中仅有 `Content-Length: 0` 声明并不能提供该保证。单个镜像的有界 chunk 队列无法接受或排空 chunk 时记为 `channel_full`；单个镜像或进程级保留字节预算耗尽时记为 `buffer_limit` |
 | `edgion_rr_selector_truncated_total` | Counter | none | RoundRobin 选择器截断事件（后端数量超过 `u16::MAX`），用于告警配置异常 |
 | `edgion_link_sys_es_bulk_channel_full_total` | Counter | none | 提交时 Elasticsearch 生产者→批量循环通道已满；日志发送路径的持续反压信号 |
 | `edgion_outbound_template_fallback_total` | Counter | `field`（`timeout_ms`） | webhook / ForwardAuth 的 `timeoutMsTemplate` 渲染失败并回退到静态字段。详见[连接器 → Templates（模板）](../infrastructure/connectors.md#模板-templates) |

@@ -3,7 +3,7 @@
 ## Scope
 
 - Baseline: `e62956dc`.
-- Pipeline state: terminal candidate; changed, independently approved and through all commit gates.
+- Pipeline state: terminal; changed and committed after independent approval and all gates.
 - Active anchor crate: `edgion-gateway`.
 - Cohesive targets: `edgion-gateway/src/plugins/http/request_id/mod.rs`, `edgion-gateway/src/request_id_tests.rs`, `edgion-gateway/src/request_trace_id/mod.rs`, and `edgion-gateway/src/request_trace_id/w3c.rs`.
 - Exact technical write scope is not approved during analysis. Existing `edgion-tests/**`, campaign records, unrelated modules and user-protected paths are read-only.
@@ -41,4 +41,4 @@
 ## Handoff
 
 - Ledger/changelog updated: yes.
-- Commit: pending automatic local commit.
+- Commit: `bf5e3a6e`.

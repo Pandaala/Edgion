@@ -112,7 +112,7 @@ Gateway metric families include:
 | `edgion_backend_requests_total` | Counter | Total backend requests (grouped by backend) |
 | `edgion_gateway_request_bytes_total` | Counter | Gateway request bytes |
 | `edgion_gateway_response_bytes_total` | Counter | Gateway response bytes |
-| `edgion_mirror_requests_total` | Counter | Mirror requests (the `status` label distinguishes `ok` / `channel_full` / `connect_err` / `connect_timeout` / `write_err` / `timeout`; mirror is fire-and-forget; for per-request latency look up the `et` field in the mirror access log — no longer exposed as a histogram) |
+| `edgion_mirror_requests_total` | Counter | Mirror requests (the `status` label distinguishes `ok` / `body_abandoned` / `channel_full` / `buffer_limit` / `connect_err` / `connect_timeout` / `write_err` / `timeout`; mirror is fire-and-forget; for per-request latency look up the `et` field in the mirror access log — no longer exposed as a histogram) |
 
 The registry also covers FIPS host/module/policy state, Wasm runtime behavior, outbound/egress
 blocking and TLS, LinkSys health, circuit breakers, retries, and access-log backfill. Consult the
