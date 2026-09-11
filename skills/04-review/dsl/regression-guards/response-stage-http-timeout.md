@@ -105,12 +105,42 @@ Verified on 2026-09-11:
   No full unit-test or integration sweep is claimed. Manual targeted execution
   did not run the standard runner's final metrics/residue gates.
 
+### Current-worktree revalidation (2026-09-11)
+
+The implementation and task deletion were already present in `61c0455e` when
+this follow-up resumed. The earlier artifacts listed above were absent from
+this worktree; those historical results were not treated as fresh verification.
+
+- Fresh format, workspace check/Clippy, agent-doc, SSA-force, metrics-inventory,
+  Pingora-source, and diff checks passed. Clippy retained existing warnings.
+  The agent-doc guard initially found an unrelated missing task link in
+  `header-modifier-validation.md`; the link now preserves the historical
+  identifier and explicitly does not claim the deferred work was completed.
+- `prepare.sh` rebuilt all integration binaries and auxiliary executables.
+  An initial run with stale binaries failed capability inventory validation;
+  after rebuilding, the standard runner passed its preflights but stopped at
+  the missing macOS loopback aliases. Neither attempt is a passing integration run.
+- The existing shared-topology startup and DSL client commands listed above
+  passed 55/55 cases with zero infrastructure errors. The new case took
+  1.016 seconds. A temporary fixture with cap 3000 instead of 10 produced
+  exactly one expected failure: `dsl_response_http_timeout` reported expected
+  `timeout` versus actual `unexpected`; the other 54 cases passed. The original
+  fixture was restored and both markers and the complete `OK` body rechecked.
+- Fresh artifacts are in `tmp/integration_testing/testing_20260911_225936/`:
+  `dsl-timeout-report.json`, `dsl-timeout-negative-report.json`, the matching
+  test logs, `dsl-timeout-startup.log`, and `logs/resource_diff.log`. An earlier
+  startup in `testing_20260911_225904/` lost its test_server before readiness;
+  no test ran there, and the available log did not establish the exit cause.
+- Independent read-only review approved the implementation and knowledge.
+  Local/K8s fixture parity was checked statically. No cluster execution, full
+  test sweep, or standard runner final metrics/residue checks are claimed.
+
 Re-evaluate if the response hook, async VM dispatch, timeout resolution, failure
 map, slow endpoint, or scenario registration changes.
 
 ## Resolution references
 
-- `add-dsl-response-stage-http-call-timeout-integration-coverage.md` (created
+- D0139 / `add-dsl-response-stage-http-call-timeout-integration-coverage.md` (created
   2026-09-10, P1 test task): confirmed test gap; the user authorized adding
   coverage. Corrected with a new integration scenario and verified on
   2026-09-11; no production behavior change was needed.

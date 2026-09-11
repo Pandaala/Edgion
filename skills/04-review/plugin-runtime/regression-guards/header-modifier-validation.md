@@ -66,8 +66,9 @@ unguarded. Only checking values when writing headers would still allow partial
 execution. Both are insufficient.
 
 Runtime string preparation is deliberately unchanged in this fix. The user
-selected the validation-only subset; the remaining performance work is tracked
-in [typed header preparation](../../../../tasks/todo/prepare-gateway-api-header-modifier-runtime.md).
+selected the validation-only subset; the recorded follow-up identifier is
+`prepare-gateway-api-header-modifier-runtime.md`. That task is absent from the
+current tree; its absence does not establish completion of the deferred work.
 Request framing and response-field restrictions remain in their separate tasks;
 this correction does not establish a local restricted-header list.
 
@@ -110,4 +111,4 @@ delegation, static errors, execution ordering, and publication/recovery.
 - `complete-gateway-api-header-modifier-validation-and-preparation-parity`:
   validation-only correction verified on 2026-09-11 after user scope approval;
   typed preparation and the documented AI duplicate-execution parity gap remain
-  deferred in the linked follow-up, not fixed or accepted as unnecessary.
+  deferred under the recorded follow-up identifier, not fixed or accepted as unnecessary.
