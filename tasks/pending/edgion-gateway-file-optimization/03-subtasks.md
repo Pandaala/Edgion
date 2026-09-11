@@ -494,14 +494,14 @@
 | `edgion-gateway/src/plugins/http/request_access_policy/plugin.rs` | `plugins-http-request-access-policy` | source | changed | B0100 |
 | `edgion-gateway/src/plugins/http/request_body_buffer/mod.rs` | `plugins-http-request-body-buffer` | source | examined-no-change | B0101 |
 | `edgion-gateway/src/plugins/http/request_body_buffer/plugin.rs` | `plugins-http-request-body-buffer` | source | examined-no-change | B0101 |
-| `edgion-gateway/src/plugins/http/request_id/mod.rs` | `plugins-http-request-id` | source | analysis-ready | B0303: examined-no-change candidate within cohesive request-identity batch |
-| `edgion-gateway/src/plugins/http/request_mirror/budget.rs` | `plugins-http-request-mirror` | source | pending | Added by external commit `90a45683`; full audit pending |
-| `edgion-gateway/src/plugins/http/request_mirror/config.rs` | `plugins-http-request-mirror` | source | pending | Added by external commit `90a45683`; full audit pending |
-| `edgion-gateway/src/plugins/http/request_mirror/mirror_log.rs` | `plugins-http-request-mirror` | source | pending | Reopened after external 79b72bb3 RequestId/request-trace-id migration; prior terminal evidence retained |
+| `edgion-gateway/src/plugins/http/request_id/mod.rs` | `plugins-http-request-id` | source | examined-no-change | B0303: bounded adapter and prepared-rule dispatch retained after cohesive migration review |
+| `edgion-gateway/src/plugins/http/request_mirror/budget.rs` | `plugins-http-request-mirror` | source | analysis-ready | B0304: examined-no-change candidate within cohesive RequestMirror refresh |
+| `edgion-gateway/src/plugins/http/request_mirror/config.rs` | `plugins-http-request-mirror` | source | analysis-ready | B0304: examined-no-change candidate within cohesive RequestMirror refresh |
+| `edgion-gateway/src/plugins/http/request_mirror/mirror_log.rs` | `plugins-http-request-mirror` | source | analysis-ready | B0304: examined-no-change candidate within cohesive RequestMirror refresh |
 | `edgion-gateway/src/plugins/http/request_mirror/mirror_state.rs` | `plugins-http-request-mirror` | source | examined-no-change | B0102 |
 | `edgion-gateway/src/plugins/http/request_mirror/mod.rs` | `plugins-http-request-mirror` | source | examined-no-change | B0102 |
-| `edgion-gateway/src/plugins/http/request_mirror/plugin.rs` | `plugins-http-request-mirror` | source | pending | External 79b72bb3 RequestId/request-trace-id migration also changed this pending target; prior evidence retained |
-| `edgion-gateway/src/plugins/http/request_mirror/tests/plugin_test.rs` | `plugins-http-request-mirror` | test | pending | Added by external commit `90a45683`; full audit pending |
+| `edgion-gateway/src/plugins/http/request_mirror/plugin.rs` | `plugins-http-request-mirror` | source | analysis-ready | B0304: examined-no-change candidate within cohesive RequestMirror refresh |
+| `edgion-gateway/src/plugins/http/request_mirror/tests/plugin_test.rs` | `plugins-http-request-mirror` | test | analysis-ready | B0304: examined-no-change candidate within cohesive RequestMirror refresh |
 | `edgion-gateway/src/plugins/http/request_restriction/mod.rs` | `plugins-http-request-restriction` | source | examined-no-change | B0103 |
 | `edgion-gateway/src/plugins/http/request_restriction/plugin.rs` | `plugins-http-request-restriction` | source | changed | B0103 |
 | `edgion-gateway/src/plugins/http/response_rewrite/mod.rs` | `plugins-http-response-rewrite` | source | examined-no-change | B0104 |
@@ -589,9 +589,9 @@
 | `edgion-gateway/src/request_body/state/enabled.rs` | `request-body` | source | changed | REQ-BODY-CORE-001 / `a408d7fd`; REQ-BODY-BLOCKING-001 / `1eb48138` |
 | `edgion-gateway/src/request_body/storage.rs` | `request-body` | source | changed | REQ-BODY-CORE-001 / `a408d7fd`; full audit REQ-BODY-STORAGE-001 / `ae283e46`; REQ-BODY-BLOCKING-001 / `1eb48138` |
 | `edgion-gateway/src/request_body/storage_io_tests.rs` | `request-body` | test | changed | REQ-BODY-STORAGE-001 / `ae283e46` |
-| `edgion-gateway/src/request_id_tests.rs` | `request-trace-id` | test | analysis-ready | B0303: examined-no-change candidate within cohesive request-identity batch |
-| `edgion-gateway/src/request_trace_id/mod.rs` | `request-trace-id` | source | analysis-ready | B0303: bounded hot-path allocation improvements proposed |
-| `edgion-gateway/src/request_trace_id/w3c.rs` | `request-trace-id` | source | analysis-ready | B0303: generated traceparent ownership transfer proposed |
+| `edgion-gateway/src/request_id_tests.rs` | `request-trace-id` | test | examined-no-change | B0303: cross-layer RequestId lifecycle coverage retained after cohesive migration review |
+| `edgion-gateway/src/request_trace_id/mod.rs` | `request-trace-id` | source | changed | B0303: avoid unnecessary header construction and absent-value aggregate scans |
+| `edgion-gateway/src/request_trace_id/w3c.rs` | `request-trace-id` | source | changed | B0303: transfer generated traceparent allocation into HeaderValue |
 | `edgion-gateway/src/response_processor_driver.rs` | `response-processing` | source | examined-no-change | B0161: request-local processor ownership, cancellation leases and finalization retained |
 | `edgion-gateway/src/routes/common.rs` | `routes-shared` | source | changed | B0162: filter delegation reverse-lock refs from listener attachment |
 | `edgion-gateway/src/routes/grpc/conf_handler_impl.rs` | `routes-shared` | source | changed | B0163: share immutable rule-level metric handles across match units |

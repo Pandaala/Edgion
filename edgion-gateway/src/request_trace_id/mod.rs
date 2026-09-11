@@ -125,7 +125,7 @@ impl RequestTraceId {
             let root = w3c::generate_root(false);
             // Generated ASCII has a fixed valid header representation.
             (
-                HeaderValue::from_str(root.traceparent()).expect("generated W3C header is valid"),
+                HeaderValue::try_from(root.into_traceparent()).expect("generated W3C header is valid"),
                 None,
             )
         };
@@ -185,23 +185,24 @@ impl RequestTraceId {
         if let Some(value) = patch.echo_response {
             self.default_echo = value;
         }
-        let generated = self.standard_trace_id().and_then(|id| HeaderValue::from_str(id).ok());
-        if let Some(id) = self.correlation_ids.iter_mut().find(|id| id.key == DEFAULT_HEADER) {
-            if !id.implicit_default {
-                return;
+        let Some(index) = self.correlation_ids.iter().position(|id| id.key == DEFAULT_HEADER) else {
+            return;
+        };
+        if !self.correlation_ids[index].implicit_default {
+            return;
+        }
+        self.correlation_ids[index].forward_upstream = self.default_forward;
+        self.correlation_ids[index].echo_response = self.default_echo;
+        match patch.enabled {
+            Some(false) => {
+                self.correlation_ids[index].value = None;
             }
-            id.forward_upstream = self.default_forward;
-            id.echo_response = self.default_echo;
-            match patch.enabled {
-                Some(false) => {
-                    id.value = None;
-                }
-                Some(true) if id.value.is_none() => {
-                    id.value = generated;
-                    id.sensitive = false;
-                }
-                _ => {}
+            Some(true) if self.correlation_ids[index].value.is_none() => {
+                self.correlation_ids[index].value =
+                    self.standard_trace_id().and_then(|id| HeaderValue::from_str(id).ok());
+                self.correlation_ids[index].sensitive = false;
             }
+            _ => {}
         }
     }
 
@@ -229,17 +230,16 @@ impl RequestTraceId {
         let copied = incoming.or_else(|| source.filter(valid_value));
         let sensitive = copied.is_some() && (inbound_present || !matches!(rule.source, Some(KeyGet::TraceId)));
         let value = copied.or_else(|| rule.generate_when_missing.then(|| generate(&rule.generator)).flatten());
-        let current_bytes: usize = self
-            .correlation_ids
-            .iter()
-            .filter_map(|id| id.value.as_ref())
-            .map(|v| v.as_bytes().len())
-            .sum();
-        if value
-            .as_ref()
-            .is_some_and(|value| current_bytes + value.as_bytes().len() > MAX_TOTAL)
-        {
-            return ApplyOutcome::LimitExceeded;
+        if let Some(value) = value.as_ref() {
+            let current_bytes: usize = self
+                .correlation_ids
+                .iter()
+                .filter_map(|id| id.value.as_ref())
+                .map(|v| v.as_bytes().len())
+                .sum();
+            if current_bytes + value.as_bytes().len() > MAX_TOTAL {
+                return ApplyOutcome::LimitExceeded;
+            }
         }
         let outcome = if value.is_some() {
             ApplyOutcome::Established

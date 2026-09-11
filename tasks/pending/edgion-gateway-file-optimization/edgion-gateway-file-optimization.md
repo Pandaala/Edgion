@@ -10,10 +10,10 @@
 | Priority | P1 |
 | Baseline commit | `d484e580` |
 | Scope | Every tracked file under `edgion-gateway/` |
-| Campaign status | in-progress at HEAD `e62956dc`: B0302 Redis reset-deadline correction passed all gates; automatic local commit is active. |
-| Coverage | 551 current Gateway files: 230 changed, 181 examined-no-change, 16 deferred, 124 non-terminal; 5 historical rows are removed and 1 renamed. External `79b72bb3` added RequestId/request-trace-id ownership, removed attachable TraceContext and reopened 18 affected terminal files. Historical evidence is retained. |
-| Active batch | B0302 Redis rate-limit exact staging and automatic local commit. Never push. |
-| Analysis queue | B0303 cohesive request-identity migration analysis-ready at `e62956dc`; promote only after B0302 commits and current-HEAD refresh. D0058 and D0127–D0154 track separate work. |
+| Campaign status | in-progress at HEAD `8ae7f72f`: B0303 request-identity hot-path improvement passed independent review and all commit gates. |
+| Coverage | 551 current Gateway files: 232 changed, 183 examined-no-change, 16 deferred, 120 non-terminal; 5 historical rows are removed and 1 renamed. External `79b72bb3` added RequestId/request-trace-id ownership, removed attachable TraceContext and reopened 18 affected terminal files. Historical evidence is retained. |
+| Active batch | B0303 exact staging and automatic local commit. Never push. |
+| Analysis queue | B0304 cohesive RequestMirror refresh is analysis-ready at `8ae7f72f`; refresh only after B0303 commits. D0058 and D0127–D0154 track separate work. |
 | Integration freeze | 3,274 files. External `79b72bb3` integration changes were verified against the commit and clean worktree, then reconciled path-by-path; prior reconciliations retained. Campaign made no integration-test edit. |
 
 ## AI guide summary

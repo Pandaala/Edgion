@@ -3,7 +3,7 @@
 ## Scope
 
 - Baseline: `e62956dc`.
-- Pipeline state: terminal candidate; changed, independently approved and in commit-gate verification.
+- Pipeline state: terminal; changed and committed after independent approval and all gates.
 - Active anchor crate: `edgion-gateway`.
 - Target: `edgion-gateway/src/plugins/http/rate_limit_redis/plugin.rs`.
 - Exact technical write scope is not approved during analysis. Existing `edgion-tests/**`, campaign records, unrelated modules and user-protected paths are read-only.
@@ -41,4 +41,4 @@
 ## Handoff
 
 - Ledger/changelog updated: yes.
-- Commit: pending automatic local commit after all gates passed.
+- Commit: `8ae7f72f`.

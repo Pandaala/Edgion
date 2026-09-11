@@ -20,8 +20,13 @@ pub struct GeneratedRoot {
 }
 
 impl GeneratedRoot {
+    #[cfg(test)]
     pub fn traceparent(&self) -> &str {
         &self.traceparent
+    }
+
+    pub(super) fn into_traceparent(self) -> String {
+        self.traceparent
     }
 
     /// Borrow the 32-hex trace ID used for access-log correlation.
