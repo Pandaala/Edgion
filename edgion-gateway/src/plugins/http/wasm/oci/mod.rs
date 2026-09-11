@@ -347,7 +347,7 @@ impl RegistrySession {
         // before the size check fires.
         let (body, truncated) = stream_body_capped(resp, max_bytes)
             .await
-            .map_err(|e| GetError::Retryable(format!("read body of {url}: {e}")))?;
+            .map_err(|e| GetError::Retryable(format!("read body of {url}: {}", e.without_url())))?;
         if truncated {
             return Err(GetError::Definitive(format!(
                 "GET {url}: body exceeds {max_bytes} bytes"
@@ -368,7 +368,7 @@ impl RegistrySession {
             if e.is_redirect() {
                 GetError::Definitive("OCI redirect blocked by policy".to_string())
             } else {
-                GetError::Retryable(format!("GET {url}: {e}"))
+                GetError::Retryable(format!("GET {url}: {}", e.without_url()))
             }
         })
     }
@@ -405,7 +405,7 @@ impl RegistrySession {
         let resp = req
             .send()
             .await
-            .map_err(|e| GetError::Retryable(format!("token endpoint: {e}")))?;
+            .map_err(|e| GetError::Retryable(format!("token endpoint: {}", e.without_url())))?;
         let status = resp.status();
         if !status.is_success() {
             // Classify consistently with registry GET responses: 4xx (bad or
@@ -430,7 +430,7 @@ impl RegistrySession {
         }
         let (body, truncated) = stream_body_capped(resp, MAX_TOKEN_BYTES)
             .await
-            .map_err(|e| GetError::Retryable(format!("token response: {e}")))?;
+            .map_err(|e| GetError::Retryable(format!("token response: {}", e.without_url())))?;
         if truncated {
             return Err(GetError::Definitive(format!(
                 "token endpoint: response exceeds {MAX_TOKEN_BYTES} bytes"
@@ -958,6 +958,149 @@ mod tests {
 
         assert_eq!(response.bytes().await.unwrap(), b"ok".as_slice());
         assert_eq!(target.received_requests().await.unwrap().len(), 1);
+    }
+
+    async fn truncated_http_target() -> (
+        std::net::SocketAddr,
+        Arc<std::sync::atomic::AtomicUsize>,
+        tokio::task::JoinHandle<()>,
+    ) {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let connections = Arc::new(AtomicUsize::new(0));
+        let server = {
+            let connections = connections.clone();
+            tokio::spawn(async move {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                connections.fetch_add(1, Ordering::AcqRel);
+                let mut request = Vec::new();
+                let mut chunk = [0_u8; 1024];
+                while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+                    let read = stream.read(&mut chunk).await.unwrap();
+                    if read == 0 {
+                        break;
+                    }
+                    request.extend_from_slice(&chunk[..read]);
+                }
+                stream
+                    .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 64\r\nConnection: close\r\n\r\n{")
+                    .await
+                    .unwrap();
+                stream.shutdown().await.unwrap();
+            })
+        };
+        (address, connections, server)
+    }
+
+    #[tokio::test]
+    async fn blob_redirect_body_error_redacts_final_url() {
+        use std::sync::atomic::Ordering;
+
+        let registry = MockServer::start().await;
+        let (target_address, target_connections, target_server) = truncated_http_target().await;
+        let secret = "signed-query-secret";
+        let location = format!("http://cdn.test:{}/blob?signature={secret}", target_address.port());
+        Mock::given(method("GET"))
+            .and(path("/start"))
+            .respond_with(ResponseTemplate::new(307).insert_header("location", location.as_str()))
+            .expect(1)
+            .mount(&registry)
+            .await;
+
+        let spec = spec_for(&registry, "test/wasm:redirect-error");
+        let image = OciImageRef::parse(&spec.image).unwrap();
+        let mut session = RegistrySession::new(&image, &spec).unwrap();
+        session.client_blob = reqwest::Client::builder()
+            .no_proxy()
+            .resolve("cdn.test", target_address)
+            .redirect(blob_redirect_policy(
+                Url::parse(&registry.uri()).unwrap().origin(),
+                EgressPolicy { block_private: true },
+            ))
+            .build()
+            .unwrap();
+        let initial_url = format!("{}/start", registry.uri());
+
+        let result = tokio::time::timeout(
+            Duration::from_secs(2),
+            session.get_authed(true, &initial_url, "application/octet-stream", 64),
+        )
+        .await
+        .expect("redirected blob body read must complete within the test timeout");
+        let error = match result {
+            Err(GetError::Retryable(error)) => error,
+            Err(GetError::Definitive(_)) => panic!("truncated blob body must remain retryable"),
+            Ok(_) => panic!("truncated blob body must not succeed"),
+        };
+
+        assert!(
+            error.starts_with(&format!("read body of {initial_url}: ")),
+            "the safe initial registry URL must remain as error context"
+        );
+        assert!(!error.contains(secret), "the secret query must be redacted");
+        assert!(!error.contains("cdn.test"), "the final redirect URL must be redacted");
+        tokio::time::timeout(Duration::from_secs(2), target_server)
+            .await
+            .expect("redirect target fixture must complete within the test timeout")
+            .expect("redirect target fixture must join successfully");
+        assert_eq!(registry.received_requests().await.unwrap().len(), 1);
+        assert_eq!(target_connections.load(Ordering::Acquire), 1);
+    }
+
+    #[tokio::test]
+    async fn token_body_error_redacts_realm_url() {
+        use std::sync::atomic::Ordering;
+
+        let registry = MockServer::start().await;
+        let (target_address, target_connections, target_server) = truncated_http_target().await;
+        let secret = "realm-query-secret";
+        let realm = format!("http://auth.test:{}/token?credential={secret}", target_address.port());
+        let challenge_header = format!(r#"Bearer realm="{realm}",service="registry.test""#);
+        Mock::given(method("GET"))
+            .and(path("/start"))
+            .respond_with(ResponseTemplate::new(401).insert_header("www-authenticate", challenge_header.as_str()))
+            .expect(1)
+            .mount(&registry)
+            .await;
+
+        let spec = spec_for(&registry, "test/wasm:token-error");
+        let image = OciImageRef::parse(&spec.image).unwrap();
+        let mut session = RegistrySession::new(&image, &spec).unwrap();
+        session.client_deny = reqwest::Client::builder()
+            .no_proxy()
+            .resolve("auth.test", target_address)
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .unwrap();
+        let initial_url = format!("{}/start", registry.uri());
+
+        let result = tokio::time::timeout(
+            Duration::from_secs(2),
+            session.get_authed(false, &initial_url, "application/octet-stream", 16),
+        )
+        .await
+        .expect("Bearer token body read must complete within the test timeout");
+        let error = match result {
+            Err(GetError::Retryable(error)) => error,
+            Err(GetError::Definitive(_)) => panic!("truncated token body must remain retryable"),
+            Ok(_) => panic!("truncated token body must not succeed"),
+        };
+
+        assert!(
+            error.starts_with("token response: "),
+            "the token response classification must remain stable"
+        );
+        assert!(!error.contains(secret), "the secret realm query must be redacted");
+        assert!(!error.contains("auth.test"), "the token realm URL must be redacted");
+        tokio::time::timeout(Duration::from_secs(2), target_server)
+            .await
+            .expect("token target fixture must complete within the test timeout")
+            .expect("token target fixture must join successfully");
+        assert_eq!(registry.received_requests().await.unwrap().len(), 1);
+        assert_eq!(target_connections.load(Ordering::Acquire), 1);
     }
 
     #[test]

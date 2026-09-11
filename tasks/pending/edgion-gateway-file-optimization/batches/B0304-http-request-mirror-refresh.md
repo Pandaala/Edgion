@@ -3,7 +3,7 @@
 ## Scope
 
 - Baseline: `8ae7f72f`.
-- Pipeline state: terminal candidate; examined-no-change after fresh independent review at `bf5e3a6e`.
+- Pipeline state: terminal; examined-no-change and committed after fresh independent review and all gates.
 - Active anchor crate: `edgion-gateway`.
 - Cohesive targets: `request_mirror/budget.rs`, `config.rs`, `mirror_log.rs`, `plugin.rs`, and `tests/plugin_test.rs`.
 - Exact technical write scope is not approved during analysis. Existing `edgion-tests/**`, campaign records, unrelated modules and user-protected paths are read-only.
@@ -31,7 +31,7 @@
 
 - All five ledger rows are terminal `examined-no-change`.
 - D0155 task/finding created; D0067 tracking reconciled without recreating its deleted task.
-- Commit: pending automatic local commit.
+- Commit: `26e7ec7f`.
 
 ## Verification
 

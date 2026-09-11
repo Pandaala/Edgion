@@ -23,7 +23,7 @@ Keep this page grouped by responsibility instead of freezing a shorter historica
 3. Reject `--integration-testing-mode` unless the explicit production-unsafe environment gate is set.
 4. Install the Prometheus recorder before emitting startup metrics.
 5. Detect host/module FIPS state, enforce `require_fips`, resolve `fips_policy`, and publish gauges.
-6. Configure outbound-egress defaults and the Wasm OCI disk/pull cache.
+6. Configure outbound-egress defaults, Wasm OCI pull tuning, and the bounded process-memory artifact cache.
 7. Initialize rate-limit, LRU, sensitive-field, AllEndpointStatus, request-duration,
    backend-request, path-normalization, and access-log option globals.
 

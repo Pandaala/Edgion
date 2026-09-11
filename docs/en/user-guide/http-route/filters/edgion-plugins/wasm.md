@@ -139,7 +139,7 @@ share the same initialized module-cache entry.
 | `inline` | **Dev/test convenience.** Not a production distribution mechanism. | 1MiB decoded (hard cap); K8s object + etcd limits apply on top | Rides the CR through etcd; every conf_sync carries it in full |
 | `file` | Modules baked into the gateway image or mounted via initContainer | 64MiB hard cap | Image build / volume mount |
 | `url` | **Recommended for production** — internal artifact repository (Nexus, Artifactory, S3 presigned) | 64MiB hard cap | Gateway fetches directly, with `source.fetch` TLS/auth/retry and mandatory `sha256` |
-| `oci` | **Recommended for production** — Istio-style OCI image distribution | 64MiB blob and extracted-module hard caps | Gateway pulls directly from an OCI registry, with a content-addressed disk cache |
+| `oci` | **Recommended for production** — Istio-style OCI image distribution | 64MiB blob and extracted-module hard caps | Gateway pulls directly from an OCI registry, with a bounded content-addressed process-memory cache |
 
 This mirrors Istio's posture: Istio's `WasmPlugin` has **no inline field** at all and treats `oci://` as the primary channel with `http(s)` as the second. Edgion keeps `inline` for fast iteration but caps and warns on it; a ConfigMap-based form was evaluated and rejected (same etcd object cap as inline, plus ref-tracking complexity, no added value).
 

@@ -514,16 +514,16 @@
 | `edgion-gateway/src/plugins/http/wasm/host_abi.rs` | `plugins-http-wasm` | source | changed | B0108 |
 | `edgion-gateway/src/plugins/http/wasm/mod.rs` | `plugins-http-wasm` | source | examined-no-change | B0109 |
 | `edgion-gateway/src/plugins/http/wasm/oci/auth.rs` | `plugins-http-wasm` | source | changed | B0110 |
-| `edgion-gateway/src/plugins/http/wasm/oci/cache.rs` | `plugins-http-wasm` | source | pending | Reopened after external 7534a9bf; prior B0111 evidence retained |
-| `edgion-gateway/src/plugins/http/wasm/oci/cache_tests.rs` | `plugins-http-wasm` | test | pending | Added externally in 7534a9bf; requires campaign analysis |
-| `edgion-gateway/src/plugins/http/wasm/oci/memory_pipeline_tests.rs` | `plugins-http-wasm` | test | pending | Added externally in 7534a9bf; requires campaign analysis |
+| `edgion-gateway/src/plugins/http/wasm/oci/cache.rs` | `plugins-http-wasm` | source | examined-no-change | B0305: independent LGTM; bounded cache accounting, generations and claims retained |
+| `edgion-gateway/src/plugins/http/wasm/oci/cache_tests.rs` | `plugins-http-wasm` | test | examined-no-change | B0305: independent LGTM; deterministic cache ownership/eviction coverage retained |
+| `edgion-gateway/src/plugins/http/wasm/oci/memory_pipeline_tests.rs` | `plugins-http-wasm` | test | examined-no-change | B0305: independent LGTM; cancellation/coalescing/publication coverage retained |
 | `edgion-gateway/src/plugins/http/wasm/oci/manifest.rs` | `plugins-http-wasm` | source | changed | B0112 |
-| `edgion-gateway/src/plugins/http/wasm/oci/mod.rs` | `plugins-http-wasm` | source | pending | Reopened after external 7534a9bf; prior B0110 evidence retained |
+| `edgion-gateway/src/plugins/http/wasm/oci/mod.rs` | `plugins-http-wasm` | source | changed | B0305: redact remote final URLs from OCI reqwest transport/body errors |
 | `edgion-gateway/src/plugins/http/wasm/plugin.rs` | `plugins-http-wasm` | source | changed | B0113 |
 | `edgion-gateway/src/plugins/http/wasm/shared_data.rs` | `plugins-http-wasm` | source | changed | B0114 |
-| `edgion-gateway/src/plugins/http/wasm/vm_manager.rs` | `plugins-http-wasm` | source | pending | Reopened after external 7534a9bf; prior B0115 evidence retained |
+| `edgion-gateway/src/plugins/http/wasm/vm_manager.rs` | `plugins-http-wasm` | source | examined-no-change | B0305: independent LGTM; bounded permits, LKG and atomic VM generations retained |
 | `edgion-gateway/src/plugins/http/webhook_key_get/mod.rs` | `plugins-http-webhook-key-get` | source | examined-no-change | `B0116`: minimal private-module/public-type facade retained |
-| `edgion-gateway/src/plugins/http/webhook_key_get/plugin.rs` | `plugins-http-webhook-key-get` | source | pending | External 9b787978..b297af6e requires review; prior changed: B0117 |
+| `edgion-gateway/src/plugins/http/webhook_key_get/plugin.rs` | `plugins-http-webhook-key-get` | source | analysis-ready | B0306: examined-no-change candidate after external outbound-diagnostics refresh; prior B0117 evidence retained |
 | `edgion-gateway/src/plugins/mod.rs` | `plugins-root` | source | examined-no-change | `B0118`: compile-time facade and live selective re-exports retained |
 | `edgion-gateway/src/plugins/runtime/body_gate.rs` | `plugins-runtime` | source | changed | B0119 |
 | `edgion-gateway/src/plugins/runtime/conditional_filter.rs` | `plugins-runtime` | source | changed | B0120 |
