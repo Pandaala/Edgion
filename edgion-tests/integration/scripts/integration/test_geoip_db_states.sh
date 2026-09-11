@@ -74,8 +74,8 @@ TEST_TOKEN="integration-geoip-db-states-admin-token-0123456789"
 
 # Dedicated port block, clear of every other preflight's range (verified by
 # grepping every 58xxx literal across this directory before picking this
-# block): controller-noauth 58200-58213, gateway-admin-auth 58300-58306,
-# fips 58310-58316, plugin-policy 58320-58331, proxy-protocol 58420-58445,
+# block): controller-noauth 58200-58213, gateway-admin-auth 58300-58307,
+# fips 58310-58317, plugin-policy 58320-58331, proxy-protocol 58420-58445,
 # proxy-protocol-chain 58520-58544/58592.
 CTRL_ADMIN_PORT=58600
 CTRL_GRPC_PORT=58601
@@ -90,6 +90,7 @@ TCP_BACKEND_PORT=58609
 UPDATE_SERVER_PORT=58610
 HTTP_BACKEND_PORT=58611
 GW_TCP_CIDR_PORT=58612
+CTRL_METRICS_PORT=58613
 
 # =============================================================================
 # Prerequisites
@@ -935,6 +936,7 @@ EOF
     precheck_port "$CTRL_ADMIN_PORT" "controller admin" || return 1
     precheck_port "$CTRL_GRPC_PORT"  "controller gRPC"  || return 1
     precheck_port "$CTRL_PROBE_PORT" "controller probe" || return 1
+    precheck_port "$CTRL_METRICS_PORT" "controller metrics" || return 1
 
     echo "=== Starting backend Controller (gRPC sync source) ==="
     "$CONTROLLER_BIN" \
@@ -944,6 +946,7 @@ EOF
         --admin-listen "127.0.0.1:${CTRL_ADMIN_PORT}" \
         --grpc-listen "127.0.0.1:${CTRL_GRPC_PORT}" \
         --probe-listen "127.0.0.1:${CTRL_PROBE_PORT}" \
+        --metrics-listen "127.0.0.1:${CTRL_METRICS_PORT}" \
         > "$LOG_DIR/controller.log" 2>&1 &
     CTRL_PID=$!
 
@@ -951,6 +954,13 @@ EOF
             "http://127.0.0.1:${CTRL_PROBE_PORT}/ready" \
             "$CTRL_PID" \
             "controller /ready" 90; then
+        cat "$LOG_DIR/controller.log"
+        return 1
+    fi
+    if ! wait_for_url_200 \
+            "http://127.0.0.1:${CTRL_METRICS_PORT}/metrics" \
+            "$CTRL_PID" \
+            "controller metrics" 30; then
         cat "$LOG_DIR/controller.log"
         return 1
     fi

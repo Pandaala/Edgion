@@ -19,6 +19,7 @@ CTRL_PROBE_PORT=58922
 GW_ADMIN_PORT=58923
 GW_PROBE_PORT=58924
 GW_METRICS_PORT=58925
+CTRL_METRICS_PORT=58926
 LISTENER_PORT=58930
 TEST_SERVER_PORT=30063
 
@@ -131,6 +132,7 @@ server:
   grpc_listen: "127.0.0.1:${CTRL_GRPC_PORT}"
   admin_listen: "127.0.0.1:${CTRL_ADMIN_PORT}"
   probe_listen: "127.0.0.1:${CTRL_PROBE_PORT}"
+  metrics_listen: "127.0.0.1:${CTRL_METRICS_PORT}"
 logging:
   log_dir: "$WORK_DIR/logs"
   log_prefix: edgion-controller
@@ -148,10 +150,17 @@ EOF
 }
 
 start_controller() {
+    if nc -z 127.0.0.1 "$CTRL_METRICS_PORT" 2>/dev/null; then
+        echo "ERROR: controller metrics port ${CTRL_METRICS_PORT} is already in use" >&2
+        return 1
+    fi
     "$CONTROLLER_BIN" -c "$WORK_DIR/config/controller.yaml" --work-dir "$WORK_DIR" \
         > "$WORK_DIR/logs/controller.log" 2>&1 &
     CTRL_PID=$!
     wait_url "http://127.0.0.1:${CTRL_PROBE_PORT}/ready" "$CTRL_PID" 200 600 || {
+        tail -80 "$WORK_DIR/logs/controller.log" >&2; return 1;
+    }
+    wait_url "http://127.0.0.1:${CTRL_METRICS_PORT}/metrics" "$CTRL_PID" 200 300 || {
         tail -80 "$WORK_DIR/logs/controller.log" >&2; return 1;
     }
 }

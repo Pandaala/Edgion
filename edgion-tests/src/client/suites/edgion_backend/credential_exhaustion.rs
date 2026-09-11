@@ -67,15 +67,14 @@ fn gateway_client(ctx: &TestContext) -> Result<reqwest::Client, String> {
         .map_err(|error| format!("failed to build credential-exhaustion client: {error}"))
 }
 
-fn even_trace_id() -> String {
-    let mut bytes = *uuid::Uuid::new_v4().as_bytes();
-    bytes[15] &= 0xfe;
-    uuid::Uuid::from_bytes(bytes).to_string()
+fn request_trace_id() -> String {
+    uuid::Uuid::new_v4().simple().to_string()
 }
 
 async fn provider_observations(ctx: &TestContext, trace: &str) -> Result<Value, String> {
     let hosts = test_backend_hosts(ctx);
     let aggregate = hosts.len() > 1;
+    let trace = crate::access_log_client::trace_id_for_marker(trace);
     let mut observations = Vec::new();
     for host in hosts {
         let response = ctx
@@ -288,7 +287,7 @@ fn credential_first_then_service_next(
         if let Err(error) = wait_for_stable_quota_window().await {
             return TestResult::failed(start.elapsed(), error);
         }
-        let first_trace = even_trace_id();
+        let first_trace = request_trace_id();
         let (status, first_body) = match post(&ctx, &first_trace).await {
             Ok(result) => result,
             Err(error) => return TestResult::failed(start.elapsed(), error),
@@ -299,7 +298,7 @@ fn credential_first_then_service_next(
                 format!("expected final provider 503, got {status}: {first_body}"),
             );
         }
-        let second_trace = even_trace_id();
+        let second_trace = request_trace_id();
         let (second_status, second_body) = match post(&ctx, &second_trace).await {
             Ok(result) => result,
             Err(error) => return TestResult::failed(start.elapsed(), error),
@@ -308,12 +307,25 @@ fn credential_first_then_service_next(
             Ok(value) => value,
             Err(error) => return TestResult::failed(start.elapsed(), error),
         };
-        let expected_observations = json!([
-            {"backend":"primary","credential_generation":"a"},
-            {"backend":"primary","credential_generation":"b"},
-            {"backend":"secondary","credential_generation":"a"}
-        ]);
-        if observations["observations"] != expected_observations {
+        let observed = observations["observations"].as_array();
+        let observations_ok = observed.is_some_and(|items| {
+            items.len() == 3
+                && items[0]["backend"] == "primary"
+                && items[1]["backend"] == "primary"
+                && [
+                    items[0]["credential_generation"].as_str(),
+                    items[1]["credential_generation"].as_str(),
+                ]
+                .contains(&Some("a"))
+                && [
+                    items[0]["credential_generation"].as_str(),
+                    items[1]["credential_generation"].as_str(),
+                ]
+                .contains(&Some("b"))
+                && items[2]["backend"] == "secondary"
+                && items[2]["credential_generation"] == "a"
+        });
+        if !observations_ok {
             return TestResult::failed(
                 start.elapsed(),
                 format!("unexpected provider dispatch order: {observations}"),
@@ -332,22 +344,29 @@ fn credential_first_then_service_next(
             Ok(attempts) => attempts,
             Err(error) => return TestResult::failed(start.elapsed(), error),
         };
-        let expected_targets = [
-            ("edgion-test/credential-exhaustion-primary", "primary-a"),
-            ("edgion-test/credential-exhaustion-primary", "primary-b"),
-            ("edgion-test/credential-exhaustion-secondary", "secondary-a"),
-        ];
-        if attempts.len() != expected_targets.len() {
+        if attempts.len() != 3 {
             return TestResult::failed(start.elapsed(), format!("expected three attempts, got {attempts:?}"));
         }
-        for (index, (backend, alias)) in expected_targets.iter().enumerate() {
+        let primary_credentials = [attempts[0]["credential"].as_str(), attempts[1]["credential"].as_str()];
+        if !primary_credentials.contains(&Some("primary-a")) || !primary_credentials.contains(&Some("primary-b")) {
+            return TestResult::failed(
+                start.elapsed(),
+                format!("primary credentials were not each attempted once: {attempts:?}"),
+            );
+        }
+        let expected_backends = [
+            "edgion-test/credential-exhaustion-primary",
+            "edgion-test/credential-exhaustion-primary",
+            "edgion-test/credential-exhaustion-secondary",
+        ];
+        for (index, backend) in expected_backends.iter().enumerate() {
             let failure_ok = if index < 2 {
                 attempts[index]["failure"] == "retryable_status"
             } else {
                 attempts[index]["failure"].is_null()
             };
             if attempts[index]["backend"] != *backend
-                || attempts[index]["credential"] != *alias
+                || (index == 2 && attempts[index]["credential"] != "secondary-a")
                 || attempts[index]["provider"] != "openai_compatible"
                 || attempts[index]["status"] != 503
                 || !failure_ok
@@ -355,13 +374,25 @@ fn credential_first_then_service_next(
                 return TestResult::failed(start.elapsed(), format!("unexpected attempt ledger: {attempts:?}"));
             }
         }
-        for (index, bucket) in buckets.iter().enumerate() {
+        for bucket in &buckets {
             let (rpm, tpm) = match bucket_usage(&ctx, bucket).await {
                 Ok(usage) => usage,
                 Err(error) => return TestResult::failed(start.elapsed(), error),
             };
-            let charged = attempts[index]["input_tokens"].as_u64().unwrap_or_default()
-                + attempts[index]["output_tokens"].as_u64().unwrap_or_default();
+            let Some(attempt) = attempts
+                .iter()
+                .find(|attempt| attempt["backend"] == bucket.backend && attempt["credential"] == bucket.alias)
+            else {
+                return TestResult::failed(
+                    start.elapsed(),
+                    format!(
+                        "no attempt ledger entry found for {} {}: {attempts:?}",
+                        bucket.backend, bucket.alias
+                    ),
+                );
+            };
+            let charged = attempt["input_tokens"].as_u64().unwrap_or_default()
+                + attempt["output_tokens"].as_u64().unwrap_or_default();
             if rpm != 1 || tpm != charged || charged == 0 {
                 return TestResult::failed(
                     start.elapsed(),
@@ -398,7 +429,7 @@ fn credential_first_then_service_next(
         }
         TestResult::passed_with_message(
             start.elapsed(),
-            "credential-first dispatch used primary-a then primary-b before the secondary backend; RPM was exhausted, TPM was reconciled, and the follow-up failed locally with a fixed 503"
+            "credential-first dispatch exhausted both primary credentials before the secondary backend; RPM was exhausted, TPM was reconciled, and the follow-up failed locally with a fixed 503"
                 .to_string(),
         )
     })

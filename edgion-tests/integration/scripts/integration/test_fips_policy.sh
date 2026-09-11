@@ -47,7 +47,7 @@ esac
 TLS_HOST="fips.example.com"
 
 # Ports chosen to avoid the main integration stack (12xxx) and the other 58xxx
-# preflight tests (controller-noauth 58200-58213, gateway-admin-auth 58300-58306).
+# preflight tests (controller-noauth 58200-58213, gateway-admin-auth 58300-58307).
 GW_ADMIN_PORT=58310
 GW_PROBE_PORT=58311
 GW_METRICS_PORT=58312
@@ -55,6 +55,7 @@ CTRL_ADMIN_PORT=58313
 CTRL_GRPC_PORT=58314
 CTRL_PROBE_PORT=58315
 GW_HTTPS_PORT=58316
+CTRL_METRICS_PORT=58317
 
 # =============================================================================
 # Prerequisites
@@ -242,6 +243,7 @@ EOF
     precheck_port "$CTRL_ADMIN_PORT" "controller admin" || return 1
     precheck_port "$CTRL_GRPC_PORT"  "controller gRPC"  || return 1
     precheck_port "$CTRL_PROBE_PORT" "controller probe" || return 1
+    precheck_port "$CTRL_METRICS_PORT" "controller metrics" || return 1
 
     echo "=== Starting backend Controller (gRPC sync source) ==="
     "$CONTROLLER_BIN" \
@@ -251,6 +253,7 @@ EOF
         --admin-listen "127.0.0.1:${CTRL_ADMIN_PORT}" \
         --grpc-listen "127.0.0.1:${CTRL_GRPC_PORT}" \
         --probe-listen "127.0.0.1:${CTRL_PROBE_PORT}" \
+        --metrics-listen "127.0.0.1:${CTRL_METRICS_PORT}" \
         > "$LOG_DIR/controller.log" 2>&1 &
     CTRL_PID=$!
 
@@ -261,6 +264,9 @@ EOF
         cat "$LOG_DIR/controller.log"
         return 1
     fi
+    wait_for_url_200 \
+        "http://127.0.0.1:${CTRL_METRICS_PORT}/metrics" \
+        "$CTRL_PID" "controller metrics" 30 || return 1
     echo "PASS: backend Controller is ready (gRPC on 127.0.0.1:${CTRL_GRPC_PORT})"
 }
 

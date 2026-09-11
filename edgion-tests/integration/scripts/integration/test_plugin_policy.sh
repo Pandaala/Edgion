@@ -52,14 +52,15 @@ CONTROLLER_BIN="${EDGION_CONTROLLER_BIN:-$BIN_DIR/edgion-controller}"
 TEST_SERVER_BIN="${EDGION_TEST_SERVER_BIN:-$BIN_DIR/test_server}"
 FIXTURE_DIR="${REPO_ROOT}/edgion-tests/integration/conf/PluginPolicy"
 
-# Dedicated port block (avoids 12xxx shared stack and 58310-58316 used by the
-# FIPS preflight).
+# Dedicated port block (avoids the 12xxx shared stack and 58310-58317 used by
+# the FIPS preflight).
 CTRL_ADMIN_PORT=58320
 CTRL_GRPC_PORT=58321
 CTRL_PROBE_PORT=58322
 GW_ADMIN_PORT=58323
 GW_PROBE_PORT=58324
 GW_METRICS_PORT=58325
+CTRL_METRICS_PORT=58326
 GW_HTTP_PORT=58330
 GW_TCP_PORT=58331
 # test_server backends (same fixed ports the fixtures reference).
@@ -229,6 +230,7 @@ server:
   grpc_listen: "127.0.0.1:${CTRL_GRPC_PORT}"
   admin_listen: "127.0.0.1:${CTRL_ADMIN_PORT}"
   probe_listen: "127.0.0.1:${CTRL_PROBE_PORT}"
+  metrics_listen: "127.0.0.1:${CTRL_METRICS_PORT}"
 
 logging:
   log_dir: "${WORK_DIR}/logs"
@@ -258,18 +260,22 @@ restart_controller() {
         kill "$CTRL_PID" 2>/dev/null || true
         wait "$CTRL_PID" 2>/dev/null || true
     fi
-    # Give the OS a moment to release ALL controller ports (gRPC + admin +
-    # probe). A stale bind on any one of them makes the next controller exit
-    # non-zero during startup, so wait for all three to be free.
+    # Give the OS a moment to release all four Controller ports. A stale bind
+    # on any one of them must fail this phase before a new process starts.
     CTRL_PID=""
     for _ in $(seq 1 20); do
         if ! nc -z 127.0.0.1 "$CTRL_GRPC_PORT" 2>/dev/null \
            && ! nc -z 127.0.0.1 "$CTRL_ADMIN_PORT" 2>/dev/null \
-           && ! nc -z 127.0.0.1 "$CTRL_PROBE_PORT" 2>/dev/null; then
+           && ! nc -z 127.0.0.1 "$CTRL_PROBE_PORT" 2>/dev/null \
+           && ! nc -z 127.0.0.1 "$CTRL_METRICS_PORT" 2>/dev/null; then
             break
         fi
         sleep 1
     done
+    precheck_port "$CTRL_GRPC_PORT" "controller gRPC" || return 1
+    precheck_port "$CTRL_ADMIN_PORT" "controller admin" || return 1
+    precheck_port "$CTRL_PROBE_PORT" "controller probe" || return 1
+    precheck_port "$CTRL_METRICS_PORT" "controller metrics" || return 1
     log_info "starting controller (${label})"
     "$CONTROLLER_BIN" \
         -c "$config_file" \
@@ -281,6 +287,8 @@ restart_controller() {
         tail -40 "$CTRL_LOG" 2>/dev/null || true
         return 1
     fi
+    wait_for_url_200 "http://127.0.0.1:${CTRL_METRICS_PORT}/metrics" \
+        "$CTRL_PID" "controller metrics (${label})" 30 || return 1
     log_ok "controller ready (${label})"
 }
 

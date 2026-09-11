@@ -54,6 +54,7 @@ CTRL_PROBE_PORT=58522
 GW_ADMIN_PORT=58523
 GW_PROBE_PORT=58524
 GW_METRICS_PORT=58525
+CTRL_METRICS_PORT=58526
 GW_PP_PORT=58530      # hop 1: PROXY protocol required
 GW_HOP2_PORT=58531    # hop 2: plain HTTP, reached from hop 1
 # HAProxy fronts hop 1, speaking PROXY protocol v2.
@@ -200,6 +201,7 @@ server:
   grpc_listen: "127.0.0.1:${CTRL_GRPC_PORT}"
   admin_listen: "127.0.0.1:${CTRL_ADMIN_PORT}"
   probe_listen: "127.0.0.1:${CTRL_PROBE_PORT}"
+  metrics_listen: "127.0.0.1:${CTRL_METRICS_PORT}"
 
 logging:
   log_dir: "${WORK_DIR}/logs"
@@ -235,6 +237,7 @@ start_test_server() {
 }
 
 start_controller() {
+    precheck_port "$CTRL_METRICS_PORT" "controller metrics" || return 1
     log_section "Start controller"
     CTRL_LOG="${WORK_DIR}/logs/controller.log"
     "$CONTROLLER_BIN" \
@@ -247,6 +250,8 @@ start_controller() {
         tail -40 "$CTRL_LOG" 2>/dev/null || true
         return 1
     fi
+    wait_for_url_200 "http://127.0.0.1:${CTRL_METRICS_PORT}/metrics" \
+        "$CTRL_PID" "controller metrics" 30 || return 1
     log_ok "controller ready"
 }
 

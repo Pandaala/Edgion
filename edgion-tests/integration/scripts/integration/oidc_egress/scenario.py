@@ -196,7 +196,10 @@ class Scenario:
         (work / "config" / "crd").symlink_to(repo / "config" / "crd", target_is_directory=True)
         self.ports = {}
         reservations = []
-        for key in ["admin", "grpc", "probe", "gw_admin", "gw_probe", "metrics", "http"]:
+        for key in [
+            "admin", "grpc", "probe", "controller_metrics", "gw_admin",
+            "gw_probe", "metrics", "http",
+        ]:
             reservation = socket.socket()
             reservation.bind(("127.0.0.1", 0))
             reservations.append(reservation)
@@ -469,6 +472,7 @@ server:
   grpc_listen: "127.0.0.1:{ports['grpc']}"
   admin_listen: "127.0.0.1:{ports['admin']}"
   probe_listen: "127.0.0.1:{ports['probe']}"
+  metrics_listen: "127.0.0.1:{ports['controller_metrics']}"
 conf_center:
   type: file_system
   conf_dir: {json.dumps(str(self.work / 'conf'))}
@@ -513,6 +517,11 @@ metrics:
                 return request(probe, "/ready")[0] == 200
 
             wait_for(f"{name} readiness", ready)
+            if name == "controller":
+                wait_for(
+                    "controller metrics readiness",
+                    lambda: request(ports["controller_metrics"], "/metrics")[0] == 200,
+                )
 
     def metrics(self):
         status, _, body = request(self.ports["metrics"], "/metrics")

@@ -74,6 +74,7 @@ CTRL_PROBE_PORT=58422
 GW_ADMIN_PORT=58423
 GW_PROBE_PORT=58424
 GW_METRICS_PORT=58425
+CTRL_METRICS_PORT=58426
 GW_PP_PORT=58430      # selected by a required policy
 GW_PLAIN_PORT=58431   # unselected and therefore disabled
 GW_TRUST_PORT=58432   # trustedSources: only 127.0.0.1 may supply a header
@@ -227,6 +228,7 @@ server:
   grpc_listen: "127.0.0.1:${CTRL_GRPC_PORT}"
   admin_listen: "127.0.0.1:${CTRL_ADMIN_PORT}"
   probe_listen: "127.0.0.1:${CTRL_PROBE_PORT}"
+  metrics_listen: "127.0.0.1:${CTRL_METRICS_PORT}"
 
 logging:
   log_dir: "${WORK_DIR}/logs"
@@ -262,6 +264,7 @@ start_test_server() {
 }
 
 start_controller() {
+    precheck_port "$CTRL_METRICS_PORT" "controller metrics" || return 1
     log_section "Start controller"
     CTRL_LOG="${WORK_DIR}/logs/controller.log"
     "$CONTROLLER_BIN" \
@@ -274,6 +277,8 @@ start_controller() {
         tail -40 "$CTRL_LOG" 2>/dev/null || true
         return 1
     fi
+    wait_for_url_200 "http://127.0.0.1:${CTRL_METRICS_PORT}/metrics" \
+        "$CTRL_PID" "controller metrics" 30 || return 1
     log_ok "controller ready"
 }
 

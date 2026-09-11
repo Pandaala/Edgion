@@ -46,6 +46,7 @@ GW_METRICS_PORT=58302
 CTRL_ADMIN_PORT=58303
 CTRL_GRPC_PORT=58304
 CTRL_PROBE_PORT=58305
+CTRL_METRICS_PORT=58307
 # Data-plane listener port for the seeded Gateway. The gateway binds this when it
 # configures listeners during startup; it must be free but is never connected to.
 GW_DATAPLANE_PORT=58306
@@ -191,6 +192,7 @@ EOF
     precheck_port "$CTRL_ADMIN_PORT" "controller admin" || return 1
     precheck_port "$CTRL_GRPC_PORT"  "controller gRPC"  || return 1
     precheck_port "$CTRL_PROBE_PORT" "controller probe" || return 1
+    precheck_port "$CTRL_METRICS_PORT" "controller metrics" || return 1
 
     echo "=== Starting backend Controller (gRPC sync source) ==="
     "$CONTROLLER_BIN" \
@@ -200,6 +202,7 @@ EOF
         --admin-listen "127.0.0.1:${CTRL_ADMIN_PORT}" \
         --grpc-listen "127.0.0.1:${CTRL_GRPC_PORT}" \
         --probe-listen "127.0.0.1:${CTRL_PROBE_PORT}" \
+        --metrics-listen "127.0.0.1:${CTRL_METRICS_PORT}" \
         > "$LOG_DIR/controller.log" 2>&1 &
     CTRL_PID=$!
 
@@ -214,6 +217,9 @@ EOF
         cat "$LOG_DIR/controller.log"
         return 1
     fi
+    wait_for_url_200 \
+        "http://127.0.0.1:${CTRL_METRICS_PORT}/metrics" \
+        "$CTRL_PID" "controller metrics" 30 || return 1
     echo "PASS: backend Controller is ready (gRPC on 127.0.0.1:${CTRL_GRPC_PORT})"
 }
 
