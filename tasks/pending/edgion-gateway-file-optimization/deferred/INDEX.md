@@ -76,7 +76,7 @@ These entries are backlinks only. A linked `tasks/todo` file is the editable sou
 | D0080 — Reduce per-chunk condition extraction cost | needs-investigation | [campaign finding](D0080-response-body-condition-extraction-cost.md) |
 | D0081 — Fail closed on plugin IP matcher limit violations | needs-investigation | [campaign finding](D0081-plugin-ip-matcher-limit-activation.md) |
 | D0085 — Complete native Gateway API CORS validation parity | needs-implementation | [campaign finding](D0085-native-gateway-api-cors-validation-parity.md) |
-| D0086 — Decide credentialed native CORS expose-headers wildcard semantics | needs-discussion | [campaign finding](D0086-credentialed-native-cors-expose-headers-wildcard.md) |
+| D0086 — Credentialed native CORS exposure policy | resolved externally in `fcd34424` | [maintained decision](../../../../skills/04-review/cors/intentional-design/native-credentialed-exposure-policy.md) |
 | D0087 — Add debug access-log wire integration coverage | resolved externally in `bfc2691e` | [maintained knowledge](../../../../skills/04-review/observability/regression-guards/debug-access-log-wire-and-lifecycle.md) |
 | D0088 — Define a bounded debug access-log response surface | needs-discussion | [campaign finding](D0088-bounded-debug-access-log-response-surface.md) |
 | D0089 — Fail closed on missing Gateway API ExtensionRef configuration | needs-implementation | [campaign finding](D0089-fail-closed-missing-extensionref-configuration.md) |
@@ -156,7 +156,7 @@ These entries are backlinks only. A linked `tasks/todo` file is the editable sou
 | Reduce per-chunk response-body condition extraction cost | pending | [task](../../../todo/reduce-response-body-condition-extraction-cost.md) |
 | Fail closed on plugin IP matcher limit violations | pending | [task](../../../todo/fail-closed-plugin-ip-matcher-limit-violations.md) |
 | Complete native Gateway API CORS validation parity | pending | [task](../../../todo/complete-native-gateway-api-cors-validation-parity.md) |
-| Decide credentialed native CORS expose-headers wildcard semantics | retired after external completion | Task removed in synchronized history through b297af6e; retained in Git |
+| Decide credentialed native CORS expose-headers wildcard semantics | completed externally in `fcd34424`; task retired | [maintained decision](../../../../skills/04-review/cors/intentional-design/native-credentialed-exposure-policy.md) |
 | Add debug access-log wire integration coverage | resolved externally in `bfc2691e` | [maintained knowledge](../../../../skills/04-review/observability/regression-guards/debug-access-log-wire-and-lifecycle.md) |
 | Define a bounded debug access-log response surface | pending | [task](../../../todo/define-bounded-debug-access-log-response-surface.md) |
 | Fail closed on missing Gateway API ExtensionRef configuration | pending | [task](../../../todo/fail-closed-missing-gateway-api-extensionref-configuration.md) |

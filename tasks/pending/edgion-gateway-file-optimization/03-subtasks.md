@@ -533,7 +533,7 @@
 | `edgion-gateway/src/plugins/runtime/dye_plan.rs` | `plugins-runtime` | source | examined-no-change | B0308: independent LGTM; source inventory remains a bounded smoke guard backed by executable stage/producer coverage |
 | `edgion-gateway/src/plugins/runtime/edgion_config_data/conf_handler.rs` | `plugins-runtime` | source | changed | B0123: decision-scoped immutable snapshot capture and torn-generation regression |
 | `edgion-gateway/src/plugins/runtime/edgion_config_data/mod.rs` | `plugins-runtime` | source | changed | B0123: crate-private snapshot API export |
-| `edgion-gateway/src/plugins/runtime/gateway_api_filters/cors_filter.rs` | `plugins-runtime` | source | pending | External 9b787978..b297af6e requires review; prior changed: B0124: bounded inline CORS header pairs and validated-only construction |
+| `edgion-gateway/src/plugins/runtime/gateway_api_filters/cors_filter.rs` | `plugins-runtime` | source | examined-no-change | B0309: independent LGTM; B0124 inline bounds and resolved D0086 credentialed exposure policy retained |
 | `edgion-gateway/src/plugins/runtime/gateway_api_filters/debug_access_log.rs` | `plugins-runtime` | source | changed | B0125: suppress raw Wrap-mode client exposure before snapshot construction |
 | `edgion-gateway/src/plugins/runtime/gateway_api_filters/extension_ref.rs` | `plugins-runtime` | source | pending | Reopened after external 79b72bb3 RequestId/request-trace-id migration; prior terminal evidence retained |
 | `edgion-gateway/src/plugins/runtime/gateway_api_filters/header_modifier.rs` | `plugins-runtime` | source | changed | B0127: shared construction-time first-equivalent header plan |

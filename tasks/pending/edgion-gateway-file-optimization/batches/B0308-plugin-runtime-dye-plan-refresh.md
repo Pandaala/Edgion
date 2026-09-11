@@ -3,7 +3,7 @@
 ## Scope
 
 - Baseline: `bfb8fe89`.
-- Pipeline state: terminal candidate; examined-no-change after fresh independent review at `bfb8fe89`.
+- Pipeline state: terminal; examined-no-change and committed after fresh independent review and all gates.
 - Active anchor crate: `edgion-gateway`.
 - Target: `edgion-gateway/src/plugins/runtime/dye_plan.rs`.
 - Exact technical write scope is not approved during analysis. Existing `edgion-tests/**`, campaign records, unrelated modules and user-protected paths are read-only.
@@ -29,4 +29,4 @@
 ## Handoff
 
 - Ledger/changelog updated: yes.
-- Commit: pending automatic local commit.
+- Commit: `fea8d812`.
