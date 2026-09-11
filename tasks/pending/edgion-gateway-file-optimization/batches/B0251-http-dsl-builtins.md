@@ -43,6 +43,6 @@
 
 ## Deferred Findings
 
-- `tasks/todo/bound-and-redact-dsl-redis-error-results.md` owns the independently confirmed unchecked dependency/caller-controlled Redis error-string boundary.
-- `tasks/todo/avoid-dsl-redis-link-key-clones.md` owns the confirmed per-call resolved Redis link-key clone.
+- standalone follow-up task owns the independently confirmed unchecked dependency/caller-controlled Redis error-string boundary.
+- standalone follow-up task owns the confirmed per-call resolved Redis link-key clone.
 - Request-metadata projection remains a measurement candidate, not a promoted task. The HMAC quick-start issue already exists; no duplicate was created. Config-range speculation was dropped.

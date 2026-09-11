@@ -6,7 +6,6 @@
 - Priority: P1
 - Category: correctness
 - Severity: medium
-- Discovered in: B0304 at `bf5e3a6e`
 
 ## Problem
 

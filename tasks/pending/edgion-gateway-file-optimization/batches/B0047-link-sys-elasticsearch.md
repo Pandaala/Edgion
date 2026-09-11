@@ -9,7 +9,7 @@
 - Allowed support files: colocated unit tests in the six target files only; no cross-crate support is authorized before analysis proves necessity
 - Forbidden files: every existing `edgion-tests/**` path, unrelated LinkSys providers/runtime/template files, shared schemas or common mechanisms without exact necessity evidence, and protected user paths
 - Pre-existing protected paths: `tasks/pending/request-body-capability-next/`, `tasks/waf-todo/`, `waf-architecture-and-multi-pattern-matching.md`, and `tasks/handoff/`
-- Exact commit allow-list: the six target files; `03-subtasks.md`; `07-changelog.md`; `edgion-gateway-file-optimization.md`; `deferred/INDEX.md`; any analyst-verified new deferred record; the B0046 and B0047 batch records
+- Exact commit allow-list: the six target files; `03-subtasks.md`; `07-changelog.md`; `edgion-gateway-file-optimization.md`; legacy follow-up index; any analyst-verified new deferred record; the B0046 and B0047 batch records
 
 ## Context and value gate
 
@@ -35,7 +35,7 @@
 - Reviewer: `b0047_independent_review`
 - Verdict: LGTM after correction; the zero-period panic path, clamp semantics, regression tests, unchanged consumers, and five no-change files were independently confirmed.
 - Must Fix resolution: the first targeted compile exposed an invalid test-only `Default` struct update; `b0047_test_diagnostic` attributed it to the batch, the implementer changed it to an explicit `EsBulk` literal, 15 focused tests passed, and the reviewer approved the latest diff.
-- Deferred observations: [`D0007`](../deferred/D0007-elasticsearch-bulk-item-retry-semantics.md) records the broader item-level transient retry contract.
+- Deferred observations: `D0007` records the broader item-level transient retry contract.
 - Adjudication: none.
 
 ## Verification

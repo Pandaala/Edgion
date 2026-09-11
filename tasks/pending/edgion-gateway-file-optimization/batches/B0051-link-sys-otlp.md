@@ -8,7 +8,7 @@
 - Allowed support files: colocated unit tests in the two target files only; no cross-crate support is authorized
 - Forbidden files: every existing `edgion-tests/**` path, logging producers, other providers, runtime/template files, shared schemas, and protected user paths
 - Pre-existing protected paths: `tasks/pending/request-body-capability-next/`, `tasks/waf-todo/`, `waf-architecture-and-multi-pattern-matching.md`, and `tasks/handoff/`
-- Exact commit allow-list: the two target files; `03-subtasks.md`; `07-changelog.md`; `edgion-gateway-file-optimization.md`; the B0050 and B0051 batch records; one verified OTLP integration deferred record and `deferred/INDEX.md`
+- Exact commit allow-list: the two target files; `03-subtasks.md`; `07-changelog.md`; `edgion-gateway-file-optimization.md`; the B0050 and B0051 batch records; one verified OTLP integration deferred record and legacy follow-up index
 
 ## Context and value gate
 - Analysis subagent: `b0051_candidate_analysis`; report revalidated unchanged against promotion HEAD.
@@ -30,7 +30,7 @@
 - Reviewer: `b0051_independent_review`
 - Verdict: LGTM after correcting the initial module-local global-mode lock.
 - Must Fix resolution: mode-specific tests now run themselves in exact isolated subprocesses, so the parent lib-test process never mutates global `SENSITIVE_MODE` and cannot race other modules.
-- Deferred observations: [`D0012`](../deferred/D0012-otlp-integration-masking-health-refresh.md) records the frozen OTLP integration scenario's weak path assertion and stale always-healthy limitation.
+- Deferred observations: `D0012` records the frozen OTLP integration scenario's weak path assertion and stale always-healthy limitation.
 - Adjudication: reviewer confirmed D0012 is real, correctly scoped, and non-duplicative; D0011 continues to own the shared sender shutdown contract.
 
 ## Verification

@@ -64,7 +64,6 @@ free space.
 ## Reference Cases
 
 - Updater cycle tests: `edgion-gateway/src/geoip/updater.rs`
-- Campaign finding: `tasks/pending/edgion-gateway-file-optimization/deferred/D0061-geoip-updater-test-temp-space.md`
 
 ## Resolution references
 

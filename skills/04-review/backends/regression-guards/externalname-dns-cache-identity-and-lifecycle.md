@@ -137,7 +137,6 @@ Re-open this decision only if:
 
 ## Reference Cases
 
-- Origin: `tasks/pending/edgion-gateway-file-optimization/deferred/D0001-external-name-dns-cache-identity-lifecycle.md`,
   promoted to a `tasks/todo` entry on 2026-09-01 and removed on closure; fixed 2026-09-03.
 - Source: `edgion-gateway/src/backends/discovery/dns_cache.rs`,
   `edgion-gateway/src/backends/discovery/services/conf_handler_impl.rs`,

@@ -62,8 +62,7 @@ Edgion is based on **Gateway API v1.5.0**, with the following support scope:
 
 TLSRoute's supported scope is v1-only. The current Controller and FileSystem
 paths still retain a nonconforming v1alpha3 probe/watch/storage/status and
-normalization fallback, tracked for atomic removal in
-[Remove the TLSRoute v1alpha3 fallback](../../tasks/todo/remove-tlsroute-v1alpha3-fallback.md).
+normalization fallback that must be removed atomically.
 
 Edgion extension resources (API group: `edgion.io`):
 

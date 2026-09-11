@@ -9,7 +9,7 @@
 - Allowed support files: colocated unit tests in the three target files only; no cross-crate support is authorized before analysis proves necessity
 - Forbidden files: every existing `edgion-tests/**` path, unrelated LinkSys providers/runtime/template files, shared schemas or common mechanisms without exact necessity evidence, and protected user paths
 - Pre-existing protected paths: `tasks/pending/request-body-capability-next/`, `tasks/waf-todo/`, `waf-architecture-and-multi-pattern-matching.md`, and `tasks/handoff/`
-- Exact commit allow-list: the three target files; `03-subtasks.md`; `07-changelog.md`; `edgion-gateway-file-optimization.md`; `deferred/INDEX.md`; any analyst-verified new deferred record; the B0047 and B0048 batch records
+- Exact commit allow-list: the three target files; `03-subtasks.md`; `07-changelog.md`; `edgion-gateway-file-optimization.md`; legacy follow-up index; any analyst-verified new deferred record; the B0047 and B0048 batch records
 
 ## Context and value gate
 
@@ -35,7 +35,7 @@
 - Reviewer: `b0048_independent_review`
 - Verdict: LGTM; validation order, units, exact timeout boundary, error distinction, preserved publication behavior, and both no-change files were independently confirmed.
 - Must Fix resolution: none required.
-- Deferred observations: [`D0008`](../deferred/D0008-kafka-producer-generation-shutdown.md), [`D0009`](../deferred/D0009-kafka-aggregate-channel-memory-bound.md), and [`D0010`](../deferred/D0010-kafka-broker-egress-dns-policy.md).
+- Deferred observations: `D0008`, `D0009`, and `D0010`.
 - Adjudication: none.
 
 ## Verification

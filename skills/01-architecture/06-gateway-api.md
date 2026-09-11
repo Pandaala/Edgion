@@ -83,9 +83,9 @@ installed CRD does not expand that support boundary.
 
 **Implementation debt:** the current TLSRoute path still probes v1alpha3 and
 can select its watch, storage, and status handling when v1 is unavailable;
-FileSystem input also still converts v1alpha3 to v1. The required atomic removal
-is tracked in
-[Remove the TLSRoute v1alpha3 fallback](../../tasks/todo/remove-tlsroute-v1alpha3-fallback.md).
+FileSystem input also still converts v1alpha3 to v1. The fallback must be removed
+atomically across those paths; removing only one branch would leave version
+ownership inconsistent.
 
 ## Extension Points
 

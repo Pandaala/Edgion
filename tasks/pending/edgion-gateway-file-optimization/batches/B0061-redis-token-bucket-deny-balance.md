@@ -9,7 +9,7 @@
 - Allowed tests: colocated tests in the implementation file only
 - Forbidden files: every existing `edgion-tests/**` path, RedisLinkClient/shared crates, resource schemas, consumers, metrics/docs, other plugins, and protected user paths
 - Pre-existing protected paths: `tasks/pending/request-body-capability-next/`, `tasks/waf-todo/`, `waf-architecture-and-multi-pattern-matching.md`, and `tasks/handoff/`
-- Exact future commit allow-list: the implementation file; campaign ledger/changelog/main record; B0060 and B0061 batch records; reviewer-approved numeric-domain and integration-coverage tasks plus campaign deferred backlinks; `deferred/INDEX.md`
+- Exact future commit allow-list: the implementation file; campaign ledger/changelog/main record; B0060 and B0061 batch records; reviewer-approved numeric-domain and integration-coverage tasks plus campaign deferred backlinks; legacy follow-up index
 
 ## Context and value gate
 - Analysis subagent: `b0055_runtime_analysis`, revalidated against `e15676a9`

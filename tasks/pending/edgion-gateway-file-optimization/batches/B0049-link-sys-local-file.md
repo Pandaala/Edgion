@@ -8,7 +8,7 @@
 - Allowed support files: colocated unit tests in the three target files only; no cross-crate support is authorized before analysis proves necessity
 - Forbidden files: every existing `edgion-tests/**` path, unrelated providers/runtime/template files, shared schemas without exact necessity evidence, and protected user paths
 - Pre-existing protected paths: `tasks/pending/request-body-capability-next/`, `tasks/waf-todo/`, `waf-architecture-and-multi-pattern-matching.md`, and `tasks/handoff/`
-- Exact commit allow-list: the three target files; `03-subtasks.md`; `07-changelog.md`; `edgion-gateway-file-optimization.md`; `deferred/INDEX.md`; any verified new deferred record; the B0048 and B0049 batch records
+- Exact commit allow-list: the three target files; `03-subtasks.md`; `07-changelog.md`; `edgion-gateway-file-optimization.md`; legacy follow-up index; any verified new deferred record; the B0048 and B0049 batch records
 
 ## Context and value gate
 - Analysis subagent: `b0049_analysis`
@@ -30,7 +30,7 @@
 - Reviewer: `b0049_independent_review`
 - Verdict: LGTM after correction loops and a post-diagnostic re-review; all flush/replacement, no-overwrite archive, rollback, canonical-base health, recovery, parser-safety, and observability Must Fix items are cleared.
 - Must Fix resolution: old buffers must flush before every replacement; archive creation cannot overwrite; dual failures and base reopen failures degrade health; recovery requires confirmed base attachment; repeated size-rotation failures log once per failure burst.
-- Deferred observations: [`D0011`](../deferred/D0011-data-sender-graceful-shutdown-contract.md).
+- Deferred observations: `D0011`.
 - Adjudication: `b0049_test_diagnostic` attributed the focused-test panic to the baseline size-index parser and identified a conflict with the binding failed-flush accounting precedent. Fresh read-only `b0049_precedent_adjudication` found no re-evaluation trigger, so the proposed exact accounting change and assertions were removed while the independent data-safety and rotation fixes were retained.
 
 ## Verification

@@ -17,6 +17,6 @@
 - Review: a fresh independent reviewer approved examined-no-change with no Must Fix or Should Fix finding. The reviewer independently confirmed SAN ordering and redaction, attempt-guard ownership across retry/cancellation/terminal cleanup, response-header-owned EWMA sampling, and canonical immediate access-log ownership.
 - Verification: `cargo fmt --all`, locked workspace all-target check and Clippy, locked Gateway binary build, agent-doc, SSA, metrics, Pingora source, Gateway no-tracing, English-only, diff, and 3,113-file frozen-path guards passed.
 - Follow-ups:
-  - `tasks/todo/refresh-connected-upstream-lb-lifecycle-documentation.md`
+  - standalone follow-up task
   - Streaming log coverage is maintained in [the connection-established log regression guard](../../../../skills/04-review/observability/regression-guards/streaming-connection-established-log-coverage.md).
 - Commit: `1603baee`; never pushed by the campaign.

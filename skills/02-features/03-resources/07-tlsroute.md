@@ -58,8 +58,7 @@ committed CRDs; it did not execute tests or validate live cluster behavior.
 Re-evaluate this discrepancy when version detection, watchers, CRUD/status,
 resource types, or static-ingress validation changes. Removing only the prose
 or one fallback branch cannot establish the required atomic upgrade.
-The coordinated implementation is tracked in
-[Remove the TLSRoute v1alpha3 fallback](../../../tasks/todo/remove-tlsroute-v1alpha3-fallback.md).
+The implementation must remain coordinated across every listed version boundary.
 
 ## Full Schema
 

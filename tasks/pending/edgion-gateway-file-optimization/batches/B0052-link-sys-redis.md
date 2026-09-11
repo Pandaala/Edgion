@@ -8,7 +8,7 @@
 - Allowed support files: colocated unit tests in the four target files only; no cross-crate support is authorized before analysis proves exact necessity
 - Forbidden files: every existing `edgion-tests/**` path, other providers, LinkSys runtime/template files, shared Redis core/schema files without exact necessity evidence, and protected user paths
 - Pre-existing protected paths: `tasks/pending/request-body-capability-next/`, `tasks/waf-todo/`, `waf-architecture-and-multi-pattern-matching.md`, and `tasks/handoff/`
-- Exact commit allow-list: the four target files; `03-subtasks.md`; `07-changelog.md`; `edgion-gateway-file-optimization.md`; the B0051 and B0052 batch records; any verified new deferred record and `deferred/INDEX.md`
+- Exact commit allow-list: the four target files; `03-subtasks.md`; `07-changelog.md`; `edgion-gateway-file-optimization.md`; the B0051 and B0052 batch records; any verified new deferred record and legacy follow-up index
 
 ## Context and value gate
 - Analysis subagent: `b0052_analysis`
@@ -30,7 +30,7 @@
 - Reviewer: `b0052_independent_review`
 - Verdict: LGTM after correcting topology-exact endpoint inference, mixed transport handling, and disabled-policy semantics.
 - Must Fix resolution: standalone now uses only its consumed first endpoint; cluster/Sentinel inspect all active endpoints; mixed transports fail without explicit TLS; disabled policy cannot inject CA/mTLS settings.
-- Deferred observations: [`D0013`](../deferred/D0013-redis-endpoint-contract.md), [`D0014`](../deferred/D0014-redis-configuration-contract.md), [`D0015`](../deferred/D0015-redis-dns-egress-policy.md), [`D0016`](../deferred/D0016-redis-pool-health-logging.md), [`D0017`](../deferred/D0017-redis-tls-integration-coverage.md), and [`D0018`](../deferred/D0018-disabled-tls-publication-readiness.md).
+- Deferred observations: `D0013`, `D0014`, `D0015`, `D0016`, `D0017`, and `D0018`.
 - Adjudication: none; two test diagnostics attributed cross-crate guard visibility and child Rustls provider initialization to batch test setup and supplied in-scope corrections.
 
 ## Verification

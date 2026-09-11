@@ -19,7 +19,7 @@
 ## Promotion and Scope
 
 - Original analyst refreshed at `4db7b1eb`: target, TLS matcher/callback, shared hostname/CA paths and TLS knowledge unchanged; no fresh Cargo run claimed. B0222 knowledge additions independently confirmed, including compiled certificate selection and Unix-time expiry comparison on the Gateway path.
-- Technical source allow-list empty. Record-only commit scope: main task, ledger, changelog, B0220 SHA backfill, this record, queued B0223 record, coordinator deferred index/D0124 and standalone `tasks/todo/reconcile-gateway-frontend-tls-knowledge.md`.
+- Technical source allow-list empty. Record-only commit scope: main task, ledger, changelog, B0220 SHA backfill, this record, queued B0223 record, coordinator deferred index/D0124 and standalone standalone follow-up task.
 - The standalone task has no campaign/progress dependencies. Protect existing integration tests and untracked handoff/WAF paths. Freeze passed before promotion; original knowledge references are the TLS architecture index, six owning drift pages and cross-Gateway/wildcard regression guards.
 
 ## Independent Review and Verification

@@ -8,14 +8,14 @@
 - Allowed support files: none; this batch is read-only pending wider-task adjudication
 - Forbidden files: every existing `edgion-tests/**` path, template consumers, schemas, shared crates, and protected user paths
 - Pre-existing protected paths: `tasks/pending/request-body-capability-next/`, `tasks/waf-todo/`, `waf-architecture-and-multi-pattern-matching.md`, and `tasks/handoff/`
-- Exact future commit allow-list: `03-subtasks.md`; `07-changelog.md`; `edgion-gateway-file-optimization.md`; B0057 and B0058 batch records; one reviewer-approved D0024 record; `deferred/INDEX.md`; and one canonical `tasks/todo/` task if approved
+- Exact future commit allow-list: `03-subtasks.md`; `07-changelog.md`; `edgion-gateway-file-optimization.md`; B0057 and B0058 batch records; one reviewer-approved D0024 record; legacy follow-up index; and one canonical `tasks/todo/` task if approved
 
 ## Context and value gate
 - Analysis subagent: `b0056_implementation`, revalidated against `e8eb6ff7`
 - Coverage summary: compared both LinkSys template files with the canonical outbound-request evaluator and every live consumer requiring missing-as-empty, missing-as-error, Secret resolution, JSON-variable escaping, restricted-variable policy, or pre-append byte budgets.
 - Concrete finding: Gateway currently has two runtime `${type:name}` segment walkers and variable resolvers with incompatible implicit policies. The LinkSys engine itself exposes separate empty/error missing-value evaluators and never resolves Secrets, while outbound request rendering duplicates the walk to add Secrets, JSON-variable escaping, and remote-IP handling.
 - Decision candidate: defer both target rows. A local extraction would preserve the competing evaluator and cannot safely reconcile consumer-specific missing, escaping, Secret-capability, or output-bound semantics.
-- Existing-task adjudication: `tasks/todo/upstream-authority-bounded-template-rendering.md` owns only the authority 63-byte case and explicitly excludes general migration; no canonical cross-consumer evaluator task was found.
+- Existing-task adjudication: standalone follow-up task owns only the authority 63-byte case and explicitly excludes general migration; no canonical cross-consumer evaluator task was found.
 
 ## Proposed wider boundary
 - Canonical mechanism: one compiled-segment walking/resolution seam with explicit missing-value, escaping, Secret-capability, and overflow-safe byte-budget policies.

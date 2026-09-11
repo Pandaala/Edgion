@@ -60,8 +60,7 @@ cache, singleflight, or revocation policy changes are involved.
 The cap bounds retained body bytes, not all process memory: the incoming chunk,
 allocator capacity, and parsed JSON representation also consume memory.
 Do not describe this as full OIDC public-error redaction; other dependency and
-status error paths remain tracked in
-`tasks/todo/redact-openid-connect-dependency-error-responses.md`.
+status error paths require separate redaction work.
 
 ## Verification and re-evaluation
 

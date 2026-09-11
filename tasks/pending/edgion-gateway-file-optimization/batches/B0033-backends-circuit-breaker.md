@@ -7,7 +7,7 @@
 - Allowed support files: none beyond directly related crate-local tests already in the target pair
 - Forbidden files: every existing `edgion-tests/**` path, unsupported Gateway rustls code, unrelated modules, and protected user paths
 - Pre-existing protected paths: `tasks/pending/request-body-capability-next/`, `tasks/waf-todo/`, `waf-architecture-and-multi-pattern-matching.md`
-- Exact commit allow-list: the two target files; `00-context.md`; `03-subtasks.md`; `07-changelog.md`; `edgion-gateway-file-optimization.md`; `integration-freeze.tsv`; `deferred/INDEX.md`; this batch record; removal of the renamed `file-inventory.md`
+- Exact commit allow-list: the two target files; `00-context.md`; `03-subtasks.md`; `07-changelog.md`; `edgion-gateway-file-optimization.md`; `integration-freeze.tsv`; legacy follow-up index; this batch record; removal of the renamed `file-inventory.md`
 
 ## Context and value gate
 

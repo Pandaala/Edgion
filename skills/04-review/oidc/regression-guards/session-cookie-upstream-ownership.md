@@ -46,7 +46,6 @@ Re-open this decision only if:
 ## Reference Cases
 
 - [review knowledge](../../SKILL.md) (D0060)
-- `tasks/pending/edgion-gateway-file-optimization/deferred/D0060-openid-connect-session-cookie-upstream-ownership.md`
 - `edgion-gateway/src/plugins/http/openid_connect/session_cookie.rs` (`strip_gateway_owned_cookies`)
 - `edgion-gateway/src/plugins/http/common/auth_common.rs` (`strip_cookie`)
 - `docs/en/user-guide/edgion-plugins/openid-connect.md`

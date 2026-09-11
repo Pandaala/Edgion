@@ -1,83 +1,53 @@
-# Edgion Gateway File-by-file Optimization
+# Edgion Gateway File Optimization
 
-## Meta
+## Status
 
-| Key | Value |
-|-----|-------|
-| Created | 2026-08-30 |
-| Status | in-progress |
-| Type | refactor |
-| Priority | P1 |
-| Baseline commit | `d484e580` |
-| Scope | The 78 paths frozen in `04-fixed-scope.md`; optimization starts from those files only. AI-owned targets and standalone `edgion-gateway/tests/**` targets are excluded. |
-| Campaign status | in-progress at HEAD `4ee46a76`: the user-fixed remaining scope is committed and B0310 is under read-only analysis. |
-| Coverage | 551 current Gateway files: 235 changed, 194 examined-no-change, 16 deferred, 28 excluded-with-reason, and 78 non-terminal; 5 historical rows are removed and 1 renamed. The 2026-09-11 scope revision excluded 25 AI-owned pending targets and 3 standalone test targets. |
-| Active batch | None. Never push. |
-| Analysis queue | B0310 analyzes four RequestId-affected plugin-runtime targets from the fixed scope. D0058 and D0127–D0155 track separate work. |
-| Integration freeze | 3,274 files. External `79b72bb3` integration changes were verified against the commit and clean worktree, then reconciled path-by-path; prior reconciliations retained. Campaign made no integration-test edit. |
+- Campaign state: paused
+- Active anchor: `edgion-gateway/`
+- Processed files: 445
+- Ignored files: 28
+- Remaining files: 78
+- Active batch: none
+- Running analysis: none
+- Push policy: never push
 
-## AI guide summary
+## Live files
 
-Audit the user-fixed remaining Gateway paths file by file in cohesive, dependency-aware batches. Make only evidence-backed, behavior-preserving improvements to local structure, duplication, type and error modeling, and bounded hot-path efficiency. Every implementation batch is independently reviewed, verified, recorded in one changelog, and committed locally without pushing.
+- `03-subtasks.md` is the only live file-status tracker. It contains the complete processed, ignored, and remaining path lists.
+- `integration-freeze.tsv` protects existing `edgion-tests/**` files.
 
-The current coverage plan was refreshed after external `79b72bb3`: RequestId and request-trace-id are separate cohesive ownership modules, the removed TraceContext paths remain historical rows, and externally affected terminal files are reopened without re-auditing unrelated code.
+The manifest currently detects externally committed `edgion-tests/**` drift. Reconcile only verified external paths when execution resumes; do not reset or rewrite tests to satisfy the manifest.
 
-## Requirements
+## Historical records
 
-The user explicitly reaffirmed standing authorization: commit every batch locally after its independent review and verification gates, without further per-batch confirmation; never push. This campaign-specific instruction supplies the explicit Git authorization required by AGENTS.md. Keep one serial mutation lane and finish its local commit before promoting the next batch.
+- `07-changelog.md` is an append-only summary of completed work.
+- `batches/` contains append-only completed batch records.
+- `external-sync-*.md` and `batches/external-sync-*.md` are append-only synchronization records.
 
-The user concurrently resolves standalone `tasks/todo/` issues through other agents. Preserve and reconcile those external commits without reopening resolved issue bodies or treating HEAD movement alone as a blocker. This campaign directory is coordinator-owned; each repair task is self-contained and must not reference or require updates to a shared global task index. Only the coordinator maintains campaign status/backlinks here.
+Historical records are evidence only. They do not own file status or follow-up task lifecycle, and they are not updated when a standalone task is completed or deleted.
 
-- Cover exactly the 78 remaining targets in `04-fixed-scope.md`; a reviewed file may legitimately need no change.
-- Do not add newly discovered or newly created Gateway files to this campaign. Read callers and callees as context, but optimize from a fixed target only. A necessary supporting edit requires explicit call-chain evidence and an exact batch allow-list; it does not expand coverage.
-- Exclude AI-owned targets (`src/ai/**`, `src/plugins/http/ai_guard/**`, `src/plugins/http/ai_proxy/**`, and `src/plugins/http/guardrail/**`) and standalone `edgion-gateway/tests/**` targets from all future batches in this campaign.
-- Preserve the Controller/Gateway split, conf-sync semantics, `EdgionHttpContext`, access-log architecture, Pingora lifecycle, and existing public behavior.
-- Prefer small local extractions and existing shared mechanisms over new frameworks or broad redesigns.
-- Use an implementation subagent for each batch and a separate review subagent after implementation.
-- Do not use the interactive `fix-issue-cn` workflow.
-- Do not modify or delete existing integration-test files. Per the user's additional constraint, record needed new integration coverage as deferred issues for later implementation.
-- Record every completed batch in `07-changelog.md`, then create a local commit. Never push.
-- Treat `tasks/pending/request-body-capability-next/`, `tasks/waf-todo/`, and `waf-architecture-and-multi-pattern-matching.md` as protected user-owned paths.
+## Scope
 
-## Guardrails
+Only paths under `Remaining files` in `03-subtasks.md` may start a new optimization batch. AI-owned targets and standalone `edgion-gateway/tests/**` targets are under `Ignored files` and are not processed.
 
-1. Read every in-scope file completely and inspect its direct callers, callees, tests, relevant architecture documents, and applicable closed-review precedents before editing.
-2. Refactor only when the result has a concrete benefit: shorter decision flow, removed real duplication, clearer types/errors, fewer avoidable hot-path operations, or stronger local invariants.
-3. Do not introduce compatibility shims, speculative abstractions, new dependencies, schema changes, metrics, or tracing merely for cleanup.
-4. Preserve bounded memory and streaming/backpressure invariants. Never add response aggregation or per-chunk allocation/logging.
-5. Preserve failure-policy, redaction, diagnostic, status, retry, TLS, SSRF, and configuration hot-reload semantics.
-6. Do not work on the unsupported Gateway rustls backend.
-7. Existing tests are a coverage floor. Unit tests may be added or strengthened; existing integration tests are immutable.
-8. Before each code commit, scan the diff against every applicable red rule in `skills/00-design-rules.md`, run targeted tests, apply formatting, and run the project-required compile/lint/guard checks.
-9. A reviewer must reject changes that reduce generality, obscure ownership, widen scope, duplicate a canonical mechanism, or merely move code without measurable clarity.
-10. The primary agent owns mechanical scope containment, validation command execution, inventory and changelog updates, exact staging, and the commit. Technical analysis, implementation, and review stay with separate agents.
+Analysis may read surrounding code and documentation. Any supporting edit outside a remaining target requires direct correctness evidence and an exact batch allow-list; it does not add another coverage target. Newly created or discovered Gateway files are outside this fixed campaign unless the user explicitly changes the remaining list.
 
-## Workflow per batch
+## File-status updates
 
-1. Select the next pending cohesive batch from `03-subtasks.md`, mark it in progress, and freeze its exact path boundary.
-2. Run the integration freeze check, then delegate a fresh read-only analysis and value gate.
-3. For a justified change, use a different implementation agent and a fresh independent reviewer; complex work also receives a separate plan review before edits.
-4. Defer wider or design-heavy findings without expanding the batch.
-5. Run targeted verification plus every repository-required pre-commit guard.
-6. Update the batch record, ledger, changelog, and deferred index.
-7. Verify the frozen paths and exact staged file set, commit locally in English, and never push.
+After a batch is committed, move each completed target from `Remaining files` to `Processed files` and update the three counts above and in `03-subtasks.md`. Do not add batch IDs, commit hashes, issue IDs, task links, or outcome details to the file lists.
 
-## Document index
+## Standalone follow-up tasks
 
-| Document | Status | Purpose |
-|----------|--------|---------|
-| `00-context.md` | done | Mandatory context and validation references |
-| `03-subtasks.md` | in-progress | Complete per-file coverage ledger and batch assignment |
-| `04-fixed-scope.md` | frozen | Authoritative 78-file remaining target allow-list |
-| `07-changelog.md` | in-progress | Unified record of actual optimizations and verification |
-| `integration-freeze.tsv` | done | Content and mode fingerprints for the immutable integration-test floor |
-| `batches/` | in-progress | Decision, scope, review, and verification record for each new-format batch |
-| `deferred/INDEX.md` | in-progress | Backlinks to canonical wider-scope task records |
+Every follow-up is a self-contained file under `tasks/todo/`. It must contain all evidence, scope, constraints, and acceptance criteria required by another agent without consulting this campaign.
 
-## Completion evidence
+Do not create campaign backlinks, deferred mirrors, shared indexes, D-number identifiers, or lifecycle references. When another agent completes a standalone task, it may delete that task file directly without editing this campaign or any historical batch record.
 
-- Every path in `04-fixed-scope.md` reaches a terminal campaign status in `03-subtasks.md`.
-- Every changed batch has an independent review result, verification evidence, and local commit in `07-changelog.md`.
-- No existing integration-test file was modified or deleted relative to the baseline.
-- The final repository-wide required checks pass.
-- A final requirement-by-requirement audit finds no pending or weakly evidenced item.
+## Execution rules
+
+- Resume with `$edgion-gateway-quality-campaign` in continue mode.
+- Keep one serial implementation, review, verification, and commit lane.
+- Use separated analysis, implementation, and independent-review agents as required by the campaign workflow.
+- Existing `edgion-tests/**` files remain frozen.
+- Preserve unrelated concurrent work and never broadly stage files.
+- Commit completed batches locally in English under campaign authorization; never push.
+- Do not invoke or recommend `fix-issue-cn` while this campaign is active.

@@ -82,7 +82,6 @@ Re-open this decision only if:
 ## Reference Cases
 
 - Closed D0027 / `tasks/todo/add-acme-gatewayref-isolation-integration-coverage.md`
-- Remaining product finding: `tasks/pending/edgion-gateway-file-optimization/deferred/D0026-acme-http01-gatewayref-ownership.md`
 - Store and intercept: `edgion-gateway/src/services/acme/challenge_store.rs`,
   `edgion-gateway/src/routes/http/proxy_http/pg_request_filter.rs`
 - Sibling close: [edgionplugins-lkg-identity-coverage-not-standalone.md](edgionplugins-lkg-identity-coverage-not-standalone.md)

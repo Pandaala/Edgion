@@ -68,17 +68,10 @@ the original exact test and the remaining selected tests passed.
 
 Builder success is not TLS handshake evidence. These tests use explicit defaults
 or local policies and do not establish live config reload, store publication,
-absence of network activity in a deployed Gateway, or valid-invalid-valid recovery.
-The campaign tracks that integration gap as
-[D0150](../../../../tasks/pending/edgion-gateway-file-optimization/deferred/D0150-extproc-tls-policy-integration.md)
-and existing live unit-test isolation as
-[D0151](../../../../tasks/pending/edgion-gateway-file-optimization/deferred/D0151-extproc-live-unit-tests.md);
-existing integration files remain unchanged.
+absence of network activity in a deployed Gateway, valid-invalid-valid recovery,
+or isolation of live stream tests from the unit tier. Those gaps require
+standalone work; existing integration files remain unchanged.
 
 Re-evaluate this guard when ExtProc implements either identity capability or when
 canonical TLS precedence, constructor failure handling, or publication policy
-changes. Historical phase-verdict pages are separate knowledge (D0149).
-
-## Resolution references
-
-- Gateway quality campaign B0283: effective ExtProc outbound TLS identity rejection.
+changes. Historical phase-verdict pages remain separate knowledge.

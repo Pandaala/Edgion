@@ -19,7 +19,7 @@
 - Exact proposed technical scope: target source; `skills/04-review/routing/regression-guards/l4-duplex-relay-centralization.md`; `skills/04-review/security/regression-guards/l4-relay-idle-timeout.md`. Update the existing owning knowledge rather than adding parallel guidance.
 - Require an in-memory old-code-failing regression, symmetric backpressure and pending-flush progress, exact bytes, shared idle/no-timeout/partial-write coverage, errors/write-zero, EOF and accounting. Preserve or explicitly replace existing helper regression coverage.
 - New integration coverage for the three transports must be deferred; existing suites stay frozen. No tests were run during analysis.
-- Deferred integration task: [D0110](../deferred/D0110-l4-duplex-backpressure-integration.md).
+- Deferred integration task: D0110.
 
 ## Implementation Plan
 

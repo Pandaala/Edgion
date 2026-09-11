@@ -88,7 +88,6 @@ Re-open this decision only if:
 ## Reference Cases
 
 - Closed D0031 / `tasks/todo/add-edgionplugins-lkg-identity-integration-coverage.md`
-- Remaining product finding: `tasks/pending/edgion-gateway-file-optimization/deferred/D0030-edgionplugins-last-known-good-resource-identity.md`
 - Store contract: `edgion-gateway/src/plugins/http/plugin_store.rs` (`apply_delta`, `replace_all`)
 - B0062: `tasks/pending/edgion-gateway-file-optimization/batches/B0062-http-plugin-snapshot-delta-semantics.md`
 

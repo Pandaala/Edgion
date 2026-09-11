@@ -29,7 +29,7 @@
 - Implementer: `b0195_implementation`; exact three-file technical scope above respected.
 - Replaced the first-field-only parser with the canonical borrowed cookie helper, retained malformed token suffixes for a lookup miss, and truncated valid expiry suffixes in the existing owned buffer.
 - Added four unit tests and strengthened expiry/known-backend cases. Backend selection, strict affinity, retry, local replies, and valid/bare token semantics remain unchanged.
-- Future HTTP/gRPC integration coverage is tracked by [D0109](../deferred/D0109-session-cookie-field-integration.md); no integration file was modified.
+- Future HTTP/gRPC integration coverage is tracked by D0109; no integration file was modified.
 
 ## Independent Review
 

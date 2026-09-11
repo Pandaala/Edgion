@@ -28,7 +28,7 @@
 - The helper matches only the exact SSE media type, case-insensitively, with optional whitespace and parameters; longer subtype extensions remain rejected.
 
 ## Deferred candidates
-- `tasks/todo/sse-window-strict-residency-and-continuity.md` already owns rollback allocation, replacement preview copying, metadata residency, overlap continuity, and EOS preview as one design cluster. This batch does not partially repair or duplicate that task.
+- standalone follow-up task already owns rollback allocation, replacement preview copying, metadata residency, overlap continuity, and EOS preview as one design cluster. This batch does not partially repair or duplicate that task.
 - Existing frozen integration coverage includes pass, replacement, rejection, first-head rejection, malformed fail-open, timeout fail-close, ExtProc composition, and Anthropic cases. No new integration-test issue is required.
 
 ## Implementation

@@ -24,10 +24,7 @@ restoring an obsolete policy. Implementation remains pending detailed plan appro
 - [Design and impact](plugin-policy-edgion-gateway-config/01-design.md)
 - [Implementation sequence and verification](plugin-policy-edgion-gateway-config/03-subtasks.md)
 
-## Original finding and evidence
-
-Source: D0095 / `plugin-policy-invalid-generation-retention`, with the campaign
-record at `tasks/pending/edgion-gateway-file-optimization/deferred/D0095-plugin-policy-invalid-generation-retention.md`.
+## Problem and evidence
 
 `compile_plugins` computes `retain_previous_on_invalid_update` from invalid DSL/WAF
 construction. Policy markers do not change that flag. `can_retain_previous` checks
@@ -61,8 +58,8 @@ precisely as the migration proposal below.
   the existing resource-owned state of allowed plugin instances across scopes.
 - Explicitly resolve missing/deleted/invalid policies, removal/relaxation, new
   requests on existing connections, Controller admission, and status ownership.
-- Keep D0095 and this task open until implementation, independent review, and
-  required verification finish. The current authorization is planning only.
+- Keep this task open until implementation, independent review, and required
+  verification finish. The current authorization is planning only.
 - Trace Controller policy stamps, Gateway compilation and `retain_previous_on_invalid_update`, policy sealing, and both `PluginStore::apply_delta` and `replace_all`.
 - Reproduce an existing activatable unblocked generation followed by a new Block stamp plus an unrelated retainable invalid DSL/WAF entry. Observe the actually published runtime.
 - Verify intended precedence between operator policy and whole-resource retention from original requirements and review knowledge; do not infer it solely from current code.
@@ -85,7 +82,7 @@ precisely as the migration proposal below.
 - The lifecycle, attachment, AI-admission, shared-listener and regression matrices
   in the linked plan are implemented and verified with independent review.
 - Required project checks and replacement integration/CRD coverage pass before
-  closing this task and D0095. Planning alone cannot satisfy migration acceptance.
+  closing this task. Planning alone cannot satisfy migration acceptance.
 
 ## Scope and authorization
 

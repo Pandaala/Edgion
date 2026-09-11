@@ -24,5 +24,5 @@
 - Implementation: the proxy now retains only `listener_port` and `is_https_listener`; the upstream GatewayClass clone chain and unused time/class state are gone. Context creation and HTTPS isolation consume the derived facts, and deleting the unused override restores Pingora's identical default false.
 - Final review: a fresh independent reviewer revalidated pinned Pingora dispatch, cache and RequestMirror boundaries, listener construction, 421 isolation, hot reload, callbacks, streaming, observability, documentation, scope, and frozen paths; verdict LGTM with no Must Fix or Should Fix.
 - Testing: proxy tests passed 223/223, RequestMirror tests 25/25, and the complete HTTP route suite 345/345. `cargo fmt --all`, locked workspace all-target check and Clippy, locked Gateway binary build, agent-doc, SSA, metrics, Pingora source, Gateway no-tracing, English-only, diff, and 3,113-file frozen-path guards passed. Existing integrations remain frozen and sufficient.
-- Deferred: stale route-manager cache wording is tracked in `tasks/todo/route-architecture-manager-cache-documentation.md`.
+- Deferred: stale route-manager cache wording is tracked in standalone follow-up task.
 - Commit: `0cd64e0d`; never pushed by the campaign.

@@ -11,7 +11,7 @@
 - Allowed tests: colocated tests in the two implementation files only
 - Forbidden files: every existing `edgion-tests/**` path, config cache and handler traits, Controller/resources/schema code, metrics/docs, other plugins, and protected user paths; no production behavior change is allowed in the two supporting files
 - Pre-existing protected paths: `tasks/pending/request-body-capability-next/`, `tasks/waf-todo/`, `waf-architecture-and-multi-pattern-matching.md`, and `tasks/handoff/`
-- Exact future commit allow-list: the two implementation files; the two narrowly supporting files above; campaign ledger/changelog/main record; B0061 and B0062 batch records; reviewer-approved identity and integration-coverage task records plus campaign deferred backlinks; `deferred/INDEX.md`
+- Exact future commit allow-list: the two implementation files; the two narrowly supporting files above; campaign ledger/changelog/main record; B0061 and B0062 batch records; reviewer-approved identity and integration-coverage task records plus campaign deferred backlinks; legacy follow-up index
 
 ## Context and value gate
 - Analysis subagent: `b0056_implementation`, revalidated against `695f0ba9`; all target blobs and relevant callers remain unchanged from the queued report.

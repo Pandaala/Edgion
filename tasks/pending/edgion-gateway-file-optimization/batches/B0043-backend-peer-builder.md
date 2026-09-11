@@ -7,7 +7,7 @@
 - Allowed support files: colocated unit tests in the target file only
 - Forbidden files: every existing `edgion-tests/**` path, unsupported Gateway rustls code, unrelated modules, and protected user paths
 - Pre-existing protected paths: `tasks/pending/request-body-capability-next/`, `tasks/waf-todo/`, `waf-architecture-and-multi-pattern-matching.md`
-- Exact commit allow-list: the target file; `03-subtasks.md`; `07-changelog.md`; `edgion-gateway-file-optimization.md`; `deferred/INDEX.md`; any analyst-verified new deferred record; the B0042 and B0043 batch records
+- Exact commit allow-list: the target file; `03-subtasks.md`; `07-changelog.md`; `edgion-gateway-file-optimization.md`; legacy follow-up index; any analyst-verified new deferred record; the B0042 and B0043 batch records
 
 ## Context and value gate
 
@@ -33,7 +33,7 @@
 - Reviewer: `b0034_defer_review`
 - Verdict: LGTM; no Must Fix or Should Fix findings.
 - Must Fix resolution: none required.
-- Deferred observations: invalid applicable BackendTLSPolicy/plaintext downgrade later landed as the Gateway `BackendTlsPolicyLookup` contract (`skills/01-architecture/02-gateway/07-backends.md`); full-snapshot partial publication is covered by `tasks/todo/backend-tls-policy-true-incremental-publication.md`; request-path port resolution and unsafe fallback are covered by `tasks/todo/backend-port-resolution-precompiled-fail-closed.md`.
+- Deferred observations: invalid applicable BackendTLSPolicy/plaintext downgrade later landed as the Gateway `BackendTlsPolicyLookup` contract (`skills/01-architecture/02-gateway/07-backends.md`); full-snapshot partial publication is covered by standalone follow-up task; request-path port resolution and unsafe fallback are covered by standalone follow-up task.
 - Adjudication: no new campaign finding; the broader observations are duplicates of existing, wider tasks and B0043 remains target-local.
 
 ## Verification

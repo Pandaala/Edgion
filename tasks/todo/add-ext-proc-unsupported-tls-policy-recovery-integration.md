@@ -27,5 +27,5 @@ sleeps or credential-bearing logs.
 - Preserve existing integration scenarios; use an explicitly authorized test-only scope for any necessary harness wiring.
 - Do not implement SAN/SNI support, change failure-policy vocabulary or alter unrelated TLS behavior.
 
-This coverage is deferred under the current campaign's integration freeze. Constructor
+This task owns the dedicated integration coverage. Constructor
 and in-memory compilation tests are useful but do not establish end-to-end reload/dial behavior.

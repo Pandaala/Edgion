@@ -151,7 +151,6 @@ Re-open this decision only if:
 
 ## Reference Cases
 
-- D0053 — `tasks/pending/edgion-gateway-file-optimization/deferred/D0053-ldap-auth-dial-time-egress-policy.md`
 - Source: `edgion-gateway/src/plugins/http/ldap_auth/plugin.rs`
 - Sibling: `skills/04-review/ssrf/regression-guards/forward-auth-webhook-ssrf.md`
 

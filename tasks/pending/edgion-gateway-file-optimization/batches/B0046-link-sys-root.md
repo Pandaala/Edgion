@@ -9,7 +9,7 @@
 - Allowed support files: colocated unit tests in the target file only; no cross-crate support is authorized before analysis proves necessity
 - Forbidden files: every existing `edgion-tests/**` path, unrelated LinkSys provider/runtime/template files, unsupported Gateway rustls code, and protected user paths
 - Pre-existing protected paths: `tasks/pending/request-body-capability-next/`, `tasks/waf-todo/`, `waf-architecture-and-multi-pattern-matching.md`, and `tasks/handoff/`
-- Exact commit allow-list: the target file; `03-subtasks.md`; `07-changelog.md`; `edgion-gateway-file-optimization.md`; `deferred/INDEX.md`; any analyst-verified new deferred record; the B0045 and B0046 batch records
+- Exact commit allow-list: the target file; `03-subtasks.md`; `07-changelog.md`; `edgion-gateway-file-optimization.md`; legacy follow-up index; any analyst-verified new deferred record; the B0045 and B0046 batch records
 
 ## Context and value gate
 

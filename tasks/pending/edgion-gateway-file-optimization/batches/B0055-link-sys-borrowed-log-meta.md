@@ -9,7 +9,7 @@
 - Allowed tests: colocated unit tests in the four owned files only
 - Forbidden files: every existing `edgion-tests/**` path, output schemas, other senders/providers, shared crates, and protected user paths
 - Pre-existing protected paths: `tasks/pending/request-body-capability-next/`, `tasks/waf-todo/`, `waf-architecture-and-multi-pattern-matching.md`, and `tasks/handoff/`
-- Exact commit allow-list: the four owned code files; `03-subtasks.md`; `07-changelog.md`; `edgion-gateway-file-optimization.md`; B0054 and B0055 batch records; D0023; and `deferred/INDEX.md`
+- Exact commit allow-list: the four owned code files; `03-subtasks.md`; `07-changelog.md`; `edgion-gateway-file-optimization.md`; B0054 and B0055 batch records; D0023; and legacy follow-up index
 
 ## Context and value gate
 - Analysis subagent: `b0055_runtime_analysis`

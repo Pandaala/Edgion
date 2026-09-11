@@ -18,8 +18,8 @@ success path, and does not define a multi-plugin sanitization order.
 This closes D0037 and D0038 as written. It does **not** close reports that a *configured*
 JwtAuth / OpenID Connect `claimsToHeaders` destination survives when the shared helper skips
 the write (missing claim, empty value, control characters, or size cap). That skip-vs-strip
-gap is Envoy `claim_to_headers` sanitize-then-add parity and belongs to D0052 /
-`tasks/todo/canonicalize-auth-claim-header-projection.md` if it is pursued.
+gap is Envoy `claim_to_headers` sanitize-then-add parity and requires separate
+claim-projection work if it is pursued.
 
 Fix suggestions of the form "unify identity-header sanitization across every auth plugin",
 "always strip client-supplied `X-Consumer-Username` / `X-Anonymous-Consumer` before auth",
@@ -91,7 +91,7 @@ destinations.
 - `edgion-gateway/src/plugins/http/common/auth_common.rs` (`set_claims_headers` skip-write)
 - `edgion-gateway/src/plugins/http/ldap_auth/plugin.rs` (`apply_authenticated_headers` clears the configured anonymous marker)
 - `docs/en/user-guide/http-route/filters/edgion-plugins/jwt-auth.md` (no default consumer header)
-- `tasks/todo/canonicalize-auth-claim-header-projection.md` (configured claim destination ownership)
+- Configured claim destination ownership remains separate work.
 - Envoy `jwt_authn` replace-on-write plus configured-name sanitize-before-rules
 - Kong `set_consumer` set-or-clear of the consumer / anonymous header family
 

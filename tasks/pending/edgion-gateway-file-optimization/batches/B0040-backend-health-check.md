@@ -7,7 +7,7 @@
 - Allowed support files: colocated unit tests within the six targets only
 - Forbidden files: every existing `edgion-tests/**` path, unsupported Gateway rustls code, unrelated modules, and protected user paths
 - Pre-existing protected paths: `tasks/pending/request-body-capability-next/`, `tasks/waf-todo/`, `waf-architecture-and-multi-pattern-matching.md`
-- Exact commit allow-list: the six target files; `03-subtasks.md`; `07-changelog.md`; `edgion-gateway-file-optimization.md`; `deferred/INDEX.md`; any analyst-verified new deferred record; the B0039 and B0040 batch records
+- Exact commit allow-list: the six target files; `03-subtasks.md`; `07-changelog.md`; `edgion-gateway-file-optimization.md`; legacy follow-up index; any analyst-verified new deferred record; the B0039 and B0040 batch records
 
 ## Context and value gate
 
@@ -51,5 +51,5 @@
 ## Handoff
 
 - Ledger/changelog updated: yes
-- Deferred findings: [`D0004`](../deferred/D0004-health-task-status-generation-ownership.md), [`D0005`](../deferred/D0005-active-health-check-tls-contract.md)
+- Deferred findings: `D0004`, `D0005`
 - Commit: `31d8bcdd`

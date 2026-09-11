@@ -6,7 +6,6 @@
 - Priority: P2
 - Category: testing-refactor
 - Severity: low
-- Discovered in: B0298 at `84af258d`
 
 ## Evidence
 
@@ -27,7 +26,7 @@ Do not delete the tests or mark them ignored. The replacement must retain the cu
 - Do not add allocations, trait dispatch, locks, or branching to the request hot path for mock convenience.
 - Preserve canonical outbound HTTP, TLS, egress admission, response caps, failure policy, redaction, PluginLog/Dye and access-log ownership.
 - Do not modify existing `edgion-tests/**` files. Add a future standalone integration only if the refactor proves a transport contract is otherwise uncovered and it can be registered without editing frozen files.
-- Do not fold in D0058 dependency-error redaction or unrelated OIDC cleanup.
+- Do not fold in dependency-error redaction or unrelated OIDC cleanup.
 
 ## Candidate next step
 

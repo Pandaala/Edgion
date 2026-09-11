@@ -25,4 +25,4 @@ the integration tier with its shared topology discipline.
 - Retain equivalent assertions for every moved or replaced scenario.
 - Demonstrate the resulting unit selection starts no server and performs no network exchange.
 - Run the affected deterministic tests and relevant project checks.
-- Do not change frozen integration files as part of the ongoing quality campaign; schedule any required integration edits under separate explicit scope.
+- Keep this test-tier refactor focused; schedule any required integration behavior change as separate explicit work.

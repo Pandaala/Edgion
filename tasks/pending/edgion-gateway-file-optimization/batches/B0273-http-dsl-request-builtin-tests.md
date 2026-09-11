@@ -22,7 +22,7 @@
 - Complete Gateway DSL including the target: 386/386 passed (42-second build, 0.22-second test execution). Format, diff, SSA, metrics, Pingora source, no-tracing, English-only and integration-freeze checks passed.
 - Fresh independent final reviewer `/root/b0273_independent_final`: PASS, no Must Fix; verified exact unordered multiplicities, repeated field-line semantics, fixed cap independent of list budget, byte-limit errors and all applicable red rules. Reviewed target blob `eab60ec420d175b652777d3c91658ea52c915150`.
 - Locked workspace check (21 seconds), Clippy (24 seconds, exit zero with 982 Gateway lib-test warnings), format check and frozen integration check passed. No batch commit was created.
-- Required agent-doc validation initially failed on three links introduced by external `78a25c3a` to absent `tasks/todo/remove-tlsroute-v1alpha3-fallback.md`: `skills/01-architecture/06-gateway-api.md:88`, `skills/02-features/03-resources/07-tlsroute.md:24`, `skills/02-features/SKILL.md:66`. The authorized standalone task now resolves all three; validation passes.
+- Required agent-doc validation initially failed on three links introduced by external `78a25c3a` to absent standalone follow-up task: `skills/01-architecture/06-gateway-api.md:88`, `skills/02-features/03-resources/07-tlsroute.md:24`, `skills/02-features/SKILL.md:66`. The authorized standalone task now resolves all three; validation passes.
 - Fresh `/root/b0273_docs_guard_diagnostic` verified the missing target has no Git history, is not a path-resolution error, and has no equivalent existing task (the Stage-1 fallback task concerns a different mechanism). Attribution: external HEAD, not this batch. Do not bypass validation, invent the task, or edit unrelated TLS docs under this frozen scope.
 - User authorization and independent documentation review resolved the external blocker. The reviewed technical blob is unchanged; all previously completed code gates remain valid and final documentation/freeze/diff checks pass.
 
@@ -39,7 +39,7 @@
 
 - The user explicitly authorized repairing the three broken TLSRoute links and their missing standalone task record, without TLS behavior or integration changes, then continuing the campaign automatically.
 - Fresh `/root/b0273_docs_scope_analysis` verified the intended issue and smallest accurate documentation-only scope. No placeholder task, validator exemption or unrelated runtime change was introduced.
-- Analysis confirmed a real Controller/resource API-version fallback distinct from Stage-1 plugin fallback. Exact additional allow-list: `tasks/todo/remove-tlsroute-v1alpha3-fallback.md` only; existing link sources are correct and remain unchanged.
+- Analysis confirmed a real Controller/resource API-version fallback distinct from Stage-1 plugin fallback. Exact additional allow-list: standalone follow-up task only; existing link sources are correct and remain unchanged.
 - Coordinator recorded the analyst-verified evidence, scope and acceptance criteria as standalone D0142 without campaign references. Fresh `/root/b0273_docs_independent_review`: PASS; all six code references and the standalone migration scope are accurate, and no TLS behavior or integration changes occurred.
 
 ## Handoff

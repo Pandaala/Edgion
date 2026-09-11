@@ -8,7 +8,7 @@
 - Allowed support files: none before analysis proves exact necessity
 - Forbidden files: every existing `edgion-tests/**` path, provider implementations, runtime/template files, shared schemas without exact necessity evidence, and protected user paths
 - Pre-existing protected paths: `tasks/pending/request-body-capability-next/`, `tasks/waf-todo/`, `waf-architecture-and-multi-pattern-matching.md`, and `tasks/handoff/`
-- Exact commit allow-list: the target file; `03-subtasks.md`; `07-changelog.md`; `edgion-gateway-file-optimization.md`; the B0049 and B0050 batch records; any verified new deferred record and `deferred/INDEX.md`
+- Exact commit allow-list: the target file; `03-subtasks.md`; `07-changelog.md`; `edgion-gateway-file-optimization.md`; the B0049 and B0050 batch records; any verified new deferred record and legacy follow-up index
 
 ## Context and value gate
 - Analysis subagent: `b0050_analysis`

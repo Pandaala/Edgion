@@ -150,11 +150,9 @@ Independent read-only review returned LGTM. `cargo fmt --all`,
 `cargo check --workspace --all-targets`, `cargo clippy --workspace --all-targets`,
 SSA-force, metrics-inventory, Pingora-source-policy, and `git diff --check` passed.
 Clippy emitted existing warnings outside the changed file; this is not a
-warning-free workspace result. Agent-doc validation remains blocked on rerun
-by three pre-existing links to the missing
-`tasks/todo/remove-tlsroute-v1alpha3-fallback.md` in the Gateway API architecture,
-TLSRoute feature page, and feature index. This unrelated task is not reconstructed
-by the KeyAuth change. Re-evaluate if parser shapes,
+warning-free workspace result. The Gateway API architecture, TLSRoute feature
+page, and feature index separately document the v1alpha3 fallback debt; the
+KeyAuth change does not alter it. Re-evaluate if parser shapes,
 duplicate policy, metadata selection, or result-map ownership changes. BasicAuth,
 HMAC, JWT, managed credentials, TLS and ACME candidates remain in the linked task.
 
@@ -177,8 +175,8 @@ plugin store and the runtimes above, shared resources/redaction/materials, and C
 token/client auth. This is application source evidence, not an exhaustive audit of
 third-party library allocations or deployed log/storage history.
 
-Optional unresolved copy reductions and shared-core questions are preserved with
-source evidence in [credential ownership follow-ups](../../../../tasks/todo/auth-credential-ownership-followups.md).
+Optional unresolved copy reductions and shared-core questions remain standalone
+work with their own source evidence.
 The body-boundedness defect deferred by this audit is corrected separately in the
 [OIDC authentication response cap guard](../../oidc/regression-guards/authentication-response-byte-caps.md).
 That correction does not establish credential erasure or full public-error redaction.

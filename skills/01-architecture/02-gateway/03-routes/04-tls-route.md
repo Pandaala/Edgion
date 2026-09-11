@@ -63,8 +63,7 @@ units until their readers release them; only the outer manager publishes via
 
 The effective-hostname input is currently a route-global projection. This table
 does not repair its missing per-attachment association; the known isolation and
-catch-all limitation remains tracked in
-[the attachment-scoping task](../../../../tasks/todo/scope-tlsroute-effective-hostnames-to-attachments.md).
+catch-all limitation requires separate attachment-scoping work.
 
 ## Route management, bucketing, rebuild, ConfHandler
 

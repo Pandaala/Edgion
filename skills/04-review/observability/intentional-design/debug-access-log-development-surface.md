@@ -58,7 +58,7 @@ A compact schema, hard byte cap, enforced development-only gate, and plugin remo
 were considered as the task's alternatives; none is implemented by this closure.
 This decision does not weaken masking, response streaming, binary-owned logging,
 or canonical response-header policy. Shared response-header mutation work remains
-owned by [D0068](../../../../tasks/todo/unify-response-header-mutation-policy.md).
+a separate concern.
 [D0087 wire coverage](../regression-guards/debug-access-log-wire-and-lifecycle.md)
 verifies the masking and lifecycle contract separately; it does not establish
 a response-header byte bound.
@@ -86,4 +86,3 @@ preserve B0125 masking boundaries; this acceptance is not a blanket exemption.
 - D0088, discovered in B0125 on 2026-09-08: originally medium / needs-discussion;
   closed as an explicitly accepted debugging limitation without implementation.
 - Former task: `tasks/todo/define-bounded-debug-access-log-response-surface.md`.
-- Former finding: `tasks/pending/edgion-gateway-file-optimization/deferred/D0088-bounded-debug-access-log-response-surface.md`.

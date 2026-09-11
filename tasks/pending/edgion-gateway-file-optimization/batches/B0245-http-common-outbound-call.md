@@ -21,7 +21,7 @@
 
 - Current HEAD: `654fe9a1`. Target and supporting client blobs remain exactly `de92374aa0d00e84c4cb4966734427f7249e6095` and `b26c50682f43165dcb74af512c56e4661335ea48`; B0244 did not touch this call chain.
 - Frozen code allow-list: `edgion-gateway/src/plugins/http/common/outbound/call.rs` and a documentation-only timing correction in `edgion-gateway/src/plugins/http/common/outbound/client.rs`.
-- Coordinator allow-list also includes the self-contained `tasks/todo/isolate-shared-outbound-call-unit-tests-from-network.md` task and campaign records. No existing integration file may change.
+- Coordinator allow-list also includes the self-contained standalone follow-up task task and campaign records. No existing integration file may change.
 
 ## Outcome
 

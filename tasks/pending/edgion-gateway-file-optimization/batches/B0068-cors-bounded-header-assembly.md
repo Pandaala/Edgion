@@ -10,7 +10,7 @@
 - Allowed tests: colocated tests in the implementation file only
 - Forbidden files: every existing `edgion-tests/**` path, `CorsConfig` and all resource/Controller code, the Gateway API `HTTPCORSFilter`, plugin runtime/framework code, metrics/access-log code, docs, Cargo manifests, other plugins, and protected user paths
 - Pre-existing protected paths: `tasks/pending/request-body-capability-next/`, `tasks/waf-todo/`, `waf-architecture-and-multi-pattern-matching.md`, and `tasks/handoff/`
-- Exact future commit allow-list: `edgion-gateway/src/plugins/http/cors/plugin.rs`; campaign ledger/changelog/main record; B0067 and B0068 batch records; `deferred/D0040-cors-validation-header-precomputation.md`; `tasks/todo/unify-cors-validation-and-header-precomputation.md`; and `deferred/INDEX.md`
+- Exact future commit allow-list: `edgion-gateway/src/plugins/http/cors/plugin.rs`; campaign ledger/changelog/main record; B0067 and B0068 batch records; legacy follow-up record; standalone follow-up task; and legacy follow-up index
 
 ## Context and value gate
 - Analysis subagent: `b0056_implementation`, revalidated against `d697aba1`; both target blobs and relevant construction/response call chains remain unchanged from the queued report.

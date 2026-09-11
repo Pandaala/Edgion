@@ -110,7 +110,6 @@ Re-open this decision only if:
 
 ## Reference Cases
 
-- D0056 — `tasks/pending/edgion-gateway-file-optimization/deferred/D0056-openid-connect-dial-time-egress-policy.md`
 - D0057 — standalone cross-process integration coverage in
   `edgion-tests/integration/scripts/integration/test_oidc_egress.sh`
 - Source: `edgion-gateway/src/plugins/http/openid_connect/plugin.rs`

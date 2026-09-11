@@ -36,9 +36,8 @@ Evaluate the optional credential copy and retention questions listed below one o
   [ownership reference](../../skills/04-review/security/review-evidence/credential-copy-ownership.md#keyauth-parser-ownership-follow-up).
   Six focused tests passed and independent read-only review returned LGTM.
   Format, workspace check/clippy, SSA-force, metrics inventory, Pingora source
-  policy, and whitespace checks passed. Agent-doc validation remains blocked
-  by existing links to the missing `tasks/todo/remove-tlsroute-v1alpha3-fallback.md`;
-  closure is withheld. See the ownership reference for verification limits.
+  policy, agent-doc validation, and whitespace checks passed. See the ownership
+  reference for verification limits.
 - Remaining candidates stay pending: BasicAuth and HMAC parser duplicates,
   HMAC runtime-map ownership, JWT copies, managed-credential ownership, shared
   TLS projection, and ACME EAB construction. DNS-01 was removed; its historical

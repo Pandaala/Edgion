@@ -172,8 +172,7 @@ Unit test in `gateway_tls_routes.rs` (TLSRoute):
   winner publication, old snapshot stability, clearing and final unit release.
 
 These TLSRoute tests do not establish correct listener-specific hostname
-projection. That known defect remains in
-[the attachment-scoping task](../../../../tasks/todo/scope-tlsroute-effective-hostnames-to-attachments.md).
+projection. That known defect requires separate attachment-scoping work.
 
 Integration scenario `EdgionTls/sni_collision` (`edgion-tests/integration/conf/EdgionTls/sni_collision/`
 + suite `edgion-tests/src/client/suites/edgion_tls/sni_collision/`): two EdgionTls bind the same
