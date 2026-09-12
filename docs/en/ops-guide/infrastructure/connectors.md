@@ -369,10 +369,21 @@ Multiple endpoints are used for round-robin load balancing. This connector is al
 |-----------|------|---------|-------------|
 | `bulk.batchSize` | Integer | `500` | Documents per bulk batch. |
 | `bulk.flushInterval` | Integer | `5000` | Flush interval in milliseconds, even if the batch is not full. |
-| `bulk.maxRetries` | Integer | `3` | Maximum retries on bulk failure. |
+| `bulk.maxRetries` | Integer | `3` | Shared retry budget for transport failures, HTTP 5xx responses, and item-level 429 rejections. |
 | `bulk.backoffMs` | Integer | `1000` | Initial backoff between retries in milliseconds. |
 | `bulk.maxBodyBytes` | Integer | `10485760` (10 MB) | Maximum bulk request body size in bytes. Ceiling 50 MB. |
 | `bulk.channelSize` | Integer | `10000` | Producer-to-bulk-loop channel capacity. Ceiling 100000. |
+
+For a successful HTTP Bulk response with item-level failures, the connector retries only items
+whose status is `429`, preserving their request order. It uses `bulk.backoffMs` as the initial
+delay and the existing exponential backoff; transport, HTTP 5xx, and item-level retries share the
+same `bulk.maxRetries` budget. Later log entries remain in the bounded `bulk.channelSize` queue,
+up to its configured capacity, while that serial retry is in progress. Once the queue is full,
+new entries are dropped and counted by `edgion_access_log_dropped_total`; that failed
+submission does not fall through to the fallback. Other item failures are permanent. An unsafe
+response correlation (for example, a mismatched item count) is not retried because resending an
+ambiguous operation could duplicate a document. If the 429 budget is exhausted, the connector
+becomes unhealthy and a configured access-log fallback can receive new entries.
 
 ### Failed-document cache
 

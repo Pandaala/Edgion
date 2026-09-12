@@ -42,6 +42,40 @@ pub struct BulkItemResult {
     pub error: Option<serde_json::Value>,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+struct BulkItemSummary {
+    retryable_indices: Vec<usize>,
+    permanent_failures: usize,
+}
+
+/// Classify a parsed Bulk API response against the submitted documents.
+///
+/// Elasticsearch and OpenSearch return `items` in request order. Require an
+/// exact one-to-one response before using that ordering so a malformed or
+/// filtered response can never make us retry an already-indexed document.
+/// Only 429 is retryable: it is the protocol's explicit overload signal.
+fn classify_bulk_items(response: &BulkResponse, expected_items: usize) -> Result<BulkItemSummary, &'static str> {
+    if response.items.len() != expected_items {
+        return Err("response item count does not match request item count");
+    }
+
+    let mut retryable_indices = Vec::new();
+    let mut permanent_failures = 0;
+    for (index, item) in response.items.iter().enumerate() {
+        let result = item.index.as_ref().ok_or("response item is not an index result")?;
+        if result.status == 429 {
+            retryable_indices.push(index);
+        } else if result.status >= 400 {
+            permanent_failures += 1;
+        }
+    }
+
+    Ok(BulkItemSummary {
+        retryable_indices,
+        permanent_failures,
+    })
+}
+
 // ============================================================================
 // Bulk ingest loop
 // ============================================================================
@@ -176,16 +210,15 @@ async fn flush_batch(
         // post-shutdown work is left to `send_bulk_request` (which aborts its
         // retry loop on shutdown) plus the 10s drain timeout + task abort in
         // `EsLinkClient::shutdown`.
-        let body = build_ndjson_body(sub_batch, &index_name);
         send_bulk_request(
             client,
             &bulk_url,
-            body,
+            sub_batch,
+            &index_name,
             config,
             healthy,
             last_flip_log,
             name,
-            sub_batch.len(),
             shutdown,
         )
         .await;
@@ -229,6 +262,31 @@ fn partition_into_sub_batches(
     (sub_batches, dropped)
 }
 
+/// Wait for the retry delay while allowing shutdown to cancel it.
+///
+/// Returns `true` when the delay elapsed and another request may start. A
+/// closed channel is treated like shutdown. Non-shutdown watch updates are
+/// ignored without restarting the delay.
+async fn wait_for_retry(backoff: std::time::Duration, shutdown: &watch::Receiver<bool>) -> bool {
+    if *shutdown.borrow() {
+        return false;
+    }
+
+    let sleep = tokio::time::sleep(backoff);
+    tokio::pin!(sleep);
+    let mut shutdown_wait = shutdown.clone();
+    loop {
+        tokio::select! {
+            _ = &mut sleep => return true,
+            changed = shutdown_wait.changed() => {
+                if changed.is_err() || *shutdown_wait.borrow() {
+                    return false;
+                }
+            }
+        }
+    }
+}
+
 /// Send one NDJSON body to ES via the Bulk API.
 ///
 /// Handles retries with exponential backoff.
@@ -239,22 +297,24 @@ fn partition_into_sub_batches(
 async fn send_bulk_request(
     client: &Client,
     bulk_url: &str,
-    body: String,
+    docs: &[&str],
+    index_name: &str,
     config: &EsBulkConfig,
     healthy: &Arc<AtomicBool>,
     last_flip_log: &AtomicU64,
     name: &str,
-    doc_count: usize,
     shutdown: &watch::Receiver<bool>,
 ) {
+    let mut pending_docs = docs.to_vec();
     let mut retries = 0u32;
     let mut backoff = config.backoff;
 
     loop {
+        let body = build_ndjson_body(&pending_docs, index_name);
         match client
             .post(bulk_url)
             .header("Content-Type", "application/x-ndjson")
-            .body(body.clone())
+            .body(body)
             .send()
             .await
         {
@@ -264,17 +324,43 @@ async fn send_bulk_request(
                     match resp.json::<BulkResponse>().await {
                         Ok(bulk_resp) => {
                             if bulk_resp.errors {
-                                let failed_count = bulk_resp
-                                    .items
-                                    .iter()
-                                    .filter(|item| item.index.as_ref().map(|i| i.status >= 400).unwrap_or(false))
-                                    .count();
-                                tracing::warn!("ES [{}] bulk: {}/{} items failed", name, failed_count, doc_count);
+                                let summary = match classify_bulk_items(&bulk_resp, pending_docs.len()) {
+                                    Ok(summary) => summary,
+                                    Err(reason) => {
+                                        tracing::warn!("ES [{}] bulk response correlation error: {}", name, reason);
+                                        // The server-side outcome is ambiguous. Do not retry the
+                                        // whole request and risk duplicating successful documents.
+                                        apply_health_result(healthy, name, "elasticsearch", last_flip_log, true, false);
+                                        return;
+                                    }
+                                };
+                                let retryable_count = summary.retryable_indices.len();
+                                let failed_count = retryable_count + summary.permanent_failures;
+                                tracing::warn!(
+                                    "ES [{}] bulk: {}/{} items failed ({} retryable)",
+                                    name,
+                                    failed_count,
+                                    pending_docs.len(),
+                                    retryable_count
+                                );
+                                if retryable_count == 0 {
+                                    apply_health_result(healthy, name, "elasticsearch", last_flip_log, true, false);
+                                    return;
+                                }
+                                pending_docs = summary
+                                    .retryable_indices
+                                    .into_iter()
+                                    .map(|index| pending_docs[index])
+                                    .collect();
                             } else {
-                                tracing::debug!("ES [{}] bulk: {} items indexed successfully", name, doc_count);
+                                tracing::debug!(
+                                    "ES [{}] bulk: {} items indexed successfully",
+                                    name,
+                                    pending_docs.len()
+                                );
+                                apply_health_result(healthy, name, "elasticsearch", last_flip_log, true, false);
+                                return;
                             }
-                            apply_health_result(healthy, name, "elasticsearch", last_flip_log, true, false);
-                            return;
                         }
                         Err(e) => {
                             tracing::warn!("ES [{}] bulk response parse error: {:?}", name, e);
@@ -307,8 +393,9 @@ async fn send_bulk_request(
                 "ES [{}] bulk: max retries ({}) exhausted, {} items lost",
                 name,
                 config.max_retries,
-                doc_count
+                pending_docs.len()
             );
+            apply_health_result(healthy, name, "elasticsearch", last_flip_log, false, false);
             return;
         }
 
@@ -320,7 +407,7 @@ async fn send_bulk_request(
             tracing::info!(
                 "ES [{}] bulk: shutdown signaled, aborting retry ({} items dropped)",
                 name,
-                doc_count
+                pending_docs.len()
             );
             return;
         }
@@ -332,7 +419,14 @@ async fn send_bulk_request(
             config.max_retries,
             backoff
         );
-        tokio::time::sleep(backoff).await;
+        if !wait_for_retry(backoff, shutdown).await {
+            tracing::info!(
+                "ES [{}] bulk: shutdown signaled during retry backoff ({} items dropped)",
+                name,
+                pending_docs.len()
+            );
+            return;
+        }
         backoff = backoff.mul_f64(2.0).min(std::time::Duration::from_secs(30));
     }
 }
@@ -375,6 +469,19 @@ fn ndjson_header_line(index_name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn test_bulk_config(max_retries: u32, backoff: std::time::Duration) -> EsBulkConfig {
+        EsBulkConfig {
+            batch_size: 500,
+            flush_interval: std::time::Duration::from_secs(5),
+            max_retries,
+            backoff,
+            max_body_bytes: 10 * 1024 * 1024,
+            channel_size: 10_000,
+            index_prefix: "test-logs".to_string(),
+            date_pattern: "%Y.%m.%d".to_string(),
+        }
+    }
 
     #[test]
     fn test_ndjson_body_format() {
@@ -426,6 +533,35 @@ mod tests {
             .filter(|item| item.index.as_ref().map(|i| i.status >= 400).unwrap_or(false))
             .count();
         assert_eq!(failed, 1);
+    }
+
+    #[test]
+    fn test_classify_bulk_items_selects_only_429_in_request_order() {
+        let json = r#"{"took":30,"errors":true,"items":[{"index":{"_index":"test","status":201}},{"index":{"_index":"test","status":429,"error":{"type":"es_rejected_execution_exception"}}},{"index":{"_index":"test","status":400,"error":{"type":"mapper_parsing_exception"}}},{"index":{"_index":"test","status":429,"error":{"type":"rejected_execution_exception"}}}]}"#;
+        let response: BulkResponse = serde_json::from_str(json).unwrap();
+
+        let summary = classify_bulk_items(&response, 4).unwrap();
+
+        assert_eq!(summary.retryable_indices, vec![1, 3]);
+        assert_eq!(summary.permanent_failures, 1);
+    }
+
+    #[test]
+    fn test_classify_bulk_items_rejects_unsafe_correlation() {
+        let wrong_count: BulkResponse =
+            serde_json::from_str(r#"{"took":1,"errors":true,"items":[{"index":{"_index":"test","status":429}}]}"#)
+                .unwrap();
+        assert_eq!(
+            classify_bulk_items(&wrong_count, 2),
+            Err("response item count does not match request item count")
+        );
+
+        let wrong_action: BulkResponse =
+            serde_json::from_str(r#"{"took":1,"errors":true,"items":[{"delete":{}}]}"#).unwrap();
+        assert_eq!(
+            classify_bulk_items(&wrong_action, 1),
+            Err("response item is not an index result")
+        );
     }
 
     #[test]
@@ -493,6 +629,127 @@ mod tests {
         assert_eq!(batches[0].len(), 1);
     }
 
+    #[tokio::test]
+    async fn test_send_bulk_request_retries_only_429_items() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        let calls = Arc::new(AtomicUsize::new(0));
+        let responder_calls = Arc::clone(&calls);
+        Mock::given(method("POST"))
+            .and(path("/_bulk"))
+            .respond_with(move |_request: &wiremock::Request| {
+                if responder_calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                    ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                        "took": 1,
+                        "errors": true,
+                        "items": [
+                            {"index": {"_index": "test", "status": 201}},
+                            {"index": {"_index": "test", "status": 429,
+                                "error": {"type": "es_rejected_execution_exception"}}}
+                        ]
+                    }))
+                } else {
+                    ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                        "took": 1,
+                        "errors": false,
+                        "items": [{"index": {"_index": "test", "status": 201}}]
+                    }))
+                }
+            })
+            .expect(2)
+            .mount(&server)
+            .await;
+
+        let docs = [r#"{"message":"accepted"}"#, r#"{"message":"retry-me"}"#];
+        let healthy = Arc::new(AtomicBool::new(true));
+        let last_flip = AtomicU64::new(0);
+        let (_shutdown_tx, shutdown_rx) = watch::channel(false);
+        send_bulk_request(
+            &Client::new(),
+            &format!("{}/_bulk", server.uri()),
+            &docs,
+            "test",
+            &test_bulk_config(3, std::time::Duration::ZERO),
+            &healthy,
+            &last_flip,
+            "test",
+            &shutdown_rx,
+        )
+        .await;
+
+        let requests = server.received_requests().await.unwrap();
+        assert_eq!(requests.len(), 2);
+        let first_body = std::str::from_utf8(&requests[0].body).unwrap();
+        let retry_body = std::str::from_utf8(&requests[1].body).unwrap();
+        assert!(first_body.contains("accepted"));
+        assert!(first_body.contains("retry-me"));
+        assert!(!retry_body.contains("accepted"));
+        assert!(retry_body.contains("retry-me"));
+        assert!(healthy.load(std::sync::atomic::Ordering::Relaxed));
+    }
+
+    #[tokio::test]
+    async fn test_send_bulk_request_degrades_after_429_retry_budget_is_exhausted() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/_bulk"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "took": 1,
+                "errors": true,
+                "items": [{"index": {"_index": "test", "status": 429,
+                    "error": {"type": "es_rejected_execution_exception"}}}]
+            })))
+            .expect(3)
+            .mount(&server)
+            .await;
+
+        let docs = [r#"{"message":"retry-me"}"#];
+        let healthy = Arc::new(AtomicBool::new(true));
+        let last_flip = AtomicU64::new(0);
+        let (_shutdown_tx, shutdown_rx) = watch::channel(false);
+        send_bulk_request(
+            &Client::new(),
+            &format!("{}/_bulk", server.uri()),
+            &docs,
+            "test",
+            &test_bulk_config(2, std::time::Duration::ZERO),
+            &healthy,
+            &last_flip,
+            "test",
+            &shutdown_rx,
+        )
+        .await;
+
+        assert!(!healthy.load(std::sync::atomic::Ordering::Relaxed));
+    }
+
+    #[tokio::test]
+    async fn test_retry_backoff_is_cancelled_after_wait_starts() {
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        let wait = wait_for_retry(std::time::Duration::from_secs(30), &shutdown_rx);
+        tokio::pin!(wait);
+
+        // Poll the helper to Pending first, proving that the shutdown signal is
+        // delivered after the backoff wait has started.
+        tokio::select! {
+            biased;
+            result = &mut wait => panic!("backoff unexpectedly completed: {result}"),
+            _ = tokio::task::yield_now() => {}
+        }
+        shutdown_tx.send(true).unwrap();
+        let elapsed = tokio::time::timeout(std::time::Duration::from_secs(1), &mut wait)
+            .await
+            .expect("shutdown must cancel the in-progress retry backoff");
+
+        assert!(!elapsed);
+    }
+
     /// Once shutdown is signaled the retry loop must exit before the next backoff
     /// sleep. With a 5s backoff and an unreachable endpoint, the 2s timeout below
     /// trips if any retry sleep runs.
@@ -503,20 +760,11 @@ mod tests {
             .timeout(std::time::Duration::from_millis(200))
             .build()
             .unwrap();
-        let config = EsBulkConfig {
-            batch_size: 500,
-            flush_interval: std::time::Duration::from_secs(5),
-            max_retries: 10,
-            backoff: std::time::Duration::from_secs(5),
-            max_body_bytes: 10 * 1024 * 1024,
-            channel_size: 10_000,
-            index_prefix: "test-logs".to_string(),
-            date_pattern: "%Y.%m.%d".to_string(),
-        };
+        let config = test_bulk_config(10, std::time::Duration::from_secs(5));
         let healthy = Arc::new(AtomicBool::new(true));
         // Shutdown is already signaled before the call.
         let (_tx, shutdown_rx) = watch::channel(true);
-        let body = build_ndjson_body(&[r#"{"message":"x"}"#], "test-logs-2026.01.01");
+        let docs = [r#"{"message":"x"}"#];
 
         // Port 1 is unreachable: the first request fails fast, after which the
         // shutdown check must return before the 5s backoff sleep.
@@ -524,12 +772,12 @@ mod tests {
         let fut = send_bulk_request(
             &client,
             "http://127.0.0.1:1/_bulk",
-            body,
+            &docs,
+            "test-logs-2026.01.01",
             &config,
             &healthy,
             &last_flip,
             "test",
-            1,
             &shutdown_rx,
         );
         tokio::time::timeout(std::time::Duration::from_secs(2), fut)

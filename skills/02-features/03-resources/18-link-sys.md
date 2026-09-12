@@ -220,6 +220,12 @@ spec:
 
 - Auth tagged-enum: `type: basic` → `BasicAuthResolver`, `type: apiKey` → `EsApiKeyResolver`, `type: bearer` → `BearerResolver`.
 - At runtime, requests are issued via reqwest directly over HTTP, without depending on the official `elasticsearch` crate; OpenSearch-compatible.
+- `bulk.maxRetries` is one shared per-sub-batch budget for transport failures, HTTP 5xx responses,
+  and item-level 429 rejections. A parsed partial response retries only its 429 documents, in
+  request order; later documents wait up to the bounded `bulk.channelSize` capacity. Entries
+  submitted after that queue fills are dropped and counted rather than sent to the fallback.
+  Exhausting the retry budget marks the connector unhealthy so a configured access-log fallback
+  can accept new entries.
 - Failed-cache spill/replay is planned but is not an accepted YAML field. Do not put it in a
   LinkSys resource until both the Rust schema and CRD declare it.
 

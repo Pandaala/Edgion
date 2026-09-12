@@ -365,10 +365,19 @@ spec:
 |------|------|--------|------|
 | `bulk.batchSize` | Integer | `500` | 每批次文档数。 |
 | `bulk.flushInterval` | Integer | `5000` | 即使批次未满也强制刷新的间隔（毫秒）。 |
-| `bulk.maxRetries` | Integer | `3` | 批量写入失败的最大重试次数。 |
+| `bulk.maxRetries` | Integer | `3` | 传输失败、HTTP 5xx 响应和 item 级 429 拒绝共用的重试预算。 |
 | `bulk.backoffMs` | Integer | `1000` | 重试间隔的初始退避（毫秒）。 |
 | `bulk.maxBodyBytes` | Integer | `10485760`（10 MB） | 批量请求体最大大小（字节），上限 50 MB。 |
 | `bulk.channelSize` | Integer | `10000` | 生产者到批量循环的通道容量，上限 100000。 |
+
+当 Bulk HTTP 请求成功但部分 item 失败时，连接器只重试状态为 `429` 的 item，并保持其请求
+顺序。重试以 `bulk.backoffMs` 为初始延迟，继续使用现有指数退避；传输失败、HTTP 5xx 和
+item 级重试共用同一个 `bulk.maxRetries` 预算。串行重试期间，后续日志可以保留在有界的
+`bulk.channelSize` 队列中，最多达到配置的容量。队列已满后，新日志会被丢弃并计入
+`edgion_access_log_dropped_total`；本次失败提交不会继续尝试 fallback。其他 item
+失败视为永久失败。如果响应无法安全关联（例如 item 数量与请求不一致），则不会重试，因为
+重发结果不明确的操作可能产生重复文档。429 重试预算耗尽后，连接器会转为不健康，已配置的
+access-log fallback 可以接收后续日志。
 
 ### 失败文档缓存
 

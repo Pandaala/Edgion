@@ -103,7 +103,8 @@ pub struct EsBulk {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub flush_interval: Option<u64>,
 
-    /// Maximum retries for failed bulk requests (default: 3)
+    /// Maximum retries for transport failures, HTTP 5xx responses, and
+    /// item-level 429 rejections, shared by the whole sub-batch (default: 3)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_retries: Option<u32>,
 
@@ -119,9 +120,9 @@ pub struct EsBulk {
     pub max_body_bytes: Option<usize>,
 
     /// Capacity of the in-memory mpsc channel between log producers and the
-    /// bulk ingest task (default: 10000, ceiling: 100000). When the channel is
-    /// full, producers backpressure on the access-log path; raise this to
-    /// absorb bursts when ES is temporarily slow.
+    /// bulk ingest task (default: 10000, ceiling: 100000). A full channel drops
+    /// non-blocking access-log submissions; awaiting producers such as backfill
+    /// apply backpressure instead. Raise this to absorb temporary ES slowdowns.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub channel_size: Option<usize>,
 }

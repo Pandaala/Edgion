@@ -62,7 +62,7 @@ access_log:
 
 原始客户端入口 URI（`request_uri`）由单独的顶层 `access_log_options` 段控制，而非 `access_log` 块——见[特殊字段](#特殊字段)。
 
-> `output` 块也接受 `es` sink。当 Elasticsearch 生产者→批量循环通道被填满时，`edgion_link_sys_es_bulk_channel_full_total` 计数器递增——将其作为反压信号监控。见[监控指标](./metrics.md)。
+> `output` 块也接受 `es` sink。当 Elasticsearch 生产者→批量循环通道已满时，非阻塞的 access-log 提交会被丢弃，并递增 `edgion_access_log_dropped_total`。见[监控指标](./metrics.md)。
 
 ## 降级：fallback sink 与手动回填
 

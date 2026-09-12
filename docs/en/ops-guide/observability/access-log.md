@@ -62,7 +62,7 @@ access_log:
 
 The raw client-entry URI (`request_uri`) is controlled by a separate top-level `access_log_options` section, not by the `access_log` block — see [Special fields](#special-fields).
 
-> The `output` block also accepts an `es` sink. When the Elasticsearch producer→bulk-loop channel fills up, the `edgion_link_sys_es_bulk_channel_full_total` counter increments — watch it as a backpressure signal. See [Metrics](./metrics.md).
+> The `output` block also accepts an `es` sink. When its Elasticsearch producer→bulk-loop channel is full, the non-blocking access-log submission is dropped and `edgion_access_log_dropped_total` increments. See [Metrics](./metrics.md).
 
 ## Degradation: fallback sink and backfill
 

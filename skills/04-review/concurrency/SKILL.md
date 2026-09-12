@@ -32,6 +32,7 @@ before applying a decision to current code.
 
 - [AsyncRwLock Write Guard Held Across an RPC — Clone-and-Drop, Don't Re-derive](regression-guards/async-write-lock-across-rpc.md)
 - [LinkSys ES bulk_ingest_loop Empty endpoints Panic](regression-guards/es-bulk-ingest-empty-endpoints-fail-closed.md)
+- [LinkSys Elasticsearch Bulk item-level 429 retry](regression-guards/es-bulk-item-level-429-retry.md)
 - [LinkSys Elasticsearch bulk `max_body_bytes` enforcement (link-sys-F002)](regression-guards/es-bulk-max-body-bytes-enforced.md)
 - [LinkSys Elasticsearch bulk-ingest shutdown cancellation (link-sys-F016)](regression-guards/es-bulk-shutdown-cancellation.md)
 - [link-sys F-012 (etcd) — health-monitor `JoinHandle` is now stored and aborted on shutdown](regression-guards/etcd-monitor-handle-not-aborted.md)
