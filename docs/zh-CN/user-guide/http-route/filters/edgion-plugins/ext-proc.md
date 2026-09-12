@@ -111,6 +111,10 @@ spec:
 
 网关把该阶段的 header 发给处理服务，包含只读的 HTTP/2 伪 header（请求侧 `:method`/`:path`/`:authority`，响应侧 `:status`），方便处理服务据此路由。多值 header（如 `Set-Cookie`）会被保真传递，不会被折叠成单值。
 
+发送的 header 值使用 protobuf `raw_value`，保留 HTTP 允许的非 UTF-8 字节。处理服务返回 mutation 时，非空 `raw_value` 优先于 `value`；两者均为空时，仅在 `keep_empty_value: true` 时应用空值。请使用 `raw_value` 返回原始字节。请求、响应及 `ImmediateResponse` 的 header 值都经过 HTTP header 校验；含 CR、LF、NUL 等非法字节的写操作会被跳过，并记录不包含原始值的访问日志诊断。
+
+条件动作按 header 名称是否存在判断，即使现有值不是 UTF-8，也视为存在。同名值保留追加顺序；不同名称之间不保证原始报文顺序。Edgion 按列表顺序执行 `set_headers`，随后执行 `remove_headers`。这些动作和空值规则是 Edgion 的行为约定；采用 Envoy 的 `raw_value` 字节表示不意味着两者的所有 mutation 细节完全一致。
+
 ### 受保护的 header（安全）
 
 处理服务**不能**改动：

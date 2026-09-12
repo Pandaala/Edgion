@@ -2034,20 +2034,19 @@ pub enum MirrorState {
 /// gRPC errors).
 #[derive(Debug, Clone)]
 pub enum PendingHeaderOp {
-    Set { name: String, value: String },
-    Append { name: String, value: String },
-    AddIfAbsent { name: String, value: String },
-    OverwriteIfExists { name: String, value: String },
+    Set { name: String, value: http::HeaderValue },
+    Append { name: String, value: http::HeaderValue },
+    AddIfAbsent { name: String, value: http::HeaderValue },
+    OverwriteIfExists { name: String, value: http::HeaderValue },
     Remove { name: String },
 }
 
 impl PendingHeaderOp {
     /// Apply this queued operation to a real ResponseHeader.
     ///
-    /// `insert_header` / `append_header` errors (invalid header value bytes,
-    /// e.g. control chars) are intentionally swallowed: dropping a malformed
-    /// queued op silently is preferable to failing the entire response, and
-    /// matches the behavior of the pre-tagged-queue implementation.
+    /// Values are already validated and retain their raw bytes and sensitivity.
+    /// Invalid header names are still silently dropped by `insert_header` /
+    /// `append_header`, preserving the queue's best-effort response behavior.
     pub fn apply(self, response_header: &mut ResponseHeader) {
         match self {
             PendingHeaderOp::Set { name, value } => {

@@ -13,6 +13,7 @@ The following documents still describe removed Webhook modules or direct-upsert 
 - `skills/01-architecture/03-controller-gateway-link/webhook.md`
 - `skills/01-architecture/05-resources/18-link-sys.md`
 - `skills/02-features/03-resources/18-link-sys.md`
+- `skills/04-review/link-sys/intentional-design/link-sys-dispatch-extract-function.md`
 - `skills/05-testing/03-link-sys-testing.md`
 - `docs/en/dev-guide/logging-system.md`
 - `docs/zh-CN/dev-guide/logging-system.md`
@@ -23,4 +24,4 @@ The following documents still describe removed Webhook modules or direct-upsert 
 The correction is a coordinated architecture, feature, testing, and bilingual user-documentation sweep. The stale comment in `edgion-common/src/link_sys_core/lifecycle.rs` is separate focused work and is intentionally excluded.
 
 ## Candidate next step
-Revalidate every listed statement against typed resources and current provider, logging, backfill, and Webhook publication paths; update the ten documents consistently, preserve the operator-facing schema reference, and run the agent-document consistency checks.
+Revalidate every listed statement against typed resources and current provider, logging, backfill, and Webhook publication paths; update the eleven documents consistently, preserve the operator-facing schema reference, and run the agent-document consistency checks.

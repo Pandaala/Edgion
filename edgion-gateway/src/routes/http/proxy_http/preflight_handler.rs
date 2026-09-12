@@ -174,7 +174,7 @@ mod tests {
                 matches!(
                     op,
                     PendingHeaderOp::Append { name, value }
-                        if name.eq_ignore_ascii_case("vary") && value.eq_ignore_ascii_case("origin")
+                        if name.eq_ignore_ascii_case("vary") && value.as_bytes().eq_ignore_ascii_case(b"origin")
                 )
             })
             .count();

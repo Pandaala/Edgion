@@ -1,15 +1,15 @@
-//! Unified lifecycle interface for all LinkSys providers.
+//! Shared lifecycle interface for LinkSys providers that use generic dispatch.
 //!
 //! Dispatch maps resource events to three lifecycle operations:
 //! - **add / update** — calls `init` on the new instance
 //! - **update** — calls `shutdown` on the old instance only when
-//!   `SHUTDOWN_ON_REPLACE = true` (Redis/Etcd/ES, which own connections)
+//!   `SHUTDOWN_ON_REPLACE = true`
 //! - **remove** — always calls `shutdown` regardless of `SHUTDOWN_ON_REPLACE`
 //!
-//! Webhook sets `SHUTDOWN_ON_REPLACE = false` because its `init` is an
-//! idempotent `manager.upsert`; calling `shutdown` (i.e. `manager.remove`)
-//! on the old instance after an update would delete the entry just written
-//! by the new instance's `init`.
+//! Redis, Etcd, Elasticsearch, and Kafka use this interface and shut down
+//! replaced instances. Gateway Webhook publication deliberately does not
+//! implement this trait: it prepares candidates and commits them through the
+//! sequence-checked `WebhookManager` before updating runtime bookkeeping.
 
 use anyhow::Result;
 use async_trait::async_trait;
@@ -27,7 +27,7 @@ pub trait LinkSysLifecycle: Send + Sync + 'static {
     }
 
     /// On update, whether the previous instance must be shut down explicitly.
-    ///   - `true` (default): owns connections / background tasks (Redis/Etcd/ES)
-    ///   - `false`: init has replace semantics built-in (Webhook upsert)
+    ///   - `true` (default): the instance owns connections or background tasks.
+    ///   - `false`: `init` provides complete replacement semantics.
     const SHUTDOWN_ON_REPLACE: bool = true;
 }

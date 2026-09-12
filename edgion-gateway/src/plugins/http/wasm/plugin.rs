@@ -1094,7 +1094,7 @@ mod tests {
         session.expect_set_response_header().returning(move |name, value| {
             q_set.lock().push(PendingHeaderOp::Set {
                 name: name.to_string(),
-                value: value.to_string(),
+                value: http::HeaderValue::from_str(value).unwrap(),
             });
             Ok(())
         });
@@ -1102,7 +1102,7 @@ mod tests {
         session.expect_append_response_header().returning(move |name, value| {
             q_app.lock().push(PendingHeaderOp::Append {
                 name: name.to_string(),
-                value: value.to_string(),
+                value: http::HeaderValue::from_str(value).unwrap(),
             });
             Ok(())
         });

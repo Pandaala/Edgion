@@ -343,11 +343,11 @@ mod tests {
             vec![
                 crate::PendingHeaderOp::Set {
                     name: "content-length".to_string(),
-                    value: "999".to_string(),
+                    value: http::HeaderValue::from_static("999"),
                 },
                 crate::PendingHeaderOp::Set {
                     name: "transfer-encoding".to_string(),
-                    value: "chunked".to_string(),
+                    value: http::HeaderValue::from_static("chunked"),
                 },
             ],
         )
@@ -527,7 +527,7 @@ mod tests {
             Some(Bytes::from_static(b"quota")),
             vec![crate::PendingHeaderOp::Append {
                 name: "x-local".to_string(),
-                value: "reply".to_string(),
+                value: http::HeaderValue::from_static("reply"),
             }],
         )
         .await;

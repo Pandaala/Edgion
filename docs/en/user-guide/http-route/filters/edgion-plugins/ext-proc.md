@@ -115,6 +115,10 @@ The processor returns a `HeaderMutation` (`set_headers` + `remove_headers`). Eac
 
 The gateway sends the phase's headers to the processor, including the read-only HTTP/2 pseudo-headers (`:method`, `:path`, `:authority` on the request; `:status` on the response) so the processor can route on them. Multi-valued headers (e.g. `Set-Cookie`) are preserved, not collapsed.
 
+Outgoing header values use protobuf `raw_value`, preserving non-UTF-8 bytes allowed in HTTP headers. For returned mutations, a non-empty `raw_value` takes precedence over `value`; when both are empty, the empty value is applied only with `keep_empty_value: true`. Use `raw_value` to return original bytes. Request, response, and `ImmediateResponse` header values undergo HTTP header validation; writes containing invalid bytes such as CR, LF, or NUL are skipped with an access-log diagnostic that does not include the value.
+
+Conditional actions check whether the header name exists, including when its existing value is not UTF-8. Values of the same name retain append order; original wire order across different names is not guaranteed. Edgion applies `set_headers` in list order, followed by `remove_headers`. These action and empty-value rules describe Edgion's behavior; using Envoy's `raw_value` representation does not imply identical mutation behavior in every detail.
+
 ### Protected headers (security)
 
 The processor **cannot** mutate:

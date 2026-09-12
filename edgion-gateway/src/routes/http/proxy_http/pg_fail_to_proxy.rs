@@ -219,11 +219,11 @@ mod tests {
         ctx.request_info.trace_id.initialize(&session.req_header().headers);
         ctx.queue_pending_response_header_op(crate::PendingHeaderOp::Set {
             name: "content-length".into(),
-            value: "999".into(),
+            value: http::HeaderValue::from_static("999"),
         });
         ctx.queue_pending_response_header_op(crate::PendingHeaderOp::Set {
             name: "transfer-encoding".into(),
-            value: "chunked".into(),
+            value: http::HeaderValue::from_static("chunked"),
         });
         assert!(!write_proxy_error_reply(&mut session, &mut ctx, &ServerHeaderOpts::default(), 502).await);
         let response = session.response_written().unwrap();

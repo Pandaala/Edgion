@@ -1057,26 +1057,45 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
     }
 
     fn set_response_header(&mut self, name: &str, value: &str) -> PluginSessionResult<()> {
+        let value = match http::HeaderValue::from_str(value) {
+            Ok(value) => value,
+            // Queued malformed values historically disappeared during reply construction.
+            Err(_) if self.response_header.is_none() => return Ok(()),
+            Err(error) => return Err(Box::new(error)),
+        };
+        self.set_response_header_value(name, value)
+    }
+
+    fn set_response_header_value(&mut self, name: &str, value: http::HeaderValue) -> PluginSessionResult<()> {
         if let Some(resp) = &mut self.response_header {
-            resp.insert_header(name.to_string(), value.to_string())
+            resp.insert_header(name.to_string(), value)
                 .map_err(|e| Box::new(e) as PluginSessionError)?;
         } else {
             self.ctx.queue_pending_response_header_op(PendingHeaderOp::Set {
                 name: name.to_string(),
-                value: value.to_string(),
+                value,
             });
         }
         Ok(())
     }
 
     fn append_response_header(&mut self, name: &str, value: &str) -> PluginSessionResult<()> {
+        let value = match http::HeaderValue::from_str(value) {
+            Ok(value) => value,
+            Err(_) if self.response_header.is_none() => return Ok(()),
+            Err(error) => return Err(Box::new(error)),
+        };
+        self.append_response_header_value(name, value)
+    }
+
+    fn append_response_header_value(&mut self, name: &str, value: http::HeaderValue) -> PluginSessionResult<()> {
         if let Some(resp) = &mut self.response_header {
-            resp.append_header(name.to_string(), value.to_string())
+            resp.append_header(name.to_string(), value)
                 .map_err(|e| Box::new(e) as PluginSessionError)?;
         } else {
             self.ctx.queue_pending_response_header_op(PendingHeaderOp::Append {
                 name: name.to_string(),
-                value: value.to_string(),
+                value,
             });
         }
         Ok(())
@@ -1129,6 +1148,12 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
             .map(|s| s.to_string())
     }
 
+    fn has_response_header(&self, name: &str) -> bool {
+        self.response_header
+            .as_ref()
+            .is_some_and(|response| response.headers.contains_key(name))
+    }
+
     fn get_response_status(&self) -> Option<u16> {
         self.response_header.as_ref().map(|h| h.status.as_u16())
     }
@@ -1172,11 +1197,16 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
     }
 
     fn append_request_header(&mut self, name: &str, value: &str) -> PluginSessionResult<()> {
+        let value = http::HeaderValue::from_str(value).map_err(|e| Box::new(e) as PluginSessionError)?;
+        self.append_request_header_value(name, value)
+    }
+
+    fn append_request_header_value(&mut self, name: &str, value: http::HeaderValue) -> PluginSessionResult<()> {
         // Append as a new header field line (preserves every existing field line
         // per RFC 7230 §3.2.2 list semantics; insert_header would replace all).
         self.inner
             .req_header_mut()
-            .append_header(name.to_string(), value.to_string())
+            .append_header(name.to_string(), value)
             .map_err(|e| Box::new(e) as PluginSessionError)?;
         self.ctx.remove_deferred_credential_mutation(name);
         Ok(())
@@ -2257,11 +2287,11 @@ mod local_reply_tests {
         let mut ctx = EdgionHttpContext::default();
         ctx.queue_pending_response_header_op(PendingHeaderOp::Set {
             name: "content-type".to_string(),
-            value: "application/json".to_string(),
+            value: http::HeaderValue::from_static("application/json"),
         });
         ctx.queue_pending_response_header_op(PendingHeaderOp::Set {
             name: "content-length".to_string(),
-            value: "999".to_string(),
+            value: http::HeaderValue::from_static("999"),
         });
         assert!(build_response_local_reply(&mut ctx, 502, Some("{}".into()), false));
         let (h, _) = ctx.take_pending_response_local_reply().unwrap();
@@ -2278,7 +2308,7 @@ mod local_reply_tests {
         let mut ctx = EdgionHttpContext::default();
         ctx.queue_pending_response_header_op(PendingHeaderOp::Set {
             name: "x-foo".to_string(),
-            value: "bar".to_string(),
+            value: http::HeaderValue::from_static("bar"),
         });
         let mut hdr = ResponseHeader::build(200, None).unwrap();
         ctx.apply_pending_response_header_ops(&mut hdr);
@@ -2299,7 +2329,7 @@ mod local_reply_tests {
         let mut ctx = EdgionHttpContext::default();
         ctx.queue_pending_response_header_op(PendingHeaderOp::Set {
             name: "x-foo".to_string(),
-            value: "bar".to_string(),
+            value: http::HeaderValue::from_static("bar"),
         });
         let mut upstream = ResponseHeader::build(200, None).unwrap();
         ctx.apply_pending_response_header_ops(&mut upstream);
@@ -2805,7 +2835,7 @@ mod tests {
 }
 
 #[cfg(test)]
-mod record_outcome_tests {
+pub(crate) mod record_outcome_tests {
     use super::*;
     use crate::plugins::http::dsl::lang::vm::{Vm, VmLimits};
     use crate::plugins::http::dsl::runtime::DslRuntime;
@@ -2979,7 +3009,7 @@ mod record_outcome_tests {
     /// already read off the wire before any other method is callable, so
     /// this writes a minimal literal request into one end of a duplex pair
     /// and reads it back off the other end.
-    async fn test_session() -> Session {
+    pub(crate) async fn test_session() -> Session {
         let (mut client, server) = tokio::io::duplex(4096);
         let stream: pingora_core::protocols::Stream = Box::new(server);
         let mut session = Session::new_h1(stream);
@@ -3042,6 +3072,107 @@ mod record_outcome_tests {
     }
 
     #[tokio::test]
+    async fn typed_request_append_preserves_opaque_duplicates_and_invalidates_deferred_credentials() {
+        let mut session = test_session().await;
+        let mut ctx = EdgionHttpContext::default();
+        let name = http::HeaderName::from_static("x-private-identity");
+        ctx.upsert_deferred_credential_mutation(
+            name.clone(),
+            Arc::new(http::HeaderValue::from_static("deferred")),
+            None,
+        );
+        session.req_header_mut().append_header(name.clone(), "first").unwrap();
+        let mut value = http::HeaderValue::from_bytes(b"\xffidentity").unwrap();
+        value.set_sensitive(true);
+        {
+            let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
+            assert!(adapter
+                .append_request_header_value("invalid name", value.clone())
+                .is_err());
+        }
+        let mut upstream = session.req_header().clone();
+        ctx.apply_deferred_credentials(&mut upstream).unwrap();
+        assert_eq!(upstream.headers[&name], "deferred");
+        {
+            let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
+            adapter.append_request_header_value(name.as_str(), value).unwrap();
+        }
+        let mut upstream = session.req_header().clone();
+        ctx.apply_deferred_credentials(&mut upstream).unwrap();
+        let values: Vec<_> = upstream.headers.get_all(&name).iter().collect();
+        assert_eq!(values.len(), 2);
+        assert_eq!(values[0], "first");
+        assert_eq!(values[1].as_bytes(), b"\xffidentity");
+        assert!(values[1].is_sensitive());
+    }
+
+    #[tokio::test]
+    async fn typed_response_values_preserve_bytes_sensitivity_and_pending_replay() {
+        let mut session = test_session().await;
+        let mut ctx = EdgionHttpContext::default();
+        let mut value = http::HeaderValue::from_bytes(b"\xffprivate").unwrap();
+        value.set_sensitive(true);
+        {
+            let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
+            adapter.set_response_header_value("x-private", value.clone()).unwrap();
+            adapter
+                .append_response_header_value("x-private", value.clone())
+                .unwrap();
+            assert!(!adapter.has_response_header("x-private"));
+            assert!(adapter.response_headers_bytes().is_empty());
+        }
+        let mut response = ResponseHeader::build(200, None).unwrap();
+        // Normal upstream response application clones the queue; local replies consume it.
+        ctx.apply_pending_response_header_ops(&mut response);
+        assert_eq!(response.headers.get_all("x-private").iter().count(), 2);
+        for item in response.headers.get_all("x-private") {
+            assert_eq!(item.as_bytes(), b"\xffprivate");
+            assert!(item.is_sensitive());
+        }
+        let mut local_reply = ResponseHeader::build(403, None).unwrap();
+        ctx.drain_pending_response_header_ops(&mut local_reply);
+        assert_eq!(local_reply.headers.get_all("x-private").iter().count(), 2);
+        assert!(local_reply
+            .headers
+            .get_all("x-private")
+            .iter()
+            .all(http::HeaderValue::is_sensitive));
+        {
+            let mut adapter = PingoraSessionAdapter::with_response_header(&mut session, &mut ctx, &mut response);
+            assert!(adapter.has_response_header("X-Private"));
+            assert!(adapter.get_response_header("x-private").is_none());
+            adapter.set_response_header_value("x-private", value.clone()).unwrap();
+            adapter.append_response_header_value("x-private", value).unwrap();
+        }
+        assert_eq!(response.headers.get_all("x-private").iter().count(), 2);
+        assert!(response
+            .headers
+            .get_all("x-private")
+            .iter()
+            .all(http::HeaderValue::is_sensitive));
+    }
+
+    #[tokio::test]
+    async fn invalid_string_response_values_keep_live_error_and_queued_noop_behavior() {
+        let mut session = test_session().await;
+        let mut ctx = EdgionHttpContext::default();
+        {
+            let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
+            assert!(adapter.set_response_header("x-invalid", "bad\rvalue").is_ok());
+            assert!(adapter.append_response_header("x-invalid", "bad\nvalue").is_ok());
+        }
+        assert!(!ctx.has_pending_response_header_ops());
+        let mut response = ResponseHeader::build(200, None).unwrap();
+        response.insert_header("x-invalid", "original").unwrap();
+        {
+            let mut adapter = PingoraSessionAdapter::with_response_header(&mut session, &mut ctx, &mut response);
+            assert!(adapter.set_response_header("x-invalid", "bad\rvalue").is_err());
+            assert!(adapter.append_response_header("x-invalid", "bad\nvalue").is_err());
+        }
+        assert_eq!(response.headers["x-invalid"], "original");
+    }
+
+    #[tokio::test]
     async fn explicit_local_reply_ops_bypass_bound_upstream_and_land_on_fresh_reply() {
         let mut session = test_session().await;
         let mut ctx = EdgionHttpContext::default();
@@ -3052,7 +3183,7 @@ mod record_outcome_tests {
             adapter
                 .queue_local_reply_header_op(PendingHeaderOp::Set {
                     name: "x-local".to_string(),
-                    value: "reply".to_string(),
+                    value: http::HeaderValue::from_static("reply"),
                 })
                 .unwrap();
         }
@@ -3645,14 +3776,14 @@ mod record_outcome_tests {
         let mut ctx = EdgionHttpContext::default();
         ctx.queue_pending_response_header_op(PendingHeaderOp::Append {
             name: "X-O".to_string(),
-            value: "v1".to_string(),
+            value: http::HeaderValue::from_static("v1"),
         });
         // Hostile framing op: without protection this would clobber the
         // caller's real content-length and desync the wire from the body
         // the caller is about to write in a separate call.
         ctx.queue_pending_response_header_op(PendingHeaderOp::Set {
             name: "content-length".to_string(),
-            value: "999".to_string(),
+            value: http::HeaderValue::from_static("999"),
         });
 
         let mut resp = ResponseHeader::build(200, None).unwrap();
@@ -3742,7 +3873,7 @@ mod record_outcome_tests {
         ctx.request_info.is_grpc_request = true;
         ctx.queue_pending_response_header_op(PendingHeaderOp::Append {
             name: "X-O".to_string(),
-            value: "v1".to_string(),
+            value: http::HeaderValue::from_static("v1"),
         });
 
         let resp = ResponseHeader::build(404, None).unwrap();

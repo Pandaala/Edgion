@@ -2,7 +2,7 @@
 
 ## Meta
 
-- Status: pending
+- Status: in-progress
 - Priority: P2
 - Category: protocol correctness
 
@@ -30,3 +30,29 @@ Add deterministic raw-header map and protobuf round-trip tests for request, resp
 local-reply surfaces. Independently review the complete consumer chain and run scoped
 tests/project guards. Do not modify existing integration tests; defer any needed new
 end-to-end coverage as a separate task for later implementation.
+
+## Approved implementation plan
+
+The user authorized the shared session API and pending-header value changes.
+Independent read-only plan review approved the following sequence:
+
+1. Add canonical typed request append and response set/append APIs, direct live
+   response-header presence, and typed `PendingHeaderOp` values. Preserve sensitive
+   metadata, successful-write credential invalidation, and deferred invalid-string
+   writes' existing successful no-op result.
+2. Project ordinary and pseudo-header values through `raw_value`; borrow the
+   request map and consume existing response byte snapshots. Validate returned
+   bytes without lossy conversion. Preserve fallback, empty-value policy, all four
+   actions, set-before-remove order, and protected headers.
+3. Migrate affected queue construction and mock wiring sites. Cover raw maps,
+   protobuf round trips, real in-memory adapters, sequential mutations, metadata,
+   and fresh local replies with deterministic tests.
+4. Update bilingual user documentation and the owning ExtProc regression guard.
+   Track deployed wire coverage separately. Complete independent final review and
+   repository checks before removing this active task. Do not commit or push.
+
+Implementation source scope is Gateway `ctx.rs`, runtime session trait/adapter,
+ExtProc mutation/plugin tests, and necessary queue test constructors in proxy
+request-body/failure paths, error responses, and Wasm tests. No integration files
+are changed. Knowledge context starts at `skills/SKILL.md`, design rules, review
+routing, ExtProc knowledge, borrowed-header access, and sensitive-header ownership.

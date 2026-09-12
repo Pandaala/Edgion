@@ -475,7 +475,7 @@ mod tests {
         ctx.request_info.trace_id.initialize(&session.req_header().headers);
         ctx.queue_pending_response_header_op(PendingHeaderOp::Set {
             name: "content-length".into(),
-            value: "0".into(),
+            value: http::HeaderValue::from_static("0"),
         });
         send_html_error(
             &mut session,
@@ -600,15 +600,15 @@ mod tests {
         let mut ctx = EdgionHttpContext::new();
         ctx.queue_pending_response_header_op(PendingHeaderOp::Append {
             name: "x-ext-proc".to_string(),
-            value: "allowed".to_string(),
+            value: http::HeaderValue::from_static("allowed"),
         });
         ctx.queue_pending_response_header_op(PendingHeaderOp::Set {
             name: "content-type".to_string(),
-            value: "text/plain".to_string(),
+            value: http::HeaderValue::from_static("text/plain"),
         });
         ctx.queue_pending_response_header_op(PendingHeaderOp::Set {
             name: "content-length".to_string(),
-            value: "999".to_string(),
+            value: http::HeaderValue::from_static("999"),
         });
 
         send_grpc_status_trailers_only(&mut session, &mut ctx, &ServerHeaderOpts::default(), 8, Some("quota"))
@@ -632,15 +632,15 @@ mod tests {
         for op in [
             PendingHeaderOp::Append {
                 name: "x-ext-proc".to_string(),
-                value: "allowed".to_string(),
+                value: http::HeaderValue::from_static("allowed"),
             },
             PendingHeaderOp::Set {
                 name: "grpc-status".to_string(),
-                value: "1".to_string(),
+                value: http::HeaderValue::from_static("1"),
             },
             PendingHeaderOp::Set {
                 name: "grpc-message".to_string(),
-                value: "conflict".to_string(),
+                value: http::HeaderValue::from_static("conflict"),
             },
         ] {
             ctx.queue_pending_response_header_op(op);

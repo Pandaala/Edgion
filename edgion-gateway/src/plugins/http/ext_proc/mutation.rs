@@ -10,7 +10,7 @@
 
 use edgion_common::ext_proc::proto::{HeaderAppendAction, HeaderMap, HeaderMutation, HeaderValue, HeaderValueOption};
 
-use crate::plugins::runtime::{PluginLog, PluginSession, PluginSessionHeaderExt};
+use crate::plugins::runtime::{PluginLog, PluginSession};
 use crate::PendingHeaderOp;
 
 /// Whether `name` is an HTTP/2 pseudo-header (leading `:`). These are sent to
@@ -45,18 +45,24 @@ pub(super) fn is_protected_header(name: &str) -> bool {
 /// Decode a processor-supplied header value, preferring the modern `raw_value`
 /// (bytes) field and falling back to the legacy `value` (string) field.
 ///
-/// Returns `Some("")` only when the option opts in via `keep_empty_value`;
-/// otherwise an empty value yields `None` (the mutation is skipped).
-fn decoded_value(opt: &HeaderValueOption, hv: &HeaderValue) -> Option<String> {
-    if !hv.raw_value.is_empty() {
-        // Lossy is acceptable: header values reaching the session API are strings.
-        return Some(String::from_utf8_lossy(&hv.raw_value).into_owned());
+/// Empty values require `keep_empty_value`. Invalid HTTP value bytes are logged
+/// and skipped without exposing or rewriting processor-supplied contents.
+fn decoded_value(opt: &HeaderValueOption, hv: &HeaderValue, log: &mut PluginLog) -> Option<http::HeaderValue> {
+    let raw = if hv.raw_value.is_empty() {
+        hv.value.as_bytes()
+    } else {
+        &hv.raw_value
+    };
+    if raw.is_empty() && !opt.keep_empty_value {
+        return None;
     }
-    if !hv.value.is_empty() {
-        return Some(hv.value.clone());
+    match http::HeaderValue::from_bytes(raw) {
+        Ok(value) => Some(value),
+        Err(_) => {
+            log.push_err("invalid header value");
+            None
+        }
     }
-    // Empty value: honor it only when the processor explicitly asked to keep it.
-    opt.keep_empty_value.then(String::new)
 }
 
 /// Build a proto `HeaderMap` from the request headers plus read-only pseudo
@@ -66,11 +72,12 @@ pub fn collect_request_headers(session: &dyn PluginSession) -> HeaderMap {
     let mut headers = Vec::new();
     push_pseudo(&mut headers, ":method", session.get_method().to_string());
     push_pseudo(&mut headers, ":path", session.get_uri());
-    if let Some(authority) = session.header_value("host") {
-        push_pseudo(&mut headers, ":authority", authority);
+    let request = session.request_header_map();
+    if let Some(authority) = request.get("host") {
+        headers.push(raw_header(":authority".to_string(), authority.as_bytes().to_vec()));
     }
-    for (name, value) in session.request_headers() {
-        headers.push(string_header(name, value));
+    for (name, value) in request {
+        headers.push(raw_header(name.as_str().to_string(), value.as_bytes().to_vec()));
     }
     HeaderMap { headers }
 }
@@ -83,21 +90,25 @@ pub fn collect_response_headers(session: &dyn PluginSession) -> HeaderMap {
     if let Some(status) = session.get_response_status() {
         push_pseudo(&mut headers, ":status", status.to_string());
     }
-    for (name, value) in session.response_headers() {
-        headers.push(string_header(name, value));
+    for (name, value) in session.response_headers_bytes() {
+        // Canonical adapters expose ASCII HeaderNames; do not repair bytes from
+        // another adapter using a lossy conversion.
+        if let Ok(name) = String::from_utf8(name) {
+            headers.push(raw_header(name, value));
+        }
     }
     HeaderMap { headers }
 }
 
 fn push_pseudo(headers: &mut Vec<HeaderValue>, key: &str, value: String) {
-    headers.push(string_header(key.to_string(), value));
+    headers.push(raw_header(key.to_string(), value.into_bytes()));
 }
 
-fn string_header(key: String, value: String) -> HeaderValue {
+fn raw_header(key: String, raw_value: Vec<u8>) -> HeaderValue {
     HeaderValue {
         key,
-        value,
-        raw_value: Vec::new(),
+        value: String::new(),
+        raw_value,
     }
 }
 
@@ -111,18 +122,18 @@ pub fn apply_to_request(session: &mut dyn PluginSession, mutation: &HeaderMutati
         if reject_protected(&hv.key, log) {
             continue;
         }
-        let Some(value) = decoded_value(opt, hv) else { continue };
+        let Some(value) = decoded_value(opt, hv, log) else {
+            continue;
+        };
         let action = HeaderAppendAction::try_from(opt.append_action).unwrap_or(HeaderAppendAction::AppendIfExistsOrAdd);
         // `Some(result)` means a mutation was attempted; `None` is a conditional no-op.
         let outcome = match action {
-            HeaderAppendAction::AppendIfExistsOrAdd => Some(session.append_request_header(&hv.key, &value)),
-            HeaderAppendAction::OverwriteIfExistsOrAdd => Some(session.set_request_header(&hv.key, &value)),
-            HeaderAppendAction::AddIfAbsent => {
-                (session.header_str(&hv.key).is_none()).then(|| session.set_request_header(&hv.key, &value))
-            }
-            HeaderAppendAction::OverwriteIfExists => {
-                (session.header_str(&hv.key).is_some()).then(|| session.set_request_header(&hv.key, &value))
-            }
+            HeaderAppendAction::AppendIfExistsOrAdd => Some(session.append_request_header_value(&hv.key, value)),
+            HeaderAppendAction::OverwriteIfExistsOrAdd => Some(session.set_request_header_value(&hv.key, value)),
+            HeaderAppendAction::AddIfAbsent => (!session.request_header_map().contains_key(&hv.key))
+                .then(|| session.set_request_header_value(&hv.key, value)),
+            HeaderAppendAction::OverwriteIfExists => (session.request_header_map().contains_key(&hv.key))
+                .then(|| session.set_request_header_value(&hv.key, value)),
         };
         match outcome {
             Some(Ok(())) => applied += 1,
@@ -153,17 +164,20 @@ pub fn apply_to_response(session: &mut dyn PluginSession, mutation: &HeaderMutat
         if reject_protected(&hv.key, log) {
             continue;
         }
-        let Some(value) = decoded_value(opt, hv) else { continue };
+        let Some(value) = decoded_value(opt, hv, log) else {
+            continue;
+        };
         let action = HeaderAppendAction::try_from(opt.append_action).unwrap_or(HeaderAppendAction::AppendIfExistsOrAdd);
-        let outcome =
-            match action {
-                HeaderAppendAction::AppendIfExistsOrAdd => Some(session.append_response_header(&hv.key, &value)),
-                HeaderAppendAction::OverwriteIfExistsOrAdd => Some(session.set_response_header(&hv.key, &value)),
-                HeaderAppendAction::AddIfAbsent => (session.get_response_header(&hv.key).is_none())
-                    .then(|| session.set_response_header(&hv.key, &value)),
-                HeaderAppendAction::OverwriteIfExists => (session.get_response_header(&hv.key).is_some())
-                    .then(|| session.set_response_header(&hv.key, &value)),
-            };
+        let outcome = match action {
+            HeaderAppendAction::AppendIfExistsOrAdd => Some(session.append_response_header_value(&hv.key, value)),
+            HeaderAppendAction::OverwriteIfExistsOrAdd => Some(session.set_response_header_value(&hv.key, value)),
+            HeaderAppendAction::AddIfAbsent => {
+                (!session.has_response_header(&hv.key)).then(|| session.set_response_header_value(&hv.key, value))
+            }
+            HeaderAppendAction::OverwriteIfExists => {
+                (session.has_response_header(&hv.key)).then(|| session.set_response_header_value(&hv.key, value))
+            }
+        };
         match outcome {
             Some(Ok(())) => applied += 1,
             Some(Err(_)) => {
@@ -209,7 +223,9 @@ pub fn local_reply_ops(mutation: &HeaderMutation, log: &mut PluginLog) -> Vec<Pe
         if reject_protected(&hv.key, log) {
             continue;
         }
-        let Some(value) = decoded_value(opt, hv) else { continue };
+        let Some(value) = decoded_value(opt, hv, log) else {
+            continue;
+        };
         let action = HeaderAppendAction::try_from(opt.append_action).unwrap_or(HeaderAppendAction::AppendIfExistsOrAdd);
         let op = match action {
             HeaderAppendAction::AppendIfExistsOrAdd => PendingHeaderOp::Append {
@@ -257,11 +273,14 @@ pub(super) fn reject_protected(name: &str, log: &mut PluginLog) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::plugins::runtime::session_adapter::record_outcome_tests::test_session;
     use crate::plugins::runtime::traits::session::MockPluginSession;
     use crate::plugins::runtime::traits::test_helpers::setup_header_mocks;
+    use crate::plugins::runtime::PingoraSessionAdapter;
     use crate::EdgionHttpContext;
     use edgion_resources::path_normalization::PathNormalizationConfig;
     use pingora_http::RequestHeader;
+    use prost::Message;
 
     fn set_header_opt(key: &str, value: &str, action: HeaderAppendAction) -> HeaderValueOption {
         HeaderValueOption {
@@ -272,6 +291,157 @@ mod tests {
             }),
             append_action: action as i32,
             keep_empty_value: false,
+        }
+    }
+
+    fn raw_opt(key: &str, value: &[u8], action: HeaderAppendAction) -> HeaderValueOption {
+        let mut opt = set_header_opt(key, "", action);
+        opt.header.as_mut().unwrap().raw_value = value.to_vec();
+        opt
+    }
+
+    fn wire_round_trip<M: Message + Default>(message: &M) -> M {
+        M::decode(message.encode_to_vec().as_slice()).unwrap()
+    }
+
+    fn assert_raw_values(map: &http::HeaderMap, key: &str, expected: &[&[u8]]) {
+        let values: Vec<_> = map.get_all(key).iter().map(|value| value.as_bytes()).collect();
+        assert_eq!(values, expected, "header {key}");
+    }
+
+    #[tokio::test]
+    async fn opaque_projection_round_trips_request_and_response_field_lines() {
+        let mut session = test_session().await;
+        let mut ctx = EdgionHttpContext::new();
+        let mut response = pingora_http::ResponseHeader::build(200, None).unwrap();
+        for bytes in [b"\xfffirst".as_slice(), b"second", b""] {
+            let value = http::HeaderValue::from_bytes(bytes).unwrap();
+            session
+                .req_header_mut()
+                .append_header("x-opaque", value.clone())
+                .unwrap();
+            response.append_header("x-opaque", value).unwrap();
+        }
+        let adapter = PingoraSessionAdapter::with_response_header(&mut session, &mut ctx, &mut response);
+        for map in [collect_request_headers(&adapter), collect_response_headers(&adapter)] {
+            let map = wire_round_trip(&map);
+            assert!(map.headers.iter().all(|header| header.value.is_empty()));
+            let actual: Vec<_> = map
+                .headers
+                .iter()
+                .filter(|header| header.key == "x-opaque")
+                .map(|header| header.raw_value.as_slice())
+                .collect();
+            assert_eq!(actual, [b"\xfffirst".as_slice(), b"second", b""]);
+        }
+    }
+
+    fn sequential_mutation() -> HeaderMutation {
+        let mut empty = raw_opt("x-empty", b"", HeaderAppendAction::OverwriteIfExistsOrAdd);
+        empty.keep_empty_value = true;
+        wire_round_trip(&HeaderMutation {
+            set_headers: vec![
+                raw_opt("x-existing", b"must-not-replace", HeaderAppendAction::AddIfAbsent),
+                raw_opt("x-existing", b"\x80updated", HeaderAppendAction::OverwriteIfExists),
+                raw_opt("x-missing", b"must-not-create", HeaderAppendAction::OverwriteIfExists),
+                raw_opt("x-created", b"\x81new", HeaderAppendAction::AddIfAbsent),
+                raw_opt("x-created", b"must-not-replace", HeaderAppendAction::AddIfAbsent),
+                raw_opt("x-created", b"\x82updated", HeaderAppendAction::OverwriteIfExists),
+                raw_opt("x-created", b"\x83append", HeaderAppendAction::AppendIfExistsOrAdd),
+                raw_opt(
+                    "x-remove",
+                    b"\x84set-then-remove",
+                    HeaderAppendAction::OverwriteIfExistsOrAdd,
+                ),
+                raw_opt("content-length", b"999", HeaderAppendAction::OverwriteIfExistsOrAdd),
+                raw_opt(":method", b"DELETE", HeaderAppendAction::OverwriteIfExistsOrAdd),
+                empty,
+            ],
+            remove_headers: vec![
+                "x-remove".to_string(),
+                "content-length".to_string(),
+                ":path".to_string(),
+            ],
+        })
+    }
+
+    fn initial_mutation_headers() -> [(&'static str, http::HeaderValue); 3] {
+        [
+            ("x-existing", http::HeaderValue::from_bytes(b"\xfforiginal").unwrap()),
+            ("x-existing", http::HeaderValue::from_static("later-text")),
+            ("content-length", http::HeaderValue::from_static("0")),
+        ]
+    }
+
+    fn assert_sequential_result(map: &http::HeaderMap) {
+        assert_raw_values(map, "x-existing", &[b"\x80updated"]);
+        assert_raw_values(map, "x-created", &[b"\x82updated", b"\x83append"]);
+        assert_raw_values(map, "x-empty", &[b""]);
+        assert!(!map.contains_key("x-missing"));
+        assert!(!map.contains_key("x-remove"));
+        assert_eq!(map["content-length"], "0");
+    }
+
+    #[tokio::test]
+    async fn opaque_mutations_observe_live_sequential_presence_in_both_directions() {
+        let mut session = test_session().await;
+        let mut ctx = EdgionHttpContext::new();
+        let mut response = pingora_http::ResponseHeader::build(200, None).unwrap();
+        for (name, value) in initial_mutation_headers() {
+            session.req_header_mut().append_header(name, value.clone()).unwrap();
+            response.append_header(name, value).unwrap();
+        }
+        let mutation = sequential_mutation();
+        {
+            let mut adapter = PingoraSessionAdapter::with_response_header(&mut session, &mut ctx, &mut response);
+            let mut log = PluginLog::new("ExtProc");
+            assert_eq!(apply_to_request(&mut adapter, &mutation, &mut log), 7);
+            assert_eq!(apply_to_response(&mut adapter, &mutation, &mut log), 7);
+            assert!(log.contains("protected header mutation rejected"));
+        }
+        assert_sequential_result(&session.req_header().headers);
+        assert_sequential_result(&response.headers);
+        assert_eq!(session.req_header().method.as_str(), "GET");
+    }
+
+    #[tokio::test]
+    async fn opaque_local_reply_round_trip_defers_conditions_to_fresh_headers() {
+        let mut session = test_session().await;
+        let mut ctx = EdgionHttpContext::new();
+        let mut upstream = pingora_http::ResponseHeader::build(200, None).unwrap();
+        upstream.insert_header("x-created", "upstream-only").unwrap();
+        let mut reply = pingora_http::ResponseHeader::build(403, None).unwrap();
+        for (name, value) in initial_mutation_headers() {
+            reply.append_header(name, value).unwrap();
+        }
+        {
+            let mut adapter = PingoraSessionAdapter::with_response_header(&mut session, &mut ctx, &mut upstream);
+            let mut log = PluginLog::new("ExtProc");
+            assert_eq!(
+                queue_for_local_reply(&mut adapter, &sequential_mutation(), &mut log),
+                10
+            );
+        }
+        assert_eq!(upstream.headers["x-created"], "upstream-only");
+        ctx.drain_pending_response_header_ops(&mut reply);
+        assert_sequential_result(&reply.headers);
+        assert!(!ctx.has_pending_response_header_ops());
+    }
+
+    #[test]
+    fn invalid_processor_bytes_are_skipped_without_exposing_contents() {
+        for bytes in [b"private\rvalue".as_slice(), b"private\nvalue", b"private\0value"] {
+            let mutation = wire_round_trip(&HeaderMutation {
+                set_headers: vec![raw_opt("x-private", bytes, HeaderAppendAction::OverwriteIfExistsOrAdd)],
+                remove_headers: vec![],
+            });
+            let mut session = MockPluginSession::new();
+            let mut log = PluginLog::new("ExtProc");
+            assert_eq!(apply_to_request(&mut session, &mutation, &mut log), 0);
+            assert_eq!(apply_to_response(&mut session, &mutation, &mut log), 0);
+            assert!(local_reply_ops(&mutation, &mut log).is_empty());
+            assert!(log.contains("invalid header value"));
+            assert!(!log.contains("private"));
         }
     }
 
@@ -326,7 +496,7 @@ mod tests {
         };
         let mut session = MockPluginSession::new();
         session
-            .expect_set_request_header()
+            .expect_set_request_header_value()
             .withf(|n, v| n == "x-user" && v == "alice")
             .times(1)
             .returning(|_, _| Ok(()));
@@ -342,7 +512,7 @@ mod tests {
         };
         let mut session = MockPluginSession::new();
         session
-            .expect_append_request_header()
+            .expect_append_request_header_value()
             .withf(|n, v| n == "x-tag" && v == "a")
             .times(1)
             .returning(|_, _| Ok(()));
@@ -363,8 +533,8 @@ mod tests {
             remove_headers: vec!["Content-Length".to_string()],
         };
         let mut session = MockPluginSession::new();
-        session.expect_set_request_header().never();
-        session.expect_append_request_header().never();
+        session.expect_set_request_header_value().never();
+        session.expect_append_request_header_value().never();
         session.expect_remove_request_header().never();
         let mut log = PluginLog::new("ExtProc");
         assert_eq!(apply_to_request(&mut session, &mutation, &mut log), 0);
@@ -380,7 +550,7 @@ mod tests {
         let mut session = MockPluginSession::new();
         setup_header_mocks(&mut session, &[("x-id", "existing")]);
         // set_request_header must NOT be called when the header already exists.
-        session.expect_set_request_header().never();
+        session.expect_set_request_header_value().never();
         let mut log = PluginLog::new("ExtProc");
         // Conditional no-op: nothing changed, so the applied count is 0.
         assert_eq!(apply_to_request(&mut session, &mutation, &mut log), 0);
@@ -398,7 +568,7 @@ mod tests {
         };
         let mut session = MockPluginSession::new();
         // No session mutation methods should ever be invoked for pseudo headers.
-        session.expect_set_request_header().never();
+        session.expect_set_request_header_value().never();
         session.expect_remove_request_header().never();
         let mut log = PluginLog::new("ExtProc");
         assert_eq!(apply_to_request(&mut session, &mutation, &mut log), 0);
@@ -431,7 +601,7 @@ mod tests {
             remove_headers: vec![],
         };
         let mut session = MockPluginSession::new();
-        session.expect_set_request_header().never();
+        session.expect_set_request_header_value().never();
         let mut log = PluginLog::new("ExtProc");
         assert_eq!(apply_to_request(&mut session, &mutation, &mut log), 0);
 
@@ -444,7 +614,7 @@ mod tests {
         };
         let mut session = MockPluginSession::new();
         session
-            .expect_set_request_header()
+            .expect_set_request_header_value()
             .withf(|n, v| n == "x-empty" && v.is_empty())
             .times(1)
             .returning(|_, _| Ok(()));
@@ -456,7 +626,7 @@ mod tests {
         map.headers
             .iter()
             .filter(|h| h.key == key)
-            .map(|h| h.value.as_str())
+            .map(|h| std::str::from_utf8(&h.raw_value).unwrap())
             .collect()
     }
 
@@ -465,16 +635,10 @@ mod tests {
         let mut session = MockPluginSession::new();
         session.expect_get_method().return_const("GET".to_string());
         session.expect_get_uri().times(1).return_const("/api".to_string());
-        session
-            .expect_header_value()
-            .withf(|n| n == "host")
-            .returning(|_| Some("example.com".to_string()));
-        session.expect_request_headers().returning(|| {
-            vec![
-                ("x-multi".to_string(), "a".to_string()),
-                ("x-multi".to_string(), "b".to_string()),
-            ]
-        });
+        setup_header_mocks(
+            &mut session,
+            &[("host", "example.com"), ("x-multi", "a"), ("x-multi", "b")],
+        );
 
         let map = collect_request_headers(&session);
         assert_eq!(values_for(&map, ":method"), vec!["GET"]);
@@ -514,8 +678,7 @@ mod tests {
             session.expect_get_request_path().never();
             session.expect_get_request_uri().never();
             session.expect_get_query().never();
-            session.expect_header_value().return_const(None);
-            session.expect_request_headers().return_const(Vec::new());
+            session.expect_request_header_map().return_const(http::HeaderMap::new());
 
             let map = collect_request_headers(&session);
             assert_eq!(values_for(&map, ":path"), vec![expected], "current URI: {current_uri}");
@@ -526,10 +689,10 @@ mod tests {
     fn collect_response_headers_includes_status_and_preserves_set_cookie() {
         let mut session = MockPluginSession::new();
         session.expect_get_response_status().return_const(Some(200u16));
-        session.expect_response_headers().returning(|| {
+        session.expect_response_headers_bytes().returning(|| {
             vec![
-                ("set-cookie".to_string(), "a=1".to_string()),
-                ("set-cookie".to_string(), "b=2".to_string()),
+                (b"set-cookie".to_vec(), b"a=1".to_vec()),
+                (b"set-cookie".to_vec(), b"b=2".to_vec()),
             ]
         });
 
@@ -549,7 +712,7 @@ mod tests {
         };
         let mut session = MockPluginSession::new();
         session
-            .expect_set_request_header()
+            .expect_set_request_header_value()
             .withf(|n, v| n == "x-bin" && v == "raw-wins")
             .times(1)
             .returning(|_, _| Ok(()));

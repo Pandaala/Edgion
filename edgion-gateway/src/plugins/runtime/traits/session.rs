@@ -299,8 +299,18 @@ pub trait PluginSession: Send + Sync {
     /// Set a response header (will be added when write_response_header is called)
     fn set_response_header(&mut self, name: &str, value: &str) -> PluginSessionResult<()>;
 
+    /// Replace response field lines, preserving raw bytes and sensitivity through deferred replies.
+    fn set_response_header_value(&mut self, name: &str, value: http::HeaderValue) -> PluginSessionResult<()>;
+
     /// Append a value to an existing response header (e.g., Vary: Origin)
     fn append_response_header(&mut self, name: &str, value: &str) -> PluginSessionResult<()>;
+
+    /// Append a response field line without converting its typed value to text.
+    fn append_response_header_value(&mut self, name: &str, value: http::HeaderValue) -> PluginSessionResult<()>;
+
+    /// Check the live response by name, independently of value encoding.
+    /// Returns false before a response is bound; pending operations are not a live response.
+    fn has_response_header(&self, name: &str) -> bool;
 
     /// Remove a response header (for ResponseHeaderModifier)
     fn remove_response_header(&mut self, name: &str) -> PluginSessionResult<()>;
@@ -346,6 +356,9 @@ pub trait PluginSession: Send + Sync {
 
     /// Append a value to an existing request header (e.g., X-Forwarded-For)
     fn append_request_header(&mut self, name: &str, value: &str) -> PluginSessionResult<()>;
+
+    /// Append a request field line, preserving raw bytes and sensitivity.
+    fn append_request_header_value(&mut self, name: &str, value: http::HeaderValue) -> PluginSessionResult<()>;
 
     /// Remove a request header (e.g., hide credentials)
     fn remove_request_header(&mut self, name: &str) -> PluginSessionResult<()>;

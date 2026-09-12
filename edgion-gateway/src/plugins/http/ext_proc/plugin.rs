@@ -1306,8 +1306,7 @@ mod tests {
     fn expect_empty_request_headers(session: &mut MockPluginSession) {
         session.expect_get_method().return_const("POST".to_string());
         session.expect_get_uri().return_const("/half-close".to_string());
-        session.expect_header_value().return_const(None);
-        session.expect_request_headers().return_const(Vec::new());
+        session.expect_request_header_map().return_const(http::HeaderMap::new());
     }
 
     async fn assert_clean_half_close(
@@ -1515,7 +1514,7 @@ mod tests {
             .expect_attached_ext_proc()
             .return_const(Some(Arc::clone(&owner)));
         session.expect_get_response_status().return_const(Some(200));
-        session.expect_response_headers().return_const(Vec::new());
+        session.expect_response_headers_bytes().return_const(Vec::new());
         session
             .expect_upstream_response_headers_end_stream()
             .return_const(Some(false));
@@ -1924,7 +1923,7 @@ mod tests {
         let ext_proc = ExtProc::build(&test_config(false)).expect("client build must not touch the network");
         let mut session = MockPluginSession::new();
         session.expect_record_outcome().times(2).return_const(());
-        session.expect_set_request_header().never();
+        session.expect_set_request_header_value().never();
         for common in [
             CommonResponse {
                 clear_route_cache: true,
@@ -2070,7 +2069,7 @@ mod tests {
         let ext_proc = ExtProc::build(&test_config(false)).expect("client build must not touch the network");
         let mut session = MockPluginSession::new();
         session
-            .expect_set_request_header()
+            .expect_set_request_header_value()
             .withf(|name, value| name == "x-body-verdict" && value == "applied")
             .times(1)
             .returning(|_, _| Ok(()));
@@ -2225,7 +2224,7 @@ mod tests {
             request_session
                 .expect_overwrite_request_body()
                 .returning(|_| Err(BodyReadError::BufferLimitExceeded { limit: 4 }));
-            request_session.expect_set_request_header().never();
+            request_session.expect_set_request_header_value().never();
             request_session
                 .expect_record_outcome()
                 .withf(move |outcome, value| {

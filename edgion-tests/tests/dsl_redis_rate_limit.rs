@@ -107,6 +107,15 @@ impl PluginSession for ResultSession {
     fn append_response_header(&mut self, _name: &str, _value: &str) -> PluginSessionResult<()> {
         panic!("unexpected session operation")
     }
+    fn set_response_header_value(&mut self, _name: &str, _value: http::HeaderValue) -> PluginSessionResult<()> {
+        panic!("unexpected session operation")
+    }
+    fn append_response_header_value(&mut self, _name: &str, _value: http::HeaderValue) -> PluginSessionResult<()> {
+        panic!("unexpected session operation")
+    }
+    fn has_response_header(&self, _name: &str) -> bool {
+        panic!("unexpected session operation")
+    }
     fn remove_response_header(&mut self, _name: &str) -> PluginSessionResult<()> {
         panic!("unexpected session operation")
     }
@@ -126,6 +135,9 @@ impl PluginSession for ResultSession {
         panic!("unexpected session operation")
     }
     fn append_request_header(&mut self, _name: &str, _value: &str) -> PluginSessionResult<()> {
+        panic!("unexpected session operation")
+    }
+    fn append_request_header_value(&mut self, _name: &str, _value: http::HeaderValue) -> PluginSessionResult<()> {
         panic!("unexpected session operation")
     }
     fn remove_request_header(&mut self, _name: &str) -> PluginSessionResult<()> {
