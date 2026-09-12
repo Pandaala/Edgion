@@ -79,6 +79,11 @@ an explicit matcher.
 2. Create and bootstrap `pingora_core::Server`.
 3. Create `GatewayBase`, list Gateway resources, and configure startup listener sockets.
 
+UDP listeners run on the auxiliary Tokio runtime, outside Pingora services. Their
+registry owns cancellation tokens and serve-task handles. If listener construction
+fails after any UDP listener has started, the CLI drains the registered UDP tasks
+before dropping that runtime and returns the original startup error.
+
 The Tokio runtime is then moved to a background thread that waits on the auxiliary shutdown watch.
 The main thread calls `run_server()` → `Server::run(RunArgs)`. On Unix, `RunArgs` carries
 `PolicyShutdownSignalWatch`, which races the ordinary `UnixShutdownSignalWatch` against the
@@ -93,11 +98,27 @@ semantics; the internal fatal branch returns `FastShutdown`. Non-Unix builds use
 2. During process shutdown, the HTTP proxy disables keepalive and adds `Connection: close` where
    applicable.
 3. After `Server::run(RunArgs)` returns, the main thread checks the bounded internal fatal
-   diagnostic, sends the auxiliary shutdown signal, and returns an error only for that internal
-   policy-fatal path.
+   diagnostic, cancels all UDP listeners, closes UDP registration, and sends the auxiliary
+   shutdown signal. UDP continues serving during Pingora's own grace period; cancellation
+   starts at the post-Pingora auxiliary drain, not at initial signal receipt.
 4. Admin, probe, metrics, backend-cleaner, and other shutdown-aware tasks begin draining.
-5. The background runtime allows a five-second drain window, returns, and is joined before
-   `EdgionGatewayCli::run()` completes.
+5. The background runtime joins UDP serve, cleanup, and upstream-receiver tasks within
+   the same five-second auxiliary grace window. Completed child handles are also reaped
+   during serving. Once producers have exited, remaining sessions submit terminal UDP
+   access-log statistics and release session permits and sockets.
+6. On grace timeout, remaining serve tasks are aborted together. Their owned child tasks
+   are aborted on drop, and a task tracker acknowledges child destruction before runtime
+   teardown. This acknowledgement is cooperative and may extend past five seconds; the
+   window is not a hard process-exit deadline. Timeout or a failed UDP task is reported
+   by a shutdown diagnostic and a non-zero exit. Repeated shutdown is idempotent.
+7. The runtime thread is joined before `EdgionGatewayCli::run()` completes. Internal
+   policy-fatal errors retain their original non-zero outcome.
+
+Terminal logs use the existing UDP logger. Cancellation may discard in-flight datagrams;
+forced shutdown can abandon pending terminal logs. Submission does not establish durable
+flush of the log sink: the shared [DataSender shutdown contract](../../../tasks/todo/data-sender-graceful-shutdown-contract.md)
+remains separate. See the [UDP lifecycle regression guard](../../04-review/listeners/regression-guards/udp-process-shutdown.md)
+for verification limits and deferred wire coverage.
 
 The background Tokio thread is therefore not an intentionally permanent `pending()` task.
 

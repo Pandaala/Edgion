@@ -7,6 +7,7 @@ use crate::observe::access_log::init_access_logger;
 use crate::observe::logs::{init_logging, init_ssl_logger, init_tcp_logger, init_tls_logger, init_udp_logger};
 use crate::observe::metrics;
 use crate::plugins::http::request_mirror::init_global_budget;
+use crate::routes::udp::get_udp_listener_registry;
 use crate::runtime::server::proxy_protocol_policy::init_global_proxy_protocol_policy_runtime;
 use anyhow::{anyhow, bail, Result};
 use clap::Parser;
@@ -40,6 +41,24 @@ pub struct EdgionGatewayCli {
 impl EdgionGatewayCli {
     pub fn parse_args() -> Self {
         Self::parse()
+    }
+
+    /// UDP and auxiliary HTTP services share the existing five-second grace
+    /// window. Forced task cancellation is acknowledged before runtime teardown.
+    async fn drain_udp_listeners() -> Result<()> {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        let outcome = get_udp_listener_registry().shutdown(deadline).await;
+        tokio::time::sleep_until(deadline).await;
+        if outcome.timed_out || outcome.failed_listeners != 0 {
+            tracing::error!(
+                component = "gateway",
+                timed_out = outcome.timed_out,
+                failed_listeners = outcome.failed_listeners,
+                "UDP shutdown required forced cancellation or encountered a failed listener"
+            );
+            bail!("UDP shutdown did not complete gracefully; inspect gateway shutdown diagnostics");
+        }
+        Ok(())
     }
 
     /// Create ConfigSyncClient
@@ -677,8 +696,19 @@ impl EdgionGatewayCli {
         let pingora_server = runtime.block_on(async {
             tokio::task::spawn_blocking(move || create_and_configure_server(config_client, &config))
                 .await
-                .expect("Failed to spawn blocking task")
-        })?;
+                .map_err(|error| anyhow!("Gateway listener construction task failed: {error}"))?
+        });
+        let pingora_server = match pingora_server {
+            Ok(server) => server,
+            Err(error) => {
+                // A later listener bind can fail after earlier UDP tasks have
+                // started. Drain them while their runtime is still available.
+                get_udp_listener_registry().cancel_all();
+                let _ = aux_shutdown_tx.send(true);
+                let _ = runtime.block_on(Self::drain_udp_listeners());
+                return Err(error);
+            }
+        };
 
         // 22. Move runtime to background thread with shutdown-aware lifecycle
         let bg_shutdown_rx = aux_shutdown_rx;
@@ -690,25 +720,29 @@ impl EdgionGatewayCli {
                         break;
                     }
                 }
-                // Grace period for auxiliary services to drain
-                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-            });
+                Self::drain_udp_listeners().await
+            })
         });
 
         // 23. Run Pingora server (blocks until shutdown)
         let run_result = run_server(pingora_server);
 
         // 24. Signal auxiliary services to shut down
+        get_udp_listener_registry().cancel_all();
         tracing::info!(
             component = "gateway",
             "Pingora stopped, shutting down auxiliary services"
         );
         let _ = aux_shutdown_tx.send(true);
 
-        // 25. Wait for background runtime to complete (services drain + 5s grace)
-        let _ = bg_thread.join();
+        // 25. Wait for UDP tasks and the shared auxiliary grace window.
+        let shutdown_result = bg_thread
+            .join()
+            .map_err(|_| anyhow!("Gateway auxiliary shutdown thread panicked"))?;
+        run_result?;
+        shutdown_result?;
 
         tracing::info!(component = "gateway", "Gateway shutdown complete");
-        run_result
+        Ok(())
     }
 }

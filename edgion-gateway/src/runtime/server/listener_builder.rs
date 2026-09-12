@@ -33,6 +33,7 @@ use edgion_resources::resources::gateway::{GatewayTlsMode, Listener};
 use edgion_resources::resources::proxy_protocol::ProxyProtocolPolicySourceKind;
 use edgion_resources::ListenerKey;
 use tokio_util::sync::CancellationToken;
+use tokio_util::task::TaskTracker;
 
 /// Context passed to listener builders containing gateway-level information and listener config
 #[derive(Clone)]
@@ -395,7 +396,7 @@ pub fn add_udp_listener(_server: &mut Server, context: &ListenerContext) -> Resu
     let socket = UdpSocket::from_std(socket)?;
 
     let cancel_token = CancellationToken::new();
-    get_udp_listener_registry().register(&context.listener_key, cancel_token.clone());
+    let child_tasks = TaskTracker::new();
 
     let edgion_udp = Arc::new(EdgionUdpProxy::new(
         port,
@@ -403,12 +404,13 @@ pub fn add_udp_listener(_server: &mut Server, context: &ListenerContext) -> Resu
         udp_route_manager,
         context.edgion_gateway_config.clone(),
         socket,
-        cancel_token,
+        cancel_token.clone(),
+        child_tasks.clone(),
     ));
 
-    tokio::spawn(async move {
-        edgion_udp.serve().await;
-    });
+    get_udp_listener_registry().spawn(&context.listener_key, cancel_token, child_tasks, async move {
+        edgion_udp.serve().await
+    })?;
 
     tracing::info!(
         gateway=%context.gateway_key,

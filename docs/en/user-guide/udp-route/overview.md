@@ -116,6 +116,12 @@ spec:
    lifetime: route or backend changes apply only to new sessions. Existing sessions
    keep forwarding to their original upstream until they expire after 60 s of
    inactivity, at which point the next packet re-runs route matching.
+4. During Gateway shutdown, UDP continues serving through Pingora's shutdown phase.
+   Once Pingora stops, UDP stops receiving and forwarding, then cleans up tasks and
+   sessions within the shared five-second auxiliary-service grace window. A timeout
+   forces task cancellation and a non-zero exit. Cancellation acknowledgement still
+   depends on runtime scheduling, so five seconds is not a hard process-exit limit.
+   Shutdown can discard in-flight datagrams; applications must handle retries.
 
 ## Sub-document Navigation
 
