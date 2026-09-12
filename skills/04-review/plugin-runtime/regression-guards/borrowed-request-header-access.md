@@ -57,8 +57,9 @@ presence is not equivalent to successful text access. Deferred upstream
 credential headers are invisible to both request-header tiers.
 
 Decoded Basic/LDAP credentials, extracted JWT/OIDC/JWE tokens, crypto internals,
-and KeyGet results may still own bytes. Those broader questions remain in
-[credential ownership follow-ups](../../../../tasks/todo/auth-credential-ownership-followups.md).
+and KeyGet results may still own bytes. The broader questions and their scoped
+no-code disposition are maintained in the
+[credential copy retention decision](../../security/intentional-design/credential-copy-retention.md).
 Dropping any owner is not proof that allocator or transport memory was wiped.
 
 ## Verification and re-evaluation

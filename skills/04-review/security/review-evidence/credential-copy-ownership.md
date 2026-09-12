@@ -26,6 +26,13 @@ Authorized Secret CRUD and explicit CLI credential issuance necessarily carry re
 credentials. Admin config projection, Debug, logs, and transport are separate
 surfaces; real conf-sync data must never be replaced with admin-redacted data.
 
+The `auth-credential-ownership-followups` review was closed without further code
+changes on 2026-09-12 after an explicit user decision that the remaining copies do
+not justify implementation work. That is a scoped value judgment, not proof that
+the copies do not exist or that credentials are physically erased. The per-boundary
+decision and re-evaluation triggers are recorded in the
+[credential copy retention decision](../intentional-design/credential-copy-retention.md).
+
 Earlier scoped corrections removed BasicAuth/HMAC identity warning fields and
 borrowed Controller bearer lookup/HMAC YAML decoding. Their semantic guards remain
 linked from the owning auth indices; their earlier verification was scoped, not
@@ -62,20 +69,20 @@ resolvers under `edgion-resources/src/credentials` were inspected, including DNS
 
 | Consumer | Required owners / implemented reductions | Release / residual classification |
 | --- | --- | --- |
-| BasicAuth | Borrow Secret UTF-8 then own trimmed fields; runtime clone takes raw users into prepared hashes; decoded password reuses String backing, separate username | Input config independent; request owns decoder output; `spawn_blocking` owns password and pinned user map until completion despite awaiter cancellation. Seen-map identity duplicates remain optional optimization |
-| HMAC and shared conditions | Borrow YAML bytes; parser Value tree then final username/secret/metadata; immutable runtime Arc map | Per-entry/Secret parser locals drop; source config and verifier generations independent. HMAC state derives from borrowed key. Removing runtime map clone requires ownership redesign |
+| BasicAuth | Borrow Secret UTF-8 then own trimmed fields; runtime clone takes raw users into prepared hashes; decoded password reuses String backing, separate username | Input config independent; request owns decoder output; `spawn_blocking` owns password and pinned user map until completion despite awaiter cancellation. The parser's extra username/group seen map is retained as a low-value cleanup candidate, not a password copy or security defect |
+| HMAC and shared conditions | Borrow YAML bytes; parser Value tree then final username/secret/metadata; immutable runtime Arc map | Per-entry/Secret parser locals drop; source config and verifier generations independent. The temporary selected-scalar copies and username/group seen map are retained after the value review; the runtime map is a required independent owner |
 | KeyAuth | Borrow YAML bytes; move the selected key and allowed metadata out of each typed parser entry; the result map also owns first-wins detection; runtime consumes raw keys into hashes | No separate parser field clones or seen-map key copies. Source Secret/config owners remain independent. Request KeyGet String survives current filter/failure delay; future drop releases it |
-| JWT | Borrow/trim Secret bytes once into final fields; constructor consumes group maps and creates DecodingKey; request extraction borrows the header before owning the selected token | Unverified iss routing and verified claims are distinct; tokens/claims drop with owners. Per-issuer serialized duplication and broader KeyGet/token-result ownership questions remain tracked |
+| JWT | Borrow/trim Secret bytes once into final fields; constructor consumes group maps and creates DecodingKey; request extraction borrows the header before owning the selected token | Unverified iss routing and verified claims are distinct; tokens/claims drop with owners. Per-issuer serialized duplication and the selected request token remain accepted scoped owners unless scale or hot-path evidence changes |
 | OIDC | Final owned client/session secret, prepared TLS/cipher; refresh access/id token fields move into cookie; response and cookie DTOs remain owned | Forms/HTTP/decoded cookie/token values release with futures/requests. Access-token and refresh-result LRU TTLs bound validity, not destruction; lazy expired get/prune/eviction/clear/drop releases. TinyUFO expired lookup does not remove entries |
 | LDAP | Decoded String with username/password ranges; separate bind DN; prepared TLS and SDK bind buffers | Request-local values release on future drop; timeout does not guarantee detached driver/SDK teardown. Unbind and driver have separate completion boundaries |
 | ForwardAuth / Guardrail / AiGuard / templates | `ResolvedSecrets` owns configured substitutions; prepared client and retry template own request values; response capped by shared outbound exchange | Template retained across attempts/delays; response/request owners drop on completion/cancel, SDK owners separately. Logs/Debug must not format values |
 | ExtProc | Independent tonic bidirectional client; resolved TLS becomes rustls client identity; Arc target runtime owns Channel, cache holds Weak only; request headers are copied into protobuf messages | Request stream owns opening future/inbound stream and four-message outbound queue. Per-exchange timeout/drop releases local owners; tonic transport, TLS and peer buffers remain independent. Shared HTTP response aggregation caps do not apply to this gRPC stream |
 | JWE | Prepared cipher consumes decoded key; fallback moves selected bytes from owned Secret | Request encrypted/decrypted payload and forwarded identity have independent owners; source/crypto copies not erased by freeing one plaintext buffer |
 | HeaderCertAuth | Borrow PEM while compiling CA pool; retained runtime config clears raw CA Secrets | Derived DER/subject pool persists with runtime; original config still independently owns Secret. Client certificate identity survives connection/request as designed |
-| CredentialInjector | Prevalidated sensitive HeaderValue behind Arc; deferred attempt injection shares it | Validity deadline rejects use, not destruction; last runtime/request/attempt Arc drops. Managed memory-to-material temporary is a tracked optional copy reduction |
+| CredentialInjector | Prevalidated sensitive HeaderValue behind Arc; deferred attempt injection shares it | Validity deadline rejects use, not destruction; last runtime/request/attempt Arc drops. Publication, conf-sync, runtime-header and attempt owners remain separate to preserve retry and injection semantics |
 | OIDC/CSRF/Wasm Secret values | Shared helper returns borrowed UTF-8; final materialization owns exact bytes; Wasm status probe needs no String | Local fetch ends after resolution; published field lifetime follows generation. CSRF/OIDC whitespace behavior preserved |
-| Shared TLS / LinkSys / AI | SecretSlot and TLS config own resolved Secrets; material produces selected CA/cert/key; clients may parse further | Full raw Secret projection into typed TLS material needs a shared consumer design; prepared dependencies and original resources are independent |
-| ACME / DNS | ACME account final String and TLS private key material use Zeroizing; DNS resolver validates borrowed values | JSON Value syntax precheck and SDK crypto copies are not wiped; DNS SDK/process storage outside a proven erasure boundary. Syntax-tree removal needs equivalence checks |
+| Shared TLS / LinkSys / AI | SecretSlot and TLS config own resolved Secrets; material produces selected CA/cert/key; clients may parse further | Full raw Secret projection is retained because replacing it requires a shared transport/consumer redesign; reconsider only with scale or exposure evidence. Prepared dependencies and original resources remain independent |
+| ACME | ACME account final String and TLS private key material use Zeroizing; EAB fetch and decode create cold-path application and SDK owners | The EAB copies are retained because account registration is rare and removing one local owner would not remove the source Secret or SDK state. JSON/crypto scratch is not proven wiped |
 | Gateway admin / CLI | Admin hashes borrowed trimmed token, stores digest; CLI file raw/trimmed Strings are Zeroizing and reqwest bearer header sensitive | Flags/env/files remain separate; header is independently owned by HTTP request. Issuance output is intentional product behavior |
 
 Direct and nested formatting corrections are recorded in the
@@ -157,8 +164,13 @@ Clippy emitted existing warnings outside the changed file; this is not a
 warning-free workspace result. The Gateway API architecture, TLSRoute feature
 page, and feature index separately document the v1alpha3 fallback debt; the
 KeyAuth change does not alter it. Re-evaluate if parser shapes,
-duplicate policy, metadata selection, or result-map ownership changes. BasicAuth,
-HMAC, JWT, managed credentials, TLS and ACME candidates remain in the linked task.
+duplicate policy, metadata selection, or result-map ownership changes. The remaining
+ownership candidates were subsequently assessed and closed without code changes as
+recorded below.
+
+The explicit keep decisions, accepted costs, alternatives, Envoy comparison, and
+re-evaluation triggers for these residual boundaries are maintained in the
+[credential copy retention decision](../intentional-design/credential-copy-retention.md).
 
 ## Zeroization decision
 
@@ -179,8 +191,9 @@ plugin store and the runtimes above, shared resources/redaction/materials, and C
 token/client auth. This is application source evidence, not an exhaustive audit of
 third-party library allocations or deployed log/storage history.
 
-Optional unresolved copy reductions and shared-core questions remain standalone
-work with their own source evidence.
+The residual optional copy reductions and shared-core questions were closed by the
+[no-code value decision](../intentional-design/credential-copy-retention.md); they
+are not unresolved implementation commitments.
 The body-boundedness defect deferred by this audit is corrected separately in the
 [OIDC authentication response cap guard](../../oidc/regression-guards/authentication-response-byte-caps.md).
 That correction does not establish credential erasure or full public-error redaction.
@@ -192,7 +205,8 @@ tracked original task files. Inspection at that recovery review confirmed their 
 the claim that they are absent from both the checkout and available Git history
 no longer applies. The HMAC quick-start and ACME DNS diagnostic corrections have
 the semantic guards linked above, although their original task metadata still
-says pending. The credential ownership follow-up task remains open. At recovery
+says pending. The credential ownership follow-up remained open at that recovery
+review and was later closed by the scoped no-code decision above. At recovery
 review time, token exchange and refresh still called `Response::json` directly;
 the later response-cap correction, including introspection, is recorded in the
 OIDC guard linked above.
@@ -229,9 +243,11 @@ Fresh verification for the completed D0036 investigation and scoped corrections:
   of unresolved work. It corrected initial JWT selector and ExtProc lifecycle
   descriptions before approval.
 
-The original audit closes as completed investigation plus implemented scoped
-corrections and transferred residual work, not removal of every avoidable copy or
-every authentication defect. The linked pending tasks retain those claims.
+The original audit closed as completed investigation plus implemented scoped
+corrections and transfer of then-residual work, not removal of every avoidable copy
+or every authentication defect. The later residual disposition is maintained in the
+[credential copy retention decision](../intentional-design/credential-copy-retention.md),
+not an active ownership task.
 Existing integration fixtures were unchanged; no full `cargo test --all` or
 end-to-end topology was run. Configuration, authentication policy and hot-reload
 semantics remain unchanged. The internal plugin development guide documents the

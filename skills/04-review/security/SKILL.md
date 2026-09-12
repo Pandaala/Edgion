@@ -18,6 +18,7 @@ before applying a decision to current code.
 ## Intentional design
 
 - [Auth Identity Headers Overwrite Written Names Only — ACCEPTED-TRADEOFF](intentional-design/auth-identity-headers-overwrite-written-names.md)
+- [Residual credential copies are retained without a broad ownership rewrite](intentional-design/credential-copy-retention.md)
 
 ## Regression guards
 
