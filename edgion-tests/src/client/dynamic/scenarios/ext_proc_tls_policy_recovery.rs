@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 
 const NS: &str = "edgion-default";
 const GLOBAL: &str = "ext-proc-tls-recovery-default";
+const GLOBAL_CA_GRANT: &str = "ext-proc-tls-recovery-global-ca";
 const NAMES: [&str; 2] = ["ext-proc-tls-recovery-close", "ext-proc-tls-recovery-open"];
 const MARKER: &str = "edgion.io/test-tls-phase";
 const TIMEOUT: Duration = Duration::from_secs(30);
@@ -446,6 +447,7 @@ async fn cleanup(ctx: &ScenarioCtx) -> Result<()> {
         ("HTTPRoute", NAMES[1]),
         ("EdgionPlugins", NAMES[0]),
         ("EdgionPlugins", NAMES[1]),
+        ("ReferenceGrant", GLOBAL_CA_GRANT),
         ("EdgionGatewayConfig", GLOBAL),
     ] {
         let scope = if kind == "EdgionGatewayConfig" {
@@ -554,6 +556,29 @@ fn run(ctx: ScenarioCtx) -> ScenarioRunFuture {
                 route["spec"]["rules"][0]["filters"][0]["extensionRef"]["name"] = json!(name);
                 apply(&ctx.test_ctx, route).await?;
             }
+            // Cluster-scoped owners use `default` as their ReferenceGrant
+            // source namespace in the shared Secret resolver.
+            apply(
+                &ctx.test_ctx,
+                json!({
+                    "apiVersion": "gateway.networking.k8s.io/v1beta1",
+                    "kind": "ReferenceGrant",
+                    "metadata": {"name": GLOBAL_CA_GRANT, "namespace": NS},
+                    "spec": {
+                        "from": [{
+                            "group": "edgion.io",
+                            "kind": "EdgionGatewayConfig",
+                            "namespace": "default"
+                        }],
+                        "to": [{
+                            "group": "",
+                            "kind": "Secret",
+                            "name": "ext-proc-external-server-ca"
+                        }]
+                    }
+                }),
+            )
+            .await?;
             wait_runtime(&ctx, |stats| {
                 ensure!(
                     stats["http_routes"]["http_routes"] == baseline_routes + 2,
@@ -601,10 +626,10 @@ fn run(ctx: ScenarioCtx) -> ScenarioRunFuture {
                     let deadline = Instant::now() + TIMEOUT;
                     loop {
                         let value = resource(&ctx.test_ctx, "EdgionGatewayConfig", GLOBAL, true).await?;
-                        if value
-                            .as_ref()
-                            .is_some_and(|value| value["spec"]["outboundTls"]["validation"] == phase.validation())
-                        {
+                        if value.as_ref().is_some_and(|value| {
+                            value["spec"]["outboundTls"]["validation"] == phase.validation()
+                                && value["spec"]["outboundTls"]["resolvedCaCertificates"] == "[redacted]"
+                        }) {
                             break;
                         }
                         ensure!(Instant::now() < deadline, "global policy publication timed out");

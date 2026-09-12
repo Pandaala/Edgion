@@ -14,9 +14,9 @@ knowledge_type: review-evidence
 
 1. **It is not a cache; it is an index of the current K8s resource graph**: entry lifetime fully follows K8s resources; there is no independent TTL / expiry semantic. Treating it as a generic cache and applying "must have GC" is a category error.
 
-2. **Each handler follows the clear-then-readd pattern**: every `process_*` path first calls `manager.clear_resource_refs(&resource_ref)` then loops `add_ref(...)`. Files covered: `handlers/{http,grpc,tls,tcp,udp}_route.rs:74` + `handlers/{http,grpc,tls,tcp,udp}_route.rs:~210/229` (cross_ns), `edgion_tls.rs:111/234`, `edgion_acme.rs:116/277`, `edgion_plugins.rs:82/135`, `backend_tls_policy.rs:130/178/300/306`, `gateway.rs:236/239/262/498/499/507`, `link_sys.rs:126/166`, `route_utils.rs:423/450`. Even if some event is missed in the middle, the next reconcile of that resource naturally clears stale refs.
+2. **Each reference-producing handler must follow the clear-then-readd pattern**: every `process_*` path first calls `manager.clear_resource_refs(&resource_ref)` then loops `add_ref(...)`. Audited examples include `handlers/{http,grpc,tls,tcp,udp}_route.rs`, `edgion_tls.rs`, `edgion_acme.rs`, `edgion_plugins.rs`, `backend_tls_policy.rs`, `gateway.rs`, `link_sys.rs`, and `route_utils.rs`. Even if some event is missed in the middle, the next reconcile of that resource naturally clears stale refs. Do not infer this invariant from the manager itself: verify every handler that starts producing a new reference type.
 
-3. **Each handler's delete path also calls `clear_resource_refs`**: paired with the process path (the second call site in the same files above).
+3. **Each reference-producing handler's delete path must also call `clear_resource_refs`**: it is the required pair to the process-path cleanup and must be checked independently.
 
 4. **Watch missed events have a backstop**: Kubernetes informer has built-in periodic resync; watch reconnection replays missed delete events as DELETED; the handler runs clear again.
 
@@ -30,3 +30,4 @@ knowledge_type: review-evidence
 
 **Known fixed cases under (a)**:
 - **c2a-007 (fixed)**: `SecretHandler::on_delete` did not purge the forward `secret_key → refs` entries in `SecretRefManager`. Fixed by adding `BidirectionalRefManager::clear_source_refs` and calling it in `on_delete` after the cascading requeue. `SecretRefManager` was also moved from per-processor `Arc` into `ControllerRuntime` (consistent with `service_ref_mgr` / `cross_ns_ref_mgr`) so that (i) `reset()` now correctly clears it, and (ii) its stats are visible in `/api/v1/debug/store-stats` for `cache_residue` leak detection.
+- **EdgionGatewayConfig cross-namespace outbound CA references (fixed 2026-09-12)**: `EdgionGatewayConfigHandler` began registering `validation.caCertificateRefs` in `cross_ns_ref_mgr`, but its update and delete paths initially cleared only Secret and global-plugin references. Fixed by clearing `cross_ns_ref_mgr` before each parse and during delete, with a unit test covering target-namespace replacement and deletion. This is a concrete example of exception (a), not evidence for periodic GC.

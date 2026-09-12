@@ -89,6 +89,7 @@ impl ProcessorHandler<EdgionGatewayConfig> for EdgionGatewayConfigHandler {
             egc.metadata.name.clone().unwrap_or_default(),
         );
         ctx.secret_ref_manager().clear_resource_refs(&resource_ref);
+        ctx.runtime().cross_ns_ref_mgr.clear_resource_refs(&resource_ref);
         ctx.runtime().plugin_ref_mgr.clear_resource_refs(&resource_ref);
         for reference in egc.spec.global_plugins_ref.as_deref().unwrap_or_default() {
             let namespace = reference.namespace.as_deref().unwrap_or("default");
@@ -140,6 +141,7 @@ impl ProcessorHandler<EdgionGatewayConfig> for EdgionGatewayConfigHandler {
             egc.metadata.name.clone().unwrap_or_default(),
         );
         ctx.secret_ref_manager().clear_resource_refs(&resource_ref);
+        ctx.runtime().cross_ns_ref_mgr.clear_resource_refs(&resource_ref);
         ctx.runtime().plugin_ref_mgr.clear_resource_refs(&resource_ref);
         // A GatewayClass's ResolvedRefs/Accepted conditions depend on whether the
         // EdgionGatewayConfig it references exists, so recompute them on every EGC delete.
@@ -358,6 +360,59 @@ mod tests {
             0,
             "ref must be cleared after on_delete"
         );
+    }
+
+    #[tokio::test]
+    async fn cross_namespace_ca_refs_replace_dependencies_and_clear_on_delete() {
+        let ctx = make_ctx_with_secrets(HashMap::new());
+        let handler = EdgionGatewayConfigHandler::new();
+        let mut spec = EdgionGatewayConfigSpec::default();
+        spec.outbound_tls = Some(OutboundTlsConfig {
+            validation: Some(OutboundTlsValidation {
+                ca_certificate_refs: Some(vec![BackendTLSPolicyCACertificateRef {
+                    kind: "Secret".to_string(),
+                    name: "global-ca".to_string(),
+                    namespace: Some("first-target".to_string()),
+                    ..Default::default()
+                }]),
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+        let mut egc = EdgionGatewayConfig::new("cluster-egc", spec);
+        let expected_ref = ResourceRef::new(ResourceKind::EdgionGatewayConfig, None, "cluster-egc".to_string());
+
+        let _ = handler.parse(egc.clone(), &ctx).await;
+        assert!(ctx
+            .runtime()
+            .cross_ns_ref_mgr
+            .get_refs("first-target")
+            .contains(&expected_ref));
+
+        egc.spec
+            .outbound_tls
+            .as_mut()
+            .unwrap()
+            .validation
+            .as_mut()
+            .unwrap()
+            .ca_certificate_refs
+            .as_mut()
+            .unwrap()[0]
+            .namespace = Some("second-target".to_string());
+        let parsed = match handler.parse(egc, &ctx).await {
+            ProcessResult::Continue(value) => value,
+            ProcessResult::Skip { reason } => panic!("unexpected skip: {reason}"),
+        };
+        assert!(ctx.runtime().cross_ns_ref_mgr.get_refs("first-target").is_empty());
+        assert!(ctx
+            .runtime()
+            .cross_ns_ref_mgr
+            .get_refs("second-target")
+            .contains(&expected_ref));
+
+        handler.on_delete(&parsed, &ctx).await;
+        assert!(ctx.runtime().cross_ns_ref_mgr.get_refs("second-target").is_empty());
     }
 
     // ── Phase 1 SAN guard tests ───────────────────────────────────────────────

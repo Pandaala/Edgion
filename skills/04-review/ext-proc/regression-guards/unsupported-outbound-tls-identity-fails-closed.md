@@ -84,6 +84,11 @@ per-resource IDs in `plugin_publication_inventory.http_generations`, route
 inventory/table counts, and actual EdgionGatewayConfig store counts. For the
 global policy, deleting/recreating the dedicated config provides an observable
 count transition after `recompute_global_config`; it does not restart processes.
+The scenario owns a narrowly scoped `ReferenceGrant` from the cluster-scoped
+EdgionGatewayConfig resolver identity to the fixture CA Secret. Before publishing
+an inheriting plugin generation, it also requires the Gateway admin view to expose
+the resolved CA field as redacted. This prevents a missing CA from producing the
+same generic rejection while bypassing the ExtProc capability guard under test.
 
 The fixture's cumulative TCP accept counter increments before TLS handshakes;
 its RPC counter counts calls even over reused connections and without test
@@ -101,9 +106,17 @@ not establish global-only invalidation of an already compiled plugin. Endpoint
 counters require serial shared-topology execution. The external fixture stays
 in the full tier; fast dynamic sweeps report an explicit skip.
 
-Current validation of the new scenario is recorded after its integration and
-repository checks complete. See the scenario's
+Fresh closure verification on 2026-09-12 ran the full targeted command from the
+scenario's
 [run contract](../../../../edgion-tests/integration/conf/EdgionPlugins/ExtProc/DynamicTest/README.md).
+The first run exposed the missing ReferenceGrant because the final supported
+inherited policy remained sealed with an unresolved CA. After adding the owned
+grant and resolved-CA readiness assertion, both `EdgionPlugins_ExtProc` and
+`Dyn_ExtProcTlsPolicyRecovery` passed, followed by the runner's unknown-field,
+requeue-loop, metrics-label, and cache-residue checks. Independent review then
+found that the newly exercised cross-namespace CA dependency was not cleared on
+EdgionGatewayConfig update or deletion; after adding symmetric cleanup and a
+focused replacement/deletion unit test, the full targeted command passed again.
 
 Re-evaluate this guard when ExtProc implements either identity capability or when
 canonical TLS precedence, constructor failure handling, or publication policy

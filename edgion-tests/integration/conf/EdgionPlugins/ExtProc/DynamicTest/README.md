@@ -33,14 +33,21 @@ probes, and are never reset or retried away.
 The fixture counts TCP accepts before the TLS handshake and RPCs independently
 of the request's test headers, including RPCs on reused connections.
 
+The scenario creates a dedicated `ReferenceGrant` allowing its cluster-scoped
+`EdgionGatewayConfig` to resolve the fixture CA Secret. It waits until the
+Gateway admin view exposes the resolved CA field as redacted before publishing
+each inheriting plugin generation, so a missing CA cannot masquerade as an
+unsupported-identity rejection.
+
 Global aggregation currently adopts validation only from a unique CA-declaring
 configuration. The scenario therefore declares a real CA reference. It does not
 claim coverage of identity-only global aggregation or global-only invalidation
 of already compiled plugins: each inherited phase publishes a new plugin entry.
 Shared-topology scenarios run serially; no other traffic may target the fixture
 during the counter assertions. The scenario deletes only its own two routes,
-two plugins, and global config on success or failure, polling for their raw and
-runtime absence and restoration of the baseline route/config counts.
+two plugins, global config, and ReferenceGrant on success or failure, polling
+for the synced resources' raw and runtime absence and restoration of the
+baseline route/config counts.
 
 Run the existing full ExtProc suite followed by this scenario:
 
