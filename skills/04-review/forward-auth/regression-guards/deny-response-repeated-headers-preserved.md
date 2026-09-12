@@ -74,11 +74,12 @@ the aliases needed by multi-address LB and GeoIP suites.
   English-only, Bash syntax/portability, and shell-helper checks passed.
 - Independent read-only code and knowledge review, including the runner change,
   returned LGTM. Live K8s execution and full-workspace unit tests were not run.
-- The separate K8s inventory parity check still fails on existing missing
-  registrations for `LinkSysDisabledTls`, `PluginPolicyDynamic`, and
-  `RateLimitLocalOverflowDynamic`; its own regression test passes. The inventory
-  entries were not changed by this work. The [integration task](../../../../tasks/todo/add-forward-auth-deny-multivalue-header-integration.md)
-  remains open because the closure workflow requires successful project checks.
+- The separate K8s inventory parity check failed on unrelated dynamic-scenario
+  registrations; its own regression test passed. The inventory entries were not
+  changed by the ForwardAuth work. Follow-up ownership moved to
+  [complete-k8s-dynamic-scenario-parity](../../../../tasks/todo/complete-k8s-dynamic-scenario-parity/complete-k8s-dynamic-scenario-parity.md),
+  which preserves the current scenario list and open Kubernetes compatibility
+  questions without treating them as a ForwardAuth defect.
 
 ## Scope and Re-evaluation
 
