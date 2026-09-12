@@ -1523,15 +1523,23 @@ impl Vm {
 /// Looks up the alias in `runtime.redis_links` to get the "namespace/name" key,
 /// then calls `get_redis_client` to retrieve the live client from the ArcSwap store.
 /// Returns `Err(redis_err(...))` — i.e. `Ok(redis_err(...))` at the call site — on failure.
-fn resolve_redis_client(link_name: &str, runtime: &DslRuntime) -> Result<Arc<RedisLinkClient>, Value> {
+fn resolve_redis_client_with<T>(
+    link_name: &str,
+    runtime: &DslRuntime,
+    get_client: impl FnOnce(&str) -> Option<T>,
+) -> Result<T, Value> {
     let ns_name = match runtime.redis_links.get(link_name) {
-        Some(k) => k.clone(),
+        Some(k) => k,
         None => return Err(redis_err(format!("link '{}' not found in linkSysRefs", link_name))),
     };
-    match get_redis_client(&ns_name) {
+    match get_client(ns_name) {
         Some(c) => Ok(c),
         None => Err(redis_err(format!("link '{}' not ready", link_name))),
     }
+}
+
+fn resolve_redis_client(link_name: &str, runtime: &DslRuntime) -> Result<Arc<RedisLinkClient>, Value> {
+    resolve_redis_client_with(link_name, runtime, get_redis_client)
 }
 
 /// Async handler for all `redis.*` builtins.
@@ -1971,6 +1979,36 @@ pub(crate) fn is_ssrf_blocked_ip_literal(host: &str) -> bool {
     match classify_ip(ip) {
         IpClass::Loopback | IpClass::LinkLocal | IpClass::Private | IpClass::UniqueLocal | IpClass::Unspecified => true,
         IpClass::Global => false,
+    }
+}
+
+#[cfg(test)]
+mod redis_client_lookup_tests {
+    use super::resolve_redis_client_with;
+    use crate::plugins::http::dsl::runtime::DslRuntime;
+    use crate::test_allocation_counter::count_allocation_stats;
+    use std::collections::HashMap;
+
+    #[test]
+    fn warm_alias_lookup_borrows_the_stored_link_key_without_allocating() {
+        let runtime = DslRuntime {
+            redis_links: HashMap::from([("cache".into(), "default/redis".into())]),
+            ..Default::default()
+        };
+        let stored_key = runtime.redis_links.get("cache").expect("test alias must exist");
+        let stored_key_ptr = stored_key.as_ptr();
+
+        let (result, allocations) = count_allocation_stats(|| {
+            resolve_redis_client_with("cache", &runtime, |key| {
+                assert_eq!(key, "default/redis");
+                assert_eq!(key.as_ptr(), stored_key_ptr);
+                Some(())
+            })
+        });
+
+        assert!(result.is_ok());
+        assert_eq!(allocations.calls, 0);
+        assert_eq!(allocations.requested_bytes, 0);
     }
 }
 

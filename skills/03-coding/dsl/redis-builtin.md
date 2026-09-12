@@ -30,6 +30,10 @@ At plugin build, each configured alias maps to its full LinkSys key. The runtime
 then looks up the alias and resolves the current client through the LinkSys store on each
 call; clients are not permanently captured by the plugin constructor.
 
+The full LinkSys key is borrowed from the immutable alias map only for the synchronous
+store lookup. Only the returned `Arc<RedisLinkClient>` crosses the command await; do not
+clone the `namespace/name` string or retain a borrowed key across an await.
+
 `check_redis_link_names` is deliberately best-effort. It validates an alias only when the
 compiler can prove the call arguments are simple single-push opcodes and recover the
 literal first argument. Calls with multi-instruction sibling expressions may skip the
