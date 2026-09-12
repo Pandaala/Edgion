@@ -12,5 +12,5 @@ before applying a decision to current code.
 ## Regression guards
 
 - [Unsupported outbound TLS identity policies fail closed](regression-guards/unsupported-outbound-tls-identity-fails-closed.md)
-- [BODY-004 — ExtProc Interactive Continue-and-Replace — FIXED](regression-guards/ext-proc-interactive-continue-and-replace.md)
+- [ExtProc request-body replacement, owner terminalization, and interactive Continue-and-Replace](regression-guards/ext-proc-interactive-continue-and-replace.md)
 - [BODY-003 — ExtProc Phase Verdict Matching — FIXED](regression-guards/ext-proc-phase-verdict-matching.md)

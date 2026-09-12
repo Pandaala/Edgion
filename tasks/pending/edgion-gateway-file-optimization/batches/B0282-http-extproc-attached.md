@@ -13,7 +13,9 @@
 - Baseline blobs: attached `3670e9cce763446639762e9a5fdf136280df76bb`; plugin `b527b12354d17acc95d99424a1dfa94bc90c3eee`.
 - Keep effective modes/phase/summary request-local, successive DEFAULT and exact normalized membership semantics, framing reservation, generation retention, cancellation/timeouts/failure policy, streaming and log ownership unchanged.
 - Tests: attached unit module and exact nonnetwork framing/malformed-header tests; add shared-list/independent-owner and constructor-normalization regressions. Do not run the broad live-gRPC plugin test module.
-- Independent incidental finding: request-body publication failures bypass owner terminalization in plugin.rs; defer separately after independent verification, never fold into ownership optimization.
+- Request-body publication failure owner terminalization is maintained by
+  `skills/04-review/ext-proc/regression-guards/ext-proc-interactive-continue-and-replace.md`;
+  keep it separate from ownership-only optimization.
 - Record scope: this batch, B0281 SHA backfill, ledger/main/changelog, and independently verified standalone deferred tasks/backlinks/index. No integration files or protected user paths.
 
 ## Resume checkpoint

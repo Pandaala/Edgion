@@ -327,10 +327,12 @@ impl ExtProc {
                     Some(body_mutation::Mutation::ClearBody(false)) | None => None,
                 };
                 if let Some(body) = body {
-                    session
-                        .overwrite_request_body(body)
-                        .await
-                        .map_err(|_| self.fail_mode(session, log, "body mutation failed", None))?;
+                    if session.overwrite_request_body(body).await.is_err() {
+                        return Err(match owner {
+                            Some(owner) => self.fail_request_owner(owner, session, log, "body mutation failed", None),
+                            None => self.fail_mode(session, log, "body mutation failed", None),
+                        });
+                    }
                 }
             }
         }
@@ -2147,64 +2149,144 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn request_body_mutation_failure_honors_fail_open() {
+    async fn request_body_mutation_failure_replaces_final_success_summary_per_policy() {
         use crate::plugins::runtime::traits::session::BodyReadError;
         use edgion_common::ext_proc::proto::{body_mutation, BodyMutation, CommonResponse};
 
-        let ext_proc = ExtProc::build(&test_config(true)).expect("client build must not touch the network");
-        let mut session = MockPluginSession::new();
-        session
-            .expect_overwrite_request_body()
-            .returning(|_| Err(BodyReadError::BufferLimitExceeded { limit: 4 }));
-        session
-            .expect_record_outcome()
-            .withf(|outcome, value| matches!(outcome, DyeOutcome::FailOpen) && value == "body-mutation-failed")
-            .times(1)
-            .return_const(());
-        let response = CommonResponse {
-            body_mutation: Some(BodyMutation {
-                mutation: Some(body_mutation::Mutation::Body(b"oversized".to_vec())),
-            }),
-            ..Default::default()
-        };
+        for (failure_mode_allow, expected_outcome) in [(true, "fail-open"), (false, "fail-close")] {
+            let ext_proc =
+                ExtProc::build(&test_config(failure_mode_allow)).expect("client build must not touch the network");
+            let owner = AttachedExtProc::test_lazy();
+            owner.mark_terminal("success", "normal-eos");
+            let mut session = MockPluginSession::new();
+            session
+                .expect_overwrite_request_body()
+                .returning(|_| Err(BodyReadError::BufferLimitExceeded { limit: 4 }));
+            session
+                .expect_record_outcome()
+                .withf(move |outcome, value| {
+                    matches!(outcome, DyeOutcome::FailOpen) == failure_mode_allow && value == "body-mutation-failed"
+                })
+                .times(1)
+                .return_const(());
+            let response = CommonResponse {
+                body_mutation: Some(BodyMutation {
+                    mutation: Some(body_mutation::Mutation::Body(b"oversized".to_vec())),
+                }),
+                ..Default::default()
+            };
 
-        let mut log = PluginLog::new("ExtProc");
-        let result = ext_proc
-            .apply_request_common_response(&mut session, &mut log, None, Some(response), true)
-            .await;
-        assert!(matches!(result, Err(PluginRunningResult::GoodNext)));
+            let result = ext_proc
+                .apply_request_common_response(
+                    &mut session,
+                    &mut PluginLog::new("ExtProc"),
+                    Some(&owner),
+                    Some(response),
+                    true,
+                )
+                .await;
+            assert_eq!(owner.test_state(), (expected_outcome, "request-stage-failure", true));
+            assert_eq!(
+                matches!(&result, Err(PluginRunningResult::GoodNext)),
+                failure_mode_allow
+            );
+            assert_eq!(
+                matches!(
+                    &result,
+                    Err(PluginRunningResult::ErrResponse {
+                        status: 500,
+                        body: None
+                    })
+                ),
+                !failure_mode_allow
+            );
+        }
     }
 
     #[tokio::test]
-    async fn request_body_mutation_failure_honors_fail_close() {
+    async fn request_body_mutation_failure_deactivates_pending_response_per_policy() {
         use crate::plugins::runtime::traits::session::BodyReadError;
-        use edgion_common::ext_proc::proto::{body_mutation, BodyMutation, CommonResponse};
-
-        let ext_proc = ExtProc::build(&test_config(false)).expect("client build must not touch the network");
-        let mut session = MockPluginSession::new();
-        session
-            .expect_overwrite_request_body()
-            .returning(|_| Err(BodyReadError::BufferLimitExceeded { limit: 4 }));
-        session
-            .expect_record_outcome()
-            .withf(|outcome, value| matches!(outcome, DyeOutcome::FailClose) && value == "body-mutation-failed")
-            .times(1)
-            .return_const(());
-        let response = CommonResponse {
-            body_mutation: Some(BodyMutation {
-                mutation: Some(body_mutation::Mutation::Body(b"oversized".to_vec())),
-            }),
-            ..Default::default()
+        use edgion_common::ext_proc::proto::{
+            body_mutation, BodyMutation, CommonResponse, HeaderAppendAction, HeaderMutation, HeaderValue,
+            HeaderValueOption,
         };
 
-        let mut log = PluginLog::new("ExtProc");
-        let result = ext_proc
-            .apply_request_common_response(&mut session, &mut log, None, Some(response), true)
-            .await;
-        assert!(matches!(
-            result,
-            Err(PluginRunningResult::ErrResponse { status: 500, .. })
-        ));
+        for (failure_mode_allow, expected_outcome) in [(true, "fail-open"), (false, "fail-close")] {
+            let mut config = test_config(failure_mode_allow);
+            config.processing_mode.response_header_mode = HeaderSendMode::Send;
+            let ext_proc = ExtProc::build(&config).expect("client build must not touch the network");
+            let owner = Arc::new(AttachedExtProc::new(
+                ext_proc.client.clone(),
+                config.processing_mode.clone(),
+                ext_proc.allow_mode_override,
+                Arc::clone(&ext_proc.allowed_override_modes),
+            ));
+            let mut request_session = MockPluginSession::new();
+            request_session
+                .expect_overwrite_request_body()
+                .returning(|_| Err(BodyReadError::BufferLimitExceeded { limit: 4 }));
+            request_session.expect_set_request_header().never();
+            request_session
+                .expect_record_outcome()
+                .withf(move |outcome, value| {
+                    matches!(outcome, DyeOutcome::FailOpen) == failure_mode_allow && value == "body-mutation-failed"
+                })
+                .times(1)
+                .return_const(());
+            let response = CommonResponse {
+                body_mutation: Some(BodyMutation {
+                    mutation: Some(body_mutation::Mutation::Body(b"oversized".to_vec())),
+                }),
+                header_mutation: Some(HeaderMutation {
+                    set_headers: vec![HeaderValueOption {
+                        header: Some(HeaderValue {
+                            key: "x-must-not-apply".to_string(),
+                            value: "after-failed-body".to_string(),
+                            raw_value: Vec::new(),
+                        }),
+                        append_action: HeaderAppendAction::OverwriteIfExistsOrAdd as i32,
+                        keep_empty_value: false,
+                    }],
+                    remove_headers: Vec::new(),
+                }),
+                ..Default::default()
+            };
+
+            let result = ext_proc
+                .apply_request_common_response(
+                    &mut request_session,
+                    &mut PluginLog::new("ExtProc"),
+                    Some(owner.as_ref()),
+                    Some(response),
+                    true,
+                )
+                .await;
+            assert_eq!(owner.test_state(), (expected_outcome, "request-stage-failure", true));
+            assert_eq!(
+                matches!(&result, Err(PluginRunningResult::GoodNext)),
+                failure_mode_allow
+            );
+            assert_eq!(
+                matches!(
+                    &result,
+                    Err(PluginRunningResult::ErrResponse {
+                        status: 500,
+                        body: None
+                    })
+                ),
+                !failure_mode_allow
+            );
+
+            let mut response_session = MockPluginSession::new();
+            response_session
+                .expect_attached_ext_proc()
+                .times(1)
+                .return_const(Some(Arc::clone(&owner)));
+            let response_result = ext_proc
+                .run_upstream_response(&mut response_session, &mut PluginLog::new("ExtProc"))
+                .await;
+            assert!(matches!(response_result, PluginRunningResult::GoodNext));
+        }
     }
 
     /// `fail_mode` is the single choke point both `run_request` and
