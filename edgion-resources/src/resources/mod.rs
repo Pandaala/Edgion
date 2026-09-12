@@ -15,6 +15,7 @@ pub mod edgion_gateway_config;
 pub mod edgion_plugins;
 pub mod edgion_stream_plugins;
 pub mod edgion_tls;
+pub mod extension_ref;
 pub mod gateway;
 pub mod gateway_class;
 pub mod grpc_route;

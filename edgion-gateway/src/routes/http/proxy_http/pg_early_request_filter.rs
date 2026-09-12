@@ -95,7 +95,7 @@ async fn initialize_scoped_request_ids(session: &mut Session, ctx: &mut EdgionHt
         .flat_map(|plugins| plugins.iter())
         .chain(gateway.iter().flat_map(|plugins| plugins.iter()))
     {
-        runtime.run_policy_gate(session, ctx).await;
+        runtime.run_preflight_gate(session, ctx).await;
         if ctx.plugin_terminated() {
             return Ok(());
         }

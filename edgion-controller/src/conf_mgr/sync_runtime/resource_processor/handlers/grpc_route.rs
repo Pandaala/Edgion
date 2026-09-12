@@ -19,6 +19,7 @@ use crate::conf_mgr::sync_runtime::resource_processor::{
 use crate::conf_mgr::ControllerRuntime;
 use edgion_resources::prelude_resources::GRPCRoute;
 use edgion_resources::resources::common::{Condition, ParentReference, RefDenied};
+use edgion_resources::resources::extension_ref::{is_supported_edgion_plugins_ref, validate_extension_ref_filter};
 use edgion_resources::resources::grpc_route::{GRPCRouteFilter, GRPCRouteFilterType, GRPCRouteStatus};
 use edgion_resources::resources::http_route::{DelegationIssue, RouteParentStatus, GATEWAY_API_GROUP};
 use edgion_resources::ResourceKind;
@@ -214,9 +215,7 @@ impl GrpcRouteHandler {
                     let Some(extension_ref) = &filter.extension_ref else {
                         continue;
                     };
-                    if (extension_ref.group.is_empty() || extension_ref.group == "edgion.io")
-                        && extension_ref.kind == "EdgionPlugins"
-                    {
+                    if is_supported_edgion_plugins_ref(extension_ref) {
                         let ref_namespace = extension_ref.resolved_namespace.as_deref().unwrap_or(namespace);
                         manager.add_ref(format!("{ref_namespace}/{}", extension_ref.name), resource_ref.clone());
                     }
@@ -575,7 +574,7 @@ impl ProcessorHandler<GRPCRoute> for GrpcRouteHandler {
             Some(resolved) => resolved.is_empty(),
             None => valid_rules == 0,
         };
-        // Header modifier errors withdraw only the offending rule. Reject the
+        // Static rule errors withdraw only the offending rule. Reject the
         // attachment when no effective rule survives, and retain valid siblings.
         let header_errors: Vec<(usize, &'static str)> = route
             .spec
@@ -585,15 +584,20 @@ impl ProcessorHandler<GRPCRoute> for GrpcRouteHandler {
             .enumerate()
             .filter_map(|(index, rule)| rule.header_modifier_error().map(|message| (index, message)))
             .collect();
-        let header_rejects_route = serves_no_rule && !header_errors.is_empty();
-        if header_rejects_route {
-            validation_accepted_errors.extend(header_errors.iter().map(|(index, message)| {
-                AcceptedError::UnsupportedValue {
-                    message: format!("rules[{index}]: {message}"),
-                }
+        let attachment_rejects_route =
+            serves_no_rule && (!invalid_indices.is_empty() || !delegation_dropped.is_empty());
+        if attachment_rejects_route {
+            validation_accepted_errors.extend(invalid_indices.iter().map(|index| AcceptedError::UnsupportedValue {
+                message: format!("rules[{index}]: invalid filter configuration"),
             }));
+            validation_accepted_errors.extend(
+                delegation_dropped
+                    .iter()
+                    .cloned()
+                    .map(|message| AcceptedError::UnsupportedValue { message }),
+            );
         }
-        let route_rejected = ownership_rejects_route || header_rejects_route;
+        let route_rejected = ownership_rejects_route || attachment_rejects_route;
 
         route.spec.invalid_rule_indices = if invalid_indices.is_empty() {
             None
@@ -666,7 +670,7 @@ impl ProcessorHandler<GRPCRoute> for GrpcRouteHandler {
                         );
                     }
                     reasons.extend(delegation_dropped.iter().cloned());
-                    let message = reasons.join("; ");
+                    let message = format!("Dropped Rule(s): {}", reasons.join("; "));
                     update_condition(
                         conditions,
                         condition_true(
@@ -676,24 +680,10 @@ impl ProcessorHandler<GRPCRoute> for GrpcRouteHandler {
                             generation,
                         ),
                     );
-                } else if conditions.iter().any(|c| c.type_ == condition_types::PARTIALLY_INVALID) {
-                    let (reason, message) = if ownership_rejects_route {
-                        (
-                            condition_reasons::UNSUPPORTED_VALUE,
-                            "Route not accepted; backend-scoped WAF cannot join the request-wide ownership election",
-                        )
-                    } else if header_rejects_route {
-                        (
-                            condition_reasons::UNSUPPORTED_VALUE,
-                            "Route not accepted; no valid rule remains after header modifier validation",
-                        )
-                    } else {
-                        (condition_reasons::ALL_RULES_VALID, "All rules are valid")
-                    };
-                    update_condition(
-                        conditions,
-                        condition_false(condition_types::PARTIALLY_INVALID, reason, message, generation),
-                    );
+                } else {
+                    // PartiallyInvalid is a negative-polarity Gateway API
+                    // condition and must be absent unless it is True.
+                    conditions.retain(|condition| condition.type_ != condition_types::PARTIALLY_INVALID);
                 }
             }
 
@@ -823,11 +813,12 @@ fn delegation_accepted_condition(
     }
 }
 
-/// True if any `ExtensionRef` filter in the list points at a kind that is not
-/// recognized.
+/// True if a filter violates the `type`/`extensionRef` union or targets an
+/// unsupported extension.
 ///
-/// `ExtensionRef` has exactly one recognized use: `EdgionPlugins` (group empty
-/// or `edgion.io`) — a plugin reference. The former route-level
+/// `ExtensionRef` has exactly one recognized use: `EdgionPlugins` in the
+/// `edgion.io` API group. An empty group denotes the Kubernetes core API group.
+/// The former route-level
 /// extensionRef-based load-balancing-policy mechanism has been removed; those
 /// kinds are now flagged like any other unsupported kind. Load-balancing
 /// policy is configured via `EdgionBackendTrafficPolicy`.
@@ -836,19 +827,13 @@ fn delegation_accepted_condition(
 /// plumbing, so this only contributes the rule index to `invalid_rule_indices`.
 fn has_unsupported_extension_ref(filters: Option<&Vec<GRPCRouteFilter>>) -> bool {
     let Some(filters) = filters else { return false };
-    for f in filters {
-        if f.filter_type != GRPCRouteFilterType::ExtensionRef {
-            continue;
-        }
-        if let Some(ext) = f.extension_ref.as_ref() {
-            let group_ok = ext.group.is_empty() || ext.group == "edgion.io";
-            let recognized = group_ok && ext.kind == "EdgionPlugins";
-            if !recognized {
-                return true;
-            }
-        }
-    }
-    false
+    filters.iter().any(|filter| {
+        validate_extension_ref_filter(
+            filter.filter_type == GRPCRouteFilterType::ExtensionRef,
+            filter.extension_ref.as_ref(),
+        )
+        .is_err()
+    })
 }
 
 /// Find rule indices where the rule is invalid.
@@ -1166,6 +1151,7 @@ mod tests {
         let conditions = &route.status.as_ref().unwrap().parents[0].conditions;
         assert!(conditions.iter().any(|c| c.type_ == "PartiallyInvalid"
             && c.status == "True"
+            && c.message.starts_with("Dropped Rule")
             && c.message.contains("1 of 3 rules are active")));
         assert!(!conditions.iter().any(|c| c.message.contains("secret-marker")));
 
@@ -1176,18 +1162,14 @@ mod tests {
             && c.status == "False"
             && c.message.contains("rules[0]")
             && c.message.contains("rules[1]")));
-        assert!(conditions
-            .iter()
-            .any(|c| c.type_ == "PartiallyInvalid" && c.status == "False"));
+        assert!(!conditions.iter().any(|c| c.type_ == "PartiallyInvalid"));
 
         route.spec.rules.as_mut().unwrap()[0].filters = None;
         route.spec.rules.as_mut().unwrap()[1].backend_refs.as_mut().unwrap()[0].filters = None;
         handler.update_status(&mut route, &ctx, &[]);
         assert!(route.spec.invalid_rule_indices.is_none());
         let conditions = &route.status.as_ref().unwrap().parents[0].conditions;
-        assert!(conditions
-            .iter()
-            .any(|c| c.type_ == "PartiallyInvalid" && c.status == "False" && c.reason == "AllRulesValid"));
+        assert!(!conditions.iter().any(|c| c.type_ == "PartiallyInvalid"));
         assert!(!conditions.iter().any(|c| c.message.contains("rules[0]")));
     }
 
@@ -1230,11 +1212,56 @@ mod tests {
             {
                 "filters": [
                     { "type": "ExtensionRef", "extensionRef": { "group": "edgion.io", "kind": "EdgionPlugins", "name": "a" } },
-                    { "type": "ExtensionRef", "extensionRef": { "kind": "EdgionPlugins", "name": "b" } }
+                    { "type": "ExtensionRef", "extensionRef": { "group": "edgion.io", "kind": "EdgionPlugins", "name": "b" } }
                 ]
             }
         ]));
         assert!(super::find_invalid_rule_indices(&route, "default").is_empty());
+    }
+
+    #[test]
+    fn extension_ref_pairing_errors_drop_only_the_affected_grpc_rules() {
+        let mut route = route_with_rules(json!([
+            {"filters": [{"type": "ExtensionRef"}]},
+            {"filters": [{"type": "RequestHeaderModifier", "extensionRef": {
+                "group": "edgion.io", "kind": "EdgionPlugins", "name": "unexpected"
+            }}]},
+            {"backendRefs": [{"name": "svc", "port": 80, "filters": [
+                {"type": "ExtensionRef"}
+            ]}]},
+            {"filters": [{"type": "ExtensionRef", "extensionRef": {
+                "group": "edgion.io", "kind": "EdgionPlugins", "name": "valid"
+            }}]}
+        ]));
+        route.spec.parent_refs = Some(serde_json::from_value(json!([{"name": "gw"}])).unwrap());
+
+        assert_eq!(super::find_invalid_rule_indices(&route, "default"), vec![0, 1, 2]);
+        GrpcRouteHandler::default().update_status(&mut route, &make_ctx(), &[]);
+        assert_eq!(route.spec.invalid_rule_indices.as_deref(), Some(&[0, 1, 2][..]));
+        let conditions = &route.status.as_ref().unwrap().parents[0].conditions;
+        assert!(conditions.iter().any(|condition| {
+            condition.type_ == "PartiallyInvalid"
+                && condition.status == "True"
+                && condition.message.starts_with("Dropped Rule")
+        }));
+
+        route.spec.rules.as_mut().unwrap().truncate(3);
+        GrpcRouteHandler::default().update_status(&mut route, &make_ctx(), &[]);
+        let conditions = &route.status.as_ref().unwrap().parents[0].conditions;
+        assert!(conditions.iter().any(|condition| {
+            condition.type_ == "Accepted" && condition.status == "False" && condition.message.contains("rules[0]")
+        }));
+        assert!(!conditions.iter().any(|condition| condition.type_ == "PartiallyInvalid"));
+    }
+
+    #[test]
+    fn extension_ref_empty_group_is_not_edgion_io() {
+        let route = route_with_rules(json!([{
+            "filters": [{"type": "ExtensionRef", "extensionRef": {
+                "kind": "EdgionPlugins", "name": "plugins"
+            }}]
+        }]));
+        assert_eq!(super::find_invalid_rule_indices(&route, "default"), vec![0]);
     }
 
     #[test]

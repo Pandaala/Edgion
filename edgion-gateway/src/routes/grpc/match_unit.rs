@@ -562,6 +562,27 @@ mod backend_handle_tests {
     use edgion_resources::resources::{BackendTLSPolicy, RefDenied};
     use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
 
+    #[test]
+    fn malformed_backend_filter_remains_backend_scoped() {
+        let rule: GRPCRouteRule = serde_json::from_value(serde_json::json!({
+            "backendRefs": [
+                {
+                    "name": "invalid",
+                    "port": 8080,
+                    "filters": [{"type": "ExtensionRef"}]
+                },
+                {"name": "valid", "port": 8080}
+            ]
+        }))
+        .unwrap();
+
+        let runtime = GrpcRouteRuleUnit::compile_grpc_rule(&rule, "route-ns");
+
+        assert!(runtime.backends[0].plugin_runtime.rejects_invalid_config());
+        assert!(!runtime.backends[1].plugin_runtime.rejects_invalid_config());
+        assert!(!runtime.plugin_runtime.rejects_invalid_config());
+    }
+
     fn compiled(name: &str, weight: i32, runtime: Arc<PluginRuntime>) -> CompiledGrpcBackend {
         CompiledGrpcBackend::compile(
             GRPCBackendRef {

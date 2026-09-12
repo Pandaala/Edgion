@@ -12,6 +12,7 @@ use crate::EdgionHttpContext;
 use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::filters::PluginRunningResult::ErrTerminateRequest;
 use edgion_resources::resources::edgion_plugins::{CorsConfig, WafConfig};
+use edgion_resources::resources::extension_ref::{validate_extension_ref_filter, ExtensionRefValidationError};
 use edgion_resources::resources::header_modifier::{validate_grpc_filter_list, validate_http_filter_list};
 use edgion_resources::resources::http_route::MirrorTuning;
 use edgion_resources::resources::{
@@ -461,7 +462,11 @@ impl PluginRuntime {
     pub fn seal_plugin_policy(&mut self) {
         if !self.policy_bypassed.is_empty() {
             let note = super::policy_filter::PolicyBypassNote::new(std::mem::take(&mut self.policy_bypassed));
-            self.request_plugins.insert(0, Arc::new(note));
+            // A bypass note is observational and must not hide the fail-closed
+            // gate from the preflight fast path. Keep RejectInvalidConfig first
+            // when sealing found an independent configuration error.
+            let index = usize::from(self.invalid_config_sealed);
+            self.request_plugins.insert(index, Arc::new(note));
         }
         if let Some((plugin, status)) = self.policy_blocks.first().cloned() {
             self.policy_blocks.clear();
@@ -524,6 +529,19 @@ impl PluginRuntime {
         assign_indices: bool,
         mirror_tuning: &MirrorTuning,
     ) {
+        if filters.iter().any(|filter| {
+            matches!(
+                validate_extension_ref_filter(
+                    filter.filter_type == HTTPRouteFilterType::ExtensionRef,
+                    filter.extension_ref.as_ref(),
+                ),
+                Err(ExtensionRefValidationError::MissingConfiguration)
+                    | Err(ExtensionRefValidationError::UnexpectedConfiguration)
+            )
+        }) {
+            self.invalid_plugins.record_non_retainable("ExtensionRef");
+            return;
+        }
         if validate_http_filter_list(filters).is_err() {
             self.invalid_plugins.record_non_retainable("HeaderModifier");
             return;
@@ -588,6 +606,9 @@ impl PluginRuntime {
                     }
                 }
                 HTTPRouteFilterType::ExtensionRef => {
+                    // Unsupported targets retain the existing ExtensionRef
+                    // runtime so their kind-specific diagnostics remain
+                    // attributable. Missing payloads were rejected above.
                     if let Some(ext_ref) = &filter.extension_ref {
                         let extension_namespace = ext_ref.resolved_namespace.as_deref().unwrap_or(namespace);
                         let mut ext_filter = ExtensionRefFilter::new(extension_namespace.to_string(), ext_ref.clone());
@@ -626,6 +647,19 @@ impl PluginRuntime {
     }
 
     fn add_from_grpcroute_filters_inner(&mut self, filters: &[GRPCRouteFilter], namespace: &str, assign_indices: bool) {
+        if filters.iter().any(|filter| {
+            matches!(
+                validate_extension_ref_filter(
+                    filter.filter_type == GRPCRouteFilterType::ExtensionRef,
+                    filter.extension_ref.as_ref(),
+                ),
+                Err(ExtensionRefValidationError::MissingConfiguration)
+                    | Err(ExtensionRefValidationError::UnexpectedConfiguration)
+            )
+        }) {
+            self.invalid_plugins.record_non_retainable("ExtensionRef");
+            return;
+        }
         if validate_grpc_filter_list(filters).is_err() {
             self.invalid_plugins.record_non_retainable("HeaderModifier");
             return;
@@ -2091,14 +2125,14 @@ impl PluginRuntime {
         self.rate_limit_local_outcome_slots
     }
 
-    /// Enforce the sealed policy gate before early IDs, preflight or body work.
+    /// Enforce a sealed policy or invalid-config gate before preflight or body work.
     /// The normal runner owns the response, access-log record and metric.
-    pub(crate) async fn run_policy_gate(&self, s: &mut Session, ctx: &mut EdgionHttpContext) {
+    pub(crate) async fn run_preflight_gate(&self, s: &mut Session, ctx: &mut EdgionHttpContext) {
         if !ctx.plugin_terminated()
             && self
                 .request_plugins
                 .first()
-                .is_some_and(|filter| filter.name() == "PluginPolicyBlock")
+                .is_some_and(|filter| matches!(filter.name(), "PluginPolicyBlock" | "RejectInvalidConfig"))
         {
             self.run_request_plugins(s, ctx).await;
         }
@@ -2512,6 +2546,16 @@ mod tests {
             },
         ))
         .compile(Some(&policy.compile().unwrap()))
+    }
+
+    async fn session_from_request(raw_request: &[u8]) -> Session {
+        let (mut client, server) = tokio::io::duplex(4096);
+        let stream: pingora_core::protocols::Stream = Box::new(server);
+        let mut session = Session::new_h1(stream);
+        client.write_all(raw_request).await.unwrap();
+        drop(client);
+        assert!(session.read_request().await.unwrap());
+        session
     }
 
     #[test]
@@ -3568,6 +3612,37 @@ mod tests {
         assert_eq!(filters.next().unwrap().name(), "RejectInvalidConfig");
     }
 
+    #[tokio::test]
+    async fn policy_bypass_note_cannot_hide_fail_closed_preflight_gate() {
+        let compiled = compile_scoped_request_entries(
+            vec![
+                RequestFilterEntry::new(EdgionPlugin::KeyAuth(KeyAuthConfig::default())),
+                RequestFilterEntry::new(EdgionPlugin::Dsl(DslConfig {
+                    source: Some("invalid @@@".into()),
+                    ..Default::default()
+                })),
+            ],
+            serde_json::json!([{"name":"http/KeyAuth","action":"bypass"}]),
+        );
+        assert!(!compiled.is_activatable);
+        let names: Vec<_> = compiled
+            .plugin_runtime
+            .request_plugins_iter()
+            .map(|filter| filter.name())
+            .collect();
+        assert_eq!(names[0], "RejectInvalidConfig");
+        assert_eq!(names[1], "PluginPolicyBypass");
+
+        let mut session = session_from_request(
+            b"OPTIONS / HTTP/1.1\r\nHost: test\r\nOrigin: https://app.example\r\nAccess-Control-Request-Method: GET\r\n\r\n",
+        )
+        .await;
+        let mut ctx = EdgionHttpContext::default();
+        compiled.plugin_runtime.run_preflight_gate(&mut session, &mut ctx).await;
+
+        assert!(ctx.plugin_terminated());
+    }
+
     #[test]
     fn unrestricted_entries_have_no_policy_filters() {
         use edgion_resources::resources::edgion_plugins::MockConfig;
@@ -3964,7 +4039,30 @@ mod header_modifier_validation_tests {
 #[cfg(test)]
 mod ext_ref_index_tests {
     use super::*;
+    use crate::plugins::runtime::traits::session::MockPluginSession;
     use edgion_resources::resources::{ForwardAuthConfig, GRPCRouteFilter, LocalObjectReference};
+
+    async fn assert_generic_config_rejection(runtime: &PluginRuntime) {
+        assert!(runtime.rejects_invalid_config());
+        let filter = runtime.request_plugins_iter().next().expect("rejection filter");
+        assert_eq!(filter.name(), "RejectInvalidConfig");
+        let mut session = MockPluginSession::new();
+        let mut log = PluginLog::new(filter.name());
+        assert_eq!(
+            filter.run_request(&mut session, &mut log).await,
+            PluginRunningResult::ErrResponse {
+                status: 500,
+                body: Some(bytes::Bytes::from_static(
+                    br#"{"message":"plugin configuration error"}"#
+                )),
+            }
+        );
+        let rendered = log.render_for_test();
+        assert!(
+            rendered.contains("ExtensionRef"),
+            "missing static attribution: {rendered}"
+        );
+    }
 
     fn make_ext_ref_filter(name: &str) -> HTTPRouteFilter {
         make_ext_ref_filter_with_kind("EdgionPlugins", name)
@@ -4020,6 +4118,27 @@ mod ext_ref_index_tests {
                 runtime.request_plugins_iter().next().map(|filter| filter.name()),
                 Some("RejectInvalidConfig")
             );
+        }
+    }
+
+    #[tokio::test]
+    async fn missing_extension_ref_payload_fails_closed_in_all_route_scopes() {
+        let http: Vec<HTTPRouteFilter> = serde_json::from_value(serde_json::json!([
+            {"type": "ExtensionRef"}
+        ]))
+        .expect("HTTP filter fixture must deserialize");
+        let grpc: Vec<GRPCRouteFilter> = serde_json::from_value(serde_json::json!([
+            {"type": "ExtensionRef"}
+        ]))
+        .expect("gRPC filter fixture must deserialize");
+
+        for runtime in [
+            PluginRuntime::from_httproute_filters_for_rule(&http, "default", &MirrorTuning::default()),
+            PluginRuntime::from_httproute_filters_for_backend(&http, "default", &MirrorTuning::default()),
+            PluginRuntime::from_grpcroute_filters_for_rule(&grpc, "default"),
+            PluginRuntime::from_grpcroute_filters_for_backend(&grpc, "default"),
+        ] {
+            assert_generic_config_rejection(&runtime).await;
         }
     }
 

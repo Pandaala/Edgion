@@ -527,6 +527,27 @@ mod tests {
     use super::*;
 
     #[test]
+    fn malformed_backend_filter_remains_backend_scoped() {
+        let rule: HTTPRouteRule = serde_json::from_value(serde_json::json!({
+            "backendRefs": [
+                {
+                    "name": "invalid",
+                    "port": 8080,
+                    "filters": [{"type": "ExtensionRef"}]
+                },
+                {"name": "valid", "port": 8080}
+            ]
+        }))
+        .unwrap();
+
+        let runtime = HttpRouteRuleUnit::compile_http_rule(&rule, "route-ns");
+
+        assert!(runtime.backends[0].plugin_runtime.rejects_invalid_config());
+        assert!(!runtime.backends[1].plugin_runtime.rejects_invalid_config());
+        assert!(!runtime.plugin_runtime.rejects_invalid_config());
+    }
+
+    #[test]
     fn compile_http_rule_preserves_slots_and_types_backends() {
         let rule: HTTPRouteRule = serde_json::from_value(serde_json::json!({
             "backendRefs": [

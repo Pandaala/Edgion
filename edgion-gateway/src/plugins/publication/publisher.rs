@@ -8,6 +8,7 @@ use parking_lot::Mutex;
 use serde::Serialize;
 
 use edgion_resources::resources::edgion_plugins::EdgionPlugin;
+use edgion_resources::resources::extension_ref::is_supported_edgion_plugins_ref;
 use edgion_resources::resources::http_route::HTTPRouteFilterType;
 use edgion_resources::resources::http_route_ai_admission::{ai_rule_invalid_reason, AiProxyAdmission};
 use edgion_resources::resources::plugin_policy::{CompiledPluginPolicy, PluginFamily, PluginPolicyAction};
@@ -758,9 +759,7 @@ fn rule_admission(route: &Arc<HTTPRoute>, scope: &PluginScope) -> RuleAdmission 
             .flatten()
             .filter(|filter| filter.filter_type == HTTPRouteFilterType::ExtensionRef)
             .filter_map(|filter| filter.extension_ref.as_ref())
-            .filter(|reference| {
-                reference.kind == "EdgionPlugins" && (reference.group.is_empty() || reference.group == "edgion.io")
-            })
+            .filter(|reference| is_supported_edgion_plugins_ref(reference))
         {
             let key = format!(
                 "{}/{}",

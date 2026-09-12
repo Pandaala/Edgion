@@ -13,6 +13,7 @@ use edgion_resources::listener_key::{resolve_listener_addr, ListenerKey};
 use edgion_resources::prelude_resources::{EdgionPlugins, Gateway};
 use edgion_resources::resources::common::{ParentReference, RefDenied};
 use edgion_resources::resources::edgion_tls::ResolvedListenerAttachment;
+use edgion_resources::resources::extension_ref::is_supported_edgion_plugins_ref;
 use edgion_resources::resources::gateway::AllowedRoutes;
 use edgion_resources::resources::http_route::{LocalObjectReference, RouteParentStatus};
 use edgion_resources::ResourceKind;
@@ -43,8 +44,7 @@ pub(super) fn backend_request_scope_extension_ref_error(
     backend_index: usize,
     extension_ref: &LocalObjectReference,
 ) -> Option<String> {
-    if !(extension_ref.group.is_empty() || extension_ref.group == "edgion.io") || extension_ref.kind != "EdgionPlugins"
-    {
+    if !is_supported_edgion_plugins_ref(extension_ref) {
         return None;
     }
     let namespace = extension_ref.resolved_namespace.as_deref().unwrap_or(route_namespace);

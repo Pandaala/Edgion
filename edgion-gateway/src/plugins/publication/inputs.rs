@@ -7,6 +7,7 @@ use std::sync::Arc;
 use edgion_resources::constants::annotations::edgion as annotations;
 use edgion_resources::listener_key::resolve_listener_addr;
 use edgion_resources::resources::common::ParentReference;
+use edgion_resources::resources::extension_ref::is_supported_edgion_plugins_ref;
 use edgion_resources::resources::gateway::AllowedRoutes;
 use edgion_resources::resources::grpc_route::GRPCRouteFilterType;
 use edgion_resources::resources::http_route::{HTTPRouteFilterType, LocalObjectReference, RouteParentStatus};
@@ -273,7 +274,7 @@ pub(crate) fn effective_http_rules(route: &HTTPRoute) -> impl Iterator<Item = (u
 
 fn add_extension_ref(keys: &mut HashSet<String>, reference: Option<&LocalObjectReference>, namespace: &str) {
     if let Some(reference) = reference {
-        if reference.kind == "EdgionPlugins" && (reference.group.is_empty() || reference.group == "edgion.io") {
+        if is_supported_edgion_plugins_ref(reference) {
             keys.insert(format!(
                 "{}/{}",
                 reference.resolved_namespace.as_deref().unwrap_or(namespace),
@@ -400,10 +401,7 @@ mod tests {
             [2]
         );
         let input = RouteInput::from_http(source);
-        assert_eq!(
-            input.http_keys,
-            HashSet::from(["apps/valid".to_owned(), "apps/empty-group".to_owned()])
-        );
+        assert_eq!(input.http_keys, HashSet::from(["apps/valid".to_owned()]));
     }
 
     #[test]

@@ -1398,6 +1398,38 @@ mod tests {
     // =====================================================================
 
     #[test]
+    fn malformed_extension_ref_in_child_drops_only_that_grpc_rule() {
+        let parent = parent_with_rules(serde_json::json!([{
+            "matches": [{"method": {"service": "svc.Billing"}}],
+            "backendRefs": [{
+                "group": "gateway.networking.k8s.io", "kind": "GRPCRoute",
+                "name": "child", "namespace": "billing"
+            }]
+        }]));
+        let child = route(
+            "billing",
+            "child",
+            serde_json::json!({"rules": [
+                {
+                    "matches": [{"method": {"service": "svc.Billing", "method": "Bad"}}],
+                    "filters": [{"type": "ExtensionRef"}],
+                    "backendRefs": [{"name": "svc", "port": 80}]
+                },
+                {
+                    "matches": [{"method": {"service": "svc.Billing", "method": "Good"}}],
+                    "backendRefs": [{"name": "svc", "port": 80}]
+                }
+            ]}),
+        );
+
+        let outcome = flatten_route(&parent, &FakeLookup::new(vec![child]));
+        assert_eq!(outcome.resolved_rules.as_ref().unwrap().len(), 1);
+        let drops = dropped_messages(&outcome);
+        assert_eq!(drops.len(), 1);
+        assert!(drops[0].contains("rules[0]"));
+    }
+
+    #[test]
     fn parent_filters_prepended_and_extension_refs_concatenate() {
         let parent = parent_with_rules(serde_json::json!([{
             "matches": [{"method": {"service": "svc.Billing"}}],

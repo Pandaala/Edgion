@@ -20,14 +20,18 @@ use crate::conf_mgr::ControllerRuntime;
 use edgion_resources::prelude_resources::{EdgionBackend, HTTPRoute};
 use edgion_resources::resources::common::{ParentReference, RefDenied};
 use edgion_resources::resources::edgion_backend_traffic_policy::{PolicyTargetKey, PolicyTargetKind};
+#[cfg(test)]
 use edgion_resources::resources::edgion_plugins::{AiProxyConfig, EdgionPlugin, EdgionPlugins};
+use edgion_resources::resources::extension_ref::{
+    is_supported_edgion_plugins_ref, validate_extension_ref_filter, ExtensionRefValidationError,
+};
 use edgion_resources::resources::http_route::{
     DelegationIssue, HTTPBackendRefKind, HTTPRouteFilterType, HTTPRouteRule, HTTPRouteStatus, RouteParentStatus,
     GATEWAY_API_GROUP,
 };
-use edgion_resources::resources::http_route_ai_admission::{
-    self as shared_ai_admission, AiProxyAdmission, ResolvedAiAdmission, ResolvedForwardingTarget,
-};
+#[cfg(test)]
+use edgion_resources::resources::http_route_ai_admission::{self as shared_ai_admission, AiProxyAdmission};
+use edgion_resources::resources::http_route_ai_admission::{ResolvedAiAdmission, ResolvedForwardingTarget};
 use edgion_resources::ResourceKind;
 
 /// True for parentRef entries that attach the route to a Gateway listener
@@ -233,9 +237,7 @@ impl HttpRouteHandler {
                     let Some(extension_ref) = &filter.extension_ref else {
                         continue;
                     };
-                    if (extension_ref.group.is_empty() || extension_ref.group == "edgion.io")
-                        && extension_ref.kind == "EdgionPlugins"
-                    {
+                    if is_supported_edgion_plugins_ref(extension_ref) {
                         let ref_namespace = extension_ref.resolved_namespace.as_deref().unwrap_or(namespace);
                         manager.add_ref(format!("{ref_namespace}/{}", extension_ref.name), resource_ref.clone());
                     }
@@ -672,40 +674,14 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
         let generation = route.metadata.generation;
         let route_ns = route.metadata.namespace.as_deref().unwrap_or("default");
 
-        // Unsupported native CORS policies and malformed header modifiers are
-        // per-rule findings, like a rewrite/redirect conflict: they drop just that rule via
-        // `invalid_rule_indices` + PartiallyInvalid. They are lifted to a
-        // route-level Accepted=False only when no rule is left to serve for this
-        // parent (`attachment_rejects_route` below). Emitting both would advertise
-        // "N of M rules active" while the gateway drops the entire route.
-        let attachment_invalid_rules: Vec<(usize, String)> = route
-            .spec
-            .rules
-            .iter()
-            .flatten()
-            .enumerate()
-            .filter_map(|(index, rule)| {
-                rule.unsupported_cors_reason()
-                    .or_else(|| rule.header_modifier_error().map(str::to_string))
-                    .map(|message| (index, message))
-            })
-            .collect();
+        // Static per-rule findings drop only the offending rule through
+        // `invalid_rule_indices` + PartiallyInvalid. They become
+        // Accepted=False only when no effective rule remains.
         let ownership_accepted_errors = backend_waf_ownership_errors(route, route_ns, _ctx.runtime());
 
-        // Source diagnostics remain visible, but only the Gateway knows the
-        // effective policy for each attachment. Keep the matched rules so its
-        // Block or invalid-config gate cannot fall through to another rule.
-        let ai_source_diagnostics: Vec<String> = route
-            .effective_rules()
-            .into_iter()
-            .flatten()
-            .enumerate()
-            .filter_map(|(index, rule)| {
-                protocol_rule_invalid_reason_with_runtime(rule, route_ns, _ctx.runtime()).map(|message| {
-                    format!("rules[{index}]: {message} (source diagnostic; admission is Gateway-scoped)")
-                })
-            })
-            .collect();
+        // AI admission is Gateway-scoped. A source-only diagnostic neither
+        // drops a rule nor activates a fallback, so it must not be represented
+        // by Gateway API's PartiallyInvalid condition.
 
         let mut resolved_refs_errors = validate_http_backend_refs(route, route_ns, _ctx.runtime());
         resolved_refs_errors.extend(super::request_mirror::errors(
@@ -761,15 +737,15 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
             Some(resolved) => resolved.is_empty(),
             None => valid_rules == 0,
         };
-        // Independent delegation/CORS/header-modifier drops reject an empty attachment.
+        // Any static rule failure or delegation drop rejects an empty attachment.
         // AI source diagnostics never withdraw a rule or participate here.
         let attachment_rejects_route =
-            (!attachment_invalid_rules.is_empty() || !delegation_dropped.is_empty()) && serves_no_rule;
+            (!invalid_details.is_empty() || !delegation_dropped.is_empty()) && serves_no_rule;
 
         let mut validation_accepted_errors = AcceptedError::from_validation_errors(validation_errors);
         validation_accepted_errors.extend(ownership_accepted_errors.clone());
         if attachment_rejects_route {
-            for (index, message) in &attachment_invalid_rules {
+            for (index, message) in &invalid_details {
                 validation_accepted_errors.push(AcceptedError::UnsupportedValue {
                     message: format!("rules[{index}]: {message}"),
                 });
@@ -840,24 +816,22 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
                         .conditions
                 };
 
-                // Set PartiallyInvalid for source diagnostics and per-rule
-                // drops while an effective rule remains matchable. Skipped when
+                // Set PartiallyInvalid for per-rule drops while an effective
+                // rule remains matchable. Skipped when
                 // `attachment_rejects_route` already rejected the whole route: a route
                 // that serves nothing must not also claim rules are active.
                 let own_invalid = !invalid_indices.is_empty() && valid_rules > 0;
-                if !route_rejected
-                    && (own_invalid || !delegation_dropped.is_empty() || !ai_source_diagnostics.is_empty())
-                {
+                if !route_rejected && (own_invalid || !delegation_dropped.is_empty()) {
                     let mut reasons: Vec<String> = Vec::new();
                     if own_invalid {
                         reasons.extend(invalid_details.iter().map(|(i, r)| format!("rules[{i}]: {r}")));
                     }
                     reasons.extend(delegation_dropped.iter().cloned());
-                    reasons.extend(ai_source_diagnostics.iter().cloned());
                     let mut message = reasons.join("; ");
-                    if own_invalid && ai_source_diagnostics.is_empty() {
+                    if own_invalid {
                         message = format!("{message} ({valid_rules} of {total_rules} rules active)");
                     }
+                    message = format!("Dropped Rule(s): {message}");
                     update_condition(
                         conditions,
                         condition_true(
@@ -867,22 +841,10 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
                             generation,
                         ),
                     );
-                } else if conditions.iter().any(|c| c.type_ == condition_types::PARTIALLY_INVALID) {
-                    // Clear a stale True. A route rejected wholesale must not be
-                    // cleared with the generic "all rules are valid" wording —
-                    // that would contradict the Accepted=False sitting next to it.
-                    let (reason, message) = if route_rejected {
-                        (
-                            condition_reasons::UNSUPPORTED_VALUE,
-                            "Route not accepted; no rule is active",
-                        )
-                    } else {
-                        (condition_reasons::ALL_RULES_VALID, "All rules are valid")
-                    };
-                    update_condition(
-                        conditions,
-                        condition_false(condition_types::PARTIALLY_INVALID, reason, message, generation),
-                    );
+                } else {
+                    // PartiallyInvalid is a negative-polarity Gateway API
+                    // condition and must be absent unless it is True.
+                    conditions.retain(|condition| condition.type_ != condition_types::PARTIALLY_INVALID);
                 }
             }
 
@@ -1072,11 +1034,11 @@ fn invalid_cors_reason(rule: &edgion_resources::resources::http_route::HTTPRoute
     None
 }
 
-/// Returns a reason string if a rule has an `ExtensionRef` filter whose `kind`
-/// is not a recognized Edgion extension kind.
+/// Returns a reason string if a rule has an invalid `ExtensionRef` filter.
 ///
-/// `ExtensionRef` has exactly one recognized use: `EdgionPlugins` (group empty
-/// or `edgion.io`) — a plugin reference. The former route-level
+/// `ExtensionRef` has exactly one recognized use: `EdgionPlugins` in the
+/// `edgion.io` API group. An empty group denotes the Kubernetes core API group.
+/// The former route-level
 /// extensionRef-based load-balancing-policy mechanism has been removed; those
 /// kinds are now flagged like any other unsupported kind. Load-balancing
 /// policy is configured via `EdgionBackendTrafficPolicy`.
@@ -1086,18 +1048,25 @@ fn invalid_cors_reason(rule: &edgion_resources::resources::http_route::HTTPRoute
 /// of leaving it to a silent runtime `GoodNext`.
 fn invalid_extension_ref_reason(rule: &edgion_resources::resources::http_route::HTTPRouteRule) -> Option<String> {
     let filter_reason = |f: &edgion_resources::resources::http_route::HTTPRouteFilter| -> Option<String> {
-        if f.filter_type != HTTPRouteFilterType::ExtensionRef {
-            return None;
+        match validate_extension_ref_filter(
+            f.filter_type == HTTPRouteFilterType::ExtensionRef,
+            f.extension_ref.as_ref(),
+        ) {
+            Ok(_) => None,
+            Err(ExtensionRefValidationError::MissingConfiguration) => {
+                Some("ExtensionRef filter missing 'extensionRef' configuration block".to_string())
+            }
+            Err(ExtensionRefValidationError::UnexpectedConfiguration) => {
+                Some("extensionRef configuration requires filter type ExtensionRef".to_string())
+            }
+            Err(ExtensionRefValidationError::UnsupportedTarget) => {
+                let ext = f.extension_ref.as_ref().expect("unsupported target has a reference");
+                Some(format!(
+                    "ExtensionRef kind '{}' (group '{}') is not supported; only edgion.io/EdgionPlugins is",
+                    ext.kind, ext.group
+                ))
+            }
         }
-        let ext = f.extension_ref.as_ref()?;
-        let group_ok = ext.group.is_empty() || ext.group == "edgion.io";
-        if group_ok && ext.kind == "EdgionPlugins" {
-            return None;
-        }
-        Some(format!(
-            "ExtensionRef kind '{}' (group '{}') is not supported; only EdgionPlugins is",
-            ext.kind, ext.group
-        ))
     };
     if let Some(filters) = rule.filters.as_ref() {
         for f in filters {
@@ -1134,11 +1103,13 @@ fn invalid_session_persistence_reason(rule: &edgion_resources::resources::http_r
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
+#[cfg(test)]
 struct AiProxyAdmissionState {
     active_count: usize,
     config: Option<AiProxyConfig>,
 }
 
+#[cfg(test)]
 fn ai_proxy_admission_state(runtime: &ControllerRuntime, namespace: &str, name: &str) -> Option<AiProxyAdmissionState> {
     let processor = runtime.processor_registry.get("EdgionPlugins")?;
     let key = format!("{namespace}/{name}");
@@ -1223,6 +1194,7 @@ fn populate_ai_admission(route: &mut HTTPRoute, route_namespace: &str, runtime: 
     }
 }
 
+#[cfg(test)]
 fn source_ai_admission(
     rule: &HTTPRouteRule,
     route_namespace: &str,
@@ -1240,7 +1212,7 @@ fn source_ai_admission(
         let Some(reference) = &filter.extension_ref else {
             continue;
         };
-        if !(reference.group.is_empty() || reference.group == "edgion.io") || reference.kind != "EdgionPlugins" {
+        if !is_supported_edgion_plugins_ref(reference) {
             continue;
         }
         let namespace = reference.resolved_namespace.as_deref().unwrap_or(route_namespace);
@@ -1257,6 +1229,7 @@ fn source_ai_admission(
     (count, configs, missing)
 }
 
+#[cfg(test)]
 fn protocol_rule_invalid_reason_with_runtime(
     rule: &HTTPRouteRule,
     route_namespace: &str,
@@ -1740,7 +1713,7 @@ spec:
     }
 
     #[tokio::test]
-    async fn ai_source_errors_preserve_rules_with_and_without_valid_siblings() {
+    async fn ai_source_errors_do_not_claim_gateway_api_rule_drops() {
         for with_sibling in [false, true] {
             let mut route = route_with_bad_ai_rule(with_sibling);
             let ctx = make_ctx_with_raw_ai_backend("default", "chat");
@@ -1751,15 +1724,7 @@ spec:
                 .find(|condition| condition.type_ == "Accepted")
                 .unwrap();
             assert!(!accepted.message.contains("retry.attempts"), "{accepted:?}");
-            let partial = conditions
-                .iter()
-                .find(|condition| condition.type_ == "PartiallyInvalid")
-                .unwrap();
-            assert_eq!(partial.status, "True");
-            assert_eq!(partial.reason, "RuleInvalid");
-            assert!(partial.message.contains("retry.attempts"), "{partial:?}");
-            assert!(partial.message.contains("source diagnostic"), "{partial:?}");
-            assert!(!partial.message.contains("rules active"), "{partial:?}");
+            assert!(!conditions.iter().any(|condition| condition.type_ == "PartiallyInvalid"));
             assert_eq!(route.spec.invalid_rule_indices, None);
         }
     }
@@ -1804,9 +1769,7 @@ spec:
             .as_ref()
             .is_some_and(|indices| indices.contains(&0)));
         let conditions = &parsed.status.as_ref().unwrap().parents[0].conditions;
-        assert!(conditions
-            .iter()
-            .any(|condition| condition.type_ == "PartiallyInvalid" && condition.message.contains("retry.attempts")));
+        assert!(!conditions.iter().any(|condition| condition.type_ == "PartiallyInvalid"));
         assert!(conditions
             .iter()
             .filter(|condition| condition.type_ == "Accepted")
@@ -1814,20 +1777,17 @@ spec:
     }
 
     #[tokio::test]
-    async fn ai_source_diagnostic_survives_sibling_removal_and_clears_on_correction() {
+    async fn ai_source_diagnostic_never_claims_a_rule_drop() {
         let handler = HttpRouteHandler::default();
         let ctx = make_ctx_with_raw_ai_backend("default", "chat");
         let mut route = route_with_bad_ai_rule(true);
         handler.update_status(&mut route, &ctx, &[]);
         route.spec.rules.as_mut().unwrap().truncate(1);
         handler.update_status(&mut route, &ctx, &[]);
-        let partial = route.status.as_ref().unwrap().parents[0]
+        assert!(!route.status.as_ref().unwrap().parents[0]
             .conditions
             .iter()
-            .find(|condition| condition.type_ == "PartiallyInvalid")
-            .unwrap();
-        assert_eq!(partial.status, "True");
-        assert!(partial.message.contains("retry.attempts"));
+            .any(|condition| condition.type_ == "PartiallyInvalid"));
         assert_eq!(route.spec.invalid_rule_indices, None);
 
         // Replacing the invalid source with an ordinary Service rule removes
@@ -1837,13 +1797,10 @@ spec:
             serde_json::json!([]),
         )]);
         handler.update_status(&mut route, &ctx, &[]);
-        let partial = route.status.as_ref().unwrap().parents[0]
+        assert!(!route.status.as_ref().unwrap().parents[0]
             .conditions
             .iter()
-            .find(|condition| condition.type_ == "PartiallyInvalid")
-            .unwrap();
-        assert_eq!(partial.status, "False");
-        assert_eq!(partial.reason, "AllRulesValid");
+            .any(|condition| condition.type_ == "PartiallyInvalid"));
     }
 
     fn ai_rule(backends: serde_json::Value, filters: serde_json::Value) -> HTTPRouteRule {
@@ -2722,9 +2679,7 @@ spec:
         let accepted = conditions.iter().find(|c| c.type_ == "Accepted").unwrap();
         assert_eq!(accepted.status, "False");
         assert!(accepted.message.contains("backendRefs[0] CORS is not supported"));
-        let partial = conditions.iter().find(|c| c.type_ == "PartiallyInvalid").unwrap();
-        assert_eq!(partial.status, "False");
-        assert_eq!(partial.reason, "UnsupportedValue");
+        assert!(!conditions.iter().any(|c| c.type_ == "PartiallyInvalid"));
 
         route.spec.rules.as_mut().unwrap()[0].backend_refs.as_mut().unwrap()[0].filters = None;
         handler.update_status(&mut route, &ctx, &[]);
@@ -2928,6 +2883,7 @@ spec:
         let partial = conditions.iter().find(|c| c.type_ == "PartiallyInvalid").unwrap();
         assert_eq!(partial.status, "True");
         assert!(partial.message.contains("rules[0]") && partial.message.contains("rules[1]"));
+        assert!(partial.message.starts_with("Dropped Rule"));
         assert!(partial.message.contains("1 of 3 rules active"));
         assert!(!partial.message.contains("secret-marker"));
 
@@ -2938,18 +2894,14 @@ spec:
             && c.status == "False"
             && c.message.contains("rules[0]")
             && c.message.contains("rules[1]")));
-        assert!(conditions
-            .iter()
-            .any(|c| c.type_ == "PartiallyInvalid" && c.status == "False"));
+        assert!(!conditions.iter().any(|c| c.type_ == "PartiallyInvalid"));
 
         route.spec.rules.as_mut().unwrap()[0].filters = None;
         route.spec.rules.as_mut().unwrap()[1].backend_refs.as_mut().unwrap()[0].filters = None;
         handler.update_status(&mut route, &ctx, &[]);
         assert!(route.spec.invalid_rule_indices.is_none());
         let conditions = &route.status.as_ref().unwrap().parents[0].conditions;
-        assert!(conditions
-            .iter()
-            .any(|c| c.type_ == "PartiallyInvalid" && c.status == "False" && c.reason == "AllRulesValid"));
+        assert!(!conditions.iter().any(|c| c.type_ == "PartiallyInvalid"));
         assert!(!conditions.iter().any(|c| c.message.contains("rules[0]")));
     }
 
@@ -2988,7 +2940,7 @@ spec:
 
     #[test]
     fn extension_ref_edgion_plugins_does_not_flag_rule() {
-        // A valid EdgionPlugins ExtensionRef (group empty or edgion.io) must not be flagged.
+        // A valid EdgionPlugins ExtensionRef must use the explicit edgion.io group.
         let yaml = r#"
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
@@ -3006,6 +2958,60 @@ spec:
 "#;
         let route: HTTPRoute = serde_yaml::from_str(yaml).unwrap();
         assert!(find_invalid_rule_details(&route, "default").is_empty());
+    }
+
+    #[test]
+    fn extension_ref_pairing_errors_drop_only_the_affected_http_rules() {
+        let mut route: HTTPRoute = serde_json::from_value(serde_json::json!({
+            "apiVersion": "gateway.networking.k8s.io/v1", "kind": "HTTPRoute",
+            "metadata": {"name": "extensions", "namespace": "default"},
+            "spec": {"parentRefs": [{"name": "gw"}], "rules": [
+                {"filters": [{"type": "ExtensionRef"}]},
+                {"filters": [{"type": "RequestHeaderModifier", "extensionRef": {
+                    "group": "edgion.io", "kind": "EdgionPlugins", "name": "unexpected"
+                }}]},
+                {"backendRefs": [{"name": "svc", "port": 80, "filters": [
+                    {"type": "ExtensionRef"}
+                ]}]},
+                {"filters": [{"type": "ExtensionRef", "extensionRef": {
+                    "group": "edgion.io", "kind": "EdgionPlugins", "name": "valid"
+                }}]}
+            ]}
+        }))
+        .expect("HTTPRoute fixture must deserialize");
+
+        let details = find_invalid_rule_details(&route, "default");
+        assert_eq!(indices_only(details), vec![0, 1, 2]);
+
+        HttpRouteHandler::default().update_status(&mut route, &make_ctx(), &[]);
+        assert_eq!(route.spec.invalid_rule_indices.as_deref(), Some(&[0, 1, 2][..]));
+        let conditions = &route.status.as_ref().unwrap().parents[0].conditions;
+        assert!(conditions.iter().any(|condition| {
+            condition.type_ == "PartiallyInvalid"
+                && condition.status == "True"
+                && condition.message.starts_with("Dropped Rule")
+        }));
+
+        route.spec.rules.as_mut().unwrap().truncate(3);
+        HttpRouteHandler::default().update_status(&mut route, &make_ctx(), &[]);
+        let conditions = &route.status.as_ref().unwrap().parents[0].conditions;
+        assert!(conditions.iter().any(|condition| {
+            condition.type_ == "Accepted" && condition.status == "False" && condition.message.contains("rules[0]")
+        }));
+        assert!(!conditions.iter().any(|condition| condition.type_ == "PartiallyInvalid"));
+    }
+
+    #[test]
+    fn extension_ref_empty_group_is_not_edgion_io() {
+        let route: HTTPRoute = serde_json::from_value(serde_json::json!({
+            "apiVersion": "gateway.networking.k8s.io/v1", "kind": "HTTPRoute",
+            "metadata": {"name": "r", "namespace": "default"},
+            "spec": {"rules": [{"filters": [{"type": "ExtensionRef", "extensionRef": {
+                "kind": "EdgionPlugins", "name": "plugins"
+            }}]}]}
+        }))
+        .expect("HTTPRoute fixture must deserialize");
+        assert_eq!(indices_only(find_invalid_rule_details(&route, "default")), vec![0]);
     }
 
     #[test]

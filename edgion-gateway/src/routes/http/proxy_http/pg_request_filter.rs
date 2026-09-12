@@ -15,6 +15,7 @@ use edgion_resources::path_normalization::get_path_normalization_config;
 use edgion_resources::path_normalization::{
     contains_escaped_slash, has_invalid_percent_encoding, normalize_path, PathNormalizationConfig,
 };
+use edgion_resources::resources::extension_ref::is_supported_edgion_plugins_ref;
 use edgion_resources::resources::{CorsConfig, HTTPRouteFilter, HTTPRouteFilterType};
 use edgion_resources::{EdgionErrorCode, EdgionInfoCode};
 use pingora_http::{RequestHeader, ResponseHeader};
@@ -153,7 +154,8 @@ pub async fn request_filter(
         ctx.install_resolved_route_ext_refs(resolve_route_ext_refs(&owner.scope, keys));
     }
     // Later-stage restrictions already have a request admission gate. Run it
-    // before early configured IDs, AI validation, CORS, WAF or body access.
+    // before AI validation, CORS, ordinary plugins, WAF or body access. Global
+    // and Gateway request IDs may already have run in Pingora's early hook.
     let global = ctx.resolved_global_plugins();
     let gateway = ctx.resolved_gateway_plugins();
     let route = ctx.resolved_route_ext_refs();
@@ -163,7 +165,19 @@ pub async fn request_filter(
         .chain(gateway.iter().flat_map(|plugins| plugins.iter()))
         .chain(route.iter().flat_map(|plugins| plugins.iter().flatten()))
     {
-        runtime.run_policy_gate(session, ctx).await;
+        runtime.run_preflight_gate(session, ctx).await;
+        if ctx.plugin_terminated() {
+            let _ = terminate_with_fallback(session, ctx, &edgion_http.server_header_opts).await;
+            return Ok(true);
+        }
+    }
+    let matched_route_runtime = ctx
+        .grpc_route_unit
+        .as_ref()
+        .map(|unit| Arc::clone(&unit.plugin_runtime))
+        .or_else(|| ctx.route_unit.as_ref().map(|unit| Arc::clone(&unit.plugin_runtime)));
+    if let Some(runtime) = matched_route_runtime {
+        runtime.run_preflight_gate(session, ctx).await;
         if ctx.plugin_terminated() {
             let _ = terminate_with_fallback(session, ctx, &edgion_http.server_header_opts).await;
             return Ok(true);
@@ -609,6 +623,7 @@ fn apply_path_normalization_entry(
 
 #[cfg(test)]
 mod tests {
+    use super::body_declared_snapshot_tests::session_from_request;
     use super::*;
     use edgion_resources::resources::LocalObjectReference;
     use pingora_http::RequestHeader;
@@ -718,6 +733,28 @@ mod tests {
         let actual = extract_cors_config_from_route_filters(&filters, &[Some(runtime)]);
 
         assert!(actual.is_some_and(|config| Arc::ptr_eq(&config, &expected)));
+    }
+
+    #[tokio::test]
+    async fn invalid_route_runtime_gate_terminates_options_before_preflight() {
+        let filters: Vec<HTTPRouteFilter> = serde_json::from_value(serde_json::json!([
+            {"type": "ExtensionRef"}
+        ]))
+        .expect("HTTP filter fixture must deserialize");
+        let runtime = crate::plugins::runtime::PluginRuntime::from_httproute_filters_for_rule(
+            &filters,
+            "default",
+            &Default::default(),
+        );
+        let mut session = session_from_request(
+            b"OPTIONS / HTTP/1.1\r\nHost: test\r\nOrigin: https://app.example\r\nAccess-Control-Request-Method: GET\r\n\r\n",
+        )
+        .await;
+        let mut ctx = EdgionHttpContext::default();
+
+        runtime.run_preflight_gate(&mut session, &mut ctx).await;
+
+        assert!(ctx.plugin_terminated());
     }
 }
 
@@ -886,7 +923,7 @@ fn extract_cors_config_from_route_filters(
         extension_index += 1;
 
         // Check if it's EdgionPlugins
-        if ext_ref.kind != "EdgionPlugins" || (!ext_ref.group.is_empty() && ext_ref.group != "edgion.io") {
+        if !is_supported_edgion_plugins_ref(ext_ref) {
             continue;
         }
 

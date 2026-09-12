@@ -15,6 +15,7 @@ use crate::plugins::runtime::traits::{
 };
 use crate::plugins::runtime::PluginRuntime;
 use edgion_resources::filters::{PluginRunningResult, PluginRunningStage};
+use edgion_resources::resources::extension_ref::is_supported_edgion_plugins_ref;
 use edgion_resources::resources::LocalObjectReference;
 
 /// Error response body written when an ExtensionRef cannot be resolved
@@ -64,7 +65,7 @@ pub struct ExtensionRefFilter {
 
 impl ExtensionRefFilter {
     pub fn new(namespace: String, ext_ref: LocalObjectReference) -> Self {
-        let supported = ext_ref.kind == "EdgionPlugins" && (ext_ref.group.is_empty() || ext_ref.group == "edgion.io");
+        let supported = is_supported_edgion_plugins_ref(&ext_ref);
         let lookup_key = format!("{}/{}", namespace, ext_ref.name);
         Self {
             target: Arc::new(ExtensionRefTarget {
@@ -118,18 +119,18 @@ impl ExtensionRefFilter {
 
     /// Helper to prepare plugin execution: validation, lookup, logging setup
     /// Returns the resolved runtime and log token, or an error for an
-    /// unsupported kind or missing referenced EdgionPlugins resource.
+    /// unsupported target or missing referenced EdgionPlugins resource.
     fn prepare_execution(
         &self,
         session: &mut dyn PluginSession,
         log: &mut PluginLog,
     ) -> Result<(Arc<PluginRuntime>, EdgionPluginsLogToken), ()> {
         if !self.is_edgion_plugins() {
-            // An unsupported ExtensionRef kind is a static config error caught
+            // An unsupported ExtensionRef target is a static config error caught
             // at preparse time (`find_invalid_rule_details` /
             // `find_invalid_rule_indices`). This is the runtime backstop — fail
             // closed via `Err(())`, which both callers map to HTTP 500.
-            log.push_err("extension ref kind not supported");
+            log.push_err("extension ref target not supported");
             return Err(());
         }
 
@@ -562,7 +563,7 @@ mod tests {
         let mut filter = ExtensionRefFilter::new(
             "ns".to_string(),
             LocalObjectReference {
-                group: "".into(),
+                group: "edgion.io".into(),
                 kind: "EdgionPlugins".into(),
                 name: "terminating".into(),
                 resolved_namespace: None,
@@ -623,7 +624,7 @@ mod tests {
         let mut filter = ExtensionRefFilter::new(
             "ns".to_string(),
             LocalObjectReference {
-                group: "".into(),
+                group: "edgion.io".into(),
                 kind: "EdgionPlugins".into(),
                 name: "waf".into(),
                 resolved_namespace: None,
@@ -659,7 +660,7 @@ mod tests {
         let filter = ExtensionRefFilter::new(
             "ns".to_string(),
             LocalObjectReference {
-                group: "".into(),
+                group: "edgion.io".into(),
                 kind: "EdgionPlugins".into(),
                 name: "p1".into(),
                 resolved_namespace: None,
@@ -699,7 +700,7 @@ mod tests {
         let mut filter = ExtensionRefFilter::new(
             "ns".to_string(),
             LocalObjectReference {
-                group: "".into(),
+                group: "edgion.io".into(),
                 kind: "EdgionPlugins".into(),
                 name: "p1".into(),
                 resolved_namespace: None,
@@ -730,7 +731,7 @@ mod tests {
         let mut filter = ExtensionRefFilter::new(
             "ns".to_string(),
             LocalObjectReference {
-                group: "".into(),
+                group: "edgion.io".into(),
                 kind: "EdgionPlugins".into(),
                 name: "p1".into(),
                 resolved_namespace: None,
@@ -785,6 +786,28 @@ mod tests {
         assert!(
             matches!(result, PluginRunningResult::ErrTerminateRequest),
             "unsupported ExtensionRef kind must fail closed (500 written + ErrTerminateRequest), got {result:?}"
+        );
+    }
+
+    #[test]
+    fn empty_group_does_not_alias_edgion_io() {
+        let mut session = MockPluginSession::new();
+        let filter = ExtensionRefFilter::new(
+            "default".to_string(),
+            LocalObjectReference {
+                group: String::new(),
+                kind: "EdgionPlugins".into(),
+                name: "x".into(),
+                resolved_namespace: None,
+            },
+        );
+        let mut log = PluginLog::with_alias("ExtensionRef", None);
+        assert_eq!(
+            filter.run_extension(PluginRunningStage::UpstreamResponseFilter, &mut session, &mut log),
+            PluginRunningResult::ErrResponse {
+                status: 500,
+                body: None,
+            }
         );
     }
 }

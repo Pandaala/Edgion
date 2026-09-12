@@ -1424,6 +1424,32 @@ mod tests {
     // =====================================================================
 
     #[test]
+    fn malformed_extension_ref_in_child_drops_only_that_http_rule() {
+        let parent = simple_parent("/api", "billing", "child");
+        let child = route(
+            "billing",
+            "child",
+            serde_json::json!({"rules": [
+                {
+                    "matches": [{"path": {"type": "PathPrefix", "value": "/api/bad"}}],
+                    "filters": [{"type": "ExtensionRef"}],
+                    "backendRefs": [{"name": "svc", "port": 80}]
+                },
+                {
+                    "matches": [{"path": {"type": "PathPrefix", "value": "/api/good"}}],
+                    "backendRefs": [{"name": "svc", "port": 80}]
+                }
+            ]}),
+        );
+
+        let outcome = flatten_route(&parent, &FakeLookup::new(vec![child]));
+        assert_eq!(outcome.resolved_rules.as_ref().unwrap().len(), 1);
+        let drops = dropped_messages(&outcome);
+        assert_eq!(drops.len(), 1);
+        assert!(drops[0].contains("rules[0]"));
+    }
+
+    #[test]
     fn mirror_delegation_preserves_declaring_namespace_and_revalidates_raw_children() {
         use super::super::request_mirror;
         for backend_filter in [false, true] {

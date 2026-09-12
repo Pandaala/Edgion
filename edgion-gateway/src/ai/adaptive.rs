@@ -11,6 +11,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use arc_swap::ArcSwap;
 use edgion_resources::resources::edgion_backend_traffic_policy::{PolicyTargetKey, PolicyTargetKind};
 use edgion_resources::resources::edgion_plugins::{AiBackendSelection, EdgionPlugin, RequestFilterEntry};
+use edgion_resources::resources::extension_ref::is_supported_edgion_plugins_ref;
 use edgion_resources::resources::http_route::{HTTPBackendRefKind, HTTPRoute, HTTPRouteFilterType};
 use parking_lot::Mutex as ParkingMutex;
 use tokio::sync::watch;
@@ -527,9 +528,7 @@ impl RouteAdaptiveFacts {
                         return None;
                     }
                     let reference = filter.extension_ref.as_ref()?;
-                    if reference.kind != "EdgionPlugins"
-                        || (!reference.group.is_empty() && reference.group != "edgion.io")
-                    {
+                    if !is_supported_edgion_plugins_ref(reference) {
                         return None;
                     }
                     let namespace = reference.resolved_namespace.as_deref().unwrap_or(route_namespace);
