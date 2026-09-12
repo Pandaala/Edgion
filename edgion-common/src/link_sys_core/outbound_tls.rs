@@ -87,9 +87,15 @@ pub fn outbound_global_default() -> OutboundTlsConfig {
 /// Replace the cluster-wide outbound TLS default.
 ///
 /// Called by the Gateway when an `EdgionGatewayConfig` carrying an
-/// `outboundTls` block is applied.
-pub fn set_outbound_global_default(cfg: OutboundTlsConfig) {
-    *OUTBOUND_GLOBAL_DEFAULT.write() = cfg;
+/// `outboundTls` block is applied. Returns `true` when the effective stored
+/// configuration changed.
+pub fn set_outbound_global_default(cfg: OutboundTlsConfig) -> bool {
+    let mut current = OUTBOUND_GLOBAL_DEFAULT.write();
+    if *current == cfg {
+        return false;
+    }
+    *current = cfg;
+    true
 }
 
 // ============================================================================
@@ -418,6 +424,20 @@ mod tests {
         let mut c = OutboundTlsConfig::default();
         c.verify = false;
         assert!(!aggregate_verify(&[a, c]).verify);
+    }
+
+    #[test]
+    fn setting_global_default_reports_only_effective_changes() {
+        let _guard = outbound_tls_test_guard();
+        assert!(!set_outbound_global_default(OutboundTlsConfig::default()));
+        assert!(set_outbound_global_default(OutboundTlsConfig {
+            verify: false,
+            ..Default::default()
+        }));
+        assert!(!set_outbound_global_default(OutboundTlsConfig {
+            verify: false,
+            ..Default::default()
+        }));
     }
 
     #[test]

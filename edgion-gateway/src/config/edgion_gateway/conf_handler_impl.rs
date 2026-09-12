@@ -182,7 +182,7 @@ const DEFAULT_LB_DEGRADE_THRESHOLD: u8 = 0;
 /// default when no config sets the field:
 ///   - webhook response cap: `min` — the strictest cap wins.
 ///   - LB degrade threshold:   `max` — degrade mode engages as early as any config asks.
-fn recompute_global_config(store: &HashMap<String, EdgionGatewayConfig>) {
+fn recompute_global_config(store: &HashMap<String, EdgionGatewayConfig>) -> bool {
     let webhook_max = store
         .values()
         .filter_map(|config| config.spec.link_sys.as_ref())
@@ -273,7 +273,7 @@ fn recompute_global_config(store: &HashMap<String, EdgionGatewayConfig>) {
             );
         }
     }
-    edgion_common::link_sys_core::outbound_tls::set_outbound_global_default(agg);
+    edgion_common::link_sys_core::outbound_tls::set_outbound_global_default(agg)
 }
 
 impl ConfHandler<EdgionGatewayConfig> for EdgionGatewayConfigHandler {
@@ -285,9 +285,12 @@ impl ConfHandler<EdgionGatewayConfig> for EdgionGatewayConfigHandler {
             data.len()
         );
         let configs = arc_map_to_owned(data);
-        recompute_global_config(&configs);
+        let outbound_tls_changed = recompute_global_config(&configs);
         EDGION_GATEWAY_CONFIG_STORE.store(Arc::new(EdgionGatewayConfigSnapshot::new(configs)));
         drop(_write_guard);
+        if outbound_tls_changed {
+            crate::link_sys::get_global_link_sys_store().rebuild_clients();
+        }
         crate::plugins::publication::global_publisher().replace_gateway_configs(data.clone());
         crate::ai::reconcile_all_adaptive_plugin_dependents();
     }
@@ -349,9 +352,12 @@ impl ConfHandler<EdgionGatewayConfig> for EdgionGatewayConfigHandler {
         // Recompute the process-global values from the post-mutation store so the
         // result is deterministic across instances and the delete path restores
         // the default once no config carries the field.
-        recompute_global_config(&configs);
+        let outbound_tls_changed = recompute_global_config(&configs);
         EDGION_GATEWAY_CONFIG_STORE.store(Arc::new(EdgionGatewayConfigSnapshot::new(configs)));
         drop(_write_guard);
+        if outbound_tls_changed {
+            crate::link_sys::get_global_link_sys_store().rebuild_clients();
+        }
         crate::plugins::publication::global_publisher().update_gateway_configs(policy_inputs, &remove);
         crate::ai::reconcile_all_adaptive_plugin_dependents();
     }

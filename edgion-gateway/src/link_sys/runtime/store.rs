@@ -142,6 +142,34 @@ impl LinkSysStore {
         }
     }
 
+    /// Rebuild every runtime client from the current authoritative snapshot.
+    ///
+    /// LinkSys clients resolve inherited process-wide settings when they are
+    /// constructed. A change to one of those settings therefore needs a fresh
+    /// dispatch even though the LinkSys resources themselves did not change.
+    pub fn rebuild_clients(&self) {
+        if self
+            .rebuild_clients_with_dispatch(
+                &NEXT_LINK_SYS_DISPATCH_SEQUENCE,
+                &LINK_SYS_SOURCE_EVENT_LOCK,
+                |sequence, dispatch_data| {
+                    if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                        handle.spawn(async move {
+                            dispatch_full_set(sequence, &dispatch_data).await;
+                        });
+                    } else {
+                        tracing::error!(
+                            "LinkSysStore::rebuild_clients called outside a tokio runtime — dispatch skipped"
+                        );
+                    }
+                },
+            )
+            .is_err()
+        {
+            tracing::error!("LinkSys dispatch sequence exhausted; client rebuild rejected");
+        }
+    }
+
     fn publish_source_event(
         &self,
         counter: &AtomicU64,
@@ -209,6 +237,23 @@ impl LinkSysStore {
             },
             |sequence| create_dispatch_task(sequence, dispatch_data, remove_set),
         )
+    }
+
+    fn rebuild_clients_with_dispatch(
+        &self,
+        counter: &AtomicU64,
+        source_lock: &Mutex<()>,
+        create_dispatch_task: impl FnOnce(u64, Arc<LinkSysMap>),
+    ) -> Result<u64, DispatchSequenceExhausted> {
+        let _source_guard = source_lock.lock();
+        let sequence = reserve_dispatch_sequence(counter).ok_or(DispatchSequenceExhausted)?;
+        let snapshot = self.resources.load_full();
+
+        // Reserve and enqueue under the same lock used by LinkSys source
+        // events. This makes the dependency-triggered rebuild part of their
+        // total order without republishing or cloning the source snapshot.
+        create_dispatch_task(sequence, snapshot);
+        Ok(sequence)
     }
 }
 
@@ -1165,6 +1210,35 @@ mod tests {
 
         let ls = store.get("default/nonexistent");
         assert!(ls.is_none());
+    }
+
+    #[test]
+    fn dependency_rebuild_dispatches_current_snapshot_without_republishing_it() {
+        let store = LinkSysStore::new();
+        let source_lock = Mutex::new(());
+        let counter = AtomicU64::new(0);
+        let key = "default/rebuild".to_string();
+        let source = Arc::new(HashMap::from([(
+            key.clone(),
+            create_test_webhook_linksys_with_port("default", "rebuild", 8181),
+        )]));
+        store.resources.store(Arc::clone(&source));
+
+        let dispatched = Mutex::new(None);
+        let sequence = store
+            .rebuild_clients_with_dispatch(&counter, &source_lock, |sequence, snapshot| {
+                *dispatched.lock() = Some((sequence, snapshot));
+            })
+            .expect("dependency rebuild reserves a dispatch sequence");
+
+        let (dispatched_sequence, dispatched_snapshot) = dispatched
+            .into_inner()
+            .expect("dependency rebuild creates one dispatch task");
+        assert_eq!(sequence, 1);
+        assert_eq!(dispatched_sequence, 1);
+        assert!(Arc::ptr_eq(&source, &dispatched_snapshot));
+        assert!(Arc::ptr_eq(&source, &store.resources.load_full()));
+        assert_eq!(source_webhook_port(&store, &key), 8181);
     }
 
     #[test]

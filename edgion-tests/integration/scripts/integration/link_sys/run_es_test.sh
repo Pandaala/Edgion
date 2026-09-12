@@ -759,11 +759,13 @@ gw_api POST "/api/v1/testing/link-sys/es/${ES_CLIENT}/delete-index/${DOC_INDEX}"
 log_info "─── 7. Bulk Ingest ───"
 
 # Bulk ingest writes to the date-based index configured in the CRD:
-# prefix = "edgion-test", datePattern = "%Y.%m.%d" → "edgion-test-YYYY.MM.DD"
+# prefix = "edgion-test", datePattern = "%Y.%m.%d" → "edgion-test-YYYY.MM.DD".
+# The Gateway derives this suffix from UTC, so the test must do the same around
+# a local midnight.
 # The CRD sets a tiny maxBodyBytes (256), so these 10 docs are flushed as
 # several sub-batches (F-002 partitioning); the count check below would catch
 # any sub-batch that the split path lost.
-BULK_INDEX="edgion-test-$(date +%Y.%m.%d)"
+BULK_INDEX="edgion-test-$(date -u +%Y.%m.%d)"
 log_info "Bulk target index: ${BULK_INDEX}"
 
 # Send 10 docs via bulk
@@ -779,15 +781,22 @@ assert_json_success "Bulk send 10 docs" "$RESP"
 SENT=$(echo "$RESP" | jq -r '.data.sent // 0')
 assert_eq "All 10 docs sent to buffer" "10" "$SENT"
 
-# Wait for bulk flush (flush interval is 2s in test config)
-log_info "Waiting 4s for bulk flush..."
-sleep 4
+# Poll the observable count instead of assuming one fixed delay is enough for
+# the 2s flush interval plus sub-batch writes and Elasticsearch refresh work.
+log_info "Waiting up to 20s for bulk flush..."
+BULK_COUNT=0
+for i in $(seq 1 20); do
+    gw_api POST "/api/v1/testing/link-sys/es/${ES_CLIENT}/refresh/${BULK_INDEX}" > /dev/null
+    RESP=$(gw_api GET "/api/v1/testing/link-sys/es/${ES_CLIENT}/count/${BULK_INDEX}")
+    BULK_COUNT=$(echo "$RESP" | jq -r '.data.count // 0')
+    if [ "$(echo "$RESP" | jq -r '.success // false')" = "true" ] && [ "$BULK_COUNT" -ge 10 ] 2>/dev/null; then
+        log_info "Bulk flush observed (count=${BULK_COUNT}, waited ${i}s)"
+        break
+    fi
+    sleep 1
+done
 
-# Refresh and count (bulk writes to the date-based index)
-gw_api POST "/api/v1/testing/link-sys/es/${ES_CLIENT}/refresh/${BULK_INDEX}" > /dev/null
-RESP=$(gw_api GET "/api/v1/testing/link-sys/es/${ES_CLIENT}/count/${BULK_INDEX}")
 assert_json_success "Count after bulk" "$RESP"
-BULK_COUNT=$(echo "$RESP" | jq -r '.data.count // 0')
 assert_ge "Bulk: at least 10 docs indexed" "$BULK_COUNT" 10
 
 # Cleanup

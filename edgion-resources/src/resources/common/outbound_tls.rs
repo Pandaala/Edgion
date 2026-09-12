@@ -56,7 +56,7 @@ pub struct OutboundTlsLocal {
 }
 
 /// Cluster-wide outbound TLS default carried on EdgionGatewayConfig.
-#[derive(Deserialize, Serialize, Clone, JsonSchema)]
+#[derive(Deserialize, Serialize, Clone, JsonSchema, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct OutboundTlsConfig {
     /// Global default verify; defaults to true when the field/block is absent.
