@@ -61,7 +61,9 @@ The language core (parser, AST, compiler, bytecode, errors, value, validator) li
 | VM (`async fn execute`, panic-isolated `execute_safe`, `VmLimits`) | `edgion-gateway/src/plugins/http/dsl/lang/vm.rs` |
 | Builtin implementations (`call_builtin`, `call_builtin_http`, `call_builtin_redis`) | `lang/builtins.rs` |
 | Value enum (`Value::Str(Arc<str>)`, opaque `Value::Body`, `List`, `Map(Box<IndexMap<String, Value>>)`) | `edgion-dsl/src/value.rs` |
-| Storage-transparent request-body scanners and mutations | `edgion-gateway/src/request_body/body_scanners.rs`, `edgion-gateway/src/request_body/operation.rs` |
+| Body runtime policy and execution-local scan account | `lang/body_ops.rs`, `lang/body_scan_budget.rs` |
+| DSL-owned JSON/regex scanners and compiled selection plans | `lang/body_scanners.rs` |
+| Generic body scanners, bounded text collection, and mutations | `edgion-gateway/src/request_body/body_scanners.rs`, `edgion-gateway/src/request_body/operation.rs` |
 | Runtime errors | `edgion-dsl/src/error.rs` |
 | Plugin entry (RequestFilter + UpstreamResponseFilter impls, config-to-plugin factory) | `plugin.rs` |
 | Per-plugin external-call context (limits + redis link table) | `runtime.rs` — `DslRuntime` |
@@ -94,6 +96,42 @@ stages. Mutations are transactional, operate on raw byte ranges, and remain
 bounded by the gateway physical body cap and mutation-segment limit.
 
 The same `DslPlugin` instance is shared across requests through `PluginRuntime` — only `&self` accessors run on the hot path. Per-request mutable state lives in `Vm::execute`'s local `VmState`, not in `DslPlugin`.
+
+### Body capability runtime
+
+`BodyValue::Request` is a host-neutral capability tag. It carries no storage
+pointer, snapshot, or cursor and preserves the 24-byte `Value` layout. Each
+operation resolves the current request body; storage pins an immutable snapshot
+for that operation. All aliases observe a subsequently published mutation on
+their next operation. Explicit snapshot readers for outbound transfer and
+mirroring remain frozen, even when an alias changes the logical body.
+
+Gateway-local `DslBodyOps` borrows the session, execution-local
+`BodyScanBudget`, and immutable runtime limits only for the operation. It owns
+body validation, shared error mapping, and scan reservation/settlement. The VM
+retains stack handling and operation-specific argument/constant checks.
+Mutations go through `PluginSession` to retain stage and replay-owner checks;
+the facade never stores another body or bypasses generation-checked publication.
+
+`BodyScanBudget` is the one account shared by scans and `http.call(Body)` in
+each VM execution. Generic scans reserve the remaining allowance and settle
+fetched raw bytes. Uploads retain their exact reservation and cancellation-aware
+settlement. Cached SHA-256 can report zero scanned bytes. A storage failure
+without accounting retains the reservation; dropping an operation does not
+automatically refund potentially still-running blocking work.
+
+To extend Body behavior, implement an owned scanner using `RawBodyScanner` or
+`TextBodyScanner` and invoke it through the runtime policy boundary. Generic
+storage traversal, lossy decoding, and range mechanics belong in `request_body`;
+DSL values, compiled JSON paths, and regex plans belong in the DSL runtime.
+Scanners moved to blocking workers must remain `Send + 'static` and cannot
+borrow the session or VM. Reuse the existing bounded scan worker lane.
+
+`read()` and `read_all()` use the same storage-aware `read_text_range` collector.
+Overflow is a bounded scan outcome carrying `bytes_scanned`, so settlement
+precedes `StringTooLong`. No raw full-range materialization occurs. Preserve
+the raw-range scan-budget preflight and `read_all()` raw-length preflight:
+their ordering determines which error policy applies when limits overlap.
 
 ## 4. Async / sync bridging
 

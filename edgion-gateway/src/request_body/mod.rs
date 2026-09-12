@@ -11,16 +11,14 @@ mod operation;
 mod state;
 mod storage;
 
-pub(crate) use body_scanners::{
-    HmacSha256Scanner, JsonPathScanner, JsonScanValue, JsonSelectPlan, JsonSelectScanner, Md5Scanner,
-    StreamingRegexScanner,
-};
+pub(crate) use body_scanners::{HmacSha256Scanner, Md5Scanner};
 pub use config::{ResolvedRequestBodyConfig, DEFAULT_MEMORY_BUFFER_BYTES};
 pub use operation::{
-    BodyOperationError, BodyScanResult, BodyTextOperation, BodyTextResult, LossyTextScanner, RawBodyScanner,
-    ScanControl, TextBodyScanner, MAX_BODY_SEGMENTS,
+    BodyOperationError, BodyScanResult, BodyTextOperation, BodyTextResult, BoundedTextResult, LossyTextScanner,
+    RawBodyScanner, ScanControl, TextBodyScanner, MAX_BODY_SEGMENTS,
 };
 pub use state::RequestBodyState;
+pub(crate) use storage::run_blocking_scan;
 pub use storage::{BodyStorage, BodyStorageView};
 #[cfg(test)]
 pub(crate) use storage::{StorageIoOperation, STORAGE_IO_TEST_HOOK};

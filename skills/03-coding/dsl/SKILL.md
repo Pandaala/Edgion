@@ -17,6 +17,13 @@ Ownership is deliberately split across three layers:
 Keep new code in the lowest layer that has the required dependencies; never move Gateway
 runtime dependencies into the leaf DSL crate.
 
+Body runtime policy belongs in Gateway-local `lang/body_ops.rs`, with one
+execution-local account in `lang/body_scan_budget.rs`. Reuse that boundary for
+new body scans; keep owned DSL JSON/regex scanners in `lang/body_scanners.rs`
+and generic storage/range/UTF-8 mechanics in `request_body`. Mutations must
+continue through `PluginSession`, and ordinary Body aliases must resolve the
+current generation rather than retaining a snapshot or implicit cursor.
+
 ## File list
 
 | File | Topic |

@@ -3,7 +3,9 @@
 use async_trait::async_trait;
 use bytes::Bytes;
 
-use super::operation::{BodyOperationError, BodyScanResult, BodyTextOperation, BodyTextResult, RawBodyScanner};
+use super::operation::{
+    BodyOperationError, BodyScanResult, BodyTextOperation, BodyTextResult, BoundedTextResult, RawBodyScanner,
+};
 use crate::plugins::runtime::traits::session::{BodyReadError, BodyReadResult, RequestBodySnapshotReader};
 
 mod enabled;
@@ -97,6 +99,20 @@ impl RequestBodyState {
         max_scan_bytes: u64,
     ) -> Result<BodyScanResult<Bytes>, BodyOperationError> {
         self.0.read_range(offset, max_bytes, max_scan_bytes).await
+    }
+
+    /// Decode an independent raw range into bounded lossy UTF-8 text without
+    /// capturing or materializing a body. Overflow still reports scanned bytes.
+    pub async fn read_text_range(
+        &self,
+        offset: u64,
+        max_bytes: u64,
+        max_output_bytes: usize,
+        max_scan_bytes: u64,
+    ) -> Result<BodyScanResult<BoundedTextResult>, BodyOperationError> {
+        self.0
+            .read_text_range(offset, max_bytes, max_output_bytes, max_scan_bytes)
+            .await
     }
 
     /// Hash the logical body and report raw scan accounting.
@@ -211,6 +227,56 @@ mod tests {
             body.extend_from_slice(&chunk);
         }
         Bytes::from(body)
+    }
+
+    #[tokio::test]
+    async fn bounded_text_read_preserves_missing_known_empty_captured_and_released_states() {
+        let mut state = RequestBodyState::default();
+        assert_eq!(
+            state.read_text_range(0, 0, 0, 0).await,
+            Err(BodyOperationError::Body(BodyReadError::NotBuffered))
+        );
+        state.mark_known_empty();
+        for max_bytes in [0, u64::MAX] {
+            assert_eq!(
+                state.read_text_range(0, max_bytes, 0, 0).await.unwrap(),
+                BodyScanResult {
+                    value: BoundedTextResult::Complete(String::new()),
+                    bytes_scanned: 0
+                }
+            );
+        }
+        assert_eq!(
+            state.read_text_range(1, 0, 0, 0).await,
+            Err(BodyOperationError::InvalidRange)
+        );
+
+        let mut state = captured(b"text").await;
+        assert_eq!(
+            state.read_text_range(1, 2, 2, 2).await.unwrap(),
+            BodyScanResult {
+                value: BoundedTextResult::Complete("ex".to_string()),
+                bytes_scanned: 2
+            }
+        );
+        assert_eq!(
+            state.read_text_range(4, u64::MAX, 0, 0).await.unwrap().value,
+            BoundedTextResult::Complete(String::new())
+        );
+        state.release_view();
+        assert_eq!(
+            state.read_text_range(0, 0, 0, 0).await,
+            Err(BodyOperationError::Body(BodyReadError::NotBuffered))
+        );
+
+        let empty = captured(b"").await;
+        assert_eq!(
+            empty.read_text_range(0, u64::MAX, 0, 0).await.unwrap(),
+            BodyScanResult {
+                value: BoundedTextResult::Complete(String::new()),
+                bytes_scanned: 0
+            }
+        );
     }
 
     #[tokio::test]

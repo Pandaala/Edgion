@@ -2807,6 +2807,153 @@ mod tests {
 #[cfg(test)]
 mod record_outcome_tests {
     use super::*;
+    use crate::plugins::http::dsl::lang::vm::{Vm, VmLimits};
+    use crate::plugins::http::dsl::runtime::DslRuntime;
+    use edgion_dsl::{error::RuntimeError, resolve_script, validator::ValidationLimits};
+
+    fn dsl_body_test_vm(source: &str) -> Vm {
+        let script = resolve_script(Some(source), None, &ValidationLimits::default()).unwrap();
+        Vm::new(script, VmLimits::default()).unwrap()
+    }
+
+    #[tokio::test]
+    async fn dsl_body_aliases_follow_mutations_while_transfer_reader_stays_frozen() {
+        let vm = dsl_body_test_vm(
+            r#"
+                let first = req.body
+                let alias = first
+                let original = first.sha256()
+                first.append("d")
+                if alias.read_all() != "abcd" || alias.sha256() == original {
+                    return deny(400, "alias did not observe append")
+                }
+                alias.remove(1, 3)
+                first.prepend("x")
+                alias.replace("a", "A")
+                if first.read_all() != "xAd" {
+                    return deny(400, "alias did not observe mutation")
+                }
+                first.clear()
+                if alias.byte_len() != 0 || alias.read_all() != "" {
+                    return deny(400, "alias did not observe clear")
+                }
+                alias.append("z")
+                if first.read_all() != "z" {
+                    return deny(400, "alias did not observe new generation")
+                }
+            "#,
+        );
+        for memory_limit in [64, 1] {
+            let mut session = test_session_with_body(b"abc").await;
+            let mut ctx = EdgionHttpContext::default();
+            ctx.request_info.body_declared = Some(true);
+            ctx.request_info.in_request_body_stage = true;
+            ctx.request_body_config.memory_buffer_bytes = memory_limit;
+            ctx.request_body_config.max_body_size_bytes = 64;
+
+            let mut frozen = {
+                let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
+                assert_eq!(adapter.ensure_request_body(None).await.unwrap(), 3);
+                let reader = adapter.request_body_snapshot_reader(false).await.unwrap();
+                let result = vm
+                    .execute(&mut adapter, &mut PluginLog::new("test"), &DslRuntime::default())
+                    .await
+                    .unwrap();
+                assert_eq!(result, PluginRunningResult::GoodNext);
+                reader
+            };
+            assert_eq!(frozen.next_chunk().await.unwrap(), Some(Bytes::from_static(b"abc")));
+            assert_eq!(frozen.next_chunk().await.unwrap(), None);
+            assert_eq!(ctx.request_body.generation(), Some(6));
+            assert_eq!(ctx.request_body.modified_len_for_framing().unwrap(), Some(1));
+            assert_eq!(
+                ctx.request_body.read_range(0, 64, 64).await.unwrap().value,
+                Bytes::from_static(b"z")
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn dsl_body_response_stage_reads_cache_but_refuses_every_mutation() {
+        let read_vm = dsl_body_test_vm(
+            r#"
+                if req.body.read_all() != "abc" || req.body.read(1, 1) != "b" {
+                    return deny(400, "late read mismatch")
+                }
+            "#,
+        );
+        for memory_limit in [64, 1] {
+            let mut session = test_session_with_body(b"abc").await;
+            let mut ctx = EdgionHttpContext::default();
+            ctx.request_info.body_declared = Some(true);
+            ctx.request_info.in_request_body_stage = true;
+            ctx.request_body_config.memory_buffer_bytes = memory_limit;
+            {
+                let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
+                adapter.ensure_request_body(None).await.unwrap();
+            }
+            ctx.request_info.in_request_body_stage = false;
+            for source in [
+                "req.body.clear()",
+                r#"req.body.append("x")"#,
+                r#"req.body.prepend("x")"#,
+                "req.body.remove(0, 1)",
+                r#"req.body.replace("a", "x")"#,
+            ] {
+                // Bypass stage-specific config rejection to exercise the host
+                // boundary even for a directly constructed VM.
+                let mutation_vm = dsl_body_test_vm(source);
+                let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
+                assert_eq!(
+                    read_vm
+                        .execute(&mut adapter, &mut PluginLog::new("test"), &DslRuntime::default())
+                        .await
+                        .unwrap(),
+                    PluginRunningResult::GoodNext
+                );
+                assert!(matches!(
+                    mutation_vm
+                        .execute(&mut adapter, &mut PluginLog::new("test"), &DslRuntime::default())
+                        .await,
+                    Err(RuntimeError::BodyAccess { .. })
+                ));
+            }
+            assert_eq!(ctx.request_body.generation(), Some(0));
+            assert_eq!(ctx.request_body.modified_len_for_framing().unwrap(), None);
+            assert_eq!(
+                ctx.request_body.read_range(0, 64, 64).await.unwrap().value,
+                Bytes::from_static(b"abc")
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn dsl_body_late_read_never_captures_and_proven_empty_needs_no_cache() {
+        let vm = dsl_body_test_vm(
+            r#"
+                if req.body.read_all() != "" || req.body.read(0, 100) != "" {
+                    return deny(400, "expected empty body")
+                }
+            "#,
+        );
+        for declared in [Some(true), None, Some(false)] {
+            let mut session = test_session().await;
+            let mut ctx = EdgionHttpContext::default();
+            ctx.request_info.body_declared = declared;
+            ctx.request_info.in_request_body_stage = false;
+            let result = {
+                let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
+                vm.execute(&mut adapter, &mut PluginLog::new("test"), &DslRuntime::default())
+                    .await
+            };
+            if declared == Some(false) {
+                assert_eq!(result.unwrap(), PluginRunningResult::GoodNext);
+            } else {
+                assert!(matches!(result, Err(RuntimeError::BodyAccess { .. })));
+            }
+            assert!(!ctx.request_body.has_cached_body());
+        }
+    }
     use crate::plugins::http::RequestBodyBuffer as RequestBodyBufferPlugin;
     use crate::plugins::runtime::{BodyGatedRequestFilter, RequestFilter};
     use crate::request_body::DEFAULT_MEMORY_BUFFER_BYTES;

@@ -51,6 +51,11 @@ Limits the maximum byte length of strings produced by concatenation operations. 
 
 It does not cap the opaque Body itself. It does cap strings returned by
 `Body.read`, `Body.read_all`, and selected or serialized JSON values.
+Body text reads check the limit during lossy UTF-8 decoding, before admitting
+each output append or capacity request. Invalid UTF-8 expansion counts toward
+the limit; overflow returns no prefix. The limit is not the total operation
+memory ceiling: bounded scan buffers and temporary string conversion also
+consume memory.
 
 **maxBodyScanPasses (Cumulative Request-Body Scans)**
 
@@ -58,11 +63,12 @@ The VM gives one script execution a cumulative scan budget equal to the
 resolved gateway physical request-body cap multiplied by
 `maxBodyScanPasses`. Metadata-only `byte_len()` consumes no scan bytes. Scans
 fetch source data in chunks of up to 64 KiB and charge every fetched chunk. An
-early-exit predicate may therefore charge the complete final chunk even when
-it matches near that chunk's beginning. Failed or rolled-back scans retain the
-charge for chunks fetched before failure. This conservative accounting avoids
-small-read and per-callback overhead and applies identically to memory,
-spill-file, and mutation-segment sources.
+early-exit predicate or overflowing text read may therefore charge the complete
+final chunk even when it stops near that chunk's beginning. Unfetched bytes are
+refunded when a scan returns a result, including a text-overflow result. A scan
+that fails without returning accounting conservatively retains its reservation.
+The same fetched-byte rule applies to memory, spill-file, and mutation-segment
+sources; different segment boundaries can yield different early-stop charges.
 
 `req.body.sha256()` lazily caches only the 32-byte digest on the current
 immutable Body generation. Its first successful call scans normally; repeated

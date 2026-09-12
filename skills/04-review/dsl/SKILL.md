@@ -25,6 +25,8 @@ before applying a decision to current code.
 
 ## Regression guards
 
+- [Body text reads are bounded during decoding, with fetched-byte accounting](regression-guards/bounded-body-text-reads.md)
+
 - [Response-stage HTTP suspension and timeout enforcement](regression-guards/response-stage-http-timeout.md)
 
 - [Context read ownership, request-to-response continuity, and request isolation](regression-guards/request-response-context-continuity.md)

@@ -3,6 +3,57 @@
 use super::*;
 use crate::plugins::runtime::traits::session::BodyReadError;
 use crate::plugins::runtime::DyeOutcome;
+use crate::request_body::BodyStorage;
+use crate::EdgionHttpContext;
+use pingora_core::protocols::http::RequestBodyBuffer;
+
+#[tokio::test]
+async fn body_text_overflow_obeys_string_error_policy_while_invalid_range_fails_closed() {
+    for policy in [
+        DslErrorPolicy::Ignore,
+        DslErrorPolicy::Deny,
+        DslErrorPolicy::DenyWith {
+            status: 418,
+            body: Some("teapot".to_string()),
+        },
+    ] {
+        for source in ["req.body.read(0, 1)", "req.body.read_all()", "req.body.read(2, 1)"] {
+            let vm = make_vm_with_limits(
+                source,
+                VmLimits {
+                    max_string_len: 2,
+                    ..VmLimits::default()
+                },
+            );
+            let (mut storage, view) = BodyStorage::new(0, 1);
+            storage.write(&Bytes::from_static(&[0xff])).await.unwrap();
+            storage.finish().await.unwrap();
+            let mut ctx = EdgionHttpContext::new();
+            ctx.request_body_config.max_body_size_bytes = 1;
+            ctx.request_body.install(view);
+            let mut session = MockPluginSession::new();
+            session.expect_declares_body().return_const(Some(true));
+            session.expect_request_body_available_len().return_const(Ok(1));
+            session.expect_ctx().return_const(ctx);
+            session.expect_record_outcome().times(1).return_const(());
+            let mut log = PluginLog::new("test");
+            let result = execute_safe(&vm, &mut session, &mut log, &policy, &DslRuntime::default()).await;
+
+            if source == "req.body.read(2, 1)" {
+                assert_eq!(result, err_response_body(500, "Request body processing failed"));
+                assert_eq!(log.render_for_test(), "err: request body access error");
+            } else {
+                let expected = match &policy {
+                    DslErrorPolicy::Ignore => good_next(),
+                    DslErrorPolicy::Deny => err_response_body(500, "DSL execution error"),
+                    DslErrorPolicy::DenyWith { .. } => err_response_body(418, "teapot"),
+                };
+                assert_eq!(result, expected);
+                assert_eq!(log.render_for_test(), "err: string too long");
+            }
+        }
+    }
+}
 
 fn limited_vm() -> Vm {
     let b64 = compile_dsl_source(

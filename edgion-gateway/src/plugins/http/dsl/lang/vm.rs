@@ -30,18 +30,16 @@ use smallvec::SmallVec;
 
 use crate::plugins::http::common::{replace_all_bounded, BoundedRegexReplacementError};
 use crate::plugins::runtime::{DyeOutcome, PluginLog, PluginSession};
-use crate::request_body::{BodyOperationError, BodyTextOperation, BodyTextResult, LossyTextScanner, TextBodyScanner};
+use crate::request_body::{BodyTextOperation, LossyTextScanner, TextBodyScanner};
 use edgion_resources::filters::PluginRunningResult;
 
 use super::super::runtime::DslRuntime;
+use super::body_ops::{body_access_error, expect_body, map_body_error, DslBodyOps};
+use super::body_scan_budget::BodyScanBudget;
+use super::body_scanners::{JsonPathScanner, JsonScanValue, JsonSelectPlan, JsonSelectScanner, StreamingRegexScanner};
 use super::bytecode::*;
 use super::error::RuntimeError;
-use super::value::BodyValue;
 use super::value::Value;
-use crate::request_body::{
-    HmacSha256Scanner, JsonPathScanner, JsonScanValue, JsonSelectPlan, JsonSelectScanner, Md5Scanner,
-    StreamingRegexScanner,
-};
 use edgion_dsl::json_path::DefiniteJsonPath;
 
 pub(crate) trait RuntimeString {
@@ -58,28 +56,6 @@ impl RuntimeString for Value {
     }
 }
 
-pub(crate) fn body_access_error(message: impl Into<String>) -> RuntimeError {
-    RuntimeError::BodyAccess {
-        message: message.into(),
-    }
-}
-
-fn map_body_error(error: BodyOperationError) -> RuntimeError {
-    body_access_error(error.to_string())
-}
-
-fn expect_body(value: Value, operation: &'static str) -> Result<(), RuntimeError> {
-    if matches!(value, Value::Body(BodyValue::Request)) {
-        Ok(())
-    } else {
-        Err(RuntimeError::TypeError {
-            expected: "Body",
-            got: value.type_name(),
-            operation,
-        })
-    }
-}
-
 fn expect_string(value: Value, operation: &'static str) -> Result<String, RuntimeError> {
     match value {
         Value::Str(value) => Ok(value.to_string()),
@@ -89,13 +65,6 @@ fn expect_string(value: Value, operation: &'static str) -> Result<String, Runtim
             operation,
         }),
     }
-}
-
-fn check_fixed_string_len(len: usize, limit: usize) -> Result<(), RuntimeError> {
-    if len > limit {
-        return Err(RuntimeError::StringTooLong { len, limit });
-    }
-    Ok(())
 }
 
 fn nonnegative_u64(value: Value, operation: &'static str) -> Result<u64, RuntimeError> {
@@ -210,7 +179,7 @@ pub(crate) struct VmState {
     // Original limits (for error messages)
     max_steps: u32,
     max_call_count: u32,
-    body_scan_budget: Option<u64>,
+    pub(crate) body_scan_budget: BodyScanBudget,
 }
 
 impl VmState {
@@ -228,7 +197,7 @@ impl VmState {
             call_budget: limits.max_call_count,
             max_steps: limits.max_steps,
             max_call_count: limits.max_call_count,
-            body_scan_budget: None,
+            body_scan_budget: BodyScanBudget::default(),
         }
     }
 
@@ -262,74 +231,6 @@ impl VmState {
         }
         self.call_budget -= 1;
         Ok(())
-    }
-
-    pub(crate) fn reserve_body_scan(&mut self, physical_cap: u64, passes: u8) -> Result<u64, RuntimeError> {
-        let budget = match self.body_scan_budget {
-            Some(budget) => budget,
-            None => {
-                let budget = physical_cap
-                    .checked_mul(u64::from(passes))
-                    .ok_or_else(|| body_access_error("request body scan budget overflow"))?;
-                self.body_scan_budget = Some(budget);
-                budget
-            }
-        };
-        self.body_scan_budget = Some(0);
-        Ok(budget)
-    }
-
-    pub(crate) fn refund_body_scan(&mut self, reserved: u64, scanned: u64) {
-        self.body_scan_budget = Some(reserved.saturating_sub(scanned));
-    }
-
-    pub(crate) fn reserve_body_scan_exact(
-        &mut self,
-        bytes: u64,
-        physical_cap: u64,
-        passes: u8,
-    ) -> Result<(), RuntimeError> {
-        let budget = match self.body_scan_budget {
-            Some(budget) => budget,
-            None => physical_cap
-                .checked_mul(u64::from(passes))
-                .ok_or_else(|| body_access_error("request body scan budget overflow"))?,
-        };
-        let remaining = budget
-            .checked_sub(bytes)
-            .ok_or_else(|| body_access_error("request body scan budget exceeded"))?;
-        self.body_scan_budget = Some(remaining);
-        Ok(())
-    }
-
-    pub(crate) fn refund_body_scan_exact(&mut self, bytes: u64) {
-        let budget = self.body_scan_budget.unwrap_or(0);
-        self.body_scan_budget = Some(budget.saturating_add(bytes));
-    }
-}
-
-#[cfg(test)]
-mod body_scan_budget_tests {
-    use super::{VmLimits, VmState};
-
-    #[test]
-    fn exact_reservation_charges_only_fetched_bytes_after_refund() {
-        let mut state = VmState::new(0, &VmLimits::default());
-
-        state.reserve_body_scan_exact(5, 16, 1).unwrap();
-        state.refund_body_scan_exact(2);
-        state.reserve_body_scan_exact(13, 16, 1).unwrap();
-
-        assert!(state.reserve_body_scan_exact(1, 16, 1).is_err());
-    }
-
-    #[test]
-    fn exact_reservation_rejects_before_overdrawing_budget() {
-        let mut state = VmState::new(0, &VmLimits::default());
-
-        assert!(state.reserve_body_scan_exact(17, 16, 1).is_err());
-        state.reserve_body_scan_exact(0, 16, 1).unwrap();
-        state.reserve_body_scan_exact(16, 16, 1).unwrap();
     }
 }
 
@@ -697,16 +598,9 @@ impl Vm {
                     let a = state.pop()?;
                     let equal = match (a, b) {
                         (Value::Body(_), Value::Str(pattern)) | (Value::Str(pattern), Value::Body(_)) => {
-                            let cap = session.ctx().request_body_config.max_body_size_bytes;
-                            let reserved = state.reserve_body_scan(cap, runtime.max_body_scan_passes)?;
-                            let result = session
-                                .ctx()
-                                .request_body
-                                .text_operation(BodyTextOperation::Equals(pattern.to_string()), reserved)
-                                .await
-                                .map_err(map_body_error)?;
-                            state.refund_body_scan(reserved, result.bytes_scanned);
-                            matches!(result.value, BodyTextResult::Bool(true))
+                            DslBodyOps::new(session, &mut state.body_scan_budget, &self.limits, runtime)
+                                .text_predicate(BodyTextOperation::Equals(pattern.to_string()))
+                                .await?
                         }
                         (a, b) => a == b,
                     };
@@ -717,16 +611,9 @@ impl Vm {
                     let a = state.pop()?;
                     let equal = match (a, b) {
                         (Value::Body(_), Value::Str(pattern)) | (Value::Str(pattern), Value::Body(_)) => {
-                            let cap = session.ctx().request_body_config.max_body_size_bytes;
-                            let reserved = state.reserve_body_scan(cap, runtime.max_body_scan_passes)?;
-                            let result = session
-                                .ctx()
-                                .request_body
-                                .text_operation(BodyTextOperation::Equals(pattern.to_string()), reserved)
-                                .await
-                                .map_err(map_body_error)?;
-                            state.refund_body_scan(reserved, result.bytes_scanned);
-                            matches!(result.value, BodyTextResult::Bool(true))
+                            DslBodyOps::new(session, &mut state.body_scan_budget, &self.limits, runtime)
+                                .text_predicate(BodyTextOperation::Equals(pattern.to_string()))
+                                .await?
                         }
                         (a, b) => a == b,
                     };
@@ -810,16 +697,9 @@ impl Vm {
                     let result = match (s, prefix) {
                         (Value::Str(s), Value::Str(p)) => s.starts_with(p.as_ref()),
                         (Value::Body(_), Value::Str(p)) => {
-                            let cap = session.ctx().request_body_config.max_body_size_bytes;
-                            let reserved = state.reserve_body_scan(cap, runtime.max_body_scan_passes)?;
-                            let scan = session
-                                .ctx()
-                                .request_body
-                                .text_operation(BodyTextOperation::StartsWith(p.to_string()), reserved)
-                                .await
-                                .map_err(map_body_error)?;
-                            state.refund_body_scan(reserved, scan.bytes_scanned);
-                            matches!(scan.value, BodyTextResult::Bool(true))
+                            DslBodyOps::new(session, &mut state.body_scan_budget, &self.limits, runtime)
+                                .text_predicate(BodyTextOperation::StartsWith(p.to_string()))
+                                .await?
                         }
                         _ => false, // Nil-friendly: returns false
                     };
@@ -831,16 +711,9 @@ impl Vm {
                     let result = match (s, suffix) {
                         (Value::Str(s), Value::Str(p)) => s.ends_with(p.as_ref()),
                         (Value::Body(_), Value::Str(p)) => {
-                            let cap = session.ctx().request_body_config.max_body_size_bytes;
-                            let reserved = state.reserve_body_scan(cap, runtime.max_body_scan_passes)?;
-                            let scan = session
-                                .ctx()
-                                .request_body
-                                .text_operation(BodyTextOperation::EndsWith(p.to_string()), reserved)
-                                .await
-                                .map_err(map_body_error)?;
-                            state.refund_body_scan(reserved, scan.bytes_scanned);
-                            matches!(scan.value, BodyTextResult::Bool(true))
+                            DslBodyOps::new(session, &mut state.body_scan_budget, &self.limits, runtime)
+                                .text_predicate(BodyTextOperation::EndsWith(p.to_string()))
+                                .await?
                         }
                         _ => false,
                     };
@@ -852,16 +725,9 @@ impl Vm {
                     let result = match (s, substr) {
                         (Value::Str(s), Value::Str(p)) => s.contains(p.as_ref()),
                         (Value::Body(_), Value::Str(p)) => {
-                            let cap = session.ctx().request_body_config.max_body_size_bytes;
-                            let reserved = state.reserve_body_scan(cap, runtime.max_body_scan_passes)?;
-                            let scan = session
-                                .ctx()
-                                .request_body
-                                .text_operation(BodyTextOperation::Contains(p.to_string()), reserved)
-                                .await
-                                .map_err(map_body_error)?;
-                            state.refund_body_scan(reserved, scan.bytes_scanned);
-                            matches!(scan.value, BodyTextResult::Bool(true))
+                            DslBodyOps::new(session, &mut state.body_scan_budget, &self.limits, runtime)
+                                .text_predicate(BodyTextOperation::Contains(p.to_string()))
+                                .await?
                         }
                         _ => false,
                     };
@@ -881,17 +747,11 @@ impl Vm {
                             scanner.finish().map_err(map_body_error)?
                         }
                         Value::Body(_) => {
-                            let cap = session.ctx().request_body_config.max_body_size_bytes;
-                            let reserved = state.reserve_body_scan(cap, runtime.max_body_scan_passes)?;
-                            let scanner = StreamingRegexScanner::new(Arc::clone(dfa)).map_err(map_body_error)?;
-                            let scan = session
-                                .ctx()
-                                .request_body
-                                .scan_raw(LossyTextScanner::new(scanner), reserved)
-                                .await
-                                .map_err(map_body_error)?;
-                            state.refund_body_scan(reserved, scan.bytes_scanned);
-                            scan.value
+                            DslBodyOps::new(session, &mut state.body_scan_budget, &self.limits, runtime)
+                                .scan_with(async {
+                                    StreamingRegexScanner::new(Arc::clone(dfa)).map(LossyTextScanner::new)
+                                })
+                                .await?
                         }
                         _ => false,
                     };
@@ -902,23 +762,9 @@ impl Vm {
                     let len = match value {
                         Value::Str(value) => value.chars().count() as u64,
                         Value::Body(_) => {
-                            let cap = session.ctx().request_body_config.max_body_size_bytes;
-                            let reserved = state.reserve_body_scan(cap, runtime.max_body_scan_passes)?;
-                            let scan = session
-                                .ctx()
-                                .request_body
-                                .text_operation(BodyTextOperation::CharLen, reserved)
-                                .await
-                                .map_err(map_body_error)?;
-                            state.refund_body_scan(reserved, scan.bytes_scanned);
-                            match scan.value {
-                                BodyTextResult::CharLen(len) => len,
-                                BodyTextResult::Bool(_) => {
-                                    return Err(RuntimeError::Internal {
-                                        message: "body CharLen returned Bool".to_string(),
-                                    })
-                                }
-                            }
+                            DslBodyOps::new(session, &mut state.body_scan_budget, &self.limits, runtime)
+                                .char_len()
+                                .await?
                         }
                         other => {
                             return Err(RuntimeError::TypeError {
@@ -936,16 +782,9 @@ impl Vm {
                     let empty = match value {
                         Value::Str(value) => value.is_empty(),
                         Value::Body(_) => {
-                            let cap = session.ctx().request_body_config.max_body_size_bytes;
-                            let reserved = state.reserve_body_scan(cap, runtime.max_body_scan_passes)?;
-                            let scan = session
-                                .ctx()
-                                .request_body
-                                .text_operation(BodyTextOperation::IsEmpty, reserved)
-                                .await
-                                .map_err(map_body_error)?;
-                            state.refund_body_scan(reserved, scan.bytes_scanned);
-                            matches!(scan.value, BodyTextResult::Bool(true))
+                            DslBodyOps::new(session, &mut state.body_scan_budget, &self.limits, runtime)
+                                .text_predicate(BodyTextOperation::IsEmpty)
+                                .await?
                         }
                         _ => false,
                     };
@@ -953,10 +792,8 @@ impl Vm {
                 }
                 OpCode::BodyByteLen => {
                     expect_body(state.pop()?, "body.byte_len")?;
-                    let known_bodyless = session.declares_body() == Some(false);
-                    let len = session
-                        .request_body_available_len(known_bodyless)
-                        .map_err(|error| body_access_error(error.to_string()))?;
+                    let len =
+                        DslBodyOps::new(session, &mut state.body_scan_budget, &self.limits, runtime).byte_len()?;
                     let len = i64::try_from(len).map_err(|_| body_access_error("request body length exceeds Int"))?;
                     state.push(Value::Int(len), self.limits.max_stack_depth)?;
                 }
@@ -964,81 +801,31 @@ impl Vm {
                     let max_bytes = nonnegative_u64(state.pop()?, "body.read")?;
                     let offset = nonnegative_u64(state.pop()?, "body.read")?;
                     expect_body(state.pop()?, "body.read")?;
-                    let cap = session.ctx().request_body_config.max_body_size_bytes;
-                    let reserved = state.reserve_body_scan(cap, runtime.max_body_scan_passes)?;
-                    let scan = session
-                        .ctx()
-                        .request_body
-                        .read_range(offset, max_bytes, reserved)
-                        .await
-                        .map_err(map_body_error)?;
-                    state.refund_body_scan(reserved, scan.bytes_scanned);
-                    let text = String::from_utf8_lossy(&scan.value).into_owned();
-                    if text.len() > self.limits.max_string_len {
-                        return Err(RuntimeError::StringTooLong {
-                            len: text.len(),
-                            limit: self.limits.max_string_len,
-                        });
-                    }
+                    let text = DslBodyOps::new(session, &mut state.body_scan_budget, &self.limits, runtime)
+                        .read_text_range(offset, max_bytes)
+                        .await?;
                     state.push(Value::Str(text.into()), self.limits.max_stack_depth)?;
                 }
                 OpCode::BodyReadAll => {
                     expect_body(state.pop()?, "body.read_all")?;
-                    let known_bodyless = session.declares_body() == Some(false);
-                    let len = session
-                        .request_body_available_len(known_bodyless)
-                        .map_err(|error| body_access_error(error.to_string()))?;
-                    if len > self.limits.max_string_len as u64 {
-                        return Err(RuntimeError::StringTooLong {
-                            len: usize::try_from(len).unwrap_or(usize::MAX),
-                            limit: self.limits.max_string_len,
-                        });
-                    }
-                    let cap = session.ctx().request_body_config.max_body_size_bytes;
-                    let reserved = state.reserve_body_scan(cap, runtime.max_body_scan_passes)?;
-                    let scan = session
-                        .ctx()
-                        .request_body
-                        .read_range(0, len, reserved)
-                        .await
-                        .map_err(map_body_error)?;
-                    state.refund_body_scan(reserved, scan.bytes_scanned);
-                    let text = String::from_utf8_lossy(&scan.value).into_owned();
-                    if text.len() > self.limits.max_string_len {
-                        return Err(RuntimeError::StringTooLong {
-                            len: text.len(),
-                            limit: self.limits.max_string_len,
-                        });
-                    }
+                    let text = DslBodyOps::new(session, &mut state.body_scan_budget, &self.limits, runtime)
+                        .read_all()
+                        .await?;
                     state.push(Value::Str(text.into()), self.limits.max_stack_depth)?;
                 }
                 OpCode::BodySha256 => {
                     expect_body(state.pop()?, "body.sha256")?;
-                    check_fixed_string_len(64, self.limits.max_string_len)?;
-                    let cap = session.ctx().request_body_config.max_body_size_bytes;
-                    let reserved = state.reserve_body_scan(cap, runtime.max_body_scan_passes)?;
-                    let scan = session
-                        .ctx()
-                        .request_body
-                        .sha256_scan(reserved)
-                        .await
-                        .map_err(map_body_error)?;
-                    state.refund_body_scan(reserved, scan.bytes_scanned);
-                    state.push(Value::Str(hex::encode(scan.value).into()), self.limits.max_stack_depth)?;
+                    let digest = DslBodyOps::new(session, &mut state.body_scan_budget, &self.limits, runtime)
+                        .sha256()
+                        .await?;
+                    state.push(Value::Str(digest.into()), self.limits.max_stack_depth)?;
                 }
                 OpCode::BodyMd5 => {
                     expect_body(state.pop()?, "body.md5")?;
-                    check_fixed_string_len(32, self.limits.max_string_len)?;
-                    let cap = session.ctx().request_body_config.max_body_size_bytes;
-                    let reserved = state.reserve_body_scan(cap, runtime.max_body_scan_passes)?;
-                    let scan = session
-                        .ctx()
-                        .request_body
-                        .scan_raw(Md5Scanner::new(), reserved)
-                        .await
-                        .map_err(map_body_error)?;
-                    state.refund_body_scan(reserved, scan.bytes_scanned);
-                    state.push(Value::Str(hex::encode(scan.value).into()), self.limits.max_stack_depth)?;
+                    let digest = DslBodyOps::new(session, &mut state.body_scan_budget, &self.limits, runtime)
+                        .md5()
+                        .await?;
+                    state.push(Value::Str(digest.into()), self.limits.max_stack_depth)?;
                 }
                 OpCode::BodyHmacSha256 => {
                     let key = match state.pop()? {
@@ -1052,18 +839,10 @@ impl Vm {
                         }
                     };
                     expect_body(state.pop()?, "body.hmac_sha256")?;
-                    check_fixed_string_len(64, self.limits.max_string_len)?;
-                    let scanner = HmacSha256Scanner::new(key.as_bytes()).map_err(map_body_error)?;
-                    let cap = session.ctx().request_body_config.max_body_size_bytes;
-                    let reserved = state.reserve_body_scan(cap, runtime.max_body_scan_passes)?;
-                    let scan = session
-                        .ctx()
-                        .request_body
-                        .scan_raw(scanner, reserved)
-                        .await
-                        .map_err(map_body_error)?;
-                    state.refund_body_scan(reserved, scan.bytes_scanned);
-                    state.push(Value::Str(hex::encode(scan.value).into()), self.limits.max_stack_depth)?;
+                    let digest = DslBodyOps::new(session, &mut state.body_scan_budget, &self.limits, runtime)
+                        .hmac_sha256(key.as_bytes())
+                        .await?;
+                    state.push(Value::Str(digest.into()), self.limits.max_stack_depth)?;
                 }
                 OpCode::JsonGet(path_idx) => {
                     let input = state.pop()?;
@@ -1077,21 +856,11 @@ impl Vm {
                             .await
                             .map_err(map_body_error)?,
                         Value::Body(_) => {
-                            let cap = session.ctx().request_body_config.max_body_size_bytes;
-                            let reserved = state.reserve_body_scan(cap, runtime.max_body_scan_passes)?;
-                            let scan = session
-                                .ctx()
-                                .request_body
-                                .scan_raw(
-                                    JsonPathScanner::new(path.clone(), self.limits.max_string_len)
-                                        .await
-                                        .map_err(map_body_error)?,
-                                    reserved,
-                                )
-                                .await
-                                .map_err(map_body_error)?;
-                            state.refund_body_scan(reserved, scan.bytes_scanned);
-                            scan.value
+                            DslBodyOps::new(session, &mut state.body_scan_budget, &self.limits, runtime)
+                                .scan_with(async {
+                                    JsonPathScanner::new(path.clone(), self.limits.max_string_len).await
+                                })
+                                .await?
                         }
                         _ => JsonScanValue::Missing,
                     };
@@ -1114,24 +883,13 @@ impl Vm {
                             message: format!("json_select_cache[{}] missing or invalid", plan_idx),
                         });
                     };
-                    let cap = session.ctx().request_body_config.max_body_size_bytes;
-                    let reserved = state.reserve_body_scan(cap, runtime.max_body_scan_passes)?;
-                    let scan = session
-                        .ctx()
-                        .request_body
-                        .scan_raw(
-                            JsonSelectScanner::new(Arc::clone(plan), self.limits.max_string_len)
-                                .await
-                                .map_err(map_body_error)?,
-                            reserved,
-                        )
-                        .await
-                        .map_err(map_body_error)?;
-                    state.refund_body_scan(reserved, scan.bytes_scanned);
+                    let values = DslBodyOps::new(session, &mut state.body_scan_budget, &self.limits, runtime)
+                        .scan_with(async { JsonSelectScanner::new(Arc::clone(plan), self.limits.max_string_len).await })
+                        .await?;
 
                     let mut output = indexmap::IndexMap::with_capacity(plan.outputs().len());
                     for (name, capture) in plan.outputs() {
-                        let value = match scan.value.get(*capture) {
+                        let value = match values.get(*capture) {
                             Some(JsonScanValue::Value(value)) => value.clone(),
                             Some(JsonScanValue::Missing) | None => Value::Nil,
                             Some(JsonScanValue::TooLong) => {
@@ -1147,32 +905,34 @@ impl Vm {
                 }
                 OpCode::BodyClear => {
                     expect_body(state.pop()?, "body.clear")?;
-                    session.request_body_clear().await.map_err(map_body_error)?;
+                    DslBodyOps::new(session, &mut state.body_scan_budget, &self.limits, runtime)
+                        .clear()
+                        .await?;
                     state.push(Value::Nil, self.limits.max_stack_depth)?;
                 }
                 OpCode::BodyAppend => {
                     let bytes = expect_string(state.pop()?, "body.append")?;
                     expect_body(state.pop()?, "body.append")?;
-                    session
-                        .request_body_append(Bytes::from(bytes))
-                        .await
-                        .map_err(map_body_error)?;
+                    DslBodyOps::new(session, &mut state.body_scan_budget, &self.limits, runtime)
+                        .append(Bytes::from(bytes))
+                        .await?;
                     state.push(Value::Nil, self.limits.max_stack_depth)?;
                 }
                 OpCode::BodyPrepend => {
                     let bytes = expect_string(state.pop()?, "body.prepend")?;
                     expect_body(state.pop()?, "body.prepend")?;
-                    session
-                        .request_body_prepend(Bytes::from(bytes))
-                        .await
-                        .map_err(map_body_error)?;
+                    DslBodyOps::new(session, &mut state.body_scan_budget, &self.limits, runtime)
+                        .prepend(Bytes::from(bytes))
+                        .await?;
                     state.push(Value::Nil, self.limits.max_stack_depth)?;
                 }
                 OpCode::BodyRemove => {
                     let end = nonnegative_u64(state.pop()?, "body.remove")?;
                     let start = nonnegative_u64(state.pop()?, "body.remove")?;
                     expect_body(state.pop()?, "body.remove")?;
-                    session.request_body_remove(start..end).await.map_err(map_body_error)?;
+                    DslBodyOps::new(session, &mut state.body_scan_budget, &self.limits, runtime)
+                        .remove(start..end)
+                        .await?;
                     state.push(Value::Nil, self.limits.max_stack_depth)?;
                 }
                 OpCode::BodyReplace => {
@@ -1186,13 +946,9 @@ impl Vm {
                             operation: "body.replace",
                         });
                     }
-                    let cap = session.ctx().request_body_config.max_body_size_bytes;
-                    let reserved = state.reserve_body_scan(cap, runtime.max_body_scan_passes)?;
-                    let scan = session
-                        .request_body_replace_literal(Bytes::from(from), Bytes::from(to), reserved)
-                        .await
-                        .map_err(map_body_error)?;
-                    state.refund_body_scan(reserved, scan.bytes_scanned);
+                    DslBodyOps::new(session, &mut state.body_scan_budget, &self.limits, runtime)
+                        .replace_literal(Bytes::from(from), Bytes::from(to))
+                        .await?;
                     state.push(Value::Nil, self.limits.max_stack_depth)?;
                 }
                 OpCode::RegexFind(regex_idx) => {

@@ -351,8 +351,16 @@ if not req.has_header("X-Request-Id") {
 | `.json_get("$.a[0]")` | 值或 `Nil` | 按编译期确定 JSONPath 选择 |
 | `.json_select({"name": "$.a"})` | `Map` | 一次解析选择多个命名的编译期路径 |
 
-`read`、`read_all` 和序列化后的 JSON 结果必须符合 `maxStringLen`。`read`
-最多返回 `max_bytes` 个源字节；offset 超过 body 会报错。
+`read`、`read_all` 和序列化后的 JSON 结果必须符合 `maxStringLen`，该限制按
+UTF-8 输出字节计算。`read` 最多选择 `max_bytes` 个原始源字节，lossy 解码后
+的输出字节数可能更多；offset 超过 body 会报错。两种读取方法都在解码过程中
+检查输出限制，包括无效或不完整 UTF-8 产生的替换字符。超限抛出
+`StringTooLong`，不会返回截断前缀，并遵循配置的 `errorPolicy`。
+提前发现超限时，长度诊断可能只报告 `maxStringLen + 1`，不会仅为计算完整长度
+而继续解码剩余内容。
+
+复制 Body 句柄仍然访问当前逻辑 body：修改成功后，所有别名在下一次操作时
+都能看到新版本。已经使用该 Body 的出站 `http.call` 保持调用开始时的快照。
 
 Body 摘要和 MAC 方法扫描已经捕获的原始字节，不会在客户端上传过程中同步计算，也
 不会将 Body 转成字符串。`sha256()` 为每个不可变 Body 版本缓存一个 32 字节结果；

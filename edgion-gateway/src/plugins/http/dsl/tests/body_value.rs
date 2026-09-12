@@ -1,5 +1,154 @@
 use super::*;
 
+use super::super::lang::body_ops::DslBodyOps;
+use super::super::lang::body_scan_budget::BodyScanBudget;
+
+async fn facade_body_session(body: &[u8], memory_limit: usize) -> MockPluginSession {
+    use bytes::Bytes;
+    use pingora_core::protocols::http::RequestBodyBuffer;
+
+    let cap = body.len() as u64;
+    let (mut storage, view) = crate::request_body::BodyStorage::new(memory_limit, cap);
+    storage.write(&Bytes::copy_from_slice(body)).await.unwrap();
+    storage.finish().await.unwrap();
+    let mut ctx = crate::EdgionHttpContext::new();
+    ctx.request_body_config.max_body_size_bytes = cap;
+    ctx.request_body.install(view);
+
+    let mut session = MockPluginSession::new();
+    session.expect_declares_body().return_const(Some(true));
+    session
+        .expect_request_body_available_len()
+        .withf(|known_empty| !known_empty)
+        .return_const(Ok(cap));
+    session.expect_ctx().return_const(ctx);
+    session
+}
+
+#[tokio::test]
+async fn body_facade_refunds_unfetched_chunks_before_returning_text_overflow() {
+    let body = vec![0xff; 128 * 1024 + 1];
+    let cap = body.len() as u64;
+    let limits = VmLimits {
+        max_string_len: body.len(),
+        ..Default::default()
+    };
+    let runtime = DslRuntime {
+        max_body_scan_passes: 1,
+        ..Default::default()
+    };
+
+    for memory_limit in [body.len(), 1] {
+        for read_all in [false, true] {
+            let mut session = facade_body_session(&body, memory_limit).await;
+            let mut budget = BodyScanBudget::default();
+            let mut ops = DslBodyOps::new(&mut session, &mut budget, &limits, &runtime);
+            let error = if read_all {
+                ops.read_all().await
+            } else {
+                ops.read_text_range(0, cap).await
+            };
+            assert!(matches!(error, Err(RuntimeError::StringTooLong { len, limit })
+                if len == body.len() + 1 && limit == body.len()));
+            assert_eq!(budget.reserve(cap, 1).unwrap(), cap - 64 * 1024);
+        }
+    }
+}
+
+#[tokio::test]
+async fn body_facade_preflights_preserve_metadata_priority_and_conservative_scan_debit() {
+    let body = vec![b'x'; 64];
+    let limits = VmLimits {
+        max_string_len: 32,
+        ..Default::default()
+    };
+    let runtime = DslRuntime {
+        max_body_scan_passes: 1,
+        ..Default::default()
+    };
+
+    for memory_limit in [body.len(), 1] {
+        let mut session = facade_body_session(&body, memory_limit).await;
+        let mut budget = BodyScanBudget::default();
+        budget.reserve_exact(1, 64, 1).unwrap();
+        let mut ops = DslBodyOps::new(&mut session, &mut budget, &limits, &runtime);
+        assert!(matches!(
+            ops.read_all().await,
+            Err(RuntimeError::StringTooLong { len: 64, limit: 32 })
+        ));
+        let remaining = budget.reserve(64, 1).unwrap();
+        assert_eq!(remaining, 63);
+        budget.settle(remaining, 0);
+
+        let mut ops = DslBodyOps::new(&mut session, &mut budget, &limits, &runtime);
+        assert!(matches!(
+            ops.read_text_range(0, 64).await,
+            Err(RuntimeError::BodyAccess { .. })
+        ));
+        assert_eq!(budget.reserve(64, 1).unwrap(), 0);
+    }
+}
+
+#[tokio::test]
+async fn body_facade_and_exact_upload_reservations_use_one_account() {
+    let mut session = facade_body_session(b"abcdefgh", 1).await;
+    let mut budget = BodyScanBudget::default();
+    let limits = VmLimits::default();
+    let runtime = DslRuntime {
+        max_body_scan_passes: 1,
+        ..Default::default()
+    };
+
+    budget.reserve_exact(4, 8, 1).unwrap();
+    budget.refund_exact(2);
+    let mut ops = DslBodyOps::new(&mut session, &mut budget, &limits, &runtime);
+    assert_eq!(ops.read_text_range(0, 3).await.unwrap(), "abc");
+    budget.reserve_exact(3, 8, 1).unwrap();
+    let mut ops = DslBodyOps::new(&mut session, &mut budget, &limits, &runtime);
+    assert!(matches!(
+        ops.read_text_range(0, 1).await,
+        Err(RuntimeError::BodyAccess { .. })
+    ));
+}
+
+#[tokio::test]
+async fn body_facade_factory_failure_keeps_the_scan_reservation() {
+    use crate::plugins::runtime::traits::session::BodyReadError;
+    use crate::request_body::{BodyOperationError, Md5Scanner};
+
+    let mut session = facade_body_session(b"abc", 1).await;
+    let mut budget = BodyScanBudget::default();
+    let limits = VmLimits::default();
+    let runtime = DslRuntime {
+        max_body_scan_passes: 1,
+        ..Default::default()
+    };
+    let mut ops = DslBodyOps::new(&mut session, &mut budget, &limits, &runtime);
+    let result = ops
+        .scan_with::<Md5Scanner, _>(async { Err(BodyOperationError::Body(BodyReadError::Incomplete)) })
+        .await;
+    assert!(matches!(result, Err(RuntimeError::BodyAccess { .. })));
+    assert_eq!(budget.reserve(3, 1).unwrap(), 0);
+}
+
+#[tokio::test]
+async fn body_facade_cancelled_factory_does_not_refund_pending_work() {
+    use crate::request_body::{BodyOperationError, Md5Scanner};
+    use futures::FutureExt;
+
+    let mut session = facade_body_session(b"abc", 1).await;
+    let mut budget = BodyScanBudget::default();
+    let limits = VmLimits::default();
+    let runtime = DslRuntime {
+        max_body_scan_passes: 1,
+        ..Default::default()
+    };
+    let mut ops = DslBodyOps::new(&mut session, &mut budget, &limits, &runtime);
+    let pending = std::future::pending::<Result<Md5Scanner, BodyOperationError>>();
+    assert!(ops.scan_with(pending).now_or_never().is_none());
+    assert_eq!(budget.reserve(3, 1).unwrap(), 0);
+}
+
 fn available_body_session() -> MockPluginSession {
     let mut session = MockPluginSession::new();
     session.expect_declares_body().return_const(Some(true));
@@ -127,6 +276,97 @@ fn run_body_script_with_limits(
             vm.execute(&mut session as &mut dyn PluginSession, &mut log, &runtime)
                 .await
         })
+}
+
+#[test]
+fn body_text_reads_bound_lossy_expansion_in_memory_and_spill() {
+    for body in [&[0xff][..], &[0xe2, 0x82][..]] {
+        for source in ["let text = req.body.read(0, 2)", "let text = req.body.read_all()"] {
+            for memory_limit in [16, 0] {
+                let result = run_body_script_with_limits(
+                    source,
+                    body,
+                    memory_limit,
+                    1,
+                    VmLimits {
+                        max_string_len: 2,
+                        ..Default::default()
+                    },
+                );
+                assert!(matches!(result, Err(RuntimeError::StringTooLong { len: 3, limit: 2 })));
+
+                let success = run_body_script_with_limits(
+                    source,
+                    body,
+                    memory_limit,
+                    1,
+                    VmLimits {
+                        max_string_len: 3,
+                        ..Default::default()
+                    },
+                );
+                assert_eq!(success.unwrap(), PluginRunningResult::GoodNext);
+            }
+        }
+    }
+}
+
+#[test]
+fn body_text_read_ranges_preserve_raw_offsets_and_budget_refunds() {
+    let source = r#"
+        if req.body.read(0, 1) != "a" { return deny(400, "prefix") }
+        if req.body.read(1, 3) != "€" { return deny(400, "scalar") }
+        if req.body.read(4, 10) != "z" { return deny(400, "tail") }
+        if req.body.read(5, 0) != "" { return deny(400, "empty") }
+    "#;
+    for memory_limit in [16, 1] {
+        assert_eq!(
+            run_body_script_with_limits(
+                source,
+                "a€z".as_bytes(),
+                memory_limit,
+                1,
+                VmLimits {
+                    max_string_len: 3,
+                    ..Default::default()
+                },
+            )
+            .unwrap(),
+            PluginRunningResult::GoodNext
+        );
+    }
+}
+
+#[test]
+fn body_text_read_preserves_scan_and_raw_length_error_priority() {
+    let body = vec![b'x'; 64];
+    for memory_limit in [128, 1] {
+        let limits = VmLimits {
+            max_string_len: 32,
+            ..Default::default()
+        };
+        let range = run_body_script_with_limits(
+            "let digest = req.body.md5() let text = req.body.read(0, 64)",
+            &body,
+            memory_limit,
+            1,
+            limits.clone(),
+        );
+        assert!(matches!(range, Err(RuntimeError::BodyAccess { .. })));
+        let all = run_body_script_with_limits(
+            "let digest = req.body.md5() let text = req.body.read_all()",
+            &body,
+            memory_limit,
+            1,
+            limits.clone(),
+        );
+        assert!(matches!(all, Err(RuntimeError::StringTooLong { len: 64, limit: 32 })));
+        let bounded = run_body_script_with_limits("let text = req.body.read(0, 64)", &body, memory_limit, 1, limits);
+        assert!(matches!(
+            bounded,
+            Err(RuntimeError::StringTooLong { len: 33, limit: 32 })
+        ));
+    }
 }
 
 #[test]

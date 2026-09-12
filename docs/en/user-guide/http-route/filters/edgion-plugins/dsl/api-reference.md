@@ -354,8 +354,18 @@ mutations still operate on the original bytes.
 | `.json_get("$.a[0]")` | value or `Nil` | Select a compile-time definite JSONPath |
 | `.json_select({"name": "$.a"})` | `Map` | Select several named compile-time paths in one parse |
 
-`read`, `read_all`, and serialized JSON results must fit `maxStringLen`. `read`
-returns at most `max_bytes`; an offset beyond the body is an error.
+`read`, `read_all`, and serialized JSON results must fit `maxStringLen`, measured
+in UTF-8 output bytes. `read` selects at most `max_bytes` raw source bytes; lossy
+decoding may produce more output bytes. An offset beyond the body is an error.
+Both read methods enforce the output limit while decoding, including replacement
+characters for invalid or incomplete UTF-8. Overflow raises `StringTooLong`
+without returning a truncated prefix and follows the configured `errorPolicy`.
+An early-overflow length diagnostic may report only `maxStringLen + 1`, rather
+than decoding the rest solely to calculate its complete size.
+
+Copying a Body handle preserves access to the current logical body: after a
+successful mutation, all aliases see the new version on their next operation.
+An outbound `http.call` already using the Body keeps its call-time snapshot.
 
 Body digest and MAC methods scan the already captured raw bytes; they do not
 hash concurrently with client upload and never convert the Body to String.

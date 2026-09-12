@@ -18,10 +18,11 @@ use crate::plugins::runtime::traits::session::{BodyReadError, RequestBodySnapsho
 use crate::plugins::runtime::{PluginLog, PluginSession, PluginSessionHeaderExt};
 
 use super::super::runtime::{dsl_http_client, DslRuntime};
+use super::body_ops::body_access_error;
 use super::bytecode::BuiltinId;
 use super::error::RuntimeError;
 use super::value::{BodyValue, Value};
-use super::vm::{body_access_error, RuntimeString, Vm, VmState};
+use super::vm::{RuntimeString, Vm, VmState};
 
 struct OpaqueBodyUpload {
     body: reqwest::Body,
@@ -1512,7 +1513,9 @@ impl Vm {
                     "request Body exceeds http.call limit of {effective_cap} bytes"
                 )));
             }
-            state.reserve_body_scan_exact(tracking.len, physical_cap, runtime.max_body_scan_passes)?;
+            state
+                .body_scan_budget
+                .reserve_exact(tracking.len, physical_cap, runtime.max_body_scan_passes)?;
             builder = builder.body(body).header(reqwest::header::CONTENT_LENGTH, tracking.len);
             body_accounting = Some((tracking.len, tracking));
         } else if let Some(body) = body_str {
@@ -1528,7 +1531,7 @@ impl Vm {
             // polls its Body again: Hyper may be blocked on flow-control
             // capacity while holding one already-buffered chunk.
             let (refund, read_error) = settle_opaque_body_upload(&tracking, reserved).await;
-            state.refund_body_scan_exact(refund);
+            state.body_scan_budget.refund_exact(refund);
             if let Some(error) = read_error {
                 return Err(body_access_error(error.to_string()));
             }

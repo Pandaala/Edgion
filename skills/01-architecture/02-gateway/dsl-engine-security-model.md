@@ -22,7 +22,7 @@ The compile-time layers (parser, validator, compiler, bytecode loader) now live 
 | VM (per-instruction) | runtime | steps, calls, stack depth, loops, string len, list len, map size | `lang/vm.rs:34-95,132-176` |
 | VM init (regex precompile) | script load | per-pattern DFA memory ≤ 1 MiB | `lang/vm.rs:199-235` |
 | Builtins (per-call) | runtime | per-builtin caps (split list size, range list size, header map size, http.call response size, etc.); shared `checked_value_str` / `checked_value_opt_str` helpers at `lang/builtins.rs:46-56` | `lang/builtins.rs:500-549,943-1208` |
-| Body operation layer | runtime | cumulative scan bytes, physical body cap, bounded returned strings, mutation ranges and segment count | `request_body/body_scanners.rs`, `lang/vm.rs`, `request_body/operation.rs` |
+| Body operation layer | runtime | cumulative scan bytes, physical body cap, bounded returned strings, mutation ranges and segment count | `lang/body_ops.rs`, `lang/body_scan_budget.rs`, `lang/body_scanners.rs`, `request_body/operation.rs` |
 | Panic isolation | the whole `execute` | catches everything else | `lang/vm.rs` → `execute_safe` (`AssertUnwindSafe + catch_unwind`); see `dsl-engine.md` §5 |
 
 **Gateway validation is independent of Controller acceptance.** Config sync may carry inline source, pre-compiled bytecode, or both serialized `DslConfig` fields (bytecode wins). Controller validation does not convert the resource to bytecode-only transport. Gateway `DslConfig::compile_and_validate` → `edgion_dsl::resolve_script` parses/compiles/validates selected source, or decodes and re-validates selected bytecode through `Validator` before VM initialization. Hand-crafted bytecode cannot bypass that check by having passed Controller admission. `Vm::new` is a separate Gateway-owned initialization step, not a replacement for static validation. See [the current data flow](dsl-engine.md#1-data-flow).
@@ -54,7 +54,11 @@ this to `physical_body_cap × passes`, reserves before each potentially
 full-body operation, and refunds unused bytes after an early match. Metadata
 access such as `byte_len()` does not consume the scan budget. This is separate
 from `VmLimits`: the absolute byte ceiling comes from the already-resolved
-gateway request-body policy, not from bytecode.
+gateway request-body policy, not from bytecode. The execution-local
+`BodyScanBudget` is shared with exact opaque-upload reservations. Scans charge
+fetched raw chunks, not decoded bytes or the exact match position. A bounded
+text-overflow result settles its fetched bytes before becoming `StringTooLong`;
+storage failures without accounting retain the conservative reservation.
 
 Adding a new runtime limit requires:
 1. Field + default in `VmLimits` (`vm.rs:34-95`).
@@ -121,6 +125,23 @@ aggregate string payload retained by `json_select()`. Body
 predicates and `sha256()` scan storage without first constructing a complete
 body string; `read_all()` is the explicit escape hatch and fails before
 returning an oversized value.
+
+Both Body text reads now select an immutable raw range and feed the existing
+`LossyTextScanner` into `BoundedTextCollector`. Every append checks the exact
+UTF-8 output-byte sum, including replacement characters and EOF carry, before
+requesting capacity. Growth targets are geometric but capped at the string
+limit; `try_reserve_exact` receives the target minus the current length.
+Allocation failure is a body-processing failure, not an output-limit result.
+On output overflow, the collector discards its prefix and stops, returning
+accounting with `BoundedTextResult::OutputLimitExceeded`. The runtime reports
+`limit + 1` as a lower-bound diagnostic rather than scanning the rejected tail.
+The existing `read_all()` raw-length preflight retains its known-length error.
+
+This bounds retained text and requested output capacity. It does not promise
+that total operation memory equals `max_string_len`: storage has an independent
+bounded raw scratch buffer and bounded snapshot segment metadata, allocators
+may round capacities, and conversion to `Arc<str>` may temporarily duplicate
+the admitted text. There is still one canonical request-body cache.
 
 `regex_replace()` uses the HTTP-plugin common bounded replacement helper. A
 template containing no `$` stays on a literal `find_iter` branch; a template
@@ -189,7 +210,7 @@ Defense in depth around regex evaluation:
 | String-literal requirement | `edgion-dsl/src/compiler/expr.rs:218-251` | Dynamic / attacker-controlled patterns |
 | `MAX_REGEX_PATTERN_LEN = 1024 B` | `edgion-dsl/src/compiler/emit.rs:79-86`, `edgion-dsl/src/validator.rs:106-113` (re-checked after deserialization) | Pathologically long patterns |
 | DFA + size limit during compile | compiler, validator, and `Vm::new` | Patterns that compile to multi-MB DFA tables |
-| Body scan budget | `VmState::reserve_body_scan` | Repeated scans of adversarial or spilled input |
+| Body scan budget | `BodyScanBudget` via `DslBodyOps` | Repeated scans of adversarial or spilled input |
 | `max_string_len` | `lang/vm.rs`, `plugins/http/common/bounded_regex_replacement.rs` | Oversized `regex_find` output and incremental `regex_replace` output construction |
 
 The validator-side rebuild is the key safeguard against **hand-crafted

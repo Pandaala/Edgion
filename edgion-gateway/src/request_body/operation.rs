@@ -79,6 +79,77 @@ pub trait TextBodyScanner: Send + 'static {
     fn finish(self) -> Result<Self::Output, BodyOperationError>;
 }
 
+/// A bounded text read either returns the complete selected range or no text.
+/// Output overflow is a scan outcome so fetched-byte accounting is retained.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BoundedTextResult {
+    Complete(String),
+    OutputLimitExceeded,
+}
+
+pub(crate) struct BoundedTextCollector {
+    text: String,
+    limit: usize,
+    exceeded: bool,
+}
+
+impl BoundedTextCollector {
+    pub(crate) fn new(limit: usize) -> Self {
+        Self {
+            text: String::new(),
+            limit,
+            exceeded: false,
+        }
+    }
+
+    fn reserve_output(&mut self, required: usize) -> Result<(), BodyOperationError> {
+        if required > self.text.capacity() {
+            // Grow geometrically, but never request a capacity above the
+            // output limit. The allocator may round this requested capacity.
+            let target = Self::growth_target(self.text.capacity(), required, self.limit);
+            self.text
+                .try_reserve_exact(target - self.text.len())
+                .map_err(|_| BodyOperationError::Body(BodyReadError::Incomplete))?;
+        }
+        Ok(())
+    }
+
+    fn growth_target(current_capacity: usize, required: usize, limit: usize) -> usize {
+        required.max(current_capacity.saturating_mul(2)).min(limit)
+    }
+}
+
+impl TextBodyScanner for BoundedTextCollector {
+    type Output = BoundedTextResult;
+
+    fn push(&mut self, chunk: &str) -> Result<ScanControl, BodyOperationError> {
+        if self.exceeded {
+            return Ok(ScanControl::Stop);
+        }
+        let Some(required) = self
+            .text
+            .len()
+            .checked_add(chunk.len())
+            .filter(|len| *len <= self.limit)
+        else {
+            self.exceeded = true;
+            self.text = String::new();
+            return Ok(ScanControl::Stop);
+        };
+        self.reserve_output(required)?;
+        self.text.push_str(chunk);
+        Ok(ScanControl::Continue)
+    }
+
+    fn finish(self) -> Result<Self::Output, BodyOperationError> {
+        Ok(if self.exceeded {
+            BoundedTextResult::OutputLimitExceeded
+        } else {
+            BoundedTextResult::Complete(self.text)
+        })
+    }
+}
+
 /// Adapts a text scanner to raw body chunks without materializing the body.
 pub struct LossyTextScanner<S> {
     inner: S,
@@ -473,6 +544,106 @@ impl RawBodyScanner for BytesScanner {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bounded_text_matches_lossy_decoding_at_every_split_and_output_limit() {
+        let corpus: &[&[u8]] = &[
+            b"",
+            b"plain text",
+            "aé€z".as_bytes(),
+            &[b'a', 0xe2, 0x28, 0xa1, b'z'],
+            &[0xc0, 0xaf, 0xff],
+            &[0xed, 0xa0, 0x80],
+            &[b'a', 0xe2, 0x82],
+        ];
+        for input in corpus {
+            let expected = String::from_utf8_lossy(input);
+            for first in 0..=input.len() {
+                for second in first..=input.len() {
+                    for limit in 0..=expected.len() + 1 {
+                        let mut scanner = LossyTextScanner::new(BoundedTextCollector::new(limit));
+                        for chunk in [&input[..first], &input[first..second], &input[second..]] {
+                            if scanner.push(chunk).unwrap() == ScanControl::Stop {
+                                break;
+                            }
+                        }
+                        let result = scanner.finish().unwrap();
+                        if expected.len() <= limit {
+                            assert_eq!(result, BoundedTextResult::Complete(expected.to_string()));
+                        } else {
+                            assert_eq!(result, BoundedTextResult::OutputLimitExceeded);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn bounded_text_stops_before_growth_and_discards_overflow_prefix() {
+        let mut collector = BoundedTextCollector::new(6);
+        assert_eq!(collector.push("abc").unwrap(), ScanControl::Continue);
+        assert_eq!(collector.push("def").unwrap(), ScanControl::Continue);
+        assert_eq!(collector.text, "abcdef");
+        assert_eq!(collector.push("g").unwrap(), ScanControl::Stop);
+        assert_eq!(collector.text.capacity(), 0);
+        assert_eq!(collector.push("ignored").unwrap(), ScanControl::Stop);
+        assert_eq!(collector.finish().unwrap(), BoundedTextResult::OutputLimitExceeded);
+
+        let mut zero = BoundedTextCollector::new(0);
+        assert_eq!(zero.push("").unwrap(), ScanControl::Continue);
+        assert_eq!(zero.push("x").unwrap(), ScanControl::Stop);
+        assert_eq!(zero.text.capacity(), 0);
+    }
+
+    #[test]
+    fn bounded_text_capacity_grows_geometrically_within_limit() {
+        for (capacity, required, limit, expected) in [
+            (0, 3, 10, 3),
+            (3, 4, 10, 6),
+            (6, 7, 10, 10),
+            (3, 9, 10, 9),
+            (0, 0, 0, 0),
+            (usize::MAX / 2 + 1, usize::MAX - 1, usize::MAX, usize::MAX),
+            (usize::MAX - 1, usize::MAX, usize::MAX, usize::MAX),
+        ] {
+            let requested = BoundedTextCollector::growth_target(capacity, required, limit);
+            assert_eq!(requested, expected);
+            assert!(requested >= required);
+            assert!(requested <= limit);
+        }
+        let limit = 3 * 1024 + 1;
+        let mut collector = BoundedTextCollector::new(limit);
+        let mut allocations = 0;
+        let mut previous_capacity = 0;
+        // Invalid raw bytes reach this collector as separate replacement
+        // scalars. Growth must not reserve exactly one scalar each time.
+        for _ in 0..1024 {
+            assert_eq!(collector.push("\u{FFFD}").unwrap(), ScanControl::Continue);
+            let capacity = collector.text.capacity();
+            if capacity != previous_capacity {
+                allocations += 1;
+                assert!(capacity >= (previous_capacity * 2).min(limit));
+                previous_capacity = capacity;
+            }
+        }
+        assert!(allocations <= 12);
+        assert_eq!(collector.text.len(), 3 * 1024);
+        assert_eq!(collector.push("x").unwrap(), ScanControl::Continue);
+        assert_eq!(collector.text.len(), limit);
+        assert_eq!(collector.push("y").unwrap(), ScanControl::Stop);
+    }
+
+    #[test]
+    fn bounded_text_reservation_failure_preserves_storage_error_class() {
+        let mut collector = BoundedTextCollector::new(usize::MAX);
+        assert_eq!(
+            collector.reserve_output(usize::MAX),
+            Err(BodyOperationError::Body(BodyReadError::Incomplete))
+        );
+        assert!(!collector.exceeded);
+        assert_eq!(collector.text.capacity(), 0);
+    }
 
     struct CollectText(String);
 

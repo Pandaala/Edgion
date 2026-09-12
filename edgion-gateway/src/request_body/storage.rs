@@ -18,8 +18,8 @@ use tokio::time::{timeout_at, Instant};
 
 use super::config::DEFAULT_STORAGE_OPERATION_TIMEOUT;
 use super::operation::{
-    BodyOperationError, BodyScanResult, BodyTextOperation, BodyTextResult, BytesScanner, LossyTextScanner,
-    RawBodyScanner, ScanControl, TextOperationScanner, MAX_BODY_SEGMENTS,
+    BodyOperationError, BodyScanResult, BodyTextOperation, BodyTextResult, BoundedTextCollector, BoundedTextResult,
+    BytesScanner, LossyTextScanner, RawBodyScanner, ScanControl, TextOperationScanner, MAX_BODY_SEGMENTS,
 };
 use crate::plugins::runtime::traits::session::{BodyReadError, BodyReadResult, RequestBodySnapshotReader};
 
@@ -32,7 +32,7 @@ fn scan_limiter() -> &'static Arc<Semaphore> {
     LIMITER.get_or_init(|| Arc::new(Semaphore::new(SCAN_CONCURRENCY)))
 }
 
-pub(super) async fn run_blocking_scan<T, F>(work: F) -> Result<T, BodyOperationError>
+pub(crate) async fn run_blocking_scan<T, F>(work: F) -> Result<T, BodyOperationError>
 where
     T: Send + 'static,
     F: FnOnce() -> Result<T, BodyOperationError> + Send + 'static,
@@ -753,21 +753,49 @@ impl BodyStorageView {
         max_bytes: u64,
         max_scan_bytes: u64,
     ) -> Result<BodyScanResult<Bytes>, BodyOperationError> {
+        let slice = self.range_snapshot(offset, max_bytes, max_scan_bytes)?;
+        let capacity = usize::try_from(slice.len).map_err(|_| BodyOperationError::Body(BodyReadError::Incomplete))?;
+        self.scan_snapshot(slice, BytesScanner::with_capacity(capacity), max_scan_bytes)
+            .await
+    }
+
+    /// Decode an isolated raw byte range without collecting it first. Both
+    /// the returned text and requested text capacity are bounded by the output
+    /// limit; overflow retains the scan's fetched-byte accounting.
+    pub async fn read_text_range(
+        &self,
+        offset: u64,
+        max_bytes: u64,
+        max_output_bytes: usize,
+        max_scan_bytes: u64,
+    ) -> Result<BodyScanResult<BoundedTextResult>, BodyOperationError> {
+        let slice = self.range_snapshot(offset, max_bytes, max_scan_bytes)?;
+        self.scan_snapshot(
+            slice,
+            LossyTextScanner::new(BoundedTextCollector::new(max_output_bytes)),
+            max_scan_bytes,
+        )
+        .await
+    }
+
+    fn range_snapshot(
+        &self,
+        offset: u64,
+        max_bytes: u64,
+        max_scan_bytes: u64,
+    ) -> Result<Arc<BodySnapshot>, BodyOperationError> {
         let (snapshot, _) = self.snapshot().map_err(BodyOperationError::Body)?;
         if offset > snapshot.len {
             return Err(BodyOperationError::InvalidRange);
         }
         let end = offset.checked_add(max_bytes).unwrap_or(u64::MAX).min(snapshot.len);
         let slice = Arc::new(BodySnapshot::from_segments(snapshot.slice(offset..end)?)?);
-        // BytesScanner must consume the complete slice. Prove its scan budget
-        // before converting or reserving the output capacity, rather than
-        // allocating a body-sized buffer for a deterministic limit failure.
+        // Range reads preflight the complete raw slice, preserving scan-limit
+        // precedence even when bounded text collection could stop early.
         if slice.len > max_scan_bytes {
             return Err(BodyOperationError::ScanLimitExceeded { limit: max_scan_bytes });
         }
-        let capacity = usize::try_from(slice.len).map_err(|_| BodyOperationError::Body(BodyReadError::Incomplete))?;
-        self.scan_snapshot(slice, BytesScanner::with_capacity(capacity), max_scan_bytes)
-            .await
+        Ok(slice)
     }
 
     pub async fn sha256_scan(&self, max_scan_bytes: u64) -> Result<BodyScanResult<[u8; 32]>, BodyOperationError> {
@@ -2342,6 +2370,107 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn bounded_text_ranges_match_isolated_lossy_bytes_in_memory_spill_and_segments() {
+        let raw = [b'a', 0xe2, 0x82, 0xac, b'z', 0xff, 0xe2, 0x82];
+        for memory_limit in [64, 1] {
+            for segmented in [false, true] {
+                let (mut storage, view) = BodyStorage::with_memory_limit(memory_limit);
+                if segmented {
+                    capture(&mut storage, &[&raw[..2]]).await;
+                    view.append(Bytes::copy_from_slice(&raw[2..])).unwrap();
+                } else {
+                    capture(&mut storage, &[&raw]).await;
+                }
+                for start in 0..=raw.len() {
+                    for end in start..=raw.len() {
+                        let expected = String::from_utf8_lossy(&raw[start..end]);
+                        for limit in [0, expected.len().saturating_sub(1), expected.len(), expected.len() + 1] {
+                            let result = view
+                                .read_text_range(start as u64, (end - start) as u64, limit, raw.len() as u64)
+                                .await
+                                .unwrap();
+                            if expected.len() <= limit {
+                                assert_eq!(result.value, BoundedTextResult::Complete(expected.to_string()));
+                                assert_eq!(result.bytes_scanned, (end - start) as u64);
+                            } else {
+                                assert_eq!(result.value, BoundedTextResult::OutputLimitExceeded);
+                                assert!(result.bytes_scanned > 0);
+                                assert!(result.bytes_scanned <= (end - start) as u64);
+                            }
+                            assert!(!view.is_materialized());
+                        }
+                    }
+                }
+                assert_eq!(
+                    view.read_text_range(1, u64::MAX, 32, 32).await.unwrap().value,
+                    BoundedTextResult::Complete(String::from_utf8_lossy(&raw[1..]).into_owned())
+                );
+                assert_eq!(
+                    view.read_text_range(raw.len() as u64 + 1, 0, 0, 0).await,
+                    Err(BodyOperationError::InvalidRange)
+                );
+                assert_eq!(
+                    view.read_text_range(0, raw.len() as u64, 0, raw.len() as u64 - 1).await,
+                    Err(BodyOperationError::ScanLimitExceeded {
+                        limit: raw.len() as u64 - 1
+                    })
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn bounded_text_overflow_charges_the_fetched_chunk_and_skips_the_tail() {
+        let body = vec![b'x'; 3 * SCAN_CHUNK_SIZE + 17];
+        for memory_limit in [body.len() + 1, 1] {
+            let (mut storage, view) = BodyStorage::with_memory_limit(memory_limit);
+            capture(&mut storage, &[&body]).await;
+            for (limit, charged) in [(3, SCAN_CHUNK_SIZE), (SCAN_CHUNK_SIZE, 2 * SCAN_CHUNK_SIZE)] {
+                let result = view
+                    .read_text_range(0, u64::MAX, limit, body.len() as u64)
+                    .await
+                    .unwrap();
+                assert_eq!(result.value, BoundedTextResult::OutputLimitExceeded);
+                assert_eq!(result.bytes_scanned, charged as u64);
+                assert!(!view.is_materialized());
+            }
+
+            // A mutation segment is a separate fetch boundary. Charge its
+            // actual fetched length, not a nominal full 64 KiB chunk.
+            view.prepend(Bytes::from_static(b"prefix")).unwrap();
+            let result = view.read_text_range(0, u64::MAX, 3, u64::MAX).await.unwrap();
+            assert_eq!(result.value, BoundedTextResult::OutputLimitExceeded);
+            assert_eq!(result.bytes_scanned, 6);
+        }
+    }
+
+    #[tokio::test]
+    async fn bounded_text_handles_utf8_split_at_storage_chunk_and_eof() {
+        let mut body = vec![b'x'; SCAN_CHUNK_SIZE - 1];
+        body.extend_from_slice("€".as_bytes());
+        body.extend_from_slice(&[0xe2, 0x82]);
+        let expected = String::from_utf8_lossy(&body);
+        for memory_limit in [body.len() + 1, 1] {
+            let (mut storage, view) = BodyStorage::with_memory_limit(memory_limit);
+            capture(&mut storage, &[&body]).await;
+            let exact = view
+                .read_text_range(0, u64::MAX, expected.len(), u64::MAX)
+                .await
+                .unwrap();
+            assert_eq!(exact.value, BoundedTextResult::Complete(expected.to_string()));
+            assert_eq!(exact.bytes_scanned, body.len() as u64);
+
+            let overflow = view
+                .read_text_range(0, u64::MAX, expected.len() - 1, u64::MAX)
+                .await
+                .unwrap();
+            assert_eq!(overflow.value, BoundedTextResult::OutputLimitExceeded);
+            assert_eq!(overflow.bytes_scanned, body.len() as u64);
+            assert!(!view.is_materialized());
+        }
+    }
+
+    #[tokio::test]
     async fn disk_scan_does_not_materialize() {
         let (mut storage, view) = BodyStorage::with_memory_limit(1);
         capture(&mut storage, &[b"prefix-body-suffix"]).await;
@@ -2613,6 +2742,10 @@ mod tests {
 
         assert_eq!(
             view.read_range(0, u64::MAX, 1).await,
+            Err(BodyOperationError::ScanLimitExceeded { limit: 1 })
+        );
+        assert_eq!(
+            view.read_text_range(0, u64::MAX, usize::MAX, 1).await,
             Err(BodyOperationError::ScanLimitExceeded { limit: 1 })
         );
     }

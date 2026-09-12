@@ -2,7 +2,8 @@ use bytes::Bytes;
 use std::sync::Arc;
 
 use super::super::operation::{
-    empty_text_operation, BodyOperationError, BodyScanResult, BodyTextOperation, BodyTextResult, RawBodyScanner,
+    empty_text_operation, BodyOperationError, BodyScanResult, BodyTextOperation, BodyTextResult, BoundedTextResult,
+    RawBodyScanner,
 };
 use super::super::BodyStorageView;
 use crate::plugins::runtime::traits::session::{BodyReadError, BodyReadResult, RequestBodySnapshotReader};
@@ -122,6 +123,27 @@ impl Backend {
             Some(view) => view.read_range(offset, max_bytes, max_scan_bytes).await,
             None if self.known_empty && offset == 0 => Ok(BodyScanResult {
                 value: Bytes::new(),
+                bytes_scanned: 0,
+            }),
+            None if self.known_empty => Err(BodyOperationError::InvalidRange),
+            None => Err(BodyOperationError::Body(BodyReadError::NotBuffered)),
+        }
+    }
+
+    pub(super) async fn read_text_range(
+        &self,
+        offset: u64,
+        max_bytes: u64,
+        max_output_bytes: usize,
+        max_scan_bytes: u64,
+    ) -> Result<BodyScanResult<BoundedTextResult>, BodyOperationError> {
+        match self.view.as_ref() {
+            Some(view) => {
+                view.read_text_range(offset, max_bytes, max_output_bytes, max_scan_bytes)
+                    .await
+            }
+            None if self.known_empty && offset == 0 => Ok(BodyScanResult {
+                value: BoundedTextResult::Complete(String::new()),
                 bytes_scanned: 0,
             }),
             None if self.known_empty => Err(BodyOperationError::InvalidRange),
