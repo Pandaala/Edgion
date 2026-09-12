@@ -61,43 +61,25 @@ fn redis_rate_limit_errors_are_script_visible_and_sanitized() {
 
 #[test]
 fn redis_rate_limit_result_budget_is_checked_before_io() {
-    for (limits, expect_map_error) in [
-        (
-            VmLimits {
-                max_map_size: 4,
-                ..Default::default()
-            },
-            true,
-        ),
-        (
-            VmLimits {
-                max_string_len: 17,
-                ..Default::default()
-            },
-            false,
-        ),
-    ] {
-        let vm = make_vm_with_limits("redis.rate_limit(\"cache\", \"requests\", \"key\", 1)", limits);
-        let mut session = MockPluginSession::new();
-        let mut log = PluginLog::new("test");
-        let runtime = rate_limit_runtime();
-        let result = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap()
-            .block_on(vm.execute(&mut session, &mut log, &runtime));
-        if expect_map_error {
-            assert!(
-                matches!(result, Err(RuntimeError::MapTooLarge { size: 5, limit: 4 })),
-                "{result:?}"
-            );
-        } else {
-            assert!(
-                matches!(result, Err(RuntimeError::StringTooLong { len: 18, limit: 17 })),
-                "{result:?}"
-            );
-        }
-    }
+    let vm = make_vm_with_limits(
+        "redis.rate_limit(\"cache\", \"requests\", \"key\", 1)",
+        VmLimits {
+            max_map_size: 4,
+            ..Default::default()
+        },
+    );
+    let mut session = MockPluginSession::new();
+    let mut log = PluginLog::new("test");
+    let runtime = rate_limit_runtime();
+    let result = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(vm.execute(&mut session, &mut log, &runtime));
+    assert!(
+        matches!(result, Err(RuntimeError::MapTooLarge { size: 5, limit: 4 })),
+        "{result:?}"
+    );
 }
 
 #[test]
@@ -134,9 +116,34 @@ resp.set_header("x-budget-checked", "complete")"#;
     );
 }
 
+#[test]
+fn redis_rate_limit_tiny_string_budget_keeps_the_failure_envelope() {
+    let source = r#"let r = redis.rate_limit("cache", "requests", "key", 1)
+if r["ok"] != false || r["value"] != nil || r["error"] != "e" {
+    return deny(500, "bad envelope")
+}"#;
+    let vm = make_vm_with_limits(
+        source,
+        VmLimits {
+            max_string_len: 1,
+            ..Default::default()
+        },
+    );
+    let mut session = MockPluginSession::new();
+    let mut log = PluginLog::new("test");
+    let runtime = rate_limit_runtime();
+
+    let result = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(vm.execute(&mut session, &mut log, &runtime));
+
+    assert_eq!(result.expect("Redis failures remain script-visible"), good_next());
+}
+
 /// Path A: alias is not present in `runtime.redis_links`. The `redis.get`
-/// builtin must return `Map { ok: false, value: Nil, error: Str("link 'X' not found ...") }`,
-/// which the DSL script surfaces as a response header so the mock can capture it.
+/// builtin must return the fixed `unknown_link` class without reflecting the alias.
 #[test]
 fn test_redis_get_returns_redis_err_when_link_alias_not_declared() {
     let mut session = MockPluginSession::new();
@@ -147,7 +154,7 @@ fn test_redis_get_returns_redis_err_when_link_alias_not_declared() {
         .returning(|_, _| Ok(()));
     session
         .expect_set_response_header()
-        .withf(|name, value| name == "x-test-err" && value.contains("link 'p0_missing' not found"))
+        .withf(|name, value| name == "x-test-err" && value == "unknown_link")
         .times(1)
         .returning(|_, _| Ok(()));
 
@@ -176,7 +183,7 @@ fn test_redis_get_returns_redis_err_when_link_not_ready() {
         .returning(|_, _| Ok(()));
     session
         .expect_set_response_header()
-        .withf(|name, value| name == "x-test-err" && value.contains("link 'p0_notready' not ready"))
+        .withf(|name, value| name == "x-test-err" && value == "provider_not_ready")
         .times(1)
         .returning(|_, _| Ok(()));
 
@@ -193,4 +200,32 @@ resp.set_header("x-test-err", r["error"])"#;
 
     let result = run_with_runtime(source, session, runtime);
     assert_eq!(result, good_next());
+}
+
+#[test]
+fn redis_error_for_oversized_alias_uses_generic_tag_under_tiny_string_limit() {
+    let alias = "sensitive-alias".repeat(64);
+    let source = format!("let r = redis.get(\"{alias}\", \"key\")\nresp.set_header(\"x-test-err\", r[\"error\"])");
+    let vm = make_vm_with_limits(
+        &source,
+        VmLimits {
+            max_string_len: 1,
+            ..Default::default()
+        },
+    );
+    let mut session = MockPluginSession::new();
+    session
+        .expect_set_response_header()
+        .withf(|name, value| name == "x-test-err" && value == "e")
+        .times(1)
+        .returning(|_, _| Ok(()));
+    let mut log = PluginLog::new("test");
+    let result = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(vm.execute(&mut session, &mut log, &DslRuntime::default()));
+
+    assert_eq!(result.expect("Redis failures remain script-visible"), good_next());
+    assert!(!log.render_for_test().contains(&alias));
 }

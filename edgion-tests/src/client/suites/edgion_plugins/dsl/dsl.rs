@@ -1988,7 +1988,7 @@ impl DslTestSuite {
                                 .to_string();
                             // The link "not-ready-redis" is declared in linkSysRefs but the backing
                             // LinkSys resource does not exist. redis.get returns ok=false with
-                            // error="link 'not-ready-redis' not ready". The script's else branch
+                            // error="provider_not_ready". The script's else branch
                             // fires and sets "not-found-or-missing-client"; request passes through.
                             if status == 200 && redis_status == "not-found-or-missing-client" {
                                 TestResult::passed_with_message(

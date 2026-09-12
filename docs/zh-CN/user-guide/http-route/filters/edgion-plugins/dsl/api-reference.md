@@ -1654,9 +1654,9 @@ if remaining != nil {
 **错误协议**：每个 `redis.*` 函数均返回 `Map { ok: Bool, value: <类型>, error: Str | Nil }`。函数**不会触发运行时错误**，也**不会 panic**。脚本作者自行决定如何处理失败（快速拒绝、降级放行或优雅退化）。
 
 - `ok: true` — 操作成功；`value` 为结果值；`error` 为 `nil`。
-- `ok: false` — Redis 连接或操作出错；`value` 为 `nil`；`error` 为错误信息。
-- 当 `link` 参数不匹配 `linkSysRefs` 中的任何别名时，返回 `ok: false, error: "link 'x' not found in linkSysRefs"`。
-- 当指定的 link 存在但尚未就绪时，返回 `ok: false, error: "link 'x' not ready"`。
+- `ok: false` — Redis 连接、操作、参数或结果出错；`value` 为 `nil`；`error` 为固定的公开分类，不包含别名、键、字段、值、依赖地址或依赖错误文本。
+- 常见分类包括 `invalid_argument`、`unknown_link`、`provider_not_ready`、`dependency_error` 和 `result_too_large`；`redis.rate_limit` 还会使用 `unknown_policy` 和 `timeout`。
+- 所有分类都受 `maxStringLen` 限制。若配置的限制无法容纳具体分类，`error` 使用单字节通用分类 `e`；敏感文本绝不会以截断前缀形式进入结果。
 
 **配置字段**（位于 `config` 内部）：
 
@@ -1865,9 +1865,10 @@ HTTP/Stream 限流插件分离，请勿向 DSL 管理的键写入其他值。
 参数类型错误、cost 越界或键超长会在 Redis I/O 前拒绝。策略配置在加载时校验。
 别名静态检查是尽力而为，动态或未知别名仍须在运行时处理。
 
-每次调用消耗正常 VM 调用预算，并要求 `maxMapSize >= 5`、
-`maxStringLen >= 18` 以容纳结果。VM 限制错误遵循 `errorPolicy`；
-示例设为 `deny`，同时单独处理结果 map 中的失败。
+每次调用消耗正常 VM 调用预算，成功结果要求 `maxMapSize >= 5`。
+固定失败分类受 `maxStringLen` 限制；无法容纳时使用通用分类 `e`，同时保留失败
+Map。其他 VM 限制错误遵循 `errorPolicy`；示例设为 `deny`，同时单独处理结果
+Map 中的失败。
 
 超时覆盖完整操作及脚本缓存未命中回退。超时或取消可能发生在 Redis 已扣费之后，
 不要假设尚未执行而重试；本接口不对不确定执行添加应用层重试，仍沿用 LinkSys
@@ -1936,7 +1937,7 @@ HTTP/Stream 限流插件分离，请勿向 DSL 管理的键写入其他值。
 
 **签名**：`redis.hgetall(link, key)` → `Map { ok: Bool, value: Map, error: Str | Nil }`
 
-获取哈希的所有字段和值。键不存在时返回空 `Map`。在连接错误,或哈希条目数超过 `max_map_size` 限制时返回 `ok: false`(后者不会构造超大 `Map`,`error` 会描述实际大小与上限)。每个条目的键与值字符串都会各自在 `max_string_len`（默认 8 KiB）处被静默截断,与 `redis.get` 一致;调用仍然成功。
+获取哈希的所有字段和值。键不存在时返回空 `Map`。发生连接错误或哈希条目数超过 `max_map_size` 限制时返回 `ok: false`；后者不会构造超大 `Map`，并返回受上述通用分类规则约束的 `result_too_large`。每个条目的键与值字符串都会各自在 `max_string_len`（默认 8 KiB）处被静默截断，与 `redis.get` 一致；调用仍然成功。
 
 **参数**：
 - `link`（Str）— 来自 `linkSysRefs[].name` 的别名

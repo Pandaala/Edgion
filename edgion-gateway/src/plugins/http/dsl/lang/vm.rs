@@ -1387,7 +1387,7 @@ impl Vm {
                     let result = if id == BuiltinId::HttpCall {
                         self.call_builtin_http(argc, &mut state, session, runtime).await?
                     } else if id.is_redis_builtin() {
-                        self.call_builtin_redis(id, argc, &mut state, runtime).await?
+                        self.call_builtin_redis(id, argc, &mut state, runtime, log).await?
                     } else if id.is_body_builtin() {
                         self.call_builtin_body(id, &mut state, session, log).await?
                     } else {

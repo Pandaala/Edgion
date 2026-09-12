@@ -315,13 +315,69 @@ fn redis_ok(value: Value) -> Value {
     Value::Map(Box::new(m))
 }
 
-/// Build a `Map { ok: false, value: nil, error: <msg> }` error response for redis.* builtins.
-fn redis_err(msg: String) -> Value {
+const REDIS_ERROR_FALLBACK: &str = "e";
+
+#[derive(Clone, Copy, Debug)]
+enum RedisFailure {
+    InvalidArgument,
+    UnknownPolicy,
+    UnknownLink,
+    ProviderNotReady,
+    DependencyError,
+    Timeout,
+    ResultTooLarge,
+}
+
+impl RedisFailure {
+    #[cfg(test)]
+    const ALL: [Self; 7] = [
+        Self::InvalidArgument,
+        Self::UnknownPolicy,
+        Self::UnknownLink,
+        Self::ProviderNotReady,
+        Self::DependencyError,
+        Self::Timeout,
+        Self::ResultTooLarge,
+    ];
+
+    const fn tag(self) -> &'static str {
+        match self {
+            Self::InvalidArgument => "invalid_argument",
+            Self::UnknownPolicy => "unknown_policy",
+            Self::UnknownLink => "unknown_link",
+            Self::ProviderNotReady => "provider_not_ready",
+            Self::DependencyError => "dependency_error",
+            Self::Timeout => "timeout",
+            Self::ResultTooLarge => "result_too_large",
+        }
+    }
+}
+
+/// Build a bounded `Map { ok: false, value: nil, error: <tag> }` response.
+///
+/// Requiring an enumerated failure prevents dependency errors and caller-controlled
+/// Redis arguments from entering the script-visible result. When an unusually small
+/// string budget cannot hold the specific tag, use one fixed generic tag rather
+/// than truncating potentially sensitive text.
+fn redis_err(failure: RedisFailure, max_string_len: usize) -> Value {
+    let tag = failure.tag();
+    let tag = if tag.len() <= max_string_len {
+        tag
+    } else if REDIS_ERROR_FALLBACK.len() <= max_string_len {
+        REDIS_ERROR_FALLBACK
+    } else {
+        ""
+    };
     let mut m = IndexMap::new();
     m.insert("ok".to_string(), Value::Bool(false));
     m.insert("value".to_string(), Value::Nil);
-    m.insert("error".to_string(), Value::Str(msg.into()));
+    m.insert("error".to_string(), Value::Str(Arc::from(tag)));
     Value::Map(Box::new(m))
+}
+
+fn redis_dependency_err(error: &dyn std::fmt::Display, max_string_len: usize, log: &mut PluginLog) -> Value {
+    log.push_err_sensitive(&error.to_string());
+    redis_err(RedisFailure::DependencyError, max_string_len)
 }
 
 /// Check that a string result doesn't exceed the VM's `max_string_len` limit.
@@ -1526,20 +1582,33 @@ impl Vm {
 fn resolve_redis_client_with<T>(
     link_name: &str,
     runtime: &DslRuntime,
+    max_string_len: usize,
+    log: &mut PluginLog,
     get_client: impl FnOnce(&str) -> Option<T>,
 ) -> Result<T, Value> {
     let ns_name = match runtime.redis_links.get(link_name) {
         Some(k) => k,
-        None => return Err(redis_err(format!("link '{}' not found in linkSysRefs", link_name))),
+        None => {
+            log.push_err("redis link unknown");
+            return Err(redis_err(RedisFailure::UnknownLink, max_string_len));
+        }
     };
     match get_client(ns_name) {
         Some(c) => Ok(c),
-        None => Err(redis_err(format!("link '{}' not ready", link_name))),
+        None => {
+            log.push_err("redis provider not ready");
+            Err(redis_err(RedisFailure::ProviderNotReady, max_string_len))
+        }
     }
 }
 
-fn resolve_redis_client(link_name: &str, runtime: &DslRuntime) -> Result<Arc<RedisLinkClient>, Value> {
-    resolve_redis_client_with(link_name, runtime, get_redis_client)
+fn resolve_redis_client(
+    link_name: &str,
+    runtime: &DslRuntime,
+    max_string_len: usize,
+    log: &mut PluginLog,
+) -> Result<Arc<RedisLinkClient>, Value> {
+    resolve_redis_client_with(link_name, runtime, max_string_len, log, get_redis_client)
 }
 
 /// Async handler for all `redis.*` builtins.
@@ -1557,6 +1626,7 @@ impl Vm {
         argc: u8,
         state: &mut VmState,
         runtime: &DslRuntime,
+        log: &mut PluginLog,
     ) -> Result<Value, RuntimeError> {
         match id {
             // ===== Basic KV =====
@@ -1568,12 +1638,6 @@ impl Vm {
                         limit: self.limits.max_map_size,
                     });
                 }
-                if self.limits.max_string_len < 18 {
-                    return Err(RuntimeError::StringTooLong {
-                        len: 18,
-                        limit: self.limits.max_string_len,
-                    });
-                }
                 let cost = state.pop()?;
                 let key = state.pop()?;
                 let policy_name = state.pop()?;
@@ -1581,26 +1645,28 @@ impl Vm {
                 let (Value::Int(cost), Value::Str(key), Value::Str(policy_name), Value::Str(link)) =
                     (cost, key, policy_name, link)
                 else {
-                    return Ok(redis_err("invalid_argument".into()));
+                    return Ok(redis_err(RedisFailure::InvalidArgument, self.limits.max_string_len));
                 };
                 if key.len() > 4096 {
-                    return Ok(redis_err("invalid_argument".into()));
+                    return Ok(redis_err(RedisFailure::InvalidArgument, self.limits.max_string_len));
                 }
                 let now_ms = chrono::Utc::now().timestamp_millis();
                 let Ok(cost) = validate_rate_limit_call(cost, now_ms) else {
-                    return Ok(redis_err("invalid_argument".into()));
+                    return Ok(redis_err(RedisFailure::InvalidArgument, self.limits.max_string_len));
                 };
                 let Some(policy) = runtime.rate_limits.policies.get(policy_name.as_ref()) else {
-                    return Ok(redis_err("unknown_policy".into()));
+                    return Ok(redis_err(RedisFailure::UnknownPolicy, self.limits.max_string_len));
                 };
                 if policy.link != link.as_ref() {
-                    return Ok(redis_err("unknown_policy".into()));
+                    return Ok(redis_err(RedisFailure::UnknownPolicy, self.limits.max_string_len));
                 }
                 let Some(ns_name) = runtime.redis_links.get(link.as_ref()) else {
-                    return Ok(redis_err("unknown_link".into()));
+                    log.push_err("redis link unknown");
+                    return Ok(redis_err(RedisFailure::UnknownLink, self.limits.max_string_len));
                 };
                 let Some(client) = get_redis_client(ns_name) else {
-                    return Ok(redis_err("provider_not_ready".into()));
+                    log.push_err("redis provider not ready");
+                    return Ok(redis_err(RedisFailure::ProviderNotReady, self.limits.max_string_len));
                 };
                 let check = runtime.rate_limits.limiter.eval_policy(
                     &client,
@@ -1615,8 +1681,13 @@ impl Vm {
                 );
                 let result = match tokio::time::timeout(policy.timeout, check).await {
                     Ok(Ok(result)) => result,
-                    Ok(Err(_)) => return Ok(redis_err("dependency_error".into())),
-                    Err(_) => return Ok(redis_err("timeout".into())),
+                    Ok(Err(error)) => {
+                        return Ok(redis_dependency_err(&error, self.limits.max_string_len, log));
+                    }
+                    Err(_) => {
+                        log.push_err("redis timeout");
+                        return Ok(redis_err(RedisFailure::Timeout, self.limits.max_string_len));
+                    }
                 };
                 // Reject inconsistent values instead of exposing unbounded results
                 // from a Redis key modified outside this policy's ownership.
@@ -1625,7 +1696,8 @@ impl Vm {
                     || !(0..=limit).contains(&result.remaining)
                     || !(0..=i64::from(cost) * policy.window_ms).contains(&result.retry_ms)
                 {
-                    return Ok(redis_err("dependency_error".into()));
+                    log.push_err("redis invalid dependency result");
+                    return Ok(redis_err(RedisFailure::DependencyError, self.limits.max_string_len));
                 }
                 let mut decision = IndexMap::with_capacity(5);
                 decision.insert("allowed".into(), Value::Bool(result.allowed));
@@ -1639,7 +1711,7 @@ impl Vm {
                 // redis.get(link, key)
                 let key = state.pop()?.runtime_string()?;
                 let link = state.pop()?.runtime_string()?;
-                let client = match resolve_redis_client(&link, runtime) {
+                let client = match resolve_redis_client(&link, runtime, self.limits.max_string_len, log) {
                     Ok(c) => c,
                     Err(e) => return Ok(e),
                 };
@@ -1649,19 +1721,19 @@ impl Vm {
                         Ok(redis_ok(Value::Str(v.into())))
                     }
                     Ok(None) => Ok(redis_ok(Value::Nil)),
-                    Err(e) => Ok(redis_err(e.to_string())),
+                    Err(error) => Ok(redis_dependency_err(&error, self.limits.max_string_len, log)),
                 }
             }
             BuiltinId::RedisSet => {
                 // redis.set(link, key, value) or redis.set(link, key, value, ttl_ms)
                 if !(3..=4).contains(&(argc as usize)) {
-                    return Ok(redis_err(format!("redis.set requires 3 or 4 arguments, got {}", argc)));
+                    return Ok(redis_err(RedisFailure::InvalidArgument, self.limits.max_string_len));
                 }
                 let ttl_ms_val = if argc == 4 { Some(state.pop()?) } else { None };
                 let value = state.pop()?.runtime_string()?;
                 let key = state.pop()?.runtime_string()?;
                 let link = state.pop()?.runtime_string()?;
-                let client = match resolve_redis_client(&link, runtime) {
+                let client = match resolve_redis_client(&link, runtime, self.limits.max_string_len, log) {
                     Ok(c) => c,
                     Err(e) => return Ok(e),
                 };
@@ -1670,56 +1742,53 @@ impl Vm {
                     Some(Value::Nil) => client.set(&key, &value, None).await,
                     Some(Value::Int(ms)) if ms > 0 => client.set_px(&key, &value, ms as u64).await,
                     Some(Value::Int(_)) => client.set(&key, &value, None).await,
-                    Some(other) => {
-                        return Ok(redis_err(format!(
-                            "redis.set ttl_ms must be Int or Nil, got {}",
-                            other.type_name()
-                        )));
+                    Some(_) => {
+                        return Ok(redis_err(RedisFailure::InvalidArgument, self.limits.max_string_len));
                     }
                 };
                 match result {
                     Ok(()) => Ok(redis_ok(Value::Bool(true))),
-                    Err(e) => Ok(redis_err(e.to_string())),
+                    Err(error) => Ok(redis_dependency_err(&error, self.limits.max_string_len, log)),
                 }
             }
             BuiltinId::RedisDel => {
                 // redis.del(link, key)
                 let key = state.pop()?.runtime_string()?;
                 let link = state.pop()?.runtime_string()?;
-                let client = match resolve_redis_client(&link, runtime) {
+                let client = match resolve_redis_client(&link, runtime, self.limits.max_string_len, log) {
                     Ok(c) => c,
                     Err(e) => return Ok(e),
                 };
                 match client.del(&[key.as_str()]).await {
                     Ok(count) => Ok(redis_ok(Value::Bool(count > 0))),
-                    Err(e) => Ok(redis_err(e.to_string())),
+                    Err(error) => Ok(redis_dependency_err(&error, self.limits.max_string_len, log)),
                 }
             }
             BuiltinId::RedisExists => {
                 // redis.exists(link, key)
                 let key = state.pop()?.runtime_string()?;
                 let link = state.pop()?.runtime_string()?;
-                let client = match resolve_redis_client(&link, runtime) {
+                let client = match resolve_redis_client(&link, runtime, self.limits.max_string_len, log) {
                     Ok(c) => c,
                     Err(e) => return Ok(e),
                 };
                 match client.exists(&key).await {
                     Ok(b) => Ok(redis_ok(Value::Bool(b))),
-                    Err(e) => Ok(redis_err(e.to_string())),
+                    Err(error) => Ok(redis_dependency_err(&error, self.limits.max_string_len, log)),
                 }
             }
             BuiltinId::RedisTtl => {
                 // redis.ttl(link, key)
                 let key = state.pop()?.runtime_string()?;
                 let link = state.pop()?.runtime_string()?;
-                let client = match resolve_redis_client(&link, runtime) {
+                let client = match resolve_redis_client(&link, runtime, self.limits.max_string_len, log) {
                     Ok(c) => c,
                     Err(e) => return Ok(e),
                 };
                 // TTL: -1 = no expiry, -2 = key not found; ok=false only on connection error
                 match client.ttl(&key).await {
                     Ok(v) => Ok(redis_ok(Value::Int(v))),
-                    Err(e) => Ok(redis_err(e.to_string())),
+                    Err(error) => Ok(redis_dependency_err(&error, self.limits.max_string_len, log)),
                 }
             }
             BuiltinId::RedisExpire => {
@@ -1729,33 +1798,30 @@ impl Vm {
                 let link = state.pop()?.runtime_string()?;
                 let seconds = match &seconds_val {
                     Value::Int(n) => *n,
-                    other => {
-                        return Ok(redis_err(format!(
-                            "redis.expire seconds must be Int, got {}",
-                            other.type_name()
-                        )));
+                    _ => {
+                        return Ok(redis_err(RedisFailure::InvalidArgument, self.limits.max_string_len));
                     }
                 };
-                let client = match resolve_redis_client(&link, runtime) {
+                let client = match resolve_redis_client(&link, runtime, self.limits.max_string_len, log) {
                     Ok(c) => c,
                     Err(e) => return Ok(e),
                 };
                 match client.expire(&key, seconds).await {
                     Ok(b) => Ok(redis_ok(Value::Bool(b))),
-                    Err(e) => Ok(redis_err(e.to_string())),
+                    Err(error) => Ok(redis_dependency_err(&error, self.limits.max_string_len, log)),
                 }
             }
             BuiltinId::RedisIncr => {
                 // redis.incr(link, key)
                 let key = state.pop()?.runtime_string()?;
                 let link = state.pop()?.runtime_string()?;
-                let client = match resolve_redis_client(&link, runtime) {
+                let client = match resolve_redis_client(&link, runtime, self.limits.max_string_len, log) {
                     Ok(c) => c,
                     Err(e) => return Ok(e),
                 };
                 match client.incr(&key).await {
                     Ok(v) => Ok(redis_ok(Value::Int(v))),
-                    Err(e) => Ok(redis_err(e.to_string())),
+                    Err(error) => Ok(redis_dependency_err(&error, self.limits.max_string_len, log)),
                 }
             }
             BuiltinId::RedisIncrBy => {
@@ -1765,20 +1831,17 @@ impl Vm {
                 let link = state.pop()?.runtime_string()?;
                 let delta = match &delta_val {
                     Value::Int(n) => *n,
-                    other => {
-                        return Ok(redis_err(format!(
-                            "redis.incr_by delta must be Int, got {}",
-                            other.type_name()
-                        )));
+                    _ => {
+                        return Ok(redis_err(RedisFailure::InvalidArgument, self.limits.max_string_len));
                     }
                 };
-                let client = match resolve_redis_client(&link, runtime) {
+                let client = match resolve_redis_client(&link, runtime, self.limits.max_string_len, log) {
                     Ok(c) => c,
                     Err(e) => return Ok(e),
                 };
                 match client.incr_by(&key, delta).await {
                     Ok(v) => Ok(redis_ok(Value::Int(v))),
-                    Err(e) => Ok(redis_err(e.to_string())),
+                    Err(error) => Ok(redis_dependency_err(&error, self.limits.max_string_len, log)),
                 }
             }
 
@@ -1788,7 +1851,7 @@ impl Vm {
                 let field = state.pop()?.runtime_string()?;
                 let key = state.pop()?.runtime_string()?;
                 let link = state.pop()?.runtime_string()?;
-                let client = match resolve_redis_client(&link, runtime) {
+                let client = match resolve_redis_client(&link, runtime, self.limits.max_string_len, log) {
                     Ok(c) => c,
                     Err(e) => return Ok(e),
                 };
@@ -1798,7 +1861,7 @@ impl Vm {
                         Ok(redis_ok(Value::Str(v.into())))
                     }
                     Ok(None) => Ok(redis_ok(Value::Nil)),
-                    Err(e) => Ok(redis_err(e.to_string())),
+                    Err(error) => Ok(redis_dependency_err(&error, self.limits.max_string_len, log)),
                 }
             }
             BuiltinId::RedisHSet => {
@@ -1807,13 +1870,13 @@ impl Vm {
                 let field = state.pop()?.runtime_string()?;
                 let key = state.pop()?.runtime_string()?;
                 let link = state.pop()?.runtime_string()?;
-                let client = match resolve_redis_client(&link, runtime) {
+                let client = match resolve_redis_client(&link, runtime, self.limits.max_string_len, log) {
                     Ok(c) => c,
                     Err(e) => return Ok(e),
                 };
                 match client.hset(&key, &field, &val).await {
                     Ok(_count) => Ok(redis_ok(Value::Bool(true))),
-                    Err(e) => Ok(redis_err(e.to_string())),
+                    Err(error) => Ok(redis_dependency_err(&error, self.limits.max_string_len, log)),
                 }
             }
             BuiltinId::RedisHDel => {
@@ -1821,31 +1884,28 @@ impl Vm {
                 let field = state.pop()?.runtime_string()?;
                 let key = state.pop()?.runtime_string()?;
                 let link = state.pop()?.runtime_string()?;
-                let client = match resolve_redis_client(&link, runtime) {
+                let client = match resolve_redis_client(&link, runtime, self.limits.max_string_len, log) {
                     Ok(c) => c,
                     Err(e) => return Ok(e),
                 };
                 match client.hdel(&key, &[field.as_str()]).await {
                     Ok(count) => Ok(redis_ok(Value::Bool(count > 0))),
-                    Err(e) => Ok(redis_err(e.to_string())),
+                    Err(error) => Ok(redis_dependency_err(&error, self.limits.max_string_len, log)),
                 }
             }
             BuiltinId::RedisHGetAll => {
                 // redis.hgetall(link, key)
                 let key = state.pop()?.runtime_string()?;
                 let link = state.pop()?.runtime_string()?;
-                let client = match resolve_redis_client(&link, runtime) {
+                let client = match resolve_redis_client(&link, runtime, self.limits.max_string_len, log) {
                     Ok(c) => c,
                     Err(e) => return Ok(e),
                 };
                 match client.hgetall(&key).await {
                     Ok(map) => {
                         if map.len() > self.limits.max_map_size {
-                            return Ok(redis_err(format!(
-                                "hgetall result too large: {} entries (limit {})",
-                                map.len(),
-                                self.limits.max_map_size
-                            )));
+                            log.push_err("redis result too large");
+                            return Ok(redis_err(RedisFailure::ResultTooLarge, self.limits.max_string_len));
                         }
                         let mut result: IndexMap<String, Value> = IndexMap::new();
                         for (k, v) in map {
@@ -1857,7 +1917,7 @@ impl Vm {
                         }
                         Ok(redis_ok(Value::Map(Box::new(result))))
                     }
-                    Err(e) => Ok(redis_err(e.to_string())),
+                    Err(error) => Ok(redis_dependency_err(&error, self.limits.max_string_len, log)),
                 }
             }
             BuiltinId::RedisHExists => {
@@ -1865,13 +1925,13 @@ impl Vm {
                 let field = state.pop()?.runtime_string()?;
                 let key = state.pop()?.runtime_string()?;
                 let link = state.pop()?.runtime_string()?;
-                let client = match resolve_redis_client(&link, runtime) {
+                let client = match resolve_redis_client(&link, runtime, self.limits.max_string_len, log) {
                     Ok(c) => c,
                     Err(e) => return Ok(e),
                 };
                 match client.hexists(&key, &field).await {
                     Ok(b) => Ok(redis_ok(Value::Bool(b))),
-                    Err(e) => Ok(redis_err(e.to_string())),
+                    Err(error) => Ok(redis_dependency_err(&error, self.limits.max_string_len, log)),
                 }
             }
 
@@ -1986,6 +2046,7 @@ pub(crate) fn is_ssrf_blocked_ip_literal(host: &str) -> bool {
 mod redis_client_lookup_tests {
     use super::resolve_redis_client_with;
     use crate::plugins::http::dsl::runtime::DslRuntime;
+    use crate::plugins::runtime::PluginLog;
     use crate::test_allocation_counter::count_allocation_stats;
     use std::collections::HashMap;
 
@@ -1997,9 +2058,10 @@ mod redis_client_lookup_tests {
         };
         let stored_key = runtime.redis_links.get("cache").expect("test alias must exist");
         let stored_key_ptr = stored_key.as_ptr();
+        let mut log = PluginLog::new("test");
 
         let (result, allocations) = count_allocation_stats(|| {
-            resolve_redis_client_with("cache", &runtime, |key| {
+            resolve_redis_client_with("cache", &runtime, usize::MAX, &mut log, |key: &str| {
                 assert_eq!(key, "default/redis");
                 assert_eq!(key.as_ptr(), stored_key_ptr);
                 Some(())
@@ -2191,6 +2253,51 @@ mod truncate_tests {
         let out = truncate_to_max_string_len(s, 3);
         assert_eq!(out, "aé");
         assert_eq!(out.len(), 3);
+    }
+}
+
+#[cfg(test)]
+mod redis_error_tests {
+    use super::{redis_dependency_err, redis_err, PluginLog, RedisFailure, Value};
+
+    fn error_text(value: &Value) -> String {
+        let Value::Map(map) = value else {
+            panic!("expected Redis result map");
+        };
+        let Some(Value::Str(error)) = map.get("error") else {
+            panic!("expected Redis error string");
+        };
+        error.to_string()
+    }
+
+    #[test]
+    fn fixed_error_tags_never_exceed_the_string_budget() {
+        for failure in RedisFailure::ALL {
+            let tag = failure.tag();
+            assert_eq!(error_text(&redis_err(failure, tag.len())), tag);
+            assert_eq!(error_text(&redis_err(failure, 1)), "e");
+            assert_eq!(error_text(&redis_err(failure, 0)), "");
+        }
+    }
+
+    #[test]
+    fn dependency_detail_is_not_script_visible_and_diagnostic_is_bounded() {
+        for sentinel in [
+            "alias-sentinel".repeat(64),
+            "key-sentinel".repeat(64),
+            "field-sentinel".repeat(64),
+            "credential-and-address-sentinel".repeat(32),
+        ] {
+            let error = anyhow::anyhow!("Redis command failed: {sentinel}");
+            let mut log = PluginLog::new("test");
+
+            let value = redis_dependency_err(&error, 16, &mut log);
+
+            assert_eq!(error_text(&value), "dependency_error");
+            assert!(!format!("{value:?}").contains(&sentinel));
+            assert!(log.contains("err:"));
+            assert!(log.render_for_test().len() <= 128);
+        }
     }
 }
 

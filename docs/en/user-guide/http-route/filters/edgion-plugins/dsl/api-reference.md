@@ -1686,9 +1686,9 @@ All `redis.*` functions are backed by a pre-configured LinkSys Redis connection 
 **Error contract**: Every `redis.*` function returns a `Map { ok: Bool, value: <type>, error: Str | Nil }`. The function **never raises a runtime error** and **never panics**. Script authors decide how to handle failures (fail-open, fail-close, or graceful degradation).
 
 - `ok: true` — The operation succeeded; `value` holds the result; `error` is `nil`.
-- `ok: false` — A Redis connection or operation error occurred; `value` is `nil`; `error` holds the error message.
-- When the `link` parameter does not match any alias in `linkSysRefs`, returns `ok: false, error: "link 'x' not found in linkSysRefs"`.
-- When the specified link exists but is not yet ready, returns `ok: false, error: "link 'x' not ready"`.
+- `ok: false` — A Redis connection, operation, argument, or result error occurred; `value` is `nil`; `error` holds a fixed public class. It never contains the alias, key, field, value, dependency address, or dependency error text.
+- Common classes are `invalid_argument`, `unknown_link`, `provider_not_ready`, `dependency_error`, and `result_too_large`; `redis.rate_limit` also uses `unknown_policy` and `timeout`.
+- Every class is subject to `maxStringLen`. If the configured limit is too small for the specific class, `error` is the generic one-byte class `e`; sensitive text is never partially truncated into the result.
 
 **Configuration field** (inside `config`):
 
@@ -1913,8 +1913,10 @@ Policy configuration is validated at load time. Unknown/dynamic aliases still
 require runtime handling; static alias checking is best-effort.
 
 Each call consumes the normal VM call budget and requires `maxMapSize >= 5`
-and `maxStringLen >= 18` for its result. VM limit failures follow `errorPolicy`;
-the example sets it to `deny` and separately handles result-map failures.
+for its successful result. Fixed failure classes obey `maxStringLen`; a class that
+does not fit becomes the generic class `e` while preserving the failure Map. Other
+VM limit failures follow `errorPolicy`; the example sets it to `deny` and separately
+handles result-map failures.
 
 The timeout bounds the complete operation, including a script-cache miss.
 Timeout/cancellation can happen after Redis has charged quota: do not retry on
@@ -1985,7 +1987,7 @@ Deletes a field from a hash. Returns `value: true` if the field existed and was 
 
 **Signature**: `redis.hgetall(link, key)` → `Map { ok: Bool, value: Map, error: Str | Nil }`
 
-Gets all fields and values of a hash. Returns an empty `Map` when the key does not exist. `ok: false` is returned on a connection error, or when the hash contains more entries than the `max_map_size` limit (in which case the oversize `Map` is not constructed and `error` describes the actual size and limit). Each entry's key and value string is independently truncated at `max_string_len` (default 8 KiB), the same as `redis.get`; the call still succeeds.
+Gets all fields and values of a hash. Returns an empty `Map` when the key does not exist. `ok: false` is returned on a connection error, or when the hash contains more entries than the `max_map_size` limit (in which case the oversize `Map` is not constructed and `error` is `result_too_large`, subject to the generic-class rule above). Each entry's key and value string is independently truncated at `max_string_len` (default 8 KiB), the same as `redis.get`; the call still succeeds.
 
 **Parameters**:
 - `link` (Str) — Alias name from `linkSysRefs[].name`

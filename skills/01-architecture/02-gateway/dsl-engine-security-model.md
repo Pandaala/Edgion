@@ -140,6 +140,12 @@ must reach EOF. Lossy UTF-8 conversion is allocated only after checked preflight
 the expanded result fits. This does not permit aggregation of the main upstream
 response and does not create another `BodyStorage`.
 
+`redis.*` keeps its non-throwing result Map on dependency and input failures. Its
+script-visible error is a fixed public class, never a dynamic dependency or
+caller-controlled string. A class that does not fit `max_string_len` becomes the
+generic one-byte class `e`; no sensitive prefix is truncated into the result.
+Dynamic dependency detail is confined to the bounded sensitive PluginLog path.
+
 `sha256()` uses one lazy `[u8; 32]` once-cell per immutable Body snapshot. The
 first successful call scans the captured snapshot; concurrent and later calls
 reuse that result and report zero scanned bytes. Initial capture publishes one

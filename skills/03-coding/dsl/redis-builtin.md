@@ -46,9 +46,12 @@ static check and fail through the normal runtime result map. Therefore:
 ## Result Semantics
 
 Failures return a bounded error map, for example an undeclared alias, a declared link
-whose provider is not ready, or a Redis operation error. Scripts should branch on `ok`
-and avoid logging the raw dynamic error into `PluginLog`; classify it or use the DSL
-sensitive logging path.
+whose provider is not ready, or a Redis operation error. The public `error` value is a
+fixed class and never contains the alias, key, field, value, or dependency error. When
+`maxStringLen` cannot hold the specific class, the value is the generic one-byte class
+`e`; it is never a truncated prefix. Internal dependency detail is recorded only through
+the bounded sensitive `PluginLog` path. Scripts should branch on `ok`; they may branch on
+a specific class only when their configured string budget can hold it.
 
 ```dsl
 // Configure the requests policy and set errorPolicy: deny; see the API reference.

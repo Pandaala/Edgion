@@ -76,10 +76,10 @@ the aliases needed by multi-address LB and GeoIP suites.
   returned LGTM. Live K8s execution and full-workspace unit tests were not run.
 - The separate K8s inventory parity check failed on unrelated dynamic-scenario
   registrations; its own regression test passed. The inventory entries were not
-  changed by the ForwardAuth work. Follow-up ownership moved to
-  [complete-k8s-dynamic-scenario-parity](../../../../tasks/todo/complete-k8s-dynamic-scenario-parity/complete-k8s-dynamic-scenario-parity.md),
-  which preserves the current scenario list and open Kubernetes compatibility
-  questions without treating them as a ForwardAuth defect.
+  changed by the ForwardAuth work. The later inventory follow-up was removed at
+  the user's request, leaving any future reconciliation to the user. The current
+  parity command and exception contract remain documented in
+  [Kubernetes integration testing](../../../05-testing/02-k8s-integration-testing.md#10-canonical-inventory-parity).
 
 ## Scope and Re-evaluation
 

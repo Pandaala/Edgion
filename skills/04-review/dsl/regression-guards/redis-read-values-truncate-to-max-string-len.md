@@ -60,7 +60,11 @@ Re-open this decision only if:
 
 ## Historical resolution evidence: dsl-rhai-07
 
-`redis.hgetall` `Ok(map)` branch now checks `map.len() > self.limits.max_map_size` before `IndexMap` construction and returns `redis_err("hgetall result too large: N entries (limit M)")`; aligned with existing `redis.*` `redis_err` style; complements VM-side `MakeMap` cap in `vm.rs:732`
+`redis.hgetall` `Ok(map)` checks `map.len() > self.limits.max_map_size` before
+`IndexMap` construction. The corrected public failure is the fixed
+`result_too_large` class (or the generic `e` when the string budget is smaller),
+not a dynamic size/limit message. See
+[`redis-error-results-bounded-and-redacted.md`](redis-error-results-bounded-and-redacted.md).
 
 ## Resolution references
 

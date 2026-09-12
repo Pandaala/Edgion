@@ -31,6 +31,7 @@ before applying a decision to current code.
 
 - [DSL Redis rate-limit policy contract](regression-guards/redis-rate-limit-policy-contract.md)
 - [DSL Redis client lookup borrows the LinkSys key](regression-guards/redis-client-lookup-borrows-link-key.md)
+- [DSL Redis error results are bounded and redact dependency detail](regression-guards/redis-error-results-bounded-and-redacted.md)
 
 - [Chrono `Display::to_string()` Panic on Bad Format — FIXED, PIN-IN-PLACE](regression-guards/chrono-display-panic.md)
 - [DSL regex constants: DFA size_limit / dfa_size_limit are capped at 1MB](regression-guards/dfa-size-limit.md)

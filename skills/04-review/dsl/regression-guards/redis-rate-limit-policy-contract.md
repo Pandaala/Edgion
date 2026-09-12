@@ -40,9 +40,11 @@ Source entry points are `edgion-dsl/src/{bytecode.rs,compiler/builtins.rs,script
 - `{ok:true,value:{allowed:false,...},error:nil}` is successful denial. Provider,
   argument and operation failures return a fixed error classification, never raw
   dependency details. VM errors remain distinct; examples set errorPolicy to deny.
-- Input validation and result-capacity checks run before Redis I/O. Results need
-  five map entries and up to 18 bytes for fixed error strings. Cost is a strict
-  positive integer, and business keys over 4096 bytes are rejected, not truncated.
+- Input validation and result-capacity checks run before Redis I/O. Successful
+  results need five map entries. Fixed error classes obey `maxStringLen`; when a
+  class does not fit, the one-byte generic class `e` preserves the failure Map.
+  Cost is a strict positive integer, and business keys over 4096 bytes are rejected,
+  not truncated.
 
 ## Numeric domain and limits
 
