@@ -259,6 +259,7 @@ pub fn check_link_sys_san(ls: &LinkSys) -> Vec<String> {
     let tls = match &ls.spec.config {
         SystemConfig::Redis(c) => c.tls.as_ref(),
         SystemConfig::Etcd(c) => c.tls.as_ref(),
+        SystemConfig::Otlp(c) => c.tls.as_ref(),
         SystemConfig::Elasticsearch(c) => c.tls.as_ref(),
         SystemConfig::Kafka(c) => c.tls.as_ref(),
         SystemConfig::Webhook(c) => c.conn.tls.as_ref(),
@@ -277,6 +278,7 @@ pub fn check_link_sys_san(ls: &LinkSys) -> Vec<String> {
     let provider = match &ls.spec.config {
         SystemConfig::Redis(_) => "Redis",
         SystemConfig::Etcd(_) => "Etcd",
+        SystemConfig::Otlp(_) => "OTLP",
         SystemConfig::Elasticsearch(_) => "Elasticsearch",
         SystemConfig::Kafka(_) => "Kafka",
         SystemConfig::Webhook(_) => "Webhook",

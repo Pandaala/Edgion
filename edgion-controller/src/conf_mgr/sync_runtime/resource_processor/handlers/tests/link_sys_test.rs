@@ -141,6 +141,7 @@ async fn disabled_tls_publication_clears_refs_and_reenabling_restores_checks() {
     for (provider, config, tls_path) in [
         ("redis", json!({"endpoints": ["redis://localhost:6379"]}), "/tls"),
         ("etcd", json!({"endpoints": ["https://localhost:2379"]}), "/tls"),
+        ("otlp", json!({"endpoint": "https://collector"}), "/tls"),
         (
             "elasticsearch",
             json!({"endpoints": ["https://localhost:9200"]}),
@@ -1647,4 +1648,311 @@ async fn redis_ca_only_no_san_accepted() {
         "CA-only TLS config must not trigger the SAN guard; got: {:?}",
         errors
     );
+}
+
+fn make_otlp(config: serde_json::Value) -> LinkSys {
+    let spec = serde_json::from_value(serde_json::json!({"type":"otlp","config":config})).unwrap();
+    let mut resource = LinkSys::new("collector", spec);
+    resource.metadata.namespace = Some("default".into());
+    resource
+}
+
+#[tokio::test]
+async fn otlp_invalid_secret_identity_never_resolves_or_registers_a_dependency() {
+    for invalid in [
+        serde_json::json!({"kind": "ConfigMap"}),
+        serde_json::json!({"group": "external.example"}),
+    ] {
+        for (field, namespace) in [("auth", "auth-ns"), ("client", "client-ns"), ("ca", "ca-ns")] {
+            let secrets = HashMap::from([
+                make_secret("auth-ns", "auth", &[("bearerToken", b"identity-test-token")]),
+                make_secret(
+                    "client-ns",
+                    "client",
+                    &[("tls.crt", b"certificate"), ("tls.key", b"key")],
+                ),
+                make_secret("ca-ns", "ca", &[("ca.crt", b"ca-certificate")]),
+            ]);
+            let (ctx, runtime) = make_ctx(secrets);
+            // Even an explicit grant for the same-name core Secret must not
+            // reinterpret an invalid group/kind as a core Secret reference.
+            for target_ns in ["auth-ns", "client-ns", "ca-ns"] {
+                let grant = serde_json::from_value(serde_json::json!({
+                    "metadata": {"namespace": target_ns, "name": "allow"},
+                    "spec": {"from": [{"group": "edgion.io", "kind": "LinkSys", "namespace": "default"}],
+                        "to": [{"group": "", "kind": "Secret"}]}
+                }))
+                .unwrap();
+                runtime
+                    .ref_grant_store
+                    .upsert(format!("{target_ns}/allow"), Arc::new(grant));
+            }
+            let handler = LinkSysHandler::new();
+            let config = serde_json::json!({
+                "endpoint": "https://collector.example.test",
+                "auth": {"secretRef": {"namespace": "auth-ns", "name": "auth"}},
+                "tls": {"enabled": true,
+                    "clientCertificateRef": {"namespace": "client-ns", "name": "client"},
+                    "validation": {"caCertificateRefs": [{"namespace": "ca-ns", "name": "ca", "kind": "Secret"}]}}
+            });
+            let ProcessResult::Continue(previous) = handler.parse(make_otlp(config.clone()), &ctx).await else {
+                panic!("valid references continue")
+            };
+            assert_eq!(
+                find_cond(&previous, condition_types::RESOLVED_REFS).unwrap().status,
+                "True"
+            );
+            // Retain prior resolved fields to prove the invalid update clears
+            // both transported material and the previous dependency generation.
+            let mut value = serde_json::to_value(previous).unwrap();
+            let pointer = match field {
+                "auth" => "/spec/config/auth/secretRef",
+                "client" => "/spec/config/tls/clientCertificateRef",
+                _ => "/spec/config/tls/validation/caCertificateRefs/0",
+            };
+            value
+                .pointer_mut(pointer)
+                .unwrap()
+                .as_object_mut()
+                .unwrap()
+                .extend(invalid.as_object().unwrap().clone());
+            let mut resource: LinkSys = serde_json::from_value(value).unwrap();
+            let errors = handler.preparse(&mut resource, &ctx);
+            assert!(!errors.is_empty());
+            let ProcessResult::Continue(mut parsed) = handler.parse(resource, &ctx).await else {
+                panic!("invalid references remain visible for status")
+            };
+            handler.update_status(&mut parsed, &ctx, &errors);
+            assert_eq!(find_cond(&parsed, condition_types::ACCEPTED).unwrap().status, "False");
+            assert_eq!(
+                find_cond(&parsed, condition_types::RESOLVED_REFS).unwrap().reason,
+                condition_reasons::INVALID_KIND
+            );
+            let SystemConfig::Otlp(otlp) = &parsed.spec.config else {
+                panic!("OTLP expected")
+            };
+            assert_eq!(otlp.auth.as_ref().unwrap().slot.secret.is_some(), field != "auth");
+            let tls = otlp.tls.as_ref().unwrap();
+            assert_eq!(tls.resolved_ca_certificates.is_some(), field == "auth");
+            assert_eq!(tls.resolved_client_certificate.is_some(), field == "auth");
+            assert!(runtime.cross_ns_ref_mgr.get_refs(namespace).is_empty());
+            let secret_name = if field == "auth" {
+                "auth"
+            } else if field == "client" {
+                "client"
+            } else {
+                "ca"
+            };
+            assert!(ctx
+                .secret_ref_manager()
+                .get_refs(&format!("{namespace}/{secret_name}"))
+                .is_empty());
+            for valid_ns in ["auth-ns", "client-ns", "ca-ns"]
+                .into_iter()
+                .filter(|ns| *ns != namespace)
+            {
+                assert!(
+                    !runtime.cross_ns_ref_mgr.get_refs(valid_ns).is_empty(),
+                    "valid references must still resolve after another fails"
+                );
+            }
+            let transport = serde_json::to_value(&parsed).unwrap();
+            let secret_pointer = if field == "auth" {
+                "/spec/config/auth/secret"
+            } else {
+                "/spec/config/tls/resolvedClientCertificate"
+            };
+            assert!(transport.pointer(secret_pointer).is_none_or(serde_json::Value::is_null));
+            let ProcessResult::Continue(recovered) = handler.parse(make_otlp(config), &ctx).await else {
+                panic!("corrected reference continues")
+            };
+            assert_eq!(
+                find_cond(&recovered, condition_types::RESOLVED_REFS).unwrap().status,
+                "True"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn otlp_auth_resolution_clears_stale_material_and_replaces_dependencies() {
+    let (ctx, runtime) = make_ctx(HashMap::new());
+    let handler = LinkSysHandler::new();
+    let mut resource = make_otlp(
+        serde_json::json!({"endpoint":"http://collector","auth":{"secretRef":{"name":"auth"},"secret":{"data":{"bearerToken":"aW5qZWN0ZWQ="}}}}),
+    );
+    for (token, expected) in [
+        (None, "False"),
+        (Some("valid-token".to_string()), "True"),
+        (Some("private invalid token".to_string()), "False"),
+        (Some("a".repeat(8193)), "False"),
+        (Some("replacement-token".to_string()), "True"),
+    ] {
+        let secrets = token
+            .as_ref()
+            .map(|token| make_secret("default", "auth", &[("bearerToken", token.as_bytes())]))
+            .into_iter()
+            .collect();
+        runtime.secret_store.replace_all(secrets);
+        let ProcessResult::Continue(parsed) = handler.parse(resource, &ctx).await else {
+            panic!("must continue")
+        };
+        assert_eq!(
+            find_cond(&parsed, condition_types::RESOLVED_REFS).unwrap().status,
+            expected
+        );
+        let SystemConfig::Otlp(config) = &parsed.spec.config else {
+            panic!("OTLP expected")
+        };
+        assert_eq!(config.auth.as_ref().unwrap().slot.secret.is_some(), expected == "True");
+        assert!(!serde_json::to_string(&parsed.status)
+            .unwrap()
+            .contains("private invalid token"));
+        assert!(!ctx.secret_ref_manager().get_refs("default/auth").is_empty());
+        resource = parsed;
+    }
+    if let SystemConfig::Otlp(config) = &mut resource.spec.config {
+        config.auth.as_mut().unwrap().slot.secret_ref.name = "next-auth".into();
+    }
+    let ProcessResult::Continue(parsed) = handler.parse(resource, &ctx).await else {
+        panic!("must continue")
+    };
+    assert!(ctx.secret_ref_manager().get_refs("default/auth").is_empty());
+    assert!(!ctx.secret_ref_manager().get_refs("default/next-auth").is_empty());
+    let SystemConfig::Otlp(config) = &parsed.spec.config else {
+        panic!("OTLP expected")
+    };
+    assert!(config.auth.as_ref().unwrap().slot.secret.is_none());
+    handler.on_delete(&parsed, &ctx).await;
+    assert!(ctx.secret_ref_manager().get_refs("default/next-auth").is_empty());
+}
+
+#[tokio::test]
+async fn otlp_tls_visits_all_references_and_publishes_only_complete_material() {
+    let (auth_key, auth) = make_secret("default", "auth", &[("bearerToken", b"valid-token")]);
+    let (ca2_key, ca2) = make_secret("default", "ca2", &[("ca.crt", b"ca-two")]);
+    let (client_key, client) = make_secret("default", "client", &[("tls.crt", b"certificate"), ("tls.key", b"key")]);
+    let mut secrets = HashMap::from([(auth_key, auth), (ca2_key, ca2), (client_key, client)]);
+    let (ctx, runtime) = make_ctx(secrets.clone());
+    let handler = LinkSysHandler::new();
+    let resource = make_otlp(
+        serde_json::json!({"endpoint":"https://collector","auth":{"secretRef":{"name":"auth"}},"tls":{"enabled":true,"validation":{"caCertificateRefs":[{"kind":"Secret","name":"ca1"},{"kind":"Secret","name":"ca2"}]},"clientCertificateRef":{"name":"client"}}}),
+    );
+    let ProcessResult::Continue(parsed) = handler.parse(resource, &ctx).await else {
+        panic!("must continue")
+    };
+    let SystemConfig::Otlp(config) = &parsed.spec.config else {
+        panic!("OTLP expected")
+    };
+    assert!(config.auth.as_ref().unwrap().slot.secret.is_some());
+    let tls = config.tls.as_ref().unwrap();
+    assert!(tls.resolved_ca_certificates.is_none());
+    assert!(tls.resolved_client_certificate.is_none());
+    for name in ["ca1", "ca2", "client"] {
+        assert!(
+            !ctx.secret_ref_manager().get_refs(&format!("default/{name}")).is_empty(),
+            "{name}"
+        );
+    }
+    let (key, ca1) = make_secret("default", "ca1", &[("ca.crt", b"ca-one")]);
+    secrets.insert(key, ca1);
+    runtime.secret_store.replace_all(secrets);
+    let ProcessResult::Continue(mut parsed) = handler.parse(parsed, &ctx).await else {
+        panic!("must continue")
+    };
+    assert_eq!(
+        find_cond(&parsed, condition_types::RESOLVED_REFS).unwrap().status,
+        "True"
+    );
+    let SystemConfig::Otlp(config) = &mut parsed.spec.config else {
+        panic!("OTLP expected")
+    };
+    let tls = config.tls.as_mut().unwrap();
+    assert_eq!(tls.resolved_ca_certificates.as_ref().unwrap().len(), 2);
+    assert!(tls.resolved_client_certificate.is_some());
+    tls.enabled = false;
+    let ProcessResult::Continue(parsed) = handler.parse(parsed, &ctx).await else {
+        panic!("must continue")
+    };
+    let SystemConfig::Otlp(config) = &parsed.spec.config else {
+        panic!("OTLP expected")
+    };
+    assert!(config.tls.as_ref().unwrap().resolved_client_certificate.is_none());
+    for name in ["ca1", "ca2", "client"] {
+        assert!(ctx.secret_ref_manager().get_refs(&format!("default/{name}")).is_empty());
+    }
+    assert!(!ctx.secret_ref_manager().get_refs("default/auth").is_empty());
+}
+
+#[tokio::test]
+async fn otlp_cross_namespace_secret_requires_grant_and_recovers() {
+    let (key, secret) = make_secret("shared", "auth", &[("bearerToken", b"valid-token")]);
+    let (ctx, runtime) = make_ctx(HashMap::from([(key, secret)]));
+    let handler = LinkSysHandler::new();
+    let resource = make_otlp(
+        serde_json::json!({"endpoint":"https://collector","auth":{"secretRef":{"namespace":"shared","name":"auth"}}}),
+    );
+    let ProcessResult::Continue(parsed) = handler.parse(resource, &ctx).await else {
+        panic!("must continue")
+    };
+    assert_eq!(
+        find_cond(&parsed, condition_types::RESOLVED_REFS).unwrap().reason,
+        condition_reasons::REF_NOT_PERMITTED
+    );
+    assert!(!ctx.secret_ref_manager().get_refs("shared/auth").is_empty());
+    let grant = serde_json::from_value(serde_json::json!({"metadata":{"namespace":"shared","name":"otlp"},"spec":{"from":[{"group":"edgion.io","kind":"LinkSys","namespace":"default"}],"to":[{"group":"","kind":"Secret","name":"auth"}]}})).unwrap();
+    runtime.ref_grant_store.upsert("shared/otlp".into(), Arc::new(grant));
+    let ProcessResult::Continue(parsed) = handler.parse(parsed, &ctx).await else {
+        panic!("must continue")
+    };
+    assert_eq!(
+        find_cond(&parsed, condition_types::RESOLVED_REFS).unwrap().status,
+        "True"
+    );
+    let SystemConfig::Otlp(config) = &parsed.spec.config else {
+        panic!("OTLP expected")
+    };
+    assert!(config.auth.as_ref().unwrap().slot.secret.is_some());
+    let owner = ResourceRef::new(ResourceKind::LinkSys, Some("default".into()), "collector".into());
+    assert!(runtime.cross_ns_ref_mgr.get_refs("shared").contains(&owner));
+
+    // Even denied/missing new references must replace previous namespace edges.
+    let mut replacement = make_otlp(serde_json::json!({
+        "endpoint": "https://collector",
+        "auth": {"secretRef": {"namespace": "next-shared", "name": "auth"}},
+        "tls": {"enabled": true,
+            "validation": {"caCertificateRefs": [{"kind": "Secret", "namespace": "tls-shared", "name": "ca"}]},
+            "clientCertificateRef": {"namespace": "identity-shared", "name": "client"}}
+    }));
+    let ProcessResult::Continue(parsed) = handler.parse(replacement.clone(), &ctx).await else {
+        panic!("must continue")
+    };
+    assert!(runtime.cross_ns_ref_mgr.get_refs("shared").is_empty());
+    assert!(ctx.secret_ref_manager().get_refs("shared/auth").is_empty());
+    for namespace in ["next-shared", "tls-shared", "identity-shared"] {
+        assert!(runtime.cross_ns_ref_mgr.get_refs(namespace).contains(&owner));
+    }
+    if let SystemConfig::Otlp(config) = &mut replacement.spec.config {
+        config.tls.as_mut().unwrap().enabled = false;
+    }
+    let ProcessResult::Continue(disabled) = handler.parse(replacement, &ctx).await else {
+        panic!("must continue")
+    };
+    assert!(runtime.cross_ns_ref_mgr.get_refs("tls-shared").is_empty());
+    assert!(runtime.cross_ns_ref_mgr.get_refs("identity-shared").is_empty());
+    assert!(runtime.cross_ns_ref_mgr.get_refs("next-shared").contains(&owner));
+    handler.on_delete(&disabled, &ctx).await;
+    assert!(runtime.cross_ns_ref_mgr.get_refs("next-shared").is_empty());
+    assert!(ctx.secret_ref_manager().get_refs("next-shared/auth").is_empty());
+    // Recreating from a previous enabled generation rebuilds every current edge.
+    let ProcessResult::Continue(recreated) = handler.parse(parsed, &ctx).await else {
+        panic!("must continue")
+    };
+    for namespace in ["next-shared", "tls-shared", "identity-shared"] {
+        assert!(runtime.cross_ns_ref_mgr.get_refs(namespace).contains(&owner));
+    }
+    handler.on_delete(&recreated, &ctx).await;
+    for namespace in ["next-shared", "tls-shared", "identity-shared"] {
+        assert!(runtime.cross_ns_ref_mgr.get_refs(namespace).is_empty());
+    }
 }

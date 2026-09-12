@@ -466,6 +466,7 @@ Only when a **completely different process-level configuration** is needed shoul
 | `test_resource_abnormal_metrics.sh` | Slow-test-only Controller `tick_secs=30` |
 | `run_conf_sync_mtls_test.sh` | Controller↔Gateway mTLS channel |
 | `run_acme_test.sh` | Standalone ACME topology |
+| `run_otlp_test.sh` | Immutable Gateway process YAML selects shared OTLP primary/fallback outputs; isolated owned collectors test hot LinkSys generations |
 | `test_oidc_egress.sh` | Gateway-startup proxy environment and process-local multi-address DNS injection for both OIDC client branches |
 | `test_debug_access_log_wire.sh` | Replace/Wrap masking is Gateway-startup-global; two serial isolated modes verify response headers and plugin hot reload |
 
@@ -477,6 +478,16 @@ It uses prebuilt Controller/Gateway/test_server binaries and generates its own
 fixtures; it is not registered in the frozen existing runners. See the
 [wire/lifecycle coverage contract](../04-review/observability/regression-guards/debug-access-log-wire-and-lifecycle.md)
 for the build command, timeout options, evidence, and limits.
+
+The OTLP runner uses its isolated `otlp_test_assertions.py` state/deadline driver
+(`wait_phase`) rather than registering in the default Rust dynamic registry:
+that shared topology cannot change startup-global log output references. It starts
+one Gateway/Controller set, owns exact child PIDs and a dedicated compose project,
+and applies LinkSys/Secret updates through the ordinary Controller API. Run
+`bash edgion-tests/integration/scripts/integration/link_sys/run_otlp_test.sh`.
+Low-level production transport tests run separately with
+`cargo test -p edgion-gateway --features test-util --test otlp_transport`;
+the test-only ResolverSpec injection is not an operator configuration field.
 
 Center/federation topology tests are maintained in the separate EdgionCenter repository.
 

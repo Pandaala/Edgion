@@ -154,3 +154,7 @@ Known high-cardinality levers, their defaults, and worst-case series counts.
 运行时安全网：`CardinalityGuard`（后续任务落地）将 recorder 注册的不同序列数上限设为
 `metrics.cardinality_cap`（默认 10000）；`edgion_controller_resource_abnormal` 在 recorder
 之外手工渲染，并依赖自身的 1000 条上限。
+
+OTLP LinkSys 健康指标在已有 `link` label 中使用已校验的 `namespace/name`。
+多个日志输出引用同一资源时共享一个健康序列和探针。Gauge 表示 TCP 可达，
+不表示导出已确认；endpoint URI 和解析后的地址不得作为 label。

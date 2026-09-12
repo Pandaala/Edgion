@@ -712,3 +712,13 @@ Spec: `docs/superpowers/specs/2026-06-16-plugin-log-tokens-design.md`.
 ### Request identity ownership
 
 `RequestInfo.trace_id: RequestTraceId` owns the internal W3C context and bounded vector of correlation IDs. Serialize one flat JSON object: emit the reserved `x-trace-id` from W3C state once, then active custom names. Disabling the default header does not remove the standard log identity. Custom destinations cannot reuse the reserved name. Preserve origin metadata: copied custom values require log masking without altering wire propagation. Suppressed custom IDs are omitted. A business ID or W3C trace ID is not a unique per-request storage key; multiple requests may share it. See [lifecycle contract](../../04-review/observability/intentional-design/request-trace-id-lifecycle.md).
+
+## OTLP connection and identity boundary
+
+OTLP senders retain only a validated LinkSys key. Shared OtlpLinkClient owns all
+connections, credentials, TLS, exporter/batch state and health. Keep record
+projection (LogMeta, severity, trace ID, body and sensitive url.path) unchanged
+when touching transport. Do not add per-request tracing or export acknowledgments
+to the first-healthy sender contract. Health labels use bounded namespace/name,
+never an endpoint or raw process-config reference. Native transport dependency
+logs are protected by shared bootstrap independently of RUST_LOG.

@@ -6,12 +6,12 @@
 
 ## Overview
 
-A **connector** is a reusable, named handle to an external system — Redis, Etcd, Elasticsearch, an HTTP webhook, or Kafka. You declare it once as a `LinkSys` resource, attach its credentials through Kubernetes Secrets, and then reference it from any feature that needs that backend. This keeps connection details and credentials in one place instead of duplicating them across every plugin and policy.
+A **connector** is a reusable, named handle to an external system — Redis, Etcd, Elasticsearch, an HTTP webhook, Kafka, or an OTLP/gRPC collector. You declare it once as a `LinkSys` resource, attach its credentials through Kubernetes Secrets, and then reference it from any feature that needs that backend. This keeps connection details and credentials in one place instead of duplicating them across every plugin and policy.
 
 A single `LinkSys` object describes exactly one connector. The top-level `spec.type` selects the backend, and `spec.config` carries the configuration for that backend. Several Edgion features consume connectors by `namespace/name`:
 
 - Distributed (cluster-wide) rate limiting references a `redis` connector by `namespace/name` — see [Redis-backed Rate Limit](../../user-guide/http-route/filters/edgion-plugins/rate-limit-redis.md).
-- Access and audit log sinks reference an `elasticsearch`, `redis`, or `webhook` connector — see [Access Log](../observability/access-log.md).
+- Async log sinks reference an `elasticsearch`, `kafka`, or `otlp` connector — see [Access Log](../observability/access-log.md).
 - Plugins that resolve keys or external data (for example webhook-based key resolution) reference a `webhook` connector.
 
 `LinkSys` is a Namespaced resource with the short name `lsys`. `kubectl get linksys` shows the `Accepted` and `ResolvedRefs` conditions at a glance.
@@ -64,7 +64,7 @@ Secret keys follow a fixed, well-known convention — there are no `usernameKey`
 |-----------|---------------------------|---------------|---------------|
 | basic (Redis / Etcd / ES) | `kubernetes.io/basic-auth` or `Opaque` | `password` | `username` |
 | apiKey (Elasticsearch) | `Opaque` | `apiKeyId`, `apiKeySecret` | — |
-| bearer (Elasticsearch) | `Opaque` | `bearerToken` | — |
+| bearer (Elasticsearch / OTLP) | `Opaque` | `bearerToken` | — |
 | TLS (all backends) | `kubernetes.io/tls` or `Opaque` | At least one of `tls.crt` / `tls.key` / `ca.crt` | — |
 
 Application-layer key names use camelCase; TLS keys follow the Kubernetes `kubernetes.io/tls` standard.
@@ -90,12 +90,12 @@ tls:
     name: my-client-tls        # Secret holding tls.crt + tls.key for client mTLS
 ```
 
-> **Phase 1 CA ref limitation**: `validation.caCertificateRefs` for LinkSys (redis / etcd / elasticsearch / kafka) only supports `kind: Secret` in this release. ConfigMap CA is not supported for LinkSys. If you need ConfigMap CA support, use the plugin (OIDC / LDAP / ForwardAuth / EGC) TLS paths. Inline CA (`caCert`) has been removed; use a Secret with a `ca.crt` key instead.
+> **Phase 1 CA ref limitation**: `validation.caCertificateRefs` for LinkSys (redis / etcd / elasticsearch / kafka / otlp) only supports `kind: Secret` in this release. ConfigMap CA is not supported for LinkSys. If you need ConfigMap CA support, use the plugin (OIDC / LDAP / ForwardAuth / EGC) TLS paths. Inline CA (`caCert`) has been removed; use a Secret with a `ca.crt` key instead.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `enabled` | Boolean | `false` | Enable TLS for the connection. For URLs that already imply TLS (`https://`, `rediss://`), this only adds custom CA / client-certificate handling. |
-| `verify` | Boolean | `true` | Verify the peer TLS certificate when the block is enabled. `verify: false` is honored (operator responsibility); a WARN is logged at startup. Redis and Etcd reject `verify: false` in enabled blocks — their SDKs have no skip-verify API. |
+| `verify` | Boolean | `true` | Verify the peer TLS certificate when the block is enabled. `verify: false` is honored (operator responsibility); a WARN is logged at startup. Redis, Etcd and OTLP reject `verify: false` in enabled blocks — their SDKs have no skip-verify API. |
 | `validation` | Object | none | Optional trust anchor configuration. Omit to use built-in webpki root CAs. |
 | `validation.caCertificateRefs` | Array | none | List of CA certificate Secret refs (each: `{ kind: Secret, name, namespace }`). The Secret must have a `ca.crt` key. For LinkSys, only `kind: Secret` is supported in this release. A custom CA **replaces** the built-in roots. |
 | `validation.wellKnownCACertificates` | String | none | Explicitly use built-in webpki root CAs. Allowed value: `System`. |
@@ -1403,3 +1403,102 @@ If you run into problems:
 - [Redis-backed Rate Limit](../../user-guide/http-route/filters/edgion-plugins/rate-limit-redis.md)
 - [Access Log](../observability/access-log.md)
 - [Metrics](../observability/metrics.md)
+
+## OTLP/gRPC connector
+
+Use `type: otlp` to export log records to an OpenTelemetry Collector. One LinkSys
+resource shares its connection, exporter, batch processor and TCP health probe
+across access, TCP, TLS and UDP log outputs. SSL logging uses a synchronous file
+writer and does not support OTLP.
+
+```yaml
+apiVersion: edgion.io/v1
+kind: LinkSys
+metadata:
+  namespace: observability
+  name: collector
+spec:
+  type: otlp
+  config:
+    endpoint: https://collector.observability.svc:4317
+    timeoutMs: 10000
+    auth:
+      secretRef:
+        name: collector-auth
+    tls:
+      enabled: true
+      validation:
+        caCertificateRefs:
+          - kind: Secret
+            name: collector-ca
+      clientCertificateRef:
+        name: collector-client
+```
+
+Create the referenced Secrets in the same namespace: `collector-auth` contains
+`bearerToken`, `collector-ca` contains `ca.crt`, and `collector-client` is a
+`kubernetes.io/tls` Secret containing `tls.crt` and `tls.key`. Omit `auth` for an
+unauthenticated collector. Omit the TLS block to use HTTPS with system roots;
+omit only `clientCertificateRef` when client authentication is unnecessary.
+Custom CA certificates replace public roots. Cross-namespace Secret references
+require a ReferenceGrant. Authentication supports only a Bearer token from a
+Secret (at most 8192 bytes); arbitrary metadata and inline credentials are rejected.
+
+Configure the Gateway process output separately:
+
+```yaml
+access_log:
+  enabled: true
+  output:
+    otlp:
+      linkSysRef:
+        namespace: observability
+        name: collector
+  fallback:
+    localFile:
+      path: logs/access-fallback.log
+```
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `endpoint` | String | Required | `http://host[:port]` or `https://host[:port]`, optionally ending in `/`. Omitted ports are 80/443; specify `:4317` for a typical collector. |
+| `timeoutMs` | Integer | 10000 | Complete export deadline in milliseconds, from 1 through 300000. |
+| `auth.secretRef` | Object | None | Secret with the `bearerToken` key. |
+| `tls` | Object | None | Shared outbound TLS policy and certificate references. |
+
+Endpoint userinfo, paths other than `/`, queries, fragments, escapes and whitespace
+are rejected. IPv6 literals require brackets. Plain HTTP cannot enable a local TLS
+block. HTTPS always verifies the original endpoint hostname. Verification disabling,
+hostname overrides and SAN overrides are unsupported. A disabled local TLS block
+is ignored; an HTTPS endpoint still uses TLS and the global verification policy.
+
+Every connection and health probe applies Gateway egress policy to the actual
+resolved addresses. Production blocks loopback, link-local and unspecified
+addresses, including IPv4-mapped IPv6. Private/unique-local collector addresses
+work when the global private-egress block is disabled. No proxy environment or
+redirect can change the destination.
+
+Missing, wrong-type, initializing and unhealthy references use the next healthy
+configured log output; when none is healthy, the log is dropped with the existing
+drop counter. A referenced connection failure does not prevent Gateway startup.
+Invalid namespace/name syntax fails process configuration. References use Kubernetes
+namespace/name syntax and bounds, including for a disabled output or fallback.
+
+Hot updates retain a working connection while the replacement is invalid,
+unresolved or fails its initial empty OTLP Export. This initial check includes
+collector authentication and TLS acceptance within a three-second deadline. A
+valid pending connection retries automatically.
+Removal stops the exporter and probe; process shutdown gives each pipeline up to
+five seconds to drain before cancelling its outstanding exports and joining its
+worker. A replacement already retiring is joined before the active pipeline. This is best-effort log
+delivery, without durable replay or retry to a second sink after a send failure.
+
+`edgion_link_sys_health{link="observability/collector"}` and its flip counter use
+the LinkSys key. Health describes TCP reachability, not authentication, successful
+TLS negotiation on every reconnect, or delivery acknowledgment. Inspect collector
+records to verify end-to-end delivery. SDK transport diagnostics that can reveal
+endpoints or certificate details remain suppressed even with `RUST_LOG=trace`.
+
+Only OTLP/gRPC log export is supported. There is no `protocol` field or legacy
+inline OTLP output shape; OTLP/HTTP, trace export and application metric export are
+outside this connector.

@@ -11,3 +11,12 @@ spec:
     - name: http
       protocol: HTTP
       port: 31930
+    - name: tcp
+      protocol: TCP
+      port: 31931
+    - name: tls
+      protocol: TLS
+      port: 31932
+      hostname: otlp-backend.edgion-test.example.com
+      tls:
+        mode: Passthrough

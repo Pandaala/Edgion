@@ -29,12 +29,15 @@ gauge only ever `set` on a flip also stays absent from `/metrics` until the firs
 "no cold zero-noise" benefit the `OnceLock` policy exists to provide for the struct handles. Adding
 struct fields would be inconsistent and buy nothing.
 
-**2. The `link` label is bounded by provider count.**
+**2. The `link` label requires a validated provider identity.**
 
 One series per configured LinkSys provider — the same bounded shape as the existing `service`
 (circuit breaker / LB degrade) and `kind` (config parse) labels in this file. `direction` is a fixed
-2-value set (`recovered`/`degraded`). No open-ended/user-controlled label values. Not a cardinality
-risk.
+2-value set (`recovered`/`degraded`). OTLP process references are user supplied, so provider count alone was not a
+sufficient safety argument. Validate namespace/name syntax and lengths before
+constructing senders or health identities. The former inline OTLP endpoint label
+violated this precondition (D0023); dedicated LinkSys ownership removes that path.
+The series domain is configured, validated provider keys, not arbitrary URIs.
 
 **3. Stale series on provider deletion is a known, accepted, pre-existing behavior.**
 

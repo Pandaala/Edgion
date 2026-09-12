@@ -649,3 +649,14 @@ production enablement even when the startup WARN goes unread.
 - Tune the default RateLimitLocal precision: change `rate_limit`
 - Require BoringSSL FIPS mode at startup (FIPS builds only): change `require_fips` or set `EDGION_REQUIRE_FIPS`
 - Tune the Wasm `source.oci` memory cache / pull behavior: change `gateway.wasm_oci_cache_max_entries` / `wasm_oci_cache_ttl_secs` / `wasm_oci_cache_purge_interval_secs` / `wasm_oci_cache_max_bytes` / `wasm_oci_pull_timeout_secs` / `wasm_oci_pull_attempts`. Artifacts are not persisted across restart. Up to four OCI acquisition pipelines bound transient work separately from retained cache allocations. Last-plugin removal clears retained entries; active compiled modules follow their existing reference lifecycle.
+
+## OTLP output references
+
+Async `access_log`, `tcp_log`, `tls_log` and `udp_log` primary/fallback outputs
+accept `otlp: {linkSysRef: {namespace: observability, name: collector}}`.
+Endpoint, timeout, authentication and TLS belong in `LinkSys.spec.config` with
+`type: otlp`, never in process YAML. There is no legacy inline OTLP form.
+All LinkSysRef values validate Kubernetes namespace/name syntax and length while
+loading process YAML, including disabled blocks. Invalid values produce fixed
+errors before sender identity construction; valid unresolved references initialize
+unhealthy and participate in first-healthy fallback. SSL sync logs remain file-only.

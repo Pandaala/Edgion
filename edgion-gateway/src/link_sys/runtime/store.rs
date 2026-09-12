@@ -8,9 +8,11 @@
 //! callers use `get_redis_client("namespace/name")` to obtain a ready-to-use client.
 
 use arc_swap::ArcSwap;
+use futures::future::{BoxFuture, Shared};
+use futures::FutureExt;
 use parking_lot::Mutex;
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock};
 
 use edgion_resources::resources::link_sys::LinkSys;
@@ -20,6 +22,7 @@ use crate::link_sys::lifecycle::LinkSysLifecycle;
 use crate::link_sys::providers::elasticsearch::EsLinkClient;
 use crate::link_sys::providers::etcd::EtcdLinkClient;
 use crate::link_sys::providers::kafka::KafkaLinkClient;
+use crate::link_sys::providers::otlp::OtlpLinkClient;
 use crate::link_sys::providers::redis::RedisLinkClient;
 use crate::link_sys::providers::webhook::{get_webhook_manager, WebhookLinkClient, WebhookManager};
 use crate::link_sys::LinkSysHealth;
@@ -32,6 +35,33 @@ type LinkSysMap = HashMap<String, LinkSys>;
 
 static LINK_SYS_SOURCE_EVENT_LOCK: Mutex<()> = Mutex::new(());
 static NEXT_LINK_SYS_DISPATCH_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+static LINK_SYS_DISPATCH_TAIL: Mutex<Option<tokio::task::JoinHandle<()>>> = Mutex::new(None);
+
+/// Reserve async admission order while the caller holds the source-event lock.
+/// The Webhook mutation guard already serializes generic dispatch, but its stale
+/// fence must not discard an earlier delta just because a later task polls first.
+/// One tail owns the pending task chain; completed predecessors are released.
+fn spawn_ordered_dispatch(
+    handle: &tokio::runtime::Handle,
+    tail: &Mutex<Option<tokio::task::JoinHandle<()>>>,
+    dispatch: impl std::future::Future<Output = ()> + Send + 'static,
+) {
+    let mut tail = tail.lock();
+    let previous = tail.take();
+    *tail = Some(handle.spawn(dispatch_after(previous, dispatch)));
+}
+
+async fn dispatch_after(
+    previous: Option<tokio::task::JoinHandle<()>>,
+    dispatch: impl std::future::Future<Output = ()>,
+) {
+    if let Some(previous) = previous {
+        if previous.await.is_err() {
+            tracing::warn!(reason = "dispatch_failed", "Previous LinkSys dispatch did not complete");
+        }
+    }
+    dispatch.await;
+}
 
 fn reserve_dispatch_sequence(counter: &AtomicU64) -> Option<u64> {
     counter
@@ -94,7 +124,8 @@ impl LinkSysStore {
                 &LINK_SYS_SOURCE_EVENT_LOCK,
                 |sequence, dispatch_data| {
                     if let Ok(handle) = tokio::runtime::Handle::try_current() {
-                        handle.spawn(async move {
+                        dispatch_otlp_full(&dispatch_data);
+                        spawn_ordered_dispatch(&handle, &LINK_SYS_DISPATCH_TAIL, async move {
                             dispatch_full_set(sequence, &dispatch_data).await;
                         });
                     } else {
@@ -125,7 +156,8 @@ impl LinkSysStore {
                 &LINK_SYS_SOURCE_EVENT_LOCK,
                 |sequence, dispatch_data, remove_set| {
                     if let Ok(handle) = tokio::runtime::Handle::try_current() {
-                        handle.spawn(async move {
+                        dispatch_otlp_partial(&dispatch_data, &remove_set);
+                        spawn_ordered_dispatch(&handle, &LINK_SYS_DISPATCH_TAIL, async move {
                             dispatch_partial_update(sequence, &dispatch_data, &remove_set).await;
                         });
                     } else {
@@ -154,7 +186,8 @@ impl LinkSysStore {
                 &LINK_SYS_SOURCE_EVENT_LOCK,
                 |sequence, dispatch_data| {
                     if let Ok(handle) = tokio::runtime::Handle::try_current() {
-                        handle.spawn(async move {
+                        dispatch_otlp_full(&dispatch_data);
+                        spawn_ordered_dispatch(&handle, &LINK_SYS_DISPATCH_TAIL, async move {
                             dispatch_full_set(sequence, &dispatch_data).await;
                         });
                     } else {
@@ -453,6 +486,189 @@ static KAFKA_RUNTIME: LazyLock<ProviderRuntimeStore<KafkaLinkClient>> = LazyLock
 /// Returns None if the LinkSys resource doesn't exist or isn't a Kafka type.
 pub fn get_kafka_client(name: &str) -> Option<Arc<KafkaLinkClient>> {
     KAFKA_RUNTIME.get(name)
+}
+
+// OTLP keeps one stable owner per key. Connection generations are prepared and
+// published inside that owner, so a failed update cannot evict working service.
+static OTLP_RUNTIME: LazyLock<ProviderRuntimeStore<OtlpLinkClient>> = LazyLock::new(ProviderRuntimeStore::new);
+static OTLP_CLEANUP: LazyLock<Mutex<tokio::task::JoinSet<()>>> =
+    LazyLock::new(|| Mutex::new(tokio::task::JoinSet::new()));
+// A removed key cannot create another owner until its entire previous owner
+// has joined. Desired recreations remain in the authoritative source snapshot.
+static OTLP_RETIRING_KEYS: LazyLock<Mutex<HashSet<String>>> = LazyLock::new(|| Mutex::new(HashSet::new()));
+static OTLP_SHUTDOWN: Mutex<Option<Shared<BoxFuture<'static, ()>>>> = Mutex::new(None);
+static OTLP_STOPPING: AtomicBool = AtomicBool::new(false);
+
+pub fn get_otlp_client(name: &str) -> Option<Arc<OtlpLinkClient>> {
+    OTLP_RUNTIME.get(name)
+}
+
+pub fn list_otlp_clients() -> Vec<String> {
+    OTLP_RUNTIME.list()
+}
+
+pub fn otlp_client_count() -> usize {
+    OTLP_RUNTIME.count()
+}
+
+fn configure_otlp(key: &str, resource: &LinkSys) {
+    if OTLP_STOPPING.load(Ordering::Acquire) || OTLP_RETIRING_KEYS.lock().contains(key) {
+        return;
+    }
+    let edgion_resources::resources::link_sys::SystemConfig::Otlp(config) = &resource.spec.config else {
+        return;
+    };
+    // FS/process inputs do not inherit Kubernetes API name validation. Never
+    // put the raw key in a diagnostic until the client has validated it.
+    let client = match OTLP_RUNTIME.get(key) {
+        Some(client) => client,
+        None => match OtlpLinkClient::new(key.to_owned()) {
+            Ok(client) => {
+                OTLP_RUNTIME.insert(key.to_owned(), client.clone());
+                client
+            }
+            Err(_) => {
+                tracing::warn!(system = "otlp", reason = "invalid_config", "OTLP provider rejected");
+                return;
+            }
+        },
+    };
+    if resource.key_name_str() != key || !resource.validate_config().is_empty() {
+        client.invalidate_pending();
+        tracing::warn!(
+            link = key,
+            system = "otlp",
+            reason = "invalid_config",
+            "OTLP update rejected"
+        );
+        return;
+    }
+    if let Err(reason) = client.update(config) {
+        tracing::warn!(
+            link = key,
+            system = "otlp",
+            reason,
+            "OTLP update retained last-known-good generation"
+        );
+    }
+}
+
+/// Called under LINK_SYS_SOURCE_EVENT_LOCK, before source dispatch can reorder.
+fn remove_otlp(key: &str) {
+    let Some(client) = OTLP_RUNTIME.get(key) else {
+        return;
+    };
+    if let Err(reason) = client.begin_shutdown() {
+        tracing::warn!(link = key, system = "otlp", reason, "OTLP shutdown registration failed");
+    }
+    OTLP_RETIRING_KEYS.lock().insert(key.to_owned());
+    OTLP_RUNTIME.remove(key);
+    let key = key.to_owned();
+    OTLP_CLEANUP.lock().spawn(async move {
+        if let Err(reason) = client.shutdown().await {
+            tracing::warn!(link = key, system = "otlp", reason, "OTLP shutdown failed");
+        }
+        let _source = LINK_SYS_SOURCE_EVENT_LOCK.lock();
+        OTLP_RETIRING_KEYS.lock().remove(&key);
+        if !OTLP_STOPPING.load(Ordering::Acquire) {
+            if let Some(resource) = get_global_link_sys_store().get(&key) {
+                configure_otlp(&key, &resource);
+            }
+        }
+    });
+}
+
+/// Includes removed owners whose actual probe/SDK cleanup has not joined yet.
+pub fn otlp_retiring_client_count() -> usize {
+    let mut cleanup = OTLP_CLEANUP.lock();
+    while let Some(result) = cleanup.try_join_next() {
+        if result.is_err() {
+            tracing::warn!(system = "otlp", reason = "shutdown_failed", "OTLP cleanup task failed");
+        }
+    }
+    drop(cleanup);
+    OTLP_RETIRING_KEYS.lock().len()
+}
+
+// These synchronous desired-state transitions run inside the existing source
+// event critical section. Generic dispatch follows the same source order, while
+// OTLP desired state and cancellation are visible before any async task polls.
+fn dispatch_otlp_full(data: &HashMap<String, LinkSys>) {
+    if OTLP_STOPPING.load(Ordering::Acquire) {
+        return;
+    }
+    let mut present = HashSet::new();
+    for (key, resource) in data {
+        if matches!(
+            resource.spec.config,
+            edgion_resources::resources::link_sys::SystemConfig::Otlp(_)
+        ) {
+            present.insert(key.as_str());
+            configure_otlp(key, resource);
+        }
+    }
+    for key in OTLP_RUNTIME.list() {
+        if !present.contains(key.as_str()) {
+            remove_otlp(&key);
+        }
+    }
+    otlp_retiring_client_count();
+}
+
+fn dispatch_otlp_partial(data: &HashMap<String, LinkSys>, remove: &HashSet<String>) {
+    if OTLP_STOPPING.load(Ordering::Acquire) {
+        return;
+    }
+    // Match source-map semantics: removal first, add/update wins an overlapping key.
+    for key in remove {
+        remove_otlp(key);
+    }
+    for (key, resource) in data {
+        if matches!(
+            resource.spec.config,
+            edgion_resources::resources::link_sys::SystemConfig::Otlp(_)
+        ) {
+            configure_otlp(key, resource);
+        } else {
+            remove_otlp(key);
+        }
+    }
+    otlp_retiring_client_count();
+}
+
+/// Fence source events and retain the entire drain task, including when a caller
+/// stops awaiting it. Runtime shutdown must await this before dropping Tokio IO.
+pub async fn shutdown_otlp_clients() {
+    let completion = {
+        let mut shutdown = OTLP_SHUTDOWN.lock();
+        shutdown
+            .get_or_insert_with(|| {
+                let mut cleanup = {
+                    let _source = LINK_SYS_SOURCE_EVENT_LOCK.lock();
+                    OTLP_STOPPING.store(true, Ordering::Release);
+                    for key in OTLP_RUNTIME.list() {
+                        remove_otlp(&key);
+                    }
+                    std::mem::replace(&mut *OTLP_CLEANUP.lock(), tokio::task::JoinSet::new())
+                };
+                let task = tokio::spawn(async move {
+                    while let Some(result) = cleanup.join_next().await {
+                        if result.is_err() {
+                            tracing::warn!(system = "otlp", reason = "shutdown_failed", "OTLP cleanup task failed");
+                        }
+                    }
+                });
+                async move {
+                    if task.await.is_err() {
+                        tracing::warn!(system = "otlp", reason = "shutdown_failed", "OTLP process drain failed");
+                    }
+                }
+                .boxed()
+                .shared()
+            })
+            .clone()
+    };
+    completion.await;
 }
 
 // ============================================================
@@ -858,6 +1074,8 @@ async fn dispatch_full_set_with(
             // Controller-only credential acquisition metadata. The Gateway receives
             // only the resolved plugin credential and never contacts the issuer.
             edgion_resources::resources::link_sys::SystemConfig::CredentialSource(_) => {}
+            // OTLP desired state was applied synchronously at source entry.
+            edgion_resources::resources::link_sys::SystemConfig::Otlp(_) => {}
         }
     }
 
@@ -981,6 +1199,16 @@ async fn dispatch_partial_update_with(
             edgion_resources::resources::link_sys::SystemConfig::HttpDns(_) => {}
             // Controller-only credential acquisition metadata.
             edgion_resources::resources::link_sys::SystemConfig::CredentialSource(_) => {}
+            edgion_resources::resources::link_sys::SystemConfig::Otlp(_) => {
+                // Switching a resource to OTLP must not leave its previous
+                // provider callable under the same key.
+                webhook_mutation.commit_remove(key).await;
+                webhook_runtime.remove(key);
+                spawn_shutdown_if_present(REDIS_RUNTIME.remove(key), "Redis");
+                spawn_shutdown_if_present(ETCD_RUNTIME.remove(key), "Etcd");
+                spawn_shutdown_if_present(ES_RUNTIME.remove(key), "Elasticsearch");
+                spawn_shutdown_if_present(KAFKA_RUNTIME.remove(key), "Kafka");
+            }
         }
     }
 
@@ -1479,6 +1707,155 @@ mod tests {
         assert_callable_webhook_port(&manager, &runtime, &key, 8082).await;
     }
 
+    #[test]
+    fn ordered_otlp_type_change_removes_foreign_clients_before_unrelated_delta() {
+        let _guard = I5_DISPATCH_LOCK.lock().unwrap_or_else(|error| error.into_inner());
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            for full in [false, true] {
+                let manager = Arc::new(WebhookManager::new_for_test());
+                let webhooks = Arc::new(ProviderRuntimeStore::new());
+                let source = LinkSysStore::new();
+                let source_lock = Mutex::new(());
+                let counter = AtomicU64::new(1);
+                let tail = Mutex::new(None);
+                let key = "ordered/transition".to_owned();
+                let old = create_test_webhook_linksys("ordered", "transition");
+                dispatch_partial_update_with(
+                    1,
+                    &HashMap::from([(key.clone(), old)]),
+                    &HashSet::new(),
+                    &manager,
+                    &webhooks,
+                )
+                .await;
+                assert!(manager.get(&key).await.is_some());
+
+                // Constructors do not connect. Populate every foreign typed map
+                // without starting any networking or provider background worker.
+                let redis =
+                    serde_json::from_value(serde_json::json!({"endpoints": ["redis://127.0.0.1:6379"]})).unwrap();
+                let etcd = serde_json::from_value(serde_json::json!({"endpoints": ["http://127.0.0.1:2379"]})).unwrap();
+                let es = serde_json::from_value(serde_json::json!({"endpoints": ["http://127.0.0.1:9200"]})).unwrap();
+                let kafka = serde_json::from_value(serde_json::json!({"brokers": ["127.0.0.1:9092"]})).unwrap();
+                REDIS_RUNTIME.insert(
+                    key.clone(),
+                    Arc::new(
+                        RedisLinkClient::from_config(&key, &redis, &credential::CredentialState::NotRequired).unwrap(),
+                    ),
+                );
+                ETCD_RUNTIME.insert(
+                    key.clone(),
+                    Arc::new(
+                        EtcdLinkClient::from_config(&key, &etcd, &credential::CredentialState::NotRequired).unwrap(),
+                    ),
+                );
+                ES_RUNTIME.insert(
+                    key.clone(),
+                    Arc::new(EsLinkClient::from_config(&key, &es, &credential::CredentialState::NotRequired).unwrap()),
+                );
+                KAFKA_RUNTIME.insert(
+                    key.clone(),
+                    Arc::new(
+                        KafkaLinkClient::from_config(&key, &kafka, &credential::CredentialState::NotRequired).unwrap(),
+                    ),
+                );
+
+                let otlp: LinkSys = serde_json::from_value(serde_json::json!({
+                    "apiVersion": "edgion.io/v1", "kind": "LinkSys",
+                    "metadata": {"namespace": "ordered", "name": "transition"},
+                    "spec": {"type": "otlp", "config": {"endpoint": "https://collector.example.test",
+                        "auth": {"secretRef": {"name": "missing"}}}}
+                }))
+                .unwrap();
+                let (release, gate) = tokio::sync::oneshot::channel();
+                let earlier_manager = manager.clone();
+                let earlier_webhooks = webhooks.clone();
+                let enqueue = |sequence, data: Arc<LinkSysMap>| {
+                    if full {
+                        dispatch_otlp_full(&data);
+                    } else {
+                        dispatch_otlp_partial(&data, &HashSet::new());
+                    }
+                    spawn_ordered_dispatch(&tokio::runtime::Handle::current(), &tail, async move {
+                        gate.await.unwrap();
+                        if full {
+                            dispatch_full_set_with(sequence, &data, &earlier_manager, &earlier_webhooks).await;
+                        } else {
+                            dispatch_partial_update_with(
+                                sequence,
+                                &data,
+                                &HashSet::new(),
+                                &earlier_manager,
+                                &earlier_webhooks,
+                            )
+                            .await;
+                        }
+                    });
+                };
+                let data = HashMap::from([(key.clone(), otlp)]);
+                if full {
+                    source
+                        .replace_all_with_dispatch(data, &counter, &source_lock, enqueue)
+                        .unwrap();
+                } else {
+                    source
+                        .update_with_dispatch(data, &HashSet::new(), &counter, &source_lock, |sequence, data, _| {
+                            enqueue(sequence, data)
+                        })
+                        .unwrap();
+                }
+                let owner = get_otlp_client(&key).unwrap();
+                let unrelated = HashMap::from([(
+                    "ordered/unrelated".to_owned(),
+                    create_test_webhook_linksys("ordered", "unrelated"),
+                )]);
+                let previous = tail.lock().take();
+                let mut later = std::pin::pin!(dispatch_after(previous, async {
+                    dispatch_partial_update_with(3, &unrelated, &HashSet::new(), &manager, &webhooks).await;
+                }));
+                // Force the later task to poll before the earlier task can enter
+                // begin_mutation. Without the predecessor wait it discards N.
+                assert!(futures::poll!(&mut later).is_pending());
+                assert!(manager.get("ordered/unrelated").await.is_none());
+                release.send(()).unwrap();
+                later.await;
+                assert!(get_redis_client(&key).is_none());
+                assert!(get_etcd_client(&key).is_none());
+                assert!(get_es_client(&key).is_none());
+                assert!(get_kafka_client(&key).is_none());
+                assert!(webhooks.get(&key).is_none());
+                assert!(manager.get(&key).await.is_none());
+                assert!(manager.get("ordered/unrelated").await.is_some());
+                assert!(Arc::ptr_eq(&owner, &get_otlp_client(&key).unwrap()));
+
+                // A later recreation must survive the earlier type cleanup.
+                let recreated = HashMap::from([(
+                    key.clone(),
+                    create_test_webhook_linksys_with_port("ordered", "transition", 8181),
+                )]);
+                dispatch_otlp_partial(&recreated, &HashSet::new());
+                dispatch_partial_update_with(4, &recreated, &HashSet::new(), &manager, &webhooks).await;
+                assert_callable_webhook_port(&manager, &webhooks, &key, 8181).await;
+                owner.shutdown().await.unwrap();
+            }
+        });
+    }
+
+    #[tokio::test]
+    async fn ordered_dispatch_releases_successor_after_predecessor_failure() {
+        let previous = tokio::spawn(async { panic!("test predecessor failure") });
+        let ran = AtomicBool::new(false);
+        dispatch_after(Some(previous), async {
+            ran.store(true, Ordering::Relaxed);
+        })
+        .await;
+        assert!(ran.load(Ordering::Relaxed));
+    }
+
     // ============================================================
     // Credential-readiness-gated dispatch tests
     //
@@ -1836,5 +2213,121 @@ mod runtime_stats_tests {
         let _: usize = redis_client_count();
         let _: usize = etcd_client_count();
         let _: usize = es_client_count();
+    }
+
+    #[test]
+    fn empty_otlp_owner_store_reports_no_residue() {
+        let store: ProviderRuntimeStore<OtlpLinkClient> = ProviderRuntimeStore::new();
+        assert_eq!(store.count(), 0);
+        assert!(store.list().is_empty());
+    }
+
+    fn pending_otlp(name: &str) -> LinkSys {
+        serde_json::from_value(serde_json::json!({
+            "apiVersion": "edgion.io/v1", "kind": "LinkSys",
+            "metadata": {"namespace": "otlp-store-test", "name": name},
+            "spec": {"type": "otlp", "config": {
+                "endpoint": "https://collector.example.test:4317",
+                "auth": {"secretRef": {"name": "missing-auth"}}
+            }}
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn otlp_full_partial_invalid_type_change_and_remove_keep_owner_scope() {
+        let _guard = I5_DISPATCH_LOCK.lock().unwrap_or_else(|error| error.into_inner());
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let store = get_global_link_sys_store();
+            let first_key = "otlp-store-test/first".to_owned();
+            let second_key = "otlp-store-test/second".to_owned();
+            let initial = HashMap::from([
+                (first_key.clone(), pending_otlp("first")),
+                (second_key.clone(), pending_otlp("second")),
+            ]);
+            store.replace_all(initial.clone());
+            let first = get_otlp_client(&first_key).unwrap();
+            let second = get_otlp_client(&second_key).unwrap();
+            assert!(!first.healthy());
+            assert!(!second.healthy());
+
+            let mut invalid = pending_otlp("first");
+            let edgion_resources::resources::link_sys::SystemConfig::Otlp(config) = &mut invalid.spec.config else {
+                panic!("test fixture is OTLP");
+            };
+            config.endpoint = "http://private-sentinel@collector".into();
+            store.update(HashMap::from([(first_key.clone(), invalid)]), &HashSet::new());
+            assert!(Arc::ptr_eq(&first, &get_otlp_client(&first_key).unwrap()));
+            assert!(Arc::ptr_eq(&second, &get_otlp_client(&second_key).unwrap()));
+
+            // Full-set absence removes only that owner; pending credentials retain
+            // the other owner without ever opening a socket in this unit test.
+            store.replace_all(HashMap::from([(first_key.clone(), pending_otlp("first"))]));
+            assert!(get_otlp_client(&second_key).is_none());
+            assert!(Arc::ptr_eq(&first, &get_otlp_client(&first_key).unwrap()));
+
+            let other: LinkSys = serde_json::from_value(serde_json::json!({
+                "apiVersion": "edgion.io/v1", "kind": "LinkSys",
+                "metadata": {"namespace": "otlp-store-test", "name": "first"},
+                "spec": {"type": "httpdns", "config": {"urlTemplate": "https://dns.example.test/{domain}"}}
+            }))
+            .unwrap();
+            store.update(HashMap::from([(first_key.clone(), other)]), &HashSet::new());
+            assert!(get_otlp_client(&first_key).is_none());
+            assert!(!first.healthy());
+            store.update(initial, &HashSet::new());
+            store.update(HashMap::new(), &HashSet::from([first_key.clone(), second_key.clone()]));
+            assert!(get_otlp_client(&first_key).is_none());
+            assert!(get_otlp_client(&second_key).is_none());
+            tokio::time::timeout(std::time::Duration::from_secs(2), async {
+                while otlp_retiring_client_count() != 0 {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .expect("removed owners must finish cleanup");
+        });
+    }
+
+    #[test]
+    fn otlp_source_entries_precede_ordered_unrelated_async_dispatch() {
+        let _guard = I5_DISPATCH_LOCK.lock().unwrap_or_else(|error| error.into_inner());
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let store = get_global_link_sys_store();
+            let first_key = "otlp-store-test/source-first".to_owned();
+            let second_key = "otlp-store-test/source-second".to_owned();
+            let first = HashMap::from([(first_key.clone(), pending_otlp("source-first"))]);
+            let second = HashMap::from([(second_key.clone(), pending_otlp("source-second"))]);
+            store.update(first.clone(), &HashSet::new());
+            store.update(second.clone(), &HashSet::new());
+            // No async task has been polled yet on this current-thread runtime.
+            // Both desired-state entries must already exist at source publication.
+            let first_owner = get_otlp_client(&first_key).expect("earlier key is configured synchronously");
+            let second_owner = get_otlp_client(&second_key).expect("unrelated later key is configured synchronously");
+            let tail = LINK_SYS_DISPATCH_TAIL.lock().take().unwrap();
+            tail.await.unwrap();
+            assert!(Arc::ptr_eq(&first_owner, &get_otlp_client(&first_key).unwrap()));
+            assert!(Arc::ptr_eq(&second_owner, &get_otlp_client(&second_key).unwrap()));
+            store.rebuild_clients();
+            assert!(Arc::ptr_eq(&first_owner, &get_otlp_client(&first_key).unwrap()));
+            store.update(HashMap::new(), &HashSet::from([first_key.clone(), second_key.clone()]));
+            assert!(get_otlp_client(&first_key).is_none());
+            assert!(!first_owner.healthy());
+            tokio::time::timeout(std::time::Duration::from_secs(2), async {
+                while otlp_retiring_client_count() != 0 {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .expect("removed owners must finish cleanup");
+        });
     }
 }

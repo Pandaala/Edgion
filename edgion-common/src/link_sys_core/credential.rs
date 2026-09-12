@@ -24,6 +24,7 @@ use edgion_resources::credentials::resolvers::{BasicAuthResolver, BearerResolver
 use edgion_resources::credentials::SecretMaterialResolver;
 use edgion_resources::resources::common::TlsConfig;
 use edgion_resources::resources::link_sys::elasticsearch::ElasticsearchAuth;
+use edgion_resources::resources::link_sys::otlp::OtlpBearerResolver;
 use edgion_resources::resources::link_sys::{LinkSys, SystemConfig};
 use k8s_openapi::api::core::v1::Secret;
 
@@ -217,6 +218,11 @@ pub fn resolved_state(ls: &LinkSys) -> CredentialState<ResolvedCredential> {
                 state_from_optional_secret(slot.secret.as_ref(), &BearerResolver).map(ResolvedCredential::Bearer)
             }
         },
+        SystemConfig::Otlp(otlp) => match &otlp.auth {
+            None => CredentialState::NotRequired,
+            Some(auth) => state_from_optional_secret(auth.slot.secret.as_ref(), &OtlpBearerResolver)
+                .map(ResolvedCredential::Bearer),
+        },
         SystemConfig::Webhook(_w) => {
             // Webhook auth is now a deprecated shim field (Option<serde_json::Value>)
             // that is accepted for backward compatibility but not used at runtime.
@@ -322,6 +328,7 @@ pub fn tls_ready(ls: &LinkSys) -> bool {
     let tls = match &ls.spec.config {
         SystemConfig::Redis(r) => r.tls.as_ref(),
         SystemConfig::Etcd(e) => e.tls.as_ref(),
+        SystemConfig::Otlp(o) => o.tls.as_ref(),
         SystemConfig::Elasticsearch(es) => es.tls.as_ref(),
         SystemConfig::Kafka(k) => k.tls.as_ref(),
         SystemConfig::Webhook(w) => w.conn.tls.as_ref(),
@@ -658,6 +665,7 @@ mod tests {
         for (provider, mut config, tls_path) in [
             ("redis", json!({"endpoints": ["rediss://localhost:6380"]}), "/tls"),
             ("etcd", json!({"endpoints": ["https://localhost:2379"]}), "/tls"),
+            ("otlp", json!({"endpoint": "https://collector"}), "/tls"),
             (
                 "elasticsearch",
                 json!({"endpoints": ["https://localhost:9200"]}),
@@ -985,5 +993,26 @@ mod tests {
     fn tls_ready_kafka_no_tls_is_true() {
         let ls = mk_kafka_linksys(None);
         assert!(tls_ready(&ls));
+    }
+    #[test]
+    fn otlp_credentials_cover_every_readiness_state() {
+        let mut ls: LinkSys = serde_json::from_value(serde_json::json!({"metadata":{"namespace":"default","name":"otlp"},"spec":{"type":"otlp","config":{"endpoint":"http://collector"}}})).unwrap();
+        assert!(matches!(resolved_state(&ls), CredentialState::NotRequired));
+        if let SystemConfig::Otlp(config) = &mut ls.spec.config {
+            config.auth = Some(serde_json::from_value(serde_json::json!({"secretRef":{"name":"auth"}})).unwrap());
+        }
+        assert!(matches!(resolved_state(&ls), CredentialState::Pending));
+        for (token, valid) in [
+            ("valid-token".to_owned(), true),
+            ("private bad token".to_owned(), false),
+            ("a".repeat(8193), false),
+        ] {
+            if let SystemConfig::Otlp(config) = &mut ls.spec.config {
+                config.auth.as_mut().unwrap().slot.secret = Some(serde_json::from_value(serde_json::json!({"data":{"bearerToken": base64::Engine::encode(&base64::engine::general_purpose::STANDARD, token.as_bytes())}})).unwrap());
+            }
+            let state = resolved_state(&ls);
+            assert_eq!(state.is_buildable(), valid);
+            assert!(!format!("{state:?}").contains(&token));
+        }
     }
 }

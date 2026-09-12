@@ -1,0 +1,15 @@
+# TLS passthrough emits a TLS log through the same OTLP owner as HTTP and TCP.
+apiVersion: gateway.networking.k8s.io/v1
+kind: TLSRoute
+metadata:
+  name: otlp-tls
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: otlp-gateway
+      sectionName: tls
+  hostnames: [otlp-backend.edgion-test.example.com]
+  rules:
+    - backendRefs:
+        - name: test-backend
+          port: 30002

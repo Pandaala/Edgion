@@ -29,7 +29,7 @@ use edgion_resources::resources::link_sys::{
     CredentialSourceConfig, CredentialSourceProvider, LinkSysStatus, SystemConfig,
 };
 
-use super::auth_spec::{AuthSpec, TlsSpec};
+use super::auth_spec::{AuthSpec, OtlpTlsSpec, TlsSpec};
 use super::san_guard;
 use edgion_resources::ResourceKind;
 use k8s_openapi::api::core::v1::Secret;
@@ -234,6 +234,7 @@ impl ProcessorHandler<LinkSys> for LinkSysHandler {
         // that was previously referenced but is no longer referenced after an update
         // does not trigger spurious requeues.
         ctx.secret_ref_manager().clear_resource_refs(&owner);
+        ctx.runtime().cross_ns_ref_mgr.clear_resource_refs(&owner);
         ctx.runtime()
             .credential_source_registry
             .remove_source(&owner.resource_key());
@@ -275,7 +276,12 @@ impl ProcessorHandler<LinkSys> for LinkSysHandler {
         apply_resolved_refs_condition(&mut ls, generation, &errors);
 
         for err in &errors {
-            if needs_operator_secret_edit(err) {
+            if matches!(err, ResolvedRefsError::InvalidKind { .. }) {
+                tracing::warn!(
+                    link_sys = %owner.key(),
+                    "Credential reference is invalid; update the LinkSys reference"
+                );
+            } else if needs_operator_secret_edit(err) {
                 // Invalid Secret content: requeues without Secret edits won't
                 // help. The spec is still pushed to the Gateway via conf_sync
                 // with `auth.secret` / `tls.certs.secret` left as `None`
@@ -309,6 +315,7 @@ impl ProcessorHandler<LinkSys> for LinkSysHandler {
             ls.metadata.name.clone().unwrap_or_default(),
         );
         ctx.secret_ref_manager().clear_resource_refs(&owner);
+        ctx.runtime().cross_ns_ref_mgr.clear_resource_refs(&owner);
         ctx.runtime()
             .credential_source_registry
             .forget_source(&owner.resource_key());
@@ -701,6 +708,10 @@ async fn resolve_for_spec(ctx: &HandlerContext, owner: &ResourceRef, config: &mu
     let errors = match config {
         SystemConfig::Redis(r) => drive_standard(ctx, owner, r.auth.as_mut(), r.tls.as_mut()).await,
         SystemConfig::Etcd(e) => drive_standard(ctx, owner, e.auth.as_mut(), e.tls.as_mut()).await,
+        SystemConfig::Otlp(o) => {
+            let mut tls = o.tls.as_mut().map(OtlpTlsSpec);
+            drive_standard(ctx, owner, o.auth.as_mut(), tls.as_mut()).await
+        }
         SystemConfig::Elasticsearch(es) => drive_standard(ctx, owner, es.auth.as_mut(), es.tls.as_mut()).await,
         SystemConfig::Webhook(w) => {
             // Emit deprecation warnings for shim fields (auth, defaultHeaders,

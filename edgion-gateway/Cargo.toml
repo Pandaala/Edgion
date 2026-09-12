@@ -21,6 +21,8 @@ harness = false
 workspace = true
 
 [features]
+# Integration harness access to canonical DNS selection, never operator configuration.
+test-util = []
 # Default features
 default = ["allocator-jemalloc", "boringssl"]
 
@@ -89,6 +91,8 @@ schemars.workspace = true
 
 # gRPC (config sync)
 tonic.workspace = true
+# OTLP SDK 0.31 owns tonic 0.14; configuration sync remains on workspace tonic.
+tonic014 = { package = "tonic", version = "0.14", default-features = false, features = ["channel", "tls-ring", "tls-webpki-roots"] }
 rustls.workspace = true
 tokio-rustls.workspace = true
 # Built-in webpki roots for building custom rustls ClientConfig (ext_proc connector)
@@ -208,3 +212,8 @@ expect-test.workspace = true
 proxy-header.workspace = true
 wiremock.workspace = true
 proptest.workspace = true
+
+[[test]]
+name = "otlp_transport"
+path = "tests/otlp_transport.rs"
+required-features = ["test-util"]

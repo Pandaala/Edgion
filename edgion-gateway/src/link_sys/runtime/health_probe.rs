@@ -150,7 +150,14 @@ pub(crate) async fn run_probe_loop<F, Fut>(
     loop {
         // The closure is bounded here; a timeout counts as unhealthy. This is
         // load-bearing for Kafka, whose internal backoff never returns Err.
-        let ok = matches!(tokio::time::timeout(cfg.probe_timeout, probe_fn()).await, Ok(true));
+        if *shutdown_rx.borrow() {
+            return;
+        }
+        let ok = tokio::select! {
+            biased;
+            _ = shutdown_rx.changed() => return,
+            result = tokio::time::timeout(cfg.probe_timeout, probe_fn()) => matches!(result, Ok(true)),
+        };
 
         apply_health_result(
             &healthy,
@@ -183,9 +190,8 @@ pub(crate) async fn run_probe_loop<F, Fut>(
 }
 
 /// Spawn `run_probe_loop` as a detached task. Returns the handle; ES/Kafka store
-/// and `abort()` it on shutdown. OTLP lets the handle detach and instead relies on
-/// the shutdown watch sender (stored on the caller, dropped with the struct) to
-/// signal the loop to exit.
+/// and `abort()` it on shutdown. OTLP retains and joins the handle after
+/// signalling the shutdown watch, including during an in-flight probe.
 pub(crate) fn spawn_health_probe<F, Fut>(
     cfg: ProbeConfig,
     healthy: Arc<AtomicBool>,
@@ -367,5 +373,32 @@ mod tests {
         tokio::task::yield_now().await; // give the task CPU to observe Err on changed()
         let joined = tokio::time::timeout(Duration::from_secs(1), task).await;
         assert!(joined.is_ok(), "probe loop must exit when the watch sender drops");
+    }
+    #[tokio::test(start_paused = true)]
+    async fn shutdown_interrupts_an_in_flight_probe() {
+        let (tx, rx) = watch::channel(false);
+        let healthy = Arc::new(AtomicBool::new(false));
+        let cfg = ProbeConfig {
+            name: "test/otlp".into(),
+            system_type: "otlp",
+            base_interval: Duration::from_secs(10),
+            max_backoff: Duration::from_secs(30),
+            probe_timeout: Duration::from_secs(300),
+            upgrade_only: false,
+        };
+        let (started, start_rx) = tokio::sync::oneshot::channel();
+        let started = parking_lot::Mutex::new(Some(started));
+        let task = tokio::spawn(run_probe_loop(cfg, healthy, rx, move || {
+            if let Some(started) = started.lock().take() {
+                let _ = started.send(());
+            }
+            std::future::pending::<bool>()
+        }));
+        start_rx.await.unwrap();
+        tx.send_replace(true);
+        tokio::time::timeout(Duration::from_millis(1), task)
+            .await
+            .unwrap()
+            .unwrap();
     }
 }

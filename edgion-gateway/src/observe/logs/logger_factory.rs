@@ -40,7 +40,7 @@ fn build_writer_config(file_cfg: &LocalFileWriterCfg, log_type: LogType) -> Loca
 }
 
 /// Build one initialized sender from a `StringOutput`. Mirrors the per-variant
-/// init differences: LocalFile/OTLP need `init()` here; ES/Kafka are lifecycle-
+/// init differences: LocalFile needs `init()` here; LinkSys outputs are lifecycle-
 /// managed elsewhere and are not init'd here. Returns `None` for a disabled
 /// LocalFile (empty path), matching the primary-path behavior.
 async fn build_sender(output: &StringOutput, log_type: LogType) -> Result<Option<Box<dyn DataSender<String>>>> {
@@ -63,12 +63,9 @@ async fn build_sender(output: &StringOutput, log_type: LogType) -> Result<Option
             tracing::info!(?log_type, %link_sys_ref, %topic, "Sender: Kafka output");
             Ok(Some(Box::new(KafkaLogSender::new(link_sys_ref.clone(), topic.clone()))))
         }
-        StringOutput::Otlp(cfg) => {
-            tracing::info!(?log_type, endpoint = %cfg.endpoint, ?cfg.protocol, "Sender: OTLP output");
-            // init() is called eagerly here — OtlpLogSender owns its provider and does
-            // not participate in the LinkSysStore lifecycle.
-            let mut sender = OtlpLogSender::new(cfg.clone());
-            sender.init().await?;
+        StringOutput::Otlp { link_sys_ref } => {
+            let sender = OtlpLogSender::new(link_sys_ref.clone())?;
+            tracing::info!(?log_type, link = sender.name(), "Sender: OTLP output");
             Ok(Some(Box::new(sender)))
         }
     }
@@ -139,9 +136,10 @@ pub async fn create_sync_logger(config: &LogConfig) -> Result<Option<SslLogger>>
             );
             Ok(None)
         }
-        StringOutput::Otlp(cfg) => {
+        StringOutput::Otlp { link_sys_ref } => {
+            let sender = OtlpLogSender::new(link_sys_ref.clone())?;
             tracing::warn!(
-                endpoint = %cfg.endpoint,
+                link = sender.name(),
                 "OTLP output is not supported for SSL logs (sync path); SSL logging disabled"
             );
             Ok(None)
@@ -154,6 +152,42 @@ mod tests {
     // `use super::*` brings in the gateway `LogType` that `create_async_logger` takes.
     use super::*;
     use edgion_resources::LinkSysRef;
+
+    #[tokio::test]
+    async fn missing_otlp_primary_starts_with_first_healthy_fallback() {
+        let directory = tempfile::tempdir().unwrap();
+        let config = LogConfig {
+            enabled: true,
+            output: StringOutput::Otlp {
+                link_sys_ref: LinkSysRef {
+                    namespace: "factory-test".into(),
+                    name: "missing-collector".into(),
+                },
+            },
+            fallback: Some(StringOutput::LocalFile(LocalFileWriterCfg {
+                path: directory.path().join("fallback.log").to_string_lossy().into_owned(),
+                disk_usage_threshold_percent: Some(0),
+                ..Default::default()
+            })),
+        };
+        let primary = build_sender(&config.output, LogType::Access).await.unwrap().unwrap();
+        assert_eq!(primary.name(), "factory-test/missing-collector");
+        assert!(!primary.healthy());
+        let logger = create_async_logger(&config, LogType::Access).await.unwrap().unwrap();
+        assert_eq!(logger.sender_count(), 2);
+    }
+
+    #[tokio::test]
+    async fn invalid_programmatic_otlp_reference_never_becomes_a_sender() {
+        let config = StringOutput::Otlp {
+            link_sys_ref: LinkSysRef {
+                namespace: "default".into(),
+                name: "private-sentinel/invalid".into(),
+            },
+        };
+        let error = build_sender(&config, LogType::Access).await.err().unwrap().to_string();
+        assert!(!error.contains("private-sentinel"));
+    }
 
     // A primary ES + LocalFile fallback must register TWO senders.
     #[tokio::test]

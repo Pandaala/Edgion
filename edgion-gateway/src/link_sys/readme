@@ -20,6 +20,7 @@ partial configuration updates to the provider-specific runtime state.
 | `Etcd` | Shared `edgion-common/src/link_sys_core/providers/etcd` client, published by the Gateway runtime store | `get_etcd_client("namespace/name")` |
 | `Elasticsearch` | Gateway `providers/elasticsearch` plus the typed runtime store | `get_es_client("namespace/name")` |
 | `Kafka` | Gateway `providers/kafka` plus the typed runtime store | `get_kafka_client("namespace/name")` |
+| `Otlp` | Gateway `providers/otlp` shared exporter, batch processor and probe | `get_otlp_client("namespace/name")` |
 | `Webhook` | Gateway `providers/webhook` with its specialized manager and runtime store | `get_webhook_call_handle` and `resolve_webhook_key` |
 | `HttpDns` | Shared `edgion-common/src/dns` resolver core | Gateway backend resolution reads the config from `LinkSysStore`; there is no generic typed LinkSys client |
 | `CredentialSource` | Controller credential manager | No Gateway LinkSys client; resolved credentials arrive through the consuming plugin runtime |
@@ -44,10 +45,12 @@ Log output configuration is `StringOutput`, not a `SystemConfig` variant.
 | `LocalFile` | No | Gateway-owned background writer with bounded queue, rotation, retention, and disk-health checks |
 | Elasticsearch (`Es`) | Yes | References an Elasticsearch LinkSys resource; `EsLogSender` resolves the current typed client |
 | `Kafka` | Yes | References a Kafka LinkSys resource and topic; `KafkaLogSender` resolves the current typed client |
-| `Otlp` | No | Self-contained `OtlpOutputConfig`; the Gateway owns the exporter directly |
+| `Otlp` | Yes | References one OTLP/gRPC LinkSys resource; all async log types share its current pipeline |
 
-Only the Elasticsearch and Kafka log outputs use LinkSys runtime clients.
-LocalFile and OTLP are logging sinks, not LinkSys CRD providers.
+Elasticsearch, Kafka and OTLP log outputs use LinkSys runtime clients.
+LocalFile owns its writer directly. OTLP configuration dispatch preserves source
+event order before async provider dispatch. Failed candidate preparation retains
+the active generation; removal and process shutdown join its owned cleanup.
 
 ### Delivery and degradation
 

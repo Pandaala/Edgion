@@ -1,0 +1,14 @@
+# Successful plain TCP forwarding emits a TCP log through the shared OTLP owner.
+apiVersion: gateway.networking.k8s.io/v1alpha2
+kind: TCPRoute
+metadata:
+  name: otlp-tcp
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: otlp-gateway
+      sectionName: tcp
+  rules:
+    - backendRefs:
+        - name: test-backend
+          port: 30001

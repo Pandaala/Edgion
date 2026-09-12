@@ -836,3 +836,17 @@ match &config.output {
 
 **最后更新**：2025-01-05  
 **版本**：Edgion v0.1.0
+
+## OTLP 共享所有权
+
+`OtlpLogSender` 仅保存已校验的 LinkSys key，每次发送时查询 `OtlpLinkClient`。
+客户端以不可变 generation 发布当前连接，更新失败时保留可用连接。单个共享健康
+循环准备候选连接并探测当前连接的 TCP 可达性。tonic 0.14 通过共享 DNS、egress
+和 TLS 机制连接，workspace 内既有 tonic 0.12 使用方保持独立。
+
+SDK exporter 包装层限制完整 unary 导出（包括响应体），并支持取消退休连接。
+客户端保留清理任务，在 Tokio worker 之外关闭并 join SDK 线程；超时本身不代表
+清理完成。共享日志初始化会抑制 `tonic::transport`、`rustls` 和 `h2` 的日志，
+因为这些依赖可能输出 endpoint 身份或对端控制的错误文本，不受 `RUST_LOG` 放宽。
+应使用二进制层拥有的安全 LinkSys 健康与状态诊断。
+参见[运维配置](../ops-guide/infrastructure/connectors.md#otlpgrpc-连接器)。

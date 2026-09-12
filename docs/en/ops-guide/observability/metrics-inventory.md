@@ -171,3 +171,8 @@ Runtime safety net: a `CardinalityGuard` (added in a later task) caps distinct
 recorder-registered series at `metrics.cardinality_cap` (default 10000);
 `edgion_controller_resource_abnormal` is hand-rendered outside the recorder and
 relies on its own 1000-entry cap.
+
+OTLP LinkSys health uses a validated `namespace/name` in the existing `link` label.
+Several log outputs referencing one resource share one health series and probe.
+The gauge reports TCP reachability, not export acknowledgment; endpoint URIs and
+resolved addresses are never labels.

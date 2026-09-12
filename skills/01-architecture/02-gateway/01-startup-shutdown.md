@@ -111,7 +111,11 @@ semantics; the internal fatal branch returns `FastShutdown`. Non-Unix builds use
    teardown. This acknowledgement is cooperative and may extend past five seconds; the
    window is not a hard process-exit deadline. Timeout or a failed UDP task is reported
    by a shutdown diagnostic and a non-zero exit. Repeated shutdown is idempotent.
-7. The runtime thread is joined before `EdgionGatewayCli::run()` completes. Internal
+7. After UDP producers finish, shared OTLP pipelines flush and shut down while the
+   auxiliary runtime is still alive, including when UDP drain returned an error.
+   The UDP result is preserved. Startup errors after conf-sync watches start also
+   drain OTLP through the armed startup guard.
+8. The runtime thread is joined before `EdgionGatewayCli::run()` completes. Internal
    policy-fatal errors retain their original non-zero outcome.
 
 Terminal logs use the existing UDP logger. Cancellation may discard in-flight datagrams;

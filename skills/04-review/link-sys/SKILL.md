@@ -23,3 +23,5 @@ before applying a decision to current code.
 
 - [ResolvedTarget Has No Webhook Compatibility Alias — FIXED](regression-guards/resolved-target-has-no-webhook-compatibility-alias.md)
 - [LinkSys outbound TLS enablement and shared loading](regression-guards/shared-outbound-tls-loading.md)
+
+- [OTLP provider ownership and safe transport](regression-guards/otlp-provider-ownership-and-egress.md)

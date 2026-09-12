@@ -17,10 +17,11 @@ description: LinkSys external system integration — CRD connector variants, run
 | Redis | `providers/redis/` | `RedisLinkClient` | standalone / sentinel / cluster (fred) | Data read/write, distributed rate limiting support |
 | Webhook | `providers/webhook/` | WebhookManager | HTTP | External service calls, WebhookKeyGet resolution |
 | Kafka | `providers/kafka/` | `KafkaLinkClient` | Kafka producer | Persistent runtime client and log delivery |
+| OTLP | `providers/otlp/` | `OtlpLinkClient` | OTLP/gRPC over HTTP/HTTPS | Shared log export, staged replacement, safe egress |
 | HttpDns | resource + DNS resolver service | resolver configuration | HTTP DNS | DNS-resolution configuration; not a LinkSys runtime-client store |
 
-`LocalFileWriter` and the OTLP exporter are logging `DataSender` implementations, not
-`SystemConfig` variants in the LinkSys CRD.
+`LocalFileWriter` is a logging-only DataSender. OTLP is a dedicated LinkSys
+provider; its key-only OtlpLogSender never owns an exporter or probe.
 
 ### Elasticsearch
 
@@ -125,13 +126,15 @@ Each provider that requires a persistent connection has its own ArcSwap runtime 
 | Etcd | `ETCD_RUNTIME: ArcSwap<HashMap<String, Arc<EtcdLinkClient>>>` | `get_etcd_client(name)` |
 | Elasticsearch | `ES_RUNTIME: ArcSwap<HashMap<String, Arc<EsLinkClient>>>` | `get_es_client(name)` |
 | Kafka | `KAFKA_RUNTIME` provider store | `get_kafka_client(name)` |
+| OTLP | `OTLP_RUNTIME` provider store | `get_otlp_client(name)` |
 | Webhook | `WebhookManager` (managed internally) | via `get_webhook_manager()` |
 
 Key format: `"namespace/name"`.
 
 ### Client lifecycle
 
-Processing flow during full_set / partial_update:
+Generic provider processing flow during full_set / partial_update (OTLP and the
+ordered Webhook manager have specialized publication boundaries):
 1. Dispatch to the corresponding provider based on the `SystemConfig` type.
 2. Create a new client instance.
 3. Insert into the runtime store first (ensures `get_*_client()` returns the new client immediately).
@@ -207,3 +210,44 @@ edgion-common/src/link_sys_core/       # core framework + Etcd provider (re-expo
 ├── mod.rs
 └── providers/etcd/           # Etcd v3 client (KV / lease / lock + background health monitor)
 ```
+
+## OTLP generations and teardown
+
+One stable OtlpLinkClient per validated namespace/name owns desired prepared
+transport and an ArcSwap active pipeline. A valid update invalidates any older
+candidate, prepares immutable auth/TLS/endpoint state, then lets the single
+canonical probe connect and complete an empty OTLP Export. Publication checks the same revision under the short
+configuration lock. Invalid, unresolved and unreachable replacements keep the
+active generation. Full and partial desired-state dispatch run inside the synchronous source-event
+critical section so unrelated async task reordering cannot discard an OTLP delta.
+Generic full/partial/rebuild tasks also reserve predecessor order inside that
+section, then await earlier dispatch completion before entering the Webhook
+mutation guard. A foreign-provider-to-OTLP transition therefore removes its old
+typed registrations before a later unrelated delta or same-key recreation.
+Type change/removal shuts down the owner. The process shutdown fence prevents late
+conf-sync events from restarting drained owners. Store stats include otlp_clients.
+
+The probe gives pending preparation and active TCP checking independent 3s budgets
+inside an 8s driver deadline. A failed pending connection cannot consume the old
+connection's health check. A successful empty Export through the candidate exporter permits publication;
+its complete response shares the 3s preparation budget. Native channel readiness
+alone can precede mTLS rejection. The same exporter enters the published pipeline,
+and failed/stale candidates never start a batch worker. Subsequent health remains
+connection-level TCP evidence only.
+One resource serves every async log type through the existing scope/record format.
+
+Native tonic014 uses the exact original URI and shared outbound TLS results;
+its custom connector resolves/classifies every actual dial. An SDK decorator
+bounds the complete export future and polls it with captured runtime context
+because the batch processor runs on a std thread. Retained cleanup tasks drain
+for 5s, cancel remaining export futures, and await worker join and exporter/channel
+release. Only one retiring pipeline is allowed, and cancellation of a shutdown
+waiter must not detach cleanup. Read the [OTLP regression boundary](../../04-review/link-sys/regression-guards/otlp-provider-ownership-and-egress.md)
+before changing this lifecycle.
+
+Removed keys retain a per-key tombstone until their SDK/probe teardown joins.
+Rapid delete/recreate only changes the latest source snapshot during this period;
+no second owner starts. Cleanup replays the latest key under the source lock,
+unless process shutdown has fenced publication. Retiring stats count tombstones
+even while the process drain owns cleanup tasks. A startup guard drains exporters
+on errors after resource watches begin, before the startup runtime can drop.

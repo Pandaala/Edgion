@@ -823,3 +823,19 @@ match &config.output {
 
 **Last updated**: 2025-01-05  
 **Version**: Edgion v0.1.0
+
+## Shared OTLP ownership
+
+`OtlpLogSender` retains a validated LinkSys key and resolves `OtlpLinkClient` on each
+send. The owner publishes immutable active generations while retaining working
+service through failed updates. A single canonical health loop prepares pending
+connections and probes active TCP reachability. Native tonic 0.14 uses the shared
+DNS/egress/TLS mechanisms; workspace tonic 0.12 consumers remain separate.
+
+The SDK exporter decorator bounds the entire unary export, including response body,
+and supports retirement cancellation. A retained cleanup task shuts down and joins
+the SDK worker away from Tokio workers; a timeout alone is never teardown evidence.
+Shared logging bootstrap suppresses `tonic::transport`, `rustls` and `h2` diagnostics
+because they can contain endpoint identity or peer-controlled error text, regardless
+of `RUST_LOG`. Use binary-owned safe LinkSys health/status diagnostics instead.
+See [operator configuration](../ops-guide/infrastructure/connectors.md#otlpgrpc-connector).

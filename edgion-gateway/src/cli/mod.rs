@@ -38,6 +38,22 @@ pub struct EdgionGatewayCli {
     pub config: EdgionGatewayConfig,
 }
 
+/// Conf-sync may publish exporters before the remaining startup steps succeed.
+/// Keep their IO runtime alive until the error path has joined every SDK worker.
+struct OtlpStartupGuard<'a> {
+    runtime: &'a tokio::runtime::Runtime,
+    armed: bool,
+}
+
+impl Drop for OtlpStartupGuard<'_> {
+    fn drop(&mut self) {
+        if self.armed {
+            self.runtime
+                .block_on(crate::link_sys::runtime::store::shutdown_otlp_clients());
+        }
+    }
+}
+
 impl EdgionGatewayCli {
     pub fn parse_args() -> Self {
         Self::parse()
@@ -624,6 +640,10 @@ impl EdgionGatewayCli {
         );
 
         // 12. Start watching resources based on Controller's supported kinds
+        let mut otlp_startup_guard = OtlpStartupGuard {
+            runtime: &runtime,
+            armed: true,
+        };
         runtime
             .block_on(sync_client.start_watch_kinds(&server_info.supported_kinds))
             .map_err(|e| anyhow!("Failed to start watching resources: {}", e))?;
@@ -711,6 +731,8 @@ impl EdgionGatewayCli {
         };
 
         // 22. Move runtime to background thread with shutdown-aware lifecycle
+        otlp_startup_guard.armed = false;
+        drop(otlp_startup_guard);
         let bg_shutdown_rx = aux_shutdown_rx;
         let bg_thread = std::thread::spawn(move || {
             runtime.block_on(async {
@@ -720,7 +742,11 @@ impl EdgionGatewayCli {
                         break;
                     }
                 }
-                Self::drain_udp_listeners().await
+                // UDP shutdown can emit final access logs. Finish its drain
+                // before flushing OTLP, including when UDP reports a failure.
+                let udp_result = Self::drain_udp_listeners().await;
+                crate::link_sys::runtime::store::shutdown_otlp_clients().await;
+                udp_result
             })
         });
 
@@ -744,5 +770,67 @@ impl EdgionGatewayCli {
 
         tracing::info!(component = "gateway", "Gateway shutdown complete");
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod otlp_startup_tests {
+    use super::OtlpStartupGuard;
+    use crate::link_sys::runtime::store::{
+        get_global_link_sys_store, get_otlp_client, otlp_client_count, otlp_retiring_client_count,
+    };
+
+    #[test]
+    fn startup_error_drains_active_otlp_before_runtime_drop() {
+        const CHILD: &str = "EDGION_OTLP_STARTUP_DRAIN_TEST_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let status = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "cli::otlp_startup_tests::startup_error_drains_active_otlp_before_runtime_drop",
+                    "--test-threads=1",
+                ])
+                .env(CHILD, "1")
+                .status()
+                .unwrap();
+            assert!(status.success());
+            return;
+        }
+        // Process shutdown is terminal global state, so this runs in an isolated
+        // child. The real SDK worker is created without emitting or opening IO.
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let client = runtime.block_on(async {
+            let resource = serde_json::from_value(serde_json::json!({
+                "apiVersion": "edgion.io/v1", "kind": "LinkSys",
+                "metadata": {"namespace": "startup-test", "name": "collector"},
+                "spec": {"type": "otlp", "config": {"endpoint": "http://collector.example.test:4317"}}
+            }))
+            .unwrap();
+            get_global_link_sys_store().update(
+                [("startup-test/collector".to_owned(), resource)].into(),
+                &Default::default(),
+            );
+            let client = get_otlp_client("startup-test/collector").unwrap();
+            client.publish_lazy_test_pipeline().unwrap();
+            client
+        });
+        assert_eq!(otlp_client_count(), 1);
+        let startup_result: Result<(), &'static str> = (|| {
+            let _drain = OtlpStartupGuard {
+                runtime: &runtime,
+                armed: true,
+            };
+            Err("startup_failed")?
+        })();
+        assert_eq!(startup_result, Err("startup_failed"));
+        assert_eq!(otlp_client_count(), 0);
+        assert_eq!(otlp_retiring_client_count(), 0);
+        assert!(!client.healthy());
+        runtime.block_on(client.shutdown()).unwrap();
+        drop(client);
+        drop(runtime);
     }
 }

@@ -106,7 +106,7 @@ policy. TLS/client construction failure must never select an unconfigured client
   `resolve_outbound_tls`; request-time callers use the pure entry and access logs.
 - **Verified consumers**: the reqwest factory, ext_proc (tonic channel with a
   custom hyper connector), ldap_auth (ldap3), the redis provider (fred), the
-  kafka provider (rskafka), the etcd link provider, openid_connect token
+  kafka provider (rskafka), the etcd link provider, the OTLP LinkSys tonic014 transport, openid_connect token
   exchange, and health-local HTTPS/GRPCS probes (explicit defaults).
 
 ### 4. Egress safety (SSRF) — Unified mechanisms, per-path adoption
@@ -132,7 +132,7 @@ Three canonical pieces, each with a distinct job:
 
 **Adoption map** (verified 2026-09-04): `EgressResolver` guards
 forward_auth / webhook, wasm guest callouts, ldap_auth dial-time LDAP
-connections, and openid_connect IdP clients (default factory and SAN-pinning
+connections, OTLP exporter/probe dials, and openid_connect IdP clients (default factory and SAN-pinning
 branches; IP-literal URLs are classified before send because reqwest skips
 custom DNS for literals). Upstream dialing goes through `classify_backend_addr`.
 DSL `http.call` is a documented design tradeoff (F-018): the default-off

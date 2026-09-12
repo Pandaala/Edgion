@@ -22,7 +22,7 @@ spec:
                 type:
                   type: string
                   description: "System type"
-                  enum: ["redis", "etcd", "elasticsearch", "kafka", "webhook", "httpdns", "credentialSource"]
+                  enum: ["redis", "etcd", "elasticsearch", "kafka", "webhook", "httpdns", "otlp", "credentialSource"]
                 config:
                   type: object
                   description: "System-specific configuration"
@@ -34,7 +34,7 @@ spec:
                       description: "Server endpoints"
                       items:
                         type: string
-                    # Redis/Etcd auth - simple secretRef (required when auth is present)
+                    # Redis/Etcd/OTLP auth - simple secretRef (required when auth is present)
                     auth:
                       type: object
                       description: "Authentication configuration"
@@ -45,13 +45,19 @@ spec:
                       properties:
                         type:
                           type: string
-                          description: "Authentication type (elasticsearch/webhook style); omit for redis/etcd simple secretRef auth"
+                          description: "Authentication type (elasticsearch/webhook style); omit for redis/etcd/otlp simple secretRef auth"
                           enum: ["basic", "apiKey", "bearer", "hmac"]
                         secretRef:
                           type: object
                           description: "Secret reference for credentials (required)"
                           required: ["name"]
                           properties:
+                            group:
+                              type: string
+                              description: "API group of the referenced Secret; validated by the Controller"
+                            kind:
+                              type: string
+                              description: "Referenced resource kind; validated by the Controller"
                             name:
                               type: string
                               description: "Name of the secret"
@@ -69,7 +75,7 @@ spec:
                           type: string
                           description: "Query parameter name for apiKey query injection"
                       oneOf:
-                        # Redis/Etcd style: secretRef only, no `type` discriminator
+                        # Redis/Etcd/OTLP style: secretRef only, no `type` discriminator
                         - required: ["secretRef"]
                           not:
                             required: ["type"]
@@ -85,7 +91,7 @@ spec:
                           default: false
                         verify:
                           type: boolean
-                          description: "Verify the peer TLS certificate (default true). verify: false is honored (operator responsibility); a WARN is logged at startup. Redis and Etcd always verify — verify: false is rejected at startup for them (the SDK has no skip-verify API)."
+                          description: "Verify the peer TLS certificate (default true). verify: false is honored (operator responsibility); a WARN is logged at startup. Redis, Etcd and OTLP always verify — verify: false is rejected at startup for them (the SDK has no skip-verify API)."
                         validation:
                           type: object
                           description: "CA trust configuration for outbound TLS connections"

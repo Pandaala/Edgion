@@ -3,25 +3,52 @@
 //! Used by the link_sys runtime (`core::gateway::link_sys`) to write
 //! observability logs to local files / external sinks.
 //!
-//! NOTE: This module is unrelated to the `LinkSys` Kubernetes CRD
-//! (`crate::resources::link_sys`), which describes connections to external
-//! systems like Redis/Etcd. For the CRD, use `crate::{LinkSys, LinkSysSpec}`.
+//! Output configuration selects local storage or a reference to a `LinkSys`
+//! connection. The resource schema itself lives in `crate::resources::link_sys`;
+//! use `crate::{LinkSys, LinkSysSpec}` for the CRD.
 
-use std::collections::HashMap;
 use std::fmt;
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// Reference to a LinkSys resource by namespace + name.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct LinkSysRef {
     pub namespace: String,
     pub name: String,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct LinkSysRefInput {
+    namespace: String,
+    name: String,
+}
+
+impl<'de> Deserialize<'de> for LinkSysRef {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let input = LinkSysRefInput::deserialize(deserializer)?;
+        let reference = Self {
+            namespace: input.namespace,
+            name: input.name,
+        };
+        reference.validate().map_err(serde::de::Error::custom)?;
+        Ok(reference)
+    }
+}
+
 impl LinkSysRef {
+    /// Validate the bounded identity before it enters logs or metrics.
+    pub fn validate(&self) -> Result<(), &'static str> {
+        use crate::resources::common::kubernetes_name::{is_dns_label, is_dns_subdomain};
+        if !is_dns_label(&self.namespace, 63) || !is_dns_subdomain(&self.name, 253) {
+            return Err("invalid LinkSys reference");
+        }
+        Ok(())
+    }
+
     /// Returns the "namespace/name" key used by runtime stores.
     pub fn key(&self) -> String {
         format!("{}/{}", self.namespace, self.name)
@@ -148,45 +175,9 @@ impl Default for LocalFileWriterCfg {
     }
 }
 
-/// OTLP transport protocol.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub enum OtlpProtocol {
-    /// OTLP/gRPC — default port 4317, binary protobuf, HTTP/2.
-    Grpc,
-    /// OTLP/HTTP — default port 4318, binary protobuf.
-    /// NOTE: not yet implemented at runtime; returns an error at startup.
-    HttpProto,
-}
-
-impl Default for OtlpProtocol {
-    fn default() -> Self {
-        Self::Grpc
-    }
-}
-
-/// Configuration for OTLP log output (self-contained, no LinkSys CRD needed).
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct OtlpOutputConfig {
-    /// OTLP receiver endpoint (e.g. "http://otel-collector:4317").
-    pub endpoint: String,
-    /// Transport protocol. Defaults to gRPC.
-    #[serde(default)]
-    pub protocol: OtlpProtocol,
-    /// Extra request headers (e.g. auth tokens).
-    /// NOTE: not yet supported at runtime in v1; logged as a warning and ignored
-    /// due to a tonic version constraint (workspace tonic 0.12 vs otlp tonic 0.14).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub headers: Option<HashMap<String, String>>,
-    /// Per-request timeout in milliseconds. None = SDK default (10 s).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub timeout_ms: Option<u64>,
-}
-
 /// String output destination configuration
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub enum StringOutput {
     /// Write to local file
     LocalFile(LocalFileWriterCfg),
@@ -196,11 +187,9 @@ pub enum StringOutput {
     /// Ship to Kafka via a LinkSys resource
     #[serde(rename_all = "camelCase")]
     Kafka { link_sys_ref: LinkSysRef, topic: String },
-    /// Ship to an OpenTelemetry Collector via OTLP.
-    ///
-    /// No LinkSys CRD is required. The Collector routes to any downstream backend
-    /// (ES, Loki, ClickHouse, S3, Datadog, etc.) without further gateway changes.
-    Otlp(OtlpOutputConfig),
+    /// Ship OTLP/gRPC logs through a shared LinkSys provider.
+    #[serde(rename_all = "camelCase")]
+    Otlp { link_sys_ref: LinkSysRef },
 }
 
 impl Default for StringOutput {
@@ -328,51 +317,6 @@ mod tests {
     }
 
     #[test]
-    fn test_string_output_otlp_grpc_serde_roundtrip() {
-        let original = StringOutput::Otlp(OtlpOutputConfig {
-            endpoint: "http://otel-collector:4317".to_string(),
-            protocol: OtlpProtocol::Grpc,
-            headers: None,
-            timeout_ms: None,
-        });
-        let json = serde_json::to_string(&original).unwrap();
-        assert_eq!(
-            json,
-            r#"{"otlp":{"endpoint":"http://otel-collector:4317","protocol":"grpc"}}"#
-        );
-        let roundtrip: StringOutput = serde_json::from_str(&json).unwrap();
-        match roundtrip {
-            StringOutput::Otlp(cfg) => {
-                assert_eq!(cfg.endpoint, "http://otel-collector:4317");
-                assert!(matches!(cfg.protocol, OtlpProtocol::Grpc));
-                assert!(cfg.headers.is_none());
-                assert!(cfg.timeout_ms.is_none());
-            }
-            other => panic!("unexpected variant: {:?}", other),
-        }
-    }
-
-    #[test]
-    fn test_string_output_otlp_http_with_timeout_serde_roundtrip() {
-        let original = StringOutput::Otlp(OtlpOutputConfig {
-            endpoint: "https://otel.example.com:4318".to_string(),
-            protocol: OtlpProtocol::HttpProto,
-            headers: None,
-            timeout_ms: Some(5000),
-        });
-        let json = serde_json::to_string(&original).unwrap();
-        let roundtrip: StringOutput = serde_json::from_str(&json).unwrap();
-        match roundtrip {
-            StringOutput::Otlp(cfg) => {
-                assert_eq!(cfg.endpoint, "https://otel.example.com:4318");
-                assert!(matches!(cfg.protocol, OtlpProtocol::HttpProto));
-                assert_eq!(cfg.timeout_ms, Some(5000));
-            }
-            other => panic!("unexpected variant: {:?}", other),
-        }
-    }
-
-    #[test]
     fn test_local_file_cfg_disk_threshold_default_and_roundtrip() {
         // Default is enabled at 90%.
         let def = LocalFileWriterCfg::default();
@@ -389,23 +333,45 @@ mod tests {
     }
 
     #[test]
-    fn test_string_output_otlp_with_headers_serde_roundtrip() {
-        let mut headers = std::collections::HashMap::new();
-        headers.insert("Authorization".to_string(), "Bearer token123".to_string());
-        let original = StringOutput::Otlp(OtlpOutputConfig {
-            endpoint: "http://otel-collector:4317".to_string(),
-            protocol: OtlpProtocol::Grpc,
-            headers: Some(headers),
-            timeout_ms: None,
-        });
-        let json = serde_json::to_string(&original).unwrap();
-        let roundtrip: StringOutput = serde_json::from_str(&json).unwrap();
-        match roundtrip {
-            StringOutput::Otlp(cfg) => {
-                let h = cfg.headers.expect("headers should round-trip");
-                assert_eq!(h.get("Authorization").map(String::as_str), Some("Bearer token123"));
-            }
-            other => panic!("unexpected variant: {:?}", other),
+    fn otlp_reference_closed_shape_and_safe_errors() {
+        let value = serde_json::json!({"otlp":{"linkSysRef":{"namespace":"default","name":"collector"}}});
+        let output: StringOutput = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(serde_json::to_value(output).unwrap(), value);
+        for namespace in ["", "Private", "private/secret", "name.space", "bad-", "-bad"] {
+            let value = serde_json::json!({"namespace":namespace,"name":"collector"});
+            let error = serde_json::from_value::<LinkSysRef>(value).unwrap_err();
+            assert_eq!(error.to_string(), "invalid LinkSys reference");
         }
+        for name in ["", "a..b", "a/b", "A", "x:y", "bad_", "a."] {
+            assert!(
+                serde_json::from_value::<LinkSysRef>(serde_json::json!({"namespace":"default","name":name})).is_err()
+            );
+        }
+        let max_name = format!(
+            "{}.{}.{}.{}",
+            "a".repeat(63),
+            "b".repeat(63),
+            "c".repeat(63),
+            "d".repeat(61)
+        );
+        let reference = LinkSysRef {
+            namespace: "n".repeat(63),
+            name: max_name,
+        };
+        assert!(reference.validate().is_ok());
+        let mut invalid = reference.clone();
+        invalid.namespace.push('n');
+        assert!(invalid.validate().is_err());
+        let mut invalid = reference;
+        invalid.name.push('d');
+        assert!(invalid.validate().is_err());
+        assert!(
+            serde_json::from_value::<StringOutput>(serde_json::json!({"otlp":{"endpoint":"http://collector"}}))
+                .is_err()
+        );
+        assert!(serde_json::from_value::<StringOutput>(
+            serde_json::json!({"otlp":{"linkSysRef":{"namespace":"default","name":"collector"},"headers":{}}})
+        )
+        .is_err());
     }
 }

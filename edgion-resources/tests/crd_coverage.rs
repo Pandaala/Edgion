@@ -501,3 +501,45 @@ fn stream_spec_declares_tls_route_plugins() {
         "stream CRD spec must declare tlsRoutePlugins (else TLS-route IP restriction is silently pruned)"
     );
 }
+
+#[test]
+fn linksys_auth_reference_fields_survive_kubernetes_pruning() {
+    use edgion_resources::resources::common::SecretObjectReference;
+    use edgion_resources::resources::link_sys::otlp::OtlpClientConfig;
+
+    let crd = crd_section("link_sys_crd.yaml", "spec");
+    let auth = &crd["properties"]["config"]["properties"]["auth"];
+    let actual = auth["properties"]["secretRef"]["properties"].as_object().unwrap();
+    let expected = serde_json::to_value(schema_for!(SecretObjectReference)).unwrap();
+    let expected = expected["properties"].as_object().unwrap();
+    assert_eq!(
+        actual.keys().collect::<BTreeSet<_>>(),
+        expected.keys().collect::<BTreeSet<_>>(),
+        "every operator reference field must survive Kubernetes structural pruning"
+    );
+    assert!(
+        auth["properties"].get("secret").is_none(),
+        "resolved credentials must stay schema-excluded"
+    );
+    assert!(crd["properties"]["type"]["enum"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|kind| kind == "otlp"));
+
+    // Unsupported fields must reach the same typed validation in Kubernetes,
+    // FS and etcd; pruning them would silently select a core Secret instead.
+    for reference in [
+        serde_json::json!({"name": "auth", "kind": "ConfigMap"}),
+        serde_json::json!({"name": "auth", "group": "external.example"}),
+    ] {
+        for field in reference.as_object().unwrap().keys() {
+            assert!(actual.contains_key(field));
+        }
+        let config: OtlpClientConfig = serde_json::from_value(serde_json::json!({
+            "endpoint": "https://collector.example", "auth": {"secretRef": reference}
+        }))
+        .unwrap();
+        assert!(config.validate().is_err());
+    }
+}

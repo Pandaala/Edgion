@@ -3,6 +3,7 @@
 pub mod byte_size;
 pub mod external_http;
 pub mod group_name;
+pub(crate) mod kubernetes_name;
 pub mod log_labels;
 pub mod outbound_request;
 pub mod outbound_tls;

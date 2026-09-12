@@ -14,6 +14,7 @@ pub mod elasticsearch;
 pub mod etcd;
 pub mod httpdns;
 pub mod kafka;
+pub mod otlp;
 pub mod redis;
 pub mod webhook;
 
@@ -24,6 +25,7 @@ pub use elasticsearch::ElasticsearchClientConfig;
 pub use etcd::EtcdClientConfig;
 pub use httpdns::HttpDnsResolverConfig;
 pub use kafka::KafkaClientConfig;
+pub use otlp::OtlpClientConfig;
 pub use redis::RedisClientConfig;
 pub use webhook::WebhookServiceConfig;
 
@@ -102,6 +104,8 @@ pub enum SystemConfig {
     Elasticsearch(ElasticsearchClientConfig),
     /// Kafka client configuration
     Kafka(KafkaClientConfig),
+    /// OTLP/gRPC log exporter configuration.
+    Otlp(OtlpClientConfig),
     /// HTTP webhook service configuration
     Webhook(WebhookServiceConfig),
     /// HTTP DNS resolver configuration
@@ -119,6 +123,7 @@ impl SystemConfig {
             SystemConfig::Etcd(_) => SystemType::Etcd,
             SystemConfig::Elasticsearch(_) => SystemType::Elasticsearch,
             SystemConfig::Kafka(_) => SystemType::Kafka,
+            SystemConfig::Otlp(_) => SystemType::Otlp,
             SystemConfig::Webhook(_) => SystemType::Webhook,
             SystemConfig::HttpDns(_) => SystemType::HttpDns,
             SystemConfig::CredentialSource(_) => SystemType::CredentialSource,
@@ -150,6 +155,7 @@ pub enum SystemType {
     Etcd,
     Elasticsearch,
     Kafka,
+    Otlp,
     Webhook,
     HttpDns,
     #[serde(rename = "credentialSource")]
@@ -205,6 +211,18 @@ impl LinkSys {
             SystemConfig::Kafka(kafka_config) => {
                 if kafka_config.brokers.is_empty() {
                     errors.push("Kafka configuration has no brokers".to_string());
+                }
+            }
+            SystemConfig::Otlp(config) => {
+                let reference = crate::output::LinkSysRef {
+                    namespace: self.metadata.namespace.clone().unwrap_or_default(),
+                    name: self.metadata.name.clone().unwrap_or_default(),
+                };
+                if let Err(error) = reference.validate() {
+                    errors.push(error.to_string());
+                }
+                if let Err(error) = config.validate() {
+                    errors.push(error.to_string());
                 }
             }
             SystemConfig::HttpDns(http_dns) => {

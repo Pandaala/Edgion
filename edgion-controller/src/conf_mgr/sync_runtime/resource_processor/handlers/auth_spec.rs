@@ -22,6 +22,7 @@ use edgion_resources::resources::common::{SecretObjectReference, SecretSlot, Tls
 use edgion_resources::resources::link_sys::elasticsearch::ElasticsearchAuth;
 use edgion_resources::resources::link_sys::etcd::EtcdAuth;
 use edgion_resources::resources::link_sys::kafka::KafkaSaslConfig;
+use edgion_resources::resources::link_sys::otlp::{validate_otlp_secret_ref, OtlpAuth, OtlpBearerResolver};
 use edgion_resources::resources::link_sys::redis::RedisAuth;
 use edgion_resources::resources::link_sys::webhook::WebhookAuth;
 
@@ -99,6 +100,42 @@ impl AuthSpec for EtcdAuth {
             Err(e) => Some(e),
         }
     }
+}
+
+#[async_trait]
+impl AuthSpec for OtlpAuth {
+    fn slot(&self) -> &SecretSlot {
+        &self.slot
+    }
+    fn slot_mut(&mut self) -> &mut SecretSlot {
+        &mut self.slot
+    }
+    fn provider_name(&self) -> &'static str {
+        "OTLP"
+    }
+    async fn resolve(&mut self, ctx: &HandlerContext, owner: &ResourceRef) -> Option<ResolvedRefsError> {
+        if let Some(error) = otlp_reference_error(&self.slot.secret_ref, "auth.secretRef") {
+            self.slot.secret = None;
+            return Some(error);
+        }
+        match resolve_one(ctx, owner, &self.slot.secret_ref, &OtlpBearerResolver).await {
+            Ok(secret) => {
+                self.slot.secret = secret;
+                None
+            }
+            Err(error) => Some(error),
+        }
+    }
+}
+
+fn otlp_reference_error(reference: &SecretObjectReference, field: &'static str) -> Option<ResolvedRefsError> {
+    validate_otlp_secret_ref(reference)
+        .err()
+        .map(|_| ResolvedRefsError::InvalidKind {
+            // Keep malformed identity fields out of status and diagnostic messages.
+            kind: "unsupported OTLP Secret reference".into(),
+            name: field.into(),
+        })
 }
 
 // ============================================================================
@@ -210,57 +247,102 @@ impl TlsSpec for TlsConfig {
         "TLS"
     }
     async fn resolve(&mut self, ctx: &HandlerContext, owner: &ResourceRef) -> Option<ResolvedRefsError> {
-        // Reset runtime-resolved fields first to avoid stale values on update.
-        self.resolved_ca_certificates = None;
-        self.resolved_client_certificate = None;
-        if !self.enabled {
-            return None;
-        }
+        resolve_tls(self, ctx, owner, false).await
+    }
+}
 
-        // Resolve CA certificate refs (type-validated via TlsCertsResolver).
-        // Note: ca_refs::resolve_ca_certificate_refs is intentionally NOT used here
-        // because TlsSpec.resolve() must return InvalidSecretType on a bad CA Secret
-        // type (e.g. kubernetes.io/ssh-auth). The ca_refs helper skips type
-        // validation; resolve_one + TlsCertsResolver enforces the whitelist.
-        let refs = self
-            .outbound
-            .validation
-            .as_ref()
-            .and_then(|v| v.ca_certificate_refs.as_deref())
-            .unwrap_or_default();
-        if !refs.is_empty() {
-            let mut cas = Vec::new();
-            for ca_ref in refs {
-                // Only Secret-kind refs are supported; other kinds (e.g. ConfigMap) are skipped.
-                if ca_ref.kind != "Secret" {
+/// OTLP retains the shared TLS material loader, with strict identity validation
+/// before each lookup. Other LinkSys providers keep their existing policy.
+pub(super) struct OtlpTlsSpec<'a>(pub &'a mut TlsConfig);
+
+#[async_trait]
+impl TlsSpec for OtlpTlsSpec<'_> {
+    fn provider_name(&self) -> &'static str {
+        "OTLP TLS"
+    }
+
+    async fn resolve(&mut self, ctx: &HandlerContext, owner: &ResourceRef) -> Option<ResolvedRefsError> {
+        resolve_tls(self.0, ctx, owner, true).await
+    }
+}
+
+async fn resolve_tls(
+    tls: &mut TlsConfig,
+    ctx: &HandlerContext,
+    owner: &ResourceRef,
+    strict_otlp_refs: bool,
+) -> Option<ResolvedRefsError> {
+    // Reset runtime-resolved fields first to avoid stale values on update.
+    tls.resolved_ca_certificates = None;
+    tls.resolved_client_certificate = None;
+    if !tls.enabled {
+        return None;
+    }
+
+    // Resolve CA certificate refs (type-validated via TlsCertsResolver).
+    // Note: ca_refs::resolve_ca_certificate_refs is intentionally NOT used here
+    // because TlsSpec.resolve() must return InvalidSecretType on a bad CA Secret
+    // type (e.g. kubernetes.io/ssh-auth). The ca_refs helper skips type
+    // validation; resolve_one + TlsCertsResolver enforces the whitelist.
+    let refs = tls
+        .outbound
+        .validation
+        .as_ref()
+        .and_then(|v| v.ca_certificate_refs.as_deref())
+        .unwrap_or_default();
+    let mut first_error = None;
+    let mut cas = Vec::new();
+    if !refs.is_empty() {
+        for ca_ref in refs {
+            let sor = SecretObjectReference {
+                group: Some(ca_ref.group.clone()),
+                kind: Some(ca_ref.kind.clone()),
+                name: ca_ref.name.clone(),
+                namespace: ca_ref.namespace.clone(),
+            };
+            if strict_otlp_refs {
+                if let Some(error) = otlp_reference_error(&sor, "tls.validation.caCertificateRefs") {
+                    first_error.get_or_insert(error);
                     continue;
                 }
-                let sor = SecretObjectReference {
-                    group: None,
-                    kind: None,
-                    name: ca_ref.name.clone(),
-                    namespace: ca_ref.namespace.clone(),
-                };
-                match resolve_one(ctx, owner, &sor, &TlsCertsResolver).await {
-                    Ok(Some(s)) => cas.push(s),
-                    Ok(None) => {}
-                    Err(e) => return Some(e),
+            }
+            // Other providers retain their existing non-Secret skip policy.
+            if ca_ref.kind != "Secret" {
+                continue;
+            }
+            match resolve_one(ctx, owner, &sor, &TlsCertsResolver).await {
+                Ok(Some(s)) => cas.push(s),
+                Ok(None) => {}
+                Err(error) => {
+                    first_error.get_or_insert(error);
                 }
             }
-            if !cas.is_empty() {
-                self.resolved_ca_certificates = Some(cas);
-            }
         }
-
-        // Resolve client certificate ref (mTLS identity).
-        if let Some(client_ref) = self.outbound.client_certificate_ref.as_ref().cloned() {
-            match resolve_one(ctx, owner, &client_ref, &TlsCertsResolver).await {
-                Ok(s) => self.resolved_client_certificate = s,
-                Err(e) => return Some(e),
-            }
-        }
-        None
     }
+
+    // Resolve client certificate ref (mTLS identity).
+    let mut client_certificate = None;
+    if let Some(client_ref) = tls.outbound.client_certificate_ref.as_ref() {
+        let result = match strict_otlp_refs
+            .then(|| otlp_reference_error(client_ref, "tls.clientCertificateRef"))
+            .flatten()
+        {
+            Some(error) => Err(error),
+            None => resolve_one(ctx, owner, client_ref, &TlsCertsResolver).await,
+        };
+        match result {
+            Ok(secret) => client_certificate = secret,
+            Err(error) => {
+                first_error.get_or_insert(error);
+            }
+        }
+    }
+    // Register every dependency, but publish only one complete TLS generation.
+    if first_error.is_none() {
+        tls.resolved_ca_certificates = (!cas.is_empty()).then_some(cas);
+        tls.resolved_client_certificate = client_certificate;
+    }
+    first_error
 }
 
 #[cfg(test)]

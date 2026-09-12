@@ -4,6 +4,7 @@
 //! state in this module. The Gateway consumes only the resolved state and never
 //! reparses operator JSON.
 
+use crate::resources::common::kubernetes_name::{is_dns_label, is_dns_subdomain};
 use std::collections::HashSet;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
@@ -338,26 +339,6 @@ fn canonicalize_cidr(raw: &str) -> Result<String, ProxyProtocolConfigErrorCode> 
             Ok(format!("{}/{prefix_len}", Ipv6Addr::from(addr)))
         }
     }
-}
-
-fn is_dns_label(value: &str, max_len: usize) -> bool {
-    if value.is_empty() || value.len() > max_len {
-        return false;
-    }
-    let bytes = value.as_bytes();
-    bytes.first().is_some_and(u8::is_ascii_alphanumeric)
-        && bytes.last().is_some_and(u8::is_ascii_alphanumeric)
-        && bytes
-            .iter()
-            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || *byte == b'-')
-}
-
-fn is_dns_subdomain(value: &str, max_len: usize) -> bool {
-    !value.is_empty()
-        && value.len() <= max_len
-        && value
-            .split('.')
-            .all(|label| is_dns_label(label, MAX_KUBERNETES_NAMESPACE_BYTES))
 }
 
 #[cfg(test)]

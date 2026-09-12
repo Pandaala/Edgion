@@ -481,6 +481,8 @@ struct LinkSysRuntimeStats {
     redis_clients: usize,
     etcd_clients: usize,
     es_clients: usize,
+    otlp_clients: usize,
+    otlp_retiring_clients: usize,
 }
 
 #[derive(Serialize)]
@@ -577,6 +579,8 @@ async fn store_stats(State(client): State<Arc<ConfigClient>>) -> Json<ApiRespons
         redis_clients: crate::link_sys::runtime::store::redis_client_count(),
         etcd_clients: crate::link_sys::runtime::store::etcd_client_count(),
         es_clients: crate::link_sys::runtime::store::es_client_count(),
+        otlp_clients: crate::link_sys::runtime::store::otlp_client_count(),
+        otlp_retiring_clients: crate::link_sys::runtime::store::otlp_retiring_client_count(),
     };
 
     let plugin_store_v2 = PluginStoreStatsV2 {
@@ -1965,6 +1969,8 @@ mod store_stats_tests {
                 redis_clients: 0,
                 etcd_clients: 0,
                 es_clients: 0,
+                otlp_clients: 0,
+                otlp_retiring_clients: 0,
             },
             plugin_store_v2: PluginStoreStatsV2 {
                 total: 0,
@@ -1987,6 +1993,8 @@ mod store_stats_tests {
         assert!(json.get("edgion_backend_store").is_some());
         assert_eq!(json["ai_credential_outlier_store"]["count"], 0);
         assert_eq!(json["adaptive_telemetry_store"]["count"], 0);
+        assert_eq!(json["link_sys_runtime"]["otlp_clients"], 0);
+        assert_eq!(json["link_sys_runtime"]["otlp_retiring_clients"], 0);
         assert!(json.get("plugin_store_v2").is_some());
         assert!(json.get("stream_plugin_store_v2").is_some());
         assert!(json.get("plugin_store").is_none());

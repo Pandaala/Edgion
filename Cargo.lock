@@ -1813,6 +1813,7 @@ dependencies = [
  "tokio-tungstenite 0.28.0",
  "tokio-util",
  "tonic 0.12.3",
+ "tonic 0.14.6",
  "tower 0.5.3",
  "tracing",
  "tracing-appender",
@@ -4138,12 +4139,7 @@ version = "0.31.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b84bcd6ae87133e903af7ef497404dda70c60d0ea14895fc8a5e6722754fc2a0"
 dependencies = [
- "futures-core",
- "futures-sink",
  "js-sys",
- "pin-project-lite",
- "thiserror 2.0.20",
- "tracing",
 ]
 
 [[package]]
@@ -4185,8 +4181,6 @@ dependencies = [
  "futures-executor",
  "futures-util",
  "opentelemetry",
- "percent-encoding",
- "rand 0.9.5",
  "thiserror 2.0.20",
 ]
 
@@ -6650,6 +6644,7 @@ dependencies = [
  "tower-layer",
  "tower-service",
  "tracing",
+ "webpki-roots 1.0.9",
 ]
 
 [[package]]

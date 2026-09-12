@@ -6,12 +6,12 @@
 
 ## 概述
 
-**连接器**是指向外部系统（Redis、Etcd、Elasticsearch、HTTP webhook 或 Kafka）的可复用命名句柄。您只需声明一次 `LinkSys` 资源，通过 Kubernetes Secret 挂载凭据，即可在任何需要该后端的功能中引用它。这样可以将连接详情和凭据集中管理，避免在每个插件和策略中重复配置。
+**连接器**是指向外部系统（Redis、Etcd、Elasticsearch、HTTP webhook、Kafka 或 OTLP/gRPC Collector）的可复用命名句柄。您只需声明一次 `LinkSys` 资源，通过 Kubernetes Secret 挂载凭据，即可在任何需要该后端的功能中引用它。这样可以将连接详情和凭据集中管理，避免在每个插件和策略中重复配置。
 
 一个 `LinkSys` 对象对应一个连接器。顶层字段 `spec.type` 选择后端类型，`spec.config` 承载该后端的配置。多个 Edgion 功能通过 `namespace/name` 引用连接器：
 
 - 分布式（集群级）限流通过 `namespace/name` 引用 `redis` 连接器——详见 [Redis 限流](../../user-guide/http-route/filters/edgion-plugins/rate-limit-redis.md)。
-- 访问日志与审计日志的输出目标可引用 `elasticsearch`、`redis` 或 `webhook` 连接器——详见 [Access Log](../observability/access-log.md)。
+- 异步日志的输出目标可引用 `elasticsearch`、`kafka` 或 `otlp` 连接器——详见 [Access Log](../observability/access-log.md)。
 - 通过 webhook 进行密钥解析等外部数据查询的插件可引用 `webhook` 连接器。
 
 `LinkSys` 是命名空间作用域的资源，短名称为 `lsys`。`kubectl get linksys` 可一览 `Accepted` 和 `ResolvedRefs` 状态条件。
@@ -64,7 +64,7 @@ Secret 键名遵循固定的已知约定，不支持通过 `usernameKey` / `pass
 |---------|---------------------|--------|--------|
 | basic（Redis / Etcd / ES） | `kubernetes.io/basic-auth` 或 `Opaque` | `password` | `username` |
 | apiKey（Elasticsearch） | `Opaque` | `apiKeyId`、`apiKeySecret` | — |
-| bearer（Elasticsearch） | `Opaque` | `bearerToken` | — |
+| bearer（Elasticsearch / OTLP） | `Opaque` | `bearerToken` | — |
 | TLS（所有后端） | `kubernetes.io/tls` 或 `Opaque` | `tls.crt`、`tls.key`、`ca.crt` 中至少一个 | — |
 
 应用层键名使用 camelCase；TLS 键名遵循 Kubernetes `kubernetes.io/tls` 标准。
@@ -89,12 +89,12 @@ tls:
     name: my-client-tls        # 包含 tls.crt + tls.key 的 Secret，用于客户端 mTLS
 ```
 
-> **Phase 1 CA 引用限制**：LinkSys（redis / etcd / elasticsearch / kafka）的 `validation.caCertificateRefs` 在本版本中仅支持 `kind: Secret`，不支持 ConfigMap CA。如需 ConfigMap CA，请使用插件（OIDC / LDAP / ForwardAuth / EGC）的 TLS 配置路径。内联 CA（`caCert` 字段）已从本版本中移除，请改用包含 `ca.crt` 键的 Secret。
+> **Phase 1 CA 引用限制**：LinkSys（redis / etcd / elasticsearch / kafka / otlp）的 `validation.caCertificateRefs` 在本版本中仅支持 `kind: Secret`，不支持 ConfigMap CA。如需 ConfigMap CA，请使用插件（OIDC / LDAP / ForwardAuth / EGC）的 TLS 配置路径。内联 CA（`caCert` 字段）已从本版本中移除，请改用包含 `ca.crt` 键的 Secret。
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `enabled` | Boolean | `false` | 为连接启用 TLS。对于已隐含 TLS 的 URL（`https://`、`rediss://`），此字段仅添加自定义 CA / 客户端证书处理。 |
-| `verify` | Boolean | `true` | TLS 块启用时验证对端证书。`verify: false` 由运维人员负责，启动时记录 WARN。Redis 和 Etcd 拒绝启用块中的 `verify: false`，其 SDK 无跳过验证 API。 |
+| `verify` | Boolean | `true` | TLS 块启用时验证对端证书。`verify: false` 由运维人员负责，启动时记录 WARN。Redis、Etcd 和 OTLP 拒绝启用块中的 `verify: false`，其 SDK 无跳过验证 API。 |
 | `validation` | Object | none | 可选信任锚配置。省略则使用内置 webpki 根证书。 |
 | `validation.caCertificateRefs` | Array | none | CA 证书 Secret 引用列表（每项：`{ kind: Secret, name, namespace }`）。Secret 须包含 `ca.crt` 键。LinkSys 仅支持 `kind: Secret`。自定义 CA **替换**内置根证书。 |
 | `validation.wellKnownCACertificates` | String | none | 显式使用内置 webpki 根证书。允许值：`System`。 |
@@ -1347,3 +1347,89 @@ spec:
 - [Redis 限流](../../user-guide/http-route/filters/edgion-plugins/rate-limit-redis.md)
 - [Access Log](../observability/access-log.md)
 - [Metrics](../observability/metrics.md)
+
+## OTLP/gRPC 连接器
+
+使用 `type: otlp` 将日志记录发送到 OpenTelemetry Collector。一个 LinkSys
+资源在访问日志、TCP、TLS 和 UDP 日志输出之间共享连接、exporter、批处理器及
+TCP 健康探针。SSL 日志使用同步文件写入，不支持 OTLP。
+
+```yaml
+apiVersion: edgion.io/v1
+kind: LinkSys
+metadata:
+  namespace: observability
+  name: collector
+spec:
+  type: otlp
+  config:
+    endpoint: https://collector.observability.svc:4317
+    timeoutMs: 10000
+    auth:
+      secretRef:
+        name: collector-auth
+    tls:
+      enabled: true
+      validation:
+        caCertificateRefs:
+          - kind: Secret
+            name: collector-ca
+      clientCertificateRef:
+        name: collector-client
+```
+
+在相同命名空间创建引用的 Secret：`collector-auth` 使用 `bearerToken` 键，
+`collector-ca` 使用 `ca.crt` 键，`collector-client` 是包含 `tls.crt` 和 `tls.key`
+的 `kubernetes.io/tls` Secret。不需要认证时省略 `auth`；使用 HTTPS 系统根证书时
+省略整个 TLS 块；不需要客户端认证时省略 `clientCertificateRef`。自定义 CA 会替换
+公共根证书。跨命名空间引用 Secret 需要 ReferenceGrant。认证仅支持来自 Secret 的
+Bearer token，最多 8192 字节；任意 metadata 和内联凭据均不支持。
+
+另行配置 Gateway 进程中的日志输出：
+
+```yaml
+access_log:
+  enabled: true
+  output:
+    otlp:
+      linkSysRef:
+        namespace: observability
+        name: collector
+  fallback:
+    localFile:
+      path: logs/access-fallback.log
+```
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `endpoint` | String | 必填 | `http://host[:port]` 或 `https://host[:port]`，可带末尾 `/`。省略端口时使用 80/443；常见 Collector 应显式填写 `:4317`。 |
+| `timeoutMs` | Integer | 10000 | 完整导出操作的超时，单位毫秒，范围 1–300000。 |
+| `auth.secretRef` | Object | 无 | 包含 `bearerToken` 的 Secret。 |
+| `tls` | Object | 无 | 共享出站 TLS 策略及证书引用。 |
+
+Endpoint 不允许 userinfo、非根路径、query、fragment、转义及空白；IPv6 地址必须
+使用方括号。HTTP 不能启用本地 TLS 块。HTTPS 始终校验原始 endpoint 主机名，
+不支持关闭证书校验、覆盖主机名或 SAN 策略。禁用本地 TLS 块只会忽略该块，
+HTTPS 仍使用 TLS 和全局校验策略。
+
+每次连接和探针均对实际解析得到的地址执行 Gateway egress 策略。生产模式拒绝
+loopback、link-local 和 unspecified 地址，也包括 IPv4-mapped IPv6。未启用全局
+私网阻断时，允许私网或 unique-local Collector。代理环境变量和重定向不能改变目的地。
+
+引用缺失、类型不匹配、初始化中或不健康时，会选择配置中的下一个健康日志输出；
+全部不健康时丢弃日志并增加已有丢弃计数器。引用的连接故障不会阻止 Gateway 启动。
+非法 namespace/name 会使进程配置失败；所有输出和 fallback（包括已禁用的输出）
+都必须满足 Kubernetes 名称语法及长度限制。
+
+热更新期间，替换配置无效、引用未解析或首次空 OTLP Export 失败时保留旧的可用连接。
+首次检查在三秒总时限内确认 Collector 认证和 TLS 接受结果。合法的待连接配置会自动重试。删除资源会停止 exporter 和探针；进程退出时，每条管线最多用五秒排空记录，
+随后取消未完成的导出并等待线程退出。已有退役管线先完成清理，再清理当前管线。这是尽力交付，不提供持久重放，也不会在一次发送失败后改投
+第二个输出。
+
+`edgion_link_sys_health{link="observability/collector"}` 及其状态切换计数器使用
+LinkSys key。健康仅表示 TCP 可达，不表示认证成功、每次重连的 TLS 握手成功或
+日志已交付；端到端验证应检查 Collector 收到的记录。可能暴露 endpoint 或证书细节
+的 SDK 传输日志即使在 `RUST_LOG=trace` 下也会被抑制。
+
+此连接器仅支持 OTLP/gRPC 日志导出，没有 `protocol` 字段，也不保留旧内联 OTLP
+输出格式。不提供 OTLP/HTTP、trace 或应用指标导出。

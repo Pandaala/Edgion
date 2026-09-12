@@ -38,8 +38,7 @@ pub mod global_def {
 pub mod resource;
 
 pub use self::output::{
-    LinkSysRef, LocalFileWriterCfg, LocalFileWriterConfig, OtlpOutputConfig, OtlpProtocol, RotationConfig,
-    RotationStrategy, StringOutput,
+    LinkSysRef, LocalFileWriterCfg, LocalFileWriterConfig, RotationConfig, RotationStrategy, StringOutput,
 };
 
 // Re-export from resource module

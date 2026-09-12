@@ -46,7 +46,7 @@ The LinkSys CRD and the log-output / rotation configuration (used by link_sys ru
 
 `LinkSysSpec` is a tagged enum with `#[serde(tag = "type", content = "config")]`:
 - The top level has only two fields: `spec.type` and `spec.config`
-- `config` is selected by `type`: Redis, Etcd, Elasticsearch, Webhook, Kafka, HttpDns, or CredentialSource
+- `config` is selected by `type`: Redis, Etcd, Elasticsearch, Webhook, Kafka, OTLP, HttpDns, or CredentialSource
 - The legacy nested `spec.config.type` / `spec.config.config` form is no longer accepted
 
 `SecretObjectReference` (`edgion-resources/src/resources/common/secret_object_ref.rs`), `SecretSlot` (`edgion-resources/src/resources/common/secret_slot.rs`), and `TlsConfig` / `TlsCerts` (`edgion-resources/src/resources/common/tls.rs`) have been extracted from each provider module into a shared common module to avoid multiple near-duplicate copies. `SecretObjectReference` carries `group / kind / name / namespace` (the first two are optional, defaulting to `core/Secret`), reserving room for non-Secret credential sources (Vault / ExternalSecret) in the future. `SecretSlot` is the `{ secret_ref: SecretObjectReference, secret: Option<Secret> }` slot, embedded into each `*Auth` via `#[serde(flatten)]`, with no change in YAML form. The LinkSys subcrates keep stable paths via `pub use`.
@@ -212,3 +212,24 @@ The full internal-dependency and requeue cascade graph is in [19-resource-depend
 
 - The Zeroize scope boundary (why end-to-end zeroization is not done when the embedded Secret travels through `serde_json` / gRPC) is in the "Zeroize scope" section of [10-secret.md](10-secret.md).
 - Provider client rebuild strategies are in `providers/*/config_mapping.rs`.
+
+## OTLP resource path
+
+`type: otlp` is the strict OTLP/gRPC origin/Bearer/TLS schema in
+`edgion-resources/src/resources/link_sys/otlp.rs`. Controller uses drive_standard
+with a bounded adapter delegating BearerResolver; SecretSlot and shared TlsConfig
+own redacted resolved material. The pure validator rejects URI userinfo/path/query,
+legacy inline fields, unsupported TLS policy and malformed reference identities.
+Gateway preparation revalidates rather than relying on advisory Controller status.
+
+TLS resolution visits every enabled CA/client reference even after an earlier
+failure, so each unresolved dependency can trigger recovery. It publishes either
+all resolved TLS material or none; disabling TLS clears material and old edges.
+Auth and TLS resolution remain independent. Kubernetes, FS and etcd share this
+pipeline, with existing backend-specific stores/status persistence.
+
+LinkSys auth.secretRef declares all four operator fields (name, namespace, group,
+kind) in the structural CRD subtree so Kubernetes cannot prune unsupported group
+or kind before typed validation. The focused CRD guard compares this subtree to
+SecretObjectReference. Handler apply/delete clear both Secret and cross-namespace
+reference managers; failed references still rebuild their current wakeup edges.

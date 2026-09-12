@@ -1637,56 +1637,62 @@ genai_tokens:
     }
 
     #[test]
-    fn test_access_log_otlp_yaml_deserializes_via_singleton_map() {
-        // Verify the full production deserialization path (singleton_map_recursive)
-        // parses the `otlp:` YAML key into StringOutput::Otlp. Without this test,
-        // a casing mismatch silently falls back to StringOutput::LocalFile and the
-        // OTLP arm in logger_factory.rs is never reached.
-        use edgion_resources::{OtlpProtocol, StringOutput};
-
-        let yaml = r#"
-access_log:
-  enabled: true
-  output:
-    otlp:
-      endpoint: "http://127.0.0.1:14317"
-      protocol: grpc
-      timeoutMs: 5000
-"#;
+    fn otlp_reference_uses_production_yaml_deserialization() {
+        let yaml = "access_log:\n  output:\n    otlp:\n      linkSysRef:\n        namespace: observability\n        name: collector\n";
         let de = serde_yaml::Deserializer::from_str(yaml);
         let cfg: EdgionGatewayConfig = serde_yaml::with::singleton_map_recursive::deserialize(de).unwrap();
-        assert!(cfg.access_log.enabled);
-        match cfg.access_log.output {
-            StringOutput::Otlp(o) => {
-                assert_eq!(o.endpoint, "http://127.0.0.1:14317");
-                assert!(matches!(o.protocol, OtlpProtocol::Grpc));
-                assert_eq!(o.timeout_ms, Some(5000));
+        let edgion_resources::StringOutput::Otlp { link_sys_ref } = cfg.access_log.output else {
+            panic!("expected OTLP reference output");
+        };
+        assert_eq!(link_sys_ref.key(), "observability/collector");
+    }
+
+    #[test]
+    fn otlp_invalid_references_fail_every_process_log_output_before_startup() {
+        // Disabled logs and fallback positions are still configuration inputs;
+        // validation must precede logger construction and identity emission.
+        for log in ["access_log", "ssl_log", "tcp_log", "tls_log", "udp_log"] {
+            for position in ["output", "fallback"] {
+                for field in ["namespace", "name"] {
+                    for invalid in ["".to_owned(), "private-sentinel/invalid".to_owned(), "x".repeat(254)] {
+                        let mut reference = serde_json::json!({"namespace": "default", "name": "collector"});
+                        reference[field] = serde_json::Value::String(invalid.clone());
+                        let mut config = serde_json::json!({});
+                        config[log] = serde_json::json!({"enabled": false});
+                        config[log][position] = serde_json::json!({"otlp": {"linkSysRef": reference}});
+                        let yaml = serde_yaml::to_string(&config).unwrap();
+                        let de = serde_yaml::Deserializer::from_str(&yaml);
+                        let result: Result<EdgionGatewayConfig, _> =
+                            serde_yaml::with::singleton_map_recursive::deserialize(de);
+                        let error = result
+                            .expect_err("invalid OTLP reference must fail config loading")
+                            .to_string();
+                        if !invalid.is_empty() {
+                            assert!(
+                                !error.contains(&invalid),
+                                "reference was echoed: {log}.{position}.{field}"
+                            );
+                        }
+                    }
+                }
             }
-            other => panic!("expected StringOutput::Otlp, got {:?}", other),
         }
     }
 
     #[test]
-    fn test_access_log_otlp_grpc_is_default_protocol() {
-        // `protocol` field defaults to grpc when omitted.
-        use edgion_resources::{OtlpProtocol, StringOutput};
-
-        let yaml = r#"
-access_log:
-  enabled: true
-  output:
-    otlp:
-      endpoint: "http://otel-collector:4317"
-"#;
-        let de = serde_yaml::Deserializer::from_str(yaml);
-        let cfg: EdgionGatewayConfig = serde_yaml::with::singleton_map_recursive::deserialize(de).unwrap();
-        match cfg.access_log.output {
-            StringOutput::Otlp(o) => {
-                assert!(matches!(o.protocol, OtlpProtocol::Grpc));
-                assert!(o.timeout_ms.is_none());
-                assert!(o.headers.is_none());
-            }
-            other => panic!("expected StringOutput::Otlp, got {:?}", other),
+    fn otlp_inline_process_configuration_is_rejected() {
+        for inline in [
+            "endpoint: https://private-sentinel.example:4317",
+            "protocol: grpc",
+            "headers: {authorization: private-sentinel}",
+        ] {
+            let yaml = format!(
+                "access_log:\n  output:\n    otlp:\n      linkSysRef: {{namespace: default, name: collector}}\n      {inline}\n"
+            );
+            let de = serde_yaml::Deserializer::from_str(&yaml);
+            let result: Result<EdgionGatewayConfig, _> = serde_yaml::with::singleton_map_recursive::deserialize(de);
+            let error = result.expect_err("inline OTLP fields must be rejected").to_string();
+            assert!(!error.contains("private-sentinel"));
         }
     }
 

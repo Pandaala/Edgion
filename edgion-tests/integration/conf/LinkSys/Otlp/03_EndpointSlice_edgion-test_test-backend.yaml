@@ -13,6 +13,9 @@ ports:
   - name: http
     port: 30001
     protocol: TCP
+  - name: https
+    port: 30002
+    protocol: TCP
 endpoints:
   - addresses:
       - "127.0.0.1"

@@ -1,6 +1,6 @@
 ---
 name: link-sys-detail
-description: Full LinkSys CRD schema: Redis/Etcd/Elasticsearch/Webhook/Kafka/HttpDns connectors and Controller-managed credential sources with a unified secretRef/TLS credential model.
+description: Full LinkSys CRD schema: Redis/Etcd/Elasticsearch/Webhook/Kafka/OTLP/HttpDns connectors and Controller-managed credential sources with a unified secretRef/TLS credential model.
 ---
 
 # LinkSys Resource
@@ -18,7 +18,7 @@ metadata:
   name: my-redis
   namespace: default
 spec:
-  type: redis                 # redis | etcd | elasticsearch | webhook | kafka | httpdns | credentialSource
+  type: redis                 # redis | etcd | elasticsearch | webhook | kafka | otlp | httpdns | credentialSource
   config:                     # Backend-type-specific configuration (expanded by type below)
     ...
 ```
@@ -510,3 +510,34 @@ does not carry the token.
 | EdgionPlugins → LinkSys | `LinkSys` (type=redis/webhook/credentialSource) | Reference by `namespace/name` in plugin configuration | Distributed rate limiting, Webhook key resolution, CredentialInjector |
 
 For the internal implementation and Handler flow, see [01-architecture/05-resources/18-link-sys.md](../../01-architecture/05-resources/18-link-sys.md).
+
+## OTLP/gRPC
+
+`type: otlp` selects `OtlpClientConfig`: required `endpoint`, `timeoutMs` default
+10000 (1..=300000), optional `auth.secretRef`, optional shared `tls`. Unknown
+fields are rejected. `auth` reads Secret `bearerToken` via the canonical Bearer
+parser with an OTLP-only 8192-byte cap. There is no protocol selector, arbitrary
+metadata map or inline credential. Endpoints accept only HTTP/HTTPS origins with
+optional root slash; omitted ports mean 80/443, and collectors normally use :4317.
+IPv6 must be bracketed; userinfo, query, fragment, non-root path, escapes and
+whitespace are rejected without echoing input.
+
+HTTPS always uses resolve_outbound_tls: public webpki roots or replacement custom
+CA, optional mTLS identity, original-host verification. Enabled verify=false,
+hostname and SAN overrides are rejected. Disabled local TLS is inert and does not
+disable HTTPS. HTTP cannot enable a local TLS policy. All credential/certificate
+refs are validated core Secrets with normal ReferenceGrant rules. Resolved
+material remains schemars-excluded, admin-redacted and conf-sync-serialized.
+
+StringOutput is `otlp: {linkSysRef: {namespace: observability, name: collector}}`.
+Namespace/name are validated on process deserialization before logging, including
+all fallback/disabled blocks. Missing/wrong-type/unhealthy references use existing
+first-healthy fallback. Connection initialization failure is not process startup
+failure; invalid process YAML is. See the complete
+[operator example](../../../docs/en/ops-guide/infrastructure/connectors.md#otlpgrpc-connector).
+
+LinkSys auth.secretRef declares all four operator fields (name, namespace, group,
+kind) in the structural CRD subtree so Kubernetes cannot prune unsupported group
+or kind before typed validation. The focused CRD guard compares this subtree to
+SecretObjectReference. Handler apply/delete clear both Secret and cross-namespace
+reference managers; failed references still rebuild their current wakeup edges.

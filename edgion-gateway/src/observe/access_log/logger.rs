@@ -173,6 +173,26 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn unresolved_otlp_reference_uses_first_healthy_fallback() {
+        let otlp = crate::link_sys::providers::otlp::OtlpLogSender::new(edgion_resources::LinkSysRef {
+            namespace: "fallback-test".into(),
+            name: "missing-collector".into(),
+        })
+        .unwrap();
+        let (fallback, received, _) = fake("fallback", true);
+        let (third, third_received, _) = fake("third", true);
+        let mut logger = AccessLogger::new();
+        logger.register(Box::new(otlp));
+        logger.register(Box::new(fallback));
+        logger.register(Box::new(third));
+        logger
+            .send_with_meta("otlp-fallback-marker".into(), &LogMeta::default())
+            .await;
+        assert_eq!(received.load(Ordering::Relaxed), 1);
+        assert_eq!(third_received.load(Ordering::Relaxed), 0);
+    }
+
+    #[tokio::test]
     async fn send_skips_unhealthy_and_falls_through_to_next() {
         let (first, first_rx, _) = fake("first", false);
         let (second, second_rx, _) = fake("second", true);

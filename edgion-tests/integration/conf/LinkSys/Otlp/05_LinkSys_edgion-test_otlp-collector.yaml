@@ -1,0 +1,15 @@
+# The isolated runner substitutes the integration-test host and dedicated port.
+# The referenced Secret is generated only inside the runner's owned work directory.
+apiVersion: edgion.io/v1
+kind: LinkSys
+metadata:
+  name: otlp-collector
+  namespace: edgion-test
+spec:
+  type: otlp
+  config:
+    endpoint: http://collector.example.com:4317
+    timeoutMs: 2000
+    auth:
+      secretRef:
+        name: otlp-auth-a

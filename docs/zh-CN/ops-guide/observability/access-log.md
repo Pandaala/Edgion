@@ -655,3 +655,26 @@ cat logs/edgion_access.log | jq 'select(.request_info.trace_id["x-trace-id"] == 
 - [监控指标](./metrics.md)
 - [debug-access-log 插件](../../user-guide/http-route/filters/edgion-plugins/debug-access-log.md)
 - [edgion-cli](../edgion-cli.md)
+
+## OpenTelemetry Collector 输出
+
+先声明 [OTLP LinkSys 连接器](../infrastructure/connectors.md#otlpgrpc-连接器)，
+然后在 Gateway 进程配置中引用：
+
+```yaml
+access_log:
+  enabled: true
+  output:
+    otlp:
+      linkSysRef:
+        namespace: observability
+        name: collector
+  fallback:
+    localFile:
+      path: logs/access-fallback.log
+```
+
+`tcp_log`、`tls_log` 和 `udp_log` 可以使用相同引用，共享一个导出流程。
+引用缺失或不健康时选择第一个健康的 fallback；非法引用语法使配置失败。
+连接字段只属于 LinkSys。导出的 JSON body、trace ID、状态码与 severity、
+敏感路径处理均保持原有语义。TCP 健康不代表日志已交付。

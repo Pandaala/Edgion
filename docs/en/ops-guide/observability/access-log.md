@@ -760,3 +760,27 @@ If you run into problems:
 - [Metrics](./metrics.md)
 - [debug-access-log Plugin](../../user-guide/http-route/filters/edgion-plugins/debug-access-log.md)
 - [edgion-cli](../edgion-cli.md)
+
+## OpenTelemetry Collector output
+
+Declare an [OTLP LinkSys connector](../infrastructure/connectors.md#otlpgrpc-connector),
+then reference it from the Gateway process configuration:
+
+```yaml
+access_log:
+  enabled: true
+  output:
+    otlp:
+      linkSysRef:
+        namespace: observability
+        name: collector
+  fallback:
+    localFile:
+      path: logs/access-fallback.log
+```
+
+The same reference can be used by `tcp_log`, `tls_log` and `udp_log`. All share one
+export pipeline. Missing or unhealthy references follow first-healthy fallback;
+invalid reference syntax fails configuration. Connection fields belong only in
+LinkSys. The exported JSON body, trace ID, status/severity and sensitive path
+handling are unchanged. TCP health is not delivery acknowledgment.

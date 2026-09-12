@@ -9,16 +9,25 @@ use tracing_subscriber::{EnvFilter, Layer};
 
 const PINGORA_H1_CLIENT_TARGET: &str = "pingora_core::protocols::http::v1::client";
 const PINGORA_H1_PROXY_TARGET: &str = "pingora_proxy::proxy_h1";
+// These dependencies can format peer-controlled headers, TLS identities and
+// certificate errors. Their diagnostics cannot be made safe by our callers.
+// Keep this protection independent of operator RUST_LOG directives.
+const SENSITIVE_TRANSPORT_TARGETS: [&str; 3] = ["tonic::transport", "rustls", "h2"];
+
+fn within_target(target: &str, parent: &str) -> bool {
+    target == parent || target.strip_prefix(parent).is_some_and(|rest| rest.starts_with("::"))
+}
 
 fn system_log_event_allowed(target: &str, level: &Level) -> bool {
+    if SENSITIVE_TRANSPORT_TARGETS
+        .iter()
+        .any(|parent| within_target(target, parent))
+    {
+        return false;
+    }
     let protected_target = [PINGORA_H1_CLIENT_TARGET, PINGORA_H1_PROXY_TARGET]
         .iter()
-        .any(|protected| {
-            target == *protected
-                || target
-                    .strip_prefix(protected)
-                    .is_some_and(|rest| rest.starts_with("::"))
-        });
+        .any(|protected| within_target(target, protected));
 
     !protected_target || level == &Level::ERROR
 }
@@ -97,10 +106,12 @@ pub async fn init_logging(config: LogConfig) -> Result<WorkerGuard> {
     // DEBUG/TRACE. Keep those two upstream targets at ERROR even when an operator
     // enables a broader RUST_LOG directive; serialized headers can no longer use
     // HeaderValue's sensitive metadata for redaction.
-    let pingora_h1_filter = filter_fn(|metadata| system_log_event_allowed(metadata.target(), metadata.level()));
+    // OTLP's native tonic/rustls/h2 stack can also expose identity and remote
+    // failure text at arbitrary verbosity. Preserve binary-owned diagnostics.
+    let protected_target_filter = filter_fn(|metadata| system_log_event_allowed(metadata.target(), metadata.level()));
     let subscriber = tracing_subscriber::registry()
         .with(env_filter)
-        .with(pingora_h1_filter)
+        .with(protected_target_filter)
         .with(file_layer);
 
     if config.console {
@@ -123,6 +134,71 @@ pub async fn init_logging(config: LogConfig) -> Result<WorkerGuard> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sensitive_transport_targets_are_closed_at_every_level() {
+        for target in [
+            "tonic::transport",
+            "tonic::transport::channel::service::reconnect",
+            "rustls",
+            "rustls::client::tls12",
+            "h2",
+            "h2::codec::framed_read",
+        ] {
+            for level in [Level::TRACE, Level::DEBUG, Level::INFO, Level::WARN, Level::ERROR] {
+                assert!(!system_log_event_allowed(target, &level), "{target} {level}");
+            }
+        }
+        for target in [
+            "h2_extra",
+            "rustls_client",
+            "tonic::transport_extra",
+            "edgion_gateway::link_sys",
+        ] {
+            assert!(system_log_event_allowed(target, &Level::TRACE), "{target}");
+        }
+    }
+
+    #[test]
+    fn protected_transport_filter_cannot_be_overridden_by_trace_directives() {
+        use parking_lot::Mutex;
+        use std::io::Write;
+        use std::sync::Arc;
+
+        #[derive(Clone)]
+        struct Capture(Arc<Mutex<Vec<u8>>>);
+        impl Write for Capture {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().extend_from_slice(bytes);
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let captured = Arc::new(Mutex::new(Vec::new()));
+        let writer = Capture(captured.clone());
+        let subscriber = tracing_subscriber::registry()
+            .with(EnvFilter::new("trace,tonic::transport=trace,rustls=trace,h2=trace"))
+            .with(filter_fn(|metadata| {
+                system_log_event_allowed(metadata.target(), metadata.level())
+            }))
+            .with(
+                tracing_subscriber::fmt::layer()
+                    .with_ansi(false)
+                    .with_writer(move || writer.clone()),
+            );
+        tracing::subscriber::with_default(subscriber, || {
+            tracing::debug!(target: "tonic::transport::channel::service::reconnect", "tls-identity-sentinel");
+            tracing::warn!(target: "rustls::client::hs", "certificate-sentinel");
+            tracing::error!(target: "h2::codec", "collector-error-sentinel");
+            tracing::info!(target: "edgion_gateway::link_sys", link = "default/collector", "connect_failed");
+        });
+        let output = String::from_utf8(captured.lock().clone()).unwrap();
+        assert!(!output.contains("sentinel"));
+        assert!(output.contains("default/collector"));
+        assert!(output.contains("connect_failed"));
+    }
 
     #[test]
     fn pingora_h1_header_log_targets_have_an_error_floor() {
