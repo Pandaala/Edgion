@@ -68,9 +68,9 @@ The result envelope distinguishes successful denial from failure. Type/range
 errors use fixed result-map classes; VM limits still use runtime errors.
 
 The canonical numeric helpers live in `edgion-resources/src/redis_rate_limit.rs`.
-They bound input and output domains; they do not make sliding-window floating
-weights exact or validate Redis state written by outsiders. The shared numeric-domain
-task retains broader HTTP/Stream adoption and stronger intermediate precision work.
+They bound the DSL, HTTP and Stream input domains and the Gateway validates
+request-rate replies before using them. They do not make sliding-window floating
+weights exact or validate Redis state written by outsiders.
 The operator namespace and length-delimited policy identity prevent accidental key
 composition collisions. Equal explicit identity on the same database deliberately
 shares counters. Configuration changes to algorithm/rate/interval select fresh keys.

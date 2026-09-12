@@ -91,9 +91,10 @@ shared read-lock reader count on lookup. Throughput can therefore regress for
 some port distributions even while unrelated entries scale better. No fairness
 or lock-free progress guarantee is claimed.
 
-The separate [numeric-domain task](../../tasks/todo/define-redis-rate-limiter-numeric-domain/define-redis-rate-limiter-numeric-domain.md)
-still owns accepted configuration limits, duration conversion, Lua exactness and
-Redis integer bounds. Local arithmetic safety does not close that task.
+Accepted configuration now uses the shared Redis rate-limit numeric domain:
+`rate` is bounded to 1..=1,000,000 and `interval` to exact whole milliseconds in
+100..=2,147,483,647. The same lower-layer contract guards resource validation,
+Gateway Redis execution and local-gate binding.
 
 ### Measurement
 

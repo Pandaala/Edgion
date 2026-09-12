@@ -17,6 +17,7 @@
 
 use crate::common::KeyGet;
 use crate::duration::parse_duration;
+use crate::redis_rate_limit::{validate_rate_limit_units, validate_rate_limit_window};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
@@ -102,7 +103,7 @@ pub enum OnRedisFailure {
 #[serde(rename_all = "camelCase")]
 pub struct RateLimitPolicy {
     /// Maximum requests (or cost units) allowed per interval.
-    #[schemars(range(min = 1))]
+    #[schemars(range(min = 1, max = 1000000))]
     pub rate: u64,
 
     /// Time interval (GEP-2257 duration, e.g., "1s", "1m", "1h", "24h").
@@ -213,7 +214,7 @@ pub struct RateLimitRedisConfig {
     /// Useful for APIs where different endpoints have different costs.
     /// For example, a search endpoint might cost 5, while a simple GET costs 1.
     #[serde(default = "default_cost")]
-    #[schemars(range(min = 1))]
+    #[schemars(range(min = 1, max = 1000000))]
     pub cost: u32,
 
     /// Maximum length of the limit key portion in Redis keys (default: 4096 bytes).
@@ -338,18 +339,16 @@ impl RateLimitRedisConfig {
         }
 
         for (i, policy) in self.policies.iter().enumerate() {
-            if policy.rate == 0 {
-                return Some(format!("policies[{}].rate must be > 0", i));
+            if let Err(error) = validate_rate_limit_units(policy.rate) {
+                return Some(format!("policies[{i}].rate {error}"));
             }
             match parse_duration(&policy.interval) {
-                Err(e) => return Some(format!("policies[{}].interval: {}", i, e)),
-                Ok(dur) if dur < Duration::from_millis(100) => {
-                    return Some(format!(
-                        "policies[{}].interval too small (< 100ms): could overwhelm Redis",
-                        i
-                    ));
+                Err(e) => return Some(format!("policies[{i}].interval: {e}")),
+                Ok(duration) => {
+                    if let Err(error) = validate_rate_limit_window(duration) {
+                        return Some(format!("policies[{i}].interval {error}"));
+                    }
                 }
-                Ok(_) => {} // valid; skip interval_duration assignment (that's validate_inner's side effect)
             }
         }
 
@@ -379,8 +378,8 @@ impl RateLimitRedisConfig {
             }
         }
 
-        if self.cost == 0 {
-            return Some("cost must be > 0".to_string());
+        if let Err(error) = validate_rate_limit_units(u64::from(self.cost)) {
+            return Some(format!("cost {error}"));
         }
 
         if self.max_key_len < 64 {
@@ -415,10 +414,10 @@ impl RateLimitRedisConfig {
             policy.interval_duration = Some(dur);
         }
 
-        self.request_timeout_duration = match &self.request_timeout {
-            Some(rt) => Some(parse_duration(rt).expect("request_timeout pre-validated by check_fields")),
-            None => None,
-        };
+        self.request_timeout_duration = self
+            .request_timeout
+            .as_ref()
+            .map(|rt| parse_duration(rt).expect("request_timeout pre-validated by check_fields"));
 
         Ok(())
     }
@@ -439,6 +438,7 @@ impl PluginValidation for RateLimitRedisConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::redis_rate_limit::{MAX_RATE_LIMIT_UNITS, MAX_RATE_LIMIT_WINDOW_MS};
 
     fn create_valid_config() -> RateLimitRedisConfig {
         RateLimitRedisConfig {
@@ -535,7 +535,7 @@ mod tests {
             ..Default::default()
         };
         let err = config.validate().unwrap_err();
-        assert!(err.contains("rate must be > 0"));
+        assert_eq!(err, "policies[0].rate must be between 1 and 1000000");
     }
 
     #[test]
@@ -551,7 +551,7 @@ mod tests {
             ..Default::default()
         };
         let err = config.validate().unwrap_err();
-        assert!(err.contains("too small"));
+        assert_eq!(err, "policies[0].interval must be between 100ms and 2147483647ms");
     }
 
     #[test]
@@ -575,6 +575,49 @@ mod tests {
         config.cost = 0;
         let err = config.validate().unwrap_err();
         assert!(err.contains("cost"));
+    }
+
+    #[test]
+    fn numeric_domain_accepts_maxima_and_rejects_first_invalid_values() {
+        let mut config = create_valid_config();
+        config.policies[0].rate = u64::from(MAX_RATE_LIMIT_UNITS);
+        assert_eq!(MAX_RATE_LIMIT_WINDOW_MS, 2_147_483_647);
+        config.policies[0].interval = "596h31m23s647ms".to_string();
+        config.cost = MAX_RATE_LIMIT_UNITS;
+        assert!(config.validate().is_ok());
+
+        config.policies[0].rate += 1;
+        assert_eq!(
+            config.validate().unwrap_err(),
+            "policies[0].rate must be between 1 and 1000000"
+        );
+        config.policies[0].rate = 1;
+        config.policies[0].interval = "596h31m23s648ms".to_string();
+        assert_eq!(
+            config.validate().unwrap_err(),
+            "policies[0].interval must be between 100ms and 2147483647ms"
+        );
+        config.policies[0].interval = "1s".to_string();
+        config.cost = MAX_RATE_LIMIT_UNITS + 1;
+        assert_eq!(config.validate().unwrap_err(), "cost must be between 1 and 1000000");
+    }
+
+    #[test]
+    fn numeric_schema_maxima_match_the_canonical_constant() {
+        let policy_schema = serde_json::to_value(schemars::schema_for!(RateLimitPolicy)).unwrap();
+        let config_schema = serde_json::to_value(schemars::schema_for!(RateLimitRedisConfig)).unwrap();
+        assert_eq!(
+            policy_schema
+                .pointer("/properties/rate/maximum")
+                .and_then(|v| v.as_u64()),
+            Some(u64::from(MAX_RATE_LIMIT_UNITS))
+        );
+        assert_eq!(
+            config_schema
+                .pointer("/properties/cost/maximum")
+                .and_then(|v| v.as_u64()),
+            Some(u64::from(MAX_RATE_LIMIT_UNITS))
+        );
     }
 
     #[test]

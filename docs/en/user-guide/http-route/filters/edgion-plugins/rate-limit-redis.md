@@ -110,7 +110,7 @@ spec:
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `cost` | Integer | `1` | Request cost units for weighted rate limiting. `cost: 5` means each request consumes 5 units of the quota |
+| `cost` | Integer | `1` | Request cost units for weighted rate limiting, from 1 through 1,000,000. `cost: 5` means each request consumes 5 units of the quota |
 
 ---
 
@@ -120,8 +120,8 @@ Each entry in the `policies` array contains:
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `rate` | Integer | — (required) | Maximum requests (or cost units) allowed per interval. Must be > 0 |
-| `interval` | String | — (required) | Time window, e.g. `"1s"`, `"1m"`, `"1h"`, `"24h"`, or combined like `"1h30m"`. Minimum: 100ms |
+| `rate` | Integer | — (required) | Maximum requests (or cost units) allowed per interval, from 1 through 1,000,000 |
+| `interval` | String | — (required) | Whole-millisecond time window from 100ms through 2,147,483,647ms, e.g. `"1s"`, `"1m"`, `"1h"`, `"24h"`, or combined like `"1h30m"` |
 | `algorithm` | Enum | `SlidingWindow` | Rate limiting algorithm. See algorithm table below |
 
 #### Algorithm Reference

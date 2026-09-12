@@ -5,11 +5,12 @@
 //! coherent refill/generation/consumption transition under the bucket mutex.
 //! No lock spans Redis work. State survives reload and is never evicted.
 
+use edgion_resources::redis_rate_limit::validate_rate_limit_policy;
 use parking_lot::{Mutex, RwLock};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct LocalGateParams {
@@ -152,9 +153,13 @@ struct LocalGateRegistry {
 
 impl LocalGateRegistry {
     fn bind(&self, scope: &str, rate: u64, interval_ms: u64) -> Option<LocalGateBinding> {
-        if rate == 0 || interval_ms == 0 {
+        if validate_rate_limit_policy(rate, Duration::from_millis(interval_ms)).is_err() {
             return None;
         }
+        self.bind_validated(scope, rate, interval_ms)
+    }
+
+    fn bind_validated(&self, scope: &str, rate: u64, interval_ms: u64) -> Option<LocalGateBinding> {
         let entry = {
             let mut entries = self.entries.lock();
             Arc::clone(entries.entry(scope.to_owned()).or_default())
@@ -248,11 +253,19 @@ mod tests {
     #[test]
     fn production_clock_allows_exact_capacity_without_sleep() {
         let registry = LocalGateRegistry::default();
-        let binding = bind(&registry, "a", 3, u64::MAX);
+        let binding = bind(&registry, "a", 3, 1_000);
         for _ in 0..3 {
             assert!(binding.try_acquire(80));
         }
         assert!(!binding.try_acquire(80));
+    }
+
+    #[test]
+    fn binding_enforces_the_shared_numeric_domain() {
+        let registry = LocalGateRegistry::default();
+        assert!(registry.bind("max", 1_000_000, i32::MAX as u64).is_some());
+        assert!(registry.bind("rate-over", 1_000_001, 1_000).is_none());
+        assert!(registry.bind("window-over", 1, i32::MAX as u64 + 1).is_none());
     }
 
     #[test]
@@ -605,7 +618,7 @@ mod tests {
     // Keep workload constants identical when comparing revisions. The two helpers
     // adapt construction/admission only; timing excludes runtime construction.
     fn measurement_binding(scope: &str) -> LocalGateBinding {
-        LocalGateBinding::new(scope, 1_000_000_000, u64::MAX).unwrap()
+        LOCAL_GATES.bind_validated(scope, 1_000_000_000, u64::MAX).unwrap()
     }
 
     fn measurement_acquire(binding: &LocalGateBinding, port: u16) -> bool {

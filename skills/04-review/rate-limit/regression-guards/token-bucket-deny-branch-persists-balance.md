@@ -83,9 +83,9 @@ insufficient: it does not run in ordinary `cargo test`.
 - Prove the behavior with wall-clock sleeps instead of explicit `now_ms` — `eval_policy` takes
   the timestamp precisely so tests never race the clock.
 
-The separate Redis rate-limiter numeric-domain task owns validation of all Lua/Rust arithmetic
-bounds across HTTP and Stream callers. This guard relies on that intended bounded domain and does
-not replace or narrow that task.
+The shared Redis rate-limiter numeric domain validates the Lua/Rust arithmetic
+bounds across HTTP and Stream callers. This guard relies on that bounded domain
+while independently preserving the deny-branch balance behavior.
 
 ## Re-evaluation Triggers
 
@@ -100,7 +100,7 @@ Re-open this decision only if:
 - B0061 (Gateway quality campaign) — production fix, commit `695f0ba9`
 - D0029 / `tasks/todo/add-redis-token-bucket-partial-refill-integration-coverage.md` — the
   deferred real-Redis coverage, added 2026-09-06
-- `tasks/todo/define-redis-rate-limiter-numeric-domain/define-redis-rate-limiter-numeric-domain.md`
+- `tasks/pending/define-redis-rate-limiter-numeric-domain/define-redis-rate-limiter-numeric-domain.md`
   — canonical cross-caller numeric bounds
 - `edgion-gateway/src/plugins/common/redis_rate_limiter/scripts.rs`
 - `edgion-tests/tests/token_bucket_partial_refill_redis.rs`

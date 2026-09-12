@@ -379,8 +379,8 @@ still evaluates and consumes that entry at both levels.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `rate` | Integer | **Required** | Maximum new TCP/TLS connections or UDP session-admission attempts per interval. Established UDP session packets are not counted. |
-| `interval` | String | **Required** | Time window, e.g. `"1s"`, `"1m"`. |
+| `rate` | Integer | **Required** | Maximum new TCP/TLS connections or UDP session-admission attempts per interval, from 1 through 1,000,000. Established UDP session packets are not counted. |
+| `interval` | String | **Required** | Whole-millisecond time window from 100ms through 2,147,483,647ms, e.g. `"1s"`, `"1m"`. |
 | `redisDistributed` | Boolean | `false` | (`perListener` only) When `true`, also enforces the cap fleet-wide via Redis in addition to the local gate. |
 | `onRedisFailure` | Enum | `Allow` (`perSourceIp`) / `Deny` (`perListener`) | Behavior when Redis is unavailable or `redisTimeout` elapses. `Allow` = fail-open; `Deny` = fail-close. |
 

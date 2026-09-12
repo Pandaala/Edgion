@@ -79,9 +79,9 @@ never wraps and does not use the refill timestamp as a generation marker.
   `DirectPeerIp`, Redis order, timeout and failure-policy defaults are unchanged.
 - The [D0099 scheduling tradeoff](../../listeners/intentional-design/bounded-serial-connection-admission.md)
   remains separate; this fix does not isolate Redis waits from Pingora accept tasks.
-- The local `u128` representation avoids overflowing scaled balance/refill, but
-  does not establish the shared configuration/Lua/Redis numeric domain. That work
-  remains in the [numeric-domain task](../../../../tasks/todo/define-redis-rate-limiter-numeric-domain/define-redis-rate-limiter-numeric-domain.md).
+- The local `u128` representation avoids overflowing scaled balance/refill. Its
+  construction boundary also enforces the shared configuration/Lua/Redis numeric
+  domain owned by `edgion-resources/src/redis_rate_limit.rs`.
 - This is the existing no-eviction registry's representation replacement, not a
   new parallel store or third generic cache. Entry count can grow with operator
   churn; a `u16` port bound does not bound total process memory.

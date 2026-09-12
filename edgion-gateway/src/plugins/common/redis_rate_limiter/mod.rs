@@ -10,6 +10,9 @@
 pub mod scripts;
 
 use crate::link_sys::providers::redis::RedisLinkClient;
+use edgion_resources::redis_rate_limit::{
+    validate_rate_limit_call, validate_rate_limit_policy, validate_rate_limit_units,
+};
 use edgion_resources::resources::edgion_plugins::{RateLimitAlgorithm, RateLimitPolicy};
 use fred::{
     interfaces::LuaInterface,
@@ -354,15 +357,73 @@ pub struct RateLimitResult {
     pub retry_ms: i64,
 }
 
+fn validate_rate_limit_execution(rate: u64, window_ms: i64, now_ms: i64, cost: u32) -> anyhow::Result<()> {
+    let window_ms_u64 =
+        u64::try_from(window_ms).map_err(|_| anyhow::anyhow!("rate-limit interval milliseconds are invalid"))?;
+    let validated_window_ms = validate_rate_limit_policy(rate, Duration::from_millis(window_ms_u64))
+        .map_err(|error| anyhow::anyhow!("invalid rate-limit policy: {error}"))?;
+    if validated_window_ms != window_ms {
+        anyhow::bail!("rate-limit interval milliseconds are invalid");
+    }
+    validate_rate_limit_call(i64::from(cost), now_ms)
+        .map_err(|error| anyhow::anyhow!("invalid rate-limit call: {error}"))?;
+    Ok(())
+}
+
+fn validate_rate_limit_batch(policies: &[RateLimitPolicy], cost: u32, now_ms: i64) -> anyhow::Result<()> {
+    if policies.is_empty() {
+        anyhow::bail!("redis_rate_limiter: no policy after iteration — invariant violated");
+    }
+    validate_rate_limit_call(i64::from(cost), now_ms)
+        .map_err(|error| anyhow::anyhow!("invalid rate-limit call: {error}"))?;
+    for policy in policies {
+        let interval = policy
+            .interval_duration
+            .ok_or_else(|| anyhow::anyhow!("rate-limit policy interval was not compiled"))?;
+        validate_rate_limit_policy(policy.rate, interval)
+            .map_err(|error| anyhow::anyhow!("invalid rate-limit policy: {error}"))?;
+    }
+    Ok(())
+}
+
 impl RateLimitResult {
-    pub fn from_lua_result(values: &[i64], limit: u64) -> Self {
-        Self {
-            allowed: values.first().copied().unwrap_or(0) == 1,
-            current: values.get(1).copied().unwrap_or(0),
-            remaining: values.get(2).copied().unwrap_or(0),
-            limit,
-            retry_ms: values.get(3).copied().unwrap_or(0),
+    pub fn from_lua_result(values: &[i64], limit: u64) -> anyhow::Result<Self> {
+        validate_rate_limit_units(limit)
+            .map_err(|error| anyhow::anyhow!("invalid rate-limit result limit: {error}"))?;
+        if values.len() != 4 {
+            anyhow::bail!("rate-limit script returned {} fields; expected exactly 4", values.len());
         }
+        let allowed = match values[0] {
+            0 => false,
+            1 => true,
+            code => anyhow::bail!("rate-limit script returned invalid allow status {code}"),
+        };
+        let bounded = |value: i64, field: &str| -> anyhow::Result<i64> {
+            let unsigned =
+                u64::try_from(value).map_err(|_| anyhow::anyhow!("rate-limit script returned negative {field}"))?;
+            validate_safe_lua_integer(field, unsigned)?;
+            Ok(value)
+        };
+        let current = bounded(values[1], "current")?;
+        let remaining = bounded(values[2], "remaining")?;
+        let retry_ms = bounded(values[3], "retry milliseconds")?;
+        if u64::try_from(remaining).unwrap_or(u64::MAX) > limit {
+            anyhow::bail!("rate-limit script returned remaining capacity above the configured limit");
+        }
+        if allowed {
+            if u64::try_from(current).unwrap_or(u64::MAX) > limit || retry_ms != 0 {
+                anyhow::bail!("rate-limit script returned an inconsistent allow result");
+            }
+        } else if remaining != 0 {
+            anyhow::bail!("rate-limit script returned an inconsistent deny result");
+        }
+        Ok(Self {
+            allowed,
+            current,
+            remaining,
+            limit,
+            retry_ms,
+        })
     }
 
     /// Aggregate across policies: deny wins; among allows keep the tightest remaining.
@@ -636,6 +697,7 @@ impl RedisRateLimiter {
         now_ms: i64,
         cost: u32,
     ) -> anyhow::Result<RateLimitResult> {
+        validate_rate_limit_execution(rate, window_ms, now_ms, cost)?;
         match algorithm {
             RateLimitAlgorithm::SlidingWindow => {
                 let key = build_redis_key(key_prefix, "sw", policy_idx, limit_key, "");
@@ -648,7 +710,7 @@ impl RedisRateLimiter {
                 let v = self
                     .eval_script(client, &self.scripts.sliding_window, vec![key], args)
                     .await?;
-                Ok(RateLimitResult::from_lua_result(&v, rate))
+                RateLimitResult::from_lua_result(&v, rate)
             }
             RateLimitAlgorithm::FixedWindow => {
                 let window_id = now_ms / window_ms;
@@ -657,7 +719,7 @@ impl RedisRateLimiter {
                 let v = self
                     .eval_script(client, &self.scripts.fixed_window, vec![key], args)
                     .await?;
-                Ok(RateLimitResult::from_lua_result(&v, rate))
+                RateLimitResult::from_lua_result(&v, rate)
             }
             RateLimitAlgorithm::TokenBucket => {
                 let key = build_redis_key(key_prefix, "tb", policy_idx, limit_key, "");
@@ -671,7 +733,7 @@ impl RedisRateLimiter {
                 let v = self
                     .eval_script(client, &self.scripts.token_bucket, vec![key], args)
                     .await?;
-                Ok(RateLimitResult::from_lua_result(&v, rate))
+                RateLimitResult::from_lua_result(&v, rate)
             }
         }
     }
@@ -687,18 +749,24 @@ impl RedisRateLimiter {
         max_key_len: usize,
         limit_key: &str,
     ) -> anyhow::Result<RateLimitResult> {
-        if !client.healthy() {
-            anyhow::bail!("Redis client '{}' is not healthy", client.name());
-        }
         let now_ms = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
-            .as_millis() as i64;
+            .as_millis();
+        let now_ms = i64::try_from(now_ms).map_err(|_| anyhow::anyhow!("rate-limit timestamp overflow"))?;
+        validate_rate_limit_batch(policies, cost, now_ms)?;
+        if !client.healthy() {
+            anyhow::bail!("Redis client '{}' is not healthy", client.name());
+        }
         let safe_key = truncate_limit_key(limit_key, max_key_len);
 
         let mut most_restrictive: Option<RateLimitResult> = None;
         for (idx, policy) in policies.iter().enumerate() {
-            let window_ms = policy.interval_duration.unwrap_or(Duration::from_secs(1)).as_millis() as i64;
+            let interval = policy
+                .interval_duration
+                .ok_or_else(|| anyhow::anyhow!("rate-limit policy interval was not compiled"))?;
+            let window_ms = validate_rate_limit_policy(policy.rate, interval)
+                .map_err(|error| anyhow::anyhow!("invalid rate-limit policy: {error}"))?;
             let result = self
                 .eval_policy(
                     client,
@@ -980,7 +1048,7 @@ mod tests {
 
     #[test]
     fn from_lua_result_parses_fields() {
-        let r = RateLimitResult::from_lua_result(&[1, 7, 3, 0], 10);
+        let r = RateLimitResult::from_lua_result(&[1, 7, 3, 0], 10).unwrap();
         assert!(r.allowed);
         assert_eq!(r.current, 7);
         assert_eq!(r.remaining, 3);
@@ -989,11 +1057,51 @@ mod tests {
 
     #[test]
     fn merge_denies_when_any_denies() {
-        let allow = RateLimitResult::from_lua_result(&[1, 1, 9, 0], 10);
-        let deny = RateLimitResult::from_lua_result(&[0, 11, 0, 500], 10);
+        let allow = RateLimitResult::from_lua_result(&[1, 1, 9, 0], 10).unwrap();
+        let deny = RateLimitResult::from_lua_result(&[0, 11, 0, 500], 10).unwrap();
         let merged = RateLimitResult::merge(Some(allow), deny);
         assert!(!merged.allowed);
         assert_eq!(merged.retry_ms, 500);
+    }
+
+    #[test]
+    fn request_rate_reply_rejects_malformed_or_inexact_values() {
+        assert!(RateLimitResult::from_lua_result(&[1, 1, 9, 0], 1_000_001).is_err());
+        assert!(RateLimitResult::from_lua_result(&[1, 1, 9], 10).is_err());
+        assert!(RateLimitResult::from_lua_result(&[2, 1, 9, 0], 10).is_err());
+        assert!(RateLimitResult::from_lua_result(&[1, -1, 9, 0], 10).is_err());
+        assert!(RateLimitResult::from_lua_result(&[1, 1, 11, 0], 10).is_err());
+        assert!(RateLimitResult::from_lua_result(&[1, 1, 9, 1], 10).is_err());
+        assert!(RateLimitResult::from_lua_result(&[0, 10, 1, 1], 10).is_err());
+        assert!(RateLimitResult::from_lua_result(&[0, MAX_SAFE_LUA_INTEGER as i64 + 1, 0, 1], 10,).is_err());
+    }
+
+    #[test]
+    fn request_rate_execution_domain_rejects_bypassed_inputs_before_io() {
+        assert!(
+            validate_rate_limit_execution(1_000_000, i64::from(i32::MAX), MAX_SAFE_LUA_INTEGER as i64, 1_000_000,)
+                .is_ok()
+        );
+        assert!(validate_rate_limit_execution(1_000_001, 100, 0, 1).is_err());
+        assert!(validate_rate_limit_execution(1, i64::from(i32::MAX) + 1, 0, 1).is_err());
+        assert!(validate_rate_limit_execution(1, 100, MAX_SAFE_LUA_INTEGER as i64 + 1, 1).is_err());
+        assert!(validate_rate_limit_execution(1, 100, 0, 1_000_001).is_err());
+
+        let policies = [
+            RateLimitPolicy {
+                rate: 1,
+                interval: String::new(),
+                algorithm: RateLimitAlgorithm::FixedWindow,
+                interval_duration: Some(Duration::from_millis(100)),
+            },
+            RateLimitPolicy {
+                rate: 1_000_001,
+                interval: String::new(),
+                algorithm: RateLimitAlgorithm::FixedWindow,
+                interval_duration: Some(Duration::from_millis(100)),
+            },
+        ];
+        assert!(validate_rate_limit_batch(&policies, 1, 0).is_err());
     }
 
     #[test]

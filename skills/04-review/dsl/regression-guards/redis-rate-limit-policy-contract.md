@@ -66,9 +66,9 @@ application replay or exactly-once guarantee is introduced. Separate policies
 are not a transaction. Retry delay is the existing algorithm's estimate; a cost
 larger than rate can never pass.
 
-The [numeric-domain task](../../../../tasks/todo/define-redis-rate-limiter-numeric-domain/define-redis-rate-limiter-numeric-domain.md)
-still owns HTTP/Stream adoption, local-gate arithmetic and its stronger
-all-intermediates-exact requirement. This feature does not close that work.
+HTTP and Stream now import this same lower-layer numeric contract. The Gateway
+rechecks it before request-rate Lua execution, and the local connection gate
+enforces it at construction.
 
 ## Verification and re-evaluation
 

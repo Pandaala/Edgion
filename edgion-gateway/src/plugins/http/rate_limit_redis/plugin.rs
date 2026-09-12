@@ -344,7 +344,7 @@ mod tests {
 
     #[test]
     fn test_rate_limit_result_from_lua_denied() {
-        let result = RateLimitResult::from_lua_result(&[0, 100, 0, 500], 100);
+        let result = RateLimitResult::from_lua_result(&[0, 100, 0, 500], 100).unwrap();
         assert!(!result.allowed);
         assert_eq!(result.current, 100);
         assert_eq!(result.remaining, 0);

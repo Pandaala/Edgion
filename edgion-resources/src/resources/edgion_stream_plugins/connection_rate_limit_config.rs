@@ -6,6 +6,7 @@
 //! defaults differ: perListener => Deny (fail-close), perSourceIp => Allow (fail-open).
 
 use crate::duration::parse_duration;
+use crate::redis_rate_limit::{validate_rate_limit_units, validate_rate_limit_window};
 use crate::resources::edgion_plugins::{OnRedisFailure, PluginValidation, RateLimitAlgorithm};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -36,7 +37,7 @@ fn default_redis_timeout() -> String {
 #[serde(rename_all = "camelCase")]
 pub struct PerListenerLimit {
     /// Max new connections per interval for this listener port.
-    #[schemars(range(min = 1))]
+    #[schemars(range(min = 1, max = 1000000))]
     pub rate: u64,
     /// Interval GEP-2257 duration string (e.g. "1s", "500ms").
     #[schemars(pattern(crate::duration::GEP2257_PATTERN))]
@@ -58,7 +59,7 @@ pub struct PerListenerLimit {
 #[serde(rename_all = "camelCase")]
 pub struct PerSourceIpLimit {
     /// Max new connections per interval per source IP.
-    #[schemars(range(min = 1))]
+    #[schemars(range(min = 1, max = 1000000))]
     pub rate: u64,
     /// Interval GEP-2257 duration string (e.g. "1s", "500ms").
     #[schemars(pattern(crate::duration::GEP2257_PATTERN))]
@@ -108,15 +109,14 @@ impl ConnectionRateLimitConfig {
     }
 
     fn check_rate_interval(label: &str, rate: u64, interval: &str) -> Option<String> {
-        if rate == 0 {
-            return Some(format!("{label}.rate must be > 0"));
+        if let Err(error) = validate_rate_limit_units(rate) {
+            return Some(format!("{label}.rate {error}"));
         }
         match parse_duration(interval) {
             Err(e) => Some(format!("{label}.interval: {e}")),
-            Ok(d) if d < Duration::from_millis(100) => {
-                Some(format!("{label}.interval too small (< 100ms): could overwhelm Redis"))
-            }
-            Ok(_) => None,
+            Ok(duration) => validate_rate_limit_window(duration)
+                .err()
+                .map(|error| format!("{label}.interval {error}")),
         }
     }
 
@@ -179,6 +179,7 @@ impl PluginValidation for ConnectionRateLimitConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::redis_rate_limit::{MAX_RATE_LIMIT_UNITS, MAX_RATE_LIMIT_WINDOW_MS};
 
     fn ip_dim(rate: u64, interval: &str) -> PerSourceIpLimit {
         PerSourceIpLimit {
@@ -215,7 +216,10 @@ mod tests {
             per_source_ip: Some(ip_dim(0, "1s")),
             redis_timeout: default_redis_timeout(),
         };
-        assert!(cfg.validation_error().unwrap().contains("rate must be > 0"));
+        assert_eq!(
+            cfg.validation_error().unwrap(),
+            "perSourceIp.rate must be between 1 and 1000000"
+        );
     }
 
     #[test]
@@ -228,7 +232,10 @@ mod tests {
             per_source_ip: Some(ip_dim(10, "50ms")),
             redis_timeout: default_redis_timeout(),
         };
-        assert!(cfg.validation_error().unwrap().contains("< 100ms"));
+        assert_eq!(
+            cfg.validation_error().unwrap(),
+            "perSourceIp.interval must be between 100ms and 2147483647ms"
+        );
     }
 
     #[test]
@@ -329,5 +336,50 @@ perSourceIp:
             redis_timeout: "0ms".to_string(),
         };
         assert!(cfg.validation_error().unwrap().contains("redisTimeout must be > 0"));
+    }
+
+    #[test]
+    fn numeric_domain_covers_local_and_redis_dimensions() {
+        let mut cfg = ConnectionRateLimitConfig {
+            redis_ref: Some("default/redis".to_string()),
+            algorithm: RateLimitAlgorithm::TokenBucket,
+            key_prefix: "edgion:crl:".to_string(),
+            per_listener: Some(PerListenerLimit {
+                rate: u64::from(MAX_RATE_LIMIT_UNITS),
+                interval: "596h31m23s647ms".to_string(),
+                redis_distributed: true,
+                on_redis_failure: OnRedisFailure::Deny,
+                interval_duration: None,
+            }),
+            per_source_ip: Some(ip_dim(u64::from(MAX_RATE_LIMIT_UNITS), "100ms")),
+            redis_timeout: default_redis_timeout(),
+        };
+        assert_eq!(cfg.validation_error(), None);
+
+        cfg.per_listener.as_mut().unwrap().rate += 1;
+        assert_eq!(
+            cfg.validation_error().unwrap(),
+            "perListener.rate must be between 1 and 1000000"
+        );
+        cfg.per_listener.as_mut().unwrap().rate = 1;
+        assert_eq!(MAX_RATE_LIMIT_WINDOW_MS, 2_147_483_647);
+        cfg.per_listener.as_mut().unwrap().interval = "596h31m23s648ms".to_string();
+        assert_eq!(
+            cfg.validation_error().unwrap(),
+            "perListener.interval must be between 100ms and 2147483647ms"
+        );
+    }
+
+    #[test]
+    fn numeric_schema_maxima_match_the_canonical_constant() {
+        for schema in [
+            serde_json::to_value(schemars::schema_for!(PerListenerLimit)).unwrap(),
+            serde_json::to_value(schemars::schema_for!(PerSourceIpLimit)).unwrap(),
+        ] {
+            assert_eq!(
+                schema.pointer("/properties/rate/maximum").and_then(|v| v.as_u64()),
+                Some(u64::from(MAX_RATE_LIMIT_UNITS))
+            );
+        }
     }
 }

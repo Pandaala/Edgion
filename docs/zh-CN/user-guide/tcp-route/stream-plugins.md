@@ -307,8 +307,8 @@ spec:
 
 | 字段 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `rate` | Integer | **必填** | 每个时间窗口内最大的 TCP/TLS 新连接数或 UDP 会话准入尝试数；不统计已建立 UDP 会话的数据报。 |
-| `interval` | String | **必填** | 时间窗口，例如 `"1s"`、`"1m"`。 |
+| `rate` | Integer | **必填** | 每个时间窗口内最大的 TCP/TLS 新连接数或 UDP 会话准入尝试数，范围为 1–1,000,000；不统计已建立 UDP 会话的数据报。 |
+| `interval` | String | **必填** | 整毫秒时间窗口，范围为 100ms–2,147,483,647ms，例如 `"1s"`、`"1m"`。 |
 | `redisDistributed` | Boolean | `false` | （仅 `perListener`）为 `true` 时，在本地门控之外再通过 Redis 进行全集群范围的限额。 |
 | `onRedisFailure` | Enum | `Allow`（`perSourceIp`）/ `Deny`（`perListener`） | Redis 不可用或 `redisTimeout` 超时时的行为。`Allow` = 放行；`Deny` = 拒绝。 |
 
