@@ -88,8 +88,9 @@ and class parametersRef rebinding. Controller/Gateway Pod UID and restart counts
 remained unchanged. The Kubernetes cache-residue gate passed with validator_rc=0.
 The existing Kubernetes `gateway_class` startup filter permits only one Class;
 the two-class shared scenario is not automatically registered there. Its local
-two-class run passed. Any filter expansion remains a separate scope decision in
-the [active task](../../../../tasks/todo/investigate-plugin-policy-invalid-generation-retention.md).
+two-class run passed. Expanding one Kubernetes Controller instance to manage
+multiple classes is a separate product-scope decision, not part of D0095's
+retention or GatewayClass-scoping correction.
 The dynamic scenario needs a freshly preloaded shared topology after its final
 cleanup because of a separately recorded listener-recreation defect. Kubernetes
 prepare also encounters a separately recorded EdgionTls structural schema rejection;
@@ -106,9 +107,16 @@ and existing bounded metrics; publication adds no hot-path tracing or per-chunk 
 Re-evaluate on new attachment consumers, constructor ownership changes, retention
 categories, policy availability rules, or request/session capture boundaries.
 
+On 2026-09-12, the focused current-HEAD regression
+`plugins::publication::tests::current_policy_wins_over_invalid_dsl_and_waf_for_delta_full_and_event_order`
+passed (one passed, zero failed). This fresh result covers DSL/WAF, delta/full,
+and policy/source event order; the broader counts above remain historical
+migration-checkpoint evidence.
+
 ## Resolution references
 
-- D0095 / `plugin-policy-invalid-generation-retention` — reproduced; scoped migration
-  implemented with focused checks, final closure still pending.
+- D0095 / `plugin-policy-invalid-generation-retention` — reproduced and fixed by
+  scoped publication; current policy is reapplied to every retained executable
+  candidate, and the focused current-HEAD regression passed on 2026-09-12.
 - `http-plugin-store-request-generation-snapshot` / B0175 — earlier declined
   request-wide proposal, preserved separately as superseded history.

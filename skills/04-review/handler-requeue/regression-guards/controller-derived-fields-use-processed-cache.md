@@ -56,9 +56,8 @@ change the original resolution.
 
 During the migration, the focused Controller HTTPRoute module passed 38 tests and
 the Controller all-target check passed. These verify the extraction checkpoint;
-they do not establish final integration or independent-review completion.
-The [active task](../../../../tasks/todo/investigate-plugin-policy-invalid-generation-retention.md)
-tracks remaining migration verification.
+the final D0095 disposition and current focused regression evidence are recorded
+in [scoped policy publication](../../plugin-runtime/regression-guards/scoped-policy-runtime-publication.md).
 
 Re-evaluate when a field changes lifecycle ownership, processed publication APIs
 change, or a caller needs unfiltered source input instead of the conf_sync view.
@@ -66,4 +65,4 @@ change, or a caller needs unfiltered source input instead of the conf_sync view.
 ## Resolution references
 
 - `ctrl-04` — processed-cache correction, closed 2026-08-09.
-- D0095 — Controller stamp authority removed; scoped migration remains under verification.
+- D0095 — Controller stamp authority removed; scoped publication correction verified and closed.
