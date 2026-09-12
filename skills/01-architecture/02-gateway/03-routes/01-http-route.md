@@ -43,12 +43,17 @@ Core fields of `RadixPath`:
 
 | Field | Description |
 |-------|-------------|
-| `normalized` | Path normalization (collapse consecutive slashes) |
+| `normalized` | Path normalization (collapse consecutive slashes; remove the non-root PathPrefix trailing slash) |
 | `specificity` | Exact, static segment count, decoded static character count, total segment count; parameter names excluded |
 | `is_prefix_match` | Whether the match is a prefix |
 | `precedence_rank` | Global candidate order, assigned in the last step of the build phase; 0 = highest priority |
 
 The radix tree internally supports `:param` parameter matching; a double colon `::` is escaped as a literal colon.
+
+At configuration build time, resource preprocessing and `RadixPath::new` share
+`canonicalize_path_prefix` after their existing normalization. PathPrefix `/abc/`
+and `/abc` use the same tree key and path specificity; non-path ties decide their
+order. Root `/`, Exact trailing slashes, and request URI semantics are preserved.
 
 ## Regex route matching
 

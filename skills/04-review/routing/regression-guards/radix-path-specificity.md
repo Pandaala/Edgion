@@ -32,8 +32,8 @@ while `/a/:x/c` and `/:x/b/c` tie at the path level. For prefixes,
 `/a` beats `/:x/:y`: static constraints precede parameter depth.
 
 This guard owns corrected path semantics, not a general restriction on future
-policy design. Matching eligibility, parameter capture, Regex precedence,
-and the request-time integer sort are unchanged.
+policy design. Parameter capture, Regex precedence, and the request-time integer
+sort are unchanged. Prefix trailing-slash eligibility is corrected below.
 
 ## Rationale and evidence
 
@@ -53,8 +53,9 @@ existing grammar without changing the shared parser:
 - `/::` removes exactly one escaped colon. `/:::x` is static `/::x`.
 - Internal `::`, as in `/foo::x`, is literal. A bare `:id` without a
   preceding slash is static in the radix parser.
-- Repeated slashes are normalized before counting; a trailing slash adds one
-  static character but no segment. Empty parameter names retain existing
+- Repeated slashes are normalized before counting. A non-root PathPrefix trailing
+  slash is then removed before both insertion and counting; only Exact retains
+  its trailing slash as a static character without another segment. Empty parameter names retain existing
   parser eligibility and do not receive identifier weight.
 
 Canonical authority: [Gateway API v1.5.0 HTTPRouteRule](https://github.com/kubernetes-sigs/gateway-api/blob/v1.5.0/apis/v1/httproute_types.go#L170-L192)
@@ -93,7 +94,7 @@ Do not use the previous formula or its old expected winners as current policy.
 
 ## Verification and re-evaluation
 
-Fresh verification during this repair:
+Historical verification during the named-parameter repair (not rerun evidence for CAND-P1-001):
 
 - `cargo check -p edgion-gateway --lib`: passed.
 - `cargo test -p edgion-gateway --lib routes::http::`: 415 passed, 0 failed.
@@ -124,8 +125,8 @@ of HTTP traffic, control-plane synchronization, or live hot reload.
 
 Cross-process route-selection and dynamic integration evidence remains tracked
 in [the integration follow-up](../../../../tasks/todo/http-route-named-parameter-precedence-integration.md).
-Existing `edgion-tests/**` files are outside the approved repair scope.
-The full workspace test suite was not run.
+Existing `edgion-tests/**` files were outside the named-parameter repair scope.
+The full workspace test suite was not run during that repair.
 
 Agent-doc validation initially found an unrelated pre-existing broken reference
 to `tasks/todo/udp-process-shutdown-wire-coverage.md`. The already-deferred
@@ -138,8 +139,62 @@ would also invalidate global pre-ranking and requires a separate design.
 
 ## Resolution references
 
+- `CAND-P1-001` / `http-route-path-prefix-trailing-slash`: the earlier guard and
+  tests incorrectly counted the Prefix trailing slash. See the correction below.
+
 - `http-route-named-parameter-precedence`: identifier-dependent route selection;
   fixed and verified on 2026-09-12 under the explicitly approved aggregate policy.
   The active source task was removed; integration evidence remains tracked above.
 - `gw-http-match-02`: historical byte-to-character correction, 2026-07-28;
   static Unicode character coverage retained under the new key.
+
+## PathPrefix trailing-slash correction
+
+Gateway API v1.5.0 `PathMatchPathPrefix` explicitly ignores a configured trailing
+slash. `/abc/` must match `/abc`, `/abc/`, and `/abc/def`, excluding `/abcd` and
+`/Abc`; `/abc` and `/abc/` have equal path specificity. Root `/` remains a
+catch-all, while Exact `/abc/` still excludes `/abc` and `/abc/def`.
+
+The previous resource preprocessing and radix constructor preserved the slash:
+the longer radix key omitted `/abc` from candidates and the extra static
+character incorrectly defeated non-path tie-breaks. Historical passing tests
+asserted that erroneous precedence and did not disprove this defect.
+
+`path_normalization::normalize::canonicalize_path_prefix` now removes the slash
+from an already-normalized non-root Prefix at build time. Both
+`HTTPRoute::normalize_path_matchers` (declared and resolved rules) and
+`RadixPath::new` use it. `tree_key` and `PathSpecificity` consume the same
+canonical value. No request URI is trimmed; no request-time parsing, allocation,
+or logging is added. Prefix rewrite counts nonempty elements, and parameter
+capture ignores empty segments, so these consumers retain their semantics.
+
+Regression coverage includes resource preprocessing idempotence, normalization
+ordering, root/Exact/Regex boundaries, real radix candidate sets, reversed
+registration, non-path precedence, snapshot replacement, and parameter capture.
+The `HttpRoutePathPrefixTrailingSlash` dynamic scenario verifies backend identity
+across equivalent prefix spellings with an observable backend generation change.
+
+Verified for CAND-P1-001 on 2026-09-12:
+
+- HTTP route library tests: 417 passed; resource preparse tests: 27 passed.
+- Local HTTPRoute Basic integration: 6 passed.
+- `HttpRoutePathPrefixTrailingSlash`: passed with the shared FileSystem-backed
+  Controller/Gateway/test_server topology, including initial absence, backend
+  30001 to 30002 to 30001, segment/case negatives, and final cleanup. Backend
+  changes prove winner publication; this does not independently prove both
+  competing route updates arrived atomically. Unit tests cover both spellings.
+- Format, workspace all-target check and clippy passed. Clippy reports existing
+  warnings; no diagnostic points to changed lines or the new scenario.
+- Agent-doc consistency, SSA force, metrics inventory, Pingora source policy,
+  and Gateway no-tracing guards passed. Final doc validation required restoring
+  an already-referenced, missing ExtProc wire-verification task; no ExtProc
+  behavior or verification result was changed.
+- Independent read-only review: LGTM, including the final cleanup implementation.
+
+The first dynamic run used a client built before the cleanup change and failed
+final absence checking. A fresh client build and complete rerun passed; the
+failed run is not counted as successful verification. Kubernetes wire testing
+and the full workspace test suite were not run.
+
+Re-evaluate if normalization ordering, prefix matching, snapshot ranking,
+parameter parsing, or prefix rewrite semantics change.

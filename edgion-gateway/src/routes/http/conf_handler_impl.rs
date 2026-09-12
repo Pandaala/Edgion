@@ -1089,7 +1089,6 @@ mod tests {
             ("PathPrefix", "/a/b", "/a", "/:x/:y"),
             ("PathPrefix", "/a/b", "/:x/:y", "/:x"),
             ("PathPrefix", "/a/b", "/:x", "/"),
-            ("PathPrefix", "/a/b", "/a/", "/a"),
         ] {
             assert_named_order(
                 vec![
@@ -1099,6 +1098,122 @@ mod tests {
                 request,
                 &["z-winner", "a-loser"],
             );
+        }
+    }
+
+    #[test]
+    fn prefix_trailing_slash_preserves_eligibility_and_snapshot_precedence() {
+        let old_units = named_units(vec![
+            named_route("a-prefix", "PathPrefix", "/abc"),
+            named_route("z-prefix", "PathPrefix", "/abc/"),
+            named_route("exact", "Exact", "/abc/"),
+            named_route("root", "PathPrefix", "/"),
+        ]);
+        let old = RadixRouteMatchEngine::build(old_units.clone()).unwrap();
+        for flipped in [false, true] {
+            let routes = vec![
+                named_route("a-prefix", "PathPrefix", if flipped { "/abc/" } else { "/abc" }),
+                named_route("z-prefix", "PathPrefix", if flipped { "/abc" } else { "/abc/" }),
+                named_route("exact", "Exact", "/abc/"),
+                named_route("root", "PathPrefix", "/"),
+            ];
+            for (request, expected) in [
+                ("/abc", vec!["a-prefix", "z-prefix", "root"]),
+                ("/abc/", vec!["exact", "a-prefix", "z-prefix", "root"]),
+                ("/abc/def", vec!["a-prefix", "z-prefix", "root"]),
+                ("/abcd", vec!["root"]),
+                ("/Abc", vec!["root"]),
+                ("/", vec!["root"]),
+            ] {
+                assert_named_order(routes.clone(), request, &expected);
+                assert_eq!(
+                    named_order(&old, &old_units, request),
+                    expected
+                        .iter()
+                        .map(|name| format!("default/{name}"))
+                        .collect::<Vec<_>>()
+                );
+            }
+        }
+        for request in ["/users/alice", "/users/alice/", "/users/alice/orders"] {
+            assert_named_order(
+                vec![named_route("parameter", "PathPrefix", "/users/:id/")],
+                request,
+                &["parameter"],
+            );
+            let captures = crate::ctx::parse_path_params("/users/:id/", request);
+            assert_eq!(captures.get("id").map(String::as_str), Some("alice"));
+        }
+    }
+
+    #[test]
+    fn equivalent_prefix_spellings_fall_through_non_path_precedence() {
+        for level in ["method", "headers", "query", "timestamp", "route-name"] {
+            for with_slash in [false, true] {
+                let mut winner = named_route("a-winner", "PathPrefix", if with_slash { "/abc/" } else { "/abc" });
+                let mut loser = named_route("z-loser", "PathPrefix", if with_slash { "/abc" } else { "/abc/" });
+                if level != "route-name" {
+                    winner.metadata.name = Some("z-winner".to_string());
+                    loser.metadata.name = Some("a-loser".to_string());
+                }
+                let matcher = &mut winner.spec.rules.as_mut().unwrap()[0].matches.as_mut().unwrap()[0];
+                match level {
+                    "method" => matcher.method = Some("GET".to_string()),
+                    "headers" => {
+                        matcher.headers = Some(
+                            serde_json::from_value(serde_json::json!([
+                                {"type": "Exact", "name": "X-A", "value": "1"}
+                            ]))
+                            .unwrap(),
+                        )
+                    }
+                    "query" => {
+                        matcher.query_params = Some(
+                            serde_json::from_value(serde_json::json!([
+                                {"type": "Exact", "name": "q", "value": "1"}
+                            ]))
+                            .unwrap(),
+                        )
+                    }
+                    "timestamp" => {
+                        loser.metadata.creation_timestamp =
+                            serde_json::from_value(serde_json::json!("2025-01-01T00:00:00Z")).unwrap()
+                    }
+                    "route-name" => {}
+                    _ => unreachable!(),
+                }
+                let expected = if level == "route-name" {
+                    ["a-winner", "z-loser"]
+                } else {
+                    ["z-winner", "a-loser"]
+                };
+                assert_named_order(vec![winner, loser], "/abc", &expected);
+            }
+        }
+        let route = route_with_paths(
+            "default",
+            "same",
+            vec!["named.example.com"],
+            "2024-01-01T00:00:00Z",
+            serde_json::json!([
+                {"matches": [{"path": {"type": "PathPrefix", "value": "/abc"}}]},
+                {"matches": [{"path": {"type": "PathPrefix", "value": "/abc/"}}]}
+            ]),
+        );
+        let mut units = named_units(vec![route]);
+        for _ in 0..2 {
+            let engine = RadixRouteMatchEngine::build(units.clone()).unwrap();
+            let indices: Vec<_> = engine
+                .ordered_candidates_for_test("/abc")
+                .iter()
+                .map(|(_, index)| {
+                    units[engine.paths_for_test()[*index as usize].route_idx]
+                        .specificity
+                        .rule_index
+                })
+                .collect();
+            assert_eq!(indices, [0, 1]);
+            units.reverse();
         }
     }
 

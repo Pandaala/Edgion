@@ -45,7 +45,7 @@ before applying a decision to current code.
 - [Lowest-latency tests must distinguish the minimum](regression-guards/lowest-latency-tests-must-distinguish-minimum.md)
 - [route-05 — Per-try timeout test coverage gaps — FILLED + ONE ACCEPTED SKIP](regression-guards/per-try-timeout-test-coverage.md)
 - [Radix route candidate precedence is ranked at build time — FIXED](regression-guards/radix-candidate-precedence-rank-precomputed.md)
-- [HTTP path specificity excludes parameter identifiers](regression-guards/radix-path-specificity.md)
+- [HTTP path specificity excludes parameter identifiers and Prefix trailing slashes](regression-guards/radix-path-specificity.md)
 - [route-06 — Retry backoff minimum wait can be skipped under a tight deadline — FIXED](regression-guards/retry-backoff-minimum-wait-conformance.md)
 - [Reused-connection retry replays non-idempotent bodies — FIXED (method-safety guard)](regression-guards/retry-non-idempotent-method-guard.md)
 - [Shared service backend ref predicate](regression-guards/shared-service-backend-ref-predicate.md)

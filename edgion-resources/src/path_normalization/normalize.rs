@@ -98,6 +98,15 @@ pub fn normalize_config_path(s: &str, cfg: &PathNormalizationConfig) -> String {
     normalize_path(s, cfg).unwrap_or_else(|| s.to_string())
 }
 
+/// Canonicalize an already-normalized PathPrefix matcher at configuration build time.
+/// Gateway API ignores its trailing slash; the root prefix must remain `/`.
+/// Do not apply this to request paths, Exact matchers, or regular expressions.
+pub fn canonicalize_path_prefix(path: &mut String) {
+    if path.len() > 1 && path.ends_with('/') {
+        path.pop();
+    }
+}
+
 /// Returns `true` if `path` contains `%2F` or `%5C` (case-insensitive).
 ///
 /// Used by the entry-filter to honour `reject_escaped_slashes` configuration.

@@ -109,7 +109,8 @@ the normalized path. Its fields compare in this order, higher first:
 A parameter's marker and complete identifier contribute no static characters.
 Only a `:` immediately after `/` starts a parameter; `/::` removes one escaped
 colon and remains literal. Repeated slashes are collapsed before counting.
-A trailing slash remains one static character, without adding a segment.
+A trailing slash is ignored for PathPrefix matching and specificity. Exact
+retains it as one static character, without adding a segment.
 
 This is Edgion's aggregate-specificity extension for named parameters. Static
 constraints across the entire path matter, not their left-to-right position.

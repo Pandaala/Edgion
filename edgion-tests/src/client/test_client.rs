@@ -21,6 +21,7 @@ static INIT: Once = Once::new();
 static CAPABILITY_REGISTRY: OnceLock<String> = OnceLock::new();
 const KNOWN_GATEWAY_CAPABILITIES: &[&str] = &["body-buffering"];
 const EXPECTED_DYNAMIC_SCENARIO_IDS: &[&str] = &[
+    "HttpRoutePathPrefixTrailingSlash",
     "ExtProcTlsPolicyRecovery",
     "PluginPolicyDynamic",
     "LinkSysDisabledTls",
@@ -1463,6 +1464,7 @@ fn dynamic_port_contract(id: &str) -> Result<Option<(&'static str, port_config::
     use port_config::PortKind;
 
     let contract = match id {
+        "HttpRoutePathPrefixTrailingSlash" => Some(("HTTPRoute/Basic", PortKind::Http)),
         "PluginPolicyDynamic" => Some(("PluginPolicy", PortKind::Http)),
         "AiBackendLifecycle" | "AiBackendPolicyIntegration" | "AiBackendSecretRotation" | "AiBackendWeighted" => {
             Some(("EdgionBackend/SingleProvider", PortKind::Http))

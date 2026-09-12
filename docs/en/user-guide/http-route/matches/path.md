@@ -29,6 +29,9 @@ Matches paths whose **path segments** start with the prefix:
 - Matches: `/api`, `/api/`, `/api/users`
 - Does not match: `/apiV2` (the prefix must align on a `/` segment boundary, not a substring)
 
+A trailing `/` in a `PathPrefix` value is ignored: `/api/` and `/api` have
+the same matching behavior and path precedence. The root prefix `/` matches all paths.
+
 ### RegularExpression
 
 ```yaml
@@ -86,8 +89,8 @@ resolved by the following criteria in order:
 
 The parameter identifier does not contribute to specificity. Renaming `:id`
 to `:customerIdentifier` therefore does not change precedence. Repeated slashes
-are normalized first. A trailing slash contributes one static character, not
-another segment; path matching eligibility remains unchanged.
+are normalized first. A trailing slash is ignored for PathPrefix matching and
+precedence. For Exact, it remains a required literal character and adds no segment.
 
 For a request to `/a/b/c`, `/:x/b/c` wins over `/a/:x/:y` because it has
 more static segments. `/a/:x/c` and `/:x/b/c` have equal path specificity:

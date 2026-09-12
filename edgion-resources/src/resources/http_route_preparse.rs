@@ -4,7 +4,7 @@
 
 use super::http_route::MirrorTuning;
 use super::HTTPRoute;
-use crate::path_normalization::normalize_config_path;
+use crate::path_normalization::{normalize::canonicalize_path_prefix, normalize_config_path};
 
 /// Pre-parse methods for HTTPRoute.
 impl HTTPRoute {
@@ -235,7 +235,10 @@ impl HTTPRoute {
                     let match_type = path.match_type.as_deref().unwrap_or("PathPrefix");
                     if match_type == "Exact" || match_type == "PathPrefix" {
                         if let Some(value) = path.value.as_mut() {
-                            let normalized = normalize_config_path(value, path_cfg);
+                            let mut normalized = normalize_config_path(value, path_cfg);
+                            if match_type == "PathPrefix" {
+                                canonicalize_path_prefix(&mut normalized);
+                            }
                             if normalized != *value {
                                 tracing::info!(
                                     route = %route_key,
@@ -382,6 +385,36 @@ mod tests {
         let mut route = make_route_with_path("PathPrefix", "/api%2Fv1");
         route.normalize_path_matchers();
         assert_eq!(get_path_value(&route), "/api/v1");
+    }
+
+    #[test]
+    fn prefix_trailing_slash_is_canonical_in_declared_and_resolved_rules() {
+        for (kind, input, expected) in [
+            ("PathPrefix", "/abc/", "/abc"),
+            ("PathPrefix", "/abc///", "/abc"),
+            ("PathPrefix", "/abc%2F", "/abc"),
+            ("PathPrefix", "/abc/./", "/abc"),
+            ("PathPrefix", "/users/:id/", "/users/:id"),
+            ("PathPrefix", "/", "/"),
+            ("PathPrefix", "///", "/"),
+            ("Exact", "/abc/", "/abc/"),
+            ("RegularExpression", "/abc/", "/abc/"),
+        ] {
+            let mut route = make_route_with_path(kind, input);
+            route.spec.resolved_rules = route.spec.rules.clone();
+            for _ in 0..2 {
+                route.normalize_path_matchers();
+                assert_eq!(get_path_value(&route), expected, "{kind} {input}");
+                let resolved = route.spec.resolved_rules.as_ref().unwrap()[0].matches.as_ref().unwrap()[0]
+                    .path
+                    .as_ref()
+                    .unwrap()
+                    .value
+                    .as_deref()
+                    .unwrap();
+                assert_eq!(resolved, expected, "resolved {kind} {input}");
+            }
+        }
     }
 
     #[test]

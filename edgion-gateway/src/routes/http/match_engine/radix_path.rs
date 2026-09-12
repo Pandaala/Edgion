@@ -52,7 +52,7 @@ impl PathSpecificity {
 /// Compiled route path pattern for radix tree matching.
 #[derive(Debug)]
 pub struct RadixPath {
-    /// Normalized path (consecutive slashes merged)
+    /// Normalized path (consecutive slashes merged; non-root Prefix trailing slash removed)
     pub normalized: String,
     /// Path precedence input used only when assigning the snapshot's ranks.
     pub specificity: PathSpecificity,
@@ -80,7 +80,7 @@ impl RadixPath {
         let is_prefix_match = is_prefix;
 
         // Normalize path: merge consecutive slashes and validate
-        let normalized = normalize_path(path);
+        let mut normalized = normalize_path(path);
 
         // Warn if path was normalized (had consecutive slashes or other issues)
         if normalized != path {
@@ -101,6 +101,9 @@ impl RadixPath {
             tracing::warn!("Path contains empty parameter name: '{}'", path);
         }
 
+        if is_prefix_match {
+            edgion_resources::path_normalization::normalize::canonicalize_path_prefix(&mut normalized);
+        }
         let specificity = PathSpecificity::new(&normalized, !is_prefix_match);
 
         Self {
@@ -297,7 +300,7 @@ mod tests {
     fn repeated_slashes_normalize_before_specificity() {
         for (input, normalized) in [
             ("/api//users", "/api/users"),
-            ("/api///v1//users/", "/api/v1/users/"),
+            ("/api///v1//users/", "/api/v1/users"),
             ("//api", "/api"),
             ("/a//:long///c", "/a/:long/c"),
             ("///", "/"),
@@ -311,12 +314,16 @@ mod tests {
     }
 
     #[test]
-    fn trailing_slash_is_a_literal_character_not_an_extra_segment() {
+    fn trailing_slash_only_contributes_to_exact_specificity() {
         for pattern in ["/api", "/api/:id"] {
             let with_slash = format!("{pattern}/");
             let a = RadixPath::new(pattern, 0, true);
             let b = RadixPath::new(&with_slash, 0, true);
             assert_eq!(a.tree_key(), pattern);
+            assert_eq!(b.tree_key(), pattern);
+            assert_eq!(a.specificity, b.specificity);
+            let a = RadixPath::new(pattern, 0, false);
+            let b = RadixPath::new(&with_slash, 0, false);
             assert_eq!(b.tree_key(), with_slash);
             assert_eq!(a.specificity.segment_count, b.specificity.segment_count);
             assert_eq!(b.specificity.static_char_count, a.specificity.static_char_count + 1);
@@ -326,7 +333,7 @@ mod tests {
 
     #[test]
     fn standard_literal_prefix_extensions_keep_longest_path_precedence() {
-        let paths = ["/", "/api", "/api/", "/api/users", "/api/users/", "/api/users/profile"];
+        let paths = ["/", "/api", "/api/users", "/api/users/profile"];
         assert!(paths.windows(2).all(|pair| key(pair[1], true) > key(pair[0], true)));
         assert!(key("/api/users", false) > key("/api/users", true));
         assert_eq!(key("/api-v1/users_list", false).static_segment_count, 2);
