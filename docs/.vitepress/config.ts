@@ -283,6 +283,7 @@ const enSidebar = [
     items: [
       { text: 'Architecture Overview', link: '/en/dev-guide/architecture-overview' },
       { text: 'Resource Architecture', link: '/en/dev-guide/resource-architecture-overview' },
+      { text: 'Gateway API Versions', link: '/en/dev-guide/gateway-api-version-support' },
       { text: 'HTTP Plugin Development', link: '/en/dev-guide/http-plugin-development' },
       { text: 'Stream Plugin Development', link: '/en/dev-guide/stream-plugin-development' },
       { text: 'JWT Auth Plugin Design', link: '/en/dev-guide/jwt-auth-plugin-design' },
@@ -518,6 +519,7 @@ const zhSidebar = [
     items: [
       { text: '架构概览', link: '/zh-CN/dev-guide/architecture-overview' },
       { text: '资源架构', link: '/zh-CN/dev-guide/resource-architecture-overview' },
+      { text: 'Gateway API 版本', link: '/zh-CN/dev-guide/gateway-api-version-support' },
       { text: 'HTTP 插件开发', link: '/zh-CN/dev-guide/http-plugin-development' },
       { text: '流插件开发', link: '/zh-CN/dev-guide/stream-plugin-development' },
       { text: 'JWT Auth 插件设计', link: '/zh-CN/dev-guide/jwt-auth-plugin-design' },

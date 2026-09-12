@@ -16,6 +16,7 @@ Use this note when changing Gateway API behavior in Edgion and you need to under
 | [03-conformance-workflow.md](03-conformance-workflow.md) | Cross-session workflow: drive conformance tests one item at a time (environment check → feature analysis → run → diagnose → record) |
 | [05-batch-conformance-debugging.md](05-batch-conformance-debugging.md) | Log collection, timeline correlation, and root-cause localization for batch conformance failures (Batch 7 specific) |
 | [06-conformance-debug-cookbook.md](06-conformance-debug-cookbook.md) | Conformance troubleshooting cookbook: pre-flight checks, common failure modes (namespace deleted, ports not bound, stale processes, etc.), efficient run tips |
+| [07-version-support/](07-version-support/SKILL.md) | Gateway API source-version support matrix, schema/conversion model, current validation paths, and multi-version redesign boundary |
 
 
 ## Latest conformance results (feature-04-06, 2026-04-07)

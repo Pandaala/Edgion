@@ -14,6 +14,12 @@
 
 Remove the remaining TLSRoute API-version fallback atomically so every controller input, watch, persistence and status path uses canonical `gateway.networking.k8s.io/v1`. This is existing implementation debt under the atomic API-upgrade rule, not a claim that the migration is already complete. It is unrelated to the Gateway's Stage-1/Stage-2 stream-plugin fallback.
 
+> Coordination gate (2026-09-12): do not implement this removal until
+> `gateway-api-version-compatibility-and-validation` GAV-001 decides whether
+> schema-backed alternate source versions become an approved product model.
+> The current atomic-version rule still applies in the meantime; this note
+> records an unresolved policy dependency, not acceptance of the fallback.
+
 ## Evidence
 
 Verified statically at `78a25c3a`; no migration test was run when recording this task.

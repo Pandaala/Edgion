@@ -13,6 +13,7 @@ This directory is intended for Edgion contributors, focusing on architecture des
 
 - [Resource Registry Guide](./resource-registry-guide.md): How resource types integrate into the unified registry system.
 - [Adding New Resource Types Guide](./add-new-resource-guide.md): Complete steps for adding a new CRD.
+- [Gateway API Version Support](./gateway-api-version-support.md): Distinguishes resource API versions, bundle/channel, declared support, and actual conversion paths.
 
 ### 3. Configuration Extension Mechanisms
 
@@ -47,13 +48,14 @@ This directory is intended for Edgion contributors, focusing on architecture des
 2. [Resource Architecture Overview](./resource-architecture-overview.md)
 3. [Resource Registry Guide](./resource-registry-guide.md)
 4. [Adding New Resource Types Guide](./add-new-resource-guide.md)
-5. [Annotations Guide](./annotations-guide.md)
-6. [HTTP Plugin Development Guide](./http-plugin-development.md)
-7. [Stream Plugin Development Guide](./stream-plugin-development.md)
-8. [Logging System Architecture](./logging-system.md)
-9. [CI and Release Workflow Guide](./ci-release-workflow.md)
-10. [AI Collaboration and Skill Usage Guide](./ai-agent-collaboration.md)
-11. [Knowledge Source Map and Maintenance Rules](./knowledge-source-map.md)
+5. [Gateway API Version Support](./gateway-api-version-support.md)
+6. [Annotations Guide](./annotations-guide.md)
+7. [HTTP Plugin Development Guide](./http-plugin-development.md)
+8. [Stream Plugin Development Guide](./stream-plugin-development.md)
+9. [Logging System Architecture](./logging-system.md)
+10. [CI and Release Workflow Guide](./ci-release-workflow.md)
+11. [AI Collaboration and Skill Usage Guide](./ai-agent-collaboration.md)
+12. [Knowledge Source Map and Maintenance Rules](./knowledge-source-map.md)
 
 ## Directory Positioning Principles
 

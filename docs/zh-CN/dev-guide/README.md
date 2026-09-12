@@ -13,6 +13,7 @@
 
 - [资源注册指南](./resource-registry-guide.md)：资源类型如何接入统一注册体系。
 - [添加新资源类型指南](./add-new-resource-guide.md)：新增 CRD 的完整落地步骤。
+- [Gateway API 版本支持](./gateway-api-version-support.md)：区分资源 API 版本、bundle/channel、声明支持和实际转换路径。
 
 ### 3. 配置扩展机制
 
@@ -48,13 +49,14 @@
 2. [资源架构总览](./resource-architecture-overview.md)
 3. [资源注册指南](./resource-registry-guide.md)
 4. [添加新资源类型指南](./add-new-resource-guide.md)
-5. [Annotations 指南](./annotations-guide.md)
-6. [HTTP 插件开发指南](./http-plugin-development.md)
-7. [Stream Plugin 开发指南](./stream-plugin-development.md)
-8. [日志系统架构](./logging-system.md)
-9. [CI 与 Release 工作流指南](./ci-release-workflow.md)
-10. [AI 协作与 Skills 使用指南](./ai-agent-collaboration.md)
-11. [知识来源映射与维护规则](./knowledge-source-map.md)
+5. [Gateway API 版本支持](./gateway-api-version-support.md)
+6. [Annotations 指南](./annotations-guide.md)
+7. [HTTP 插件开发指南](./http-plugin-development.md)
+8. [Stream Plugin 开发指南](./stream-plugin-development.md)
+9. [日志系统架构](./logging-system.md)
+10. [CI 与 Release 工作流指南](./ci-release-workflow.md)
+11. [AI 协作与 Skills 使用指南](./ai-agent-collaboration.md)
+12. [知识来源映射与维护规则](./knowledge-source-map.md)
 
 ## 目录定位原则
 
