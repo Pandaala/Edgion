@@ -75,7 +75,31 @@ Standard Gateway API filters (`URLRewrite`, `RequestRedirect`, `RequestHeaderMod
 When several rules match the same request, the most specific path wins:
 
 - An `Exact` match is more specific than any prefix.
-- A longer `PathPrefix` beats a shorter one (`/api/v1` beats `/api`).
+- Among literal paths, a longer `PathPrefix` beats a shorter one (`/api/v1` beats `/api`).
+
+For Edgion named parameters, after comparing Exact versus PathPrefix, ties are
+resolved by the following criteria in order:
+
+1. More static (non-parameter) segments.
+2. More static Unicode characters, including slashes; `/::` counts as the literal `/:`.
+3. More path segments, counting each parameter as one segment.
+
+The parameter identifier does not contribute to specificity. Renaming `:id`
+to `:customerIdentifier` therefore does not change precedence. Repeated slashes
+are normalized first. A trailing slash contributes one static character, not
+another segment; path matching eligibility remains unchanged.
+
+For a request to `/a/b/c`, `/:x/b/c` wins over `/a/:x/:y` because it has
+more static segments. `/a/:x/c` and `/:x/b/c` have equal path specificity:
+a static segment appearing earlier is not an extra preference. For overlapping
+prefixes, `/a` wins over `/:x/:y`; static constraints take precedence over
+parameter depth.
+
+If path specificity is equal, prefer a method match, more header matches, more
+query-parameter matches, an older route creation timestamp, then the first
+`namespace/name` in alphabetical order. Within the same route, the first rule,
+then the first match entry wins. These criteria apply only to candidates whose
+request conditions match.
 
 ## Examples
 

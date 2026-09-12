@@ -19,8 +19,8 @@ use std::sync::Arc;
 /// Comparison order (highest priority first):
 ///   has_method > header_count > query_count > creation_ts > route_key > rule_index
 ///
-/// Path-level precedence (Exact vs Prefix, char count) is handled separately by
-/// RadixPath.priority_weight, which sorts *before* this struct.
+/// Path-level precedence (Exact vs Prefix, static constraints, depth) is handled separately by
+/// RadixPath.specificity, which sorts *before* this struct.
 #[derive(Clone, Debug)]
 pub struct MatchSpecificity {
     /// Whether this match specifies an HTTP method (true = more specific)
@@ -45,7 +45,7 @@ impl MatchSpecificity {
     /// Returns Ordering where Less means `self` has higher priority.
     ///
     /// This does NOT include path-level comparison — the caller must
-    /// compare RadixPath.priority_weight first.
+    /// compare RadixPath.specificity first.
     pub fn cmp_precedence(&self, other: &Self) -> Ordering {
         // Level 3: method match (has_method = true sorts first)
         other

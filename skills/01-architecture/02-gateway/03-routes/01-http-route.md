@@ -36,7 +36,7 @@ edgion-gateway/src/routes/http/
 2. **Match phase** (`match_route`):
    - Call `tree.match_all_ext(path)` to obtain all candidates and their `MatchKind` in one pass.
    - Filter: Exact accepts only `FullyConsumed`; Prefix accepts `FullyConsumed` or `SegmentBoundary`.
-   - Order candidates by the build-time `precedence_rank` (a plain integer sort). The rank encodes `priority_weight` descending, then the full Gateway API priority chain via `MatchSpecificity::cmp_precedence()` (method → headers → query params → timestamp → name → rule/match index), then `path_idx`.
+   - Order candidates by the build-time `precedence_rank` (a plain integer sort). The rank encodes `PathSpecificity` descending, then the full Gateway API priority chain via `MatchSpecificity::cmp_precedence()` (method → headers → query params → timestamp → name → rule/match index), then `path_idx`.
    - Run `deep_match` on candidates in turn; the first that passes is the final match.
 
 Core fields of `RadixPath`:
@@ -44,7 +44,7 @@ Core fields of `RadixPath`:
 | Field | Description |
 |-------|-------------|
 | `normalized` | Path normalization (collapse consecutive slashes) |
-| `priority_weight` | `path_char_count * 4 + type_bonus` |
+| `specificity` | Exact, static segment count, decoded static character count, total segment count; parameter names excluded |
 | `is_prefix_match` | Whether the match is a prefix |
 | `precedence_rank` | Global candidate order, assigned in the last step of the build phase; 0 = highest priority |
 

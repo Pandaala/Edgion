@@ -838,24 +838,24 @@ mod tests {
 
     /// The optimization's load-bearing claim: the ranks that
     /// `assign_precedence_ranks` writes must order candidates exactly the way
-    /// the pre-optimization per-request sort did (stable sort over build order
-    /// by `priority_weight` descending, then `MatchSpecificity::cmp_precedence`).
+    /// a direct comparison does (stable sort over build order
+    /// by path specificity descending, then `MatchSpecificity::cmp_precedence`).
     ///
     /// This drives the real engine, so a wrong write-back index or a wrong
     /// `routes[route_idx]` lookup fails here — the algebraic unit tests in
     /// `radix_route_match.rs` cannot catch either.
     #[test]
-    fn engine_ranks_reproduce_the_legacy_per_request_ordering() {
+    fn engine_ranks_reproduce_direct_candidate_ordering() {
         let units = precedence_fixture_units();
         let engine = RadixRouteMatchEngine::build(units.clone()).expect("engine must build");
         let paths = engine.paths_for_test();
         assert_eq!(paths.len(), units.len(), "each fixture unit contributes one path");
 
-        // Reference implementation of the ordering this optimization replaced.
+        // Direct comparison of the current ordering contract.
         let mut expected: Vec<usize> = (0..paths.len()).collect();
         expected.sort_by(|a, b| {
             let (pa, pb) = (&paths[*a], &paths[*b]);
-            pb.priority_weight.cmp(&pa.priority_weight).then_with(|| {
+            pb.specificity.cmp(&pa.specificity).then_with(|| {
                 units[pa.route_idx]
                     .specificity
                     .cmp_precedence(&units[pb.route_idx].specificity)
@@ -865,7 +865,7 @@ mod tests {
         let mut actual: Vec<usize> = (0..paths.len()).collect();
         actual.sort_unstable_by_key(|i| paths[*i].precedence_rank);
 
-        assert_eq!(actual, expected, "build-time rank diverges from the legacy order");
+        assert_eq!(actual, expected, "build-time rank diverges from direct order");
 
         // Ranks must be a dense permutation for the request-path integer sort.
         let mut ranks: Vec<u32> = paths.iter().map(|p| p.precedence_rank).collect();
@@ -946,8 +946,8 @@ mod tests {
         let paths = engine.paths_for_test();
         assert_eq!(paths.len(), 2);
         assert_eq!(
-            paths[0].priority_weight, paths[1].priority_weight,
-            "identical paths must carry identical weight, so the pair is fully tied"
+            paths[0].specificity, paths[1].specificity,
+            "identical paths must carry identical specificity, so the pair is fully tied"
         );
 
         // Distinct `route_idx`: `extract_paths` yields at most one path per unit,
@@ -995,6 +995,313 @@ mod tests {
         let mut shared: Vec<usize> = buckets.iter().map(|b| b.len()).filter(|n| *n > 1).collect();
         shared.sort_unstable();
         assert_eq!(shared, vec![2, 2, 2], "shared paths must each group both declarations");
+    }
+
+    fn named_route(name: &str, kind: &str, path: &str) -> HTTPRoute {
+        route_with_paths(
+            "default",
+            name,
+            vec!["named.example.com"],
+            "2024-01-01T00:00:00Z",
+            serde_json::json!([{"matches": [{"path": {"type": kind, "value": path}}]}]),
+        )
+    }
+
+    fn named_units(routes: Vec<HTTPRoute>) -> Vec<Arc<HttpRouteRuleUnit>> {
+        let data = routes
+            .into_iter()
+            .map(|route| (route.key_name(), Arc::new(route)))
+            .collect();
+        parse_http_routes_to_domain_rules(&data)
+            .remove("named.example.com")
+            .expect("named fixtures must produce a domain")
+            .0
+    }
+
+    fn named_order(engine: &RadixRouteMatchEngine, units: &[Arc<HttpRouteRuleUnit>], request: &str) -> Vec<String> {
+        engine
+            .ordered_candidates_for_test(request)
+            .iter()
+            .map(|(_, path_idx)| {
+                let path = &engine.paths_for_test()[*path_idx as usize];
+                units[path.route_idx].specificity.route_key.clone()
+            })
+            .collect()
+    }
+
+    fn assert_named_order(routes: Vec<HTTPRoute>, request: &str, expected: &[&str]) {
+        let mut units = named_units(routes);
+        let expected: Vec<String> = expected.iter().map(|name| format!("default/{name}")).collect();
+        // Real parsing and both registration orders; expected winners do not
+        // come from the production key or comparator.
+        for _ in 0..2 {
+            let engine = RadixRouteMatchEngine::build(units.clone()).expect("named engine must build");
+            assert_eq!(named_order(&engine, &units, request), expected, "{request}");
+            let mut ranks: Vec<u32> = engine.paths_for_test().iter().map(|p| p.precedence_rank).collect();
+            ranks.sort_unstable();
+            assert_eq!(ranks, (0..units.len() as u32).collect::<Vec<_>>());
+            units.reverse();
+        }
+    }
+
+    #[test]
+    fn named_paths_order_all_four_categories_and_request_subsets() {
+        let routes = vec![
+            named_route("static-exact", "Exact", "/a/b"),
+            named_route("param-exact", "Exact", "/a/:identifier"),
+            named_route("static-prefix", "PathPrefix", "/a/b"),
+            named_route("param-prefix", "PathPrefix", "/a/:customerIdentifier"),
+            named_route("root", "PathPrefix", "/"),
+        ];
+        for (request, expected) in [
+            (
+                "/a/b",
+                vec!["static-exact", "param-exact", "static-prefix", "param-prefix", "root"],
+            ),
+            ("/a/b/c", vec!["static-prefix", "param-prefix", "root"]),
+            ("/a/beyond", vec!["param-exact", "param-prefix", "root"]),
+            ("/a", vec!["root"]),
+            ("/other", vec!["root"]),
+        ] {
+            assert_named_order(routes.clone(), request, &expected);
+        }
+    }
+
+    #[test]
+    fn named_exact_beats_shorter_static_prefix() {
+        assert_named_order(
+            vec![
+                named_route("param-exact", "Exact", "/a/:x/:y"),
+                named_route("static-prefix", "PathPrefix", "/a/b"),
+            ],
+            "/a/b/c",
+            &["param-exact", "static-prefix"],
+        );
+    }
+
+    #[test]
+    fn named_paths_exercise_each_aggregate_precedence_level() {
+        for (kind, request, winner, loser) in [
+            ("Exact", "/a/b/c", "/:x/b/c", "/a/:x/:y"),
+            ("Exact", "/longsegment/b/c", "/:x/b/c", "/longsegment/:x/:y"),
+            ("PathPrefix", "/longsegment/b/c", "/longsegment/:x", "/:x/b/:y"),
+            ("PathPrefix", "/a/ab/c", "/a/:x/:y", "/:x/ab"),
+            ("PathPrefix", "/a/b", "/a", "/:x/:y"),
+            ("PathPrefix", "/a/b", "/:x/:y", "/:x"),
+            ("PathPrefix", "/a/b", "/:x", "/"),
+            ("PathPrefix", "/a/b", "/a/", "/a"),
+        ] {
+            assert_named_order(
+                vec![
+                    named_route("z-winner", kind, winner),
+                    named_route("a-loser", kind, loser),
+                ],
+                request,
+                &["z-winner", "a-loser"],
+            );
+        }
+    }
+
+    #[test]
+    fn named_paths_with_equal_aggregate_constraints_use_route_name() {
+        assert_named_order(
+            vec![
+                named_route("z-earlier-static", "Exact", "/a/:x/c"),
+                named_route("a-later-static", "Exact", "/:x/b/c"),
+            ],
+            "/a/b/c",
+            &["a-later-static", "z-earlier-static"],
+        );
+    }
+
+    #[test]
+    fn named_paths_match_escaped_literals_and_colon_boundaries() {
+        for (pattern, request) in [
+            ("/a/::literal", "/a/:literal"),
+            ("/a/:::x", "/a/::x"),
+            ("/a/::", "/a/:"),
+            ("/a/foo::x", "/a/foo::x"),
+        ] {
+            assert_named_order(
+                vec![
+                    named_route("z-literal", "Exact", pattern),
+                    named_route("a-param", "Exact", "/a/:identifier::tail"),
+                ],
+                request,
+                &["z-literal", "a-param"],
+            );
+        }
+    }
+
+    #[test]
+    fn named_paths_preserve_normalization_and_trailing_slash_eligibility() {
+        assert_named_order(
+            vec![
+                named_route("z-static", "Exact", "//a///b/"),
+                named_route("a-param", "Exact", "/a//:identifier/"),
+            ],
+            "/a/b/",
+            &["z-static", "a-param"],
+        );
+        assert_named_order(vec![named_route("trailing-exact", "Exact", "/a/:id/")], "/a/b", &[]);
+        assert_named_order(vec![named_route("trailing-exact", "Exact", "/a/:id/")], "/a/b/c", &[]);
+    }
+
+    #[test]
+    fn named_paths_unicode_static_counts_can_tie_across_different_structures() {
+        // Both have one static segment, three static characters, two segments.
+        // UTF-8 byte counting would incorrectly favor the z route.
+        assert_named_order(
+            vec![
+                named_route("z-multibyte", "Exact", "/:x/€"),
+                named_route("a-ascii", "Exact", "/a/:identifier"),
+            ],
+            "/a/€",
+            &["a-ascii", "z-multibyte"],
+        );
+    }
+
+    #[test]
+    fn renamed_parameters_fall_through_every_cross_route_precedence_level() {
+        for is_prefix in [false, true] {
+            let kind = if is_prefix { "PathPrefix" } else { "Exact" };
+            for name in ["customerIdentifier", "é", "€πé", "id::tail"] {
+                for level in ["method", "headers", "query", "timestamp", "route-name"] {
+                    let mut winner = named_route("z-winner", kind, "/a/:x");
+                    let loser_name = if level == "route-name" { "zz-loser" } else { "a-loser" };
+                    let mut loser = named_route(loser_name, kind, &format!("/a/:{name}"));
+                    let winner_match = &mut winner.spec.rules.as_mut().unwrap()[0].matches.as_mut().unwrap()[0];
+                    let loser_match = &mut loser.spec.rules.as_mut().unwrap()[0].matches.as_mut().unwrap()[0];
+                    match level {
+                        "method" => {
+                            winner_match.method = Some("GET".to_string());
+                            // A later level favors the loser, proving method wins first.
+                            loser_match.headers = Some(
+                                serde_json::from_value(serde_json::json!([
+                                    {"type": "Exact", "name": "X-A", "value": "1"}
+                                ]))
+                                .unwrap(),
+                            );
+                        }
+                        "headers" => {
+                            winner_match.headers = Some(
+                                serde_json::from_value(serde_json::json!([
+                                    {"type": "Exact", "name": "X-A", "value": "1"},
+                                    {"type": "Exact", "name": "X-B", "value": "2"}
+                                ]))
+                                .unwrap(),
+                            );
+                            loser_match.headers = Some(
+                                serde_json::from_value(serde_json::json!([
+                                    {"type": "Exact", "name": "X-A", "value": "1"}
+                                ]))
+                                .unwrap(),
+                            );
+                            loser_match.query_params = Some(
+                                serde_json::from_value(serde_json::json!([
+                                    {"type": "Exact", "name": "q", "value": "1"}
+                                ]))
+                                .unwrap(),
+                            );
+                        }
+                        "query" => {
+                            winner_match.query_params = Some(
+                                serde_json::from_value(serde_json::json!([
+                                    {"type": "Exact", "name": "q", "value": "1"},
+                                    {"type": "Exact", "name": "r", "value": "2"}
+                                ]))
+                                .unwrap(),
+                            );
+                            loser_match.query_params = Some(
+                                serde_json::from_value(serde_json::json!([
+                                    {"type": "Exact", "name": "q", "value": "1"}
+                                ]))
+                                .unwrap(),
+                            );
+                        }
+                        "timestamp" => {
+                            loser.metadata.creation_timestamp =
+                                serde_json::from_value(serde_json::json!("2025-01-01T00:00:00Z")).unwrap();
+                        }
+                        "route-name" => {}
+                        _ => unreachable!("fixture lists every level"),
+                    }
+                    assert_named_order(vec![loser, winner], "/a/b", &["z-winner", loser_name]);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn renamed_parameters_fall_through_rule_match_and_final_path_indices() {
+        let route = route_with_paths(
+            "default",
+            "same",
+            vec!["named.example.com", "named.example.com"],
+            "2024-01-01T00:00:00Z",
+            serde_json::json!([
+                {"matches": [
+                    {"path": {"type": "Exact", "value": "/a/:x"}},
+                    {"path": {"type": "Exact", "value": "/a/:customerIdentifier"}}
+                ]},
+                {"matches": [{"path": {"type": "Exact", "value": "/a/:é€"}}]}
+            ]),
+        );
+        let mut units = named_units(vec![route]);
+        for _ in 0..2 {
+            let engine = RadixRouteMatchEngine::build(units.clone()).expect("engine must build");
+            let actual: Vec<(u32, u32, u32)> = engine
+                .ordered_candidates_for_test("/a/b")
+                .iter()
+                .map(|(_, idx)| {
+                    let spec = &units[engine.paths_for_test()[*idx as usize].route_idx].specificity;
+                    (spec.rule_index, spec.match_index, *idx)
+                })
+                .collect();
+            assert_eq!(
+                actual.iter().map(|(r, m, _)| (*r, *m)).collect::<Vec<_>>(),
+                vec![(0, 0), (0, 0), (0, 1), (0, 1), (1, 0), (1, 0)],
+            );
+            for pair in actual.chunks_exact(2) {
+                assert!(pair[0].2 < pair[1].2, "fully tied registrations use ascending path_idx");
+            }
+            units.reverse();
+        }
+    }
+
+    #[test]
+    fn named_path_rebuild_preserves_old_snapshot_and_updated_capture_names() {
+        let old_units = named_units(vec![
+            named_route("a-first", "Exact", "/a/:x"),
+            named_route("z-other", "Exact", "/a/:other"),
+        ]);
+        let old = RadixRouteMatchEngine::build(old_units.clone()).unwrap();
+        let new_units = named_units(vec![
+            named_route("a-first", "Exact", "/a/:customerIdentifier"),
+            named_route("z-other", "Exact", "/a/:other"),
+        ]);
+        let new = RadixRouteMatchEngine::build(new_units.clone()).unwrap();
+        let expected = vec!["default/a-first".to_string(), "default/z-other".to_string()];
+        assert_eq!(named_order(&old, &old_units, "/a/b"), expected);
+        assert_eq!(named_order(&new, &new_units, "/a/b"), expected);
+        for (engine, name) in [(&old, "x"), (&new, "customerIdentifier")] {
+            let first = engine.ordered_candidates_for_test("/a/b")[0].1;
+            let pattern = &engine.paths_for_test()[first as usize].normalized;
+            let captures = crate::ctx::parse_path_params(pattern, "/a/b");
+            assert_eq!(captures.len(), 1);
+            assert_eq!(captures.get(name).map(String::as_str), Some("b"));
+        }
+        // A changed static constraint affects only the freshly built snapshot.
+        let changed_units = named_units(vec![
+            named_route("a-first", "Exact", "/a/:customerIdentifier"),
+            named_route("z-other", "Exact", "/a/b"),
+        ]);
+        let changed = RadixRouteMatchEngine::build(changed_units.clone()).unwrap();
+        assert_eq!(
+            named_order(&changed, &changed_units, "/a/b"),
+            vec!["default/z-other", "default/a-first"]
+        );
+        assert_eq!(named_order(&old, &old_units, "/a/b"), expected);
     }
 
     #[test]

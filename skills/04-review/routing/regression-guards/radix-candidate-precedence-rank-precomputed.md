@@ -27,7 +27,7 @@ radix node's bucket independently and merge", are **not accepted**.
 
 **1. The ordering inputs are immutable snapshot data**
 
-The precedence chain reads exactly two things: `RadixPath::priority_weight`
+The precedence chain reads exactly two things: `RadixPath::specificity`
 (derived from the path pattern) and `HttpRouteRuleUnit::specificity` (method,
 header count, query count, creation timestamp, route key, rule index, match
 index). Both are frozen when the route snapshot is published through the
@@ -41,20 +41,24 @@ the final tie-break, so it is a strict total order. Restricting a strict total
 order to a subset yields that subset's order — therefore sorting a request's
 candidate subset by the global rank produces exactly what a direct comparator
 sort of the subset would produce. The claim is locked by
-`conf_handler_impl::tests::engine_ranks_reproduce_the_legacy_per_request_ordering`,
+`conf_handler_impl::tests::engine_ranks_reproduce_direct_candidate_ordering`,
 which builds a real engine from HTTPRoute fixtures and asserts full sequence
-equality against a transcription of the pre-optimization sort. The algebraic
+equality against a direct comparison of the current path key and non-path chain.
+The named-path engine tests additionally assert explicit candidate sequences;
+comparator equivalence alone cannot validate the path policy. The algebraic
 guards in `radix_route_match.rs` —
-`rank_order_never_inverts_the_legacy_comparator`,
+`rank_order_never_inverts_the_direct_comparator`,
 `cmp_candidate_is_a_strict_total_order`, and
 `sample_candidates_exercises_every_precedence_level` — cover the comparator
 itself; each states its own reach in its doc comment.
 
-The previous code used a stable `sort_by`, so fully-tied candidates kept radix
+Historical context: the pre-ranking code used a stable `sort_by`, so fully-tied candidates kept radix
 traversal order. Ties are now broken by `path_idx` (build order) instead, and
-that produces the **same sequence**, not merely an equivalent one:
+that preserved the **same sequence** for that optimization. The 2026-09-12
+named-parameter repair intentionally changes path precedence; this historical
+argument does not promise equivalence to the removed weight formula:
 
-- A full tie requires equal `priority_weight` **and** an identical
+- A full tie requires equal path specificity **and** an identical
   `MatchSpecificity`, hence identical `(route_key, rule_index, match_index)` —
   which names one match item of one rule of one route.
 - The same match item carries the same path string, so both tied candidates
@@ -104,14 +108,15 @@ the `HashMap<u32, _>` hash lookup the old code did once per matched tree value.
 The index uses `checked_sub(1)` plus `get`, so a value outside the built range
 skips the bucket rather than panicking.
 
-**Attribution.** A throwaway review microbenchmark over the two loops (real
+**Historical attribution (not rerun for the new path key).** A throwaway review microbenchmark over the two loops (real
 SipHash map, real `cmp_precedence`, 80-byte `RadixPath`) — not committed, so the
 figures below are indicative only and cannot be re-derived from the tree — put
 the total saving at roughly 60 ns
 per request at a realistic candidate count of 4, of which about half came from
 removing the hash lookups rather than from the ordering change. The `String`
 comparison in `cmp_precedence` was rarely reached even before: the chain
-short-circuits on `priority_weight`, which differs whenever path lengths differ.
+short-circuited on the former `priority_weight`. These figures do not establish
+the size or performance of the current `PathSpecificity` representation.
 Do not cite the `String` comparison as the primary motivation. Against a
 multi-microsecond per-request budget this is ~0.1-1%: the change is justified as
 strictly less work with no pessimization path, not by a throughput number. No
@@ -156,7 +161,7 @@ Re-open this decision only if:
 - `edgion-gateway/src/routes/http/conf_handler_impl.rs` — the engine-level
   ordering, bucket, candidate-filter, and tied-candidate tests
 - `skills/01-architecture/02-gateway/03-routes/SKILL.md`
-- Sibling ordering rule: [radix-priority-weight-char-count.md](radix-priority-weight-char-count.md)
+- Sibling ordering rule: [radix-path-specificity.md](radix-path-specificity.md)
 
 ## Resolution references
 

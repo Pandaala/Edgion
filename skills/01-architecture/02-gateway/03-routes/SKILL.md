@@ -94,28 +94,41 @@ Each `RouteRules` holds two engines internally:
 - Match order: the radix engine runs first; the regex engine is the fallback, preserving
   Gateway API precedence `Exact > PathPrefix > RegularExpression`.
 
-## RadixPath priority
+## RadixPath specificity
 
-`RadixPath`'s `priority_weight` formula (uses character count per the Gateway API spec):
+`RadixPath::specificity` is a fixed-size `PathSpecificity` key, computed once from
+the normalized path. Its fields compare in this order, higher first:
 
-```
-priority_weight = path_char_count * 4 + type_bonus
-```
+| Field | Meaning |
+|-------|---------|
+| `is_exact` | Every Exact outranks every PathPrefix |
+| `static_segment_count` | Number of nonempty literal segments |
+| `static_char_count` | Unicode characters in literal content, including slashes, after `/::` escapes |
+| `segment_count` | Number of nonempty segments, including one for each parameter |
 
-`type_bonus` values:
+A parameter's marker and complete identifier contribute no static characters.
+Only a `:` immediately after `/` starts a parameter; `/::` removes one escaped
+colon and remains literal. Repeated slashes are collapsed before counting.
+A trailing slash remains one static character, without adding a segment.
 
-| Type | is_prefix | has_params | type_bonus |
-|------|-----------|------------|------------|
-| Static exact | false | false | 3 |
-| Param exact | false | true | 2 |
-| Static prefix | true | false | 1 |
-| Param prefix | true | true | 0 |
+This is Edgion's aggregate-specificity extension for named parameters. Static
+constraints across the entire path matter, not their left-to-right position.
+For `/a/b/c`, `/:x/b/c` outranks `/a/:x/:y`; `/a/:x/c` and `/:x/b/c`
+have equal path keys. For prefixes, `/a` outranks `/:x/:y` when both match:
+static constraints take precedence over parameter depth. Among simultaneously
+matching standard literal prefixes, the key preserves longest-character
+precedence because additional segments necessarily extend the same path.
 
-Sort rules: higher `priority_weight` wins; on a tie, the full Gateway API priority chain runs via `MatchSpecificity::cmp_precedence()` — method match → header count → query param count → creation timestamp → route namespace/name lexicographic order → rule/match index. `path_idx` is the final tie-break, making the order strict.
+Equal path keys continue through `MatchSpecificity::cmp_precedence()`: method
+match, header count, query count, older creation timestamp, ascending
+namespace/name, then ascending rule/match index. Ascending `path_idx` is final.
+Parameter spelling never bypasses these tie-breaks.
 
-This chain reads only immutable snapshot data, so it is evaluated once during `build` (see `assign_precedence_ranks`) and materialized as `RadixPath::precedence_rank`. Ordering a request's candidate subset by that rank is equivalent to running the chain per request, because a strict total order restricted to a subset is that subset's order.
-
-Example: `/api/users` (static exact, 10 chars, weight = 43) wins over `/api/users` (static prefix, weight = 41). For the same path and type, a route with method match wins over a route without.
+`assign_precedence_ranks` remains the sole place combining these immutable
+inputs into `precedence_rank`. A request sorts only `(rank, path_idx)` integer
+pairs; no pattern parsing, key comparison, or route-key string comparison is
+added to that path. Restricting a strict total order to any candidate subset
+preserves its order. See the [specificity regression guard](../../../04-review/routing/regression-guards/radix-path-specificity.md).
 
 ## Deep match
 

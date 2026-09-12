@@ -1,4 +1,4 @@
-use super::radix_path::RadixPath;
+use super::radix_path::{PathSpecificity, RadixPath};
 use crate::ctx::EdgionHttpContext;
 use crate::routes::http::match_unit::{MatchSpecificity, RouteMatchResult};
 use crate::routes::http::HttpRouteRuleUnit;
@@ -12,22 +12,20 @@ use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-/// Total order over route candidates, mirroring the Gateway API precedence
-/// contract. Levels 1-2 (match kind, path character length) come from the path
-/// pattern's `priority_weight`; levels 3-7 (method, headers, query, creation
-/// timestamp, resource name, rule/match index) come from the route's
-/// [`MatchSpecificity`]. `path_idx` is the final tie-break, which makes the
-/// order strict so ranking the whole snapshot yields a permutation.
+/// Total order over immutable route candidates. Path specificity sorts first,
+/// followed by method, headers, query, creation time, name, and rule/match index.
+/// The final path index makes the order strict, allowing request subsets to use
+/// precomputed integer ranks without comparing these fields again.
 fn cmp_candidate(
-    weight_a: usize,
+    path_a: PathSpecificity,
     spec_a: &MatchSpecificity,
     path_idx_a: u32,
-    weight_b: usize,
+    path_b: PathSpecificity,
     spec_b: &MatchSpecificity,
     path_idx_b: u32,
 ) -> Ordering {
-    weight_b
-        .cmp(&weight_a)
+    path_b
+        .cmp(&path_a)
         .then_with(|| spec_a.cmp_precedence(spec_b))
         .then(path_idx_a.cmp(&path_idx_b))
 }
@@ -97,13 +95,9 @@ impl RadixRouteMatchEngine {
     /// [`MatchKind`], orders them by their build-time precedence rank, and runs
     /// deep matching.
     ///
-    /// Priority order (highest first):
-    /// 1. Static exact matches
-    /// 2. Parameter exact matches
-    /// 3. Static prefix matches
-    /// 4. Parameter prefix matches
-    ///
-    /// Within each category, longer paths have higher priority.
+    /// Exact precedes Prefix; ties compare aggregate static segment count,
+    /// static character count, then segment count. Parameter names never rank.
+    /// Remaining ties use the existing non-path specificity chain.
     pub fn match_route(
         &self,
         session: &mut Session,
@@ -234,10 +228,10 @@ impl RadixRouteMatchEngine {
             let pa = &self.radix_paths[*a as usize];
             let pb = &self.radix_paths[*b as usize];
             cmp_candidate(
-                pa.priority_weight,
+                pa.specificity,
                 &self.routes[pa.route_idx].specificity,
                 *a,
-                pb.priority_weight,
+                pb.specificity,
                 &self.routes[pb.route_idx].specificity,
                 *b,
             )
@@ -286,9 +280,12 @@ impl Default for RadixRouteMatchEngine {
 mod tests {
     use super::*;
 
-    /// The nine levels `cmp_candidate` resolves, in the order it consults them.
-    const LEVELS: [&str; 9] = [
-        "weight",
+    /// The twelve levels `cmp_candidate` resolves, in the order it consults them.
+    const LEVELS: [&str; 12] = [
+        "is_exact",
+        "static_segment_count",
+        "static_char_count",
+        "segment_count",
         "has_method",
         "header_count",
         "query_count",
@@ -301,15 +298,14 @@ mod tests {
 
     #[derive(Clone)]
     struct Candidate {
-        weight: usize,
+        path: PathSpecificity,
         spec: MatchSpecificity,
     }
 
-    /// Order used before this optimization: `priority_weight` descending, then
-    /// the Gateway API precedence chain. It has no final tie-break, so it can
-    /// return `Equal` — the request path relied on a stable sort to resolve that.
-    fn legacy_cmp(a: &Candidate, b: &Candidate) -> Ordering {
-        b.weight.cmp(&a.weight).then_with(|| a.spec.cmp_precedence(&b.spec))
+    /// Direct comparison without ranks or the final index. This independently
+    /// checks that ranking preserves the current path and non-path order.
+    fn direct_cmp(a: &Candidate, b: &Candidate) -> Ordering {
+        b.path.cmp(&a.path).then_with(|| a.spec.cmp_precedence(&b.spec))
     }
 
     /// Report which level of the chain decides an ordered pair and the ordering
@@ -322,8 +318,11 @@ mod tests {
     /// together if a level is ever reordered or a direction flipped.
     fn deciding_level(a: &Candidate, ia: u32, b: &Candidate, ib: u32) -> Option<(&'static str, Ordering)> {
         let (sa, sb) = (&a.spec, &b.spec);
-        let steps: [Ordering; 9] = [
-            b.weight.cmp(&a.weight),
+        let steps: [Ordering; 12] = [
+            b.path.is_exact.cmp(&a.path.is_exact),
+            b.path.static_segment_count.cmp(&a.path.static_segment_count),
+            b.path.static_char_count.cmp(&a.path.static_char_count),
+            b.path.segment_count.cmp(&a.path.segment_count),
             sb.has_method.cmp(&sa.has_method),
             sb.header_count.cmp(&sa.header_count),
             sb.query_count.cmp(&sa.query_count),
@@ -341,7 +340,7 @@ mod tests {
 
     fn base_candidate() -> Candidate {
         Candidate {
-            weight: 40,
+            path: RadixPath::new("/a/:x/c", 0, false).specificity,
             spec: MatchSpecificity {
                 has_method: true,
                 header_count: 2,
@@ -359,8 +358,11 @@ mod tests {
     /// Constructed this way so every level of the chain — including the
     /// `path_idx` tie-break — decides at least one pair.
     fn sample_candidates() -> Vec<Candidate> {
-        let mutations: [fn(&mut Candidate); 8] = [
-            |c| c.weight = 23,
+        let mutations: [fn(&mut Candidate); 11] = [
+            |c| c.path.is_exact = false,
+            |c| c.path.static_segment_count = 1,
+            |c| c.path.static_char_count = 4,
+            |c| c.path.segment_count = 2,
             |c| c.spec.has_method = false,
             |c| c.spec.header_count = 1,
             |c| c.spec.query_count = 0,
@@ -385,7 +387,7 @@ mod tests {
         let mut ordered: Vec<u32> = (0..candidates.len() as u32).collect();
         ordered.sort_unstable_by(|a, b| {
             let (ca, cb) = (&candidates[*a as usize], &candidates[*b as usize]);
-            cmp_candidate(ca.weight, &ca.spec, *a, cb.weight, &cb.spec, *b)
+            cmp_candidate(ca.path, &ca.spec, *a, cb.path, &cb.spec, *b)
         });
         let mut rank = vec![0u32; candidates.len()];
         for (r, idx) in ordered.into_iter().enumerate() {
@@ -412,7 +414,7 @@ mod tests {
                 if i == j {
                     continue;
                 }
-                let produced = cmp_candidate(a.weight, &a.spec, i as u32, b.weight, &b.spec, j as u32);
+                let produced = cmp_candidate(a.path, &a.spec, i as u32, b.path, &b.spec, j as u32);
                 match deciding_level(a, i as u32, b, j as u32) {
                     Some((level, ordering)) => {
                         assert_eq!(
@@ -432,10 +434,10 @@ mod tests {
         }
     }
 
-    /// The rank must never invert a pair relative to the pre-optimization
-    /// comparator. `legacy_cmp` is retyped here independently of
+    /// The rank must never invert a pair relative to the direct
+    /// comparator. `direct_cmp` is retyped here independently of
     /// `cmp_candidate`, so reordering `cmp_candidate`'s two top-level steps,
-    /// flipping the `priority_weight` direction, or dropping the specificity
+    /// flipping the path-specificity direction, or dropping the specificity
     /// step all fail here.
     ///
     /// Its reach stops there: both sides call the same
@@ -445,9 +447,9 @@ mod tests {
     /// `sample_candidates_exercises_every_precedence_level`). Whether
     /// `assign_precedence_ranks` writes the ranks correctly is likewise out of
     /// scope here — that is
-    /// `conf_handler_impl::tests::engine_ranks_reproduce_the_legacy_per_request_ordering`.
+    /// `conf_handler_impl::tests::engine_ranks_reproduce_direct_candidate_ordering`.
     #[test]
-    fn rank_order_never_inverts_the_legacy_comparator() {
+    fn rank_order_never_inverts_the_direct_comparator() {
         let candidates = sample_candidates();
         let rank = rank_of(&candidates);
 
@@ -470,7 +472,7 @@ mod tests {
             for pair in subset.windows(2) {
                 let (a, b) = (&candidates[pair[0] as usize], &candidates[pair[1] as usize]);
                 assert_ne!(
-                    legacy_cmp(a, b),
+                    direct_cmp(a, b),
                     Ordering::Greater,
                     "rank order puts a lower-precedence candidate first"
                 );
@@ -495,7 +497,7 @@ mod tests {
         let candidates = sample_candidates();
         let cmp = |i: usize, j: usize| {
             let (a, b) = (&candidates[i], &candidates[j]);
-            cmp_candidate(a.weight, &a.spec, i as u32, b.weight, &b.spec, j as u32)
+            cmp_candidate(a.path, &a.spec, i as u32, b.path, &b.spec, j as u32)
         };
 
         for i in 0..candidates.len() {
