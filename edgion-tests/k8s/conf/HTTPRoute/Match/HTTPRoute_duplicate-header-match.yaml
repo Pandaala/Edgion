@@ -1,0 +1,75 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: duplicate-header-match
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: http-match-gateway
+      sectionName: http
+  hostnames: ["duplicate-header.example.com"]
+  rules:
+    - matches:
+        - path: {type: Exact, value: /echo/first}
+          headers:
+            - {name: X-Mode, value: one}
+            - {name: x-mode, value: two}
+      backendRefs:
+        - {name: duplicate-header-backend, port: 30001}
+    - matches:
+        - path: {type: Exact, value: /echo/reversed}
+          headers:
+            - {name: x-mode, value: two}
+            - {name: X-Mode, value: one}
+      backendRefs:
+        - {name: duplicate-header-backend, port: 30002}
+    # Equal effective header counts must reach the earlier-rule tie-break.
+    - matches:
+        - path: {type: Exact, value: /echo/priority}
+          headers:
+            - {name: X-Mode, value: one}
+      backendRefs:
+        - {name: duplicate-header-backend, port: 30001}
+    - matches:
+        - path: {type: Exact, value: /echo/priority}
+          headers:
+            - {name: X-Mode, value: one}
+            - {name: x-mode, value: one}
+      backendRefs:
+        - {name: duplicate-header-backend, port: 30002}
+    - matches:
+        - path: {type: Exact, value: /echo/and}
+          headers:
+            - {name: X-Mode, value: one}
+            - {name: x-mode, value: two}
+            - {name: X-Tenant, value: blue}
+      backendRefs:
+        - {name: duplicate-header-backend, port: 30001}
+    # Removing an ignored regex must not shift the next regex's compiled slot.
+    - matches:
+        - path: {type: Exact, value: /echo/regex}
+          headers:
+            - {name: X-Mode, value: one}
+            - {name: x-mode, type: RegularExpression, value: "^two$"}
+            - {name: X-Version, type: RegularExpression, value: "^v[0-9]+$"}
+      backendRefs:
+        - {name: duplicate-header-backend, port: 30001}
+    - matches:
+        - path: {type: Exact, value: /echo/regex-first}
+          headers:
+            - {name: X-Mode, type: RegularExpression, value: "^v[0-9]+$"}
+            - {name: x-mode, type: Exact, value: other}
+      backendRefs:
+        - {name: duplicate-header-backend, port: 30002}
+    # Deduplication is per match; the second OR alternative has its own first value.
+    - matches:
+        - path: {type: Exact, value: /echo/or}
+          headers:
+            - {name: X-Mode, value: one}
+            - {name: x-mode, value: ignored}
+        - path: {type: Exact, value: /echo/or}
+          headers:
+            - {name: x-mode, value: two}
+            - {name: X-Mode, value: ignored}
+      backendRefs:
+        - {name: duplicate-header-backend, port: 30001}

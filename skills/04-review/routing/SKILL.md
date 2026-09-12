@@ -21,6 +21,7 @@ before applying a decision to current code.
 
 ## Regression guards
 
+- [HTTP header predicates retain the first equivalent configured name](regression-guards/http-header-match-first-name-wins.md)
 - [Delegation ParentRefs cannot attach to a same-coordinate Gateway](regression-guards/delegation-parentref-gateway-name-collision.md)
 - [TCP connection snapshot ownership](regression-guards/tcp-connection-snapshot-ownership.md)
 - [TLS passthrough connection ownership](regression-guards/tls-passthrough-connection-ownership.md)

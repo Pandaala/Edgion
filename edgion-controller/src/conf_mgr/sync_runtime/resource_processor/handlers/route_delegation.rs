@@ -1385,6 +1385,44 @@ mod tests {
     }
 
     #[test]
+    fn duplicate_headers_preserve_effective_parent_and_child_constraints() {
+        for child_value in ["one", "two"] {
+            let parent = parent_with_rules(serde_json::json!([{
+                "matches": [{"path": {"type": "PathPrefix", "value": "/api"}, "headers": [
+                    {"name": "X-Mode", "value": "one"},
+                    {"name": "x-mode", "value": "ignored-parent"}
+                ]}],
+                "backendRefs": [{"group": "gateway.networking.k8s.io", "kind": "HTTPRoute",
+                    "name": "child", "namespace": "billing"}]
+            }]));
+            let child = route(
+                "billing",
+                "child",
+                serde_json::json!({"rules": [{
+                    "matches": [{"path": {"type": "PathPrefix", "value": "/api/pay"}, "headers": [
+                        {"name": "x-mode", "value": child_value},
+                        {"name": "X-Mode", "type": "RegularExpression", "value": "["},
+                        {"name": "X-Other", "value": "west"}
+                    ]}],
+                    "backendRefs": [{"name": "svc", "port": 80}]
+                }]}),
+            );
+            let outcome = flatten_route(&parent, &FakeLookup::new(vec![child]));
+            let rules = outcome.resolved_rules.as_ref().unwrap();
+            if child_value == "one" {
+                assert!(dropped_messages(&outcome).is_empty());
+                let headers = rules[0].matches.as_ref().unwrap()[0].headers.as_ref().unwrap();
+                assert_eq!(headers.len(), 2);
+                assert_eq!(headers[0].value, "one");
+                assert_eq!(headers[1].name, "X-Other");
+            } else {
+                assert!(rules.is_empty());
+                assert_eq!(dropped_messages(&outcome).len(), 1);
+            }
+        }
+    }
+
+    #[test]
     fn conflicting_header_or_method_drops_child_rule() {
         let parent = parent_with_rules(serde_json::json!([{
             "matches": [{

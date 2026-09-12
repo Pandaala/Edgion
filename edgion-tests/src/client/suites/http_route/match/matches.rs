@@ -623,7 +623,7 @@ impl TestSuite for HttpMatchTestSuite {
     }
 
     fn test_cases(&self) -> Vec<TestCase> {
-        vec![
+        let mut cases = vec![
             Self::test_path_prefix_match(),
             Self::test_exact_path_match(),
             Self::test_regex_path_match(),
@@ -636,6 +636,8 @@ impl TestSuite for HttpMatchTestSuite {
             Self::test_combined_match(),
             Self::test_section_name_match(),
             Self::test_wildcard_hostname_match(),
-        ]
+        ];
+        cases.extend(Self::duplicate_header_cases());
+        cases
     }
 }

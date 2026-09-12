@@ -1007,6 +1007,128 @@ mod tests {
         )
     }
 
+    #[test]
+    fn duplicate_headers_compile_and_deep_match_the_same_canonical_vector() {
+        use crate::ctx::EdgionHttpContext;
+        use crate::runtime::store::listener_gateway_info::ListenerGatewayInfoStore;
+        use pingora_http::RequestHeader;
+
+        let gateway = serde_json::from_value(serde_json::json!({
+            "apiVersion": "gateway.networking.k8s.io/v1", "kind": "Gateway",
+            "metadata": {"namespace": "default", "name": "gw1"},
+            "spec": {"gatewayClassName": "test", "listeners": [{"name": "http", "port": 80, "protocol": "HTTP"}]}
+        }))
+        .unwrap();
+        let store = ListenerGatewayInfoStore::new();
+        store.rebuild(&[gateway]);
+        let keys = store.all_listener_keys();
+        assert_eq!(keys.len(), 1);
+        let index = store.get_index(&keys[0]);
+        let ctx = EdgionHttpContext::default();
+
+        for path_type in ["Exact", "PathPrefix", "RegularExpression"] {
+            for first_type in ["Exact", "RegularExpression"] {
+                let first_value = if first_type == "Exact" { "one" } else { "^one$" };
+                let route = route_with_paths(
+                    "default",
+                    "duplicate",
+                    vec!["named.example.com"],
+                    "2024-01-01T00:00:00Z",
+                    serde_json::json!([{"matches": [
+                        {"path": {"type": path_type, "value": "/echo"}, "headers": [
+                            {"name": "X-Mode", "type": first_type, "value": first_value},
+                            {"name": "x-mode", "type": "RegularExpression", "value": "["},
+                            {"name": "X-Region", "type": "RegularExpression", "value": "^west$"},
+                            {"name": "x-region", "value": "ignored"},
+                            {"name": "X-Final", "value": "yes"}
+                        ]},
+                        {"path": {"type": path_type, "value": "/echo"}, "headers": [
+                            {"name": "x-mode", "value": "two"}, {"name": "X-Mode", "value": "one"}
+                        ]}
+                    ]}]),
+                );
+                let data = HashMap::from([(route.key_name(), Arc::new(route))]);
+                let domains = parse_http_routes_to_domain_rules(&data);
+                let (normal, regex) = domains.get("named.example.com").unwrap();
+                let units: Vec<_> = normal.iter().chain(regex).collect();
+                assert_eq!(units.len(), 2);
+                assert_eq!(units[0].specificity.header_count, 3);
+                assert_eq!(units[0].compiled_header_regexes.len(), 3);
+                assert_eq!(
+                    units[0].compiled_header_regexes[0].is_some(),
+                    first_type == "RegularExpression"
+                );
+                assert!(units[0].compiled_header_regexes[1].is_some());
+                assert!(units[0].compiled_header_regexes[2].is_none());
+                assert_eq!(units[1].specificity.header_count, 1);
+                for (mode, region, final_value, expected) in [
+                    ("one", "west", Some("yes"), vec![true, false]),
+                    ("one", "east", Some("yes"), vec![false, false]),
+                    ("one", "west", None, vec![false, false]),
+                    ("two", "east", None, vec![false, true]),
+                    ("ONE", "west", Some("yes"), vec![false, false]),
+                ] {
+                    for name in ["X-MODE", "x-mode"] {
+                        let mut request = RequestHeader::build("GET", b"/echo", None).unwrap();
+                        request.insert_header(name, mode).unwrap();
+                        request.insert_header("x-region", region).unwrap();
+                        if let Some(value) = final_value {
+                            request.insert_header("x-final", value).unwrap();
+                        }
+                        let actual: Vec<_> = units
+                            .iter()
+                            .map(|unit| {
+                                HttpRouteRuleUnit::deep_match_common(
+                                    &unit.matched_info,
+                                    &request,
+                                    &unit.parent_refs,
+                                    &ctx,
+                                    &index,
+                                    &unit.compiled_header_regexes,
+                                    &unit.compiled_query_regexes,
+                                    unit.has_query_matchers,
+                                )
+                                .unwrap()
+                                .is_some()
+                            })
+                            .collect();
+                        assert_eq!(actual, expected, "{path_type}/{first_type}/{mode}/{region}");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn duplicate_headers_count_once_before_route_age_tiebreak() {
+        let route = |name, timestamp, headers| {
+            route_with_paths(
+                "default",
+                name,
+                vec!["named.example.com"],
+                timestamp,
+                serde_json::json!([{"matches": [{
+                    "path": {"type": "PathPrefix", "value": "/echo"}, "headers": headers
+                }]}]),
+            )
+        };
+        let older = route(
+            "z-older",
+            "2024-01-01T00:00:00Z",
+            serde_json::json!([
+                {"name": "x-mode", "value": "one"}
+            ]),
+        );
+        let newer = route(
+            "a-newer",
+            "2025-01-01T00:00:00Z",
+            serde_json::json!([
+                {"name": "X-Mode", "value": "one"}, {"name": "x-mode", "value": "one"}
+            ]),
+        );
+        assert_named_order(vec![newer, older], "/echo", &["z-older", "a-newer"]);
+    }
+
     fn named_units(routes: Vec<HTTPRoute>) -> Vec<Arc<HttpRouteRuleUnit>> {
         let data = routes
             .into_iter()

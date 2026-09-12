@@ -6,6 +6,7 @@ use crate::dynamic::scenario::Scenario;
 pub fn all() -> Vec<&'static Scenario> {
     vec![
         crate::dynamic::scenarios::http_route_path_prefix_trailing_slash::SCENARIO,
+        crate::dynamic::scenarios::http_route_duplicate_headers::SCENARIO,
         crate::dynamic::scenarios::ext_proc_tls_policy_recovery::SCENARIO,
         crate::dynamic::scenarios::plugin_policy::SCENARIO,
         crate::dynamic::scenarios::delegation_parentref_gateway_collision::HTTP_SCENARIO,

@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: duplicate-header-backend
+  namespace: edgion-test
+spec:
+  selector:
+    app: edgion-test-server
+  ports:
+    - name: first
+      port: 30001
+      targetPort: 30001
+      protocol: TCP
+    - name: second
+      port: 30002
+      targetPort: 30002
+      protocol: TCP

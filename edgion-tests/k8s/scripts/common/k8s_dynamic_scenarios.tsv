@@ -1,4 +1,5 @@
 # scenario_id	k8s_conf_path	reset_path	kubectl_resource	gateway_kind	namespace	name
+HttpRouteDuplicateHeaders	HTTPRoute/Match/DynamicTest	initial	httproutes.gateway.networking.k8s.io	httproute	edgion-test	duplicate-header-dynamic
 AiBackendLifecycle	EdgionBackend/Lifecycle/DynamicTest	initial	edgionplugins.edgion.io	edgionplugins	edgion-test	lifecycle-ai-proxy
 AiBackendSecretRotation	EdgionBackend/SingleProvider/DynamicTest	initial	edgionbackends.edgion.io	edgionbackend	edgion-test	single-provider-fixture-provider
 AiBackendWeighted	EdgionBackend/Weighted/DynamicTest	initial	edgionplugins.edgion.io	edgionplugins	edgion-test	weighted-ai-proxy

@@ -5,7 +5,7 @@
 use kube::CustomResource;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::sync::Arc;
 
@@ -291,8 +291,14 @@ pub struct HTTPRouteMatch {
     #[serde(default = "default_path_prefix_root", skip_serializing_if = "Option::is_none")]
     pub path: Option<HTTPPathMatch>,
 
-    /// Headers specifies HTTP request header matchers
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Header matchers, retaining only the first ASCII-case-equivalent name.
+    /// Normalize at decode before Controller validation/delegation and Gateway
+    /// regex compilation, predicate evaluation, and specificity counting.
+    #[serde(
+        default,
+        deserialize_with = "deserialize_header_matches",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub headers: Option<Vec<HTTPHeaderMatch>>,
 
     /// QueryParams specifies HTTP query parameter matchers
@@ -302,6 +308,18 @@ pub struct HTTPRouteMatch {
     /// Method specifies HTTP method matcher
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub method: Option<String>,
+}
+
+fn deserialize_header_matches<'de, D>(deserializer: D) -> Result<Option<Vec<HTTPHeaderMatch>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let mut headers = Option::<Vec<HTTPHeaderMatch>>::deserialize(deserializer)?;
+    if let Some(headers) = headers.as_mut().filter(|headers| headers.len() > 1) {
+        let mut seen = HashSet::with_capacity(headers.len());
+        headers.retain(|header| seen.insert(header.name.to_ascii_lowercase()));
+    }
+    Ok(headers)
 }
 
 /// Gateway API structural default for an omitted `HTTPRouteMatch.path`.
@@ -1504,6 +1522,63 @@ pub struct RouteParentStatus {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn header_matches_decode_first_equivalent_name_in_order() {
+        for reverse in [false, true] {
+            let mut duplicates = vec![
+                serde_json::json!({"name": "X-Mode", "value": "one"}),
+                serde_json::json!({"name": "x-mode", "type": "RegularExpression", "value": "^two$"}),
+            ];
+            if reverse {
+                duplicates.reverse();
+            }
+            let first = duplicates[0].clone();
+            duplicates.insert(1, serde_json::json!({"name": "X-Other", "value": "west"}));
+            duplicates.push(serde_json::json!({"name": "X-Mode", "value": "ignored"}));
+            let input = serde_json::json!({"headers": duplicates});
+            let json: super::HTTPRouteMatch = serde_json::from_value(input.clone()).unwrap();
+            let yaml: super::HTTPRouteMatch = serde_yaml::from_str(&serde_yaml::to_string(&input).unwrap()).unwrap();
+            for parsed in [json, yaml] {
+                let headers = parsed.headers.as_ref().unwrap();
+                assert_eq!(headers.len(), 2);
+                assert_eq!(serde_json::to_value(&headers[0]).unwrap(), first);
+                assert_eq!(headers[1].name, "X-Other");
+                let encoded = serde_json::to_value(&parsed).unwrap();
+                let again: super::HTTPRouteMatch = serde_json::from_value(encoded.clone()).unwrap();
+                assert_eq!(serde_json::to_value(again).unwrap(), encoded);
+            }
+        }
+        for input in [serde_json::json!({}), serde_json::json!({"headers": null})] {
+            let parsed: super::HTTPRouteMatch = serde_json::from_value(input).unwrap();
+            assert!(parsed.headers.is_none());
+        }
+        let empty: super::HTTPRouteMatch = serde_json::from_value(serde_json::json!({"headers": []})).unwrap();
+        assert!(empty.headers.unwrap().is_empty());
+    }
+
+    #[test]
+    fn header_matches_decode_independently_in_declared_and_resolved_rules() {
+        let rules = serde_json::json!([{"matches": [
+            {"headers": [{"name": "X-Mode", "value": "one"}, {"name": "x-mode", "value": "two"}]},
+            {"headers": [{"name": "x-mode", "value": "two"}, {"name": "X-Mode", "value": "one"}]}
+        ]}]);
+        let route: super::HTTPRoute = serde_json::from_value(serde_json::json!({
+            "apiVersion": "gateway.networking.k8s.io/v1", "kind": "HTTPRoute",
+            "metadata": {"name": "duplicates"},
+            "spec": {"rules": rules, "resolvedRules": rules}
+        }))
+        .unwrap();
+        for rules in [route.spec.rules, route.spec.resolved_rules] {
+            let rules = rules.unwrap();
+            let matches = rules[0].matches.as_ref().unwrap();
+            for (index, expected) in ["one", "two"].into_iter().enumerate() {
+                let headers = matches[index].headers.as_ref().unwrap();
+                assert_eq!(headers.len(), 1);
+                assert_eq!(headers[0].value, expected);
+            }
+        }
+    }
+
     #[test]
     fn credentialed_expose_headers_shared_validation() {
         for credentials in [

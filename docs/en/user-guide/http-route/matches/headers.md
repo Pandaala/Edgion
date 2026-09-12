@@ -38,7 +38,8 @@ Matches when the header value satisfies the regular expression.
 
 ## How header conditions combine
 
-- Multiple entries in one `headers` list are **ANDed** — every header condition must hold.
+- Conditions for distinct names in one `headers` list are **ANDed** — every effective header condition must hold.
+- If names repeat, ignoring ASCII case, only the first entry's type and value apply. Later entries are ignored and do not increase routing priority. For example, `X-Mode: one` followed by `x-mode: two` matches `X-Mode: one`; use separate match blocks to accept either value.
 - Header conditions are also ANDed with `path`, `queryParams`, and `method` in the same match block.
 - Header **names** are case-insensitive (per HTTP); header **values** are matched case-sensitively.
 

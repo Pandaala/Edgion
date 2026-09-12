@@ -142,7 +142,7 @@ After path matching, candidate routes go through `deep_match_common` for exact v
    - Reject if a more specific Listener on the same port also matches the hostname (prevents fuzzy matching).
    - Verify AllowedRoutes (namespace and kind restrictions).
 2. **HTTP method**: `match_item.method` is compared with the request method.
-3. **Headers**: all header match conditions must be satisfied (AND logic); supports `Exact` and `RegularExpression` (precompiled regex).
+3. **Headers**: all effective header match conditions must be satisfied (AND logic); supports `Exact` and `RegularExpression` (precompiled regex). Typed decoding retains only the first ASCII-case-equivalent name within each match; the canonical vector also determines regex indexes and header specificity.
 4. **Query params**: all query-param match conditions must be satisfied (AND logic); supports `Exact` and `RegularExpression`.
 
 ## Route registration flow

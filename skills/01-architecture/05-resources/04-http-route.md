@@ -25,12 +25,19 @@ HTTPRoute is the most complex resource in Edgion. It defines HTTP-layer routing 
 1. Calls `validate_http_route_if_enabled()` for matcher enum/regex validation; cross-namespace validation is handled via `ref_denied` in the parse stage.
 2. Per-rule header modifier validation uses the shared `HTTPRouteRule::header_modifier_error()` in the invalid-rule path, including backend filters and delegation source rules. Invalid rules are excluded while valid siblings survive; all-invalid header rules reject attachment. See [header modifier validation](../../04-review/plugin-runtime/regression-guards/header-modifier-validation.md).
 
-### preparse (type level)
+### Decode and type-level preparse
 
-HTTPRoute's `preparse()` method builds runtime structures at the type level:
-- Compiles `filters` into `PluginRuntime` (plugin execution chain)
-- Pre-compiles regex matchers
-- Builds path-matching information
+`HTTPRouteMatch.headers` normalizes at typed deserialization: only the first
+ASCII-case-equivalent name survives, with its original type, value, spelling,
+and relative order. This happens before Controller validation and delegation,
+and also covers Gateway decoding of both declared and resolved rules.
+Delegation still rejects conflicting effective parent/child constraints.
+
+`HTTPRoute::preparse()` normalizes paths and resolves rule annotations;
+`ResourceMeta::pre_parse()` additionally parses timeouts and retries.
+Plugin runtimes and match regexes are compiled later by the Gateway route
+builder. Regex indexes, predicates, and header specificity all consume the
+same decoded header vector. See the [header normalization guard](../../04-review/routing/regression-guards/http-header-match-first-name-wins.md).
 
 ### parse
 
