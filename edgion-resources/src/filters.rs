@@ -36,9 +36,10 @@ pub enum PluginRunningResult {
     GoodNext,
     /// Filter judged that the request should be stopped here, no other plugins should run.
     ///
-    /// **Convention** (enforced by code review, not by the type system): any plugin
-    /// that returns `ErrTerminateRequest` SHOULD have already written the response
-    /// (header + body) to the session before returning.
+    /// **Contract** (enforced by code review, not by the type system): only an
+    /// inherently dynamic response may use this result, and the plugin MUST
+    /// have written the response to the session before returning. Ordinary
+    /// rejections, including DSL `terminate()`, use [`Self::ErrResponse`].
     ///
     /// **Runtime fail-safe**: if the plugin returns `ErrTerminateRequest` without
     /// having started a response write, the runtime will
@@ -48,9 +49,9 @@ pub enum PluginRunningResult {
     /// to fix the offending plugin.
     ///
     /// If a plugin cannot write a response at its current stage (e.g. the sync
-    /// `UpstreamResponseFilter` hook where `await` is unavailable), prefer
-    /// [`Self::ErrResponse`] so the runtime can emit the status/body downstream, or
-    /// document explicitly why a naked terminate is acceptable in that path.
+    /// `UpstreamResponseFilter` hook where `await` is unavailable), use
+    /// [`Self::ErrResponse`] so the runtime owns the response or stage denial.
+    /// A naked terminate is a plugin bug, not a supported rejection mechanism.
     ErrTerminateRequest,
     /// Filter returns an error response with custom status and body
     ///

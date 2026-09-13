@@ -229,7 +229,10 @@ pub async fn response_filter(
         // upstream-failure accounting in that cancellation window.
         ctx.mark_local_reply_written();
         let body_result = if body_empty {
-            Ok(())
+            // Session::write_response_header does not propagate its end flag
+            // to the H2 codec. Finish explicitly before the sentinel abort
+            // drops the session, otherwise an empty reply ends with CANCEL.
+            session.write_response_body(None, true).await
         } else {
             session.write_response_body(Some(body), true).await
         };
@@ -315,6 +318,156 @@ mod tests {
         let mut session = Session::new_h1(stream);
         session.read_request().await.unwrap();
         (client, session)
+    }
+
+    #[tokio::test]
+    async fn empty_local_reply_h1_preserves_close_and_framing() {
+        use std::time::Duration;
+        use tokio::io::AsyncReadExt;
+
+        for method in [http::Method::GET, http::Method::HEAD] {
+            let (mut client, mut session) = h1_session().await;
+            session.req_header_mut().set_method(method);
+            let mut ctx = EdgionHttpContext::default();
+            let mut reply = ResponseHeader::build(502, None).unwrap();
+            reply.insert_header("content-length", "0").unwrap();
+            ctx.stage_response_local_reply(Box::new(reply), bytes::Bytes::new());
+            let mut upstream = ResponseHeader::build(200, None).unwrap();
+            upstream.insert_header("x-upstream-private", "discard").unwrap();
+            response_filter(&proxy(), &mut session, &mut upstream, &mut ctx)
+                .await
+                .expect_err("the local response stops upstream forwarding");
+            assert_eq!(ctx.final_downstream_status(), Some(502));
+            assert_eq!(
+                ctx.diagnostics.entries(),
+                &[RequestDiagnostic::Info(EdgionInfoCode::PluginResponseReplaced)]
+            );
+            drop(session);
+            let mut wire = String::new();
+            tokio::time::timeout(Duration::from_secs(2), client.read_to_string(&mut wire))
+                .await
+                .unwrap()
+                .unwrap();
+            let (headers, body) = wire.split_once("\r\n\r\n").unwrap();
+            let headers = headers.to_ascii_lowercase();
+            assert!(headers.starts_with("http/1.1 502"));
+            assert!(headers.contains("connection: close\r\n") || headers.ends_with("connection: close"));
+            assert!(headers.contains("content-length: 0"));
+            assert!(!headers.contains("transfer-encoding"));
+            assert!(!headers.contains("x-upstream-private"));
+            assert!(body.is_empty());
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn dsl_terminate_h2_local_reply_finishes_before_session_drop() {
+        use crate::plugins::runtime::PluginRuntime;
+        use crate::PendingHeaderOp;
+        use edgion_dsl::validator::{compile_dsl_source, ValidationLimits};
+        use edgion_resources::{DslConfig, EdgionPlugin, UpstreamResponseFilterEntry};
+        use pingora_core::protocols::http::v2::server::{handshake, H2Accept, HttpSession as H2Session};
+        use pingora_core::protocols::Digest;
+        use std::time::Duration;
+
+        for bytecode in [false, true] {
+            for method in [http::Method::GET, http::Method::HEAD] {
+                tokio::time::timeout(Duration::from_secs(5), async {
+                    let (client_io, server_io) = tokio::io::duplex(64 * 1024);
+                    let client = tokio::spawn(async move {
+                        let (mut sender, connection) = h2::client::handshake(client_io).await.unwrap();
+                        let mut drivers = tokio::task::JoinSet::new();
+                        drivers.spawn(connection);
+                        sender = sender.ready().await.unwrap();
+                        let request = http::Request::builder()
+                            .method(method)
+                            .uri("https://example.test/terminate")
+                            .body(())
+                            .unwrap();
+                        let (response, _) = sender.send_request(request, true).unwrap();
+                        let response = response.await.expect("local reply headers arrive without reset");
+                        assert_eq!(response.status(), http::StatusCode::BAD_GATEWAY);
+                        assert_eq!(response.headers()["x-queued"], "retained");
+                        assert!(!response.headers().contains_key("x-upstream-private"));
+                        assert!(!response.headers().contains_key("x-bound"));
+                        assert!(!response.headers().contains_key("x-after-terminate"));
+                        let mut body = response.into_body();
+                        while let Some(chunk) = body.data().await {
+                            assert!(chunk.expect("empty reply must end cleanly, not reset").is_empty());
+                        }
+                        assert!(body.trailers().await.unwrap().is_none());
+                        assert!(body.is_end_stream());
+                        drop(body);
+                        drop(sender);
+                        // Only stop the client driver after observing the actual EOS.
+                        drivers.shutdown().await;
+                    });
+
+                    let mut connection = handshake(Box::new(server_io), None).await.unwrap();
+                    let digest = Arc::new(Digest::default());
+                    let Some(H2Accept::Session(h2_session)) =
+                        H2Session::from_h2_conn(&mut connection, Arc::clone(&digest))
+                            .await
+                            .unwrap()
+                    else {
+                        panic!("H2 request reaches the response-stage fixture");
+                    };
+                    // The proxy exposes only an H1 test constructor. Replace its
+                    // public downstream with the real in-memory H2 session.
+                    let (_unused_client, placeholder) = tokio::io::duplex(1);
+                    let mut session = Session::new_h1(Box::new(placeholder));
+                    session.downstream_session =
+                        Box::new(pingora_core::protocols::http::server::Session::new_http2(h2_session));
+                    let source = "resp.set_header(\"x-bound\", \"discard\")\nreturn terminate()";
+                    let config = DslConfig {
+                        name: "terminate-contract".to_string(),
+                        source: (!bytecode).then(|| source.to_string()),
+                        bytecode: bytecode.then(|| compile_dsl_source(source, &ValidationLimits::default()).unwrap()),
+                        ..Default::default()
+                    };
+                    let mut runtime = PluginRuntime::new();
+                    let entries = [
+                        UpstreamResponseFilterEntry::new(EdgionPlugin::Dsl(config)),
+                        UpstreamResponseFilterEntry::new(EdgionPlugin::Dsl(DslConfig {
+                            name: "after-terminate".to_string(),
+                            source: Some("resp.set_header(\"x-after-terminate\", \"unexpected\")".to_string()),
+                            ..Default::default()
+                        })),
+                    ];
+                    let errors = runtime.add_from_upstream_response_filters(&entries, "test");
+                    assert!(errors.is_empty(), "{errors:?}");
+                    let mut ctx = EdgionHttpContext::default();
+                    ctx.queue_pending_response_header_op(PendingHeaderOp::Set {
+                        name: "x-queued".to_string(),
+                        value: http::HeaderValue::from_static("retained"),
+                    });
+                    let mut upstream = ResponseHeader::build(200, None).unwrap();
+                    upstream.insert_header("x-upstream-private", "discard").unwrap();
+                    runtime.run_upstream_response_plugins_sync(&mut session, &mut ctx, &mut upstream);
+                    assert_eq!(ctx.stage_logs()[0].filters.len(), 1);
+                    let proxy = proxy();
+                    let error = response_filter(&proxy, &mut session, &mut upstream, &mut ctx)
+                        .await
+                        .expect_err("local replacement stops the upstream pump");
+                    assert!(ctx.local_reply_written());
+                    assert_eq!(ctx.final_downstream_status(), Some(502));
+                    assert_eq!(
+                        ctx.diagnostics.entries(),
+                        &[RequestDiagnostic::Info(EdgionInfoCode::PluginResponseReplaced)]
+                    );
+                    let outcome =
+                        super::super::pg_fail_to_proxy::fail_to_proxy(&proxy, &mut session, &error, &mut ctx).await;
+                    assert_eq!(outcome.error_code, 502);
+                    // Match the post-pump abort path: no downstream.finish() here.
+                    drop(session);
+                    let (client_result, connection_result) =
+                        tokio::join!(client, H2Session::from_h2_conn(&mut connection, digest));
+                    client_result.unwrap();
+                    assert!(connection_result.unwrap().is_none());
+                })
+                .await
+                .expect("H2 local reply reaches EOS within the test deadline");
+            }
+        }
     }
 
     fn response(content_length: Option<&str>) -> ResponseHeader {

@@ -1172,7 +1172,10 @@ impl Vm {
                     });
                 }
                 OpCode::ReturnTerminate => {
-                    return Ok(PluginRunningResult::ErrTerminateRequest);
+                    return Ok(PluginRunningResult::ErrResponse {
+                        status: 502,
+                        body: None,
+                    });
                 }
                 OpCode::ReturnGrpcError => {
                     let message = state.pop()?;
@@ -1223,9 +1226,8 @@ pub async fn execute_safe(
     match result {
         Ok(Ok(running_result)) => {
             match &running_result {
-                // `Nothing` is unreachable for DSL scripts (the VM only ever
-                // returns GoodNext / ErrResponse / ErrTerminateRequest /
-                // ErrGrpcError); folded into the allow case for completeness.
+                // The VM only returns GoodNext / ErrResponse / ErrGrpcError.
+                // Keep the other shared plugin-result arms exhaustive.
                 PluginRunningResult::GoodNext | PluginRunningResult::Nothing => log.push("OK"),
                 PluginRunningResult::ErrResponse { status, .. } => log.push(&format!("Deny {status}")),
                 PluginRunningResult::ErrTerminateRequest => log.push("Deny terminate"),

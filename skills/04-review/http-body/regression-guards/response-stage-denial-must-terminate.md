@@ -11,9 +11,9 @@ knowledge_type: regression-guards
 
 ## Conclusion
 
-Three independent rules govern every terminal result a response-phase plugin can
-return — `ErrResponse`, `ErrGrpcError`, `ErrTerminateRequest` — and violating
-any one turns a denial into a silent ALLOW:
+Four independent rules govern every terminal result a response-phase plugin can
+return — `ErrResponse`, `ErrGrpcError`, `ErrTerminateRequest`. Violating them can
+silently allow a denied response or leave the local reply incomplete:
 
 1. **Whether the exchange can still carry a replacement response is a fact about
    the RESPONSE, never about the request's stated intent.**
@@ -39,6 +39,15 @@ any one turns a denial into a silent ALLOW:
    returning success would silently forward the upstream final response. The
    control-flow error is not attributed to backend outlier detection and does
    not mark `LocalReplyWritten` or `PluginResponseReplaced`.
+
+4. **Complete the local response before aborting the pump, even with no body.**
+   In the pinned Pingora fork, `Session::write_response_header(_, true)` does
+   not send H2 END_STREAM. After committing the header and immediately marking
+   `LocalReplyWritten`, `pg_response_filter` explicitly finishes an empty body
+   with `write_response_body(None, true)`. The post-pump failure path skips
+   `finish()`, so otherwise dropping the H2 session sends CANCEL. Delivery
+   failure still records `ClientClosed`, not `PluginResponseReplaced`; the
+   marker continues to suppress a second reply during cancellation or failure.
 
 Fix suggestions of the form "narrowing the refusal predicate is enough" and
 "the runners already call `set_terminate`" are **both not accepted** — each
@@ -74,12 +83,16 @@ log.
 
 **3. A naked `ErrTerminateRequest` leaked with no precondition at all**
 
-The `ErrTerminateRequest` arm simply returned `true`. Unlike the `ErrResponse`
-case it needed no refusal to leak — every response-stage `terminate()` was
+Historically, the `ErrTerminateRequest` arm simply returned `true`. Unlike the
+`ErrResponse` case it needed no refusal to leak — a bare termination result was
 answered by forwarding the upstream response, with no marker in the access log.
-It now mirrors the request stage's contract for the same result
+The guard now mirrors the request stage's contract for that plugin result
 (`error_response::terminate_with_fallback`): a 502 fallback plus
 `PluginTerminateWithoutResponse`, on top of the shared abort.
+
+DSL `return terminate()` now returns an explicit `ErrResponse { status: 502,
+body: None }`; it does not enter this plugin-bug guard. See
+[the DSL termination contract](../../dsl/regression-guards/terminate-explicit-local-response.md).
 
 **4. `ErrGrpcError` needs its own carrier**
 
@@ -118,11 +131,13 @@ a second write.
 | real `101` + `deny(403)` | abort, 403, upgrade never completes | `websocket_response_stage_deny_blocks_upgrade`; access log `deny response 403` + `diagnostics:[{"kind":"error","code":"PluginResponseDenyAborted"}]` + `upstream.err:["HTTPStatus"]` |
 | CONNECT answered non-2xx | local reply | unit: `local_reply_replaces_rejected_connect` |
 | CONNECT answered 2xx / interim 1xx | refused (unchanged) | unit: `local_reply_refused_for_established_connect_tunnel`, `..._interim_informational` |
-| naked `terminate()` at the response stage | abort, 502 + `PluginTerminateWithoutResponse` | unit: `response_stage_naked_terminate_arms_the_abort` |
+| bare `ErrTerminateRequest` plugin result at the response stage (not DSL `terminate()`) | abort, 502 + `PluginTerminateWithoutResponse` | unit: `response_stage_naked_terminate_arms_the_abort` |
 | `grpc_error(8, ..)` at the response stage | abort, exact code 8 | unit: `response_stage_grpc_error_arms_the_abort_with_the_exact_status`; integration blocked, see `tasks/todo/integration-dslgrpcerror-item-never-runs.md` |
 | staged local reply with `1xx` or invalid status | abort before downstream commit, non-retryable 500 | unit: `invalid_response_local_reply_statuses_fail_closed_without_delivery_state`; wire: `WafDynamic` initial phase `waf_response_invalid_status_fails_closed` |
 | native WAF phase-3 disruption with `status:100` after an upstream 200 | client and request-level access log receive terminal 500; the upstream body is not forwarded and the attempt retains status 200 | integration: `waf_response_invalid_status_fails_closed` (`EdgionPlugins/Waf`) |
 | staged local reply after another final owner | control-flow abort; first written response remains authoritative | unit: `response_filter_rejects_pending_reply_after_an_existing_writer` |
+| empty H2 DSL local reply followed by abort/session drop | 502 with clean EOS, no reset or upstream content | `dsl_terminate_h2_local_reply_finishes_before_session_drop`; current results in the linked DSL regression guard |
+| empty H1 local reply | empty response with honest `Connection: close` and framing | `empty_local_reply_h1_preserves_close_and_framing`; current results in the linked DSL regression guard |
 
 ## Closed follow-up
 
@@ -149,6 +164,10 @@ Related: [[body-admission-reads-pre-plugin-snapshots]],
 [[filter-iteration-control-sync-phase-tradeoff]].
 
 ## Resolution references
+
+- `reconcile-dsl-terminate-contract` — distinguish the explicit DSL response
+  from the retained bare-plugin-result fallback; verification lives in the
+  linked DSL regression guard.
 
 - `response-body-gate-sync-stage F2` — 2026-08-03.
 - `D0104` — 2026-09-09. Added the native-WAF wire regression after the

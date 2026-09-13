@@ -2124,7 +2124,11 @@ if req.protocol == "grpc" {
 
 **Signature**: `terminate()` — terminates the request
 
-Terminates processing. A bare `terminate()` does not provide a response, so the gateway uses its terminal fallback (HTTP `502`, or the corresponding gRPC error on a gRPC request). Use `grpc_error()` when you need an explicit gRPC code and optional message.
+Immediately stops the script and subsequent plugins with an explicit HTTP `502` and an empty response body. gRPC requests receive HTTP `200` with `grpc-status: 13` (INTERNAL). It does not silently close the connection and is independent of `errorPolicy`, including `ignore`. Use `deny(status, body)` for a different HTTP status or body, or `grpc_error()` for a specific gRPC code and message.
+
+In the response stage, the gateway replaces an uncommitted ordinary HTTP upstream response, discarding its headers and body, including upstream-header edits made by `resp.set_header()` in that stage. Response-header operations queued during the request stage are applied to the local response. gRPC, switched-protocol, and established-tunnel responses stop through the existing denial path. HTTP/1 response-stage local replacement closes the connection; connection reuse is not guaranteed.
+
+**Behavior change**: The HTTP status remains `502`, but the former fallback HTML body is now empty. The DSL decision log is `Deny 502`, and a valid call no longer produces `PluginTerminateWithoutResponse`; the response dispatcher may still append replacement or denial records.
 
 **Example**:
 ```

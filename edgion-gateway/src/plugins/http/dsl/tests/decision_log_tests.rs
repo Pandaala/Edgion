@@ -36,8 +36,14 @@ fn test_decision_log_deny_emits_status() {
 fn test_decision_log_terminate_emits_deny_once() {
     let vm = make_vm("return terminate()");
     let (result, log) = run_vm_policy_log(&vm, MockPluginSession::new(), &DslErrorPolicy::Deny);
-    assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
-    expect!["Deny terminate"].assert_eq(&log.render_for_test());
+    assert_eq!(
+        result,
+        PluginRunningResult::ErrResponse {
+            status: 502,
+            body: None
+        }
+    );
+    expect!["Deny 502"].assert_eq(&log.render_for_test());
 }
 
 #[test]

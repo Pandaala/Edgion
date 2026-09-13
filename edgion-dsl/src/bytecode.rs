@@ -142,7 +142,7 @@ pub enum OpCode {
     ReturnNext,
     /// Pop (body, status) → ErrResponse
     ReturnDeny,
-    /// return terminate() → ErrTerminateRequest
+    /// return terminate() → explicit HTTP 502 local response with no body
     ReturnTerminate,
     /// Pop (message, code) → gRPC error response (HTTP 200 + grpc-status trailer)
     ReturnGrpcError,

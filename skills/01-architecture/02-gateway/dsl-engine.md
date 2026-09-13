@@ -141,6 +141,21 @@ storage materialization APIs remain separate from the script API.
 
 ## 4. Async / sync bridging
 
+### Explicit termination decisions
+
+`OpCode::ReturnTerminate` returns `PluginRunningResult::ErrResponse { status: 502,
+body: None }` in both DSL entry points. This is a successful VM control-flow
+decision, independent of `DslErrorPolicy`, and `execute_safe` logs `Deny 502`
+once. The shared plugin runtime owns local response writing or response-stage
+denial, including HTTP-to-gRPC mapping. DSL termination never relies on the
+bare-`ErrTerminateRequest` bug fallback required by design rule F.
+
+The opcode and bytecode format are unchanged: source and validated bytecode
+both reach the same VM branch. For response ownership, header/body changes,
+and verification limits, see [the termination regression guard](../../04-review/dsl/regression-guards/terminate-explicit-local-response.md).
+
+### Execution bridge
+
 `Vm::execute` is `async fn` (so it can await `http.call` and `redis.*` builtins). It must run from both an async filter phase (RequestFilter) and a sync one (UpstreamResponseFilter):
 
 | Phase | Trait method | Bridge |

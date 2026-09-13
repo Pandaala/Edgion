@@ -25,6 +25,8 @@ before applying a decision to current code.
 
 ## Regression guards
 
+- [Terminate uses an explicit local response](regression-guards/terminate-explicit-local-response.md)
+
 - [Body text reads are bounded during decoding, with fetched-byte accounting](regression-guards/bounded-body-text-reads.md)
 
 - [Response-stage HTTP suspension and timeout enforcement](regression-guards/response-stage-http-timeout.md)

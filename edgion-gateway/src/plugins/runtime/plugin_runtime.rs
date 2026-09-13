@@ -2633,6 +2633,214 @@ mod tests {
             .count()
     }
 
+    fn terminate_dsl_config(bytecode: bool) -> DslConfig {
+        use edgion_dsl::validator::{compile_dsl_source, ValidationLimits};
+        let source = r#"
+            resp.set_header("x-terminate", "selected")
+            return terminate()
+        "#;
+        DslConfig {
+            name: "terminate-contract".to_string(),
+            source: (!bytecode).then(|| source.to_string()),
+            bytecode: bytecode.then(|| compile_dsl_source(source, &ValidationLimits::default()).unwrap()),
+            // The default Ignore policy must not turn an explicit rejection into a pass.
+            ..Default::default()
+        }
+    }
+
+    fn after_terminate_dsl_config() -> DslConfig {
+        DslConfig {
+            name: "after-terminate".to_string(),
+            source: Some(r#"resp.set_header("x-after-terminate", "unexpected")"#.to_string()),
+            ..Default::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn dsl_terminate_request_writes_empty_502_without_fallback() {
+        use crate::runtime::server::{terminate_with_fallback, ServerHeaderOpts};
+        use crate::PendingHeaderOp;
+        for bytecode in [false, true] {
+            for method in [http::Method::GET, http::Method::HEAD] {
+                let (mut session, mut client) = plugin_test_session().await;
+                session.req_header_mut().set_method(method);
+                let mut ctx = EdgionHttpContext::default();
+                for (name, value) in [("content-length", "999"), ("transfer-encoding", "chunked")] {
+                    ctx.queue_pending_response_header_op(PendingHeaderOp::Set {
+                        name: name.to_string(),
+                        value: http::HeaderValue::from_static(value),
+                    });
+                }
+                let mut runtime = PluginRuntime::new();
+                runtime.add_request_filter(DslPlugin::from_config(&terminate_dsl_config(bytecode)).unwrap());
+                runtime.add_request_filter(DslPlugin::from_config(&after_terminate_dsl_config()).unwrap());
+                runtime.run_request_plugins(&mut session, &mut ctx).await;
+                assert!(ctx.plugin_terminated());
+                assert_eq!(ctx.final_downstream_status(), Some(502));
+                // The proxy invokes this after a stopped request chain. A legitimate
+                // local response already owns the reply, so this must be a no-op.
+                terminate_with_fallback(&mut session, &mut ctx, &ServerHeaderOpts::default())
+                    .await
+                    .unwrap();
+                assert!(!ctx
+                    .diagnostics
+                    .contains_error(EdgionErrorCode::PluginTerminateWithoutResponse));
+                let stages = ctx.stage_logs();
+                assert_eq!(stages.len(), 1);
+                assert_eq!(stages[0].filters.len(), 1);
+                assert_eq!(stages[0].filters[0].render_for_test(), "Deny 502");
+                drop(session);
+                let raw = String::from_utf8(read_client_response(&mut client).await).unwrap();
+                let (headers, body) = raw.split_once("\r\n\r\n").unwrap();
+                let headers = headers.to_ascii_lowercase();
+                assert!(headers.starts_with("http/1.1 502"), "{raw}");
+                assert!(headers.contains("content-length: 0"), "{raw}");
+                assert!(!headers.contains("transfer-encoding"), "{raw}");
+                assert!(headers.contains("content-type: text/plain"), "{raw}");
+                assert!(headers.contains("x-terminate: selected"), "{raw}");
+                assert!(!headers.contains("x-after-terminate"), "{raw}");
+                assert!(body.is_empty(), "{raw}");
+            }
+        }
+    }
+
+    /// The in-memory H1 session exercises the gRPC writer's status mapping;
+    /// actual H2 trailer interoperability is tracked by the E2E follow-up.
+    #[tokio::test]
+    async fn dsl_terminate_request_maps_grpc_without_fallback() {
+        for bytecode in [false, true] {
+            for route_only in [false, true] {
+                let (mut session, mut client) = plugin_test_session().await;
+                let mut ctx = EdgionHttpContext::default();
+                ctx.request_info.is_grpc_request = !route_only;
+                ctx.is_grpc_route_matched = route_only;
+                let mut runtime = PluginRuntime::new();
+                runtime.add_request_filter(DslPlugin::from_config(&terminate_dsl_config(bytecode)).unwrap());
+                runtime.add_request_filter(DslPlugin::from_config(&after_terminate_dsl_config()).unwrap());
+                runtime.run_request_plugins(&mut session, &mut ctx).await;
+                assert!(ctx.plugin_terminated());
+                assert_eq!(ctx.final_downstream_status(), Some(200));
+                assert_eq!(ctx.request_info.grpc_status(), Some(13));
+                assert!(!ctx
+                    .diagnostics
+                    .contains_error(EdgionErrorCode::PluginTerminateWithoutResponse));
+                assert_eq!(ctx.stage_logs()[0].filters.len(), 1);
+                drop(session);
+                let raw = String::from_utf8(read_client_response(&mut client).await).unwrap();
+                let raw = raw.to_ascii_lowercase();
+                assert!(raw.starts_with("http/1.1 200"), "{raw}");
+                assert!(raw.contains("grpc-status: 13"), "{raw}");
+                assert!(raw.contains("grpc-message: internal"), "{raw}");
+                assert!(raw.contains("x-terminate: selected"), "{raw}");
+                assert!(!raw.contains("x-after-terminate"), "{raw}");
+            }
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn dsl_terminate_response_stages_empty_local_reply() {
+        use crate::PendingHeaderOp;
+        for bytecode in [false, true] {
+            for (method, upstream_status) in [
+                (http::Method::GET, 200),
+                (http::Method::HEAD, 200),
+                (http::Method::GET, 204),
+                (http::Method::CONNECT, 403),
+            ] {
+                let (mut session, _client) = plugin_test_session().await;
+                session.req_header_mut().set_method(method.clone());
+                // A request-side upgrade intent alone must not prevent replacement.
+                session.req_header_mut().insert_header("upgrade", "websocket").unwrap();
+                let mut ctx = EdgionHttpContext::default();
+                ctx.queue_pending_response_header_op(PendingHeaderOp::Set {
+                    name: "x-queued".to_string(),
+                    value: http::HeaderValue::from_static("retained"),
+                });
+                if method != http::Method::HEAD {
+                    for (name, value) in [("content-length", "999"), ("transfer-encoding", "chunked")] {
+                        ctx.queue_pending_response_header_op(PendingHeaderOp::Set {
+                            name: name.to_string(),
+                            value: http::HeaderValue::from_static(value),
+                        });
+                    }
+                }
+                let mut upstream = ResponseHeader::build(upstream_status, None).unwrap();
+                upstream.insert_header("x-upstream-private", "discard").unwrap();
+                let mut runtime = PluginRuntime::new();
+                runtime.add_upstream_response_filter(
+                    DslPlugin::from_config_response(&terminate_dsl_config(bytecode)).unwrap(),
+                );
+                runtime.add_upstream_response_filter(
+                    DslPlugin::from_config_response(&after_terminate_dsl_config()).unwrap(),
+                );
+                runtime.run_upstream_response_plugins_sync(&mut session, &mut ctx, &mut upstream);
+                assert!(ctx.plugin_terminated());
+                assert_eq!(ctx.response_denial(), None);
+                assert!(!ctx
+                    .diagnostics
+                    .contains_error(EdgionErrorCode::PluginTerminateWithoutResponse));
+                assert_eq!(ctx.stage_logs()[0].filters.len(), 1);
+                let log = ctx.stage_logs()[0].filters[0].render_for_test();
+                assert_eq!(log.matches("Deny 502").count(), 1);
+                assert!(log.contains("replace response 502"));
+                let (reply, body) = ctx.take_pending_response_local_reply().expect("local reply staged");
+                assert_eq!(reply.status.as_u16(), 502);
+                assert!(body.is_empty());
+                // Response-phase resp.set_header edits the bound upstream header.
+                // Only queued request-phase operations survive local replacement.
+                assert_eq!(upstream.headers["x-terminate"], "selected");
+                assert!(!upstream.headers.contains_key("x-after-terminate"));
+                assert!(!reply.headers.contains_key("x-terminate"));
+                assert_eq!(reply.headers["x-queued"], "retained");
+                assert!(!reply.headers.contains_key("x-upstream-private"));
+                assert!(!reply.headers.contains_key("x-after-terminate"));
+                if method != http::Method::HEAD {
+                    assert_eq!(reply.headers["content-length"], "0");
+                    assert!(!reply.headers.contains_key("transfer-encoding"));
+                }
+            }
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn dsl_terminate_response_refusal_arms_denial_without_plugin_bug() {
+        use crate::ResponseStageDenial;
+        for (method, upstream_status, grpc_request, grpc_route) in [
+            (http::Method::GET, 101, false, false),
+            (http::Method::CONNECT, 200, false, false),
+            (http::Method::POST, 200, true, false),
+            (http::Method::POST, 200, false, true),
+        ] {
+            let (mut session, _client) = plugin_test_session().await;
+            session.req_header_mut().set_method(method);
+            let mut ctx = EdgionHttpContext::default();
+            ctx.request_info.is_grpc_request = grpc_request;
+            ctx.is_grpc_route_matched = grpc_route;
+            let mut upstream = ResponseHeader::build(upstream_status, None).unwrap();
+            let mut runtime = PluginRuntime::new();
+            runtime
+                .add_upstream_response_filter(DslPlugin::from_config_response(&terminate_dsl_config(false)).unwrap());
+            runtime
+                .add_upstream_response_filter(DslPlugin::from_config_response(&after_terminate_dsl_config()).unwrap());
+            runtime.run_upstream_response_plugins_sync(&mut session, &mut ctx, &mut upstream);
+            assert!(ctx.plugin_terminated());
+            assert!(ctx.take_pending_response_local_reply().is_none());
+            assert_eq!(ctx.response_denial(), Some(&ResponseStageDenial::Http(502)));
+            assert!(!ctx
+                .diagnostics
+                .contains_error(EdgionErrorCode::PluginTerminateWithoutResponse));
+            assert!(ctx
+                .diagnostics
+                .contains_error(EdgionErrorCode::PluginResponseDenyAborted));
+            assert_eq!(
+                ctx.diagnostics
+                    .contains_error(EdgionErrorCode::PluginResponseReplaceUnsupportedGrpc),
+                grpc_request || grpc_route
+            );
+            assert_eq!(ctx.stage_logs()[0].filters.len(), 1);
+        }
+    }
+
     #[tokio::test]
     async fn err_response_writer_failures_record_client_closed_once() {
         let (mut session, client) = plugin_test_session().await;

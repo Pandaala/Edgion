@@ -53,10 +53,15 @@ async fn shutdown_after_error_response(session: &mut Session) {
 /// the plain `Session::write_response_header` drops `end_of_stream` before the H2 codec.
 pub(crate) async fn send_grpc_trailers_only_frame(
     session: &mut Session,
-    resp: ResponseHeader,
+    mut resp: ResponseHeader,
     grpc_status: u16,
     grpc_message: Option<&str>,
 ) -> pingora_core::Result<()> {
+    // Terminal status fields belong exclusively to this writer. Queued plugin
+    // values must not conflict with gRPC-Web's trailer frame or survive a
+    // native trailers-only reply whose canonical message is absent.
+    resp.remove_header("grpc-status");
+    resp.remove_header("grpc-message");
     // Read-only check of the grpc-web bridge state. For native gRPC the bridge is never
     // init()'d, so it stays Disabled (!= Upgrade) and we take the unchanged native path
     // below. Reading via get_mut + == does not mutate the bridge; the borrow is dropped
@@ -96,7 +101,6 @@ pub(crate) async fn send_grpc_trailers_only_frame(
     } else {
         // Native gRPC (and non-grpc): unchanged single-frame Trailers-Only — grpc-status /
         // grpc-message as ordinary header fields in one HEADERS frame with END_STREAM=true.
-        let mut resp = resp;
         resp.insert_header("grpc-status", grpc_status.to_string())
             .expect("u16 decimal string is always a valid HeaderValue");
         if let Some(msg) = grpc_message {
@@ -160,12 +164,6 @@ pub(crate) async fn send_grpc_status_trailers_only(
     // queued an unsafe operation.
     resp.remove_header(&http::header::CONTENT_LENGTH);
     resp.remove_header(&http::header::TRANSFER_ENCODING);
-    // grpc-status/message belong exclusively to the canonical terminal shape:
-    // native gRPC adds them to its trailers-only HEADERS below, while gRPC-Web
-    // encodes them into the 0x80 trailer body frame. Never let queued values
-    // survive in the initial response headers.
-    resp.remove_header("grpc-status");
-    resp.remove_header("grpc-message");
     resp.insert_header("content-type", "application/grpc")
         .expect("static ASCII header literal, cannot fail");
     send_grpc_trailers_only_frame(session, resp, grpc_status, grpc_message).await
@@ -668,6 +666,97 @@ mod tests {
         assert!(!wire.contains("grpc-status: 1\r\n"));
         assert!(!wire.contains("grpc-message: conflict\r\n"));
         assert!(wire.contains("grpc-status:8\r\ngrpc-message:quota\r\n"));
+    }
+
+    #[tokio::test]
+    async fn dsl_terminate_grpc_web_has_only_canonical_trailer_status() {
+        use crate::plugins::runtime::PluginRuntime;
+        use edgion_dsl::validator::{compile_dsl_source, ValidationLimits};
+        use edgion_resources::{DslConfig, EdgionPlugin, RequestFilterEntry};
+
+        for bytecode in [false, true] {
+            let (mut session, mut client) = live_grpc_web_session().await;
+            let source = r#"
+                resp.set_header("grpc-status", "0")
+                resp.set_header("grpc-message", "queued")
+                resp.set_header("x-queued", "retained")
+                return terminate()
+            "#;
+            let config = DslConfig {
+                name: "terminate-contract".to_string(),
+                source: (!bytecode).then(|| source.to_string()),
+                bytecode: bytecode.then(|| compile_dsl_source(source, &ValidationLimits::default()).unwrap()),
+                ..Default::default()
+            };
+            let mut runtime = PluginRuntime::new();
+            let errors = runtime.add_from_request_filters(
+                &[RequestFilterEntry::new(EdgionPlugin::Dsl(config))],
+                "test",
+                "test/terminate",
+            );
+            assert!(errors.is_empty(), "{errors:?}");
+            let mut ctx = EdgionHttpContext::default();
+            ctx.request_info.is_grpc_request = true;
+            runtime.run_request_plugins(&mut session, &mut ctx).await;
+            terminate_with_fallback(&mut session, &mut ctx, &ServerHeaderOpts::default())
+                .await
+                .unwrap();
+            assert!(ctx.plugin_terminated());
+            assert_eq!(ctx.final_downstream_status(), Some(200));
+            assert_eq!(ctx.request_info.grpc_status(), Some(13));
+            assert_eq!(ctx.stage_logs()[0].filters[0].render_for_test(), "Deny 502");
+            assert!(ctx.diagnostics.entries().is_empty());
+            let written = session.response_written().unwrap();
+            assert_eq!(written.status.as_u16(), 200);
+            assert_eq!(written.headers["content-type"], "application/grpc-web");
+            assert_eq!(written.headers["x-queued"], "retained");
+            assert!(!written.headers.contains_key("grpc-status"));
+            assert!(!written.headers.contains_key("grpc-message"));
+            drop(session);
+            let mut wire = Vec::new();
+            timeout(Duration::from_secs(2), client.read_to_end(&mut wire))
+                .await
+                .unwrap()
+                .unwrap();
+            let head_end = wire.windows(4).position(|part| part == b"\r\n\r\n").unwrap() + 4;
+            // Decode H1 chunking before checking the exact gRPC-Web envelope.
+            let mut remaining = &wire[head_end..];
+            let mut payload = Vec::new();
+            loop {
+                let line_end = remaining.windows(2).position(|part| part == b"\r\n").unwrap();
+                let size = usize::from_str_radix(std::str::from_utf8(&remaining[..line_end]).unwrap(), 16).unwrap();
+                remaining = &remaining[line_end + 2..];
+                if size == 0 {
+                    assert_eq!(remaining, b"\r\n");
+                    break;
+                }
+                payload.extend_from_slice(&remaining[..size]);
+                assert_eq!(&remaining[size..size + 2], b"\r\n");
+                remaining = &remaining[size + 2..];
+            }
+            let trailer = b"grpc-status:13\r\ngrpc-message:internal\r\n";
+            let mut expected = vec![0x80];
+            expected.extend_from_slice(&(trailer.len() as u32).to_be_bytes());
+            expected.extend_from_slice(trailer);
+            assert_eq!(payload, expected, "exactly one canonical trailer frame, no data frames");
+        }
+    }
+
+    #[tokio::test]
+    async fn grpc_terminal_frame_without_message_removes_stale_status_fields() {
+        let (mut session, _client) = live_downstream_session().await;
+        let mut response = ResponseHeader::build(200, None).unwrap();
+        response.insert_header("content-type", "application/grpc").unwrap();
+        response.append_header("grpc-status", "0").unwrap();
+        response.append_header("grpc-status", "1").unwrap();
+        response.insert_header("grpc-message", "queued").unwrap();
+        send_grpc_trailers_only_frame(&mut session, response, 8, None)
+            .await
+            .unwrap();
+        let written = session.response_written().unwrap();
+        assert_eq!(written.headers["grpc-status"], "8");
+        assert_eq!(written.headers.get_all("grpc-status").iter().count(), 1);
+        assert!(!written.headers.contains_key("grpc-message"));
     }
 
     #[tokio::test]

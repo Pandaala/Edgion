@@ -2071,7 +2071,11 @@ if req.protocol == "grpc" {
 
 **签名**：`terminate()` — 终止请求
 
-终止处理。单独调用 `terminate()` 不提供响应，因此网关会使用终止响应兜底（HTTP `502`，gRPC 请求则返回对应的 gRPC 错误）。需要明确的 gRPC 状态码和可选消息时，请使用 `grpc_error()`。
+立即停止脚本及后续插件处理，显式返回 HTTP `502`，响应体为空；gRPC 请求返回 HTTP `200` 和 `grpc-status: 13`（INTERNAL）。它不会静默关闭连接，且不受 `errorPolicy` 影响，包括 `ignore`。需要其他 HTTP 状态码或响应体时，使用 `deny(status, body)`；需要指定 gRPC 状态码和消息时，使用 `grpc_error()`。
+
+在响应阶段，网关会替换尚未提交的普通 HTTP 上游响应，并丢弃其响应头和响应体，包括本阶段 `resp.set_header()` 对上游头的修改；请求阶段排队的响应头操作会应用到本地响应。gRPC、已切换协议或已建立隧道的响应使用既有拒绝路径中止处理。HTTP/1 响应阶段的本地替换会关闭连接，不保证连接复用。
+
+**行为变更**：HTTP 状态仍为 `502`，响应体由过去的兜底 HTML 改为空。DSL 决策日志为 `Deny 502`，合法调用不再产生 `PluginTerminateWithoutResponse`；响应调度器仍可能附加替换或拒绝记录。
 
 **示例**：
 ```

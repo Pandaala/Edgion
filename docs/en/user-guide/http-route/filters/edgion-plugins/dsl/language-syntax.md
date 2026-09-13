@@ -453,7 +453,7 @@ return deny(204, nil)
 
 ### 6.3 return terminate()
 
-Immediately terminates request processing without sending any response. Use this when you need to close the connection directly:
+Immediately stops the script and subsequent plugins with an explicit HTTP `502` and an empty response body; gRPC requests receive HTTP `200` with `grpc-status: 13` (INTERNAL). This is not a silent connection close, and `errorPolicy: ignore` does not allow the request through. Use `deny()` or `grpc_error()` for a custom rejection status. See the [terminate API](./api-reference.md#terminate) for response-stage and connection behavior.
 
 ```dsl
 // Deliberately match the physical peer for this exact network-origin block.

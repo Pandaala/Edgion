@@ -446,7 +446,7 @@ return deny(204, nil)
 
 ### 6.3 return terminate()
 
-立即终止请求处理，不发送任何响应。适用于需要直接关闭连接的场景：
+立即停止脚本及后续插件处理，显式返回 HTTP `502` 和空响应体；gRPC 请求返回 HTTP `200` 和 `grpc-status: 13`（INTERNAL）。这不是静默关闭连接，`errorPolicy: ignore` 也不会放行。需要自定义拒绝状态时使用 `deny()` 或 `grpc_error()`。响应阶段和连接行为见 [terminate API](./api-reference.md#terminate)。
 
 ```dsl
 // 该精确网络来源规则故意匹配物理传输对端。

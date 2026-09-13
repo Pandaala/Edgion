@@ -21,6 +21,7 @@ before applying a decision to current code.
 
 ## Regression guards
 
+- [Terminal gRPC status fields have one writer](regression-guards/terminal-status-field-ownership.md)
 - [Abandoned Request Bodies Have a Distinct Terminal Event — FIXED](regression-guards/abandoned-request-body-terminal-event.md)
 - [Custom terminal 101 normalized before dispatch](regression-guards/custom-terminal-101-normalized-before-dispatch.md)
 - [h2-grpc-07 — `fed_client` connect timeout added](regression-guards/fed-client-connect-timeout.md)
