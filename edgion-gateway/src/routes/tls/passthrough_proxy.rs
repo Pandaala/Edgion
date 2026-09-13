@@ -215,7 +215,10 @@ impl EdgionTlsPassthroughProxy {
         let Some(scope) = resolve_route_scope(
             &publication,
             &self.listener_key,
-            &unit.resolved_parent_refs,
+            unit.resolved_parent_refs
+                .get(&self.listener_key)
+                .map(Vec::as_slice)
+                .unwrap_or_default(),
             sni,
             tls_route.metadata.namespace.as_deref().unwrap_or("default"),
             "TLSRoute",
@@ -515,34 +518,27 @@ mod tests {
             EdgionTlsPassthroughProxy::listener_log_entry,
         );
     }
-    use edgion_resources::resources::tls_route::{TLSRoute, TLSRouteSpec};
-    use kube::api::ObjectMeta;
     use std::collections::HashMap;
     use std::io;
     use std::pin::Pin;
     use std::task::{Context, Poll};
 
     fn route_unit(name: &str, hostname: &str) -> Arc<TlsRouteUnit> {
-        Arc::new(TlsRouteUnit::from_route(Arc::new(TLSRoute {
-            metadata: ObjectMeta {
-                namespace: Some("default".to_string()),
-                name: Some(name.to_string()),
-                ..Default::default()
-            },
-            spec: TLSRouteSpec {
-                parent_refs: None,
-                hostnames: Some(vec![hostname.to_string()]),
-                rules: None,
-                resolved_listeners: None,
-                effective_hostnames: None,
-            },
-            status: None,
-        })))
+        let route = serde_json::from_value(serde_json::json!({
+            "metadata": {"namespace": "default", "name": name},
+            "spec": {
+                "hostnames": [hostname], "parentRefs": [{"name": "gateway", "sectionName": "tls"}],
+                "resolvedListeners": [{"listenerKey": "0.0.0.0:443/TLS", "gatewayNamespace": "default",
+                    "gatewayName": "gateway", "listenerName": "tls", "hostnames": [hostname]}]
+            }
+        }))
+        .unwrap();
+        Arc::new(TlsRouteUnit::from_route(Arc::new(route)))
     }
 
     #[test]
     fn selected_unit_survives_reload_without_retaining_old_table() {
-        let manager = TlsRouteManager::new();
+        let manager = TlsRouteManager::new(ListenerKey::new("0.0.0.0:443".parse().unwrap(), "TLS"));
         assert!(select_route_unit(&manager, "a.example.com").is_none());
         let old_unit = route_unit("a", "a.example.com");
         let sibling = route_unit("b", "b.example.com");

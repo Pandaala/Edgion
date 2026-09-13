@@ -120,8 +120,8 @@ semantics; the internal fatal branch returns `FastShutdown`. Non-Unix builds use
 
 Terminal logs use the existing UDP logger. Cancellation may discard in-flight datagrams;
 forced shutdown can abandon pending terminal logs. Submission does not establish durable
-flush of the log sink: the shared [DataSender shutdown contract](../../../tasks/todo/data-sender-graceful-shutdown-contract.md)
-remains separate. See the [UDP lifecycle regression guard](../../04-review/listeners/regression-guards/udp-process-shutdown.md)
+flush of the log sink: [process-exit log delivery remains best-effort](../../04-review/link-sys/intentional-design/process-exit-log-delivery-best-effort.md).
+See the [UDP lifecycle regression guard](../../04-review/listeners/regression-guards/udp-process-shutdown.md)
 for process-level wire coverage and its verification limits.
 
 The background Tokio thread is therefore not an intentionally permanent `pending()` task.

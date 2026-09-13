@@ -546,22 +546,53 @@ pub fn resolve_listener_keys(
     fallback_namespace: Option<&str>,
     runtime: &ControllerRuntime,
 ) -> Vec<ListenerKey> {
-    let (mut keys, _, _) = resolve_listeners_inner(parent_refs, route_namespace, fallback_namespace, runtime, None);
+    let (mut keys, _, _) =
+        resolve_listeners_inner(parent_refs, route_namespace, fallback_namespace, runtime, None, false);
     keys.sort_unstable();
     keys.dedup();
     keys
 }
 
-/// Like `resolve_listener_keys`, but also returns the listener hostnames
-/// (positionally paired with the keys) for effective hostname computation.
-pub fn resolve_listener_keys_with_hostnames(
+/// Resolve TLSRoute hostnames independently for each exact listener attachment.
+pub fn resolve_tls_listener_hostnames(
     parent_refs: &[ParentReference],
     route_namespace: &str,
-    fallback_namespace: Option<&str>,
+    hostnames: &[String],
     runtime: &ControllerRuntime,
-) -> (Vec<ListenerKey>, Vec<Option<String>>) {
-    let (keys, hostnames, _) = resolve_listeners_inner(parent_refs, route_namespace, fallback_namespace, runtime, None);
-    (keys, hostnames)
+) -> Vec<edgion_resources::resources::tls_route::ResolvedTlsListener> {
+    use edgion_resources::resources::tls_route::ResolvedTlsListener;
+    if hostnames.is_empty() {
+        return Vec::new();
+    }
+    let (_, listener_hosts, attachments) =
+        resolve_listeners_inner(parent_refs, route_namespace, Some(route_namespace), runtime, None, true);
+    let mut resolved = Vec::new();
+    for (attachment, listener_host) in attachments.into_iter().zip(listener_hosts) {
+        if attachment.listener_key.protocol() != "TLS" {
+            continue;
+        }
+        let effective = compute_tls_hostnames(hostnames, listener_host.as_deref());
+        if effective.is_empty() {
+            continue;
+        }
+        resolved.push(ResolvedTlsListener {
+            listener_key: attachment.listener_key,
+            gateway_namespace: attachment.gateway_namespace,
+            gateway_name: attachment.gateway_name,
+            listener_name: attachment.listener_name,
+            hostnames: effective,
+        });
+    }
+    resolved.sort_by(|a, b| {
+        (&a.listener_key, &a.gateway_namespace, &a.gateway_name, &a.listener_name).cmp(&(
+            &b.listener_key,
+            &b.gateway_namespace,
+            &b.gateway_name,
+            &b.listener_name,
+        ))
+    });
+    resolved.dedup();
+    resolved
 }
 
 /// Resolve complete Gateway listener attachment identities for EdgionTls.
@@ -577,6 +608,7 @@ pub fn resolve_listener_attachments(
         fallback_namespace,
         runtime,
         Some(edgion_resources::resources::edgion_tls::MAX_EDGION_TLS_RESOLVED_ATTACHMENTS),
+        false,
     );
     // Raw-store Gateways intentionally carry no controller instance proof.
     // They remain usable for ordinary route status/listener-key resolution,
@@ -601,6 +633,7 @@ fn resolve_listeners_inner(
     fallback_namespace: Option<&str>,
     runtime: &ControllerRuntime,
     attachment_limit: Option<usize>,
+    tls_route: bool,
 ) -> (Vec<ListenerKey>, Vec<Option<String>>, Vec<ResolvedListenerAttachment>) {
     let mut listener_keys = Vec::new();
     let mut listener_hostnames: Vec<Option<String>> = Vec::new();
@@ -664,6 +697,9 @@ fn resolve_listeners_inner(
         );
 
         let mut collect = |l: &edgion_resources::resources::gateway::Listener| {
+            if tls_route && (l.protocol != "TLS" || !listener_supports_route_kind(l, "TLSRoute")) {
+                return;
+            }
             if attachment_limit.is_some_and(|limit| listener_attachments.len() > limit) {
                 return;
             }
@@ -707,45 +743,18 @@ fn resolve_listeners_inner(
     (listener_keys, listener_hostnames, listener_attachments)
 }
 
-/// Compute effective hostnames = intersection of route hostnames with listener hostnames.
-///
-/// Per Gateway API spec, a route's effective hostname on a listener is the
-/// intersection of the route's hostnames with the listener's hostname.
-/// The result is deduplicated.
-pub fn compute_effective_hostnames(route_hostnames: &[String], listener_hostnames: &[Option<String>]) -> Vec<String> {
-    use std::collections::BTreeSet;
-    let mut effective: BTreeSet<String> = BTreeSet::new();
-
-    if route_hostnames.is_empty() {
-        // Route matches all hostnames; effective = listener hostnames
-        for lh in listener_hostnames {
-            if let Some(h) = lh {
-                effective.insert(h.to_ascii_lowercase());
-            }
-            // None listener hostname = all hostnames; nothing specific to add
-        }
-        return effective.into_iter().collect();
-    }
-
-    for lh in listener_hostnames {
-        match lh {
-            None => {
-                // Listener accepts all hostnames; effective = route hostnames
-                for rh in route_hostnames {
-                    effective.insert(rh.to_ascii_lowercase());
-                }
-            }
-            Some(listener_host) => {
-                for rh in route_hostnames {
-                    if let Some(intersected) = hostname_intersection(listener_host, rh) {
-                        effective.insert(intersected.to_ascii_lowercase());
-                    }
-                }
-            }
-        }
-    }
-
-    effective.into_iter().collect()
+/// Project one TLS attachment; an unrestricted listener preserves the route names.
+fn compute_tls_hostnames(route_hostnames: &[String], listener_hostname: Option<&str>) -> Vec<String> {
+    route_hostnames
+        .iter()
+        .filter_map(|hostname| match listener_hostname {
+            Some(listener) => hostname_intersection(listener, hostname),
+            None => Some(hostname.as_str()),
+        })
+        .map(str::to_ascii_lowercase)
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect()
 }
 
 /// Compute the intersection of two hostnames, returning the more specific one.
@@ -774,6 +783,76 @@ fn hostname_intersection<'a>(a: &'a str, b: &'a str) -> Option<&'a str> {
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn tls_hostnames_remain_scoped_to_attachments_through_updates() {
+        use super::*;
+        use crate::conf_mgr::sync_runtime::resource_processor::handlers::GatewayHandler;
+        use crate::conf_mgr::sync_runtime::resource_processor::{LocalRawStore, ResourceProcessor};
+        let runtime = Arc::new(ControllerRuntime::default());
+        let processor = Arc::new(ResourceProcessor::<Gateway>::new(
+            "Gateway",
+            16,
+            Arc::new(GatewayHandler::new(None, None)),
+            runtime.clone(),
+        ));
+        let raw = Arc::new(LocalRawStore::new());
+        processor.set_raw_store(raw.clone());
+        runtime.processor_registry.register(processor);
+        let gateway = |name: &str, port: u16, hostname: Option<&str>| {
+            Arc::new(
+                serde_json::from_value::<Gateway>(serde_json::json!({
+                    "metadata": {"namespace": "apps", "name": name},
+                    "spec": {"gatewayClassName": "test", "listeners": [{
+                        "name": "tls", "port": port, "protocol": "TLS", "hostname": hostname,
+                        "tls": {"mode": "Passthrough"}
+                    }]}
+                }))
+                .unwrap(),
+            )
+        };
+        raw.upsert("apps/a".into(), gateway("a", 8443, Some("a.example.com")));
+        raw.upsert("apps/b".into(), gateway("b", 9443, Some("b.example.com")));
+        let parents: Vec<ParentReference> = serde_json::from_value(serde_json::json!([
+            {"name": "a", "sectionName": "tls"}, {"name": "b", "sectionName": "tls"}
+        ]))
+        .unwrap();
+        let hosts = vec!["*.example.com".to_string()];
+        let resolved = resolve_tls_listener_hostnames(&parents, "apps", &hosts, &runtime);
+        assert_eq!(resolved.len(), 2);
+        assert_eq!(resolved[0].hostnames, ["a.example.com"]);
+        assert_eq!(resolved[1].hostnames, ["b.example.com"]);
+        assert_eq!(resolved[0].gateway_name, "a");
+        assert_eq!(resolved[1].listener_key.0, "0.0.0.0:9443/TLS");
+        // An unrestricted listener preserves the explicit route wildcard; it
+        // does not widen the other attachment or manufacture a route catch-all.
+        raw.upsert("apps/a".into(), gateway("a", 8443, None));
+        let updated = resolve_tls_listener_hostnames(&parents, "apps", &hosts, &runtime);
+        assert_eq!(updated[0].hostnames, ["*.example.com"]);
+        assert_eq!(updated[1], resolved[1]);
+        raw.upsert("apps/a".into(), gateway("a", 10443, Some("unrelated.test")));
+        let narrowed = resolve_tls_listener_hostnames(&parents, "apps", &hosts, &runtime);
+        assert_eq!(narrowed, [resolved[1].clone()]);
+        assert!(resolve_tls_listener_hostnames(&parents, "apps", &[], &runtime).is_empty());
+        let port_mismatch: Vec<ParentReference> = serde_json::from_value(serde_json::json!([
+            {"name": "b", "sectionName": "tls", "port": 8443}
+        ]))
+        .unwrap();
+        assert!(resolve_tls_listener_hostnames(&port_mismatch, "apps", &hosts, &runtime).is_empty());
+        let mut mixed = (*gateway("a", 8443, Some("a.example.com"))).clone();
+        mixed.spec.listeners.as_mut().unwrap().push(
+            serde_json::from_value(serde_json::json!({
+                "name": "wrong-group", "port": 8443, "protocol": "TLS", "hostname": "a.example.com",
+                "allowedRoutes": {"kinds": [{"kind": "TLSRoute", "group": "unrelated.example.com"}]}
+            }))
+            .unwrap(),
+        );
+        raw.upsert("apps/a".into(), Arc::new(mixed));
+        let all: Vec<ParentReference> = serde_json::from_value(serde_json::json!([{"name": "a"}])).unwrap();
+        let filtered = resolve_tls_listener_hostnames(&all, "apps", &hosts, &runtime);
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].listener_name, "tls");
+    }
+
     #[tokio::test]
     async fn backend_request_id_rejects_only_active_entries() {
         use super::*;

@@ -45,7 +45,9 @@ More on listeners: [TLS Termination](../../ops-guide/gateway/tls/tls-termination
 
 ### Hostnames (SNI)
 
-`hostnames` is the SNI match list. The gateway compares each value against the SNI sent in the ClientHello. Exact names (`secure.example.com`) and wildcards (`*.internal.example.com`) are both supported; a wildcard matches exactly one label. If `hostnames` is omitted, the route matches any SNI reaching its listener. When multiple TLSRoutes share a listener, the most specific hostname match wins, so place exact names alongside any wildcards.
+`hostnames` is required and must contain explicit SNI names. Exact names (`secure.example.com`) and wildcard suffixes (`*.internal.example.com`) are supported. A route wildcard matches one or more labels, including `a.b.internal.example.com`, but not the suffix alone. This routing rule is distinct from certificate wildcard verification. Missing or empty lists and a bare `*` are rejected.
+
+Each attachment uses the intersection of the route's names and that listener's hostname. For example, a route declaring `a.example.com` and `b.example.com` attached to listeners for each name on different ports serves only the corresponding name on each port. A listener without a hostname preserves the route's explicit names; it does not make the route match arbitrary SNI. An empty intersection produces no route on that listener. Changing or removing an attachment replaces its old names without changing unrelated listener snapshots.
 
 ### Rules
 

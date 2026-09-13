@@ -64,8 +64,8 @@ Normal cancellation lets an in-progress expiry log/removal pair finish before th
 remaining-session pass. Forced abort can abandon unsubmitted terminal logs and
 in-flight datagrams. Log submission uses the existing best-effort logger; it does
 not promise persistence or sink flush. The
-[DataSender shutdown task](../../../../tasks/todo/data-sender-graceful-shutdown-contract.md)
-owns that independent contract. Serving-time expiry/activity and same-key receiver
+[process-exit log delivery decision](../../link-sys/intentional-design/process-exit-log-delivery-best-effort.md)
+records that independent accepted limitation. Serving-time expiry/activity and same-key receiver
 generation races remain in
 [session retirement](../../../../tasks/todo/retire-udp-sessions-by-generation.md).
 

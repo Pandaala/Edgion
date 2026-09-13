@@ -46,6 +46,7 @@ pub fn all() -> Vec<&'static Scenario> {
         crate::dynamic::scenarios::canary_hot_swap::SCENARIO,
         crate::dynamic::scenarios::dns_resolution_flap::SCENARIO,
         crate::dynamic::scenarios::tcp_esp_reload::SCENARIO,
+        crate::dynamic::scenarios::tls_route_attachments::SCENARIO,
         crate::dynamic::scenarios::tls_route_plugins_reload::SCENARIO,
         crate::dynamic::scenarios::gateway_class_params_flap::SCENARIO,
         crate::dynamic::scenarios::edgion_tls_last_known_good::SCENARIO,

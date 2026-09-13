@@ -98,10 +98,27 @@ impl Default for TlsRouteHandler {
 
 impl TlsRouteHandler {
     fn validate_route(&self, route: &TLSRoute) -> Vec<String> {
-        validate_tls_route_if_enabled(route)
+        let mut errors = validate_tls_route_if_enabled(route);
+        if let Err(error) = route.spec.validate_hostnames() {
+            errors.push(error.to_string());
+        }
+        errors
     }
 
     async fn parse_route(&self, mut route: TLSRoute, ctx: &HandlerContext) -> ProcessResult<TLSRoute> {
+        // Install new parent edges before reading a Gateway snapshot, so a
+        // concurrent Gateway publication cannot miss this route. on_change
+        // removes old edges and requeues dropped parents after tracker updates.
+        ctx.runtime().gateway_route_index.register_route_dependencies(
+            ResourceKind::TLSRoute,
+            &format!(
+                "{}/{}",
+                route.metadata.namespace.as_deref().unwrap_or("default"),
+                route.metadata.name.as_deref().unwrap_or("")
+            ),
+            route.spec.parent_refs.as_deref().unwrap_or_default(),
+            route.metadata.namespace.as_deref().unwrap_or("default"),
+        );
         Self::record_cross_ns_refs(&route, ctx);
         // Register Service backend references, then requeue BTPs bound to any
         // Service dropped from backendRefs (the apply path otherwise only
@@ -146,25 +163,21 @@ impl TlsRouteHandler {
         }
 
         route.spec.resolved_listeners = None;
-        route.spec.effective_hostnames = None;
 
-        if let Some(parent_refs) = &route.spec.parent_refs {
-            let (listener_keys, listener_hostnames) = super::route_utils::resolve_listener_keys_with_hostnames(
+        if let Some(parent_refs) = route
+            .spec
+            .parent_refs
+            .as_ref()
+            .filter(|_| route.spec.validate_hostnames().is_ok())
+        {
+            let listeners = super::route_utils::resolve_tls_listener_hostnames(
                 parent_refs,
                 route_ns,
-                route.metadata.namespace.as_deref(),
+                route.spec.hostnames.as_deref().unwrap_or_default(),
                 ctx.runtime(),
             );
-            if !listener_keys.is_empty() {
-                route.spec.resolved_listeners = Some(listener_keys);
-            }
-
-            let effective = super::route_utils::compute_effective_hostnames(
-                route.spec.hostnames.as_deref().unwrap_or_default(),
-                &listener_hostnames,
-            );
-            if !effective.is_empty() {
-                route.spec.effective_hostnames = Some(effective);
+            if !listeners.is_empty() {
+                route.spec.resolved_listeners = Some(listeners);
             }
         }
 
@@ -272,11 +285,14 @@ impl TlsRouteHandler {
             status.parents.clear();
         }
 
+        // Globally rejected routes must not contribute to attachedRoutes.
+        // Passing no parents also removes attachments from the prior generation.
+        let accepted_parents = route.spec.parent_refs.as_ref().filter(|_| validation_errors.is_empty());
         super::route_utils::update_tracker_accepted_only(
             ResourceKind::TLSRoute,
             route_ns,
             route.metadata.name.as_deref().unwrap_or(""),
-            route.spec.parent_refs.as_ref(),
+            accepted_parents,
             route.spec.hostnames.as_ref(),
             ctx.runtime(),
         );
@@ -393,4 +409,76 @@ fn collect_ref_denied_list(route: &TLSRoute) -> Vec<Option<&RefDenied>> {
         }
     }
     list
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::conf_mgr::sync_runtime::resource_processor::handlers::GatewayHandler;
+    use crate::conf_mgr::sync_runtime::resource_processor::{LocalRawStore, ResourceProcessor};
+    use crate::conf_mgr::ControllerRuntime;
+    use edgion_resources::Gateway;
+    use std::sync::Arc;
+
+    #[tokio::test]
+    async fn invalid_hostnames_clear_attachment_status_and_counts_then_recover() {
+        let runtime = Arc::new(ControllerRuntime::default());
+        let processor = Arc::new(ResourceProcessor::<Gateway>::new(
+            "Gateway",
+            16,
+            Arc::new(GatewayHandler::new(None, None)),
+            runtime.clone(),
+        ));
+        let raw = Arc::new(LocalRawStore::new());
+        processor.set_raw_store(raw.clone());
+        runtime.processor_registry.register(processor);
+        raw.upsert(
+            "apps/gateway".into(),
+            Arc::new(
+                serde_json::from_value(serde_json::json!({
+                    "metadata": {"namespace": "apps", "name": "gateway"},
+                    "spec": {"gatewayClassName": "test", "listeners": [{
+                        "name": "tls", "port": 8443, "protocol": "TLS",
+                        "tls": {"mode": "Passthrough"}
+                    }]}
+                }))
+                .unwrap(),
+            ),
+        );
+        let ctx = HandlerContext::new(None, None, Default::default(), 3, 20, runtime.clone());
+        let handler = TlsRouteHandler::default();
+        let mut route: TLSRoute = serde_json::from_value(serde_json::json!({
+            "metadata": {"namespace": "apps", "name": "route"},
+            "spec": {"parentRefs": [{"name": "gateway", "sectionName": "tls"}]}
+        }))
+        .unwrap();
+        let valid = Some(vec!["a.example.com".to_string()]);
+        for hostnames in [
+            valid.clone(),
+            Some(Vec::new()),
+            valid.clone(),
+            None,
+            valid.clone(),
+            Some(vec!["*".to_string()]),
+            valid,
+        ] {
+            route.spec.hostnames = hostnames;
+            let errors = handler.validate_route(&route);
+            let accepted = errors.is_empty();
+            let ProcessResult::Continue(mut parsed) = handler.parse_route(route, &ctx).await else {
+                panic!("route parsing must retain the object for status reporting");
+            };
+            handler.update_route_status(&mut parsed, &ctx, &errors);
+            let parents = &parsed.status.as_ref().unwrap().parents;
+            assert_eq!(parents.len(), 1);
+            let condition = parents[0].conditions.iter().find(|c| c.type_ == "Accepted").unwrap();
+            assert_eq!(condition.status, if accepted { "True" } else { "False" });
+            assert_eq!(parsed.spec.resolved_listeners.is_some(), accepted);
+            assert_eq!(
+                runtime.attached_route_tracker.count_for_listener("apps/gateway", "tls"),
+                i32::from(accepted)
+            );
+            route = parsed;
+        }
+    }
 }

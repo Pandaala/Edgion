@@ -32,7 +32,6 @@ edgion-gateway/src/routes/tls/
 ```rust
 pub struct TlsRouteTable {
     host_map: HashHost<Arc<TlsRouteUnit>>,
-    catch_all_route: Option<Arc<TlsRouteUnit>>,
 }
 ```
 
@@ -40,19 +39,16 @@ Match priority:
 
 1. **Exact hostname match**: `HashHost` exact lookup, O(1).
 2. **Wildcard hostname match**: `HashHost` handles wildcards such as `*.example.com` internally and returns the most specific wildcard match.
-3. **Catch-all**: eligible routes without a hostname restriction serve as a fallback.
+3. **No match**: reject if no explicit route hostname matches; TLSRoute v1 has no hostname-less catch-all.
 
 `TlsRouteTable::from_units` build process:
 
-1. Borrow hostname slices from each compiled unit's schema: use `effective_hostnames`
-   when `resolved_listeners` is present, otherwise use raw `spec.hostnames`.
-   Allocate lowercased bucket keys without first copying the input strings.
-2. Empty selected hostnames enter the temporary catch-all candidates, except a
-   processed route with explicit nonempty raw hostnames and an empty effective
-   intersection, which is excluded rather than widened to catch-all.
+1. Borrow hostname slices from the unit's accepted `ResolvedTlsListener` records
+   for the table's physical `ListenerKey`. No route-global union or raw fallback.
+2. Empty intersections and unresolved/invalid routes contribute no candidates.
 3. Sort colliding candidate vectors by oldest creation timestamp, namespace, then
    name; preserve config-rebuild collision warnings. Publish only the winner Arc
-   per hostname/catch-all. The canonical unit cache still retains configured
+   per hostname. The canonical unit cache still retains configured
    runners-up, allowing the next rebuild to promote one after winner removal.
 
 All SNI slots selecting one route share its compiled unit and backend selector.
@@ -61,9 +57,10 @@ single-label certificate-selection rule. Old snapshots retain their selected
 units until their readers release them; only the outer manager publishes via
 `ArcSwap`.
 
-The effective-hostname input is currently a route-global projection. This table
-does not repair its missing per-attachment association; the known isolation and
-catch-all limitation requires separate attachment-scoping work.
+The Controller resolves names per exact Gateway/listener attachment. Runtime
+units retain accepted schema indices and compile exact logical parent identities
+per physical key; both proxies use these identities for policy admission.
+See [attachment regression boundaries](../../../04-review/routing/regression-guards/tls-hostnames-per-attachment.md).
 
 ## Route management, bucketing, rebuild, ConfHandler
 

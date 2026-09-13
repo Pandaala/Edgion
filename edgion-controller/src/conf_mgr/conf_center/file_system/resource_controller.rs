@@ -1094,7 +1094,6 @@ mod tests {
                     }]),
                 }]),
                 resolved_listeners: None,
-                effective_hostnames: None,
             },
             status: Some(TLSRouteStatus { parents: vec![] }),
         }

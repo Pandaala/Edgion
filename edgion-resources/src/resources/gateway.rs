@@ -386,7 +386,7 @@ pub enum ServingCertificateResolutionError {
 
 pub use crate::resources::common::SecretObjectReference;
 
-#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
+#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct AllowedRoutes {
     /// Namespaces indicates namespaces from which Routes may be attached
@@ -398,7 +398,7 @@ pub struct AllowedRoutes {
     pub kinds: Option<Vec<RouteGroupKind>>,
 }
 
-#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
+#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct RouteNamespaces {
     /// From indicates where Routes should be selected
@@ -410,7 +410,7 @@ pub struct RouteNamespaces {
     pub selector: Option<serde_json::Value>,
 }
 
-#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
+#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct RouteGroupKind {
     /// Group is the group of the Route

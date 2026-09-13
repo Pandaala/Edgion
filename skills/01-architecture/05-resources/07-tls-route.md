@@ -28,11 +28,11 @@ TLSRoute defines TLS-layer routing rules, supporting both TLS passthrough and te
 1. Record cross-namespace references in CrossNsRefManager
 2. Register Service references in ServiceRefManager
 3. Mark rejected cross-namespace backendRefs
-4. Clear and recompute `resolved_listeners`: resolve `Vec<ListenerKey>` from parentRef via `resolve_listener_keys()`, following the Gateway API spec:
+4. Clear and recompute `resolved_listeners`: resolve `Vec<ResolvedTlsListener>` through the canonical listener resolver, retaining the Gateway namespace/name, logical listener name, physical key, and each attachment's hostname intersection:
    - Always look up the Gateway to obtain address and protocol (the parentRef.port-only fast path no longer exists)
    - When sectionName + port are both present, validate consistency between them
    - If neither is specified → attach to all of the parent Gateway's Listeners (subject to the allowedRoutes namespace policy)
-5. If resolved_listeners is None, log a debug message
+5. Reject missing/empty/invalid authored hostnames; an unrestricted listener preserves explicit route names. Drop empty intersections and non-TLS/disallowed-kind listeners. No route-global hostname union is transported.
 
 ### on_change
 
@@ -52,7 +52,7 @@ TLSRoute's ConfHandler compiles routes into `GlobalTlsRouteManagers`:
 
 1. **Route initialization**: call `initialize_route()` to share the immutable incoming `Arc<TLSRoute>` with a compiled `TlsRouteUnit`; runtime selectors and resolved annotations live on the unit, not on a cloned or mutated schema
 2. **Per-listener management**: based on resolved_listeners, register into the route manager of the corresponding `ListenerKey`
-3. **SNI matching**: match TLS SNI against spec.hostnames, supporting wildcard domains
+3. **SNI matching**: index only accepted attachments' hostname intersections on the table's physical key. Exact logical parents are compiled per physical key and used by both proxies' existing admission check.
 4. **Incremental updates**: partial_update collects affected listeners (old + new) and rebuilds only those listeners' route tables
 
 ## Cross-resource relationships

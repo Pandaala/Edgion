@@ -1,0 +1,20 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: TLSRoute
+metadata:
+  name: tls-attachments-wildcard
+  namespace: edgion-test
+  creationTimestamp: "2024-01-01T00:00:00Z"
+spec:
+  parentRefs:
+    - name: tls-attachments-a
+      namespace: edgion-test
+      sectionName: narrow
+    - name: tls-attachments-b
+      namespace: edgion-test
+      sectionName: unrestricted
+  hostnames:
+    - "*.wild.attachments.example.com"
+  rules:
+    - backendRefs:
+        - name: tls-attachments-backend-30051
+          port: 30051

@@ -31,7 +31,9 @@ SNI buckets. Unchanged sibling units retain selector identity and WRR state.
 The Result adapter, shared delta/rebuild helpers, locks, controller-resolved
 listener/hostname fields, first-rule selection, denied backend weights, and
 per-listener atomic publication are unchanged. No cross-listener atomicity or
-hostname-projection correction is claimed.
+hostname-projection correction was claimed by that change. The later
+[attachment-scoping correction](tls-hostnames-per-attachment.md) preserves schema
+sharing while replacing the controller-resolved hostname representation.
 
 ## Verification and re-evaluation
 

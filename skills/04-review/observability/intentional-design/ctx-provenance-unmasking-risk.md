@@ -103,4 +103,4 @@ outside this explicitly accepted existing gap.
 
 - `ctx-sensitive-provenance-unmasking` / `D0044`: real defect, risk explicitly
   accepted by the user on 2026-09-11; no code change requested. Origin:
-  [B0071](../../../../tasks/pending/edgion-gateway-file-optimization/batches/B0071-ctx-set-bounded-transform-execution.md).
+  campaign batch `B0071` (historical batch task removed).

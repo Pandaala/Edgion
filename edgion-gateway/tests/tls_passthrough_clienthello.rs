@@ -12,7 +12,8 @@ use edgion_gateway::backends::get_service_discovery_coordinator;
 use edgion_gateway::link_sys::DataSender;
 use edgion_gateway::observe::AccessLogger;
 use edgion_gateway::routes::tls::{sni_parser, EdgionTlsPassthroughProxy, GlobalTlsRouteManagers};
-use edgion_resources::{EdgionGatewayConfig, ListenerKey, TLSRoute};
+use edgion_resources::resources::tls_route::ResolvedTlsListener;
+use edgion_resources::{EdgionGatewayConfig, Gateway, GatewayClass, ListenerKey, TLSRoute};
 use k8s_openapi::api::{core::v1::Service, discovery::v1::EndpointSlice};
 use pingora_core::{apps::ServerApp, connectors::TransportConnector, protocols::l4};
 use serde_json::{json, Value};
@@ -76,13 +77,36 @@ impl Fixture {
         discovery.replace_services(&HashMap::from([("hello-wire/backend".into(), Arc::new(service))]));
         discovery.replace_endpoint_slices(&HashMap::from([("hello-wire/backend-slice".into(), Arc::new(slice))]));
 
-        let mut route: TLSRoute = serde_json::from_value(json!({
-            "metadata": {"namespace": "hello-wire", "name": "route"},
-            "spec": {"hostnames": [HOST], "rules": [{"backendRefs": [{"name": "backend", "port": port}]}]}
+        let class: GatewayClass = serde_json::from_value(json!({
+            "metadata": {"name": "hello-wire"},
+            "spec": {"controllerName": "edgion.io/gateway-controller"}
         }))
         .unwrap();
-        route.spec.resolved_listeners = Some(vec![key.clone()]);
-        route.spec.effective_hostnames = Some(vec![HOST.to_string()]);
+        edgion_gateway::config::gateway_class::create_gateway_class_handler()
+            .full_set(&HashMap::from([("hello-wire".into(), Arc::new(class))]));
+        let gateway: Gateway = serde_json::from_value(json!({
+            "metadata": {"namespace": "hello-wire", "name": "gateway"},
+            "spec": {"gatewayClassName": "hello-wire",
+                "addresses": [{"type": "IPAddress", "value": addr.ip().to_string()}],
+                "listeners": [{"name": "tls", "port": addr.port(), "protocol": "TLS",
+                    "hostname": HOST, "tls": {"mode": "Passthrough"}}]}
+        }))
+        .unwrap();
+        edgion_gateway::runtime::create_gateway_handler()
+            .full_set(&HashMap::from([("hello-wire/gateway".into(), Arc::new(gateway))]));
+
+        let mut route: TLSRoute = serde_json::from_value(json!({
+            "metadata": {"namespace": "hello-wire", "name": "route"},
+            "spec": {"parentRefs": [{"name": "gateway", "sectionName": "tls"}], "hostnames": [HOST], "rules": [{"backendRefs": [{"name": "backend", "port": port}]}]}
+        }))
+        .unwrap();
+        route.spec.resolved_listeners = Some(vec![ResolvedTlsListener {
+            listener_key: key.clone(),
+            gateway_namespace: "hello-wire".into(),
+            gateway_name: "gateway".into(),
+            listener_name: "tls".into(),
+            hostnames: vec![HOST.to_string()],
+        }]);
         let routes = GlobalTlsRouteManagers::new();
         routes.full_set(&HashMap::from([("hello-wire/route".into(), Arc::new(route))]));
         let config: EdgionGatewayConfig = serde_json::from_value(json!({
@@ -198,6 +222,8 @@ impl Drop for Fixture {
         let discovery = get_service_discovery_coordinator();
         discovery.replace_endpoint_slices(&HashMap::new());
         discovery.replace_services(&HashMap::new());
+        edgion_gateway::runtime::create_gateway_handler().full_set(&HashMap::new());
+        edgion_gateway::config::gateway_class::create_gateway_class_handler().full_set(&HashMap::new());
     }
 }
 

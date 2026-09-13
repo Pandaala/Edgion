@@ -171,8 +171,12 @@ Unit test in `gateway_tls_routes.rs` (TLSRoute):
 - `test_rebuild_promotes_runner_up_without_mutating_old_snapshot` verifies new
   winner publication, old snapshot stability, clearing and final unit release.
 
-These TLSRoute tests do not establish correct listener-specific hostname
-projection. That known defect requires separate attachment-scoping work.
+Those historical TLSRoute tests did not establish listener-specific hostname
+projection. The [attachment-scoping correction](../../routing/regression-guards/tls-hostnames-per-attachment.md)
+now restricts each physical table's candidates to its accepted attachments.
+The former raw/effective input and catch-all cases have been replaced with
+explicit-hostname and unresolved/invalid-input rejection coverage for TLSRoute v1.
+The Gateway certificate matchers' catch-all behavior is unaffected.
 
 Integration scenario `EdgionTls/sni_collision` (`edgion-tests/integration/conf/EdgionTls/sni_collision/`
 + suite `edgion-tests/src/client/suites/edgion_tls/sni_collision/`): two EdgionTls bind the same

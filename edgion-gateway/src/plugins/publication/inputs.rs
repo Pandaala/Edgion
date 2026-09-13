@@ -223,12 +223,20 @@ impl RouteInput {
     }
 
     pub(crate) fn from_tls(route: &TLSRoute) -> Self {
+        let listeners: Vec<_> = route
+            .spec
+            .resolved_listeners
+            .as_deref()
+            .unwrap_or_default()
+            .iter()
+            .map(|attachment| attachment.listener_key.clone())
+            .collect();
         let mut input = Self::base(
             &route.metadata,
             RouteKind::Tls,
             route.spec.parent_refs.as_deref(),
             route.status.as_ref().map(|status| status.parents.as_slice()),
-            route.spec.resolved_listeners.as_deref(),
+            Some(&listeners),
         );
         input.stream_key = resolve_stream_plugin_store_key(&route.metadata);
         input.stages.tls_route = true;

@@ -53,7 +53,7 @@ const PROXY_PROTOCOL_POLICY_CONFLICT: &str = "ProxyProtocolPolicyConflict";
 /// - parse: Resolve TLS certificateRefs into ordered typed outcomes
 /// - parse: Register Secret references to SecretRefManager
 /// - parse: Register listeners to ListenerPortManager for intra-gateway conflict detection
-/// - on_change: Requeue referencing routes when listener hostnames/ports change
+/// - after_publish: Requeue routes after listener attachment inputs change
 /// - on_delete: Clear SecretRefManager and ListenerPortManager references
 /// - update_status: Set Conflicted/Programmed/ListenersNotValid conditions based on intra-gateway port conflicts
 pub struct GatewayHandler {
@@ -884,61 +884,6 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
         ProcessResult::Continue(g)
     }
 
-    async fn on_change(&self, gateway: &Gateway, ctx: &HandlerContext) {
-        let gateway_key = format!(
-            "{}/{}",
-            gateway.metadata.namespace.as_deref().unwrap_or(""),
-            gateway.metadata.name.as_deref().unwrap_or("")
-        );
-
-        // Requeue routes when listener hostnames or ports actually changed.
-        // Cycle safety: route on_change only requeues Gateways when parentRef
-        // attachments change; hostname/port-only changes don't trigger Gateway requeue.
-        let route_index = &ctx.runtime().gateway_route_index;
-
-        let listeners = gateway.spec.listeners.as_deref().unwrap_or_default();
-
-        let current_hostnames: Vec<String> = listeners.iter().filter_map(|l| l.hostname.clone()).collect();
-        let current_ports: Vec<i32> = listeners.iter().map(|l| l.port).collect();
-
-        // CYCLE PREVENTION: Only requeue referencing routes when listener
-        // hostnames or ports actually changed. All Route.on_change handlers
-        // unconditionally requeue their parent Gateways, so removing this
-        // condition would create Route→Gateway→Route infinite loops.
-        //
-        // Atomicity: change detection and route collection share one write
-        // guard inside the index, so a concurrent `update_route` cannot insert
-        // a new route between the two steps and slip past requeue.
-        let listener_change =
-            route_index.update_listener_config_and_collect_routes(&gateway_key, current_hostnames, current_ports);
-        match listener_change {
-            Some(change) if !change.routes.is_empty() => {
-                tracing::info!(
-                    gateway = %gateway_key,
-                    route_count = change.routes.len(),
-                    hostnames_changed = change.hostnames_changed,
-                    ports_changed = change.ports_changed,
-                    "Gateway listener config changed, requeue referencing routes"
-                );
-                for (route_kind, route_key) in change.routes {
-                    if route_kind == ResourceKind::EdgionTls {
-                        continue;
-                    }
-                    ctx.requeue(route_kind.as_str(), route_key).await;
-                }
-            }
-            Some(_) => {
-                // Listener config changed but no routes reference this Gateway yet.
-            }
-            None => {
-                tracing::trace!(
-                    gateway = %gateway_key,
-                    "Gateway listener hostnames/ports unchanged, skip requeue referencing routes"
-                );
-            }
-        }
-    }
-
     fn finalize_transport(&self, gateway: &mut Gateway, ctx: &HandlerContext) {
         let epoch = ctx.runtime().next_gateway_attachment_epoch();
         gateway.spec.resolved_attachment_proof = Some(build_gateway_attachment_proof(
@@ -954,7 +899,17 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
             gateway.metadata.namespace.as_deref().unwrap_or(""),
             gateway.metadata.name.as_deref().unwrap_or("")
         );
+        // Route resolvers prefer the published Gateway cache. Enqueue only
+        // after publication, with a config gate to break Route/Gateway cycles.
         let route_index = &ctx.runtime().gateway_route_index;
+        if let Some(routes) = route_index.update_listener_config_and_collect_routes(&gateway_key, gateway) {
+            for (route_kind, route_key) in routes {
+                if route_kind != ResourceKind::EdgionTls {
+                    ctx.requeue(route_kind.as_str(), route_key).await;
+                }
+            }
+        }
+        // EdgionTls consumes the publication proof and must refresh each epoch.
         for (route_kind, route_key) in route_index.get_routes_for_gateway(&gateway_key) {
             if route_kind == ResourceKind::EdgionTls {
                 ctx.requeue(ResourceKind::EdgionTls.as_str(), route_key).await;
@@ -969,13 +924,9 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
             gateway.metadata.name.as_deref().unwrap_or("")
         );
         let route_index = &ctx.runtime().gateway_route_index;
-        for (route_kind, route_key) in route_index.get_routes_for_gateway(&gateway_key) {
-            if route_kind == ResourceKind::EdgionTls {
-                ctx.requeue(ResourceKind::EdgionTls.as_str(), route_key).await;
-            }
+        for (route_kind, route_key) in route_index.remove_listener_config_and_collect_routes(&gateway_key) {
+            ctx.requeue(route_kind.as_str(), route_key).await;
         }
-        route_index.remove_gateway_hostnames(&gateway_key);
-        route_index.remove_gateway_ports(&gateway_key);
     }
 
     async fn on_delete(&self, g: &Gateway, ctx: &HandlerContext) {
@@ -1018,7 +969,7 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
 
         tracing::debug!(
             gateway = %gateway_key,
-            "Cleared secret, port manager, hostname and port cache on Gateway delete"
+            "Cleared Gateway secret references and port manager registration"
         );
     }
 
@@ -2647,6 +2598,10 @@ fn validate_gateway_dns_resolver_ref(gateway: &Gateway, runtime: &ControllerRunt
         denial.ref_namespace, denial.name
     ))
 }
+
+#[cfg(test)]
+#[path = "gateway_route_refresh_tests.rs"]
+mod route_refresh_tests;
 
 #[cfg(test)]
 mod tests {

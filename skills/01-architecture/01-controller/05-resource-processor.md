@@ -166,7 +166,7 @@ Core operations: `add_ref`, `remove_ref`, `clear_value_refs` (clear-then-add on 
 | `SecretRefManager` | `BidirectionalRefManager<ResourceRef>` | Secret dependency tracking (Secret → Gateway, EdgionTls, EdgionPlugins, EdgionAcme) |
 | `ServiceRefManager` | `BidirectionalRefManager<ResourceRef>` | Service backend dependencies (Service → all route types) |
 | `CrossNamespaceRefManager` | `BidirectionalRefManager<ResourceRef>` | Cross-namespace references (ReferenceGrant → referencing resources) |
-| `GatewayRouteIndex` | Custom bidirectional index | Gateway ↔ Route mapping, with hostname/port change-detection cache |
+| `GatewayRouteIndex` | Custom bidirectional index | Gateway ↔ Route mapping, with associated Listener routing-input change detection |
 | `AttachedRouteTracker` | Custom struct | Tracks Route → parent Gateway attachment state (used for the `attachedRoutes` count in Gateway status) |
 
 ### ReferenceGrant System

@@ -96,7 +96,7 @@ spec:
 | Field | Type | Description |
 |-------|------|-------------|
 | `parentRefs` | `Vec<ParentReference>` | Attach to a TLS-type Listener |
-| `hostnames` | `Vec<String>?` | SNI hostname match list (wildcards supported) |
+| `hostnames` | `Vec<String>` | Required nonempty SNI hostname match list (wildcard suffixes supported) |
 | `rules` | `Vec<TLSRouteRule>` | TLS routing rules |
 
 ### TLSRouteRule

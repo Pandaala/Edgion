@@ -18,7 +18,7 @@
 //!
 //! ## Concurrency
 //!
-//! All four maps (forward, reverse, gateway_hostnames, gateway_ports) live
+//! The dependency maps and listener configuration records live
 //! under a single `RwLock<Inner>` so that listener-config change detection
 //! and the subsequent route collection observe a consistent snapshot. This
 //! closes a race where a concurrent `update_route` could insert a new route
@@ -28,8 +28,10 @@
 use parking_lot::RwLock;
 use std::collections::{HashMap, HashSet};
 
+use edgion_resources::listener_key::resolve_listener_addr;
 use edgion_resources::resources::common::ParentReference;
-use edgion_resources::ResourceKind;
+use edgion_resources::resources::gateway::AllowedRoutes;
+use edgion_resources::{Gateway, ListenerKey, ResourceKind};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct RouteEntry {
@@ -41,15 +43,22 @@ struct RouteEntry {
 struct Inner {
     forward: HashMap<String, HashSet<RouteEntry>>,
     reverse: HashMap<RouteEntry, HashSet<String>>,
-    /// Cached sorted listener hostnames per gateway, used for change detection
-    /// so that route requeue only fires when listener hostnames actually change.
-    gateway_hostnames: HashMap<String, Vec<String>>,
-    /// Cached sorted listener ports per gateway for change detection.
-    /// Port changes must requeue TLSRoute/EdgionTls that reference sectionName.
-    gateway_ports: HashMap<String, Vec<i32>>,
+    /// Routing inputs, preserving each logical listener's field associations.
+    gateway_listeners: HashMap<String, Vec<ListenerRouteConfig>>,
 }
 
 impl Inner {
+    fn gateway_keys(parent_refs: &[ParentReference], route_ns: &str) -> HashSet<String> {
+        parent_refs
+            .iter()
+            .filter(|parent| {
+                parent.group.as_deref().unwrap_or("gateway.networking.k8s.io") == "gateway.networking.k8s.io"
+                    && parent.kind.as_deref().unwrap_or("Gateway") == "Gateway"
+            })
+            .map(|parent| parent.build_parent_key(Some(route_ns)))
+            .collect()
+    }
+
     fn collect_routes_for_gateway(&self, gateway_key: &str) -> Vec<(ResourceKind, String)> {
         match self.forward.get(gateway_key) {
             Some(entries) => entries.iter().map(|e| (e.kind, e.key.clone())).collect(),
@@ -73,16 +82,7 @@ impl Inner {
             key: route_key.to_string(),
         };
 
-        let mut gateway_keys = HashSet::new();
-        for pr in parent_refs {
-            let parent_group = pr.group.as_deref().unwrap_or("gateway.networking.k8s.io");
-            let parent_kind = pr.kind.as_deref().unwrap_or("Gateway");
-            if parent_group != "gateway.networking.k8s.io" || parent_kind != "Gateway" {
-                continue;
-            }
-            let gw_key = pr.build_parent_key(Some(route_ns));
-            gateway_keys.insert(gw_key);
-        }
+        let gateway_keys = Self::gateway_keys(parent_refs, route_ns);
 
         // Remove old entries, remembering which gateways this route used to
         // reference so the diff below can report the ones it no longer does.
@@ -130,17 +130,40 @@ impl Inner {
     }
 }
 
-/// Result of an atomic listener-config update returned by
-/// [`GatewayRouteIndex::update_listener_config_and_collect_routes`].
-///
-/// Only constructed when at least one of `hostnames_changed` / `ports_changed`
-/// is true; callers use the flags for telemetry and `routes` for the requeue
-/// fan-out.
-#[derive(Debug)]
-pub struct ListenerConfigChange {
-    pub hostnames_changed: bool,
-    pub ports_changed: bool,
-    pub routes: Vec<(ResourceKind, String)>,
+/// Only inputs consumed by route attachment resolution. Never retain TLS
+/// credentials, publication proofs, or status in the requeue comparison.
+#[derive(Debug, PartialEq)]
+struct ListenerRouteConfig {
+    name: String,
+    hostname: Option<String>,
+    listener_key: ListenerKey,
+    port: i32,
+    protocol: String,
+    allowed_routes: Option<AllowedRoutes>,
+}
+
+impl ListenerRouteConfig {
+    fn for_gateway(gateway: &Gateway) -> Vec<Self> {
+        let mut listeners: Vec<_> = gateway
+            .spec
+            .listeners
+            .iter()
+            .flatten()
+            .map(|listener| Self {
+                name: listener.name.clone(),
+                hostname: listener.hostname.clone(),
+                listener_key: ListenerKey::new(
+                    resolve_listener_addr(gateway.spec.addresses.as_ref(), listener.port),
+                    &listener.protocol,
+                ),
+                port: listener.port,
+                protocol: listener.protocol.clone(),
+                allowed_routes: listener.allowed_routes.clone(),
+            })
+            .collect();
+        listeners.sort_by(|a, b| a.name.cmp(&b.name));
+        listeners
+    }
 }
 
 pub struct GatewayRouteIndex {
@@ -154,95 +177,56 @@ impl GatewayRouteIndex {
         }
     }
 
-    /// Update the cached listener hostnames for a Gateway.
-    /// Returns true if the hostnames actually changed (i.e., routes need requeue).
-    pub fn update_gateway_hostnames(&self, gateway_key: &str, mut hostnames: Vec<String>) -> bool {
-        hostnames.sort();
-        let mut g = self.inner.write();
-        match g.gateway_hostnames.get(gateway_key) {
-            Some(old) if *old == hostnames => false,
-            _ => {
-                g.gateway_hostnames.insert(gateway_key.to_string(), hostnames);
-                true
-            }
-        }
+    /// Remove a deleted Gateway's routing inputs and collect dependents under
+    /// the same lock. Keep dependency edges so recreation requeues them again.
+    pub fn remove_listener_config_and_collect_routes(&self, gateway_key: &str) -> Vec<(ResourceKind, String)> {
+        let mut inner = self.inner.write();
+        inner.gateway_listeners.remove(gateway_key);
+        inner.collect_routes_for_gateway(gateway_key)
     }
 
-    /// Remove cached hostnames for a deleted Gateway.
-    pub fn remove_gateway_hostnames(&self, gateway_key: &str) {
-        self.inner.write().gateway_hostnames.remove(gateway_key);
-    }
-
-    /// Update the cached listener ports for a Gateway.
-    /// Returns true if the ports actually changed (i.e., routes need requeue).
-    pub fn update_gateway_ports(&self, gateway_key: &str, mut ports: Vec<i32>) -> bool {
-        ports.sort();
-        let mut g = self.inner.write();
-        match g.gateway_ports.get(gateway_key) {
-            Some(old) if *old == ports => false,
-            _ => {
-                g.gateway_ports.insert(gateway_key.to_string(), ports);
-                true
-            }
-        }
-    }
-
-    /// Remove cached ports for a deleted Gateway.
-    pub fn remove_gateway_ports(&self, gateway_key: &str) {
-        self.inner.write().gateway_ports.remove(gateway_key);
-    }
-
-    /// Atomically update both listener hostnames and ports for a Gateway, and
-    /// — if either changed — collect the routes that reference this Gateway
-    /// under the same write guard.
-    ///
-    /// Returns:
-    /// - `None` when neither hostnames nor ports changed (caller skips requeue).
-    /// - `Some(ListenerConfigChange { hostnames_changed, ports_changed, routes })`
-    ///   when at least one changed; `routes` is the snapshot of the forward
-    ///   index for this Gateway, observed atomically with the hostnames/ports
-    ///   write. `routes` may be empty if no route currently references the
-    ///   Gateway. The `*_changed` flags are exposed for telemetry so callers
-    ///   can log which axis triggered the requeue.
-    ///
-    /// This closes the race where a concurrent `update_route` could insert a
-    /// new route into `forward` between change detection and route lookup.
+    /// Atomically compare the published Gateway's attachment inputs and collect
+    /// dependents. None means no routing input changed; Some may be empty when
+    /// no route references the Gateway yet. Unrelated publication changes must
+    /// not trigger the Route -> Gateway -> Route feedback loop.
     pub fn update_listener_config_and_collect_routes(
         &self,
         gateway_key: &str,
-        mut hostnames: Vec<String>,
-        mut ports: Vec<i32>,
-    ) -> Option<ListenerConfigChange> {
-        hostnames.sort();
-        ports.sort();
-
-        let mut g = self.inner.write();
-
-        let hostnames_changed = match g.gateway_hostnames.get(gateway_key) {
-            Some(old) if *old == hostnames => false,
-            _ => {
-                g.gateway_hostnames.insert(gateway_key.to_string(), hostnames);
-                true
-            }
-        };
-
-        let ports_changed = match g.gateway_ports.get(gateway_key) {
-            Some(old) if *old == ports => false,
-            _ => {
-                g.gateway_ports.insert(gateway_key.to_string(), ports);
-                true
-            }
-        };
-
-        if !hostnames_changed && !ports_changed {
+        gateway: &Gateway,
+    ) -> Option<Vec<(ResourceKind, String)>> {
+        let listeners = ListenerRouteConfig::for_gateway(gateway);
+        let mut inner = self.inner.write();
+        if inner.gateway_listeners.get(gateway_key) == Some(&listeners) {
             return None;
         }
+        inner.gateway_listeners.insert(gateway_key.to_string(), listeners);
+        Some(inner.collect_routes_for_gateway(gateway_key))
+    }
 
-        Some(ListenerConfigChange {
-            hostnames_changed,
-            ports_changed,
-            routes: g.collect_routes_for_gateway(gateway_key),
-        })
+    /// Register new dependencies before reading Gateway snapshots. Keep old
+    /// edges until update_route runs after status computation, so dropped
+    /// Gateways are requeued only after their attachment counts are replaced.
+    /// The caller must complete update_route or remove_route after this step.
+    pub fn register_route_dependencies(
+        &self,
+        route_kind: ResourceKind,
+        route_key: &str,
+        parent_refs: &[ParentReference],
+        route_ns: &str,
+    ) {
+        let keys = Inner::gateway_keys(parent_refs, route_ns);
+        if keys.is_empty() {
+            return;
+        }
+        let entry = RouteEntry {
+            kind: route_kind,
+            key: route_key.to_string(),
+        };
+        let mut inner = self.inner.write();
+        for key in &keys {
+            inner.forward.entry(key.clone()).or_default().insert(entry.clone());
+        }
+        inner.reverse.entry(entry).or_default().extend(keys);
     }
 
     /// Update the index for a route based on its parentRefs.
@@ -317,8 +301,7 @@ impl GatewayRouteIndex {
         let mut g = self.inner.write();
         g.forward.clear();
         g.reverse.clear();
-        g.gateway_hostnames.clear();
-        g.gateway_ports.clear();
+        g.gateway_listeners.clear();
     }
 }
 
@@ -457,17 +440,28 @@ mod tests {
         assert!(empty.is_empty());
     }
 
+    fn gateway(listeners: serde_json::Value) -> Gateway {
+        serde_json::from_value(serde_json::json!({
+            "metadata": {"name": "gw1", "namespace": "default"},
+            "spec": {"gatewayClassName": "test", "listeners": listeners}
+        }))
+        .unwrap()
+    }
+
+    fn listener(name: &str, hostname: Option<&str>, port: i32) -> serde_json::Value {
+        serde_json::json!({"name": name, "hostname": hostname, "port": port, "protocol": "TLS"})
+    }
+
     #[test]
     fn test_atomic_listener_update_no_change() {
         let idx = GatewayRouteIndex::new();
-        // Seed with current state
-        idx.update_gateway_hostnames("default/gw1", vec!["a.example.com".into()]);
-        idx.update_gateway_ports("default/gw1", vec![80]);
-
-        // Same values → None
-        let result =
-            idx.update_listener_config_and_collect_routes("default/gw1", vec!["a.example.com".into()], vec![80]);
-        assert!(result.is_none());
+        let gateway = gateway(serde_json::json!([listener("a", Some("a.example.com"), 443)]));
+        assert!(idx
+            .update_listener_config_and_collect_routes("default/gw1", &gateway)
+            .is_some());
+        assert!(idx
+            .update_listener_config_and_collect_routes("default/gw1", &gateway)
+            .is_none());
     }
 
     #[test]
@@ -479,38 +473,30 @@ mod tests {
             &[pr("default", "gw1")],
             "default",
         );
-        idx.update_gateway_hostnames("default/gw1", vec!["old.example.com".into()]);
-        idx.update_gateway_ports("default/gw1", vec![80]);
-
-        let result =
-            idx.update_listener_config_and_collect_routes("default/gw1", vec!["new.example.com".into()], vec![80]);
-        let change = result.expect("hostnames changed → should return Some");
-        assert!(change.hostnames_changed);
-        assert!(!change.ports_changed);
-        assert_eq!(change.routes.len(), 1);
-        assert_eq!(change.routes[0], (ResourceKind::HTTPRoute, "default/r1".to_string()));
+        let mut gateway = gateway(serde_json::json!([listener("a", Some("old.example.com"), 443)]));
+        idx.update_listener_config_and_collect_routes("default/gw1", &gateway);
+        gateway.spec.listeners.as_mut().unwrap()[0].hostname = Some("new.example.com".into());
+        let routes = idx
+            .update_listener_config_and_collect_routes("default/gw1", &gateway)
+            .unwrap();
+        assert_eq!(routes, [(ResourceKind::HTTPRoute, "default/r1".to_string())]);
     }
 
     #[test]
     fn test_atomic_listener_update_ports_changed() {
         let idx = GatewayRouteIndex::new();
         idx.update_route(ResourceKind::TLSRoute, "default/t1", &[pr("default", "gw1")], "default");
-        idx.update_gateway_hostnames("default/gw1", vec!["a.example.com".into()]);
-        idx.update_gateway_ports("default/gw1", vec![443]);
-
-        let result =
-            idx.update_listener_config_and_collect_routes("default/gw1", vec!["a.example.com".into()], vec![443, 8443]);
-        let change = result.expect("ports changed → should return Some");
-        assert!(!change.hostnames_changed);
-        assert!(change.ports_changed);
-        assert_eq!(change.routes.len(), 1);
-        assert_eq!(change.routes[0], (ResourceKind::TLSRoute, "default/t1".to_string()));
+        let mut gateway = gateway(serde_json::json!([listener("a", Some("a.example.com"), 443)]));
+        idx.update_listener_config_and_collect_routes("default/gw1", &gateway);
+        gateway.spec.listeners.as_mut().unwrap()[0].port = 8443;
+        let routes = idx
+            .update_listener_config_and_collect_routes("default/gw1", &gateway)
+            .unwrap();
+        assert_eq!(routes, [(ResourceKind::TLSRoute, "default/t1".to_string())]);
     }
 
     #[test]
     fn test_atomic_listener_update_first_call_returns_some() {
-        // First call against a fresh index: both hostnames and ports go from
-        // absent to present → both "changed" → returns Some.
         let idx = GatewayRouteIndex::new();
         idx.update_route(
             ResourceKind::HTTPRoute,
@@ -518,30 +504,27 @@ mod tests {
             &[pr("default", "gw1")],
             "default",
         );
-
-        let result =
-            idx.update_listener_config_and_collect_routes("default/gw1", vec!["a.example.com".into()], vec![80]);
-        let change = result.expect("first call should be Some");
-        assert!(change.hostnames_changed);
-        assert!(change.ports_changed);
-        assert_eq!(change.routes.len(), 1);
-
-        // Second call with same values → None
-        let result2 =
-            idx.update_listener_config_and_collect_routes("default/gw1", vec!["a.example.com".into()], vec![80]);
-        assert!(result2.is_none());
+        let gateway = gateway(serde_json::json!([listener("a", None, 443)]));
+        let routes = idx
+            .update_listener_config_and_collect_routes("default/gw1", &gateway)
+            .unwrap();
+        assert_eq!(routes, [(ResourceKind::HTTPRoute, "default/r1".to_string())]);
+        assert!(idx
+            .update_listener_config_and_collect_routes("default/gw1", &gateway)
+            .is_none());
     }
 
     #[test]
     fn test_atomic_listener_update_no_referencing_routes() {
         let idx = GatewayRouteIndex::new();
-        // Gateway has no referencing routes yet
-        let result =
-            idx.update_listener_config_and_collect_routes("default/gw1", vec!["a.example.com".into()], vec![80]);
-        let change = result.expect("first call → Some");
-        assert!(change.hostnames_changed);
-        assert!(change.ports_changed);
-        assert!(change.routes.is_empty());
+        let gateway = gateway(serde_json::json!([]));
+        assert_eq!(
+            idx.update_listener_config_and_collect_routes("default/gw1", &gateway),
+            Some(vec![])
+        );
+        assert!(idx
+            .update_listener_config_and_collect_routes("default/gw1", &gateway)
+            .is_none());
     }
 
     #[test]
@@ -556,7 +539,16 @@ mod tests {
         );
         assert!(dropped.is_empty(), "first registration drops nothing");
 
-        // Re-point the route from gw-a to gw-b: gw-a must be reported dropped.
+        // Pre-register before lookup without dropping old edges before status.
+        index.register_route_dependencies(
+            ResourceKind::HTTPRoute,
+            "default/r1",
+            &[pr("default", "gw-b")],
+            "default",
+        );
+        assert_eq!(index.get_routes_for_gateway("default/gw-a").len(), 1);
+        assert_eq!(index.get_routes_for_gateway("default/gw-b").len(), 1);
+        // Re-point after status: gw-a must still be reported dropped.
         let dropped = index.update_route(
             ResourceKind::HTTPRoute,
             "default/r1",
@@ -564,6 +556,7 @@ mod tests {
             "default",
         );
         assert_eq!(dropped, vec!["default/gw-a".to_string()]);
+        assert!(index.get_routes_for_gateway("default/gw-a").is_empty());
 
         // Unchanged refs drop nothing.
         let dropped = index.update_route(
@@ -578,18 +571,82 @@ mod tests {
     #[test]
     fn test_atomic_listener_update_input_order_irrelevant() {
         let idx = GatewayRouteIndex::new();
-        idx.update_listener_config_and_collect_routes(
-            "default/gw1",
-            vec!["b.example.com".into(), "a.example.com".into()],
-            vec![443, 80],
-        );
+        let mut gateway = gateway(serde_json::json!([
+            listener("a", Some("a.example.com"), 443),
+            listener("b", Some("b.example.com"), 8443)
+        ]));
+        idx.update_listener_config_and_collect_routes("default/gw1", &gateway);
+        gateway.spec.listeners.as_mut().unwrap().reverse();
+        assert!(idx
+            .update_listener_config_and_collect_routes("default/gw1", &gateway)
+            .is_none());
+    }
 
-        // Same set, different order → no change
-        let result = idx.update_listener_config_and_collect_routes(
-            "default/gw1",
-            vec!["a.example.com".into(), "b.example.com".into()],
-            vec![80, 443],
+    #[test]
+    fn attachment_inputs_preserve_associations_and_policy_changes() {
+        let base = serde_json::json!([listener("a", Some("a.example.com"), 443), listener("b", None, 443)]);
+        for (pointer, value) in [
+            ("/0/name", serde_json::json!("renamed")),
+            ("/0/protocol", serde_json::json!("tls")),
+            ("/0/port", serde_json::json!(443 + 65536)),
+            (
+                "/0/allowedRoutes",
+                serde_json::json!({"kinds": [{"group": "other.test", "kind": "TLSRoute"}]}),
+            ),
+            (
+                "/0/allowedRoutes",
+                serde_json::json!({"namespaces": {"from": "Selector", "selector": {"matchLabels": {"team": "blue"}}}}),
+            ),
+        ] {
+            let idx = GatewayRouteIndex::new();
+            let original = gateway(base.clone());
+            idx.update_listener_config_and_collect_routes("default/gw1", &original);
+            let mut changed = base.clone();
+            if pointer.ends_with("allowedRoutes") {
+                changed[0]["allowedRoutes"] = value;
+            } else {
+                *changed.pointer_mut(pointer).unwrap() = value;
+            }
+            assert!(
+                idx.update_listener_config_and_collect_routes("default/gw1", &gateway(changed))
+                    .is_some(),
+                "{pointer}"
+            );
+        }
+        let idx = GatewayRouteIndex::new();
+        let mut gateway = gateway(base);
+        idx.update_listener_config_and_collect_routes("default/gw1", &gateway);
+        let listeners = gateway.spec.listeners.as_mut().unwrap();
+        listeners[1].hostname = listeners[0].hostname.take();
+        assert!(idx
+            .update_listener_config_and_collect_routes("default/gw1", &gateway)
+            .is_some());
+        gateway.spec.addresses = Some(vec![serde_json::from_value(
+            serde_json::json!({"type": "IPAddress", "value": "127.0.0.1"}),
+        )
+        .unwrap()]);
+        assert!(idx
+            .update_listener_config_and_collect_routes("default/gw1", &gateway)
+            .is_some());
+    }
+
+    #[test]
+    fn removing_listener_config_keeps_edges_for_recreation_and_clear_resets_all() {
+        let idx = GatewayRouteIndex::new();
+        idx.update_route(ResourceKind::TLSRoute, "default/r1", &[pr("default", "gw1")], "default");
+        let gateway = gateway(serde_json::json!([listener("a", None, 443)]));
+        idx.update_listener_config_and_collect_routes("default/gw1", &gateway);
+        let removed = idx.remove_listener_config_and_collect_routes("default/gw1");
+        assert_eq!(removed, [(ResourceKind::TLSRoute, "default/r1".to_string())]);
+        assert_eq!(
+            idx.update_listener_config_and_collect_routes("default/gw1", &gateway),
+            Some(removed)
         );
-        assert!(result.is_none());
+        idx.clear();
+        assert!(idx.get_routes_for_gateway("default/gw1").is_empty());
+        assert_eq!(
+            idx.update_listener_config_and_collect_routes("default/gw1", &gateway),
+            Some(vec![])
+        );
     }
 }

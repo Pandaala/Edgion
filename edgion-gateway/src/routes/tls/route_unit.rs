@@ -1,5 +1,8 @@
-use crate::routes::common::{filter_accepted_parent_refs, resolve_parent_refs};
+use crate::routes::common::filter_accepted_parent_refs;
 use crate::runtime::matching::route::ResolvedParentRef;
+use crate::runtime::store::listener_gateway_info::format_gateway_key;
+use edgion_resources::ListenerKey;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use super::{cap_tls_connect_retries, DEFAULT_TLS_CONNECT_RETRIES, MAX_TLS_CONNECT_RETRIES};
@@ -23,7 +26,9 @@ use edgion_resources::ResourceMeta;
 /// rule (matching the data-plane read path `rules.first()`).
 pub struct TlsRouteUnit {
     /// Accepted parent identities resolved once for logical Gateway admission.
-    pub resolved_parent_refs: Vec<ResolvedParentRef>,
+    pub resolved_parent_refs: HashMap<ListenerKey, Vec<ResolvedParentRef>>,
+    /// Indices into the immutable schema, avoiding a second copy of hostname lists.
+    pub(crate) accepted_attachments: Vec<usize>,
     pub route: Arc<TLSRoute>,
     /// WRR selector over the first rule's backends (one per route, shared
     /// across all SNI hostnames that map to this route).
@@ -57,7 +62,54 @@ impl TlsRouteUnit {
             Some(namespace),
         )
         .unwrap_or_default();
-        let resolved_parent_refs = resolve_parent_refs(&accepted, namespace);
+        let mut resolved_parent_refs: HashMap<ListenerKey, Vec<ResolvedParentRef>> = HashMap::new();
+        let mut accepted_attachments = Vec::new();
+        if route.spec.validate_hostnames().is_ok() {
+            // Preserve authored parent order: admission selects the first owner.
+            for parent in &accepted {
+                for (i, attachment) in route
+                    .spec
+                    .resolved_listeners
+                    .as_deref()
+                    .unwrap_or_default()
+                    .iter()
+                    .enumerate()
+                {
+                    let port = attachment
+                        .listener_key
+                        .0
+                        .split_once('/')
+                        .and_then(|(addr, _)| addr.parse::<std::net::SocketAddr>().ok())
+                        .map(|addr| i32::from(addr.port()));
+                    if attachment.listener_key.protocol() != "TLS"
+                        || attachment.hostnames.is_empty()
+                        || parent.namespace.as_deref().unwrap_or(namespace) != attachment.gateway_namespace
+                        || parent.name != attachment.gateway_name
+                        || parent
+                            .section_name
+                            .as_deref()
+                            .is_some_and(|name| name != attachment.listener_name)
+                        || parent.port.is_some_and(|required| Some(required) != port)
+                        || accepted_attachments.contains(&i)
+                    {
+                        continue;
+                    }
+                    accepted_attachments.push(i);
+                    let parents = resolved_parent_refs.entry(attachment.listener_key.clone()).or_default();
+                    let gateway_key = format_gateway_key(&attachment.gateway_namespace, &attachment.gateway_name);
+                    if !parents.iter().any(|parent| {
+                        parent.gateway_key == gateway_key
+                            && parent.section_name.as_deref() == Some(&attachment.listener_name)
+                    }) {
+                        parents.push(ResolvedParentRef {
+                            gateway_key,
+                            parent_ns: attachment.gateway_namespace.clone(),
+                            section_name: Some(attachment.listener_name.clone()),
+                        });
+                    }
+                }
+            }
+        }
 
         let route_key = route.key_name();
         let annotations = route.metadata.annotations.as_ref();
@@ -93,6 +145,7 @@ impl TlsRouteUnit {
         TlsRouteUnit {
             route,
             resolved_parent_refs,
+            accepted_attachments,
             backend_finder,
             stream_plugin_store_key,
             proxy_protocol_version,
@@ -127,6 +180,35 @@ fn build_backend_selector(route: &TLSRoute) -> Arc<BackendSelector<TLSBackendRef
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn exact_attachment_parents_preserve_authored_owner_order() {
+        let route = serde_json::from_value(serde_json::json!({
+            "metadata": {"namespace": "apps", "name": "ordered"},
+            "spec": {"hostnames": ["shared.example.com"],
+                "parentRefs": [{"name": "z"}, {"name": "a"}],
+                "resolvedListeners": [
+                    {"listenerKey": "0.0.0.0:443/TLS", "gatewayNamespace": "apps",
+                        "gatewayName": "a", "listenerName": "tls", "hostnames": ["shared.example.com"]},
+                    {"listenerKey": "0.0.0.0:443/TLS", "gatewayNamespace": "apps",
+                        "gatewayName": "z", "listenerName": "tls", "hostnames": ["shared.example.com"]}
+                ]}
+        }))
+        .unwrap();
+        let unit = super::TlsRouteUnit::from_route(std::sync::Arc::new(route));
+        let key = edgion_resources::ListenerKey::new("0.0.0.0:443".parse().unwrap(), "TLS");
+        let parents = &unit.resolved_parent_refs[&key];
+        assert_eq!(
+            parents
+                .iter()
+                .map(|parent| parent.gateway_key.as_str())
+                .collect::<Vec<_>>(),
+            ["apps/z", "apps/a"]
+        );
+        assert!(parents
+            .iter()
+            .all(|parent| parent.section_name.as_deref() == Some("tls")));
+    }
+
     use super::*;
     use edgion_resources::resources::common::{ParentReference, RefDenied};
     use edgion_resources::resources::tls_route::{TLSBackendRef, TLSRouteRule, TLSRouteSpec};
@@ -161,7 +243,6 @@ mod tests {
                     }]),
                 }]),
                 resolved_listeners: None,
-                effective_hostnames: None,
             },
             status: None,
         })

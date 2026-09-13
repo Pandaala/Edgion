@@ -18,18 +18,14 @@ use edgion_resources::ListenerKey;
 /// Route data is owned by `GlobalTlsRouteManagers`; this struct only
 /// holds the compiled hostname-index snapshot for one listener.
 pub struct TlsRouteManager {
+    listener_key: ListenerKey,
     route_table: ArcSwap<TlsRouteTable>,
 }
 
-impl Default for TlsRouteManager {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl TlsRouteManager {
-    pub fn new() -> Self {
+    pub fn new(listener_key: ListenerKey) -> Self {
         Self {
+            listener_key,
             route_table: ArcSwap::from_pointee(TlsRouteTable::new()),
         }
     }
@@ -42,12 +38,11 @@ impl TlsRouteManager {
     /// Rebuild the route table from units belonging to this listener.
     /// Called by `GlobalTlsRouteManagers` during rebuild.
     pub fn rebuild(&self, units: &HashMap<String, Arc<TlsRouteUnit>>) {
-        let new_table = TlsRouteTable::from_units(units);
+        let new_table = TlsRouteTable::from_units(&self.listener_key, units);
 
         tracing::debug!(
             component = "tls_route_manager",
             routes = units.len(),
-            catch_all = new_table.has_catch_all(),
             "Rebuilt per-listener TLS route table"
         );
 
@@ -112,7 +107,7 @@ impl GlobalTlsRouteManagers {
     pub fn get_or_create_listener_manager(&self, key: &ListenerKey) -> Arc<TlsRouteManager> {
         self.by_listener
             .entry(key.clone())
-            .or_insert_with(|| Arc::new(TlsRouteManager::new()))
+            .or_insert_with(|| Arc::new(TlsRouteManager::new(key.clone())))
             .value()
             .clone()
     }
@@ -157,7 +152,7 @@ impl GlobalTlsRouteManagers {
             &self.by_listener,
             &self.route_cache,
             active,
-            |u| resolved_listeners_for_route(&u.route).to_vec(),
+            |u| resolved_listeners_for_route(&u.route),
             |k| self.get_or_create_listener_manager(k),
             |m, units| m.rebuild(units),
         );
@@ -174,7 +169,7 @@ impl GlobalTlsRouteManagers {
             &self.route_cache,
             affected_listeners,
             active,
-            |u| resolved_listeners_for_route(&u.route).to_vec(),
+            |u| resolved_listeners_for_route(&u.route),
             |k| self.get_or_create_listener_manager(k),
             |m, units| m.rebuild(units),
         );
@@ -185,8 +180,18 @@ impl GlobalTlsRouteManagers {
 ///
 /// Uses `spec.resolved_listeners` which is pre-computed by the controller
 /// from parentRef.port / parentRef.sectionName → Gateway listener.
-pub(crate) fn resolved_listeners_for_route(route: &TLSRoute) -> &[ListenerKey] {
-    route.spec.resolved_listeners.as_deref().unwrap_or_default()
+pub(crate) fn resolved_listeners_for_route(route: &TLSRoute) -> Vec<ListenerKey> {
+    let mut keys: Vec<_> = route
+        .spec
+        .resolved_listeners
+        .as_deref()
+        .unwrap_or_default()
+        .iter()
+        .map(|attachment| attachment.listener_key.clone())
+        .collect();
+    keys.sort_unstable();
+    keys.dedup();
+    keys
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -239,10 +244,15 @@ mod tests {
                     section_name: Some("tls".to_string()),
                     port: None,
                 }]),
-                hostnames: None,
+                hostnames: Some(vec!["test.example.com".into()]),
                 rules: Some(vec![]),
-                resolved_listeners: Some(vec![listener_key]),
-                effective_hostnames: None,
+                resolved_listeners: Some(vec![edgion_resources::resources::tls_route::ResolvedTlsListener {
+                    listener_key,
+                    gateway_namespace: namespace.into(),
+                    gateway_name: "test-gateway".into(),
+                    listener_name: "tls".into(),
+                    hostnames: vec!["test.example.com".into()],
+                }]),
             },
             status: None,
         }
@@ -264,7 +274,7 @@ mod tests {
             &managers.by_listener,
             &managers.route_cache,
             active,
-            |u| resolved_listeners_for_route(&u.route).to_vec(),
+            |u| resolved_listeners_for_route(&u.route),
             |k| managers.get_or_create_listener_manager(k),
             |m, units| m.rebuild(units),
         );
@@ -281,7 +291,7 @@ mod tests {
             &managers.route_cache,
             affected,
             active,
-            |u| resolved_listeners_for_route(&u.route).to_vec(),
+            |u| resolved_listeners_for_route(&u.route),
             |k| managers.get_or_create_listener_manager(k),
             |m, units| m.rebuild(units),
         );
@@ -304,7 +314,7 @@ mod tests {
         );
         mgr_b.rebuild(&prior);
         assert!(
-            mgr_b.load_route_table().has_catch_all(),
+            mgr_b.load_route_table().match_route("test.example.com").is_some(),
             "precondition: B has a non-empty table"
         );
 
@@ -314,7 +324,7 @@ mod tests {
         drive_rebuild_all(&managers, vec![listener_a.clone(), listener_b.clone()]);
 
         assert!(
-            !mgr_b.load_route_table().has_catch_all(),
+            !mgr_b.load_route_table().match_route("test.example.com").is_some(),
             "active-but-no-routes TLS listener should be cleared"
         );
         assert!(managers.by_listener.contains_key(&listener_a));
@@ -349,8 +359,8 @@ mod tests {
         );
         mgr.rebuild(&prior);
         assert!(
-            mgr.load_route_table().has_catch_all(),
-            "precondition: listener has the catch-all prior route"
+            mgr.load_route_table().match_route("test.example.com").is_some(),
+            "precondition: listener has the prior route"
         );
 
         let mut affected: HashSet<ListenerKey> = HashSet::new();
@@ -358,7 +368,7 @@ mod tests {
         drive_rebuild_affected(&managers, &affected, vec![listener.clone()]);
 
         assert!(
-            !mgr.load_route_table().has_catch_all(),
+            !mgr.load_route_table().match_route("test.example.com").is_some(),
             "affected TLS listener with no routes should be cleared"
         );
         assert!(managers.by_listener.contains_key(&listener));

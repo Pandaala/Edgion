@@ -61,9 +61,8 @@ pub async fn trigger_full_cross_ns_revalidation(runtime: Arc<ControllerRuntime>)
 /// Requeue all routes registered in the gateway_route_index after init.
 ///
 /// During init, routes may register in gateway_route_index via on_change, but
-/// if a route's on_change runs before its parent Gateway's on_change, the
-/// Gateway's hostname/port change detection fires when no routes are registered
-/// yet. This one-time requeue ensures all such routes get reprocessed with
+/// if the Gateway is published before a route registers, listener change
+/// detection has no dependent route to collect. This one-time requeue ensures all such routes get reprocessed with
 /// the Gateway already in cache, so lookup_gateway() in parse() succeeds.
 pub async fn trigger_gateway_route_revalidation(runtime: Arc<ControllerRuntime>) {
     let routes = runtime.gateway_route_index.all_routes();

@@ -45,7 +45,9 @@ spec:
 
 ### Hostnames（SNI）
 
-`hostnames` 是 SNI 匹配列表。网关将每个值与 ClientHello 中发送的 SNI 进行比较。支持精确名称（`secure.example.com`）和通配符（`*.internal.example.com`），通配符匹配恰好一个标签。如果省略 `hostnames`，则路由匹配到达该监听器的所有 SNI。当多个 TLSRoute 共享一个监听器时，最精确的主机名匹配获胜，因此应将精确名称与通配符并列。
+`hostnames` 必填，必须包含显式的 SNI 域名。支持精确名称（`secure.example.com`）和通配符后缀（`*.internal.example.com`）。路由通配符匹配一个或多个标签，包括 `a.b.internal.example.com`，但不匹配后缀本身；这与证书通配符验证规则不同。缺失、空列表和单独的 `*` 均会被拒绝。
+
+每个挂载分别使用路由域名与该监听器 hostname 的交集。例如，声明 `a.example.com`、`b.example.com` 的路由挂载到不同端口上分别接受这两个域名的监听器时，每个端口仅服务对应域名。监听器不设置 hostname 时，保留路由显式声明的域名，不会让路由匹配任意 SNI。交集为空的监听器不发布该路由。修改或删除挂载会替换旧域名关联，并保留其他监听器的快照。
 
 ### Rules
 

@@ -94,11 +94,11 @@ impl ConfHandler<TLSRoute> for GlobalTlsRouteManagers {
             update,
             remove,
             |key| self.get_route(key),
-            |u| resolved_listeners_for_route(&u.route).to_vec(),
+            |u| resolved_listeners_for_route(&u.route),
             |key| self.remove_route(key),
             |route| {
                 self.initialize_route(route).map(|unit| {
-                    let lks = resolved_listeners_for_route(&unit.route).to_vec();
+                    let lks = resolved_listeners_for_route(&unit.route);
                     self.insert_route(unit);
                     lks
                 })
@@ -177,8 +177,13 @@ mod tests {
                         ref_denied: None,
                     }]),
                 }]),
-                resolved_listeners: Some(vec![listener_key]),
-                effective_hostnames: Some(vec![hostname.to_string()]),
+                resolved_listeners: Some(vec![ResolvedTlsListener {
+                    listener_key,
+                    gateway_namespace: namespace.into(),
+                    gateway_name: gateway.into(),
+                    listener_name: "tls".into(),
+                    hostnames: vec![hostname.into()],
+                }]),
             },
             status: None,
         }
@@ -270,7 +275,8 @@ mod tests {
         let new_key = make_listener_key(11443, "TLS");
         let mut original = create_test_tls_route("default", "shared", "gw", "old.example.com", 10443, old_key.clone());
         original.spec.hostnames = Some(vec!["*.example.com".to_string()]);
-        original.spec.effective_hostnames = Some(vec!["old.example.com".to_string(), "alias.example.com".to_string()]);
+        original.spec.resolved_listeners.as_mut().unwrap()[0].hostnames =
+            vec!["old.example.com".into(), "alias.example.com".into()];
         let original = Arc::new(original);
         managers.partial_update(
             HashMap::from([("default/shared".to_string(), Arc::clone(&original))]),
@@ -322,7 +328,10 @@ mod tests {
             &old_unit
         ));
         assert!(old_table.match_route("new.example.com").is_none());
-        assert_eq!(original.spec.resolved_listeners.as_ref().unwrap(), &[old_key]);
+        assert_eq!(
+            original.spec.resolved_listeners.as_ref().unwrap()[0].listener_key,
+            old_key
+        );
         assert_eq!(old_unit.backend_finder.select().unwrap().name, "test-service");
     }
 

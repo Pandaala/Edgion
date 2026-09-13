@@ -1,5 +1,5 @@
 {
-  "current_max": 31974,
+  "current_max": 31976,
   "suites": {
     "PluginPolicy": {
       "udp": 58338,
@@ -197,6 +197,12 @@
     },
     "Gateway/ListenerHostname": {
       "http": 31240
+    },
+    "TLSRoute/Attachments": {
+      "tls": 31975
+    },
+    "TLSRoute/Attachments/Secondary": {
+      "tls": 31976
     },
     "TLSRoute/Basic": {
       "tls": 31280

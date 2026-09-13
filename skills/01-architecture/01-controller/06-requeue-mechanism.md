@@ -27,16 +27,23 @@ ConfigMap, plugin/config-data references, and other runtime-owned indexes.
 
 | Direction | Trigger | Target resources | Mechanism |
 |---|---|---|---|
-| Gateway → Routes | Listener hostname or port changed | HTTPRoute, GRPCRoute, TLSRoute, EdgionTls | When `gateway_route_index.update_gateway_hostnames/ports()` returns true, requeue all routes associated in the index |
-| Route → Gateway | parentRef attachment list changed | Gateway | Only requeues when the attachment list actually changes (decided by AttachedRouteTracker) |
+| Gateway → Routes | Published listener attachment inputs changed, or Gateway was unpublished | Registered Route kinds | `after_publish` atomically compares associated listener records and collects dependents; `after_unpublish` clears the record and requeues dependents |
+| Gateway → EdgionTls | Every publication/unpublication | EdgionTls | Refresh the controller-owned attachment proof after the cache transition |
+| Route → Gateway | Route reconciliation or dropped parentRef | Gateway | Requeue current and dropped parents so attachment status converges; Gateway routing-input comparison prevents feedback loops |
 | Post-init | `trigger_gateway_route_revalidation()` | All routes registered in the index | One-shot run that covers the case where Gateway arrives before Route |
 
-**Registration rule**: any Handler that calls `lookup_gateway()` in `parse()` must also call `update_gateway_route_index()` in `on_change()` and `remove_from_gateway_route_index()` in `on_delete()`.
+**Registration rule**: a Handler that resolves Gateway dependencies must maintain the GatewayRouteIndex on apply and remove its edges on delete. Ordinary Route handlers finalize their edges in `on_change`; EdgionTls installs its exact edges in `parse` before proof lookup.
+
+TLSRoute additionally pre-registers new parent edges before reading Gateway
+snapshots. Its normal `on_change` still replaces the complete edge set and
+requeues dropped parents after attachment counts change. EdgionTls uses its
+existing dependency-before-proof-read barrier for the same publication race.
 
 **Key files**:
-- `gateway_route_index.rs` — forward/reverse index + hostname/port change-detection cache
-- `handlers/gateway.rs` — on_change: update the cache and requeue routes
-- `handlers/{http_route,grpc_route,tls_route,edgion_tls}.rs` — on_change: register into the index
+- `gateway_route_index.rs` — forward/reverse index + associated listener routing-input records
+- `handlers/gateway.rs` — after_publish/after_unpublish: update comparison records and requeue routes after cache publication/removal
+- `handlers/{http_route,grpc_route,tls_route}.rs` — on_change: finalize index edges; TLSRoute also pre-registers in parse
+- `handlers/edgion_tls.rs` — parse: register before proof lookup; on_change has no index work
 
 ### 2. SecretRefManager
 
@@ -132,10 +139,10 @@ Call sites:
 | HTTPRoute | yes | yes | gateway_route_index, attached_route_tracker, cross_ns_ref, service_ref |
 | GRPCRoute | yes | yes | gateway_route_index, attached_route_tracker, cross_ns_ref, service_ref |
 | TLSRoute | yes | yes | gateway_route_index, attached_route_tracker, service_ref |
-| EdgionTls | yes | yes | gateway_route_index, secret_ref |
+| EdgionTls | no index work; registered in parse | yes | gateway_route_index, secret_ref |
 | TCPRoute | yes | yes | attached_route_tracker, service_ref |
 | UDPRoute | yes | yes | attached_route_tracker, service_ref |
-| Gateway | yes | yes | gateway_route_index (consumer) |
+| Gateway | after_publish | after_unpublish + on_delete | gateway_route_index (consumer) |
 | Secret | yes | yes | triggers cascading requeue |
 | Service | yes | yes | triggers requeue of dependent routes |
 | ReferenceGrant | yes | yes | CrossNsRevalidationListener |
@@ -162,8 +169,9 @@ Call sites:
 
 Route ↔ Gateway is one important bidirectional relationship:
 
-- **Gateway on_change → requeue Routes**: triggered only when hostname/port **actually changed** (compared via the `gateway_route_index` cache)
-- **Route on_change → requeue Gateway**: triggered only when the **attachment list actually changed** (decided by `AttachedRouteTracker`)
+- **Gateway after_publish → requeue Routes**: triggered only when associated Listener routing inputs change. Records include logical name, optional hostname, physical key, raw port/protocol and allowedRoutes; metadata, status, proof epochs and TLS credentials are excluded. Unpublish clears the record and requeues dependents.
+- **Route on_change → requeue Gateway**: current parent status is refreshed on reconciliation; dropped parents are also requeued. A status-only Gateway publication does not change the routing-input record and cannot restart the loop.
+- **Gateway → EdgionTls**: the existing proof-consumer path refreshes every publication epoch independently of the ordinary Route change gate.
 
 Route delegation can also requeue parents and children of the same kind, and
 policy sibling-precedence changes can requeue peers. Change-detection guards

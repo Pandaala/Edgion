@@ -129,8 +129,9 @@ Protocol correction verification on 2026-09-13:
   the pinned fork and test driver ordering without rerunning Cargo; test results
   above were produced by the implementing agent.
 
-Existing integration files are frozen by the selected task. New E2E and dynamic
-coverage remains tracked in [the follow-up task](../../../../tasks/todo/dsl-terminate-explicit-response-integration.md).
+Existing integration files were frozen by the selected task. New E2E and dynamic
+coverage was deferred under `dsl-terminate-explicit-response-integration`.
+The verification recorded above does not establish that deferred coverage.
 Re-evaluate if the terminate result, bytecode validation, phase dispatch,
 response ownership, or HTTP-to-gRPC mapping changes.
 

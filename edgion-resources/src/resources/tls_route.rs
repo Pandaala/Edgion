@@ -38,17 +38,45 @@ pub struct TLSRouteSpec {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rules: Option<Vec<TLSRouteRule>>,
 
-    /// Pre-computed listener keys from parentRef resolution (set by Controller).
-    /// Used by Gateway to bind this route to per-listener route tables.
+    /// Controller-resolved attachments and their individual hostname intersections.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(skip)]
-    pub resolved_listeners: Option<Vec<ListenerKey>>,
+    pub resolved_listeners: Option<Vec<ResolvedTlsListener>>,
+}
 
-    /// Effective hostnames after intersecting route hostnames with listener hostnames.
-    /// Set by Controller; used by Gateway for route matching instead of raw `hostnames`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[schemars(skip)]
-    pub effective_hostnames: Option<Vec<String>>,
+/// Internal conf-sync data; never exposed as operator-authored CRD fields.
+#[derive(Deserialize, Serialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ResolvedTlsListener {
+    pub listener_key: ListenerKey,
+    pub gateway_namespace: String,
+    pub gateway_name: String,
+    pub listener_name: String,
+    pub hostnames: Vec<String>,
+}
+
+impl TLSRouteSpec {
+    /// TLSRoute v1 requires explicit SNI names, including on unrestricted listeners.
+    pub fn validate_hostnames(&self) -> Result<(), &'static str> {
+        let Some(hostnames) = &self.hostnames else {
+            return Err("TLSRoute requires nonempty hostnames");
+        };
+        if hostnames.is_empty() || hostnames.len() > 1024 {
+            return Err("TLSRoute requires between 1 and 1024 hostnames");
+        }
+        // Use the shared Gateway API grammar, on configuration paths only.
+        static PATTERN: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+            regex::Regex::new(crate::gwapi_types::HOSTNAME_PATTERN).expect("static hostname pattern")
+        });
+        if hostnames.iter().any(|host| {
+            host.len() > crate::gwapi_types::HOSTNAME_MAX_LEN as usize
+                || !PATTERN.is_match(host)
+                || host.parse::<std::net::IpAddr>().is_ok()
+        }) {
+            return Err("TLSRoute contains an invalid SNI hostname");
+        }
+        Ok(())
+    }
 }
 
 /// TLSRouteRule defines TLS routing rules
@@ -135,7 +163,6 @@ impl From<TLSRouteAlpha3> for TLSRoute {
                 hostnames: alpha3.spec.hostnames,
                 rules: alpha3.spec.rules,
                 resolved_listeners: None,
-                effective_hostnames: None,
             },
             status: alpha3.status,
         }
@@ -179,6 +206,43 @@ pub struct TLSRouteStatus {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn hostname_validation_and_attachment_transport() {
+        use super::*;
+        let spec = |hosts: serde_json::Value| {
+            serde_json::from_value::<TLSRouteSpec>(serde_json::json!({
+                "hostnames": hosts,
+                "resolvedListeners": [{"listenerKey": "0.0.0.0:443/TLS", "gatewayNamespace": "apps",
+                    "gatewayName": "gateway", "listenerName": "tls", "hostnames": ["a.example.com"]}]
+            }))
+            .unwrap()
+        };
+        for hosts in [
+            serde_json::Value::Null,
+            serde_json::json!([]),
+            serde_json::json!(["*"]),
+            serde_json::json!(["127.0.0.1"]),
+            serde_json::json!(["A.example.com"]),
+        ] {
+            assert!(spec(hosts).validate_hostnames().is_err());
+        }
+        let value = spec(serde_json::json!(["*.example.com", "a.example.com"]));
+        assert!(value.validate_hostnames().is_ok());
+        let serialized = serde_json::to_value(&value).unwrap();
+        assert_eq!(serialized["resolvedListeners"][0]["hostnames"][0], "a.example.com");
+        assert!(serialized.get("effectiveHostnames").is_none());
+        let restored: TLSRouteSpec = serde_json::from_value(serialized).unwrap();
+        assert_eq!(restored.resolved_listeners, value.resolved_listeners);
+        let schema = serde_json::to_value(schemars::schema_for!(TLSRouteSpec)).unwrap();
+        assert!(schema["properties"].get("resolvedListeners").is_none());
+        assert!(spec(serde_json::json!(vec!["a.example.com"; 1024]))
+            .validate_hostnames()
+            .is_ok());
+        assert!(spec(serde_json::json!(vec!["a.example.com"; 1025]))
+            .validate_hostnames()
+            .is_err());
+    }
+
     use super::*;
     use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
 
@@ -211,7 +275,6 @@ mod tests {
                     }]),
                 }]),
                 resolved_listeners: None,
-                effective_hostnames: None,
             },
             status: Some(TLSRouteStatus { parents: vec![] }),
         }
