@@ -56,7 +56,7 @@ Every processed request must include these headers:
 - `x-ext-proc-test-mode`: exactly `interop`, `immediate`, `grpc-immediate`,
   `disabled-immediate`, `mode-reduce-none`, `mode-forbidden-expand`,
   `trailer-mutate`, `no-trailer`, `long-idle`, `barrier-headers`, or
-  `barrier-request-body`.
+  `barrier-request-body`, `opaque-headers`, or `opaque-immediate`.
 - `x-ext-proc-barrier-id`: required only for the two barrier modes and subject
   to the same grammar and length limit as the case ID.
 
@@ -73,6 +73,11 @@ change. `trailer-mutate` returns a fixed mutation for a real response trailer;
 `barrier-request-body` pauses before the first request-body verdict. A stream
 uses its barrier at most once. Barrier waits have a fixed 25-second hard
 deadline; request-controlled delay values are intentionally unsupported.
+`opaque-headers` validates fixed repeated non-UTF-8 request values, returns
+typed request mutations, validates fixed non-UTF-8 upstream response values,
+and returns typed response mutations. `opaque-immediate` validates the same
+request projection and returns fixed repeated non-UTF-8 response headers. Both
+modes use only fixed fixture-owned values and never retain arbitrary headers.
 
 ## Admin API
 
@@ -111,7 +116,8 @@ still has waiters.
 
 Case snapshots store only bounded phase transitions, message counts, response
 status codes, byte counts, SHA-256 digests, EOS counts, fixed response-trailer
-presence booleans, and stream lifecycle flags. Each stream includes `request_header_messages`,
+presence booleans, fixed opaque-scenario match booleans, and stream lifecycle
+flags. Each stream includes `request_header_messages`,
 `response_header_messages`, and `response_statuses`. The status array records
 the numeric `:status` value from every `response_headers` message in arrival
 order. Repeated messages in one phase increment the corresponding counters

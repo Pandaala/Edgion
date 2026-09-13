@@ -24,6 +24,7 @@ use crate::suites::grpc_route::test::test_service_client::TestServiceClient;
 use crate::suites::grpc_route::test::HelloRequest;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 const BASIC_HOST: &str = "ext-proc-basic.example.com";
 const FAILCLOSE_HOST: &str = "ext-proc-failclose.example.com";
@@ -99,6 +100,8 @@ struct ExternalStreamSnapshot {
     request_eos_count: usize,
     response_header_messages: usize,
     response_statuses: Vec<u16>,
+    request_opaque_headers_ok: bool,
+    response_opaque_headers_ok: bool,
     response_body_messages: usize,
     response_body_bytes: usize,
     response_body_sha256: String,
@@ -608,6 +611,180 @@ async fn external_h2_response_trailers(
     driver.abort();
     let _ = driver.await;
     Ok((status, bytes::Bytes::from(bytes), trailers))
+}
+
+fn raw_header_values(headers: &[(String, Vec<u8>)], name: &str) -> Vec<Vec<u8>> {
+    headers
+        .iter()
+        .filter(|(key, _)| key.eq_ignore_ascii_case(name))
+        .map(|(_, value)| value.clone())
+        .collect()
+}
+
+fn parse_h1_response_head(raw: &[u8]) -> Result<(u16, Vec<(String, Vec<u8>)>), String> {
+    let mut lines = raw.split(|byte| *byte == b'\n');
+    let status_line = lines
+        .next()
+        .ok_or_else(|| "HTTP/1 response head was empty".to_string())?;
+    let status_line = status_line.strip_suffix(b"\r").unwrap_or(status_line);
+    let status_text =
+        std::str::from_utf8(status_line).map_err(|error| format!("HTTP/1 status line was not ASCII: {error}"))?;
+    let status = status_text
+        .split_whitespace()
+        .nth(1)
+        .and_then(|value| value.parse::<u16>().ok())
+        .ok_or_else(|| format!("HTTP/1 status line was invalid: {status_text:?}"))?;
+    let mut headers = Vec::new();
+    for line in lines {
+        let line = line.strip_suffix(b"\r").unwrap_or(line);
+        if line.is_empty() {
+            break;
+        }
+        let Some(colon) = line.iter().position(|byte| *byte == b':') else {
+            return Err(format!("HTTP/1 response header had no colon: {line:?}"));
+        };
+        let name = std::str::from_utf8(&line[..colon])
+            .map_err(|error| format!("HTTP/1 response header name was not ASCII: {error}"))?
+            .to_string();
+        let value = line[colon + 1..]
+            .iter()
+            .skip_while(|byte| matches!(byte, b' ' | b'\t'))
+            .copied()
+            .collect();
+        headers.push((name, value));
+    }
+    Ok((status, headers))
+}
+
+async fn external_opaque_h1(
+    ctx: &TestContext,
+    case_id: &str,
+    mode: &str,
+) -> Result<(u16, Vec<(String, Vec<u8>)>), String> {
+    let mut stream = tokio::net::TcpStream::connect((ctx.target_host.as_str(), ctx.http_port))
+        .await
+        .map_err(|error| format!("connect HTTP/1 gateway: {error}"))?;
+    let mut request = format!(
+        "GET /headers HTTP/1.1\r\nHost: {EXTERNAL_HOST}\r\nx-ext-proc-case-id: {case_id}\r\nx-ext-proc-test-mode: {mode}\r\n"
+    )
+    .into_bytes();
+    for (name, value) in [
+        ("x-opaque-presence", b"\xffrequest-first".as_slice()),
+        ("x-opaque-presence", b"\x80request-second"),
+        ("x-opaque-overwrite", b"\xferequest-old"),
+    ] {
+        request.extend_from_slice(name.as_bytes());
+        request.extend_from_slice(b": ");
+        request.extend_from_slice(value);
+        request.extend_from_slice(b"\r\n");
+    }
+    request.extend_from_slice(b"Connection: close\r\n\r\n");
+    stream
+        .write_all(&request)
+        .await
+        .map_err(|error| format!("write HTTP/1 opaque request: {error}"))?;
+
+    let mut response = Vec::new();
+    loop {
+        if let Some(end) = response.windows(4).position(|window| window == b"\r\n\r\n") {
+            return parse_h1_response_head(&response[..end + 4]);
+        }
+        if response.len() >= 64 * 1024 {
+            return Err("HTTP/1 opaque response head exceeded 64 KiB".to_string());
+        }
+        let mut chunk = [0_u8; 4096];
+        let read = tokio::time::timeout(EXTERNAL_REQUEST_TIMEOUT, stream.read(&mut chunk))
+            .await
+            .map_err(|_| "HTTP/1 opaque response head timed out".to_string())?
+            .map_err(|error| format!("read HTTP/1 opaque response: {error}"))?;
+        if read == 0 {
+            return Err("HTTP/1 connection closed before the response head".to_string());
+        }
+        response.extend_from_slice(&chunk[..read]);
+    }
+}
+
+async fn external_opaque_h2(
+    ctx: &TestContext,
+    case_id: &str,
+    mode: &str,
+) -> Result<(u16, Vec<(String, Vec<u8>)>), String> {
+    let tcp = tokio::net::TcpStream::connect((ctx.target_host.as_str(), ctx.http_port))
+        .await
+        .map_err(|error| format!("connect HTTP/2 gateway: {error}"))?;
+    let (mut client, connection) = h2::client::handshake(tcp)
+        .await
+        .map_err(|error| format!("HTTP/2 opaque handshake: {error}"))?;
+    let driver = tokio::spawn(async move { connection.await });
+    let uri = format!("http://{EXTERNAL_HOST}/headers")
+        .parse::<http::Uri>()
+        .map_err(|error| format!("build HTTP/2 opaque URI: {error}"))?;
+    let mut request = http::Request::builder()
+        .method(http::Method::GET)
+        .uri(uri)
+        .version(http::Version::HTTP_2)
+        .body(())
+        .map_err(|error| format!("build HTTP/2 opaque request: {error}"))?;
+    for (name, value) in [
+        ("x-ext-proc-case-id", case_id.as_bytes()),
+        ("x-ext-proc-test-mode", mode.as_bytes()),
+        ("x-opaque-presence", b"\xffrequest-first".as_slice()),
+        ("x-opaque-presence", b"\x80request-second"),
+        ("x-opaque-overwrite", b"\xferequest-old"),
+    ] {
+        request.headers_mut().append(
+            http::HeaderName::from_bytes(name.as_bytes()).map_err(|error| format!("opaque header name: {error}"))?,
+            http::HeaderValue::from_bytes(value).map_err(|error| format!("opaque header value: {error}"))?,
+        );
+    }
+    let (response, _) = client
+        .send_request(request, true)
+        .map_err(|error| format!("send HTTP/2 opaque request: {error}"))?;
+    let response = response
+        .await
+        .map_err(|error| format!("receive HTTP/2 opaque response: {error}"))?;
+    let status = response.status().as_u16();
+    let headers = response
+        .headers()
+        .iter()
+        .map(|(name, value)| (name.as_str().to_string(), value.as_bytes().to_vec()))
+        .collect();
+    drop(client);
+    driver.abort();
+    let _ = driver.await;
+    Ok((status, headers))
+}
+
+fn assert_opaque_downstream_headers(headers: &[(String, Vec<u8>)], immediate: bool) -> Result<(), String> {
+    let expected = if immediate {
+        vec![b"\x84immediate-first".to_vec(), b"\x85immediate-second".to_vec()]
+    } else {
+        vec![b"\xfdresponse-first".to_vec(), b"\x80response-second".to_vec()]
+    };
+    let name = if immediate {
+        "x-opaque-immediate"
+    } else {
+        "x-opaque-presence"
+    };
+    if raw_header_values(headers, name) != expected {
+        return Err(format!("{name} values were not byte-exact: {headers:?}"));
+    }
+    if !immediate {
+        if raw_header_values(headers, "x-opaque-overwrite") != [b"\x81response-overwrite".to_vec()]
+            || raw_header_values(headers, "x-opaque-added")
+                != [b"\x82response-add".to_vec(), b"\x83response-append".to_vec()]
+            || raw_header_values(headers, "x-opaque-empty") != [Vec::<u8>::new()]
+        {
+            return Err(format!("ordinary opaque mutations were not byte-exact: {headers:?}"));
+        }
+    }
+    if headers
+        .iter()
+        .any(|(_, value)| value.windows(3).any(|window| window == [0xef, 0xbf, 0xbd]))
+    {
+        return Err("downstream headers contained a UTF-8 replacement character".to_string());
+    }
+    Ok(())
 }
 
 fn assert_external_streamed_observation(
@@ -1788,6 +1965,84 @@ impl ExtProcTestSuite {
                     TestResult::passed_with_message(
                         start.elapsed(),
                         "independent header mutations and terminal half-close observed".to_string(),
+                    )
+                })
+            },
+        )
+    }
+
+    fn test_external_opaque_header_wire_fidelity() -> TestCase {
+        TestCase::new(
+            "external_opaque_header_wire_fidelity",
+            "HTTP/1 and HTTP/2 preserve opaque repeated headers through an independent ExtProc exchange",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    for (protocol, h2, mode, immediate) in [
+                        ("h1", false, "opaque-headers", false),
+                        ("h2", true, "opaque-headers", false),
+                        ("h1", false, "opaque-immediate", true),
+                        ("h2", true, "opaque-immediate", true),
+                    ] {
+                        let case_id = format!(
+                            "external-opaque-{protocol}-{}",
+                            if immediate { "immediate" } else { "headers" }
+                        );
+                        let admin_url = match prepare_external_case(&ctx.http_client, &case_id).await {
+                            Ok(url) => url,
+                            Err(error) => return TestResult::failed(start.elapsed(), error),
+                        };
+                        let result = if h2 {
+                            external_opaque_h2(&ctx, &case_id, mode).await
+                        } else {
+                            external_opaque_h1(&ctx, &case_id, mode).await
+                        };
+                        let (status, headers) = match result {
+                            Ok(result) => result,
+                            Err(error) => return TestResult::failed(start.elapsed(), error),
+                        };
+                        let expected_status = if immediate { 403 } else { 200 };
+                        if status != expected_status {
+                            return TestResult::failed(
+                                start.elapsed(),
+                                format!("{protocol} {mode} status = {status}, want {expected_status}"),
+                            );
+                        }
+                        if let Err(error) = assert_opaque_downstream_headers(&headers, immediate) {
+                            return TestResult::failed(start.elapsed(), format!("{protocol} {mode}: {error}"));
+                        }
+
+                        let snapshot = match poll_external_snapshot(&ctx.http_client, &admin_url, &case_id).await {
+                            Ok(snapshot) => snapshot,
+                            Err(error) => return TestResult::failed(start.elapsed(), error),
+                        };
+                        let stream = match assert_external_stream(&snapshot, &case_id, !immediate) {
+                            Ok(stream) => stream,
+                            Err(error) => return TestResult::failed(start.elapsed(), error),
+                        };
+                        let expected_phases: &[&str] = if immediate {
+                            &["request_headers"]
+                        } else {
+                            &["request_headers", "response_headers"]
+                        };
+                        if let Err(error) = assert_exact_phases(stream, expected_phases) {
+                            return TestResult::failed(start.elapsed(), error);
+                        }
+                        if !stream.request_opaque_headers_ok
+                            || stream.response_opaque_headers_ok != !immediate
+                            || (immediate && (!stream.cancelled || stream.client_half_closed))
+                        {
+                            return TestResult::failed(
+                                start.elapsed(),
+                                format!("{protocol} {mode} opaque observation mismatch: {stream:?}"),
+                            );
+                        }
+                    }
+
+                    TestResult::passed_with_message(
+                        start.elapsed(),
+                        "HTTP/1 and HTTP/2 preserved request, response, and ImmediateResponse opaque header bytes"
+                            .to_string(),
                     )
                 })
             },
@@ -3203,6 +3458,7 @@ impl TestSuite for ExtProcTestSuite {
         if self.full_test {
             cases.extend([
                 Self::test_external_headers_and_terminal_half_close(),
+                Self::test_external_opaque_header_wire_fidelity(),
                 Self::test_external_buffered_request_body(),
                 Self::test_external_buffered_status_retry_discards_intermediate(),
                 Self::test_external_streamed_request_and_response_body(),
@@ -3230,6 +3486,7 @@ mod tests {
 
     const EXTERNAL_CASES: &[&str] = &[
         "external_headers_and_terminal_half_close",
+        "external_opaque_header_wire_fidelity",
         "external_buffered_request_body",
         "external_buffered_status_retry_discards_intermediate",
         "external_streamed_request_and_response_body",

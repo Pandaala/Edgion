@@ -83,9 +83,21 @@ unrelated missing routing follow-up target referenced from
 `routing/regression-guards/radix-path-specificity.md`; the active task remains
 open until required checks pass.
 
-Deployed HTTP/1 and HTTP/2 interoperability was deferred under
-`verify-ext-proc-opaque-header-wire-fidelity`; no active task file currently
-tracks that coverage.
+The Full integration case `external_opaque_header_wire_fidelity` now exercises
+fixed repeated non-UTF-8 request values, request and response typed mutations,
+upstream response projection, and ImmediateResponse headers over real HTTP/1
+and HTTP/2 downstream connections. The independent processor uses official Go
+v1.37.0 types, validates exact protobuf `raw_value` bytes, and publishes only
+fixed match booleans rather than retaining arbitrary header contents. The
+downstream assertions cover presence, overwrite, append, empty values, repeated
+per-name order, and absence of UTF-8 replacement bytes.
+
+`./edgion-tests/integration/scripts/integration/run_integration.sh --no-prepare
+-r EdgionPlugins -i ExtProc --full-test` passed on 2026-09-13: the 33-case
+ExtProc suite, dynamic TLS-policy recovery, and the integration final guards all
+passed. This is deployed HTTP/1 and HTTP/2 downstream evidence against the
+repository-pinned Gateway and Go fixture; it does not add an upstream-protocol
+matrix or claim global ordering across different header names.
 Re-evaluate if projection encoding, header validity, session APIs, queue value
 ownership, deferred credential invalidation, or conditional mutation order changes.
 
@@ -93,3 +105,5 @@ ownership, deferred credential invalidation, or conditional mutation order chang
 
 - D0152 / `preserve-ext-proc-opaque-header-fidelity`: confirmed correctness defect;
   implementation authorized after scope and performance discussion.
+- `verify-ext-proc-opaque-header-wire-fidelity`: Full HTTP/1 and HTTP/2
+  downstream wire verification completed.

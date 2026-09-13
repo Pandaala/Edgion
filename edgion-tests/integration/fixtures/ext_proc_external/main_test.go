@@ -175,6 +175,61 @@ func TestImmediateResponseContract(t *testing.T) {
 	}
 }
 
+func TestOpaqueHeaderModesUseRawBytesAndTypedActions(t *testing.T) {
+	request := requestHeaders("opaque-case", "opaque-headers")
+	requestMap := request.GetRequestHeaders().GetHeaders()
+	requestMap.Headers = append(requestMap.Headers,
+		&corev3.HeaderValue{Key: "x-opaque-presence", RawValue: []byte("\xffrequest-first")},
+		&corev3.HeaderValue{Key: "x-opaque-presence", RawValue: []byte("\x80request-second")},
+		&corev3.HeaderValue{Key: "x-opaque-overwrite", RawValue: []byte("\xferequest-old")},
+	)
+	response := responseHeaders()
+	responseMap := response.GetResponseHeaders().GetHeaders()
+	responseMap.Headers = append(responseMap.Headers,
+		&corev3.HeaderValue{Key: "x-opaque-presence", RawValue: []byte("\xfdresponse-first")},
+		&corev3.HeaderValue{Key: "x-opaque-presence", RawValue: []byte("\x80response-second")},
+		&corev3.HeaderValue{Key: "x-opaque-overwrite", RawValue: []byte("\xfcresponse-old")},
+	)
+	store := newObservationStore()
+	stream := &fakeProcessStream{
+		ctx:      context.Background(),
+		requests: []*extprocv3.ProcessingRequest{request, response},
+	}
+	if err := (&processor{store: store}).Process(stream); err != nil {
+		t.Fatalf("Process() error = %v", err)
+	}
+	if len(stream.sent) != 2 {
+		t.Fatalf("sent responses = %d, want 2", len(stream.sent))
+	}
+	requestMutations := stream.sent[0].GetRequestHeaders().GetResponse().GetHeaderMutation().GetSetHeaders()
+	if len(requestMutations) != 5 || requestMutations[0].GetAppendAction() != corev3.HeaderValueOption_ADD_IF_ABSENT ||
+		requestMutations[1].GetAppendAction() != corev3.HeaderValueOption_OVERWRITE_IF_EXISTS ||
+		requestMutations[3].GetAppendAction() != corev3.HeaderValueOption_APPEND_IF_EXISTS_OR_ADD {
+		t.Fatalf("request opaque mutations = %+v", requestMutations)
+	}
+	responseMutations := stream.sent[1].GetResponseHeaders().GetResponse().GetHeaderMutation().GetSetHeaders()
+	if len(responseMutations) != 5 || !responseMutations[4].GetKeepEmptyValue() {
+		t.Fatalf("response opaque mutations = %+v", responseMutations)
+	}
+	snapshot, ok := store.snapshot("opaque-case")
+	if !ok || len(snapshot.Streams) != 1 || !snapshot.Streams[0].RequestOpaqueHeadersOK ||
+		!snapshot.Streams[0].ResponseOpaqueHeadersOK {
+		t.Fatalf("opaque observation = %+v, present = %v", snapshot, ok)
+	}
+
+	immediate := opaqueImmediateResponse().GetImmediateResponse()
+	values := headerRawValues(&corev3.HeaderMap{Headers: []*corev3.HeaderValue{
+		immediate.GetHeaders().GetSetHeaders()[0].GetHeader(),
+		immediate.GetHeaders().GetSetHeaders()[1].GetHeader(),
+	}}, "x-opaque-immediate")
+	if !rawValuesEqual(values, []byte("\x84immediate-first"), []byte("\x85immediate-second")) {
+		t.Fatalf("opaque immediate values = %x", values)
+	}
+	if !validMode("opaque-headers") || !validMode("opaque-immediate") {
+		t.Fatal("opaque modes must be accepted")
+	}
+}
+
 func TestOfficialEnvoyTypesPinNewWireFields(t *testing.T) {
 	immediateFields := (&extprocv3.ImmediateResponse{}).ProtoReflect().Descriptor().Fields()
 	if field := immediateFields.ByName("grpc_status"); field == nil || field.Number() != 4 {

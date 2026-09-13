@@ -2,6 +2,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -631,9 +632,11 @@ type streamObservation struct {
 	ServerLeafSHA256 string   `json:"server_leaf_sha256,omitempty"`
 	PeerLeafSHA256   string   `json:"peer_leaf_sha256,omitempty"`
 
-	RequestHeaderMessages  int      `json:"request_header_messages"`
-	ResponseHeaderMessages int      `json:"response_header_messages"`
-	ResponseStatuses       []uint16 `json:"response_statuses"`
+	RequestHeaderMessages   int      `json:"request_header_messages"`
+	ResponseHeaderMessages  int      `json:"response_header_messages"`
+	ResponseStatuses        []uint16 `json:"response_statuses"`
+	RequestOpaqueHeadersOK  bool     `json:"request_opaque_headers_ok"`
+	ResponseOpaqueHeadersOK bool     `json:"response_opaque_headers_ok"`
 
 	RequestBodyMessages int    `json:"request_body_messages"`
 	RequestBodyBytes    int    `json:"request_body_bytes"`
@@ -832,6 +835,16 @@ func (s *observationStore) setConnectionIdentity(stream *streamObservation, iden
 	stream.TLSGeneration = identity.generation
 	stream.ServerLeafSHA256 = identity.serverLeafFingerprint
 	stream.PeerLeafSHA256 = identity.peerLeafFingerprint
+}
+
+func (s *observationStore) setOpaqueHeaderResult(stream *streamObservation, request, ok bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if request {
+		stream.RequestOpaqueHeadersOK = ok
+	} else {
+		stream.ResponseOpaqueHeadersOK = ok
+	}
 }
 
 type barrierWaiter struct {
@@ -1120,7 +1133,18 @@ func (p *processor) observeAndRespond(
 	switch value := request.GetRequest().(type) {
 	case *extprocv3.ProcessingRequest_RequestHeaders:
 		phase = "request_headers"
-		if mode == "immediate" || mode == "disabled-immediate" {
+		if mode == "opaque-headers" || mode == "opaque-immediate" {
+			ok := opaqueRequestHeadersMatch(value.RequestHeaders.GetHeaders())
+			p.store.setOpaqueHeaderResult(observation, true, ok)
+			if !ok {
+				return status.Error(codes.InvalidArgument, "opaque request headers did not match")
+			}
+			if mode == "opaque-immediate" {
+				response = opaqueImmediateResponse()
+			} else {
+				response = opaqueRequestHeaderResponse()
+			}
+		} else if mode == "immediate" || mode == "disabled-immediate" {
 			response = immediateResponse()
 		} else if mode == "grpc-immediate" {
 			response = grpcImmediateResponse()
@@ -1141,7 +1165,16 @@ func (p *processor) observeAndRespond(
 			return status.Error(codes.InvalidArgument, err.Error())
 		}
 		observedResponseStatus = &statusCode
-		response = headerResponse(false)
+		if mode == "opaque-headers" {
+			ok := opaqueResponseHeadersMatch(value.ResponseHeaders.GetHeaders())
+			p.store.setOpaqueHeaderResult(observation, false, ok)
+			if !ok {
+				return status.Error(codes.InvalidArgument, "opaque response headers did not match")
+			}
+			response = opaqueResponseHeaderResponse()
+		} else {
+			response = headerResponse(false)
+		}
 	case *extprocv3.ProcessingRequest_ResponseBody:
 		phase, body, eos = "response_body", value.ResponseBody.GetBody(), value.ResponseBody.GetEndOfStream()
 		response = bodyResponse(false)
@@ -1182,7 +1215,7 @@ func validMode(value string) bool {
 	switch value {
 	case "interop", "immediate", "grpc-immediate", "disabled-immediate", "mode-reduce-none",
 		"mode-forbidden-expand", "trailer-mutate", "no-trailer", "long-idle", "barrier-headers",
-		"barrier-request-body":
+		"barrier-request-body", "opaque-headers", "opaque-immediate":
 		return true
 	default:
 		return false
@@ -1222,6 +1255,101 @@ func setHeader(name, value string) *corev3.HeaderValueOption {
 		Header:       &corev3.HeaderValue{Key: name, RawValue: []byte(value)},
 		AppendAction: corev3.HeaderValueOption_OVERWRITE_IF_EXISTS_OR_ADD,
 	}
+}
+
+func rawHeaderAction(name string, value []byte, action corev3.HeaderValueOption_HeaderAppendAction) *corev3.HeaderValueOption {
+	return &corev3.HeaderValueOption{
+		Header:       &corev3.HeaderValue{Key: name, RawValue: value},
+		AppendAction: action,
+	}
+}
+
+func headerRawValues(headers *corev3.HeaderMap, name string) [][]byte {
+	if headers == nil {
+		return nil
+	}
+	values := make([][]byte, 0)
+	for _, header := range headers.GetHeaders() {
+		if !strings.EqualFold(header.GetKey(), name) {
+			continue
+		}
+		value := header.GetRawValue()
+		if len(value) == 0 {
+			value = []byte(header.GetValue())
+		}
+		values = append(values, value)
+	}
+	return values
+}
+
+func rawValuesEqual(actual [][]byte, expected ...[]byte) bool {
+	if len(actual) != len(expected) {
+		return false
+	}
+	for index := range actual {
+		if !bytes.Equal(actual[index], expected[index]) {
+			return false
+		}
+	}
+	return true
+}
+
+func opaqueRequestHeadersMatch(headers *corev3.HeaderMap) bool {
+	return rawValuesEqual(headerRawValues(headers, "x-opaque-presence"), []byte("\xffrequest-first"), []byte("\x80request-second")) &&
+		rawValuesEqual(headerRawValues(headers, "x-opaque-overwrite"), []byte("\xferequest-old"))
+}
+
+func opaqueResponseHeadersMatch(headers *corev3.HeaderMap) bool {
+	return rawValuesEqual(headerRawValues(headers, "x-opaque-presence"), []byte("\xfdresponse-first"), []byte("\x80response-second")) &&
+		rawValuesEqual(headerRawValues(headers, "x-opaque-overwrite"), []byte("\xfcresponse-old"))
+}
+
+func opaqueRequestHeaderResponse() *extprocv3.ProcessingResponse {
+	mutation := &extprocv3.HeaderMutation{SetHeaders: []*corev3.HeaderValueOption{
+		rawHeaderAction("x-opaque-presence", []byte("must-not-replace"), corev3.HeaderValueOption_ADD_IF_ABSENT),
+		rawHeaderAction("x-opaque-overwrite", []byte("\x81request-overwrite"), corev3.HeaderValueOption_OVERWRITE_IF_EXISTS),
+		rawHeaderAction("x-opaque-added", []byte("\x82request-add"), corev3.HeaderValueOption_ADD_IF_ABSENT),
+		rawHeaderAction("x-opaque-added", []byte("\x83request-append"), corev3.HeaderValueOption_APPEND_IF_EXISTS_OR_ADD),
+		setHeader("x-ext-proc-backend-opaque", "1"),
+	}}
+	return &extprocv3.ProcessingResponse{Response: &extprocv3.ProcessingResponse_RequestHeaders{
+		RequestHeaders: &extprocv3.HeadersResponse{Response: &extprocv3.CommonResponse{
+			Status: extprocv3.CommonResponse_CONTINUE, HeaderMutation: mutation,
+		}},
+	}}
+}
+
+func opaqueResponseMutation() *extprocv3.HeaderMutation {
+	empty := rawHeaderAction("x-opaque-empty", []byte{}, corev3.HeaderValueOption_OVERWRITE_IF_EXISTS_OR_ADD)
+	empty.KeepEmptyValue = true
+	return &extprocv3.HeaderMutation{SetHeaders: []*corev3.HeaderValueOption{
+		rawHeaderAction("x-opaque-presence", []byte("must-not-replace"), corev3.HeaderValueOption_ADD_IF_ABSENT),
+		rawHeaderAction("x-opaque-overwrite", []byte("\x81response-overwrite"), corev3.HeaderValueOption_OVERWRITE_IF_EXISTS),
+		rawHeaderAction("x-opaque-added", []byte("\x82response-add"), corev3.HeaderValueOption_ADD_IF_ABSENT),
+		rawHeaderAction("x-opaque-added", []byte("\x83response-append"), corev3.HeaderValueOption_APPEND_IF_EXISTS_OR_ADD),
+		empty,
+	}}
+}
+
+func opaqueResponseHeaderResponse() *extprocv3.ProcessingResponse {
+	return &extprocv3.ProcessingResponse{Response: &extprocv3.ProcessingResponse_ResponseHeaders{
+		ResponseHeaders: &extprocv3.HeadersResponse{Response: &extprocv3.CommonResponse{
+			Status: extprocv3.CommonResponse_CONTINUE, HeaderMutation: opaqueResponseMutation(),
+		}},
+	}}
+}
+
+func opaqueImmediateResponse() *extprocv3.ProcessingResponse {
+	mutation := &extprocv3.HeaderMutation{SetHeaders: []*corev3.HeaderValueOption{
+		rawHeaderAction("x-opaque-immediate", []byte("\x84immediate-first"), corev3.HeaderValueOption_OVERWRITE_IF_EXISTS_OR_ADD),
+		rawHeaderAction("x-opaque-immediate", []byte("\x85immediate-second"), corev3.HeaderValueOption_APPEND_IF_EXISTS_OR_ADD),
+	}}
+	return &extprocv3.ProcessingResponse{Response: &extprocv3.ProcessingResponse_ImmediateResponse{
+		ImmediateResponse: &extprocv3.ImmediateResponse{
+			Status: &typev3.HttpStatus{Code: typev3.StatusCode_Forbidden}, Headers: mutation,
+			Body: []byte("opaque immediate response"),
+		},
+	}}
 }
 
 func commonResponse(headerName, headerValue string, body []byte) *extprocv3.CommonResponse {

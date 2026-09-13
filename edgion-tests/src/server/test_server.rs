@@ -852,12 +852,45 @@ async fn body_slow_handler(req: AxumRequest<Body>) -> impl IntoResponse {
     body_digest_handler(req).await
 }
 
-async fn headers_handler(req: AxumRequest<Body>) -> impl IntoResponse {
-    use axum::http::StatusCode;
+async fn headers_handler(req: AxumRequest<Body>) -> axum::response::Response {
+    use axum::http::{HeaderValue, StatusCode};
     use axum::response::Json;
     use serde_json::json;
 
     let headers = req.headers();
+    if headers
+        .get("x-ext-proc-backend-opaque")
+        .and_then(|value| value.to_str().ok())
+        == Some("1")
+    {
+        let values = |name: &str| {
+            headers
+                .get_all(name)
+                .iter()
+                .map(|value| value.as_bytes())
+                .collect::<Vec<_>>()
+        };
+        let request_is_exact = values("x-opaque-presence") == [b"\xffrequest-first".as_slice(), b"\x80request-second"]
+            && values("x-opaque-overwrite") == [b"\x81request-overwrite".as_slice()]
+            && values("x-opaque-added") == [b"\x82request-add".as_slice(), b"\x83request-append"];
+        if !request_is_exact {
+            return (StatusCode::BAD_REQUEST, "opaque request mutation mismatch").into_response();
+        }
+
+        let mut response = (StatusCode::OK, "opaque header fixture").into_response();
+        for (name, value) in [
+            ("x-opaque-presence", b"\xfdresponse-first".as_slice()),
+            ("x-opaque-presence", b"\x80response-second"),
+            ("x-opaque-overwrite", b"\xfcresponse-old"),
+        ] {
+            response.headers_mut().append(
+                name,
+                HeaderValue::from_bytes(value).expect("fixed opaque header must be valid"),
+            );
+        }
+        return response;
+    }
+
     let mut headers_map = serde_json::Map::new();
 
     // Return all headers (convert header names to lowercase for consistency)
@@ -871,7 +904,7 @@ async fn headers_handler(req: AxumRequest<Body>) -> impl IntoResponse {
         "headers": headers_map
     });
 
-    (StatusCode::OK, Json(response))
+    (StatusCode::OK, Json(response)).into_response()
 }
 
 /// Auth-header probe handler.

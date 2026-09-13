@@ -1,6 +1,6 @@
 # ExtProc Compatibility and Coverage Matrix
 
-Reviewed: 2026-08-29
+Reviewed: 2026-09-13
 
 This matrix records what Edgion currently proves about its HTTP ExtProc
 implementation. It is an evidence index, not a claim of complete Envoy
@@ -29,6 +29,7 @@ a separately built external processor. A planned row is not test evidence.
 |---|---|---|---|
 | Request and final response header phases on one request-scoped `Process` stream | Supported | The default integration suite checks both mutations in [`test_basic_request_and_response_headers`](../../../../../edgion-tests/src/client/suites/edgion_plugins/ext_proc/ext_proc.rs). Exact request-header/body/response ordering and one-stream ownership are checked by [`client.rs`](../../../../../edgion-gateway/src/plugins/http/ext_proc/client.rs) (`one_process_stream_carries_request_and_response_in_exact_order`) and [`attached.rs`](../../../../../edgion-gateway/src/plugins/http/ext_proc/attached.rs). | Fast |
 | Header collection, duplicate preservation, append actions, remove actions, and pseudo-header observation | Supported | Mutation unit tests in [`mutation.rs`](../../../../../edgion-gateway/src/plugins/http/ext_proc/mutation.rs) cover overwrite, append, add-if-absent, removal, duplicate values, pseudo-headers, and raw values. | Fast |
+| Opaque ordinary and `ImmediateResponse` header bytes over HTTP/1 and HTTP/2 | Supported | [`external_opaque_header_wire_fidelity`](../../../../../edgion-tests/src/client/suites/edgion_plugins/ext_proc/ext_proc.rs) sends fixed non-UTF-8 repeated headers over real HTTP/1 and HTTP/2 downstream connections, verifies the official-Go processor received exact `raw_value` bytes, validates request and response projection through the backend, and checks typed presence/overwrite/append/empty mutations at the downstream client without UTF-8 replacement. The fixture stores only fixed match booleans, not arbitrary header values. | Full interoperability |
 | Mutation of pseudo-headers and proxy-managed framing/hop-by-hop headers | Intentionally rejected | [`mutation.rs`](../../../../../edgion-gateway/src/plugins/http/ext_proc/mutation.rs) rejects pseudo-header mutations and proxy-managed headers; the same file has regression tests for both rules. | Fast |
 | Request-header `ImmediateResponse` | Supported | [`test_immediate_response_403`](../../../../../edgion-tests/src/client/suites/edgion_plugins/ext_proc/ext_proc.rs) asserts status, body, and an allowed response-header mutation. [`client.rs`](../../../../../edgion-gateway/src/plugins/http/ext_proc/client.rs) checks that `ImmediateResponse` is terminal rather than a phase verdict. | Fast |
 | Exact `ImmediateResponse.grpc_status` | Supported | [`external_exact_grpc_immediate_response`](../../../../../edgion-tests/src/client/suites/edgion_plugins/ext_proc/ext_proc.rs) uses the official Go v1.37 field and proves exact `PERMISSION_DENIED` plus message on a real gRPC client. [`plugin.rs`](../../../../../edgion-gateway/src/plugins/http/ext_proc/plugin.rs) pins presence-aware status 0, range 0–16, ordinary-HTTP ignore behavior, and rejection above 16. | Fast unit + Full interoperability |
@@ -98,8 +99,9 @@ official `github.com/envoyproxy/go-control-plane/envoy` v1.37.0 generated types.
 Descriptor tests pin the official field numbers for
 `ImmediateResponse.grpc_status`, `ProcessingResponse.mode_override`,
 `ProcessingMode.response_trailer_mode`, and
-`ProcessingRequest.response_trailers`. The 32-case targeted full suite proves
-header, `BUFFERED`, and bidirectional `STREAMED` decoding and mutation, exact
+`ProcessingRequest.response_trailers`. The 33-case targeted full suite proves
+ASCII headers, opaque HTTP/1 and HTTP/2 header fidelity, `BUFFERED`, and
+bidirectional `STREAMED` decoding and mutation, exact
 gRPC ImmediateResponse, disabled ImmediateResponse, reduction-only mode
 override, real/no response trailers, phase/EOS observations, normal
 half-close, a three-second idle exchange, seeded chunk reconstruction,
