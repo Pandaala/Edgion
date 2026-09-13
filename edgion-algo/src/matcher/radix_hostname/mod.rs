@@ -10,6 +10,7 @@ mod radix;
 
 pub use input::{normalize_route_sni, NormalizedRouteSni, RadixHostnameQuery};
 pub use pattern::{radix_hostname_matches, RadixHostnamePatternError, RadixHostnamePatternRef, MAX_HOSTNAME_LEN};
+pub use radix::RadixHostnameBuildError;
 
 use self::radix::{HostPatternId, HostnameRadixTree};
 use rpds::HashTrieMapSync;
@@ -59,31 +60,36 @@ impl<T> Clone for RadixHostnameMatcher<T> {
 
 impl<T> Default for RadixHostnameMatcher<T> {
     fn default() -> Self {
-        Self::build(HashMap::new())
+        Self {
+            hosts: Arc::new(HostnameRadixTree::empty()),
+            contents: HashTrieMapSync::new_sync(),
+        }
     }
 }
 
 impl<T> RadixHostnameMatcher<T> {
     /// Callers aggregate competing resources into one opaque value per pattern.
-    pub fn build(mut groups: HashMap<RadixHostnamePattern, Arc<T>>) -> Self {
+    pub fn build(mut groups: HashMap<RadixHostnamePattern, Arc<T>>) -> Result<Self, RadixHostnameBuildError> {
         let mut patterns: Vec<_> = groups.keys().cloned().collect();
         patterns.sort();
+        let hosts = Arc::new(HostnameRadixTree::build(patterns)?);
         let mut contents = HashTrieMapSync::new_sync();
-        for (id, pattern) in patterns.iter().enumerate() {
+        for (id, pattern) in hosts.patterns().iter().enumerate() {
             let value = groups
                 .remove(pattern)
                 .expect("patterns are exactly the unique group keys");
+            let id = u32::try_from(id).expect("the frozen tree already checked every pattern ID fits u32");
             contents.insert_mut(HostPatternId(id), value);
         }
-        Self {
-            hosts: Arc::new(HostnameRadixTree::build(patterns)),
-            contents,
-        }
+        Ok(Self { hosts, contents })
     }
 
     /// Ordered cold operations coalesce before testing final pattern occupancy.
     /// Existing keys only: share the whole tree and patch persistent map paths.
-    pub fn with_changes(&self, changes: impl IntoIterator<Item = RadixHostnameChange<T>>) -> Self {
+    pub fn with_changes(
+        &self,
+        changes: impl IntoIterator<Item = RadixHostnameChange<T>>,
+    ) -> Result<Self, RadixHostnameBuildError> {
         let mut final_changes = HashMap::new();
         for change in changes {
             match change {
@@ -127,12 +133,15 @@ impl<T> RadixHostnameMatcher<T> {
                 }
             }
         }
-        next
+        Ok(next)
     }
 
     /// Full payload replacement still shares the tree when keys agree. Its
     /// O(H) discovery cost is explicit; incremental owners use with_changes.
-    pub fn with_groups(&self, mut groups: HashMap<RadixHostnamePattern, Arc<T>>) -> Self {
+    pub fn with_groups(
+        &self,
+        mut groups: HashMap<RadixHostnamePattern, Arc<T>>,
+    ) -> Result<Self, RadixHostnameBuildError> {
         if groups.len() != self.len() || !self.hosts.patterns().iter().all(|pattern| groups.contains_key(pattern)) {
             return Self::build(groups);
         }
@@ -142,15 +151,16 @@ impl<T> RadixHostnameMatcher<T> {
         let mut next = self.clone();
         for (id, pattern) in self.hosts.patterns().iter().enumerate() {
             let value = groups.remove(pattern).expect("the complete key set was checked");
-            let id = HostPatternId(id);
+            let id =
+                HostPatternId(u32::try_from(id).expect("the frozen tree already checked every pattern ID fits u32"));
             if !Arc::ptr_eq(self.content(id), &value) {
                 next.contents.insert_mut(id, value);
             }
         }
-        next
+        Ok(next)
     }
 
-    pub fn matching_values(&self, query: RadixHostnameQuery<'_>) -> impl Iterator<Item = &T> {
+    pub fn matching_values<'a>(&'a self, query: RadixHostnameQuery<'a>) -> impl Iterator<Item = &'a T> + 'a {
         self.hosts
             .matching_ids(query.as_str())
             .map(|id| self.content(id).as_ref())
@@ -163,11 +173,10 @@ impl<T> RadixHostnameMatcher<T> {
 
     /// Cold enumeration; IDs stay private and cannot leak across generations.
     pub fn groups(&self) -> impl Iterator<Item = (&RadixHostnamePattern, &Arc<T>)> {
-        self.hosts
-            .patterns()
-            .iter()
-            .enumerate()
-            .map(|(id, pattern)| (pattern, self.content(HostPatternId(id))))
+        self.hosts.patterns().iter().enumerate().map(|(id, pattern)| {
+            let id = u32::try_from(id).expect("the frozen tree already checked every pattern ID fits u32");
+            (pattern, self.content(HostPatternId(id)))
+        })
     }
 
     pub fn len(&self) -> usize {
@@ -212,6 +221,7 @@ mod tests {
                 .map(|p| (pattern(p), Arc::new((*p).to_string())))
                 .collect(),
         )
+        .unwrap()
     }
 
     fn hits(index: &RadixHostnameMatcher<String>, query: &str) -> Vec<String> {
@@ -255,9 +265,12 @@ mod tests {
         let old = RadixHostnameMatcher::build(HashMap::from([
             (pattern("a.test"), a.clone()),
             (pattern("*.test"), b.clone()),
-        ]));
+        ]))
+        .unwrap();
         let updated = Arc::new(Payload(3));
-        let new = old.with_changes([RadixHostnameChange::Upsert(pattern("a.test"), updated.clone())]);
+        let new = old
+            .with_changes([RadixHostnameChange::Upsert(pattern("a.test"), updated.clone())])
+            .unwrap();
         assert!(new.shares_hosts(&old));
         assert!(Arc::ptr_eq(new.get(&pattern("*.test")).unwrap(), &b));
         assert!(Arc::ptr_eq(new.get(&pattern("a.test")).unwrap(), &updated));
@@ -276,7 +289,7 @@ mod tests {
                 .0,
             3
         );
-        let empty_payload = RadixHostnameMatcher::build(HashMap::from([(pattern("test"), Arc::new(()))]));
+        let empty_payload = RadixHostnameMatcher::build(HashMap::from([(pattern("test"), Arc::new(()))])).unwrap();
         assert_eq!(
             empty_payload
                 .matching_values(RadixHostnameQuery::new("test").unwrap())
@@ -291,13 +304,16 @@ mod tests {
         let old = RadixHostnameMatcher::build(HashMap::from([
             (pattern("a.test"), Arc::new(Payload(1))),
             (pattern("*.test"), Arc::new(Payload(2))),
-        ]));
+        ]))
+        .unwrap();
         let exact = Arc::new(Payload(3));
         let wildcard = Arc::new(Payload(4));
-        let new = old.with_groups(HashMap::from([
-            (pattern("*.test"), wildcard.clone()),
-            (pattern("a.test"), exact.clone()),
-        ]));
+        let new = old
+            .with_groups(HashMap::from([
+                (pattern("*.test"), wildcard.clone()),
+                (pattern("a.test"), exact.clone()),
+            ]))
+            .unwrap();
         assert!(new.shares_hosts(&old));
         assert!(Arc::ptr_eq(new.get(&pattern("a.test")).unwrap(), &exact));
         assert!(Arc::ptr_eq(new.get(&pattern("*.test")).unwrap(), &wildcard));
@@ -310,10 +326,12 @@ mod tests {
             new.matching_values(query).map(|value| value.0).collect::<Vec<_>>(),
             [3, 4]
         );
-        let renamed = new.with_groups(HashMap::from([
-            (pattern("z.test"), exact.clone()),
-            (pattern("*.test"), wildcard.clone()),
-        ]));
+        let renamed = new
+            .with_groups(HashMap::from([
+                (pattern("z.test"), exact.clone()),
+                (pattern("*.test"), wildcard.clone()),
+            ]))
+            .unwrap();
         assert!(!renamed.shares_hosts(&new));
         assert!(Arc::ptr_eq(renamed.get(&pattern("z.test")).unwrap(), &exact));
         assert!(renamed.get(&pattern("a.test")).is_none());
@@ -324,10 +342,12 @@ mod tests {
     fn topology_rebuild_remaps_ids_by_pattern_and_reuses_payloads() {
         let old = matcher(&["z.test", "*.test", "test"]);
         let held = old.get(&pattern("z.test")).unwrap().clone();
-        let new = old.with_changes([
-            RadixHostnameChange::Remove(pattern("*.test")),
-            RadixHostnameChange::Upsert(pattern("a.test"), Arc::new("new".into())),
-        ]);
+        let new = old
+            .with_changes([
+                RadixHostnameChange::Remove(pattern("*.test")),
+                RadixHostnameChange::Upsert(pattern("a.test"), Arc::new("new".into())),
+            ])
+            .unwrap();
         assert!(!new.shares_hosts(&old));
         assert!(Arc::ptr_eq(new.get(&pattern("z.test")).unwrap(), &held));
         assert_eq!(hits(&old, "z.test"), ["z.test", "*.test"]);
@@ -338,27 +358,49 @@ mod tests {
     }
 
     #[test]
+    fn exact_and_wildcard_terminals_at_one_suffix_are_independently_removed() {
+        let both = matcher(&["example.com", "*.example.com"]);
+        let without_exact = both
+            .with_changes([RadixHostnameChange::Remove(pattern("example.com"))])
+            .unwrap();
+        assert!(hits(&without_exact, "example.com").is_empty());
+        assert_eq!(hits(&without_exact, "a.example.com"), ["*.example.com"]);
+        assert_eq!(hits(&both, "example.com"), ["example.com"]);
+
+        let without_wildcard = both
+            .with_changes([RadixHostnameChange::Remove(pattern("*.example.com"))])
+            .unwrap();
+        assert_eq!(hits(&without_wildcard, "example.com"), ["example.com"]);
+        assert!(hits(&without_wildcard, "a.example.com").is_empty());
+        assert_eq!(hits(&both, "a.example.com"), ["*.example.com"]);
+    }
+
+    #[test]
     fn coalesced_deltas_and_full_list_preserve_final_occupancy() {
         let old = matcher(&["a.test", "*.test"]);
-        let new = old.with_changes([
-            RadixHostnameChange::Remove(pattern("a.test")),
-            RadixHostnameChange::Upsert(pattern("a.test"), Arc::new("replacement".into())),
-            RadixHostnameChange::Upsert(pattern("gone.test"), Arc::new("temporary".into())),
-            RadixHostnameChange::Remove(pattern("gone.test")),
-        ]);
+        let new = old
+            .with_changes([
+                RadixHostnameChange::Remove(pattern("a.test")),
+                RadixHostnameChange::Upsert(pattern("a.test"), Arc::new("replacement".into())),
+                RadixHostnameChange::Upsert(pattern("gone.test"), Arc::new("temporary".into())),
+                RadixHostnameChange::Remove(pattern("gone.test")),
+            ])
+            .unwrap();
         assert!(new.shares_hosts(&old));
         assert_eq!(hits(&new, "a.test"), ["replacement", "*.test"]);
-        let full = new.with_groups(HashMap::from([
-            (pattern("*.test"), Arc::new("wild".into())),
-            (pattern("a.test"), Arc::new("exact".into())),
-        ]));
+        let full = new
+            .with_groups(HashMap::from([
+                (pattern("*.test"), Arc::new("wild".into())),
+                (pattern("a.test"), Arc::new("exact".into())),
+            ]))
+            .unwrap();
         assert!(full.shares_hosts(&old));
         assert_eq!(hits(&full, "a.test"), ["exact", "wild"]);
-        let empty = full.with_groups(HashMap::new());
+        let empty = full.with_groups(HashMap::new()).unwrap();
         assert!(empty.is_empty());
         assert!(hits(&empty, "a.test").is_empty());
         assert!(!empty.shares_hosts(&full));
-        assert!(empty.with_groups(HashMap::new()).shares_hosts(&empty));
+        assert!(empty.with_groups(HashMap::new()).unwrap().shares_hosts(&empty));
     }
 
     #[test]
@@ -402,7 +444,7 @@ mod tests {
     }
 
     #[test]
-    fn maximum_depth_uses_bounded_inline_iterator() {
+    fn maximum_depth_is_returned_by_the_lazy_iterator() {
         let query = vec!["a"; 127].join(".");
         assert_eq!(query.len(), 253);
         let mut patterns = vec![query.clone()];
@@ -414,6 +456,35 @@ mod tests {
         assert_eq!(matches.len(), 127);
         assert_eq!(matches[0], query);
         assert_eq!(matches.last().unwrap(), "*.a");
-        assert!(size_of::<super::radix::MatchingIds>() <= 1024);
+        assert!(size_of::<super::radix::MatchingIds<'_, '_>>() <= 40);
+    }
+
+    #[test]
+    fn maximum_length_edges_and_wildcard_suffixes_are_not_truncated() {
+        let exact = "a".repeat(253);
+        let index = matcher(&[&exact]);
+        assert_eq!(hits(&index, &exact), std::slice::from_ref(&exact));
+        for position in [0, exact.len() / 2, exact.len() - 1] {
+            let mut mismatch = exact.clone();
+            mismatch.replace_range(position..position + 1, "b");
+            assert!(hits(&index, &mismatch).is_empty(), "position={position}");
+        }
+
+        let suffix = "a".repeat(251);
+        let wildcard = format!("*.{suffix}");
+        let query = format!("b.{suffix}");
+        assert_eq!(wildcard.len(), 253);
+        assert_eq!(query.len(), 253);
+        assert_eq!(hits(&matcher(&[&wildcard]), &query), [wildcard]);
+    }
+
+    #[test]
+    fn long_common_edge_keeps_distinct_children() {
+        let suffix = "a".repeat(250);
+        let first = format!("b.{suffix}");
+        let second = format!("c.{suffix}");
+        let index = matcher(&[&first, &second]);
+        assert_eq!(hits(&index, &first), [first]);
+        assert_eq!(hits(&index, &second), [second]);
     }
 }

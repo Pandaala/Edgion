@@ -10,11 +10,12 @@ use crate::routes::http::routes_mgr::{
 use crate::routes::http::{get_global_http_route_managers, HttpRouteRuleUnit};
 use crate::runtime::matching::route::ResolvedParentRef;
 use crate::MatchInfo;
-use edgion_algo::matcher::radix_hostname::{RadixHostnameChange, RadixHostnamePattern};
+use edgion_algo::matcher::radix_hostname::{RadixHostnameChange, RadixHostnameMatcher, RadixHostnamePattern};
 use edgion_common::conf_sync::traits::ConfHandler;
 use edgion_resources::{HTTPPathMatch, HTTPRoute, HTTPRouteMatch, HTTPRouteRule, ListenerKey, ResourceMeta};
 use regex::Regex;
 use std::collections::{HashMap, HashSet};
+use std::fmt::Display;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -23,6 +24,32 @@ type DomainStr = String;
 type RouteRulesPair = (Vec<Arc<HttpRouteRuleUnit>>, Vec<Arc<HttpRouteRuleUnit>>);
 /// Domain -> (normal_routes, regex_routes) mapping
 type DomainRouteRulesMap = HashMap<DomainStr, RouteRulesPair>;
+
+fn hostname_table_or_fail_closed(
+    result: Result<RadixHostnameMatcher<RouteRules>, impl Display>,
+    catch_all_routes: Option<Arc<RouteRules>>,
+    pattern_count: usize,
+) -> DomainRouteRules {
+    match result {
+        Ok(hosts) => DomainRouteRules {
+            hosts,
+            catch_all_routes,
+            hostname_build_failed: false,
+        },
+        Err(error) => {
+            tracing::error!(
+                component = "http_route_hostname_index",
+                pattern_count,
+                err = %error,
+                "Failed to build the HTTP Route hostname index; publishing an empty Listener table"
+            );
+            DomainRouteRules {
+                hostname_build_failed: true,
+                ..DomainRouteRules::new()
+            }
+        }
+    }
+}
 
 /// Validated HTTPRoute data extracted from an HTTPRoute resource
 struct ValidatedHttpRoute<'a> {
@@ -668,10 +695,8 @@ pub(crate) fn build_domain_route_rules_from_routes(
             groups.insert(pattern, rules);
         }
     }
-    DomainRouteRules {
-        hosts: previous.hosts.with_groups(groups),
-        catch_all_routes,
-    }
+    let pattern_count = groups.len();
+    hostname_table_or_fail_closed(previous.hosts.with_groups(groups), catch_all_routes, pattern_count)
 }
 
 /// Recompile changed resources only, then replace only their old/new groups.
@@ -681,6 +706,9 @@ pub(crate) fn patch_domain_route_rules(
     previous: &DomainRouteRules,
     changes: &HttpRouteChanges,
 ) -> DomainRouteRules {
+    if previous.hostname_build_failed {
+        return build_domain_route_rules_from_routes(data, previous);
+    }
     let changed_routes = data
         .iter()
         .filter(|(key, _)| changes.resource_keys.contains(*key))
@@ -737,10 +765,8 @@ pub(crate) fn patch_domain_route_rules(
             None => catch_all_routes = rules,
         }
     }
-    DomainRouteRules {
-        hosts: previous.hosts.with_changes(updates),
-        catch_all_routes,
-    }
+    let pattern_count = previous.hosts.len();
+    hostname_table_or_fail_closed(previous.hosts.with_changes(updates), catch_all_routes, pattern_count)
 }
 
 /// Build a raw-slot-aligned metric identity for every backendRef kind.
@@ -766,6 +792,66 @@ fn http_backends_from_rule(rule: &HTTPRouteRule, route_ns: &str) -> Vec<(String,
 mod tests {
     use super::*;
     use edgion_resources::HTTPRoute;
+
+    #[test]
+    fn hostname_build_failure_clears_named_and_catch_all_routes() {
+        let catch_all = Arc::new(RouteRules {
+            resource_keys: HashSet::new(),
+            route_rules_list: Vec::new(),
+            match_engine: None,
+            regex_routes: Vec::new(),
+            regex_routes_engine: None,
+        });
+        let result: Result<RadixHostnameMatcher<RouteRules>, &str> = Err("injected capacity failure");
+        let table = hostname_table_or_fail_closed(result, Some(catch_all), 1);
+        assert!(table.hosts.is_empty());
+        assert!(table.catch_all_routes.is_none());
+        assert!(table.hostname_build_failed);
+    }
+
+    #[test]
+    fn partial_update_after_hostname_build_failure_rebuilds_the_complete_listener() {
+        let failed = hostname_table_or_fail_closed(
+            Err::<RadixHostnameMatcher<RouteRules>, _>("injected capacity failure"),
+            None,
+            2,
+        );
+        let named_key = "recovery/named".to_string();
+        let catch_all_key = "recovery/catch-all".to_string();
+        let mut named = route_with_paths(
+            "recovery",
+            "named",
+            vec!["named.example.com"],
+            "2026-09-13T00:00:00Z",
+            serde_json::json!([{"matches": [{"path": {"value": "/named"}}]}]),
+        );
+        named.pre_parse();
+        let mut catch_all = route_with_paths(
+            "recovery",
+            "catch-all",
+            Vec::new(),
+            "2026-09-13T00:00:01Z",
+            serde_json::json!([{"matches": [{"path": {"value": "/all"}}]}]),
+        );
+        catch_all.pre_parse();
+        let data = HashMap::from([
+            (named_key, Arc::new(named)),
+            (catch_all_key.clone(), Arc::new(catch_all)),
+        ]);
+        let changes = HttpRouteChanges {
+            resource_keys: HashSet::from([catch_all_key]),
+            hostnames: HashSet::from([CATCH_ALL_HOSTNAME.to_string()]),
+        };
+
+        let recovered = patch_domain_route_rules(&data, &failed, &changes);
+
+        assert!(!recovered.hostname_build_failed);
+        assert!(recovered.catch_all_routes.is_some());
+        assert!(recovered
+            .hosts
+            .get(&RadixHostnamePattern::parse("named.example.com").unwrap())
+            .is_some());
+    }
 
     fn create_test_httproute(
         namespace: &str,

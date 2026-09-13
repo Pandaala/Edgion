@@ -2,6 +2,7 @@ use arc_swap::ArcSwap;
 use dashmap::DashMap;
 use parking_lot::Mutex;
 use std::collections::{HashMap, HashSet};
+use std::fmt::Display;
 use std::sync::{Arc, OnceLock};
 
 use crate::ctx::EdgionHttpContext;
@@ -378,6 +379,32 @@ impl GlobalGrpcRouteManagers {
 }
 
 /// Build DomainGrpcRouteRules from a per-listener units map.
+fn domain_table_from_engine_result(
+    result: Result<GrpcMatchEngine, impl Display>,
+    resource_keys: HashSet<String>,
+    route_rules_list: Vec<Arc<GrpcRouteRuleUnit>>,
+) -> DomainGrpcRouteRules {
+    match result {
+        Ok(engine) => DomainGrpcRouteRules {
+            grpc_routes: Arc::new(GrpcRouteRules {
+                resource_keys,
+                route_rules_list,
+                match_engine: Some(Arc::new(engine)),
+            }),
+        },
+        Err(error) => {
+            tracing::error!(
+                component = "grpc_route_hostname_index",
+                resource_count = resource_keys.len(),
+                route_count = route_rules_list.len(),
+                err = %error,
+                "Failed to build the gRPC Route hostname index; publishing an empty Listener table"
+            );
+            DomainGrpcRouteRules::new()
+        }
+    }
+}
+
 fn build_grpc_route_rules_from_units(
     all_units: &HashMap<String, Vec<Arc<GrpcRouteRuleUnit>>>,
     previous: Option<&DomainGrpcRouteRules>,
@@ -392,20 +419,19 @@ fn build_grpc_route_rules_from_units(
         }
     }
 
-    let match_engine = if route_rules_list.is_empty() {
-        None
-    } else {
-        Some(Arc::new(GrpcMatchEngine::rebuild(
+    if !route_rules_list.is_empty() {
+        let result = GrpcMatchEngine::rebuild(
             route_rules_list.clone(),
             previous.and_then(|table| table.grpc_routes.match_engine.as_deref()),
-        )))
-    };
+        );
+        return domain_table_from_engine_result(result, resource_keys, route_rules_list);
+    }
 
     DomainGrpcRouteRules {
         grpc_routes: Arc::new(GrpcRouteRules {
             resource_keys,
             route_rules_list,
-            match_engine,
+            match_engine: None,
         }),
     }
 }
@@ -437,6 +463,17 @@ mod tests {
     use crate::routes::grpc::match_unit::{GrpcMatchInfo, GrpcMatchSpecificity};
     use crate::routes::grpc::GrpcRouteInfo;
     use edgion_resources::{GRPCMethodMatch, GRPCRouteMatch, GRPCRouteRule};
+
+    #[test]
+    fn hostname_build_failure_clears_the_complete_grpc_listener_table() {
+        let unit = route_unit("discarded");
+        let result: Result<GrpcMatchEngine, &str> = Err("injected capacity failure");
+        let table = domain_table_from_engine_result(result, HashSet::from([unit.resource_key.clone()]), vec![unit]);
+        assert!(!table.has_routes());
+        assert!(table.grpc_routes.resource_keys.is_empty());
+        assert!(table.grpc_routes.route_rules_list.is_empty());
+        assert!(table.grpc_routes.match_engine.is_none());
+    }
 
     fn make_listener_key(port: u16) -> ListenerKey {
         let addr = std::net::SocketAddr::new(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED), port);

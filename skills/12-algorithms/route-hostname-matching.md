@@ -24,9 +24,11 @@ are lowercase DNS names, including short names; bare `*`, IP literals, partial
 wildcards and malformed lists are rejected. HTTPRoute/GRPCRoute permit 0..16
 names; TLSRoute requires 1..16. Invalid entries reject the entire Route list.
 
-Traversal compares reversed bytes without constructing a reversed request:
-collect matching wildcard terminals at dot boundaries, add an exact terminal
-if present, then return contents in reverse collection order. Thus exact wins,
+The immutable topology uses exactly sized flat node, packed child-entry and
+edge-byte pools. Edges are stored in query-forward order, so traversal compares
+one continuous borrowed query slice without constructing a reversed request.
+After descent a lazy iterator returns exact first, then follows parent indices
+to yield wildcard terminals from longest to shortest suffix. Thus exact wins,
 then longest wildcard suffix, then shorter matching suffixes. `*.example.com`
 matches `a.example.com` and `a.b.example.com`, never `example.com` or
 `notexample.com`. Exact and wildcard terminals at the same suffix are distinct.
@@ -40,10 +42,12 @@ count H. Content lookup uses the persistent map for each returned ID; its cost
 is not part of the radix's byte-walk bound. Queries allocate no heap memory,
 clone no Arcs, and acquire no lock. A 253-byte checked name has at most 127
 nonempty labels: at most 126 wildcard ancestors plus one exact terminal. The
-iterator therefore stores at most 127 IDs inline; it never truncates matches.
+iterator is lazy and stores no fixed candidate array; it never truncates matches.
 
-Construction sorts canonical patterns and reversed suffixes before freezing
-the tree. It is a cold operation, not an O(1) update. `with_changes` coalesces
+Construction sorts by reversed suffix and exact-before-wildcard terminal kind,
+then assigns private generation-local IDs and freezes exact-capacity pools.
+The ordered pattern enumeration has no external ordering contract. Construction
+is a cold operation, not an O(1) update. `with_changes` coalesces
 operations by pattern and compares final occupancy: content-only changes reuse
 the entire tree and path-copy changed persistent-map branches. Add/remove with
 no net occupancy change does not rebuild it. A changed key set rebuilds the
@@ -53,6 +57,12 @@ by enumerating all groups, so its O(H) discovery remains explicit even when it
 reuses the tree. Equal cardinality plus complete old-pattern membership proves
 key-set identity; replacements then use the old pattern order's IDs directly,
 without converting a full list into a second delta/coalescing collection.
+
+Flat construction is fallible because node, child, edge and terminal metadata
+use checked `u32`/`u8` representations. HTTP, gRPC and TLS owners map a capacity
+error to a complete empty physical-Listener table and publish it through their
+existing outer snapshot: no old table, partial table, wildcard or catch-all
+fallback survives the failure.
 
 The protocol owner publishes one immutable outer snapshot containing all
 dependent data; the matcher adds no nested ArcSwap. Readers holding an old
@@ -123,11 +133,23 @@ occupancy semantics, not just first-hit throughput.
 
 `edgion-algo/benches/radix_hostname.rs` is a dependency-free, `harness=false`
 benchmark with 10/1,000/100,000 keys, exact/wildcard/miss/continuation lookups,
-full builds, content patches, topology changes, maximum-depth queries,
-multi-Listener builds and held-generation reclamation. Its counting allocator
+200/253-byte continuous edges, shared-suffix and high-fanout shapes, full
+builds, content patches, topology changes, maximum-depth queries, multi-Listener
+builds and held-generation reclamation. Its counting allocator
 measures requested bytes, not RSS; batch means are not latency percentiles.
 Report machine, profile, key shape and command with any result. It adds no
 production metrics or dependencies.
+
+The selected 20-byte node and 5-byte packed child layout was measured on an
+Apple M4/16 GiB macOS aarch64 host with Rust 1.96.1 in the optimized bench
+profile. Against the recursive baseline, the 100,000-key build's net live-byte
+delta fell 27.8% (the matcher-only final-reader release fell 18.4%), retained
+add/remove generation deltas fell 20.6%, and all common lookup medians
+improved (exact/wildcard/short first-hit by 38.1%/48.3%/63.6%). Continuous
+200/253-byte edge hits improved 87.4%/89.6%. The artificial full 127-candidate
+walk regressed 10.9%; this is retained as a documented worst-case cost of the
+smaller lazy iterator because ordinary first-hit paths and retained memory met
+the predeclared acceptance gate.
 
 ## References
 

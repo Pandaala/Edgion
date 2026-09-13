@@ -7,6 +7,7 @@ use edgion_algo::matcher::radix_hostname::{
 };
 use edgion_resources::ListenerKey;
 use std::collections::HashMap;
+use std::fmt::Display;
 use std::sync::Arc;
 
 /// One Route plus only its accepted attachments relevant to this pattern/key.
@@ -30,6 +31,28 @@ fn tls_route_precedence(a: &Arc<TlsRouteUnit>, b: &Arc<TlsRouteUnit>) -> std::cm
 }
 
 impl TlsRouteTable {
+    fn from_hostname_result(
+        result: Result<RadixHostnameMatcher<Vec<TlsRouteCandidate>>, impl Display>,
+        pattern_count: usize,
+        unit_count: usize,
+    ) -> Self {
+        match result {
+            Ok(hosts) => Self { hosts },
+            Err(error) => {
+                tracing::error!(
+                    component = "tls_route_hostname_index",
+                    pattern_count,
+                    unit_count,
+                    err = %error,
+                    "Failed to build the TLS Route hostname index; publishing an empty Listener table"
+                );
+                Self {
+                    hosts: RadixHostnameMatcher::default(),
+                }
+            }
+        }
+    }
+
     pub fn new() -> Self {
         Self {
             hosts: RadixHostnameMatcher::default(),
@@ -77,7 +100,7 @@ impl TlsRouteTable {
                 }
             }
         }
-        let groups = groups
+        let groups: HashMap<RadixHostnamePattern, Arc<Vec<TlsRouteCandidate>>> = groups
             .into_iter()
             .map(|(pattern, mut candidates)| {
                 candidates.sort_by(|a, b| tls_route_precedence(&a.unit, &b.unit));
@@ -92,9 +115,8 @@ impl TlsRouteTable {
                 (pattern, value)
             })
             .collect();
-        Self {
-            hosts: self.hosts.with_groups(groups),
-        }
+        let pattern_count = groups.len();
+        Self::from_hostname_result(self.hosts.with_groups(groups), pattern_count, units.len())
     }
 
     /// Hostname and attachment eligibility are conjunctive, before owner policy.
@@ -161,6 +183,13 @@ impl Default for TlsRouteTable {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hostname_build_failure_clears_all_tls_candidates() {
+        let result: Result<RadixHostnameMatcher<Vec<TlsRouteCandidate>>, &str> = Err("injected capacity failure");
+        let table = TlsRouteTable::from_hostname_result(result, 1, 1);
+        assert!(table.hosts.is_empty());
+    }
     use crate::runtime::store::listener_gateway_info::ListenerEntry;
     use edgion_resources::resources::common::ParentReference;
     use edgion_resources::resources::tls_route::*;

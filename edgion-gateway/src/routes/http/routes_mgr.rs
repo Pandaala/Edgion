@@ -187,6 +187,10 @@ pub struct DomainRouteRules {
     /// Stored separately from named patterns so only an omitted or empty
     /// authored list can opt into catch-all behavior.
     pub(crate) catch_all_routes: Option<Arc<RouteRules>>,
+
+    /// Cold publication state used to force the next partial update through a
+    /// complete Listener rebuild after hostname topology construction failed.
+    pub(crate) hostname_build_failed: bool,
 }
 
 impl DomainRouteRules {
@@ -194,6 +198,7 @@ impl DomainRouteRules {
         Self {
             hosts: RadixHostnameMatcher::default(),
             catch_all_routes: None,
+            hostname_build_failed: false,
         }
     }
 

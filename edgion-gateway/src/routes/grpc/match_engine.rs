@@ -2,8 +2,9 @@ use crate::ctx::EdgionHttpContext;
 use crate::routes::grpc::GrpcRouteRuleUnit;
 use crate::runtime::store::listener_gateway_info::GatewayInfoIndex;
 use crate::runtime::GatewayInfo;
-use edgion_algo::matcher::radix_hostname::RadixHostnameQuery;
-use edgion_algo::matcher::radix_hostname::{RadixHostnameMatcher, RadixHostnamePattern};
+use edgion_algo::matcher::radix_hostname::{
+    RadixHostnameBuildError, RadixHostnameMatcher, RadixHostnamePattern, RadixHostnameQuery,
+};
 use edgion_resources::err::EdError;
 use edgion_resources::resources::grpc_route::CompiledGrpcMethodMatch;
 use pingora_proxy::Session;
@@ -107,13 +108,17 @@ impl Iterator for GrpcCandidates<'_> {
 }
 
 impl GrpcMatchEngine {
+    #[cfg(test)]
     pub fn new(routes: Vec<Arc<GrpcRouteRuleUnit>>) -> Self {
-        Self::rebuild(routes, None)
+        Self::rebuild(routes, None).expect("unit-test hostname topology fits the flat representation")
     }
 
     /// Rebuild ranks and every dependent candidate list together. Only the
     /// hostname topology can be shared with an earlier ranked generation.
-    pub(crate) fn rebuild(routes: Vec<Arc<GrpcRouteRuleUnit>>, previous: Option<&Self>) -> Self {
+    pub(crate) fn rebuild(
+        routes: Vec<Arc<GrpcRouteRuleUnit>>,
+        previous: Option<&Self>,
+    ) -> Result<Self, RadixHostnameBuildError> {
         // Character counts are computed once, not inside the sort comparator.
         // Match type is deliberately absent: no Exact/regex bucket can override
         // the Gateway API service/method/header/route precedence chain.
@@ -163,19 +168,19 @@ impl GrpcMatchEngine {
                 groups.entry(pattern).or_default().insert(rank, route);
             }
         }
-        let groups = groups
+        let groups: HashMap<RadixHostnamePattern, Arc<GrpcCandidateIndex>> = groups
             .into_iter()
             .map(|(pattern, group)| (pattern, Arc::new(group)))
             .collect();
         let hosts = match previous {
             Some(previous) => previous.hosts.with_groups(groups),
             None => RadixHostnameMatcher::build(groups),
-        };
-        Self {
+        }?;
+        Ok(Self {
             routes,
             hosts,
             catch_all,
-        }
+        })
     }
 
     pub fn match_route(
@@ -863,7 +868,7 @@ mod tests {
             make_route(Some("svc.User"), Some("Get"), None, "added"),
             &["*.example.com"],
         );
-        let updated = GrpcMatchEngine::rebuild(vec![exact.clone(), wildcard.clone(), added], Some(&old));
+        let updated = GrpcMatchEngine::rebuild(vec![exact.clone(), wildcard.clone(), added], Some(&old)).unwrap();
         assert!(old.shares_hosts(&updated));
         assert_eq!(
             candidate_names(&old, "svc.User", "Get", "api.example.com"),
@@ -879,7 +884,8 @@ mod tests {
         let topology = GrpcMatchEngine::rebuild(
             vec![with_hosts(make_route(None, Some("Get"), None, "renamed"), &["grpc"])],
             Some(&updated),
-        );
+        )
+        .unwrap();
         assert!(!updated.shares_hosts(&topology));
         assert_eq!(candidate_names(&topology, "svc", "Get", "grpc"), ["default/renamed"]);
         assert!(candidate_names(&topology, "svc", "Get", "api.example.com").is_empty());

@@ -20,6 +20,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
+const LOOKUP_BATCHES: usize = 5;
+
 struct CountingSystem;
 
 static CALLS: AtomicUsize = AtomicUsize::new(0);
@@ -237,20 +239,22 @@ fn lookup_measurements(
             black_box(matcher.matching_values(query).next().copied());
             black_box(reference.first(input));
         }
-        let (_, timing) = measured(|| {
-            for _ in 0..iterations {
-                black_box(matcher.matching_values(black_box(query)).next().copied());
-            }
-        });
-        assert_eq!(timing.calls, 0);
-        report("radix", shape, keys, iterations, &timing);
-        let (_, timing) = measured(|| {
-            for _ in 0..iterations {
-                black_box(reference.first(black_box(input)));
-            }
-        });
-        assert_eq!(timing.calls, 0);
-        report("corrected_hash", shape, keys, iterations, &timing);
+        for _ in 0..LOOKUP_BATCHES {
+            let (_, timing) = measured(|| {
+                for _ in 0..iterations {
+                    black_box(matcher.matching_values(black_box(query)).next().copied());
+                }
+            });
+            assert_eq!(timing.calls, 0);
+            report("radix", shape, keys, iterations, &timing);
+            let (_, timing) = measured(|| {
+                for _ in 0..iterations {
+                    black_box(reference.first(black_box(input)));
+                }
+            });
+            assert_eq!(timing.calls, 0);
+            report("corrected_hash", shape, keys, iterations, &timing);
+        }
     }
     for (shape, input) in [
         ("lookup_exact", "api.sub.example.com"),
@@ -265,27 +269,30 @@ fn lookup_measurements(
             black_box(checksum(matcher, query));
             black_box(reference.checksum(input));
         }
-        let (_, timing) = measured(|| {
-            for _ in 0..iterations {
-                black_box(checksum(matcher, black_box(query)));
-            }
-        });
-        assert_eq!(timing.calls, 0, "normalized radix lookup allocates");
-        report("radix", shape, keys, iterations, &timing);
-        let (_, timing) = measured(|| {
-            for _ in 0..iterations {
-                black_box(reference.checksum(black_box(input)));
-            }
-        });
-        assert_eq!(timing.calls, 0, "corrected hash lookup allocates");
-        report("corrected_hash", shape, keys, iterations, &timing);
+        for _ in 0..LOOKUP_BATCHES {
+            let (_, timing) = measured(|| {
+                for _ in 0..iterations {
+                    black_box(checksum(matcher, black_box(query)));
+                }
+            });
+            assert_eq!(timing.calls, 0, "normalized radix lookup allocates");
+            report("radix", shape, keys, iterations, &timing);
+            let (_, timing) = measured(|| {
+                for _ in 0..iterations {
+                    black_box(reference.checksum(black_box(input)));
+                }
+            });
+            assert_eq!(timing.calls, 0, "corrected hash lookup allocates");
+            report("corrected_hash", shape, keys, iterations, &timing);
+        }
     }
 }
 
 fn size_measurements(keys: usize, iterations: usize) {
     let source = groups(keys);
     let prepared = source.clone();
-    let (matcher, build) = measured(|| RadixHostnameMatcher::build(prepared));
+    let (matcher, build) =
+        measured(|| RadixHostnameMatcher::build(prepared).expect("benchmark topology fits the flat representation"));
     report("radix", "full_build", keys, 1, &build);
     let (reference, build) = measured(|| CorrectedHash::new(&source));
     report("corrected_hash", "full_build", keys, 1, &build);
@@ -295,14 +302,22 @@ fn size_measurements(keys: usize, iterations: usize) {
         pattern("api.sub.example.com"),
         Arc::new(keys + 1),
     )];
-    let (patched, timing) = measured(|| matcher.with_changes(changes));
+    let (patched, timing) = measured(|| {
+        matcher
+            .with_changes(changes)
+            .expect("benchmark topology fits the flat representation")
+    });
     report("radix", "one_content_patch_old_retained", keys, 1, &timing);
     let query = RadixHostnameQuery::new("api.sub.example.com").unwrap();
     assert_eq!(*matcher.matching_values(query).next().unwrap(), 0);
     assert_eq!(*patched.matching_values(query).next().unwrap(), keys + 1);
 
     let prepared = source.clone();
-    let (reconnected, timing) = measured(|| patched.with_groups(prepared));
+    let (reconnected, timing) = measured(|| {
+        patched
+            .with_groups(prepared)
+            .expect("benchmark topology fits the flat representation")
+    });
     report(
         "radix",
         "full_list_same_keyset_one_changed_old_retained",
@@ -316,7 +331,11 @@ fn size_measurements(keys: usize, iterations: usize) {
         .iter()
         .map(|(key, value)| (key.clone(), Arc::new(**value)))
         .collect();
-    let (replaced, timing) = measured(|| reconnected.with_groups(prepared));
+    let (replaced, timing) = measured(|| {
+        reconnected
+            .with_groups(prepared)
+            .expect("benchmark topology fits the flat representation")
+    });
     report(
         "radix",
         "full_list_same_keyset_all_fresh_old_retained",
@@ -332,11 +351,19 @@ fn size_measurements(keys: usize, iterations: usize) {
     ));
     let added_key = pattern("added.example.com");
     let changes = [RadixHostnameChange::Upsert(added_key.clone(), Arc::new(keys + 2))];
-    let (added, timing) = measured(|| reconnected.with_changes(changes));
+    let (added, timing) = measured(|| {
+        reconnected
+            .with_changes(changes)
+            .expect("benchmark topology fits the flat representation")
+    });
     report("radix", "add_key_remap_old_retained", keys, 1, &timing);
     assert_eq!(added.len(), keys + 1);
     assert_eq!(checksum(&matcher, query), checksum(&added, query));
-    let (removed, timing) = measured(|| added.with_changes([RadixHostnameChange::Remove(added_key)]));
+    let (removed, timing) = measured(|| {
+        added
+            .with_changes([RadixHostnameChange::Remove(added_key)])
+            .expect("benchmark topology fits the flat representation")
+    });
     report("radix", "remove_key_remap_old_retained", keys, 1, &timing);
     assert_eq!(removed.len(), keys);
     assert_eq!(checksum(&removed, query), checksum(&matcher, query));
@@ -358,24 +385,116 @@ fn deep_measurements(iterations: usize) {
         groups.insert(pattern(&format!("*.{suffix}")), Arc::new(labels));
     }
     let reference = CorrectedHash::new(&groups);
-    let matcher = RadixHostnameMatcher::build(groups);
+    let matcher = RadixHostnameMatcher::build(groups).expect("benchmark topology fits the flat representation");
     let query = RadixHostnameQuery::new(&query).unwrap();
     assert_eq!(matcher.matching_values(query).count(), 127);
     assert_eq!(checksum(&matcher, query), reference.checksum(query.as_str()));
-    let (_, timing) = measured(|| {
-        for _ in 0..iterations {
-            black_box(checksum(&matcher, black_box(query)));
+    for _ in 0..LOOKUP_BATCHES {
+        let (_, timing) = measured(|| {
+            for _ in 0..iterations {
+                black_box(matcher.matching_values(black_box(query)).next().copied());
+            }
+        });
+        assert_eq!(timing.calls, 0);
+        report("radix", "253_byte_127_hits_first", 127, iterations, &timing);
+        let (_, timing) = measured(|| {
+            for _ in 0..iterations {
+                black_box(checksum(&matcher, black_box(query)));
+            }
+        });
+        assert_eq!(timing.calls, 0);
+        report("radix", "253_byte_127_hits_full", 127, iterations, &timing);
+        let (_, timing) = measured(|| {
+            for _ in 0..iterations {
+                black_box(reference.checksum(black_box(query.as_str())));
+            }
+        });
+        assert_eq!(timing.calls, 0);
+        report("corrected_hash", "253_byte_127_hits_full", 127, iterations, &timing);
+    }
+}
+
+fn exact_lookup_batches(operation: &str, pattern_value: &str, queries: &[(&str, String)], iterations: usize) {
+    let matcher = RadixHostnameMatcher::build(HashMap::from([(pattern(pattern_value), Arc::new(1))]))
+        .expect("benchmark topology fits the flat representation");
+    for (case, input) in queries {
+        let query = RadixHostnameQuery::new(input).expect("benchmark query is a valid hostname");
+        let expected = usize::from(input == pattern_value);
+        assert_eq!(matcher.matching_values(query).count(), expected);
+        for _ in 0..256 {
+            black_box(matcher.matching_values(query).next());
         }
-    });
-    assert_eq!(timing.calls, 0);
-    report("radix", "253_byte_127_hits", 127, iterations, &timing);
-    let (_, timing) = measured(|| {
-        for _ in 0..iterations {
-            black_box(reference.checksum(black_box(query.as_str())));
+        for _ in 0..LOOKUP_BATCHES {
+            let (_, timing) = measured(|| {
+                for _ in 0..iterations {
+                    black_box(matcher.matching_values(black_box(query)).next());
+                }
+            });
+            assert_eq!(timing.calls, 0);
+            report("radix", &format!("{operation}_{case}"), 1, iterations, &timing);
         }
-    });
-    assert_eq!(timing.calls, 0);
-    report("corrected_hash", "253_byte_127_hits", 127, iterations, &timing);
+    }
+}
+
+fn long_edge_measurements(iterations: usize) {
+    for length in [200, 253] {
+        let exact = "a".repeat(length);
+        let mut early = exact.clone();
+        early.replace_range(0..1, "b");
+        let mut middle = exact.clone();
+        middle.replace_range(length / 2..length / 2 + 1, "b");
+        let mut late = exact.clone();
+        late.replace_range(length - 1..length, "b");
+        exact_lookup_batches(
+            &format!("{length}_byte_single_edge"),
+            &exact,
+            &[
+                ("hit", exact.clone()),
+                ("miss_start", early),
+                ("miss_middle", middle),
+                ("miss_end", late),
+            ],
+            iterations,
+        );
+    }
+}
+
+fn shaped_lookup_measurements(iterations: usize) {
+    let shared: Groups = (0..10_000)
+        .map(|id| (pattern(&format!("host{id}.deep.shared.example.com")), Arc::new(id)))
+        .collect();
+    let shared_matcher = RadixHostnameMatcher::build(shared).expect("benchmark topology fits the flat representation");
+    let shared_query = RadixHostnameQuery::new("host9999.deep.shared.example.com").unwrap();
+    for _ in 0..LOOKUP_BATCHES {
+        let (_, timing) = measured(|| {
+            for _ in 0..iterations {
+                black_box(shared_matcher.matching_values(black_box(shared_query)).next());
+            }
+        });
+        assert_eq!(timing.calls, 0);
+        report("radix", "shared_suffix_exact_first", 10_000, iterations, &timing);
+    }
+
+    let alphabet = b"abcdefghijklmnopqrstuvwxyz0123456789";
+    let fanout: Groups = alphabet
+        .iter()
+        .enumerate()
+        .map(|(id, byte)| {
+            let name = format!("{}.fanout.example.com", char::from(*byte));
+            (pattern(&name), Arc::new(id))
+        })
+        .collect();
+    let fanout_matcher = RadixHostnameMatcher::build(fanout).expect("benchmark topology fits the flat representation");
+    let fanout_query = RadixHostnameQuery::new("z.fanout.example.com").unwrap();
+    for _ in 0..LOOKUP_BATCHES {
+        let (_, timing) = measured(|| {
+            for _ in 0..iterations {
+                black_box(fanout_matcher.matching_values(black_box(fanout_query)).next());
+            }
+        });
+        assert_eq!(timing.calls, 0);
+        report("radix", "high_fanout_exact_first", alphabet.len(), iterations, &timing);
+    }
 }
 
 fn main() {
@@ -393,11 +512,13 @@ fn main() {
         );
     }
     deep_measurements(if smoke { 100 } else { 10_000 });
+    long_edge_measurements(if smoke { 100 } else { 10_000 });
+    shaped_lookup_measurements(if smoke { 100 } else { 10_000 });
     let prepared: Vec<_> = (0..1_000).map(|_| groups(100)).collect();
     let (listeners, timing) = measured(|| {
         prepared
             .into_iter()
-            .map(RadixHostnameMatcher::build)
+            .map(|groups| RadixHostnameMatcher::build(groups).expect("benchmark topology fits the flat representation"))
             .collect::<Vec<_>>()
     });
     report("radix", "1000_listeners_x_100_keys_build", 100_000, 1, &timing);
