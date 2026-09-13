@@ -2305,6 +2305,7 @@ run_all_isolated_scenarios() {
   # suite-parity: isolated plugin_policy
   # suite-parity: isolated unknown_config_fields
   # suite-parity: isolated proxy_protocol_policy_lifecycle
+  # suite-parity: isolated udp_process_shutdown
   # suite-parity: isolated oidc_egress
   printf '%s\n' \
     'Isolated|controller_auth' \
@@ -2312,7 +2313,8 @@ run_all_isolated_scenarios() {
     'Isolated|fips_policy' \
     'Isolated|geoip_db_states' \
     'Isolated|plugin_policy' \
-    'Isolated|unknown_config_fields' > "${jobs_expected}"
+    'Isolated|unknown_config_fields' \
+    'Isolated|udp_process_shutdown' > "${jobs_expected}"
 
   run_isolated_helper_group jobs "${jobs_expected}" \
     "${RUN_ISOLATED_JOBS_SCRIPT}" \
@@ -2326,6 +2328,7 @@ run_all_isolated_scenarios() {
     --job geoip_db_states \
     --job plugin_policy \
     --job unknown_config_fields \
+    --job udp_process_shutdown \
     || isolated_harness_failed=true
 
   # suite-parity: isolated proxy_protocol_inbound

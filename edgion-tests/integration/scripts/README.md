@@ -222,6 +222,22 @@ Covered areas:
 - Load balancing: `lb-rr` (RoundRobin), `lb-ch` (ConsistentHash), `weighted-backend`
 - Advanced features: `timeout`, `real-ip`, `security`, `plugin-logs`
 
+### UDP process shutdown wire scenario
+
+`integration/test_udp_process_shutdown.sh` starts isolated Controller and Gateway
+processes with two active UDP listeners and a streaming UDP fixture. It verifies
+SIGTERM grace behavior, SIGINT, an inbound-PROXY-policy fatal transition, and a
+later listener bind failure. Each case checks packet cessation, process outcome,
+and UDP port release; running cases also observe terminal session records in the
+local-file UDP sink. This proves the configured local sink received those records,
+not that every asynchronous log backend provides a durable shutdown flush.
+
+Run it after preparing the integration binaries:
+
+```bash
+bash edgion-tests/integration/scripts/integration/test_udp_process_shutdown.sh
+```
+
 ## conf_sync Tests
 
 ### `run_conf_sync_mtls_test.sh`

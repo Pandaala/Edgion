@@ -6,4 +6,5 @@ geoip_db_states	edgion-tests/integration/scripts/integration/test_geoip_db_state
 plugin_policy	edgion-tests/integration/scripts/integration/test_plugin_policy.sh	480
 unknown_config_fields	edgion-tests/integration/scripts/integration/test_unknown_config_fields.sh	360
 proxy_protocol_policy_lifecycle	edgion-tests/integration/scripts/integration/test_proxy_protocol_policy_lifecycle.sh	480
+udp_process_shutdown	edgion-tests/integration/scripts/integration/test_udp_process_shutdown.sh	360
 oidc_egress	edgion-tests/integration/scripts/integration/test_oidc_egress.sh	600

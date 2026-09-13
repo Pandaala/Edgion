@@ -122,7 +122,7 @@ Terminal logs use the existing UDP logger. Cancellation may discard in-flight da
 forced shutdown can abandon pending terminal logs. Submission does not establish durable
 flush of the log sink: the shared [DataSender shutdown contract](../../../tasks/todo/data-sender-graceful-shutdown-contract.md)
 remains separate. See the [UDP lifecycle regression guard](../../04-review/listeners/regression-guards/udp-process-shutdown.md)
-for verification limits and deferred wire coverage.
+for process-level wire coverage and its verification limits.
 
 The background Tokio thread is therefore not an intentionally permanent `pending()` task.
 

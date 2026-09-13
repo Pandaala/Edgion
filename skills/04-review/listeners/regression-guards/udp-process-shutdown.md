@@ -85,19 +85,43 @@ Current verification:
   review identified the partial-listener startup-failure branch; it was included
   before the code reviews. Neither source review substitutes for executed checks.
 
+Fresh process-level verification for follow-up `udp-process-shutdown-wire-coverage`:
+
+- `bash edgion-tests/integration/scripts/integration/test_udp_process_shutdown.sh`:
+  passed on 2026-09-13 on macOS.
+- The isolated scenario starts a real Controller, Gateway, and streaming UDP
+  fixture with two listeners. SIGTERM preserves UDP traffic during Pingora's
+  configured grace period, while SIGINT and an inbound-PROXY-policy fatal
+  transition preserve their fast/non-zero semantics as applicable. All running
+  cases stop forwarding after the post-Pingora drain marker, exit only after the
+  auxiliary drain, and release both ports while the process is still alive.
+- A separate startup case reserves the second UDP port, observes the first
+  listener start, and verifies the non-zero bind failure releases the earlier
+  port before process completion. Running cases observe terminal records for
+  both listeners in the configured local-file UDP sink before process completion.
+- The scenario is registered in the canonical local and Kubernetes isolated-job
+  inventories. This run exercised the canonical standalone script locally; it
+  did not execute a Kubernetes Job.
+
 Registry tests cover multi-listener cancellation, duplicate/late registration,
 repeated/concurrent shutdown, failed task reporting, and parent-abort/child-
 destruction acknowledgement without network I/O. The existing serve cancellation
 test also checks session and permit cleanup.
 
-Real signal/UDP-wire verification remains explicitly deferred in
-[UDP process shutdown wire coverage](../../../../tasks/todo/udp-process-shutdown-wire-coverage.md).
-Re-evaluate if shutdown timing moves to initial signal receipt, listeners become
-dynamic, task ownership changes, a blocking operation enters these futures, or
-the session retirement / shared sender lifecycle contracts change.
+Real signal and UDP-wire coverage now exercises normal cooperative process drain.
+The forced-abort branch remains deterministic unit coverage: the wire scenario
+does not add a production-only hang or test hook merely to force the five-second
+deadline. Observing the local-file record proves that sink received the submitted
+entry in this scenario; it does not establish a durable-flush guarantee for every
+asynchronous sender. Re-evaluate if shutdown timing moves to initial signal
+receipt, listeners become dynamic, task ownership changes, a blocking operation
+enters these futures, or the session retirement / shared sender lifecycle
+contracts change.
 
 ## Resolution references
 
 - `wire-udp-listener-process-shutdown`: confirmed defect, fixed and verified;
-  the active source task was removed. The explicitly deferred wire coverage,
-  session-generation retirement, and sender persistence work remain tracked above.
+  the active source task was removed.
+- `udp-process-shutdown-wire-coverage`: confirmed test gap, closed with the
+  process-level scenario described above. Session-generation retirement and
+  sender persistence remain separate tracked work.

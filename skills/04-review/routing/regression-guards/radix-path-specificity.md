@@ -129,9 +129,10 @@ Existing `edgion-tests/**` files were outside the named-parameter repair scope.
 The full workspace test suite was not run during that repair.
 
 Agent-doc validation initially found an unrelated pre-existing broken reference
-to `tasks/todo/udp-process-shutdown-wire-coverage.md`. The already-deferred
-verification task was restored from its owning UDP knowledge page, and the
-guard passed on rerun; no UDP implementation or verification claim was changed.
+to the UDP shutdown wire-coverage task. The then-deferred task was restored from
+its owning [UDP knowledge page](../../listeners/regression-guards/udp-process-shutdown.md),
+and the guard passed on rerun; no UDP implementation or verification claim was
+changed by the routing repair.
 
 Re-evaluate if parameter/escape grammar, normalization, the extension policy,
 or the canonical Gateway API precedence changes. Request-dependent ordering

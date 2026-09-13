@@ -636,6 +636,7 @@ run_isolated_scenarios() {
         "geoip_db_states"
         "unknown_config_fields"
         "proxy_protocol_policy_lifecycle"
+        "udp_process_shutdown"
         "oidc_egress"
     )
     local commands=(
@@ -645,6 +646,7 @@ run_isolated_scenarios() {
         "${SCRIPT_DIR}/test_geoip_db_states.sh"
         "${SCRIPT_DIR}/test_unknown_config_fields.sh"
         "${SCRIPT_DIR}/test_proxy_protocol_policy_lifecycle.sh"
+        "${SCRIPT_DIR}/test_udp_process_shutdown.sh"
         "${SCRIPT_DIR}/test_oidc_egress.sh"
     )
 
