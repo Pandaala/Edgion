@@ -67,9 +67,21 @@ infer whether arbitrary processor bytes originated from a secret.
 
 ## Verification and re-evaluation
 
-Implementation and fresh verification are in progress; no completed test result
-is asserted yet. Closure requires deterministic raw-map/protobuf tests and real
-adapter tests, independent review, and repository checks.
+Fresh scoped verification passed 170 tests: 16 ExtProc mutation tests, 119
+session-adapter tests, and 35 local-reply, streamed-response, Wasm, preflight,
+request-body and failure-response tests. Coverage includes raw-map/protobuf
+round trips, sequential conditions, invalid bytes, and sensitivity metadata.
+Independent code review returned LGTM after the DSL Redis test session gained
+the four required fail-fast trait stubs; its scenarios and assertions were not
+changed. No performance benchmark or deployed wire test was run.
+
+`cargo fmt --all -- --check`, `cargo check --workspace --all-targets`, and
+`cargo clippy --workspace --all-targets` passed (Clippy reported warnings).
+SSA, metrics inventory, Pingora source, Gateway tracing, and English-only guards
+also passed. The latest agent-doc check is blocked by an
+unrelated missing routing follow-up target referenced from
+`routing/regression-guards/radix-path-specificity.md`; the active task remains
+open until required checks pass.
 
 Deployed HTTP/1 and HTTP/2 interoperability remains tracked in
 [the wire-coverage task](../../../../tasks/todo/verify-ext-proc-opaque-header-wire-fidelity.md).
