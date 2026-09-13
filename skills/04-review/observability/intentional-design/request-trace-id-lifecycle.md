@@ -122,7 +122,9 @@ aliases; LBRoundRobin was not run. The remaining suites used the existing shared
 start/stop scripts with 127.0.0.1 fixtures. A missing Filters/base Gateway was
 added to the test invocation before the successful rerun. No full sweep, live
 Kubernetes/OTLP collector, physical multi-gateway or cache-residue coverage is
-claimed. See `tasks/pending/request-trace-id/flat-access-log.md` for scope.
+claimed. The completed scope covered flat request-identity serialization,
+reserved-name validation, default-header replacement, canonical access-log key
+selection, affected integration consumers, and English/Chinese documentation.
 
 D0069's old TraceContext documentation gap is superseded by removing its plugin
 and options, not by accepting its old trust/generation/sampling wording. The new

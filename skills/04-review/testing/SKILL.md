@@ -16,7 +16,6 @@ before applying a decision to current code.
 ## Intentional design
 
 - [ACME GatewayRef Isolation Coverage Is Not a Standalone Defect — WONT-FIX](intentional-design/acme-gatewayref-isolation-coverage-not-standalone.md)
-- [EdgionPlugins LKG Identity Coverage Is Not a Standalone Defect — WONT-FIX](intentional-design/edgionplugins-lkg-identity-coverage-not-standalone.md)
 - [`/api/v1/debug/store-stats` path prefix vs testing-mode gate — ACCEPTED-TRADEOFF](intentional-design/store-stats-testing-router-naming.md)
 - [Testing-router error-body enumeration & no-auth on `create_testing_router` — ACCEPTED-TRADEOFF](intentional-design/testing-router-error-body-enumeration.md)
 

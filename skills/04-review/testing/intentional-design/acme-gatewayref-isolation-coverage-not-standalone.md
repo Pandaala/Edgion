@@ -86,7 +86,7 @@ Re-open this decision only if:
 - Closed D0027 / `tasks/todo/add-acme-gatewayref-isolation-integration-coverage.md`
 - Store and intercept: `edgion-gateway/src/services/acme/challenge_store.rs`,
   `edgion-gateway/src/routes/http/proxy_http/pg_request_filter.rs`
-- Sibling close: [edgionplugins-lkg-identity-coverage-not-standalone.md](edgionplugins-lkg-identity-coverage-not-standalone.md)
+- Related plugin-runtime decision: [EdgionPlugins key-scoped last-known-good](../../plugin-runtime/intentional-design/edgionplugins-key-scoped-last-known-good.md)
 - B0060: `tasks/pending/edgion-gateway-file-optimization/batches/B0060-acme-expiry-boundary.md`
 
 ## Resolution references

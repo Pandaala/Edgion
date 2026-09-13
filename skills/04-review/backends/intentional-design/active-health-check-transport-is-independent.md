@@ -98,9 +98,12 @@ tuning are useful precedent but are not part of the first protocol increment.
 
 The explicit product decision and linked primary documentation were reconciled
 on 2026-09-11. The original documentation-only change established plaintext probe
-independence; the encrypted extension preserves that ownership boundary. Its
-fresh test commands and review outcomes are recorded in
-`tasks/pending/independent-encrypted-active-health-check-protocols/02-implementation.md`.
+independence; the encrypted extension preserves that ownership boundary. Focused
+resource, Controller, Gateway, structural-CRD, dynamic-registry, and live
+TLS/mTLS HTTP/gRPC integration coverage passed. Independent design and final
+code reviews closed the publication race, strict CA parsing, and GRPCS origin
+findings. The current resource regression and complete CRD coverage guards were
+rerun successfully on 2026-09-13.
 
 Re-evaluate if Edgion adopts a general cluster transport object that explicitly
 owns both application and probe transport, if a protocol specification requires
