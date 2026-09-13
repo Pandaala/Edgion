@@ -1,5 +1,4 @@
 use crate::lb::BackendSelector;
-use crate::matcher::hostname::{CompiledHostnamePattern, HostContentChange};
 use crate::plugins::PluginRuntime;
 use crate::routes::common::{filter_accepted_parent_refs, gateways_from_parent_refs, resolve_parent_refs};
 use crate::routes::http::match_engine::radix_route_match::RadixRouteMatchEngine;
@@ -11,6 +10,7 @@ use crate::routes::http::routes_mgr::{
 use crate::routes::http::{get_global_http_route_managers, HttpRouteRuleUnit};
 use crate::runtime::matching::route::ResolvedParentRef;
 use crate::MatchInfo;
+use edgion_algo::matcher::radix_hostname::{RadixHostnameChange, RadixHostnamePattern};
 use edgion_common::conf_sync::traits::ConfHandler;
 use edgion_resources::{HTTPPathMatch, HTTPRoute, HTTPRouteMatch, HTTPRouteRule, ListenerKey, ResourceMeta};
 use regex::Regex;
@@ -664,7 +664,7 @@ pub(crate) fn build_domain_route_rules_from_routes(
         };
         if domain == CATCH_ALL_HOSTNAME {
             catch_all_routes = Some(rules);
-        } else if let Ok(pattern) = CompiledHostnamePattern::parse(&domain) {
+        } else if let Ok(pattern) = RadixHostnamePattern::parse(&domain) {
             groups.insert(pattern, rules);
         }
     }
@@ -693,7 +693,7 @@ pub(crate) fn patch_domain_route_rules(
         let pattern = if domain == CATCH_ALL_HOSTNAME {
             None
         } else {
-            let Ok(pattern) = CompiledHostnamePattern::parse(domain) else {
+            let Ok(pattern) = RadixHostnamePattern::parse(domain) else {
                 continue;
             };
             Some(pattern)
@@ -731,8 +731,8 @@ pub(crate) fn patch_domain_route_rules(
         let rules = build_route_rules(domain, split);
         match pattern {
             Some(pattern) => updates.push(match rules {
-                Some(rules) => HostContentChange::Upsert(pattern, rules),
-                None => HostContentChange::Remove(pattern),
+                Some(rules) => RadixHostnameChange::Upsert(pattern, rules),
+                None => RadixHostnameChange::Remove(pattern),
             }),
             None => catch_all_routes = rules,
         }
@@ -2265,7 +2265,7 @@ mod tests {
         // build_route_with_lb_policy declares the test.example.com hostname group.
         let rules = table
             .hosts
-            .get(&CompiledHostnamePattern::parse("test.example.com").unwrap())
+            .get(&RadixHostnamePattern::parse("test.example.com").unwrap())
             .cloned()
             .expect("test.example.com rules present");
         let unit = rules

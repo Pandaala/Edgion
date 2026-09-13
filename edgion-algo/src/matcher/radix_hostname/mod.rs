@@ -1,27 +1,27 @@
-//! Gateway hostname matching algorithms.
+//! Gateway API Route hostname radix matching.
 //!
 //! Route matching follows Gateway API hostname-intersection semantics and may
 //! match multiple labels below a wildcard suffix. Certificate selection is kept
 //! in [`rfc6125`] and intentionally matches exactly one wildcard label.
 
 mod input;
+mod pattern;
 mod radix;
-pub(crate) mod rfc6125;
 
-pub use input::{normalize_route_sni, HostnameQuery, NormalizedRouteSni};
+pub use input::{normalize_route_sni, NormalizedRouteSni, RadixHostnameQuery};
+pub use pattern::{radix_hostname_matches, RadixHostnamePatternError, RadixHostnamePatternRef, MAX_HOSTNAME_LEN};
 
 use self::radix::{HostPatternId, HostnameRadixTree};
-use edgion_resources::hostname::{HostnameError, HostnamePatternRef};
 use rpds::HashTrieMapSync;
 use std::collections::HashMap;
 use std::sync::Arc;
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct CompiledHostnamePattern(Box<str>);
+pub struct RadixHostnamePattern(Box<str>);
 
-impl CompiledHostnamePattern {
-    pub fn parse(pattern: &str) -> Result<Self, HostnameError> {
-        HostnamePatternRef::parse(pattern)?;
+impl RadixHostnamePattern {
+    pub fn parse(pattern: &str) -> Result<Self, RadixHostnamePatternError> {
+        RadixHostnamePatternRef::parse(pattern)?;
         Ok(Self(pattern.into()))
     }
 
@@ -38,17 +38,17 @@ impl CompiledHostnamePattern {
     }
 }
 
-pub enum HostContentChange<T> {
-    Upsert(CompiledHostnamePattern, Arc<T>),
-    Remove(CompiledHostnamePattern),
+pub enum RadixHostnameChange<T> {
+    Upsert(RadixHostnamePattern, Arc<T>),
+    Remove(RadixHostnamePattern),
 }
 
-pub struct HostnameMatcher<T> {
+pub struct RadixHostnameMatcher<T> {
     hosts: Arc<HostnameRadixTree>,
     contents: HashTrieMapSync<HostPatternId, Arc<T>>,
 }
 
-impl<T> Clone for HostnameMatcher<T> {
+impl<T> Clone for RadixHostnameMatcher<T> {
     fn clone(&self) -> Self {
         Self {
             hosts: Arc::clone(&self.hosts),
@@ -57,15 +57,15 @@ impl<T> Clone for HostnameMatcher<T> {
     }
 }
 
-impl<T> Default for HostnameMatcher<T> {
+impl<T> Default for RadixHostnameMatcher<T> {
     fn default() -> Self {
         Self::build(HashMap::new())
     }
 }
 
-impl<T> HostnameMatcher<T> {
+impl<T> RadixHostnameMatcher<T> {
     /// Callers aggregate competing resources into one opaque value per pattern.
-    pub fn build(mut groups: HashMap<CompiledHostnamePattern, Arc<T>>) -> Self {
+    pub fn build(mut groups: HashMap<RadixHostnamePattern, Arc<T>>) -> Self {
         let mut patterns: Vec<_> = groups.keys().cloned().collect();
         patterns.sort();
         let mut contents = HashTrieMapSync::new_sync();
@@ -83,14 +83,14 @@ impl<T> HostnameMatcher<T> {
 
     /// Ordered cold operations coalesce before testing final pattern occupancy.
     /// Existing keys only: share the whole tree and patch persistent map paths.
-    pub fn with_changes(&self, changes: impl IntoIterator<Item = HostContentChange<T>>) -> Self {
+    pub fn with_changes(&self, changes: impl IntoIterator<Item = RadixHostnameChange<T>>) -> Self {
         let mut final_changes = HashMap::new();
         for change in changes {
             match change {
-                HostContentChange::Upsert(pattern, value) => {
+                RadixHostnameChange::Upsert(pattern, value) => {
                     final_changes.insert(pattern, Some(value));
                 }
-                HostContentChange::Remove(pattern) => {
+                RadixHostnameChange::Remove(pattern) => {
                     final_changes.insert(pattern, None);
                 }
             }
@@ -132,7 +132,7 @@ impl<T> HostnameMatcher<T> {
 
     /// Full payload replacement still shares the tree when keys agree. Its
     /// O(H) discovery cost is explicit; incremental owners use with_changes.
-    pub fn with_groups(&self, mut groups: HashMap<CompiledHostnamePattern, Arc<T>>) -> Self {
+    pub fn with_groups(&self, mut groups: HashMap<RadixHostnamePattern, Arc<T>>) -> Self {
         if groups.len() != self.len() || !self.hosts.patterns().iter().all(|pattern| groups.contains_key(pattern)) {
             return Self::build(groups);
         }
@@ -150,19 +150,19 @@ impl<T> HostnameMatcher<T> {
         next
     }
 
-    pub fn matching_values(&self, query: HostnameQuery<'_>) -> impl Iterator<Item = &T> {
+    pub fn matching_values(&self, query: RadixHostnameQuery<'_>) -> impl Iterator<Item = &T> {
         self.hosts
             .matching_ids(query.as_str())
             .map(|id| self.content(id).as_ref())
     }
 
     /// Cold exact-pattern access for rebuilding a touched protocol group.
-    pub fn get(&self, pattern: &CompiledHostnamePattern) -> Option<&Arc<T>> {
+    pub fn get(&self, pattern: &RadixHostnamePattern) -> Option<&Arc<T>> {
         self.hosts.id_for_pattern(pattern).map(|id| self.content(id))
     }
 
     /// Cold enumeration; IDs stay private and cannot leak across generations.
-    pub fn groups(&self) -> impl Iterator<Item = (&CompiledHostnamePattern, &Arc<T>)> {
+    pub fn groups(&self) -> impl Iterator<Item = (&RadixHostnamePattern, &Arc<T>)> {
         self.hosts
             .patterns()
             .iter()
@@ -187,8 +187,11 @@ impl<T> HostnameMatcher<T> {
             .expect("every frozen tree terminal has same-generation contents")
     }
 
-    #[cfg(test)]
-    pub(crate) fn shares_hosts(&self, other: &Self) -> bool {
+    /// Returns whether two snapshots share the same immutable radix topology.
+    ///
+    /// This is intended for cold-path diagnostics and structural-sharing tests;
+    /// it does not compare payloads.
+    pub fn shares_hosts(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.hosts, &other.hosts)
     }
 }
@@ -198,12 +201,12 @@ mod tests {
     use super::*;
     use std::mem::size_of;
 
-    fn pattern(value: &str) -> CompiledHostnamePattern {
-        CompiledHostnamePattern::parse(value).unwrap()
+    fn pattern(value: &str) -> RadixHostnamePattern {
+        RadixHostnamePattern::parse(value).unwrap()
     }
 
-    fn matcher(patterns: &[&str]) -> HostnameMatcher<String> {
-        HostnameMatcher::build(
+    fn matcher(patterns: &[&str]) -> RadixHostnameMatcher<String> {
+        RadixHostnameMatcher::build(
             patterns
                 .iter()
                 .map(|p| (pattern(p), Arc::new((*p).to_string())))
@@ -211,9 +214,9 @@ mod tests {
         )
     }
 
-    fn hits(index: &HostnameMatcher<String>, query: &str) -> Vec<String> {
+    fn hits(index: &RadixHostnameMatcher<String>, query: &str) -> Vec<String> {
         index
-            .matching_values(HostnameQuery::new(query).unwrap())
+            .matching_values(RadixHostnameQuery::new(query).unwrap())
             .cloned()
             .collect()
     }
@@ -249,34 +252,34 @@ mod tests {
         struct Payload(usize);
         let a = Arc::new(Payload(1));
         let b = Arc::new(Payload(2));
-        let old = HostnameMatcher::build(HashMap::from([
+        let old = RadixHostnameMatcher::build(HashMap::from([
             (pattern("a.test"), a.clone()),
             (pattern("*.test"), b.clone()),
         ]));
         let updated = Arc::new(Payload(3));
-        let new = old.with_changes([HostContentChange::Upsert(pattern("a.test"), updated.clone())]);
+        let new = old.with_changes([RadixHostnameChange::Upsert(pattern("a.test"), updated.clone())]);
         assert!(new.shares_hosts(&old));
         assert!(Arc::ptr_eq(new.get(&pattern("*.test")).unwrap(), &b));
         assert!(Arc::ptr_eq(new.get(&pattern("a.test")).unwrap(), &updated));
         assert!(Arc::ptr_eq(old.get(&pattern("a.test")).unwrap(), &a));
         assert_eq!(
-            old.matching_values(HostnameQuery::new("a.test").unwrap())
+            old.matching_values(RadixHostnameQuery::new("a.test").unwrap())
                 .next()
                 .unwrap()
                 .0,
             1
         );
         assert_eq!(
-            new.matching_values(HostnameQuery::new("a.test").unwrap())
+            new.matching_values(RadixHostnameQuery::new("a.test").unwrap())
                 .next()
                 .unwrap()
                 .0,
             3
         );
-        let empty_payload = HostnameMatcher::build(HashMap::from([(pattern("test"), Arc::new(()))]));
+        let empty_payload = RadixHostnameMatcher::build(HashMap::from([(pattern("test"), Arc::new(()))]));
         assert_eq!(
             empty_payload
-                .matching_values(HostnameQuery::new("test").unwrap())
+                .matching_values(RadixHostnameQuery::new("test").unwrap())
                 .count(),
             1
         );
@@ -285,7 +288,7 @@ mod tests {
     #[test]
     fn full_replacement_shares_tree_with_fresh_non_clone_contents() {
         struct Payload(usize);
-        let old = HostnameMatcher::build(HashMap::from([
+        let old = RadixHostnameMatcher::build(HashMap::from([
             (pattern("a.test"), Arc::new(Payload(1))),
             (pattern("*.test"), Arc::new(Payload(2))),
         ]));
@@ -298,7 +301,7 @@ mod tests {
         assert!(new.shares_hosts(&old));
         assert!(Arc::ptr_eq(new.get(&pattern("a.test")).unwrap(), &exact));
         assert!(Arc::ptr_eq(new.get(&pattern("*.test")).unwrap(), &wildcard));
-        let query = HostnameQuery::new("a.test").unwrap();
+        let query = RadixHostnameQuery::new("a.test").unwrap();
         assert_eq!(
             old.matching_values(query).map(|value| value.0).collect::<Vec<_>>(),
             [1, 2]
@@ -322,8 +325,8 @@ mod tests {
         let old = matcher(&["z.test", "*.test", "test"]);
         let held = old.get(&pattern("z.test")).unwrap().clone();
         let new = old.with_changes([
-            HostContentChange::Remove(pattern("*.test")),
-            HostContentChange::Upsert(pattern("a.test"), Arc::new("new".into())),
+            RadixHostnameChange::Remove(pattern("*.test")),
+            RadixHostnameChange::Upsert(pattern("a.test"), Arc::new("new".into())),
         ]);
         assert!(!new.shares_hosts(&old));
         assert!(Arc::ptr_eq(new.get(&pattern("z.test")).unwrap(), &held));
@@ -338,10 +341,10 @@ mod tests {
     fn coalesced_deltas_and_full_list_preserve_final_occupancy() {
         let old = matcher(&["a.test", "*.test"]);
         let new = old.with_changes([
-            HostContentChange::Remove(pattern("a.test")),
-            HostContentChange::Upsert(pattern("a.test"), Arc::new("replacement".into())),
-            HostContentChange::Upsert(pattern("gone.test"), Arc::new("temporary".into())),
-            HostContentChange::Remove(pattern("gone.test")),
+            RadixHostnameChange::Remove(pattern("a.test")),
+            RadixHostnameChange::Upsert(pattern("a.test"), Arc::new("replacement".into())),
+            RadixHostnameChange::Upsert(pattern("gone.test"), Arc::new("temporary".into())),
+            RadixHostnameChange::Remove(pattern("gone.test")),
         ]);
         assert!(new.shares_hosts(&old));
         assert_eq!(hits(&new, "a.test"), ["replacement", "*.test"]);

@@ -9,7 +9,7 @@ use smallvec::SmallVec;
 
 /// Describes how the request path aligned with a matched tree node.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum PathMatchKind {
+pub enum PathMatchKind {
     /// The request path was fully consumed at this node.
     FullyConsumed,
     /// There is remaining path, and it starts on a segment boundary (`/`).
@@ -93,7 +93,7 @@ struct ChildEntry {
 ///
 /// This eliminates pointer chasing and improves spatial locality.
 #[derive(Debug, Clone)]
-pub(crate) struct PathRadixTree {
+pub struct PathRadixTree {
     /// Flat array of all nodes
     nodes: Vec<FlatNode>,
 

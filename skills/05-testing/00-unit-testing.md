@@ -187,7 +187,7 @@ When pruning / merging unit tests (parameterizing, removing tests covered equiva
 |---|---|
 | `edgion-gateway/src/lb/runtime_state/mod.rs` leastconn count | P0-07 regression |
 | `edgion-gateway/src/tls/validation/cert.rs` | mTLS verify_depth / SAN wildcard |
-| `edgion-gateway/src/cache/lru.rs` invariant tests | LRU underflow / hit_ratio |
+| `edgion-algo/src/cache/lru.rs` invariant tests | LRU underflow / hit_ratio |
 | `edgion-gateway/src/routes/grpc/match_engine.rs` sort tests | spec conformance |
 | `edgion-gateway/src/runtime/matching/route.rs` allowed_routes | spec conformance |
 | `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/status_utils.rs` Condition mapping | reason/message text |

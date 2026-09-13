@@ -38,7 +38,7 @@ A snapshot cannot express the invariant being checked in these cases — it can 
 
 | Category | Named repo example |
 |----------|--------------------|
-| Data-structure invariants | `edgion-gateway/src/cache/lru.rs` — LRU underflow / hit-ratio NaN |
+| Data-structure invariants | `edgion-algo/src/cache/lru.rs` — LRU underflow / hit-ratio NaN |
 | Error message text | `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/status_utils.rs` Condition mapping |
 | Algorithmic correctness | `edgion-resources/src/resources/tests/edgion_tls_test.rs` hostname wildcard tests |
 | Spec compliance | `edgion-gateway/src/routes/grpc/match_engine.rs` sort tests |

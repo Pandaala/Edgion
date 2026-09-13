@@ -156,7 +156,7 @@ LB policy is not synchronized from routes. It is resolved from the target Servic
 5. Precompile header / query RegularExpression regexes for each match_item.
 
 `build_domain_route_rules_from_routes` stores all named groups in the gateway's
-`HostnameMatcher<RouteRules>`, with hostless fallback separate. Exact and
+`RadixHostnameMatcher<RouteRules>`, with hostless fallback separate. Exact and
 descending wildcard groups continue only on RouteNotFound, not other errors.
 Listener intersections never promote wildcard/hostless Route specificity.
 Route deltas rebuild touched declared-hostname groups, removing all old units of

@@ -4,9 +4,9 @@
 use std::collections::HashSet;
 use std::net::IpAddr;
 
-use crate::matcher::ip_radix_tree::IpRadixMatcher;
 use crate::resources::edgion_config_data::{EdgionConfigDataRef, IpGroup};
 use crate::resources::edgion_plugins::{AccessDecision, DefaultAction};
+use edgion_algo::matcher::radix_ip::IpRadixMatcher;
 
 pub use crate::resources::common::group_name::validate_group_name;
 

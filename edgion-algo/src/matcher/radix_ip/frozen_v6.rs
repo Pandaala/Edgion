@@ -65,7 +65,7 @@ impl FrozenIpV6RadixTree {
     ///
     /// # Examples
     /// ```
-    /// use edgion_resources::matcher::ip_radix_tree::builder_v6::IpV6RadixBuilder;
+    /// use edgion_algo::matcher::radix_ip::builder_v6::IpV6RadixBuilder;
     /// use std::net::Ipv6Addr;
     ///
     /// let mut builder = IpV6RadixBuilder::new();
@@ -217,7 +217,7 @@ impl FlatTreeBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::matcher::ip_radix_tree::builder_v6::IpV6RadixBuilder;
+    use crate::matcher::radix_ip::builder_v6::IpV6RadixBuilder;
 
     #[test]
     fn flat_node_is_16_bytes() {

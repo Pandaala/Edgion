@@ -1,8 +1,8 @@
 //! IP Restriction plugin configuration
 
-use crate::matcher::ip_radix_tree::IpRadixMatcher;
 use crate::resources::edgion_config_data::{EdgionConfigDataRef, IpGroup};
 use crate::resources::edgion_plugins::AccessDecision;
+use edgion_algo::matcher::radix_ip::IpRadixMatcher;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::net::IpAddr;

@@ -8,9 +8,9 @@
 use std::collections::HashSet;
 
 use crate::conf_mgr::ControllerRuntime;
+use edgion_algo::matcher::radix_hostname::RadixHostnamePatternRef;
 use edgion_resources::prelude_resources::Gateway;
 use edgion_resources::resources::common::ParentReference;
-use edgion_resources::HostnamePatternRef;
 
 pub struct ResolvedHostnames {
     pub hostnames: Vec<String>,
@@ -198,8 +198,8 @@ fn collect_matching_listeners(gateway: &Gateway, pr: &ParentReference) -> Vec<Op
 /// | *.bar.com         | *.foo.bar.com     | *.foo.bar.com       |
 /// | foo.com           | bar.com           | None                |
 pub fn compute_hostname_intersection(listener_hn: &str, route_hn: &str) -> Option<String> {
-    let listener = HostnamePatternRef::parse(listener_hn).ok()?;
-    let route = HostnamePatternRef::parse(route_hn).ok()?;
+    let listener = RadixHostnamePatternRef::parse(listener_hn).ok()?;
+    let route = RadixHostnamePatternRef::parse(route_hn).ok()?;
     listener.intersection(route).map(|pattern| pattern.as_str().to_owned())
 }
 

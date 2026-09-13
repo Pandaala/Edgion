@@ -4,10 +4,9 @@
 //! The handshake path must never compile a regex. `RegularExpression` entries
 //! with `compiled_regex == None` fail closed.
 
+use edgion_algo::matcher::rfc6125_hostname::matches;
 use edgion_resources::resources::allowed_san::{allowed_san_schema_error, AllowedSan, AllowedSanMatch, AllowedSanType};
 use std::net::IpAddr;
-
-use crate::tls_validation::matches_host_pattern;
 
 /// A certificate SAN classified by ASN.1 GeneralName type, not by string prefix.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -121,7 +120,7 @@ fn match_presented_value(presented: &str, entry: &AllowedSan) -> bool {
 
 /// RFC 6125 §6.4.3 wildcards on either the allowlist or the presented DNS SAN.
 fn dns_exact_rfc6125(cert_dns: &str, allowed: &str) -> bool {
-    matches_host_pattern(cert_dns, allowed) || matches_host_pattern(allowed, cert_dns)
+    matches(allowed, cert_dns) || matches(cert_dns, allowed)
 }
 
 fn ip_exact(cert_ip: &str, allowed: &str) -> bool {

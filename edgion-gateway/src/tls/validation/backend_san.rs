@@ -2,6 +2,7 @@
 //!
 //! Validates server certificate SANs against BackendTLSPolicy SubjectAltName requirements.
 
+use edgion_algo::matcher::rfc6125_hostname::matches;
 use edgion_resources::resources::backend_tls_policy::{SubjectAltName, SubjectAltNameType};
 use std::fmt;
 
@@ -44,7 +45,7 @@ pub fn validate_backend_sans(cert_sans: &[String], policy_sans: &[SubjectAltName
                         if edgion_common::allowed_san::has_typed_san_display_prefix(cert_san) {
                             continue;
                         }
-                        if super::matches_host_pattern(cert_san, hostname_pattern) {
+                        if matches(hostname_pattern, cert_san) {
                             return BackendSanValidationResult {
                                 passed: true,
                                 reason: "certificate hostname SAN matched policy",
@@ -184,10 +185,10 @@ mod tests {
 
     #[test]
     fn test_matches_hostname_exact_and_wildcard() {
-        use crate::tls::validation::matches_host_pattern;
-        assert!(matches_host_pattern("foo.example.com", "foo.example.com"));
-        assert!(matches_host_pattern("foo.example.com", "*.example.com"));
-        assert!(!matches_host_pattern("foo.bar.example.com", "*.example.com"));
-        assert!(!matches_host_pattern("example.com", "*.example.com"));
+        use edgion_algo::matcher::rfc6125_hostname::matches;
+        assert!(matches("foo.example.com", "foo.example.com"));
+        assert!(matches("*.example.com", "foo.example.com"));
+        assert!(!matches("*.example.com", "foo.bar.example.com"));
+        assert!(!matches("*.example.com", "example.com"));
     }
 }

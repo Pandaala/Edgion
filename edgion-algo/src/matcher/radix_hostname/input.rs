@@ -1,17 +1,17 @@
 //! Checked borrowed inputs for Route hostname lookup, not certificate selection.
 
-use edgion_resources::hostname::{HostnameError, HostnamePatternRef};
+use super::{RadixHostnamePatternError, RadixHostnamePatternRef};
 use std::borrow::Cow;
 
 #[derive(Clone, Copy)]
-pub struct HostnameQuery<'a>(&'a str);
+pub struct RadixHostnameQuery<'a>(&'a str);
 
-impl<'a> HostnameQuery<'a> {
+impl<'a> RadixHostnameQuery<'a> {
     /// HTTP callers pass their already normalized authority hostname.
-    pub fn new(hostname: &'a str) -> Result<Self, HostnameError> {
-        let pattern = HostnamePatternRef::parse(hostname)?;
+    pub fn new(hostname: &'a str) -> Result<Self, RadixHostnamePatternError> {
+        let pattern = RadixHostnamePatternRef::parse(hostname)?;
         if pattern.is_wildcard() {
-            return Err(HostnameError::InvalidPattern);
+            return Err(RadixHostnamePatternError::InvalidPattern);
         }
         Ok(Self(hostname))
     }
@@ -25,8 +25,8 @@ impl<'a> HostnameQuery<'a> {
 pub struct NormalizedRouteSni<'a>(Cow<'a, str>);
 
 impl NormalizedRouteSni<'_> {
-    pub fn query(&self) -> HostnameQuery<'_> {
-        HostnameQuery(&self.0)
+    pub fn query(&self) -> RadixHostnameQuery<'_> {
+        RadixHostnameQuery(&self.0)
     }
 
     pub fn into_owned(self) -> String {
@@ -35,13 +35,13 @@ impl NormalizedRouteSni<'_> {
 }
 
 /// Route-only SNI normalization. Missing SNI remains a transport policy.
-pub fn normalize_route_sni(sni: &str) -> Result<NormalizedRouteSni<'_>, HostnameError> {
+pub fn normalize_route_sni(sni: &str) -> Result<NormalizedRouteSni<'_>, RadixHostnamePatternError> {
     let normalized = if sni.bytes().any(|b| b.is_ascii_uppercase()) {
         Cow::Owned(sni.to_ascii_lowercase())
     } else {
         Cow::Borrowed(sni)
     };
-    HostnameQuery::new(&normalized)?;
+    RadixHostnameQuery::new(&normalized)?;
     Ok(NormalizedRouteSni(normalized))
 }
 
@@ -59,8 +59,8 @@ mod tests {
             normalize_route_sni("A.B.Example.COM").unwrap().query().as_str(),
             "a.b.example.com"
         );
-        assert!(HostnameQuery::new("UPPER.test").is_err());
-        assert!(HostnameQuery::new("grpc").is_ok());
+        assert!(RadixHostnameQuery::new("UPPER.test").is_err());
+        assert!(RadixHostnameQuery::new("grpc").is_ok());
     }
 
     #[test]

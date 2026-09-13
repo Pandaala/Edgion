@@ -1,10 +1,10 @@
-use crate::matcher::hostname::normalize_route_sni;
-use crate::matcher::hostname::{CompiledHostnamePattern, HostnameMatcher};
 use crate::routes::tls::route_unit::TlsRouteUnit;
 use crate::runtime::gateway_info::GatewayInfo;
 use crate::runtime::matching::route::{check_gateway_listener_match, ResolvedParentRef};
 use crate::runtime::store::listener_gateway_info::GatewayInfoIndex;
-use edgion_resources::hostname::{hostname_matches_pattern, HostnamePatternRef};
+use edgion_algo::matcher::radix_hostname::{
+    normalize_route_sni, radix_hostname_matches, RadixHostnameMatcher, RadixHostnamePattern, RadixHostnamePatternRef,
+};
 use edgion_resources::ListenerKey;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -17,7 +17,7 @@ struct TlsRouteCandidate {
 
 /// Immutable per-physical-listener candidates, published by the outer ArcSwap.
 pub struct TlsRouteTable {
-    hosts: HostnameMatcher<Vec<TlsRouteCandidate>>,
+    hosts: RadixHostnameMatcher<Vec<TlsRouteCandidate>>,
 }
 
 fn tls_route_precedence(a: &Arc<TlsRouteUnit>, b: &Arc<TlsRouteUnit>) -> std::cmp::Ordering {
@@ -32,14 +32,14 @@ fn tls_route_precedence(a: &Arc<TlsRouteUnit>, b: &Arc<TlsRouteUnit>) -> std::cm
 impl TlsRouteTable {
     pub fn new() -> Self {
         Self {
-            hosts: HostnameMatcher::default(),
+            hosts: RadixHostnameMatcher::default(),
         }
     }
 
     /// Existing L4 discovery cost remains explicit. Reuse both the tree and
     /// unchanged ordered candidate groups; never rebuild cached Route selectors.
     pub fn with_units(&self, listener_key: &ListenerKey, units: &HashMap<String, Arc<TlsRouteUnit>>) -> Self {
-        let mut groups: HashMap<CompiledHostnamePattern, Vec<TlsRouteCandidate>> = HashMap::new();
+        let mut groups: HashMap<RadixHostnamePattern, Vec<TlsRouteCandidate>> = HashMap::new();
         for unit in units.values() {
             if unit.route.spec.validate_hostnames().is_err() {
                 continue;
@@ -47,7 +47,7 @@ impl TlsRouteTable {
             let records = unit.route.spec.resolved_listeners.as_deref().unwrap_or_default();
             for declared in unit.route.spec.hostnames.as_deref().unwrap_or_default() {
                 let pattern =
-                    HostnamePatternRef::parse(declared).expect("the entire Route hostname list was validated");
+                    RadixHostnamePatternRef::parse(declared).expect("the entire Route hostname list was validated");
                 let attachment_indices: Vec<_> = unit
                     .accepted_attachments
                     .iter()
@@ -56,7 +56,7 @@ impl TlsRouteTable {
                         let attachment = &records[accepted.schema_index];
                         attachment.listener_key == *listener_key
                             && attachment.hostnames.iter().any(|effective| {
-                                HostnamePatternRef::parse(effective)
+                                RadixHostnamePatternRef::parse(effective)
                                     .is_ok_and(|effective| pattern.intersection(effective).is_some())
                             })
                     })
@@ -65,7 +65,7 @@ impl TlsRouteTable {
                 if attachment_indices.is_empty() {
                     continue;
                 }
-                let key = CompiledHostnamePattern::parse(declared)
+                let key = RadixHostnamePattern::parse(declared)
                     .expect("the same declared hostname already parsed successfully");
                 let candidates = groups.entry(key).or_default();
                 // Duplicate declared names never duplicate a Route or its WRR state.
@@ -127,7 +127,7 @@ impl TlsRouteTable {
                     if !attachment
                         .hostnames
                         .iter()
-                        .any(|hostname| hostname_matches_pattern(query.as_str(), hostname))
+                        .any(|hostname| radix_hostname_matches(query.as_str(), hostname))
                     {
                         continue;
                     }
@@ -314,7 +314,7 @@ mod tests {
             &HashMap::from([(replacement.key_name(), replacement.clone()), (b.key_name(), b.clone())]),
         );
         assert!(new.hosts.shares_hosts(&old.hosts));
-        let b_pattern = CompiledHostnamePattern::parse("b.test").unwrap();
+        let b_pattern = RadixHostnamePattern::parse("b.test").unwrap();
         assert!(Arc::ptr_eq(
             old.hosts.get(&b_pattern).unwrap(),
             new.hosts.get(&b_pattern).unwrap()

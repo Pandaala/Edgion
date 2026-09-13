@@ -34,17 +34,17 @@ mod tests {
 
     #[test]
     fn test_matches_pattern_exact() {
-        use crate::tls::validation::matches_host_pattern;
-        assert!(matches_host_pattern("example.com", "example.com"));
-        assert!(!matches_host_pattern("example.com", "other.com"));
+        use edgion_algo::matcher::rfc6125_hostname::matches;
+        assert!(matches("example.com", "example.com"));
+        assert!(!matches("other.com", "example.com"));
     }
 
     #[test]
     fn test_matches_pattern_wildcard() {
-        use crate::tls::validation::matches_host_pattern;
-        assert!(matches_host_pattern("sub.example.com", "*.example.com"));
-        assert!(!matches_host_pattern("example.com", "*.example.com"));
-        assert!(!matches_host_pattern("sub.sub.example.com", "*.example.com"));
+        use edgion_algo::matcher::rfc6125_hostname::matches;
+        assert!(matches("*.example.com", "sub.example.com"));
+        assert!(!matches("*.example.com", "example.com"));
+        assert!(!matches("*.example.com", "sub.sub.example.com"));
     }
 
     #[test]

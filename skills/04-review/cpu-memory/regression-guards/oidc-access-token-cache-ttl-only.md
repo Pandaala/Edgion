@@ -38,7 +38,7 @@ Re-open this decision only if a cache-entry consumer needs the original absolute
 
 - `gw-plugin-oidc-04` (fixed 2026-08-02).
 - `edgion-gateway/src/plugins/http/openid_connect/token_exchange.rs`.
-- `edgion-gateway/src/cache/lru.rs`.
+- `edgion-algo/src/cache/lru.rs`.
 
 ## Resolution references
 

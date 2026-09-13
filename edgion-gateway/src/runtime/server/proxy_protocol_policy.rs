@@ -12,8 +12,8 @@ use std::sync::{Arc, OnceLock};
 
 use anyhow::{anyhow, bail, Context, Result};
 use async_trait::async_trait;
+use edgion_algo::matcher::radix_ip::IpRadixMatcher;
 use edgion_resources::listener_key::{resolve_listener_addr, ListenerKey};
-use edgion_resources::matcher::ip_radix_tree::IpRadixMatcher;
 use edgion_resources::resources::gateway::Listener;
 use edgion_resources::resources::proxy_protocol::{
     CanonicalProxyProtocolTrustPolicy, ProxyProtocolConfigErrorCode, ResolvedInboundProxyProtocol,

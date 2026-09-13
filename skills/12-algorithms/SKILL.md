@@ -47,7 +47,7 @@ placeholders — write the entry when you next touch that code.
 
 | Algorithm | Source | Doc |
 |---|---|---|
-| Sharded LRU (explicit invalidation semantics) | `edgion-gateway/src/cache/sharded.rs` | not yet written |
+| Sharded LRU (explicit invalidation semantics) | `edgion-algo/src/cache/` | not yet written |
 | TinyUFO + TTL (admission-friendly, no per-key delete) | `edgion-gateway/src/cache/tiny_ufo.rs` | not yet written |
 
 The selection rule between these two is a 🔴 design rule, not a preference — see the
@@ -57,8 +57,10 @@ in-process cache selection section of [../00-design-rules.md](../00-design-rules
 
 | Algorithm | Source | Doc |
 |---|---|---|
-| IP radix tree (allow/deny matching) | `edgion-resources/src/matcher/ip_radix_tree/` | not yet written |
-| Immutable Route hostname radix with persistent contents | `edgion-gateway/src/matcher/hostname/` | [route-hostname-matching.md](route-hostname-matching.md) |
+| IP radix tree (allow/deny matching) | `edgion-algo/src/matcher/radix_ip/` | not yet written |
+| Path radix tree (route and policy candidates) | `edgion-algo/src/matcher/radix_path/` | not yet written |
+| Immutable Route hostname radix with persistent contents | `edgion-algo/src/matcher/radix_hostname/` | [route-hostname-matching.md](route-hostname-matching.md) |
+| RFC 6125 certificate hostname matching | `edgion-algo/src/matcher/rfc6125_hostname/` | not yet written |
 | Aho-Corasick multi-pattern matching (WAF) | `edgion-waf/src/aho_corasick/` | not yet written |
 
 ### Rate limiting

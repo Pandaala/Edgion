@@ -31,7 +31,7 @@ edgion-gateway/src/routes/tls/
 
 ```rust
 pub struct TlsRouteTable {
-    hosts: HostnameMatcher<Vec<TlsRouteCandidate>>,
+    hosts: RadixHostnameMatcher<Vec<TlsRouteCandidate>>,
 }
 ```
 

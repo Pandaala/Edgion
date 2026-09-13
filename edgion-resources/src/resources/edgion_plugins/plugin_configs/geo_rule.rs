@@ -44,8 +44,8 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::net::IpAddr;
 
-use crate::matcher::ip_radix_tree::types::IpCidr;
-use crate::matcher::ip_radix_tree::{IpRadixMatcher, IpRadixMatcherBuilder};
+use edgion_algo::matcher::radix_ip::types::IpCidr;
+use edgion_algo::matcher::radix_ip::{IpRadixMatcher, IpRadixMatcherBuilder};
 
 /// Data source for a geo rule's underlying peer IP.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]

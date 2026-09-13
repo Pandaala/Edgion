@@ -116,8 +116,10 @@ where
         let mut nodes = Vec::with_capacity(capacity);
         for idx in 0..capacity {
             let next_free = if idx + 1 < capacity { Some(idx + 1) } else { None };
-            let mut node = CacheNode::default();
-            node.next_free = next_free;
+            let node = CacheNode {
+                next_free,
+                ..CacheNode::default()
+            };
             nodes.push(node);
         }
 

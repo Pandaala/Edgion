@@ -123,7 +123,7 @@ partial_update:
 
 Skips preparse + validation + unit construction for unchanged routes, and avoids deep-copying the full HashMap.
 
-HTTP/gRPC/TLSRoute embed the same immutable `HostnameMatcher` inside their
+HTTP/gRPC/TLSRoute embed the same immutable `RadixHostnameMatcher` inside their
 existing outer snapshots. Same final hostname keys reuse the hosts Arc, even on
 full-list or Gateway-triggered rebuilds; topology changes rebuild one tree and
 its ID-to-content mapping together. HTTP Route deltas patch touched hostname

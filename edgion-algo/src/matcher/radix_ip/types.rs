@@ -32,7 +32,7 @@ impl IpCidr {
     ///
     /// # Examples
     /// ```
-    /// use edgion_resources::matcher::ip_radix_tree::types::IpCidr;
+    /// use edgion_algo::matcher::radix_ip::IpCidr;
     ///
     /// let cidr_v4 = IpCidr::parse("192.168.1.0/24").unwrap();
     /// let cidr_v6 = IpCidr::parse("2001:db8::/32").unwrap();

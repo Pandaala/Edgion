@@ -4,7 +4,7 @@
 //! message. Used by TLS Passthrough mode to route connections based on SNI
 //! without performing a full TLS handshake.
 
-use crate::matcher::hostname::normalize_route_sni;
+use edgion_algo::matcher::radix_hostname::normalize_route_sni;
 
 /// Upper bound on bytes drained from the stream while accumulating a
 /// ClientHello record.

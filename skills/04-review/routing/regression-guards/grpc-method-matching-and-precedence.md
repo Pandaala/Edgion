@@ -44,7 +44,7 @@ contract defines the precedence chain and per-rule invalidity behavior.
 - Gateway `routes/grpc/conf_handler_impl.rs` compiles each match once and rejects
   the whole rule before constructing rule runtimes if any method is invalid,
   including status-less/stale configuration. Match units share rule runtime.
-- `match_engine.rs` builds one ranked route array. Gateway-owned `HostnameMatcher`
+- `match_engine.rs` builds one ranked route array. Shared Algo `RadixHostnameMatcher`
   indexes ranks by declared Route hostname;
   its borrowed `matching_values` lookup visits
   exact, descending wildcard suffixes, then the engine's catch-all group.

@@ -24,7 +24,7 @@ use super::jwks_provider::{
 };
 use super::jwt_common::{resolve_algorithm_policy, select_jwk, validate_token_alg, JwkSelectError};
 use super::refresh_flight_registry::RefreshFlightRegistry;
-use crate::cache::{LogicalWeight, ShardedLruCache, TinyUfoTtlCache};
+use crate::cache::{LogicalWeight, TinyUfoTtlCache};
 use crate::cli::config::{
     get_default_lru_cache_capacity, get_default_lru_cache_shards, get_refresh_singleflight_max_registered_keys,
     resolve_lru_cache_limits, resolve_tiny_ufo_ttl_cache_limits,
@@ -40,6 +40,7 @@ use crate::plugins::http::common::outbound::egress::{
 use crate::plugins::runtime::log::la;
 use crate::plugins::runtime::{DyeOutcome, PluginLog, PluginSession, RequestFilter};
 use crate::tls::validation::build_verified_outbound_tls;
+use edgion_algo::cache::ShardedLruCache;
 use edgion_common::dns::ResolverSpec;
 use edgion_common::link_sys_core::outbound_tls::resolve_outbound_tls;
 use edgion_resources::filters::PluginRunningResult;

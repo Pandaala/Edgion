@@ -13,9 +13,9 @@
 //!   profiles; it can never disable filtering.
 
 use crate::matcher::ip_cidr_helpers::{build_grouped_matcher_partial, evaluate_ip_access, EntryError};
-use crate::matcher::ip_radix_tree::IpRadixMatcher;
 use crate::resources::edgion_config_data::{EdgionConfigDataRef, IpGroup};
 use crate::resources::edgion_plugins::{AccessDecision, DefaultAction};
+use edgion_algo::matcher::radix_ip::IpRadixMatcher;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;

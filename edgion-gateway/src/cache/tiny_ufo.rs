@@ -305,7 +305,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cache::lru::LocalLruCache;
+    use edgion_algo::cache::LocalLruCache;
     use std::hash::{Hash, Hasher};
     use std::hint::black_box;
     use std::thread;

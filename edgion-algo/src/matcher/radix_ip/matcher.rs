@@ -26,7 +26,7 @@ pub const MAX_LABELS: u16 = 65534;
 ///
 /// # Examples
 /// ```
-/// use edgion_resources::matcher::ip_radix_tree::IpRadixMatcher;
+/// use edgion_algo::matcher::radix_ip::IpRadixMatcher;
 /// use std::net::IpAddr;
 ///
 /// let mut builder = IpRadixMatcher::builder();

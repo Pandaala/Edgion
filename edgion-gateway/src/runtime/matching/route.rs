@@ -5,7 +5,7 @@
 
 use crate::runtime::gateway_info::GatewayInfo;
 use crate::runtime::store::listener_gateway_info::GatewayInfoIndex;
-use edgion_resources::hostname::hostname_matches_pattern;
+use edgion_algo::matcher::radix_hostname::radix_hostname_matches;
 use edgion_resources::resources::gateway::AllowedRoutes;
 use std::sync::Arc;
 
@@ -53,7 +53,7 @@ pub struct ResolvedParentRef {
 /// for deep subdomains.
 #[inline]
 pub fn hostname_matches_listener(request_host: &str, listener_hostname: &str) -> bool {
-    hostname_matches_pattern(request_host, listener_hostname)
+    radix_hostname_matches(request_host, listener_hostname)
 }
 
 /// Check if a route is allowed by the listener's AllowedRoutes configuration.

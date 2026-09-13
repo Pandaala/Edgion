@@ -21,8 +21,8 @@ use axum::http::{header, HeaderValue, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 
+use edgion_algo::matcher::radix_ip::IpRadixMatcher;
 use edgion_resources::matcher::ip_cidr_helpers::{to_cidr_format, validate_ip_or_cidr};
-use edgion_resources::matcher::ip_radix_tree::IpRadixMatcher;
 
 /// Single group label for the flat admin allowlist matcher.
 const ADMIN_ALLOW_GROUP: &str = "admin-allow";

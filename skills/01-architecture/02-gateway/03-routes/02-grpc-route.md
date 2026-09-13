@@ -24,7 +24,7 @@ edgion-gateway/src/routes/grpc/
 ## Service / Method matching
 
 `GrpcMatchEngine` keeps one immutable ranked route array and indexes its numeric
-ranks by the Route's declared hostnames through gateway `HostnameMatcher`. Lookup visits the
+ranks by the Route's declared hostnames through the shared Algo `RadixHostnameMatcher`. Lookup visits the
 exact hostname, longest-to-shortest matching wildcard suffixes, then catch-all.
 Only matching declared hostnames contribute precedence. Listener intersection
 must not promote wildcard/hostless Route priority; `deep_match` independently

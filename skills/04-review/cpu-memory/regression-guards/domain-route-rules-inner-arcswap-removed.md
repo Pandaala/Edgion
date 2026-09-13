@@ -43,7 +43,7 @@ unchanged.
 ## Why the Naive Form Was Wrong
 
 Current shape after Route hostname unification: `DomainRouteRules` embeds the
-gateway-owned immutable `HostnameMatcher<RouteRules>` plus a separate hostless
+shared immutable Algo `RadixHostnameMatcher<RouteRules>` plus a separate hostless
 group. The historical three-field examples above describe the original repair,
 not the current struct layout. Its frozen hostname tree and persistent contents
 are paired inside the same outer table; there is still only one owner-level

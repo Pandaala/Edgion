@@ -21,6 +21,7 @@ use std::fmt;
 use x509_parser::pem::Pem;
 use x509_parser::prelude::*;
 
+use edgion_algo::matcher::rfc6125_hostname::matches;
 use edgion_resources::EdgionTls;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -241,40 +242,6 @@ pub fn check_key_matches_cert(cert_pem: &str, key_pem: &str) -> Result<(), KeyCe
     }
 
     Ok(())
-}
-
-// ---------------------------------------------------------------------------
-// matches_host_pattern
-// ---------------------------------------------------------------------------
-
-/// Match value against pattern using a single-leftmost-label wildcard. Per RFC 6125 §6.4.1
-/// (case-insensitive) and §6.4.3 (`*.example.com` matches `api.example.com` but NOT
-/// `a.b.example.com`). Used for TLS cert SAN validation at config load time; the same
-/// single-label rule is also applied by `HashHost::get_rfc6125` at SNI selection time
-/// (Gateway API route matching at `hostname_matches_listener` remains multi-label).
-pub fn matches_host_pattern(value: &str, pattern: &str) -> bool {
-    if value.eq_ignore_ascii_case(pattern) {
-        return true;
-    }
-
-    if let Some(suffix) = pattern.strip_prefix("*.") {
-        if suffix.is_empty() {
-            return false;
-        }
-
-        // value must end with ".suffix" (case-insensitive) and have exactly one subdomain label
-        if value.len() < suffix.len() + 2 {
-            return false;
-        }
-        let split_pos = value.len() - suffix.len();
-        if value.as_bytes()[split_pos - 1] != b'.' || !value[split_pos..].eq_ignore_ascii_case(suffix) {
-            return false;
-        }
-        let subdomain = &value[..split_pos - 1];
-        return !subdomain.is_empty() && !subdomain.contains('.');
-    }
-
-    false
 }
 
 // ---------------------------------------------------------------------------
@@ -782,7 +749,7 @@ fn check_san_matches(cert: &X509Certificate, declared_hosts: &[String]) -> Resul
 
 /// Check if a declared host is covered by certificate SAN list
 fn is_host_covered(declared: &str, san_list: &[String]) -> bool {
-    san_list.iter().any(|san| matches_host_pattern(declared, san))
+    san_list.iter().any(|san| matches(san, declared))
 }
 
 /// Whether a declared host is a valid SAN pattern under RFC 6125 §6.4.3 / RFC 5280 §4.2.1.6.
@@ -791,7 +758,7 @@ fn is_host_covered(declared: &str, san_list: &[String]) -> bool {
 /// `*.<suffix>` where `<suffix>` is non-empty and contains no further `*` — i.e. a single,
 /// left-most-label asterisk. Multi-label wildcards (`*.*.example.com`), partial-label
 /// wildcards (`foo*.example.com`), and non-leftmost wildcards (`a.*.example.com`) are
-/// rejected; these are exactly the patterns `matches_host_pattern` cannot match.
+/// rejected; these are exactly the patterns the RFC 6125 matcher cannot match.
 fn is_valid_san_pattern(host: &str) -> bool {
     if !host.contains('*') {
         return true;

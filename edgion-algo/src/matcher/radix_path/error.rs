@@ -4,7 +4,7 @@ use std::fmt;
 
 /// Errors that can occur during router operations
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum PathRadixError {
+pub enum PathRadixError {
     /// Path is empty
     EmptyPath,
 

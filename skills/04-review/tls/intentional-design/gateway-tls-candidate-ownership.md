@@ -47,7 +47,7 @@ universally negligible. Required selection semantics remain in
 Publishing only the winner could release losing compiled objects from the new
 index. It would not remove source certificate material from canonical resources,
 eliminate temporary compilation work by itself, or release objects still owned
-by old readers. That optimization and a shared `HashHost` API change are declined
+by old readers. That optimization and a shared `Rfc6125HostnameMatcher` API change are declined
 for this investigation: there is no demonstrated benefit to justify changing the
 builder and validating its ownership transitions. The benefit of the current
 choice is avoiding that implementation and maintenance work.

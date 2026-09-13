@@ -9,6 +9,7 @@ use std::sync::Arc;
 use crate::conf_mgr::sync_runtime::resource_processor::attached_route_tracker::Attachment;
 use crate::conf_mgr::sync_runtime::resource_processor::{AcceptedError, ResolvedRefsError};
 use crate::conf_mgr::ControllerRuntime;
+use edgion_algo::matcher::radix_hostname::RadixHostnamePatternRef;
 use edgion_resources::listener_key::{resolve_listener_addr, ListenerKey};
 use edgion_resources::prelude_resources::{EdgionPlugins, Gateway};
 use edgion_resources::resources::common::{ParentReference, RefDenied};
@@ -16,7 +17,7 @@ use edgion_resources::resources::edgion_tls::ResolvedListenerAttachment;
 use edgion_resources::resources::extension_ref::is_supported_edgion_plugins_ref;
 use edgion_resources::resources::gateway::AllowedRoutes;
 use edgion_resources::resources::http_route::{LocalObjectReference, RouteParentStatus};
-use edgion_resources::{HostnamePatternRef, ResourceKind};
+use edgion_resources::ResourceKind;
 
 /// Result of validating a parentRef for acceptance.
 pub struct AcceptedResult {
@@ -740,9 +741,9 @@ fn compute_tls_hostnames(route_hostnames: &[String], listener_hostname: Option<&
 /// Compute the intersection of two hostnames, returning the more specific one.
 /// Returns None if they do not intersect.
 fn hostname_intersection<'a>(a: &'a str, b: &'a str) -> Option<&'a str> {
-    let a = HostnamePatternRef::parse(a).ok()?;
-    let b = HostnamePatternRef::parse(b).ok()?;
-    a.intersection(b).map(HostnamePatternRef::as_str)
+    let a = RadixHostnamePatternRef::parse(a).ok()?;
+    let b = RadixHostnamePatternRef::parse(b).ok()?;
+    a.intersection(b).map(RadixHostnamePatternRef::as_str)
 }
 
 #[cfg(test)]

@@ -13,8 +13,8 @@ use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use crate::cache::ShardedLruCache;
 use crate::cli::config::{get_default_lru_cache_capacity, get_default_lru_cache_shards};
+use edgion_algo::cache::ShardedLruCache;
 
 /// Default TTL for a self-resolved address set (EGC `dnsResolver.cacheTtl`
 /// default). Kept in sync with the EGC schema default.

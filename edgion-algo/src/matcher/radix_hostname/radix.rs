@@ -1,6 +1,6 @@
 //! Frozen reverse-byte radix. Protocol contents never live in this tree.
 
-use super::CompiledHostnamePattern;
+use super::RadixHostnamePattern;
 
 /// A configured pattern's identity, private to one tree generation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -12,7 +12,7 @@ const MAX_MATCHES: usize = 127;
 
 pub(super) struct HostnameRadixTree {
     root: Node,
-    patterns: Box<[CompiledHostnamePattern]>,
+    patterns: Box<[RadixHostnamePattern]>,
 }
 
 struct Node {
@@ -29,7 +29,7 @@ struct BuildEntry {
 }
 
 impl HostnameRadixTree {
-    pub(super) fn build(patterns: Vec<CompiledHostnamePattern>) -> Self {
+    pub(super) fn build(patterns: Vec<RadixHostnamePattern>) -> Self {
         let mut entries: Vec<_> = patterns
             .iter()
             .enumerate()
@@ -46,12 +46,12 @@ impl HostnameRadixTree {
         }
     }
 
-    pub(super) fn patterns(&self) -> &[CompiledHostnamePattern] {
+    pub(super) fn patterns(&self) -> &[RadixHostnamePattern] {
         &self.patterns
     }
 
     /// Cold exact CONFIGURED-pattern lookup, never wildcard query fallback.
-    pub(super) fn id_for_pattern(&self, pattern: &CompiledHostnamePattern) -> Option<HostPatternId> {
+    pub(super) fn id_for_pattern(&self, pattern: &RadixHostnamePattern) -> Option<HostPatternId> {
         let query = pattern.suffix().as_bytes();
         let mut node = &self.root;
         let mut consumed = 0;

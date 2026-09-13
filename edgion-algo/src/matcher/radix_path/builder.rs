@@ -92,7 +92,7 @@ impl BuildNode {
 /// This is the mutable builder used to insert routes. Once all routes are inserted,
 /// call `freeze()` to convert it into a cache-friendly `PathRadixTree`.
 #[derive(Debug)]
-pub(crate) struct PathRadixBuilder {
+pub struct PathRadixBuilder {
     root: BuildNode,
     route_count: usize,
 }

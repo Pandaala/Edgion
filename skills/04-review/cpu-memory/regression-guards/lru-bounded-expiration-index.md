@@ -183,7 +183,7 @@ Re-open this decision only if:
 ## Reference Cases
 
 - `tasks/todo/bound-lru-expiration-maintenance.md` (P1 task, closed 2026-09-03).
-- `edgion-gateway/src/cache/lru.rs`, `edgion-gateway/src/cache/sharded.rs`.
+- `edgion-algo/src/cache/lru.rs`, `edgion-algo/src/cache/sharded_lru.rs`.
 - `edgion-gateway/benches/lru_expiration.rs` — capacity-scaled insertion benchmark
   (1K / 16K / 256K x live / mixed-expiration / update-heavy), CSV on stdout. Percentiles are over
   individual inserts; `expiration_index_payload_bytes` is payload, not resident size.

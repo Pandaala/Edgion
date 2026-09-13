@@ -14,7 +14,7 @@ use crate::plugins::runtime::edgion_config_data::{
 };
 use crate::plugins::stream::stream_plugin_trait::access_decision_to_stream_result;
 use crate::plugins::stream::StreamPluginResult;
-use edgion_resources::matcher::ip_radix_tree::IpRadixMatcher;
+use edgion_algo::matcher::radix_ip::IpRadixMatcher;
 use edgion_resources::resources::edgion_plugins::{IpRestrictionConfig, IpSource};
 
 pub struct TlsRouteIpRestriction {

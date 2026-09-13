@@ -19,7 +19,6 @@ pub mod rate_limit_local_config;
 pub mod redact;
 pub mod redis_rate_limit;
 pub mod resources;
-pub mod schema;
 pub mod schema_check;
 pub mod sensitive;
 pub mod uri_utils;
@@ -27,7 +26,7 @@ pub mod work_dir;
 
 // Re-export common types
 pub use self::common::{KeyGet, KeySet};
-pub use self::hostname::{validate_route_hostnames, HostnameError, HostnamePatternRef};
+pub use self::hostname::{validate_route_hostnames, HostnameError};
 pub use self::listener_key::ListenerKey;
 
 // Backward compatibility: global_def re-exports from constants::app
@@ -57,7 +56,6 @@ pub use self::err::{
 };
 pub use self::observe::LogConfig;
 pub use self::resources::*;
-pub use self::schema::*;
 pub use self::work_dir::{init_work_dir, work_dir, WorkDir};
 
 // Backward compatibility re-exports (old paths)

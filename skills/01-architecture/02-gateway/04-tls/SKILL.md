@@ -81,7 +81,7 @@ pub struct TlsCertMatcher {
 ```
 
 - Two-level persistent index: `ListenerKey → hostname slot → ordered EdgionTls candidates`.
-- Uses Gateway `matcher/hostname/rfc6125.rs::lookup_rfc6125` for exact and single-label wildcard matches, the same algorithm as `HashHost::get_rfc6125`.
+- Uses `edgion_algo::matcher::rfc6125_hostname::lookup` for exact and single-label wildcard matches, the same algorithm as `Rfc6125HostnameMatcher::get`.
 - Uses `ArcSwap` for lock-free reads. The match call (`match_sni`) runs inside the TLS handshake callback and must return quickly.
 - Global singleton: `TLS_CERT_MATCHER` (`LazyLock<Arc<TlsCertMatcher>>`), shared with the global TLS store.
 - Includes only valid certificates with bounded dimensions. Physical listener slots use `resolved_listeners`; the separate exact attachment index uses resolved Gateway attachment proofs and rejects complete groups above 64 candidates.
@@ -92,12 +92,12 @@ pub struct TlsCertMatcher {
 
 ```rust
 struct TlsMatcherData {
-    listener_map: HashMap<ListenerKey, HashHost<Vec<GatewayTlsEntry>>>,
+    listener_map: HashMap<ListenerKey, Rfc6125HostnameMatcher<Vec<GatewayTlsEntry>>>,
 }
 ```
 
 - Extracts certificate references and resolved ordered outcomes from Gateway Listener TLS configuration, and cold-compiles a complete non-empty serving-certificate set before publication.
-- Same two-level index `ListenerKey → HashHost(hostname → GatewayTlsEntry)`.
+- Same two-level index `ListenerKey → Rfc6125HostnameMatcher(hostname → GatewayTlsEntry)`.
 - `ArcSwap` for lock-free reads; the inner `Option` provides a fast path (returns immediately when no Gateway TLS configuration exists).
 - Global singleton: `GATEWAY_TLS_MATCHER`.
 - Rebuilt via `rebuild_from_gateways` whenever Gateway configuration changes.

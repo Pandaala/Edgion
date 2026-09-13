@@ -25,6 +25,9 @@ allocator-mimalloc = ["mimalloc"]
 allocator-system = []
 
 [dependencies]
+# Runtime-independent matching algorithms used by resource handlers.
+edgion-algo.workspace = true
+
 # Memory allocators (optional, controlled by features)
 tikv-jemallocator = { workspace = true, optional = true }
 mimalloc = { workspace = true, optional = true }

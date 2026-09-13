@@ -1554,6 +1554,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d0881ea181b1df73ff77ffaaf9c7544ecc11e82fba9b5f27b262a3c73a332555"
 
 [[package]]
+name = "edgion-algo"
+version = "0.1.0"
+dependencies = [
+ "parking_lot",
+ "rpds",
+ "smallvec",
+]
+
+[[package]]
 name = "edgion-cli"
 version = "0.1.0"
 dependencies = [
@@ -1597,6 +1606,7 @@ dependencies = [
  "chrono",
  "clap",
  "dashmap 6.2.1",
+ "edgion-algo",
  "edgion-resources",
  "etcd-client",
  "hickory-resolver 0.26.1",
@@ -1644,6 +1654,7 @@ dependencies = [
  "clap",
  "croner",
  "dashmap 6.2.1",
+ "edgion-algo",
  "edgion-common",
  "edgion-resources",
  "etcd-client",
@@ -1734,6 +1745,7 @@ dependencies = [
  "cookie",
  "crc32fast",
  "dashmap 6.2.1",
+ "edgion-algo",
  "edgion-common",
  "edgion-dsl",
  "edgion-resources",
@@ -1836,6 +1848,7 @@ dependencies = [
  "bytes",
  "chrono",
  "clap",
+ "edgion-algo",
  "edgion-dsl",
  "edgion-waf",
  "hex",

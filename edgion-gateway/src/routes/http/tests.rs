@@ -1,11 +1,11 @@
 #[cfg(test)]
 mod route_matching_tests {
-    use crate::matcher::hostname::CompiledHostnamePattern;
-    use crate::matcher::hostname::HostnameQuery;
     use crate::routes::http::conf_handler_impl::HttpRouteChanges;
     use crate::routes::http::routes_mgr::DomainRouteRules;
     use crate::routes::http::routes_mgr::{GlobalHttpRouteManagers, HttpPortRouteManager};
     use crate::runtime::store::get_global_gateway_store;
+    use edgion_algo::matcher::radix_hostname::RadixHostnamePattern;
+    use edgion_algo::matcher::radix_hostname::RadixHostnameQuery;
     use edgion_common::conf_sync::traits::ConfHandler;
     use edgion_resources::{Gateway, HTTPRoute, ListenerKey};
     use std::collections::{HashMap, HashSet};
@@ -118,7 +118,7 @@ mod route_matching_tests {
         assert_eq!(table.hosts.len(), 1);
         let rules = table
             .hosts
-            .get(&CompiledHostnamePattern::parse("api.example.com").unwrap())
+            .get(&RadixHostnamePattern::parse("api.example.com").unwrap())
             .unwrap();
         assert_eq!(rules.route_rules_list.len(), 1);
         assert!(table.catch_all_routes.is_none());
@@ -245,7 +245,7 @@ mod route_matching_tests {
         let replaced = Arc::clone(&manager.load_route_table());
         assert!(!Arc::ptr_eq(&before, &replaced));
         assert!(before.hosts.shares_hosts(&replaced.hosts));
-        let exact = CompiledHostnamePattern::parse("api.example.com").unwrap();
+        let exact = RadixHostnamePattern::parse("api.example.com").unwrap();
         assert!(!Arc::ptr_eq(
             before.hosts.get(&exact).unwrap(),
             replaced.hosts.get(&exact).unwrap()
@@ -270,8 +270,8 @@ mod route_matching_tests {
             ("hostname-contract/cold".into(), Arc::new(cold)),
         ]));
         let old = Arc::clone(&manager.load_route_table());
-        let api = CompiledHostnamePattern::parse("api.example.com").unwrap();
-        let cold = CompiledHostnamePattern::parse("cold.example.com").unwrap();
+        let api = RadixHostnamePattern::parse("api.example.com").unwrap();
+        let cold = RadixHostnamePattern::parse("cold.example.com").unwrap();
         let old_sibling = old
             .hosts
             .get(&api)
@@ -356,7 +356,7 @@ mod route_matching_tests {
         let rejected = manager.load_route_table();
         assert!(rejected
             .hosts
-            .get(&CompiledHostnamePattern::parse("new.example.com").unwrap())
+            .get(&RadixHostnamePattern::parse("new.example.com").unwrap())
             .is_none());
         assert!(rejected.catch_all_routes.is_none());
         assert_eq!(
@@ -517,7 +517,7 @@ mod route_matching_tests {
     fn verify_route_exists(listener_manager: &Arc<HttpPortRouteManager>, hostname: &str, should_exist: bool) {
         let domain_routes = listener_manager.load_route_table();
         let hostname = hostname.to_ascii_lowercase();
-        let exists = HostnameQuery::new(&hostname)
+        let exists = RadixHostnameQuery::new(&hostname)
             .is_ok_and(|query| domain_routes.hosts.matching_values(query).next().is_some())
             || domain_routes.catch_all_routes.is_some();
         assert_eq!(
@@ -538,7 +538,7 @@ mod route_matching_tests {
     ) {
         let domain_routes = listener_manager.load_route_table();
         let hostname = hostname.to_ascii_lowercase();
-        let route_rules = HostnameQuery::new(&hostname)
+        let route_rules = RadixHostnameQuery::new(&hostname)
             .ok()
             .and_then(|query| domain_routes.hosts.matching_values(query).next())
             .or(domain_routes.catch_all_routes.as_deref());
@@ -614,7 +614,7 @@ mod route_matching_tests {
         assert!(manager
             .load_route_table()
             .hosts
-            .get(&CompiledHostnamePattern::parse("retained.example.com").unwrap())
+            .get(&RadixHostnamePattern::parse("retained.example.com").unwrap())
             .is_some());
         manager
     }

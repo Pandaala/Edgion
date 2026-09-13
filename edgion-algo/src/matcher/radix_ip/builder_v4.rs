@@ -56,7 +56,7 @@ impl IpV4RadixBuilder {
     ///
     /// # Examples
     /// ```
-    /// use edgion_resources::matcher::ip_radix_tree::builder_v4::IpV4RadixBuilder;
+    /// use edgion_algo::matcher::radix_ip::builder_v4::IpV4RadixBuilder;
     ///
     /// let mut builder = IpV4RadixBuilder::new();
     /// builder.insert("192.168.0.0/16", 1).unwrap();

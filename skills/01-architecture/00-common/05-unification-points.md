@@ -244,7 +244,7 @@ not in-process checks.
 
 ### 9. IP/CIDR matching — Unified
 
-- **Canon**: `edgion-resources/src/matcher/ip_radix_tree/` (+
+- **Canon**: `edgion-algo/src/matcher/radix_ip/` (+
   `edgion-resources/src/matcher/ip_cidr_helpers.rs`).
 - **Consumers**: http/stream ip_restriction, global_connection_ip_restriction,
   tls_route IP restriction, request_access_policy, real-IP trusted-proxy

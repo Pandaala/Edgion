@@ -1,9 +1,9 @@
 use crate::ctx::EdgionHttpContext;
-use crate::matcher::hostname::HostnameQuery;
-use crate::matcher::hostname::{CompiledHostnamePattern, HostnameMatcher};
 use crate::routes::grpc::GrpcRouteRuleUnit;
 use crate::runtime::store::listener_gateway_info::GatewayInfoIndex;
 use crate::runtime::GatewayInfo;
+use edgion_algo::matcher::radix_hostname::RadixHostnameQuery;
+use edgion_algo::matcher::radix_hostname::{RadixHostnameMatcher, RadixHostnamePattern};
 use edgion_resources::err::EdError;
 use edgion_resources::resources::grpc_route::CompiledGrpcMethodMatch;
 use pingora_proxy::Session;
@@ -16,7 +16,7 @@ use std::sync::Arc;
 /// so hostname fan-out never duplicates rules, plugins, or backend selectors.
 pub struct GrpcMatchEngine {
     routes: Vec<Arc<GrpcRouteRuleUnit>>,
-    hosts: HostnameMatcher<GrpcCandidateIndex>,
+    hosts: RadixHostnameMatcher<GrpcCandidateIndex>,
     catch_all: GrpcCandidateIndex,
 }
 
@@ -142,7 +142,7 @@ impl GrpcMatchEngine {
                 .then_with(|| a.2.specificity.cmp_precedence(&b.2.specificity))
         });
         let routes: Vec<_> = ranked.into_iter().map(|(_, _, route)| route).collect();
-        let mut groups: HashMap<CompiledHostnamePattern, GrpcCandidateIndex> = HashMap::new();
+        let mut groups: HashMap<RadixHostnamePattern, GrpcCandidateIndex> = HashMap::new();
         let mut catch_all = GrpcCandidateIndex::default();
         for (rank, route) in routes.iter().enumerate() {
             // Listener intersection may narrow a wildcard Route to an exact
@@ -158,8 +158,8 @@ impl GrpcMatchEngine {
                 catch_all.insert(rank, route);
             }
             for hostname in hostnames {
-                let pattern = CompiledHostnamePattern::parse(hostname)
-                    .expect("ranked routes passed whole-list hostname validation");
+                let pattern =
+                    RadixHostnamePattern::parse(hostname).expect("ranked routes passed whole-list hostname validation");
                 groups.entry(pattern).or_default().insert(rank, route);
             }
         }
@@ -169,7 +169,7 @@ impl GrpcMatchEngine {
             .collect();
         let hosts = match previous {
             Some(previous) => previous.hosts.with_groups(groups),
-            None => HostnameMatcher::build(groups),
+            None => RadixHostnameMatcher::build(groups),
         };
         Self {
             routes,
@@ -206,7 +206,7 @@ impl GrpcMatchEngine {
     ) -> Result<Option<(&Arc<GrpcRouteRuleUnit>, T)>, EdError> {
         // A non-DNS authority cannot hit a named group. Existing HTTP authority
         // validation and the separately authored hostless group remain in charge.
-        for group in HostnameQuery::new(hostname)
+        for group in RadixHostnameQuery::new(hostname)
             .ok()
             .into_iter()
             .flat_map(|query| self.hosts.matching_values(query))

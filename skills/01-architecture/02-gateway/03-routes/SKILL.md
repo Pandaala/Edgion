@@ -60,11 +60,11 @@ The TCP, TLS, and UDP route docs all share the same listener-bucketing, rebuild,
 - **Rebuild strategy**: `rebuild_all_listener_managers` fully rebuilds every listener table and cleans up stale listeners with no routes; `rebuild_affected_listener_managers` rebuilds only affected listeners (incremental updates).
 - **ConfHandler**: `full_set` clears `route_cache`, replaces it in full, and calls `rebuild_all_listener_managers`; `partial_update` computes affected listeners, updates `route_cache`, and calls `rebuild_affected_listener_managers`. TCP/TLS connections already matched against an old snapshot continue with their selected unit. New UDP sessions load the latest snapshot, while established UDP sessions remain pinned to their selected upstream until removal or expiry.
 
-Per-protocol deltas: **TCP** = first-match over a flat `Vec` (no hostname dimension); **TLS** = SNI-indexed `HostnameMatcher` candidates + two proxies (terminate-to-TCP vs passthrough); **UDP** = first-packet route match and weighted backend selection when creating a client session, followed by a pinned-session fast path.
+Per-protocol deltas: **TCP** = first-match over a flat `Vec` (no hostname dimension); **TLS** = SNI-indexed `RadixHostnameMatcher` candidates + two proxies (terminate-to-TCP vs passthrough); **UDP** = first-packet route match and weighted backend selection when creating a client session, followed by a pinned-session fast path.
 
 ## Domain match
 
-HTTPRoute, GRPCRoute and TLSRoute share gateway-owned `HostnameMatcher<T>`:
+HTTPRoute, GRPCRoute and TLSRoute share `edgion_algo::matcher::radix_hostname::RadixHostnameMatcher<T>`:
 one frozen reverse-byte hostname radix plus a persistent ID-to-content map,
 published with protocol data through the existing outer snapshot. The matcher
 returns borrowed candidates, exact first then longest-to-shortest wildcard
@@ -168,7 +168,7 @@ flowchart TD
     G --> G2["build_domain_route_rules_from_routes"]
     G2 --> G2a["RadixRouteMatchEngine::build (radix tree freeze)"]
     G2 --> G2b["RegexRoutesEngine::build (RegexSet compile)"]
-    G2 --> G2c["HostnameMatcher: reuse hosts when final keys agree"]
+    G2 --> G2c["RadixHostnameMatcher: reuse hosts when final keys agree"]
     G --> G3["HttpPortRouteManager::store_route_table (ArcSwap atomic swap)"]
     E --> H["Clean up stale listeners with no routes and no active Listener"]
 ```

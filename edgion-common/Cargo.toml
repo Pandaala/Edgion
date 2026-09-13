@@ -19,6 +19,9 @@ workspace = true
 test-util = []
 
 [dependencies]
+# Runtime-independent matching and data-structure algorithms.
+edgion-algo.workspace = true
+
 # Shared resource/config schema crate (leaf)
 edgion-resources.workspace = true
 

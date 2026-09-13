@@ -21,11 +21,11 @@ listener/hostname indexes + `ArcSwap*` for lock-free SNI lookup at
 TLS handshake time. The two `match_sni` hot paths share the same shape:
 `load snapshot → get(listener_key) → RFC6125 lookup → entries.first()`.
 The TLS resource store now uses persistent hostname maps; Gateway listener
-matching retains `HashHost`. Both call the shared `lookup_rfc6125` algorithm.
+matching retains `Rfc6125HostnameMatcher`. Both call the shared `lookup` algorithm.
 
 The proposal to factor both out into a generic
 `ListenerSniMatcher<T: Clone>` exposing
-`ArcSwapOption<HashMap<ListenerKey, HashHost<Vec<T>>>>` + `match_sni()` is
+`ArcSwapOption<HashMap<ListenerKey, Rfc6125HostnameMatcher<Vec<T>>>>` + `match_sni()` is
 **not accepted** as a fix-issue task. Re-reports of the structural-duplication
 form should be closed by referencing this entry.
 
@@ -63,7 +63,7 @@ EdgionTls-backed vs. Gateway-TLS-backed certificates" — is real but already
 managed:
 
 - Both matchers route their hostname lookup through the **single shared**
-  `lookup_rfc6125` (also used by `HashHost::get_rfc6125`) (see `wildcard-depth-gateway-api-vs-rfc6125.md`). RFC
+  `lookup` (also used by `Rfc6125HostnameMatcher::get`) (see `wildcard-depth-gateway-api-vs-rfc6125.md`). RFC
   6125 §6.4.3 single-label wildcard semantics live there; changing them changes
   both call sites at once.
 - Both `match_sni` doc comments cite RFC 6125 §6.4.3 + Gateway API §4.3 and
@@ -80,13 +80,13 @@ managed:
 When a review/audit report claims any of the following, close as "accepted tradeoff" referencing this entry:
 
 1. "`TlsCertMatcher::match_sni` and `GatewayTlsMatcher::match_sni` duplicate
-   the load→get→`get_rfc6125`→`first()` chain — extract a generic
+   the load→get→RFC 6125 lookup→`first()` chain — extract a generic
    `ListenerSniMatcher<T>`" → **rejected**; the two matchers' wrappers
    (`ArcSwap` vs `ArcSwapOption`-with-fallback) and value-type contracts do not
    share enough to make a generic wrapper a net win.
 2. "Future SNI normalization / wildcard fixes will diverge between the two
    matchers" → **rejected as a refactor trigger**; the actual normalization
-   lives in `lookup_rfc6125`, also called by `HashHost::get_rfc6125`. Wildcard depth
+   lives in `lookup`, also called by `Rfc6125HostnameMatcher::get`. Wildcard depth
    semantics are governed by `wildcard-depth-gateway-api-vs-rfc6125.md`.
 3. "`GatewayTlsMatcher`'s fallback layer should also exist on `TlsCertMatcher`
    for symmetry" → **rejected**; EdgionTls is keyed by hostname by
@@ -111,7 +111,7 @@ Re-evaluation triggers (re-open under a new ID, not this one):
 - Code:
   - `edgion-gateway/src/tls/store/cert_matcher.rs` — `TlsCertMatcher`
   - `edgion-gateway/src/runtime/matching/tls.rs` — `GatewayTlsMatcher`
-  - `edgion-gateway/src/matcher/hostname/rfc6125.rs` — shared `HashHost::get_rfc6125`
+  - `edgion-algo/src/matcher/rfc6125_hostname/mod.rs` — shared `Rfc6125HostnameMatcher::get`
 - Related rules:
   - `edgion-tls/wildcard-depth-gateway-api-vs-rfc6125.md` (the shared SNI
     semantics this entry depends on)

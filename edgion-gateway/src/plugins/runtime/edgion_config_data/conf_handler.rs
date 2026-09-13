@@ -17,8 +17,8 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::LazyLock;
 
+use edgion_algo::matcher::radix_ip::IpRadixMatcher;
 use edgion_common::conf_sync::traits::ConfHandler;
-use edgion_resources::matcher::ip_radix_tree::IpRadixMatcher;
 use edgion_resources::resources::edgion_config_data::{
     ConfigEntry, EdgionConfigData, EdgionConfigDataRef, RegionTableValidation,
 };

@@ -11,7 +11,7 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::matcher::ip_radix_tree::IpCidr;
+use edgion_algo::matcher::radix_ip::IpCidr;
 
 pub const MAX_INBOUND_PROXY_PROTOCOL_ANNOTATION_BYTES: usize = 16 * 1024;
 pub const MAX_PROXY_PROTOCOL_LISTENERS: usize = 64;

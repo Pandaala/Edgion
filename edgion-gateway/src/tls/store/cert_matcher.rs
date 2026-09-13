@@ -1,6 +1,6 @@
 use super::tls_store::TlsSnapshotData;
-use crate::matcher::hostname::rfc6125::{lookup_rfc6125, matches_rfc6125};
 use arc_swap::ArcSwap;
+use edgion_algo::matcher::rfc6125_hostname::{lookup, matches};
 use edgion_resources::listener_key::ListenerKey;
 use edgion_resources::resources::edgion_tls::ResolvedListenerAttachment;
 use edgion_resources::EdgionTls;
@@ -26,7 +26,7 @@ impl TlsCertMatcherSnapshot {
         self.data
             .listeners
             .get(key)
-            .and_then(|bucket| lookup_rfc6125(sni, |host| bucket.hosts.get(host)))
+            .and_then(|bucket| lookup(sni, |host| bucket.hosts.get(host)))
             .map(|slot| slot.ordered.clone())
             .unwrap_or_else(|| EMPTY_TLS_CANDIDATES.clone())
     }
@@ -37,7 +37,7 @@ impl TlsCertMatcherSnapshot {
         };
         candidates
             .iter()
-            .find(|candidate| candidate.spec.hosts.iter().any(|host| matches_rfc6125(host, sni)))
+            .find(|candidate| candidate.spec.hosts.iter().any(|host| matches(host, sni)))
             .cloned()
     }
 }

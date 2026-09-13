@@ -21,8 +21,8 @@
 //! fast path: when no Gateway TLS is configured, lookups return immediately
 //! without touching any HashMap.
 
-use crate::matcher::hostname::rfc6125::HashHost;
 use arc_swap::ArcSwapOption;
+use edgion_algo::matcher::rfc6125_hostname::Rfc6125HostnameMatcher;
 use edgion_resources::listener_key::{resolve_listener_addr, ListenerKey};
 use edgion_resources::prelude_resources::Gateway;
 use edgion_resources::resources::edgion_tls::GatewayAttachmentProof;
@@ -350,7 +350,7 @@ fn compile_serving_certificates(
 /// Combined matcher data atomically swapped via `ArcSwap`.
 struct TlsMatcherData {
     /// Hostname-based matcher: listener_key -> (hostname/SNI -> entries)
-    listener_map: HashMap<ListenerKey, HashHost<Vec<Arc<GatewayTlsEntry>>>>,
+    listener_map: HashMap<ListenerKey, Rfc6125HostnameMatcher<Vec<Arc<GatewayTlsEntry>>>>,
     /// Catch-all fallback: listener_key -> entries (listeners without hostname)
     fallback_listener_map: HashMap<ListenerKey, Vec<Arc<GatewayTlsEntry>>>,
 }
@@ -362,8 +362,8 @@ struct TlsMatcherData {
 /// no Gateway TLS is configured (avoids HashMap allocation and lookup).
 ///
 /// ## Lookup priority (per listener)
-/// 1. Exact hostname match (via HashHost)
-/// 2. Wildcard hostname match (via HashHost)
+/// 1. Exact hostname match (via Rfc6125HostnameMatcher)
+/// 2. Wildcard hostname match (via Rfc6125HostnameMatcher)
 /// 3. Catch-all fallback (listeners without hostname)
 pub struct GatewayTlsMatcher {
     data: ArcSwapOption<TlsMatcherData>,
@@ -461,7 +461,7 @@ impl GatewayTlsMatcher {
 
         // 1) Hostname-based lookup (exact > wildcard)
         if let Some(host_matcher) = data.listener_map.get(key) {
-            if let Some(entries) = host_matcher.get_rfc6125(sni) {
+            if let Some(entries) = host_matcher.get(sni) {
                 if let Some(entry) = entries.first() {
                     return Some(entry.clone());
                 }
@@ -483,7 +483,7 @@ impl GatewayTlsMatcher {
     /// Extracts TLS configurations from all Gateway Listeners and builds
     /// a listener_key -> hostname-based matcher for certificate lookup.
     pub fn rebuild_from_gateways(&self, gateways: &[Gateway]) {
-        let mut listener_map: HashMap<ListenerKey, HashHost<Vec<Arc<GatewayTlsEntry>>>> = HashMap::new();
+        let mut listener_map: HashMap<ListenerKey, Rfc6125HostnameMatcher<Vec<Arc<GatewayTlsEntry>>>> = HashMap::new();
         let mut fallback_listener_map: HashMap<ListenerKey, Vec<Arc<GatewayTlsEntry>>> = HashMap::new();
         let mut hostname_entry_count = 0usize;
         let mut fallback_entry_count = 0usize;
@@ -598,7 +598,7 @@ impl GatewayTlsMatcher {
 
                         let host_matcher = listener_map.entry(listener_key).or_insert_with(|| {
                             listener_count += 1;
-                            HashHost::new()
+                            Rfc6125HostnameMatcher::new()
                         });
 
                         if let Some(existing) = host_matcher.get_mut_exact(hostname) {

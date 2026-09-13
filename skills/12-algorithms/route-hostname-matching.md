@@ -1,6 +1,6 @@
 ---
 name: route-hostname-matching
-description: Gateway-owned immutable Route hostname radix, persistent contents, candidate ordering, and update granularity.
+description: Shared immutable Route hostname radix, persistent contents, candidate ordering, and update granularity.
 status: shipped
 ---
 
@@ -8,17 +8,18 @@ status: shipped
 
 ## What we run today
 
-`edgion-gateway/src/matcher/hostname/mod.rs` owns the generic
-`HostnameMatcher<T>` used by HTTPRoute, GRPCRoute and TLSRoute. Its frozen
+`edgion-algo/src/matcher/radix_hostname/mod.rs` owns the generic
+`RadixHostnameMatcher<T>` used by HTTPRoute, GRPCRoute and TLSRoute. Its frozen
 reverse-byte compressed radix maps exact and wildcard terminals to private,
 generation-local IDs. A persistent `rpds::HashTrieMapSync` maps those IDs to
 opaque `Arc<T>` contents. The tree knows nothing about Routes, Listeners,
 backend selection, errors, catch-all policy, or publication.
 
-Configuration grammar lives in `edgion-resources/src/hostname.rs`, allowing
-Controller and Gateway validation without a Controller-to-Gateway dependency.
-Protocol input normalization lives in Gateway `matcher/hostname/input.rs`; the matcher
-accepts only a checked, normalized borrowed `HostnameQuery`. Configured names
+Single-pattern grammar and input normalization live beside the index in
+`edgion-algo/src/matcher/radix_hostname/`, allowing Controller, Resources, and
+Gateway to share them without a business-crate dependency. Resources retains
+Route hostname-list cardinality and required/optional policy. The matcher
+accepts only a checked, normalized borrowed `RadixHostnameQuery`. Configured names
 are lowercase DNS names, including short names; bare `*`, IP literals, partial
 wildcards and malformed lists are rejected. HTTPRoute/GRPCRoute permit 0..16
 names; TLSRoute requires 1..16. Invalid entries reject the entire Route list.
@@ -96,7 +97,7 @@ certificate, Listener, and backend behavior from leaking into a generic match.
 | Implementation | Decision and reason |
 |---|---|
 | Gateway API [v1.5.0 hostname definitions](https://github.com/kubernetes-sigs/gateway-api/blob/v1.5.0/apis/v1/shared_types.go) and Route definitions | Adopt multi-label wildcard suffixes and authored hostname specificity; intersection alone does not settle runtime Listener ownership. |
-| Gateway RFC 6125 `HashHost` certificate consumers | Keep semantically separate. Their certificate-selection/identity contracts are not Route semantics. The benchmark has an isolated corrected-hash reference; it is not a new production matcher. |
+| Shared RFC 6125 certificate consumers | Keep `edgion_algo::matcher::rfc6125_hostname` semantically separate. Its certificate-selection/identity contract is not Route semantics. The benchmark has an isolated multi-label hash reference; it is not a new production matcher. |
 | Former Route `RadixHostMatchEngine` | Replace its payload-coupled tree and permissive configuration handling with the shared checked index. Its useful exact/wildcard/empty/payload tests are covered by the new core; old acceptance of uppercase configuration or nested wildcards is intentionally not retained. |
 | [rpds 1.2.1 hash-trie implementation](https://github.com/orium/rpds/blob/v1.2.1/src/map/hash_trie_map/mod.rs) | Reuse the existing persistent map for content path-copying; do not introduce a custom persistent container or require payload cloning. |
 | [ArcSwap consistent-snapshot pattern](https://docs.rs/arc-swap/latest/arc_swap/docs/patterns/index.html) | Keep one owner-level publication and retain snapshots where decisions must agree; independent inner swaps could mix a tree generation with another generation's contents/ranks. |
@@ -120,7 +121,7 @@ Listener/key distributions without weakening immutable ownership or moving
 allocation to the request path. Preserve exact/suffix continuation and final
 occupancy semantics, not just first-hit throughput.
 
-`edgion-gateway/benches/route_hostname.rs` is a dependency-free, `harness=false`
+`edgion-algo/benches/radix_hostname.rs` is a dependency-free, `harness=false`
 benchmark with 10/1,000/100,000 keys, exact/wildcard/miss/continuation lookups,
 full builds, content patches, topology changes, maximum-depth queries,
 multi-Listener builds and held-generation reclamation. Its counting allocator
@@ -130,7 +131,7 @@ production metrics or dependencies.
 
 ## References
 
-- `edgion-gateway/src/runtime/matching/{hostname,hostname_radix,hostname_input}.rs`
+- `edgion-algo/src/matcher/radix_hostname/`
 - `edgion-resources/src/hostname.rs`
 - [Route architecture](../01-architecture/02-gateway/03-routes/SKILL.md)
 - [Configuration update discipline](../01-architecture/02-gateway/11-conf-handler-guidelines.md)

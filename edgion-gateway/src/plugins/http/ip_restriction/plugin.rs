@@ -49,9 +49,9 @@ use crate::plugins::runtime::edgion_config_data::{
 };
 use crate::plugins::runtime::log::la;
 use crate::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
+use edgion_algo::matcher::radix_ip::IpRadixMatcher;
 use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::matcher::ip_cidr_helpers::evaluate_ip_access_multi;
-use edgion_resources::matcher::ip_radix_tree::IpRadixMatcher;
 use edgion_resources::resources::edgion_plugins::{DefaultAction, IpRestrictionConfig, IpSource};
 
 const PLUGIN_NAME: &str = "IpRestriction";

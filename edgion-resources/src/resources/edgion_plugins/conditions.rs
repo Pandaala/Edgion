@@ -52,12 +52,12 @@
 use crate::common::KeyGet;
 
 crate::redact::impl_redacted_debug!(SecretMatchCondition);
-use crate::matcher::ip_radix_tree::IpRadixMatcher;
 use crate::path_normalization::{get_path_normalization_config, normalize_config_path};
 use crate::resources::common::SecretObjectReference;
 use crate::resources::config_data_ref::EdgionConfigDataRef;
 use crate::resources::edgion_plugins::hmac_match::HmacMatchConfig;
 pub use crate::resources::edgion_plugins::mtls_field::{MtlsField, SanType};
+use edgion_algo::matcher::radix_ip::IpRadixMatcher;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;

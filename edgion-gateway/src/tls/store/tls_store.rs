@@ -1,6 +1,6 @@
 use super::cert_matcher::{AttachmentMatchSlot, TlsCertMatcher, TlsCertMatcherSnapshot, MAX_ATTACHMENT_CANDIDATES};
-use crate::matcher::hostname::rfc6125::canonical_host_key;
 use crate::tls::validation::cert::{validate_cert, CertValidationResult};
+use edgion_algo::matcher::rfc6125_hostname::canonical_key;
 use edgion_resources::listener_key::ListenerKey;
 use edgion_resources::resources::edgion_tls::ResolvedListenerAttachment;
 use edgion_resources::EdgionTls;
@@ -405,12 +405,7 @@ impl IndexDeltas {
             return;
         }
         let tls = &entry.tls;
-        let hosts: HashSet<String> = tls
-            .spec
-            .hosts
-            .iter()
-            .filter_map(|host| canonical_host_key(host))
-            .collect();
+        let hosts: HashSet<String> = tls.spec.hosts.iter().filter_map(|host| canonical_key(host)).collect();
         if let Some(listeners) = &tls.spec.resolved_listeners {
             for listener in listeners {
                 let changed_hosts = self.listeners.entry(listener.clone()).or_default();

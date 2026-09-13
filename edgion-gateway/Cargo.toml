@@ -13,14 +13,6 @@ path = "src/lib.rs"
 name = "edgion-gateway"
 path = "src/bin/edgion_gateway.rs"
 
-[[bench]]
-name = "lru_expiration"
-harness = false
-
-[[bench]]
-name = "route_hostname"
-harness = false
-
 [lints]
 workspace = true
 
@@ -56,6 +48,9 @@ fips = ["boringssl", "boring/fips"]
 legacy_route_tests = []
 
 [dependencies]
+# Runtime-independent matching and data-structure algorithms.
+edgion-algo.workspace = true
+
 # Memory allocators (optional, controlled by features)
 tikv-jemallocator = { workspace = true, optional = true }
 mimalloc = { workspace = true, optional = true }

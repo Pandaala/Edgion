@@ -3,11 +3,11 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::net::IpAddr;
 
-use crate::matcher::path::{PathMatchKind, PathRadixBuilder, PathRadixTree};
 use async_trait::async_trait;
 use bytes::Bytes;
+use edgion_algo::matcher::radix_ip::IpRadixMatcher;
+use edgion_algo::matcher::radix_path::{PathMatchKind, PathRadixBuilder, PathRadixTree};
 use edgion_resources::filters::PluginRunningResult;
-use edgion_resources::matcher::ip_radix_tree::IpRadixMatcher;
 use edgion_resources::resources::edgion_config_data::ConfigEntry;
 use edgion_resources::resources::edgion_plugins::plugin_configs::{
     AccessPathMatchType, IpAccessMatch, RequestAccessPolicyConfig, RequestAccessProfile, RequestAccessRuleType,

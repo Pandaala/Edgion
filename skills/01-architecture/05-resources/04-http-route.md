@@ -118,7 +118,7 @@ HTTPRoute's ConfHandler implements route compilation and registration:
 2. **Per-listener route management**: based on resolved_listeners, register route rules into the `HttpRouteManager` of the corresponding `ListenerKey`
 3. **Domain route table**: each physical Listener maintains authored hostname groups; only omitted/empty hostname lists create a separate internal catch-all. Both planes reject a bare `*` or any other invalid hostname entry for the complete Route.
 4. **Multi-level match engine**:
-   - Gateway `HostnameMatcher<RouteRules>`: shared immutable exact/wildcard index; matching suffixes continue from longest to shortest without changing Listener eligibility
+   - Algo `RadixHostnameMatcher<RouteRules>`: shared immutable exact/wildcard index consumed by Gateway; matching suffixes continue from longest to shortest without changing Listener eligibility
    - `RadixRouteMatchEngine`: path-prefix matching based on a Radix Tree
    - `RegexRoutesEngine`: regex path matching
 5. **Request handling flow**: `port → domain match → path match → header/query deep match → selected rule → execute plugin chain → proxy_http`

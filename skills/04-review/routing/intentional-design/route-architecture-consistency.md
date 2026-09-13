@@ -28,7 +28,7 @@ types to ensure architectural alignment.
 | Dimension | TCP | UDP | TLS | HTTP | gRPC |
 |-----------|-----|-----|-----|------|------|
 | **Port** | Yes | Yes | Yes | Yes | Yes |
-| **Hostname** | No | No | Yes (SNI via `HostnameMatcher`) | Yes (exact/wildcard/catch-all) | Yes (ordered `HostnameMatcher` + catch-all) |
+| **Hostname** | No | No | Yes (SNI via `RadixHostnameMatcher`) | Yes (exact/wildcard/catch-all) | Yes (ordered `RadixHostnameMatcher` + catch-all) |
 | **Path** | N/A | N/A | N/A | Yes (radix + regex) | N/A |
 | **Service/Method** | N/A | N/A | N/A | N/A | Yes (service+method/service-only/method-only/regex/any) |
 
@@ -46,7 +46,7 @@ types to ensure architectural alignment.
 | Dimension | TCP | UDP | TLS | HTTP | gRPC |
 |-----------|-----|-----|-----|------|------|
 | **Match type** | First match | First match | SNI hostname match | Domain → Path → Deep match | Hostname → ranked Service/Method → Deep match |
-| **Match engine** | `Vec::first()` | `Vec::first()` | `HostnameMatcher` (exact → wildcard) | `RadixRouteMatchEngine` + `RegexRoutesEngine` | `GrpcMatchEngine` (hostname groups plus five indexed streams merged by build-time rank) |
+| **Match engine** | `Vec::first()` | `Vec::first()` | `RadixHostnameMatcher` (exact → wildcard) | `RadixRouteMatchEngine` + `RegexRoutesEngine` | `GrpcMatchEngine` (hostname groups plus five indexed streams merged by build-time rank) |
 | **Gateway validation** | No | No | No | Yes (`deep_match` with `gateway_infos`) | Yes (`deep_match` with `gateway_infos`) |
 
 ### `resolved_listeners` Handling

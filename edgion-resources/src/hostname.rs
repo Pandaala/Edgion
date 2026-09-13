@@ -1,10 +1,9 @@
-//! Gateway API hostname syntax and intersection, independent of routing payloads.
+//! Route hostname-list validation owned by the resource schema layer.
 
-use std::{error::Error, fmt, net::IpAddr};
+use edgion_algo::matcher::radix_hostname::{RadixHostnamePatternError, RadixHostnamePatternRef};
+use std::{error::Error, fmt};
 
-use crate::gwapi_types::HOSTNAME_MAX_LEN;
-
-/// A rejected configured hostname or route hostname list.
+/// A rejected configured Route hostname list.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum HostnameError {
     InvalidPattern,
@@ -12,6 +11,16 @@ pub enum HostnameError {
     IpLiteral,
     MissingHostnames,
     TooManyHostnames,
+}
+
+impl From<RadixHostnamePatternError> for HostnameError {
+    fn from(value: RadixHostnamePatternError) -> Self {
+        match value {
+            RadixHostnamePatternError::InvalidPattern => Self::InvalidPattern,
+            RadixHostnamePatternError::InvalidLength => Self::InvalidLength,
+            RadixHostnamePatternError::IpLiteral => Self::IpLiteral,
+        }
+    }
 }
 
 impl fmt::Display for HostnameError {
@@ -28,91 +37,6 @@ impl fmt::Display for HostnameError {
 
 impl Error for HostnameError {}
 
-/// A borrowed, validated Gateway API v1.5 hostname pattern.
-///
-/// This is a configuration value, not an HTTP authority or certificate SAN.
-/// The Gateway API grammar permits single-label names and does not impose a
-/// separate 63-byte label limit. A bare `*` is not a hostname pattern.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct HostnamePatternRef<'a> {
-    pattern: &'a str,
-    wildcard: bool,
-}
-
-impl<'a> HostnamePatternRef<'a> {
-    pub fn parse(pattern: &'a str) -> Result<Self, HostnameError> {
-        if pattern.is_empty() || pattern.len() > HOSTNAME_MAX_LEN as usize {
-            return Err(HostnameError::InvalidLength);
-        }
-        // Check the complete literal, not the suffix of a wildcard pattern:
-        // '*.127.0.0.1' is a valid DNS pattern, not an IP address literal.
-        if pattern.parse::<IpAddr>().is_ok() {
-            return Err(HostnameError::IpLiteral);
-        }
-        let wildcard = pattern.starts_with("*.");
-        let name = if wildcard { &pattern[2..] } else { pattern };
-        let alphanumeric = |byte: u8| byte.is_ascii_lowercase() || byte.is_ascii_digit();
-        if !name.split('.').all(|label| {
-            let bytes = label.as_bytes();
-            bytes.first().is_some_and(|byte| alphanumeric(*byte))
-                && bytes.last().is_some_and(|byte| alphanumeric(*byte))
-                && bytes.iter().all(|byte| alphanumeric(*byte) || *byte == b'-')
-        }) {
-            return Err(HostnameError::InvalidPattern);
-        }
-        Ok(Self { pattern, wildcard })
-    }
-
-    pub fn as_str(self) -> &'a str {
-        self.pattern
-    }
-
-    pub fn is_wildcard(self) -> bool {
-        self.wildcard
-    }
-
-    /// The wildcard suffix, including its leading dot (for example `.example.com`).
-    pub fn suffix(self) -> Option<&'a str> {
-        self.wildcard.then(|| &self.pattern[1..])
-    }
-
-    /// Match an already validated, normalized hostname query without parsing it.
-    ///
-    /// Callers validate the query once before visiting candidate patterns. This
-    /// method does not accept authority ports or perform case normalization.
-    pub fn matches(self, hostname: &str) -> bool {
-        hostname_matches_pattern(hostname, self.pattern)
-    }
-
-    /// Return the narrower input pattern when their hostname sets intersect.
-    pub fn intersection(self, other: Self) -> Option<Self> {
-        match (self.suffix(), other.suffix()) {
-            (None, _) => other.matches(self.pattern).then_some(self),
-            (Some(_), None) => self.matches(other.pattern).then_some(other),
-            (Some(left), Some(right)) => {
-                if left.ends_with(right) {
-                    Some(self)
-                } else if right.ends_with(left) {
-                    Some(other)
-                } else {
-                    None
-                }
-            }
-        }
-    }
-}
-
-/// Pure suffix predicate for validated configuration and normalized queries.
-/// Runtime owners validate once before iteration; this performs no parsing or
-/// allocation. Exact comparison preserves the existing ASCII-insensitive API.
-pub fn hostname_matches_pattern(hostname: &str, pattern: &str) -> bool {
-    match pattern.strip_prefix('*') {
-        Some(suffix) if suffix.starts_with('.') => hostname.len() > suffix.len() && hostname.ends_with(suffix),
-        Some(_) => false,
-        None => hostname.eq_ignore_ascii_case(pattern),
-    }
-}
-
 /// Validate the entire authored list; invalid entries never become catch-all.
 /// HTTPRoute/GRPCRoute permit omitted or empty lists; TLSRoute requires 1..=16.
 pub fn validate_route_hostnames(hostnames: Option<&[String]>, required: bool) -> Result<(), HostnameError> {
@@ -124,7 +48,7 @@ pub fn validate_route_hostnames(hostnames: Option<&[String]>, required: bool) ->
         return Err(HostnameError::TooManyHostnames);
     }
     for hostname in hostnames {
-        HostnamePatternRef::parse(hostname)?;
+        RadixHostnamePatternRef::parse(hostname).map_err(HostnameError::from)?;
     }
     Ok(())
 }
@@ -132,72 +56,6 @@ pub fn validate_route_hostnames(hostnames: Option<&[String]>, required: bool) ->
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn gateway_api_hostname_grammar_and_lengths() {
-        for value in ["a", "a-b", "example.com", "*.a", "*.example.com", "*.127.0.0.1"] {
-            assert!(HostnamePatternRef::parse(value).is_ok(), "{value}");
-        }
-        for value in [
-            "",
-            "*",
-            "*.",
-            "foo.*.com",
-            "example.com.",
-            ".example.com",
-            "a..b",
-            "-a",
-            "a-",
-            "A.example.com",
-            "a_b",
-            "a:80",
-            "127.0.0.1",
-            "::1",
-            "[::1]",
-            "é.example",
-            " a",
-        ] {
-            assert!(HostnamePatternRef::parse(value).is_err(), "{value}");
-        }
-        assert_eq!(HostnamePatternRef::parse("127.0.0.1"), Err(HostnameError::IpLiteral));
-        assert!(HostnamePatternRef::parse(&"a".repeat(253)).is_ok());
-        assert!(HostnamePatternRef::parse(&"a".repeat(254)).is_err());
-        assert!(HostnamePatternRef::parse(&format!("*.{}", "a".repeat(251))).is_ok());
-        assert!(HostnamePatternRef::parse(&format!("*.{}", "a".repeat(252))).is_err());
-    }
-
-    #[test]
-    fn wildcard_matches_preserve_label_boundaries_and_require_a_prefix() {
-        let pattern = HostnamePatternRef::parse("*.example.com").unwrap();
-        assert!(pattern.is_wildcard());
-        assert_eq!(pattern.suffix(), Some(".example.com"));
-        for name in ["a.example.com", "a.b.example.com"] {
-            assert!(pattern.matches(name));
-        }
-        for name in ["example.com", "badexample.com", ".example.com", "example.org"] {
-            assert!(!pattern.matches(name));
-        }
-    }
-
-    #[test]
-    fn intersections_are_commutative_and_return_the_narrower_input() {
-        for (left, right, expected) in [
-            ("a", "a", Some("a")),
-            ("a", "b", None),
-            ("*.example.com", "a.example.com", Some("a.example.com")),
-            ("*.example.com", "a.b.example.com", Some("a.b.example.com")),
-            ("*.example.com", "example.com", None),
-            ("*.example.com", "*.b.example.com", Some("*.b.example.com")),
-            ("*.example.com", "*.badexample.com", None),
-            ("*.a", "a.a", Some("a.a")),
-        ] {
-            let left = HostnamePatternRef::parse(left).unwrap();
-            let right = HostnamePatternRef::parse(right).unwrap();
-            assert_eq!(left.intersection(right).map(HostnamePatternRef::as_str), expected);
-            assert_eq!(right.intersection(left).map(HostnamePatternRef::as_str), expected);
-            assert_eq!(left.intersection(left), Some(left));
-        }
-    }
 
     #[test]
     fn route_hostname_lists_are_all_or_nothing() {

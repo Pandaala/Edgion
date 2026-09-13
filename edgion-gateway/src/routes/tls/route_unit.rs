@@ -1,6 +1,7 @@
 use crate::routes::common::filter_accepted_parent_refs;
 use crate::runtime::matching::route::ResolvedParentRef;
 use crate::runtime::store::listener_gateway_info::format_gateway_key;
+use edgion_algo::matcher::radix_hostname::RadixHostnamePatternRef;
 use std::sync::Arc;
 
 use super::{cap_tls_connect_retries, DEFAULT_TLS_CONNECT_RETRIES, MAX_TLS_CONNECT_RETRIES};
@@ -86,7 +87,7 @@ impl TlsRouteUnit {
                         || attachment
                             .hostnames
                             .iter()
-                            .any(|hostname| edgion_resources::hostname::HostnamePatternRef::parse(hostname).is_err())
+                            .any(|hostname| RadixHostnamePatternRef::parse(hostname).is_err())
                         || parent.namespace.as_deref().unwrap_or(namespace) != attachment.gateway_namespace
                         || parent.name != attachment.gateway_name
                         || parent

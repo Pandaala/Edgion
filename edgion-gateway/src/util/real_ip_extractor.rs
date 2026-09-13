@@ -27,8 +27,8 @@
 //! Result: RemoteIp = "203.0.113.1"
 //! ```
 
+use edgion_algo::matcher::radix_ip::IpRadixMatcher;
 use edgion_resources::matcher::ip_cidr_helpers::to_cidr_format;
-use edgion_resources::matcher::ip_radix_tree::IpRadixMatcher;
 use edgion_resources::resources::edgion_config_data::IpGroup;
 use pingora_http::RequestHeader;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};

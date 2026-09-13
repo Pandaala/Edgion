@@ -15,7 +15,7 @@ use parking_lot::Mutex;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio::task::AbortHandle;
 
-use crate::cache::ShardedLruCache;
+use edgion_algo::cache::ShardedLruCache;
 
 /// Bounds the canonical LRU's eagerly allocated metadata, independently of bytes.
 pub const MAX_CACHE_ENTRIES: usize = MAX_LRU_CACHE_CAPACITY;

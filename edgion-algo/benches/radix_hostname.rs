@@ -1,7 +1,7 @@
 //! Bounded Route hostname benchmark; does not modify certificate matching.
 //!
-//! Run: cargo bench -p edgion-gateway --bench route_hostname
-//! Smoke: EDGION_HOSTNAME_BENCH_SMOKE=1 cargo bench -p edgion-gateway --bench route_hostname
+//! Run: cargo bench -p edgion-algo --bench radix_hostname
+//! Smoke: EDGION_HOSTNAME_BENCH_SMOKE=1 cargo bench -p edgion-algo --bench radix_hostname
 //!
 //! CSV timings are batch means, NOT latency percentiles. Lookup uses repeatedly
 //! warmed inputs and includes the production ID-to-content lookup. Cold pattern
@@ -10,7 +10,9 @@
 //! or RSS. The global counting overhead affects allocation-heavy measurements;
 //! this executable creates no worker threads and owns its own allocator.
 
-use edgion_gateway::matcher::hostname::{CompiledHostnamePattern, HostContentChange, HostnameMatcher, HostnameQuery};
+use edgion_algo::matcher::radix_hostname::{
+    RadixHostnameChange, RadixHostnameMatcher, RadixHostnamePattern, RadixHostnameQuery,
+};
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::collections::HashMap;
 use std::hint::black_box;
@@ -118,11 +120,11 @@ fn report(engine: &str, operation: &str, keys: usize, iterations: usize, result:
     );
 }
 
-fn pattern(value: &str) -> CompiledHostnamePattern {
-    CompiledHostnamePattern::parse(value).expect("benchmark configured hostnames are valid")
+fn pattern(value: &str) -> RadixHostnamePattern {
+    RadixHostnamePattern::parse(value).expect("benchmark configured hostnames are valid")
 }
 
-type Groups = HashMap<CompiledHostnamePattern, Arc<usize>>;
+type Groups = HashMap<RadixHostnamePattern, Arc<usize>>;
 
 fn groups(keys: usize) -> Groups {
     let mut result: Groups = [
@@ -148,9 +150,10 @@ fn groups(keys: usize) -> Groups {
     result
 }
 
-/// Benchmark-only corrected HashHost reference. Exact keys never satisfy a
-/// wildcard probe: wildcard storage keys start with a dot, exact keys do not.
-/// Its value payload is the same integer used by the production generic index.
+/// Benchmark-only hash reference for Gateway API multi-label wildcard matching.
+/// Exact keys never satisfy a wildcard probe: wildcard storage keys start with
+/// a dot, exact keys do not. Its value payload is the same integer used by the
+/// production generic index.
 struct CorrectedHash {
     values: HashMap<String, usize>,
     wildcard_lengths: Vec<usize>,
@@ -209,13 +212,18 @@ impl CorrectedHash {
     }
 }
 
-fn checksum(matcher: &HostnameMatcher<usize>, query: HostnameQuery<'_>) -> usize {
+fn checksum(matcher: &RadixHostnameMatcher<usize>, query: RadixHostnameQuery<'_>) -> usize {
     matcher
         .matching_values(query)
         .fold(0usize, |value, found| value.wrapping_mul(31).wrapping_add(found + 1))
 }
 
-fn lookup_measurements(matcher: &HostnameMatcher<usize>, reference: &CorrectedHash, keys: usize, iterations: usize) {
+fn lookup_measurements(
+    matcher: &RadixHostnameMatcher<usize>,
+    reference: &CorrectedHash,
+    keys: usize,
+    iterations: usize,
+) {
     // Successful protocol matching normally stops at the first hostname group.
     // Report that path separately from the complete continuation stream below.
     for (shape, input) in [
@@ -223,7 +231,7 @@ fn lookup_measurements(matcher: &HostnameMatcher<usize>, reference: &CorrectedHa
         ("lookup_wildcard_first", "random.example.com"),
         ("lookup_short_first", "grpc"),
     ] {
-        let query = HostnameQuery::new(input).unwrap();
+        let query = RadixHostnameQuery::new(input).unwrap();
         assert_eq!(matcher.matching_values(query).next().copied(), reference.first(input));
         for _ in 0..256 {
             black_box(matcher.matching_values(query).next().copied());
@@ -251,7 +259,7 @@ fn lookup_measurements(matcher: &HostnameMatcher<usize>, reference: &CorrectedHa
         ("lookup_continuation", "foo.api.sub.example.com"),
         ("lookup_short", "grpc"),
     ] {
-        let query = HostnameQuery::new(input).unwrap();
+        let query = RadixHostnameQuery::new(input).unwrap();
         assert_eq!(checksum(matcher, query), reference.checksum(input));
         for _ in 0..256 {
             black_box(checksum(matcher, query));
@@ -277,19 +285,19 @@ fn lookup_measurements(matcher: &HostnameMatcher<usize>, reference: &CorrectedHa
 fn size_measurements(keys: usize, iterations: usize) {
     let source = groups(keys);
     let prepared = source.clone();
-    let (matcher, build) = measured(|| HostnameMatcher::build(prepared));
+    let (matcher, build) = measured(|| RadixHostnameMatcher::build(prepared));
     report("radix", "full_build", keys, 1, &build);
     let (reference, build) = measured(|| CorrectedHash::new(&source));
     report("corrected_hash", "full_build", keys, 1, &build);
     lookup_measurements(&matcher, &reference, keys, iterations);
 
-    let changes = [HostContentChange::Upsert(
+    let changes = [RadixHostnameChange::Upsert(
         pattern("api.sub.example.com"),
         Arc::new(keys + 1),
     )];
     let (patched, timing) = measured(|| matcher.with_changes(changes));
     report("radix", "one_content_patch_old_retained", keys, 1, &timing);
-    let query = HostnameQuery::new("api.sub.example.com").unwrap();
+    let query = RadixHostnameQuery::new("api.sub.example.com").unwrap();
     assert_eq!(*matcher.matching_values(query).next().unwrap(), 0);
     assert_eq!(*patched.matching_values(query).next().unwrap(), keys + 1);
 
@@ -323,12 +331,12 @@ fn size_measurements(keys: usize, iterations: usize) {
         replaced.get(&exact_key).unwrap()
     ));
     let added_key = pattern("added.example.com");
-    let changes = [HostContentChange::Upsert(added_key.clone(), Arc::new(keys + 2))];
+    let changes = [RadixHostnameChange::Upsert(added_key.clone(), Arc::new(keys + 2))];
     let (added, timing) = measured(|| reconnected.with_changes(changes));
     report("radix", "add_key_remap_old_retained", keys, 1, &timing);
     assert_eq!(added.len(), keys + 1);
     assert_eq!(checksum(&matcher, query), checksum(&added, query));
-    let (removed, timing) = measured(|| added.with_changes([HostContentChange::Remove(added_key)]));
+    let (removed, timing) = measured(|| added.with_changes([RadixHostnameChange::Remove(added_key)]));
     report("radix", "remove_key_remap_old_retained", keys, 1, &timing);
     assert_eq!(removed.len(), keys);
     assert_eq!(checksum(&removed, query), checksum(&matcher, query));
@@ -350,8 +358,8 @@ fn deep_measurements(iterations: usize) {
         groups.insert(pattern(&format!("*.{suffix}")), Arc::new(labels));
     }
     let reference = CorrectedHash::new(&groups);
-    let matcher = HostnameMatcher::build(groups);
-    let query = HostnameQuery::new(&query).unwrap();
+    let matcher = RadixHostnameMatcher::build(groups);
+    let query = RadixHostnameQuery::new(&query).unwrap();
     assert_eq!(matcher.matching_values(query).count(), 127);
     assert_eq!(checksum(&matcher, query), reference.checksum(query.as_str()));
     let (_, timing) = measured(|| {
@@ -386,7 +394,12 @@ fn main() {
     }
     deep_measurements(if smoke { 100 } else { 10_000 });
     let prepared: Vec<_> = (0..1_000).map(|_| groups(100)).collect();
-    let (listeners, timing) = measured(|| prepared.into_iter().map(HostnameMatcher::build).collect::<Vec<_>>());
+    let (listeners, timing) = measured(|| {
+        prepared
+            .into_iter()
+            .map(RadixHostnameMatcher::build)
+            .collect::<Vec<_>>()
+    });
     report("radix", "1000_listeners_x_100_keys_build", 100_000, 1, &timing);
     let (_, timing) = measured(|| drop(listeners));
     report("radix", "1000_listeners_x_100_keys_drop", 100_000, 1, &timing);

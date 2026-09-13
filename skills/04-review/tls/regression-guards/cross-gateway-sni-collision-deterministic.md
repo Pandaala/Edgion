@@ -88,7 +88,7 @@ collisions reach the data plane unguarded.
 - Every `tracing::warn!` lives only in a rebuild path, never in `match_sni`/`match_route`,
   so the data-plane handshake hot-path tracing prohibition
   ([03-coding/01-log-safety.md](../../../03-coding/01-log-safety.md)) is respected.
-- `HashHost::get_mut_exact` wildcard normalization (the GatewayTlsMatcher companion fix)
+- `Rfc6125HostnameMatcher::get_mut_exact` wildcard normalization (the GatewayTlsMatcher companion fix)
   has exactly one caller, so the behavior change is contained; it still refuses to fall
   back to a wildcard for a concrete subdomain.
 
@@ -149,7 +149,7 @@ Unit tests in `tls.rs` (GatewayTlsMatcher):
 - `test_cross_gateway_collision_prefers_oldest_creation_timestamp` — the older Gateway
   wins even with a lexically larger name, proving creationTimestamp dominates.
 
-Unit test in `edgion-gateway/src/matcher/hostname/rfc6125.rs`:
+Unit test in `edgion-algo/src/matcher/rfc6125_hostname/mod.rs`:
 - `test_get_mut_exact_resolves_wildcard_pattern` — `get_mut_exact("*.example.com")`
   resolves to its own bucket, still refuses a concrete subdomain, case-insensitive.
 

@@ -1,4 +1,4 @@
-//! A cache-friendly path radix tree for Gateway route and policy matching.
+//! A cache-friendly path radix tree for route and policy matching.
 //!
 //! This module provides a high-performance prefix tree optimized for CPU cache.
 //! It uses a two-phase approach:
@@ -12,12 +12,12 @@
 //! - No dynamic parameter extraction
 //!
 //! Algorithm examples and boundary cases live beside the implementation as
-//! unit tests because this module is intentionally Gateway-private.
+//! unit tests. Runtime-specific route and policy aggregation stays in consumers.
 
 mod builder;
 mod error;
 mod frozen;
 
-pub(crate) use builder::PathRadixBuilder;
-pub(crate) use error::PathRadixError;
-pub(crate) use frozen::{PathMatchKind, PathRadixTree};
+pub use builder::PathRadixBuilder;
+pub use error::PathRadixError;
+pub use frozen::{PathMatchKind, PathRadixTree};

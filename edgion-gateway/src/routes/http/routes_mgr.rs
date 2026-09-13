@@ -2,8 +2,6 @@ use super::conf_handler_impl::{patch_domain_route_rules, HttpRouteChanges};
 use crate::backends::LogicalBackendHandle;
 use crate::ctx::EdgionHttpContext;
 use crate::lb::{ERR_INCONSISTENT_WEIGHT, ERR_NO_BACKEND_REFS};
-use crate::matcher::hostname::HostnameMatcher;
-use crate::matcher::hostname::HostnameQuery;
 use crate::routes::http::match_engine::radix_route_match::RadixRouteMatchEngine;
 use crate::routes::http::match_engine::regex_routes_engine::RegexRoutesEngine;
 use crate::routes::http::match_unit::RouteMatchResult;
@@ -11,6 +9,8 @@ use crate::routes::http::HttpRouteRuleUnit;
 use crate::runtime::store::listener_gateway_info::GatewayInfoIndex;
 use arc_swap::ArcSwap;
 use dashmap::DashMap;
+use edgion_algo::matcher::radix_hostname::RadixHostnameMatcher;
+use edgion_algo::matcher::radix_hostname::RadixHostnameQuery;
 use edgion_resources::err::EdError;
 use edgion_resources::HTTPRoute;
 use edgion_resources::ListenerKey;
@@ -181,7 +181,7 @@ impl RouteRules {
 
 pub struct DomainRouteRules {
     /// Declared hostname groups, published with their path rules in this snapshot.
-    pub(crate) hosts: HostnameMatcher<RouteRules>,
+    pub(crate) hosts: RadixHostnameMatcher<RouteRules>,
 
     /// Catch-all routes from HTTPRoutes with no spec.hostnames.
     /// Stored separately from named patterns so only an omitted or empty
@@ -192,7 +192,7 @@ pub struct DomainRouteRules {
 impl DomainRouteRules {
     pub fn new() -> Self {
         Self {
-            hosts: HostnameMatcher::default(),
+            hosts: RadixHostnameMatcher::default(),
             catch_all_routes: None,
         }
     }
@@ -222,7 +222,7 @@ impl DomainRouteRules {
 
         // A valid HTTP authority outside named hostname syntax (for example an
         // IP literal) may still use an eligible hostless Route and Listener.
-        if let Ok(query) = HostnameQuery::new(hostname) {
+        if let Ok(query) = RadixHostnameQuery::new(hostname) {
             for rules in self.hosts.matching_values(query) {
                 match rules.match_route(session, ctx, index) {
                     Err(EdError::RouteNotFound()) => {}

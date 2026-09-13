@@ -31,8 +31,8 @@ separate statistics/store window itself caused incorrect certificate selection.
 
 The implementation is in tls/store/tls_store.rs and cert_matcher.rs. IndexDeltas
 collects effective old/new memberships. TlsSnapshotData::apply_indexes copies
-changed HAMT paths and reorders affected candidate slots. Shared canonical_host_key
-and lookup_rfc6125 helpers preserve HashHost normalization, exact-first lookup,
+changed HAMT paths and reorders affected candidate slots. Shared canonical_key
+and lookup helpers preserve Rfc6125HostnameMatcher normalization, exact-first lookup,
 and single-label wildcard semantics. Other resource stores retain their representations.
 
 ## Preserved boundaries and limits
@@ -95,7 +95,7 @@ and production ordering returned LGTM.
 ### Incremental-publication verification history
 
 Earlier focused verification: cargo test -p edgion-gateway --lib tls::store passed
-22 tests; the broader tls:: selection passed 191 tests; the shared HashHost module
+22 tests; the broader tls:: selection passed 191 tests; the shared Rfc6125HostnameMatcher module
 passed 19 tests. Coverage includes unchanged
 same-listener hostname sharing, unaffected listener/entry identity, wildcard
 deletion, exact priority, retained snapshots, attachment/listener migration,

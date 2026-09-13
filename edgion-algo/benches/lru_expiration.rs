@@ -40,7 +40,7 @@ use std::hint::black_box;
 use std::mem::size_of;
 use std::time::{Duration, Instant};
 
-use edgion_gateway::cache::lru::LocalLruCache;
+use edgion_algo::cache::LocalLruCache;
 
 /// Long enough that no entry seeded with it expires during a run.
 const LIVE_TTL: Duration = Duration::from_secs(3_600);
