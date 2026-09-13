@@ -130,9 +130,9 @@ Three canonical pieces, each with a distinct job:
   for the upstream-authority path: never resolves the composed authority in
   DNS at all; pins every lookup to the anchor Service's ready endpoints.
 
-**Adoption map** (verified 2026-09-04): `EgressResolver` guards
+**Adoption map** (verified 2026-09-13): `EgressResolver` guards
 forward_auth / webhook, wasm guest callouts, ldap_auth dial-time LDAP
-connections, OTLP exporter/probe dials, and openid_connect IdP clients (default factory and SAN-pinning
+connections, Redis seed/reconnect/Sentinel/Cluster dials, OTLP exporter/probe dials, and openid_connect IdP clients (default factory and SAN-pinning
 branches; IP-literal URLs are classified before send because reqwest skips
 custom DNS for literals). Upstream dialing goes through `classify_backend_addr`.
 DSL `http.call` is a documented design tradeoff (F-018): the default-off
@@ -169,7 +169,8 @@ not in-process checks.
   ldap_auth and openid_connect are no longer in this list: ldap_auth resolves
   through `EgressResolver` (`ResolverSpec::System`) and injects the admitted
   stream into ldap3; openid_connect installs the same resolver on both IdP
-  HTTP clients.
+  HTTP clients. Redis likewise adapts Fred's resolver hook to `EgressResolver`
+  with `ResolverSpec::System`, so every actual topology dial is classified.
 - **Not DNS at all**: K8s Service backends dial EndpointSlice pod IPs /
   ClusterIP directly; the upstream-authority outbound path uses
   `AnchorPinnedResolver`.
@@ -187,6 +188,12 @@ not in-process checks.
   credential reservation runtimes, and DSL `redis.*` builtins (client access).
 - **Rule**: never create a direct redis connection; new rate-limit algorithms
   extend the shared core, not a plugin-local copy.
+- **Dial invariant**: install `redis_egress_resolver` before `Pool::init` so Fred
+  routes configured seeds, reconnects, Sentinel discoveries, and Cluster
+  discoveries/redirects through the canonical Gateway `EgressResolver`. The
+  Fred `dns` feature is enabled only to expose this injection hook; its optional
+  Hickory 0.24 implementation is dependency baggage and is not a permitted
+  resolver path. See the LinkSys review compatibility constraint.
 
 ---
 

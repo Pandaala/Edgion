@@ -142,6 +142,7 @@ cookie = "0.18.1"
 etcd-client = { version = "0.18", features = ["tls"] }
 fred = { version = "10", default-features = false, features = [
     "enable-rustls",       # TLS via rustls (consistent with Edgion)
+    "dns",                 # Expose the resolver hook; Edgion still owns DNS resolution
     "i-std",               # Standard data structures (GET, SET, lists, etc.)
     "i-keys",              # Key commands (EXPIRE, TTL, EXISTS, etc.)
     "i-hashes",            # Hash commands (HGET, HSET, HGETALL, etc.)

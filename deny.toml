@@ -15,6 +15,15 @@
 [advisories]
 yanked = "deny"
 ignore = [
+    # hickory-proto 0.24 message-encoding CPU exhaustion. Fred 10.1's `dns`
+    # feature is required only to expose Pool::set_resolver, but it also pulls
+    # hickory-resolver 0.24. Fred does not call that resolver implementation;
+    # Edgion replaces Fred's system DefaultResolver with its canonical
+    # EgressResolver before Pool::init, so no untrusted DNS message is decoded
+    # or encoded through this dependency. RE-EVALUATE: every Fred upgrade;
+    # remove once its custom-resolver hook no longer enables Hickory 0.24.
+    { id = "RUSTSEC-2026-0119", reason = "fred resolver-hook feature baggage; Hickory 0.24 is not called" },
+
     # protobuf 2.x decode-recursion crash. Pinned by pingora-core ->
     # prometheus 0.13 (requires protobuf 2.x); the fixed 3.7+ is a major we
     # cannot select. Exposure: the prometheus crate only ENCODES our metrics

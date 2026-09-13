@@ -201,6 +201,20 @@ spec:
 
 When `topology` is omitted, the connector runs in standalone mode. When `mode=sentinel` but `sentinel` is missing (or `mode=cluster` but `cluster` is missing), the status reports `Accepted=False/Invalid`.
 
+### DNS and egress policy
+
+Redis endpoints are resolved by the Gateway when Fred opens a connection, not by the Controller and
+not once per Redis command. The same dial-time resolver covers configured seeds, automatic reconnects,
+Sentinel-discovered primaries, and Cluster-discovered or redirected nodes. Results use the system DNS
+mode of Edgion's shared resolver and are cached for `outbound_egress_dns_cache_ttl_ms` (5 seconds by
+default).
+
+Every resolved address is classified immediately before Fred connects. Loopback, link-local, and
+unspecified addresses are always rejected in production. Private and unique-local addresses follow the
+Gateway-wide `outbound_egress_block_private` setting; Redis has no per-connector override. This guard is
+defense in depth and does not replace a Gateway Pod `NetworkPolicy`. See
+[Egress policy](#egress-policy-ssrf-protection) for the shared settings and address classes.
+
 > **Note**: `topology.sentinel.password` (a Sentinel-specific password separate from Redis node auth) has been removed — it was a runtime no-op and was never consumed by the connector. If you have an existing CR that includes a `password:` field under `topology.sentinel`, the Kubernetes API server will silently prune it on re-apply; it does not cause a parse error.
 
 #### Example: Sentinel high availability
@@ -572,8 +586,8 @@ value comes from the gateway's own configuration:
 
 | Setting | Type | Default | Description |
 |---------|------|---------|-------------|
-| `outbound_egress_block_private` (gateway config file) / `EDGION_OUTBOUND_BLOCK_PRIVATE` (env) | Boolean | `false` | Gateway-wide default for `target.blockPrivate` when a webhook omits it. Truthy values: `1`, `true`, `yes`, `on` (case-insensitive). |
-| `outbound_egress_dns_cache_ttl_ms` (gateway config file) / `EDGION_OUTBOUND_DNS_CACHE_TTL_MS` (env) | Integer (ms) | `5000` | How long a URL target's resolved-and-classified addresses are cached before being re-resolved. An unparseable env value is ignored (a WARN is logged) and the configured value is kept. |
+| `outbound_egress_block_private` (gateway config file) / `EDGION_OUTBOUND_BLOCK_PRIVATE` (env) | Boolean | `false` | Gateway-wide default for guarded outbound targets. A webhook's `target.blockPrivate` may override it; Redis may not. Truthy values: `1`, `true`, `yes`, `on` (case-insensitive). |
+| `outbound_egress_dns_cache_ttl_ms` (gateway config file) / `EDGION_OUTBOUND_DNS_CACHE_TTL_MS` (env) | Integer (ms) | `5000` | How long guarded outbound DNS results, including Redis results, are cached after classification before being re-resolved. An unparseable env value is ignored (a WARN is logged) and the configured value is kept. |
 
 **Precedence: the resource field wins.** An explicit `target.blockPrivate` on a webhook always
 overrides the gateway-local default — a cluster administrator who wants the stricter posture

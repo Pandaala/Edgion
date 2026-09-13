@@ -20,6 +20,7 @@
 pub mod client;
 pub mod config_mapping;
 pub mod ops;
+mod resolver;
 
 // Re-export key types for convenient access
 pub use client::RedisLinkClient;

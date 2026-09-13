@@ -144,6 +144,7 @@ spec:
 
 - When `topology.mode=sentinel`, `sentinel` is required; when `mode=cluster`, `cluster` is required; otherwise `Accepted=False/Invalid`.
 - `auth` uses `BasicAuthResolver`: the Secret must provide at least `password`; `username` is optional (Redis 6+ ACL).
+- Fred resolves every configured, reconnect, Sentinel-discovered, and Cluster-discovered dial through the canonical Gateway `EgressResolver` with `ResolverSpec::System`. This happens per connection attempt, not per Redis command. Loopback/link-local/unspecified addresses are rejected in production; private/unique-local addresses follow the Gateway-wide `outbound_egress_block_private` setting. Redis has no resource-level override, and results use `outbound_egress_dns_cache_ttl_ms`.
 
 ### `type: etcd`
 

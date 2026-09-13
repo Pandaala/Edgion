@@ -22,6 +22,7 @@ use edgion_resources::credentials::materials::BasicAuthMaterial;
 use edgion_resources::resources::link_sys::redis::RedisClientConfig;
 
 use super::config_mapping::{build_fred_config, build_fred_pool};
+use super::resolver::redis_egress_resolver;
 
 /// Runtime Redis client wrapper.
 ///
@@ -68,6 +69,10 @@ impl RedisLinkClient {
     /// then connects all pool clients to Redis.
     /// On success, the client is marked healthy and ready for use.
     pub async fn init(&self) -> Result<()> {
+        // Install Edgion's resolver before Fred performs any seed, reconnect,
+        // Sentinel, or Cluster topology dial.
+        self.pool.set_resolver(redis_egress_resolver()).await;
+
         // Set up connection event listeners on each client in the pool.
         // Pool does not implement EventInterface directly — we must iterate
         // over individual clients.
@@ -159,4 +164,45 @@ impl LinkSysLifecycle for RedisLinkClient {
     }
 
     // SHUTDOWN_ON_REPLACE uses the trait default value (true)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use edgion_resources::resources::link_sys::redis::RedisPool;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn init_installs_egress_resolver_before_fred_connects() {
+        let config = RedisClientConfig {
+            endpoints: vec!["redis://169.254.169.254:6379".to_string()],
+            auth: None,
+            db: None,
+            timeout: None,
+            pool: Some(RedisPool {
+                size: Some(1),
+                min_idle: None,
+            }),
+            retry: None,
+            topology: None,
+            tls: None,
+            observability: None,
+        };
+        let client =
+            RedisLinkClient::from_config("test/blocked-redis", &config, &CredentialState::NotRequired).unwrap();
+
+        let error = tokio::time::timeout(Duration::from_secs(1), client.init())
+            .await
+            .expect("egress rejection must happen before the connection timeout")
+            .expect_err("link-local Redis targets must be rejected");
+
+        assert!(
+            error
+                .to_string()
+                .contains("egress policy blocked all resolved addresses"),
+            "unexpected initialization error: {error}"
+        );
+    }
 }

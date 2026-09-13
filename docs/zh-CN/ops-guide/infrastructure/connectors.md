@@ -197,6 +197,18 @@ spec:
 
 省略 `topology` 时连接器以 standalone 模式运行。`mode=sentinel` 但缺少 `sentinel` 块（或 `mode=cluster` 但缺少 `cluster` 块）时，状态报告 `Accepted=False/Invalid`。
 
+### DNS 与出站流量策略
+
+Redis 端点由 Gateway 在 Fred 建立连接时解析，而不是由 Controller 预先解析，也不会在每条
+Redis 命令执行时解析。配置的 seed、自动重连、Sentinel 发现的主节点，以及 Cluster 发现或
+重定向到的节点都经过同一拨号时解析器。解析使用 Edgion 共享解析器的系统 DNS 模式，结果按
+`outbound_egress_dns_cache_ttl_ms` 缓存（默认 5 秒）。
+
+Fred 建立连接前会立即对每个解析地址分类。生产模式始终拒绝回环、链路本地和未指定地址；
+私有地址与唯一本地地址遵循 Gateway 全局 `outbound_egress_block_private` 配置，Redis 不提供
+连接器级覆盖。此防护属于纵深防御，不能替代 Gateway Pod 的 `NetworkPolicy`。共享配置和地址
+分类详见[出站流量策略（SSRF 防护）](#出站流量策略ssrf-防护)。
+
 > **说明**：`topology.sentinel.password`（独立于 Redis 节点认证的 Sentinel 自身密码）字段已被移除——该字段在运行时从未被消费（no-op）。如果现有 CR 的 `topology.sentinel` 下包含 `password:` 字段，Kubernetes API server 在重新 apply 时会静默裁剪该字段，不会导致解析错误。
 
 #### 示例：Sentinel 高可用
@@ -533,8 +545,8 @@ URL 目标按主机名寻址，因此——与通过 Kubernetes EndpointSlice �
 
 | 配置项 | 类型 | 默认值 | 说明 |
 |--------|------|--------|------|
-| `outbound_egress_block_private`（网关配置文件）/ `EDGION_OUTBOUND_BLOCK_PRIVATE`（环境变量） | Boolean | `false` | webhook 未设置 `target.blockPrivate` 时的网关级默认值。真值：`1`、`true`、`yes`、`on`（大小写不敏感）。 |
-| `outbound_egress_dns_cache_ttl_ms`（网关配置文件）/ `EDGION_OUTBOUND_DNS_CACHE_TTL_MS`（环境变量） | Integer（毫秒） | `5000` | URL 目标已解析并分类的地址在重新解析前的缓存时长。环境变量值无法解析时会被忽略（记录 WARN）并保留已配置的值。 |
+| `outbound_egress_block_private`（网关配置文件）/ `EDGION_OUTBOUND_BLOCK_PRIVATE`（环境变量） | Boolean | `false` | 受保护出站目标的网关级默认值。Webhook 可用 `target.blockPrivate` 覆盖；Redis 不可覆盖。真值：`1`、`true`、`yes`、`on`（大小写不敏感）。 |
+| `outbound_egress_dns_cache_ttl_ms`（网关配置文件）/ `EDGION_OUTBOUND_DNS_CACHE_TTL_MS`（环境变量） | Integer（毫秒） | `5000` | 受保护出站 DNS 结果（包括 Redis）在分类后、重新解析前的缓存时长。环境变量值无法解析时会被忽略（记录 WARN）并保留已配置的值。 |
 
 **优先级：资源字段优先于网关默认值。** webhook 上显式设置的 `target.blockPrivate` 总是覆盖网关本地默认值——希望全局采用更严格策略的集群管理员可以打开 `outbound_egress_block_private`；需要访问内部 `10.x` 制品库的个别 webhook 仍可用 `target.blockPrivate: false` 单独放行，反之亦然。
 

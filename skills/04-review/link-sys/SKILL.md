@@ -22,7 +22,12 @@ before applying a decision to current code.
 
 ## Regression guards
 
+- [Redis DNS and egress policy is enforced at every Fred dial](regression-guards/redis-dial-time-egress-policy.md)
 - [ResolvedTarget Has No Webhook Compatibility Alias — FIXED](regression-guards/resolved-target-has-no-webhook-compatibility-alias.md)
 - [LinkSys outbound TLS enablement and shared loading](regression-guards/shared-outbound-tls-loading.md)
 - [OTLP provider ownership and safe transport](regression-guards/otlp-provider-ownership-and-egress.md)
 - [Webhook publication stays outside the generic LinkSys lifecycle](regression-guards/webhook-publication-outside-generic-lifecycle.md)
+
+## Compatibility constraints
+
+- [Fred `dns` feature carries an unused legacy Hickory resolver](compatibility-constraints/fred-dns-feature-hickory.md)
