@@ -11,6 +11,7 @@ before applying a decision to current code.
 
 ## Intentional design
 
+- [EdgionTls last-known-good follows the resource key](intentional-design/last-known-good-follows-resource-key.md)
 - [Gateway TLS collision candidate ownership](intentional-design/gateway-tls-candidate-ownership.md)
 - [tls-F010 (cert/key install dup) — Shared `install_cert_key_to_ssl` extraction deferred](intentional-design/cert-key-install-helper-deferred.md)
 - [tls-F007 (duplication) — Two SNI matchers stay separate; semantics changes apply to both](intentional-design/cert-matcher-duplication-accepted.md)
