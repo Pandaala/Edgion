@@ -186,6 +186,91 @@ pub struct GRPCRouteMatch {
     pub headers: Option<Vec<GRPCHeaderMatch>>,
 }
 
+/// Validated method predicates compiled once when building a route snapshot.
+/// Exact values remain borrowed from the owning match; this is not a wire type.
+#[derive(Clone, Debug)]
+pub enum CompiledGrpcMethodMatch {
+    Any,
+    Exact,
+    RegularExpression {
+        service: Option<regex::Regex>,
+        method: Option<regex::Regex>,
+    },
+}
+
+impl GRPCRouteMatch {
+    /// Apply the same Gateway API method policy on every configuration backend.
+    /// Errors are bounded and never include operator-provided patterns.
+    pub fn compile_method(&self) -> Result<CompiledGrpcMethodMatch, &'static str> {
+        let Some(matcher) = &self.method else {
+            return Ok(CompiledGrpcMethodMatch::Any);
+        };
+        let service = matcher.service.as_deref();
+        let method = matcher.method.as_deref();
+        if service.is_none_or(str::is_empty) && method.is_none_or(str::is_empty) {
+            return Err("gRPC method matcher requires a non-empty service or method");
+        }
+        if [service, method]
+            .into_iter()
+            .flatten()
+            .any(|value| value.chars().count() > 1024)
+        {
+            return Err("gRPC service and method must not exceed 1024 characters");
+        }
+        if matcher.match_type.as_ref() != Some(&GRPCMethodMatchType::RegularExpression) {
+            // Mirror the vendored Gateway API Exact CEL name constraints,
+            // including the optional leading dot on a service name.
+            if service.is_some_and(|value| {
+                !value
+                    .strip_prefix('.')
+                    .unwrap_or(value)
+                    .split('.')
+                    .all(valid_grpc_identifier)
+            }) {
+                return Err("gRPC Exact service must be a valid service name");
+            }
+            if method.is_some_and(|value| !valid_grpc_identifier(value)) {
+                return Err("gRPC Exact method must be a valid method name");
+            }
+            return Ok(CompiledGrpcMethodMatch::Exact);
+        }
+        let compile = |pattern: Option<&str>| {
+            pattern
+                .filter(|pattern| !pattern.is_empty())
+                .map(|pattern| {
+                    regex::RegexBuilder::new(pattern)
+                        .size_limit(10 * 1024 * 1024)
+                        .dfa_size_limit(2 * 1024 * 1024)
+                        .build()
+                        .map_err(|_| "gRPC method matcher contains an invalid regular expression")
+                })
+                .transpose()
+        };
+        Ok(CompiledGrpcMethodMatch::RegularExpression {
+            service: compile(service)?,
+            method: compile(method)?,
+        })
+    }
+}
+
+fn valid_grpc_identifier(value: &str) -> bool {
+    let mut bytes = value.bytes();
+    bytes
+        .next()
+        .is_some_and(|byte| byte.is_ascii_alphabetic() || byte == b'_')
+        && bytes.all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+}
+
+impl GRPCRouteRule {
+    /// One invalid OR-branch invalidates its whole rule; valid sibling rules survive.
+    pub fn method_match_error(&self) -> Option<&'static str> {
+        self.matches
+            .iter()
+            .flatten()
+            .find_map(|matcher| matcher.compile_method().err())
+    }
+}
+
 #[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct GRPCMethodMatch {
@@ -599,6 +684,96 @@ pub struct GRPCRouteStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn method_match_compile_policy_survives_json_and_yaml_roundtrip() {
+        for (source, valid) in [
+            ("{}", true),
+            (r#"{"method":{"method":"Get"}}"#, true),
+            (r#"{"method":{"type":"Exact","method":"Get"}}"#, true),
+            (r#"{"method":{"service":".pkg.Service_1"}}"#, true),
+            (r#"{"method":{"service":"pkg.Service","method":"_Get2"}}"#, true),
+            (r#"{"method":{}}"#, false),
+            (r#"{"method":{"type":"Exact"}}"#, false),
+            (r#"{"method":{"service":"","method":"Get"}}"#, false),
+            (r#"{"method":{"service":"pkg.Service","method":""}}"#, false),
+            (r#"{"method":{"service":"pkg..Service"}}"#, false),
+            (r#"{"method":{"service":"pkg.Service."}}"#, false),
+            (r#"{"method":{"method":"1Get"}}"#, false),
+            (r#"{"method":{"method":"Get/Item"}}"#, false),
+            (r#"{"method":{"method":"Gét"}}"#, false),
+            (r#"{"method":{"type":"RegularExpression","method":"^Get.*$"}}"#, true),
+            (
+                r#"{"method":{"type":"RegularExpression","service":"","method":"Get"}}"#,
+                true,
+            ),
+            (
+                r#"{"method":{"type":"RegularExpression","service":"svc","method":""}}"#,
+                true,
+            ),
+            (
+                r#"{"method":{"type":"RegularExpression","service":"","method":""}}"#,
+                false,
+            ),
+            (
+                r#"{"method":{"type":"RegularExpression","service":"[","method":"Get"}}"#,
+                false,
+            ),
+            (
+                r#"{"method":{"type":"RegularExpression","service":"svc","method":"["}}"#,
+                false,
+            ),
+        ] {
+            let matcher: GRPCRouteMatch = serde_json::from_str(source).unwrap();
+            assert_eq!(matcher.compile_method().is_ok(), valid, "{source}");
+            let wire = serde_json::to_value(&matcher).unwrap();
+            let json_copy: GRPCRouteMatch = serde_json::from_value(wire.clone()).unwrap();
+            let yaml_copy: GRPCRouteMatch = serde_yaml::from_str(&serde_yaml::to_string(&matcher).unwrap()).unwrap();
+            assert_eq!(json_copy.compile_method().is_ok(), valid, "{source}");
+            assert_eq!(yaml_copy.compile_method().is_ok(), valid, "{source}");
+            assert_eq!(serde_json::to_value(yaml_copy).unwrap(), wire);
+        }
+    }
+
+    #[test]
+    fn compiled_method_distinguishes_any_exact_and_unconstrained_regex_fields() {
+        let any: GRPCRouteMatch = serde_json::from_str("{}").unwrap();
+        assert!(matches!(any.compile_method(), Ok(CompiledGrpcMethodMatch::Any)));
+        let exact: GRPCRouteMatch = serde_json::from_str(r#"{"method":{"method":"Get"}}"#).unwrap();
+        assert!(matches!(exact.compile_method(), Ok(CompiledGrpcMethodMatch::Exact)));
+        let regex: GRPCRouteMatch =
+            serde_json::from_str(r#"{"method":{"type":"RegularExpression","service":"","method":"^Get.*$"}}"#).unwrap();
+        let CompiledGrpcMethodMatch::RegularExpression { service, method } = regex.compile_method().unwrap() else {
+            panic!("expected regex matcher");
+        };
+        assert!(service.is_none());
+        let method = method.unwrap();
+        assert!(method.is_match("GetItem"));
+        assert!(!method.is_match("DeleteItem"));
+    }
+
+    #[test]
+    fn method_match_length_and_rule_failure_boundaries() {
+        for match_type in ["Exact", "RegularExpression"] {
+            for (length, valid) in [(1024, true), (1025, false)] {
+                let matcher: GRPCRouteMatch = serde_json::from_value(serde_json::json!({
+                    "method": {"type": match_type, "method": "a".repeat(length)}
+                }))
+                .unwrap();
+                assert_eq!(matcher.compile_method().is_ok(), valid);
+            }
+        }
+        let rule: GRPCRouteRule = serde_json::from_value(serde_json::json!({"matches": [
+            {"method": {"method": "Get"}},
+            {"method": {"type": "RegularExpression", "method": "private-marker["}}
+        ]}))
+        .unwrap();
+        let error = rule.method_match_error().unwrap();
+        assert_eq!(error, "gRPC method matcher contains an invalid regular expression");
+        assert!(!error.contains("private-marker"));
+        let catch_all: GRPCRouteRule = serde_json::from_str("{}").unwrap();
+        assert!(catch_all.method_match_error().is_none());
+    }
 
     fn backend_ref(group: Option<&str>, kind: Option<&str>) -> GRPCBackendRef {
         GRPCBackendRef {

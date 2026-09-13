@@ -195,15 +195,40 @@ fn parse_route_to_units(resource_key: &str, route: &Arc<GRPCRoute>) -> Vec<Arc<G
             if invalid_rule_indices.is_some_and(|inv| inv.contains(&rule_id)) {
                 continue;
             }
+            // Compile matchers once, before allocating rule runtime state. An
+            // invalid method predicate withdraws its entire rule on both planes,
+            // including input whose Controller status is absent or stale.
+            let catch_all = edgion_resources::GRPCRouteMatch {
+                method: None,
+                headers: None,
+            };
+            let effective_matches = rule
+                .matches
+                .as_deref()
+                .filter(|m| !m.is_empty())
+                .unwrap_or_else(|| std::slice::from_ref(&catch_all));
+            let matched_infos: Vec<_> = effective_matches
+                .iter()
+                .enumerate()
+                .map(|(match_id, matched)| {
+                    GrpcMatchInfo::new(
+                        route_namespace.to_string(),
+                        route_name.to_string(),
+                        rule_id,
+                        match_id,
+                        matched.clone(),
+                        route_sv,
+                        rule.name.clone(),
+                    )
+                    .with_route_meta(route_labels_meta.clone(), route_annotations_meta.clone())
+                })
+                .collect();
+            if matched_infos.iter().any(|info| info.compiled_method_match.is_none()) {
+                continue;
+            }
             let rule_arc = Arc::new(rule.clone());
-
-            // Compile rule runtime ONCE per rule (plugin chains + compiled backends).
-            // All match-item units of this rule share the same Arc fields so that
-            // in-memory RateLimitLocal CMS state is never split across units.
             let rule_runtime: GrpcRuleRuntime = GrpcRouteRuleUnit::compile_grpc_rule(rule, route_namespace);
-            let rule_plugin_runtime = rule_runtime.plugin_runtime;
-            let rule_backends = rule_runtime.backends;
-            let backend_finder = GrpcRouteRuleUnit::build_backend_selector(&rule_backends);
+            let backend_finder = GrpcRouteRuleUnit::build_backend_selector(&rule_runtime.backends);
             let metric_handles = Arc::new(crate::observe::metrics::route_handles::RouteMetricHandles::build(
                 &attached_gateways,
                 route_namespace,
@@ -211,76 +236,30 @@ fn parse_route_to_units(resource_key: &str, route: &Arc<GRPCRoute>) -> Vec<Arc<G
                 &grpc_backends_from_rule(rule, route_namespace),
             ));
 
-            let effective_matches: &[edgion_resources::GRPCRouteMatch] = rule.matches.as_deref().unwrap_or(&[]);
-
-            if effective_matches.is_empty() {
-                // Per Gateway API spec, a rule with no matches (or an empty matches list)
-                // matches all gRPC traffic.  Synthesise a single catch-all unit so that
-                // `has_routes()` returns true for the listener and unmatched-hostname
-                // requests are correctly answered with UNIMPLEMENTED(12).
+            for matched_info in matched_infos {
                 let specificity = GrpcMatchSpecificity {
-                    header_count: 0,
+                    header_count: matched_info
+                        .matched
+                        .headers
+                        .as_ref()
+                        .map_or(0, |headers| headers.len() as u16),
                     creation_ts_ms,
                     route_key: resource_key.to_string(),
                     rule_index: rule_id as u32,
-                    match_index: 0,
+                    match_index: matched_info.match_id as u32,
                 };
                 units.push(Arc::new(GrpcRouteRuleUnit {
                     resource_key: resource_key.to_string(),
-                    matched_info: GrpcMatchInfo::new(
-                        route_namespace.to_string(),
-                        route_name.to_string(),
-                        rule_id,
-                        0,
-                        edgion_resources::GRPCRouteMatch {
-                            method: None,
-                            headers: None,
-                        },
-                        route_sv,
-                        rule.name.clone(),
-                    )
-                    .with_route_meta(route_labels_meta.clone(), route_annotations_meta.clone()),
-                    rule: rule_arc.clone(),
-                    route: Some(route.clone()),
-                    route_info: route_info.clone(),
+                    matched_info,
+                    rule: Arc::clone(&rule_arc),
+                    route: Some(Arc::clone(route)),
+                    route_info: Arc::clone(&route_info),
                     specificity,
-                    metric_handles: metric_handles.clone(),
-                    plugin_runtime: rule_plugin_runtime.clone(),
-                    backend_finder: backend_finder.clone(),
-                    backends: rule_backends.clone(),
+                    metric_handles: Arc::clone(&metric_handles),
+                    plugin_runtime: Arc::clone(&rule_runtime.plugin_runtime),
+                    backend_finder: Arc::clone(&backend_finder),
+                    backends: Arc::clone(&rule_runtime.backends),
                 }));
-            } else {
-                for (match_id, match_item) in effective_matches.iter().enumerate() {
-                    let header_count = match_item.headers.as_ref().map(|h| h.len() as u16).unwrap_or(0);
-                    let specificity = GrpcMatchSpecificity {
-                        header_count,
-                        creation_ts_ms,
-                        route_key: resource_key.to_string(),
-                        rule_index: rule_id as u32,
-                        match_index: match_id as u32,
-                    };
-                    units.push(Arc::new(GrpcRouteRuleUnit {
-                        resource_key: resource_key.to_string(),
-                        matched_info: GrpcMatchInfo::new(
-                            route_namespace.to_string(),
-                            route_name.to_string(),
-                            rule_id,
-                            match_id,
-                            match_item.clone(),
-                            route_sv,
-                            rule.name.clone(),
-                        )
-                        .with_route_meta(route_labels_meta.clone(), route_annotations_meta.clone()),
-                        rule: rule_arc.clone(),
-                        route: Some(route.clone()),
-                        route_info: route_info.clone(),
-                        specificity,
-                        metric_handles: metric_handles.clone(),
-                        plugin_runtime: rule_plugin_runtime.clone(),
-                        backend_finder: backend_finder.clone(),
-                        backends: rule_backends.clone(),
-                    }));
-                }
             }
         }
     }
@@ -308,6 +287,273 @@ fn grpc_backends_from_rule(rule: &GRPCRouteRule, route_ns: &str) -> Vec<(String,
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ctx::{EdgionHttpContext, NormalizedHostname};
+    use crate::routes::grpc::{try_match_grpc_route, GrpcMatchEngine};
+    use crate::runtime::store::listener_gateway_info::{GatewayInfoIndex, ListenerEntry};
+    use crate::runtime::GatewayInfo;
+    use pingora_proxy::Session;
+    use serde_json::json;
+    use tokio::io::AsyncWriteExt;
+
+    async fn matching_session(path: &str, hostname: &str, headers: &str) -> (Session, EdgionHttpContext) {
+        let (mut client, server) = tokio::io::duplex(8192);
+        client
+            .write_all(
+                format!("POST {path} HTTP/1.1\r\nHost: {hostname}\r\nContent-Length: 0\r\n{headers}\r\n").as_bytes(),
+            )
+            .await
+            .unwrap();
+        let mut session = Session::new_h1(Box::new(server));
+        assert!(session.read_request().await.unwrap());
+        let mut ctx = EdgionHttpContext::default();
+        ctx.request_info.normalized_current_path = path.to_string();
+        ctx.request_info.hostname = NormalizedHostname::new(hostname);
+        (session, ctx)
+    }
+
+    fn matching_index() -> GatewayInfoIndex {
+        matching_index_with_hostname(None)
+    }
+
+    fn matching_index_with_hostname(hostname: Option<&str>) -> GatewayInfoIndex {
+        GatewayInfoIndex::from_entries_for_test(vec![(
+            "default/test-gw".to_string(),
+            ListenerEntry {
+                info: Arc::new(GatewayInfo::new(
+                    Some("default".to_string()),
+                    "test-gw".to_string(),
+                    Some("grpc".to_string()),
+                    None,
+                    None,
+                    None,
+                    vec![],
+                    None,
+                )),
+                hostname: hostname.map(str::to_string),
+                allowed_routes: None,
+            },
+        )])
+    }
+
+    fn matching_route(name: &str, host: &str, matcher: serde_json::Value) -> Arc<GRPCRoute> {
+        let route: GRPCRoute = serde_json::from_value(json!({
+            "apiVersion": "gateway.networking.k8s.io/v1", "kind": "GRPCRoute",
+            "metadata": {"name": name, "namespace": "default"},
+            "spec": {"parentRefs": [{"name": "test-gw", "sectionName": "grpc"}],
+                "hostnames": [host], "resolvedListeners": ["127.0.0.1:19235/HTTP"],
+                "rules": [{"matches": [matcher], "backendRefs": [{"name": "svc", "port": 80}]}]}
+        }))
+        .unwrap();
+        // Exercise the same serialized fields carried by conf_sync.
+        Arc::new(serde_json::from_slice(&serde_json::to_vec(&route).unwrap()).unwrap())
+    }
+
+    #[tokio::test]
+    async fn method_only_matches_through_real_session_and_header_failure_falls_back() {
+        let index = matching_index();
+        for method in [
+            json!({"method":"Get"}),
+            json!({"type":"Exact", "method":"Get"}),
+            json!({"type":"RegularExpression", "method":"^Get.*$"}),
+        ] {
+            let route = matching_route(
+                "method",
+                "api.example.com",
+                json!({"method":method,
+                "headers":[{"name":"x-version", "value":"v2"}]}),
+            );
+            let fallback = matching_route("fallback", "*.example.com", json!({}));
+            let mut units = parse_route_to_units("default/method", &route);
+            units.extend(parse_route_to_units("default/fallback", &fallback));
+            let engine = GrpcMatchEngine::new(units);
+            for service in ["svc.User", "other.Service"] {
+                let (session, ctx) =
+                    matching_session(&format!("/{service}/Get"), "api.example.com", "x-version: v2\r\n").await;
+                assert_eq!(
+                    engine
+                        .match_route(&session, &ctx, &index, "api.example.com")
+                        .unwrap()
+                        .0
+                        .resource_key,
+                    "default/method"
+                );
+            }
+            let (session, ctx) = matching_session("/svc.User/Get", "api.example.com", "x-version: v1\r\n").await;
+            assert_eq!(
+                engine
+                    .match_route(&session, &ctx, &index, "api.example.com")
+                    .unwrap()
+                    .0
+                    .resource_key,
+                "default/fallback"
+            );
+            let (session, ctx) = matching_session("/svc.User/Set", "api.example.com", "x-version: v2\r\n").await;
+            assert_eq!(
+                engine
+                    .match_route(&session, &ctx, &index, "api.example.com")
+                    .unwrap()
+                    .0
+                    .resource_key,
+                "default/fallback"
+            );
+        }
+    }
+
+    #[test]
+    fn invalid_method_withdraws_whole_rule_even_without_controller_status() {
+        for bad in [
+            json!({}),
+            json!({"service":"", "method":"Get"}),
+            json!({"type":"RegularExpression", "service":"svc", "method":"["}),
+        ] {
+            let mut route = (*matching_route("invalid", "api.example.com", json!({"method":bad}))).clone();
+            let rule = &mut route.spec.rules.as_mut().unwrap()[0];
+            rule.matches
+                .as_mut()
+                .unwrap()
+                .push(serde_json::from_value(json!({"method":{"method":"Get"}})).unwrap());
+            let mut valid = rule.clone();
+            valid.matches = Some(vec![
+                serde_json::from_value(json!({"method":{"method":"List"}})).unwrap()
+            ]);
+            route.spec.rules.as_mut().unwrap().push(valid);
+            for resolved in [false, true] {
+                if resolved {
+                    route.spec.resolved_rules = route.spec.rules.clone();
+                }
+                let units = parse_route_to_units("default/invalid", &Arc::new(route.clone()));
+                assert_eq!(units.len(), 1);
+                assert_eq!(units[0].matched_info.rule_id, 1);
+                assert_eq!(
+                    units[0].matched_info.matched.method.as_ref().unwrap().method.as_deref(),
+                    Some("List")
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn exact_listener_intersection_does_not_promote_wildcard_or_hostless_routes() {
+        let mut exact = (*matching_route(
+            "exact-host",
+            "api.example.com",
+            json!({"method":{"method":"Get"},
+            "headers":[{"name":"x-version", "value":"v2"}]}),
+        ))
+        .clone();
+        let mut wildcard =
+            (*matching_route("wildcard-host", "*.example.com", json!({"method":{"method":"Get"}}))).clone();
+        let mut hostless = (*matching_route(
+            "hostless",
+            "unused.example.com",
+            json!({"method":{"service":"svc.User", "method":"Get"}}),
+        ))
+        .clone();
+        hostless.spec.hostnames = None;
+        // Controller intersection with an exact Listener yields the same
+        // effective hostname for all three, but their Route priorities differ.
+        let mut units = Vec::new();
+        for route in [&mut hostless, &mut wildcard, &mut exact] {
+            route.spec.resolved_hostnames = Some(vec!["api.example.com".to_string()]);
+            let key = format!("default/{}", route.metadata.name.as_deref().unwrap());
+            units.extend(parse_route_to_units(&key, &Arc::new(route.clone())));
+        }
+        let engine = GrpcMatchEngine::new(units);
+        let index = matching_index_with_hostname(Some("api.example.com"));
+        for (headers, expected) in [
+            ("x-version: v2\r\n", "default/exact-host"),
+            ("", "default/wildcard-host"),
+        ] {
+            let (session, ctx) = matching_session("/svc.User/Get", "api.example.com", headers).await;
+            assert_eq!(
+                engine
+                    .match_route(&session, &ctx, &index, "api.example.com")
+                    .unwrap()
+                    .0
+                    .resource_key,
+                expected
+            );
+        }
+        let (session, ctx) = matching_session("/svc.User/Get", "other.example.com", "").await;
+        assert!(engine.match_route(&session, &ctx, &index, "other.example.com").is_err());
+    }
+
+    #[tokio::test]
+    async fn method_and_hostname_indexes_replace_atomically_on_partial_update_and_delete() {
+        let mgr = GlobalGrpcRouteManagers::new();
+        let key = "default/method-reload".to_string();
+        let listener = ListenerKey("127.0.0.1:19235/HTTP".to_string());
+        let initial = matching_route("method-reload", "old.example.com", json!({"method":{"method":"Get"}}));
+        mgr.full_set(&HashMap::from([(key.clone(), initial)]));
+        let manager = mgr.by_listener.get(&listener).unwrap().clone();
+        let old = Arc::clone(&manager.load_route_table());
+        let index = matching_index();
+        let (mut old_session, old_ctx) = matching_session("/svc.User/Get", "old.example.com", "").await;
+        assert!(old
+            .match_route(&mut old_session, &old_ctx, &index, "old.example.com")
+            .is_ok());
+        let updated = matching_route(
+            "method-reload",
+            "new.example.com",
+            json!({"method":{"type":"RegularExpression", "method":"^List.*$"}}),
+        );
+        mgr.partial_update(HashMap::new(), HashMap::from([(key.clone(), updated)]), HashSet::new());
+        let new = Arc::clone(&manager.load_route_table());
+        assert!(!Arc::ptr_eq(&old, &new));
+        assert!(new
+            .match_route(&mut old_session, &old_ctx, &index, "old.example.com")
+            .is_err());
+        assert!(old
+            .match_route(&mut old_session, &old_ctx, &index, "old.example.com")
+            .is_ok());
+        let (mut new_session, new_ctx) = matching_session("/other.Service/ListAll", "new.example.com", "").await;
+        assert!(new
+            .match_route(&mut new_session, &new_ctx, &index, "new.example.com")
+            .is_ok());
+        mgr.partial_update(HashMap::new(), HashMap::new(), HashSet::from([key]));
+        assert!(!manager.load_route_table().has_routes());
+        assert!(new
+            .match_route(&mut new_session, &new_ctx, &index, "new.example.com")
+            .is_ok());
+    }
+
+    #[tokio::test]
+    async fn grpc_first_and_http_fallback_keep_overlapping_hostnames_usable() {
+        use crate::routes::http::routes_mgr::GlobalHttpRouteManagers;
+        let grpc_mgr = GlobalGrpcRouteManagers::new();
+        let http_mgr = GlobalHttpRouteManagers::new();
+        let listener = ListenerKey("127.0.0.1:19235/HTTP".to_string());
+        let grpc = matching_route("grpc-first", "api.example.com", json!({"method":{"method":"Get"}}));
+        grpc_mgr.full_set(&HashMap::from([("default/grpc-first".to_string(), grpc)]));
+        let http = Arc::new(
+            serde_json::from_value(json!({
+                "apiVersion":"gateway.networking.k8s.io/v1", "kind":"HTTPRoute",
+                "metadata":{"name":"http-fallback", "namespace":"default"},
+                "spec":{"parentRefs":[{"name":"test-gw", "sectionName":"grpc"}],
+                    "hostnames":["api.example.com"], "resolvedListeners":["127.0.0.1:19235/HTTP"],
+                    "rules":[{"matches":[{"path":{"type":"PathPrefix", "value":"/"}}],
+                        "backendRefs":[{"name":"svc", "port":80}]}]}
+            }))
+            .unwrap(),
+        );
+        http_mgr.full_set(&HashMap::from([("default/http-fallback".to_string(), http)]));
+        let grpc_manager = grpc_mgr.by_listener.get(&listener).unwrap().clone();
+        let http_manager = http_mgr.by_listener.get(&listener).unwrap().clone();
+        let grpc_table = Arc::clone(&grpc_manager.load_route_table());
+        let http_table = http_manager.load_route_table();
+        let index = matching_index();
+        for (method, expect_grpc) in [("Get", true), ("Set", false)] {
+            let (mut session, mut ctx) = matching_session(&format!("/svc.User/{method}"), "api.example.com", "").await;
+            let matched = try_match_grpc_route(&grpc_table, &mut session, &mut ctx, &index)
+                .await
+                .unwrap();
+            assert_eq!(matched, expect_grpc);
+            assert_eq!(ctx.is_grpc_route_matched, expect_grpc);
+            if !matched {
+                assert!(http_table.match_route(&mut session, &ctx, &index).is_ok());
+            }
+        }
+    }
 
     /// Build a minimal GRPCRoute suitable for unit tests.
     ///

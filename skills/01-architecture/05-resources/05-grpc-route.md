@@ -21,7 +21,8 @@ GRPCRoute defines gRPC-layer routing rules. Its Controller-side processing is hi
 
 ### validate
 
-1. Calls `validate_grpc_route_if_enabled()` for matcher enum/regex validation; cross-namespace validation is handled via `ref_denied` in the parse stage.
+1. Calls `validate_grpc_route_if_enabled()` for header matcher enum/regex validation; cross-namespace validation is handled via `ref_denied` in the parse stage.
+   Method validation uses the shared `GRPCRouteMatch::compile_method()` via `GRPCRouteRule::method_match_error()` in per-rule classification, status, and delegation filtering. Invalid method predicates drop their whole rule; valid siblings survive, and all-invalid effective rules reject attachment with `Accepted=False / UnsupportedValue`. These errors never enter route-wide advisory validation. Missing outer method is unconstrained; omitted type is Exact; method-only Exact and regex are supported outside delegation. Explicit empty matchers, invalid Exact names, and invalid regexes fail closed with bounded static errors.
    Per-rule header modifier validation uses the shared `GRPCRouteRule::header_modifier_error()`, including backend filters and delegation source rules. Invalid rules are excluded while valid siblings survive; all-invalid header rules reject attachment. See [header modifier validation](../../04-review/plugin-runtime/regression-guards/header-modifier-validation.md).
 2. Calls `validate_backend_refs()` to validate all backendRefs
 
@@ -57,8 +58,8 @@ GRPCRoute's ConfHandler compiles routes into `GlobalGrpcRouteManagers`:
 
 0. **Effective rules**: compiles `route.effective_rules()` — `spec.resolved_rules` (controller-flattened delegation result) when present, else `spec.rules`. `invalid_rule_indices` applies only to `spec.rules` (flattening already dropped invalid rules). Delegation children have no Gateway parentRefs / `resolved_listeners`, so they register nothing and are inert on the data plane. Flattening stamps every rule- and backend-level ExtensionRef with its declaring GRPCRoute namespace; authored `resolvedNamespace` values are cleared before flattening in filesystem/etcd modes
 1. **preparse**: in the route cache, call `route.preparse()` to build runtime structures
-2. **Route units**: each rule is compiled into a `GrpcRouteRuleUnit` containing `GrpcMatchInfo` (service, method, header matching)
-3. **Domain matching**: use resolved_hostnames (preferred) or spec.hostnames as the match domain; with no hostname, use `*` (wildcard)
+2. **Route units**: compile each method predicate once into `GrpcMatchInfo.compiled_method_match`; any invalid predicate drops its whole rule, even without Controller status. Valid matches share the rule/plugin/backend runtime through `Arc`.
+3. **Domain matching**: index the Route's declared spec.hostnames (borrowed from its existing schema Arc), with omitted hostnames in catch-all. Keep resolved_hostnames as the deep-match eligibility constraint: Listener intersection must not promote Route hostname priority. Shared `HashHost` indexes numeric route ranks, visiting exact and descending wildcard suffixes before catch-all. Within each group, merge up to five indexed streams by build-time service/method/header/route rank. Failed full matches continue to broader domains. See [the engine](../02-gateway/03-routes/02-grpc-route.md).
 4. **Per-listener management**: based on resolved_listeners, register into the route manager of the corresponding `ListenerKey`; on change, only rebuild the route table for the affected listeners
 5. **gRPC-Web support**: automatically supports the gRPC-Web protocol via content-type detection
 
@@ -70,7 +71,7 @@ GRPCRoute delegation is a parallel module (`handlers/grpc_route_delegation.rs`),
 
 1. A delegating rule with `matches` absent/empty is **invalid** (HTTP treats a matchless delegating rule as delegating `"/"`; that default is not mirrored — delegate-all is out of scope for v1).
 2. A terminal child rule with `matches` absent/empty flattens to **one inherited match per delegated scope**, never cloned matchless (the gateway synthesizes a catch-all unit for a matchless rule; an unmodified clone would match ALL traffic on the parent's hostnames).
-3. Any child match whose `method.service` is absent or empty (missing matcher, empty `method: {}`, or method-only) **inherits** the delegated service as `{type: Exact, service: S}`.
+3. A valid child match whose `method.service` is absent (missing matcher or method-only) **inherits** the delegated service as `{type: Exact, service: S}`, preserving its method name. Shared rule validation rejects explicit empty matchers and empty/invalid Exact names before inheritance.
 4. Any child match with `method.type: RegularExpression` **invalidates that whole child rule** (v1 rejects the match outright rather than proving a regex service cannot escape the scope).
 
 ## Cross-resource relationships

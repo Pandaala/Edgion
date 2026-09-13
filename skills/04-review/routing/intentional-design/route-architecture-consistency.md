@@ -28,9 +28,9 @@ types to ensure architectural alignment.
 | Dimension | TCP | UDP | TLS | HTTP | gRPC |
 |-----------|-----|-----|-----|------|------|
 | **Port** | Yes | Yes | Yes | Yes | Yes |
-| **Hostname** | No | No | Yes (SNI via `HashHost`) | Yes (exact/wildcard/catch-all) | No (flat per-listener) |
+| **Hostname** | No | No | Yes (SNI via `HashHost`) | Yes (exact/wildcard/catch-all) | Yes (ordered `HashHost` + catch-all) |
 | **Path** | N/A | N/A | N/A | Yes (radix + regex) | N/A |
-| **Service/Method** | N/A | N/A | N/A | N/A | Yes (exact/service/catch-all) |
+| **Service/Method** | N/A | N/A | N/A | N/A | Yes (service+method/service-only/method-only/regex/any) |
 
 ### Route Cache & Concurrency
 
@@ -45,8 +45,8 @@ types to ensure architectural alignment.
 
 | Dimension | TCP | UDP | TLS | HTTP | gRPC |
 |-----------|-----|-----|-----|------|------|
-| **Match type** | First match | First match | SNI hostname match | Domain → Path → Deep match | Service/Method → Deep match |
-| **Match engine** | `Vec::first()` | `Vec::first()` | `HashHost` (exact → wildcard → catch-all) | `RadixRouteMatchEngine` + `RegexRoutesEngine` | `GrpcMatchEngine` (exact → service → catch-all) |
+| **Match type** | First match | First match | SNI hostname match | Domain → Path → Deep match | Hostname → ranked Service/Method → Deep match |
+| **Match engine** | `Vec::first()` | `Vec::first()` | `HashHost` (exact → wildcard → catch-all) | `RadixRouteMatchEngine` + `RegexRoutesEngine` | `GrpcMatchEngine` (five indexed streams merged by build-time rank) |
 | **Gateway validation** | No | No | No | Yes (`deep_match` with `gateway_infos`) | Yes (`deep_match` with `gateway_infos`) |
 
 ### `resolved_listeners` Handling
@@ -163,7 +163,7 @@ register in `gateway_route_index` via `on_change()`. See `skills/08-kubernetes/0
 These differences exist by design and do not need unification:
 
 1. **TLS has hostname (SNI) matching within per-listener tables** — combines listener + hostname dimension; TCP/UDP have no hostname dimension
-2. **HTTP has multi-level hostname matching** — exact → wildcard → catch-all within per-listener tables; TCP/UDP/TLS have simpler matching
+2. **HTTP and gRPC have multi-level hostname matching** — exact → wildcard → catch-all within per-listener tables; gRPC continues through broader groups after full-predicate failures. See [the gRPC regression guard](../regression-guards/grpc-method-matching-and-precedence.md).
 3. **HTTP and gRPC share one proxy** — `EdgionHttpProxy` retains separate HTTP and gRPC per-listener manager handles; the three L4 proxies each retain their own family-specific handle
 4. **TLS has dual logging (global + per-listener)** — historical compatibility
 5. **gRPC has `route_units_cache` with `Mutex`** — needed because gRPC pre-parses routes into `GrpcRouteRuleUnit` units; HTTP parses inline during route table build
@@ -204,6 +204,10 @@ snapshots still visible through retained listener handles.
 ---
 
 ## Improvement Backlog
+
+The `gateway-routes-06` helper/tier description above is historical. The current
+ranked gRPC `select` loop uses `deep_match(...).ok().flatten()` and preserves the
+same error-continuation contract; the seven-tier helper no longer exists.
 
 | # | Item | Priority | Status |
 |---|------|----------|--------|

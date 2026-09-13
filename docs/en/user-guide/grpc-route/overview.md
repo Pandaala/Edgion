@@ -48,7 +48,7 @@ Specifies which listener of which Gateway this route binds to. GRPCRoute typical
 
 ### Rules
 
-Each Rule is an independent routing decision unit containing match conditions, filters, and backend references. Multiple Rules are evaluated in declaration order.
+Each Rule is an independent routing decision unit containing match conditions, filters, and backend references. Matching rules follow the [precedence rules](matches/overview.md#precedence); declaration order is a final tie-break within one route.
 
 ### Matches
 

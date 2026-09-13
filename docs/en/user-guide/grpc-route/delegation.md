@@ -102,13 +102,16 @@ A malformed delegating rule is dropped and reported via the route's
 
 - A child match whose `method.service` is **non-empty** must be string-equal
   to one of the rule's delegated services; a non-equal service is out of
-  scope and that match is dropped (the rule survives if another match is
-  valid).
-- A child match whose `method.service` is **absent or empty** — no `method`
-  matcher at all, an empty `method: {}`, or a method-only matcher — inherits
+  scope and the entire child rule is dropped.
+- A valid child match whose `method.service` is **absent** — no `method`
+  matcher at all, or a method-only matcher — inherits
   the delegated service: it flattens to `method: {type: Exact, service: S}`
   (plus the child's `method.method` if set). With multiple delegated
   services, such a match expands once per scope.
+- An explicit empty `method: {}`, an empty Exact service or method, or an
+  invalid Exact name invalidates the whole child rule before inheritance.
+  Other valid child rules remain active. These checks use the same method
+  policy as ordinary GRPCRoutes on Kubernetes, filesystem, and etcd inputs.
 - A **matchless child rule** (`matches` absent or empty) flattens to **one
   inherited match per delegated scope**:
   `matches: [{method: {type: Exact, service: S}}]` (plus any merged header
@@ -154,12 +157,10 @@ checked against ReferenceGrants with the child as the referrer.
 
 Flattening moves the child's rules onto the parent, so on the data plane a
 delegated rule is matched exactly like an ordinary rule of the **parent**
-route: it rides the parent's `resolved_hostnames`, and the gRPC match
-engine's priority buckets (exact service + exact method → exact service +
-regex method → regex service + exact method → regex service + regex method →
-exact-service-only → regex-service-only → catch-all) simply gain more
-entries. Within a bucket, ties resolve by
-`header_count > creation_ts > route_key > rule_index > match_index`.
+route: it uses the parent's declared hostnames for priority and the parent's
+resolved hostname/Listener intersection for eligibility. All candidates follow
+the unified [matching precedence](matches/overview.md#precedence); Exact/regex
+buckets do not impose a separate order.
 
 The two consequences matter only when routes collide on an identical
 service/method with identical specificity — a misconfiguration in practice,
@@ -190,7 +191,8 @@ which of two colliding same-service/method rules is selected.
 - **Parent route**: `ResolvedRefs=False/BackendNotFound` when a named child
   is missing; `PartiallyInvalid=True` listing every dropped rule
   (out-of-scope service, regex match, filter conflict, cycle, depth,
-  malformed delegating rule).
+  malformed delegating rule). If no effective rule survives those invalid
+  configurations, attachment is instead `Accepted=False / UnsupportedValue`.
 - **Child route**: for each `parentRefs` entry with `kind: GRPCRoute`, an
   `Accepted` condition reports whether that parent currently delegates to it
   (`DelegationAccepted` / `NoMatchingParent`).

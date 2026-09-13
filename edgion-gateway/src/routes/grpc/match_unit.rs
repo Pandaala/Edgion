@@ -6,6 +6,7 @@ use crate::runtime::store::listener_gateway_info::GatewayInfoIndex;
 use crate::runtime::GatewayInfo;
 use edgion_resources::err::EdError;
 use edgion_resources::resources::edgion_backend_traffic_policy::{PolicyTargetKey, PolicyTargetKind};
+use edgion_resources::resources::grpc_route::CompiledGrpcMethodMatch;
 use edgion_resources::{GRPCBackendRef, GRPCRoute, GRPCRouteMatch, GRPCRouteRule};
 use pingora_proxy::Session;
 use regex::Regex;
@@ -164,10 +165,10 @@ pub struct GrpcRuleRuntime {
 
 /// Pre-computed match specificity for GRPCRoute Gateway API precedence ordering.
 ///
-/// GRPCRoute precedence (within the same service/method bucket):
+/// GRPCRoute precedence after hostname, service length, and method length:
 ///   header_count > creation_ts > route_key > rule_index > match_index
 ///
-/// Service/method-level precedence is handled by the bucket structure in GrpcMatchEngine.
+/// GrpcMatchEngine folds this key into its build-time rank, independent of indexes.
 #[derive(Clone, Debug)]
 pub struct GrpcMatchSpecificity {
     /// Number of header match conditions
@@ -210,8 +211,8 @@ pub struct GrpcRouteInfo {
     /// this route's units, so no inner `Arc` is needed.
     pub parent_refs: Option<Vec<ResolvedParentRef>>,
     /// Effective hostnames for this route (from resolved_hostnames or hostnames).
-    /// Unlike HTTP routes (bucketed by domain), gRPC routes share a single
-    /// match engine so we must verify hostname match explicitly.
+    /// Listener-resolved eligibility constraint; authored Route hostnames
+    /// determine engine precedence independently of this intersection.
     pub effective_hostnames: Vec<String>,
 }
 
@@ -240,14 +241,11 @@ pub struct GrpcMatchInfo {
     #[serde(skip)]
     #[schemars(skip)]
     pub compiled_header_regexes: Vec<Option<Regex>>,
-    /// Pre-compiled regex for service name matching (when match_type is RegularExpression)
+    /// Canonical shared method compilation outcome. None is invalid, never a
+    /// signal to reinterpret a failed regex as an Exact or catch-all matcher.
     #[serde(skip)]
     #[schemars(skip)]
-    pub compiled_service_regex: Option<Regex>,
-    /// Pre-compiled regex for method name matching (when match_type is RegularExpression)
-    #[serde(skip)]
-    #[schemars(skip)]
-    pub compiled_method_regex: Option<Regex>,
+    pub compiled_method_match: Option<CompiledGrpcMethodMatch>,
     /// Raw route labels for `AccessLogExtern` `from: routeLabel`. In-process
     /// only — never part of the serialized entry; only declared keys reach `ext`.
     #[serde(skip)]
@@ -305,36 +303,20 @@ impl GrpcMatchInfo {
             Vec::new()
         };
 
-        // Pre-compile regex patterns for service/method matching
-        use edgion_resources::resources::grpc_route::GRPCMethodMatchType;
-        let (compiled_service_regex, compiled_method_regex) = if let Some(ref method_match) = matched.method {
-            let is_regex = method_match.match_type.as_ref() == Some(&GRPCMethodMatchType::RegularExpression);
-            let compile = |field: &Option<String>, label: &str| -> Option<Regex> {
-                if !is_regex {
-                    return None;
-                }
-                field.as_ref().and_then(|pattern| match Regex::new(pattern) {
-                    Ok(re) => Some(re),
-                    Err(e) => {
-                        tracing::warn!(
-                            route = %format!("{}/{}", route_ns, route_name),
-                            rule_id = rule_id,
-                            match_id = match_id,
-                            field = label,
-                            pattern = %pattern,
-                            error = %e,
-                            "Failed to compile gRPC method regex pattern, match will fail"
-                        );
-                        None
-                    }
-                })
-            };
-            (
-                compile(&method_match.service, "service"),
-                compile(&method_match.method, "method"),
-            )
-        } else {
-            (None, None)
+        let compiled_method_match = match matched.compile_method() {
+            Ok(compiled) => Some(compiled),
+            Err(reason) => {
+                tracing::warn!(
+                    component = "grpc_route_manager",
+                    route_namespace = %route_ns,
+                    route_name = %route_name,
+                    rule_id,
+                    match_id,
+                    reason,
+                    "Invalid gRPC method matcher; its rule will be skipped"
+                );
+                None
+            }
         };
 
         Self {
@@ -350,8 +332,7 @@ impl GrpcMatchInfo {
             sv,
             matched,
             compiled_header_regexes,
-            compiled_service_regex,
-            compiled_method_regex,
+            compiled_method_match,
             labels_meta: None,
             annotations_meta: None,
         }
@@ -426,7 +407,7 @@ impl GrpcRouteRuleUnit {
     }
 
     /// Build a WRR selector over original backend slot indexes.
-    /// gRPC has no hostname fan-out, so one selector per rule suffices.
+    /// All matches and hostname indexes share this one selector per rule.
     pub fn build_backend_selector(backends: &[CompiledGrpcBackend]) -> Arc<BackendSelector<usize>> {
         let selector = BackendSelector::new();
         if !backends.is_empty() {
@@ -438,9 +419,8 @@ impl GrpcRouteRuleUnit {
 
     /// Deep match: check hostname, Gateway/sectionName, and headers.
     ///
-    /// Unlike HTTP routes which are bucketed by domain, gRPC routes share a single
-    /// match engine indexed by service/method. We must explicitly verify that the
-    /// request hostname matches the route's effective hostnames.
+    /// The engine already selects the hostname group. Retain the route-level
+    /// check here so direct callers cannot bypass the effective hostname scope.
     ///
     /// Returns `Some(GatewayInfo)` of the matched gateway on success, `None` on failure.
     pub fn deep_match(
@@ -451,8 +431,7 @@ impl GrpcRouteRuleUnit {
     ) -> Result<Option<Arc<GatewayInfo>>, EdError> {
         let req_header = session.req_header();
 
-        // Check route-level hostname constraint: gRPC routes are NOT bucketed
-        // by domain so we verify here that the request host is allowed.
+        // Preserve the effective hostname scope for direct deep-match callers.
         if !self.matches_hostname(hostname) {
             return Ok(None);
         }

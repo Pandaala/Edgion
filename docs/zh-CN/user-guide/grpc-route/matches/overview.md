@@ -37,6 +37,14 @@ spec:
 
 省略 `method` 时匹配指定 `service` 的所有 RPC；省略 `service` 时匹配任意服务下指定名称的方法。
 
+例如，`method: {method: GetUser}` 同时匹配 `/user.UserService/GetUser`
+和 `/admin.AdminService/GetUser`。省略 `type` 时默认为 `Exact`。
+省略外层 method 匹配器表示不限制服务和方法，因此只匹配 header 的规则仍然有效。
+显式 `method: {}` 和空的 Exact 字段无效。正则匹配中，只有另一字段非空时，
+缺失或为空的字段才表示不限制。无效的方法名称或正则表达式会使整条 rule 无效，
+但保留其他有效 rule；Controller 状态会报告 `PartiallyInvalid`，全部有效规则候选
+均无效时则报告 `Accepted=False / UnsupportedValue`。
+
 ## 条件组合（同一 match 内为 AND）
 
 单个 `matches` 条目将其 `method` 和 `headers` 条件以 AND 关系组合——调用必须同时满足所有条件：
@@ -98,7 +106,17 @@ spec:
 
 ## 优先级
 
-当一个调用匹配多条规则时，最具体的规则获胜：`Exact` 方法匹配优于 `RegularExpression` 匹配，带有更多 headers 条件的匹配优于条件更少的匹配。应将较窄的规则放在宽泛的兜底规则之前。
+匹配候选按以下顺序比较：
+
+1. 实际匹配的域名具体程度：精确域名、从长到短的通配后缀、不限制域名。
+2. 配置的 service 字符数，再比较 method 字符数，较长者优先；正则使用模式字符数。
+3. header 条件数量，较多者优先。
+4. 路由创建时间，较早者优先；再按 `namespace/name` 字母顺序。
+5. 同一路由内最先匹配的 rule，再比较该 rule 内的 match 声明顺序。
+
+`Exact` 不会独立于以上规则获得高于正则的优先级。候选必须满足全部条件；
+header 或 listener 不匹配时，会继续尝试后续候选及更宽泛的域名。
+路由声明中未匹配请求的更长域名不会提高其优先级。
 
 ## 相关文档
 

@@ -22,7 +22,7 @@ before applying a decision to current code.
 ## Regression guards
 
 - [TLSRoute hostnames stay with listener attachments](regression-guards/tls-hostnames-per-attachment.md)
-
+- [GRPCRoute method predicates, hostname precedence, and ranked candidate fallback](regression-guards/grpc-method-matching-and-precedence.md)
 - [HTTP header predicates retain the first equivalent configured name](regression-guards/http-header-match-first-name-wins.md)
 - [Delegation ParentRefs cannot attach to a same-coordinate Gateway](regression-guards/delegation-parentref-gateway-name-collision.md)
 - [TCP connection snapshot ownership](regression-guards/tcp-connection-snapshot-ownership.md)

@@ -94,13 +94,15 @@ spec:
 ### 子路由
 
 - 子 match 的 `method.service` **非空**时，必须与该委派规则的某个被委派
-  service 字符串相等；不相等则该 match 越界并被丢弃（规则本身如果还有其他
-  合法 match 则继续存活）。
-- 子 match 的 `method.service` **缺失或为空**——完全没有 `method` matcher、
-  空的 `method: {}`，或只写了 method 的 matcher——会继承被委派的 service：
+  service 字符串相等；不相等则越界，整条子规则被丢弃。
+- 合法子 match 的 `method.service` **缺失**——完全没有 `method` matcher，
+  或只写了 method 的 matcher——会继承被委派的 service：
   摊平后变成 `method: {type: Exact, service: S}`（保留子路由自己写的
   `method.method`，如果有）。若委派了多个 service，这类 match 会按每个
   scope 各展开一次。
+- 显式空 `method: {}`、Exact 下的空 service 或 method、以及非法 Exact
+  名称会在继承前使整个子规则无效，其他合法子规则仍然生效。此校验与普通
+  GRPCRoute 共用方法匹配策略，对 Kubernetes、文件和 etcd 配置一致适用。
 - **无 match 的子规则**（`matches` 缺失或为空）会摊平成**每个委派 scope 一个
   继承 match**：`matches: [{method: {type: Exact, service: S}}]`（附带合并
   后的 header 约束）——绝不会原样克隆。这是安全关键点：gRPC 网关会把无
@@ -140,12 +142,9 @@ ReferenceGrant。
 ### 优先级与冲突
 
 摊平把子路由的规则搬到父路由上，因此在数据面上，委派规则和父路由自己的普通
-规则**同等匹配**：它们都乘着父路由的 `resolved_hostnames`，gRPC 匹配引擎的
-优先级分桶（exact service + exact method → exact service + regex method →
-regex service + exact method → regex service + regex method →
-仅 exact service → 仅 regex service → catch-all）只是多了一些条目。同一个桶
-内，平局按 `header_count > creation_ts > route_key > rule_index > match_index`
-决胜。
+规则**同等匹配**：它们使用父路由声明的域名决定优先级，并用父路由与 Listener
+的有效域名交集限制可匹配范围。所有候选遵循统一的[匹配优先级](matches/overview.md#优先级)，
+Exact/正则分桶不形成额外的优先级顺序。
 
 以下两点仅在多条路由命中**完全相同的 service/method 且 specificity 相同**
 时才有影响——这本身是误配，但结果是确定的：
@@ -169,7 +168,8 @@ regex service + exact method → regex service + regex method →
 
 - **父路由**：指名子路由缺失 → `ResolvedRefs=False/BackendNotFound`；每条被
   丢弃的规则（service 越界、正则 match、filter 冲突、循环、超深、委派规则不
-  合法）→ `PartiallyInvalid=True` 并列出原因。
+  合法）→ `PartiallyInvalid=True` 并列出原因。如果这些无效配置导致没有任何
+  有效规则保留，则改为 `Accepted=False / UnsupportedValue`，拒绝挂载。
 - **子路由**：每个 `kind: GRPCRoute` 的 `parentRefs` 条目会得到一个
   `Accepted` 条件，报告该父当前是否委派给它（`DelegationAccepted` /
   `NoMatchingParent`）。

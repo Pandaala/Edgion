@@ -23,31 +23,51 @@ edgion-gateway/src/routes/grpc/
 
 ## Service / Method matching
 
-`GrpcMatchEngine` supports both Exact and RegularExpression match types and implements a seven-level priority match:
+`GrpcMatchEngine` keeps one immutable ranked route array and indexes its numeric
+ranks by the Route's declared hostnames through the shared `HashHost`. Lookup visits the
+exact hostname, longest-to-shortest matching wildcard suffixes, then catch-all.
+Only matching declared hostnames contribute precedence. Listener intersection
+must not promote wildcard/hostless Route priority; `deep_match` independently
+enforces the effective intersection. Full predicate failure continues
+within the group and then to broader hostname groups.
 
-| Priority | Match type | Data structure | Description |
-|----------|------------|----------------|-------------|
-| 1 | Exact service + Exact method | `HashMap<(String, String), Vec<...>>` | Exact match, O(1) |
-| 2 | Exact service + Regex method | `Vec<Arc<GrpcRouteRuleUnit>>` | Exact service + regex method |
-| 3 | Regex service + Exact method | `Vec<Arc<GrpcRouteRuleUnit>>` | Regex service + exact method |
-| 4 | Regex service + Regex method | `Vec<Arc<GrpcRouteRuleUnit>>` | Both regex |
-| 5 | Exact service only | `HashMap<String, Vec<...>>` | Service specified, matches any method |
-| 6 | Regex service only | `Vec<Arc<GrpcRouteRuleUnit>>` | Regex service, no method specified |
-| 7 | catch-all | `Option<Arc<GrpcRouteRuleUnit>>` | Neither service nor method specified |
+Within each group, priority is descending service character count, method
+character count, header count, then oldest route creation time, namespace/name,
+rule index, and match index. Regex fields use pattern character counts.
+Exact/regex type is not an additional priority tier.
 
-gRPC path parsing (`parse_grpc_path`):
+| Candidate index | Request lookup |
+|-----------------|----------------|
+| Exact service + method | Nested borrowed HashMap lookup |
+| Exact service only | The same service lookup, all-methods list |
+| Exact method only | Borrowed method HashMap lookup |
+| Regex | Precompiled service/method predicates |
+| Any method | Outer method matcher omitted |
 
-- Input: `/helloworld.Greeter/SayHello`
-- Output: service = `helloworld.Greeter`, method = `SayHello`
-- The path must have exactly two segments; otherwise an `InvalidGrpcPath` error is returned.
+These lists contain ascending build-time ranks. A stack-only five-way merge
+compares integer heads without allocating, sorting, locking, or comparing route
+identities on the request path. Hostname fan-out stores ranks, not duplicate
+rule/plugin/backend state. Regex candidates remain a linear list; no latency or
+throughput equivalence is inferred from this design alone.
 
-Multiple routes can share the same (service, method) combination (different hostnames or header conditions). They are stored as `Vec<Arc<GrpcRouteRuleUnit>>` and `deep_match` runs in order until the first match.
+`parse_grpc_path` borrows service and method from `/{service}/{method}`.
+Malformed paths return `InvalidGrpcPath`. Exact method-only matches any service;
+a header-only match has no method constraint. Omitted type means Exact.
 
-### Regex match
+### Validation and regex compilation
 
-When `GRPCMethodMatch.type = RegularExpression`, the `type` applies to both the service and method fields (per Gateway API semantics). Regex patterns are precompiled into `Arc<Regex>` at route load time, stored in the `compiled_service_regex` / `compiled_method_regex` fields of `GrpcMatchInfo`. Regex routes are sorted by pattern length descending (longer = more specific = higher priority).
+`GRPCRouteMatch::compile_method` is the shared Controller/Gateway policy.
+`GrpcMatchInfo.compiled_method_match` stores Any, Exact, or precompiled optional
+regex fields; None means invalid, never Exact/catch-all fallback. Any invalid
+method predicate drops its whole rule before rule runtimes are built, including
+status-less/stale Controller input. Valid sibling rules survive.
 
-Unlike HTTPRoute's `RegexRoutesEngine`, gRPC regex matching does not use `RegexSet` — it walks the precompiled regexes linearly, since gRPC regex routes are usually few.
+Explicit empty method matchers and empty/invalid Exact names are rejected.
+For regex, an absent/empty field is unconstrained only when the other is
+non-empty. Failure of either supplied pattern rejects the predicate. Compilation
+is bounded and happens at configuration load time, never on the request path.
+See [the regression guard](../../../04-review/routing/regression-guards/grpc-method-matching-and-precedence.md)
+for authority, tests, and limitations.
 
 ## gRPC-Web support
 
@@ -102,7 +122,7 @@ GlobalGrpcRouteManagers
 Specifics:
 
 - `route_units_cache` caches parsed route units to avoid re-parsing on every listener rebuild.
-- gRPC does not bucket by hostname (unlike HTTP); all routes go into a single `GrpcRouteRules`.
+- One per-listener `GrpcRouteRules` owns the ranked engine and its hostname indexes.
 - Inside `GrpcMatchEngine::match_route`, `deep_match` validates the request hostname against the route's `effective_hostnames`.
 - Listener bucketing matches HTTP: routes with empty `resolved_listeners` are skipped + warned (no broadcast-to-all-ports fallback).
 

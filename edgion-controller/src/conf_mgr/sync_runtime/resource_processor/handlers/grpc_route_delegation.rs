@@ -23,8 +23,8 @@
 //!    inherited match PER delegated scope — never cloned matchless (the
 //!    gateway synthesizes a catch-all unit for a matchless rule; a cloned
 //!    matchless rule would match ALL traffic on the parent's hostnames).
-//! 3. Any child match whose `method.service` is absent or empty (matcher
-//!    missing, empty `method: {}`, or method-only) inherits the delegated
+//! 3. Any valid child match whose `method.service` is absent (matcher
+//!    missing or method-only) inherits the delegated
 //!    service as `{type: Exact, service: S}`.
 //! 4. Any child match with `method.type: RegularExpression` invalidates that
 //!    whole child rule (v1 rejects the match outright rather than proving a
@@ -188,6 +188,11 @@ pub fn flatten_route(parent: &GRPCRoute, lookup: &dyn DelegationLookup) -> Flatt
     let mut out_rules: Vec<GRPCRouteRule> = Vec::new();
     for (idx, rule) in rules.iter().enumerate() {
         if invalid_indices.contains(&idx) {
+            if let Some(message) = rule.method_match_error() {
+                ctx.issues.push(DelegationIssue::RuleDropped {
+                    message: format!("rules[{idx}]: {message}"),
+                });
+            }
             continue;
         }
         let is_delegating = rule
@@ -716,20 +721,16 @@ enum MergeResult {
 ///   (spec-string equality — the gateway compiles service/method values
 ///   verbatim, so there is no HTTP-style normalization gap); the match
 ///   expands against every scope it equals.
-/// - An absent/empty `method.service` (matcher missing, empty `method: {}`,
-///   or method-only) inherits the scope's service and expands once per
-///   scope.
+/// - An absent `method.service` (matcher missing or valid method-only)
+///   inherits the scope's service and expands once per scope. Explicit empty
+///   matchers and invalid Exact names are rejected by shared rule validation.
 fn merge_match(scopes: &[DelegatedScope], child_match: &GRPCRouteMatch) -> MergeResult {
     if child_match.method.as_ref().and_then(|m| m.match_type.as_ref()) == Some(&GRPCMethodMatchType::RegularExpression)
     {
         return MergeResult::Conflict("RegularExpression method matches cannot be delegated".to_string());
     }
 
-    let explicit_service = child_match
-        .method
-        .as_ref()
-        .and_then(|m| m.service.as_deref())
-        .filter(|s| !s.is_empty());
+    let explicit_service = child_match.method.as_ref().and_then(|m| m.service.as_deref());
     let child_method_name = child_match.method.as_ref().and_then(|m| m.method.clone());
 
     let mut merged = Vec::new();
@@ -1032,7 +1033,7 @@ mod tests {
     }
 
     // =====================================================================
-    // Service inheritance over all three "absent/empty" shapes
+    // Service inheritance distinguishes omission from invalid empty matchers
     // =====================================================================
 
     #[test]
@@ -1054,7 +1055,7 @@ mod tests {
     }
 
     #[test]
-    fn inheritance_empty_method_matcher() {
+    fn empty_method_matcher_is_rejected_before_inheritance() {
         let parent = simple_parent("svc.Billing", "billing", "child");
         let child = route(
             "billing",
@@ -1066,7 +1067,71 @@ mod tests {
         );
         let outcome = flatten_route(&parent, &FakeLookup::new(vec![child]));
         let rules = outcome.resolved_rules.clone().unwrap();
-        assert_eq!(rule_services(&rules), vec!["svc.Billing"]);
+        assert!(rules.is_empty());
+        assert!(outcome.issues.iter().any(|issue| matches!(issue,
+            DelegationIssue::RuleDropped { message } if message.contains("invalid rule")
+        )));
+    }
+
+    #[test]
+    fn invalid_child_method_drops_whole_rule_but_preserves_valid_sibling() {
+        let parent = simple_parent("svc.Billing", "billing", "child");
+        let child = route(
+            "billing",
+            "child",
+            serde_json::json!({"rules": [
+                {"matches": [{"method": {"method": "Get"}}, {"method": {"service": "", "method": "Get"}}],
+                 "backendRefs": [{"name": "invalid", "port": 80}]},
+                {"matches": [{"method": {"type": "RegularExpression", "method": "private-marker["}}],
+                 "backendRefs": [{"name": "invalid-regex", "port": 80}]},
+                {"matches": [{"method": {"method": "List"}}],
+                 "backendRefs": [{"name": "valid", "port": 80}]}
+            ]}),
+        );
+        let outcome = flatten_route(&parent, &FakeLookup::new(vec![child]));
+        let rules = outcome.resolved_rules.unwrap();
+        assert_eq!(rules.len(), 1);
+        assert_eq!(rules[0].backend_refs.as_ref().unwrap()[0].name, "valid");
+        let matcher = rules[0].matches.as_ref().unwrap()[0].method.as_ref().unwrap();
+        assert_eq!(matcher.service.as_deref(), Some("svc.Billing"));
+        assert_eq!(matcher.method.as_deref(), Some("List"));
+        assert_eq!(outcome.issues.len(), 2);
+        assert!(!format!("{:?}", outcome.issues).contains("private-marker"));
+    }
+
+    #[test]
+    fn resolved_publication_excludes_invalid_parent_and_child_method_rules() {
+        let mut parent = simple_parent("svc.Billing", "billing", "child");
+        let siblings: Vec<GRPCRouteRule> = serde_json::from_value(serde_json::json!([
+            {"matches": [{"method": {"type": "RegularExpression", "method": "["}}],
+             "backendRefs": [{"name": "invalid-parent", "port": 80}]},
+            {"matches": [{"method": {"method": "Fetch"}}],
+             "backendRefs": [{"name": "valid-parent", "port": 80}]}
+        ]))
+        .unwrap();
+        parent.spec.rules.as_mut().unwrap().extend(siblings);
+        let child = route(
+            "billing",
+            "child",
+            serde_json::json!({"rules": [
+                {"matches": [{"method": {}}], "backendRefs": [{"name": "invalid-child", "port": 80}]},
+                {"matches": [{"method": {"method": "Get"}}], "backendRefs": [{"name": "valid-child", "port": 80}]}
+            ]}),
+        );
+        let outcome = flatten_route(&parent, &FakeLookup::new(vec![child]));
+        assert_eq!(outcome.issues.len(), 2);
+        parent.spec.resolved_rules = outcome.resolved_rules;
+        parent.spec.delegation_issues = outcome.issues;
+        let published: GRPCRoute = serde_json::from_slice(&serde_json::to_vec(&parent).unwrap()).unwrap();
+        let effective = published.effective_rules().unwrap();
+        assert_eq!(effective.len(), 2);
+        assert!(effective.iter().all(|rule| rule.method_match_error().is_none()));
+        assert_eq!(effective[0].backend_refs.as_ref().unwrap()[0].name, "valid-child");
+        assert_eq!(effective[1].backend_refs.as_ref().unwrap()[0].name, "valid-parent");
+        let inherited = effective[0].matches.as_ref().unwrap()[0].method.as_ref().unwrap();
+        assert_eq!(inherited.service.as_deref(), Some("svc.Billing"));
+        assert_eq!(inherited.method.as_deref(), Some("Get"));
+        assert!(published.spec.delegation_issues.is_empty());
     }
 
     #[test]
@@ -1265,7 +1330,7 @@ mod tests {
                               "name": "c", "namespace": "billing"}]
         }]));
         let outcome4 = flatten_route(&empty_service, &FakeLookup::new(vec![]));
-        assert!(dropped_messages(&outcome4)[0].contains("method.service"));
+        assert!(dropped_messages(&outcome4)[0].contains("requires a non-empty service or method"));
 
         // port set
         let with_port = parent_with_rules(serde_json::json!([{

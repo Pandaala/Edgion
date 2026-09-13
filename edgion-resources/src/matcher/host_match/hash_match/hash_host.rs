@@ -109,24 +109,26 @@ impl<T> HashHost<T> {
     }
 
     fn get_lower(&self, k: &str) -> Option<&T> {
-        if !is_valid_domain(k) {
-            return None;
-        }
-        if let Some(value) = self.map.get(k) {
-            return Some(value);
-        }
-        // Optimized wildcard lookup: only probe suffix lengths that actually
-        // exist among the registered wildcard keys (longest first).
-        let k_len = k.len();
-        for &wk_len in &self.wildcard_key_lens {
-            if k_len > wk_len {
-                let suffix = &k[k_len - wk_len..];
-                if let Some(value) = self.map.get(suffix) {
-                    return Some(value);
-                }
+        self.matching_values(k).next()
+    }
+
+    /// Borrow matching values in Gateway API hostname precedence order:
+    /// exact first, then longest wildcard suffix first. Unlike [`Self::get`],
+    /// this lets a route whose remaining predicates fail try a broader hostname.
+    /// The caller supplies a normalized lowercase hostname. No allocation is
+    /// needed, and only registered wildcard suffix lengths are probed.
+    pub fn matching_values<'a: 'b, 'b>(&'a self, hostname: &'b str) -> impl Iterator<Item = &'a T> + 'b {
+        let valid = is_valid_domain(hostname);
+        let exact = valid.then(|| self.map.get(hostname)).flatten();
+        let wildcard_lengths = if valid { self.wildcard_key_lens.as_slice() } else { &[] };
+        exact.into_iter().chain(wildcard_lengths.iter().filter_map(move |&len| {
+            if hostname.len() <= len {
+                return None;
             }
-        }
-        None
+            hostname
+                .get(hostname.len() - len..)
+                .and_then(|suffix| self.map.get(suffix))
+        }))
     }
 
     pub fn get_mut(&mut self, k: &str) -> Option<&mut T> {
@@ -182,6 +184,37 @@ impl<T> HashHost<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn matching_values_preserves_all_hostname_fallbacks_in_order() {
+        let mut hosts = HashHost::new();
+        hosts.insert("*.example.com", 3);
+        hosts.insert("*.sub.example.com", 2);
+        hosts.insert("api.sub.example.com", 1);
+        hosts.insert("*.other.com", 9);
+        assert_eq!(
+            hosts
+                .matching_values("api.sub.example.com")
+                .copied()
+                .collect::<Vec<_>>(),
+            [1, 2, 3]
+        );
+        assert_eq!(
+            hosts
+                .matching_values("deep.api.sub.example.com")
+                .copied()
+                .collect::<Vec<_>>(),
+            [2, 3]
+        );
+        assert_eq!(
+            hosts.matching_values("sub.example.com").copied().collect::<Vec<_>>(),
+            [3]
+        );
+        assert!(hosts.matching_values("example.com").next().is_none());
+        assert!(hosts.matching_values("badexample.com").next().is_none());
+        assert!(hosts.matching_values("é.example.com").next().is_none());
+        assert_eq!(hosts.get("API.SUB.EXAMPLE.COM"), Some(&1));
+    }
 
     #[test]
     fn test_canonical_host_key_rejects_invalid_patterns() {

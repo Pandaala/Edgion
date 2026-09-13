@@ -241,7 +241,6 @@ pub fn validate_http_route_if_enabled(route: &edgion_resources::resources::HTTPR
 /// (sets ResolvedRefs=False). Returning them here would cause Accepted=False, which
 /// violates Gateway API spec — ref_denied routes must remain Accepted=True.
 pub fn validate_grpc_route_if_enabled(route: &edgion_resources::resources::GRPCRoute) -> Vec<String> {
-    use edgion_resources::resources::grpc_route::GRPCMethodMatchType;
     let mut errors = Vec::new();
     let ns = route.metadata.namespace.as_deref().unwrap_or("");
     let name = route.metadata.name.as_deref().unwrap_or("");
@@ -249,16 +248,8 @@ pub fn validate_grpc_route_if_enabled(route: &edgion_resources::resources::GRPCR
     for rule in rules {
         let matches = rule.matches.as_deref().unwrap_or_default();
         for m in matches {
-            if let Some(method) = &m.method {
-                if method.match_type.as_ref() == Some(&GRPCMethodMatchType::RegularExpression) {
-                    if let Some(svc) = method.service.as_deref() {
-                        check_regex_pattern(svc, "GRPCRoute", "method.service", ns, name, &mut errors);
-                    }
-                    if let Some(mth) = method.method.as_deref() {
-                        check_regex_pattern(mth, "GRPCRoute", "method.method", ns, name, &mut errors);
-                    }
-                }
-            }
+            // Method errors are per-rule, via GRPCRouteRule::method_match_error.
+            // Returning them here would reject otherwise valid sibling rules.
             for h in m.headers.as_deref().unwrap_or_default() {
                 let mt = h.match_type.as_deref().unwrap_or("Exact");
                 if mt != "Exact" && mt != "RegularExpression" {

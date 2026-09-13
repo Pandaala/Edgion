@@ -100,8 +100,10 @@ Matching logic:
 - `type: RegularExpression`: both service and method are matched by regex (`type` applies to both fields simultaneously).
 - Both `service` + `method` specified → match a single method.
 - Only `service` specified → match all methods of that service.
-- Neither specified → match all gRPC requests.
-- Exact match takes precedence over regex match; among regex entries, priority is by pattern length in descending order.
+- Only `method` specified → match that method across all services (Edgion's implementation-specific support).
+- Omit the outer method matcher → no service/method constraint. An explicit `method: {}` is invalid, not catch-all.
+- Exact fields must be non-empty valid names. Regex fields may be absent/empty if the other field is non-empty; invalid patterns invalidate the entire rule, retaining valid sibling rules.
+- Priority is matching hostname specificity, then descending service and method character counts (pattern lengths for regex), then header count, oldest creation time, namespace/name, and first rule. Match index breaks remaining ties. Exact is not a separate priority tier.
 
 ### GRPCHeaderMatch
 
@@ -162,8 +164,9 @@ Key semantics (canonical user doc: [`docs/en/user-guide/grpc-route/delegation.md
   (deliberately does NOT mirror HTTPRoute's `"/"` default; delegate-all is out
   of scope for v1).
 - A child match with a non-empty, non-matching `method.service` is out of
-  scope (dropped); one with an absent/empty `service` (missing matcher, empty
-  `method: {}`, or method-only) inherits the delegated service. A matchless
+  scope (dropped); one with a missing outer matcher or valid method-only
+  matcher inherits the delegated service. Explicit empty matchers and empty
+  Exact fields invalidate the child rule. A matchless
   child rule flattens to **one inherited match per delegated scope**, never
   cloned as-is (a raw clone would compile to a gateway catch-all).
 - `type: RegularExpression` in a child match invalidates that child rule

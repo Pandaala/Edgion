@@ -37,6 +37,15 @@ spec:
 
 Omitting `method` matches any RPC on the listed `service`; omitting `service` matches the named `method` on any service.
 
+For example, `method: {method: GetUser}` matches `/user.UserService/GetUser`
+and `/admin.AdminService/GetUser`. Omitted `type` defaults to `Exact`.
+Omitting the outer method matcher leaves service/method unconstrained, so a
+header-only match remains valid. Explicit `method: {}` and empty Exact fields
+are invalid. For regex, an absent/empty field is unconstrained only when the
+other field is non-empty. Invalid method names or patterns invalidate the whole
+rule, not valid sibling rules; Controller status reports `PartiallyInvalid`, or
+`Accepted=False / UnsupportedValue` when all effective rules are invalid.
+
 ## Combining conditions (AND within one match)
 
 A single `matches` entry combines its `method` and `headers` conditions with AND — the call must satisfy every condition:
@@ -98,7 +107,18 @@ spec:
 
 ## Precedence
 
-When a call matches more than one rule, the most specific rule wins: an `Exact` method match is preferred over a `RegularExpression` match, and a match with more header conditions is preferred over one with fewer. Define narrower rules ahead of broader catch-all rules.
+Matching candidates are ordered by:
+
+1. Most specific matching hostname: exact, then longest wildcard suffix, then no hostname constraint.
+2. Most characters in the configured service, then method (pattern lengths for regex).
+3. Most header conditions.
+4. Oldest route creation time, then alphabetical `namespace/name`.
+5. First matching rule, then match entry within that rule.
+
+`Exact` is not an extra priority tier ahead of regex. A candidate must satisfy
+all its conditions; a header or listener mismatch continues to the next
+candidate, including broader hostnames. A longer hostname that does not match
+the request cannot increase a route's priority.
 
 ## Related documents
 

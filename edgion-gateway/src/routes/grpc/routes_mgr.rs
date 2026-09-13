@@ -70,7 +70,7 @@ impl GrpcRouteRules {
     }
 }
 
-/// gRPC route rules container (no hostname-based separation — gRPC uses a flat engine)
+/// Per-listener gRPC route rules; the engine owns ordered hostname indexes.
 pub struct DomainGrpcRouteRules {
     pub grpc_routes: Arc<GrpcRouteRules>,
 }

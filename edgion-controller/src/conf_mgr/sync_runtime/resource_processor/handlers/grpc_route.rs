@@ -576,19 +576,25 @@ impl ProcessorHandler<GRPCRoute> for GrpcRouteHandler {
         };
         // Static rule errors withdraw only the offending rule. Reject the
         // attachment when no effective rule survives, and retain valid siblings.
-        let header_errors: Vec<(usize, &'static str)> = route
+        let rule_errors: Vec<(usize, &'static str)> = route
             .spec
             .rules
             .iter()
             .flatten()
             .enumerate()
-            .filter_map(|(index, rule)| rule.header_modifier_error().map(|message| (index, message)))
+            .filter_map(|(index, rule)| {
+                rule.method_match_error()
+                    .or_else(|| rule.header_modifier_error())
+                    .map(|message| (index, message))
+            })
             .collect();
         let attachment_rejects_route =
             serves_no_rule && (!invalid_indices.is_empty() || !delegation_dropped.is_empty());
         if attachment_rejects_route {
             validation_accepted_errors.extend(invalid_indices.iter().map(|index| AcceptedError::UnsupportedValue {
-                message: format!("rules[{index}]: invalid filter configuration"),
+                message: format!("rules[{index}]: {}", rule_errors.iter()
+                    .find(|(rule_index, _)| rule_index == index)
+                    .map_or("invalid rule configuration", |(_, message)| *message)),
             }));
             validation_accepted_errors.extend(
                 delegation_dropped
@@ -664,7 +670,7 @@ impl ProcessorHandler<GRPCRoute> for GrpcRouteHandler {
                             invalid_indices, valid_rules, total_rules
                         ));
                         reasons.extend(
-                            header_errors
+                            rule_errors
                                 .iter()
                                 .map(|(index, message)| format!("rules[{index}]: {message}")),
                         );
@@ -838,7 +844,7 @@ fn has_unsupported_extension_ref(filters: Option<&Vec<GRPCRouteFilter>>) -> bool
 
 /// Find rule indices where the rule is invalid.
 ///
-/// A rule is invalid if it (or any of its backend refs) has a malformed or repeated
+/// A rule is invalid if any method predicate is invalid, or it (or any of its backend refs) has a malformed or repeated
 /// header modifier within a single filter list. Rules with invalid backends (non-Service kind
 /// or non-existent) are NOT marked as invalid here — the Gateway still registers them so
 /// requests match and get an error response (per Gateway API spec).
@@ -852,7 +858,7 @@ pub(crate) fn find_invalid_rule_indices(route: &GRPCRoute, _route_ns: &str) -> V
     let mut invalid_indices = Vec::new();
     if let Some(rules) = &route.spec.rules {
         for (idx, rule) in rules.iter().enumerate() {
-            if rule.header_modifier_error().is_some() {
+            if rule.method_match_error().is_some() || rule.header_modifier_error().is_some() {
                 invalid_indices.push(idx);
                 continue;
             }
@@ -1115,6 +1121,93 @@ mod tests {
             "spec": { "rules": rules }
         }))
         .expect("route should deserialize")
+    }
+
+    #[tokio::test]
+    async fn method_validation_preserves_siblings_publishes_indices_and_recovers() {
+        use super::super::GatewayHandler;
+        use crate::conf_mgr::sync_runtime::resource_processor::{LocalRawStore, ResourceProcessor};
+        use edgion_resources::resources::Gateway;
+
+        let runtime = Arc::new(ControllerRuntime::default());
+        let ctx = HandlerContext::new(None, None, TriggerChain::default(), 3, 20, runtime.clone());
+        let processor = Arc::new(ResourceProcessor::<Gateway>::new(
+            "Gateway",
+            16,
+            Arc::new(GatewayHandler::new(None, None)),
+            runtime,
+        ));
+        let raw = Arc::new(LocalRawStore::new());
+        let gateway: Gateway = serde_json::from_value(json!({
+            "apiVersion": "gateway.networking.k8s.io/v1", "kind": "Gateway",
+            "metadata": {"name": "gw", "namespace": "default"},
+            "spec": {"gatewayClassName": "edgion", "listeners": [
+                {"name": "grpc", "protocol": "HTTP", "port": 80}
+            ]}
+        }))
+        .unwrap();
+        raw.upsert("default/gw".to_string(), Arc::new(gateway));
+        processor.set_raw_store(raw);
+        ctx.runtime().processor_registry.register(processor);
+
+        let mut route = route_with_rules(json!([
+            {"matches": [{"method": {"method": "Get"}},
+                {"method": {"type": "RegularExpression", "service": "private-marker[", "method": "Get"}}]},
+            {"matches": [{"method": {}}]},
+            {"matches": [{"method": {"method": "Get"}}]},
+            {"matches": [{"method": {"type": "RegularExpression", "method": "^List.*$"}}]}
+        ]));
+        route.spec.parent_refs = Some(serde_json::from_value(json!([{"name": "gw"}])).unwrap());
+        let handler = GrpcRouteHandler::default();
+        let errors = validate_grpc_route_if_enabled(&route);
+        assert!(errors.is_empty(), "per-rule errors must not reject valid siblings");
+        route = match handler.parse(route, &ctx).await {
+            ProcessResult::Continue(route) => route,
+            other => panic!("unexpected parse result: {other:?}"),
+        };
+        handler.update_status(&mut route, &ctx, &errors);
+        assert_eq!(route.spec.invalid_rule_indices.as_deref(), Some(&[0, 1][..]));
+        let conditions = &route.status.as_ref().unwrap().parents[0].conditions;
+        assert!(conditions.iter().any(|c| c.type_ == "Accepted" && c.status == "True"));
+        assert!(conditions.iter().any(|c| c.type_ == "PartiallyInvalid"
+            && c.status == "True"
+            && c.message.contains("invalid regular expression")));
+        assert!(!conditions.iter().any(|c| c.message.contains("private-marker")));
+        let published: GRPCRoute = serde_json::from_slice(&serde_json::to_vec(&route).unwrap()).unwrap();
+        assert_eq!(published.spec.invalid_rule_indices.as_deref(), Some(&[0, 1][..]));
+        assert_eq!(published.effective_rules().unwrap().len(), 4);
+        assert!(published.effective_rules().unwrap()[2].method_match_error().is_none());
+
+        route.spec.rules.as_mut().unwrap().truncate(2);
+        handler.update_status(&mut route, &ctx, &[]);
+        let conditions = &route.status.as_ref().unwrap().parents[0].conditions;
+        assert!(conditions.iter().any(|c| c.type_ == "Accepted"
+            && c.status == "False"
+            && c.reason == "UnsupportedValue"
+            && c.message.contains("rules[0]")));
+        assert!(!conditions.iter().any(|c| c.type_ == "PartiallyInvalid"));
+
+        for rule in route.spec.rules.iter_mut().flatten() {
+            rule.matches = None;
+        }
+        handler.update_status(&mut route, &ctx, &[]);
+        assert!(route.spec.invalid_rule_indices.is_none());
+        let conditions = &route.status.as_ref().unwrap().parents[0].conditions;
+        assert!(conditions.iter().any(|c| c.type_ == "Accepted" && c.status == "True"));
+        assert!(!conditions.iter().any(|c| c.type_ == "PartiallyInvalid"));
+
+        // Delegation can leave no effective rules even when its authored
+        // parent service scope is valid. That attachment must also reject.
+        route.spec.resolved_rules = Some(vec![]);
+        route.spec.delegation_issues = vec![DelegationIssue::RuleDropped {
+            message: "child rule dropped: invalid method matcher".to_string(),
+        }];
+        handler.update_status(&mut route, &ctx, &[]);
+        let conditions = &route.status.as_ref().unwrap().parents[0].conditions;
+        assert!(conditions
+            .iter()
+            .any(|c| c.type_ == "Accepted" && c.status == "False" && c.reason == "UnsupportedValue"));
+        assert!(!conditions.iter().any(|c| c.type_ == "PartiallyInvalid"));
     }
 
     #[test]
