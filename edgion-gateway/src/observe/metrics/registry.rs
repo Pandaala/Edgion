@@ -938,10 +938,11 @@ pub fn record_outbound_template_fallback(field: &'static str) {
 // Wasm plugin host metrics
 // ============================================================
 //
-// All Wasm metrics carry a `module` label: the human-readable source
-// descriptor produced by `WasmSourceSpec::metrics_label()` (file path, url,
-// or `inline:<sha8>`). Cardinality is bounded by the number of distinct
-// configured modules.
+// Per-module Wasm metrics carry the source descriptor produced by
+// `WasmSourceSpec::metrics_label()`. URL sources use a 96-byte-capped,
+// credential-free `url:<canonical-origin>#<path-sha8>` identity that remains
+// stable across signed-query rotations. Cardinality is bounded by the number
+// of distinct configured source identities.
 
 /// Record a Wasm module load attempt outcome. `result` is `"ok"` or `"error"`.
 pub fn record_wasm_module_load(module: &str, result: &'static str) {

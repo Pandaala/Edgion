@@ -1445,7 +1445,14 @@ async fn fetch_url_bytes_with_permits(
         let response = req.send().await;
         match response {
             Err(e) => {
-                last_error = format!("fetch wasm url '{url}': {e}");
+                let kind = if e.is_timeout() {
+                    "request timed out"
+                } else if e.is_connect() {
+                    "connection failed"
+                } else {
+                    "request failed"
+                };
+                last_error = format!("fetch wasm url: {kind}");
             }
             Ok(resp) => {
                 let status = resp.status();
@@ -1454,18 +1461,18 @@ async fn fetch_url_bytes_with_permits(
                     // opening the body stream; the streaming counter below still
                     // guards absent/false/chunked lengths.
                     if resp.content_length().is_some_and(|cl| cl > MAX_MODULE_BYTES as u64) {
-                        return Err(format!("fetch wasm url '{url}': body exceeds {MAX_MODULE_BYTES} bytes"));
+                        return Err(format!("fetch wasm url: body exceeds {MAX_MODULE_BYTES} bytes"));
                     }
                     let (body, truncated) =
                         crate::plugins::http::common::outbound::call::stream_body_capped(resp, MAX_MODULE_BYTES)
                             .await
-                            .map_err(|e| format!("read wasm body: {e}"))?;
+                            .map_err(|_| "read wasm body: response error".to_string())?;
                     if truncated {
-                        return Err(format!("fetch wasm url '{url}': body exceeds {MAX_MODULE_BYTES} bytes"));
+                        return Err(format!("fetch wasm url: body exceeds {MAX_MODULE_BYTES} bytes"));
                     }
                     return Ok(body.to_vec());
                 }
-                last_error = format!("fetch wasm url '{url}': status {status}");
+                last_error = format!("fetch wasm url: status {status}");
                 if status.is_client_error() {
                     // 4xx is definitive — do not retry.
                     return Err(last_error);
@@ -3268,6 +3275,29 @@ mod tests {
         assert!(err.contains("auth header secret not resolved"), "got: {err}");
     }
 
+    #[tokio::test]
+    async fn url_fetch_transport_error_does_not_expose_configured_url() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("reserve an unused local port");
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+        let configured_url =
+            format!("http://alice:password@127.0.0.1:{port}/private/module.wasm?token=repo-secret#fragment");
+
+        let error = fetch_url_bytes(&configured_url, None).await.unwrap_err();
+        assert!(error.starts_with("fetch wasm url: "), "got: {error}");
+        for secret in [
+            configured_url.as_str(),
+            "alice",
+            "password",
+            "private",
+            "module.wasm",
+            "repo-secret",
+            "fragment",
+        ] {
+            assert!(!error.contains(secret), "error leaked {secret}: {error}");
+        }
+    }
+
     /// url fetch retry: first attempt 503, second 200 → load succeeds and
     /// exactly two requests hit the server.
     #[tokio::test]
@@ -3400,7 +3430,8 @@ mod tests {
             .await;
 
         let mut config = edgion_resources::plugin_configs::WasmConfig::default();
-        config.source.url = Some(format!("{}/m.wasm", server.uri()));
+        let configured_url = format!("{}/m.wasm?token=repo-secret#fragment", server.uri());
+        config.source.url = Some(configured_url.clone());
         config.source.fetch = Some(edgion_resources::plugin_configs::WasmFetchSpec {
             timeout_ms: 5000,
             retry: Some(edgion_resources::plugin_configs::WasmFetchRetry {
@@ -3413,6 +3444,8 @@ mod tests {
         let mgr = WasmVmManager::new_for_test();
         let err = load(&mgr, &config).await.unwrap_err();
         assert!(err.contains("status 401"), "got: {err}");
+        assert!(!err.contains(&configured_url), "got: {err}");
+        assert!(!err.contains("repo-secret"), "got: {err}");
         assert_eq!(
             server.received_requests().await.unwrap().len(),
             1,

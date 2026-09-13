@@ -14,6 +14,8 @@ use serde_json::Value;
 use super::wasm_oci::{OciImageRef, WasmOciSpec};
 use crate::resources::common::{SecretObjectReference, TlsConfig};
 
+const MAX_SOURCE_METRICS_LABEL_BYTES: usize = 96;
+
 /// Where the Wasm bytecode comes from. Exactly one field must be set.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -146,15 +148,16 @@ impl WasmSourceSpec {
         )
     }
 
-    /// Human-readable, bounded-cardinality descriptor for metrics labels:
-    /// the file path, the url, or `inline:<sha8>`. Unlike `cache_key` this is
-    /// meant to be read by an operator on a dashboard.
+    /// Human-readable source descriptor for metrics labels. URL identities
+    /// exclude userinfo, query, fragment, and clear-text path content so
+    /// signed URL generations share one bounded, credential-free label.
+    /// Unlike `cache_key`, this is safe to expose in observability output.
     pub fn metrics_label(&self) -> String {
         if let Some(f) = &self.file {
             return format!("file:{f}");
         }
         if let Some(u) = &self.url {
-            return format!("url:{u}");
+            return url_metrics_label(u);
         }
         if let Some(b64) = &self.inline {
             use sha2::{Digest, Sha256};
@@ -181,6 +184,38 @@ impl WasmSourceSpec {
         }
         "unknown".to_string()
     }
+}
+
+fn url_metrics_label(raw: &str) -> String {
+    use sha2::Digest as _;
+
+    let Ok(mut parsed) = url::Url::parse(raw) else {
+        return "url:invalid".to_string();
+    };
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return "url:invalid".to_string();
+    }
+
+    // `origin` cannot contain userinfo, path, query, or fragment. The digest
+    // retains path-level correlation without exposing path-carried secrets;
+    // query and fragment are cleared first so signed URL rotations do not
+    // create new metric series.
+    let origin = parsed.origin().ascii_serialization();
+    let _ = parsed.set_username("");
+    let _ = parsed.set_password(None);
+    parsed.set_query(None);
+    parsed.set_fragment(None);
+    let digest = hex::encode(sha2::Sha256::digest(parsed.as_str().as_bytes()));
+    let suffix = format!("#{}", &digest[..8]);
+    let prefix = "url:";
+    let origin_limit = MAX_SOURCE_METRICS_LABEL_BYTES - prefix.len() - suffix.len();
+    let bounded_origin = &origin.as_bytes()[..origin.len().min(origin_limit)];
+    // `Origin::ascii_serialization` guarantees ASCII, so the byte boundary is
+    // also a UTF-8 character boundary.
+    format!(
+        "{prefix}{}{suffix}",
+        std::str::from_utf8(bounded_origin).unwrap_or("invalid")
+    )
 }
 
 /// Wasm plugin configuration.
@@ -497,7 +532,7 @@ impl WasmConfig {
         }
         if let Some(url) = &self.source.url {
             if !(url.starts_with("http://") || url.starts_with("https://")) {
-                return Err(format!("source.url must be http(s), got '{}'", url));
+                return Err("source.url must use http or https".to_string());
             }
             if self.sha256.is_none() {
                 return Err("sha256 is required when source.url is used".to_string());
@@ -630,6 +665,51 @@ mod tests {
         assert!(c.validate().unwrap_err().contains("sha256"));
         c.sha256 = Some("a".repeat(64));
         assert!(c.validate().is_ok());
+    }
+
+    #[test]
+    fn url_metrics_label_is_redacted_bounded_and_generation_stable() {
+        let source = |url: &str| WasmSourceSpec {
+            url: Some(url.to_string()),
+            ..Default::default()
+        };
+        let first = source("https://alice:password@artifacts.example/tenant/private/module.wasm?token=first#secret")
+            .metrics_label();
+        let rotated =
+            source("https://bob:other@artifacts.example/tenant/private/module.wasm?token=second#other").metrics_label();
+
+        assert_eq!(first, rotated);
+        assert!(first.starts_with("url:https://artifacts.example#"), "got: {first}");
+        for secret in [
+            "alice",
+            "password",
+            "tenant",
+            "private",
+            "module.wasm",
+            "token",
+            "secret",
+        ] {
+            assert!(!first.contains(secret), "label leaked {secret}: {first}");
+        }
+        assert!(first.len() <= MAX_SOURCE_METRICS_LABEL_BYTES);
+
+        let other_path = source("https://artifacts.example/other/module.wasm").metrics_label();
+        assert_ne!(first, other_path, "different URL paths need distinct source identities");
+
+        let long_host = format!("https://{}.example/module.wasm", "a".repeat(180));
+        let long_label = source(&long_host).metrics_label();
+        assert!(long_label.len() <= MAX_SOURCE_METRICS_LABEL_BYTES, "got: {long_label}");
+    }
+
+    #[test]
+    fn invalid_url_validation_does_not_echo_the_configured_value() {
+        let mut c = WasmConfig::default();
+        let configured = "file://user:password@host/private/module.wasm?token=secret";
+        c.source.url = Some(configured.to_string());
+        c.sha256 = Some("a".repeat(64));
+        let error = c.validate().unwrap_err();
+        assert!(!error.contains(configured), "got: {error}");
+        assert!(!error.contains("password"), "got: {error}");
     }
 
     #[test]

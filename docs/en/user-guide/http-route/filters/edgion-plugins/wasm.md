@@ -406,7 +406,7 @@ The compiled-module cache is keyed by the source **plus, for `file` sources, the
 
 ## Metrics
 
-All metrics carry a `module` label — the human-readable source descriptor (`file:<path>`, `url:<url>`, `inline:<sha8>`), bounded by the number of configured modules.
+All metrics carry a `module` label. File sources use `file:<path>`, inline sources use `inline:<sha8>`, and URL sources use `url:<canonical-origin>#<path-sha8>`. A URL label is capped at 96 bytes, never contains userinfo, clear-text path, query, or fragment, and stays stable when only signed-query credentials change. The real URL remains part of the internal fetch and cache identity; it is not exposed through metrics or load-error logs.
 
 | Metric | Type | Labels | Meaning |
 |---|---|---|---|

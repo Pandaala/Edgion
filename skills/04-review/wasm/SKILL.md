@@ -16,6 +16,7 @@ before applying a decision to current code.
 - [Wasm module cache key must fold in per-plugin runtime config — FIXED](regression-guards/wasm-module-cache-key-runtime-config.md)
 - [Wasm OCI token endpoint 5xx must honor the retry policy — FIXED](regression-guards/wasm-oci-token-5xx-retry-classification.md)
 - [Wasm Request Bodies Use One Complete Terminal Callback — FIXED](regression-guards/wasm-whole-request-body-callback-contract.md)
+- [Wasm URL source identity and error redaction](regression-guards/wasm-url-source-identity-redaction.md)
 
 ## Intentional design
 

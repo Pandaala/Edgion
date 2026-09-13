@@ -393,7 +393,7 @@ trap（或其他故障）的 VM 实例会被**污染**：直接丢弃而不回�
 
 ## 指标
 
-所有指标带 `module` label——人类可读的来源描述（`file:<path>`、`url:<url>`、`inline:<sha8>`），基数受配置模块数约束。
+所有指标都带 `module` label。文件来源使用 `file:<path>`，内联来源使用 `inline:<sha8>`，URL 来源使用 `url:<canonical-origin>#<path-sha8>`。URL label 最长 96 字节，不含 userinfo、明文路径、查询参数或片段；仅签名查询凭据变化时，label 保持稳定。真实 URL 仍用于内部下载和缓存身份，不会进入指标或模块加载错误日志。
 
 | 指标 | 类型 | Labels | 含义 |
 |---|---|---|---|

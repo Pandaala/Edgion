@@ -57,7 +57,7 @@ EdgionBackend 保留独立的撤销策略。
 | edgion_gateway_fips_host_enabled | Gauge | gateway | none | self | 1 = the host kernel reports FIPS mode (`/proc/sys/crypto/fips_enabled`) | `edgion_gateway_fips_host_enabled == 1 and edgion_gateway_fips_module_enabled == 0` |
 | edgion_gateway_fips_host_detect_error | Gauge | gateway | none | self | 1 = the host FIPS flag exists but could not be read (masked `/proc`); both the guardrail and `fips_policy=auto` are inert in this state | - |
 | edgion_gateway_fips_policy_active | Gauge | gateway | module_enabled (true/false) | self | 1 = the approved FIPS cipher/curve profile is in effect on downstream listeners; the label records the BoringSSL FIPS-mode signal | - |
-| edgion_wasm_module_load_total | Counter | gateway | module, result (ok/error) | self | Wasm module load attempt outcome | - |
+| edgion_wasm_module_load_total | Counter | gateway | module, result (ok/error) | self | Wasm 模块加载结果；所有 Wasm `module` label 使用来源描述，其中 URL 来源使用不含凭据、查询变化不改变且最长 96 字节的身份 | - |
 | edgion_wasm_module_compile_duration_ms | Histogram | gateway | module | self | Wall-clock duration of one Wasm `Module::new` compilation | - |
 | edgion_wasm_module_evicted_total | Counter | gateway | module | self | Wasm module-cache entry eviction (refcount reached zero and the grace period elapsed) | - |
 | edgion_wasm_instance_instantiate_total | Counter | gateway | module | self | Fresh Wasm VM instantiation (instance pool miss) | - |
