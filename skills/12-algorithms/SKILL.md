@@ -57,7 +57,7 @@ in-process cache selection section of [../00-design-rules.md](../00-design-rules
 
 | Algorithm | Source | Doc |
 |---|---|---|
-| IP radix tree (allow/deny matching) | `edgion-algo/src/matcher/radix_ip/` | not yet written |
+| IP radix tree (allow/deny matching) | `edgion-algo/src/matcher/radix_ip/` | [ip-radix-matching.md](ip-radix-matching.md) |
 | Path radix tree (route and policy candidates) | `edgion-algo/src/matcher/radix_path/` | not yet written |
 | Immutable Route hostname radix with persistent contents | `edgion-algo/src/matcher/radix_hostname/` | [route-hostname-matching.md](route-hostname-matching.md) |
 | RFC 6125 certificate hostname matching | `edgion-algo/src/matcher/rfc6125_hostname/` | not yet written |

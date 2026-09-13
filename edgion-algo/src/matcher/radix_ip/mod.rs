@@ -99,6 +99,7 @@
 //! assert_eq!(tree.match_ip(ip3), Some(1));  // Matches /8
 //! ```
 
+mod binary;
 pub mod builder_v4;
 pub mod builder_v6;
 pub mod error;
