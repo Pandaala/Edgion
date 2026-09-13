@@ -11,6 +11,7 @@ before applying a decision to current code.
 
 ## Intentional design
 
+- [Best-effort log delivery during Gateway process exit](intentional-design/process-exit-log-delivery-best-effort.md)
 - [Access-Log Fallback Sink + Manual Backfill — DESIGN-TRADEOFF (accepted)](intentional-design/access-log-fallback-backfill-tradeoffs.md)
 - [LinkSys core/runtime module split — `link_sys_core` (common) vs `link_sys` (gateway) — FIXED](intentional-design/core-runtime-module-split-naming.md)
 - [LinkSys health metric: free-function emit + per-link label — NOT-AN-ISSUE](intentional-design/health-metric-free-function-and-cardinality.md)

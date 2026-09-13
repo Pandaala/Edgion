@@ -126,6 +126,11 @@ for verification limits and deferred wire coverage.
 
 The background Tokio thread is therefore not an intentionally permanent `pending()` task.
 
+Log delivery during process exit is best effort; the five-second window does not
+acknowledge sender drain. See the accepted
+[process-exit logging tradeoff](../../04-review/link-sys/intentional-design/process-exit-log-delivery-best-effort.md)
+before proposing a shared sender shutdown contract.
+
 ## Listener hot-reload boundary
 
 Listener sockets are bound once during Pingora construction. Runtime Gateway updates rebuild

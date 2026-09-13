@@ -1,6 +1,0 @@
-# External Sync — 6a5e428a
-
-- Expected concurrent user commit `6a5e428a` arrived during B0236 planning. It changes exactly five paths: one existing WebSocket integration file, its new and updated observability knowledge, the B0178 follow-up reference, and deletion of the resolved standalone task. It changes no Gateway source and none of B0236's three frozen paths; Gateway inventory and coverage are unaffected.
-- Fresh independent reviewer `b0236_final_independent_review` verified parent `3a4cc11922560959ba49ab95153453ea7fe3618c` and commit `6a5e428a16042dbdb0ae0458d067b3c5f5a8c243`. The sole integration change is `edgion-tests/src/client/suites/http_route/protocol/websocket.rs`, blob `b5bed69c3eef0c98da7b9ea21da804a5a8d12b6a` to `06d1f5a81aa77e6eedb226fdbc3a75f2580237ce`, with Git mode `100644`, filesystem mode `0644`, non-executable, and bytes identical between the commit and current worktree.
-- Only that existing manifest fingerprint was refreshed; the frozen count remains 3,136 and the full check passes. The campaign did not edit or execute the integration test. The external test's recorded execution remains historical evidence owned by its knowledge page.
-- The deleted standalone follow-up task was resolved externally and must not be recreated. User-owned handoff/WAF paths remain untouched; never push.

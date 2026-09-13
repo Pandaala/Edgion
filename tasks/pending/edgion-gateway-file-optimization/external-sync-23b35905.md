@@ -1,8 +1,0 @@
-# External Sync — 5cb0b087 through 23b35905
-
-- Expected concurrent user commits `5cb0b087` and `23b35905` arrived at B0233's commit gate. B0233's target, B0232 scripts and every Redis caller remain unchanged; the independent final reviewer refreshed its LGTM at `23b35905`.
-- Gateway inventory remains 548 files. Reopen the two externally changed terminal sources: `plugins/http/plugin_store.rs` for cross-namespace mirror LKG policy and `plugins/http/request_mirror/plugin.rs` for ReferenceGrant early rejection. Historical batch evidence remains intact.
-- Independent diagnostic `remote_7825_reconcile` verified eight updated and three added integration paths byte-for-byte against their source commits and current HEAD. All are regular Git `100644`, filesystem `0644`, executable bits `000`. Only those exact freeze entries were reconciled; count 3,124 to 3,127. No campaign integration edit or execution occurred.
-- External D0109 session-cookie-field coverage validly closes and deletes its standalone task; maintained knowledge records multi-field HTTP/gRPC, backend identity, malformed expiry, replay and scope limits. External 5/5 plus 5/5 results remain historical. Do not recreate the task.
-- The new mirror knowledge introduced three broken links to task paths that never existed in Git history. This external documentation failure is not caused by B0233. The exact owning page was corrected to retain all three boundaries as unresolved prose without inventing tasks or claiming closure. Any standalone repair task requires separate technical validation.
-- User-owned handoff/WAF paths remain untouched; never push.
