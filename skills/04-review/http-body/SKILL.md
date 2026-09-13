@@ -17,6 +17,7 @@ before applying a decision to current code.
 ## Intentional design
 
 - [Plugin body filter is read-only by design (bandwidth-throttle only) — DESIGN-TRADEOFF](intentional-design/body-filter-read-only-by-design.md)
+- [Plugin-authored request framing is a trusted configuration choice](intentional-design/plugin-authored-request-framing-is-trusted.md)
 - [HTTP/1 close after a response-stage local reply is a feature gap](intentional-design/response-local-reply-h1-close-is-feature.md)
 
 ## Regression guards
