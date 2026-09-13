@@ -35,7 +35,9 @@ pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) use forward_
 pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) use guardrail::resolve as resolve_guardrail;
 pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) use header_cert_auth::resolve as resolve_header_cert_auth;
 pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) use hmac::resolve as resolve_hmac;
-pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) use jwe::resolve as resolve_jwe;
+pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) use jwe::{
+    resolve as resolve_jwe, status_errors as jwe_status_errors,
+};
 pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) use jwt::resolve as resolve_jwt;
 pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) use key_auth::resolve as resolve_key_auth;
 pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) use ldap_auth::resolve as resolve_ldap_auth;

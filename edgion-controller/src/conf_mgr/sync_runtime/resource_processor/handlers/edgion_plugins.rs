@@ -447,6 +447,7 @@ impl ProcessorHandler<EdgionPlugins> for EdgionPluginsHandler {
         );
         let mut resolved_errors = Self::resolve_secret_refs(ep, ctx);
         resolved_errors.extend(cred::credential_injector_status_errors(ep, &resource_ref, ctx));
+        resolved_errors.extend(cred::jwe_status_errors(ep));
         resolved_errors.extend(resolve_secret_match_refs(ep, ctx));
         resolved_errors.extend(resolve_guardrail_request_secret_refs(ep, ctx));
         resolved_errors.extend(resolve_wasm_refs(ep, ctx));
@@ -1157,7 +1158,7 @@ mod tests {
         BasicAuthConfig, BasicAuthSecretGroup, CertSourceMode, CredentialInjectionTarget, CredentialInjectorConfig,
         EdgionPlugin, EdgionPlugins, EdgionPluginsSpec, HeaderCertAuthConfig, HmacAuthConfig, HmacAuthSecretGroup,
         JweDecryptConfig, JwtAlgorithm, JwtAuthConfig, JwtIssuerGroup, KeyAuthConfig, KeyMetadata, OpenidConnectConfig,
-        RegionRouteConfig, RequestFilterEntry, ResolvedJwtCredential, ResolvedJwtIssuerGroup,
+        RegionRouteConfig, RequestFilterEntry, ResolvedJweCredential, ResolvedJwtCredential, ResolvedJwtIssuerGroup,
     };
     use edgion_resources::resources::gateway::SecretObjectReference;
     use k8s_openapi::api::core::v1::Secret;
@@ -1882,6 +1883,40 @@ profiles:
             .expect("expected resolved secret");
         assert!(!resolved_secret.is_empty());
         assert_eq!(ctx.secret_ref_manager().get_refs("default/jwe-secret").len(), 1);
+    }
+
+    #[tokio::test]
+    async fn disabled_jwe_clears_stale_credential_without_registering_secret_ref() {
+        let jwe_secret = build_secret("default", "jwe-secret", "secret", "too-short");
+        let (ctx, _runtime) = make_ctx_with_secrets(HashMap::from([("default/jwe-secret".to_string(), jwe_secret)]));
+
+        let mut entry = RequestFilterEntry::new(EdgionPlugin::JweDecrypt(JweDecryptConfig {
+            secret_ref: Some(SecretObjectReference {
+                group: None,
+                kind: None,
+                name: "jwe-secret".to_string(),
+                namespace: None,
+            }),
+            resolved_credential: Some(ResolvedJweCredential {
+                secret: Some("stale-controller-value".to_string()),
+            }),
+            ..Default::default()
+        }));
+        entry.enable = false;
+        let mut ep = EdgionPlugins::new("disabled-jwe", EdgionPluginsSpec::default());
+        ep.metadata.namespace = Some("default".to_string());
+        ep.spec.request_plugins = Some(vec![entry]);
+
+        let handler = EdgionPluginsHandler::new();
+        let parsed = match handler.parse(ep, &ctx).await {
+            ProcessResult::Continue(value) => value,
+            ProcessResult::Skip { reason } => panic!("unexpected skip: {reason}"),
+        };
+        let EdgionPlugin::JweDecrypt(config) = &parsed.spec.request_plugins.as_ref().unwrap()[0].plugin else {
+            panic!("unexpected plugin type");
+        };
+        assert!(config.resolved_credential.is_none());
+        assert!(ctx.secret_ref_manager().get_refs("default/jwe-secret").is_empty());
     }
 
     #[tokio::test]

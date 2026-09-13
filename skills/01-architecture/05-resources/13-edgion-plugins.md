@@ -42,12 +42,13 @@ Two Gateway-API-style conditions (`k8s_openapi::Condition` type):
 
 - **`Accepted`**: True (reason=Accepted) when there are no validation_errors; False (reason=Invalid) when errors exist. Stays `True` even when inline IP lists have bad entries (partial-good; see `PartiallyInvalid` below).
 - **`ResolvedRefs`**: checks Secret references and EdgionConfigData cross-namespace refs:
-  - Secret refs: aggregate via `SecretRefManager::get_dependencies(ep_key)`, check `secret_store.get(ns, name)` one by one. Any unresolved Secret → `ResolvedRefsError::SecretNotFound` (reason `BackendNotFound`); the message lists all missing `ns/name`.
+  - Secret refs: aggregate via `SecretRefManager::get_dependencies(ep_key)`, check `secret_store.get(ns, name)` one by one. Any unresolved Secret → `ResolvedRefsError::SecretNotFound` (reason `SecretNotFound`); the message lists all missing `ns/name`.
+  - JWE credential content: a present Secret missing `data.secret`, containing invalid inner Base64 for `base64Secret`, or decoding to a non-32-byte A256GCM key sets `ResolvedRefs=False` with `MissingKeys` or `DecodeError`. The Gateway still publishes a fail-closed JWE runtime for that generation and never retains the prior key.
   - EdgionConfigData cross-ns refs (`overrideRef`, `RequestAccessPolicy.activeProfileRef`, RequestAccessPolicy nested IpList refs, `allowRefs`/`denyRefs`): if `ref_denied` is set on the ref (cross-ns without a matching `ReferenceGrant` and target `visibility ≠ Cluster`), → `ResolvedRefsError::RefNotPermitted` (reason `RefNotPermitted`). If the target is missing/disabled/wrong-type → reason `InvalidEdgionConfigDataRef`.
   - When all references resolve → True
 - **`PartiallyInvalid`**: set when `IpRestriction` inline `allow`/`deny` groups contain bad entries (invalid CIDR, empty group, cross-group duplicate CIDR, duplicate/invalid group name). `status=True`/`reason=RuleInvalid` when bad entries exist (message lists them); `status=False`/`reason=AllRulesValid` when clean. The plugin still loads — valid entries compile and the plugin accepts requests normally. A skipped inline **deny** entry additionally increments `edgion_ip_deny_entries_skipped_total{scope="http"}` (blacklist hole = loud metric). The exception: if **both** `allow` and `deny` are completely absent or empty and no `allowRefs`/`denyRefs` are configured, `validate_and_init` returns `Err` and the plugin sets `init_failed` (deny-all fail-closed); this is a structural misconfiguration, not a bad-CIDR case.
 
-Note: `ResolvedRefs` currently checks only Secret **existence**, not whether the Secret contains the required keys (e.g., a BasicAuth Secret missing the `username` field). The latter only emits `tracing::warn!` during parse and is not reflected in the condition.
+Most legacy plugin Secret resolvers currently report only Secret **existence** through `ResolvedRefs`, not every required data key. JWE and the other explicitly documented typed resolvers are exceptions: they project usable-material failures into `ResolvedRefs` without turning dependency content into an operator-facing `Accepted` error.
 
 ## Gateway-side processing
 

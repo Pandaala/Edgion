@@ -6,16 +6,17 @@ use crate::plugins::http::common::auth_common::set_sensitive_request_header;
 use aes_gcm::aead::{AeadInPlace, KeyInit};
 use aes_gcm::{Aes256Gcm, Nonce, Tag};
 use async_trait::async_trait;
-use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 
 use crate::plugins::http::common::auth_common::{
     apply_auth_failure_delay, send_gateway_auth_error_response, set_claims_headers,
 };
 use crate::plugins::runtime::{PluginLog, PluginSession, PluginSessionHeaderExt, RequestFilter};
-use edgion_common::secret::get_secret;
 use edgion_resources::filters::PluginRunningResult;
-use edgion_resources::resources::edgion_plugins::{ClaimHeaderProjectionPlan, JweContentEncryption, JweDecryptConfig};
+use edgion_resources::resources::edgion_plugins::{
+    ClaimHeaderProjectionPlan, JweContentEncryption, JweDecryptConfig, ResolvedJweCredentialError,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum JweFailure {
@@ -33,9 +34,9 @@ impl JweFailure {
         match self {
             JweFailure::InvalidFormat => 400,
             JweFailure::MissingHeader => 400,
-            JweFailure::NoKey => 403,
-            JweFailure::KeyLenErr => 403,
-            JweFailure::DecryptFail => 403,
+            JweFailure::NoKey => 401,
+            JweFailure::KeyLenErr => 401,
+            JweFailure::DecryptFail => 401,
             JweFailure::BadAlg => 400,
             JweFailure::AlgDenied => 400,
         }
@@ -75,16 +76,6 @@ enum PreparedDecryptor {
     Ready(Aes256Gcm),
     Missing,
     DecodeFailed,
-    InvalidLength,
-}
-
-enum KeyPreparationFailure {
-    Missing,
-    DecodeFailed,
-}
-
-enum RequestDecryptor<'a> {
-    Ready(&'a Aes256Gcm),
     InvalidLength,
 }
 
@@ -176,57 +167,17 @@ impl JweDecrypt {
         PluginRunningResult::ErrTerminateRequest
     }
 
-    fn decode_secret_if_needed(secret_bytes: Vec<u8>, base64_secret: bool) -> Result<Vec<u8>, KeyPreparationFailure> {
-        if !base64_secret {
-            return Ok(secret_bytes);
-        }
-        let secret_str = std::str::from_utf8(&secret_bytes).map_err(|_| KeyPreparationFailure::DecodeFailed)?;
-        STANDARD
-            .decode(secret_str.trim())
-            .map_err(|_| KeyPreparationFailure::DecodeFailed)
-    }
-
-    fn load_key_material(
-        config: &mut JweDecryptConfig,
-        plugin_namespace: &str,
-    ) -> Result<Vec<u8>, KeyPreparationFailure> {
-        if let Some(resolved) = config.resolved_credential.take() {
-            let secret_b64 = resolved.secret.ok_or(KeyPreparationFailure::Missing)?;
-            let secret_bytes = STANDARD
-                .decode(secret_b64)
-                .map_err(|_| KeyPreparationFailure::DecodeFailed)?;
-            return Self::decode_secret_if_needed(secret_bytes, config.base64_secret);
-        }
-
-        let secret_ref = config.secret_ref.as_ref().ok_or(KeyPreparationFailure::Missing)?;
-
-        let ns = secret_ref.namespace.as_deref().unwrap_or(plugin_namespace);
-        let mut secret = get_secret(Some(ns), &secret_ref.name).ok_or(KeyPreparationFailure::Missing)?;
-
-        if let Some(data) = &mut secret.data {
-            if let Some(secret_bytes) = data.remove("secret") {
-                return Self::decode_secret_if_needed(secret_bytes.0, config.base64_secret);
-            }
-        }
-        if let Some(string_data) = &mut secret.string_data {
-            if let Some(secret_str) = string_data.remove("secret") {
-                return Self::decode_secret_if_needed(secret_str.into_bytes(), config.base64_secret);
-            }
-        }
-
-        Err(KeyPreparationFailure::Missing)
-    }
-
-    fn prepare_decryptor(config: &mut JweDecryptConfig, plugin_namespace: &str) -> PreparedDecryptor {
-        let key = match Self::load_key_material(config, plugin_namespace) {
+    fn prepare_decryptor(config: &mut JweDecryptConfig, _plugin_namespace: &str) -> PreparedDecryptor {
+        let key = config.resolved_key_material();
+        config.resolved_credential = None;
+        let key = match key {
             Ok(key) => key,
-            Err(KeyPreparationFailure::Missing) => return PreparedDecryptor::Missing,
-            Err(KeyPreparationFailure::DecodeFailed) => return PreparedDecryptor::DecodeFailed,
+            Err(ResolvedJweCredentialError::Missing) => return PreparedDecryptor::Missing,
+            Err(ResolvedJweCredentialError::TransportDecodeFailed | ResolvedJweCredentialError::SecretDecodeFailed) => {
+                return PreparedDecryptor::DecodeFailed;
+            }
+            Err(ResolvedJweCredentialError::InvalidLength { .. }) => return PreparedDecryptor::InvalidLength,
         };
-
-        if key.len() != config.content_encryption_algorithm.required_key_len() {
-            return PreparedDecryptor::InvalidLength;
-        }
 
         match Aes256Gcm::new_from_slice(&key) {
             Ok(cipher) => PreparedDecryptor::Ready(cipher),
@@ -298,12 +249,8 @@ impl JweDecrypt {
         })
     }
 
-    fn decrypt_compact_jwe(&self, token: &str, decryptor: RequestDecryptor<'_>) -> Result<String, JweFailure> {
+    fn decrypt_compact_jwe(&self, token: &str, cipher: &Aes256Gcm) -> Result<String, JweFailure> {
         let parsed = self.parse_compact_jwe(token)?;
-        let cipher = match decryptor {
-            RequestDecryptor::Ready(cipher) => cipher,
-            RequestDecryptor::InvalidLength => return Err(JweFailure::KeyLenErr),
-        };
 
         let iv = URL_SAFE_NO_PAD
             .decode(parsed.iv_segment)
@@ -342,7 +289,7 @@ impl RequestFilter for JweDecrypt {
             Some(token) => token,
             None if self.config.strict => {
                 return self
-                    .reject_custom(session, plugin_log, 403, "JWE token required", "no token")
+                    .reject_custom(session, plugin_log, 401, "JWE token required", "no token")
                     .await;
             }
             None => {
@@ -358,8 +305,10 @@ impl RequestFilter for JweDecrypt {
         }
 
         let decryptor = match &self.decryptor {
-            PreparedDecryptor::Ready(cipher) => RequestDecryptor::Ready(cipher),
-            PreparedDecryptor::InvalidLength => RequestDecryptor::InvalidLength,
+            PreparedDecryptor::Ready(cipher) => cipher,
+            PreparedDecryptor::InvalidLength => {
+                return self.reject(session, plugin_log, JweFailure::KeyLenErr).await;
+            }
             PreparedDecryptor::Missing | PreparedDecryptor::DecodeFailed => {
                 return self.reject(session, plugin_log, JweFailure::NoKey).await;
             }
@@ -409,6 +358,7 @@ mod tests {
     use crate::plugins::http::plugin_store::compile_plugins;
     use crate::plugins::runtime::traits::session::MockPluginSession;
     use crate::plugins::runtime::traits::test_helpers::setup_header_mocks;
+    use base64::engine::general_purpose::STANDARD;
     use bytes::Bytes;
     use edgion_resources::resources::edgion_plugins::{EdgionPlugin, RequestFilterEntry, ResolvedJweCredential};
     use edgion_resources::resources::EdgionPlugins;
@@ -422,6 +372,12 @@ mod tests {
 
     fn config_with_key(key: &[u8]) -> JweDecryptConfig {
         JweDecryptConfig {
+            secret_ref: Some(edgion_resources::resources::gateway::SecretObjectReference {
+                group: None,
+                kind: None,
+                name: "jwe-secret".to_string(),
+                namespace: None,
+            }),
             strip_prefix: Some("Bearer ".to_string()),
             forward_header: "x-decrypted-auth".to_string(),
             resolved_credential: Some(ResolvedJweCredential {
@@ -469,8 +425,8 @@ mod tests {
 
     fn decrypt_with_prepared(plugin: &JweDecrypt, token: &str) -> Result<String, JweFailure> {
         match &plugin.decryptor {
-            PreparedDecryptor::Ready(cipher) => plugin.decrypt_compact_jwe(token, RequestDecryptor::Ready(cipher)),
-            PreparedDecryptor::InvalidLength => plugin.decrypt_compact_jwe(token, RequestDecryptor::InvalidLength),
+            PreparedDecryptor::Ready(cipher) => plugin.decrypt_compact_jwe(token, cipher),
+            PreparedDecryptor::InvalidLength => Err(JweFailure::KeyLenErr),
             PreparedDecryptor::Missing | PreparedDecryptor::DecodeFailed => Err(JweFailure::NoKey),
         }
     }
@@ -791,7 +747,7 @@ mod tests {
             let mut session = MockPluginSession::new();
             setup_header_mocks(&mut session, &[("authorization", "Bearer malformed")]);
             let mut sequence = Sequence::new();
-            expect_auth_response(&mut session, &mut sequence, 403, b"403 JWE decryption failed");
+            expect_auth_response(&mut session, &mut sequence, 401, b"401 JWE decryption failed");
 
             let mut log = PluginLog::new("JweDecrypt");
             let result = plugin.run_request(&mut session, &mut log).await;
@@ -808,7 +764,7 @@ mod tests {
         let mut session = MockPluginSession::new();
         setup_header_mocks(&mut session, &[("authorization", header_value.as_str())]);
         let mut sequence = Sequence::new();
-        expect_auth_response(&mut session, &mut sequence, 403, b"403 JWE decryption failed");
+        expect_auth_response(&mut session, &mut sequence, 401, b"401 JWE decryption failed");
 
         let mut log = PluginLog::new("JweDecrypt");
         let result = plugin.run_request(&mut session, &mut log).await;
@@ -817,78 +773,56 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn direct_constructor_preserves_parse_precedence_for_invalid_key_length() {
+    async fn direct_constructor_rejects_invalid_key_length_before_parsing() {
         let plugin = JweDecrypt::new(&config_with_key(b"too-short"), "default".to_string());
         let mut session = MockPluginSession::new();
         setup_header_mocks(&mut session, &[("authorization", "Bearer malformed")]);
         let mut sequence = Sequence::new();
-        expect_auth_response(&mut session, &mut sequence, 400, b"400 Invalid JWE format");
+        expect_auth_response(&mut session, &mut sequence, 401, b"401 JWE decryption failed");
 
         let mut log = PluginLog::new("JweDecrypt");
         let result = plugin.run_request(&mut session, &mut log).await;
         assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
-        assert_eq!(log.render_for_test(), "invalid format");
+        assert_eq!(log.render_for_test(), "err: key len err");
     }
 
     #[tokio::test]
-    async fn compile_plugins_seals_invalid_resolved_credentials_before_jwe_construction() {
-        async fn assert_sealed(config: JweDecryptConfig, expected_error: &str, exact_error: bool) {
+    async fn compile_plugins_constructs_fail_closed_jwe_for_invalid_resolved_credentials() {
+        async fn assert_constructed(config: JweDecryptConfig, expected_log: &str) {
             let mut resource = EdgionPlugins::new("invalid-jwe", Default::default());
             resource.metadata.namespace = Some("default".to_string());
             resource.spec.request_plugins = Some(vec![RequestFilterEntry::new(EdgionPlugin::JweDecrypt(config))]);
 
             let compiled = compile_plugins(&resource);
-            assert!(!compiled.is_activatable);
+            assert!(compiled.is_activatable);
             assert!(!compiled.retain_previous_on_invalid_update);
-            assert_eq!(compiled.preparse_errors.len(), 1);
-            if exact_error {
-                assert_eq!(compiled.preparse_errors[0], expected_error);
-            } else {
-                assert!(
-                    compiled.preparse_errors[0].starts_with(expected_error),
-                    "unexpected validation error: {}",
-                    compiled.preparse_errors[0]
-                );
-            }
+            assert!(compiled.preparse_errors.is_empty());
             assert_eq!(compiled.plugin_runtime.request_plugins_count(), 1);
 
             let filter = compiled
                 .plugin_runtime
                 .request_plugins_iter()
                 .next()
-                .expect("sealed reject filter");
-            assert_eq!(filter.name(), "RejectInvalidConfig");
+                .expect("constructed JWE filter");
+            assert_eq!(filter.name(), "JweDecrypt");
 
             let mut session = MockPluginSession::new();
+            setup_header_mocks(&mut session, &[("authorization", "Bearer malformed")]);
+            let mut sequence = Sequence::new();
+            expect_auth_response(&mut session, &mut sequence, 401, b"401 JWE decryption failed");
             let mut log = PluginLog::new(filter.name());
             let result = filter.run_request(&mut session, &mut log).await;
-            assert_eq!(
-                result,
-                PluginRunningResult::ErrResponse {
-                    status: 500,
-                    body: Some(Bytes::from_static(br#"{"message":"plugin configuration error"}"#)),
-                }
-            );
-            assert_eq!(log.render_for_test(), "err: invalid plugin config\nerr: JweDecrypt");
+            assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
+            assert_eq!(log.render_for_test(), expected_log);
         }
 
         let mut invalid_encoding = config_with_key(&test_key());
         invalid_encoding.resolved_credential = Some(ResolvedJweCredential {
             secret: Some("not-base64!".to_string()),
         });
-        assert_sealed(
-            invalid_encoding,
-            "requestPlugins[0] (JweDecrypt): resolvedCredential.secret is not valid base64:",
-            false,
-        )
-        .await;
+        assert_constructed(invalid_encoding, "err: key load fail").await;
 
         let invalid_length = config_with_key(b"too-short");
-        assert_sealed(
-            invalid_length,
-            "requestPlugins[0] (JweDecrypt): resolvedCredential.secret decoded length must be 32 bytes for A256GCM (got 9)",
-            true,
-        )
-        .await;
+        assert_constructed(invalid_length, "err: key len err").await;
     }
 }

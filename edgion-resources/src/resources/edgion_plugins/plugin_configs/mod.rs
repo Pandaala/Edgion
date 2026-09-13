@@ -117,7 +117,9 @@ pub use json_schema_validation::{
     StrictJsonError, ABSOLUTE_INSTANCE_MAX_BYTES, DEFAULT_INSTANCE_MAX_BYTES, MAX_JSON_INSTANCE_DEPTH,
     MAX_JSON_INSTANCE_NODES,
 };
-pub use jwe_decrypt::{JweContentEncryption, JweDecryptConfig, JweKeyManagement, ResolvedJweCredential};
+pub use jwe_decrypt::{
+    JweContentEncryption, JweDecryptConfig, JweKeyManagement, ResolvedJweCredential, ResolvedJweCredentialError,
+};
 pub use jwt_auth::{JwtAlgorithm, JwtAuthConfig, JwtIssuerGroup, ResolvedJwtCredential, ResolvedJwtIssuerGroup};
 pub use key_auth::{KeyAuthConfig, KeyAuthSecretGroup, KeyMetadata};
 pub use ldap_auth::LdapAuthConfig;

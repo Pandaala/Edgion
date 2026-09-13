@@ -12,3 +12,7 @@ before applying a decision to current code.
 ## Intentional design
 
 - [JWE Allowed-Algorithm Runtime Check — ACCEPTED-TRADEOFF](intentional-design/allowed-algorithms-defensive-check.md)
+
+## Regression guards
+
+- [JWE resolved-credential failures remain authentication failures](regression-guards/resolved-credential-failure-policy.md)

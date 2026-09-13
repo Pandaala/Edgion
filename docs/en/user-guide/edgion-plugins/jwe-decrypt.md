@@ -193,26 +193,24 @@ spec:
 
 ## Key Preparation and Protected Headers
 
-The Controller attempts to resolve the referenced Secret before publishing the plugin configuration. When a resolved credential is present, the Gateway consumes it while constructing the runtime plugin generation and prepares one immutable cipher for that generation. The request path does not reload the Secret. When the Secret changes, the normal Controller re-resolution and requeue flow publishes a replacement plugin generation; an already-held generation continues to use its pinned cipher.
+The Controller resolves the referenced Secret before publishing the plugin configuration. The Gateway consumes only that Controller-resolved credential while constructing the runtime plugin generation and prepares either one immutable cipher or a fail-closed unavailable state for that generation. The request path does not reload the Secret or fall back to a Gateway-local Secret. When the Secret changes, the normal Controller re-resolution and requeue flow publishes a replacement plugin generation; an already-held request continues to use its captured generation.
 
 The current compact-JWE implementation does not support compression or critical extensions. Any protected Header Parameter named `zip` or `crit` is rejected based on its presence, regardless of its value. Other unknown parameters are accepted when they are not marked critical. The original encoded protected segment, not reserialized JSON, remains the authenticated AAD. These restrictions describe the currently supported profile and are not a claim of complete RFC 7516 coverage.
 
 ## Error Semantics
 
-In the standard PluginRuntime publication path, an invalid resolved-credential encoding or key length fails shared configuration validation before `JweDecrypt` is constructed. The resource is sealed fail-closed and returns the current generic invalid-plugin response: HTTP `500` with `{"message":"plugin configuration error"}`. Its static PluginLog entries are `err: invalid plugin config` and `err: JweDecrypt`. Because the JWE plugin was not constructed, this response does not use its Bearer challenge or `authFailureDelayMs`.
+Operator-facing configuration errors are reported through `Accepted`. A referenced Secret that is missing, lacks `data.secret`, contains invalid inner Base64 for `base64Secret`, or does not decode to a 32-byte A256GCM key is reported through `ResolvedRefs`. Unusable credential material still constructs a fail-closed `JweDecrypt` runtime instead of sealing the resource as a generic invalid plugin. The replacement generation does not retain the previous key.
 
-If a referenced Secret remains unavailable to the constructed generation, a request that carries a JWE token receives `403 JWE decryption failed`, the Bearer challenge, and the configured authentication-failure delay. Ciphertext authentication failures use the same client response and delay. Direct construction or legacy defensive fallback paths that bypass standard validation also map credential decode and key-length failures to that generic JWE `403`; those branches are defense in depth, not the normal PluginRuntime path. A request without a token still follows the configured `strict` or bypass behavior before key availability is checked.
+Missing credentials, unusable key material, and ciphertext authentication failures use the same generic HTTP `401` authentication response, Bearer challenge, and configured `authFailureDelayMs`. Encoding details, key lengths, and Secret identifiers are never returned to the client. A missing token with `strict=false` still bypasses the plugin; with `strict=true` it receives the generic 401 required-token response.
 
 | Scenario | Status Code | Client Body | PluginLog |
 |----------|------------|-------------|-----------|
-| Missing JWE and `strict=true` | `403` | `403 JWE token required` | `no token` |
+| Missing JWE and `strict=true` | `401` | `401 JWE token required` | `no token` |
 | Invalid JWE format, including protected `zip` or `crit` | `400` | `400 Invalid JWE format` | `invalid format` |
 | JWE missing required headers (`alg`/`enc`) | `400` | `400 JWE missing required headers` | `missing header` |
-| Invalid resolved-credential encoding or key length in the standard PluginRuntime path | `500` | `{"message":"plugin configuration error"}` | `err: invalid plugin config`; `err: JweDecrypt` |
-| Referenced Secret/key unavailable to the constructed generation | `403` | `403 JWE decryption failed` | `err: key load fail` |
-| Defensive direct/legacy credential decode failure | `403` | `403 JWE decryption failed` | `err: key load fail` |
-| Defensive direct/legacy key-length mismatch | `403` | `403 JWE decryption failed` | `err: key len err` |
-| Decryption failed | `403` | `403 JWE decryption failed` | `err: decrypt fail` |
+| Referenced Secret/key unavailable or undecodable | `401` | `401 JWE decryption failed` | `err: key load fail` |
+| Resolved key length does not match A256GCM | `401` | `401 JWE decryption failed` | `err: key len err` |
+| Decryption failed | `401` | `401 JWE decryption failed` | `err: decrypt fail` |
 | Unsupported or mismatched algorithm | `400` | `400 Unsupported encryption algorithm` | `bad alg` |
 | Algorithm not in allowlist | `400` | `400 Algorithm not allowed` | `alg denied` |
 | Token exceeds size limit | `400` | `400 JWE token too large` | `token too large` |

@@ -53,9 +53,10 @@ pub struct CompiledPlugins {
     /// Whether an invalid update should retain the prior activatable runtime.
     ///
     /// DSL/WAF programs allow last-known-good publication unless either
-    /// generation contains a cross-namespace mirror. Other plugin configuration
-    /// errors keep the established fail-closed replacement behavior. The scoped
-    /// publisher reapplies the current execution policy to retained source entries.
+    /// generation contains a cross-namespace mirror or an enabled JWE entry.
+    /// Other plugin configuration errors keep the established fail-closed
+    /// replacement behavior. The scoped publisher reapplies the current
+    /// execution policy to retained source entries.
     pub retain_previous_on_invalid_update: bool,
 }
 
@@ -68,6 +69,8 @@ impl CompiledPlugins {
             && previous.is_activatable
             && !self.has_cross_namespace_mirror()
             && !previous.has_cross_namespace_mirror()
+            && !self.has_enabled_jwe()
+            && !previous.has_enabled_jwe()
     }
 
     fn has_cross_namespace_mirror(&self) -> bool {
@@ -81,6 +84,18 @@ impl CompiledPlugins {
                 edgion_resources::resources::edgion_plugins::EdgionPlugin::RequestMirror(config)
                     if config.filter.backend_ref.namespace.as_deref().unwrap_or(namespace) != namespace
             )
+        })
+    }
+
+    /// Whole-resource last-known-good retention must never carry a JWE
+    /// authentication policy, entry condition, or key across generations.
+    fn has_enabled_jwe(&self) -> bool {
+        self.spec.spec.request_plugins.iter().flatten().any(|entry| {
+            entry.is_enabled()
+                && matches!(
+                    &entry.plugin,
+                    edgion_resources::resources::edgion_plugins::EdgionPlugin::JweDecrypt(_)
+                )
         })
     }
 }

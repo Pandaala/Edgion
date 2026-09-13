@@ -79,10 +79,10 @@ impl JweDecryptTestSuite {
         )
     }
 
-    fn test_missing_token_returns_403() -> TestCase {
+    fn test_missing_token_returns_401() -> TestCase {
         TestCase::new(
-            "missing_token_returns_403",
-            "Missing JWE token returns 403 in strict mode",
+            "missing_token_returns_401",
+            "Missing JWE token returns 401 in strict mode",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -93,13 +93,13 @@ impl JweDecryptTestSuite {
                     match request.send().await {
                         Ok(response) => {
                             let status = response.status().as_u16();
-                            if status == 403 {
+                            if status == 401 {
                                 TestResult::passed_with_message(
                                     start.elapsed(),
-                                    "Missing token returns 403 as expected".to_string(),
+                                    "Missing token returns 401 as expected".to_string(),
                                 )
                             } else {
-                                TestResult::failed(start.elapsed(), format!("Expected 403, got {}", status))
+                                TestResult::failed(start.elapsed(), format!("Expected 401, got {}", status))
                             }
                         }
                         Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
@@ -236,7 +236,7 @@ impl TestSuite for JweDecryptTestSuite {
     fn test_cases(&self) -> Vec<TestCase> {
         vec![
             Self::test_valid_jwe_returns_200(),
-            Self::test_missing_token_returns_403(),
+            Self::test_missing_token_returns_401(),
             Self::test_invalid_jwe_format_returns_400(),
             Self::test_unsupported_algorithm_returns_400(),
             Self::test_payload_headers_mapped(),

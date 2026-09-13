@@ -1,6 +1,8 @@
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::Arc;
 
+use base64::Engine as _;
 use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::{
     EdgionGatewayConfig, EdgionPlugins, EdgionStreamPlugins, Gateway, GatewayClass, HTTPRoute, ListenerKey,
@@ -11,6 +13,7 @@ use super::inputs::{GatewayInput, RouteInput, RouteKind};
 use super::{ConnectionView, PluginPublisher, PluginScope};
 use crate::plugins::http::CompiledPlugins;
 use crate::plugins::runtime::traits::session::MockPluginSession;
+use crate::plugins::runtime::traits::test_helpers::setup_header_mocks;
 use crate::plugins::runtime::{PluginLog, RequestFilter};
 
 fn plugin(program: &str, valid: bool) -> Arc<EdgionPlugins> {
@@ -32,6 +35,52 @@ fn plugin(program: &str, valid: bool) -> Arc<EdgionPlugins> {
         }))
         .unwrap(),
     )
+}
+
+fn jwe_plugin(program: &str, valid_program: bool, key: &[u8]) -> Arc<EdgionPlugins> {
+    let mut spec = json!({"requestPlugins": [{
+        "type": "JweDecrypt",
+        "config": {
+            "secretRef": {"name": "jwe-key"},
+            "stripPrefix": "Bearer ",
+            "resolvedCredential": {
+                "secret": base64::engine::general_purpose::STANDARD.encode(key)
+            }
+        }
+    }]});
+    if program == "dsl" {
+        spec["requestPlugins"].as_array_mut().unwrap().push(json!({
+            "type": "Dsl",
+            "config": {"name": "program", "source": if valid_program {"let a = 1"} else {"invalid @@@"}}
+        }));
+    } else {
+        spec["waf"] = json!({
+            "rules": if valid_program {"SecAction \"id:1,phase:1,pass\"\n"} else {"SecRule invalid-("}
+        });
+    }
+    Arc::new(
+        serde_json::from_value(json!({
+            "apiVersion": "edgion.io/v1", "kind": "EdgionPlugins",
+            "metadata": {"namespace": "apps", "name": "plugins"}, "spec": spec,
+        }))
+        .unwrap(),
+    )
+}
+
+fn jwe_plugin_with_skip(program: &str, valid_program: bool, key: &[u8]) -> Arc<EdgionPlugins> {
+    let mut source = (*jwe_plugin(program, valid_program, key)).clone();
+    source.spec.request_plugins.as_mut().unwrap()[0].conditions = Some(
+        serde_json::from_value(json!({
+            "skip": {
+                "allOf": [{
+                    "type": "keyExist",
+                    "key": {"type": "header", "name": "x-bypass"}
+                }]
+            }
+        }))
+        .unwrap(),
+    );
+    Arc::new(source)
 }
 
 fn config(name: &str, policy: Value) -> Arc<EdgionGatewayConfig> {
@@ -117,6 +166,115 @@ async fn first_result(view: &CompiledPlugins) -> PluginRunningResult {
         .unwrap()
         .run_request(&mut session, &mut log)
         .await
+}
+
+async fn malformed_jwe_result(view: &CompiledPlugins) -> (u16, String) {
+    let filter = filter(view, "JweDecrypt");
+    let mut session = MockPluginSession::new();
+    setup_header_mocks(&mut session, &[("authorization", "Bearer malformed")]);
+    let status = Arc::new(AtomicU16::new(0));
+    let written = Arc::clone(&status);
+    session
+        .expect_write_response_header()
+        .times(1)
+        .returning(move |header, _| {
+            written.store(header.status.as_u16(), Ordering::Relaxed);
+            Ok(())
+        });
+    session.expect_write_response_body().times(1).returning(|_, _| Ok(()));
+    session.expect_shutdown().times(1).returning(|| ());
+    let mut log = PluginLog::new("JweDecrypt");
+    assert_eq!(
+        filter.run_request(&mut session, &mut log).await,
+        PluginRunningResult::ErrTerminateRequest
+    );
+    (status.load(Ordering::Relaxed), log.render_for_test())
+}
+
+#[tokio::test]
+async fn changed_jwe_credentials_block_mixed_program_retention_for_delta_and_full_updates() {
+    let first_key = b"0123456789abcdef0123456789abcdef";
+    let recovered_key = b"abcdef0123456789abcdef0123456789";
+    for program in ["dsl", "waf"] {
+        for full in [false, true] {
+            let publisher = publisher();
+            update_source(&publisher, jwe_plugin(program, true, first_key), full);
+            let initial = view(&publisher);
+            assert!(
+                initial.is_activatable,
+                "{program} {full:?}: {:?}",
+                initial.preparse_errors
+            );
+            assert_eq!(
+                malformed_jwe_result(&initial).await,
+                (400, "invalid format".to_string())
+            );
+
+            update_source(&publisher, jwe_plugin(program, false, b"too-short"), full);
+            let mixed_invalid = view(&publisher);
+            assert!(!mixed_invalid.is_activatable, "{program} {full:?}");
+            assert_eq!(
+                mixed_invalid
+                    .plugin_runtime
+                    .request_plugins_iter()
+                    .next()
+                    .unwrap()
+                    .name(),
+                "RejectInvalidConfig"
+            );
+
+            update_source(&publisher, jwe_plugin(program, true, b"too-short"), full);
+            let unavailable = view(&publisher);
+            assert!(
+                unavailable.is_activatable,
+                "{program} {full:?}: {:?}",
+                unavailable.preparse_errors
+            );
+            assert_eq!(
+                malformed_jwe_result(&unavailable).await,
+                (401, "err: key len err".to_string())
+            );
+
+            update_source(&publisher, jwe_plugin(program, true, recovered_key), full);
+            let recovered = view(&publisher);
+            assert!(
+                recovered.is_activatable,
+                "{program} {full:?}: {:?}",
+                recovered.preparse_errors
+            );
+            assert_eq!(
+                malformed_jwe_result(&recovered).await,
+                (400, "invalid format".to_string())
+            );
+
+            // In-flight snapshots may finish, but current publication never
+            // selects the obsolete credential-bearing generation again.
+            assert!(initial.is_activatable);
+        }
+    }
+}
+
+#[test]
+fn jwe_entry_condition_change_blocks_mixed_program_retention() {
+    let key = b"0123456789abcdef0123456789abcdef";
+    for program in ["dsl", "waf"] {
+        for full in [false, true] {
+            let publisher = publisher();
+            update_source(&publisher, jwe_plugin_with_skip(program, true, key), full);
+            assert!(view(&publisher).is_activatable, "{program} {full:?}");
+
+            // The incoming source removes an authentication bypass while its
+            // program is invalid. Retaining the old source would preserve the
+            // obsolete skip wrapper even though the JWE key itself is equal.
+            update_source(&publisher, jwe_plugin(program, false, key), full);
+            let current = view(&publisher);
+            assert!(!current.is_activatable, "{program} {full:?}");
+            assert_eq!(
+                current.plugin_runtime.request_plugins_iter().next().unwrap().name(),
+                "RejectInvalidConfig"
+            );
+        }
+    }
 }
 
 #[tokio::test]

@@ -191,26 +191,24 @@ spec:
 
 ## 密钥准备与 Protected Header
 
-Controller 在发布插件配置前尝试解析引用的 Secret。存在已解析凭据时，Gateway 在构造该代运行时插件时消费它，并为这一代准备一个不可变的 cipher；请求路径不会重新加载 Secret。Secret 更新后，正常的 Controller 重新解析和 requeue 流程会发布替换的插件代；已经持有的旧代继续使用其固定 cipher。
+Controller 在发布插件配置前解析引用的 Secret。Gateway 只在构造运行时插件代时消费 Controller 已解析的凭据，并为这一代准备一个不可变 cipher 或 fail-closed 不可用状态；请求路径不会重新加载 Secret，也不会回退读取 Gateway 本地 Secret。Secret 更新后，正常的 Controller 重新解析和 requeue 流程会发布替换的插件代；已经开始的请求继续使用其捕获的插件代。
 
 当前 Compact JWE 实现不支持压缩或 critical extension。Protected Header Parameter 中只要存在名为 `zip` 或 `crit` 的字段，无论其值为何，都会被拒绝。其他未标记为 critical 的未知参数仍可接受。认证 AAD 始终使用原始编码的 protected segment，而不是重新序列化后的 JSON。这些约束只描述当前支持的 profile，不代表完整实现 RFC 7516。
 
 ## 错误语义
 
-在标准 PluginRuntime 发布路径中，已解析凭据的编码或密钥长度无效时，共享配置校验会在构造 `JweDecrypt` 之前失败。该资源会被 seal fail-closed，并返回当前的通用无效插件响应：HTTP `500`，响应体为 `{"message":"plugin configuration error"}`。静态 PluginLog 条目为 `err: invalid plugin config` 和 `err: JweDecrypt`。由于 JWE 插件没有被构造，该响应不使用插件的 Bearer challenge 或 `authFailureDelayMs`。
+Operator-facing 配置错误通过 `Accepted` 报告。引用的 Secret 不存在、缺少 `data.secret`、在 `base64Secret` 模式下包含无效的内层 Base64，或没有解码成 A256GCM 所需的 32 字节密钥时，通过 `ResolvedRefs` 报告。不可用的凭据材料仍会构造 fail-closed `JweDecrypt` 运行时，而不是把资源封装成通用无效插件；替换代不会继续保留上一把密钥。
 
-如果构造出的插件代仍无法取得引用的 Secret，携带 JWE token 的请求会收到 `403 JWE decryption failed`、Bearer challenge 和配置的认证失败延迟。密文认证失败使用相同的客户端响应和延迟。绕过标准校验的直接构造或旧式防御回退路径，也会把凭据解码和密钥长度失败映射为相同的通用 JWE `403`；这些分支属于纵深防御，而不是正常的 PluginRuntime 路径。没有 token 的请求仍会在检查密钥可用性之前遵循配置的 `strict` 或旁路行为。
+凭据缺失、密钥材料不可用和密文认证失败使用相同的通用 HTTP `401` 认证响应、Bearer challenge 和配置的 `authFailureDelayMs`。客户端不会收到编码细节、密钥长度或 Secret 标识。缺少 token 时，`strict=false` 仍会旁路插件；`strict=true` 返回通用的 401 必需-token 响应。
 
 | 场景 | 状态码 | 客户端响应体 | PluginLog |
 |------|--------|--------------|-----------|
-| 缺少 JWE 且 `strict=true` | `403` | `403 JWE token required` | `no token` |
+| 缺少 JWE 且 `strict=true` | `401` | `401 JWE token required` | `no token` |
 | JWE 格式错误，包括 protected `zip` 或 `crit` | `400` | `400 Invalid JWE format` | `invalid format` |
 | JWE 缺少必要头（`alg`/`enc`） | `400` | `400 JWE missing required headers` | `missing header` |
-| 标准 PluginRuntime 路径中的已解析凭据编码或密钥长度无效 | `500` | `{"message":"plugin configuration error"}` | `err: invalid plugin config`；`err: JweDecrypt` |
-| 构造出的插件代无法取得引用的 Secret/密钥 | `403` | `403 JWE decryption failed` | `err: key load fail` |
-| 直接构造/旧式防御路径中的凭据解码失败 | `403` | `403 JWE decryption failed` | `err: key load fail` |
-| 直接构造/旧式防御路径中的密钥长度不匹配 | `403` | `403 JWE decryption failed` | `err: key len err` |
-| 解密失败 | `403` | `403 JWE decryption failed` | `err: decrypt fail` |
+| 引用的 Secret/密钥不可用或无法解码 | `401` | `401 JWE decryption failed` | `err: key load fail` |
+| 已解析密钥长度不符合 A256GCM | `401` | `401 JWE decryption failed` | `err: key len err` |
+| 解密失败 | `401` | `401 JWE decryption failed` | `err: decrypt fail` |
 | 算法不支持或不匹配 | `400` | `400 Unsupported encryption algorithm` | `bad alg` |
 | 算法不在白名单 | `400` | `400 Algorithm not allowed` | `alg denied` |
 | token 超过大小限制 | `400` | `400 JWE token too large` | `token too large` |

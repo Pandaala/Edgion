@@ -11,6 +11,7 @@ crate::redact::impl_redacted_debug!(ResolvedJweCredential, JweDecryptConfig);
 use base64::Engine;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use zeroize::Zeroizing;
 
 use crate::resources::gateway::SecretObjectReference;
 
@@ -66,6 +67,28 @@ pub struct ResolvedJweCredential {
     /// Symmetric key, base64-encoded.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub secret: Option<String>,
+}
+
+/// Why Controller-resolved JWE key material cannot build a decryptor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResolvedJweCredentialError {
+    Missing,
+    TransportDecodeFailed,
+    SecretDecodeFailed,
+    InvalidLength { required: usize, actual: usize },
+}
+
+impl ResolvedJweCredentialError {
+    pub fn status_detail(self) -> String {
+        match self {
+            Self::Missing => "required Secret data key is missing".to_string(),
+            Self::TransportDecodeFailed => "resolved credential transport encoding is invalid".to_string(),
+            Self::SecretDecodeFailed => "Secret value is not valid base64 for base64Secret mode".to_string(),
+            Self::InvalidLength { required, actual } => {
+                format!("decoded key must be {required} bytes (got {actual})")
+            }
+        }
+    }
 }
 
 /// JWE Decrypt plugin configuration.
@@ -205,7 +228,7 @@ impl JweDecryptConfig {
     }
 
     pub fn detect_validation_error(&self) -> Option<String> {
-        if self.secret_ref.is_none() && self.resolved_credential.is_none() {
+        if self.secret_ref.is_none() {
             return Some("secretRef is required".to_string());
         }
         if self.header.trim().is_empty() {
@@ -237,50 +260,45 @@ impl JweDecryptConfig {
                 return Some("allowedAlgorithms must include contentEncryptionAlgorithm".to_string());
             }
         }
-        if let Some(resolved) = &self.resolved_credential {
-            if resolved.secret.is_none() {
-                return Some("resolvedCredential.secret is required".to_string());
-            }
-            if let Some(secret_b64) = &resolved.secret {
-                let decoded = match base64::engine::general_purpose::STANDARD.decode(secret_b64) {
-                    Ok(v) => v,
-                    Err(e) => return Some(format!("resolvedCredential.secret is not valid base64: {}", e)),
-                };
-                let final_secret = if self.base64_secret {
-                    let s = match String::from_utf8(decoded) {
-                        Ok(v) => v,
-                        Err(e) => {
-                            return Some(format!(
-                                "resolvedCredential.secret(base64-decoded) is not UTF-8 for base64Secret mode: {}",
-                                e
-                            ));
-                        }
-                    };
-                    match base64::engine::general_purpose::STANDARD.decode(s.trim()) {
-                        Ok(v) => v,
-                        Err(e) => {
-                            return Some(format!(
-                                "resolvedCredential.secret (base64Secret mode) is not valid base64: {}",
-                                e
-                            ));
-                        }
-                    }
-                } else {
-                    decoded
-                };
-
-                let required = self.content_encryption_algorithm.required_key_len();
-                if final_secret.len() != required {
-                    return Some(format!(
-                        "resolvedCredential.secret decoded length must be {} bytes for {} (got {})",
-                        required,
-                        self.content_encryption_algorithm.as_str(),
-                        final_secret.len()
-                    ));
-                }
-            }
-        }
         None
+    }
+
+    /// Decode Controller-owned transport state into one generation's JWE key.
+    ///
+    /// This is intentionally separate from operator-facing configuration
+    /// validation. A malformed resolved Secret must build a fail-closed auth
+    /// runtime and surface through `ResolvedRefs`, not seal the plugin as an
+    /// invalid configuration.
+    pub fn resolved_key_material(&self) -> Result<Zeroizing<Vec<u8>>, ResolvedJweCredentialError> {
+        let encoded = self
+            .resolved_credential
+            .as_ref()
+            .and_then(|credential| credential.secret.as_deref())
+            .ok_or(ResolvedJweCredentialError::Missing)?;
+        let transport_decoded = Zeroizing::new(
+            base64::engine::general_purpose::STANDARD
+                .decode(encoded)
+                .map_err(|_| ResolvedJweCredentialError::TransportDecodeFailed)?,
+        );
+        let key = if self.base64_secret {
+            let encoded_key =
+                std::str::from_utf8(&transport_decoded).map_err(|_| ResolvedJweCredentialError::SecretDecodeFailed)?;
+            Zeroizing::new(
+                base64::engine::general_purpose::STANDARD
+                    .decode(encoded_key.trim())
+                    .map_err(|_| ResolvedJweCredentialError::SecretDecodeFailed)?,
+            )
+        } else {
+            transport_decoded
+        };
+        let required = self.content_encryption_algorithm.required_key_len();
+        if key.len() != required {
+            return Err(ResolvedJweCredentialError::InvalidLength {
+                required,
+                actual: key.len(),
+            });
+        }
+        Ok(key)
     }
 }
 
@@ -298,7 +316,7 @@ mod tests {
     use base64::Engine;
 
     #[test]
-    fn test_detect_validation_error_requires_secret_ref_or_resolved() {
+    fn operator_validation_requires_secret_ref() {
         let cfg = JweDecryptConfig::default();
         let err = cfg.detect_validation_error();
         assert!(err.is_some());
@@ -325,19 +343,36 @@ mod tests {
     #[test]
     fn test_detect_validation_error_key_len_mismatch() {
         let cfg = JweDecryptConfig {
+            secret_ref: Some(SecretObjectReference {
+                group: None,
+                kind: None,
+                name: "jwe-secret".to_string(),
+                namespace: None,
+            }),
             resolved_credential: Some(ResolvedJweCredential {
                 secret: Some(base64::engine::general_purpose::STANDARD.encode("short-key")),
             }),
             ..Default::default()
         };
-        let err = cfg.detect_validation_error();
-        assert!(err.is_some());
-        assert!(err.unwrap().contains("decoded length must be 32 bytes"));
+        assert!(cfg.detect_validation_error().is_none());
+        assert_eq!(
+            cfg.resolved_key_material().unwrap_err(),
+            ResolvedJweCredentialError::InvalidLength {
+                required: 32,
+                actual: 9,
+            }
+        );
     }
 
     #[test]
     fn test_detect_validation_error_valid_resolved_secret() {
         let cfg = JweDecryptConfig {
+            secret_ref: Some(SecretObjectReference {
+                group: None,
+                kind: None,
+                name: "jwe-secret".to_string(),
+                namespace: None,
+            }),
             resolved_credential: Some(ResolvedJweCredential {
                 secret: Some(base64::engine::general_purpose::STANDARD.encode("0123456789abcdef0123456789abcdef")),
             }),
@@ -348,16 +383,78 @@ mod tests {
     }
 
     #[test]
-    fn validation_error_resolved_credential_without_secret() {
+    fn resolved_credential_cannot_replace_operator_secret_ref() {
         use crate::resources::edgion_plugins::PluginValidation;
         let config = JweDecryptConfig {
             resolved_credential: Some(ResolvedJweCredential { secret: None }),
             ..Default::default()
         };
+        assert_eq!(config.validation_error(), Some("secretRef is required".to_string()));
         assert_eq!(
-            config.validation_error(),
-            Some("resolvedCredential.secret is required".to_string())
+            config.resolved_key_material().unwrap_err(),
+            ResolvedJweCredentialError::Missing
         );
+    }
+
+    #[test]
+    fn resolved_key_material_classifies_transport_and_inner_base64_failures() {
+        let secret_ref = Some(SecretObjectReference {
+            group: None,
+            kind: None,
+            name: "jwe-secret".to_string(),
+            namespace: None,
+        });
+        let transport_invalid = JweDecryptConfig {
+            secret_ref: secret_ref.clone(),
+            resolved_credential: Some(ResolvedJweCredential {
+                secret: Some("not-base64!".to_string()),
+            }),
+            ..Default::default()
+        };
+        assert_eq!(
+            transport_invalid.resolved_key_material().unwrap_err(),
+            ResolvedJweCredentialError::TransportDecodeFailed
+        );
+
+        let inner_invalid = JweDecryptConfig {
+            secret_ref,
+            base64_secret: true,
+            resolved_credential: Some(ResolvedJweCredential {
+                secret: Some(base64::engine::general_purpose::STANDARD.encode("not-base64!")),
+            }),
+            ..Default::default()
+        };
+        assert_eq!(
+            inner_invalid.resolved_key_material().unwrap_err(),
+            ResolvedJweCredentialError::SecretDecodeFailed
+        );
+
+        let inner_non_utf8 = JweDecryptConfig {
+            secret_ref: transport_invalid.secret_ref.clone(),
+            base64_secret: true,
+            resolved_credential: Some(ResolvedJweCredential {
+                secret: Some(base64::engine::general_purpose::STANDARD.encode([0xff])),
+            }),
+            ..Default::default()
+        };
+        assert_eq!(
+            inner_non_utf8.resolved_key_material().unwrap_err(),
+            ResolvedJweCredentialError::SecretDecodeFailed
+        );
+
+        let key = b"0123456789abcdef0123456789abcdef";
+        let double_encoded = JweDecryptConfig {
+            secret_ref: transport_invalid.secret_ref,
+            base64_secret: true,
+            resolved_credential: Some(ResolvedJweCredential {
+                secret: Some(
+                    base64::engine::general_purpose::STANDARD
+                        .encode(base64::engine::general_purpose::STANDARD.encode(key)),
+                ),
+            }),
+            ..Default::default()
+        };
+        assert_eq!(double_encoded.resolved_key_material().unwrap().as_slice(), key);
     }
 
     #[test]
