@@ -34,6 +34,6 @@ spec:
 413，超时时返回 408，拒绝捕获或其他失败时返回 500。这与晚阶段 VM Body 操作无法
 访问或处理已要求缓存时使用的固定通用 500 不同。
 
-DSL 将缓存视为 opaque `req.body` 值。`byte_len()`、`contains()`、`matches()`、`sha256()` 和 `json_get()` 等方法无需完整复制成字符串即可检查请求体；只有 `read()` 和 `read_all()` 会为所请求的结果创建字符串。无论缓存位于内存还是已溢写到磁盘，所有方法的行为都相同。
+DSL 将缓存视为 opaque `req.body` 值。`byte_len()`、`contains()`、`matches()`、`sha256()` 和 `json_get()` 等方法无需完整复制成字符串即可检查请求体；只有 `read(offset, max_bytes)` 会为所请求的结果创建有界字符串。无论缓存位于内存还是已溢写到磁盘，所有方法的行为都相同。
 
 需要完整请求 body 的 Wasm 模块通常应放在 `requestPlugins` 并导出 `proxy_on_request_body`；响应阶段的 Wasm 宿主阶段不会暴露这份请求 body 缓存。

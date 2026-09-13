@@ -70,7 +70,7 @@ The opaque `Body` API separates data outcomes from infrastructure failures:
 | Invalid JSON, missing JSONPath, or traversal type mismatch | `req.body.json_get()` returns `nil` |
 | Search/prefix/suffix/regex does not match | Returns `false` |
 | Implicit Body→String coercion, Body ordering, invalid method argument type | `TypeError`, handled by configured `errorPolicy` |
-| Oversized returned string | `StringTooLong`, handled by configured `errorPolicy` |
+| Oversized returned string or Body.read requested length above maxStringLen | `StringTooLong`, handled by configured `errorPolicy` |
 | Storage error, scan-budget exhaustion, invalid byte range, physical-cap or mutation-segment breach | `RuntimeError::BodyAccess` |
 
 `BodyAccess` is an internal typed hard-failure classification. It bypasses

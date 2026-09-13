@@ -7,10 +7,10 @@ use serde::{Deserialize, Serialize};
 
 /// Current serialized bytecode schema version.
 ///
-/// Version 4 adds explicit raw-Body MD5 and HMAC-SHA-256 operations. Older
+/// Version 5 removes whole-body text reads and caps explicit read lengths. Older
 /// payloads are intentionally rejected so they can never execute with
 /// different Body or stack semantics.
-pub const BYTECODE_VERSION: u16 = 4;
+pub const BYTECODE_VERSION: u16 = 5;
 /// Hard ceiling for one static JSON multi-select plan.
 pub const JSON_SELECT_MAX_ENTRIES: usize = 64;
 /// Maximum UTF-8 byte length of one JSON multi-select output name.
@@ -90,8 +90,6 @@ pub enum OpCode {
     BodyByteLen,
     /// Pop (Body, offset, max_bytes), push lossy-decoded Str.
     BodyRead,
-    /// Pop Body, push the complete bounded lossy-decoded Str.
-    BodyReadAll,
     /// Pop Body, push lowercase hexadecimal SHA-256.
     BodySha256,
     /// Pop Body, push lowercase hexadecimal MD5.
@@ -482,6 +480,14 @@ mod tests {
     }
 
     #[test]
+    fn test_removed_body_read_all_opcode_is_rejected() {
+        let mut payload = serde_json::to_value(minimal_script()).unwrap();
+        payload["code"] = serde_json::json!(["BodyReadAll", "ReturnNext"]);
+        let error = serde_json::from_value::<CompiledScript>(payload).unwrap_err();
+        assert!(error.to_string().contains("unknown variant `BodyReadAll`"));
+    }
+
+    #[test]
     fn test_bytecode_roundtrip_with_version() {
         // Roundtrip with source_map absent.
         let script = minimal_script();
@@ -595,7 +601,7 @@ mod tests {
     #[test]
     fn test_reject_old_and_unversioned_bytecode_schemas() {
         use base64::Engine;
-        for old_version in [None, Some(0), Some(1), Some(2), Some(3)] {
+        for old_version in [None, Some(0), Some(1), Some(2), Some(3), Some(4)] {
             let mut payload = serde_json::json!({
                 "code": ["ReturnNext"],
                 "constants": [],

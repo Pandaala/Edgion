@@ -18,7 +18,7 @@ DSL 插件支持两种加载方式：`source`（源码）和 `bytecode`（预编
 
 ```json
 {
-  "version": 4,
+  "version": 5,
   "code": [...],
   "constants": [...],
   "local_count": 16,
@@ -31,7 +31,7 @@ DSL 插件支持两种加载方式：`source`（源码）和 `bytecode`（预编
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
-| `version` | 整数 | 字节码格式版本号，当前版本为 `4` |
+| `version` | 整数 | 字节码格式版本号，当前版本为 `5` |
 | `code` | 数组 | 指令序列（`Vec<OpCode>`），VM 逐条执行 |
 | `constants` | 数组 | 常量池（`Vec<Constant>`），指令通过索引引用 |
 | `local_count` | 整数 | 局部变量槽数 |
@@ -72,11 +72,11 @@ DSL 插件支持两种加载方式：`source`（源码）和 `bytecode`（预编
 - 升级 Edgion 后如果字节码格式版本发生变更，已有字节码需要重新编译
 - 建议在 CI/CD 中将字节码与 Edgion 版本绑定，避免版本漂移
 
-当前版本号：`BYTECODE_VERSION = 4`
+当前版本号：`BYTECODE_VERSION = 5`
 
-版本 4 新增显式的原始 Body MD5 和 HMAC-SHA-256 指令。版本 3 新增静态有界的
-`JsonSelect` 常量和指令，但现在版本 3 以及所有更早版本和无版本字节码都会被
-拒绝，必须使用目标 Edgion 版本从源码重新编译。
+版本 5 删除完整正文文本读取指令，改用显式的 `read(offset, max_bytes)`，并要求
+`max_bytes <= maxStringLen`。版本 4 以及所有更早版本和无版本字节码都会被拒绝。
+请把完整读取改为显式范围，并使用目标 Edgion 版本重新编译。
 
 ## 安全校验
 

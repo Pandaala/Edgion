@@ -85,8 +85,8 @@ Both factories call `resolve_parts()`, which:
 A static request-stage reference to `req.body` registers the fixed fail-close
 body gate so capture is available before VM execution. The VM receives only an
 opaque `Value::Body` handle: byte length is metadata, predicates/hash/JSONPath
-scan the shared `BodyStorage` incrementally, and only `read()` / `read_all()`
-materialize a returned string. Memory-backed, spilled, and mutation-segmented
+scan the shared `BodyStorage` incrementally, and only `read(offset, max_bytes)`
+materializes a returned body string. Memory-backed, spilled, and mutation-segmented
 storage therefore share one logical API. Response-stage DSL never starts late
 capture and may read only the cache populated in the request stage.
 
@@ -127,11 +127,17 @@ DSL values, compiled JSON paths, and regex plans belong in the DSL runtime.
 Scanners moved to blocking workers must remain `Send + 'static` and cannot
 borrow the session or VM. Reuse the existing bounded scan worker lane.
 
-`read()` and `read_all()` use the same storage-aware `read_text_range` collector.
+`read(offset, max_bytes)` uses the storage-aware `read_text_range` collector.
+The requested raw `max_bytes` must fit `max_string_len` (default 8 KiB;
+operator-configurable up to 1 MiB). Reject oversize arguments with
+`StringTooLong` before scan reservation and range clipping; do not silently
+clamp them even for short or empty bodies. Admitted ranges retain the generic
+raw scan-budget preflight, EOF clipping, and invalid-offset behavior.
 Overflow is a bounded scan outcome carrying `bytes_scanned`, so settlement
-precedes `StringTooLong`. No raw full-range materialization occurs. Preserve
-the raw-range scan-budget preflight and `read_all()` raw-length preflight:
-their ordering determines which error policy applies when limits overlap.
+precedes the output `StringTooLong`. No raw full-range materialization occurs.
+The no-argument whole-body method and its opcode are removed in bytecode
+version 5, with no alias or implicit no-argument `read` replacement. Internal
+storage materialization APIs remain separate from the script API.
 
 ## 4. Async / sync bridging
 

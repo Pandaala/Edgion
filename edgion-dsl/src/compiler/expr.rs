@@ -249,13 +249,6 @@ impl Compiler {
                 self.compile_expr(&args[1])?;
                 self.emit(OpCode::BodyRead);
             }
-            "read_all" => {
-                if !args.is_empty() {
-                    return Err(CompileError::new("read_all() requires 0 arguments"));
-                }
-                self.compile_expr(object)?;
-                self.emit(OpCode::BodyReadAll);
-            }
             "sha256" => {
                 if !args.is_empty() {
                     return Err(CompileError::new("sha256() requires 0 arguments"));
@@ -606,13 +599,26 @@ mod tests {
     }
 
     #[test]
+    fn test_body_read_requires_explicit_range_and_rejects_removed_method() {
+        for (source, expected) in [
+            ("req.body.read_all()", "unknown method: .read_all()"),
+            ("req.body.read()", "read() requires 2 arguments"),
+            ("req.body.read(16)", "read() requires 2 arguments"),
+        ] {
+            let program = parse_program(source).unwrap();
+            let error = Compiler::new().compile(&program).unwrap_err().to_string();
+            assert!(error.contains(expected), "expected '{expected}', got: {error}");
+        }
+    }
+
+    #[test]
     fn test_compile_body_read_and_mutation_methods() {
         let source = r#"
             let chars = req.body.len()
             let empty = req.body.is_empty()
             let bytes = req.body.byte_len()
             let prefix = req.body.read(0, 16)
-            let whole = req.body.read_all()
+            let whole = req.body.read(0, req.body.byte_len())
             let digest = req.body.sha256()
             let legacy = req.body.md5()
             let mac = req.body.hmac_sha256("key")
@@ -630,7 +636,6 @@ mod tests {
             OpCode::TextIsEmpty,
             OpCode::BodyByteLen,
             OpCode::BodyRead,
-            OpCode::BodyReadAll,
             OpCode::BodySha256,
             OpCode::BodyMd5,
             OpCode::BodyHmacSha256,

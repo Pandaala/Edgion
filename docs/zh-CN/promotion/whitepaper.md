@@ -227,7 +227,7 @@ flowchart LR
 - **命名空间方法解析**：`req.header("X")` 被编译为 `CallBuiltin(ReqHeader, 1)`，直接映射到内置函数 ID
 - **常量池去重**：相同的字符串和整数常量共享同一个常量池条目
 
-**阶段 4: 字节码。** 编译产物 `CompiledScript` 包含格式版本、指令序列（`code: Vec<OpCode>`）、常量池（`constants: Vec<Constant>`）、局部变量槽数（`local_count`）、最大循环嵌套深度（`max_loop_depth`）和用于诊断的可选源码。字节码当前使用 `BYTECODE_VERSION = 3`，序列化为 base64 编码的 JSON 格式，可在 Controller 和 Gateway 之间安全传输，也可持久化存储。版本 3 新增静态有界的 JSON 多路径选择计划；版本 2 及更早版本和无版本载荷都会被拒绝，必须重新编译。反序列化时严格校验版本兼容性和载荷大小（最大 256KB 解码后）。
+**阶段 4: 字节码。** 编译产物 `CompiledScript` 包含格式版本、指令序列（`code: Vec<OpCode>`）、常量池（`constants: Vec<Constant>`）、局部变量槽数（`local_count`）、最大循环嵌套深度（`max_loop_depth`）和用于诊断的可选源码。字节码当前使用 `BYTECODE_VERSION = 5`，序列化为 base64 编码的 JSON 格式，可在 Controller 和 Gateway 之间安全传输，也可持久化存储。版本 5 要求显式且有单次长度上限的 Body 文本读取；版本 4 及更早版本和无版本载荷都会被拒绝，必须重新编译。反序列化时严格校验版本兼容性和载荷大小（最大 256KB 解码后）。
 
 **阶段 5: 执行。** 栈式虚拟机（Stack-based VM）逐条执行字节码指令。指令集包括栈操作（LoadConst、LoadNil、LoadTrue、LoadFalse、Pop）、局部变量操作（GetLocal、SetLocal）、算术运算、比较运算、逻辑运算、字符串方法（StartsWith、EndsWith、Contains、Matches）、控制流跳转、列表操作以及内置函数调用。
 

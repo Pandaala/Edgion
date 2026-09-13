@@ -94,6 +94,14 @@ impl<'a> DslBodyOps<'a> {
     }
 
     pub(crate) async fn read_text_range(&mut self, offset: u64, max_bytes: u64) -> Result<String, RuntimeError> {
+        // Reject the requested length before reserving scan work or clipping
+        // to the available body. Lossy output is bounded independently below.
+        if max_bytes > self.limits.max_string_len as u64 {
+            return Err(RuntimeError::StringTooLong {
+                len: usize::try_from(max_bytes).unwrap_or(usize::MAX),
+                limit: self.limits.max_string_len,
+            });
+        }
         let reserved = self.reserve()?;
         let scan = self
             .session
@@ -109,17 +117,6 @@ impl<'a> DslBodyOps<'a> {
                 limit: self.limits.max_string_len,
             }),
         }
-    }
-
-    pub(crate) async fn read_all(&mut self) -> Result<String, RuntimeError> {
-        let len = self.byte_len()?;
-        if len > self.limits.max_string_len as u64 {
-            return Err(RuntimeError::StringTooLong {
-                len: usize::try_from(len).unwrap_or(usize::MAX),
-                limit: self.limits.max_string_len,
-            });
-        }
-        self.read_text_range(0, len).await
     }
 
     async fn text_operation(&mut self, operation: BodyTextOperation) -> Result<BodyTextResult, RuntimeError> {

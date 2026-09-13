@@ -18,7 +18,7 @@ Bytecode is transmitted as a Base64-encoded JSON string.
 
 ```json
 {
-  "version": 4,
+  "version": 5,
   "code": [...],
   "constants": [...],
   "local_count": 16,
@@ -31,7 +31,7 @@ Field descriptions:
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `version` | integer | Bytecode format version. Current version is `4`. |
+| `version` | integer | Bytecode format version. Current version is `5`. |
 | `code` | array | Instruction sequence (`Vec<OpCode>`), executed by the VM one instruction at a time. |
 | `constants` | array | Constant pool (`Vec<Constant>`), referenced by instructions via index. |
 | `local_count` | integer | Number of local variable slots. |
@@ -72,12 +72,12 @@ Bytecode carries a version number in the `version` field, which is strictly vali
 - If the bytecode format version changes after an Edgion upgrade, existing bytecode must be recompiled.
 - It is recommended to bind bytecode to a specific Edgion version in your CI/CD pipeline to avoid version drift.
 
-Current version: `BYTECODE_VERSION = 4`
+Current version: `BYTECODE_VERSION = 5`
 
-Version 4 adds explicit raw-Body MD5 and HMAC-SHA-256 opcodes. Version 3 added
-the statically bounded `JsonSelect` constant and opcode, but version 3 and all
-older or unversioned payloads are now rejected; recompile them from source
-with the target Edgion version.
+Version 5 removes the whole-body text-read opcode and requires explicit
+`read(offset, max_bytes)` calls with `max_bytes <= maxStringLen`. Version 4
+and all older or unversioned payloads are rejected. Replace whole-body reads
+with explicit ranges and recompile with the target Edgion version.
 
 ## Security Validation
 

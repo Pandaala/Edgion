@@ -806,13 +806,6 @@ impl Vm {
                         .await?;
                     state.push(Value::Str(text.into()), self.limits.max_stack_depth)?;
                 }
-                OpCode::BodyReadAll => {
-                    expect_body(state.pop()?, "body.read_all")?;
-                    let text = DslBodyOps::new(session, &mut state.body_scan_budget, &self.limits, runtime)
-                        .read_all()
-                        .await?;
-                    state.push(Value::Str(text.into()), self.limits.max_stack_depth)?;
-                }
                 OpCode::BodySha256 => {
                     expect_body(state.pop()?, "body.sha256")?;
                     let digest = DslBodyOps::new(session, &mut state.body_scan_budget, &self.limits, runtime)

@@ -154,7 +154,7 @@ if token != nil {
 
 **String concatenation**: When either operand of `+` is a `String`, the other
 operand is automatically converted to its textual representation before concatenation.
-`Body` is intentionally excluded; use `read()` or `read_all()` explicitly:
+`Body` is intentionally excluded; use `read(offset, max_bytes)` explicitly:
 
 ```dsl
 "count: " + 42           // "count: 42"
@@ -379,7 +379,7 @@ receiver or argument has the wrong type:
 | `.matches(pattern)` | String | Bool | Whether the string matches the given regular expression (validated at compile time) |
 
 Body additionally provides `.byte_len()`, `.read(offset, max_bytes)`,
-`.read_all()`, `.sha256()`, `.md5()`, `.hmac_sha256(key)`,
+`.sha256()`, `.md5()`, `.hmac_sha256(key)`,
 `.json_get("definite path")`, and the static
 multi-path `.json_select({"name": "$.path"})`. Request-stage scripts may
 mutate it with `.clear()`, `.append(s)`, `.prepend(s)`, `.remove(start, end)`,

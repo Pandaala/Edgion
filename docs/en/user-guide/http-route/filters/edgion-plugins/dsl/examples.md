@@ -812,7 +812,7 @@ config:
 The default limits are suitable for the vast majority of scenarios. Do not raise them blindly. Only consider adjustments in the following situations:
 
 - **Lower** `maxLoopIterations` (e.g., to `20`): when the length of the list being iterated is known to be small, a lower value catches anomalies earlier.
-- **Raise** `maxStringLen` (e.g., to `32768`): when you need to return longer strings from `read()`, `read_all()`, `json_get()`, or process longer Base64-encoded content. Streaming body predicates do not require a complete string allocation.
+- **Raise** `maxStringLen` (e.g., to `32768`): when you need to return longer strings from `read()`, `json_get()`, or process longer Base64-encoded content. Streaming body predicates do not require a complete string allocation.
 - Do not increase `maxSteps` to "fix" an infinite loop — inspect the script logic instead.
 
 ### 6.5 Bytecode Mode

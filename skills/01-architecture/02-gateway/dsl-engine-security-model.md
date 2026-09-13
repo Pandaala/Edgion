@@ -118,15 +118,17 @@ The compile-time `MakeMap(n)` operand check in `edgion-dsl/src/validator.rs:279-
 
 ## 5. String length cap — what it does and doesn't cover
 
-`max_string_len` caps **runtime-produced** strings only — every concat,
+`max_string_len` caps **runtime-produced** strings — every concat,
 `regex_find` / `regex_replace` result, checked builtin return, request-body
-`read()` / `read_all()` result, serialized `json_get()` result, and the live
+`read()` result, serialized `json_get()` result, and the live
 aggregate string payload retained by `json_select()`. Body
 predicates and `sha256()` scan storage without first constructing a complete
-body string; `read_all()` is the explicit escape hatch and fails before
-returning an oversized value.
+body string. It also caps the requested raw byte count of each `Body.read`
+call (default 8 KiB; configured maximum 1 MiB). The facade rejects an oversized
+argument with `StringTooLong` before scan reservation or range clipping,
+regardless of the available body length. This does not cap the Body itself.
 
-Both Body text reads now select an immutable raw range and feed the existing
+Body text reads select an immutable raw range and feed the existing
 `LossyTextScanner` into `BoundedTextCollector`. Every append checks the exact
 UTF-8 output-byte sum, including replacement characters and EOF carry, before
 requesting capacity. Growth targets are geometric but capped at the string
@@ -135,7 +137,8 @@ Allocation failure is a body-processing failure, not an output-limit result.
 On output overflow, the collector discards its prefix and stops, returning
 accounting with `BoundedTextResult::OutputLimitExceeded`. The runtime reports
 `limit + 1` as a lower-bound diagnostic rather than scanning the rejected tail.
-The existing `read_all()` raw-length preflight retains its known-length error.
+An argument-limit diagnostic reports the requested raw length; the output
+limit remains independent because invalid UTF-8 can expand during decoding.
 
 This bounds retained text and requested output capacity. It does not promise
 that total operation memory equals `max_string_len`: storage has an independent

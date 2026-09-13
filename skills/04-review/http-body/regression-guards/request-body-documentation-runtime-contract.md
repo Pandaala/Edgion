@@ -26,7 +26,7 @@ The request runtime may lazily capture the proxied request body, spill it to
 disk, and expose the current logical version to serial request plugins. DSL
 sees an opaque `req.body`: metadata, predicates, hashing, streaming regex, and
 definite JSONPath selection operate transparently across memory and spill
-storage; bounded `read()` / `read_all()` are the explicit string-copy APIs.
+storage; bounded `read(offset, max_bytes)` is the explicit string-copy API.
 Request-stage mutation methods update the shared logical body transactionally,
 while response-stage mutation is rejected. Wasm whole-request-body mode is
 selected by a guest exporting

@@ -344,16 +344,21 @@ if not req.has_header("X-Request-Id") {
 |------|--------|------|
 | `.byte_len()` | `Int` | 原始字节数，只读元数据 |
 | `.read(offset, max_bytes)` | `Str` | 先选原始字节范围，再单独进行 lossy 解码 |
-| `.read_all()` | `Str` | 显式读取并 lossy 解码完整 body |
 | `.sha256()` | `Str` | 原始字节的 64 字符小写 SHA-256；按不可变 Body 版本缓存 |
 | `.md5()` | `Str` | 原始字节的 32 字符小写遗留 MD5 checksum |
 | `.hmac_sha256(key)` | `Str` | 对原始字节生成 64 字符小写 HMAC-SHA-256 |
 | `.json_get("$.a[0]")` | 值或 `Nil` | 按编译期确定 JSONPath 选择 |
 | `.json_select({"name": "$.a"})` | `Map` | 一次解析选择多个命名的编译期路径 |
 
-`read`、`read_all` 和序列化后的 JSON 结果必须符合 `maxStringLen`，该限制按
+`read(offset, max_bytes)` 必须提供两个非负整数参数。请求的 `max_bytes` 不得超过
+`maxStringLen`：默认 8,192 字节（8 KiB），可配置范围为 1 到 1,048,576 字节
+（1 MiB）。参数超限会在预留扫描预算或裁剪范围之前产生 `StringTooLong`，即使
+实际正文更短也不会静默缩小参数。在允许范围内，读取终点超过 EOF 时返回可用
+后缀，起点超过正文长度则报错。
+
+`read` 的输出和序列化后的 JSON 结果也必须符合 `maxStringLen`，该限制按
 UTF-8 输出字节计算。`read` 最多选择 `max_bytes` 个原始源字节，lossy 解码后
-的输出字节数可能更多；offset 超过 body 会报错。两种读取方法都在解码过程中
+的输出字节数可能更多；offset 超过 body 会报错。`read` 在解码过程中
 检查输出限制，包括无效或不完整 UTF-8 产生的替换字符。超限抛出
 `StringTooLong`，不会返回截断前缀，并遵循配置的 `errorPolicy`。
 提前发现超限时，长度诊断可能只报告 `maxStringLen + 1`，不会仅为计算完整长度
@@ -993,7 +998,7 @@ if auth != nil and len(auth) > 7 {
 - `Map` → Map 的诊断表示
 
 `Body` 会被明确拒绝并产生类型错误。需要实际 body 字符串时，使用
-`read(offset, max_bytes)` 或 `read_all()`。
+`read(offset, max_bytes)`。
 
 **参数**：
 - `v`（任意类型）— 输入值

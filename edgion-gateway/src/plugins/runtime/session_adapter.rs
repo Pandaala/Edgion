@@ -2854,21 +2854,21 @@ pub(crate) mod record_outcome_tests {
                 let alias = first
                 let original = first.sha256()
                 first.append("d")
-                if alias.read_all() != "abcd" || alias.sha256() == original {
+                if alias.read(0, alias.byte_len()) != "abcd" || alias.sha256() == original {
                     return deny(400, "alias did not observe append")
                 }
                 alias.remove(1, 3)
                 first.prepend("x")
                 alias.replace("a", "A")
-                if first.read_all() != "xAd" {
+                if first.read(0, first.byte_len()) != "xAd" {
                     return deny(400, "alias did not observe mutation")
                 }
                 first.clear()
-                if alias.byte_len() != 0 || alias.read_all() != "" {
+                if alias.byte_len() != 0 || alias.read(0, alias.byte_len()) != "" {
                     return deny(400, "alias did not observe clear")
                 }
                 alias.append("z")
-                if first.read_all() != "z" {
+                if first.read(0, first.byte_len()) != "z" {
                     return deny(400, "alias did not observe new generation")
                 }
             "#,
@@ -2907,7 +2907,7 @@ pub(crate) mod record_outcome_tests {
     async fn dsl_body_response_stage_reads_cache_but_refuses_every_mutation() {
         let read_vm = dsl_body_test_vm(
             r#"
-                if req.body.read_all() != "abc" || req.body.read(1, 1) != "b" {
+                if req.body.read(0, req.body.byte_len()) != "abc" || req.body.read(1, 1) != "b" {
                     return deny(400, "late read mismatch")
                 }
             "#,
@@ -2961,7 +2961,7 @@ pub(crate) mod record_outcome_tests {
     async fn dsl_body_late_read_never_captures_and_proven_empty_needs_no_cache() {
         let vm = dsl_body_test_vm(
             r#"
-                if req.body.read_all() != "" || req.body.read(0, 100) != "" {
+                if req.body.read(0, req.body.byte_len()) != "" || req.body.read(0, 100) != "" {
                     return deny(400, "expected empty body")
                 }
             "#,

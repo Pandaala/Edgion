@@ -17,7 +17,7 @@ async fn body_text_overflow_obeys_string_error_policy_while_invalid_range_fails_
             body: Some("teapot".to_string()),
         },
     ] {
-        for source in ["req.body.read(0, 1)", "req.body.read_all()", "req.body.read(2, 1)"] {
+        for source in ["req.body.read(0, 1)", "req.body.read(0, 3)", "req.body.read(2, 1)"] {
             let vm = make_vm_with_limits(
                 source,
                 VmLimits {

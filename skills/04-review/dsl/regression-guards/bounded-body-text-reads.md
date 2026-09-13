@@ -8,7 +8,7 @@ knowledge_type: regression-guards
 
 ## Conclusion and scope
 
-`Body.read(offset, max_bytes)` and `Body.read_all()` use one canonical
+`Body.read(offset, max_bytes)` uses one canonical
 `RequestBodyState::read_text_range` operation over the selected raw snapshot
 range. `LossyTextScanner` feeds a bounded collector without first collecting
 the full raw range. Logical output and requested output capacity are limited
@@ -18,9 +18,15 @@ before each append/reservation, including invalid UTF-8 expansion and EOF carry.
 
 The original `bound-dsl-body-reads-before-allocation` finding identified a raw
 range allocation followed by complete lossy conversion before the VM string
-check. `read_all()` additionally had a raw-byte precheck that could not bound
-replacement-character expansion. The correction keeps that precheck but uses
-the bounded collector for both opcodes.
+check. The former `read_all()` additionally had a raw-byte precheck that could
+not bound replacement-character expansion. The initial correction bounded
+both opcodes; the subsequent explicit-range-only API removes `read_all` and
+its opcode in bytecode version 5.
+
+The remaining `read` rejects a requested `max_bytes` above `max_string_len`
+(default 8 KiB, configured maximum 1 MiB) before scan reservation or clipping
+to the body. Short/empty bodies cannot make an oversized argument valid.
+Admitted arguments still undergo raw scan preflight and bounded decoding.
 
 - Generic collection and UTF-8 adaptation:
   `edgion-gateway/src/request_body/operation.rs`.
@@ -36,7 +42,8 @@ the bounded collector for both opcodes.
 `OutputLimitExceeded` is a scan outcome retaining `bytes_scanned`, not a
 `BodyOperationError`. The facade settles that accounting before raising
 `StringTooLong`, whose length is a lower bound (`limit + 1`) on early overflow.
-Raw-length preflight retains its known-length diagnostic. Storage/allocation
+Argument-limit preflight reports the requested raw length without debiting
+the scan account. Storage/allocation
 failures remain `BodyAccess` and fixed fail-close; output-limit errors retain
 the configured DSL error policy. No body bytes or storage details are logged.
 

@@ -51,7 +51,7 @@ spec:
 | `maxLoopIterations` | Integer | ❌ | `100` | 最大循环迭代次数 |
 | `maxCallCount` | Integer | ❌ | `500` | 最大函数调用次数 |
 | `maxStackDepth` | Integer | ❌ | `128` | 最大栈深度 |
-| `maxStringLen` | Integer | ❌ | `8192` | 最大字符串长度 |
+| `maxStringLen` | Integer | ❌ | `8192` | 运行时字符串及单次 Body.read 请求的最大字节数（1–1,048,576） |
 | `maxBodyScanPasses` | Integer | ❌ | `4` | 请求 body 累计扫描预算，以物理 body 上限的完整扫描次数计，范围 `1`–`16` |
 | `errorPolicy` | String | ❌ | `Ignore` | 错误策略：`Ignore` / `Deny` / `DenyWith` |
 | `httpMaxTimeoutMs` | Integer | ❌ | `5000` | `http.call()` 单次调用超时上限（毫秒） |

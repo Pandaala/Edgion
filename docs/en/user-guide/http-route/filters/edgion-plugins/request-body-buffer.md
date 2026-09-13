@@ -49,8 +49,8 @@ process an already-required cache.
 
 DSL sees the cache as an opaque `req.body` value. Methods such as
 `byte_len()`, `contains()`, `matches()`, `sha256()`, and `json_get()` inspect
-it without requiring a complete string copy; `read()` and `read_all()` create
-strings only for the requested result. All methods behave the same for
+it without requiring a complete string copy; `read(offset, max_bytes)` creates a
+bounded string only for the requested result. All methods behave the same for
 memory-backed and spilled storage.
 
 Wasm modules needing the complete request body should normally run in

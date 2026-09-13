@@ -347,17 +347,23 @@ mutations still operate on the original bytes.
 |--------|--------|-------------|
 | `.byte_len()` | `Int` | Raw byte length; metadata-only |
 | `.read(offset, max_bytes)` | `Str` | Select the raw range, then lossily decode that isolated slice |
-| `.read_all()` | `Str` | Explicitly read and lossily decode the complete body |
 | `.sha256()` | `Str` | 64-character lowercase SHA-256 of the raw bytes; cached per immutable Body generation |
 | `.md5()` | `Str` | 32-character lowercase legacy MD5 checksum of the raw bytes |
 | `.hmac_sha256(key)` | `Str` | Generate a 64-character lowercase HMAC-SHA-256 over the raw bytes |
 | `.json_get("$.a[0]")` | value or `Nil` | Select a compile-time definite JSONPath |
 | `.json_select({"name": "$.a"})` | `Map` | Select several named compile-time paths in one parse |
 
-`read`, `read_all`, and serialized JSON results must fit `maxStringLen`, measured
-in UTF-8 output bytes. `read` selects at most `max_bytes` raw source bytes; lossy
-decoding may produce more output bytes. An offset beyond the body is an error.
-Both read methods enforce the output limit while decoding, including replacement
+`read(offset, max_bytes)` requires two non-negative integer arguments. The
+requested `max_bytes` must not exceed `maxStringLen`: 8,192 bytes (8 KiB) by
+default, configurable from 1 to 1,048,576 bytes (1 MiB). An oversized request
+raises `StringTooLong` before scan reservation or range clipping, even if the
+body is shorter; it is never silently clamped. Within the admitted limit, a
+range extending beyond EOF returns the available suffix, and an offset beyond
+the body is an error.
+
+The returned text and serialized JSON results must also fit `maxStringLen`,
+measured in UTF-8 output bytes. Lossy decoding may produce more output bytes
+than the selected raw range. `read` enforces the output limit while decoding, including replacement
 characters for invalid or incomplete UTF-8. Overflow raises `StringTooLong`
 without returning a truncated prefix and follows the configured `errorPolicy`.
 An early-overflow length diagnostic may report only `maxStringLen + 1`, rather
@@ -1011,7 +1017,7 @@ Converts scalar and container values to a string:
 - `Map` → a diagnostic map representation
 
 `Body` is intentionally rejected with a type error. Use `read(offset,
-max_bytes)` or `read_all()` when an actual body string is required.
+max_bytes)` when an actual body string is required.
 
 **Parameters**:
 - `v` (any type) — Input value

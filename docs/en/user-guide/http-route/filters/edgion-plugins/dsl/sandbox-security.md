@@ -24,7 +24,7 @@ The following limits are tracked independently on each request and do not interf
 | Max loop iterations | `maxLoopIterations` | 100 | 1 | 100,000 | Maximum iterations for a single loop body |
 | Max function calls | `maxCallCount` | 500 | 1 | 100,000 | Total number of built-in function calls |
 | Max stack depth | `maxStackDepth` | 128 | 1 | 1,024 | Value stack depth |
-| Max string length | `maxStringLen` | 8,192 | 1 | 1,048,576 | Maximum bytes in a string concatenation result |
+| Max string length | `maxStringLen` | 8,192 | 1 | 1,048,576 | Maximum runtime string bytes and requested Body.read bytes per call |
 | Max body scan passes | `maxBodyScanPasses` | 4 | 1 | 16 | Cumulative raw bytes scanned, measured against the resolved physical request-body cap |
 
 ### Limit Details
@@ -50,7 +50,10 @@ The VM uses a stack to evaluate expressions. Deeply nested expressions — such 
 Limits the maximum byte length of strings produced by concatenation operations. If the concatenated string exceeds this value, the VM raises a `StringTooLong` error. This limit also acts as an indirect constraint on functions that process string data, such as `json_get()`. Note that this limit applies to strings produced at runtime and does not affect string literals in the compile-time constant pool, which are governed by a separate compile-time limit.
 
 It does not cap the opaque Body itself. It does cap strings returned by
-`Body.read`, `Body.read_all`, and selected or serialized JSON values.
+`Body.read` and selected or serialized JSON values.
+Each `Body.read(offset, max_bytes)` also requires `max_bytes <= maxStringLen`
+(default 8 KiB, configurable up to 1 MiB). Oversized arguments raise
+`StringTooLong` before scan reservation or EOF clipping, without silent clamping.
 Body text reads check the limit during lossy UTF-8 decoding, before admitting
 each output append or capacity request. Invalid UTF-8 expansion counts toward
 the limit; overflow returns no prefix. The limit is not the total operation
@@ -222,7 +225,7 @@ Some built-in functions have their own parameter or result limits in addition to
 |----------|-------|-------------|
 | `req.body.json_get` | Definite JSONPath up to 1,024 bytes and 32 segments; selected result bounded by `maxStringLen` | Selectively parses one value without building a complete JSON DOM |
 | `req.body.json_select` | 1–64 static named paths; names up to 256 bytes; per-value and live aggregate string payload bounded by `maxStringLen` | Selects several values with one complete parse and Body scan |
-| `req.body.read` / `read_all` | Non-negative range; returned string bounded by `maxStringLen` | Reads the memory-backed or spilled body transparently |
+| `req.body.read` | Non-negative range; requested raw length and output each bounded by `maxStringLen` | Reads the memory-backed or spilled body transparently |
 | `req.body.matches` / other body scans | Total scanned bytes bounded by `maxBodyScanPasses × physical body cap` | Prevents repeated full-body scans |
 | Request-body mutation methods | Result bounded by the physical body cap and 4,096 mutation segments | Mutations are transactional and request-stage only |
 | `time_format` | Format string up to 256 characters | Prevents excessive resource consumption from overly long format strings |

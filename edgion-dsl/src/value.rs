@@ -82,7 +82,7 @@ impl Value {
     /// Convert to an owned string using the existing scalar coercion rules.
     ///
     /// Body conversion is intentionally fallible. Callers that need body text
-    /// must use the explicit bounded `read` or `read_all` DSL operations.
+    /// must use the explicit bounded `read(offset, max_bytes)` DSL operation.
     pub fn try_into_string(self) -> Result<String, ImplicitStringCoercionError> {
         match self {
             Value::Str(s) => Ok(s.to_string()),

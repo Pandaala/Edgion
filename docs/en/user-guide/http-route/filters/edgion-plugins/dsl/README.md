@@ -51,7 +51,7 @@ spec:
 | `maxLoopIterations` | Integer | `100` | Maximum loop iterations |
 | `maxCallCount` | Integer | `500` | Maximum function call count |
 | `maxStackDepth` | Integer | `128` | Maximum stack depth |
-| `maxStringLen` | Integer | `8192` | Maximum string length |
+| `maxStringLen` | Integer | `8192` | Maximum runtime string bytes and raw bytes requested per Body.read call (1–1,048,576) |
 | `maxBodyScanPasses` | Integer | `4` | Cumulative request-body scan budget, measured in physical-body-cap passes (`1`–`16`) |
 | `errorPolicy` | Enum | `Ignore` | Error policy. Allowed values: `Ignore` / `Deny` / `DenyWith` |
 | `httpMaxTimeoutMs` | Integer | `5000` | Hard cap on `http.call()` timeout per request (ms) |

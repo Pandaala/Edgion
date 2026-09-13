@@ -42,7 +42,7 @@ spec:
             if req.body.read(6, 2) != "π" {
               return deny(422, "body range mismatch")
             }
-            if req.body.read_all() != "alpha-π-omega" {
+            if req.body.read(0, req.body.byte_len()) != "alpha-π-omega" {
               return deny(422, "body full read mismatch")
             }
             if req.body.sha256() != "ee04b27ecbbd770d66cb864060c5b8f92c24c0e8316ca4006e272428ef3882c2" {

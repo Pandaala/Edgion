@@ -134,7 +134,8 @@ pub struct DslConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_stack_depth: Option<usize>,
 
-    /// Max string length from concatenation (default: 8192)
+    /// Max runtime-produced string bytes and raw bytes requested per Body.read
+    /// call (default: 8192; allowed range: 1..=1048576).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_string_len: Option<usize>,
 

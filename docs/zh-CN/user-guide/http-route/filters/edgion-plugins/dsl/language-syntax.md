@@ -151,8 +151,7 @@ if token != nil {
 **除以零**：产生运行时 `DivisionByZero` 错误。脚本会根据 `errorPolicy` 配置决定后续行为。
 
 **字符串拼接**：`+` 运算符两侧只要有一侧是 `String`，另一侧会自动调用
-转换为文本后拼接。`Body` 被明确排除；必须显式使用 `read()` 或
-`read_all()`：
+转换为文本后拼接。`Body` 被明确排除；必须显式使用 `read(offset, max_bytes)`：
 
 ```dsl
 "count: " + 42           // "count: 42"
@@ -374,7 +373,7 @@ nil-friendly 行为，返回 `false`：
 | `.contains(substring)` | String | Bool | 是否包含指定子字符串 |
 | `.matches(pattern)` | String | Bool | 是否匹配正则表达式（编译期校验） |
 
-Body 还提供 `.byte_len()`、`.read(offset, max_bytes)`、`.read_all()`、
+Body 还提供 `.byte_len()`、`.read(offset, max_bytes)`、
 `.sha256()`、`.md5()`、`.hmac_sha256(key)`、`.json_get("确定路径")` 和静态多路径
 `.json_select({"name": "$.path"})`。请求阶段脚本可用 `.clear()`、
 `.append(s)`、`.prepend(s)`、`.remove(start, end)` 和字面量 `.replace(from,
