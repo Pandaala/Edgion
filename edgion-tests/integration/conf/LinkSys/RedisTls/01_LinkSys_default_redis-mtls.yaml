@@ -1,0 +1,30 @@
+# Redis mutual-TLS success fixture. The server requires a client certificate;
+# both the private CA and client identity are generated at runtime.
+apiVersion: edgion.io/v1
+kind: LinkSys
+metadata:
+  name: redis-mtls
+  namespace: default
+spec:
+  type: redis
+  config:
+    endpoints:
+      - "rediss://127.0.0.1:16381"
+    db: 3
+    auth:
+      secretRef:
+        name: redis-test-auth
+    tls:
+      enabled: true
+      validation:
+        caCertificateRefs:
+          - kind: Secret
+            name: redis-tls-ca
+      clientCertificateRef:
+        name: redis-tls-client
+    pool:
+      size: 1
+    timeout:
+      connect: 3000
+      read: 2000
+      write: 2000

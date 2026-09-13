@@ -173,6 +173,30 @@ assert_json_failure() {
     fi
 }
 
+WAIT_REDIS_LAST_RESPONSE=""
+wait_for_redis_client() {
+    local client_name="$1"
+    local wait_budget=20
+    local deadline=$((SECONDS + wait_budget))
+
+    while [ $SECONDS -lt $deadline ]; do
+        local remaining=$((deadline - SECONDS))
+        WAIT_REDIS_LAST_RESPONSE=$(curl -sS \
+            --connect-timeout "$remaining" --max-time "$remaining" \
+            -X GET "${GATEWAY_URL}/api/v1/testing/link-sys/redis/${client_name}/ping" \
+            -H "Authorization: Bearer ${EDGION_GATEWAY_ADMIN_TOKEN}" \
+            -H "Content-Type: application/json" 2>/dev/null || true)
+        if echo "$WAIT_REDIS_LAST_RESPONSE" | jq -e '.success == true' >/dev/null 2>&1; then
+            return 0
+        fi
+        if [ $SECONDS -lt $deadline ]; then
+            sleep 1
+        fi
+    done
+
+    return 1
+}
+
 # ── HTTP helpers ────────────────────────────────────────────────────────────
 gw_api() {
     local method="$1" path="$2"
@@ -392,6 +416,42 @@ assert_not_contains "redis-tls-reject client NOT registered (verify=false refuse
 RESP=$(gw_api GET "/api/v1/testing/link-sys/redis/${REJECT_CLIENT}/ping")
 assert_json_failure "PING redis-tls-reject fails (client was never built)" "$RESP"
 assert_contains "redis-tls-reject ping error mentions 'not found'" "$RESP" "not found"
+
+# ── 8c. Successful Redis TLS and mTLS handshakes ───────────────────────────
+# These clients connect to real TLS-enabled Redis processes. A successful PING
+# crosses Controller Secret resolution, conf_sync, shared TLS material loading,
+# Fred/rustls connector construction, certificate verification, and Redis AUTH.
+log_info "─── 8c. TLS and mTLS success ───"
+TLS_CLIENT="default_redis-tls-custom-ca"
+MTLS_CLIENT="default_redis-mtls"
+DEFAULT_TRUST_CLIENT="default_redis-tls-default-trust"
+
+TESTS_TOTAL=$((TESTS_TOTAL + 1))
+if wait_for_redis_client "$DEFAULT_TRUST_CLIENT"; then
+    TESTS_PASSED=$((TESTS_PASSED + 1))
+    log_success "Scheme-only rediss PING succeeds with default trust"
+else
+    TESTS_FAILED=$((TESTS_FAILED + 1))
+    log_error "Scheme-only rediss client did not complete a default-trust handshake within 20s; last response: ${WAIT_REDIS_LAST_RESPONSE:-<empty>}"
+fi
+
+TESTS_TOTAL=$((TESTS_TOTAL + 1))
+if wait_for_redis_client "$TLS_CLIENT"; then
+    TESTS_PASSED=$((TESTS_PASSED + 1))
+    log_success "Redis TLS PING succeeds with custom CA"
+else
+    TESTS_FAILED=$((TESTS_FAILED + 1))
+    log_error "Redis TLS client did not complete a verified handshake within 20s; last response: ${WAIT_REDIS_LAST_RESPONSE:-<empty>}"
+fi
+
+TESTS_TOTAL=$((TESTS_TOTAL + 1))
+if wait_for_redis_client "$MTLS_CLIENT"; then
+    TESTS_PASSED=$((TESTS_PASSED + 1))
+    log_success "Redis mTLS PING succeeds with client identity"
+else
+    TESTS_FAILED=$((TESTS_FAILED + 1))
+    log_error "Redis mTLS client did not complete an authenticated handshake within 20s; last response: ${WAIT_REDIS_LAST_RESPONSE:-<empty>}"
+fi
 
 # ── 9. RateLimitRedis plugin integration ───────────────────────────────────
 log_info "─── 9. RateLimitRedis Plugin ───"

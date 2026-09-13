@@ -59,17 +59,24 @@ LDAP_TLS_SERVICE_STARTED=false
 
 # Redis integration dependency (used by EdgionPlugins/Dsl, EdgionPlugins/RateLimitRedis,
 # and any LinkSys Redis test driven by the main runner). The bundled docker-compose
-# matches edgion-tests/integration/conf/LinkSys/Redis (host 127.0.0.1, port 16379, password
-# edgion-test-pwd). When the runner starts Redis itself, cleanup() stops it; an
-# externally-managed Redis is left untouched.
+# matches edgion-tests/integration/conf/LinkSys/Redis (plaintext, TLS, and mTLS on
+# loopback ports 16379-16381, password edgion-test-pwd). When the runner starts
+# Redis itself, cleanup() stops it; externally managed services are left untouched.
 REDIS_COMPOSE_DIR=""
 REDIS_COMPOSE_FILE=""
 REDIS_SERVICE_REQUIRED=false
+REDIS_TLS_SERVICE_REQUIRED=false
 REDIS_SERVICE_STARTED=false
+REDIS_STARTED_SERVICES=()
 REDIS_HOST="127.0.0.1"
 REDIS_PORT=16379
+REDIS_TLS_PORT=16380
+REDIS_MTLS_PORT=16381
 REDIS_PASSWORD="edgion-test-pwd"
 REDIS_CONTAINER_NAME="edgion-test-redis"
+REDIS_TLS_CONTAINER_NAME="edgion-test-redis-tls"
+REDIS_MTLS_CONTAINER_NAME="edgion-test-redis-mtls"
+REDIS_NATIVE_CA_FILE=""
 
 CONTROLLER_GRPC_PORT=12151
 
@@ -833,7 +840,8 @@ cleanup() {
         fi
         if $REDIS_SERVICE_STARTED; then
             log_info "Stopping Redis test service..."
-            docker compose -f "${REDIS_COMPOSE_FILE}" down --timeout 5 >/dev/null 2>&1 || true
+            docker compose -f "${REDIS_COMPOSE_FILE}" rm -f -s \
+                "${REDIS_STARTED_SERVICES[@]}" >/dev/null 2>&1 || true
         fi
         "${UTILS_DIR}/kill_all.sh" 2>&1 || true
     else
@@ -1114,7 +1122,7 @@ is_redis_service_required() {
     fi
 
     if [ "$G_RESOURCE" = "LinkSys" ]; then
-        if [ -z "$G_ITEM" ] || [ "$G_ITEM" = "Redis" ]; then
+        if [ -z "$G_ITEM" ] || [ "$G_ITEM" = "Redis" ] || [ "$G_ITEM" = "RedisTls" ]; then
             return 0
         fi
     fi
@@ -1126,9 +1134,26 @@ is_redis_service_required() {
     fi
 
     case ",${explicit_suites}," in
-        *,EdgionPlugins/Dsl,*|*,EdgionPlugins/RateLimitRedis,*|*,EdgionBackend/SingleProvider,*|*,EdgionBackend/CredentialExhaustion,*|*,LinkSys/Redis,*|*,TCPRoute/StreamPlugins,*)
+        *,EdgionPlugins/Dsl,*|*,EdgionPlugins/RateLimitRedis,*|*,EdgionBackend/SingleProvider,*|*,EdgionBackend/CredentialExhaustion,*|*,LinkSys/Redis,*|*,LinkSys/RedisTls,*|*,TCPRoute/StreamPlugins,*)
             return 0
             ;;
+    esac
+
+    return 1
+}
+
+is_redis_tls_service_required() {
+    local explicit_suites="$1"
+
+    if [ -z "$G_RESOURCE" ] && [ -z "$explicit_suites" ]; then
+        return 0
+    fi
+    if [ "$G_RESOURCE" = "LinkSys" ] \
+        && { [ -z "$G_ITEM" ] || [ "$G_ITEM" = "Redis" ] || [ "$G_ITEM" = "RedisTls" ]; }; then
+        return 0
+    fi
+    case ",${explicit_suites}," in
+        *,LinkSys/RedisTls,*) return 0 ;;
     esac
 
     return 1
@@ -1168,11 +1193,50 @@ probe_redis_ready() {
     return 1
 }
 
+probe_redis_tls_ready() {
+    local host=$1 port=$2 password=$3 require_client_cert=$4
+    local certs_dir="${PROJECT_ROOT}/edgion-tests/integration/conf/Services/redis/certs"
+    local tls_args=(--tls --cacert "${certs_dir}/ca.crt")
+    local container_name="$REDIS_TLS_CONTAINER_NAME"
+    local container_port=6380
+
+    if [ "$require_client_cert" = "true" ]; then
+        tls_args+=(--cert "${certs_dir}/client.crt" --key "${certs_dir}/client.key")
+        container_name="$REDIS_MTLS_CONTAINER_NAME"
+        container_port=6381
+    fi
+
+    if command -v redis-cli >/dev/null 2>&1; then
+        if redis-cli "${tls_args[@]}" -h "$host" -p "$port" -a "$password" \
+            --no-auth-warning ping 2>/dev/null | grep -q '^PONG$'; then
+            return 0
+        fi
+    fi
+
+    if command -v docker >/dev/null 2>&1 \
+        && docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "$container_name"; then
+        local container_args=(--tls --cacert /certs/ca.crt)
+        if [ "$require_client_cert" = "true" ]; then
+            container_args+=(--cert /certs/client.crt --key /certs/client.key)
+        fi
+        if docker exec "$container_name" redis-cli "${container_args[@]}" \
+            -p "$container_port" -a "$password" --no-auth-warning ping 2>/dev/null \
+            | grep -q '^PONG$'; then
+            return 0
+        fi
+    fi
+
+    return 1
+}
+
 print_redis_install_hints() {
     cat <<EOF
 
 Edgion integration tests require a Redis instance reachable at
-  ${REDIS_HOST}:${REDIS_PORT}  (password: ${REDIS_PASSWORD})
+  ${REDIS_HOST}:${REDIS_PORT}   plaintext
+  ${REDIS_HOST}:${REDIS_TLS_PORT}   TLS with the generated test CA
+  ${REDIS_HOST}:${REDIS_MTLS_PORT}  mutual TLS with the generated client identity
+  password: ${REDIS_PASSWORD}
 
 This matches the LinkSys fixture in edgion-tests/integration/conf/LinkSys/Redis
 (consumed by EdgionPlugins/Dsl, EdgionPlugins/RateLimitRedis, and the
@@ -1220,15 +1284,41 @@ start_redis_service_if_needed() {
 
     REDIS_COMPOSE_DIR="${PROJECT_ROOT}/edgion-tests/integration/conf/Services/redis"
     REDIS_COMPOSE_FILE="${REDIS_COMPOSE_DIR}/docker-compose.yaml"
+    local cert_script="${REDIS_COMPOSE_DIR}/make-test-certs.sh"
 
     log_section "Redis dependency: ensure Redis is available"
 
-    if probe_redis_ready "$REDIS_HOST" "$REDIS_PORT" "$REDIS_PASSWORD"; then
-        log_success "Redis already reachable at ${REDIS_HOST}:${REDIS_PORT} (reusing it)"
+    local plaintext_ready=false
+    local tls_ready=true
+    local mtls_ready=true
+    probe_redis_ready "$REDIS_HOST" "$REDIS_PORT" "$REDIS_PASSWORD" && plaintext_ready=true
+
+    if $REDIS_TLS_SERVICE_REQUIRED; then
+        if [ ! -f "$cert_script" ] || ! command -v openssl >/dev/null 2>&1; then
+            log_error "Redis TLS certificate preparation requires ${cert_script} and openssl"
+            return 1
+        fi
+        if ! bash "$cert_script"; then
+            log_error "Redis TLS certificate preparation failed"
+            return 1
+        fi
+
+        # fred's scheme-only rediss:// path uses rustls-native-certs. Point its
+        # documented file source at the ephemeral test CA so this isolated suite
+        # exercises default trust without modifying the host trust store.
+        REDIS_NATIVE_CA_FILE="${REDIS_COMPOSE_DIR}/certs/ca.crt"
+        tls_ready=false
+        mtls_ready=false
+        probe_redis_tls_ready "$REDIS_HOST" "$REDIS_TLS_PORT" "$REDIS_PASSWORD" false && tls_ready=true
+        probe_redis_tls_ready "$REDIS_HOST" "$REDIS_MTLS_PORT" "$REDIS_PASSWORD" true && mtls_ready=true
+    fi
+
+    if $plaintext_ready && $tls_ready && $mtls_ready; then
+        log_success "Required Redis services are already reachable (reusing them)"
         return 0
     fi
 
-    log_info "Redis not reachable at ${REDIS_HOST}:${REDIS_PORT} — attempting to start it"
+    log_info "One or more Redis transports are unavailable — attempting to start bundled services"
 
     if ! command -v docker >/dev/null 2>&1 \
         || ! docker info >/dev/null 2>&1 \
@@ -1243,8 +1333,15 @@ start_redis_service_if_needed() {
         return 1
     fi
 
+    local services=()
+    $plaintext_ready || services+=(redis)
+    $tls_ready || services+=(redis-tls)
+    $mtls_ready || services+=(redis-mtls)
+
     local compose_output=""
-    compose_output=$(docker compose -f "${REDIS_COMPOSE_FILE}" up -d 2>&1) || {
+    REDIS_STARTED_SERVICES=("${services[@]}")
+    REDIS_SERVICE_STARTED=true
+    compose_output=$(docker compose -f "${REDIS_COMPOSE_FILE}" up -d "${services[@]}" 2>&1) || {
         log_error "Failed to start Redis via docker compose"
         echo "$compose_output"
         print_redis_install_hints
@@ -1254,16 +1351,18 @@ start_redis_service_if_needed() {
     local elapsed=0
     local timeout=30
     while [ $elapsed -lt $timeout ]; do
-        if probe_redis_ready "$REDIS_HOST" "$REDIS_PORT" "$REDIS_PASSWORD"; then
-            REDIS_SERVICE_STARTED=true
-            log_success "Redis is ready (started via docker, waited ${elapsed}s)"
+        if probe_redis_ready "$REDIS_HOST" "$REDIS_PORT" "$REDIS_PASSWORD" \
+            && { ! $REDIS_TLS_SERVICE_REQUIRED \
+                || { probe_redis_tls_ready "$REDIS_HOST" "$REDIS_TLS_PORT" "$REDIS_PASSWORD" false \
+                    && probe_redis_tls_ready "$REDIS_HOST" "$REDIS_MTLS_PORT" "$REDIS_PASSWORD" true; }; }; then
+            log_success "Required Redis services are ready (waited ${elapsed}s)"
             return 0
         fi
         sleep 1
         elapsed=$((elapsed + 1))
     done
 
-    log_error "Redis container did not become ready within ${timeout}s"
+    log_error "Required Redis services did not become ready within ${timeout}s"
     docker compose -f "${REDIS_COMPOSE_FILE}" logs --no-color --tail=80 || true
     return 1
 }
@@ -1832,7 +1931,7 @@ run_all_tests() {
                 if [ -z "$G_ITEM" ]; then
                     run_test "LinkSys_Status" "${EDGION_TEST_CLIENT_BIN} -g -r LinkSys -i Status" || test_failed=true
                     run_test "LinkSys_Redis" "$(linksys_redis_cmd)" || test_failed=true
-                elif [ "$G_ITEM" = "Redis" ]; then
+                elif [ "$G_ITEM" = "Redis" ] || [ "$G_ITEM" = "RedisTls" ]; then
                     run_test "LinkSys_Redis" "$(linksys_redis_cmd)" || test_failed=true
                 else
                     local item_safe=$(echo "$G_ITEM" | tr '/' '_')
@@ -2307,9 +2406,9 @@ main() {
             # — load EdgionPlugins/base + RateLimitRedis so test 9 has its plugins.
             local linksys_extras="EdgionPlugins/base,EdgionPlugins/RateLimitRedis"
             if [ -z "$G_ITEM" ]; then
-                suites="${base_suites},LinkSys/Status,LinkSys/Redis,${linksys_extras}"
-            elif [ "$G_ITEM" = "Redis" ]; then
-                suites="${base_suites},LinkSys/Redis,${linksys_extras}"
+                suites="${base_suites},LinkSys/Status,LinkSys/Redis,LinkSys/RedisTls,${linksys_extras}"
+            elif [ "$G_ITEM" = "Redis" ] || [ "$G_ITEM" = "RedisTls" ]; then
+                suites="${base_suites},LinkSys/Redis,LinkSys/RedisTls,${linksys_extras}"
             else
                 suites="${base_suites},LinkSys/${G_ITEM}"
             fi
@@ -2388,6 +2487,9 @@ main() {
 
     if is_redis_service_required "$suites"; then
         REDIS_SERVICE_REQUIRED=true
+    fi
+    if is_redis_tls_service_required "$suites"; then
+        REDIS_TLS_SERVICE_REQUIRED=true
     fi
 
     echo ""
@@ -2781,7 +2883,13 @@ main() {
         # NOTE: Must separate 'local' from command substitution, because
         # 'local' always returns 0 and masks the real exit code of $().
         local output exit_code
-        output=$("${start_args[@]}" 2>&1) && exit_code=0 || exit_code=$?
+        if [ -n "$REDIS_NATIVE_CA_FILE" ]; then
+            output=$(EDGION_TEST_ENABLE_REDIS_TLS=1 SSL_CERT_FILE="$REDIS_NATIVE_CA_FILE" \
+                "${start_args[@]}" 2>&1) \
+                && exit_code=0 || exit_code=$?
+        else
+            output=$("${start_args[@]}" 2>&1) && exit_code=0 || exit_code=$?
+        fi
         
         # Show output
         echo "$output"

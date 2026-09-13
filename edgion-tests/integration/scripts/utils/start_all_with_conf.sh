@@ -877,6 +877,30 @@ generate_certs() {
             exit 1
         fi
     fi
+
+    local redis_tls_selected=false
+    if [ "${EDGION_TEST_ENABLE_REDIS_TLS:-0}" = "1" ] \
+        || [ -z "$SUITES" ] \
+        || [[ ",${SUITES}," == *",LinkSys/RedisTls,"* ]]; then
+        redis_tls_selected=true
+    fi
+    if $redis_tls_selected; then
+        # Generate Redis TLS Secrets from the same ephemeral CA mounted into the
+        # Redis TLS and mTLS containers.
+        local redis_tls_cert_script="${PROJECT_ROOT}/edgion-tests/integration/conf/Services/redis/make-test-certs.sh"
+        if [ -f "$redis_tls_cert_script" ]; then
+            log_info "Run Redis TLS certificate preparation..."
+            if EDGION_GENERATED_SECRET_DIR="$GENERATED_SECRET_DIR" bash "$redis_tls_cert_script" > /dev/null 2>&1; then
+                log_success "Redis TLS certificate preparation completed"
+            else
+                log_error "Redis TLS certificate preparation failed"
+                exit 1
+            fi
+        else
+            log_error "Redis TLS certificate script not found: ${redis_tls_cert_script}"
+            exit 1
+        fi
+    fi
     
 }
 

@@ -123,8 +123,9 @@ dense ranks, and old/new snapshot capture names. Algebraic tests in
 antisymmetry, and transitivity. These are in-process tests, not fresh evidence
 of HTTP traffic, control-plane synchronization, or live hot reload.
 
-Cross-process route-selection and dynamic integration evidence remains tracked
-in [the integration follow-up](../../../../tasks/todo/http-route-named-parameter-precedence-integration.md).
+Cross-process route-selection and dynamic integration evidence was deferred under
+`http-route-named-parameter-precedence-integration`; no active task file currently
+tracks that coverage.
 Existing `edgion-tests/**` files were outside the named-parameter repair scope.
 The full workspace test suite was not run during that repair.
 
@@ -145,7 +146,7 @@ would also invalidate global pre-ranking and requires a separate design.
 
 - `http-route-named-parameter-precedence`: identifier-dependent route selection;
   fixed and verified on 2026-09-12 under the explicitly approved aggregate policy.
-  The active source task was removed; integration evidence remains tracked above.
+  The active source task was removed; the deferred integration gap is described above.
 - `gw-http-match-02`: historical byte-to-character correction, 2026-07-28;
   static Unicode character coverage retained under the new key.
 

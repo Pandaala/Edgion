@@ -67,12 +67,14 @@ transport; they are not operator-authored schema fields.
 ## Limits and verification
 
 This does not establish cross-kind atomicity or general eligibility-aware route
-selection. [Same-socket listener-specificity shadowing](../../../../tasks/todo/tlsroute-specific-listener-candidate-shadowing.md)
-has a distinct single-attachment trigger and remains tracked. Existing
-[protocol acceptance parity](../../../../tasks/todo/route-listener-protocol-acceptance-parity.md)
-and [single-label hostname matching](../../../../tasks/todo/gateway-api-single-label-hostname-matching.md)
-gaps also remain separate; this is not a full Gateway API conformance claim.
-[Physical TLS listener manager recreation](../../../../tasks/todo/tls-listener-recreation-stale-route-manager.md)
+selection. Same-socket listener-specificity shadowing has a distinct
+single-attachment trigger and was recorded under
+`tlsroute-specific-listener-candidate-shadowing`. Existing protocol acceptance
+parity and single-label hostname matching gaps were recorded under
+`route-listener-protocol-acceptance-parity` and
+`gateway-api-single-label-hostname-matching`. No active task files currently track
+these gaps; this is not a full Gateway API conformance claim. Physical TLS listener
+manager recreation, recorded under `tls-listener-recreation-stale-route-manager`,
 is another pre-existing lifecycle defect: deleting every owning Gateway and
 recreating it can disconnect configuration updates from the proxy's retained Arc.
 Route-only deletion/recreation does not exercise that ownership transition.

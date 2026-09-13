@@ -1,0 +1,28 @@
+# Redis TLS success fixture. The private CA is generated at runtime by
+# Services/redis/make-test-certs.sh and resolved through redis-tls-ca.
+apiVersion: edgion.io/v1
+kind: LinkSys
+metadata:
+  name: redis-tls-custom-ca
+  namespace: default
+spec:
+  type: redis
+  config:
+    endpoints:
+      - "rediss://127.0.0.1:16380"
+    db: 2
+    auth:
+      secretRef:
+        name: redis-test-auth
+    tls:
+      enabled: true
+      validation:
+        caCertificateRefs:
+          - kind: Secret
+            name: redis-tls-ca
+    pool:
+      size: 1
+    timeout:
+      connect: 3000
+      read: 2000
+      write: 2000

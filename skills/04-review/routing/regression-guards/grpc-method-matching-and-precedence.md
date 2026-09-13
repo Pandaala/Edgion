@@ -65,8 +65,8 @@ Regex traversal remains linear in the selected hostname group's regex candidates
 Correctness/instrumented candidate counts do not establish latency equivalence.
 
 Duplicate equivalent gRPC header names still need first-name-wins handling;
-this is a separate existing defect, not accepted behavior. See the
-[follow-up](../../../../tasks/todo/grpc-header-match-first-name-wins.md).
+this is a separate existing defect, not accepted behavior. It was recorded under
+`grpc-header-match-first-name-wins`; no active task file currently tracks it.
 Do not read this rule as proving complete GRPCRoute conformance.
 
 ## Verification and re-evaluation

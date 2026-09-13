@@ -94,6 +94,17 @@ Fresh verification on 2026-09-11:
   under enabled unresolved TLS, and recovery after disabling. Resources and markers
   are cleaned up. No Kubernetes deployment or every-provider live transport sweep
   was run; other provider boundaries are covered by the targeted tests above.
+- `redis-tls-integration-coverage`: the isolated `LinkSys/RedisTls` fixtures now
+  exercise successful Redis handshakes through the complete Controller, conf_sync,
+  Gateway, Fred, and Redis path. The suite covers scheme-only `rediss://` with the
+  generated CA exposed through the documented native trust source, an explicit
+  `caCertificateRefs` private CA, and mTLS with `clientCertificateRef`. Each client
+  readiness check is bounded to 20 seconds. A fresh 2026-09-13 standard runner call,
+  `run_integration.sh --no-prepare -r LinkSys -i RedisTls`, passed all 73 Redis
+  LinkSys assertions, including the three new handshakes, plus resource convergence,
+  unknown-field, requeue-loop, and cache-residue checks. Its first service probe
+  exposed and drove correction of missing container-side TLS ports before the
+  successful rerun.
 - `cargo fmt --all` and `cargo fmt --all -- --check`,
   `cargo check --workspace --all-targets`, and
   `cargo clippy --workspace --all-targets`: passed. Clippy retains existing repository
@@ -115,3 +126,5 @@ dependencies and scheme behavior must be reviewed together with front-end gates.
 - `g9a-007`: historical correction unifying outbound reqwest TLS loading.
 - `disabled-tls-publication-readiness`: fixed; inactive LinkSys TLS no longer
   blocks reference resolution/readiness or changes Webhook transport selection.
+- `redis-tls-integration-coverage`: fixed; successful default-trust, custom-CA,
+  and mutual-TLS Redis handshakes have isolated integration coverage.

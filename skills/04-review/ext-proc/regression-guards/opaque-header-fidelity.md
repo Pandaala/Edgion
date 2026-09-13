@@ -83,8 +83,9 @@ unrelated missing routing follow-up target referenced from
 `routing/regression-guards/radix-path-specificity.md`; the active task remains
 open until required checks pass.
 
-Deployed HTTP/1 and HTTP/2 interoperability remains tracked in
-[the wire-coverage task](../../../../tasks/todo/verify-ext-proc-opaque-header-wire-fidelity.md).
+Deployed HTTP/1 and HTTP/2 interoperability was deferred under
+`verify-ext-proc-opaque-header-wire-fidelity`; no active task file currently
+tracks that coverage.
 Re-evaluate if projection encoding, header validity, session APIs, queue value
 ownership, deferred credential invalidation, or conditional mutation order changes.
 

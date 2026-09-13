@@ -1,0 +1,24 @@
+# Scheme-only Redis TLS success fixture. The integration runner exposes the
+# generated test CA through SSL_CERT_FILE, which is the documented native trust
+# source consumed by fred's default rustls connector. There is deliberately no
+# local tls block: rediss:// alone must select TLS and use default trust.
+apiVersion: edgion.io/v1
+kind: LinkSys
+metadata:
+  name: redis-tls-default-trust
+  namespace: default
+spec:
+  type: redis
+  config:
+    endpoints:
+      - "rediss://127.0.0.1:16380"
+    db: 4
+    auth:
+      secretRef:
+        name: redis-test-auth
+    pool:
+      size: 1
+    timeout:
+      connect: 3000
+      read: 2000
+      write: 2000

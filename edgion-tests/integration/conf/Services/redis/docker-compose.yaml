@@ -19,3 +19,53 @@ services:
       timeout: 3s
       retries: 10
     restart: "no"
+
+  redis-tls:
+    image: redis:7-alpine
+    container_name: edgion-test-redis-tls
+    ports:
+      - "16380:6380"
+    volumes:
+      - ./certs:/certs:ro
+    command: >
+      redis-server
+      --port 0
+      --tls-port 6380
+      --tls-cert-file /certs/server.crt
+      --tls-key-file /certs/server.key
+      --tls-ca-cert-file /certs/ca.crt
+      --tls-auth-clients no
+      --requirepass edgion-test-pwd
+      --maxmemory 64mb
+      --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli --tls --cacert /certs/ca.crt -h 127.0.0.1 -p 6380 -a edgion-test-pwd --no-auth-warning ping | grep -q '^PONG$'"]
+      interval: 2s
+      timeout: 3s
+      retries: 10
+    restart: "no"
+
+  redis-mtls:
+    image: redis:7-alpine
+    container_name: edgion-test-redis-mtls
+    ports:
+      - "16381:6381"
+    volumes:
+      - ./certs:/certs:ro
+    command: >
+      redis-server
+      --port 0
+      --tls-port 6381
+      --tls-cert-file /certs/server.crt
+      --tls-key-file /certs/server.key
+      --tls-ca-cert-file /certs/ca.crt
+      --tls-auth-clients yes
+      --requirepass edgion-test-pwd
+      --maxmemory 64mb
+      --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli --tls --cacert /certs/ca.crt --cert /certs/client.crt --key /certs/client.key -h 127.0.0.1 -p 6381 -a edgion-test-pwd --no-auth-warning ping | grep -q '^PONG$'"]
+      interval: 2s
+      timeout: 3s
+      retries: 10
+    restart: "no"

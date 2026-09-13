@@ -81,8 +81,9 @@ Fresh verification on 2026-09-12:
 
 The first dynamic attempt followed the integration runner's final wipe-all
 and reloaded its Gateway into the same process; both static and dynamic
-requests then returned 404. This is consistent with the separately tracked
-[listener recreation defect](../../../../tasks/todo/http-listener-recreation-stale-route-manager.md).
+requests then returned 404. This is consistent with the listener recreation
+defect recorded during this review under
+`http-listener-recreation-stale-route-manager`.
 The successful run used the standard runner's fresh topology, deferred the
 residue wipe until after the dynamic test, and did not restart during scenario
 phases. This correction does not claim to fix listener deletion/recreation.
@@ -90,8 +91,9 @@ phases. This correction does not claim to fix listener deletion/recreation.
 The mandatory Kubernetes inventory-parity guard still fails for five
 pre-existing scenario gaps, identically on baseline and changed inventories.
 Its own regression test passes, and this new scenario is registered in both
-inventories. See the [inventory follow-up](../../../../tasks/todo/k8s-dynamic-scenario-inventory-parity.md).
-The selected task is retained as blocked by this closure gate, with its live
+inventories. The follow-up was recorded under
+`k8s-dynamic-scenario-inventory-parity`; no active task file currently tracks it.
+At review closure, the selected task was retained as blocked by this gate, with its live
 Kubernetes acceptance evidence still outstanding; no empty registrations or
 unsupported exceptions were added. Full workspace tests and live Kubernetes
 traffic were not run.
