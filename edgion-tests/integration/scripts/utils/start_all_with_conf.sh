@@ -955,6 +955,13 @@ get_suites_to_load() {
                     if [ -d "$subdir" ]; then
                         has_subdir=true
                         local subdir_name=$(basename "$subdir")
+
+                        # OTLP owns a standalone process topology. Its TLS listener
+                        # overlaps HTTPRoute/Delegation on port 31932, so only load
+                        # these fixtures when explicitly requested via --suites.
+                        if [ "$resource_name/$subdir_name" = "LinkSys/Otlp" ]; then
+                            continue
+                        fi
                         
                         # Checkdirectory
                         local has_deep_subdir=false

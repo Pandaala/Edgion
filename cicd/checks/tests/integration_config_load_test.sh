@@ -54,3 +54,24 @@ if set -o | grep '^pipefail' | grep -q 'on'; then
     fail "loader changed caller shell options"
 fi
 echo "PASS: config load success, loader failure, log sink failure, and shell option isolation"
+
+# Exercise real suite discovery: standalone OTLP listeners must never enter the
+# default shared stack, where port 31932 belongs to HTTPRoute/Delegation.
+discovery=$(sed -n '/^get_suites_to_load()/,/^}/p' "$START")
+[ -n "$discovery" ] || fail "production get_suites_to_load function not found"
+eval "$discovery"
+suite_is_supported() { return 0; }
+SUITES=""
+default_suites=" $(get_suites_to_load) "
+case "$default_suites" in
+    *" LinkSys/Otlp "*|*" LinkSys/Otlp/"*) fail "standalone OTLP config entered the shared stack" ;;
+esac
+for shared_suite in HTTPRoute/Delegation LinkSys/Redis LinkSys/Status; do
+    case "$default_suites" in
+        *" $shared_suite "*) ;;
+        *) fail "shared suite disappeared: $shared_suite" ;;
+    esac
+done
+SUITES="LinkSys/Otlp"
+[ "$(get_suites_to_load)" = " LinkSys/Otlp" ] || fail "explicit OTLP selection was lost"
+echo "PASS: default shared-suite isolation and explicit OTLP selection"
