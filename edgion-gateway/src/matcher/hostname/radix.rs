@@ -1,6 +1,6 @@
 //! Frozen reverse-byte radix. Protocol contents never live in this tree.
 
-use super::hostname::CompiledHostnamePattern;
+use super::CompiledHostnamePattern;
 
 /// A configured pattern's identity, private to one tree generation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

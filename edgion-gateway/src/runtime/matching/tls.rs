@@ -21,9 +21,9 @@
 //! fast path: when no Gateway TLS is configured, lookups return immediately
 //! without touching any HashMap.
 
+use crate::matcher::hostname::rfc6125::HashHost;
 use arc_swap::ArcSwapOption;
 use edgion_resources::listener_key::{resolve_listener_addr, ListenerKey};
-use edgion_resources::matcher::HashHost;
 use edgion_resources::prelude_resources::Gateway;
 use edgion_resources::resources::edgion_tls::GatewayAttachmentProof;
 use edgion_resources::resources::edgion_tls::ResolvedListenerAttachment;

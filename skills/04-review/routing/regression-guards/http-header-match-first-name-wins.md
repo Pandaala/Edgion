@@ -82,8 +82,12 @@ Fresh verification on 2026-09-12:
 The first dynamic attempt followed the integration runner's final wipe-all
 and reloaded its Gateway into the same process; both static and dynamic
 requests then returned 404. This is consistent with the listener recreation
-defect recorded during this review under
+failure recorded during this review under
 `http-listener-recreation-stale-route-manager`.
+On 2026-09-13 the user accepted this as an
+[unsupported Gateway lifecycle limitation](../../listeners/intentional-design/gateway-recreation-requires-restart.md)
+requiring a data-plane restart, with no production fix. The failed run remains
+historical evidence; this disposition does not turn it into a passing test.
 The successful run used the standard runner's fresh topology, deferred the
 residue wipe until after the dynamic test, and did not restart during scenario
 phases. This correction does not claim to fix listener deletion/recreation.

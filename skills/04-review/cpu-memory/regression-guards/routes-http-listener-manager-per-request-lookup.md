@@ -22,8 +22,8 @@ and the gRPC-flavored equivalent — on every HTTP / gRPC request. That lookup i
    to the same shard — concurrent requests on a single listener serialize on
    that one write lock on the hottest path.
 
-The looked-up `Arc<HttpPortRouteManager>` / `Arc<GrpcPortRouteManager>` is
-structurally stable for the lifetime of a serving listener:
+The looked-up `Arc<HttpPortRouteManager>` / `Arc<GrpcPortRouteManager>` retains
+identity across Route updates while its Gateway listener remains configured:
 
 - `EdgionHttpProxy` is constructed once per listener in
   `listener_builder.rs` and shared as `&self` by Pingora across all requests on
@@ -31,17 +31,21 @@ structurally stable for the lifetime of a serving listener:
 - Route updates only swap the inner `ArcSwap<DomainRouteRules>`; the outer
   `Arc` returned by `get_or_create_listener_manager` retains identity.
 - `rebuild_*_listener_managers` only sweeps `by_listener` entries that are both
-  route-less **and** absent from `ListenerGatewayInfoStore`. A listener with a
-  live proxy is always registered there, so its `Arc` is never removed while
-  the proxy is alive.
+  route-less **and** absent from `ListenerGatewayInfoStore`. That store tracks
+  logical Gateway ownership, not live sockets. Deleting every owner can remove
+  the manager while a proxy still retains its cleared `Arc`; recreation then
+  allocates a different manager. The earlier claim that every live proxy stays
+  registered was incorrect. See the accepted
+  [Gateway recreation boundary](../../listeners/intentional-design/gateway-recreation-requires-restart.md).
 
 **Fix**: add `http_route_manager: Arc<HttpPortRouteManager>` and
 `grpc_route_manager: Arc<GrpcPortRouteManager>` fields to `EdgionHttpProxy`,
 populate them once at construction via
 `get_or_create_listener_manager(&listener_key)`, and have `request_filter`
 read them directly. The per-request route table read still goes through the
-inner `ArcSwap` (`.load_route_table()`), so hot-reload semantics are
-unchanged. This eliminates the per-request `String` allocation and the shard
+inner `ArcSwap` (`.load_route_table()`), preserving Route hot reload under an
+existing Gateway. It does not establish Gateway delete/recreate recovery.
+This eliminates the per-request `String` allocation and the shard
 write-lock entirely on the request path.
 
 ## Why the Naive Form Was Wrong
@@ -80,5 +84,7 @@ on the request path.
   `edgion-gateway/src/runtime/server/listener_builder.rs` (construction).
 - Stability rationale in `routes_mgr.rs`:
   `rebuild_all_listener_managers` / `rebuild_affected_listener_managers`
-  preserve outer `Arc` identity; stale sweep guarded by `active_listeners`
-  (= `ListenerGatewayInfoStore::all_listener_keys`).
+  preserve outer `Arc` identity while the key remains registered; stale sweep
+  uses logical `active_listeners` (= `ListenerGatewayInfoStore::all_listener_keys`),
+  not serving-proxy liveness. This rationale was corrected by source inspection
+  on 2026-09-13; the historical performance fix was not rerun for that correction.

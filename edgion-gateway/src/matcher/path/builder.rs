@@ -1,4 +1,4 @@
-//! Build-time radix tree implementation
+//! Build-time path radix tree implementation
 //!
 //! This module provides the flexible tree structure used during route insertion.
 //!
@@ -10,8 +10,8 @@
 //!
 //! Parameter segments match any content until the next `/` or end of path.
 
-use crate::matcher::radix_tree::error::RouterError;
-use crate::matcher::radix_tree::frozen::FrozenRadixTree;
+use super::error::PathRadixError;
+use super::frozen::PathRadixTree;
 use std::collections::BTreeMap;
 
 /// Node type for distinguishing static vs parameter nodes.
@@ -90,14 +90,14 @@ impl BuildNode {
 /// A radix tree router for building routes.
 ///
 /// This is the mutable builder used to insert routes. Once all routes are inserted,
-/// call `freeze()` to convert it into a cache-friendly `FrozenRadixTree`.
+/// call `freeze()` to convert it into a cache-friendly `PathRadixTree`.
 #[derive(Debug)]
-pub struct RadixRouter {
+pub(crate) struct PathRadixBuilder {
     root: BuildNode,
     route_count: usize,
 }
 
-impl RadixRouter {
+impl PathRadixBuilder {
     /// Creates a new empty router.
     pub fn new() -> Self {
         Self {
@@ -118,17 +118,17 @@ impl RadixRouter {
     ///
     /// # Returns
     /// * `Ok(())` if insertion succeeded
-    /// * `Err(RouterError)` if insertion fails due to constraints
-    pub fn insert(&mut self, path: &str, value: usize) -> Result<(), RouterError> {
+    /// * `Err(PathRadixError)` if insertion fails due to constraints
+    pub fn insert(&mut self, path: &str, value: usize) -> Result<(), PathRadixError> {
         let path_bytes = path.as_bytes();
 
         if path_bytes.is_empty() {
-            return Err(RouterError::EmptyPath);
+            return Err(PathRadixError::EmptyPath);
         }
 
         // Check path length doesn't exceed u16::MAX
         if path_bytes.len() > u16::MAX as usize {
-            return Err(RouterError::PathTooLong {
+            return Err(PathRadixError::PathTooLong {
                 length: path_bytes.len(),
                 max: u16::MAX as usize,
             });
@@ -218,11 +218,11 @@ impl RadixRouter {
         segments: &[PathSegment],
         value: usize,
         original_path: &str,
-    ) -> Result<(), RouterError> {
+    ) -> Result<(), PathRadixError> {
         if segments.is_empty() {
             // No more segments, add value to current node
             if node.values.len() >= u8::MAX as usize {
-                return Err(RouterError::TooManyValues {
+                return Err(PathRadixError::TooManyValues {
                     path: original_path.to_string(),
                     count: node.values.len() + 1,
                     max: u8::MAX as usize,
@@ -254,7 +254,7 @@ impl RadixRouter {
         remaining_segments: &[PathSegment],
         value: usize,
         original_path: &str,
-    ) -> Result<(), RouterError> {
+    ) -> Result<(), PathRadixError> {
         // If this node is a Param node (empty prefix), go directly to children
         if node.node_type == NodeType::Param {
             let first_byte = prefix[0];
@@ -262,7 +262,7 @@ impl RadixRouter {
                 return Self::insert_static_segment(child, prefix, remaining_segments, value, original_path);
             } else {
                 if node.children.len() >= u16::MAX as usize {
-                    return Err(RouterError::TooManyChildren {
+                    return Err(PathRadixError::TooManyChildren {
                         count: node.children.len() + 1,
                         max: u16::MAX as usize,
                     });
@@ -310,7 +310,7 @@ impl RadixRouter {
             Self::insert_static_segment(child, remaining_prefix, remaining_segments, value, original_path)
         } else {
             if node.children.len() >= u16::MAX as usize {
-                return Err(RouterError::TooManyChildren {
+                return Err(PathRadixError::TooManyChildren {
                     count: node.children.len() + 1,
                     max: u16::MAX as usize,
                 });
@@ -329,12 +329,12 @@ impl RadixRouter {
     ///
     /// # Errors
     /// Returns an error if the tree exceeds any size limits during flattening.
-    pub fn freeze(self) -> Result<FrozenRadixTree, RouterError> {
-        FrozenRadixTree::from_builder(self.root)
+    pub fn freeze(self) -> Result<PathRadixTree, PathRadixError> {
+        PathRadixTree::from_builder(self.root)
     }
 }
 
-impl Default for RadixRouter {
+impl Default for PathRadixBuilder {
     fn default() -> Self {
         Self::new()
     }
@@ -369,13 +369,13 @@ mod tests {
 
     #[test]
     fn test_parse_path_static() {
-        let segments = RadixRouter::parse_path(b"/api/users");
+        let segments = PathRadixBuilder::parse_path(b"/api/users");
         assert_eq!(segments, vec![PathSegment::Static(b"/api/users".to_vec())]);
     }
 
     #[test]
     fn test_parse_path_single_param() {
-        let segments = RadixRouter::parse_path(b"/api/:version/users");
+        let segments = PathRadixBuilder::parse_path(b"/api/:version/users");
         assert_eq!(
             segments,
             vec![
@@ -388,7 +388,7 @@ mod tests {
 
     #[test]
     fn test_parse_path_multi_params() {
-        let segments = RadixRouter::parse_path(b"/api/:version/:resource");
+        let segments = PathRadixBuilder::parse_path(b"/api/:version/:resource");
         assert_eq!(
             segments,
             vec![
@@ -402,7 +402,7 @@ mod tests {
 
     #[test]
     fn test_parse_path_escaped_colon() {
-        let segments = RadixRouter::parse_path(b"/api/::literal/test");
+        let segments = PathRadixBuilder::parse_path(b"/api/::literal/test");
         assert_eq!(
             segments,
             vec![
@@ -414,7 +414,7 @@ mod tests {
 
     #[test]
     fn test_parse_path_param_at_end() {
-        let segments = RadixRouter::parse_path(b"/users/:id");
+        let segments = PathRadixBuilder::parse_path(b"/users/:id");
         assert_eq!(
             segments,
             vec![PathSegment::Static(b"/users/".to_vec()), PathSegment::Param,]
@@ -423,14 +423,14 @@ mod tests {
 
     #[test]
     fn test_parse_path_root_only() {
-        let segments = RadixRouter::parse_path(b"/");
+        let segments = PathRadixBuilder::parse_path(b"/");
         assert_eq!(segments, vec![PathSegment::Static(b"/".to_vec())]);
     }
 
     #[test]
     fn test_parse_path_param_empty_name() {
         // /api/:/test - param has empty name (just ":")
-        let segments = RadixRouter::parse_path(b"/api/:/test");
+        let segments = PathRadixBuilder::parse_path(b"/api/:/test");
         assert_eq!(
             segments,
             vec![
@@ -444,7 +444,7 @@ mod tests {
     #[test]
     fn test_parse_path_trailing_param() {
         // /api/: - param at end with empty name
-        let segments = RadixRouter::parse_path(b"/api/:");
+        let segments = PathRadixBuilder::parse_path(b"/api/:");
         assert_eq!(
             segments,
             vec![PathSegment::Static(b"/api/".to_vec()), PathSegment::Param,]
@@ -454,14 +454,14 @@ mod tests {
     #[test]
     fn test_parse_path_consecutive_escapes() {
         // /api/:::test -> /api/::test (first :: escapes, third : is literal)
-        let segments = RadixRouter::parse_path(b"/api/:::test");
+        let segments = PathRadixBuilder::parse_path(b"/api/:::test");
         assert_eq!(segments, vec![PathSegment::Static(b"/api/::test".to_vec())]);
     }
 
     #[test]
     fn test_parse_path_escape_then_param() {
         // /api/::x/:id -> Static("/api/:x"), Static("/"), Param
-        let segments = RadixRouter::parse_path(b"/api/::x/:id");
+        let segments = PathRadixBuilder::parse_path(b"/api/::x/:id");
         assert_eq!(segments.len(), 3);
         assert_eq!(segments[0], PathSegment::Static(b"/api/:x".to_vec()));
         assert_eq!(segments[2], PathSegment::Param);
@@ -470,7 +470,7 @@ mod tests {
     #[test]
     fn test_parse_path_double_slash() {
         // Double slash - treated as static
-        let segments = RadixRouter::parse_path(b"/api//test");
+        let segments = PathRadixBuilder::parse_path(b"/api//test");
         assert_eq!(segments, vec![PathSegment::Static(b"/api//test".to_vec())]);
     }
 }

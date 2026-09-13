@@ -1,4 +1,5 @@
 use crate::lb::BackendSelector;
+use crate::matcher::hostname::{CompiledHostnamePattern, HostContentChange};
 use crate::plugins::PluginRuntime;
 use crate::routes::common::{filter_accepted_parent_refs, gateways_from_parent_refs, resolve_parent_refs};
 use crate::routes::http::match_engine::radix_route_match::RadixRouteMatchEngine;
@@ -8,7 +9,6 @@ use crate::routes::http::routes_mgr::{
     resolved_listeners_for_route, DomainRouteRules, GlobalHttpRouteManagers, RouteRules,
 };
 use crate::routes::http::{get_global_http_route_managers, HttpRouteRuleUnit};
-use crate::runtime::matching::hostname::{CompiledHostnamePattern, HostContentChange};
 use crate::runtime::matching::route::ResolvedParentRef;
 use crate::MatchInfo;
 use edgion_common::conf_sync::traits::ConfHandler;
@@ -964,7 +964,7 @@ mod tests {
 
     /// Covers the request path's filter-and-order step, which `match_route`
     /// otherwise reaches only with a live `Session`. Without this, dropping the
-    /// candidate sort, inverting the `MatchKind` filter, or losing the
+    /// candidate sort, inverting the path match-kind filter, or losing the
     /// `tree_value - 1` bucket offset would all go undetected by unit tests.
     #[test]
     fn engine_filters_and_orders_candidates_for_a_request_path() {

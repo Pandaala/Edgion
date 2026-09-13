@@ -1,15 +1,15 @@
-//! Cache-friendly frozen radix tree implementation
+//! Cache-friendly frozen path radix tree implementation
 //!
 //! This module provides the flattened, cache-optimized tree structure for fast lookups.
 //! Supports parameter segments (`:param`) for dynamic route matching.
 
-use crate::matcher::radix_tree::builder::{BuildNode, NodeType};
-use crate::matcher::radix_tree::error::RouterError;
+use super::builder::{BuildNode, NodeType};
+use super::error::PathRadixError;
 use smallvec::SmallVec;
 
 /// Describes how the request path aligned with a matched tree node.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MatchKind {
+pub(crate) enum PathMatchKind {
     /// The request path was fully consumed at this node.
     FullyConsumed,
     /// There is remaining path, and it starts on a segment boundary (`/`).
@@ -93,7 +93,7 @@ struct ChildEntry {
 ///
 /// This eliminates pointer chasing and improves spatial locality.
 #[derive(Debug, Clone)]
-pub struct FrozenRadixTree {
+pub(crate) struct PathRadixTree {
     /// Flat array of all nodes
     nodes: Vec<FlatNode>,
 
@@ -110,17 +110,19 @@ pub struct FrozenRadixTree {
 /// Internal iterator for matching prefixes in the tree.
 /// This struct encapsulates the common logic for traversing the tree
 /// and matching path prefixes, eliminating code duplication.
+#[allow(dead_code)]
 struct PrefixMatchIter<'a> {
-    tree: &'a FrozenRadixTree,
+    tree: &'a PathRadixTree,
     node_idx: usize,
     remaining: &'a [u8],
     finished: bool,
 }
 
+#[allow(dead_code)]
 impl<'a> PrefixMatchIter<'a> {
     /// Creates a new prefix match iterator
     #[inline]
-    fn new(tree: &'a FrozenRadixTree, path: &'a [u8]) -> Self {
+    fn new(tree: &'a PathRadixTree, path: &'a [u8]) -> Self {
         Self {
             tree,
             node_idx: 0,
@@ -182,7 +184,7 @@ impl<'a> PrefixMatchIter<'a> {
     }
 }
 
-impl FrozenRadixTree {
+impl PathRadixTree {
     /// Helper method to get the prefix bytes for a node
     #[inline]
     fn get_node_prefix(&self, node: &FlatNode) -> &[u8] {
@@ -212,6 +214,7 @@ impl FrozenRadixTree {
     /// binary search for larger arrays. Linear search is faster for small arrays
     /// due to better cache locality and branch prediction.
     #[inline]
+    #[allow(dead_code)]
     fn find_child(&self, children: &[ChildEntry], byte: u8) -> Option<usize> {
         if children.len() <= 4 {
             // Linear search for small arrays - better cache and branch prediction
@@ -228,13 +231,13 @@ impl FrozenRadixTree {
     }
 
     /// Creates a frozen tree from a build tree.
-    pub(crate) fn from_builder(root: BuildNode) -> Result<Self, RouterError> {
+    pub(crate) fn from_builder(root: BuildNode) -> Result<Self, PathRadixError> {
         // Pre-calculate exact capacities to avoid reallocation
         let stats = count_tree_stats(&root);
 
         // Check node count doesn't exceed u32::MAX
         if stats.node_count > u32::MAX as usize {
-            return Err(RouterError::TooManyNodes {
+            return Err(PathRadixError::TooManyNodes {
                 count: stats.node_count,
                 max: u32::MAX as usize,
             });
@@ -242,7 +245,7 @@ impl FrozenRadixTree {
 
         // Check string pool size doesn't exceed u32::MAX
         if stats.total_string_bytes > u32::MAX as usize {
-            return Err(RouterError::StringPoolTooLarge {
+            return Err(PathRadixError::StringPoolTooLarge {
                 size: stats.total_string_bytes,
                 max: u32::MAX as usize,
             });
@@ -250,7 +253,7 @@ impl FrozenRadixTree {
 
         // Check values pool size doesn't exceed u32::MAX
         if stats.total_values_external > u32::MAX as usize {
-            return Err(RouterError::ValuesPoolTooLarge {
+            return Err(PathRadixError::ValuesPoolTooLarge {
                 size: stats.total_values_external,
                 max: u32::MAX as usize,
             });
@@ -275,22 +278,7 @@ impl FrozenRadixTree {
     /// # Returns
     /// A slice of all values for the longest matching route (empty if no match)
     ///
-    /// # Example
-    /// ```
-    /// use edgion_resources::matcher::radix_tree::RadixTreeBuilder;
-    ///
-    /// let mut builder = RadixTreeBuilder::new();
-    /// builder.insert("/api", 1).unwrap();
-    /// builder.insert("/api", 2).unwrap();  // Multiple values for same path
-    /// builder.insert("/api/users", 3).unwrap();
-    ///
-    /// let tree = builder.freeze().unwrap();
-    ///
-    /// assert_eq!(tree.match_route_longest("/api"), &[1, 2]);
-    /// assert_eq!(tree.match_route_longest("/api/users"), &[3]);
-    /// assert_eq!(tree.match_route_longest("/api/users/123"), &[3]); // Longest prefix
-    /// assert_eq!(tree.match_route_longest("/home"), &[] as &[u32]);
-    /// ```
+    #[allow(dead_code)]
     pub fn match_route_longest(&self, path: &str) -> &[u32] {
         let mut iter = PrefixMatchIter::new(self, path.as_bytes());
         let mut last_match = None;
@@ -315,23 +303,7 @@ impl FrozenRadixTree {
     /// # Returns
     /// A vector of all matching values, ordered from shortest to longest prefix
     ///
-    /// # Example
-    /// ```
-    /// use edgion_resources::matcher::radix_tree::RadixTreeBuilder;
-    ///
-    /// let mut builder = RadixTreeBuilder::new();
-    /// builder.insert("/api", 1).unwrap();
-    /// builder.insert("/api/users", 2).unwrap();
-    /// builder.insert("/api/users/active", 3).unwrap();
-    ///
-    /// let tree = builder.freeze().unwrap();
-    ///
-    /// // Returns all matching prefixes
-    /// assert_eq!(tree.match_all_prefixes("/api/users/active/123").as_slice(), &[1, 2, 3]);
-    /// assert_eq!(tree.match_all_prefixes("/api/users").as_slice(), &[1, 2]);
-    /// assert_eq!(tree.match_all_prefixes("/api").as_slice(), &[1]);
-    /// assert_eq!(tree.match_all_prefixes("/home").as_slice(), &[] as &[u32]);
-    /// ```
+    #[allow(dead_code)]
     pub fn match_all_prefixes(&self, path: &str) -> SmallVec<[u32; 8]> {
         let mut iter = PrefixMatchIter::new(self, path.as_bytes());
         let mut results = SmallVec::<[u32; 8]>::new();
@@ -357,23 +329,7 @@ impl FrozenRadixTree {
     /// # Returns
     /// A vector of all matching values from all matching routes
     ///
-    /// # Example
-    /// ```
-    /// use edgion_resources::matcher::radix_tree::RadixTreeBuilder;
-    ///
-    /// let mut builder = RadixTreeBuilder::new();
-    /// builder.insert("/api", 1).unwrap();
-    /// builder.insert("/api/v1/users", 2).unwrap();
-    /// builder.insert("/api/:version/users", 3).unwrap();
-    ///
-    /// let tree = builder.freeze().unwrap();
-    ///
-    /// // Returns all matching routes (prefix + static + parametric)
-    /// let results = tree.match_all("/api/v1/users");
-    /// assert!(results.contains(&1));  // prefix match
-    /// assert!(results.contains(&2));  // static match
-    /// assert!(results.contains(&3));  // parametric match
-    /// ```
+    #[allow(dead_code)]
     pub fn match_all(&self, path: &str) -> SmallVec<[u32; 8]> {
         let mut results = SmallVec::<[u32; 8]>::new();
 
@@ -440,13 +396,13 @@ impl FrozenRadixTree {
     }
 
     /// Like [`match_all`](Self::match_all), but each returned value carries a
-    /// [`MatchKind`] that tells the caller whether the request path was fully
+    /// [`PathMatchKind`] that tells the caller whether the request path was fully
     /// consumed, ended on a segment boundary, or split a segment.
     ///
     /// This lets the caller distinguish exact vs prefix semantics in one pass
     /// without re-parsing the path.
-    pub fn match_all_ext(&self, path: &str) -> SmallVec<[(u32, MatchKind); 8]> {
-        let mut results = SmallVec::<[(u32, MatchKind); 8]>::new();
+    pub fn match_all_ext(&self, path: &str) -> SmallVec<[(u32, PathMatchKind); 8]> {
+        let mut results = SmallVec::<[(u32, PathMatchKind); 8]>::new();
 
         if self.nodes.is_empty() {
             return results;
@@ -475,11 +431,11 @@ impl FrozenRadixTree {
 
             if node.values_count > 0 {
                 let kind = if after_match.is_empty() {
-                    MatchKind::FullyConsumed
+                    PathMatchKind::FullyConsumed
                 } else if after_match[0] == b'/' || prefix_ends_with_slash {
-                    MatchKind::SegmentBoundary
+                    PathMatchKind::SegmentBoundary
                 } else {
-                    MatchKind::PartialSegment
+                    PathMatchKind::PartialSegment
                 };
                 for &v in self.get_node_values(node_idx) {
                     results.push((v, kind));
@@ -569,11 +525,11 @@ impl FlatTreeBuilder {
 
     /// Recursively flattens a build node and its children.
     /// Returns the index of the flattened node.
-    fn flatten_node(&mut self, node: &BuildNode) -> Result<u32, RouterError> {
+    fn flatten_node(&mut self, node: &BuildNode) -> Result<u32, PathRadixError> {
         // Check string pool won't overflow
         let new_string_pool_size = self.string_pool.len() + node.prefix().len();
         if new_string_pool_size > u32::MAX as usize {
-            return Err(RouterError::StringPoolTooLarge {
+            return Err(PathRadixError::StringPoolTooLarge {
                 size: new_string_pool_size,
                 max: u32::MAX as usize,
             });
@@ -589,7 +545,7 @@ impl FlatTreeBuilder {
 
         // Check values count fits in u8
         if values_count > u8::MAX as usize {
-            return Err(RouterError::TooManyValues {
+            return Err(PathRadixError::TooManyValues {
                 path: String::from_utf8_lossy(node.prefix()).to_string(),
                 count: values_count,
                 max: u8::MAX as usize,
@@ -610,7 +566,7 @@ impl FlatTreeBuilder {
             // External storage (3+ values)
             let new_values_pool_size = self.values_pool.len() + values.len();
             if new_values_pool_size > u32::MAX as usize {
-                return Err(RouterError::ValuesPoolTooLarge {
+                return Err(PathRadixError::ValuesPoolTooLarge {
                     size: new_values_pool_size,
                     max: u32::MAX as usize,
                 });
@@ -626,7 +582,7 @@ impl FlatTreeBuilder {
         // Check prefix length fits in u16
         let prefix_len = node.prefix().len();
         if prefix_len > u16::MAX as usize {
-            return Err(RouterError::PathTooLong {
+            return Err(PathRadixError::PathTooLong {
                 length: prefix_len,
                 max: u16::MAX as usize,
             });
@@ -635,7 +591,7 @@ impl FlatTreeBuilder {
         // Check children count fits in u16
         let children_count = node.children().len();
         if children_count > u16::MAX as usize {
-            return Err(RouterError::TooManyChildren {
+            return Err(PathRadixError::TooManyChildren {
                 count: children_count,
                 max: u16::MAX as usize,
             });
@@ -643,7 +599,7 @@ impl FlatTreeBuilder {
 
         // Check node index won't overflow
         if self.nodes.len() >= u32::MAX as usize {
-            return Err(RouterError::TooManyNodes {
+            return Err(PathRadixError::TooManyNodes {
                 count: self.nodes.len() + 1,
                 max: u32::MAX as usize,
             });
@@ -683,7 +639,7 @@ impl FlatTreeBuilder {
 
         // Check children offset won't overflow
         if self.children.len() > u32::MAX as usize {
-            return Err(RouterError::TooManyChildren {
+            return Err(PathRadixError::TooManyChildren {
                 count: self.children.len(),
                 max: u32::MAX as usize,
             });
@@ -704,8 +660,8 @@ impl FlatTreeBuilder {
         Ok(node_index)
     }
 
-    fn build(self) -> FrozenRadixTree {
-        FrozenRadixTree {
+    fn build(self) -> PathRadixTree {
+        PathRadixTree {
             nodes: self.nodes,
             children: self.children,
             string_pool: self.string_pool,
@@ -716,101 +672,101 @@ impl FlatTreeBuilder {
 
 #[cfg(test)]
 mod tests {
-    use super::MatchKind;
-    use crate::matcher::radix_tree::RadixTreeBuilder;
+    use super::super::PathRadixBuilder;
+    use super::PathMatchKind;
 
-    fn ext_has(results: &[(u32, MatchKind)], val: u32, kind: MatchKind) -> bool {
+    fn ext_has(results: &[(u32, PathMatchKind)], val: u32, kind: PathMatchKind) -> bool {
         results.iter().any(|&(v, k)| v == val && k == kind)
     }
 
     #[test]
     fn test_ext_fully_consumed() {
-        let mut builder = RadixTreeBuilder::new();
+        let mut builder = PathRadixBuilder::new();
         builder.insert("/api", 1).unwrap();
         let tree = builder.freeze().unwrap();
 
         let results = tree.match_all_ext("/api");
-        assert!(ext_has(&results, 1, MatchKind::FullyConsumed));
+        assert!(ext_has(&results, 1, PathMatchKind::FullyConsumed));
     }
 
     #[test]
     fn test_ext_segment_boundary() {
-        let mut builder = RadixTreeBuilder::new();
+        let mut builder = PathRadixBuilder::new();
         builder.insert("/api", 1).unwrap();
         let tree = builder.freeze().unwrap();
 
         let results = tree.match_all_ext("/api/users");
-        assert!(ext_has(&results, 1, MatchKind::SegmentBoundary));
+        assert!(ext_has(&results, 1, PathMatchKind::SegmentBoundary));
     }
 
     #[test]
     fn test_ext_partial_segment() {
-        let mut builder = RadixTreeBuilder::new();
+        let mut builder = PathRadixBuilder::new();
         builder.insert("/v2", 1).unwrap();
         let tree = builder.freeze().unwrap();
 
         let results = tree.match_all_ext("/v2example");
-        assert!(ext_has(&results, 1, MatchKind::PartialSegment));
+        assert!(ext_has(&results, 1, PathMatchKind::PartialSegment));
     }
 
     #[test]
     fn test_ext_root_prefix_matches_everything() {
-        let mut builder = RadixTreeBuilder::new();
+        let mut builder = PathRadixBuilder::new();
         builder.insert("/", 1).unwrap();
         let tree = builder.freeze().unwrap();
 
         let r = tree.match_all_ext("/");
-        assert!(ext_has(&r, 1, MatchKind::FullyConsumed));
+        assert!(ext_has(&r, 1, PathMatchKind::FullyConsumed));
 
         let r = tree.match_all_ext("/anything");
-        assert!(ext_has(&r, 1, MatchKind::SegmentBoundary));
+        assert!(ext_has(&r, 1, PathMatchKind::SegmentBoundary));
 
         let r = tree.match_all_ext("/a/b/c");
-        assert!(ext_has(&r, 1, MatchKind::SegmentBoundary));
+        assert!(ext_has(&r, 1, PathMatchKind::SegmentBoundary));
     }
 
     #[test]
     fn test_ext_exact_and_prefix_same_path() {
-        let mut builder = RadixTreeBuilder::new();
+        let mut builder = PathRadixBuilder::new();
         builder.insert("/api", 1).unwrap();
         builder.insert("/api/users", 2).unwrap();
         let tree = builder.freeze().unwrap();
 
         let r = tree.match_all_ext("/api");
-        assert!(ext_has(&r, 1, MatchKind::FullyConsumed));
+        assert!(ext_has(&r, 1, PathMatchKind::FullyConsumed));
         assert!(!r.iter().any(|&(v, _)| v == 2));
 
         let r = tree.match_all_ext("/api/users");
-        assert!(ext_has(&r, 1, MatchKind::SegmentBoundary));
-        assert!(ext_has(&r, 2, MatchKind::FullyConsumed));
+        assert!(ext_has(&r, 1, PathMatchKind::SegmentBoundary));
+        assert!(ext_has(&r, 2, PathMatchKind::FullyConsumed));
 
         let r = tree.match_all_ext("/api/users/123");
-        assert!(ext_has(&r, 1, MatchKind::SegmentBoundary));
-        assert!(ext_has(&r, 2, MatchKind::SegmentBoundary));
+        assert!(ext_has(&r, 1, PathMatchKind::SegmentBoundary));
+        assert!(ext_has(&r, 2, PathMatchKind::SegmentBoundary));
     }
 
     #[test]
     fn test_ext_param_routes() {
-        let mut builder = RadixTreeBuilder::new();
+        let mut builder = PathRadixBuilder::new();
         builder.insert("/users/:id", 1).unwrap();
         builder.insert("/users/:id/profile", 2).unwrap();
         let tree = builder.freeze().unwrap();
 
         let r = tree.match_all_ext("/users/123");
-        assert!(ext_has(&r, 1, MatchKind::FullyConsumed));
+        assert!(ext_has(&r, 1, PathMatchKind::FullyConsumed));
 
         let r = tree.match_all_ext("/users/123/profile");
-        assert!(ext_has(&r, 1, MatchKind::SegmentBoundary));
-        assert!(ext_has(&r, 2, MatchKind::FullyConsumed));
+        assert!(ext_has(&r, 1, PathMatchKind::SegmentBoundary));
+        assert!(ext_has(&r, 2, PathMatchKind::FullyConsumed));
 
         let r = tree.match_all_ext("/users/123/settings");
-        assert!(ext_has(&r, 1, MatchKind::SegmentBoundary));
+        assert!(ext_has(&r, 1, PathMatchKind::SegmentBoundary));
         assert!(!r.iter().any(|&(v, _)| v == 2));
     }
 
     #[test]
     fn test_ext_no_match() {
-        let mut builder = RadixTreeBuilder::new();
+        let mut builder = PathRadixBuilder::new();
         builder.insert("/api", 1).unwrap();
         let tree = builder.freeze().unwrap();
 
@@ -820,26 +776,26 @@ mod tests {
 
     #[test]
     fn test_ext_multi_segment_boundary() {
-        let mut builder = RadixTreeBuilder::new();
+        let mut builder = PathRadixBuilder::new();
         builder.insert("/api/v1", 1).unwrap();
         let tree = builder.freeze().unwrap();
 
-        assert!(ext_has(&tree.match_all_ext("/api/v1"), 1, MatchKind::FullyConsumed));
+        assert!(ext_has(&tree.match_all_ext("/api/v1"), 1, PathMatchKind::FullyConsumed));
         assert!(ext_has(
             &tree.match_all_ext("/api/v1/users"),
             1,
-            MatchKind::SegmentBoundary
+            PathMatchKind::SegmentBoundary
         ));
         assert!(ext_has(
             &tree.match_all_ext("/api/v1beta"),
             1,
-            MatchKind::PartialSegment
+            PathMatchKind::PartialSegment
         ));
     }
 
     #[test]
     fn test_match_all_static_routes() {
-        let mut builder = RadixTreeBuilder::new();
+        let mut builder = PathRadixBuilder::new();
         builder.insert("/health", 1).unwrap();
         builder.insert("/echo", 2).unwrap();
         builder.insert("/api/v1/users", 3).unwrap();
@@ -862,7 +818,7 @@ mod tests {
 
     #[test]
     fn test_match_all_with_params() {
-        let mut builder = RadixTreeBuilder::new();
+        let mut builder = PathRadixBuilder::new();
         builder.insert("/api/:version/users", 1).unwrap();
         builder.insert("/api/v1/users", 2).unwrap();
         let tree = builder.freeze().unwrap();
@@ -875,7 +831,7 @@ mod tests {
 
     #[test]
     fn test_match_all_prefixes_still_works() {
-        let mut builder = RadixTreeBuilder::new();
+        let mut builder = PathRadixBuilder::new();
         builder.insert("/api", 1).unwrap();
         builder.insert("/api/users", 2).unwrap();
         let tree = builder.freeze().unwrap();

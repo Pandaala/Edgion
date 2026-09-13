@@ -1,10 +1,16 @@
-//! Generic immutable Route hostname index and independently replaceable contents.
+//! Gateway hostname matching algorithms.
 //!
-//! The owner publishes this object with its dependent protocol data through ONE
-//! outer snapshot. This module knows nothing about Routes, Listeners or policy.
+//! Route matching follows Gateway API hostname-intersection semantics and may
+//! match multiple labels below a wildcard suffix. Certificate selection is kept
+//! in [`rfc6125`] and intentionally matches exactly one wildcard label.
 
-use super::hostname_input::HostnameQuery;
-use super::hostname_radix::{HostPatternId, HostnameRadixTree};
+mod input;
+mod radix;
+pub(crate) mod rfc6125;
+
+pub use input::{normalize_route_sni, HostnameQuery, NormalizedRouteSni};
+
+use self::radix::{HostPatternId, HostnameRadixTree};
 use edgion_resources::hostname::{HostnameError, HostnamePatternRef};
 use rpds::HashTrieMapSync;
 use std::collections::HashMap;
@@ -405,6 +411,6 @@ mod tests {
         assert_eq!(matches.len(), 127);
         assert_eq!(matches[0], query);
         assert_eq!(matches.last().unwrap(), "*.a");
-        assert!(size_of::<super::super::hostname_radix::MatchingIds>() <= 1024);
+        assert!(size_of::<super::radix::MatchingIds>() <= 1024);
     }
 }

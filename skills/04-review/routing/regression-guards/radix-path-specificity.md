@@ -44,7 +44,7 @@ request `/a/b`, static Exact `/a/b` scored 19, parameter Exact
 incorrectly won due to identifier length; type bonuses could not enforce
 Exact-first ordering.
 
-`edgion-resources/src/matcher/radix_tree/builder.rs::parse_path` discards the
+`edgion-gateway/src/matcher/path/builder.rs::parse_path` discards the
 identifier when constructing a parameter node. The new key follows that
 existing grammar without changing the shared parser:
 

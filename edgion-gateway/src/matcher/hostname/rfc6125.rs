@@ -1,5 +1,19 @@
-use crate::schema::is_valid_domain;
+//! RFC 6125 single-label wildcard matching for Gateway certificate selection.
+//!
+//! This policy intentionally differs from the sibling Route hostname radix,
+//! whose Gateway API wildcards may cover multiple labels.
+
+use edgion_resources::schema::is_valid_domain;
 use std::collections::HashMap;
+
+/// Match a configured certificate pattern against one hostname.
+///
+/// The shared TLS validator owns the cross-plane RFC 6125 comparison rule;
+/// this Gateway-facing wrapper keeps certificate-selection imports under the
+/// matcher boundary and presents the configured pattern first.
+pub fn matches_rfc6125(pattern: &str, hostname: &str) -> bool {
+    edgion_common::tls_validation::matches_host_pattern(hostname, pattern)
+}
 
 /// Normalize a hostname pattern to its storage key, rejecting invalid domains.
 /// Wildcards use `.example.com` keys; exact names use `example.com` keys.
@@ -85,6 +99,7 @@ impl<T> HashHost<T> {
         true
     }
 
+    #[allow(dead_code)]
     pub fn get(&self, k: &str) -> Option<&T> {
         // Avoid heap allocation when input is already ASCII-lowercase (the common
         // case: HTTP/2 headers and TLS SNI names are always lowercase per spec).
@@ -102,12 +117,13 @@ impl<T> HashHost<T> {
     /// `get_rfc6125("foo.example.com")` matches a registered `*.example.com`;
     /// `get_rfc6125("a.b.example.com")` does NOT — that would be a multi-label
     /// match, which RFC 6125-compliant client TLS stacks reject during the
-    /// handshake. Route matching (which is governed by Gateway API §4.3) still
-    /// uses [`HashHost::get`], so the two semantics coexist intentionally.
+    /// handshake. Route matching is implemented by the sibling hostname radix
+    /// and follows Gateway API multi-label wildcard semantics instead.
     pub fn get_rfc6125(&self, k: &str) -> Option<&T> {
         lookup_rfc6125(k, |key| self.map.get(key))
     }
 
+    #[allow(dead_code)]
     fn get_lower(&self, k: &str) -> Option<&T> {
         self.matching_values(k).next()
     }
@@ -117,6 +133,7 @@ impl<T> HashHost<T> {
     /// this lets a route whose remaining predicates fail try a broader hostname.
     /// The caller supplies a normalized lowercase hostname. No allocation is
     /// needed, and only registered wildcard suffix lengths are probed.
+    #[allow(dead_code)]
     pub fn matching_values<'a: 'b, 'b>(&'a self, hostname: &'b str) -> impl Iterator<Item = &'a T> + 'b {
         let valid = is_valid_domain(hostname);
         let exact = valid.then(|| self.map.get(hostname)).flatten();
@@ -131,6 +148,7 @@ impl<T> HashHost<T> {
         }))
     }
 
+    #[allow(dead_code)]
     pub fn get_mut(&mut self, k: &str) -> Option<&mut T> {
         if k.bytes().any(|b| b.is_ascii_uppercase()) {
             self.get_mut_lower(&k.to_ascii_lowercase())
@@ -139,6 +157,7 @@ impl<T> HashHost<T> {
         }
     }
 
+    #[allow(dead_code)]
     fn get_mut_lower(&mut self, k: &str) -> Option<&mut T> {
         if !is_valid_domain(k) {
             return None;
@@ -176,6 +195,7 @@ impl<T> HashHost<T> {
         self.map.get_mut(&key)
     }
 
+    #[allow(dead_code)]
     pub fn remove(&mut self, k: &str) -> Option<T> {
         self.map.remove(k)
     }
@@ -184,6 +204,14 @@ impl<T> HashHost<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_matches_rfc6125_uses_exactly_one_wildcard_label() {
+        assert!(matches_rfc6125("api.example.com", "API.EXAMPLE.COM"));
+        assert!(matches_rfc6125("*.example.com", "api.example.com"));
+        assert!(!matches_rfc6125("*.example.com", "a.api.example.com"));
+        assert!(!matches_rfc6125("*.example.com", "example.com"));
+    }
 
     #[test]
     fn matching_values_preserves_all_hostname_fallbacks_in_order() {

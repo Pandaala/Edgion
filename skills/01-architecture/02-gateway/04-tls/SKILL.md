@@ -81,7 +81,7 @@ pub struct TlsCertMatcher {
 ```
 
 - Two-level persistent index: `ListenerKey → hostname slot → ordered EdgionTls candidates`.
-- Uses shared `lookup_rfc6125` for exact and single-label wildcard matches, the same algorithm as `HashHost::get_rfc6125`.
+- Uses Gateway `matcher/hostname/rfc6125.rs::lookup_rfc6125` for exact and single-label wildcard matches, the same algorithm as `HashHost::get_rfc6125`.
 - Uses `ArcSwap` for lock-free reads. The match call (`match_sni`) runs inside the TLS handshake callback and must return quickly.
 - Global singleton: `TLS_CERT_MATCHER` (`LazyLock<Arc<TlsCertMatcher>>`), shared with the global TLS store.
 - Includes only valid certificates with bounded dimensions. Physical listener slots use `resolved_listeners`; the separate exact attachment index uses resolved Gateway attachment proofs and rejects complete groups above 64 candidates.

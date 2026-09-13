@@ -10,8 +10,7 @@
 //! or RSS. The global counting overhead affects allocation-heavy measurements;
 //! this executable creates no worker threads and owns its own allocator.
 
-use edgion_gateway::runtime::matching::hostname::{CompiledHostnamePattern, HostContentChange, HostnameMatcher};
-use edgion_gateway::runtime::matching::hostname_input::HostnameQuery;
+use edgion_gateway::matcher::hostname::{CompiledHostnamePattern, HostContentChange, HostnameMatcher, HostnameQuery};
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::collections::HashMap;
 use std::hint::black_box;

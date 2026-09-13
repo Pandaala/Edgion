@@ -3,11 +3,11 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::net::IpAddr;
 
+use crate::matcher::path::{PathMatchKind, PathRadixBuilder, PathRadixTree};
 use async_trait::async_trait;
 use bytes::Bytes;
 use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::matcher::ip_radix_tree::IpRadixMatcher;
-use edgion_resources::matcher::radix_tree::{MatchKind, RadixTree, RadixTreeBuilder};
 use edgion_resources::resources::edgion_config_data::ConfigEntry;
 use edgion_resources::resources::edgion_plugins::plugin_configs::{
     AccessPathMatchType, IpAccessMatch, RequestAccessPolicyConfig, RequestAccessProfile, RequestAccessRuleType,
@@ -74,7 +74,7 @@ struct PathBucket {
 struct RuntimeUrlIndex {
     candidates: Vec<RuntimeUrlCandidate>,
     path_buckets: Vec<PathBucket>,
-    path_tree: Option<RadixTree>,
+    path_tree: Option<PathRadixTree>,
     regex_paths: Vec<(usize, Regex)>,
 }
 
@@ -130,7 +130,7 @@ impl RuntimeUrlIndex {
             }
         }
 
-        let mut builder = RadixTreeBuilder::new();
+        let mut builder = PathRadixBuilder::new();
         let mut path_buckets = Vec::with_capacity(paths.len());
         for (path, bucket) in paths {
             let bucket_index = path_buckets.len();
@@ -159,12 +159,12 @@ impl RuntimeUrlIndex {
         if let Some(tree) = &self.path_tree {
             for (bucket_index, kind) in tree.match_all_ext(path) {
                 let bucket = &self.path_buckets[bucket_index as usize];
-                if kind == MatchKind::FullyConsumed {
+                if kind == PathMatchKind::FullyConsumed {
                     for candidate_index in &bucket.exact {
                         matched[*candidate_index] = true;
                     }
                 }
-                if matches!(kind, MatchKind::FullyConsumed | MatchKind::SegmentBoundary) {
+                if matches!(kind, PathMatchKind::FullyConsumed | PathMatchKind::SegmentBoundary) {
                     for candidate_index in &bucket.prefix {
                         matched[*candidate_index] = true;
                     }

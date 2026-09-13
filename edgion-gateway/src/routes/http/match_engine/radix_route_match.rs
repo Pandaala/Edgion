@@ -1,11 +1,11 @@
 use super::radix_path::{PathSpecificity, RadixPath};
 use crate::ctx::EdgionHttpContext;
+use crate::matcher::path::{PathMatchKind, PathRadixBuilder, PathRadixError, PathRadixTree};
 use crate::routes::http::match_unit::{MatchSpecificity, RouteMatchResult};
 use crate::routes::http::HttpRouteRuleUnit;
 use crate::runtime::store::listener_gateway_info::GatewayInfoIndex;
 use edgion_resources::err::EdError;
 use edgion_resources::err::EdError::RouteNotFound;
-use edgion_resources::matcher::radix_tree::{MatchKind, RadixTree, RadixTreeBuilder, RouterError};
 use pingora_proxy::Session;
 use smallvec::SmallVec;
 use std::cmp::Ordering;
@@ -33,15 +33,15 @@ fn cmp_candidate(
 /// Radix tree based route matching engine.
 ///
 /// Uses a single `match_all_ext` tree traversal that returns both the matched
-/// values and a [`MatchKind`] per value. The engine then applies lightweight
+/// values and a [`PathMatchKind`] per value. The engine then applies lightweight
 /// filtering:
-/// - **Exact routes**: accepted only when `MatchKind::FullyConsumed`
+/// - **Exact routes**: accepted only when `PathMatchKind::FullyConsumed`
 /// - **Prefix routes**: accepted when `FullyConsumed` or `SegmentBoundary`
 ///   (rejects partial-segment matches like `/v2` vs `/v2example`)
 ///
 /// **Lock-free concurrent reads**: the tree is immutable after initialization.
 pub struct RadixRouteMatchEngine {
-    tree: RadixTree,
+    tree: PathRadixTree,
     routes: Vec<Arc<HttpRouteRuleUnit>>,
     /// All RadixPath instances (flattened from all routes)
     radix_paths: Vec<RadixPath>,
@@ -55,7 +55,7 @@ impl RadixRouteMatchEngine {
     /// Build a new RadixRouteMatchEngine with the given route runtimes
     pub fn build(route_runtimes: Vec<Arc<HttpRouteRuleUnit>>) -> Result<Self, EdError> {
         let mut engine = Self {
-            tree: RadixTreeBuilder::new()
+            tree: PathRadixBuilder::new()
                 .freeze()
                 .expect("Failed to create empty radix tree"),
             routes: Vec::new(),
@@ -92,7 +92,7 @@ impl RadixRouteMatchEngine {
     /// Match a route for the given request (recommended entry point).
     ///
     /// Performs a single `match_all_ext` tree traversal, filters candidates by
-    /// [`MatchKind`], orders them by their build-time precedence rank, and runs
+    /// [`PathMatchKind`], orders them by their build-time precedence rank, and runs
     /// deep matching.
     ///
     /// Exact precedes Prefix; ties compare aggregate static segment count,
@@ -122,7 +122,7 @@ impl RadixRouteMatchEngine {
     /// Collect the candidates a request path matches and order them by their
     /// build-time precedence rank.
     ///
-    /// Split out of [`Self::match_route`] so the [`MatchKind`] filter and the
+    /// Split out of [`Self::match_route`] so the [`PathMatchKind`] filter and the
     /// ordering can be exercised without a live `Session`; `match_route` adds
     /// only deep matching on top of this.
     ///
@@ -143,10 +143,10 @@ impl RadixRouteMatchEngine {
             };
             for &path_idx in path_indices {
                 if let Some(radix_path) = self.radix_paths.get(path_idx as usize) {
-                    if !radix_path.is_prefix_match && *match_kind != MatchKind::FullyConsumed {
+                    if !radix_path.is_prefix_match && *match_kind != PathMatchKind::FullyConsumed {
                         continue;
                     }
-                    if radix_path.is_prefix_match && *match_kind == MatchKind::PartialSegment {
+                    if radix_path.is_prefix_match && *match_kind == PathMatchKind::PartialSegment {
                         continue;
                     }
                     candidates.push((radix_path.precedence_rank, path_idx));
@@ -159,7 +159,7 @@ impl RadixRouteMatchEngine {
     }
 
     fn initialize_internal(&mut self, route_runtimes: Vec<Arc<HttpRouteRuleUnit>>) -> Result<(), EdError> {
-        let mut builder = RadixTreeBuilder::new();
+        let mut builder = PathRadixBuilder::new();
         let mut total_paths = 0usize;
         let mut next_tree_value = 1usize;
         let mut path_to_value: HashMap<String, usize> = HashMap::new();
@@ -177,7 +177,7 @@ impl RadixRouteMatchEngine {
                     existing_value
                 } else {
                     let new_value = next_tree_value;
-                    builder.insert(tree_key, new_value).map_err(|e: RouterError| {
+                    builder.insert(tree_key, new_value).map_err(|e: PathRadixError| {
                         EdError::InternalError(format!("Failed to insert path '{}' into radix tree: {}", tree_key, e))
                     })?;
                     path_to_value.insert(tree_key.to_string(), new_value);
@@ -201,7 +201,7 @@ impl RadixRouteMatchEngine {
 
         self.tree = builder
             .freeze()
-            .map_err(|e: RouterError| EdError::InternalError(format!("Failed to freeze radix tree: {}", e)))?;
+            .map_err(|e: PathRadixError| EdError::InternalError(format!("Failed to freeze radix tree: {}", e)))?;
 
         self.assign_precedence_ranks();
 
@@ -264,7 +264,7 @@ impl RadixRouteMatchEngine {
 
 impl Default for RadixRouteMatchEngine {
     fn default() -> Self {
-        let builder = RadixTreeBuilder::new();
+        let builder = PathRadixBuilder::new();
         let tree = builder.freeze().expect("Failed to create empty radix tree");
 
         Self {

@@ -143,6 +143,15 @@ listener metadata and per-listener route snapshots, but cannot add or remove Pin
 
 Changing the listener port set requires a Gateway process restart/rolling restart.
 
+Gateway dynamic deletion/recreation is also unsupported: reapplying the same
+Gateway and listener key does not promise recovery on the existing process.
+Restart or roll the data plane against the desired Gateway configuration.
+Logical-owner cleanup can clear and retire a manager that a physical proxy still
+holds; later reapply publishes to a different manager. This accepted limitation
+does not disable Controller dependency requeue, Route hot reload, or certificate
+hot reload under an existing Gateway. See the
+[lifecycle decision](../../04-review/listeners/intentional-design/gateway-recreation-requires-restart.md).
+
 Inbound PROXY protocol is part of the same socket boundary. After the baseline is frozen, a
 change in PROXY socket semantics (Required / TrustedSources presence, CIDRs, or bind address of
 an enabled policy) trips a process-wide monotonic fatal guard. Disabled-only listener keys may

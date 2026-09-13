@@ -83,8 +83,8 @@ Each `RouteRules` holds two engines internally:
 
 ### RadixRouteMatchEngine (Exact / Prefix)
 
-- Based on a radix tree (`RadixTreeBuilder` + `RadixTree`); all routes are inserted at initialization and frozen into an immutable tree.
-- A single `match_all_ext` traversal returns all candidates with their `MatchKind` (`FullyConsumed` / `SegmentBoundary` / `PartialSegment`).
+- Based on the Gateway-owned path radix (`PathRadixBuilder` + `PathRadixTree`); all routes are inserted at initialization and frozen into an immutable tree.
+- A single `match_all_ext` traversal returns all candidates with their `PathMatchKind` (`FullyConsumed` / `SegmentBoundary` / `PartialSegment`).
 - Exact routes accept only `FullyConsumed`; Prefix routes accept `FullyConsumed` or `SegmentBoundary` (rejecting partial-segment matches like `/v2` matching `/v2example`).
 - Candidate ordering is resolved at build time, not per request: the whole snapshot is ranked once
   into a per-`RadixPath` `precedence_rank`, so the request path only sorts `(rank, path_idx)`

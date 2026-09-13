@@ -83,9 +83,13 @@ acceptance parity was recorded under `route-listener-protocol-acceptance-parity`
 and remains a separate concern. Certificate selection and SAN identity matching
 are unchanged, not consumers of the Route matcher. Physical TLS listener
 manager recreation, recorded under `tls-listener-recreation-stale-route-manager`,
-is another pre-existing lifecycle defect: deleting every owning Gateway and
+is a pre-existing lifecycle failure: deleting every owning Gateway and
 recreating it can disconnect configuration updates from the proxy's retained Arc.
 Route-only deletion/recreation does not exercise that ownership transition.
+On 2026-09-13 the user accepted the
+[Gateway recreation restart boundary](../../listeners/intentional-design/gateway-recreation-requires-restart.md)
+without a production fix. Existing recovery-test expectations remain separately
+tracked; historical failures are not passing verification.
 
 The following results are historical attachment-projection repair evidence, not
 fresh verification of the shared hostname-index migration.
@@ -119,7 +123,7 @@ including Gateway listener rename, route-parent and hostname changes, wildcard
 controls, exact backend identity, and Route delete/recreate. The final
 `cache_residue --mode fail` passed after wiping 41 resources without errors.
 Run the residue wipe after all traffic scenarios. An earlier attempt to reload
-after that final wipe reproduced the separate manager-recreation defect above
+after that final wipe reproduced the separate manager-recreation failure above
 and is not counted as a passing dynamic run.
 
 Re-evaluate changes to attachment identity, parent acceptance, wildcard semantics,

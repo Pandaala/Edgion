@@ -1,7 +1,7 @@
 use crate::ctx::EdgionHttpContext;
+use crate::matcher::hostname::HostnameQuery;
+use crate::matcher::hostname::{CompiledHostnamePattern, HostnameMatcher};
 use crate::routes::grpc::GrpcRouteRuleUnit;
-use crate::runtime::matching::hostname::{CompiledHostnamePattern, HostnameMatcher};
-use crate::runtime::matching::hostname_input::HostnameQuery;
 use crate::runtime::store::listener_gateway_info::GatewayInfoIndex;
 use crate::runtime::GatewayInfo;
 use edgion_resources::err::EdError;

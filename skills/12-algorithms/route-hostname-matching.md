@@ -8,7 +8,7 @@ status: shipped
 
 ## What we run today
 
-`edgion-gateway/src/runtime/matching/hostname.rs` owns the generic
+`edgion-gateway/src/matcher/hostname/mod.rs` owns the generic
 `HostnameMatcher<T>` used by HTTPRoute, GRPCRoute and TLSRoute. Its frozen
 reverse-byte compressed radix maps exact and wildcard terminals to private,
 generation-local IDs. A persistent `rpds::HashTrieMapSync` maps those IDs to
@@ -17,7 +17,7 @@ backend selection, errors, catch-all policy, or publication.
 
 Configuration grammar lives in `edgion-resources/src/hostname.rs`, allowing
 Controller and Gateway validation without a Controller-to-Gateway dependency.
-Protocol input normalization lives in gateway `hostname_input.rs`; the matcher
+Protocol input normalization lives in Gateway `matcher/hostname/input.rs`; the matcher
 accepts only a checked, normalized borrowed `HostnameQuery`. Configured names
 are lowercase DNS names, including short names; bare `*`, IP literals, partial
 wildcards and malformed lists are rejected. HTTPRoute/GRPCRoute permit 0..16
@@ -96,7 +96,7 @@ certificate, Listener, and backend behavior from leaking into a generic match.
 | Implementation | Decision and reason |
 |---|---|
 | Gateway API [v1.5.0 hostname definitions](https://github.com/kubernetes-sigs/gateway-api/blob/v1.5.0/apis/v1/shared_types.go) and Route definitions | Adopt multi-label wildcard suffixes and authored hostname specificity; intersection alone does not settle runtime Listener ownership. |
-| Existing resources `HashHost` certificate consumers | Keep unchanged. Their certificate-selection/identity contracts are not Route semantics. The benchmark has an isolated corrected-hash reference; it is not a new production matcher. |
+| Gateway RFC 6125 `HashHost` certificate consumers | Keep semantically separate. Their certificate-selection/identity contracts are not Route semantics. The benchmark has an isolated corrected-hash reference; it is not a new production matcher. |
 | Former Route `RadixHostMatchEngine` | Replace its payload-coupled tree and permissive configuration handling with the shared checked index. Its useful exact/wildcard/empty/payload tests are covered by the new core; old acceptance of uppercase configuration or nested wildcards is intentionally not retained. |
 | [rpds 1.2.1 hash-trie implementation](https://github.com/orium/rpds/blob/v1.2.1/src/map/hash_trie_map/mod.rs) | Reuse the existing persistent map for content path-copying; do not introduce a custom persistent container or require payload cloning. |
 | [ArcSwap consistent-snapshot pattern](https://docs.rs/arc-swap/latest/arc_swap/docs/patterns/index.html) | Keep one owner-level publication and retain snapshots where decisions must agree; independent inner swaps could mix a tree generation with another generation's contents/ranks. |

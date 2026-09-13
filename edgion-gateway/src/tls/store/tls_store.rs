@@ -1,7 +1,7 @@
 use super::cert_matcher::{AttachmentMatchSlot, TlsCertMatcher, TlsCertMatcherSnapshot, MAX_ATTACHMENT_CANDIDATES};
+use crate::matcher::hostname::rfc6125::canonical_host_key;
 use crate::tls::validation::cert::{validate_cert, CertValidationResult};
 use edgion_resources::listener_key::ListenerKey;
-use edgion_resources::matcher::canonical_host_key;
 use edgion_resources::resources::edgion_tls::ResolvedListenerAttachment;
 use edgion_resources::EdgionTls;
 use rpds::{HashTrieMapSync as PersistentHashMap, HashTrieSetSync as PersistentHashSet};

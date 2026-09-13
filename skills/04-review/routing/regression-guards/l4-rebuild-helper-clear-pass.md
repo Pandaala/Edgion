@@ -68,6 +68,10 @@ convention.
    generic L4 helper with a genuinely non-empty retained handle; HTTP and gRPC
    have matching family-specific tests.
 
+These invariants establish clearing, not Gateway delete/recreate recovery on a
+retained proxy. PGIS is a logical-owner inventory; it does not prove a socket has
+retired. See the [accepted restart boundary](../../listeners/intentional-design/gateway-recreation-requires-restart.md).
+
 ## Hard boundary — do not fold gRPC or HTTP into this helper
 
 The same boundary as `apply_l4_partial_update`:

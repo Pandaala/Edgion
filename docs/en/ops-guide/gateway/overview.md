@@ -17,6 +17,18 @@ three layers:
 Edgion supports HTTP/1.1, HTTP/2, gRPC, TCP, UDP, TLS, and WebSocket, plus a plugin system,
 load balancing, and TLS/mTLS.
 
+## Gateway lifecycle and hot reload
+
+Gateway dynamic creation/deletion and listener socket changes are not supported
+without a data-plane restart. Apply the desired Gateway configuration, then
+restart or roll the Gateway processes. Deleting and recreating a Gateway also
+requires this restart, even when its listener address, port, and protocol stay
+the same; reapplying the resource alone does not guarantee traffic recovery.
+
+Routes and TLS certificates under an existing Gateway support hot reload. This
+lifecycle limitation does not change the documented dynamic behavior of the
+separate `EdgionGatewayConfig` resource.
+
 ## How a request flows
 
 1. A client connects to a listener address (`port` + `protocol`).

@@ -32,9 +32,9 @@ edgion-gateway/src/routes/http/
 
 `RadixRouteMatchEngine` implements Exact and Prefix path matching via an immutable radix tree:
 
-1. **Build phase** (`build`): iterate every `HttpRouteRuleUnit`, create a `RadixPath` per path, insert into `RadixTreeBuilder`, `freeze()` into an immutable `RadixTree`, and finally rank every candidate once (`assign_precedence_ranks`) into `RadixPath::precedence_rank`.
+1. **Build phase** (`build`): iterate every `HttpRouteRuleUnit`, create a `RadixPath` per path, insert into `PathRadixBuilder`, `freeze()` into an immutable `PathRadixTree`, and finally rank every candidate once (`assign_precedence_ranks`) into `RadixPath::precedence_rank`.
 2. **Match phase** (`match_route`):
-   - Call `tree.match_all_ext(path)` to obtain all candidates and their `MatchKind` in one pass.
+   - Call `tree.match_all_ext(path)` to obtain all candidates and their `PathMatchKind` in one pass.
    - Filter: Exact accepts only `FullyConsumed`; Prefix accepts `FullyConsumed` or `SegmentBoundary`.
    - Order candidates by the build-time `precedence_rank` (a plain integer sort). The rank encodes `PathSpecificity` descending, then the full Gateway API priority chain via `MatchSpecificity::cmp_precedence()` (method → headers → query params → timestamp → name → rule/match index), then `path_idx`.
    - Run `deep_match` on candidates in turn; the first that passes is the final match.

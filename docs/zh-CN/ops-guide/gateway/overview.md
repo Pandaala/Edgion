@@ -12,6 +12,12 @@ Edgion 是 Gateway API 的实现。您通过标准 Gateway API 资源声明意�
 
 Edgion 支持 HTTP/1.1、HTTP/2、gRPC、TCP、UDP、TLS 和 WebSocket，并提供插件系统、负载均衡和 TLS/mTLS。
 
+## Gateway 生命周期与热更新
+
+Gateway 的动态创建、删除以及监听 socket 的变更不支持免重启生效。请先应用目标 Gateway 配置，再重启或滚动重启数据面 Gateway 进程。删除后重新创建 Gateway 也需要执行该重启流程，即使监听地址、端口和协议完全相同；仅重新应用资源不能保证流量恢复。
+
+已有 Gateway 下的路由和 TLS 证书支持热更新。此生命周期限制不改变独立资源 `EdgionGatewayConfig` 已有文档说明的动态生效行为。
+
 ## 请求流转
 
 1. 客户端连接到 Listener 地址（`port` + `protocol`）。

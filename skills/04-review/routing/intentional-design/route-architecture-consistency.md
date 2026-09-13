@@ -28,7 +28,7 @@ types to ensure architectural alignment.
 | Dimension | TCP | UDP | TLS | HTTP | gRPC |
 |-----------|-----|-----|-----|------|------|
 | **Port** | Yes | Yes | Yes | Yes | Yes |
-| **Hostname** | No | No | Yes (SNI via `HashHost`) | Yes (exact/wildcard/catch-all) | Yes (ordered `HashHost` + catch-all) |
+| **Hostname** | No | No | Yes (SNI via `HostnameMatcher`) | Yes (exact/wildcard/catch-all) | Yes (ordered `HostnameMatcher` + catch-all) |
 | **Path** | N/A | N/A | N/A | Yes (radix + regex) | N/A |
 | **Service/Method** | N/A | N/A | N/A | N/A | Yes (service+method/service-only/method-only/regex/any) |
 
@@ -46,7 +46,7 @@ types to ensure architectural alignment.
 | Dimension | TCP | UDP | TLS | HTTP | gRPC |
 |-----------|-----|-----|-----|------|------|
 | **Match type** | First match | First match | SNI hostname match | Domain → Path → Deep match | Hostname → ranked Service/Method → Deep match |
-| **Match engine** | `Vec::first()` | `Vec::first()` | `HashHost` (exact → wildcard → catch-all) | `RadixRouteMatchEngine` + `RegexRoutesEngine` | `GrpcMatchEngine` (five indexed streams merged by build-time rank) |
+| **Match engine** | `Vec::first()` | `Vec::first()` | `HostnameMatcher` (exact → wildcard) | `RadixRouteMatchEngine` + `RegexRoutesEngine` | `GrpcMatchEngine` (hostname groups plus five indexed streams merged by build-time rank) |
 | **Gateway validation** | No | No | No | Yes (`deep_match` with `gateway_infos`) | Yes (`deep_match` with `gateway_infos`) |
 
 ### `resolved_listeners` Handling
@@ -98,6 +98,11 @@ When a listener registry entry is removed, rebuild clears the old manager before
 dropping it from `by_listener`. A proxy that still retains that `Arc` therefore sees
 an empty snapshot. Later recreation installs a distinct manager, so it cannot revive
 the removed generation through the old handle.
+
+Live recovery after Gateway deletion/recreation is outside the
+[supported lifecycle](../../listeners/intentional-design/gateway-recreation-requires-restart.md)
+and requires a data-plane restart. This limitation does not excuse stale routes
+after deletion or breakage of Route-only hot reload under an existing Gateway.
 
 ---
 

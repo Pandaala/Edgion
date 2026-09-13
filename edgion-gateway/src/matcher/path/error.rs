@@ -4,7 +4,7 @@ use std::fmt;
 
 /// Errors that can occur during router operations
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum RouterError {
+pub(crate) enum PathRadixError {
     /// Path is empty
     EmptyPath,
 
@@ -59,32 +59,32 @@ pub enum RouterError {
     },
 }
 
-impl fmt::Display for RouterError {
+impl fmt::Display for PathRadixError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            RouterError::EmptyPath => {
+            PathRadixError::EmptyPath => {
                 write!(f, "path cannot be empty")
             }
-            RouterError::PathTooLong { length, max } => {
+            PathRadixError::PathTooLong { length, max } => {
                 write!(f, "path length {} exceeds maximum {}", length, max)
             }
-            RouterError::TooManyValues { path, count, max } => {
+            PathRadixError::TooManyValues { path, count, max } => {
                 write!(f, "path '{}' has {} values, exceeds maximum {}", path, count, max)
             }
-            RouterError::TooManyNodes { count, max } => {
+            PathRadixError::TooManyNodes { count, max } => {
                 write!(f, "tree has {} nodes, exceeds maximum {}", count, max)
             }
-            RouterError::TooManyChildren { count, max } => {
+            PathRadixError::TooManyChildren { count, max } => {
                 write!(f, "node has {} children, exceeds maximum {}", count, max)
             }
-            RouterError::StringPoolTooLarge { size, max } => {
+            PathRadixError::StringPoolTooLarge { size, max } => {
                 write!(f, "string pool size {} exceeds maximum {}", size, max)
             }
-            RouterError::ValuesPoolTooLarge { size, max } => {
+            PathRadixError::ValuesPoolTooLarge { size, max } => {
                 write!(f, "values pool size {} exceeds maximum {}", size, max)
             }
         }
     }
 }
 
-impl std::error::Error for RouterError {}
+impl std::error::Error for PathRadixError {}

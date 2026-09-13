@@ -1,10 +1,10 @@
 #[cfg(test)]
 mod route_matching_tests {
+    use crate::matcher::hostname::CompiledHostnamePattern;
+    use crate::matcher::hostname::HostnameQuery;
     use crate::routes::http::conf_handler_impl::HttpRouteChanges;
     use crate::routes::http::routes_mgr::DomainRouteRules;
     use crate::routes::http::routes_mgr::{GlobalHttpRouteManagers, HttpPortRouteManager};
-    use crate::runtime::matching::hostname::CompiledHostnamePattern;
-    use crate::runtime::matching::hostname_input::HostnameQuery;
     use crate::runtime::store::get_global_gateway_store;
     use edgion_common::conf_sync::traits::ConfHandler;
     use edgion_resources::{Gateway, HTTPRoute, ListenerKey};

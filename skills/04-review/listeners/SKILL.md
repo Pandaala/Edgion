@@ -11,6 +11,7 @@ before applying a decision to current code.
 
 ## Intentional design
 
+- [Gateway recreation requires a data-plane restart](intentional-design/gateway-recreation-requires-restart.md)
 - [Serial connection admission with optional Redis limits](intentional-design/bounded-serial-connection-admission.md)
 
 ## Compatibility constraints

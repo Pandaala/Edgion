@@ -24,6 +24,12 @@ listener add/remove/drain (Envoy LDS parity) depends on Pingora's `Server` API g
 the ability to register `Service`s after the serving loop starts; until then the
 documented operator workflow is a Kubernetes rolling restart for port changes.
 
+Gateway deletion/recreation also requires a data-plane restart, even for the
+same physical listener key. That is a separate
+[accepted product boundary](../intentional-design/gateway-recreation-requires-restart.md),
+not proof that Pingora prevents reconnecting route publication on an existing
+socket. Route and certificate hot reload under an existing Gateway remains supported.
+
 ## Core Rationale
 
 **1. The real fix is blocked by an upstream API limit**

@@ -40,7 +40,7 @@ unconditionally — otherwise the prefilter produces a false negative and the ro
 unreachable.
 
 This is *not* limited to same-path siblings. `FrozenRadixTree::match_all_ext`
-(`edgion-resources/src/matcher/radix_tree/frozen.rs`) returns every valued node along the
+(`edgion-gateway/src/matcher/path/frozen.rs`) returns every valued node along the
 request path, so `/api/v1/checkout` yields the `/api`, `/api/v1` and `/api/v1/checkout`
 buckets together, and a prefix ancestor may well carry a header predicate of its own. The
 saving is therefore bounded by the number of returned candidates carrying a mismatching
@@ -151,7 +151,7 @@ With that precondition satisfied, re-open this decision only if:
 - `edgion-gateway/src/runtime/matching/route.rs` and
   `edgion-gateway/src/runtime/store/listener_gateway_info.rs` — precomputed parent-reference
   keys and generation-local Gateway/listener lookup ownership
-- `edgion-resources/src/matcher/radix_tree/frozen.rs` — `match_all_ext` returns every valued
+- `edgion-gateway/src/matcher/path/frozen.rs` — `match_all_ext` returns every valued
   node along the path
 - `tasks/todo/radix-route-matching-benchmarks.md` — the prerequisite measurement surface and
   the bucket-depth observation

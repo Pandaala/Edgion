@@ -156,6 +156,7 @@ pub mod ctx;
 pub mod geoip;
 pub mod lb;
 pub mod link_sys;
+pub mod matcher;
 pub mod observe;
 pub mod plugins;
 pub mod request_body;

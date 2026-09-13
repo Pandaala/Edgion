@@ -1,7 +1,7 @@
 use super::tls_store::TlsSnapshotData;
+use crate::matcher::hostname::rfc6125::{lookup_rfc6125, matches_rfc6125};
 use arc_swap::ArcSwap;
 use edgion_resources::listener_key::ListenerKey;
-use edgion_resources::matcher::lookup_rfc6125;
 use edgion_resources::resources::edgion_tls::ResolvedListenerAttachment;
 use edgion_resources::EdgionTls;
 use std::sync::{Arc, LazyLock};
@@ -37,13 +37,7 @@ impl TlsCertMatcherSnapshot {
         };
         candidates
             .iter()
-            .find(|candidate| {
-                candidate
-                    .spec
-                    .hosts
-                    .iter()
-                    .any(|host| hostname_matches_rfc6125(host, sni))
-            })
+            .find(|candidate| candidate.spec.hosts.iter().any(|host| matches_rfc6125(host, sni)))
             .cloned()
     }
 }
@@ -94,19 +88,6 @@ impl TlsCertMatcher {
             data: self.data.load_full(),
         }
     }
-}
-
-fn hostname_matches_rfc6125(pattern: &str, hostname: &str) -> bool {
-    if pattern.eq_ignore_ascii_case(hostname) {
-        return true;
-    }
-    let Some(suffix) = pattern.strip_prefix("*.") else {
-        return false;
-    };
-    let Some(dot) = hostname.find('.') else {
-        return false;
-    };
-    !hostname[..dot].is_empty() && hostname[dot + 1..].eq_ignore_ascii_case(suffix)
 }
 
 impl TlsCertMatcher {

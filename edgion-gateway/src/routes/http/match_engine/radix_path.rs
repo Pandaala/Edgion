@@ -30,7 +30,7 @@ impl PathSpecificity {
                 continue;
             }
             specificity.segment_count += 1;
-            // Match radix_tree::builder::parse_path: only a colon immediately
+            // Match matcher::path::builder::parse_path: only a colon immediately
             // after '/' starts a parameter or escape. An internal ':' is literal.
             let static_segment = if index > 0 && segment.starts_with(':') {
                 if let Some(escaped) = segment.strip_prefix("::") {

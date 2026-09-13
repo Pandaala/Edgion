@@ -149,7 +149,7 @@ Unit tests in `tls.rs` (GatewayTlsMatcher):
 - `test_cross_gateway_collision_prefers_oldest_creation_timestamp` — the older Gateway
   wins even with a lexically larger name, proving creationTimestamp dominates.
 
-Unit test in `hash_host.rs`:
+Unit test in `edgion-gateway/src/matcher/hostname/rfc6125.rs`:
 - `test_get_mut_exact_resolves_wildcard_pattern` — `get_mut_exact("*.example.com")`
   resolves to its own bucket, still refuses a concrete subdomain, case-insensitive.
 

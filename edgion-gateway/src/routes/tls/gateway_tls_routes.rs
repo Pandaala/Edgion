@@ -1,7 +1,7 @@
+use crate::matcher::hostname::normalize_route_sni;
+use crate::matcher::hostname::{CompiledHostnamePattern, HostnameMatcher};
 use crate::routes::tls::route_unit::TlsRouteUnit;
 use crate::runtime::gateway_info::GatewayInfo;
-use crate::runtime::matching::hostname::{CompiledHostnamePattern, HostnameMatcher};
-use crate::runtime::matching::hostname_input::normalize_route_sni;
 use crate::runtime::matching::route::{check_gateway_listener_match, ResolvedParentRef};
 use crate::runtime::store::listener_gateway_info::GatewayInfoIndex;
 use edgion_resources::hostname::{hostname_matches_pattern, HostnamePatternRef};
