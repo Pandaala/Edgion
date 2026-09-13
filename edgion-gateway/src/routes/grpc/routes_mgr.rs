@@ -221,7 +221,8 @@ impl GlobalGrpcRouteManagers {
 
         for (key, units) in &listener_buckets {
             let manager = self.get_or_create_listener_manager(key);
-            let table = build_grpc_route_rules_from_units(units);
+            let previous = manager.load_route_table();
+            let table = build_grpc_route_rules_from_units(units, Some(&previous));
             manager.store_route_table(table);
             rebuilt_listeners += 1;
         }
@@ -293,7 +294,8 @@ impl GlobalGrpcRouteManagers {
         let mut removed_stale = 0usize;
         for (key, units) in &listener_buckets {
             let manager = self.get_or_create_listener_manager(key);
-            let table = build_grpc_route_rules_from_units(units);
+            let previous = manager.load_route_table();
+            let table = build_grpc_route_rules_from_units(units, Some(&previous));
             manager.store_route_table(table);
             if units.is_empty() && !active_listeners.contains(key) {
                 if self.by_listener.remove(key).is_some() {
@@ -376,7 +378,10 @@ impl GlobalGrpcRouteManagers {
 }
 
 /// Build DomainGrpcRouteRules from a per-listener units map.
-fn build_grpc_route_rules_from_units(all_units: &HashMap<String, Vec<Arc<GrpcRouteRuleUnit>>>) -> DomainGrpcRouteRules {
+fn build_grpc_route_rules_from_units(
+    all_units: &HashMap<String, Vec<Arc<GrpcRouteRuleUnit>>>,
+    previous: Option<&DomainGrpcRouteRules>,
+) -> DomainGrpcRouteRules {
     let mut resource_keys = HashSet::new();
     let mut route_rules_list: Vec<Arc<GrpcRouteRuleUnit>> = Vec::new();
 
@@ -390,7 +395,10 @@ fn build_grpc_route_rules_from_units(all_units: &HashMap<String, Vec<Arc<GrpcRou
     let match_engine = if route_rules_list.is_empty() {
         None
     } else {
-        Some(Arc::new(GrpcMatchEngine::new(route_rules_list.clone())))
+        Some(Arc::new(GrpcMatchEngine::rebuild(
+            route_rules_list.clone(),
+            previous.and_then(|table| table.grpc_routes.match_engine.as_deref()),
+        )))
     };
 
     DomainGrpcRouteRules {
@@ -484,7 +492,7 @@ mod tests {
     ) -> Arc<GrpcPortRouteManager> {
         let manager = managers.get_or_create_listener_manager(listener_key);
         let units = HashMap::from([("default/prior".to_string(), vec![route_unit("prior")])]);
-        let table = build_grpc_route_rules_from_units(&units);
+        let table = build_grpc_route_rules_from_units(&units, None);
         assert!(table.has_routes());
         manager.store_route_table(table);
         manager
@@ -494,7 +502,7 @@ mod tests {
     fn outer_swap_keeps_each_domain_grpc_snapshot_immutable() {
         let manager = GrpcPortRouteManager::new();
         let units = HashMap::from([("default/prior".to_string(), vec![route_unit("prior")])]);
-        manager.store_route_table(build_grpc_route_rules_from_units(&units));
+        manager.store_route_table(build_grpc_route_rules_from_units(&units, None));
         let retained_snapshot = manager.load_route_table();
         assert!(retained_snapshot.has_routes());
 

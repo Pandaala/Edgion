@@ -166,7 +166,6 @@ COLD_FUNCTION_REGISTRATIONS = [
         "configuration publication assembles cached stream entries",
     ),
     ("plugins/stream/tls_route/ip_restriction.rs", "TlsRouteIpRestriction", "new", "plugin construction"),
-    ("routes/grpc/match_engine.rs", "GrpcMatchEngine", "new", "route matcher construction"),
     ("routes/grpc/match_unit.rs", "GrpcMatchInfo", "new", "route matcher construction"),
     ("routes/http/match_engine/radix_path.rs", "RadixPath", "new", "route matcher construction"),
     (

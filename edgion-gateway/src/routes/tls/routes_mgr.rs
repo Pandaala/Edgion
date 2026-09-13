@@ -38,7 +38,8 @@ impl TlsRouteManager {
     /// Rebuild the route table from units belonging to this listener.
     /// Called by `GlobalTlsRouteManagers` during rebuild.
     pub fn rebuild(&self, units: &HashMap<String, Arc<TlsRouteUnit>>) {
-        let new_table = TlsRouteTable::from_units(&self.listener_key, units);
+        let previous = self.route_table.load();
+        let new_table = previous.with_units(&self.listener_key, units);
 
         tracing::debug!(
             component = "tls_route_manager",

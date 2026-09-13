@@ -116,13 +116,18 @@ HTTPRoute's ConfHandler implements route compilation and registration:
 0. **Effective rules**: compiles `route.effective_rules()` — `spec.resolved_rules` (controller-flattened delegation result) when present, else `spec.rules`. `invalid_rule_indices` applies only to `spec.rules` (flattening already dropped invalid rules). Delegation children have no Gateway parentRefs / `resolved_listeners`, so they register nothing and are inert on the data plane. Flattening stamps every rule- and backend-level ExtensionRef with the Namespace of the HTTPRoute that declared it, preserving parent-local and child-local EdgionPlugins resolution in the shared Gateway runtime. Authored `resolvedNamespace` values are cleared before flattening in filesystem/etcd modes
 1. **parentRef filtering**: only compile parentRefs with `Accepted=True` (when status is not yet present, optimistically compile all)
 2. **Per-listener route management**: based on resolved_listeners, register route rules into the `HttpRouteManager` of the corresponding `ListenerKey`
-3. **Domain route table**: each port maintains a `domain → route_rules` mapping; routes without a hostname are registered under `*` (wildcard)
+3. **Domain route table**: each physical Listener maintains authored hostname groups; only omitted/empty hostname lists create a separate internal catch-all. Both planes reject a bare `*` or any other invalid hostname entry for the complete Route.
 4. **Multi-level match engine**:
-   - `RadixHostMatchEngine`: domain matching based on a Radix Tree
+   - Gateway `HostnameMatcher<RouteRules>`: shared immutable exact/wildcard index; matching suffixes continue from longest to shortest without changing Listener eligibility
    - `RadixRouteMatchEngine`: path-prefix matching based on a Radix Tree
    - `RegexRoutesEngine`: regex path matching
 5. **Request handling flow**: `port → domain match → path match → header/query deep match → selected rule → execute plugin chain → proxy_http`
 6. **LB policy sync**: when routes change, the corresponding load-balancing policy is synced
+
+HTTP Route deltas replace touched hostname contents while retaining untouched
+path engines. The shared hostname tree is reused whenever final keys agree,
+including full-list/Gateway rebuilds; the table is published through one outer
+snapshot. See the [hostname algorithm contract](../../12-algorithms/route-hostname-matching.md).
 
 ## Cross-resource relationships
 

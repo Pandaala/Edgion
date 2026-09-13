@@ -98,11 +98,8 @@ impl Default for TlsRouteHandler {
 
 impl TlsRouteHandler {
     fn validate_route(&self, route: &TLSRoute) -> Vec<String> {
-        let mut errors = validate_tls_route_if_enabled(route);
-        if let Err(error) = route.spec.validate_hostnames() {
-            errors.push(error.to_string());
-        }
-        errors
+        // Hostname errors are classified separately as UnsupportedValue in status.
+        validate_tls_route_if_enabled(route)
     }
 
     async fn parse_route(&self, mut route: TLSRoute, ctx: &HandlerContext) -> ProcessResult<TLSRoute> {
@@ -233,6 +230,7 @@ impl TlsRouteHandler {
         let generation = route.metadata.generation;
         let route_ns = route.metadata.namespace.as_deref().unwrap_or("default");
 
+        let hostname_error = route.spec.validate_hostnames().err();
         let validation_accepted_errors = AcceptedError::from_validation_errors(validation_errors);
 
         let backend_ref_tuples = collect_backend_ref_tuples(route);
@@ -258,6 +256,14 @@ impl TlsRouteHandler {
                     ctx.runtime(),
                 );
                 let mut accepted_errors = accepted_result.errors;
+                if let Some(error) = hostname_error {
+                    accepted_errors.insert(
+                        0,
+                        AcceptedError::UnsupportedValue {
+                            message: error.to_string(),
+                        },
+                    );
+                }
                 accepted_errors.extend(validation_accepted_errors.clone());
 
                 let parent_status = status.parents.iter_mut().find(|ps| {
@@ -287,7 +293,11 @@ impl TlsRouteHandler {
 
         // Globally rejected routes must not contribute to attachedRoutes.
         // Passing no parents also removes attachments from the prior generation.
-        let accepted_parents = route.spec.parent_refs.as_ref().filter(|_| validation_errors.is_empty());
+        let accepted_parents = route
+            .spec
+            .parent_refs
+            .as_ref()
+            .filter(|_| validation_errors.is_empty() && hostname_error.is_none());
         super::route_utils::update_tracker_accepted_only(
             ResourceKind::TLSRoute,
             route_ns,
@@ -460,11 +470,16 @@ mod tests {
             None,
             valid.clone(),
             Some(vec!["*".to_string()]),
+            Some(vec!["a.example.com".to_string(); 16]),
+            Some(vec!["a.example.com".to_string(); 17]),
+            Some(vec!["a.example.com".to_string(), "*".to_string()]),
+            Some(vec!["127.0.0.1".to_string()]),
+            Some(vec!["*.127.0.0.1".to_string()]),
             valid,
         ] {
             route.spec.hostnames = hostnames;
             let errors = handler.validate_route(&route);
-            let accepted = errors.is_empty();
+            let accepted = errors.is_empty() && route.spec.validate_hostnames().is_ok();
             let ProcessResult::Continue(mut parsed) = handler.parse_route(route, &ctx).await else {
                 panic!("route parsing must retain the object for status reporting");
             };
@@ -473,6 +488,7 @@ mod tests {
             assert_eq!(parents.len(), 1);
             let condition = parents[0].conditions.iter().find(|c| c.type_ == "Accepted").unwrap();
             assert_eq!(condition.status, if accepted { "True" } else { "False" });
+            assert_eq!(condition.reason, if accepted { "Accepted" } else { "UnsupportedValue" });
             assert_eq!(parsed.spec.resolved_listeners.is_some(), accepted);
             assert_eq!(
                 runtime.attached_route_tracker.count_for_listener("apps/gateway", "tls"),

@@ -16,7 +16,7 @@ use edgion_resources::resources::edgion_tls::ResolvedListenerAttachment;
 use edgion_resources::resources::extension_ref::is_supported_edgion_plugins_ref;
 use edgion_resources::resources::gateway::AllowedRoutes;
 use edgion_resources::resources::http_route::{LocalObjectReference, RouteParentStatus};
-use edgion_resources::ResourceKind;
+use edgion_resources::{HostnamePatternRef, ResourceKind};
 
 /// Result of validating a parentRef for acceptance.
 pub struct AcceptedResult {
@@ -117,27 +117,7 @@ pub fn listener_allows_route_namespace(
 /// 3. Concrete listener × wildcard route: listener is under route's wildcard
 /// 4. Both wildcards: one suffix contains the other
 pub fn hostnames_intersect(listener_hn: &str, route_hn: &str) -> bool {
-    if listener_hn == route_hn {
-        return true;
-    }
-
-    if let Some(listener_suffix) = listener_hn.strip_prefix("*.") {
-        if let Some(route_suffix) = route_hn.strip_prefix("*.") {
-            // Both wildcards: *.a.com vs *.b.a.com
-            return route_suffix == listener_suffix
-                || route_suffix.ends_with(&format!(".{}", listener_suffix))
-                || listener_suffix.ends_with(&format!(".{}", route_suffix));
-        }
-        // Wildcard listener vs concrete route: *.bar.com vs foo.bar.com
-        return route_hn.ends_with(&format!(".{}", listener_suffix));
-    }
-
-    if let Some(route_suffix) = route_hn.strip_prefix("*.") {
-        // Concrete listener vs wildcard route: very.specific.com vs *.specific.com
-        return listener_hn.ends_with(&format!(".{}", route_suffix));
-    }
-
-    false
+    hostname_intersection(listener_hn, route_hn).is_some()
 }
 
 /// Check if a Service resource exists in the processor registry.
@@ -760,29 +740,22 @@ fn compute_tls_hostnames(route_hostnames: &[String], listener_hostname: Option<&
 /// Compute the intersection of two hostnames, returning the more specific one.
 /// Returns None if they do not intersect.
 fn hostname_intersection<'a>(a: &'a str, b: &'a str) -> Option<&'a str> {
-    if hostnames_intersect(a, b) {
-        // Return the more specific hostname (non-wildcard > wildcard, longer suffix > shorter)
-        let a_wild = a.starts_with("*.");
-        let b_wild = b.starts_with("*.");
-        match (a_wild, b_wild) {
-            (false, true) => Some(a), // a is exact, b is wildcard
-            (true, false) => Some(b), // b is exact, a is wildcard
-            _ => {
-                // Both exact (must be equal) or both wildcard (more specific = longer)
-                if a.len() >= b.len() {
-                    Some(a)
-                } else {
-                    Some(b)
-                }
-            }
-        }
-    } else {
-        None
-    }
+    let a = HostnamePatternRef::parse(a).ok()?;
+    let b = HostnamePatternRef::parse(b).ok()?;
+    a.intersection(b).map(HostnamePatternRef::as_str)
 }
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn invalid_patterns_never_intersect() {
+        for invalid in ["*", "A.example.com", "127.0.0.1", "a..b"] {
+            assert!(!super::hostnames_intersect(invalid, invalid));
+        }
+        assert!(super::hostnames_intersect("a", "a"));
+        assert!(super::hostnames_intersect("*.127.0.0.1", "a.127.0.0.1"));
+    }
+
     #[tokio::test]
     async fn tls_hostnames_remain_scoped_to_attachments_through_updates() {
         use super::*;

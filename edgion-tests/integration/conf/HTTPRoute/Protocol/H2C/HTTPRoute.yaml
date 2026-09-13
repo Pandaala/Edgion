@@ -12,7 +12,8 @@ spec:
     - matches:
         - path:
             type: PathPrefix
-            value: /
+            # Share the listener without catching gRPC-Web's unknown-method probe.
+            value: /version
       backendRefs:
         - name: test-h2c
           port: 30001

@@ -58,6 +58,7 @@ in-process cache selection section of [../00-design-rules.md](../00-design-rules
 | Algorithm | Source | Doc |
 |---|---|---|
 | IP radix tree (allow/deny matching) | `edgion-resources/src/matcher/ip_radix_tree/` | not yet written |
+| Immutable Route hostname radix with persistent contents | `edgion-gateway/src/runtime/matching/hostname.rs` | [route-hostname-matching.md](route-hostname-matching.md) |
 | Aho-Corasick multi-pattern matching (WAF) | `edgion-waf/src/aho_corasick/` | not yet written |
 
 ### Rate limiting

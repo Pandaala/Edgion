@@ -57,25 +57,8 @@ pub struct ResolvedTlsListener {
 
 impl TLSRouteSpec {
     /// TLSRoute v1 requires explicit SNI names, including on unrestricted listeners.
-    pub fn validate_hostnames(&self) -> Result<(), &'static str> {
-        let Some(hostnames) = &self.hostnames else {
-            return Err("TLSRoute requires nonempty hostnames");
-        };
-        if hostnames.is_empty() || hostnames.len() > 1024 {
-            return Err("TLSRoute requires between 1 and 1024 hostnames");
-        }
-        // Use the shared Gateway API grammar, on configuration paths only.
-        static PATTERN: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
-            regex::Regex::new(crate::gwapi_types::HOSTNAME_PATTERN).expect("static hostname pattern")
-        });
-        if hostnames.iter().any(|host| {
-            host.len() > crate::gwapi_types::HOSTNAME_MAX_LEN as usize
-                || !PATTERN.is_match(host)
-                || host.parse::<std::net::IpAddr>().is_ok()
-        }) {
-            return Err("TLSRoute contains an invalid SNI hostname");
-        }
-        Ok(())
+    pub fn validate_hostnames(&self) -> Result<(), crate::HostnameError> {
+        crate::validate_route_hostnames(self.hostnames.as_deref(), true)
     }
 }
 
@@ -235,10 +218,10 @@ mod tests {
         assert_eq!(restored.resolved_listeners, value.resolved_listeners);
         let schema = serde_json::to_value(schemars::schema_for!(TLSRouteSpec)).unwrap();
         assert!(schema["properties"].get("resolvedListeners").is_none());
-        assert!(spec(serde_json::json!(vec!["a.example.com"; 1024]))
+        assert!(spec(serde_json::json!(vec!["a.example.com"; 16]))
             .validate_hostnames()
             .is_ok());
-        assert!(spec(serde_json::json!(vec!["a.example.com"; 1025]))
+        assert!(spec(serde_json::json!(vec!["a.example.com"; 17]))
             .validate_hostnames()
             .is_err());
     }

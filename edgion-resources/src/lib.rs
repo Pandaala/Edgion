@@ -8,6 +8,7 @@ pub mod err;
 pub mod filters;
 pub mod geoip_codes;
 pub mod gwapi_types;
+pub mod hostname;
 pub mod http_status;
 pub mod listener_key;
 pub mod matcher;
@@ -26,6 +27,7 @@ pub mod work_dir;
 
 // Re-export common types
 pub use self::common::{KeyGet, KeySet};
+pub use self::hostname::{validate_route_hostnames, HostnameError, HostnamePatternRef};
 pub use self::listener_key::ListenerKey;
 
 // Backward compatibility: global_def re-exports from constants::app

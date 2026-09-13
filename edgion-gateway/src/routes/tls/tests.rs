@@ -1,11 +1,196 @@
 //! Regression tests for TLS route plugin dispatch and shared route gates.
 
 use super::*;
+use crate::plugins::publication::{inputs::GatewayInput, PluginPublisher};
 use crate::plugins::stream::plugin_generation::{StreamPluginGeneration, StreamStages};
 use edgion_resources::resources::edgion_stream_plugins::{EdgionStreamPlugins, StreamPluginEntry, TlsRoutePluginEntry};
 use edgion_resources::resources::plugin_policy::{PluginPolicyConfig, PluginPolicyEntryConfig, PolicyActionKind};
+use edgion_resources::{Gateway, GatewayClass};
+use serde_json::json;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+fn selection_class(name: &str) -> Arc<GatewayClass> {
+    Arc::new(
+        serde_json::from_value(json!({
+            "metadata": {"name": name},
+            "spec": {"controllerName": "edgion.io/gateway-controller"}
+        }))
+        .unwrap(),
+    )
+}
+
+fn selection_gateway(name: &str, class: &str, hostname: &str, port: u16) -> Gateway {
+    serde_json::from_value(json!({
+        "metadata": {"namespace": "default", "name": name},
+        "spec": {"gatewayClassName": class, "listeners": [
+            {"name": "tls", "hostname": hostname, "port": port, "protocol": "TLS",
+                "tls": {"mode": "Passthrough"}}
+        ]}
+    }))
+    .unwrap()
+}
+
+fn selection_unit(name: &str, hostname: &str, parents: &[&str], port: u16) -> Arc<TlsRouteUnit> {
+    let parent_refs: Vec<_> = parents
+        .iter()
+        .map(|gateway| json!({"name": gateway, "sectionName": "tls"}))
+        .collect();
+    let attachments: Vec<_> = parents
+        .iter()
+        .map(|gateway| {
+            json!({
+                "listenerKey": format!("0.0.0.0:{port}/TLS"), "gatewayNamespace": "default",
+                "gatewayName": gateway, "listenerName": "tls", "hostnames": [hostname]
+            })
+        })
+        .collect();
+    let route = serde_json::from_value(json!({
+        "metadata": {"namespace": "default", "name": name},
+        "spec": {"hostnames": [hostname], "parentRefs": parent_refs, "resolvedListeners": attachments}
+    }))
+    .unwrap();
+    Arc::new(TlsRouteUnit::from_route(Arc::new(route)))
+}
+
+#[test]
+fn selected_owner_policy_is_terminal_and_uses_the_captured_publication() {
+    let publisher = PluginPublisher::new();
+    let fallback_class = selection_class("tls-fallback");
+    publisher.replace_gateway_classes(HashMap::from([
+        ("tls-selection".into(), selection_class("tls-selection")),
+        ("tls-fallback".into(), Arc::clone(&fallback_class)),
+    ]));
+    let first = selection_gateway("tls-selection", "tls-selection", "api.example.com", 19443);
+    let second = selection_gateway("tls-fallback", "tls-fallback", "api.example.com", 19443);
+    publisher.replace_gateways(HashMap::from([
+        ("default/tls-selection".into(), GatewayInput::from_gateway(&first)),
+        ("default/tls-fallback".into(), GatewayInput::from_gateway(&second)),
+    ]));
+    let key = ListenerKey::new("0.0.0.0:19443".parse().unwrap(), "TLS");
+    // This published serving-set fixture deliberately exposes two eligible
+    // owners. It tests policy/selection ordering, not Controller conflict status.
+    let unit = selection_unit("selected", "api.example.com", &["tls-selection", "tls-fallback"], 19443);
+    let runner_up = selection_unit("z-runner-up", "api.example.com", &["tls-fallback"], 19443);
+    let manager = TlsRouteManager::new(key.clone());
+    manager.rebuild(&HashMap::from([
+        (unit.key_name(), Arc::clone(&unit)),
+        (runner_up.key_name(), Arc::clone(&runner_up)),
+    ]));
+    let old = publisher.snapshot();
+    let selected = select_tls_route(&manager, &old, &key, "api.example.com").unwrap();
+    assert!(Arc::ptr_eq(&selected.unit, &unit));
+    assert!(Arc::ptr_eq(
+        selected.scope.as_ref().unwrap(),
+        &old.gateway("default/tls-selection").unwrap().scope
+    ));
+
+    // Only the first owner's policy becomes unavailable. Both the second
+    // owner and a same-hostname runner-up still have a usable scope.
+    publisher.replace_gateway_classes(HashMap::from([("tls-fallback".into(), fallback_class)]));
+    let current = publisher.snapshot();
+    assert!(!current.gateway("default/tls-selection").unwrap().scope.available);
+    assert!(current.gateway("default/tls-fallback").unwrap().scope.available);
+    let control = TlsRouteManager::new(key.clone());
+    control.rebuild(&HashMap::from([(runner_up.key_name(), Arc::clone(&runner_up))]));
+    let alternate = select_tls_route(&control, &current, &key, "api.example.com").unwrap();
+    assert!(Arc::ptr_eq(&alternate.unit, &runner_up));
+    assert!(alternate.scope.is_some());
+
+    // Neither the Route's second owner nor the runner-up can repair a policy
+    // failure after the first eligible owner and Route have already won.
+    let unavailable = select_tls_route(&manager, &current, &key, "api.example.com").unwrap();
+    assert!(Arc::ptr_eq(&unavailable.unit, &unit));
+    assert!(unavailable.scope.is_none());
+    assert!(select_tls_route(&manager, &old, &key, "api.example.com")
+        .unwrap()
+        .scope
+        .is_some());
+
+    // Removing an owner is an eligibility change, unlike an unavailable scope.
+    publisher.update_gateways(HashMap::new(), &HashSet::from(["default/tls-selection".into()]));
+    let removed_owner = publisher.snapshot();
+    let rebound = select_tls_route(&manager, &removed_owner, &key, "api.example.com").unwrap();
+    assert!(Arc::ptr_eq(&rebound.unit, &unit));
+    assert!(Arc::ptr_eq(
+        rebound.scope.as_ref().unwrap(),
+        &removed_owner.gateway("default/tls-fallback").unwrap().scope
+    ));
+    assert!(select_tls_route(&manager, &current, &key, "api.example.com")
+        .unwrap()
+        .scope
+        .is_none());
+    publisher.update_gateways(HashMap::new(), &HashSet::from(["default/tls-fallback".into()]));
+    assert!(select_tls_route(&manager, &publisher.snapshot(), &key, "api.example.com").is_none());
+    assert!(selected.scope.unwrap().available);
+}
+
+#[test]
+fn gateway_only_empty_exact_listener_updates_block_and_restore_wildcard_route() {
+    let publisher = PluginPublisher::new();
+    publisher.replace_gateway_classes(HashMap::from([(
+        "tls-live-owner".into(),
+        selection_class("tls-live-owner"),
+    )]));
+    let broad = selection_gateway("wildcard-owner", "tls-live-owner", "*.example.com", 19444);
+    publisher.replace_gateways(HashMap::from([(
+        "default/wildcard-owner".into(),
+        GatewayInput::from_gateway(&broad),
+    )]));
+    let key = ListenerKey::new("0.0.0.0:19444".parse().unwrap(), "TLS");
+    let unit = selection_unit("wildcard-route", "*.example.com", &["wildcard-owner"], 19444);
+    let manager = TlsRouteManager::new(key.clone());
+    manager.rebuild(&HashMap::from([(unit.key_name(), Arc::clone(&unit))]));
+    let route_table = Arc::clone(&manager.load_route_table());
+    let before = publisher.snapshot();
+    assert!(Arc::ptr_eq(
+        &select_tls_route(&manager, &before, &key, "api.example.com")
+            .unwrap()
+            .unit,
+        &unit
+    ));
+
+    // Another physical key must not constrain this key, even with the same SNI.
+    let elsewhere = selection_gateway("empty-exact", "tls-live-owner", "api.example.com", 19445);
+    publisher.update_gateways(
+        HashMap::from([("default/empty-exact".into(), GatewayInput::from_gateway(&elsewhere))]),
+        &HashSet::new(),
+    );
+    assert!(select_tls_route(&manager, &publisher.snapshot(), &key, "api.example.com").is_some());
+
+    // Only Gateway facts change: the Route, its attachment and table stay fixed.
+    let exact = selection_gateway("empty-exact", "tls-live-owner", "api.example.com", 19444);
+    publisher.update_gateways(
+        HashMap::from([("default/empty-exact".into(), GatewayInput::from_gateway(&exact))]),
+        &HashSet::new(),
+    );
+    let blocked = publisher.snapshot();
+    assert!(blocked
+        .listener_index(&key)
+        .unwrap()
+        .get("default/empty-exact", "tls")
+        .is_some());
+    assert!(select_tls_route(&manager, &blocked, &key, "api.example.com").is_none());
+    assert!(select_tls_route(&manager, &blocked, &key, "other.example.com").is_some());
+    assert!(select_tls_route(&manager, &before, &key, "api.example.com").is_some());
+    assert!(Arc::ptr_eq(&route_table, &manager.load_route_table()));
+
+    publisher.update_gateways(HashMap::new(), &HashSet::from(["default/empty-exact".into()]));
+    let restored = publisher.snapshot();
+    assert!(restored
+        .listener_index(&key)
+        .unwrap()
+        .get("default/empty-exact", "tls")
+        .is_none());
+    assert!(Arc::ptr_eq(
+        &select_tls_route(&manager, &restored, &key, "api.example.com")
+            .unwrap()
+            .unit,
+        &unit
+    ));
+    assert!(select_tls_route(&manager, &blocked, &key, "api.example.com").is_none());
+    assert!(Arc::ptr_eq(&route_table, &manager.load_route_table()));
+}
 fn stage1_entry() -> StreamPluginEntry {
     serde_yaml::from_str("type: IpRestriction\nconfig:\n  deny:\n    - name: blocked\n      cidrs: [127.0.0.0/8]\n")
         .unwrap()

@@ -1,11 +1,369 @@
 #[cfg(test)]
 mod route_matching_tests {
+    use crate::routes::http::conf_handler_impl::HttpRouteChanges;
+    use crate::routes::http::routes_mgr::DomainRouteRules;
     use crate::routes::http::routes_mgr::{GlobalHttpRouteManagers, HttpPortRouteManager};
+    use crate::runtime::matching::hostname::CompiledHostnamePattern;
+    use crate::runtime::matching::hostname_input::HostnameQuery;
     use crate::runtime::store::get_global_gateway_store;
     use edgion_common::conf_sync::traits::ConfHandler;
     use edgion_resources::{Gateway, HTTPRoute, ListenerKey};
     use std::collections::{HashMap, HashSet};
     use std::sync::Arc;
+
+    fn contract_route(name: &str, hostnames: Vec<&str>, path: &str) -> HTTPRoute {
+        create_test_httproute_with_paths(
+            "hostname-contract",
+            name,
+            hostnames,
+            vec![("hostname-contract", "shared")],
+            vec![("Exact", path)],
+        )
+    }
+
+    fn contract_index(
+        listeners: &[(&str, Option<&str>)],
+    ) -> crate::runtime::store::listener_gateway_info::GatewayInfoIndex {
+        use crate::runtime::gateway_info::GatewayInfo;
+        use crate::runtime::store::listener_gateway_info::{GatewayInfoIndex, ListenerEntry};
+        GatewayInfoIndex::from_entries_for_test(
+            listeners
+                .iter()
+                .map(|(name, hostname)| {
+                    (
+                        format!("hostname-contract/{name}"),
+                        ListenerEntry {
+                            info: Arc::new(GatewayInfo::new(
+                                Some("hostname-contract".into()),
+                                (*name).into(),
+                                Some("web".into()),
+                                None,
+                                None,
+                                None,
+                                Vec::new(),
+                                None,
+                            )),
+                            hostname: hostname.map(str::to_owned),
+                            allowed_routes: None,
+                        },
+                    )
+                })
+                .collect(),
+        )
+    }
+
+    async fn match_contract(
+        table: &DomainRouteRules,
+        hostname: &str,
+        path: &str,
+        index: &crate::runtime::store::listener_gateway_info::GatewayInfoIndex,
+    ) -> Option<(String, String)> {
+        use crate::ctx::{EdgionHttpContext, NormalizedHostname};
+        use edgion_resources::EdError;
+        use tokio::io::AsyncWriteExt;
+        let (mut client, server) = tokio::io::duplex(4096);
+        let mut session = pingora_proxy::Session::new_h1(Box::new(server));
+        client
+            .write_all(format!("GET {path} HTTP/1.1\r\nHost: {hostname}\r\n\r\n").as_bytes())
+            .await
+            .unwrap();
+        drop(client);
+        assert!(session.read_request().await.unwrap());
+        let mut ctx = EdgionHttpContext::new();
+        ctx.request_info.hostname = NormalizedHostname::new(hostname);
+        ctx.request_info.entry_raw_path = path.to_string();
+        ctx.request_info.normalized_current_path = path.to_string();
+        match table.match_route(&mut session, &ctx, index) {
+            Ok(result) => Some((
+                result.route_unit.resource_key.clone(),
+                result.matched_gateway.gateway_key().to_owned(),
+            )),
+            Err(EdError::RouteNotFound()) => None,
+            Err(error) => panic!("unexpected terminal route error: {error:?}"),
+        }
+    }
+
+    async fn match_contract_route(
+        table: &DomainRouteRules,
+        hostname: &str,
+        path: &str,
+        index: &crate::runtime::store::listener_gateway_info::GatewayInfoIndex,
+    ) -> Option<String> {
+        match_contract(table, hostname, path, index)
+            .await
+            .map(|(route, _)| route)
+    }
+
+    fn contract_table(routes: Vec<HTTPRoute>) -> DomainRouteRules {
+        use crate::routes::http::conf_handler_impl::build_domain_route_rules_from_routes;
+        let data = routes
+            .into_iter()
+            .map(|route| {
+                (
+                    format!("hostname-contract/{}", route.metadata.name.as_deref().unwrap()),
+                    Arc::new(route),
+                )
+            })
+            .collect();
+        build_domain_route_rules_from_routes(&data, &DomainRouteRules::new())
+    }
+
+    #[test]
+    fn duplicate_hostnames_share_one_unit_and_invalid_lists_never_publish() {
+        let table = contract_table(vec![
+            contract_route("duplicate", vec!["api.example.com", "api.example.com"], "/"),
+            contract_route("invalid", vec!["other.example.com", "*"], "/"),
+            contract_route("too-many", vec!["excess.example.com"; 17], "/"),
+        ]);
+        assert_eq!(table.hosts.len(), 1);
+        let rules = table
+            .hosts
+            .get(&CompiledHostnamePattern::parse("api.example.com").unwrap())
+            .unwrap();
+        assert_eq!(rules.route_rules_list.len(), 1);
+        assert!(table.catch_all_routes.is_none());
+    }
+
+    #[tokio::test]
+    async fn hostname_path_misses_continue_through_all_wildcards_and_hostless() {
+        let table = contract_table(vec![
+            contract_route("exact", vec!["api.sub.example.com"], "/exact"),
+            contract_route("narrow", vec!["*.sub.example.com"], "/narrow"),
+            contract_route("wide", vec!["*.example.com"], "/wide"),
+            contract_route("hostless", vec![], "/hostless"),
+        ]);
+        let index = contract_index(&[("shared", None)]);
+        for (path, route) in [
+            ("/exact", "exact"),
+            ("/narrow", "narrow"),
+            ("/wide", "wide"),
+            ("/hostless", "hostless"),
+        ] {
+            assert_eq!(
+                match_contract_route(&table, "api.sub.example.com", path, &index).await,
+                Some(format!("hostname-contract/{route}"))
+            );
+        }
+        assert_eq!(match_contract_route(&table, "example.com", "/wide", &index).await, None);
+        assert_eq!(
+            match_contract_route(&table, "badexample.com", "/wide", &index).await,
+            None
+        );
+        assert_eq!(
+            match_contract_route(&table, "127.0.0.1", "/hostless", &index).await,
+            Some("hostname-contract/hostless".into())
+        );
+    }
+
+    #[tokio::test]
+    async fn listener_intersection_does_not_promote_wildcard_route_priority() {
+        let mut wildcard = contract_route("a-older-wildcard", vec!["*.example.com"], "/");
+        wildcard.spec.resolved_hostnames = Some(vec!["api.example.com".into()]);
+        let mut exact = contract_route("z-exact", vec!["api.example.com"], "/");
+        exact.spec.resolved_hostnames = Some(vec!["api.example.com".into()]);
+        let table = contract_table(vec![wildcard, exact]);
+        let index = contract_index(&[("shared", Some("api.example.com"))]);
+        assert_eq!(
+            match_contract_route(&table, "api.example.com", "/", &index).await,
+            Some("hostname-contract/z-exact".into())
+        );
+        assert_eq!(
+            match_contract_route(&table, "other.example.com", "/", &index).await,
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn empty_exact_listener_in_other_gateway_blocks_wider_route() {
+        let table = contract_table(vec![contract_route("wide", vec!["*.example.com"], "/")]);
+        let index = contract_index(&[
+            ("shared", Some("*.example.com")),
+            ("empty-exact", Some("api.example.com")),
+        ]);
+        assert_eq!(match_contract_route(&table, "api.example.com", "/", &index).await, None);
+        assert_eq!(
+            match_contract_route(&table, "other.example.com", "/", &index).await,
+            Some("hostname-contract/wide".into())
+        );
+    }
+
+    #[tokio::test]
+    async fn listener_specificity_wins_before_the_routes_declared_hostname_priority() {
+        let exact_route = contract_route("exact-route-on-wildcard", vec!["api.example.com"], "/");
+        let mut wildcard_route = contract_route("wildcard-route-on-exact", vec!["*.example.com"], "/");
+        wildcard_route.spec.parent_refs.as_mut().unwrap()[0].name = "exact-owner".into();
+        wildcard_route.spec.resolved_hostnames = Some(vec!["api.example.com".into()]);
+        let table = contract_table(vec![exact_route, wildcard_route]);
+        let broad_only = contract_index(&[("shared", Some("*.example.com"))]);
+        assert_eq!(
+            match_contract(&table, "api.example.com", "/", &broad_only).await,
+            Some((
+                "hostname-contract/exact-route-on-wildcard".into(),
+                "hostname-contract/shared".into()
+            ))
+        );
+        let both = contract_index(&[
+            ("shared", Some("*.example.com")),
+            ("exact-owner", Some("api.example.com")),
+        ]);
+        assert_eq!(
+            match_contract(&table, "api.example.com", "/", &both).await,
+            Some((
+                "hostname-contract/wildcard-route-on-exact".into(),
+                "hostname-contract/exact-owner".into()
+            ))
+        );
+    }
+
+    #[test]
+    fn full_set_and_gateway_rebuild_reuse_unchanged_hostname_tree() {
+        let managers = GlobalHttpRouteManagers::new();
+        let manager = managers.get_global_routes();
+        let first = HashMap::from([
+            (
+                "hostname-contract/exact".into(),
+                Arc::new(contract_route("exact", vec!["api.example.com"], "/old")),
+            ),
+            (
+                "hostname-contract/wildcard".into(),
+                Arc::new(contract_route("wildcard", vec!["*.example.com"], "/wide")),
+            ),
+        ]);
+        managers.full_set(&first);
+        let before = Arc::clone(&manager.load_route_table());
+        let replacement = HashMap::from([
+            (
+                "hostname-contract/exact".into(),
+                Arc::new(contract_route("exact", vec!["api.example.com"], "/new")),
+            ),
+            (
+                "hostname-contract/wildcard".into(),
+                Arc::new(contract_route("wildcard", vec!["*.example.com"], "/wide")),
+            ),
+        ]);
+        managers.full_set(&replacement);
+        let replaced = Arc::clone(&manager.load_route_table());
+        assert!(!Arc::ptr_eq(&before, &replaced));
+        assert!(before.hosts.shares_hosts(&replaced.hosts));
+        let exact = CompiledHostnamePattern::parse("api.example.com").unwrap();
+        assert!(!Arc::ptr_eq(
+            before.hosts.get(&exact).unwrap(),
+            replaced.hosts.get(&exact).unwrap()
+        ));
+        managers.rebuild_all_listener_managers();
+        let rebuilt = Arc::clone(&manager.load_route_table());
+        assert!(!Arc::ptr_eq(&replaced, &rebuilt));
+        assert!(before.hosts.shares_hosts(&rebuilt.hosts));
+        assert_eq!(rebuilt.hosts.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn hostname_delta_preserves_untouched_paths_units_and_old_snapshots() {
+        let managers = GlobalHttpRouteManagers::new();
+        let manager = managers.get_global_routes();
+        let first = contract_route("updated", vec!["api.example.com"], "/old");
+        let sibling = contract_route("sibling", vec!["api.example.com"], "/sibling");
+        let cold = contract_route("cold", vec!["cold.example.com"], "/cold");
+        managers.full_set(&HashMap::from([
+            ("hostname-contract/updated".into(), Arc::new(first)),
+            ("hostname-contract/sibling".into(), Arc::new(sibling)),
+            ("hostname-contract/cold".into(), Arc::new(cold)),
+        ]));
+        let old = Arc::clone(&manager.load_route_table());
+        let api = CompiledHostnamePattern::parse("api.example.com").unwrap();
+        let cold = CompiledHostnamePattern::parse("cold.example.com").unwrap();
+        let old_sibling = old
+            .hosts
+            .get(&api)
+            .unwrap()
+            .route_rules_list
+            .iter()
+            .find(|unit| unit.resource_key == "hostname-contract/sibling")
+            .unwrap()
+            .clone();
+        managers.partial_update(
+            HashMap::new(),
+            HashMap::from([(
+                "hostname-contract/updated".into(),
+                Arc::new(contract_route("updated", vec!["api.example.com"], "/new")),
+            )]),
+            HashSet::new(),
+        );
+        let changed = Arc::clone(&manager.load_route_table());
+        assert!(old.hosts.shares_hosts(&changed.hosts));
+        assert!(Arc::ptr_eq(
+            old.hosts.get(&cold).unwrap(),
+            changed.hosts.get(&cold).unwrap()
+        ));
+        assert!(Arc::ptr_eq(
+            old.hosts.get(&cold).unwrap().match_engine.as_ref().unwrap(),
+            changed.hosts.get(&cold).unwrap().match_engine.as_ref().unwrap()
+        ));
+        let sibling = changed
+            .hosts
+            .get(&api)
+            .unwrap()
+            .route_rules_list
+            .iter()
+            .find(|unit| unit.resource_key == "hostname-contract/sibling")
+            .unwrap();
+        assert!(Arc::ptr_eq(&old_sibling, sibling));
+        assert!(Arc::ptr_eq(&old_sibling.backend_finder, &sibling.backend_finder));
+        let index = contract_index(&[("shared", None)]);
+        assert_eq!(
+            match_contract_route(&old, "api.example.com", "/old", &index).await,
+            Some("hostname-contract/updated".into())
+        );
+        assert_eq!(
+            match_contract_route(&changed, "api.example.com", "/old", &index).await,
+            None
+        );
+        assert_eq!(
+            match_contract_route(&changed, "api.example.com", "/new", &index).await,
+            Some("hostname-contract/updated".into())
+        );
+
+        managers.partial_update(
+            HashMap::new(),
+            HashMap::from([(
+                "hostname-contract/updated".into(),
+                Arc::new(contract_route("updated", vec!["new.example.com"], "/new")),
+            )]),
+            HashSet::new(),
+        );
+        let moved = Arc::clone(&manager.load_route_table());
+        assert!(!changed.hosts.shares_hosts(&moved.hosts));
+        assert!(Arc::ptr_eq(
+            changed.hosts.get(&cold).unwrap(),
+            moved.hosts.get(&cold).unwrap()
+        ));
+        assert_eq!(
+            match_contract_route(&moved, "api.example.com", "/new", &index).await,
+            None
+        );
+        assert_eq!(
+            match_contract_route(&moved, "new.example.com", "/new", &index).await,
+            Some("hostname-contract/updated".into())
+        );
+        managers.partial_update(
+            HashMap::new(),
+            HashMap::from([(
+                "hostname-contract/updated".into(),
+                Arc::new(contract_route("updated", vec!["new.example.com", "*"], "/new")),
+            )]),
+            HashSet::new(),
+        );
+        let rejected = manager.load_route_table();
+        assert!(rejected
+            .hosts
+            .get(&CompiledHostnamePattern::parse("new.example.com").unwrap())
+            .is_none());
+        assert!(rejected.catch_all_routes.is_none());
+        assert_eq!(
+            match_contract_route(&moved, "new.example.com", "/new", &index).await,
+            Some("hostname-contract/updated".into())
+        );
+    }
 
     /// Helper: wrap HTTPRoute values in Arc for ConfHandler API
     fn wrap_arc(data: HashMap<String, HTTPRoute>) -> HashMap<String, Arc<HTTPRoute>> {
@@ -158,22 +516,10 @@ mod route_matching_tests {
     /// Instead, we'll test the internal state of RouteRules
     fn verify_route_exists(listener_manager: &Arc<HttpPortRouteManager>, hostname: &str, should_exist: bool) {
         let domain_routes = listener_manager.load_route_table();
-        // Check exact domain map first (case-insensitive)
-        let exists_exact = domain_routes.exact_domain_map.get(&hostname.to_lowercase()).is_some();
-        let exists_catch_all = domain_routes.catch_all_routes.is_some();
-
-        // Check wildcard engine if not found in exact map
-        let exists_wildcard = if !exists_exact && !exists_catch_all {
-            domain_routes
-                .wildcard_engine
-                .as_ref()
-                .and_then(|engine| engine.match_host(hostname))
-                .is_some()
-        } else {
-            false
-        };
-
-        let exists = exists_exact || exists_catch_all || exists_wildcard;
+        let hostname = hostname.to_ascii_lowercase();
+        let exists = HostnameQuery::new(&hostname)
+            .is_ok_and(|query| domain_routes.hosts.matching_values(query).next().is_some())
+            || domain_routes.catch_all_routes.is_some();
         assert_eq!(
             exists,
             should_exist,
@@ -191,18 +537,11 @@ mod route_matching_tests {
         expected_regex_routes: usize,
     ) {
         let domain_routes = listener_manager.load_route_table();
-        // Try exact domain map first (case-insensitive)
-        let route_rules = if let Some(route_rules) = domain_routes.exact_domain_map.get(&hostname.to_lowercase()) {
-            Some(route_rules.clone())
-        } else if let Some(catch_all) = domain_routes.catch_all_routes.as_ref() {
-            Some(catch_all.clone())
-        } else {
-            // Try wildcard engine
-            domain_routes
-                .wildcard_engine
-                .as_ref()
-                .and_then(|engine| engine.match_host(hostname))
-        };
+        let hostname = hostname.to_ascii_lowercase();
+        let route_rules = HostnameQuery::new(&hostname)
+            .ok()
+            .and_then(|query| domain_routes.hosts.matching_values(query).next())
+            .or(domain_routes.catch_all_routes.as_deref());
 
         if let Some(route_rules) = route_rules {
             let normal_count = route_rules.route_rules_list.len();
@@ -266,12 +605,17 @@ mod route_matching_tests {
         );
         route.spec.resolved_listeners = Some(vec![listener_key.clone()]);
         let routes = HashMap::from([("retained-test/prior".to_string(), Arc::new(route))]);
-        manager
-            .store_route_table(crate::routes::http::conf_handler_impl::build_domain_route_rules_from_routes(&routes));
+        manager.store_route_table(
+            crate::routes::http::conf_handler_impl::build_domain_route_rules_from_routes(
+                &routes,
+                &DomainRouteRules::new(),
+            ),
+        );
         assert!(manager
             .load_route_table()
-            .exact_domain_map
-            .contains_key("retained.example.com"));
+            .hosts
+            .get(&CompiledHostnamePattern::parse("retained.example.com").unwrap())
+            .is_some());
         manager
     }
 
@@ -1488,7 +1832,7 @@ mod route_matching_tests {
         managers.rebuild_all_listener_managers_with_active(Vec::new());
 
         assert!(!managers.by_listener.contains_key(&stale));
-        assert!(retained.load_route_table().exact_domain_map.is_empty());
+        assert!(retained.load_route_table().hosts.is_empty());
         let recreated = managers.get_or_create_listener_manager(&stale);
         assert!(!Arc::ptr_eq(&retained, &recreated));
     }
@@ -1501,10 +1845,14 @@ mod route_matching_tests {
         let retained = seed_nonempty_manager(&managers, &orphan);
         let affected_set = HashSet::from([affected.clone()]);
 
-        managers.rebuild_affected_listener_managers_with_active(&affected_set, vec![affected]);
+        managers.rebuild_affected_listener_managers_with_active(
+            &affected_set,
+            vec![affected],
+            &HttpRouteChanges::default(),
+        );
 
         assert!(!managers.by_listener.contains_key(&orphan));
-        assert!(retained.load_route_table().exact_domain_map.is_empty());
+        assert!(retained.load_route_table().hosts.is_empty());
         let recreated = managers.get_or_create_listener_manager(&orphan);
         assert!(!Arc::ptr_eq(&retained, &recreated));
     }

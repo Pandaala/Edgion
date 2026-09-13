@@ -1,6 +1,6 @@
 ---
 name: domain-route-rules-inner-arcswap-removed
-description: Use when reviewing findings that `DomainRouteRules` (or any similar inside-an-ArcSwap container) wraps its inner fields in `ArcSwap` / `ArcSwapOption` and pays unnecessary per-request atomic loads; this is a real fix — the inner fields are now plain `Arc` / `Option<Arc<…>>` because the outer `ArcSwap<DomainRouteRules>` already provides atomic swap granularity.
+description: DomainRouteRules keeps immutable inner fields under one outer atomic snapshot; do not add per-field ArcSwap loads or independently published generations.
 knowledge_type: regression-guards
 ---
 
@@ -41,6 +41,15 @@ continues to be the single atomic swap point used by config reload and by
 unchanged.
 
 ## Why the Naive Form Was Wrong
+
+Current shape after Route hostname unification: `DomainRouteRules` embeds the
+gateway-owned immutable `HostnameMatcher<RouteRules>` plus a separate hostless
+group. The historical three-field examples above describe the original repair,
+not the current struct layout. Its frozen hostname tree and persistent contents
+are paired inside the same outer table; there is still only one owner-level
+ArcSwap and no independently mutable per-host publication. Sharing an unchanged
+tree or payload Arc across generations does not weaken that invariant.
+See the [hostname algorithm contract](../../../12-algorithms/route-hostname-matching.md).
 
 - Treating "snapshot replaced atomically" and "field swap-in-place" as
   interchangeable design points. The data-plane reader needs an atomic

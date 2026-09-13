@@ -22,7 +22,7 @@ hostname actually matching the request contributes. Listener intersection may
 narrow eligibility but must not promote wildcard/hostless Route priority.
 Pattern character counts apply to regex;
 Exact is not an additional priority tier. Match index resolves remaining ties.
-Every candidate must pass the full predicate, with failure continuing through
+Every candidate must pass the full predicate, with no-match continuing through
 remaining candidates and broader matching hostname groups. gRPC-first/HTTP
 fallback for overlapping hostnames is unchanged.
 
@@ -44,13 +44,16 @@ contract defines the precedence chain and per-rule invalidity behavior.
 - Gateway `routes/grpc/conf_handler_impl.rs` compiles each match once and rejects
   the whole rule before constructing rule runtimes if any method is invalid,
   including status-less/stale configuration. Match units share rule runtime.
-- `match_engine.rs` builds one ranked route array. Shared `HashHost` indexes
-  ranks by declared Route hostname (borrowed from the existing schema Arc);
+- `match_engine.rs` builds one ranked route array. Gateway-owned `HostnameMatcher`
+  indexes ranks by declared Route hostname;
   its borrowed `matching_values` lookup visits
   exact, descending wildcard suffixes, then the engine's catch-all group.
   Each group merges five indexed streams using integer heads on the stack.
+  Rank-dependent contents are rebuilt together; unchanged final hostname keys
+  preserve the frozen hostname tree, including full-list and Gateway rebuilds.
 - `match_unit.rs::deep_match` remains responsible for headers and attachment.
-  Error/no-match continues; `integration.rs::try_match_grpc_route` retains HTTP
+  Only no-match continues inside the engine; predicate errors propagate to its
+  caller. `integration.rs::try_match_grpc_route` retains HTTP
   fallback. ArcSwap generation replacement retains in-flight snapshots.
 
 ## Alternatives and limits
@@ -58,18 +61,21 @@ contract defines the precedence chain and per-rule invalidity behavior.
 The old seven-tier engine omitted method-only predicates, let Exact buckets
 override normative precedence, and checked hostname too late. Treating method-only
 as catch-all would lose its predicate. Sorting all routes per request or scanning
-unrelated Exact routes is unnecessary: build-time ranks preserve borrowed hash
+unrelated Exact routes is unnecessary: build-time ranks preserve borrowed hostname
 lookup while allowing cross-index precedence. No request allocation, blocking
 lock, runtime pattern compilation, or request-level tracing is added by selection.
 Regex traversal remains linear in the selected hostname group's regex candidates.
 Correctness/instrumented candidate counts do not establish latency equivalence.
 
 Duplicate equivalent gRPC header names still need first-name-wins handling;
-this is a separate existing defect, not accepted behavior. It was recorded under
-`grpc-header-match-first-name-wins`; no active task file currently tracks it.
+this is a separate existing defect, not accepted behavior. It is tracked in
+[grpc-header-match-first-name-wins](../../../../tasks/todo/grpc-header-match-first-name-wins.md).
 Do not read this rule as proving complete GRPCRoute conformance.
 
 ## Verification and re-evaluation
+
+The following results are historical method-matching repair evidence, not fresh
+verification of the shared hostname-index migration.
 
 Independent code review passed after correcting Listener-intersection priority
 promotion. `cargo test -p edgion-resources --lib grpc_route` passed (8 tests),
@@ -94,7 +100,9 @@ the 13 changed/new documents pass the same guard functions when scoped to the di
 Source tasks remain open while the repository-wide closure gate is blocked.
 
 Re-evaluate on Gateway API version changes, delegation policy changes, new
-matching dimensions, or changes to HashHost canonicalization and table publication.
+matching dimensions, or changes to the shared hostname matcher, input normalization,
+and table publication. Route wildcards match multiple labels; certificate matching
+helpers are outside this contract and remain unchanged.
 
 ## Resolution references
 

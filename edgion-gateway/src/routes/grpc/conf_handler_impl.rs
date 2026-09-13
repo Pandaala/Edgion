@@ -144,8 +144,18 @@ pub fn create_grpc_route_handler() -> Box<dyn ConfHandler<GRPCRoute> + Send + Sy
     Box::new(get_global_grpc_route_managers())
 }
 
+#[cfg(test)]
+pub(crate) fn parse_route_to_units_for_test(resource_key: &str, route: &Arc<GRPCRoute>) -> Vec<Arc<GrpcRouteRuleUnit>> {
+    parse_route_to_units(resource_key, route)
+}
+
 /// Parse a single GRPCRoute into route rule units.
 fn parse_route_to_units(resource_key: &str, route: &Arc<GRPCRoute>) -> Vec<Arc<GrpcRouteRuleUnit>> {
+    if let Err(error) = route.spec.validate_hostnames() {
+        tracing::warn!(component = "grpc_route_manager", route = resource_key, %error,
+            "Invalid GRPCRoute hostnames; skipping the complete route");
+        return Vec::new();
+    }
     let route_namespace = route.metadata.namespace.as_deref().unwrap_or("default");
     let route_name = route.metadata.name.as_deref().unwrap_or("");
 
@@ -349,6 +359,58 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn built_grpc_route_cannot_cross_an_empty_exact_listener_in_another_gateway() {
+        let route = matching_route(
+            "broad-owner-route",
+            "*.example.com",
+            json!({"method": {"method": "Get"}}),
+        );
+        let units = parse_route_to_units("default/broad-owner-route", &route);
+        assert_eq!(units.len(), 1);
+        let unit = Arc::clone(&units[0]);
+        let engine = GrpcMatchEngine::new(units);
+        let broad = matching_index_with_hostname(Some("*.example.com"));
+        let blocked = GatewayInfoIndex::from_entries_for_test(vec![
+            (
+                "default/test-gw".into(),
+                broad.get("default/test-gw", "grpc").unwrap().clone(),
+            ),
+            (
+                "default/empty-exact".into(),
+                ListenerEntry {
+                    info: Arc::new(GatewayInfo::new(
+                        Some("default".into()),
+                        "empty-exact".into(),
+                        Some("grpc".into()),
+                        None,
+                        None,
+                        None,
+                        Vec::new(),
+                        None,
+                    )),
+                    hostname: Some("api.example.com".into()),
+                    allowed_routes: None,
+                },
+            ),
+        ]);
+        let (session, ctx) = matching_session("/svc/Get", "api.example.com", "").await;
+        let (selected, owner) = engine.match_route(&session, &ctx, &broad, "api.example.com").unwrap();
+        assert!(Arc::ptr_eq(&selected, &unit));
+        assert_eq!(owner.gateway_key(), "default/test-gw");
+        assert!(matches!(
+            engine.match_route(&session, &ctx, &blocked, "api.example.com"),
+            Err(edgion_resources::EdError::RouteNotFound())
+        ));
+        let (other_session, other_ctx) = matching_session("/svc/Get", "other.example.com", "").await;
+        let (selected, owner) = engine
+            .match_route(&other_session, &other_ctx, &blocked, "other.example.com")
+            .unwrap();
+        assert!(Arc::ptr_eq(&selected, &unit));
+        assert_eq!(owner.gateway_key(), "default/test-gw");
+        assert!(engine.match_route(&session, &ctx, &broad, "api.example.com").is_ok());
+    }
+
+    #[tokio::test]
     async fn method_only_matches_through_real_session_and_header_failure_falls_back() {
         let index = matching_index();
         for method in [
@@ -515,6 +577,121 @@ mod tests {
         assert!(new
             .match_route(&mut new_session, &new_ctx, &index, "new.example.com")
             .is_ok());
+    }
+
+    #[tokio::test]
+    async fn invalid_authored_hostname_list_withdraws_the_whole_published_route() {
+        let managers = GlobalGrpcRouteManagers::new();
+        let resource_key = "default/validated-hosts".to_string();
+        let listener = ListenerKey("127.0.0.1:19235/HTTP".to_string());
+        let valid = matching_route("validated-hosts", "grpc", json!({}));
+        let index = matching_index();
+        let (mut session, ctx) = matching_session("/svc/Get", "grpc", "").await;
+        for hosts in [
+            vec!["*".to_string()],
+            vec!["grpc".to_string(), "*".to_string()],
+            vec!["grpc".to_string(), "UPPER.example.com".to_string()],
+            vec!["grpc".to_string(), "127.0.0.1".to_string()],
+            vec!["grpc".to_string(); 17],
+        ] {
+            managers.full_set(&HashMap::from([(resource_key.clone(), valid.clone())]));
+            let manager = managers.by_listener.get(&listener).unwrap().clone();
+            let old = Arc::clone(&manager.load_route_table());
+            assert!(old.match_route(&mut session, &ctx, &index, "grpc").is_ok());
+            let mut invalid = (*valid).clone();
+            invalid.spec.hostnames = Some(hosts);
+            // Forged/stale resolved projection must not salvage authored invalidity.
+            invalid.spec.resolved_hostnames = Some(vec!["grpc".to_string()]);
+            let invalid = Arc::new(invalid);
+            assert!(parse_route_to_units(&resource_key, &invalid).is_empty());
+            managers.partial_update(
+                HashMap::new(),
+                HashMap::from([(resource_key.clone(), invalid)]),
+                HashSet::new(),
+            );
+            assert!(!manager.load_route_table().has_routes());
+            assert!(old.match_route(&mut session, &ctx, &index, "grpc").is_ok());
+        }
+        for hosts in [None, Some(Vec::new())] {
+            let mut hostless = (*valid).clone();
+            hostless.spec.hostnames = hosts;
+            assert!(!parse_route_to_units(&resource_key, &Arc::new(hostless)).is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn partial_and_full_rebuild_share_hostname_tree_with_coherent_payloads() {
+        let managers = GlobalGrpcRouteManagers::new();
+        let listener = ListenerKey("127.0.0.1:19235/HTTP".to_string());
+        let first = matching_route("first", "api.example.com", json!({"method":{"method":"Get"}}));
+        let fallback = matching_route("fallback", "*.example.com", json!({}));
+        managers.full_set(&HashMap::from([
+            ("default/first".to_string(), first),
+            ("default/fallback".to_string(), fallback.clone()),
+        ]));
+        let manager = managers.by_listener.get(&listener).unwrap().clone();
+        let old = Arc::clone(&manager.load_route_table());
+        let unchanged = old
+            .grpc_routes
+            .route_rules_list
+            .iter()
+            .find(|unit| unit.resource_key == "default/fallback")
+            .unwrap()
+            .clone();
+        let replacement = matching_route("first", "api.example.com", json!({"method":{"method":"List"}}));
+        managers.partial_update(
+            HashMap::new(),
+            HashMap::from([("default/first".to_string(), replacement.clone())]),
+            HashSet::new(),
+        );
+        let updated = Arc::clone(&manager.load_route_table());
+        let old_engine = old.grpc_routes.match_engine.as_ref().unwrap();
+        let new_engine = updated.grpc_routes.match_engine.as_ref().unwrap();
+        assert!(old_engine.shares_hosts(new_engine));
+        assert!(updated
+            .grpc_routes
+            .route_rules_list
+            .iter()
+            .any(|unit| Arc::ptr_eq(unit, &unchanged)));
+        let index = matching_index();
+        let (mut session, ctx) = matching_session("/svc/Get", "api.example.com", "").await;
+        assert_eq!(
+            old.match_route(&mut session, &ctx, &index, "api.example.com")
+                .unwrap()
+                .0
+                .resource_key,
+            "default/first"
+        );
+        assert_eq!(
+            updated
+                .match_route(&mut session, &ctx, &index, "api.example.com")
+                .unwrap()
+                .0
+                .resource_key,
+            "default/fallback"
+        );
+        let (mut list_session, list_ctx) = matching_session("/svc/List", "api.example.com", "").await;
+        assert_eq!(
+            updated
+                .match_route(&mut list_session, &list_ctx, &index, "api.example.com")
+                .unwrap()
+                .0
+                .resource_key,
+            "default/first"
+        );
+
+        managers.full_set(&HashMap::from([
+            ("default/first".to_string(), replacement),
+            ("default/fallback".to_string(), fallback),
+        ]));
+        let reconnected = Arc::clone(&manager.load_route_table());
+        assert!(new_engine.shares_hosts(reconnected.grpc_routes.match_engine.as_ref().unwrap()));
+        managers.rebuild_all_listener_managers();
+        let rebuilt = Arc::clone(&manager.load_route_table());
+        assert!(new_engine.shares_hosts(rebuilt.grpc_routes.match_engine.as_ref().unwrap()));
+        managers.full_set(&HashMap::new());
+        assert!(!manager.load_route_table().has_routes());
+        assert!(reconnected.has_routes());
     }
 
     #[tokio::test]

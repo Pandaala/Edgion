@@ -1516,7 +1516,8 @@ mod request_scenario_state_tests {
 
         assert!(!info.has_tls_info());
         assert!(!info.has_grpc_info());
-        assert_eq!(std::mem::size_of::<RequestInfo>(), 288);
+        #[cfg(target_pointer_width = "64")]
+        assert_eq!(std::mem::size_of::<RequestInfo>(), 392);
     }
 
     #[test]
@@ -5382,7 +5383,7 @@ mod ai_context_claim_tests {
     fn ordinary_context_construction_is_allocation_free() {
         let (ctx, allocations) = crate::test_allocation_counter::count_allocation_stats(EdgionHttpContext::new);
 
-        assert_eq!(std::mem::size_of_val(&ctx), 1120);
+        assert_eq!(std::mem::size_of_val(&ctx), 1232);
         assert!(ctx.gateway_info.is_none());
         assert_eq!(allocations.calls, 0);
         assert_eq!(allocations.requested_bytes, 0);

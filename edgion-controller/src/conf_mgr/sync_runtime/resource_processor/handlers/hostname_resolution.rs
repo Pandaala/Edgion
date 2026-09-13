@@ -3,13 +3,14 @@
 //! Computes effective hostnames at the controller level by intersecting
 //! route hostnames with Gateway listener hostnames per Gateway API spec.
 //! The resolved hostnames are written into the route resource so the data
-//! plane can use them directly without re-checking Gateway constraints.
+//! plane can apply the eligibility constraint without changing authored route priority.
 
 use std::collections::HashSet;
 
 use crate::conf_mgr::ControllerRuntime;
 use edgion_resources::prelude_resources::Gateway;
 use edgion_resources::resources::common::ParentReference;
+use edgion_resources::HostnamePatternRef;
 
 pub struct ResolvedHostnames {
     pub hostnames: Vec<String>,
@@ -197,58 +198,26 @@ fn collect_matching_listeners(gateway: &Gateway, pr: &ParentReference) -> Vec<Op
 /// | *.bar.com         | *.foo.bar.com     | *.foo.bar.com       |
 /// | foo.com           | bar.com           | None                |
 pub fn compute_hostname_intersection(listener_hn: &str, route_hn: &str) -> Option<String> {
-    if listener_hn == route_hn {
-        return Some(listener_hn.to_string());
-    }
-
-    let listener_is_wildcard = listener_hn.starts_with("*.");
-    let route_is_wildcard = route_hn.starts_with("*.");
-
-    match (listener_is_wildcard, route_is_wildcard) {
-        (false, false) => {
-            // Both concrete: must be equal (already checked above)
-            None
-        }
-        (true, false) => {
-            // Wildcard listener × concrete route
-            let listener_suffix = &listener_hn[1..]; // ".example.com"
-            if route_hn.ends_with(listener_suffix) && route_hn.len() > listener_suffix.len() {
-                Some(route_hn.to_string())
-            } else {
-                None
-            }
-        }
-        (false, true) => {
-            // Concrete listener × wildcard route
-            let route_suffix = &route_hn[1..]; // ".specific.com"
-            if listener_hn.ends_with(route_suffix) && listener_hn.len() > route_suffix.len() {
-                Some(listener_hn.to_string())
-            } else {
-                None
-            }
-        }
-        (true, true) => {
-            // Both wildcards: the more specific (longer suffix) wins
-            let listener_suffix = &listener_hn[1..];
-            let route_suffix = &route_hn[1..];
-            if listener_suffix == route_suffix {
-                Some(listener_hn.to_string())
-            } else if route_suffix.ends_with(listener_suffix) && route_suffix.len() > listener_suffix.len() {
-                // route is more specific: *.foo.bar.com under *.bar.com
-                Some(route_hn.to_string())
-            } else if listener_suffix.ends_with(route_suffix) && listener_suffix.len() > route_suffix.len() {
-                // listener is more specific
-                Some(listener_hn.to_string())
-            } else {
-                None
-            }
-        }
-    }
+    let listener = HostnamePatternRef::parse(listener_hn).ok()?;
+    let route = HostnamePatternRef::parse(route_hn).ok()?;
+    listener.intersection(route).map(|pattern| pattern.as_str().to_owned())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn invalid_patterns_do_not_intersect_even_when_equal() {
+        for invalid in ["*", "A.example.com", "127.0.0.1", "a..b"] {
+            assert_eq!(compute_hostname_intersection(invalid, invalid), None);
+        }
+        assert_eq!(compute_hostname_intersection("a", "a"), Some("a".into()));
+        assert_eq!(
+            compute_hostname_intersection("*.127.0.0.1", "a.127.0.0.1"),
+            Some("a.127.0.0.1".into())
+        );
+    }
 
     #[test]
     fn test_intersection_both_concrete_equal() {

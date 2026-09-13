@@ -24,12 +24,13 @@ edgion-gateway/src/routes/grpc/
 ## Service / Method matching
 
 `GrpcMatchEngine` keeps one immutable ranked route array and indexes its numeric
-ranks by the Route's declared hostnames through the shared `HashHost`. Lookup visits the
+ranks by the Route's declared hostnames through gateway `HostnameMatcher`. Lookup visits the
 exact hostname, longest-to-shortest matching wildcard suffixes, then catch-all.
 Only matching declared hostnames contribute precedence. Listener intersection
 must not promote wildcard/hostless Route priority; `deep_match` independently
-enforces the effective intersection. Full predicate failure continues
-within the group and then to broader hostname groups.
+enforces the effective intersection. Predicate no-match continues within the
+group and then to broader hostname groups; real errors propagate out of the
+candidate loop. The outer gRPC dispatch keeps its existing error/no-match mapping.
 
 Within each group, priority is descending service character count, method
 character count, header count, then oldest route creation time, namespace/name,
@@ -55,6 +56,12 @@ Malformed paths return `InvalidGrpcPath`. Exact method-only matches any service;
 a header-only match has no method constraint. Omitted type means Exact.
 
 ### Validation and regex compilation
+
+Both planes validate the complete authored hostname list (0..16 names). Bare
+`*`, malformed names and excessive lists withdraw the complete Route, including
+status-less Gateway input; they never create catch-all or partial hostname groups.
+Only omitted/empty lists are hostless. Named queries use already-normalized
+authority input; non-DNS authority cannot hit a named group.
 
 `GRPCRouteMatch::compile_method` is the shared Controller/Gateway policy.
 `GrpcMatchInfo.compiled_method_match` stores Any, Exact, or precompiled optional
@@ -123,6 +130,11 @@ Specifics:
 
 - `route_units_cache` caches parsed route units to avoid re-parsing on every listener rebuild.
 - One per-listener `GrpcRouteRules` owns the ranked engine and its hostname indexes.
+- A rank-changing rebuild replaces the rank array and all five-stream candidate
+  contents together; old numeric ranks never enter a new array. The hostname
+  tree is reused whenever final keys agree, including full-list and Gateway
+  rebuilds. Unchanged cached units keep their runtime/selector Arcs. Discovery
+  still scans caches and affected Listener payloads; this is not per-host ranking.
 - Inside `GrpcMatchEngine::match_route`, `deep_match` validates the request hostname against the route's `effective_hostnames`.
 - Listener bucketing matches HTTP: routes with empty `resolved_listeners` are skipped + warned (no broadcast-to-all-ports fallback).
 

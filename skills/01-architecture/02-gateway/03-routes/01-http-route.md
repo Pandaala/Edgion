@@ -147,12 +147,23 @@ LB policy is not synchronized from routes. It is resolved from the target Servic
 `parse_http_routes_to_domain_rules` parses HTTPRoutes into a `DomainRouteRulesMap`:
 
 1. Validate route validity (non-empty parent_refs, rules, namespace, name).
-2. `filter_accepted_parent_refs`: keep parentRefs whose status is `Accepted=True`.
-3. `get_effective_hostnames`: prefer `resolved_hostnames` (the Controller-precomputed intersection), fall back to `spec.hostnames`, then to `"*"` (catch-all).
-4. For each hostname × rule × match combination, split into a regex route or a normal route.
+2. `filter_accepted_parent_refs` preserves Accepted-status filtering and existing
+   missing-status optimism; delegation parent kinds cannot attach to Gateways.
+3. Validate the complete authored hostname list. `get_declared_hostnames` uses
+   `spec.hostnames`; only omitted/empty lists create the internal catch-all.
+4. Compile one rule runtime/backend selector and share match-unit Arcs across
+   declared hostname groups; Listener eligibility remains in deep matching.
 5. Precompile header / query RegularExpression regexes for each match_item.
 
-`build_domain_route_rules_from_routes` builds the parsed result into the final data structures: exact domains go into `exact_domain_map`, wildcard domains build a `RadixHostMatchEngine`, and routes without hostname become `catch_all_routes`.
+`build_domain_route_rules_from_routes` stores all named groups in the gateway's
+`HostnameMatcher<RouteRules>`, with hostless fallback separate. Exact and
+descending wildcard groups continue only on RouteNotFound, not other errors.
+Listener intersections never promote wildcard/hostless Route specificity.
+Route deltas rebuild touched declared-hostname groups, removing all old units of
+changed/deleted resource keys before adding new units; untouched groups retain
+their path/regex engines. Full-list and Gateway rebuilds can reconstruct payloads
+but reuse the old hostname tree when final keys agree. Each outer table atomically
+couples that tree with its content map; no per-host ArcSwap or cross-listener transaction.
 
 ## Key source files
 

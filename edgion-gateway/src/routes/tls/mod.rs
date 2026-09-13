@@ -7,6 +7,9 @@
 //! - ClientHello SNI extraction ([`sni_parser`])
 //! - Per-port route table ([`gateway_tls_routes`])
 
+use crate::plugins::publication::{PluginPublication, PluginScope};
+use edgion_resources::ListenerKey;
+use std::sync::Arc;
 use std::time::Duration;
 
 mod conf_handler_impl;
@@ -22,6 +25,29 @@ pub mod sni_parser;
 pub use routes_mgr::{get_global_tls_route_managers, GlobalTlsRouteManagers, TlsRouteManager, TlsRouteManagerStats};
 
 pub use conf_handler_impl::create_tls_route_handler;
+
+/// An eligible Route has already won. Missing policy is terminal, not no-match.
+struct SelectedTlsRoute {
+    unit: Arc<TlsRouteUnit>,
+    scope: Option<Arc<PluginScope>>,
+}
+
+/// Both proxy modes bind attachment, owner and policy against one publication.
+/// Retain only selected handles, never table/publication guards across relay.
+fn select_tls_route(
+    manager: &TlsRouteManager,
+    publication: &PluginPublication,
+    listener_key: &ListenerKey,
+    sni: &str,
+) -> Option<SelectedTlsRoute> {
+    let index = publication.listener_index(listener_key)?;
+    let (unit, owner) = manager.load_route_table().select_route(sni, index)?;
+    let scope = publication
+        .gateway(owner.gateway_key())
+        .filter(|gateway| gateway.scope.available)
+        .map(|gateway| Arc::clone(&gateway.scope));
+    Some(SelectedTlsRoute { unit, scope })
+}
 
 use crate::plugins::stream::CompiledStreamPlugins;
 use crate::plugins::{StreamPluginResult, TlsRouteContext};

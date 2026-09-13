@@ -17,6 +17,10 @@ path = "src/bin/edgion_gateway.rs"
 name = "lru_expiration"
 harness = false
 
+[[bench]]
+name = "route_hostname"
+harness = false
+
 [lints]
 workspace = true
 

@@ -1,8 +1,6 @@
 use crate::lb::BackendSelector;
 use crate::plugins::PluginRuntime;
-use crate::routes::common::{
-    effective_hostnames, filter_accepted_parent_refs, gateways_from_parent_refs, resolve_parent_refs,
-};
+use crate::routes::common::{filter_accepted_parent_refs, gateways_from_parent_refs, resolve_parent_refs};
 use crate::routes::http::match_engine::radix_route_match::RadixRouteMatchEngine;
 use crate::routes::http::match_engine::regex_routes_engine::RegexRoutesEngine;
 use crate::routes::http::match_unit::{CompiledBackend, HttpRuleRuntime, MatchSpecificity};
@@ -10,10 +8,10 @@ use crate::routes::http::routes_mgr::{
     resolved_listeners_for_route, DomainRouteRules, GlobalHttpRouteManagers, RouteRules,
 };
 use crate::routes::http::{get_global_http_route_managers, HttpRouteRuleUnit};
+use crate::runtime::matching::hostname::{CompiledHostnamePattern, HostContentChange};
 use crate::runtime::matching::route::ResolvedParentRef;
 use crate::MatchInfo;
 use edgion_common::conf_sync::traits::ConfHandler;
-use edgion_resources::matcher::host_match::radix_match::{RadixHost, RadixHostMatchEngine};
 use edgion_resources::{HTTPPathMatch, HTTPRoute, HTTPRouteMatch, HTTPRouteRule, ListenerKey, ResourceMeta};
 use regex::Regex;
 use std::collections::{HashMap, HashSet};
@@ -44,11 +42,30 @@ struct ValidatedHttpRoute<'a> {
 /// Per Gateway API spec, omitting hostnames means "match all hosts".
 const CATCH_ALL_HOSTNAME: &str = "*";
 
-fn get_effective_hostnames(route: &HTTPRoute) -> Vec<String> {
-    effective_hostnames(
-        route.spec.resolved_hostnames.as_deref(),
-        route.spec.hostnames.as_deref(),
-    )
+fn get_declared_hostnames(route: &HTTPRoute) -> Vec<String> {
+    match route.spec.hostnames.as_ref().filter(|hosts| !hosts.is_empty()) {
+        Some(hosts) => {
+            let mut hosts = hosts.clone();
+            hosts.sort();
+            hosts.dedup();
+            hosts
+        }
+        None => vec![CATCH_ALL_HOSTNAME.to_string()],
+    }
+}
+
+/// Cold change discovery; payload reconstruction visits only touched groups.
+#[derive(Default)]
+pub(crate) struct HttpRouteChanges {
+    pub(crate) resource_keys: HashSet<String>,
+    hostnames: HashSet<String>,
+}
+
+impl HttpRouteChanges {
+    fn record(&mut self, key: &str, route: &HTTPRoute) {
+        self.resource_keys.insert(key.to_string());
+        self.hostnames.extend(get_declared_hostnames(route));
+    }
 }
 
 impl ConfHandler<HTTPRoute> for GlobalHttpRouteManagers {
@@ -133,8 +150,10 @@ impl ConfHandler<HTTPRoute> for GlobalHttpRouteManagers {
             let _guard = self.lock_rebuild();
             // Compute affected listeners BEFORE updating cache.
             let mut affected_listeners: HashSet<ListenerKey> = HashSet::new();
+            let mut changes = HttpRouteChanges::default();
 
             for (key, route) in &add_or_update {
+                changes.record(key, route);
                 let listeners = resolved_listeners_for_route(route); // &Arc coerces to &HTTPRoute
                 if listeners.is_empty() {
                     tracing::warn!(route = %key, "HTTPRoute has no resolved_listeners during partial_update");
@@ -144,13 +163,16 @@ impl ConfHandler<HTTPRoute> for GlobalHttpRouteManagers {
                     }
                 }
                 if let Some(old) = self.route_cache.get(key) {
+                    changes.record(key, old.value());
                     for lk in resolved_listeners_for_route(old.value()) {
                         affected_listeners.insert(lk.clone());
                     }
                 }
             }
             for key in &remove {
+                changes.resource_keys.insert(key.clone());
                 if let Some(old) = self.route_cache.get(key) {
+                    changes.record(key, old.value());
                     let listeners = resolved_listeners_for_route(old.value());
                     if !listeners.is_empty() {
                         for lk in listeners {
@@ -168,7 +190,7 @@ impl ConfHandler<HTTPRoute> for GlobalHttpRouteManagers {
                 self.route_cache.remove(key);
             }
 
-            self.rebuild_affected_listener_managers(&affected_listeners);
+            self.rebuild_affected_listener_managers(&affected_listeners, &changes);
         }
 
         tracing::info!(
@@ -349,19 +371,28 @@ fn build_normal_route_unit(ctx: RouteUnitCtx<'_>) -> HttpRouteRuleUnit {
     }
 }
 
-/// Push one match item into the normal or regex bucket for `hostname`.
-fn append_match_to_domain(domain_rules: &mut DomainRouteRulesMap, hostname: &str, ctx: RouteUnitCtx<'_>) {
+/// Compile a match once, then share the same unit across declared hostnames.
+fn append_match_to_domains(domain_rules: &mut DomainRouteRulesMap, hostnames: &[String], ctx: RouteUnitCtx<'_>) {
     let resource_key = ctx.resource_key;
-    let split = domain_rules
-        .entry(hostname.to_string())
-        .or_insert_with(|| (Vec::new(), Vec::new()));
-    if is_regex_path(ctx.match_item) {
+    let regex = is_regex_path(ctx.match_item);
+    let unit = if regex {
         match create_regex_route_unit(ctx) {
-            Ok(unit) => split.1.push(Arc::new(unit)),
-            Err(e) => tracing::warn!(route = %resource_key, err = %e, "failed to create regex route"),
+            Ok(unit) => Arc::new(unit),
+            Err(e) => {
+                tracing::warn!(route = %resource_key, err = %e, "failed to create regex route");
+                return;
+            }
         }
     } else {
-        split.0.push(Arc::new(build_normal_route_unit(ctx)));
+        Arc::new(build_normal_route_unit(ctx))
+    };
+    for hostname in hostnames {
+        let split = domain_rules.entry(hostname.clone()).or_default();
+        if regex {
+            split.1.push(Arc::clone(&unit));
+        } else {
+            split.0.push(Arc::clone(&unit));
+        }
     }
 }
 
@@ -373,11 +404,11 @@ struct SharedHttpRule {
     metric_handles: Arc<crate::observe::metrics::route_handles::RouteMetricHandles>,
 }
 
-/// Expand all rules of a single route into `hostname`'s domain bucket.
+/// Expand one route into its declared hostname groups, sharing units and selectors.
 #[allow(clippy::too_many_arguments)] // route-build inputs have distinct lifetimes/ownership; grouping would obscure them
-fn append_route_to_hostname(
+fn append_route_to_domains(
     domain_rules: &mut DomainRouteRulesMap,
-    hostname: &str,
+    hostnames: &[String],
     validated: &ValidatedHttpRoute<'_>,
     resource_key: &str,
     // Resolved once per route by the caller and shared across every hostname
@@ -402,8 +433,8 @@ fn append_route_to_hostname(
         let rule_id = shared_rule.rule_id;
         let rule = &shared_rule.rule;
         // Compiled runtime is built ONCE per accepted rule;
-        // the LB selector is built once per (rule, hostname) and shared across
-        // this rule's match-item units.
+        // the LB selector is built once per rule and shared across all of
+        // this rule's match items and declared hostname groups.
         let rule_rt = &shared_rule.runtime;
         let backend_finder = HttpRouteRuleUnit::build_backend_selector(&rule_rt.backends);
         let matches = match &rule.matches {
@@ -411,9 +442,9 @@ fn append_route_to_hostname(
             _ => &default_matches,
         };
         for (match_id, match_item) in matches.iter().enumerate() {
-            append_match_to_domain(
+            append_match_to_domains(
                 domain_rules,
-                hostname,
+                hostnames,
                 RouteUnitCtx {
                     namespace: &validated.namespace,
                     name: &validated.name,
@@ -514,19 +545,17 @@ fn parse_http_routes_to_domain_rules(data: &HashMap<String, Arc<HTTPRoute>>) -> 
                 })
             })
             .collect();
-        for hostname in &get_effective_hostnames(route) {
-            append_route_to_hostname(
-                &mut domain_rules,
-                hostname,
-                &validated,
-                &resource_key,
-                &resolved_parent_refs,
-                creation_ts_ms,
-                route_sv,
-                &shared_rules,
-                route,
-            );
-        }
+        append_route_to_domains(
+            &mut domain_rules,
+            &get_declared_hostnames(route),
+            &validated,
+            &resource_key,
+            &resolved_parent_refs,
+            creation_ts_ms,
+            route_sv,
+            &shared_rules,
+            route,
+        );
         processed_routes += 1;
     }
 
@@ -543,6 +572,8 @@ fn parse_http_routes_to_domain_rules(data: &HashMap<String, Arc<HTTPRoute>>) -> 
 
 /// Validate HTTPRoute and extract required fields, returning None if any required field is missing.
 fn validate_http_route(route: &HTTPRoute) -> Option<ValidatedHttpRoute<'_>> {
+    // Controller status is advisory; malformed explicit lists never become catch-all.
+    route.spec.validate_hostnames().ok()?;
     match &route.spec.parent_refs {
         Some(refs) if !refs.is_empty() => refs,
         _ => {
@@ -588,68 +619,126 @@ fn validate_http_route(route: &HTTPRoute) -> Option<ValidatedHttpRoute<'_>> {
     })
 }
 
-/// Build DomainRouteRules from a set of routes (used by per-port rebuild).
-pub(crate) fn build_domain_route_rules_from_routes(data: &HashMap<String, Arc<HTTPRoute>>) -> DomainRouteRules {
-    let domain_rules_map = parse_http_routes_to_domain_rules(data);
-
-    let mut exact_domain_map: HashMap<DomainStr, Arc<RouteRules>> = HashMap::new();
-    let mut wildcard_hosts: Vec<RadixHost<RouteRules>> = Vec::new();
-    let mut catch_all_routes: Option<Arc<RouteRules>> = None;
-
-    for (domain, split) in domain_rules_map.into_iter() {
-        if split.0.is_empty() && split.1.is_empty() {
-            continue;
-        }
-
-        let match_engine = if split.0.is_empty() {
-            None
-        } else {
-            match RadixRouteMatchEngine::build(split.0.clone()) {
-                Ok(engine) => Some(Arc::new(engine)),
-                Err(e) => {
-                    tracing::error!(component="route_manager",domain=%domain,err=?e,"build failed");
-                    continue;
-                }
+/// Compile the path predicates for one touched hostname group.
+fn build_route_rules(domain: &str, split: RouteRulesPair) -> Option<Arc<RouteRules>> {
+    if split.0.is_empty() && split.1.is_empty() {
+        return None;
+    }
+    let match_engine = if split.0.is_empty() {
+        None
+    } else {
+        match RadixRouteMatchEngine::build(split.0.clone()) {
+            Ok(engine) => Some(Arc::new(engine)),
+            Err(e) => {
+                tracing::error!(component="route_manager",domain=%domain,err=?e,"build failed");
+                return None;
             }
+        }
+    };
+    let regex_routes_engine = (!split.1.is_empty()).then(|| Arc::new(RegexRoutesEngine::build(split.1.clone())));
+    let resource_keys = split
+        .0
+        .iter()
+        .chain(&split.1)
+        .map(|unit| unit.resource_key.clone())
+        .collect();
+    Some(Arc::new(RouteRules {
+        resource_keys,
+        route_rules_list: split.0,
+        match_engine,
+        regex_routes: split.1,
+        regex_routes_engine,
+    }))
+}
+
+/// Full payload replacement; an unchanged hostname set retains its tree.
+pub(crate) fn build_domain_route_rules_from_routes(
+    data: &HashMap<String, Arc<HTTPRoute>>,
+    previous: &DomainRouteRules,
+) -> DomainRouteRules {
+    let mut groups = HashMap::new();
+    let mut catch_all_routes = None;
+    for (domain, split) in parse_http_routes_to_domain_rules(data) {
+        let Some(rules) = build_route_rules(&domain, split) else {
+            continue;
         };
-
-        let regex_routes_engine = (!split.1.is_empty()).then(|| Arc::new(RegexRoutesEngine::build(split.1.clone())));
-
-        let mut resource_keys: HashSet<String> = split.0.iter().map(|u| u.resource_key.clone()).collect();
-        resource_keys.extend(split.1.iter().map(|u| u.resource_key.clone()));
-
-        let route_rules = Arc::new(RouteRules {
-            resource_keys,
-            route_rules_list: split.0,
-            match_engine,
-            regex_routes: split.1,
-            regex_routes_engine,
-        });
-
         if domain == CATCH_ALL_HOSTNAME {
-            catch_all_routes = Some(route_rules);
-        } else if domain.starts_with("*.") {
-            wildcard_hosts.push(RadixHost::new(&domain, route_rules));
-        } else {
-            exact_domain_map.insert(domain.to_lowercase(), route_rules);
+            catch_all_routes = Some(rules);
+        } else if let Ok(pattern) = CompiledHostnamePattern::parse(&domain) {
+            groups.insert(pattern, rules);
         }
     }
+    DomainRouteRules {
+        hosts: previous.hosts.with_groups(groups),
+        catch_all_routes,
+    }
+}
 
-    let wildcard_engine = if !wildcard_hosts.is_empty() {
-        let mut engine = RadixHostMatchEngine::new();
-        if let Err(e) = engine.initialize(wildcard_hosts) {
-            tracing::error!(component="route_manager",err=%e,"failed to build RadixHostMatchEngine");
+/// Recompile changed resources only, then replace only their old/new groups.
+/// The caller's global cache scan discovers listener membership, not payloads.
+pub(crate) fn patch_domain_route_rules(
+    data: &HashMap<String, Arc<HTTPRoute>>,
+    previous: &DomainRouteRules,
+    changes: &HttpRouteChanges,
+) -> DomainRouteRules {
+    let changed_routes = data
+        .iter()
+        .filter(|(key, _)| changes.resource_keys.contains(*key))
+        .map(|(key, route)| (key.clone(), Arc::clone(route)))
+        .collect();
+    let mut additions = parse_http_routes_to_domain_rules(&changed_routes);
+    let mut updates = Vec::new();
+    let mut catch_all_routes = previous.catch_all_routes.clone();
+    for domain in &changes.hostnames {
+        let pattern = if domain == CATCH_ALL_HOSTNAME {
             None
         } else {
-            Some(engine)
+            let Ok(pattern) = CompiledHostnamePattern::parse(domain) else {
+                continue;
+            };
+            Some(pattern)
+        };
+        let prior = match &pattern {
+            Some(pattern) => previous.hosts.get(pattern),
+            None => previous.catch_all_routes.as_ref(),
+        };
+        let mut split = additions.remove(domain).unwrap_or_default();
+        let removes_prior = prior.is_some_and(|rules| {
+            rules
+                .resource_keys
+                .iter()
+                .any(|key| changes.resource_keys.contains(key))
+        });
+        if !removes_prior && split.0.is_empty() && split.1.is_empty() {
+            continue;
         }
-    } else {
-        None
-    };
-
+        if let Some(prior) = prior {
+            split.0.extend(
+                prior
+                    .route_rules_list
+                    .iter()
+                    .filter(|unit| !changes.resource_keys.contains(&unit.resource_key))
+                    .cloned(),
+            );
+            split.1.extend(
+                prior
+                    .regex_routes
+                    .iter()
+                    .filter(|unit| !changes.resource_keys.contains(&unit.resource_key))
+                    .cloned(),
+            );
+        }
+        let rules = build_route_rules(domain, split);
+        match pattern {
+            Some(pattern) => updates.push(match rules {
+                Some(rules) => HostContentChange::Upsert(pattern, rules),
+                None => HostContentChange::Remove(pattern),
+            }),
+            None => catch_all_routes = rules,
+        }
+    }
     DomainRouteRules {
-        exact_domain_map: Arc::new(exact_domain_map),
-        wildcard_engine: wildcard_engine.map(Arc::new),
+        hosts: previous.hosts.with_changes(updates),
         catch_all_routes,
     }
 }
@@ -716,7 +805,7 @@ mod tests {
     }
 
     #[test]
-    fn test_get_effective_hostnames_prefers_resolved() {
+    fn test_get_declared_hostnames_ignores_resolved() {
         let mut route = create_test_httproute(
             "default",
             "route1",
@@ -725,26 +814,26 @@ mod tests {
         );
         route.spec.resolved_hostnames = Some(vec!["resolved.example.com".to_string()]);
 
-        let result = get_effective_hostnames(&route);
-        assert_eq!(result, vec!["resolved.example.com"]);
+        let result = get_declared_hostnames(&route);
+        assert_eq!(result, vec!["original.example.com"]);
     }
 
     #[test]
-    fn test_get_effective_hostnames_falls_back_to_spec_hostnames() {
+    fn test_get_declared_hostnames_falls_back_to_spec_hostnames() {
         let route = create_test_httproute("default", "route1", vec!["spec.example.com"], vec![("default", "gw1")]);
-        let result = get_effective_hostnames(&route);
+        let result = get_declared_hostnames(&route);
         assert_eq!(result, vec!["spec.example.com"]);
     }
 
     #[test]
-    fn test_get_effective_hostnames_catch_all_when_empty() {
+    fn test_get_declared_hostnames_catch_all_when_empty() {
         let route = create_test_httproute("default", "route1", vec![], vec![("default", "gw1")]);
-        let result = get_effective_hostnames(&route);
+        let result = get_declared_hostnames(&route);
         assert_eq!(result, vec!["*"]);
     }
 
     #[test]
-    fn test_get_effective_hostnames_skips_empty_resolved() {
+    fn test_get_declared_hostnames_skips_empty_resolved() {
         let mut route = create_test_httproute(
             "default",
             "route1",
@@ -752,7 +841,7 @@ mod tests {
             vec![("default", "gw1")],
         );
         route.spec.resolved_hostnames = Some(vec![]);
-        let result = get_effective_hostnames(&route);
+        let result = get_declared_hostnames(&route);
         assert_eq!(result, vec!["fallback.example.com"]);
     }
 
@@ -909,16 +998,9 @@ mod tests {
         assert!(matched("/other").is_empty());
     }
 
-    /// A route listing the same hostname twice registers its units twice in one
-    /// engine, producing candidates that tie through every level of the
-    /// precedence chain. `spec.hostnames` is `x-kubernetes-list-type: atomic`
-    /// with no `uniqueItems`, and `effective_hostnames` does not dedup, so this
-    /// is reachable rather than hypothetical.
-    ///
-    /// This is the only case where the old stable sort and the new `path_idx`
-    /// tie-break could have diverged. They do not: the old code pushed such
-    /// candidates consecutively in ascending `path_idx` within one bucket, which
-    /// is exactly what the rank now encodes.
+    /// Duplicate authored hostnames compile a match unit only once. Separately,
+    /// the path engine's final tie-break remains deterministic even if its
+    /// inputs contain repeated references to an identical unit.
     #[test]
     fn tied_candidates_from_a_duplicate_hostname_keep_build_order() {
         let route = route_with_paths(
@@ -935,7 +1017,10 @@ mod tests {
         let (units, _regex_units) = domain_rules
             .get("dup.example.com")
             .expect("duplicated hostname must still produce route rules");
-        assert_eq!(units.len(), 2, "the duplicate hostname registers the unit twice");
+        assert_eq!(units.len(), 1, "duplicate hostnames must not duplicate compiled units");
+        // Exercise the lower-level final tie explicitly, rather than relying
+        // on hostname fan-out to manufacture duplicate registrations.
+        let units = vec![Arc::clone(&units[0]), Arc::clone(&units[0])];
         assert_eq!(
             units[0].specificity.cmp_precedence(&units[1].specificity),
             std::cmp::Ordering::Equal,
@@ -950,8 +1035,7 @@ mod tests {
             "identical paths must carry identical specificity, so the pair is fully tied"
         );
 
-        // Distinct `route_idx`: `extract_paths` yields at most one path per unit,
-        // so tied candidates are duplicate registrations, never one shared route.
+        // Each input position retains a distinct route_idx, even for shared Arcs.
         assert_ne!(paths[0].route_idx, paths[1].route_idx);
 
         // The tie resolves to build order, deterministically.
@@ -1485,6 +1569,7 @@ mod tests {
             ]),
         );
         let mut units = named_units(vec![route]);
+        assert_eq!(units.len(), 3, "duplicate hostnames must not repeat rule/match units");
         for _ in 0..2 {
             let engine = RadixRouteMatchEngine::build(units.clone()).expect("engine must build");
             let actual: Vec<(u32, u32, u32)> = engine
@@ -1497,10 +1582,16 @@ mod tests {
                 .collect();
             assert_eq!(
                 actual.iter().map(|(r, m, _)| (*r, *m)).collect::<Vec<_>>(),
-                vec![(0, 0), (0, 0), (0, 1), (0, 1), (1, 0), (1, 0)],
+                vec![(0, 0), (0, 1), (1, 0)],
             );
-            for pair in actual.chunks_exact(2) {
-                assert!(pair[0].2 < pair[1].2, "fully tied registrations use ascending path_idx");
+            // Deliberately repeat engine inputs to retain the final path-index
+            // tie coverage independently of deduplicated hostname fan-out.
+            let repeated = units.iter().chain(&units).cloned().collect();
+            let tied = RadixRouteMatchEngine::build(repeated).expect("tied engine must build");
+            let tied_order = tied.ordered_candidates_for_test("/a/b");
+            assert_eq!(tied_order.len(), 6);
+            for pair in tied_order.chunks_exact(2) {
+                assert!(pair[0].1 < pair[1].1, "fully tied registrations use ascending path_idx");
             }
             units.reverse();
         }
@@ -1568,7 +1659,7 @@ mod tests {
     }
 
     #[test]
-    fn test_get_effective_hostnames_multiple_resolved() {
+    fn test_get_declared_hostnames_multiple_resolved() {
         let mut route = create_test_httproute(
             "default",
             "route1",
@@ -1576,8 +1667,8 @@ mod tests {
             vec![("default", "gw1")],
         );
         route.spec.resolved_hostnames = Some(vec!["a.example.com".to_string(), "b.example.com".to_string()]);
-        let result = get_effective_hostnames(&route);
-        assert_eq!(result, vec!["a.example.com", "b.example.com"]);
+        let result = get_declared_hostnames(&route);
+        assert_eq!(result, vec!["ignored.example.com"]);
     }
 
     // ====================================================================
@@ -1824,9 +1915,10 @@ mod tests {
             "matches of one rule and hostname must share a selector"
         );
         assert!(
-            !Arc::ptr_eq(&a00.backend_finder, &b00.backend_finder),
-            "different hostname buckets must retain independent selector state"
+            Arc::ptr_eq(&a00.backend_finder, &b00.backend_finder),
+            "hostname fan-out must preserve the rule's selector state"
         );
+        assert!(Arc::ptr_eq(&a00, &b00), "hostname groups share the compiled match unit");
         assert!(
             !Arc::ptr_eq(&a00.backend_finder, &a10.backend_finder),
             "different rules must retain independent selector state"
@@ -2169,11 +2261,11 @@ mod tests {
         let mut data = std::collections::HashMap::new();
         data.insert(route_key.to_string(), route.clone());
 
-        let table = build_domain_route_rules_from_routes(&data);
-        // build_route_with_lb_policy sets hostnames: ["test.example.com"] -> exact_domain_map bucket.
+        let table = build_domain_route_rules_from_routes(&data, &DomainRouteRules::new());
+        // build_route_with_lb_policy declares the test.example.com hostname group.
         let rules = table
-            .exact_domain_map
-            .get("test.example.com")
+            .hosts
+            .get(&CompiledHostnamePattern::parse("test.example.com").unwrap())
             .cloned()
             .expect("test.example.com rules present");
         let unit = rules

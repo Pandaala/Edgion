@@ -27,39 +27,46 @@ edgion-gateway/src/routes/tls/
 
 ## SNI matching
 
-`TlsRouteTable` uses the `HashHost` data structure to perform hostname matching by SNI:
+`TlsRouteTable` uses the gateway's shared hostname matcher for Route SNI candidates:
 
 ```rust
 pub struct TlsRouteTable {
-    host_map: HashHost<Arc<TlsRouteUnit>>,
+    hosts: HostnameMatcher<Vec<TlsRouteCandidate>>,
 }
 ```
 
 Match priority:
 
-1. **Exact hostname match**: `HashHost` exact lookup, O(1).
-2. **Wildcard hostname match**: `HashHost` handles wildcards such as `*.example.com` internally and returns the most specific wildcard match.
+1. **Exact hostname match**: authored exact Route patterns first.
+2. **Wildcard hostname match**: matching suffixes longest first; `*.example.com` includes deep subdomains but excludes `example.com`.
 3. **No match**: reject if no explicit route hostname matches; TLSRoute v1 has no hostname-less catch-all.
 
-`TlsRouteTable::from_units` build process:
+`TlsRouteTable::with_units` build process:
 
-1. Borrow hostname slices from the unit's accepted `ResolvedTlsListener` records
-   for the table's physical `ListenerKey`. No route-global union or raw fallback.
+1. Group by validated authored Route patterns that intersect accepted
+   `ResolvedTlsListener` records on the table's physical `ListenerKey`. Retain
+   the contributing attachment indices with each candidate, not a global union.
 2. Empty intersections and unresolved/invalid routes contribute no candidates.
-3. Sort colliding candidate vectors by oldest creation timestamp, namespace, then
-   name; preserve config-rebuild collision warnings. Publish only the winner Arc
-   per hostname. The canonical unit cache still retains configured
-   runners-up, allowing the next rebuild to promote one after winner removal.
+3. Sort candidates by oldest creation timestamp, namespace, then name; retain
+   runners-up in each published group. Reuse unchanged group Arcs by candidate
+   identity/order and attachment indices; reuse the tree when final keys agree.
 
 All SNI slots selecting one route share its compiled unit and backend selector.
-`HashHost::get` preserves Gateway API multi-depth wildcard matching, not the
-single-label certificate-selection rule. Old snapshots retain their selected
+Route matching preserves Gateway API multi-depth wildcard matching. EdgionTls
+and Gateway TLS/certificate selection remain unchanged and single-label.
+Old snapshots retain their selected
 units until their readers release them; only the outer manager publishes via
 `ArcSwap`.
 
 The Controller resolves names per exact Gateway/listener attachment. Runtime
 units retain accepted schema indices and compile exact logical parent identities
-per physical key; both proxies use these identities for policy admission.
+per physical key. Selection checks effective hostname and exact logical parent
+from the SAME attachment, then existing Listener eligibility; a rejected candidate
+can yield to a runner-up or broader Route group, never a less-specific Listener.
+Both proxies use one shared route/scope selection path. Once an owner is selected,
+unavailable policy, denied backend or connection failure is terminal for that
+selection; none restarts hostname iteration. Retain the selected runtime/scope,
+not unrelated full snapshots across plugin/dial awaits.
 See [attachment regression boundaries](../../../04-review/routing/regression-guards/tls-hostnames-per-attachment.md).
 
 ## Route management, bucketing, rebuild, ConfHandler
@@ -76,7 +83,7 @@ TLS-terminate-to-TCP proxy. Doc-comment: "TLS-to-TCP proxy service for Gateway T
 
 - Holds an `Arc<TlsRouteManager>` and gets the current snapshot via `load_route_table()`.
 - **Terminates** the TLS handshake; extracts the SNI from the established connection via `ssl_ref.servername(NameType::HOST_NAME)` and tracks `is_mtls` in `TlsContext`.
-- Calls `TlsRouteTable::match_route(sni_hostname)` to select a route.
+- Calls the shared TLSRoute selection path to select a route and eligible owner.
 - Selects a backend from the route's `backend_refs` and establishes an upstream **plain TCP** connection.
 - Relays decrypted traffic bidirectionally (downstream is TLS-terminated, upstream is TCP).
 

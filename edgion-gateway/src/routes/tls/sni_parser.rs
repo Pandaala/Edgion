@@ -4,6 +4,8 @@
 //! message. Used by TLS Passthrough mode to route connections based on SNI
 //! without performing a full TLS handshake.
 
+use crate::runtime::matching::hostname_input::normalize_route_sni;
+
 /// Upper bound on bytes drained from the stream while accumulating a
 /// ClientHello record.
 ///
@@ -158,7 +160,8 @@ pub fn extract_sni(buf: &[u8]) -> Option<String> {
     first_sni
         .flatten()
         .and_then(|name| std::str::from_utf8(name).ok())
-        .map(str::to_lowercase)
+        .and_then(|name| normalize_route_sni(name).ok())
+        .map(|name| name.into_owned())
 }
 
 /// Validate the complete list, retaining the first host_name without allocating.
@@ -365,9 +368,11 @@ mod tests {
         set_u16(&mut sni, 7, u16::MAX as usize);
         assert_eq!(extract_sni(&replace_extensions(&sni)), None);
 
-        // This change does not add hostname-content policy or select a later
-        // SNI extension when the first one has no usable hostname.
-        assert_eq!(extract_sni(&build_client_hello("")), Some(String::new()));
+        // Route input validation rejects an unusable first name; it must not
+        // select a later SNI extension to repair that name.
+        for name in ["", "*", "a..example", "a.example.", "a.example:443", "é.example"] {
+            assert_eq!(extract_sni(&build_client_hello(name)), None, "{name}");
+        }
         let unknown_only = [0, 0, 0, 6, 0, 4, 1, 0, 1, 0xaa];
         assert_eq!(
             extract_sni(&replace_extensions(&[&unknown_only, second_sni].concat())),

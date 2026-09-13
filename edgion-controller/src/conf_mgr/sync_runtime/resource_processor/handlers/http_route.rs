@@ -535,9 +535,14 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
         // Treat resolved_listeners as controller-derived state.
         // Clear any user-provided or stale value before recomputing from current parentRefs.
         route.spec.resolved_listeners = None;
+        route.spec.resolved_hostnames = None;
+        if let Some(annotations) = route.metadata.annotations.as_mut() {
+            annotations.remove("edgion.io/hostname-resolution");
+        }
+        let valid_hostnames = route.spec.validate_hostnames().is_ok();
 
         // Resolve effective hostnames (intersection with Gateway listener hostnames)
-        if let Some(parent_refs) = &route.spec.parent_refs {
+        if let Some(parent_refs) = route.spec.parent_refs.as_ref().filter(|_| valid_hostnames) {
             let route_ns_resolve = route.metadata.namespace.as_deref().unwrap_or("default");
             let resolved = super::hostname_resolution::resolve_effective_hostnames(
                 route.spec.hostnames.as_ref(),
@@ -557,7 +562,7 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
         }
 
         // Resolve listener keys from parentRefs for per-listener route isolation
-        if let Some(parent_refs) = &route.spec.parent_refs {
+        if let Some(parent_refs) = route.spec.parent_refs.as_ref().filter(|_| valid_hostnames) {
             let route_ns = route.metadata.namespace.as_deref().unwrap_or("default");
             let listener_keys = super::route_utils::resolve_listener_keys(
                 parent_refs,
@@ -742,6 +747,7 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
         let attachment_rejects_route =
             (!invalid_details.is_empty() || !delegation_dropped.is_empty()) && serves_no_rule;
 
+        let hostname_error = route.spec.validate_hostnames().err();
         let mut validation_accepted_errors = AcceptedError::from_validation_errors(validation_errors);
         validation_accepted_errors.extend(ownership_accepted_errors.clone());
         if attachment_rejects_route {
@@ -759,7 +765,8 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
                     .map(|message| AcceptedError::UnsupportedValue { message }),
             );
         }
-        let route_rejected = attachment_rejects_route || !ownership_accepted_errors.is_empty();
+        let route_rejected =
+            hostname_error.is_some() || attachment_rejects_route || !ownership_accepted_errors.is_empty();
 
         let status = route.status.get_or_insert_with(|| HTTPRouteStatus { parents: vec![] });
         let route_hostnames = route.spec.hostnames.as_ref();
@@ -779,6 +786,14 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
                     _ctx.runtime(),
                 );
                 let mut accepted_errors = accepted_result.errors;
+                if let Some(error) = hostname_error {
+                    accepted_errors.insert(
+                        0,
+                        AcceptedError::UnsupportedValue {
+                            message: error.to_string(),
+                        },
+                    );
+                }
                 accepted_errors.extend(validation_accepted_errors.clone());
 
                 // Note: per-rule problems (rewrite/redirect conflict, malformed CORS,
@@ -906,7 +921,7 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
             ResourceKind::HTTPRoute,
             route_ns,
             route.metadata.name.as_deref().unwrap_or(""),
-            route.spec.parent_refs.as_ref(),
+            route.spec.parent_refs.as_ref().filter(|_| hostname_error.is_none()),
             route.spec.hostnames.as_ref(),
             _ctx.runtime(),
         );
@@ -1473,6 +1488,109 @@ mod tests {
     use crate::conf_mgr::sync_runtime::workqueue::TriggerChain;
     use crate::conf_mgr::ControllerRuntime;
     use std::sync::Arc;
+
+    #[tokio::test]
+    async fn hostname_validation_clears_stale_attachments_and_recovers() {
+        use super::super::GatewayHandler;
+        use crate::conf_mgr::sync_runtime::resource_processor::{LocalRawStore, ResourceProcessor};
+        use edgion_resources::Gateway;
+
+        let runtime = Arc::new(ControllerRuntime::default());
+        let processor = Arc::new(ResourceProcessor::<Gateway>::new(
+            "Gateway",
+            16,
+            Arc::new(GatewayHandler::new(None, None)),
+            runtime.clone(),
+        ));
+        let raw = Arc::new(LocalRawStore::new());
+        processor.set_raw_store(raw.clone());
+        runtime.processor_registry.register(processor);
+        raw.upsert(
+            "apps/gateway".into(),
+            Arc::new(
+                serde_json::from_value(serde_json::json!({
+                    "metadata": {"namespace": "apps", "name": "gateway"},
+                    "spec": {"gatewayClassName": "test", "listeners": [
+                        {"name": "http", "port": 8080, "protocol": "HTTP"}
+                    ]}
+                }))
+                .unwrap(),
+            ),
+        );
+        let ctx = HandlerContext::new(None, None, Default::default(), 3, 20, runtime.clone());
+        let handler = HttpRouteHandler::default();
+        let mut route: HTTPRoute = serde_json::from_value(serde_json::json!({
+            "metadata": {"namespace": "apps", "name": "route"},
+            "spec": {"parentRefs": [{"name": "gateway", "sectionName": "http"}], "rules": [{}]}
+        }))
+        .unwrap();
+        for (hostnames, accepted) in [
+            (None, true),
+            (Some(Vec::new()), true),
+            (Some(vec!["a.example.com".to_string(); 16]), true),
+            (Some(vec!["a.example.com".to_string(); 17]), false),
+            (Some(vec!["a.example.com".to_string()]), true),
+            (Some(vec!["a.example.com".to_string(), "*".to_string()]), false),
+            (Some(vec!["127.0.0.1".to_string()]), false),
+            (Some(vec!["*.127.0.0.1".to_string()]), true),
+            (Some(vec!["A.example.com".to_string()]), false),
+            (Some(vec!["a.example.com".to_string()]), true),
+        ] {
+            route.spec.hostnames = hostnames;
+            let errors = handler.validate(&route, &ctx);
+            let ProcessResult::Continue(mut parsed) = handler.parse(route, &ctx).await else {
+                panic!("invalid hostnames must retain the object for status reporting");
+            };
+            if !accepted {
+                // A prior rule-level warning must not survive whole-route rejection.
+                parsed.status.as_mut().unwrap().parents[0]
+                    .conditions
+                    .push(condition_true(
+                        condition_types::PARTIALLY_INVALID,
+                        condition_reasons::RULE_INVALID,
+                        "Previous generation contained an invalid rule",
+                        None,
+                    ));
+            }
+            handler.update_status(&mut parsed, &ctx, &errors);
+            let conditions = &parsed.status.as_ref().unwrap().parents[0].conditions;
+            let condition = conditions.iter().find(|c| c.type_ == "Accepted").unwrap();
+            assert_eq!(condition.status, if accepted { "True" } else { "False" });
+            assert_eq!(condition.reason, if accepted { "Accepted" } else { "UnsupportedValue" });
+            assert_eq!(parsed.spec.resolved_listeners.is_some(), accepted);
+            assert_eq!(parsed.spec.resolved_hostnames.is_some(), accepted);
+            if !accepted {
+                assert!(parsed
+                    .metadata
+                    .annotations
+                    .as_ref()
+                    .is_none_or(|a| !a.contains_key("edgion.io/hostname-resolution")));
+                assert!(!conditions
+                    .iter()
+                    .any(|c| c.type_ == "PartiallyInvalid" && c.status == "True"));
+            }
+            assert_eq!(
+                runtime
+                    .attached_route_tracker
+                    .count_for_listener("apps/gateway", "http"),
+                i32::from(accepted)
+            );
+            route = parsed;
+        }
+        route.spec.parent_refs = None;
+        let ProcessResult::Continue(mut parsed) = handler.parse(route, &ctx).await else {
+            panic!("parentless route must remain available for status reporting");
+        };
+        handler.update_status(&mut parsed, &ctx, &[]);
+        assert!(parsed.spec.resolved_listeners.is_none());
+        assert!(parsed.spec.resolved_hostnames.is_none());
+        assert_eq!(
+            runtime
+                .attached_route_tracker
+                .count_for_listener("apps/gateway", "http"),
+            0
+        );
+    }
 
     fn make_ctx() -> HandlerContext {
         HandlerContext::new(

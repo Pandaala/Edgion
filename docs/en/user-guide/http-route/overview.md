@@ -38,6 +38,12 @@ Key top-level fields:
 
 ## Core concepts
 
+### Hostnames
+
+`hostnames` accepts up to 16 lowercase DNS names, including short names such as `api`. A wildcard such as `*.example.com` matches both `api.example.com` and `a.b.example.com`, but not `example.com`. IP literals, malformed names and a bare `*` are invalid; one invalid entry rejects the whole list. An omitted or empty list means no Route hostname restriction, not exemption from Listener checks.
+
+Matching declared names are considered from exact to longest wildcard suffix, before hostless routes. Listener intersection limits eligibility without promoting a wildcard route's priority. If path or other match conditions fail, another eligible candidate may match; a more-specific Listener is not bypassed merely because it has no matching route. These routing wildcards do not change certificate matching rules.
+
 ### ParentRefs
 
 `parentRefs` attaches the route to a Gateway listener. The Controller intersects the route's hostnames with the listener's hostnames and binds the route only to matching listeners.

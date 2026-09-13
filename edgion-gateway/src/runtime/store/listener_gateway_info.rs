@@ -59,6 +59,19 @@ impl GatewayInfoIndex {
         self.gateways.get(gateway_key)
     }
 
+    /// Compare the whole admitted logical inventory for this physical key.
+    /// Empty-route and policy-unavailable owners still constrain eligibility;
+    /// neither permits a Route to escape to a less-specific Listener.
+    pub fn has_more_specific(&self, request_hostname: &str, current_hostname: Option<&str>) -> bool {
+        // Exact already has maximum specificity, regardless of serving-set size.
+        if matches!(current_hostname, Some(host) if !host.starts_with("*.")) {
+            return false;
+        }
+        self.gateways
+            .values()
+            .any(|listeners| listeners.has_more_specific(request_hostname, current_hostname))
+    }
+
     #[inline]
     pub fn is_empty(&self) -> bool {
         self.gateways.is_empty()
@@ -219,6 +232,10 @@ impl ListenerGatewayInfoStore {
     /// Hot-path call: O(1) ArcSwap load + HashMap get.
     #[inline]
     pub fn get_index(&self, key: &ListenerKey) -> Arc<GatewayInfoIndex> {
+        #[cfg(test)]
+        if let Some(index) = TEST_INDEX_OVERRIDES.with(|overrides| overrides.borrow().get(key).cloned()) {
+            return index;
+        }
         let snap = self.snapshot.load();
         snap.index
             .get(key)
@@ -339,6 +356,47 @@ impl ListenerGatewayInfoStore {
             gateway_listener_entries = total_entries,
             "Rebuilt listener GatewayInfo store"
         );
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    static TEST_INDEX_OVERRIDES: std::cell::RefCell<HashMap<ListenerKey, Arc<GatewayInfoIndex>>> =
+        std::cell::RefCell::new(HashMap::new());
+}
+
+/// Isolate actual request-entry tests without mutating a process-global snapshot.
+/// The guard must remain on its creating thread, including across async awaits.
+#[cfg(test)]
+pub(crate) struct TestListenerIndexGuard {
+    key: ListenerKey,
+    previous: Option<Arc<GatewayInfoIndex>>,
+    _thread_bound: std::marker::PhantomData<std::rc::Rc<()>>,
+}
+
+#[cfg(test)]
+impl TestListenerIndexGuard {
+    pub(crate) fn install(key: ListenerKey, index: Arc<GatewayInfoIndex>) -> Self {
+        let previous = TEST_INDEX_OVERRIDES.with(|overrides| overrides.borrow_mut().insert(key.clone(), index));
+        Self {
+            key,
+            previous,
+            _thread_bound: std::marker::PhantomData,
+        }
+    }
+}
+
+#[cfg(test)]
+impl Drop for TestListenerIndexGuard {
+    fn drop(&mut self) {
+        TEST_INDEX_OVERRIDES.with(|overrides| {
+            let mut overrides = overrides.borrow_mut();
+            if let Some(previous) = self.previous.take() {
+                overrides.insert(self.key.clone(), previous);
+            } else {
+                overrides.remove(&self.key);
+            }
+        });
     }
 }
 

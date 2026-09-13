@@ -639,6 +639,12 @@ impl EdgionGatewayCli {
             "Gateway startup configuration initialized"
         );
 
+        // Initialize metrics before resource watches: route compilation reads
+        // these OnceLocks and would otherwise install fallback defaults first.
+        config::init_request_duration_config(config.metrics.request_duration.clone());
+        config::init_backend_requests_config(config.metrics.backend_requests.clone());
+        config::init_genai_tokens_config(config.metrics.genai_tokens.clone());
+
         // 12. Start watching resources based on Controller's supported kinds
         let mut otlp_startup_guard = OtlpStartupGuard {
             runtime: &runtime,
@@ -677,11 +683,6 @@ impl EdgionGatewayCli {
                 spawn_client_cert_watcher(sync_client_arc.clone(), paths, shutdown);
             });
         }
-
-        // 14. Initialize metrics configuration (global OnceLock for hot-path access)
-        config::init_request_duration_config(config.metrics.request_duration.clone());
-        config::init_backend_requests_config(config.metrics.backend_requests.clone());
-        config::init_genai_tokens_config(config.metrics.genai_tokens.clone());
 
         // 15. Initialize path normalization config (global OnceLock for hot-path access)
         edgion_resources::path_normalization::init_path_normalization_config(config.path_normalization.clone());

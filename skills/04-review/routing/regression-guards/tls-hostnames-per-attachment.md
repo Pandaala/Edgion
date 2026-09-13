@@ -16,18 +16,20 @@ hostnames for unresolved routes. Missing, empty, or invalid route hostnames do
 not produce catch-all routes. An unrestricted Listener preserves the route's
 explicit names.
 
-The reference is [Gateway API v1.6.2 TLSRoute](https://github.com/kubernetes-sigs/gateway-api/blob/v1.6.2/apis/v1/tlsroute_types.go),
-which requires 1..1024 hostnames and intersection per attachment. This correction
-does not upgrade the repository's complete v1.5.0 CRD bundle; installed schema
-limits and broader API-version alignment require the coordinated version task.
+The reference is the pinned [Gateway API v1.5.0 TLSRoute](https://github.com/kubernetes-sigs/gateway-api/blob/v1.5.0/apis/v1/tlsroute_types.go)
+and vendored v1.5.0 CRD bundle: 1..16 hostnames and intersection per attachment.
+The earlier reference to v1.6.2's 1..1024 limit was outside that pinned contract;
+it is not the Gateway's validation policy or permission to upgrade the bundle.
 
 ## Rationale and evidence
 
 `route_utils::resolve_tls_listener_hostnames` uses canonical parent resolution,
 projects each listener independently, discards empty intersections, and replaces
 the prior records. The Gateway unit filters these against accepted parentRefs
-including port/section identity. `TlsRouteTable::from_units` admits hostname
-buckets only from those accepted attachments on the table's own physical key.
+including port/section identity. `TlsRouteTable::with_units` indexes authored
+Route hostname patterns only where they intersect accepted attachments on the
+table's own physical key. Each candidate retains its contributing attachment
+indices; intersection narrows eligibility, never authored hostname priority.
 Both TLS proxies pass only that key's exact logical parents to existing policy
 admission, preventing another port's parent from supplying logical ownership.
 Global TLSRoute validation errors also clear the attachment tracker: rejected
@@ -58,26 +60,35 @@ reported unauthorized-backend example; that guard did not fix wrong candidates
 or their availability consequences.
 
 The schema Arc, compiled unit and backend selector remain shared across SNI
-buckets. Accepted attachment indices borrow hostname lists from the schema;
+buckets. Buckets retain sorted runner-up candidates, not only one oldest winner.
+Selection requires hostname intersection and logical ownership to succeed on the
+same attachment. Ineligible candidates may yield to another candidate or broader
+Route hostname; a more-specific Listener remains authoritative even without an
+eligible Route. Once selected, policy/backend failure does not restart selection.
+Accepted attachment indices borrow hostname lists from the schema;
 there is no second owned hostname-list copy in the runtime unit. Rebuild locks,
 affected-key updates, and per-listener immutable publication remain unchanged.
+Unchanged candidate groups reuse their Arcs; unchanged final key sets reuse the
+gateway-owned frozen hostname tree even during full-list/Gateway rebuilds.
 Internal records use `schemars(skip)` at the containing field and retain serde
 transport; they are not operator-authored schema fields.
 
 ## Limits and verification
 
-This does not establish cross-kind atomicity or general eligibility-aware route
-selection. Same-socket listener-specificity shadowing has a distinct
-single-attachment trigger and was recorded under
-`tlsroute-specific-listener-candidate-shadowing`. Existing protocol acceptance
-parity and single-label hostname matching gaps were recorded under
-`route-listener-protocol-acceptance-parity` and
-`gateway-api-single-label-hostname-matching`. No active task files currently track
-these gaps; this is not a full Gateway API conformance claim. Physical TLS listener
+The Route hostname migration addresses short names, multi-label wildcards and
+same-attachment candidate eligibility, including the historical
+`tlsroute-specific-listener-candidate-shadowing` case. It does not establish
+cross-kind atomicity or complete Gateway API conformance. Existing protocol
+acceptance parity was recorded under `route-listener-protocol-acceptance-parity`
+and remains a separate concern. Certificate selection and SAN identity matching
+are unchanged, not consumers of the Route matcher. Physical TLS listener
 manager recreation, recorded under `tls-listener-recreation-stale-route-manager`,
 is another pre-existing lifecycle defect: deleting every owning Gateway and
 recreating it can disconnect configuration updates from the proxy's retained Arc.
 Route-only deletion/recreation does not exercise that ownership transition.
+
+The following results are historical attachment-projection repair evidence, not
+fresh verification of the shared hostname-index migration.
 
 Regression cases cover per-port hostname separation, accepted-parent filtering,
 exact scoped ownership, wildcard narrowing, unrestricted listeners, invalid

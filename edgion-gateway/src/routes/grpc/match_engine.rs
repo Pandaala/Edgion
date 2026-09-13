@@ -1,9 +1,10 @@
 use crate::ctx::EdgionHttpContext;
 use crate::routes::grpc::GrpcRouteRuleUnit;
+use crate::runtime::matching::hostname::{CompiledHostnamePattern, HostnameMatcher};
+use crate::runtime::matching::hostname_input::HostnameQuery;
 use crate::runtime::store::listener_gateway_info::GatewayInfoIndex;
 use crate::runtime::GatewayInfo;
 use edgion_resources::err::EdError;
-use edgion_resources::matcher::host_match::HashHost;
 use edgion_resources::resources::grpc_route::CompiledGrpcMethodMatch;
 use pingora_proxy::Session;
 use std::collections::HashMap;
@@ -15,7 +16,7 @@ use std::sync::Arc;
 /// so hostname fan-out never duplicates rules, plugins, or backend selectors.
 pub struct GrpcMatchEngine {
     routes: Vec<Arc<GrpcRouteRuleUnit>>,
-    hosts: HashHost<GrpcCandidateIndex>,
+    hosts: HostnameMatcher<GrpcCandidateIndex>,
     catch_all: GrpcCandidateIndex,
 }
 
@@ -107,12 +108,23 @@ impl Iterator for GrpcCandidates<'_> {
 
 impl GrpcMatchEngine {
     pub fn new(routes: Vec<Arc<GrpcRouteRuleUnit>>) -> Self {
+        Self::rebuild(routes, None)
+    }
+
+    /// Rebuild ranks and every dependent candidate list together. Only the
+    /// hostname topology can be shared with an earlier ranked generation.
+    pub(crate) fn rebuild(routes: Vec<Arc<GrpcRouteRuleUnit>>, previous: Option<&Self>) -> Self {
         // Character counts are computed once, not inside the sort comparator.
         // Match type is deliberately absent: no Exact/regex bucket can override
         // the Gateway API service/method/header/route precedence chain.
         let mut ranked: Vec<_> = routes
             .into_iter()
             .filter(|route| route.matched_info.compiled_method_match.is_some())
+            .filter(|unit| {
+                unit.route
+                    .as_ref()
+                    .is_none_or(|route| route.spec.validate_hostnames().is_ok())
+            })
             .map(|route| {
                 let matcher = route.matched_info.matched.method.as_ref();
                 let service_len = matcher
@@ -130,7 +142,7 @@ impl GrpcMatchEngine {
                 .then_with(|| a.2.specificity.cmp_precedence(&b.2.specificity))
         });
         let routes: Vec<_> = ranked.into_iter().map(|(_, _, route)| route).collect();
-        let mut hosts = HashHost::new();
+        let mut groups: HashMap<CompiledHostnamePattern, GrpcCandidateIndex> = HashMap::new();
         let mut catch_all = GrpcCandidateIndex::default();
         for (rank, route) in routes.iter().enumerate() {
             // Listener intersection may narrow a wildcard Route to an exact
@@ -146,17 +158,19 @@ impl GrpcMatchEngine {
                 catch_all.insert(rank, route);
             }
             for hostname in hostnames {
-                if hostname == "*" {
-                    catch_all.insert(rank, route);
-                } else if let Some(group) = hosts.get_mut_exact(hostname) {
-                    GrpcCandidateIndex::insert(group, rank, route);
-                } else {
-                    let mut group = GrpcCandidateIndex::default();
-                    group.insert(rank, route);
-                    hosts.insert(hostname, group);
-                }
+                let pattern = CompiledHostnamePattern::parse(hostname)
+                    .expect("ranked routes passed whole-list hostname validation");
+                groups.entry(pattern).or_default().insert(rank, route);
             }
         }
+        let groups = groups
+            .into_iter()
+            .map(|(pattern, group)| (pattern, Arc::new(group)))
+            .collect();
+        let hosts = match previous {
+            Some(previous) => previous.hosts.with_groups(groups),
+            None => HostnameMatcher::build(groups),
+        };
         Self {
             routes,
             hosts,
@@ -173,14 +187,14 @@ impl GrpcMatchEngine {
     ) -> Result<(Arc<GrpcRouteRuleUnit>, Arc<GatewayInfo>), EdError> {
         let (service, method) = parse_grpc_path(ctx.path())?;
         self.select(service, method, hostname, |route| {
-            route.deep_match(session, index, hostname).ok().flatten()
-        })
+            route.deep_match(session, index, hostname)
+        })?
         .map(|(route, gateway)| (Arc::clone(route), gateway))
         .ok_or_else(EdError::RouteNotFound)
     }
 
-    /// Shared selection loop. A failed full predicate, including a deep-match
-    /// error, advances to the next candidate and eventually the broader hostname.
+    /// Shared selection loop. Only a predicate no-match advances to the next
+    /// candidate; errors retain their identity for the protocol dispatch owner.
     /// The callback is monomorphized; it also lets pure selection tests exercise
     /// the exact production traversal without inventing a mock session.
     fn select<T>(
@@ -188,11 +202,14 @@ impl GrpcMatchEngine {
         service: &str,
         method: &str,
         hostname: &str,
-        mut deep_match: impl FnMut(&GrpcRouteRuleUnit) -> Option<T>,
-    ) -> Option<(&Arc<GrpcRouteRuleUnit>, T)> {
-        for group in self
-            .hosts
-            .matching_values(hostname)
+        mut deep_match: impl FnMut(&GrpcRouteRuleUnit) -> Result<Option<T>, EdError>,
+    ) -> Result<Option<(&Arc<GrpcRouteRuleUnit>, T)>, EdError> {
+        // A non-DNS authority cannot hit a named group. Existing HTTP authority
+        // validation and the separately authored hostless group remain in charge.
+        for group in HostnameQuery::new(hostname)
+            .ok()
+            .into_iter()
+            .flat_map(|query| self.hosts.matching_values(query))
             .chain(std::iter::once(&self.catch_all))
         {
             for rank in group.candidates(service, method) {
@@ -208,12 +225,17 @@ impl GrpcMatchEngine {
                         continue;
                     }
                 }
-                if let Some(result) = deep_match(route) {
-                    return Some((route, result));
+                if let Some(result) = deep_match(route)? {
+                    return Ok(Some((route, result)));
                 }
             }
         }
-        None
+        Ok(None)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn shares_hosts(&self, other: &Self) -> bool {
+        self.hosts.shares_hosts(&other.hosts)
     }
 }
 
@@ -615,10 +637,12 @@ mod tests {
 
     fn candidate_names(engine: &GrpcMatchEngine, service: &str, method: &str, hostname: &str) -> Vec<String> {
         let mut names = Vec::new();
-        engine.select::<()>(service, method, hostname, |r| {
-            names.push(r.resource_key.clone());
-            None
-        });
+        engine
+            .select::<()>(service, method, hostname, |r| {
+                names.push(r.resource_key.clone());
+                Ok(None)
+            })
+            .unwrap();
         names
     }
 
@@ -648,10 +672,10 @@ mod tests {
         for winner in ["default/exact", "default/fallback"] {
             let (selected, allocations) = crate::test_allocation_counter::count_allocation_stats(|| {
                 engine.select("svc.User", "Get", "api.example.com", |route| {
-                    (route.resource_key == winner).then_some(())
+                    Ok((route.resource_key == winner).then_some(()))
                 })
             });
-            assert_eq!(selected.unwrap().0.resource_key, winner);
+            assert_eq!(selected.unwrap().unwrap().0.resource_key, winner);
             assert_eq!(allocations.calls, 0);
             assert_eq!(allocations.requested_bytes, 0);
         }
@@ -664,12 +688,13 @@ mod tests {
         // Regex owns its existing lazy search cache. Measure repeated selection
         // after warming that cache, not a claim about first-use regex allocation.
         assert!(regex
-            .select("svc.User", "GetItem", "api.example.com", |_| Some(()))
+            .select("svc.User", "GetItem", "api.example.com", |_| Ok(Some(())))
+            .unwrap()
             .is_some());
         let (selected, allocations) = crate::test_allocation_counter::count_allocation_stats(|| {
-            regex.select("svc.User", "GetItem", "api.example.com", |_| Some(()))
+            regex.select("svc.User", "GetItem", "api.example.com", |_| Ok(Some(())))
         });
-        assert!(selected.is_some());
+        assert!(selected.unwrap().is_some());
         assert_eq!(allocations.calls, 0);
         assert_eq!(allocations.requested_bytes, 0);
     }
@@ -763,8 +788,9 @@ mod tests {
         );
         let (winner, ()) = engine
             .select("svc.User", "Get", "api.sub.example.com", |r| {
-                (r.resource_key == "default/wildcard").then_some(())
+                Ok((r.resource_key == "default/wildcard").then_some(()))
             })
+            .unwrap()
             .unwrap();
         assert_eq!(winner.resource_key, "default/wildcard");
     }
@@ -783,8 +809,84 @@ mod tests {
             candidate_names(&engine, "svc", "Get", "api.example.com"),
             ["default/exact", "default/multi"]
         );
-        let (winner, ()) = engine.select("svc", "Get", "other.example.com", |_| Some(())).unwrap();
+        let (winner, ()) = engine
+            .select("svc", "Get", "other.example.com", |_| Ok(Some(())))
+            .unwrap()
+            .unwrap();
         assert!(Arc::ptr_eq(winner, &route));
+    }
+
+    #[test]
+    fn real_predicate_errors_do_not_visit_broader_candidates() {
+        let engine = GrpcMatchEngine::new(vec![
+            with_hosts(make_route(None, Some("Get"), None, "exact"), &["api.example.com"]),
+            with_hosts(make_route(None, Some("Get"), None, "wildcard"), &["*.example.com"]),
+        ]);
+        let mut visits = 0;
+        let result = engine.select::<()>("svc", "Get", "api.example.com", |_| {
+            visits += 1;
+            Err(EdError::InvalidGrpcPath("predicate failure".to_string()))
+        });
+        assert!(matches!(result, Err(EdError::InvalidGrpcPath(_))));
+        assert_eq!(visits, 1);
+    }
+
+    #[test]
+    fn shared_hostname_index_handles_short_names_and_exact_key_collision() {
+        let named = |name, host| with_hosts(make_route(None, Some("Get"), None, name), &[host]);
+        let engine = GrpcMatchEngine::new(vec![
+            named("exact", "api.sub.example.com"),
+            named("wildcard", "*.example.com"),
+            named("specific", "*.sub.example.com"),
+            named("unrelated", "*.abcdefghijklmn.com"),
+            named("short", "grpc"),
+            named("short-wildcard", "*.com"),
+        ]);
+        assert_eq!(
+            candidate_names(&engine, "svc", "Get", "foo.api.sub.example.com"),
+            ["default/specific", "default/wildcard", "default/short-wildcard"]
+        );
+        assert_eq!(candidate_names(&engine, "svc", "Get", "grpc"), ["default/short"]);
+        assert_eq!(
+            candidate_names(&engine, "svc", "Get", "a.b.com"),
+            ["default/short-wildcard"]
+        );
+    }
+
+    #[test]
+    fn reused_hostname_tree_never_reuses_ranks_from_the_previous_array() {
+        let exact = with_hosts(make_route(None, Some("Get"), None, "exact"), &["api.example.com"]);
+        let wildcard = with_hosts(make_route(None, Some("Get"), None, "wildcard"), &["*.example.com"]);
+        let old = GrpcMatchEngine::new(vec![exact.clone(), wildcard.clone()]);
+        // This rule sorts before both old rules and shifts their numeric ranks.
+        let added = with_hosts(
+            make_route(Some("svc.User"), Some("Get"), None, "added"),
+            &["*.example.com"],
+        );
+        let updated = GrpcMatchEngine::rebuild(vec![exact.clone(), wildcard.clone(), added], Some(&old));
+        assert!(old.shares_hosts(&updated));
+        assert_eq!(
+            candidate_names(&old, "svc.User", "Get", "api.example.com"),
+            ["default/exact", "default/wildcard"]
+        );
+        assert_eq!(
+            candidate_names(&updated, "svc.User", "Get", "api.example.com"),
+            ["default/exact", "default/added", "default/wildcard"]
+        );
+        assert!(updated.routes.iter().any(|route| Arc::ptr_eq(route, &exact)));
+        assert!(updated.routes.iter().any(|route| Arc::ptr_eq(route, &wildcard)));
+
+        let topology = GrpcMatchEngine::rebuild(
+            vec![with_hosts(make_route(None, Some("Get"), None, "renamed"), &["grpc"])],
+            Some(&updated),
+        );
+        assert!(!updated.shares_hosts(&topology));
+        assert_eq!(candidate_names(&topology, "svc", "Get", "grpc"), ["default/renamed"]);
+        assert!(candidate_names(&topology, "svc", "Get", "api.example.com").is_empty());
+        assert_eq!(
+            candidate_names(&updated, "svc.User", "Get", "api.example.com"),
+            ["default/exact", "default/added", "default/wildcard"]
+        );
     }
 
     #[test]
@@ -872,8 +974,9 @@ mod tests {
         let (winner, ()) = engine
             .select("svc.Service500", "Call", "example.com", |_| {
                 visited += 1;
-                Some(())
+                Ok(Some(()))
             })
+            .unwrap()
             .unwrap();
         assert_eq!(winner.resource_key, "default/route500");
         assert_eq!(visited, 1);

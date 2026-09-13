@@ -497,16 +497,9 @@ impl GrpcRouteRuleUnit {
         if hostnames.is_empty() || (hostnames.len() == 1 && hostnames[0] == CATCH_ALL_HOSTNAME) {
             return true;
         }
-        for h in hostnames {
-            if h.starts_with("*.") {
-                if hostname_matches_listener(request_hostname, h) {
-                    return true;
-                }
-            } else if request_hostname.eq_ignore_ascii_case(h) {
-                return true;
-            }
-        }
-        false
+        hostnames
+            .iter()
+            .any(|hostname| hostname_matches_listener(request_hostname, hostname))
     }
 
     /// Get route identifier with rule and match details

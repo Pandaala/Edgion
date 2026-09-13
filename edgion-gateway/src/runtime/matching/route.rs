@@ -5,6 +5,7 @@
 
 use crate::runtime::gateway_info::GatewayInfo;
 use crate::runtime::store::listener_gateway_info::GatewayInfoIndex;
+use edgion_resources::hostname::hostname_matches_pattern;
 use edgion_resources::resources::gateway::AllowedRoutes;
 use std::sync::Arc;
 
@@ -52,16 +53,7 @@ pub struct ResolvedParentRef {
 /// for deep subdomains.
 #[inline]
 pub fn hostname_matches_listener(request_host: &str, listener_hostname: &str) -> bool {
-    if listener_hostname.starts_with("*.") {
-        let suffix = &listener_hostname[1..]; // ".example.com"
-        if !request_host.ends_with(suffix) {
-            return false;
-        }
-        let prefix_len = request_host.len() - suffix.len();
-        prefix_len > 0
-    } else {
-        request_host.eq_ignore_ascii_case(listener_hostname)
-    }
+    hostname_matches_pattern(request_host, listener_hostname)
 }
 
 /// Check if a route is allowed by the listener's AllowedRoutes configuration.
@@ -157,7 +149,7 @@ pub fn check_gateway_listener_match(
                     }
                 }
                 // Check if a more-specific listener should take priority
-                if gw.has_more_specific(request_hostname, entry.hostname.as_deref()) {
+                if index.has_more_specific(request_hostname, entry.hostname.as_deref()) {
                     continue;
                 }
                 if !check_allowed_routes(&entry.allowed_routes, route_ns, route_kind, parent_ns) {
@@ -176,7 +168,7 @@ pub fn check_gateway_listener_match(
                 }
             }
 
-            if gw.has_more_specific(request_hostname, entry.hostname.as_deref()) {
+            if index.has_more_specific(request_hostname, entry.hostname.as_deref()) {
                 continue;
             }
 
@@ -383,6 +375,54 @@ mod tests {
             let matched = check_gateway_listener_match(&parent_refs, &index, "example.com", "gw-ns", "HTTPRoute")
                 .expect("the sole listener allows this same-namespace route");
             assert!(Arc::ptr_eq(&matched, expected));
+        }
+    }
+
+    #[test]
+    fn another_gateways_empty_exact_listener_blocks_broader_routes() {
+        for broad in [None, Some("*.example.com")] {
+            let index = GatewayInfoIndex::from_entries_for_test(vec![
+                (
+                    "ns/broad".into(),
+                    listener_entry("ns", "broad", Some("broad"), broad, None),
+                ),
+                (
+                    "ns/exact".into(),
+                    listener_entry("ns", "exact", Some("exact"), Some("api.example.com"), None),
+                ),
+            ]);
+            for section in [None, Some("broad")] {
+                let parents = [resolved("ns/broad", "ns", section)];
+                for kind in ["HTTPRoute", "GRPCRoute", "TLSRoute"] {
+                    assert!(check_gateway_listener_match(&parents, &index, "api.example.com", "ns", kind).is_none());
+                    assert!(check_gateway_listener_match(&parents, &index, "other.example.com", "ns", kind).is_some());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn cross_gateway_wildcard_specificity_does_not_follow_route_parent_order() {
+        let index = GatewayInfoIndex::from_entries_for_test(vec![
+            (
+                "ns/broad".into(),
+                listener_entry("ns", "broad", Some("broad"), Some("*.example.com"), None),
+            ),
+            (
+                "ns/narrow".into(),
+                listener_entry("ns", "narrow", Some("narrow"), Some("*.sub.example.com"), None),
+            ),
+        ]);
+        for named in [false, true] {
+            let parents = [
+                resolved("ns/broad", "ns", named.then_some("broad")),
+                resolved("ns/narrow", "ns", named.then_some("narrow")),
+            ];
+            let owner =
+                check_gateway_listener_match(&parents, &index, "a.b.sub.example.com", "ns", "HTTPRoute").unwrap();
+            assert_eq!(owner.gateway_name(), "narrow");
+            let owner = check_gateway_listener_match(&parents, &index, "other.example.com", "ns", "HTTPRoute").unwrap();
+            assert_eq!(owner.gateway_name(), "broad");
         }
     }
 

@@ -12,6 +12,8 @@ mod routes_mgr;
 
 // Export core types
 pub use conf_handler_impl::create_grpc_route_handler;
+#[cfg(test)]
+pub(crate) use conf_handler_impl::parse_route_to_units_for_test;
 pub use grpc_timeout::{format_grpc_timeout, parse_grpc_timeout};
 pub use match_engine::GrpcMatchEngine;
 pub use match_unit::{

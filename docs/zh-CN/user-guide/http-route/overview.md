@@ -38,6 +38,12 @@ spec:
 
 ## 核心概念
 
+### Hostnames
+
+`hostnames` 最多接受 16 个小写 DNS 名称，也支持 `api` 这样的短名称。`*.example.com` 同时匹配 `api.example.com` 和 `a.b.example.com`，但不匹配 `example.com`。IP 地址、格式错误的名称和单独的 `*` 均无效；任一项无效会拒绝整个列表。省略或使用空列表表示路由不限制 hostname，并不跳过监听器校验。
+
+匹配的声明域名按精确名称、最长通配符后缀的顺序考虑，最后才是未限制 hostname 的路由。监听器交集只限制可用范围，不提升通配符路由的优先级。路径或其他匹配条件不满足时，可继续检查其他合格候选；更具体的监听器不会因为没有匹配路由而被绕过。这些路由通配符规则不改变证书匹配规则。
+
 ### ParentRefs
 
 `parentRefs` 将路由附加到 Gateway listener。Controller（控制平面）会将路由的 hostname 与 listener 的 hostname 取交集，仅将路由绑定到匹配的 listener。

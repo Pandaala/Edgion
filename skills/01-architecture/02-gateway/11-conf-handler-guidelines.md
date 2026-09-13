@@ -106,20 +106,31 @@ partial_update:
 ```
 
 References:
-- HTTPRoute and TLSRoute `rebuild_affected_listener_managers(&affected_listeners)`.
+- HTTPRoute `rebuild_affected_listener_managers(&affected_listeners, &changes)`.
+- TLSRoute `rebuild_affected_listener_managers(&affected_listeners)`.
 
-### 7.2 Cache parsed results (suboptimal)
+### 7.2 Cache parsed results and rebuild coupled ranks
 
-Suitable for global engines without bucketing dimensions (GRPCRoute).
+GRPCRoute is also bucketed by physical ListenerKey. Within an affected Listener,
+its numeric rank array and all dependent candidate streams must change together.
 
 ```
 partial_update:
   1. Parse only the add/update routes → update route_units_cache.
   2. Delete cache entries for removed routes.
-  3. Merge all units in the cache → rebuild the engine.
+  3. Discover affected Listener units → rebuild each complete ranked engine.
 ```
 
 Skips preparse + validation + unit construction for unchanged routes, and avoids deep-copying the full HashMap.
+
+HTTP/gRPC/TLSRoute embed the same immutable `HostnameMatcher` inside their
+existing outer snapshots. Same final hostname keys reuse the hosts Arc, even on
+full-list or Gateway-triggered rebuilds; topology changes rebuild one tree and
+its ID-to-content mapping together. HTTP Route deltas patch touched hostname
+groups; gRPC replaces all rank-dependent contents in the affected Listener;
+TLSRoute reuses unchanged ordered candidate groups and cached selectors. Existing
+cache discovery scans remain. Content-only matcher updates are not a claim that
+every protocol's end-to-end update avoids scanning its scope.
 
 ### 7.3 Short-circuit (last resort)
 
@@ -135,12 +146,12 @@ partial_update:
 
 | Resource | Rating | Strategy |
 |----------|--------|----------|
-| HTTPRoute | A | Rebuild by affected listener; unchanged listener snapshots are untouched |
-| TLSRoute | A | Rebuild by affected listener; unchanged listeners are not touched |
+| HTTPRoute | A | Patch affected declared-hostname groups; share untouched path engines and same-key hostname tree |
+| TLSRoute | A | Recompose affected Listener groups; share unchanged candidate groups, units and same-key tree |
 | TCPRoute | A | Update route cache and rebuild affected listener snapshots |
 | UDPRoute | A | Update route cache and rebuild affected listener snapshots |
 | EndpointSlice | A | Update LB incrementally by affected_services |
-| GRPCRoute | B | Incremental route_units_cache, but still merges all units to rebuild GrpcMatchEngine |
+| GRPCRoute | B | Cache units; coherently rebuild affected Listener ranks/contents while reusing same-key hostname tree |
 | Service | B | Incremental store + per-item health check reconciliation |
 | EdgionPlugins | B | ArcSwap clone-modify-swap |
 | EdgionTls | A | Persistent resource/hostname/attachment maps; changed slots only; one immutable publication |

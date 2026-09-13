@@ -230,8 +230,8 @@ pub struct HttpRouteRuleUnit {
     /// Per-rule compiled backends (each with its own plugin runtime), shared
     /// across the rule's units. Used for by-name lookup (Internal upstream jumps).
     pub backends: Arc<Vec<CompiledBackend>>,
-    /// LB selector over original compiled-backend slot indexes, built at unit
-    /// construction.
+    /// LB selector over original compiled-backend slot indexes, built once per
+    /// rule and shared across its match items and declared hostname groups.
     /// `Arc` so the `#[derive(Clone)]` unit stays cheap to clone.
     pub backend_finder: Arc<BackendSelector<usize>>,
 }
@@ -245,7 +245,7 @@ pub struct HttpRuleRuntime {
     /// Rule-level compiled plugin chain (one per rule, shared across all units).
     pub plugin_runtime: Arc<PluginRuntime>,
     /// Compiled backends (each with its own per-rule-shared plugin runtime). The
-    /// per-(rule,hostname) LB selector is built over a clone of these. `Arc` so it
+    /// per-rule LB selector is built over these backend slots. `Arc` so it
     /// is shared (not deep-cloned) into each of the rule's units.
     pub backends: Arc<Vec<CompiledBackend>>,
 }
@@ -286,9 +286,8 @@ impl HttpRouteRuleUnit {
         }
     }
 
-    /// Build a per-(rule,hostname) LB selector over original backend slots.
-    /// Compiled backends are Arc-shared; only the WRR cursor and indexes are
-    /// per-hostname.
+    /// Build a per-rule LB selector over original backend slots. Its WRR cursor
+    /// and indexes are shared across the rule's match items and hostname groups.
     pub fn build_backend_selector(backends: &[CompiledBackend]) -> Arc<BackendSelector<usize>> {
         let selector = BackendSelector::new();
         let generic_backends = backends

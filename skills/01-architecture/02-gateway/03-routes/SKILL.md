@@ -60,19 +60,22 @@ The TCP, TLS, and UDP route docs all share the same listener-bucketing, rebuild,
 - **Rebuild strategy**: `rebuild_all_listener_managers` fully rebuilds every listener table and cleans up stale listeners with no routes; `rebuild_affected_listener_managers` rebuilds only affected listeners (incremental updates).
 - **ConfHandler**: `full_set` clears `route_cache`, replaces it in full, and calls `rebuild_all_listener_managers`; `partial_update` computes affected listeners, updates `route_cache`, and calls `rebuild_affected_listener_managers`. TCP/TLS connections already matched against an old snapshot continue with their selected unit. New UDP sessions load the latest snapshot, while established UDP sessions remain pinned to their selected upstream until removal or expiry.
 
-Per-protocol deltas: **TCP** = first-match over a flat `Vec` (no hostname dimension); **TLS** = SNI-indexed `HashHost` + two proxies (terminate-to-TCP vs passthrough); **UDP** = first-packet route match and weighted backend selection when creating a client session, followed by a pinned-session fast path.
+Per-protocol deltas: **TCP** = first-match over a flat `Vec` (no hostname dimension); **TLS** = SNI-indexed `HostnameMatcher` candidates + two proxies (terminate-to-TCP vs passthrough); **UDP** = first-packet route match and weighted backend selection when creating a client session, followed by a pinned-session fast path.
 
 ## Domain match
 
-`DomainRouteRules` contains a three-tier hostname lookup structure:
+HTTPRoute, GRPCRoute and TLSRoute share gateway-owned `HostnameMatcher<T>`:
+one frozen reverse-byte hostname radix plus a persistent ID-to-content map,
+published with protocol data through the existing outer snapshot. The matcher
+returns borrowed candidates, exact first then longest-to-shortest wildcard
+suffixes. It knows no Route, Listener, attachment or policy semantics.
 
-| Tier | Data structure | Complexity | Description |
-|------|----------------|------------|-------------|
-| Exact match | `ArcSwap<HashMap<String, Arc<RouteRules>>>` | O(1) | Hostname is lowercased and looked up directly in the HashMap |
-| Wildcard match | `ArcSwap<Option<RadixHostMatchEngine<RouteRules>>>` | O(log n) | Wildcard hostnames such as `*.example.com`, using RadixHostMatchEngine |
-| Catch-all | `ArcSwap<Option<Arc<RouteRules>>>` | O(1) | Fallback when an HTTPRoute does not specify `spec.hostnames` |
-
-The match priority strictly follows the Gateway API spec: exact > wildcard > catch-all.
+HTTP/gRPC keep hostless fallback outside the matcher; TLSRoute has none.
+Groups use authored Route names, never Listener-narrowed intersections as
+precedence keys. Rule no-match may continue to broader groups, but Listener
+eligibility remains mandatory and post-selection failure never restarts routing.
+EdgionTls and Gateway TLS/certificate matchers are not migrated.
+See the [algorithm contract](../../../12-algorithms/route-hostname-matching.md).
 
 ## Path match
 
@@ -139,7 +142,7 @@ After path matching, candidate routes go through `deep_match_common` for exact v
    - Verify that the parentRef's namespace + name match the Gateway.
    - Verify that sectionName matches the Listener (if specified).
    - Verify that the request hostname matches the Listener hostname (HTTP Listener Isolation).
-   - Reject if a more specific Listener on the same port also matches the hostname (prevents fuzzy matching).
+   - Reject if a more specific Listener in the same physical ListenerKey serving index also matches the hostname, across Gateways and including empty Listeners.
    - Verify AllowedRoutes (namespace and kind restrictions).
 2. **HTTP method**: `match_item.method` is compared with the request method.
 3. **Headers**: all effective header match conditions must be satisfied (AND logic); supports `Exact` and `RegularExpression` (precompiled regex). Typed decoding retains only the first ASCII-case-equivalent name within each match; the canonical vector also determines regex indexes and header specificity.
@@ -147,22 +150,25 @@ After path matching, candidate routes go through `deep_match_common` for exact v
 
 ## Route registration flow
 
+This diagram shows full-list and Gateway-triggered rebuilds. Partial updates
+use `patch_domain_route_rules` to replace only touched hostname path groups.
+
 ```mermaid
 flowchart TD
-    A["Controller pushes HTTPRoute"] --> B["ConfHandler&lt;HTTPRoute&gt;::full_set / partial_update"]
+    A["Full-list or Gateway refresh"] --> B["ConfHandler&lt;HTTPRoute&gt;::full_set / Gateway rebuild"]
     B --> C["route_cache update (DashMap insert/remove)"]
-    C --> E["rebuild_all_listener_managers / rebuild_affected_listener_managers"]
+    C --> E["rebuild_all_listener_managers"]
     E --> F["bucket_routes_by_listener (bucket by resolved_listeners)"]
     F -->|"resolved_listeners empty"| F1["skip + warn"]
     E --> G["For each affected listener"]
     G --> G1["parse_http_routes_to_domain_rules"]
     G1 --> G1a["filter_accepted_parent_refs"]
-    G1 --> G1b["get_effective_hostnames"]
-    G1 --> G1c["split: regex routes vs normal routes"]
+    G1 --> G1b["get_declared_hostnames"]
+    G1 --> G1c["declared hostname groups: shared normal/regex units"]
     G --> G2["build_domain_route_rules_from_routes"]
     G2 --> G2a["RadixRouteMatchEngine::build (radix tree freeze)"]
     G2 --> G2b["RegexRoutesEngine::build (RegexSet compile)"]
-    G2 --> G2c["RadixHostMatchEngine init (wildcard hostnames)"]
+    G2 --> G2c["HostnameMatcher: reuse hosts when final keys agree"]
     G --> G3["HttpPortRouteManager::store_route_table (ArcSwap atomic swap)"]
     E --> H["Clean up stale listeners with no routes and no active Listener"]
 ```

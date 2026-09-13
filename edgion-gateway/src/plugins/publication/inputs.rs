@@ -491,6 +491,11 @@ mod tests {
         assert_eq!(udp.stream_key, tcp.stream_key);
         assert_eq!(udp.stages, tcp.stages);
         raw["kind"] = json!("TLSRoute");
+        raw["spec"]["hostnames"] = json!(["api.example.com"]);
+        raw["spec"]["resolvedListeners"] = json!([{
+            "listenerKey": "0.0.0.0:8443/TLS", "gatewayNamespace": "apps",
+            "gatewayName": "gateway", "listenerName": "web", "hostnames": ["api.example.com"]
+        }]);
         raw["metadata"]["annotations"] = json!({annotations::EDGION_STREAM_PLUGINS: " shared/policy "});
         let tls = RouteInput::from_tls(&serde_json::from_value(raw).unwrap());
         assert_eq!(tls.stream_key.as_deref(), Some("shared/policy"));

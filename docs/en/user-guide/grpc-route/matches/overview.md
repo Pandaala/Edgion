@@ -2,6 +2,12 @@
 
 GRPCRoute matches inbound gRPC calls by service and method name, and optionally by gRPC metadata (headers). A rule fires when **all** conditions inside one `matches` entry are satisfied; listing multiple `matches` entries is an OR.
 
+## Hostnames
+
+`spec.hostnames` accepts up to 16 lowercase DNS names, including short names such as `grpc`. `*.example.com` matches `api.example.com` and `a.b.example.com`, but not `example.com`. IP literals, malformed names and a bare `*` are invalid; one invalid entry rejects the whole list. An omitted or empty list leaves the Route hostname unrestricted, while Listener checks still apply.
+
+Exact declared names precede matching wildcard suffixes, longest suffix first, then hostless routes. Listener intersection narrows eligibility without increasing Route hostname priority. Unmatched method or header predicates may continue to other eligible candidates, but cannot bypass a more-specific Listener. Certificate selection and certificate wildcard verification use separate, unchanged rules.
+
 ## Match types
 
 | Match type | Description |

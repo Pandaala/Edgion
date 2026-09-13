@@ -41,7 +41,7 @@ pub struct GRPCRouteSpec {
     pub hostnames: Option<Vec<String>>,
 
     /// Controller-resolved effective hostnames (intersection of route hostnames and listener hostnames).
-    /// Set by the controller ProcessorHandler; the data plane uses these directly.
+    /// Eligibility only; hostname precedence uses the route's authored hostnames.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(skip)]
     pub resolved_hostnames: Option<Vec<String>>,
@@ -80,6 +80,13 @@ pub struct GRPCRouteSpec {
     #[serde(skip, default)]
     #[schemars(skip)]
     pub delegation_issues: Vec<DelegationIssue>,
+}
+
+impl GRPCRouteSpec {
+    /// Validate authored hostname syntax and the Gateway API list bound.
+    pub fn validate_hostnames(&self) -> Result<(), crate::HostnameError> {
+        crate::validate_route_hostnames(self.hostnames.as_deref(), false)
+    }
 }
 
 #[derive(Deserialize, Serialize, JsonSchema)]
@@ -683,6 +690,22 @@ pub struct GRPCRouteStatus {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn hostname_list_validation_is_optional_bounded_and_strict() {
+        for (hostnames, valid) in [
+            (serde_json::Value::Null, true),
+            (serde_json::json!([]), true),
+            (serde_json::json!(vec!["a"; 16]), true),
+            (serde_json::json!(vec!["a"; 17]), false),
+            (serde_json::json!(["a", "*"]), false),
+            (serde_json::json!(["127.0.0.1"]), false),
+            (serde_json::json!(["*.127.0.0.1"]), true),
+        ] {
+            let spec: super::GRPCRouteSpec =
+                serde_json::from_value(serde_json::json!({"hostnames": hostnames})).unwrap();
+            assert_eq!(spec.validate_hostnames().is_ok(), valid);
+        }
+    }
     use super::*;
 
     #[test]

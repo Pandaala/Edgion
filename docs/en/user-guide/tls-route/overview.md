@@ -45,9 +45,11 @@ More on listeners: [TLS Termination](../../ops-guide/gateway/tls/tls-termination
 
 ### Hostnames (SNI)
 
-`hostnames` is required and must contain explicit SNI names. Exact names (`secure.example.com`) and wildcard suffixes (`*.internal.example.com`) are supported. A route wildcard matches one or more labels, including `a.b.internal.example.com`, but not the suffix alone. This routing rule is distinct from certificate wildcard verification. Missing or empty lists and a bare `*` are rejected.
+`hostnames` is required and must contain 1..16 lowercase DNS names, including short names such as `tls`. Exact names (`secure.example.com`) and wildcard suffixes (`*.internal.example.com`) are supported. A route wildcard matches one or more labels, including `a.b.internal.example.com`, but not the suffix alone. This routing rule is distinct from unchanged certificate selection and certificate wildcard verification. Missing or empty lists, IP literals, malformed names and a bare `*` are rejected; one invalid entry rejects the whole list.
 
 Each attachment uses the intersection of the route's names and that listener's hostname. For example, a route declaring `a.example.com` and `b.example.com` attached to listeners for each name on different ports serves only the corresponding name on each port. A listener without a hostname preserves the route's explicit names; it does not make the route match arbitrary SNI. An empty intersection produces no route on that listener. Changing or removing an attachment replaces its old names without changing unrelated listener snapshots.
+
+Matching declared names are considered from exact to longest wildcard suffix; Listener intersection does not promote a wildcard route's priority. A candidate must match the SNI and ownership checks through the same accepted attachment. Ineligible candidates may yield to another eligible route, but cannot bypass a more-specific Listener. Once a route is selected, policy or backend failure does not select another route.
 
 ### Rules
 

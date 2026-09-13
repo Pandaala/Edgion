@@ -83,7 +83,7 @@ impl RadixRouteMatchEngine {
                     }));
                 }
                 Ok(None) => return Ok(None),
-                Err(_) => return Ok(None),
+                Err(error) => return Err(error),
             }
         }
         Ok(None)

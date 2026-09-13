@@ -6,7 +6,6 @@
 //! to the selected upstream.
 
 use crate::plugins::publication::global_publisher;
-use crate::plugins::stream::connection_filter_bridge::resolve_route_scope;
 use async_trait::async_trait;
 use std::net::IpAddr;
 use std::sync::Arc;
@@ -20,6 +19,7 @@ use pingora_core::server::ShutdownWatch;
 use pingora_core::upstreams::peer::BasicPeer;
 
 use super::proxy::{TlsContext, TlsUpstreamInfo};
+#[cfg(test)]
 use super::route_unit::TlsRouteUnit;
 use super::sni_parser;
 use super::TlsDuplexHooks;
@@ -184,13 +184,14 @@ impl EdgionTlsPassthroughProxy {
     /// bidirectional relay.
     async fn handle_connection(&self, downstream: Stream, ctx: &mut TlsContext, sni: &str, initial_bytes: Vec<u8>) {
         // 1. Match TLSRoute unit by SNI
-        let unit = match select_route_unit(&self.tls_route_manager, sni) {
-            Some(unit) => unit,
-            None => {
-                ctx.err_log = Some("no match".to_string());
-                return;
-            }
+        let publication = global_publisher().snapshot();
+        let Some(selected) = super::select_tls_route(&self.tls_route_manager, &publication, &self.listener_key, sni)
+        else {
+            ctx.err_log = Some("no match".to_string());
+            return;
         };
+        drop(publication);
+        let unit = selected.unit;
         let tls_route = &unit.route;
 
         ctx.matched = Some(MatchedInfo {
@@ -211,18 +212,7 @@ impl EdgionTlsPassthroughProxy {
             return;
         }
 
-        let publication = global_publisher().snapshot();
-        let Some(scope) = resolve_route_scope(
-            &publication,
-            &self.listener_key,
-            unit.resolved_parent_refs
-                .get(&self.listener_key)
-                .map(Vec::as_slice)
-                .unwrap_or_default(),
-            sni,
-            tls_route.metadata.namespace.as_deref().unwrap_or("default"),
-            "TLSRoute",
-        ) else {
+        let Some(scope) = selected.scope else {
             ctx.err_log = Some("plugin policy unavailable".to_string());
             return;
         };
@@ -231,7 +221,6 @@ impl EdgionTlsPassthroughProxy {
             .as_deref()
             .and_then(|key| scope.stream(key));
         drop(scope);
-        drop(publication);
         if !super::run_tls_route_plugins(
             unit.stream_plugin_store_key.as_deref(),
             resource.as_deref(),
@@ -481,7 +470,8 @@ impl EdgionTlsPassthroughProxy {
     }
 }
 
-/// Keep only the selected generation, never a table guard across connection I/O.
+/// Unit-test ownership view; production binds owner/policy through select_tls_route.
+#[cfg(test)]
 fn select_route_unit(manager: &TlsRouteManager, sni: &str) -> Option<Arc<TlsRouteUnit>> {
     manager.load_route_table().match_route(sni)
 }
