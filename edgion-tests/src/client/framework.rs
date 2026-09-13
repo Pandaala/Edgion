@@ -252,6 +252,98 @@ impl TestContext {
         format!("http://{}:{}", self.target_host, self.admin_port)
     }
 
+    /// Wait until a Controller-resolved listener attachment has reached both
+    /// the Controller's published view and the Gateway's consumed view.
+    pub async fn wait_for_listener_projection(
+        &self,
+        kind: &str,
+        namespace: &str,
+        name: &str,
+        attachment_field: &str,
+        listener_name: &str,
+        timeout: Duration,
+    ) -> Result<(), String> {
+        let deadline = Instant::now() + timeout;
+        let mut last_error: String;
+        loop {
+            last_error = match self
+                .listener_projection_matches(kind, namespace, name, attachment_field, listener_name)
+                .await
+            {
+                Ok(true) => return Ok(()),
+                Ok(false) => format!("listener {listener_name} has not reached both projections"),
+                Err(error) => error,
+            };
+            if Instant::now() >= deadline {
+                return Err(last_error);
+            }
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+    }
+
+    async fn listener_projection_matches(
+        &self,
+        kind: &str,
+        namespace: &str,
+        name: &str,
+        attachment_field: &str,
+        listener_name: &str,
+    ) -> Result<bool, String> {
+        let gateway_url = std::env::var("EDGION_TEST_GATEWAY_ADMIN_URL")
+            .ok()
+            .filter(|url| !url.trim().is_empty())
+            .unwrap_or_else(|| format!("http://{}:12001", self.target_host));
+        for (base, prefix, token) in [
+            (self.admin_api_url(), "configserver", self.admin_token.clone()),
+            (
+                gateway_url,
+                "configclient",
+                std::env::var("EDGION_GATEWAY_ADMIN_TOKEN")
+                    .ok()
+                    .or_else(|| self.admin_token.clone()),
+            ),
+        ] {
+            let mut request = self
+                .http_client
+                .get(format!("{}/{prefix}/{kind}/list", base.trim_end_matches('/')))
+                .timeout(Duration::from_secs(2));
+            if let Some(token) = token {
+                request = request.bearer_auth(token);
+            }
+            let response = request
+                .send()
+                .await
+                .map_err(|error| format!("{prefix} request failed: {error}"))?;
+            let status = response.status();
+            let body: serde_json::Value = response
+                .error_for_status()
+                .map_err(|error| format!("{prefix} returned {status}: {error}"))?
+                .json()
+                .await
+                .map_err(|error| format!("{prefix} returned invalid JSON: {error}"))?;
+            if body["success"] != true {
+                return Err(format!("{prefix} resource listing failed"));
+            }
+            let resources = body["data"]
+                .as_array()
+                .ok_or_else(|| format!("{prefix} response has no data array"))?;
+            let resource = resources
+                .iter()
+                .find(|item| item["metadata"]["namespace"] == namespace && item["metadata"]["name"] == name)
+                .ok_or_else(|| format!("{namespace}/{name} is absent from {prefix}"))?;
+            let attachments = resource["spec"][attachment_field]
+                .as_array()
+                .ok_or_else(|| format!("{namespace}/{name} has no {attachment_field} in {prefix}"))?;
+            if !attachments
+                .iter()
+                .any(|listener| listener["listenerName"] == listener_name)
+            {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
     /// Create a metrics client for this context
     pub fn metrics_client(&self) -> crate::metrics_helper::MetricsClient {
         crate::metrics_helper::MetricsClient::from_host_port(&self.target_host, 12090)

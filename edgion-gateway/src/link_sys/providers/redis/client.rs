@@ -13,6 +13,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use fred::clients::Pool;
 use fred::interfaces::{ClientLike, EventInterface};
+use fred::types::Resolve;
 
 use async_trait::async_trait;
 
@@ -23,6 +24,8 @@ use edgion_resources::resources::link_sys::redis::RedisClientConfig;
 
 use super::config_mapping::{build_fred_config, build_fred_pool};
 use super::resolver::redis_egress_resolver;
+#[cfg(feature = "test-util")]
+use super::resolver::redis_egress_resolver_for_test;
 
 /// Runtime Redis client wrapper.
 ///
@@ -69,9 +72,20 @@ impl RedisLinkClient {
     /// then connects all pool clients to Redis.
     /// On success, the client is marked healthy and ready for use.
     pub async fn init(&self) -> Result<()> {
+        self.init_with_resolver(redis_egress_resolver()).await
+    }
+
+    /// Initialize against an integration fixture that may be bound to
+    /// loopback. Production LinkSys clients always use [`Self::init`].
+    #[cfg(feature = "test-util")]
+    pub async fn init_for_test(&self) -> Result<()> {
+        self.init_with_resolver(redis_egress_resolver_for_test()).await
+    }
+
+    async fn init_with_resolver(&self, resolver: Arc<dyn Resolve>) -> Result<()> {
         // Install Edgion's resolver before Fred performs any seed, reconnect,
         // Sentinel, or Cluster topology dial.
-        self.pool.set_resolver(redis_egress_resolver()).await;
+        self.pool.set_resolver(resolver).await;
 
         // Set up connection event listeners on each client in the pool.
         // Pool does not implement EventInterface directly — we must iterate

@@ -25,6 +25,76 @@ use tokio::net::TcpStream;
 
 pub struct TlsBothAbsentParentRefTestSuite;
 
+const ORIGINAL_GATEWAY: &str = r#"apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: tls-route-both-absent-gw
+  namespace: edgion-test
+spec:
+  gatewayClassName: public-gateway
+  listeners:
+    - name: tls-both-absent
+      protocol: TLS
+      port: 31288
+      hostname: "*.both-absent.example.com"
+      tls:
+        mode: Terminate
+        certificateRefs:
+          - name: edge-tls
+            namespace: edgion-test"#;
+
+const RENAMED_GATEWAY: &str = r#"apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: tls-route-both-absent-gw
+  namespace: edgion-test
+spec:
+  gatewayClassName: public-gateway
+  listeners:
+    - name: tls-both-absent-updated
+      protocol: TLS
+      port: 31288
+      hostname: "*.both-absent.example.com"
+      tls:
+        mode: Terminate
+        certificateRefs:
+          - name: edge-tls
+            namespace: edgion-test"#;
+
+async fn tls_echo_works(ctx: &TestContext) -> bool {
+    let addr = format!("{}:31288", ctx.target_host);
+    let connector = make_tls_connector();
+    let sni = ServerName::try_from("requeue.both-absent.example.com").unwrap();
+    let Ok(Ok(tcp)) = tokio::time::timeout(Duration::from_secs(3), TcpStream::connect(&addr)).await else {
+        return false;
+    };
+    let Ok(mut tls) = connector.connect(sni, tcp).await else {
+        return false;
+    };
+    let payload = b"Hello Requeue";
+    if tls.write_all(payload).await.is_err() {
+        return false;
+    }
+    let mut response = [0; 13];
+    matches!(
+        tokio::time::timeout(Duration::from_secs(2), tls.read_exact(&mut response)).await,
+        Ok(Ok(_)) if response == *payload
+    )
+}
+
+async fn wait_for_tls_echo(ctx: &TestContext) -> bool {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        if tls_echo_works(ctx).await {
+            return true;
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+}
+
 impl TlsBothAbsentParentRefTestSuite {
     fn test_tls_connection_both_absent() -> TestCase {
         TestCase::new(
@@ -91,113 +161,101 @@ impl TlsBothAbsentParentRefTestSuite {
         )
     }
 
-    /// Test: delete Gateway, verify TLS fails, re-apply Gateway, verify TLS recovers.
-    /// This validates the requeue mechanism: when a Gateway is re-added after
-    /// TLSRoute and EdgionTls already exist, they should be requeued and
-    /// their resolved_listeners re-resolved from the new Gateway's listeners.
-    fn test_gateway_requeue_cycle() -> TestCase {
+    /// Rename the existing listener without changing its physical key, then
+    /// verify both Controller and Gateway projections refresh and traffic stays
+    /// attached through the broad parentRef.
+    fn test_gateway_listener_update_requeue() -> TestCase {
         TestCase::new(
-            "tls_both_absent_gateway_requeue",
-            "Delete and re-apply Gateway should trigger requeue and restore TLS routing",
+            "tls_both_absent_gateway_listener_update_requeue",
+            "Renaming a stable Gateway listener should requeue TLSRoute and preserve TLS routing",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
-
-                    // Phase 1: baseline — TLS should work
-                    let addr = format!("{}:31288", ctx.target_host);
-                    let connector = make_tls_connector();
-                    let sni = ServerName::try_from("requeue.both-absent.example.com").unwrap();
-
-                    let baseline_ok = {
-                        match tokio::time::timeout(Duration::from_secs(3), TcpStream::connect(&addr)).await {
-                            Ok(Ok(tcp)) => connector.connect(sni.clone(), tcp).await.is_ok(),
-                            _ => false,
-                        }
-                    };
-                    if !baseline_ok {
+                    if let Err(error) = ctx
+                        .wait_for_listener_projection(
+                            "TLSRoute",
+                            "edgion-test",
+                            "tls-route-both-absent",
+                            "resolvedListeners",
+                            "tls-both-absent",
+                            Duration::from_secs(8),
+                        )
+                        .await
+                    {
                         return TestResult::failed(
                             start.elapsed(),
-                            "Baseline check failed — TLS not working before Gateway delete".to_string(),
+                            format!("Initial listener projection is missing: {error}"),
+                        );
+                    }
+                    if !wait_for_tls_echo(&ctx).await {
+                        return TestResult::failed(start.elapsed(), "Baseline TLS echo failed".to_string());
+                    }
+
+                    if let Err(error) = ctx.apply_yaml(RENAMED_GATEWAY).await {
+                        return TestResult::failed(start.elapsed(), format!("Failed to rename listener: {error}"));
+                    }
+                    let renamed_result = ctx
+                        .wait_for_listener_projection(
+                            "TLSRoute",
+                            "edgion-test",
+                            "tls-route-both-absent",
+                            "resolvedListeners",
+                            "tls-both-absent-updated",
+                            Duration::from_secs(8),
+                        )
+                        .await;
+                    let renamed_traffic_ok = renamed_result.is_ok() && wait_for_tls_echo(&ctx).await;
+
+                    if let Err(error) = ctx.apply_yaml(ORIGINAL_GATEWAY).await {
+                        return TestResult::failed(
+                            start.elapsed(),
+                            format!("Failed to restore listener name: {error}"),
+                        );
+                    }
+                    if let Err(error) = renamed_result {
+                        return TestResult::failed(
+                            start.elapsed(),
+                            format!("Renamed projection did not converge: {error}"),
+                        );
+                    }
+                    if !renamed_traffic_ok {
+                        return TestResult::failed(
+                            start.elapsed(),
+                            "TLS echo failed after the broad parentRef moved to the renamed listener".to_string(),
+                        );
+                    }
+                    if let Err(error) = ctx
+                        .wait_for_listener_projection(
+                            "TLSRoute",
+                            "edgion-test",
+                            "tls-route-both-absent",
+                            "resolvedListeners",
+                            "tls-both-absent",
+                            Duration::from_secs(8),
+                        )
+                        .await
+                    {
+                        return TestResult::failed(
+                            start.elapsed(),
+                            format!("Restored projection did not converge: {error}"),
+                        );
+                    }
+                    if !wait_for_tls_echo(&ctx).await {
+                        return TestResult::failed(
+                            start.elapsed(),
+                            "TLS echo failed after listener restore".to_string(),
                         );
                     }
 
-                    // Phase 2: delete Gateway
-                    if let Err(e) = ctx
-                        .delete_resource("Gateway", "edgion-test", "tls-route-both-absent-gw")
-                        .await
-                    {
-                        return TestResult::failed(start.elapsed(), format!("Failed to delete Gateway: {}", e));
-                    }
-                    tokio::time::sleep(Duration::from_millis(1000)).await;
-
-                    // Phase 3: re-apply Gateway
-                    let gateway_yaml = r#"apiVersion: gateway.networking.k8s.io/v1
-kind: Gateway
-metadata:
-  name: tls-route-both-absent-gw
-  namespace: edgion-test
-spec:
-  gatewayClassName: public-gateway
-  listeners:
-    - name: tls-both-absent
-      protocol: TLS
-      port: 31288
-      hostname: "*.both-absent.example.com"
-      tls:
-        mode: Terminate
-        certificateRefs:
-          - name: edge-tls
-            namespace: edgion-test"#;
-
-                    if let Err(e) = ctx.apply_yaml(gateway_yaml).await {
-                        return TestResult::failed(start.elapsed(), format!("Failed to re-apply Gateway: {}", e));
-                    }
-
-                    // Phase 4: wait for requeue to propagate
-                    tokio::time::sleep(Duration::from_secs(2)).await;
-
-                    // Phase 5: verify TLS works again
-                    let mut recovered = false;
-                    for attempt in 0..5 {
-                        match tokio::time::timeout(Duration::from_secs(3), TcpStream::connect(&addr)).await {
-                            Ok(Ok(tcp)) => {
-                                if let Ok(mut tls_stream) = connector.connect(sni.clone(), tcp).await {
-                                    let test_data = b"Hello Requeue";
-                                    if tls_stream.write_all(test_data).await.is_ok() {
-                                        let mut buf = vec![0u8; 1024];
-                                        if let Ok(Ok(n)) =
-                                            tokio::time::timeout(Duration::from_secs(2), tls_stream.read(&mut buf))
-                                                .await
-                                        {
-                                            if n > 0 {
-                                                recovered = true;
-                                                break;
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            _ => {}
-                        }
-                        if attempt < 4 {
-                            tokio::time::sleep(Duration::from_secs(1)).await;
-                        }
-                    }
-
-                    if recovered {
-                        TestResult::passed_with_message(
-                            start.elapsed(),
-                            "Gateway delete + re-apply triggered requeue, TLS restored".to_string(),
-                        )
-                    } else {
-                        TestResult::failed(
-                            start.elapsed(),
-                            "TLS did not recover after Gateway re-apply — requeue may not be working for both-absent parentRefs".to_string(),
-                        )
-                    }
+                    TestResult::passed_with_message(
+                        start.elapsed(),
+                        "Stable listener rename requeued TLSRoute in Controller and Gateway; TLS stayed routable"
+                            .to_string(),
+                    )
                 })
             },
         )
+        .with_timeout(Duration::from_secs(40))
     }
 
     fn test_sni_mismatch_both_absent() -> TestCase {
@@ -261,7 +319,7 @@ impl TestSuite for TlsBothAbsentParentRefTestSuite {
         vec![
             Self::test_tls_connection_both_absent(),
             Self::test_sni_mismatch_both_absent(),
-            Self::test_gateway_requeue_cycle(),
+            Self::test_gateway_listener_update_requeue(),
         ]
     }
 }

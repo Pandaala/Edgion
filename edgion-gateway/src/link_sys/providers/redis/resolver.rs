@@ -20,6 +20,16 @@ pub(super) fn redis_egress_resolver() -> Arc<dyn Resolve> {
     ))
 }
 
+#[cfg(feature = "test-util")]
+pub(super) fn redis_egress_resolver_for_test() -> Arc<dyn Resolve> {
+    Arc::new(RedisEgressResolver::new_for_test(
+        EgressPolicy {
+            block_private: default_block_private(),
+        },
+        egress_dns_cache_ttl(),
+    ))
+}
+
 struct RedisEgressResolver {
     inner: EgressResolver,
 }
@@ -28,6 +38,13 @@ impl RedisEgressResolver {
     fn new(policy: EgressPolicy, ttl: std::time::Duration) -> Self {
         Self {
             inner: EgressResolver::new(ResolverSpec::System, policy, ttl),
+        }
+    }
+
+    #[cfg(feature = "test-util")]
+    fn new_for_test(policy: EgressPolicy, ttl: std::time::Duration) -> Self {
+        Self {
+            inner: EgressResolver::new_for_test(ResolverSpec::System, policy, ttl),
         }
     }
 }

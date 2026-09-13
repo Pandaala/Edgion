@@ -14,9 +14,64 @@
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use async_trait::async_trait;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 pub struct EdgionTlsBothAbsentParentRefTestSuite;
+
+const ORIGINAL_GATEWAY: &str = r#"apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: edgiontls-both-absent-gw
+  namespace: edgion-test
+spec:
+  gatewayClassName: public-gateway
+  listeners:
+    - name: https
+      protocol: HTTPS
+      port: 31289
+      hostname: "both-absent-tls.example.com"
+      allowedRoutes:
+        namespaces:
+          from: All"#;
+
+const RENAMED_GATEWAY: &str = r#"apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: edgiontls-both-absent-gw
+  namespace: edgion-test
+spec:
+  gatewayClassName: public-gateway
+  listeners:
+    - name: https-updated
+      protocol: HTTPS
+      port: 31289
+      hostname: "both-absent-tls.example.com"
+      allowedRoutes:
+        namespaces:
+          from: All"#;
+
+async fn https_works(ctx: &TestContext) -> bool {
+    let host = ctx.http_host.as_deref().unwrap_or(&ctx.target_host);
+    let url = format!("https://{}:{}/health", host, ctx.https_port);
+    ctx.http_client
+        .get(url)
+        .send()
+        .await
+        .is_ok_and(|response| response.status().is_success())
+}
+
+async fn wait_for_https(ctx: &TestContext) -> bool {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        if https_works(ctx).await {
+            return true;
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+}
 
 impl EdgionTlsBothAbsentParentRefTestSuite {
     fn test_https_with_both_absent_parentref() -> TestCase {
@@ -69,92 +124,98 @@ impl EdgionTlsBothAbsentParentRefTestSuite {
         )
     }
 
-    /// Test: delete Gateway, re-apply it, verify HTTPS recovers.
-    /// Validates that EdgionTls's gateway_route_index registration
-    /// allows Gateway changes to trigger EdgionTls requeue.
-    fn test_gateway_requeue_cycle() -> TestCase {
+    /// Rename the existing listener without changing its physical key, then
+    /// verify both Controller and Gateway projections refresh and HTTPS stays
+    /// attached through the broad parentRef.
+    fn test_gateway_listener_update_requeue() -> TestCase {
         TestCase::new(
-            "edgiontls_both_absent_gateway_requeue",
-            "Delete and re-apply Gateway should requeue EdgionTls and restore HTTPS",
+            "edgiontls_both_absent_gateway_listener_update_requeue",
+            "Renaming a stable Gateway listener should requeue EdgionTls and preserve HTTPS",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
-                    let host = ctx.http_host.as_deref().unwrap_or(&ctx.target_host);
-
-                    // Phase 1: baseline
-                    let baseline_url = format!("https://{}:{}/health", host, ctx.https_port);
-                    let baseline_ok = ctx.http_client.get(&baseline_url).send().await.is_ok();
-                    if !baseline_ok {
-                        return TestResult::failed(
-                            start.elapsed(),
-                            "Baseline failed — HTTPS not working before Gateway delete".to_string(),
-                        );
-                    }
-
-                    // Phase 2: delete Gateway
-                    if let Err(e) = ctx
-                        .delete_resource("Gateway", "edgion-test", "edgiontls-both-absent-gw")
+                    if let Err(error) = ctx
+                        .wait_for_listener_projection(
+                            "EdgionTls",
+                            "edgion-test",
+                            "edgiontls-both-absent-cert",
+                            "resolvedListenerAttachments",
+                            "https",
+                            Duration::from_secs(8),
+                        )
                         .await
                     {
-                        return TestResult::failed(start.elapsed(), format!("Failed to delete Gateway: {}", e));
-                    }
-                    tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
-
-                    // Phase 3: re-apply Gateway
-                    let gateway_yaml = r#"apiVersion: gateway.networking.k8s.io/v1
-kind: Gateway
-metadata:
-  name: edgiontls-both-absent-gw
-  namespace: edgion-test
-spec:
-  gatewayClassName: public-gateway
-  listeners:
-    - name: https
-      protocol: HTTPS
-      port: 31289
-      hostname: "both-absent-tls.example.com"
-      allowedRoutes:
-        namespaces:
-          from: All"#;
-
-                    if let Err(e) = ctx.apply_yaml(gateway_yaml).await {
-                        return TestResult::failed(start.elapsed(), format!("Failed to re-apply Gateway: {}", e));
-                    }
-
-                    // Phase 4: wait for Gateway + dependent route/TLS updates to propagate
-                    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-
-                    // Phase 5: verify HTTPS works again with a slightly longer retry window.
-                    // Gateway delete/re-apply is followed by asynchronous config propagation to the
-                    // data plane, so a few extra seconds avoids false negatives from timing jitter.
-                    let url = format!("https://{}:{}/health", host, ctx.https_port);
-                    let mut recovered = false;
-                    for attempt in 0..10 {
-                        if let Ok(resp) = ctx.http_client.get(&url).send().await {
-                            if resp.status().is_success() {
-                                recovered = true;
-                                break;
-                            }
-                        }
-                        if attempt < 9 {
-                            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-                        }
-                    }
-
-                    if recovered {
-                        TestResult::passed_with_message(
+                        return TestResult::failed(
                             start.elapsed(),
-                            "Gateway delete + re-apply triggered EdgionTls requeue, HTTPS restored".to_string(),
-                        )
-                    } else {
-                        TestResult::failed(
-                            start.elapsed(),
-                            "HTTPS did not recover after Gateway re-apply — EdgionTls requeue may not work with both-absent parentRefs".to_string(),
-                        )
+                            format!("Initial listener projection is missing: {error}"),
+                        );
                     }
+                    if !wait_for_https(&ctx).await {
+                        return TestResult::failed(start.elapsed(), "Baseline HTTPS request failed".to_string());
+                    }
+
+                    if let Err(error) = ctx.apply_yaml(RENAMED_GATEWAY).await {
+                        return TestResult::failed(start.elapsed(), format!("Failed to rename listener: {error}"));
+                    }
+                    let renamed_result = ctx
+                        .wait_for_listener_projection(
+                            "EdgionTls",
+                            "edgion-test",
+                            "edgiontls-both-absent-cert",
+                            "resolvedListenerAttachments",
+                            "https-updated",
+                            Duration::from_secs(8),
+                        )
+                        .await;
+                    let renamed_traffic_ok = renamed_result.is_ok() && wait_for_https(&ctx).await;
+
+                    if let Err(error) = ctx.apply_yaml(ORIGINAL_GATEWAY).await {
+                        return TestResult::failed(
+                            start.elapsed(),
+                            format!("Failed to restore listener name: {error}"),
+                        );
+                    }
+                    if let Err(error) = renamed_result {
+                        return TestResult::failed(
+                            start.elapsed(),
+                            format!("Renamed projection did not converge: {error}"),
+                        );
+                    }
+                    if !renamed_traffic_ok {
+                        return TestResult::failed(
+                            start.elapsed(),
+                            "HTTPS failed after the broad parentRef moved to the renamed listener".to_string(),
+                        );
+                    }
+                    if let Err(error) = ctx
+                        .wait_for_listener_projection(
+                            "EdgionTls",
+                            "edgion-test",
+                            "edgiontls-both-absent-cert",
+                            "resolvedListenerAttachments",
+                            "https",
+                            Duration::from_secs(8),
+                        )
+                        .await
+                    {
+                        return TestResult::failed(
+                            start.elapsed(),
+                            format!("Restored projection did not converge: {error}"),
+                        );
+                    }
+                    if !wait_for_https(&ctx).await {
+                        return TestResult::failed(start.elapsed(), "HTTPS failed after listener restore".to_string());
+                    }
+
+                    TestResult::passed_with_message(
+                        start.elapsed(),
+                        "Stable listener rename requeued EdgionTls in Controller and Gateway; HTTPS stayed routable"
+                            .to_string(),
+                    )
                 })
             },
         )
+        .with_timeout(Duration::from_secs(40))
     }
 
     fn test_https_echo() -> TestCase {
@@ -194,7 +255,7 @@ impl TestSuite for EdgionTlsBothAbsentParentRefTestSuite {
         vec![
             Self::test_https_with_both_absent_parentref(),
             Self::test_https_echo(),
-            Self::test_gateway_requeue_cycle(),
+            Self::test_gateway_listener_update_requeue(),
         ]
     }
 }

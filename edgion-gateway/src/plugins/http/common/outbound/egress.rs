@@ -60,6 +60,16 @@ impl EgressResolver {
         }
     }
 
+    /// Construct the canonical resolver with the integration fixture's
+    /// loopback exception. This is deliberately unavailable to production
+    /// configuration and runtime call sites.
+    #[cfg(feature = "test-util")]
+    pub(crate) fn new_for_test(spec: ResolverSpec, policy: EgressPolicy, ttl: Duration) -> Self {
+        Self {
+            inner: CoreEgressResolver::new_with_options(spec, policy, ttl, true, Some(observe_block)),
+        }
+    }
+
     pub async fn resolve_socket_addrs(&self, host: &str, port: u16) -> Result<Vec<SocketAddr>, String> {
         self.inner.resolve_socket_addrs(host, port).await
     }

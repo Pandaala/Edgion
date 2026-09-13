@@ -57,7 +57,7 @@ path = "src/build_test_proto.rs"
 edgion-resources.workspace = true
 edgion-controller.workspace = true
 edgion-cli.workspace = true
-edgion-gateway = { workspace = true, features = ["boringssl"] }
+edgion-gateway = { workspace = true, features = ["boringssl", "test-util"] }
 # `edgion-common` provides the generated ext_proc proto types/server stub used by
 # the fake external-processor in the test server.
 edgion-common.workspace = true

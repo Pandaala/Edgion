@@ -103,7 +103,7 @@ async fn credential_reservation_lifecycle_uses_real_redis() -> Result<()> {
     let (config, auth) = redis_config();
     let client = RedisLinkClient::from_config("integration/credential-reservation", &config, &auth)?;
     client
-        .init()
+        .init_for_test()
         .await
         .context("connect to the integration Redis fixture")?;
     let core = RedisRateLimiter::new();
