@@ -57,7 +57,7 @@ let bearer = substr(token, 7, len(token))
 
 **Signature**: `req.method` → `Str`
 
-Returns the HTTP method of the current request, such as `"GET"`, `"POST"`, `"PUT"`, `"DELETE"`, etc. Always returned in uppercase.
+Returns the HTTP method of the current request, preserving its case, including changes made by `req.set_method`. Method names are case-sensitive: `"POST"`, `"post"`, and `"Post"` are distinct. Use the uppercase spelling for standard methods such as `"GET"` and `"POST"`.
 
 **Return value**: HTTP method string
 
@@ -661,12 +661,14 @@ req.set_host("internal-api.svc.cluster.local")
 
 **Signature**: `req.set_method(method)` → `Nil`
 
-Changes the HTTP method of the request. The method name is case-insensitive; it is converted to uppercase before being applied.
+Changes the HTTP method of the request, preserving the supplied case. Method names are case-sensitive and are not converted to uppercase: `"post"` remains `"post"`, distinct from the standard method `"POST"`. Valid extension methods such as `"X-Custom"` also retain their case. See [HTTP method semantics](https://www.rfc-editor.org/rfc/rfc9110.html#section-9.1).
 
 **Parameters**:
 - `method` (Str) — New HTTP method, e.g. `"GET"`, `"POST"`
 
 **Return value**: `nil`
+
+**Errors**: The method must be a nonempty HTTP token. Empty strings or names containing spaces, control characters, separators such as `/`, or non-ASCII characters cause `ApiError`, handled by the configured `errorPolicy`. An invalid method leaves the current method unchanged.
 
 **Example**:
 ```

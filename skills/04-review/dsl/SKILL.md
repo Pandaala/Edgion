@@ -25,6 +25,8 @@ before applying a decision to current code.
 
 ## Regression guards
 
+- [Request methods preserve case](regression-guards/request-method-case-contract.md)
+
 - [Terminate uses an explicit local response](regression-guards/terminate-explicit-local-response.md)
 
 - [Body text reads are bounded during decoding, with fetched-byte accounting](regression-guards/bounded-body-text-reads.md)

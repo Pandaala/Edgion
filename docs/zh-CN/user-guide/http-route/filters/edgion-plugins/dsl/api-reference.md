@@ -57,7 +57,7 @@ let bearer = substr(token, 7, len(token))
 
 **签名**：`req.method` → `Str`
 
-返回当前请求的 HTTP 方法，如 `"GET"`、`"POST"`、`"PUT"`、`"DELETE"` 等，始终为大写。
+返回当前请求的 HTTP 方法，保留其大小写，包括通过 `req.set_method` 做出的修改。方法名区分大小写：`"POST"`、`"post"` 和 `"Post"` 是不同的方法。使用 `"GET"`、`"POST"` 等标准方法时，应采用其大写拼写。
 
 **返回值**：HTTP 方法字符串
 
@@ -645,12 +645,14 @@ req.set_host("internal-api.svc.cluster.local")
 
 **签名**：`req.set_method(method)` → `Nil`
 
-修改请求的 HTTP 方法。传入的方法名称不区分大小写，底层会转换为大写后应用。
+修改请求的 HTTP 方法，保留传入的大小写。方法名区分大小写，不会自动转为大写：`"post"` 仍为 `"post"`，与标准方法 `"POST"` 不同。`"X-Custom"` 等合法扩展方法也保留大小写。参见 [HTTP 方法语义](https://www.rfc-editor.org/rfc/rfc9110.html#section-9.1)。
 
 **参数**：
 - `method`（Str）— 新的 HTTP 方法，例如 `"GET"`、`"POST"`
 
 **返回值**：`nil`
+
+**错误**：方法名必须是非空 HTTP token。空字符串，或包含空格、控制字符、`/` 等分隔符、非 ASCII 字符的方法名会产生 `ApiError`，由配置的 `errorPolicy` 处理。非法方法名不会改变当前方法。
 
 **示例**：
 ```
