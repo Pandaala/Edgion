@@ -122,6 +122,7 @@ impl fmt::Debug for ReadyAiAttemptPlan {
 }
 
 /// The single request-wide AI forwarding decision.
+#[allow(clippy::large_enum_variant)]
 pub enum AiAttemptPlan {
     Rejected(AiPlanError),
     Ready(ReadyAiAttemptPlan),

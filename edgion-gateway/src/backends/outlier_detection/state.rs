@@ -194,9 +194,7 @@ impl PassiveEjectionState {
     /// Advance the endpoint-local counter and return a generation-bound
     /// candidate only when an ejection threshold is reached.
     pub(crate) fn record_failure_candidate(&self, class: FailureClass) -> Option<FailureCandidate> {
-        let Some(config) = self.config.as_ref() else {
-            return None;
-        };
+        let config = self.config.as_ref()?;
         let mut state = self.inner.lock();
         if state.effective_open_until().is_some() {
             return None;

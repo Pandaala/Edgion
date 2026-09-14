@@ -136,21 +136,17 @@ async fn ensure_pebble_ready() -> bool {
     // Pin Pebble's minica CA so rustls-tls-webpki-roots accepts the self-signed
     // cert (matches the AcmeClient probe path). `danger_accept_invalid_certs`
     // over rustls + HTTP/2 fails fast (~10ms) and never reaches the server.
-    let ca_path = match download_pebble_tls_ca().await {
-        Ok(p) => p,
-        Err(_) => return false,
+    let Ok(ca_path) = download_pebble_tls_ca().await else {
+        return false;
     };
-    let ca_pem = match std::fs::read(&ca_path) {
-        Ok(b) => b,
-        Err(_) => return false,
+    let Ok(ca_pem) = std::fs::read(&ca_path) else {
+        return false;
     };
-    let cert = match reqwest::Certificate::from_pem(&ca_pem) {
-        Ok(c) => c,
-        Err(_) => return false,
+    let Ok(cert) = reqwest::Certificate::from_pem(&ca_pem) else {
+        return false;
     };
-    let client = match reqwest::Client::builder().add_root_certificate(cert).build() {
-        Ok(c) => c,
-        Err(_) => return false,
+    let Ok(client) = reqwest::Client::builder().add_root_certificate(cert).build() else {
+        return false;
     };
 
     // Reachability == server responded. Pebble's `/dir` rejects bare GET with

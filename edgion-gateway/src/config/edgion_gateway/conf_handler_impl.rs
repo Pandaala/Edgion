@@ -101,7 +101,7 @@ pub fn get_edgion_gateway_config_by_name(name: &str) -> Option<EdgionGatewayConf
 #[cfg(test)]
 pub fn list_edgion_gateway_configs() -> Vec<EdgionGatewayConfig> {
     let mut items: Vec<EdgionGatewayConfig> = EDGION_GATEWAY_CONFIG_STORE.load().configs.values().cloned().collect();
-    items.sort_by(|a, b| a.name_any().cmp(&b.name_any()));
+    items.sort_by_key(|a| a.name_any());
     items
 }
 

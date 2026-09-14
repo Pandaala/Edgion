@@ -121,17 +121,14 @@ impl PercentMirrorTestSuite {
 
                     match poll_mirror_received(&ctx, &trace_id, 20, 100).await {
                         Ok(captures) => {
-                            let cap = match find_mirror_capture(&captures) {
-                                Some(c) => c,
-                                None => {
-                                    return TestResult::failed(
-                                        start.elapsed(),
-                                        format!(
-                                            "No mirror capture with x-mirror: true; {} total capture(s)",
-                                            captures.len()
-                                        ),
-                                    );
-                                }
+                            let Some(cap) = find_mirror_capture(&captures) else {
+                                return TestResult::failed(
+                                    start.elapsed(),
+                                    format!(
+                                        "No mirror capture with x-mirror: true; {} total capture(s)",
+                                        captures.len()
+                                    ),
+                                );
                             };
                             let has_mirror_hdr = cap["headers"]["x-mirror"]
                                 .as_str()

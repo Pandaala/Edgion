@@ -964,9 +964,10 @@ mod tests {
     use kube::api::ObjectMeta;
     use kube::client::Body;
     use kube::core::PartialObjectMeta;
+    use parking_lot::Mutex;
     use std::collections::BTreeMap;
     use std::convert::Infallible;
-    use std::sync::{Arc, Mutex};
+    use std::sync::Arc;
     use tower::service_fn;
 
     fn json_response(status: StatusCode, value: Value) -> Response<Body> {
@@ -1140,7 +1141,6 @@ mod tests {
                 };
                 captured
                     .lock()
-                    .unwrap()
                     .push((parts.method.clone(), parts.uri.to_string(), value));
                 let response = if parts.uri.path() == "/apis/gateway.networking.k8s.io/v1" {
                     not_found_response()
@@ -1170,7 +1170,7 @@ mod tests {
             .await
             .expect("conditional Kubernetes delete must succeed");
 
-        let requests = requests.lock().unwrap();
+        let requests = requests.lock();
         let delete = requests
             .iter()
             .find(|(method, _, _)| method == Method::DELETE)
@@ -1185,10 +1185,7 @@ mod tests {
         let service = service_fn(move |request: http::Request<Body>| {
             let captured = Arc::clone(&captured);
             async move {
-                captured
-                    .lock()
-                    .expect("request capture lock must not be poisoned")
-                    .push(request.uri().path().to_string());
+                captured.lock().push(request.uri().path().to_string());
                 Ok::<_, Infallible>(json_response(
                     StatusCode::OK,
                     json!({
@@ -1235,7 +1232,7 @@ mod tests {
         assert_eq!(second.items.len(), 1);
         assert_eq!(second.items[0].metadata.name, "a-2");
         assert!(second.continue_token.is_none());
-        let paths = paths.lock().expect("request capture lock must not be poisoned");
+        let paths = paths.lock();
         assert_eq!(
             paths.as_slice(),
             [
@@ -1411,13 +1408,11 @@ mod tests {
                 };
                 let prior_puts = captured
                     .lock()
-                    .expect("request capture lock must not be poisoned")
                     .iter()
                     .filter(|(method, _, _)| *method == Method::PUT)
                     .count();
                 captured
                     .lock()
-                    .expect("request capture lock must not be poisoned")
                     .push((parts.method.clone(), parts.uri.to_string(), value.clone()));
 
                 let response = match parts.method {
@@ -1450,7 +1445,7 @@ mod tests {
 
         assert!(matches!(error, ConfWriterError::Conflict(_)));
 
-        let requests = requests.lock().expect("request capture lock must not be poisoned");
+        let requests = requests.lock();
         let methods = requests.iter().map(|(method, _, _)| method.clone()).collect::<Vec<_>>();
         assert_eq!(methods, vec![Method::GET, Method::PUT]);
         let puts = requests
@@ -1471,10 +1466,7 @@ mod tests {
             let captured = Arc::clone(&captured);
             async move {
                 let method = request.method().clone();
-                captured
-                    .lock()
-                    .expect("request capture lock must not be poisoned")
-                    .push(method.clone());
+                captured.lock().push(method.clone());
                 let response = if method == Method::GET {
                     json_response(StatusCode::OK, config_map_value(Some("42"), Some("old"), "old"))
                 } else if method == Method::PUT {
@@ -1502,10 +1494,7 @@ mod tests {
             .expect_err("explicit CAS must surface a replace conflict");
 
         assert!(matches!(error, ConfWriterError::Conflict(_)));
-        assert_eq!(
-            *requests.lock().expect("request capture lock must not be poisoned"),
-            vec![Method::GET, Method::PUT]
-        );
+        assert_eq!(*requests.lock(), vec![Method::GET, Method::PUT]);
     }
 
     #[tokio::test]
@@ -1516,10 +1505,7 @@ mod tests {
             let captured = Arc::clone(&captured);
             async move {
                 let method = request.method().clone();
-                captured
-                    .lock()
-                    .expect("request capture lock must not be poisoned")
-                    .push(method.clone());
+                captured.lock().push(method.clone());
                 let response = if method == Method::GET {
                     json_response(StatusCode::OK, config_map_value(Some("42"), Some("old"), "old"))
                 } else if method == Method::PUT {
@@ -1556,10 +1542,7 @@ mod tests {
             .await
             .expect_err("a non-conflict replace error must be returned without retry");
 
-        assert_eq!(
-            *requests.lock().expect("request capture lock must not be poisoned"),
-            vec![Method::GET, Method::PUT]
-        );
+        assert_eq!(*requests.lock(), vec![Method::GET, Method::PUT]);
     }
 
     #[tokio::test]
@@ -1570,10 +1553,7 @@ mod tests {
             let captured = Arc::clone(&captured);
             async move {
                 let method = request.method().clone();
-                captured
-                    .lock()
-                    .expect("request capture lock must not be poisoned")
-                    .push(method.clone());
+                captured.lock().push(method.clone());
                 let response = if method == Method::GET {
                     json_response(StatusCode::OK, config_map_value(Some("42"), Some("busy"), "old"))
                 } else if method == Method::PUT {
@@ -1601,7 +1581,7 @@ mod tests {
             .expect_err("the first backend conflict must be surfaced");
 
         assert!(matches!(error, ConfWriterError::Conflict(_)));
-        let methods = requests.lock().expect("request capture lock must not be poisoned");
+        let methods = requests.lock();
         assert_eq!(methods.as_slice(), &[Method::GET, Method::PUT]);
     }
 
@@ -1621,7 +1601,6 @@ mod tests {
                 };
                 captured
                     .lock()
-                    .expect("request capture lock must not be poisoned")
                     .push((parts.method.clone(), parts.uri.to_string(), value.clone()));
 
                 let response = if parts.uri.path() == "/apis/gateway.networking.k8s.io/v1" {
@@ -1649,7 +1628,7 @@ mod tests {
             .await
             .expect("v1beta1 create must succeed");
 
-        let requests = requests.lock().expect("request capture lock must not be poisoned");
+        let requests = requests.lock();
         assert_eq!(requests.len(), 3, "one v1 probe, one v1beta1 probe, and one create");
         let create = requests
             .iter()
@@ -1679,7 +1658,6 @@ mod tests {
                 };
                 captured
                     .lock()
-                    .expect("request capture lock must not be poisoned")
                     .push((parts.method.clone(), parts.uri.to_string(), value.clone()));
 
                 let path = parts.uri.path();
@@ -1728,7 +1706,7 @@ mod tests {
             .await
             .expect("v1beta1 update must succeed");
 
-        let requests = requests.lock().expect("request capture lock must not be poisoned");
+        let requests = requests.lock();
         assert_eq!(
             requests.len(),
             4,
@@ -1755,10 +1733,7 @@ mod tests {
         let service = service_fn(move |request: http::Request<Body>| {
             let captured = Arc::clone(&captured);
             async move {
-                captured
-                    .lock()
-                    .expect("request capture lock must not be poisoned")
-                    .push(request.uri().to_string());
+                captured.lock().push(request.uri().to_string());
                 Ok::<_, Infallible>(json_response(
                     StatusCode::FORBIDDEN,
                     json!({
@@ -1791,7 +1766,7 @@ mod tests {
             other => panic!("expected internal probe error, got {other:?}"),
         };
         assert!(message.to_ascii_lowercase().contains("forbidden"));
-        let paths = paths.lock().expect("request capture lock must not be poisoned");
+        let paths = paths.lock();
         assert_eq!(paths.len(), 1, "RBAC failure must not be treated as v1 absence");
         assert_eq!(paths[0].trim_end_matches('?'), "/apis/gateway.networking.k8s.io/v1");
     }

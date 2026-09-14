@@ -560,9 +560,8 @@ async fn try_serve_acme_challenge(
         return Ok(false);
     };
 
-    let key_auth = match store.lookup(token, &host) {
-        Some(v) => v,
-        None => return Ok(false),
+    let Some(key_auth) = store.lookup(token, &host) else {
+        return Ok(false);
     };
 
     if !ctx.claim_final_response(200) {

@@ -811,9 +811,7 @@ impl WasmVmManager {
         if slot.published.load_full().is_some() || monotonic_millis() < slot.load_retry_due_ms.load(Ordering::Acquire) {
             return None;
         }
-        let Some(claim) = slot.try_claim_preload() else {
-            return None;
-        };
+        let claim = slot.try_claim_preload()?;
         // Only the winning task needs owned inputs. Repeated response chunks
         // during an in-flight load or retry window must not copy the key.
         Some((claim, config.clone(), cache_key.to_owned()))
@@ -1077,6 +1075,7 @@ impl WasmVmManager {
         });
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn refresh_oci_entry(
         engine: Engine,
         cache: Arc<CacheInner>,
@@ -3339,8 +3338,8 @@ mod tests {
 
     #[tokio::test]
     async fn url_retry_backoff_releases_permit_for_another_fetch() {
+        use parking_lot::Mutex as StdMutex;
         use std::sync::atomic::{AtomicUsize, Ordering};
-        use std::sync::Mutex as StdMutex;
         use tokio::sync::{Notify, Semaphore};
         use wiremock::matchers::{method, path};
         use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -3357,7 +3356,7 @@ mod tests {
                 let a_calls = a_calls.clone();
                 move |_: &wiremock::Request| {
                     let call = a_calls.fetch_add(1, Ordering::SeqCst);
-                    order.lock().unwrap().push(if call == 0 { "a1" } else { "a2" });
+                    order.lock().push(if call == 0 { "a1" } else { "a2" });
                     if call == 0 {
                         first_a_seen.notify_one();
                         ResponseTemplate::new(503)
@@ -3373,7 +3372,7 @@ mod tests {
             .respond_with({
                 let order = order.clone();
                 move |_: &wiremock::Request| {
-                    order.lock().unwrap().push("b");
+                    order.lock().push("b");
                     ResponseTemplate::new(200).set_body_bytes(b"b".to_vec())
                 }
             })
@@ -3413,7 +3412,7 @@ mod tests {
                 .unwrap(),
             b"a"
         );
-        assert_eq!(&*order.lock().unwrap(), &["a1", "b", "a2"]);
+        assert_eq!(&*order.lock(), &["a1", "b", "a2"]);
     }
 
     /// url fetch retry: 4xx is definitive — exactly one request, no retry.
@@ -4470,7 +4469,7 @@ mod tests {
         }
 
         let wasm_a = wat::parse_str(TICK_GUEST).unwrap();
-        let wasm_b = wat::parse_str(&TICK_GUEST.replace(
+        let wasm_b = wat::parse_str(TICK_GUEST.replace(
             "(func (export \"proxy_on_tick\")",
             "(func (export \"version_b\"))\n      (func (export \"proxy_on_tick\")",
         ))

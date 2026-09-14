@@ -171,24 +171,21 @@ impl ExtensionRefFilter {
         session: &mut dyn PluginSession,
         log: &mut PluginLog,
     ) -> PluginRunningResult {
-        let (plugin_runtime, log_token) = match self.prepare_execution(session, log) {
-            Ok(res) => res,
-            Err(_) => {
-                // Sync stage: no `await`, so we cannot write a response body
-                // here. Signal the status via `ErrResponse` instead. The
-                // response runner (`check_response_stage_terminate`) turns this
-                // into a local reply: it builds a fresh `500` and `response_filter`
-                // writes it to the client, replacing the upstream response.
-                // `body` is `None`, so the client gets a bare `500` (no JSON
-                // envelope); the request-stage `run_extension_async` path is the
-                // one that writes a JSON body. A bare `ErrTerminateRequest` would
-                // trip the runtime's 502 fail-safe, masking this as a plugin-reference
-                // error.
-                return PluginRunningResult::ErrResponse {
-                    status: 500,
-                    body: None,
-                };
-            }
+        let Ok((plugin_runtime, log_token)) = self.prepare_execution(session, log) else {
+            // Sync stage: no `await`, so we cannot write a response body
+            // here. Signal the status via `ErrResponse` instead. The
+            // response runner (`check_response_stage_terminate`) turns this
+            // into a local reply: it builds a fresh `500` and `response_filter`
+            // writes it to the client, replacing the upstream response.
+            // `body` is `None`, so the client gets a bare `500` (no JSON
+            // envelope); the request-stage `run_extension_async` path is the
+            // one that writes a JSON body. A bare `ErrTerminateRequest` would
+            // trip the runtime's 502 fail-safe, masking this as a plugin-reference
+            // error.
+            return PluginRunningResult::ErrResponse {
+                status: 500,
+                body: None,
+            };
         };
 
         match stage {
@@ -232,29 +229,26 @@ impl ExtensionRefFilter {
         session: &mut dyn PluginSession,
         log: &mut PluginLog,
     ) -> PluginRunningResult {
-        let (plugin_runtime, log_token) = match self.prepare_execution(session, log) {
-            Ok(res) => res,
-            Err(_) => {
-                // Response stage: a direct write + ErrTerminateRequest would be
-                // forwarded over by the upstream response (the response runner only
-                // aborts on an ErrResponse local-reply, not on ErrTerminateRequest).
-                // Return ErrResponse so `check_response_stage_terminate` builds the
-                // single replacement reply. (Normally unreachable here because
-                // `run_upstream_response` pre-resolves; this guards the TOCTOU window
-                // where the ref vanishes between the two lookups.)
-                if matches!(stage, PluginRunningStage::UpstreamResponse) {
-                    return PluginRunningResult::ErrResponse {
-                        status: 500,
-                        body: None,
-                    };
-                }
-                // Request stage: without writing a response here, ErrTerminateRequest
-                // would surface as a naked 502 (no plugin name in access log, no body)
-                // — practically impossible to triage. Write a 500 + JSON body so the
-                // terminated request is diagnosable from the client side too.
-                write_extension_ref_error_response(session).await;
-                return PluginRunningResult::ErrTerminateRequest;
+        let Ok((plugin_runtime, log_token)) = self.prepare_execution(session, log) else {
+            // Response stage: a direct write + ErrTerminateRequest would be
+            // forwarded over by the upstream response (the response runner only
+            // aborts on an ErrResponse local-reply, not on ErrTerminateRequest).
+            // Return ErrResponse so `check_response_stage_terminate` builds the
+            // single replacement reply. (Normally unreachable here because
+            // `run_upstream_response` pre-resolves; this guards the TOCTOU window
+            // where the ref vanishes between the two lookups.)
+            if matches!(stage, PluginRunningStage::UpstreamResponse) {
+                return PluginRunningResult::ErrResponse {
+                    status: 500,
+                    body: None,
+                };
             }
+            // Request stage: without writing a response here, ErrTerminateRequest
+            // would surface as a naked 502 (no plugin name in access log, no body)
+            // — practically impossible to triage. Write a 500 + JSON body so the
+            // terminated request is diagnosable from the client side too.
+            write_extension_ref_error_response(session).await;
+            return PluginRunningResult::ErrTerminateRequest;
         };
 
         match stage {

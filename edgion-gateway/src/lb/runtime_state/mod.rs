@@ -60,7 +60,7 @@ fn build_sp_affinity_map(
 pub(crate) fn sp_affinity_get_or_build_key(
     service_key: &str,
     section: &ServiceSectionKey,
-    _backends_fn: impl FnOnce() -> Arc<Vec<Arc<LbBackend>>>,
+    _backends_fn: impl FnOnce() -> Arc<[Arc<LbBackend>]>,
 ) -> Arc<std::collections::HashMap<String, std::net::SocketAddr>> {
     let coordinator = crate::backends::discovery::get_service_discovery_coordinator();
     sp_affinity_get_or_build_from(&coordinator, service_key, section)
@@ -154,7 +154,7 @@ pub(crate) fn sp_affinity_get_or_build_scoped(
     service_key: &str,
     section: &ServiceSectionKey,
     scope: Option<&str>,
-    backends_fn: impl FnOnce() -> Arc<Vec<Arc<LbBackend>>>,
+    backends_fn: impl FnOnce() -> Arc<[Arc<LbBackend>]>,
 ) -> Arc<std::collections::HashMap<String, std::net::SocketAddr>> {
     // Typed scopes may include a direct backend UID. Keeping those generations in
     // this process-global Service cache would let an in-flight request recreate
@@ -329,7 +329,7 @@ mod tests {
     fn scoped_affinity_views_are_isolated_and_never_registered_globally() {
         let addr: StdSocketAddr = "10.0.0.8:8080".parse().unwrap();
         let svc = "ns/scoped-affinity";
-        let backends = Arc::new(vec![backend(addr)]);
+        let backends: Arc<[Arc<LbBackend>]> = Arc::from(vec![backend(addr)]);
         let first_scope = "edgion.io/EdgionBackend/ns/first\0core/Service/ns/scoped-affinity";
         let second_scope = "edgion.io/EdgionBackend/ns/second\0core/Service/ns/scoped-affinity";
         let first = sp_affinity_get_or_build_scoped(svc, &test_section(), Some(first_scope), || backends.clone());
@@ -350,14 +350,14 @@ mod tests {
     fn scoped_affinity_view_has_the_canonical_endpoint_cap() {
         let svc = "ns/scoped-bounded";
         let scope = "edgion.io/EdgionBackend/ns/agent/uid\0core/Service/ns/scoped-bounded";
-        let backends = Arc::new(
+        let backends = Arc::from(
             (0..=SP_AFFINITY_MAX_PER_SERVICE)
                 .map(|index| {
                     let third = ((index / 254) % 254 + 1) as u8;
                     let fourth = (index % 254 + 1) as u8;
                     backend(StdSocketAddr::from(([10, 1, third, fourth], 8080)))
                 })
-                .collect(),
+                .collect::<Vec<_>>(),
         );
         let view = sp_affinity_get_or_build_scoped(svc, &test_section(), Some(scope), || backends);
         assert_eq!(view.len(), SP_AFFINITY_MAX_PER_SERVICE);

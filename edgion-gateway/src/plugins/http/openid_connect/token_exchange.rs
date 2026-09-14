@@ -121,13 +121,11 @@ impl OpenidConnect {
             persisted_payload.access_token.clear();
         }
 
-        let cipher = match self.session_cipher() {
-            Some(cipher) => cipher,
-            None => return,
+        let Some(cipher) = self.session_cipher() else {
+            return;
         };
-        let value = match Self::encode_signed_cookie_payload(&persisted_payload, cipher) {
-            Ok(v) => v,
-            Err(_) => return,
+        let Ok(value) = Self::encode_signed_cookie_payload(&persisted_payload, cipher) else {
+            return;
         };
         let cookie = format!(
             "{}={}{}",
@@ -272,9 +270,8 @@ impl OpenidConnect {
             return;
         }
 
-        let discovery = match self.cached_discovery_doc().await {
-            Some(v) => v,
-            None => return,
+        let Some(discovery) = self.cached_discovery_doc().await else {
+            return;
         };
         let Some(revocation_endpoint) = discovery.revocation_endpoint.as_deref().filter(|v| !v.is_empty()) else {
             return;
@@ -405,15 +402,12 @@ impl OpenidConnect {
     ) -> VerifyResult<String> {
         let flight = self.refresh_singleflight.get_or_create(lock_key);
         let wait_timeout = Duration::from_secs(self.config.timeout);
-        let _guard = match tokio::time::timeout(wait_timeout, flight.lock().lock()).await {
-            Ok(guard) => guard,
-            Err(_) => {
-                if let Some(cached_payload) = self.try_get_recent_refresh_result(lock_key).await {
-                    *session_cookie = cached_payload;
-                    return Ok(session_cookie.access_token.clone());
-                }
-                return Err(OidcVerifyError::RefreshSingleflightTimeout);
+        let Ok(_guard) = tokio::time::timeout(wait_timeout, flight.lock().lock()).await else {
+            if let Some(cached_payload) = self.try_get_recent_refresh_result(lock_key).await {
+                *session_cookie = cached_payload;
+                return Ok(session_cookie.access_token.clone());
             }
+            return Err(OidcVerifyError::RefreshSingleflightTimeout);
         };
 
         if let Some(cached_payload) = self.try_get_recent_refresh_result(lock_key).await {

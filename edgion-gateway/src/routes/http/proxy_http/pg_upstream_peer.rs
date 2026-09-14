@@ -1458,11 +1458,10 @@ fn try_direct_endpoint_peer(
     edgion_http: &EdgionHttpProxy,
     ctx: &mut EdgionHttpContext,
 ) -> pingora_core::Result<Box<HttpPeer>> {
-    let direct = match ctx.jump.as_deref() {
-        Some(UpstreamJumpTarget::Direct(preset)) => preset,
+    let Some(UpstreamJumpTarget::Direct(direct)) = ctx.jump.as_deref() else {
         // invariant: caller (line 146) only reaches this helper after matching Direct{..};
         //   other variants are dispatched to sibling helpers
-        _ => unreachable!("caller must dispatch only on ctx.jump == Some(Direct)"),
+        unreachable!("caller must dispatch only on ctx.jump == Some(Direct)");
     };
     let addr = PingoraSocketAddr::Inet(direct.addr);
     let policy = direct.tls_policy.clone();
@@ -1496,11 +1495,10 @@ async fn try_external_jump_peer(
     edgion_http: &EdgionHttpProxy,
     ctx: &mut EdgionHttpContext,
 ) -> pingora_core::Result<Box<HttpPeer>> {
-    let external = match ctx.jump.as_deref() {
-        Some(UpstreamJumpTarget::External(p)) => p,
+    let Some(UpstreamJumpTarget::External(external)) = ctx.jump.as_deref() else {
         // invariant: caller (line 147) only reaches this helper after matching External(..);
         //   other variants are dispatched to sibling helpers
-        _ => unreachable!("caller must dispatch only on ctx.jump == Some(External)"),
+        unreachable!("caller must dispatch only on ctx.jump == Some(External)");
     };
     let domain = external.domain.clone();
     let port = external.port;
@@ -1964,7 +1962,7 @@ mod tests {
             }
         );
         let mut ctx = EdgionHttpContext::new();
-        let logical = crate::backends::LogicalBackendHandle::new(Arc::new(vec![backend]), 0).unwrap();
+        let logical = crate::backends::LogicalBackendHandle::new(Arc::from(vec![backend]), 0).unwrap();
         ctx.selected_backend = Some(crate::backends::SelectedHttpBackend::Invalid(logical));
 
         init_backend_context_if_needed(&mut ctx).unwrap();
@@ -3557,7 +3555,7 @@ mod tests {
         );
         let mut ctx = EdgionHttpContext::new();
         ctx.selected_backend = Some(crate::backends::SelectedHttpBackend::Invalid(
-            crate::backends::LogicalBackendHandle::new(Arc::new(vec![backend]), 0).unwrap(),
+            crate::backends::LogicalBackendHandle::new(Arc::from(vec![backend]), 0).unwrap(),
         ));
         ctx.backend_context = Some(BackendContext {
             source: None,

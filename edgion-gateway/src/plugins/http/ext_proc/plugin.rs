@@ -359,9 +359,8 @@ impl ExtProc {
         // bytes past inspection. `None` = the session type cannot supply the
         // fact (custom-connector, subrequest) — the per-chunk capability is
         // absent there and the fail mode applies.
-        let headers_end_stream = match session.request_headers_end_stream() {
-            Some(fact) => fact,
-            None => return self.fail_request_owner(&owner, session, log, "streamed unsupported", None),
+        let Some(headers_end_stream) = session.request_headers_end_stream() else {
+            return self.fail_request_owner(&owner, session, log, "streamed unsupported", None);
         };
 
         // Transport-guaranteed bodyless request: nothing to stream. Degenerate
@@ -1048,12 +1047,14 @@ impl UpstreamResponse for ExtProc {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::field_reassign_with_default)]
+
     use super::*;
     use crate::plugins::runtime::traits::session::MockPluginSession;
     use edgion_common::ext_proc::proto::external_processor_server::{ExternalProcessor, ExternalProcessorServer};
     use edgion_common::ext_proc::proto::{HeadersResponse, ProcessingMode as WireProcessingMode, ProcessingResponse};
     use edgion_resources::plugin_configs::{BodySendMode, GrpcServiceConfig, HeaderSendMode};
-    use std::sync::Mutex;
+    use parking_lot::Mutex;
     use tokio_stream::wrappers::{ReceiverStream, TcpListenerStream};
 
     #[test]
@@ -1113,9 +1114,9 @@ mod tests {
         ) -> Result<tonic::Response<Self::ProcessStream>, tonic::Status> {
             let mut inbound = request.into_inner();
             let (tx, rx) = tokio::sync::mpsc::channel(4);
-            let observed = self.observed.lock().unwrap().take();
+            let observed = self.observed.lock().take();
             let override_on = self.override_on;
-            let mode_override = self.mode_override.clone();
+            let mode_override = self.mode_override;
             tokio::spawn(async move {
                 let mut phases = 0;
                 let observation = loop {
@@ -1140,7 +1141,7 @@ mod tests {
                             if tx
                                 .send(Ok(ProcessingResponse {
                                     response: Some(response),
-                                    mode_override: attach_override.then(|| mode_override.clone()),
+                                    mode_override: attach_override.then_some(mode_override),
                                 }))
                                 .await
                                 .is_err()
@@ -1198,7 +1199,7 @@ mod tests {
         ) -> Result<tonic::Response<Self::ProcessStream>, tonic::Status> {
             let mut inbound = request.into_inner();
             let (tx, rx) = tokio::sync::mpsc::channel(4);
-            let observed = self.observed.lock().unwrap().take();
+            let observed = self.observed.lock().take();
             tokio::spawn(async move {
                 let mut phases = 0;
                 let mut clean_eof = false;
@@ -1553,7 +1554,7 @@ mod tests {
             .expect_install_attached_ext_proc()
             .times(1)
             .returning(move |_, owner, _| {
-                *installed_capture.lock().unwrap() = Some(owner);
+                *installed_capture.lock() = Some(owner);
                 true
             });
         expect_empty_request_headers(&mut request_session);
@@ -1562,7 +1563,7 @@ mod tests {
             .run_request(&mut request_session, &mut PluginLog::new("ExtProc"))
             .await;
         assert!(matches!(result, PluginRunningResult::GoodNext));
-        let owner = installed.lock().unwrap().clone().expect("request owner installed");
+        let owner = installed.lock().clone().expect("request owner installed");
         assert_eq!(owner.test_state(), ("suppressed", "immediate-disabled", true));
 
         let mut response_session = MockPluginSession::new();

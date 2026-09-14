@@ -42,6 +42,7 @@ pub(crate) type AttachedExtProcMap = HashMap<String, Arc<crate::plugins::http::e
 /// sentinel and allocate nothing; non-empty maps box only their 48-byte map
 /// header in addition to the buckets they inherently own.
 #[derive(Default)]
+#[allow(clippy::box_collection)]
 struct ParsedRequestCaches {
     path: std::sync::OnceLock<Option<Box<HashMap<String, String>>>>,
     query: std::sync::OnceLock<Option<Box<HashMap<String, String>>>>,

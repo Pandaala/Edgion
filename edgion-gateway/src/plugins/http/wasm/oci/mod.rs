@@ -1372,8 +1372,8 @@ mod tests {
 
     #[tokio::test]
     async fn retry_backoff_releases_permit_for_another_registry_request() {
+        use parking_lot::Mutex;
         use std::sync::atomic::{AtomicUsize, Ordering};
-        use std::sync::Mutex;
         use tokio::sync::{Notify, Semaphore};
 
         let server = MockServer::start().await;
@@ -1388,7 +1388,7 @@ mod tests {
                 let a_calls = a_calls.clone();
                 move |_: &wiremock::Request| {
                     let call = a_calls.fetch_add(1, Ordering::SeqCst);
-                    order.lock().unwrap().push(if call == 0 { "a1" } else { "a2" });
+                    order.lock().push(if call == 0 { "a1" } else { "a2" });
                     if call == 0 {
                         first_a_seen.notify_one();
                         ResponseTemplate::new(503)
@@ -1404,7 +1404,7 @@ mod tests {
             .respond_with({
                 let order = order.clone();
                 move |_: &wiremock::Request| {
-                    order.lock().unwrap().push("b");
+                    order.lock().push("b");
                     ResponseTemplate::new(200).set_body_bytes(b"b".to_vec())
                 }
             })
@@ -1449,7 +1449,7 @@ mod tests {
                 .unwrap(),
             b"a"
         );
-        assert_eq!(&*order.lock().unwrap(), &["a1", "b", "a2"]);
+        assert_eq!(&*order.lock(), &["a1", "b", "a2"]);
     }
 
     #[tokio::test]

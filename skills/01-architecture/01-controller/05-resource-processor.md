@@ -56,7 +56,7 @@ The context object passed to handler methods. It provides the following shared r
 |---|---|---|
 | `runtime` | `Arc<ControllerRuntime>` | Owns ProcessorRegistry, SecretStore, reference managers, and indexes; accessed through methods |
 | `metadata_filter` | `Option<Arc<MetadataFilterConfig>>` | Metadata cleanup-rule configuration |
-| `namespace_filter` | `Option<Arc<Vec<String>>>` | Namespace allowlist filter |
+| `namespace_filter` | `Option<Arc<[String]>>` | Namespace allowlist filter |
 | `trigger_chain` | `TriggerChain` | Cascade trigger chain, used for cycle detection during requeue |
 | `max_trigger_cycles` | `usize` | Max number of times the same (kind, key) is allowed to repeat in the trigger chain (default 5) |
 | `max_trigger_depth` | `usize` | Maximum total trigger-chain depth (default 20) |

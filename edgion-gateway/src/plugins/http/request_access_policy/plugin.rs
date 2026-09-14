@@ -193,6 +193,7 @@ enum RuntimeRule {
 }
 
 impl RuntimeRule {
+    #[allow(clippy::too_many_arguments)]
     async fn matches(
         &self,
         session: &mut dyn PluginSession,

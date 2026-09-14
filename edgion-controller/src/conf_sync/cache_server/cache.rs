@@ -79,6 +79,10 @@ impl<T: ResourceMeta + Resource + Send + Sync> ServerCache<T> {
         store_guard.len()
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
     /// Start a watcher task that listens for notifications and sends data
     /// Only needs the store to access data
     ///

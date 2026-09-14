@@ -175,17 +175,14 @@ impl RequestMirrorTestSuite {
                     // Poll for mirror receipt (mirror is async — allow up to 2s)
                     match poll_mirror_received(&ctx, &trace_id, 20, 100).await {
                         Ok(captures) => {
-                            let cap = match find_mirror_capture(&captures) {
-                                Some(c) => c,
-                                None => {
-                                    return TestResult::failed(
-                                        start.elapsed(),
-                                        format!(
-                                            "No mirror capture found (x-mirror: true); {} total capture(s)",
-                                            captures.len()
-                                        ),
-                                    );
-                                }
+                            let Some(cap) = find_mirror_capture(&captures) else {
+                                return TestResult::failed(
+                                    start.elapsed(),
+                                    format!(
+                                        "No mirror capture found (x-mirror: true); {} total capture(s)",
+                                        captures.len()
+                                    ),
+                                );
                             };
                             let has_mirror_hdr = cap["headers"]["x-mirror"]
                                 .as_str()
@@ -305,14 +302,11 @@ impl RequestMirrorTestSuite {
 
                     match poll_mirror_received(&ctx, &trace_id, 20, 100).await {
                         Ok(captures) => {
-                            let cap = match find_mirror_capture(&captures) {
-                                Some(c) => c,
-                                None => {
-                                    return TestResult::failed(
-                                        start.elapsed(),
-                                        "No mirror capture found (x-mirror: true)".to_string(),
-                                    );
-                                }
+                            let Some(cap) = find_mirror_capture(&captures) else {
+                                return TestResult::failed(
+                                    start.elapsed(),
+                                    "No mirror capture found (x-mirror: true)".to_string(),
+                                );
                             };
                             let headers = &cap["headers"];
                             let has_connection = !headers["connection"].is_null();
@@ -694,14 +688,11 @@ impl RequestMirrorTestSuite {
                     // via the received headers having the trace_id (meaning request arrived)
                     match poll_mirror_received(&ctx, &trace_id, 20, 100).await {
                         Ok(captures) => {
-                            let cap = match find_mirror_capture(&captures) {
-                                Some(c) => c,
-                                None => {
-                                    return TestResult::failed(
-                                        start.elapsed(),
-                                        "No mirror capture found (x-mirror: true)".to_string(),
-                                    );
-                                }
+                            let Some(cap) = find_mirror_capture(&captures) else {
+                                return TestResult::failed(
+                                    start.elapsed(),
+                                    "No mirror capture found (x-mirror: true)".to_string(),
+                                );
                             };
                             let x_mirror = cap["headers"]["x-mirror"].as_str().unwrap_or("");
                             if x_mirror != "true" {
@@ -748,14 +739,11 @@ impl RequestMirrorTestSuite {
 
                     match poll_mirror_received(&ctx, &trace_id, 20, 100).await {
                         Ok(captures) => {
-                            let cap = match find_mirror_capture(&captures) {
-                                Some(c) => c,
-                                None => {
-                                    return TestResult::failed(
-                                        start.elapsed(),
-                                        "No mirror capture found (x-mirror: true)".to_string(),
-                                    );
-                                }
+                            let Some(cap) = find_mirror_capture(&captures) else {
+                                return TestResult::failed(
+                                    start.elapsed(),
+                                    "No mirror capture found (x-mirror: true)".to_string(),
+                                );
                             };
                             let headers = &cap["headers"];
 

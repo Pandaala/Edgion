@@ -110,19 +110,16 @@ pub fn resolve_ca_certificate_refs(
 
         // Determine the effective namespace for this ref.
         // ca_ref.namespace takes priority; falls back to owner_ns.
-        let effective_ns = match ca_ref.namespace.as_deref().or(owner_ns) {
-            Some(ns) => ns,
-            None => {
-                // Cluster-scoped owner (owner_ns = None) and no explicit namespace
-                // on the ref: we cannot resolve — skip and log.
-                tracing::info!(
-                    resource = %resource_ref.key(),
-                    ref_name = %ca_ref.name,
-                    kind = %ca_ref.kind,
-                    "CA ref has no namespace and owner is cluster-scoped; skipping"
-                );
-                continue;
-            }
+        let Some(effective_ns) = ca_ref.namespace.as_deref().or(owner_ns) else {
+            // Cluster-scoped owner (owner_ns = None) and no explicit namespace
+            // on the ref: we cannot resolve — skip and log.
+            tracing::info!(
+                resource = %resource_ref.key(),
+                ref_name = %ca_ref.name,
+                kind = %ca_ref.kind,
+                "CA ref has no namespace and owner is cluster-scoped; skipping"
+            );
+            continue;
         };
 
         // Register with SecretRefManager so the owner is requeued when the

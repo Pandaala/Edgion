@@ -52,17 +52,14 @@ impl HostnameIntersectionStatusTestSuite {
 
                     match helpers::fetch_resource_status(&ctx, "Gateway", GATEWAY_NAMESPACE, GATEWAY_NAME).await {
                         Ok(gateway) => {
-                            let listeners = match gateway["status"]["listeners"].as_array() {
-                                Some(l) => l,
-                                None => {
-                                    return TestResult::failed(
-                                        start.elapsed(),
-                                        format!(
-                                            "No listeners in Gateway status. Full status: {}",
-                                            serde_json::to_string_pretty(&gateway["status"]).unwrap_or_default()
-                                        ),
-                                    );
-                                }
+                            let Some(listeners) = gateway["status"]["listeners"].as_array() else {
+                                return TestResult::failed(
+                                    start.elapsed(),
+                                    format!(
+                                        "No listeners in Gateway status. Full status: {}",
+                                        serde_json::to_string_pretty(&gateway["status"]).unwrap_or_default()
+                                    ),
+                                );
                             };
 
                             let expected: &[(&str, i64)] = &[("listener-1", 2), ("listener-2", 1), ("listener-3", 1)];
@@ -118,17 +115,14 @@ impl HostnameIntersectionStatusTestSuite {
 
                     match helpers::fetch_resource_status(&ctx, "Gateway", GATEWAY_NAMESPACE, GATEWAY_NAME).await {
                         Ok(gateway) => {
-                            let listeners = match gateway["status"]["listeners"].as_array() {
-                                Some(l) => l,
-                                None => {
-                                    return TestResult::failed(
-                                        start.elapsed(),
-                                        format!(
-                                            "No listeners in Gateway status. Full status: {}",
-                                            serde_json::to_string_pretty(&gateway["status"]).unwrap_or_default()
-                                        ),
-                                    );
-                                }
+                            let Some(listeners) = gateway["status"]["listeners"].as_array() else {
+                                return TestResult::failed(
+                                    start.elapsed(),
+                                    format!(
+                                        "No listeners in Gateway status. Full status: {}",
+                                        serde_json::to_string_pretty(&gateway["status"]).unwrap_or_default()
+                                    ),
+                                );
                             };
 
                             let count = listeners.len();
@@ -164,14 +158,8 @@ impl HostnameIntersectionStatusTestSuite {
 
                     match helpers::fetch_resource_status(&ctx, "Gateway", GATEWAY_NAMESPACE, GATEWAY_NAME).await {
                         Ok(gateway) => {
-                            let listeners = match gateway["status"]["listeners"].as_array() {
-                                Some(l) => l,
-                                None => {
-                                    return TestResult::failed(
-                                        start.elapsed(),
-                                        "No listeners in Gateway status".into(),
-                                    );
-                                }
+                            let Some(listeners) = gateway["status"]["listeners"].as_array() else {
+                                return TestResult::failed(start.elapsed(), "No listeners in Gateway status".into());
                             };
 
                             let mut errors = Vec::new();
@@ -220,17 +208,14 @@ impl HostnameIntersectionStatusTestSuite {
 
                     match helpers::fetch_resource_status(&ctx, "Gateway", GATEWAY_NAMESPACE, GATEWAY_NAME).await {
                         Ok(gateway) => {
-                            let conditions = match gateway["status"]["conditions"].as_array() {
-                                Some(c) => c,
-                                None => {
-                                    return TestResult::failed(
-                                        start.elapsed(),
-                                        format!(
-                                            "No conditions in Gateway status. Full status: {}",
-                                            serde_json::to_string_pretty(&gateway["status"]).unwrap_or_default()
-                                        ),
-                                    );
-                                }
+                            let Some(conditions) = gateway["status"]["conditions"].as_array() else {
+                                return TestResult::failed(
+                                    start.elapsed(),
+                                    format!(
+                                        "No conditions in Gateway status. Full status: {}",
+                                        serde_json::to_string_pretty(&gateway["status"]).unwrap_or_default()
+                                    ),
+                                );
                             };
 
                             let required = [("Accepted", "True"), ("Programmed", "True")];
@@ -277,14 +262,8 @@ impl HostnameIntersectionStatusTestSuite {
 
                     match helpers::fetch_resource_status(&ctx, "Gateway", GATEWAY_NAMESPACE, GATEWAY_NAME).await {
                         Ok(gateway) => {
-                            let listeners = match gateway["status"]["listeners"].as_array() {
-                                Some(l) => l,
-                                None => {
-                                    return TestResult::failed(
-                                        start.elapsed(),
-                                        "No listeners in Gateway status".into(),
-                                    );
-                                }
+                            let Some(listeners) = gateway["status"]["listeners"].as_array() else {
+                                return TestResult::failed(start.elapsed(), "No listeners in Gateway status".into());
                             };
 
                             let required_conditions = [("Accepted", "True"), ("ResolvedRefs", "True")];

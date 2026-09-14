@@ -163,29 +163,23 @@ impl CsrfTestSuite {
                         );
                     }
 
-                    let set_cookie = match get_resp
+                    let Some(set_cookie) = get_resp
                         .headers()
                         .get("set-cookie")
                         .and_then(|v| v.to_str().ok())
                         .map(String::from)
-                    {
-                        Some(v) => v,
-                        None => {
-                            return TestResult::failed(start.elapsed(), "GET response missing Set-Cookie header".into())
-                        }
+                    else {
+                        return TestResult::failed(start.elapsed(), "GET response missing Set-Cookie header".into());
                     };
 
-                    let token = match extract_csrf_token(&set_cookie, TOKEN_HEADER) {
-                        Some(t) => t,
-                        None => {
-                            return TestResult::failed(
-                                start.elapsed(),
-                                format!(
-                                    "Could not extract {} token from Set-Cookie: {}",
-                                    TOKEN_HEADER, set_cookie
-                                ),
-                            )
-                        }
+                    let Some(token) = extract_csrf_token(&set_cookie, TOKEN_HEADER) else {
+                        return TestResult::failed(
+                            start.elapsed(),
+                            format!(
+                                "Could not extract {} token from Set-Cookie: {}",
+                                TOKEN_HEADER, set_cookie
+                            ),
+                        );
                     };
 
                     // Step 2: POST with token in both header and cookie

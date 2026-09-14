@@ -162,7 +162,7 @@ mod tests {
         // -- server leaf --
         let san_name = "edgion-controller.ns1.svc".to_string();
         let server = ca
-            .sign_server(&[san_name.clone()], ::time::Duration::days(365))
+            .sign_server(std::slice::from_ref(&san_name), ::time::Duration::days(365))
             .unwrap();
         let sc = parse(&server.cert_pem);
 

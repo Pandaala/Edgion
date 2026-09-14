@@ -28,7 +28,7 @@ pub fn get_gateway_class_by_name(name: &str) -> Option<GatewayClass> {
 #[cfg(test)]
 pub fn list_gateway_classes() -> Vec<GatewayClass> {
     let mut items: Vec<GatewayClass> = GATEWAY_CLASS_STORE.read().values().cloned().collect();
-    items.sort_by(|a, b| a.name_any().cmp(&b.name_any()));
+    items.sort_by_key(|a| a.name_any());
     items
 }
 

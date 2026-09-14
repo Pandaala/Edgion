@@ -191,14 +191,11 @@ impl StreamPluginsTestSuite {
                             return TestResult::failed(start.elapsed(), format!("Failed to load ports.json: {}", e));
                         }
                     };
-                    let bare_port = match bare_port {
-                        Some(p) => p,
-                        None => {
-                            return TestResult::failed(
-                                start.elapsed(),
-                                "ports.json Gateway/StreamPlugins.tcp_bare is not set".to_string(),
-                            );
-                        }
+                    let Some(bare_port) = bare_port else {
+                        return TestResult::failed(
+                            start.elapsed(),
+                            "ports.json Gateway/StreamPlugins.tcp_bare is not set".to_string(),
+                        );
                     };
                     let addr = format!("{}:{}", ctx.target_host, bare_port);
                     let test_data = b"Hello BareName StreamPlugins";

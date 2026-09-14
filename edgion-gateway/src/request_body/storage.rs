@@ -627,6 +627,10 @@ impl BodyStorageView {
         self.snapshot().map(|(snapshot, _)| snapshot.len)
     }
 
+    pub fn is_empty(&self) -> Result<bool, BodyReadError> {
+        self.len().map(|len| len == 0)
+    }
+
     /// Capture an owned reader over the current immutable logical snapshot.
     ///
     /// Creating the reader does not materialize a disk-backed source. Later

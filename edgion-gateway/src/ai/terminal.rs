@@ -244,14 +244,12 @@ mod tests {
             stream_kind: ResponseStreamKind::None,
         };
         assert!(!non_sse.allows_sse());
-        for status_allows_body in [false] {
-            let bodyless_status = FinalResponseEligibility {
-                method_allows_body: true,
-                status_allows_body,
-                stream_kind: ResponseStreamKind::Sse,
-            };
-            assert!(!bodyless_status.allows_sse());
-        }
+        let bodyless_status = FinalResponseEligibility {
+            method_allows_body: true,
+            status_allows_body: false,
+            stream_kind: ResponseStreamKind::Sse,
+        };
+        assert!(!bodyless_status.allows_sse());
     }
 
     #[test]

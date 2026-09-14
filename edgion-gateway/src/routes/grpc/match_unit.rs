@@ -32,12 +32,12 @@ pub struct CompiledGrpcBackend {
 /// One immutable gRPC backend slot pinned to its compiled route generation.
 #[derive(Clone)]
 pub struct GrpcBackendHandle {
-    generation: Arc<Vec<CompiledGrpcBackend>>,
+    generation: Arc<[CompiledGrpcBackend]>,
     index: usize,
 }
 
 impl GrpcBackendHandle {
-    pub(crate) fn new(generation: Arc<Vec<CompiledGrpcBackend>>, index: usize) -> Option<Self> {
+    pub(crate) fn new(generation: Arc<[CompiledGrpcBackend]>, index: usize) -> Option<Self> {
         if generation.get(index).is_some() {
             Some(Self { generation, index })
         } else {
@@ -160,7 +160,7 @@ pub struct GrpcRuleRuntime {
     /// Rule-level compiled plugin chain.
     pub plugin_runtime: Arc<PluginRuntime>,
     /// Compiled backends (each with its own plugin runtime).
-    pub backends: Arc<Vec<CompiledGrpcBackend>>,
+    pub backends: Arc<[CompiledGrpcBackend]>,
 }
 
 /// Pre-computed match specificity for GRPCRoute Gateway API precedence ordering.
@@ -377,7 +377,7 @@ pub struct GrpcRouteRuleUnit {
     /// including weight-0 refs the WRR selector filters out. Session
     /// persistence resolves an established session across this list before
     /// weighted selection (GEP-1619: weights govern only new sessions).
-    pub backends: Arc<Vec<CompiledGrpcBackend>>,
+    pub backends: Arc<[CompiledGrpcBackend]>,
 }
 
 impl GrpcRouteRuleUnit {
@@ -402,7 +402,7 @@ impl GrpcRouteRuleUnit {
         });
         GrpcRuleRuntime {
             plugin_runtime,
-            backends: Arc::new(backends),
+            backends: Arc::from(backends),
         }
     }
 
@@ -573,7 +573,7 @@ mod backend_handle_tests {
         )
     }
 
-    fn compile_one_backend(schema: GRPCBackendRef, route_namespace: &str) -> Arc<Vec<CompiledGrpcBackend>> {
+    fn compile_one_backend(schema: GRPCBackendRef, route_namespace: &str) -> Arc<[CompiledGrpcBackend]> {
         GrpcRouteRuleUnit::compile_grpc_rule(
             &GRPCRouteRule {
                 name: None,
@@ -650,13 +650,13 @@ mod backend_handle_tests {
     #[test]
     fn handle_projects_exact_duplicate_slot_and_pins_generation_runtime() {
         let old_runtime = Arc::new(PluginRuntime::new());
-        let generation = Arc::new(vec![
+        let generation = Arc::from(vec![
             compiled("api", 0, Arc::new(PluginRuntime::new())),
             compiled("api", 1, Arc::clone(&old_runtime)),
         ]);
         let logical = GrpcBackendHandle::new(Arc::clone(&generation), 1).unwrap();
         let selected = SelectedGrpcBackend::new(logical, BackendTlsPolicyLookup::Absent);
-        let replacement = Arc::new(vec![compiled("new", 1, Arc::new(PluginRuntime::new()))]);
+        let replacement = Arc::from(vec![compiled("new", 1, Arc::new(PluginRuntime::new()))]);
         drop(generation);
 
         assert_eq!(selected.slot(), 1);
@@ -670,7 +670,7 @@ mod backend_handle_tests {
 
     #[test]
     fn handle_rejects_out_of_range_index() {
-        let generation = Arc::new(vec![compiled("api", 1, Arc::new(PluginRuntime::new()))]);
+        let generation = Arc::from(vec![compiled("api", 1, Arc::new(PluginRuntime::new()))]);
         assert!(GrpcBackendHandle::new(generation, 1).is_none());
     }
 
@@ -828,7 +828,7 @@ mod backend_handle_tests {
     #[test]
     fn selected_backend_pins_tls_policy_and_selection_is_allocation_free() {
         let runtime = Arc::new(PluginRuntime::new());
-        let generation = Arc::new(vec![compiled("api", 1, Arc::clone(&runtime))]);
+        let generation = Arc::from(vec![compiled("api", 1, Arc::clone(&runtime))]);
         let old_policy = tls_policy("old", "old.example.com");
         let current_policy = tls_policy("new", "new.example.com");
 

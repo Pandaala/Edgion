@@ -72,6 +72,7 @@ struct ParsedJwe<'a> {
     tag_segment: &'a str,
 }
 
+#[allow(clippy::large_enum_variant)]
 enum PreparedDecryptor {
     Ready(Aes256Gcm),
     Missing,

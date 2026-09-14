@@ -66,24 +66,18 @@ impl WasmPluginTestSuite {
 
                             match resp.json::<Value>().await {
                                 Ok(body) => {
-                                    let headers = match body["headers"].as_object() {
-                                        Some(h) => h,
-                                        None => {
-                                            return TestResult::failed(
-                                                start.elapsed(),
-                                                "Response body missing 'headers' object".to_string(),
-                                            )
-                                        }
+                                    let Some(headers) = body["headers"].as_object() else {
+                                        return TestResult::failed(
+                                            start.elapsed(),
+                                            "Response body missing 'headers' object".to_string(),
+                                        );
                                     };
 
-                                    let got = match headers.get("x-wasm-added").and_then(|v| v.as_str()) {
-                                        Some(v) => v,
-                                        None => {
-                                            return TestResult::failed(
-                                                start.elapsed(),
-                                                "x-wasm-added header not found in upstream echo".to_string(),
-                                            )
-                                        }
+                                    let Some(got) = headers.get("x-wasm-added").and_then(|v| v.as_str()) else {
+                                        return TestResult::failed(
+                                            start.elapsed(),
+                                            "x-wasm-added header not found in upstream echo".to_string(),
+                                        );
                                     };
 
                                     if got != "yes" {
@@ -247,14 +241,11 @@ impl WasmPluginTestSuite {
 
                             match resp.json::<Value>().await {
                                 Ok(body) => {
-                                    let headers = match body["headers"].as_object() {
-                                        Some(h) => h,
-                                        None => {
-                                            return TestResult::failed(
-                                                start.elapsed(),
-                                                "Recovery response body missing 'headers' object".to_string(),
-                                            )
-                                        }
+                                    let Some(headers) = body["headers"].as_object() else {
+                                        return TestResult::failed(
+                                            start.elapsed(),
+                                            "Recovery response body missing 'headers' object".to_string(),
+                                        );
                                     };
 
                                     match headers.get("x-wasm-added").and_then(|v| v.as_str()) {

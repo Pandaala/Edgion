@@ -221,9 +221,8 @@ fn test_vm_rejects_malformed_json_select_plans_without_validator() {
             source: None,
             source_map: None,
         };
-        let error = match Vm::new(script, VmLimits::default()) {
-            Ok(_) => panic!("malformed JSON select plan unexpectedly initialized"),
-            Err(error) => error,
+        let Err(error) = Vm::new(script, VmLimits::default()) else {
+            panic!("malformed JSON select plan unexpectedly initialized");
         };
         assert!(
             error.to_string().contains(expected),

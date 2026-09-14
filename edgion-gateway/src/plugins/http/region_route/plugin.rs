@@ -338,12 +338,9 @@ impl RegionRoute {
         }
 
         // Compute hash via hash_calc.
-        let calc = match self.base.hash_calc.as_ref() {
-            Some(c) => c,
-            None => {
-                log.push("no_hash_calc, pass");
-                return None;
-            }
+        let Some(calc) = self.base.hash_calc.as_ref() else {
+            log.push("no_hash_calc, pass");
+            return None;
         };
 
         if self.base.key_get.is_empty() {
@@ -351,12 +348,9 @@ impl RegionRoute {
             return None;
         }
 
-        let (key, src) = match self.extract_first(session, &self.base.key_get) {
-            Some(v) => v,
-            None => {
-                log.push("key_missing, pass");
-                return None;
-            }
+        let Some((key, src)) = self.extract_first(session, &self.base.key_get) else {
+            log.push("key_missing, pass");
+            return None;
         };
 
         let hash_val = compute_hash(&key, &calc.algorithm, modulo);
@@ -423,9 +417,8 @@ impl RequestFilter for RegionRoute {
             match rule {
                 // ── RouteByDirectRegion ────────────────────────────────────────
                 RouteRule::RouteByDirectRegion { key_from } => {
-                    let (name, src) = match self.extract_first(session, key_from) {
-                        Some(v) => v,
-                        None => continue,
+                    let Some((name, src)) = self.extract_first(session, key_from) else {
+                        continue;
                     };
                     match Self::lookup_by_name(&effective_regions, &name) {
                         Some((idx, region)) => {
@@ -446,9 +439,8 @@ impl RequestFilter for RegionRoute {
                         log.push("conf_match: no key_get, skip");
                         continue;
                     }
-                    let (value, src) = match self.extract_first(session, &self.base.key_get) {
-                        Some(v) => v,
-                        None => continue,
+                    let Some((value, src)) = self.extract_first(session, &self.base.key_get) else {
+                        continue;
                     };
 
                     // Use cluster override map if set, non-empty, and not bypassed.

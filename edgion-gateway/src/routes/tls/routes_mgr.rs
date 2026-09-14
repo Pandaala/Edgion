@@ -325,7 +325,7 @@ mod tests {
         drive_rebuild_all(&managers, vec![listener_a.clone(), listener_b.clone()]);
 
         assert!(
-            !mgr_b.load_route_table().match_route("test.example.com").is_some(),
+            mgr_b.load_route_table().match_route("test.example.com").is_none(),
             "active-but-no-routes TLS listener should be cleared"
         );
         assert!(managers.by_listener.contains_key(&listener_a));
@@ -369,7 +369,7 @@ mod tests {
         drive_rebuild_affected(&managers, &affected, vec![listener.clone()]);
 
         assert!(
-            !mgr.load_route_table().match_route("test.example.com").is_some(),
+            mgr.load_route_table().match_route("test.example.com").is_none(),
             "affected TLS listener with no routes should be cleared"
         );
         assert!(managers.by_listener.contains_key(&listener));

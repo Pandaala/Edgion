@@ -125,7 +125,7 @@ fn test_resp_header_names_empty() {
         }
     "#;
     let mut session = MockPluginSession::new();
-    session.expect_response_header_names().returning(|| vec![]);
+    session.expect_response_header_names().returning(Vec::new);
     session
         .expect_set_request_header()
         .withf(|n, v| n == "X-Empty" && v == "true")

@@ -49,19 +49,16 @@ pub fn resolve_effective_hostnames(
         }
 
         let gw_ns = pr.namespace.as_deref().unwrap_or(route_ns);
-        let gateway = match super::route_utils::lookup_gateway(gw_ns, &pr.name, runtime) {
-            Some(gw) => gw,
-            None => {
-                if let Some(hs) = route_hostnames {
-                    for h in hs {
-                        if seen.insert(h.clone()) {
-                            all_effective.push(h.clone());
-                        }
+        let Some(gateway) = super::route_utils::lookup_gateway(gw_ns, &pr.name, runtime) else {
+            if let Some(hs) = route_hostnames {
+                for h in hs {
+                    if seen.insert(h.clone()) {
+                        all_effective.push(h.clone());
                     }
                 }
-                actions.push("gateway-pending".to_string());
-                continue;
             }
+            actions.push("gateway-pending".to_string());
+            continue;
         };
 
         let matching_listeners = collect_matching_listeners(&gateway, pr);
@@ -166,9 +163,8 @@ fn resolve_for_listeners(
 /// `None` means the listener has no hostname constraint (catch-all).
 /// This preserves catch-all listener information that was previously lost.
 fn collect_matching_listeners(gateway: &Gateway, pr: &ParentReference) -> Vec<Option<String>> {
-    let listeners = match &gateway.spec.listeners {
-        Some(ls) => ls,
-        None => return Vec::new(),
+    let Some(listeners) = &gateway.spec.listeners else {
+        return Vec::new();
     };
 
     let mut seen: HashSet<Option<String>> = HashSet::new();

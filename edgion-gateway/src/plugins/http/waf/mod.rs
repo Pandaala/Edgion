@@ -725,7 +725,7 @@ mod tests {
             ),
             WafMode::On,
         );
-        let slot = Arc::new(std::sync::Mutex::new(None));
+        let slot = Arc::new(parking_lot::Mutex::new(None));
         let mut session = MockPluginSession::new();
         expect_request_head(&mut session, "/submit");
         let mut ctx = EdgionHttpContext::new();
@@ -739,7 +739,7 @@ mod tests {
             .expect_install_waf_transaction()
             .times(2)
             .returning(move |_, transaction| {
-                let mut guard = install_slot.lock().expect("transaction slot lock");
+                let mut guard = install_slot.lock();
                 if guard.is_some() {
                     return false;
                 }
@@ -750,8 +750,8 @@ mod tests {
         session
             .expect_take_waf_transaction()
             .times(2)
-            .returning(move |_| take_slot.lock().expect("transaction slot lock").take());
-        session.expect_response_headers_bytes().return_once(|| Vec::new());
+            .returning(move |_| take_slot.lock().take());
+        session.expect_response_headers_bytes().return_once(Vec::new);
         session.expect_get_response_status().return_const(Some(201_u16));
 
         let mut request_log = PluginLog::new(NAME);
@@ -769,6 +769,6 @@ mod tests {
             UpstreamResponse::run_upstream_response(&plugin, &mut session, &mut response_log).await,
             PluginRunningResult::GoodNext
         );
-        assert!(slot.lock().expect("transaction slot lock").is_none());
+        assert!(slot.lock().is_none());
     }
 }

@@ -758,9 +758,8 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
         // Process all Listeners and resolve TLS certificates from global secret store
         if let Some(ref mut listeners) = g.spec.listeners {
             for listener in listeners.iter_mut() {
-                let tls_config = match &mut listener.tls {
-                    Some(tls) => tls,
-                    None => continue,
+                let Some(tls_config) = &mut listener.tls else {
+                    continue;
                 };
 
                 // Only Terminate mode needs certificate resolution; Passthrough proxies raw TLS.
@@ -1951,6 +1950,7 @@ fn update_gateway_condition(
 /// * `validation_errors` - Any validation errors from parsing
 /// * `generation` - Resource generation for condition tracking
 /// * `is_conflicted` - Whether this listener has port conflicts
+#[allow(clippy::too_many_arguments)]
 fn update_listener_conditions(
     ls: &mut ListenerStatus,
     validation_errors: &[String],
@@ -3814,9 +3814,8 @@ mod tests {
             allowed_routes: None,
         }]);
 
-        let parsed = match GatewayHandler::new(None, None).parse(gateway, &ctx).await {
-            ProcessResult::Continue(gateway) => gateway,
-            _ => panic!("gateway parse unexpectedly stopped"),
+        let ProcessResult::Continue(parsed) = GatewayHandler::new(None, None).parse(gateway, &ctx).await else {
+            panic!("gateway parse unexpectedly stopped")
         };
         let tls = parsed.spec.listeners.unwrap()[0].tls.as_ref().unwrap().clone();
         assert!(tls.frontend_validation.is_none());

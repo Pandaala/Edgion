@@ -189,9 +189,9 @@ where
     Ok(())
 }
 
-fn decode_list_payload<T: ResourceMeta>(data: &[u8]) -> Result<Vec<T>, &'static str>
+fn decode_list_payload<T>(data: &[u8]) -> Result<Vec<T>, &'static str>
 where
-    T: serde::de::DeserializeOwned,
+    T: ResourceMeta + serde::de::DeserializeOwned,
 {
     if !is_edgion_backend::<T>() {
         return serde_json::from_slice(data).map_err(|_| "list payload does not match the resource array schema");
@@ -308,13 +308,10 @@ fn apply_backend_watch_payload<T>(
 where
     T: ResourceMeta + Resource + Clone + Send + 'static + serde::de::DeserializeOwned,
 {
-    let events = match serde_json::from_str::<Vec<serde_json::Value>>(data) {
-        Ok(events) => events,
-        Err(_) => {
-            record_config_event_parse_error(T::kind_name());
-            clear_backend_cache(cache_data, response_sv);
-            return BackendWatchBatchOutcome::Unsafe;
-        }
+    let Ok(events) = serde_json::from_str::<Vec<serde_json::Value>>(data) else {
+        record_config_event_parse_error(T::kind_name());
+        clear_backend_cache(cache_data, response_sv);
+        return BackendWatchBatchOutcome::Unsafe;
     };
     apply_backend_watch_batch(cache_data, events, response_sv)
 }
@@ -591,8 +588,8 @@ where
                     let request = tonic::Request::new(edgion_common::conf_sync::proto::WatchRequest {
                         key: String::new(),
                         kind: T::kind_name().to_string(),
-                        client_id: client_id.as_ref().clone(),
-                        client_name: client_name.as_ref().clone(),
+                        client_id: client_id.to_string(),
+                        client_name: client_name.to_string(),
                         from_version,
                         expected_server_id: current_server_id.clone(),
                     });

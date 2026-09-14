@@ -125,6 +125,7 @@ impl GuardrailResponseProcessor {
             .ok_or(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn new(
         client: Arc<ManagedOutboundClient>,
         permits: Arc<Semaphore>,
@@ -495,14 +496,11 @@ impl GuardrailResponseProcessor {
                     Ok(()) => break,
                     Err((_error, returned)) => {
                         record = returned;
-                        let stats = match self.window.stats() {
-                            Ok(stats) => stats,
-                            Err(_) => {
-                                records.push_front(record);
-                                self.fail_dependency(&mut output, records, sink, session, "semantic-source");
-                                *chunk = (!output.is_empty()).then(|| output.freeze());
-                                return;
-                            }
+                        let Ok(stats) = self.window.stats() else {
+                            records.push_front(record);
+                            self.fail_dependency(&mut output, records, sink, session, "semantic-source");
+                            *chunk = (!output.is_empty()).then(|| output.freeze());
+                            return;
                         };
                         let has_raw = stats.raw_bytes != 0;
                         if !has_raw {
@@ -591,13 +589,10 @@ impl GuardrailResponseProcessor {
                     }
                 }
             }
-            let stats = match self.window.stats() {
-                Ok(stats) => stats,
-                Err(_) => {
-                    self.fail_dependency(&mut output, records, sink, session, "semantic-source");
-                    *chunk = (!output.is_empty()).then(|| output.freeze());
-                    return;
-                }
+            let Ok(stats) = self.window.stats() else {
+                self.fail_dependency(&mut output, records, sink, session, "semantic-source");
+                *chunk = (!output.is_empty()).then(|| output.freeze());
+                return;
             };
             let should_decide = stats.current_semantic_bytes >= self.window_bytes;
             if should_decide {
@@ -670,13 +665,10 @@ impl GuardrailResponseProcessor {
             }
         }
         if end_of_stream {
-            let stats = match self.window.stats() {
-                Ok(stats) => stats,
-                Err(_) => {
-                    self.fail_dependency(&mut output, VecDeque::new(), sink, session, "semantic-source");
-                    *chunk = (!output.is_empty()).then(|| output.freeze());
-                    return;
-                }
+            let Ok(stats) = self.window.stats() else {
+                self.fail_dependency(&mut output, VecDeque::new(), sink, session, "semantic-source");
+                *chunk = (!output.is_empty()).then(|| output.freeze());
+                return;
             };
             let semantic = stats.current_semantic_bytes != 0;
             let resolved = if semantic {

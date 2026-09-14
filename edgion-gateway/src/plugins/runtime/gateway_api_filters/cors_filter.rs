@@ -203,9 +203,8 @@ impl RequestFilter for GapiCorsFilter {
     }
 
     async fn run_request(&self, session: &mut dyn PluginSession, plugin_log: &mut PluginLog) -> PluginRunningResult {
-        let origin = match session.header_value("origin") {
-            Some(o) => o,
-            None => return PluginRunningResult::GoodNext,
+        let Some(origin) = session.header_value("origin") else {
+            return PluginRunningResult::GoodNext;
         };
 
         if !self.is_origin_allowed(&origin) {
@@ -254,9 +253,8 @@ impl UpstreamResponseFilter for GapiCorsFilter {
         session: &mut dyn PluginSession,
         plugin_log: &mut PluginLog,
     ) -> PluginRunningResult {
-        let origin = match session.header_value("origin") {
-            Some(o) => o,
-            None => return PluginRunningResult::GoodNext,
+        let Some(origin) = session.header_value("origin") else {
+            return PluginRunningResult::GoodNext;
         };
 
         if !self.is_origin_allowed(&origin) {

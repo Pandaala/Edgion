@@ -507,26 +507,23 @@ async fn handle_center_message(
                 "HttpProxyRequest received"
             );
             // Limit concurrent proxy tasks to prevent Center from overwhelming Controller.
-            let permit = match proxy_semaphore.clone().try_acquire_owned() {
-                Ok(p) => p,
-                Err(_) => {
-                    tracing::warn!(
-                        component = "fed_client",
-                        request_id = %proxy_req.request_id,
-                        "HttpProxy rejected: too many concurrent requests"
-                    );
-                    let _ = tx
-                        .send(ControllerMessage {
-                            payload: Some(CtrlPayload::HttpProxyResponse(HttpProxyResponse {
-                                request_id: proxy_req.request_id,
-                                status_code: 429,
-                                headers: Default::default(),
-                                body: b"Too many concurrent proxy requests".to_vec(),
-                            })),
-                        })
-                        .await;
-                    return Ok(());
-                }
+            let Ok(permit) = proxy_semaphore.clone().try_acquire_owned() else {
+                tracing::warn!(
+                    component = "fed_client",
+                    request_id = %proxy_req.request_id,
+                    "HttpProxy rejected: too many concurrent requests"
+                );
+                let _ = tx
+                    .send(ControllerMessage {
+                        payload: Some(CtrlPayload::HttpProxyResponse(HttpProxyResponse {
+                            request_id: proxy_req.request_id,
+                            status_code: 429,
+                            headers: Default::default(),
+                            body: b"Too many concurrent proxy requests".to_vec(),
+                        })),
+                    })
+                    .await;
+                return Ok(());
             };
             let tx = tx.clone();
             // Spawn as a separate task so proxy requests don't block Ping/Pong handling
@@ -738,24 +735,21 @@ async fn handle_center_message(
             // The ready gate in run() ensures CSS is ready before first connection.
             // Center-side backoff (3s) handles transient unavailability during reload.
             // We must NOT block here -- this would stall Ping/Pong and cause heartbeat timeout.
-            let css = match conf_mgr.config_sync_server() {
-                Some(css) => css,
-                None => {
-                    tracing::info!(
-                        component = "fed_client",
-                        request_id = %req.request_id,
-                        "ConfigSyncServer not ready, returning NotReady (Center will retry with backoff)"
-                    );
-                    let err_msg = ControllerMessage {
-                        payload: Some(CtrlPayload::WatchEventResponse(FedWatchEventResponse {
-                            request_id: req.request_id,
-                            error: "NotReady".to_string(),
-                            ..Default::default()
-                        })),
-                    };
-                    let _ = tx.send(err_msg).await;
-                    return Ok(());
-                }
+            let Some(css) = conf_mgr.config_sync_server() else {
+                tracing::info!(
+                    component = "fed_client",
+                    request_id = %req.request_id,
+                    "ConfigSyncServer not ready, returning NotReady (Center will retry with backoff)"
+                );
+                let err_msg = ControllerMessage {
+                    payload: Some(CtrlPayload::WatchEventResponse(FedWatchEventResponse {
+                        request_id: req.request_id,
+                        error: "NotReady".to_string(),
+                        ..Default::default()
+                    })),
+                };
+                let _ = tx.send(err_msg).await;
+                return Ok(());
             };
 
             // Step 1: if from_version == 0, send list first

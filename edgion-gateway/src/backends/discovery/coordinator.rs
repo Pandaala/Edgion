@@ -166,7 +166,7 @@ impl AvailableServiceProjection {
     /// Number/name aliases of one section share the same identity and are
     /// returned once. Different sections that share a socket stay separate.
     /// Invalid sections contribute nothing.
-    pub fn canonical_probe_backends(&self) -> Arc<Vec<Arc<LbBackend>>> {
+    pub fn canonical_probe_backends(&self) -> Arc<[Arc<LbBackend>]> {
         let mut seen = HashSet::new();
         let mut backends = Vec::new();
         for section in unique_resolved_sections(&self.sections) {
@@ -179,7 +179,7 @@ impl AvailableServiceProjection {
                 }
             }
         }
-        Arc::new(backends)
+        backends.into()
     }
 }
 
@@ -1546,7 +1546,11 @@ fn build_section(
         .cloned()
         .collect::<Vec<_>>()
         .into();
-    let ready_backends = Arc::new(ready_slots.iter().map(|slot| Arc::clone(&slot.backend)).collect());
+    let ready_backends = ready_slots
+        .iter()
+        .map(|slot| Arc::clone(&slot.backend))
+        .collect::<Vec<_>>()
+        .into();
     ServiceSectionOutcome::Resolved(Arc::new(ResolvedServiceSection {
         identity: identity.clone(),
         direct_endpoint_ports: compile_direct_endpoint_ports(&all_slots),
@@ -1668,6 +1672,7 @@ fn projection_membership_identity(sections: &BTreeMap<ServiceSectionKey, Arc<Ser
     u64::from_be_bytes(hash[..8].try_into().expect("SHA-256 digest is 32 bytes"))
 }
 
+#[allow(clippy::type_complexity)]
 fn identified_backends_for_reuse(
     old: Option<&ServicePublishedState>,
 ) -> (HashMap<[u8; 32], Arc<LbBackend>>, HashMap<SocketAddr, Arc<LbBackend>>) {
@@ -1735,7 +1740,11 @@ fn materialize_section(
         .cloned()
         .collect::<Vec<_>>()
         .into();
-    let ready_backends = Arc::new(ready_slots.iter().map(|slot| Arc::clone(&slot.backend)).collect());
+    let ready_backends = ready_slots
+        .iter()
+        .map(|slot| Arc::clone(&slot.backend))
+        .collect::<Vec<_>>()
+        .into();
     Some(ResolvedServiceSection {
         identity: section.identity.clone(),
         direct_endpoint_ports: compile_direct_endpoint_ports(&all_slots),

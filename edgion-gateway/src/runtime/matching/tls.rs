@@ -66,7 +66,7 @@ pub struct GatewayTlsEntry {
     /// References to Secrets containing certificates
     pub certificate_refs: Vec<SecretObjectReference>,
     /// Exact identity-checked serving certificates compiled on matcher rebuild.
-    pub compiled_serving_certificates: Option<Arc<Vec<Arc<CompiledServingCertificate>>>>,
+    pub compiled_serving_certificates: Option<Arc<[Arc<CompiledServingCertificate>]>>,
     /// Immutable trust store compiled once when the matcher snapshot is built.
     pub compiled_frontend_ca_store: Option<Arc<X509Store>>,
     /// Immutable frontend client-auth decision compiled when the matcher
@@ -79,7 +79,7 @@ pub struct GatewayTlsEntry {
 /// matcher. The chain remains leaf-first and includes all intermediates.
 #[derive(Clone)]
 pub struct CompiledServingCertificate {
-    pub chain: Arc<Vec<X509>>,
+    pub chain: Arc<[X509]>,
     #[cfg(feature = "boringssl")]
     pub atomic_chain: Arc<CompiledBoringCertificateChain>,
     pub private_key: PKey<Private>,
@@ -126,6 +126,10 @@ impl CompiledBoringCertificateChain {
 
     pub fn len(&self) -> usize {
         self.buffers.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.buffers.is_empty()
     }
 }
 
@@ -211,9 +215,8 @@ fn compile_frontend_mtls(
     if resolved.len() != validation.ca_certificate_refs.len() {
         return compiled_reject("ca set incomplete");
     }
-    let mut store_builder = match X509StoreBuilder::new() {
-        Ok(builder) => builder,
-        Err(_) => return compiled_reject("ca store unavailable"),
+    let Ok(mut store_builder) = X509StoreBuilder::new() else {
+        return compiled_reject("ca store unavailable");
     };
     let mut aggregate_bytes = 0usize;
     let mut unique_certificates = HashSet::new();
@@ -242,9 +245,8 @@ fn compile_frontend_mtls(
             Some(total) if total <= edgion_common::tls_validation::MAX_CA_BUNDLE_BYTES_AGGREGATE => total,
             _ => return compiled_reject("ca aggregate bytes exceeded"),
         };
-        let bundle = match edgion_common::tls_validation::parse_canonical_ca_bundle(&pem.0) {
-            Ok(bundle) => bundle,
-            Err(_) => return compiled_reject("ca pem invalid"),
+        let Ok(bundle) = edgion_common::tls_validation::parse_canonical_ca_bundle(&pem.0) else {
+            return compiled_reject("ca pem invalid");
         };
         for der in bundle.certificates_der {
             if !unique_certificates.insert(der.clone()) {
@@ -253,9 +255,8 @@ fn compile_frontend_mtls(
             if unique_certificates.len() > edgion_common::tls_validation::MAX_CA_CERTIFICATES_AGGREGATE {
                 return compiled_reject("ca aggregate certificate count exceeded");
             }
-            let certificate = match X509::from_der(&der) {
-                Ok(certificate) => certificate,
-                Err(_) => return compiled_reject("ca der invalid"),
+            let Ok(certificate) = X509::from_der(&der) else {
+                return compiled_reject("ca der invalid");
             };
             if store_builder.add_cert(certificate).is_err() {
                 return compiled_reject("ca store invalid");
@@ -279,9 +280,9 @@ fn compile_serving_certificates(
     references: &[SecretObjectReference],
     outcomes: Option<&[ResolvedServingCertificateReference]>,
     gateway_namespace: &str,
-) -> Option<Arc<Vec<Arc<CompiledServingCertificate>>>> {
+) -> Option<Arc<[Arc<CompiledServingCertificate>]>> {
     if references.is_empty() {
-        return Some(Arc::new(Vec::new()));
+        return Some(Arc::from(Vec::new()));
     }
     if references.len() > edgion_common::tls_validation::MAX_SERVING_CERTIFICATE_REFS {
         return None;
@@ -335,7 +336,7 @@ fn compile_serving_certificates(
             return None;
         }
         certificates.push(Arc::new(CompiledServingCertificate {
-            chain: Arc::new(chain),
+            chain: Arc::from(chain),
             #[cfg(feature = "boringssl")]
             atomic_chain,
             key_type: private_key.id(),
@@ -344,7 +345,7 @@ fn compile_serving_certificates(
             leaf_not_after_unix: strict_chain.leaf_not_after_unix,
         }));
     }
-    Some(Arc::new(certificates))
+    Some(Arc::from(certificates))
 }
 
 /// Combined matcher data atomically swapped via `ArcSwap`.
@@ -494,9 +495,8 @@ impl GatewayTlsMatcher {
             let gateway_name = gateway.name_any();
 
             // Get listeners from Gateway spec
-            let listeners = match &gateway.spec.listeners {
-                Some(listeners) => listeners,
-                None => continue,
+            let Some(listeners) = &gateway.spec.listeners else {
+                continue;
             };
             if listeners.len() > edgion_resources::resources::gateway::MAX_GATEWAY_LISTENERS {
                 tracing::warn!(
@@ -512,9 +512,8 @@ impl GatewayTlsMatcher {
 
             for listener in listeners {
                 // Skip listeners without TLS config
-                let tls_config = match &listener.tls {
-                    Some(tls) => tls,
-                    None => continue,
+                let Some(tls_config) = &listener.tls else {
+                    continue;
                 };
 
                 let eligibility = tls_config

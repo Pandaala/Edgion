@@ -510,11 +510,8 @@ pub(crate) async fn metrics_handler() -> Response {
         return Response::from_parts(parts, body);
     }
 
-    let base_bytes = match axum::body::to_bytes(body, usize::MAX).await {
-        Ok(b) => b,
-        Err(_) => {
-            return (StatusCode::INTERNAL_SERVER_ERROR, "failed to read base metrics body").into_response();
-        }
+    let Ok(base_bytes) = axum::body::to_bytes(body, usize::MAX).await else {
+        return (StatusCode::INTERNAL_SERVER_ERROR, "failed to read base metrics body").into_response();
     };
     let mut text = String::from_utf8(base_bytes.to_vec()).unwrap_or_default();
 

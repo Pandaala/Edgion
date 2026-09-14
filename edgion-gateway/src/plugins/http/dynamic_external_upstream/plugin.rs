@@ -84,25 +84,22 @@ impl RequestFilter for DynamicExternalUpstream {
         };
 
         // 3. Look up domain in domainMap
-        let target = match self.config.lookup_domain(routing_key) {
-            Some(t) => t,
-            None => {
-                return match self.config.on_no_match {
-                    UpstreamFallback::Fallback => {
-                        session.record_outcome(DyeOutcome::Fallback, "on-no-match");
-                        log.push("upstream miss");
-                        PluginRunningResult::GoodNext
+        let Some(target) = self.config.lookup_domain(routing_key) else {
+            return match self.config.on_no_match {
+                UpstreamFallback::Fallback => {
+                    session.record_outcome(DyeOutcome::Fallback, "on-no-match");
+                    log.push("upstream miss");
+                    PluginRunningResult::GoodNext
+                }
+                UpstreamFallback::Reject => {
+                    session.record_outcome(DyeOutcome::Reject, "on-no-match");
+                    log.push_err("no upstream available");
+                    PluginRunningResult::ErrResponse {
+                        status: 400,
+                        body: Some(Bytes::from_static(b"No matching domain for routing key")),
                     }
-                    UpstreamFallback::Reject => {
-                        session.record_outcome(DyeOutcome::Reject, "on-no-match");
-                        log.push_err("no upstream available");
-                        PluginRunningResult::ErrResponse {
-                            status: 400,
-                            body: Some(Bytes::from_static(b"No matching domain for routing key")),
-                        }
-                    }
-                };
-            }
+                }
+            };
         };
 
         // 4. Build ExternalJumpPreset and acquire the unified jump slot.

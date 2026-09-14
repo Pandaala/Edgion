@@ -579,7 +579,7 @@ mod tests {
 
         assert_eq!(labels.get("gateway_namespace"), Some(&"default".to_string()));
         assert_eq!(labels.get("gateway_name"), Some(&"test-gw".to_string()));
-        assert!(labels.get("test_data").is_some());
+        assert!(labels.contains_key("test_data"));
     }
 
     #[test]

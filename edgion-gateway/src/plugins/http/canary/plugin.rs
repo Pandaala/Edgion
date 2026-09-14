@@ -134,12 +134,9 @@ impl RequestFilter for Canary {
         // Pre-validate the resolved target against the route's canonical
         // compiled backend view before publishing the jump.
         let ctx = session.ctx();
-        let route_unit = match ctx.route_unit.as_ref() {
-            Some(unit) => unit,
-            None => {
-                log.push("no route");
-                return PluginRunningResult::GoodNext;
-            }
+        let Some(route_unit) = ctx.route_unit.as_ref() else {
+            log.push("no route");
+            return PluginRunningResult::GoodNext;
         };
         let route_ns = &route_unit.matched_info.rsc.ns;
         match route_unit.rule.backend_refs.as_ref() {

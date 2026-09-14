@@ -489,7 +489,7 @@ struct RegionPatch {
 
 /// Modify a single region's failoverTo while distinguishing a missing region
 /// from an idempotent request whose target state is already present.
-fn patch_region_failover(regions: &mut Vec<serde_json::Value>, region_name: &str, failover_to: &str) -> RegionPatch {
+fn patch_region_failover(regions: &mut [serde_json::Value], region_name: &str, failover_to: &str) -> RegionPatch {
     let mut matched = false;
     let mut changed = false;
     for region in regions.iter_mut() {

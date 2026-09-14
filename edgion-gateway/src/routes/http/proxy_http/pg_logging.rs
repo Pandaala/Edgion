@@ -350,24 +350,20 @@ fn try_record_via_handles(ctx: &EdgionHttpContext, duration_ms: f64) -> bool {
         return false;
     };
 
-    let entry = match handles.lookup(gateway_info.gateway_namespace(), gateway_info.gateway_name()) {
-        Some(e) => e,
-        None => return false,
+    let Some(entry) = handles.lookup(gateway_info.gateway_namespace(), gateway_info.gateway_name()) else {
+        return false;
     };
 
-    let bc = match ctx.backend_context.as_ref() {
-        Some(bc) => bc,
-        None => return false,
+    let Some(bc) = ctx.backend_context.as_ref() else {
+        return false;
     };
-    let b_idx = match bc.backend_ref_idx {
-        Some(i) => i,
-        None => return false,
+    let Some(b_idx) = bc.backend_ref_idx else {
+        return false;
     };
 
     let protocol = ctx.request_info.discover_protocol.as_deref().unwrap_or("http");
-    let p_idx = match protocol_to_idx(protocol) {
-        Some(p) => p,
-        None => return false,
+    let Some(p_idx) = protocol_to_idx(protocol) else {
+        return false;
     };
     let s_idx = status_to_idx(ctx.request_info.status_option());
     let idx = ps_index(p_idx, s_idx);

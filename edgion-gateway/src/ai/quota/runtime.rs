@@ -351,6 +351,7 @@ impl QuotaSink for RedisQuotaSink {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_targets(
     entry_scope: &str,
     identity: &str,

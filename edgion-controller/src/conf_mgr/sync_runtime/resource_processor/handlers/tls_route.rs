@@ -388,7 +388,7 @@ impl ProcessorHandler<TLSRouteAlpha3> for TlsRouteAlpha3Handler {
     }
 }
 
-fn collect_backend_ref_tuples(route: &TLSRoute) -> Vec<(Option<&str>, Option<&str>, Option<&str>, &str)> {
+fn collect_backend_ref_tuples(route: &TLSRoute) -> Vec<super::route_utils::BackendRefTuple<'_>> {
     let mut tuples = Vec::new();
     if let Some(rules) = &route.spec.rules {
         for rule in rules {

@@ -411,17 +411,14 @@ async fn join_external_request_tasks(
         Ok::<_, String>((case_id, result))
     });
     let mut all = Box::pin(futures::future::join_all(joins));
-    let results = match tokio::time::timeout(timeout, &mut all).await {
-        Ok(results) => results,
-        Err(_) => {
-            for handle in abort_handles {
-                handle.abort();
-            }
-            let _ = tokio::time::timeout(Duration::from_secs(1), &mut all).await;
-            return Err(format!(
-                "external ExtProc request-task cleanup timed out after {timeout:?}"
-            ));
+    let Ok(results) = tokio::time::timeout(timeout, &mut all).await else {
+        for handle in abort_handles {
+            handle.abort();
         }
+        let _ = tokio::time::timeout(Duration::from_secs(1), &mut all).await;
+        return Err(format!(
+            "external ExtProc request-task cleanup timed out after {timeout:?}"
+        ));
     };
     results.into_iter().collect()
 }
@@ -621,7 +618,9 @@ fn raw_header_values(headers: &[(String, Vec<u8>)], name: &str) -> Vec<Vec<u8>> 
         .collect()
 }
 
-fn parse_h1_response_head(raw: &[u8]) -> Result<(u16, Vec<(String, Vec<u8>)>), String> {
+type RawHeaderList = Vec<(String, Vec<u8>)>;
+
+fn parse_h1_response_head(raw: &[u8]) -> Result<(u16, RawHeaderList), String> {
     let mut lines = raw.split(|byte| *byte == b'\n');
     let status_line = lines
         .next()
@@ -1292,15 +1291,20 @@ async fn rotate_external_tls_listener(
     .await
 }
 
+#[derive(Clone, Copy)]
+struct SecureIdentityExpectation<'a> {
+    transport: &'a str,
+    generation: &'a str,
+    server_leaf: &'a str,
+    peer_leaf: Option<&'a str>,
+}
+
 async fn observe_external_secure_header_request(
     ctx: &TestContext,
     admin_url: &str,
     host: &str,
     case_id: &str,
-    transport: &str,
-    expected_generation: &str,
-    expected_server_leaf: &str,
-    expected_peer_leaf: Option<&str>,
+    expected: SecureIdentityExpectation<'_>,
 ) -> Result<(), String> {
     reset_external_case(&ctx.http_client, admin_url, case_id).await?;
     let response = ctx
@@ -1336,13 +1340,13 @@ async fn observe_external_secure_header_request(
     assert_exact_phases(stream, &["request_headers", "response_headers"])?;
     assert_header_observations(stream, 1, &[200])?;
     assert_no_body_observations(stream)?;
-    let peer_matches = match expected_peer_leaf {
+    let peer_matches = match expected.peer_leaf {
         Some(expected) => stream.peer_leaf_sha256.as_deref() == Some(expected),
         None => stream.peer_leaf_sha256.as_deref().unwrap_or_default().is_empty(),
     };
-    if stream.transport != transport
-        || stream.tls_generation.as_deref() != Some(expected_generation)
-        || stream.server_leaf_sha256.as_deref() != Some(expected_server_leaf)
+    if stream.transport != expected.transport
+        || stream.tls_generation.as_deref() != Some(expected.generation)
+        || stream.server_leaf_sha256.as_deref() != Some(expected.server_leaf)
         || !peer_matches
     {
         return Err(format!(
@@ -1357,10 +1361,7 @@ async fn poll_external_secure_identity(
     admin_url: &str,
     host: &str,
     case_prefix: &str,
-    transport: &str,
-    expected_generation: &str,
-    expected_server_leaf: &str,
-    expected_peer_leaf: Option<&str>,
+    expected: SecureIdentityExpectation<'_>,
     timeout: Duration,
 ) -> Result<(), String> {
     let deadline = Instant::now() + timeout;
@@ -1371,16 +1372,7 @@ async fn poll_external_secure_identity(
         attempt += 1;
         match tokio::time::timeout(
             Duration::from_secs(5),
-            observe_external_secure_header_request(
-                ctx,
-                admin_url,
-                host,
-                &case_id,
-                transport,
-                expected_generation,
-                expected_server_leaf,
-                expected_peer_leaf,
-            ),
+            observe_external_secure_header_request(ctx, admin_url, host, &case_id, expected),
         )
         .await
         {
@@ -1446,10 +1438,12 @@ async fn run_external_tls_server_rotation(ctx: &TestContext) -> Result<String, S
             &admin_url,
             EXTERNAL_TLS_HOST,
             &format!("tls-rotation-a1-{}", uuid::Uuid::new_v4()),
-            "tls",
-            "a",
-            &identity.tls.generation_a_leaf_sha256,
-            None,
+            SecureIdentityExpectation {
+                transport: "tls",
+                generation: "a",
+                server_leaf: &identity.tls.generation_a_leaf_sha256,
+                peer_leaf: None,
+            },
         )
         .await?;
         rotate_external_tls_listener(&ctx.http_client, &admin_url, "tls", "b").await?;
@@ -1458,10 +1452,12 @@ async fn run_external_tls_server_rotation(ctx: &TestContext) -> Result<String, S
             &admin_url,
             EXTERNAL_TLS_HOST,
             &format!("tls-rotation-b-{}", uuid::Uuid::new_v4()),
-            "tls",
-            "b",
-            &identity.tls.generation_b_leaf_sha256,
-            None,
+            SecureIdentityExpectation {
+                transport: "tls",
+                generation: "b",
+                server_leaf: &identity.tls.generation_b_leaf_sha256,
+                peer_leaf: None,
+            },
         )
         .await?;
         rotate_external_tls_listener(&ctx.http_client, &admin_url, "tls", "a").await?;
@@ -1470,10 +1466,12 @@ async fn run_external_tls_server_rotation(ctx: &TestContext) -> Result<String, S
             &admin_url,
             EXTERNAL_TLS_HOST,
             &format!("tls-rotation-a2-{}", uuid::Uuid::new_v4()),
-            "tls",
-            "a",
-            &identity.tls.generation_a_leaf_sha256,
-            None,
+            SecureIdentityExpectation {
+                transport: "tls",
+                generation: "a",
+                server_leaf: &identity.tls.generation_a_leaf_sha256,
+                peer_leaf: None,
+            },
         )
         .await
     })
@@ -1489,10 +1487,12 @@ async fn run_external_tls_server_rotation(ctx: &TestContext) -> Result<String, S
             &admin_url,
             EXTERNAL_TLS_HOST,
             &format!("tls-cleanup-a-{}", uuid::Uuid::new_v4()),
-            "tls",
-            "a",
-            &identity.tls.generation_a_leaf_sha256,
-            None,
+            SecureIdentityExpectation {
+                transport: "tls",
+                generation: "a",
+                server_leaf: &identity.tls.generation_a_leaf_sha256,
+                peer_leaf: None,
+            },
         )
         .await
     })
@@ -1520,10 +1520,12 @@ async fn run_external_mtls_client_rotation(ctx: &TestContext) -> Result<String, 
             &admin_url,
             EXTERNAL_MTLS_HOST,
             "mtls-converge-a",
-            "mtls",
-            "a",
-            &identity.mtls.generation_a_leaf_sha256,
-            Some(&identity.client_a_leaf_sha256),
+            SecureIdentityExpectation {
+                transport: "mtls",
+                generation: "a",
+                server_leaf: &identity.mtls.generation_a_leaf_sha256,
+                peer_leaf: Some(&identity.client_a_leaf_sha256),
+            },
             Duration::from_secs(10),
         )
         .await?;
@@ -1535,10 +1537,12 @@ async fn run_external_mtls_client_rotation(ctx: &TestContext) -> Result<String, 
             &admin_url,
             EXTERNAL_MTLS_HOST,
             "mtls-converge-b",
-            "mtls",
-            "a",
-            &identity.mtls.generation_a_leaf_sha256,
-            Some(&identity.client_b_leaf_sha256),
+            SecureIdentityExpectation {
+                transport: "mtls",
+                generation: "a",
+                server_leaf: &identity.mtls.generation_a_leaf_sha256,
+                peer_leaf: Some(&identity.client_b_leaf_sha256),
+            },
             Duration::from_secs(10),
         )
         .await
@@ -1559,10 +1563,12 @@ async fn run_external_mtls_client_rotation(ctx: &TestContext) -> Result<String, 
             &admin_url,
             EXTERNAL_MTLS_HOST,
             "mtls-cleanup-a",
-            "mtls",
-            "a",
-            &identity.mtls.generation_a_leaf_sha256,
-            Some(&identity.client_a_leaf_sha256),
+            SecureIdentityExpectation {
+                transport: "mtls",
+                generation: "a",
+                server_leaf: &identity.mtls.generation_a_leaf_sha256,
+                peer_leaf: Some(&identity.client_a_leaf_sha256),
+            },
             Duration::from_secs(12),
         )
         .await
@@ -2626,11 +2632,8 @@ impl ExtProcTestSuite {
                         "x-ext-proc-test-mode",
                         "grpc-immediate".parse().expect("fixed mode is valid metadata"),
                     );
-                    let status = match client.say_hello(request).await {
-                        Ok(_) => {
-                            return TestResult::failed(start.elapsed(), "expected gRPC error, got success".to_string())
-                        }
-                        Err(status) => status,
+                    let Err(status) = client.say_hello(request).await else {
+                        return TestResult::failed(start.elapsed(), "expected gRPC error, got success".to_string());
                     };
                     if status.code() != tonic::Code::PermissionDenied
                         || status.message() != "processor denied exact grpc request"

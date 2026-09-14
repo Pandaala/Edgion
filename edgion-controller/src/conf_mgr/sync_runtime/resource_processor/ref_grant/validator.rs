@@ -330,6 +330,8 @@ mod tests {
     }
 
     /// Build a ReferenceGrant with a single From and a single To entry.
+    // Keeping the complete From/To tuple visible makes authorization fixtures auditable.
+    #[allow(clippy::too_many_arguments)]
     fn make_grant(
         ns: &str,
         name: &str,

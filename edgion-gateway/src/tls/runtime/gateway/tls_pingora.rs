@@ -546,16 +546,13 @@ impl TlsCallback {
                         log_ssl(&ssl_ctx.meta);
                         return Err(SelectCertError::ERROR);
                     }
-                    let exact_overlay = match select_gateway_edgion_tls_overlay(
+                    let Ok(exact_overlay) = select_gateway_edgion_tls_overlay(
                         et_matcher_snapshot.match_attachment_sni(&gw.attachment, &sni),
                         &gw,
-                    ) {
-                        Ok(overlay) => overlay,
-                        Err(()) => {
-                            ssl_ctx.meta.err_log = Some("frontend mTLS conflict".to_string());
-                            log_ssl(&ssl_ctx.meta);
-                            return Err(SelectCertError::ERROR);
-                        }
+                    ) else {
+                        ssl_ctx.meta.err_log = Some("frontend mTLS conflict".to_string());
+                        log_ssl(&ssl_ctx.meta);
+                        return Err(SelectCertError::ERROR);
                     };
                     if let Some(candidate) = exact_overlay {
                         if let Some(min_version) = candidate.spec.min_tls_version {
@@ -873,12 +870,9 @@ impl TlsCallback {
         // BoringSSL/Envoy perform internally. With one configured cert this is a
         // no-op. A bad/missing selected cert fails the handshake (fail-closed)
         // rather than silently serving nothing.
-        let certificate = match self.select_gateway_certificate(ssl, certificates.as_slice()) {
-            Some(certificate) => certificate,
-            None => {
-                ssl_ctx.meta.err_log = Some("no usable cert".to_string());
-                return;
-            }
+        let Some(certificate) = self.select_gateway_certificate(ssl, certificates.as_ref()) else {
+            ssl_ctx.meta.err_log = Some("no usable cert".to_string());
+            return;
         };
         // Listener-level frontendValidation is a security-boundary control
         // (operator-required client cert). `configure_gateway_frontend_mtls`
@@ -1278,7 +1272,7 @@ mod tests {
     use std::net::SocketAddr;
     use std::sync::Arc;
 
-    static HANDSHAKE_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    static HANDSHAKE_TEST_LOCK: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
 
     const RSA: Option<bool> = Some(false);
     const ECDSA: Option<bool> = Some(true);
@@ -1543,7 +1537,7 @@ mod tests {
 
     #[test]
     fn atomic_identity_rotation_sends_intermediate_and_replaces_old_chain() {
-        let _serial = HANDSHAKE_TEST_LOCK.lock().unwrap();
+        let _serial = HANDSHAKE_TEST_LOCK.lock();
         use crate::runtime::matching::tls::{CompiledBoringCertificateChain, CompiledServingCertificate};
         use boring::pkey::PKey;
         use boring::ssl::{Ssl, SslContext, SslMethod, SslVerifyMode};
@@ -1584,7 +1578,7 @@ mod tests {
                 .collect::<Vec<_>>();
             let private_key = PKey::private_key_from_pem(leaf_key.serialize_pem().as_bytes()).unwrap();
             let compiled = Arc::new(CompiledServingCertificate {
-                chain: Arc::new(chain),
+                chain: Arc::from(chain),
                 atomic_chain: Arc::new(CompiledBoringCertificateChain::from_der(&chain_der).unwrap()),
                 key_type: private_key.id(),
                 private_key,

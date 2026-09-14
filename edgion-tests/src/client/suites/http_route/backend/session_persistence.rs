@@ -428,21 +428,15 @@ impl SessionPersistenceTestSuite {
                         Ok(r) => r,
                         Err(e) => return TestResult::failed(start.elapsed(), format!("initial request failed: {e}")),
                     };
-                    let set_cookie = match get_set_cookie(&resp) {
-                        Some(sc) => sc,
-                        None => return TestResult::failed(start.elapsed(), "no Set-Cookie on initial request".into()),
-                    };
+                    let Some(set_cookie) = get_set_cookie(&resp) else { return TestResult::failed(start.elapsed(), "no Set-Cookie on initial request".into()) };
                     let cookie_value = set_cookie.split(';').next().unwrap_or(&set_cookie).to_string();
                     let token = cookie_value.split_once('=').map(|(_, v)| v.to_string()).unwrap_or_default();
-                    let (hash, expiry) = match parse_token_expiry(&token) {
-                        Some(v) => v,
-                        None => {
+                    let Some((hash, expiry)) = parse_token_expiry(&token) else {
                             return TestResult::failed(
                                 start.elapsed(),
                                 format!("token is not <16hex>.<expiry>: {token}"),
                             );
-                        }
-                    };
+                        };
                     if expiry <= now_secs() {
                         return TestResult::failed(
                             start.elapsed(),
@@ -539,19 +533,13 @@ impl SessionPersistenceTestSuite {
                         Ok(r) => r,
                         Err(e) => return TestResult::failed(start.elapsed(), format!("initial request failed: {e}")),
                     };
-                    let token = match get_token(&resp) {
-                        Some(t) => t,
-                        None => return TestResult::failed(start.elapsed(), "no x-session-id on initial request".into()),
-                    };
-                    let (hash, expiry) = match parse_token_expiry(&token) {
-                        Some(v) => v,
-                        None => {
+                    let Some(token) = get_token(&resp) else { return TestResult::failed(start.elapsed(), "no x-session-id on initial request".into()) };
+                    let Some((hash, expiry)) = parse_token_expiry(&token) else {
                             return TestResult::failed(
                                 start.elapsed(),
                                 format!("header token is not <16hex>.<expiry>: {token}"),
                             );
-                        }
-                    };
+                        };
                     if expiry <= now_secs() {
                         return TestResult::failed(
                             start.elapsed(),

@@ -76,6 +76,7 @@ impl CompiledTimeRangeCondition {
     }
 }
 
+#[allow(clippy::large_enum_variant)]
 enum CompiledPredicate {
     RateLimitExceeded {
         alias: Box<str>,
@@ -248,6 +249,7 @@ enum CompiledSetKind {
     AnyOf(Vec<CompiledAnyOfClause>),
 }
 
+#[allow(clippy::large_enum_variant)]
 enum CompiledAnyOfClause {
     Condition(CompiledCondition),
     AllOf(CompiledAllOf),
@@ -897,9 +899,8 @@ impl KeyExistConditionExt for KeyExistCondition {
 
 impl KeyMatchConditionExt for KeyMatchCondition {
     fn evaluate(&self, session: &dyn PluginSession, log: Option<&mut PluginLog>) -> bool {
-        let value = match session.key_get(&self.key) {
-            Some(v) => v,
-            None => return apply_negate(false, self.negate),
+        let Some(value) = session.key_get(&self.key) else {
+            return apply_negate(false, self.negate);
         };
         self.match_value(&value, log)
     }

@@ -276,13 +276,18 @@ pub fn select_service_endpoint(
 
 /// Current backends for one proven Service section. Used by health-adjacent
 /// session-affinity construction for that section only.
-pub fn backends_for_service_section(service_key: &str, section: &ServiceSectionKey) -> Arc<Vec<Arc<LbBackend>>> {
+pub fn backends_for_service_section(service_key: &str, section: &ServiceSectionKey) -> Arc<[Arc<LbBackend>]> {
     let Some((available, _)) = load_active_projection(service_key) else {
-        return Arc::new(Vec::new());
+        return Arc::from(Vec::new());
     };
     match available.resolve_section(section) {
-        Ok(section) => Arc::new(section.all_slots.iter().map(|slot| Arc::clone(&slot.backend)).collect()),
-        Err(_) => Arc::new(Vec::new()),
+        Ok(section) => section
+            .all_slots
+            .iter()
+            .map(|slot| Arc::clone(&slot.backend))
+            .collect::<Vec<_>>()
+            .into(),
+        Err(_) => Arc::from(Vec::new()),
     }
 }
 

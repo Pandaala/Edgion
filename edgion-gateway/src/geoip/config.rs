@@ -170,6 +170,7 @@ max_db_bytes: 1024
     }
 
     #[test]
+    #[allow(clippy::type_complexity)]
     fn configured_updater_rejects_zero_durations_intervals_and_size_cap() {
         let base = GeoIpConfig {
             update_url: Some("https://mirror.internal/geo.mmdb".into()),

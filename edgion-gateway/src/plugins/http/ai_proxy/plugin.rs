@@ -112,6 +112,7 @@ fn visible_model_ids(
         .collect()
 }
 
+#[allow(clippy::type_complexity)]
 fn unknown_model_passthrough_allowed(
     rewrite_requires_canonical: bool,
     configured: OnUnknownModel,
@@ -209,13 +210,12 @@ impl AiProxy {
                 })
             })
             .collect::<Vec<_>>();
-        let body = match serde_json::to_vec(&serde_json::json!({"object": "list", "data": data})) {
-            Ok(body) => Bytes::from(body),
-            Err(_) => return Self::reject(session, log, "model-list-encode", AiProxyError::BackendUnavailable),
+        let Ok(body) = serde_json::to_vec(&serde_json::json!({"object": "list", "data": data})) else {
+            return Self::reject(session, log, "model-list-encode", AiProxyError::BackendUnavailable);
         };
-        let mut response = match ResponseHeader::build(200, None) {
-            Ok(response) => response,
-            Err(_) => return PluginRunningResult::ErrTerminateRequest,
+        let body = Bytes::from(body);
+        let Ok(mut response) = ResponseHeader::build(200, None) else {
+            return PluginRunningResult::ErrTerminateRequest;
         };
         let _ = response.insert_header("content-type", "application/json");
         let _ = response.insert_header("content-length", body.len().to_string());
@@ -291,14 +291,12 @@ impl AiProxy {
             Err(error) => return Self::reject(session, log, "request-invalid", error),
         };
 
-        let decision =
-            match self
-                .model_routes
+        let Ok(decision) =
+            self.model_routes
                 .decide(&canonical.requested_model, session.request_header_map(), &backends)
-            {
-                Ok(decision) => decision,
-                Err(_) => return Self::install_rejected_plan(session, log, AiPlanError::InvalidRouteConfiguration),
-            };
+        else {
+            return Self::install_rejected_plan(session, log, AiPlanError::InvalidRouteConfiguration);
+        };
         if decision.identity_model != canonical.logical_model
             && canonical.replace_logical_model(&decision.identity_model).is_err()
         {
@@ -899,7 +897,7 @@ mod tests {
         assert!(ai_candidate_spec(&denied).is_none());
         let (slot, weight, key) = ai_candidate_spec(&allowed).unwrap();
         assert_eq!((slot, weight, key), (0, 1, "tenant-b/provider".to_string()));
-        let generation = Arc::new(vec![allowed.clone()]);
+        let generation = Arc::from(vec![allowed.clone()]);
         let logical = crate::backends::LogicalBackendHandle::new(generation, 0).unwrap();
         assert_eq!(logical.identity(), &allowed.identity);
     }
@@ -1167,7 +1165,7 @@ mod tests {
             public_model_ids: BTreeSet::from(["premium".to_string(), "economy".to_string()]),
         });
         let compiled = compiled_ai_backend(None);
-        let logical = crate::backends::LogicalBackendHandle::new(Arc::new(vec![compiled]), 0).unwrap();
+        let logical = crate::backends::LogicalBackendHandle::new(Arc::from(vec![compiled]), 0).unwrap();
         let mut candidates = vec![AiPlanCandidate {
             logical,
             slot: 0,

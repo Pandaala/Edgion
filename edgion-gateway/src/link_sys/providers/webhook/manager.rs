@@ -1012,9 +1012,8 @@ mod tests {
         let accepted = manager.begin_mutation(7).await.expect("sequence is accepted once");
         drop(accepted);
 
-        let stale = match manager.begin_mutation(7).await {
-            Ok(_) => panic!("equal sequence must be stale"),
-            Err(stale) => stale,
+        let Err(stale) = manager.begin_mutation(7).await else {
+            panic!("equal sequence must be stale");
         };
         assert_eq!(stale.latest_accepted_sequence, 7);
     }

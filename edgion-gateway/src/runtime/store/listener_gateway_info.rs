@@ -136,9 +136,8 @@ impl GatewayListeners {
         }
 
         for entry in &self.all {
-            let other_host = match entry.hostname.as_deref() {
-                Some(h) => h,
-                None => continue,
+            let Some(other_host) = entry.hostname.as_deref() else {
+                continue;
             };
 
             if !hostname_matches_listener(request_hostname, other_host) {
@@ -189,7 +188,7 @@ pub struct ListenerEntry {
 /// maps can `load()` once and access both fields from the resulting Arc,
 /// guaranteed to belong to the same epoch.
 struct ListenerGatewayInfoSnapshot {
-    flat: HashMap<ListenerKey, Arc<Vec<Arc<GatewayInfo>>>>,
+    flat: HashMap<ListenerKey, Arc<[Arc<GatewayInfo>]>>,
     index: HashMap<ListenerKey, Arc<GatewayInfoIndex>>,
 }
 
@@ -221,9 +220,9 @@ impl ListenerGatewayInfoStore {
     /// Listener construction and diagnostics use this flat view; request route
     /// matching uses `get_index` below.
     #[inline]
-    pub fn get(&self, key: &ListenerKey) -> Arc<Vec<Arc<GatewayInfo>>> {
+    pub fn get(&self, key: &ListenerKey) -> Arc<[Arc<GatewayInfo>]> {
         let snap = self.snapshot.load();
-        snap.flat.get(key).cloned().unwrap_or_else(|| Arc::new(Vec::new()))
+        snap.flat.get(key).cloned().unwrap_or_else(|| Arc::from(Vec::new()))
     }
 
     /// Get the pre-built GatewayInfoIndex for a given listener key.
@@ -262,9 +261,8 @@ impl ListenerGatewayInfoStore {
             let gateway_namespace = gateway.metadata.namespace.clone();
             let gateway_name = gateway.name_any();
 
-            let listeners = match &gateway.spec.listeners {
-                Some(l) => l,
-                None => continue,
+            let Some(listeners) = &gateway.spec.listeners else {
+                continue;
             };
 
             let gateway_annotations = gateway.metadata.annotations.as_ref();
@@ -333,9 +331,9 @@ impl ListenerGatewayInfoStore {
         let listener_count = port_map.len();
         let total_entries: usize = port_map.values().map(|v| v.len()).sum();
 
-        let flat_arc_map: HashMap<ListenerKey, Arc<Vec<Arc<GatewayInfo>>>> = port_map
+        let flat_arc_map: HashMap<ListenerKey, Arc<[Arc<GatewayInfo>]>> = port_map
             .into_iter()
-            .map(|(key, infos)| (key, Arc::new(infos)))
+            .map(|(key, infos)| (key, Arc::from(infos)))
             .collect();
 
         let index_arc_map: HashMap<ListenerKey, Arc<GatewayInfoIndex>> = index_map

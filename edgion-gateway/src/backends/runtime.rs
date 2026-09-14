@@ -13,12 +13,12 @@ use edgion_resources::resources::edgion_backend_traffic_policy::{PolicyTargetKey
 /// One immutable, gateway-compiled HTTPRoute backend slot.
 #[derive(Clone)]
 pub struct LogicalBackendHandle {
-    generation: Arc<Vec<CompiledBackend>>,
+    generation: Arc<[CompiledBackend]>,
     index: usize,
 }
 
 impl LogicalBackendHandle {
-    pub(crate) fn new(generation: Arc<Vec<CompiledBackend>>, index: usize) -> Option<Self> {
+    pub(crate) fn new(generation: Arc<[CompiledBackend]>, index: usize) -> Option<Self> {
         if generation.get(index).is_some_and(|compiled| compiled.slot == index) {
             Some(Self { generation, index })
         } else {
@@ -299,7 +299,7 @@ mod tests {
     }
 
     fn logical(compiled: CompiledBackend) -> LogicalBackendHandle {
-        let generation = Arc::new(vec![compiled]);
+        let generation = Arc::from(vec![compiled]);
         LogicalBackendHandle::new(generation, 0).expect("single-slot fixture must be valid")
     }
 
@@ -336,7 +336,7 @@ mod tests {
 
     #[test]
     fn logical_handle_preserves_slot_identity_target_and_declared_weight() {
-        let generation = Arc::new(vec![compiled("api", 0, Some(0))]);
+        let generation = Arc::from(vec![compiled("api", 0, Some(0))]);
         let logical = LogicalBackendHandle::new(generation, 0).unwrap();
         assert_eq!(logical.slot(), 0);
         assert_eq!(logical.declared_weight(), 0);
@@ -382,10 +382,10 @@ mod tests {
 
     #[test]
     fn logical_handle_rejects_invalid_generation_indexes() {
-        let generation = Arc::new(vec![compiled("api", 0, None)]);
+        let generation = Arc::from(vec![compiled("api", 0, None)]);
         assert!(LogicalBackendHandle::new(Arc::clone(&generation), 1).is_none());
 
-        let mismatched = Arc::new(vec![compiled("api", 3, None)]);
+        let mismatched = Arc::from(vec![compiled("api", 3, None)]);
         assert!(LogicalBackendHandle::new(mismatched, 0).is_none());
     }
 
@@ -398,7 +398,7 @@ mod tests {
 
     #[test]
     fn service_selection_and_runtime_projection_are_allocation_free() {
-        let generation = Arc::new(vec![compiled("api", 0, None)]);
+        let generation = Arc::from(vec![compiled("api", 0, None)]);
         let (selected, allocations) = crate::test_allocation_counter::count_allocation_stats(|| {
             let logical = LogicalBackendHandle::new(Arc::clone(&generation), 0).unwrap();
             let selected = SelectedHttpBackend::Service(
@@ -417,7 +417,7 @@ mod tests {
     #[test]
     fn logical_handle_pins_generation_and_plugin_runtime() {
         let old_runtime = Arc::new(PluginRuntime::new());
-        let old_generation = Arc::new(vec![CompiledBackend::compile(
+        let old_generation = Arc::from(vec![CompiledBackend::compile(
             HTTPBackendRef {
                 name: "old".to_string(),
                 namespace: Some("backend-ns".to_string()),
@@ -437,7 +437,7 @@ mod tests {
         let selected =
             SelectedHttpBackend::Service(SelectedServiceBackend::new(logical, BackendTlsPolicyLookup::Absent).unwrap());
 
-        let replacement = Arc::new(vec![compiled("new", 0, None)]);
+        let replacement = Arc::from(vec![compiled("new", 0, None)]);
         drop(old_generation);
 
         assert_eq!(selected.name, "old");
@@ -454,7 +454,7 @@ mod tests {
         let old_policy = tls_policy("old", "old.example.com");
         store.replace_all(HashMap::from([("backend-ns/old".to_string(), Arc::clone(&old_policy))]));
 
-        let generation = Arc::new(vec![compiled("api", 0, None)]);
+        let generation = Arc::from(vec![compiled("api", 0, None)]);
         let logical = LogicalBackendHandle::new(Arc::clone(&generation), 0).unwrap();
         let target = logical.policy_target_key().unwrap();
         let captured = store.snapshot().lookup(&target, None);

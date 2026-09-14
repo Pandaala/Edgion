@@ -388,7 +388,6 @@ mod tests {
     fn hostname_rejected_even_when_san_gate_on() {
         // The key fix: a provider that enforces subjectAltNames (gate on) must
         // still reject hostname, because SNI override is implemented nowhere.
-        assert!(!HOSTNAME_SNI_ENFORCED, "test assumes SNI override not yet enforced");
         let errs = check_validation_block(Some(&hostname_only()), "OpenidConnect", true);
         assert_eq!(errs.len(), 1);
         assert!(errs[0].contains("hostname"));

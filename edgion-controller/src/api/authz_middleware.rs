@@ -104,19 +104,16 @@ pub async fn authz_layer(State(authorizer): State<Arc<Authorizer>>, req: Request
         (kind, Request::from_parts(parts, body))
     };
 
-    let (verb, kind_str) = match classify(&method, matched_str.as_deref(), kind.as_deref()) {
-        Some(vk) => vk,
-        None => {
-            // Unknown/absent route => deny. Source is "unknown" because we cannot
-            // determine whether this was a Center or cli-token request without a
-            // matched route to classify.
-            edgion_common::observe::fed_metrics::record_rbac_denied(
-                "unknown",
-                "unknown",
-                edgion_common::observe::fed_metrics::labels::rbac_source::UNKNOWN,
-            );
-            return forbidden();
-        }
+    let Some((verb, kind_str)) = classify(&method, matched_str.as_deref(), kind.as_deref()) else {
+        // Unknown/absent route => deny. Source is "unknown" because we cannot
+        // determine whether this was a Center or cli-token request without a
+        // matched route to classify.
+        edgion_common::observe::fed_metrics::record_rbac_denied(
+            "unknown",
+            "unknown",
+            edgion_common::observe::fed_metrics::labels::rbac_source::UNKNOWN,
+        );
+        return forbidden();
     };
 
     // Self-introspection is inherent once authentication has supplied a Role.

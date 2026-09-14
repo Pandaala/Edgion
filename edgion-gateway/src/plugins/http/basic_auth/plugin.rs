@@ -118,9 +118,8 @@ impl BasicAuth {
     }
 
     async fn authenticate_request(&self, session: &mut dyn PluginSession) -> Result<(String, String), AuthFailure> {
-        let auth_header_value = match session.header_str("authorization") {
-            Some(v) => v,
-            None => return Err(AuthFailure::MissingHeader),
+        let Some(auth_header_value) = session.header_str("authorization") else {
+            return Err(AuthFailure::MissingHeader);
         };
 
         let (username, password) =

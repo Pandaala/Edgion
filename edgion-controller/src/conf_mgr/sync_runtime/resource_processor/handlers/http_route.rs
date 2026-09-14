@@ -134,7 +134,7 @@ impl HttpRouteHandler {
     /// this single call.
     fn register_service_refs(
         route: &HTTPRoute,
-        extra_tuples: &[(Option<String>, Option<String>, Option<String>, String)],
+        extra_tuples: &[super::route_utils::OwnedBackendRefTuple],
         ctx: &HandlerContext,
     ) -> Vec<String> {
         let route_ns = route.metadata.namespace.as_deref().unwrap_or("default");
@@ -251,7 +251,7 @@ impl HttpRouteHandler {
     /// EBTP attached to either side may change the route's Gateway ancestors.
     fn register_backend_refs(
         route: &HTTPRoute,
-        flattened_tuples: &[(Option<String>, Option<String>, Option<String>, String)],
+        flattened_tuples: &[super::route_utils::OwnedBackendRefTuple],
         ctx: &HandlerContext,
     ) -> BackendRefDelta {
         let route_ns = route.metadata.namespace.as_deref().unwrap_or("default");

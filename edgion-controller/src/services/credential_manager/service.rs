@@ -237,7 +237,7 @@ enum JobResult {
         identity: String,
         input_revision: String,
         consumer_revision: String,
-        result: Result<ReconcileSuccess, ReconcileFailure>,
+        result: Box<Result<ReconcileSuccess, ReconcileFailure>>,
     },
     Cleaned {
         key: String,
@@ -262,7 +262,7 @@ struct ReconcileFailure {
     retry_after: Option<Duration>,
     schedule: FailureSchedule,
     publications: Option<HashMap<String, DeleteExpectation>>,
-    retained: Option<RetainedPublication>,
+    retained: Option<Box<RetainedPublication>>,
     consumer_conflict: bool,
 }
 
@@ -293,7 +293,7 @@ impl ReconcileFailure {
         retained: RetainedPublication,
     ) -> Self {
         self.publications = Some(publications);
-        self.retained = Some(retained);
+        self.retained = Some(Box::new(retained));
         self
     }
 }
@@ -509,7 +509,7 @@ async fn run_worker(backend: CredentialManagerBackend, runtime: Arc<ControllerRu
                         state.identity = identity;
                         state.input_revision = input_revision;
                         state.consumer_revision = consumer_revision;
-                        match result {
+                        match *result {
                             Ok(success) => {
                                 state.failure_count = 0;
                                 state.persist = current.persist;
@@ -535,7 +535,7 @@ async fn run_worker(backend: CredentialManagerBackend, runtime: Arc<ControllerRu
                                 if let Some(retained) = failure.retained.take() {
                                     state.expired = false;
                                     state.expires_at = Some(retained.expires_at);
-                                    state.retained = Some(retained);
+                                    state.retained = Some(*retained);
                                     state.publication_retry = true;
                                 }
                                 state.failure_count = state.failure_count.saturating_add(1);
@@ -595,7 +595,7 @@ async fn reconcile_source(
         identity,
         input_revision,
         consumer_revision,
-        result,
+        result: Box::new(result),
     }
 }
 

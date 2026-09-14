@@ -172,7 +172,7 @@ type HostCandidates = PersistentHashMap<String, Arc<EdgionTls>>;
 
 pub(super) struct HostBucket {
     candidates: HostCandidates,
-    pub(super) ordered: Arc<Vec<Arc<EdgionTls>>>,
+    pub(super) ordered: Arc<[Arc<EdgionTls>]>,
 }
 
 #[derive(Clone, Default)]
@@ -458,7 +458,7 @@ impl TlsSnapshotData {
                 ordered.sort_by(edgion_tls_precedence);
                 let slot = HostBucket {
                     candidates,
-                    ordered: Arc::new(ordered),
+                    ordered: Arc::from(ordered),
                 };
                 let previous = warning_baseline
                     .listeners
@@ -517,7 +517,7 @@ impl TlsSnapshotData {
                     .filter_map(|key| self.entries.get(key).map(|entry| entry.tls.clone()))
                     .collect();
                 ordered.sort_by(edgion_tls_precedence);
-                AttachmentMatchSlot::Ready(Arc::new(ordered))
+                AttachmentMatchSlot::Ready(Arc::from(ordered))
             };
             self.attachments
                 .insert_mut(attachment, Arc::new(AttachmentBucket { candidates, slot }));

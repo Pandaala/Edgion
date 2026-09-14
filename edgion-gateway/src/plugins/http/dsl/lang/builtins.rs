@@ -480,9 +480,8 @@ pub(in crate::plugins::http::dsl) async fn complete_http_call_response(
     max_string_len: usize,
     max_map_size: usize,
 ) -> Value {
-    let response = match send_result {
-        Ok(response) => response,
-        Err(_) => return http_call_failure_map(),
+    let Ok(response) = send_result else {
+        return http_call_failure_map();
     };
     let effective_body_cap = max_response_body_bytes.min(max_string_len);
     if response
@@ -508,9 +507,8 @@ pub(in crate::plugins::http::dsl) async fn complete_http_call_response(
         response_headers.insert(name, Value::Str(Arc::from(value)));
     }
 
-    let (body, truncated) = match stream_body_capped(response, effective_body_cap).await {
-        Ok(result) => result,
-        Err(_) => return http_call_failure_map(),
+    let Ok((body, truncated)) = stream_body_capped(response, effective_body_cap).await else {
+        return http_call_failure_map();
     };
     if truncated {
         return http_call_failure_map();
@@ -1371,14 +1369,11 @@ impl Vm {
         let url_str = url_val.runtime_string()?;
 
         // Reject non-http/https schemes to prevent file://, ftp://, etc.
-        let parsed_url = match reqwest::Url::parse(&url_str) {
-            Ok(u) => u,
-            Err(_) => {
-                return Err(RuntimeError::ApiError {
-                    function: "http.call".into(),
-                    message: format!("invalid URL: {}", url_str),
-                });
-            }
+        let Ok(parsed_url) = reqwest::Url::parse(&url_str) else {
+            return Err(RuntimeError::ApiError {
+                function: "http.call".into(),
+                message: format!("invalid URL: {}", url_str),
+            });
         };
         if !matches!(parsed_url.scheme(), "http" | "https") {
             return Err(RuntimeError::ApiError {
@@ -1589,12 +1584,9 @@ fn resolve_redis_client_with<T>(
     log: &mut PluginLog,
     get_client: impl FnOnce(&str) -> Option<T>,
 ) -> Result<T, Value> {
-    let ns_name = match runtime.redis_links.get(link_name) {
-        Some(k) => k,
-        None => {
-            log.push_err("redis link unknown");
-            return Err(redis_err(RedisFailure::UnknownLink, max_string_len));
-        }
+    let Some(ns_name) = runtime.redis_links.get(link_name) else {
+        log.push_err("redis link unknown");
+        return Err(redis_err(RedisFailure::UnknownLink, max_string_len));
     };
     match get_client(ns_name) {
         Some(c) => Ok(c),

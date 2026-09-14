@@ -51,9 +51,8 @@ impl OpenidConnect {
             return fallback_target;
         };
 
-        let mut end_session_url = match Url::parse(&end_session_endpoint) {
-            Ok(v) => v,
-            Err(_) => return fallback_target,
+        let Ok(mut end_session_url) = Url::parse(&end_session_endpoint) else {
+            return fallback_target;
         };
         if let Some(post_logout_redirect_uri) = post_logout_redirect_uri {
             end_session_url

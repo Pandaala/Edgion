@@ -140,14 +140,11 @@ impl AllEndpointStatusTestSuite {
 
                             match serde_json::from_str::<serde_json::Value>(&body) {
                                 Ok(json) => {
-                                    let summary = match json.get("summary") {
-                                        Some(s) => s,
-                                        None => {
-                                            return TestResult::failed(
-                                                start.elapsed(),
-                                                "Missing 'summary' field".to_string(),
-                                            );
-                                        }
+                                    let Some(summary) = json.get("summary") else {
+                                        return TestResult::failed(
+                                            start.elapsed(),
+                                            "Missing 'summary' field".to_string(),
+                                        );
                                     };
 
                                     let required_fields = [
@@ -246,14 +243,11 @@ impl AllEndpointStatusTestSuite {
 
                             match serde_json::from_str::<serde_json::Value>(&body) {
                                 Ok(json) => {
-                                    let backends = match json["backends"].as_array() {
-                                        Some(b) => b,
-                                        None => {
-                                            return TestResult::failed(
-                                                start.elapsed(),
-                                                "backends is not an array".to_string(),
-                                            );
-                                        }
+                                    let Some(backends) = json["backends"].as_array() else {
+                                        return TestResult::failed(
+                                            start.elapsed(),
+                                            "backends is not an array".to_string(),
+                                        );
                                     };
 
                                     if backends.is_empty() {
@@ -275,14 +269,11 @@ impl AllEndpointStatusTestSuite {
                                         );
                                     }
 
-                                    let endpoints = match backend["endpoints"].as_array() {
-                                        Some(e) => e,
-                                        None => {
-                                            return TestResult::failed(
-                                                start.elapsed(),
-                                                "endpoints is not an array".to_string(),
-                                            );
-                                        }
+                                    let Some(endpoints) = backend["endpoints"].as_array() else {
+                                        return TestResult::failed(
+                                            start.elapsed(),
+                                            "endpoints is not an array".to_string(),
+                                        );
                                     };
 
                                     if endpoints.is_empty() {
@@ -422,14 +413,11 @@ impl AllEndpointStatusTestSuite {
 
                             match serde_json::from_str::<serde_json::Value>(&body) {
                                 Ok(json) => {
-                                    let backends = match json["backends"].as_array() {
-                                        Some(b) => b,
-                                        None => {
-                                            return TestResult::failed(
-                                                start.elapsed(),
-                                                "backends is not an array".to_string(),
-                                            );
-                                        }
+                                    let Some(backends) = json["backends"].as_array() else {
+                                        return TestResult::failed(
+                                            start.elapsed(),
+                                            "backends is not an array".to_string(),
+                                        );
                                     };
 
                                     // Find a backend with endpoints that have headers

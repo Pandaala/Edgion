@@ -229,7 +229,7 @@ pub struct HttpRouteRuleUnit {
     pub plugin_runtime: Arc<PluginRuntime>,
     /// Per-rule compiled backends (each with its own plugin runtime), shared
     /// across the rule's units. Used for by-name lookup (Internal upstream jumps).
-    pub backends: Arc<Vec<CompiledBackend>>,
+    pub backends: Arc<[CompiledBackend]>,
     /// LB selector over original compiled-backend slot indexes, built once per
     /// rule and shared across its match items and declared hostname groups.
     /// `Arc` so the `#[derive(Clone)]` unit stays cheap to clone.
@@ -247,7 +247,7 @@ pub struct HttpRuleRuntime {
     /// Compiled backends (each with its own per-rule-shared plugin runtime). The
     /// per-rule LB selector is built over these backend slots. `Arc` so it
     /// is shared (not deep-cloned) into each of the rule's units.
-    pub backends: Arc<Vec<CompiledBackend>>,
+    pub backends: Arc<[CompiledBackend]>,
 }
 
 impl HttpRouteRuleUnit {
@@ -282,7 +282,7 @@ impl HttpRouteRuleUnit {
         });
         HttpRuleRuntime {
             plugin_runtime,
-            backends: Arc::new(backends),
+            backends: Arc::from(backends),
         }
     }
 
@@ -420,9 +420,8 @@ impl HttpRouteRuleUnit {
         query_param_match: &edgion_resources::HTTPQueryParamMatch,
         compiled_regex: Option<&Regex>,
     ) -> Result<bool, EdError> {
-        let param_value = match query_params.get(&query_param_match.name) {
-            Some(value) => value,
-            None => return Ok(false),
+        let Some(param_value) = query_params.get(&query_param_match.name) else {
+            return Ok(false);
         };
 
         let match_type = query_param_match.match_type.as_deref().unwrap_or("Exact");

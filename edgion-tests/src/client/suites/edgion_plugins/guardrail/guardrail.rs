@@ -372,11 +372,8 @@ impl GuardrailTestSuite {
                     }
 
                     let mut delivered = Vec::new();
-                    loop {
-                        match response.chunk().await {
-                            Ok(Some(chunk)) => delivered.extend_from_slice(&chunk),
-                            Ok(None) | Err(_) => break,
-                        }
+                    while let Ok(Some(chunk)) = response.chunk().await {
+                        delivered.extend_from_slice(&chunk);
                     }
                     if held_sse_leaked(&delivered) {
                         TestResult::failed(
@@ -524,11 +521,8 @@ impl GuardrailTestSuite {
                         );
                     }
                     let mut delivered = Vec::new();
-                    loop {
-                        match response.chunk().await {
-                            Ok(Some(chunk)) => delivered.extend_from_slice(&chunk),
-                            Ok(None) | Err(_) => break,
-                        }
+                    while let Ok(Some(chunk)) = response.chunk().await {
+                        delivered.extend_from_slice(&chunk);
                     }
                     if held_sse_leaked(&delivered) {
                         return TestResult::failed(

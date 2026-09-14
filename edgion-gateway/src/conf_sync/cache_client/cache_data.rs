@@ -132,15 +132,12 @@ impl<T: ResourceMeta> CacheData<T> {
     {
         let mut cache = cache_data.write();
 
-        let handler = match cache.handler.as_mut() {
-            Some(h) => h,
-            None => {
-                tracing::error!(
-                    component = "cache_client",
-                    "Handler was removed, stopping compressed events processing task"
-                );
-                return false; // Handler removed, stop the task
-            }
+        let Some(handler) = cache.handler.as_mut() else {
+            tracing::error!(
+                component = "cache_client",
+                "Handler was removed, stopping compressed events processing task"
+            );
+            return false; // Handler removed, stop the task
         };
 
         if handler.compressed_events.events.is_empty() {

@@ -46,17 +46,14 @@ impl ObservedGenerationStatusTestSuite {
                         };
 
                     let metadata_gen = gateway["metadata"]["generation"].as_i64();
-                    let conditions = match gateway["status"]["conditions"].as_array() {
-                        Some(c) => c,
-                        None => {
-                            return TestResult::failed(
-                                start.elapsed(),
-                                format!(
-                                    "No status.conditions found. status: {}",
-                                    serde_json::to_string_pretty(&gateway["status"]).unwrap_or_default()
-                                ),
-                            );
-                        }
+                    let Some(conditions) = gateway["status"]["conditions"].as_array() else {
+                        return TestResult::failed(
+                            start.elapsed(),
+                            format!(
+                                "No status.conditions found. status: {}",
+                                serde_json::to_string_pretty(&gateway["status"]).unwrap_or_default()
+                            ),
+                        );
                     };
 
                     if conditions.is_empty() {
@@ -108,17 +105,14 @@ impl ObservedGenerationStatusTestSuite {
                         };
 
                     let metadata_gen = gateway["metadata"]["generation"].as_i64();
-                    let listeners = match gateway["status"]["listeners"].as_array() {
-                        Some(l) => l,
-                        None => {
-                            return TestResult::failed(
-                                start.elapsed(),
-                                format!(
-                                    "No status.listeners found. status: {}",
-                                    serde_json::to_string_pretty(&gateway["status"]).unwrap_or_default()
-                                ),
-                            );
-                        }
+                    let Some(listeners) = gateway["status"]["listeners"].as_array() else {
+                        return TestResult::failed(
+                            start.elapsed(),
+                            format!(
+                                "No status.listeners found. status: {}",
+                                serde_json::to_string_pretty(&gateway["status"]).unwrap_or_default()
+                            ),
+                        );
                     };
 
                     let mut failures = Vec::new();
@@ -165,17 +159,14 @@ impl ObservedGenerationStatusTestSuite {
                         };
 
                     let metadata_gen = gc["metadata"]["generation"].as_i64();
-                    let conditions = match gc["status"]["conditions"].as_array() {
-                        Some(c) => c,
-                        None => {
-                            return TestResult::failed(
-                                start.elapsed(),
-                                format!(
-                                    "No status.conditions found. status: {}",
-                                    serde_json::to_string_pretty(&gc["status"]).unwrap_or_default()
-                                ),
-                            );
-                        }
+                    let Some(conditions) = gc["status"]["conditions"].as_array() else {
+                        return TestResult::failed(
+                            start.elapsed(),
+                            format!(
+                                "No status.conditions found. status: {}",
+                                serde_json::to_string_pretty(&gc["status"]).unwrap_or_default()
+                            ),
+                        );
                     };
 
                     if conditions.is_empty() {

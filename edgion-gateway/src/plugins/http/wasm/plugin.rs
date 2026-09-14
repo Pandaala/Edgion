@@ -165,10 +165,9 @@ impl WasmPlugin {
             .state_mut()
             .begin_phase(WasmPhase::ResponseHeaders, request_headers, response_headers, props);
 
-        let action = match lease.call_on_response_headers(num_headers) {
-            Ok(a) => a,
+        let Ok(action) = lease.call_on_response_headers(num_headers) else {
             // Hot path: `fail_mode` records the metric and PluginLog entry; no tracing.
-            Err(_) => return self.fail_mode(session, log, "trap"),
+            return self.fail_mode(session, log, "trap");
         };
         self.finish_phase(lease, session, log, action, false)
     }
@@ -194,10 +193,9 @@ impl WasmPlugin {
             .state_mut()
             .arm_dispatch(self.callout_allowlist.clone(), self.config.callout_timeout_ms);
 
-        let (ctx_id, action) = match lease.call_on_request_headers_open(num_headers) {
-            Ok(v) => v,
+        let Ok((ctx_id, action)) = lease.call_on_request_headers_open(num_headers) else {
             // Hot path: `fail_mode` records the metric and PluginLog entry; no tracing.
-            Err(_) => return self.fail_mode(session, log, "trap"),
+            return self.fail_mode(session, log, "trap");
         };
 
         let paused = action != 0;
@@ -317,9 +315,8 @@ impl WasmPlugin {
                 return self.fail_mode(session, log, "body read");
             }
         };
-        let mut lease = match entry.acquire(self.config.timeout_ms) {
-            Ok(l) => l,
-            Err(_) => return self.fail_mode(session, log, "acquire"),
+        let Ok(mut lease) = entry.acquire(self.config.timeout_ms) else {
+            return self.fail_mode(session, log, "acquire");
         };
         let size = body.len() as i32;
         let request_headers = session.request_headers();
@@ -332,9 +329,8 @@ impl WasmPlugin {
             state.request_body = body.to_vec();
             state.request_body_limit = usize::try_from(cap).unwrap_or(usize::MAX);
         }
-        let action = match lease.call_on_request_body(size, true) {
-            Ok(a) => a,
-            Err(_) => return self.fail_mode(session, log, "trap"),
+        let Ok(action) = lease.call_on_request_body(size, true) else {
+            return self.fail_mode(session, log, "trap");
         };
         if lease.state().local_response.is_some() {
             // The proxied request has ended. Finish the deliberate local
@@ -528,11 +524,10 @@ impl UpstreamResponseBodyFilter for WasmPlugin {
             return None;
         }
         let chunk_budget_ms = (self.config.timeout_ms / 10).max(10);
-        let mut lease = match entry.acquire(chunk_budget_ms) {
-            Ok(l) => l,
+        let Ok(mut lease) = entry.acquire(chunk_budget_ms) else {
             // Per-chunk hot path: acquire failure is non-fatal (stream continues);
             // no tracing here (Iron rule 3).
-            Err(_) => return None,
+            return None;
         };
         let state = lease.state_mut();
         // Lean phase begin: body observation needs no header snapshot or
@@ -673,14 +668,12 @@ impl RequestFilter for WasmPlugin {
     }
 
     async fn run_request(&self, session: &mut dyn PluginSession, log: &mut PluginLog) -> PluginRunningResult {
-        let entry = match global_vm_manager().get_or_load(&self.config, &self.cache_key).await {
-            Ok(e) => e,
+        let Ok(entry) = global_vm_manager().get_or_load(&self.config, &self.cache_key).await else {
             // Hot path: `fail_mode` records the metric and PluginLog entry; no tracing.
-            Err(_) => return self.fail_mode(session, log, "load"),
+            return self.fail_mode(session, log, "load");
         };
-        let lease = match entry.acquire(self.config.timeout_ms) {
-            Ok(l) => l,
-            Err(_) => return self.fail_mode(session, log, "acquire"),
+        let Ok(lease) = entry.acquire(self.config.timeout_ms) else {
+            return self.fail_mode(session, log, "acquire");
         };
         self.run_leased_request(entry, lease, session, log).await
     }
@@ -702,10 +695,9 @@ impl UpstreamResponseFilter for WasmPlugin {
             global_vm_manager().spawn_preload(&self.config, &self.cache_key);
             return self.fail_mode(session, log, "not loaded");
         };
-        let lease = match entry.acquire(self.config.timeout_ms) {
-            Ok(l) => l,
+        let Ok(lease) = entry.acquire(self.config.timeout_ms) else {
             // Hot path: `fail_mode` records the metric and PluginLog entry; no tracing.
-            Err(_) => return self.fail_mode(session, log, "acquire"),
+            return self.fail_mode(session, log, "acquire");
         };
         self.run_leased_response(lease, session, log)
     }

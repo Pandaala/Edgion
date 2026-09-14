@@ -93,27 +93,21 @@ impl RequestFilter for Csrf {
         }
 
         // 1. Get token from HEADER
-        let header_token = match session.header_str(&self.token_name) {
-            Some(token) if !token.is_empty() => token,
-            _ => {
-                plugin_log.push("Deny missing token");
-                return PluginRunningResult::ErrResponse {
-                    status: 401,
-                    body: Some(Bytes::from_static(br#"{"error_msg":"no csrf token in headers"}"#)),
-                };
-            }
+        let Some(header_token) = session.header_str(&self.token_name).filter(|token| !token.is_empty()) else {
+            plugin_log.push("Deny missing token");
+            return PluginRunningResult::ErrResponse {
+                status: 401,
+                body: Some(Bytes::from_static(br#"{"error_msg":"no csrf token in headers"}"#)),
+            };
         };
 
         // 2. Get token from COOKIE
-        let cookie_token = match session.get_cookie(&self.token_name) {
-            Some(token) => token,
-            None => {
-                plugin_log.push("Deny missing token");
-                return PluginRunningResult::ErrResponse {
-                    status: 401,
-                    body: Some(Bytes::from_static(br#"{"error_msg":"no csrf cookie"}"#)),
-                };
-            }
+        let Some(cookie_token) = session.get_cookie(&self.token_name) else {
+            plugin_log.push("Deny missing token");
+            return PluginRunningResult::ErrResponse {
+                status: 401,
+                body: Some(Bytes::from_static(br#"{"error_msg":"no csrf cookie"}"#)),
+            };
         };
 
         // 3. Tokens must MATCH (Double Submit Cookie Pattern)

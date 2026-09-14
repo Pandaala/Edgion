@@ -25,6 +25,7 @@ use std::sync::Arc;
 //   init_and_insert — build a companion from a new route and insert it into the
 //                     cache; returns the resolved ListenerKeys on success
 //   rebuild         — rebuild only the listener managers that were affected
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn apply_l4_partial_update<R, C>(
     route_kind: &'static str,
     add: HashMap<String, R>,

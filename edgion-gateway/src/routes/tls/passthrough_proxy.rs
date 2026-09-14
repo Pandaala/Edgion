@@ -102,13 +102,10 @@ impl ServerApp for EdgionTlsPassthroughProxy {
         };
 
         // 2. Extract SNI from the complete record.
-        let sni = match sni_parser::extract_sni(&peek_buf[..record_end]) {
-            Some(sni) => sni,
-            None => {
-                ctx.err_log = Some("no SNI in ClientHello".to_string());
-                self.log_disconnect(&mut ctx).await;
-                return None;
-            }
+        let Some(sni) = sni_parser::extract_sni(&peek_buf[..record_end]) else {
+            ctx.err_log = Some("no SNI in ClientHello".to_string());
+            self.log_disconnect(&mut ctx).await;
+            return None;
         };
         ctx.sni = Some(sni.clone());
 
@@ -242,12 +239,9 @@ impl EdgionTlsPassthroughProxy {
         let mut last_err = String::new();
 
         for attempt in 0..max_attempts {
-            let backend_ref = match unit.backend_finder.select() {
-                Ok(b) => b,
-                Err(_) => {
-                    ctx.err_log = Some("no backend".to_string());
-                    return;
-                }
+            let Ok(backend_ref) = unit.backend_finder.select() else {
+                ctx.err_log = Some("no backend".to_string());
+                return;
             };
             if super::apply_tls_l4_post_select(
                 ctx,
@@ -264,22 +258,16 @@ impl EdgionTlsPassthroughProxy {
             let backend_ns = backend_ref.namespace.as_deref().unwrap_or(route_ns);
             let service_key = format!("{}/{}", backend_ns, backend_ref.name);
 
-            let section = match service_section_key_from_port(backend_ref.port) {
-                Ok(section) => section,
-                Err(_) => {
-                    last_err = format!("no proven section: {}", service_key);
-                    continue;
-                }
+            let Ok(section) = service_section_key_from_port(backend_ref.port) else {
+                last_err = format!("no proven section: {}", service_key);
+                continue;
             };
-            let endpoint =
-                match select_service_endpoint(&service_key, section, &None, ServiceDegradePolicy::Live, None, "", None)
-                {
-                    Ok(endpoint) => endpoint,
-                    Err(_) => {
-                        last_err = format!("no endpoint: {}", service_key);
-                        continue;
-                    }
-                };
+            let Ok(endpoint) =
+                select_service_endpoint(&service_key, section, &None, ServiceDegradePolicy::Live, None, "", None)
+            else {
+                last_err = format!("no endpoint: {}", service_key);
+                continue;
+            };
             let backend = endpoint.backend;
 
             let upstream_addr = &backend.inner().addr;
@@ -362,12 +350,9 @@ impl EdgionTlsPassthroughProxy {
             }
         }
 
-        let (mut upstream_stream, upstream_addr_str) = match upstream {
-            Some(pair) => pair,
-            None => {
-                ctx.err_log = Some(last_err);
-                return;
-            }
+        let Some((mut upstream_stream, upstream_addr_str)) = upstream else {
+            ctx.err_log = Some(last_err);
+            return;
         };
 
         // 5. Send Proxy Protocol v2 if configured

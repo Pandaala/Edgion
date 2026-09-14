@@ -128,7 +128,7 @@ impl RequestFilter for DirectEndpoint {
         // 2. Get route context
         let ctx = session.ctx();
         let backends = match ctx.route_unit.as_ref() {
-            Some(unit) if !unit.backends.is_empty() => unit.backends.as_slice(),
+            Some(unit) if !unit.backends.is_empty() => unit.backends.as_ref(),
             _ => {
                 log.push("no route refs");
                 return PluginRunningResult::GoodNext;
@@ -318,7 +318,7 @@ mod tests {
                     Arc::new(crate::plugins::PluginRuntime::new()),
                 )
             })
-            .collect();
+            .collect::<Vec<_>>();
         HttpRouteRuleUnit {
             resource_key: format!("{}/test-route", ns),
             matched_info: MatchInfo {
@@ -369,7 +369,7 @@ mod tests {
             },
             metric_handles: Arc::new(crate::observe::metrics::route_handles::RouteMetricHandles::empty()),
             plugin_runtime: Arc::new(crate::plugins::PluginRuntime::new()),
-            backends: Arc::new(backends),
+            backends: Arc::from(backends),
             backend_finder: Arc::new(crate::lb::BackendSelector::new()),
         }
     }

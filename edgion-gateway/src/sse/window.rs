@@ -1174,6 +1174,8 @@ fn check_limit(value: usize, limit: usize, kind: WindowLimit) -> Result<(), Wind
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::field_reassign_with_default)]
+
     use super::super::SseDecoder;
     use super::*;
 

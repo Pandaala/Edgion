@@ -6,11 +6,11 @@ use edgion_resources::resources::edgion_tls::ResolvedListenerAttachment;
 use edgion_resources::EdgionTls;
 use std::sync::{Arc, LazyLock};
 
-static EMPTY_TLS_CANDIDATES: LazyLock<Arc<Vec<Arc<EdgionTls>>>> = LazyLock::new(|| Arc::new(Vec::new()));
+static EMPTY_TLS_CANDIDATES: LazyLock<Arc<[Arc<EdgionTls>]>> = LazyLock::new(|| Arc::from(Vec::new()));
 pub(crate) const MAX_ATTACHMENT_CANDIDATES: usize = 64;
 
 pub(crate) enum AttachmentMatchSlot {
-    Ready(Arc<Vec<Arc<EdgionTls>>>),
+    Ready(Arc<[Arc<EdgionTls>]>),
     Overflow,
 }
 
@@ -22,7 +22,7 @@ pub struct TlsCertMatcherSnapshot {
 }
 
 impl TlsCertMatcherSnapshot {
-    pub fn match_sni_candidates(&self, key: &ListenerKey, sni: &str) -> Arc<Vec<Arc<EdgionTls>>> {
+    pub fn match_sni_candidates(&self, key: &ListenerKey, sni: &str) -> Arc<[Arc<EdgionTls>]> {
         self.data
             .listeners
             .get(key)
@@ -72,7 +72,7 @@ impl TlsCertMatcher {
     /// Return the complete immutable winner slot for an SNI match. Gateway
     /// frontend TLS uses this to select an EdgionTls candidate by exact logical
     /// attachment instead of letting an unrelated first entry shadow it.
-    pub fn match_sni_candidates(&self, key: &ListenerKey, sni: &str) -> Arc<Vec<Arc<EdgionTls>>> {
+    pub fn match_sni_candidates(&self, key: &ListenerKey, sni: &str) -> Arc<[Arc<EdgionTls>]> {
         self.snapshot().match_sni_candidates(key, sni)
     }
 
@@ -107,7 +107,7 @@ pub fn match_sni(key: &ListenerKey, sni: &str) -> Option<Arc<EdgionTls>> {
     get_tls_cert_matcher().match_sni(key, sni)
 }
 
-pub fn match_sni_candidates(key: &ListenerKey, sni: &str) -> Arc<Vec<Arc<EdgionTls>>> {
+pub fn match_sni_candidates(key: &ListenerKey, sni: &str) -> Arc<[Arc<EdgionTls>]> {
     get_tls_cert_matcher().match_sni_candidates(key, sni)
 }
 

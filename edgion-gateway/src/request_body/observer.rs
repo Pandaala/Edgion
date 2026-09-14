@@ -360,16 +360,12 @@ impl RequestBodyObservers {
             return false;
         }
 
-        let observer = match catch_redacted_panic(factory) {
-            Ok(Ok(observer)) => observer,
-            Ok(Err(_)) | Err(_) => return false,
+        let Ok(Ok(observer)) = catch_redacted_panic(factory) else {
+            return false;
         };
-        let retained = match catch_redacted_panic(|| observer.retained_bytes()) {
-            Ok(retained) => retained,
-            Err(_) => {
-                let _ = catch_redacted_panic(|| drop(observer));
-                return false;
-            }
+        let Ok(retained) = catch_redacted_panic(|| observer.retained_bytes()) else {
+            let _ = catch_redacted_panic(|| drop(observer));
+            return false;
         };
         if retained > limits.retained_bytes {
             let _ = catch_redacted_panic(|| drop(observer));
@@ -414,7 +410,9 @@ impl RequestBodyObservers {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::{Arc, Mutex};
+    use std::sync::Arc;
+
+    use parking_lot::Mutex;
 
     #[derive(Default)]
     struct State {
@@ -622,24 +620,24 @@ mod tests {
             if self.semantic_charge != 0 && !budget.charge_work(self.semantic_charge) {
                 return Ok(ObserverControl::Continue);
             }
-            self.state.lock().unwrap().bodies.push(bytes.to_vec());
+            self.state.lock().bodies.push(bytes.to_vec());
             Ok(self.control)
         }
 
         fn reset_for_attempt(&mut self, _budget: &mut ObserverBudget) -> Result<(), ObserverError> {
-            self.state.lock().unwrap().resets += 1;
+            self.state.lock().resets += 1;
             Ok(())
         }
 
         fn finalize(&mut self, terminal: ObserverTerminal, _budget: &mut ObserverBudget) -> Result<(), ObserverError> {
-            self.state.lock().unwrap().finalizes.push(terminal);
+            self.state.lock().finalizes.push(terminal);
             Ok(())
         }
     }
 
     impl Drop for TestObserver {
         fn drop(&mut self) {
-            self.state.lock().unwrap().drops += 1;
+            self.state.lock().drops += 1;
         }
     }
 
@@ -719,7 +717,7 @@ mod tests {
         registry.observe(b"replay", RequestBodyEvent::Complete, 2);
         let json = outcome(&mut registry);
         assert!(json.contains("complete"));
-        let state = state.lock().unwrap();
+        let state = state.lock();
         assert_eq!(state.bodies, [b"abc".to_vec()]);
         assert_eq!(state.finalizes, [ObserverTerminal::Complete]);
         assert_eq!(state.drops, 1);
@@ -736,7 +734,7 @@ mod tests {
         registry.observe(b"x", RequestBodyEvent::Complete, 2);
         let json = outcome(&mut registry);
         assert!(json.contains("exhausted"));
-        let state = state.lock().unwrap();
+        let state = state.lock();
         assert_eq!(state.resets, 1);
         assert_eq!(state.bodies, [b"abc".to_vec(), b"abc".to_vec()]);
     }
@@ -749,7 +747,7 @@ mod tests {
         assert!(registry.try_install(identity("test"), factory(state.clone()), limits));
         registry.observe(b"four", RequestBodyEvent::Data, 1);
         assert!(outcome(&mut registry).contains("exhausted"));
-        assert!(state.lock().unwrap().bodies.is_empty());
+        assert!(state.lock().bodies.is_empty());
     }
 
     #[test]
@@ -775,7 +773,7 @@ mod tests {
             let mut registry = RequestBodyObservers::default();
             assert!(registry.try_install(identity("boundary"), factory(state.clone()), limits));
             registry.observe(first, RequestBodyEvent::Data, 1);
-            assert_eq!(state.lock().unwrap().bodies.len(), 1);
+            assert_eq!(state.lock().bodies.len(), 1);
             registry.observe(second, RequestBodyEvent::Data, 1);
             assert!(outcome(&mut registry).contains("exhausted"));
         }
@@ -842,7 +840,7 @@ mod tests {
         registry.observe(b"method", RequestBodyEvent::Data, 1);
         registry.observe(b"ignored", RequestBodyEvent::Complete, 1);
         assert!(outcome(&mut registry).contains("complete"));
-        assert_eq!(state.lock().unwrap().bodies, [b"method".to_vec(), b"ignored".to_vec()]);
+        assert_eq!(state.lock().bodies, [b"method".to_vec(), b"ignored".to_vec()]);
     }
 
     #[test]
@@ -948,7 +946,7 @@ mod tests {
         let json = serde_json::to_string(&registry.finalize_incomplete_and_take_logs()).unwrap();
         assert!(json.contains("failed"));
         assert!(json.contains("complete"));
-        assert_eq!(healthy_state.lock().unwrap().bodies, [b"unchanged".to_vec()]);
+        assert_eq!(healthy_state.lock().bodies, [b"unchanged".to_vec()]);
     }
 
     #[test]

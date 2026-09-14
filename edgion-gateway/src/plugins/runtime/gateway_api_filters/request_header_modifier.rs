@@ -70,7 +70,9 @@ mod tests {
     use crate::plugins::runtime::traits::session::MockPluginSession;
     use edgion_resources::resources::HTTPHeader;
     use mockall::Sequence;
-    use std::sync::{Arc, Mutex};
+    use std::sync::Arc;
+
+    use parking_lot::Mutex;
 
     fn header(name: &str, value: &str) -> HTTPHeader {
         HTTPHeader {
@@ -106,7 +108,7 @@ mod tests {
             .withf(|name, value| name == "X-Trace" && value == "edge")
             .times(1)
             .returning(move |_, value| {
-                appended.lock().unwrap().push(value.to_string());
+                appended.lock().push(value.to_string());
                 Ok(())
             });
         let mut log = PluginLog::new("RequestHeaderModifier");
@@ -115,7 +117,7 @@ mod tests {
             filter.modify_headers(&mut session, &mut log),
             PluginRunningResult::GoodNext
         );
-        assert_eq!(&*values.lock().unwrap(), &["client-a", "client-b", "edge"]);
+        assert_eq!(&*values.lock(), &["client-a", "client-b", "edge"]);
         assert_eq!(log.render_for_test(), "");
     }
 

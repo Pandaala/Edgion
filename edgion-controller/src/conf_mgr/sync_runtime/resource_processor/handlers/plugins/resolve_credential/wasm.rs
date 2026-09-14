@@ -233,8 +233,10 @@ mod tests {
     use k8s_openapi::ByteString;
 
     fn secret(type_: Option<&str>, key: Option<(&str, &[u8])>) -> Secret {
-        let mut s = Secret::default();
-        s.type_ = type_.map(str::to_string);
+        let mut s = Secret {
+            type_: type_.map(str::to_string),
+            ..Default::default()
+        };
         if let Some((k, v)) = key {
             s.data = Some([(k.to_string(), ByteString(v.to_vec()))].into_iter().collect());
         }

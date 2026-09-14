@@ -112,7 +112,7 @@ mod tests {
         };
         let mut ed = EdgionConfigData::new(name, spec);
         ed.metadata.namespace = Some(ns.to_string());
-        get_global_edgion_config_data_store().insert_raw_for_test(&format!("{ns}/{name}"), Arc::new(ed));
+        get_global_edgion_config_data_store().insert_raw_for_test(format!("{ns}/{name}"), Arc::new(ed));
     }
 
     #[tokio::test]

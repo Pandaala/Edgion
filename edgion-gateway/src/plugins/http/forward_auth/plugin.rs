@@ -131,9 +131,8 @@ impl ForwardAuth {
         content_type: Option<&str>,
         forwarded_headers: Option<(&reqwest::header::HeaderMap, &[String])>,
     ) -> PluginRunningResult {
-        let mut resp = match ResponseHeader::build(status, None) {
-            Ok(r) => r,
-            Err(_) => return PluginRunningResult::ErrTerminateRequest,
+        let Ok(mut resp) = ResponseHeader::build(status, None) else {
+            return PluginRunningResult::ErrTerminateRequest;
         };
 
         if let Some(content_type) = content_type {
@@ -304,29 +303,26 @@ impl RequestFilter for ForwardAuth {
         )
         .await;
         diagnostics.emit(plugin_log);
-        let resp = match result {
-            Ok(r) => r,
-            Err(_) => {
-                // Transport-level failure: connection refused, DNS, timeout, rate/health gate.
-                // Surface in access-log diagnostics for gateway-level visibility; PluginLog
-                // captures the per-request plugin-side detail.
-                session.record_error(edgion_resources::EdgionErrorCode::ForwardAuthServiceUnreachable);
-                plugin_log.push_err("upstream unreachable");
-                // Record BEFORE `send_error_response`'s self-write
-                // (`write_response_header`) so the queued dye header op is
-                // drained by that write.
-                session.record_outcome(DyeOutcome::FailClose, "auth-server-unreachable");
-                return self
-                    .send_error_response(
-                        session,
-                        plugin_log,
-                        self.status_on_error,
-                        Bytes::from_static(b"{\"message\":\"Auth service unavailable\"}"),
-                        Some("application/json"),
-                        None,
-                    )
-                    .await;
-            }
+        let Ok(resp) = result else {
+            // Transport-level failure: connection refused, DNS, timeout, rate/health gate.
+            // Surface in access-log diagnostics for gateway-level visibility; PluginLog
+            // captures the per-request plugin-side detail.
+            session.record_error(edgion_resources::EdgionErrorCode::ForwardAuthServiceUnreachable);
+            plugin_log.push_err("upstream unreachable");
+            // Record BEFORE `send_error_response`'s self-write
+            // (`write_response_header`) so the queued dye header op is
+            // drained by that write.
+            session.record_outcome(DyeOutcome::FailClose, "auth-server-unreachable");
+            return self
+                .send_error_response(
+                    session,
+                    plugin_log,
+                    self.status_on_error,
+                    Bytes::from_static(b"{\"message\":\"Auth service unavailable\"}"),
+                    Some("application/json"),
+                    None,
+                )
+                .await;
         };
         self.handle_outbound_response(session, plugin_log, resp).await
     }

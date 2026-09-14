@@ -304,7 +304,7 @@ struct RouteUnitCtx<'a> {
     /// Per-(rule,hostname) LB selector, Arc-shared across this rule's units.
     backend_finder: Arc<BackendSelector<usize>>,
     /// Per-rule compiled backends (Arc-shared), for by-name lookup.
-    backends: Arc<Vec<CompiledBackend>>,
+    backends: Arc<[CompiledBackend]>,
     /// Route's raw metadata maps, resolved once per route, Arc-shared into
     /// each match-item unit's `MatchInfo` for `AccessLogExtern`.
     route_labels_meta: crate::ctx::RouteMeta,
@@ -506,23 +506,17 @@ fn parse_http_routes_to_domain_rules(data: &HashMap<String, Arc<HTTPRoute>>) -> 
     let mut skipped_routes = 0;
 
     for (_key, route) in data.iter() {
-        let validated = match validate_http_route(route) {
-            Some(v) => v,
-            None => {
-                skipped_routes += 1;
-                continue;
-            }
+        let Some(validated) = validate_http_route(route) else {
+            skipped_routes += 1;
+            continue;
         };
-        let accepted_refs = match filter_accepted_parent_refs(
+        let Some(accepted_refs) = filter_accepted_parent_refs(
             route.spec.parent_refs.as_deref(),
             route.status.as_ref().map(|s| s.parents.as_slice()),
             Some(&validated.namespace),
-        ) {
-            Some(refs) => refs,
-            None => {
-                skipped_routes += 1;
-                continue;
-            }
+        ) else {
+            skipped_routes += 1;
+            continue;
         };
 
         let route_sv = route.get_sync_version();

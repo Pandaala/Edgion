@@ -459,9 +459,8 @@ impl AllEndpointStatus {
         body: &str,
         extra_headers: &[(&str, &str)],
     ) -> PluginRunningResult {
-        let mut resp = match ResponseHeader::build(status, None) {
-            Ok(r) => r,
-            Err(_) => return PluginRunningResult::ErrTerminateRequest,
+        let Ok(mut resp) = ResponseHeader::build(status, None) else {
+            return PluginRunningResult::ErrTerminateRequest;
         };
         let _ = resp.insert_header("Content-Type", "application/json");
         let _ = resp.insert_header("Content-Length", body.len().to_string());
@@ -731,6 +730,199 @@ fn assemble_endpoint_results(
     }
 
     aggregate
+}
+
+// ============================================================
+// RequestFilter implementation
+// ============================================================
+
+#[async_trait]
+impl RequestFilter for AllEndpointStatus {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    async fn run_request(&self, session: &mut dyn PluginSession, log: &mut PluginLog) -> PluginRunningResult {
+        let global_config = get_all_endpoint_status_global_config();
+
+        // === Global rate limit check ===
+        // Loop until we either claim the execution slot via CAS or get rate-limited.
+        // A bare load+check followed by a discarded CAS would let concurrent requests
+        // that all read the same `last` value bypass the min-interval gate together.
+        let min_interval = global_config.min_interval_ms;
+        if min_interval > 0 {
+            if let Err(remaining_ms) = claim_execution_at(&LAST_EXECUTION_MS, elapsed_ms(), min_interval) {
+                let retry_after_s = remaining_ms.div_ceil(1000);
+                log.push_err("rate limited");
+                let body = format!(r#"{{"error":"rate limited, retry after {}s"}}"#, retry_after_s);
+                return self
+                    .send_json_response_with_headers(
+                        session,
+                        429,
+                        &body,
+                        &[("Retry-After", &retry_after_s.to_string())],
+                    )
+                    .await;
+            }
+        }
+
+        // === Global concurrency gate ===
+        let Ok(Ok(_global_permit)) = tokio::time::timeout(Duration::from_secs(5), GLOBAL_CONCURRENCY.acquire()).await
+        else {
+            log.push_err("concurrency limit");
+            return self
+                .send_json_response(
+                    session,
+                    503,
+                    r#"{"error":"too many concurrent all-endpoint-status requests"}"#,
+                )
+                .await;
+        };
+
+        let start = Instant::now();
+
+        // 1. Get route_unit and backend_refs
+        let ctx = session.ctx();
+        let route_unit = match ctx.route_unit.as_ref() {
+            Some(unit) => unit.clone(),
+            None => {
+                log.push_err("no route");
+                return self
+                    .send_json_response(session, 503, r#"{"error":"no route matched"}"#)
+                    .await;
+            }
+        };
+
+        let backend_refs = match route_unit.rule.backend_refs.as_ref() {
+            Some(refs) if !refs.is_empty() => refs.clone(),
+            _ => {
+                log.push("status served 0");
+                let empty = r#"{"summary":{"total_backends":0,"total_endpoints":0,"success_count":0,"failure_count":0,"truncated":false,"timeout_ms":0,"wall_timeout_ms":0,"total_latency_ms":0,"total_response_bytes":0,"wall_timeout_hit":false},"backends":[]}"#;
+                return self.send_json_response(session, 200, empty).await;
+            }
+        };
+
+        // Collect original request info (before mutable borrow)
+        let original_method = session.get_method().to_string();
+        let original_path = session.get_path().to_string();
+        let original_query = session.get_query();
+        let original_headers = session.request_headers();
+        let route_namespace = route_unit.matched_info.rsc.ns.clone();
+
+        // 2. Resolve all endpoints from all backends
+        let effective_max = self.config.effective_max_endpoints(global_config.max_endpoints);
+        let discovery = get_service_discovery_coordinator().load_generation();
+        let policies = get_global_backend_tls_policy_store().snapshot();
+        let gateway_key = ctx.gateway_info.as_ref().map(|gateway| gateway.gateway_key());
+        let collection = collect_route_endpoints_with(
+            &backend_refs,
+            &route_namespace,
+            effective_max,
+            ctx.allow_loopback_upstream,
+            |name, namespace, port, allow_loopback| {
+                resolve_endpoints(
+                    name,
+                    namespace,
+                    port,
+                    allow_loopback,
+                    &discovery,
+                    &policies,
+                    gateway_key,
+                )
+            },
+        );
+
+        if collection.invalid_ref_count > 0 {
+            log.push_err("probe configuration unavailable");
+            return PluginRunningResult::ErrResponse {
+                status: 503,
+                body: Some(Bytes::from_static(b"probe configuration unavailable")),
+            };
+        }
+
+        if collection.denied_ref_count > 0 {
+            log.push_err("backend ref denied");
+        }
+        if collection.unsafe_endpoint_count > 0 {
+            log.push_err("unsafe upstream");
+        }
+
+        let total_truncated = collection.truncated();
+        let mut all_backend_results = collection.backends;
+        let all_endpoints = collection.selected_endpoints;
+        let total_endpoints = all_endpoints.len();
+
+        if total_endpoints == 0 {
+            log.push("status served 0");
+            let response = AggregatedResponse {
+                summary: Summary {
+                    total_backends: all_backend_results.len(),
+                    total_endpoints: 0,
+                    success_count: 0,
+                    failure_count: 0,
+                    truncated: total_truncated,
+                    timeout_ms: self.config.effective_timeout_ms(),
+                    wall_timeout_ms: self.config.effective_wall_timeout_ms(),
+                    total_latency_ms: duration_millis(Instant::now().saturating_duration_since(start)),
+                    total_response_bytes: 0,
+                    wall_timeout_hit: false,
+                },
+                backends: all_backend_results,
+            };
+            let json_body = serde_json::to_string(&response).unwrap_or_default();
+            return self.send_json_response(session, 200, &json_body).await;
+        }
+
+        // 3. Fan-out requests
+        let (endpoint_results, wall_timeout_hit) = self
+            .fan_out_requests(
+                &all_endpoints,
+                &original_method,
+                &original_path,
+                original_query.as_deref(),
+                &original_headers,
+            )
+            .await;
+
+        // 4. Map results back to backends
+        let aggregate = assemble_endpoint_results(&all_endpoints, endpoint_results, &mut all_backend_results);
+        if aggregate.failure_count > 0 {
+            log.push_err("endpoint probe failed");
+        }
+
+        record_execution_completed_at(&LAST_EXECUTION_MS, elapsed_ms());
+
+        let total_latency = duration_millis(Instant::now().saturating_duration_since(start));
+
+        // 5. Build aggregated response
+        let response = AggregatedResponse {
+            summary: Summary {
+                total_backends: all_backend_results.len(),
+                total_endpoints,
+                success_count: aggregate.success_count,
+                failure_count: aggregate.failure_count,
+                truncated: total_truncated,
+                timeout_ms: self.config.effective_timeout_ms(),
+                wall_timeout_ms: self.config.effective_wall_timeout_ms(),
+                total_latency_ms: total_latency,
+                total_response_bytes: aggregate.total_response_bytes,
+                wall_timeout_hit,
+            },
+            backends: all_backend_results,
+        };
+
+        let Ok(json_body) = serde_json::to_string(&response) else {
+            log.push_err("serialize fail");
+            return self
+                .send_json_response(session, 500, r#"{"error":"internal serialization error"}"#)
+                .await;
+        };
+
+        log.push_fmt("status served {}", la![total_endpoints.to_string().as_str()]);
+
+        self.send_json_response(session, 200, &json_body).await
+        // _global_permit is dropped here, releasing the concurrency slot
+    }
 }
 
 #[cfg(test)]
@@ -1165,203 +1357,5 @@ mod tests {
         assert!(!is_inbound_body_header("authorization"));
         assert!(!is_inbound_body_header("host"));
         assert!(is_hop_by_hop_or_listed("Transfer-Encoding", &[]));
-    }
-}
-
-// ============================================================
-// RequestFilter implementation
-// ============================================================
-
-#[async_trait]
-impl RequestFilter for AllEndpointStatus {
-    fn name(&self) -> &str {
-        &self.name
-    }
-
-    async fn run_request(&self, session: &mut dyn PluginSession, log: &mut PluginLog) -> PluginRunningResult {
-        let global_config = get_all_endpoint_status_global_config();
-
-        // === Global rate limit check ===
-        // Loop until we either claim the execution slot via CAS or get rate-limited.
-        // A bare load+check followed by a discarded CAS would let concurrent requests
-        // that all read the same `last` value bypass the min-interval gate together.
-        let min_interval = global_config.min_interval_ms;
-        if min_interval > 0 {
-            if let Err(remaining_ms) = claim_execution_at(&LAST_EXECUTION_MS, elapsed_ms(), min_interval) {
-                let retry_after_s = remaining_ms.div_ceil(1000);
-                log.push_err("rate limited");
-                let body = format!(r#"{{"error":"rate limited, retry after {}s"}}"#, retry_after_s);
-                return self
-                    .send_json_response_with_headers(
-                        session,
-                        429,
-                        &body,
-                        &[("Retry-After", &retry_after_s.to_string())],
-                    )
-                    .await;
-            }
-        }
-
-        // === Global concurrency gate ===
-        let _global_permit = match tokio::time::timeout(Duration::from_secs(5), GLOBAL_CONCURRENCY.acquire()).await {
-            Ok(Ok(permit)) => permit,
-            _ => {
-                log.push_err("concurrency limit");
-                return self
-                    .send_json_response(
-                        session,
-                        503,
-                        r#"{"error":"too many concurrent all-endpoint-status requests"}"#,
-                    )
-                    .await;
-            }
-        };
-
-        let start = Instant::now();
-
-        // 1. Get route_unit and backend_refs
-        let ctx = session.ctx();
-        let route_unit = match ctx.route_unit.as_ref() {
-            Some(unit) => unit.clone(),
-            None => {
-                log.push_err("no route");
-                return self
-                    .send_json_response(session, 503, r#"{"error":"no route matched"}"#)
-                    .await;
-            }
-        };
-
-        let backend_refs = match route_unit.rule.backend_refs.as_ref() {
-            Some(refs) if !refs.is_empty() => refs.clone(),
-            _ => {
-                log.push("status served 0");
-                let empty = r#"{"summary":{"total_backends":0,"total_endpoints":0,"success_count":0,"failure_count":0,"truncated":false,"timeout_ms":0,"wall_timeout_ms":0,"total_latency_ms":0,"total_response_bytes":0,"wall_timeout_hit":false},"backends":[]}"#;
-                return self.send_json_response(session, 200, empty).await;
-            }
-        };
-
-        // Collect original request info (before mutable borrow)
-        let original_method = session.get_method().to_string();
-        let original_path = session.get_path().to_string();
-        let original_query = session.get_query();
-        let original_headers = session.request_headers();
-        let route_namespace = route_unit.matched_info.rsc.ns.clone();
-
-        // 2. Resolve all endpoints from all backends
-        let effective_max = self.config.effective_max_endpoints(global_config.max_endpoints);
-        let discovery = get_service_discovery_coordinator().load_generation();
-        let policies = get_global_backend_tls_policy_store().snapshot();
-        let gateway_key = ctx.gateway_info.as_ref().map(|gateway| gateway.gateway_key());
-        let collection = collect_route_endpoints_with(
-            &backend_refs,
-            &route_namespace,
-            effective_max,
-            ctx.allow_loopback_upstream,
-            |name, namespace, port, allow_loopback| {
-                resolve_endpoints(
-                    name,
-                    namespace,
-                    port,
-                    allow_loopback,
-                    &discovery,
-                    &policies,
-                    gateway_key,
-                )
-            },
-        );
-
-        if collection.invalid_ref_count > 0 {
-            log.push_err("probe configuration unavailable");
-            return PluginRunningResult::ErrResponse {
-                status: 503,
-                body: Some(Bytes::from_static(b"probe configuration unavailable")),
-            };
-        }
-
-        if collection.denied_ref_count > 0 {
-            log.push_err("backend ref denied");
-        }
-        if collection.unsafe_endpoint_count > 0 {
-            log.push_err("unsafe upstream");
-        }
-
-        let total_truncated = collection.truncated();
-        let mut all_backend_results = collection.backends;
-        let all_endpoints = collection.selected_endpoints;
-        let total_endpoints = all_endpoints.len();
-
-        if total_endpoints == 0 {
-            log.push("status served 0");
-            let response = AggregatedResponse {
-                summary: Summary {
-                    total_backends: all_backend_results.len(),
-                    total_endpoints: 0,
-                    success_count: 0,
-                    failure_count: 0,
-                    truncated: total_truncated,
-                    timeout_ms: self.config.effective_timeout_ms(),
-                    wall_timeout_ms: self.config.effective_wall_timeout_ms(),
-                    total_latency_ms: duration_millis(Instant::now().saturating_duration_since(start)),
-                    total_response_bytes: 0,
-                    wall_timeout_hit: false,
-                },
-                backends: all_backend_results,
-            };
-            let json_body = serde_json::to_string(&response).unwrap_or_default();
-            return self.send_json_response(session, 200, &json_body).await;
-        }
-
-        // 3. Fan-out requests
-        let (endpoint_results, wall_timeout_hit) = self
-            .fan_out_requests(
-                &all_endpoints,
-                &original_method,
-                &original_path,
-                original_query.as_deref(),
-                &original_headers,
-            )
-            .await;
-
-        // 4. Map results back to backends
-        let aggregate = assemble_endpoint_results(&all_endpoints, endpoint_results, &mut all_backend_results);
-        if aggregate.failure_count > 0 {
-            log.push_err("endpoint probe failed");
-        }
-
-        record_execution_completed_at(&LAST_EXECUTION_MS, elapsed_ms());
-
-        let total_latency = duration_millis(Instant::now().saturating_duration_since(start));
-
-        // 5. Build aggregated response
-        let response = AggregatedResponse {
-            summary: Summary {
-                total_backends: all_backend_results.len(),
-                total_endpoints,
-                success_count: aggregate.success_count,
-                failure_count: aggregate.failure_count,
-                truncated: total_truncated,
-                timeout_ms: self.config.effective_timeout_ms(),
-                wall_timeout_ms: self.config.effective_wall_timeout_ms(),
-                total_latency_ms: total_latency,
-                total_response_bytes: aggregate.total_response_bytes,
-                wall_timeout_hit,
-            },
-            backends: all_backend_results,
-        };
-
-        let json_body = match serde_json::to_string(&response) {
-            Ok(j) => j,
-            Err(_) => {
-                log.push_err("serialize fail");
-                return self
-                    .send_json_response(session, 500, r#"{"error":"internal serialization error"}"#)
-                    .await;
-            }
-        };
-
-        log.push_fmt("status served {}", la![total_endpoints.to_string().as_str()]);
-
-        self.send_json_response(session, 200, &json_body).await
-        // _global_permit is dropped here, releasing the concurrency slot
     }
 }

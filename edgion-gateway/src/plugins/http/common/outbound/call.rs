@@ -260,13 +260,10 @@ pub async fn outbound_call_with_body(
             }
         }
 
-        let req = match request_for_attempt(&mut template_req, max_attempts) {
-            Some(r) => r,
-            None => {
-                return Err(OutboundCallError::Connect(
-                    "outbound request is not cloneable".to_string(),
-                ))
-            }
+        let Some(req) = request_for_attempt(&mut template_req, max_attempts) else {
+            return Err(OutboundCallError::Connect(
+                "outbound request is not cloneable".to_string(),
+            ));
         };
 
         let exec = tokio::time::timeout(effective_timeout, client.http_client.execute(req)).await;
@@ -622,13 +619,11 @@ fn should_halfopen_probe(client: &ManagedOutboundClient) -> bool {
     if client.health_task.is_some() {
         return false;
     }
-    let passive = match client.passive_health_check.as_ref() {
-        Some(p) => p,
-        None => return false,
+    let Some(passive) = client.passive_health_check.as_ref() else {
+        return false;
     };
-    let backoff = match &passive.backoff {
-        Some(b) => b,
-        None => return false,
+    let Some(backoff) = &passive.backoff else {
+        return false;
     };
 
     let now = process_elapsed_secs();
@@ -915,7 +910,7 @@ mod tests {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/big"))
-            .respond_with(ResponseTemplate::new(200).set_body_bytes(b"x".repeat(200).to_vec()))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(b"x".repeat(200)))
             .mount(&server)
             .await;
 
@@ -1701,8 +1696,6 @@ mod tests {
     /// the outbound call always times out — a reliable DoS.
     #[test]
     fn resolve_timeout_floor_falls_back_to_static_timeout() {
-        use edgion_resources::resources::common::external_http::MIN_OUTBOUND_TIMEOUT_MS;
-
         let mut client = make_client("http://10.0.0.1:1");
         client.timeout = Duration::from_secs(5);
         client.timeout_template = Some(compile_tpl("${ctx:desired_timeout_ms}"));
@@ -1715,10 +1708,6 @@ mod tests {
 
         let resolved = resolve_timeout(&client, &session);
         assert_eq!(resolved, Duration::from_secs(5), "must fall back to the static timeout");
-        assert!(
-            1 < MIN_OUTBOUND_TIMEOUT_MS,
-            "sanity: the render must be below the floor"
-        );
     }
 
     /// A render exactly at `MIN_OUTBOUND_TIMEOUT_MS` is accepted (the floor is

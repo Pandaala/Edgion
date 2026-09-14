@@ -21,7 +21,6 @@ use edgion_common::ext_proc::proto::{
 /// hold/release adapter from `crate::sse` must feed this processor before any
 /// semantic SSE-window claim; this type never treats a transport chunk as an
 /// SSE event and never parses or reserializes SSE.
-
 pub(super) const RESPONSE_WINDOW_CAP: usize = 1024 * 1024;
 
 #[async_trait]
@@ -236,7 +235,7 @@ mod tests {
     use edgion_common::ext_proc::proto::{
         BodyMutation, BodyResponse, CommonResponse, HeaderMutation, ImmediateResponse,
     };
-    use std::sync::Mutex;
+    use parking_lot::Mutex;
 
     struct Scripted {
         results: Mutex<Vec<Result<ProcessingResponse, tonic::Status>>>,
@@ -247,12 +246,12 @@ mod tests {
     #[async_trait]
     impl ResponseExchange for Scripted {
         async fn exchange(&self, request: ProcessingRequest, last: bool) -> Result<ProcessingResponse, tonic::Status> {
-            self.requests.lock().unwrap().push((request, last));
-            self.results.lock().unwrap().remove(0)
+            self.requests.lock().push((request, last));
+            self.results.lock().remove(0)
         }
 
         fn terminal(&self, outcome: &'static str, reason: &'static str) {
-            *self.terminal.lock().unwrap() = Some((outcome, reason));
+            *self.terminal.lock() = Some((outcome, reason));
         }
     }
 
@@ -316,7 +315,7 @@ mod tests {
                 &mut session,
             )
             .await;
-        assert!(owner.requests.lock().unwrap().is_empty());
+        assert!(owner.requests.lock().is_empty());
 
         let (mut skip_trailers, owner) = processor(Ok(verdict(None, false)), false);
         let mut session = mock_session();
@@ -331,7 +330,7 @@ mod tests {
                 &mut session,
             )
             .await;
-        let requests = owner.requests.lock().unwrap();
+        let requests = owner.requests.lock();
         assert!(requests[0].1);
         let Some(processing_request::Request::ResponseBody(body)) = requests[0].0.request.as_ref() else {
             panic!("expected terminal response body")
@@ -357,7 +356,7 @@ mod tests {
                 &mut session,
             )
             .await;
-        let requests = owner.requests.lock().unwrap();
+        let requests = owner.requests.lock();
         assert!(requests[0].1);
         let Some(processing_request::Request::ResponseBody(body)) = requests[0].0.request.as_ref() else {
             panic!("expected terminal response body")
@@ -508,10 +507,7 @@ mod tests {
             .await;
         assert_eq!(original.as_deref(), Some(&b"original"[..]));
         assert!(!sink.is_terminated());
-        assert_eq!(
-            *terminal.terminal.lock().unwrap(),
-            Some(("fail-open", "post-commit-immediate"))
-        );
+        assert_eq!(*terminal.terminal.lock(), Some(("fail-open", "post-commit-immediate")));
     }
 
     #[tokio::test]
@@ -532,10 +528,7 @@ mod tests {
             .await;
         assert_eq!(original.as_deref(), Some(&b"original"[..]));
         assert!(!sink.is_terminated());
-        assert_eq!(
-            *terminal.terminal.lock().unwrap(),
-            Some(("suppressed", "immediate-disabled"))
-        );
+        assert_eq!(*terminal.terminal.lock(), Some(("suppressed", "immediate-disabled")));
     }
 
     #[tokio::test]
@@ -612,6 +605,6 @@ mod tests {
         eos.on_chunk(&mut empty, true, ResponseStreamKind::None, &mut sink, &mut session)
             .await;
         assert!(!sink.is_terminated());
-        assert!(owner.requests.lock().unwrap()[0].1);
+        assert!(owner.requests.lock()[0].1);
     }
 }

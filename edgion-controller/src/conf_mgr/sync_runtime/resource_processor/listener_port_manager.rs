@@ -184,9 +184,8 @@ impl ListenerPortManager {
         let gw_map = self.gateway_to_ports.read();
         let port_map = self.port_to_listeners.read();
 
-        let port_keys = match gw_map.get(gateway_key) {
-            Some(keys) => keys,
-            None => return conflicts,
+        let Some(port_keys) = gw_map.get(gateway_key) else {
+            return conflicts;
         };
 
         for conflict_key in port_keys {

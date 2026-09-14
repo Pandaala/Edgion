@@ -159,7 +159,7 @@ mod tests {
         };
         let mut ed = EdgionConfigData::new("blk", spec);
         ed.metadata.namespace = Some(ns.to_string());
-        get_global_edgion_config_data_store().insert_raw_for_test(&format!("{ns}/blk"), Arc::new(ed));
+        get_global_edgion_config_data_store().insert_raw_for_test(format!("{ns}/blk"), Arc::new(ed));
 
         let config = IpRestrictionConfig {
             allow: None,

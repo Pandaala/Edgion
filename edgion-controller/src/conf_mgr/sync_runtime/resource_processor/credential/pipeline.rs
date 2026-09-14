@@ -215,15 +215,12 @@ pub fn fetch_configmap(
     owner_ns: Option<&str>,
 ) -> FetchOutcome<ConfigMap> {
     // ── Step 1: compute effective namespace ──────────────────────────────
-    let effective_ns = match namespace.or(owner_ns) {
-        Some(ns) => ns,
-        None => {
-            // Cluster-scoped owner with no explicit namespace: cannot resolve.
-            return FetchOutcome::Pending(PendingReason::SecretNotFound {
-                namespace: String::new(),
-                name: name.to_string(),
-            });
-        }
+    let Some(effective_ns) = namespace.or(owner_ns) else {
+        // Cluster-scoped owner with no explicit namespace: cannot resolve.
+        return FetchOutcome::Pending(PendingReason::SecretNotFound {
+            namespace: String::new(),
+            name: name.to_string(),
+        });
     };
 
     // ── Step 2: register SecretRefManager dependency ─────────────────────
@@ -326,11 +323,8 @@ fn resolve_inner_with_registration<R: SecretMaterialResolver>(
         return ResolveOutcome::Invalid(e);
     }
 
-    let data = match secret.data.as_ref() {
-        Some(d) => d,
-        None => {
-            return ResolveOutcome::Invalid(InvalidCredentialError::MissingKeys(resolver.required_keys().to_vec()));
-        }
+    let Some(data) = secret.data.as_ref() else {
+        return ResolveOutcome::Invalid(InvalidCredentialError::MissingKeys(resolver.required_keys().to_vec()));
     };
 
     match resolver.parse(data) {

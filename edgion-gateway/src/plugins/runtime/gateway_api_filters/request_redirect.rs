@@ -141,11 +141,8 @@ impl RequestFilter for RequestRedirectFilter {
 
         plugin_log.push_fmt("redirect {}", la![status.as_u16().to_string().as_str()]);
 
-        let mut resp = match ResponseHeader::build(status, None) {
-            Ok(r) => r,
-            Err(_) => {
-                return PluginRunningResult::ErrTerminateRequest;
-            }
+        let Ok(mut resp) = ResponseHeader::build(status, None) else {
+            return PluginRunningResult::ErrTerminateRequest;
         };
 
         if resp.insert_header("Location", &location).is_err() {

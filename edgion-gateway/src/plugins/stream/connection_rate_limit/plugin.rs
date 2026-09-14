@@ -101,8 +101,10 @@ impl ConnectionRateLimitPlugin {
         let redis_timeout_ms = parse_duration(&cfg.redis_timeout)
             .map(|d| d.as_millis() as u64)
             .unwrap_or(100)
-            .min(edgion_resources::resources::edgion_stream_plugins::MAX_REDIS_ACCEPT_TIMEOUT_MS)
-            .max(1);
+            .clamp(
+                1,
+                edgion_resources::resources::edgion_stream_plugins::MAX_REDIS_ACCEPT_TIMEOUT_MS,
+            );
         let local_gate = if !init_failed {
             pl_rate.and_then(|rate| {
                 let binding = LocalGateBinding::new(entry_scope, rate, pl_interval_ms);

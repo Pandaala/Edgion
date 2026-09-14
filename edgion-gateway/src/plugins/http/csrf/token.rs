@@ -66,9 +66,8 @@ impl CsrfToken {
 
     /// Verify token signature and expiration
     pub fn verify(&self, key: &str, max_age_seconds: i64) -> bool {
-        let elapsed = match SystemTime::now().duration_since(UNIX_EPOCH) {
-            Ok(elapsed) => elapsed,
-            Err(_) => return false,
+        let Ok(elapsed) = SystemTime::now().duration_since(UNIX_EPOCH) else {
+            return false;
         };
         let Ok(now) = i64::try_from(elapsed.as_secs()) else {
             return false;

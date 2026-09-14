@@ -276,15 +276,15 @@ fn resolve_field(field: &AccessLogExternField, session: &Session, ctx: &EdgionHt
 mod tests {
     use super::*;
     use edgion_resources::sensitive::SENSITIVE_MODE;
+    use parking_lot::{Mutex, MutexGuard};
     use std::sync::atomic::Ordering;
-    use std::sync::Mutex;
 
     // Serialize every test that mutates the global mode.
     static MODE_LOCK: Mutex<()> = Mutex::new(());
 
     struct ModeGuard<'a> {
         prev: u8,
-        _lock: std::sync::MutexGuard<'a, ()>,
+        _lock: MutexGuard<'a, ()>,
     }
     impl Drop for ModeGuard<'_> {
         fn drop(&mut self) {
@@ -292,7 +292,7 @@ mod tests {
         }
     }
     fn set_mode(mode: u8) -> ModeGuard<'static> {
-        let lock = MODE_LOCK.lock().unwrap();
+        let lock = MODE_LOCK.lock();
         let prev = SENSITIVE_MODE.swap(mode, Ordering::SeqCst);
         ModeGuard { prev, _lock: lock }
     }

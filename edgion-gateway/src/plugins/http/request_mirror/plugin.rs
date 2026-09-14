@@ -291,12 +291,9 @@ impl RequestFilter for RequestMirrorPlugin {
             return PluginRunningResult::GoodNext;
         }
 
-        let permit = match self.semaphore.clone().try_acquire_owned() {
-            Ok(p) => p,
-            Err(_) => {
-                log.push("mirror skipped concurrency");
-                return PluginRunningResult::GoodNext;
-            }
+        let Ok(permit) = self.semaphore.clone().try_acquire_owned() else {
+            log.push("mirror skipped concurrency");
+            return PluginRunningResult::GoodNext;
         };
 
         let Some(process_permit) = self.budget.try_acquire_task() else {
@@ -320,12 +317,9 @@ impl RequestFilter for RequestMirrorPlugin {
             format!("{base_url}{path}")
         };
 
-        let method = match reqwest::Method::from_bytes(session.get_method().as_bytes()) {
-            Ok(m) => m,
-            Err(_) => {
-                log.push_err("mirror invalid method");
-                return PluginRunningResult::GoodNext;
-            }
+        let Ok(method) = reqwest::Method::from_bytes(session.get_method().as_bytes()) else {
+            log.push_err("mirror invalid method");
+            return PluginRunningResult::GoodNext;
         };
         let has_committed_body = session.ctx().request_body.has_cached_body();
 
@@ -521,6 +515,8 @@ impl RequestFilter for RequestMirrorPlugin {
 
 #[cfg(test)]
 mod arming_tests {
+    #![allow(clippy::field_reassign_with_default)]
+
     use super::*;
     use crate::backends::get_roundrobin_store;
     use crate::plugins::http::common::http_client::get_mirror_http_client;

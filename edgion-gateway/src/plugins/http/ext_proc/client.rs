@@ -13,7 +13,7 @@
 //! `tower` connector (`connect_with_connector_lazy`).
 
 use std::collections::HashMap;
-use std::sync::{Arc, LazyLock, Mutex, Weak};
+use std::sync::{Arc, LazyLock, Weak};
 use std::time::Duration;
 
 use edgion_common::ext_proc::proto::external_processor_client::ExternalProcessorClient;
@@ -21,6 +21,7 @@ use edgion_common::ext_proc::proto::{processing_response, ProcessingRequest, Pro
 use edgion_common::link_sys_core::outbound_tls::{resolve_outbound_tls, EffectiveCa, ResolvedOutboundTls};
 use edgion_resources::plugin_configs::ExtProcConfig;
 use hyper_util::rt::TokioIo;
+use parking_lot::Mutex;
 use rustls::pki_types::{pem::PemObject, CertificateDer, PrivateKeyDer, ServerName};
 use rustls::{ClientConfig, RootCertStore};
 use tokio_rustls::TlsConnector;
@@ -57,6 +58,7 @@ enum ProcessingPhase {
 }
 
 impl ProcessingPhase {
+    #[allow(clippy::result_large_err)]
     fn from_request(request: &ProcessingRequest) -> Result<Self, tonic::Status> {
         use edgion_common::ext_proc::proto::processing_request::Request;
 
@@ -102,6 +104,7 @@ fn common_response(response: &ProcessingResponse) -> Option<&edgion_common::ext_
 }
 
 #[cfg(test)]
+#[allow(clippy::result_large_err)]
 fn response_status(
     response: &ProcessingResponse,
 ) -> Result<edgion_common::ext_proc::proto::common_response::ResponseStatus, tonic::Status> {
@@ -174,12 +177,7 @@ impl ExtProcClient {
         fingerprint_effective_tls(&mut hasher, resolved_tls.as_ref());
         hasher.update([u8::from(default_block_private())]);
         let cache_key = format!("{:x}", hasher.finalize());
-        if let Some(runtime) = TARGET_RUNTIMES
-            .lock()
-            .map_err(|_| "ext_proc target cache lock poisoned".to_string())?
-            .get(&cache_key)
-            .and_then(Weak::upgrade)
-        {
+        if let Some(runtime) = TARGET_RUNTIMES.lock().get(&cache_key).and_then(Weak::upgrade) {
             return Ok(Self { runtime, timeout });
         }
 
@@ -188,9 +186,7 @@ impl ExtProcClient {
             client: ExternalProcessorClient::new(channel),
             sessions: Arc::new(Semaphore::new(TARGET_SESSION_CAP)),
         });
-        let mut cache = TARGET_RUNTIMES
-            .lock()
-            .map_err(|_| "ext_proc target cache lock poisoned".to_string())?;
+        let mut cache = TARGET_RUNTIMES.lock();
         cache.retain(|_, runtime| runtime.strong_count() > 0);
         if let Some(existing) = cache.get(&cache_key).and_then(Weak::upgrade) {
             return Ok(Self {
@@ -277,6 +273,7 @@ impl ExtProcClient {
 
 /// Inbound side of a request-scoped stream: the un-awaited `process` call
 /// until the first exchange resolves it, the live response stream afterwards.
+#[allow(clippy::large_enum_variant)]
 enum InboundState {
     Opening(
         futures::future::BoxFuture<
@@ -300,6 +297,7 @@ pub struct ExtProcStream {
 }
 
 impl ExtProcStream {
+    #[allow(clippy::result_large_err)]
     fn reject_observable_unsolicited(&mut self) -> Result<(), tonic::Status> {
         use futures::FutureExt;
 
@@ -1061,8 +1059,8 @@ mod tests {
         use edgion_common::link_sys_core::outbound_tls::{outbound_global_default, set_outbound_global_default};
         use edgion_resources::resources::common::OutboundTlsConfig;
 
-        static GLOBAL_TLS_TEST: std::sync::Mutex<()> = std::sync::Mutex::new(());
-        let _guard = GLOBAL_TLS_TEST.lock().unwrap();
+        static GLOBAL_TLS_TEST: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
+        let _guard = GLOBAL_TLS_TEST.lock();
         install_test_crypto_provider();
         let original = outbound_global_default();
         set_outbound_global_default(OutboundTlsConfig::default());
@@ -1086,9 +1084,8 @@ mod tests {
         for _ in 0..TARGET_SESSION_CAP {
             streams.push(client.open_stream().await.unwrap());
         }
-        let saturated = match client.open_stream().await {
-            Ok(_) => panic!("session cap must reject excess logical streams"),
-            Err(status) => status,
+        let Err(saturated) = client.open_stream().await else {
+            panic!("session cap must reject excess logical streams");
         };
         assert_eq!(saturated.code(), tonic::Code::ResourceExhausted);
         streams.pop();
@@ -1187,7 +1184,7 @@ mod tests {
                 let (tx, rx) = tokio::sync::mpsc::channel(4);
                 let behavior = self.behavior;
                 let phase = self.phase;
-                let observed = self.observed.lock().unwrap().take();
+                let observed = self.observed.lock().take();
                 tokio::spawn(async move {
                     let first = inbound.message().await;
                     let matches_phase = matches!(

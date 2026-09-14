@@ -43,22 +43,17 @@ pub(super) fn verify_jwt<'a>(
     plugin_log: &mut PluginLog,
 ) -> Result<VerifyOk<'a>, VerifyDeny> {
     // 1. Decode header -- gives us the token's claimed alg.
-    let header = match decode_header(token) {
-        Ok(h) => h,
-        Err(_) => {
-            plugin_log.push("Deny malformed token");
-            return Err(VerifyDeny::Malformed);
-        }
+    let Ok(header) = decode_header(token) else {
+        plugin_log.push("Deny malformed token");
+        return Err(VerifyDeny::Malformed);
     };
 
     // 2. Peek at payload (insecure decode) to read iss.
-    let peek = match decode::<Value>(token, store.peek_decoding_key(), store.peek_validation()) {
-        Ok(d) => d.claims,
-        Err(_) => {
-            plugin_log.push("Deny malformed token");
-            return Err(VerifyDeny::Malformed);
-        }
+    let Ok(peek) = decode::<Value>(token, store.peek_decoding_key(), store.peek_validation()) else {
+        plugin_log.push("Deny malformed token");
+        return Err(VerifyDeny::Malformed);
     };
+    let peek = peek.claims;
 
     // 3. Extract iss (REQUIRED, must be non-empty string).
     let iss = match peek.get("iss").and_then(|v| v.as_str()) {
@@ -70,12 +65,9 @@ pub(super) fn verify_jwt<'a>(
     };
 
     // 4. Route to group (exact iss match; no normalization).
-    let cached_group = match store.lookup_by_iss(iss) {
-        Some(g) => g,
-        None => {
-            plugin_log.push("Deny unknown iss"); // NO iss value in log
-            return Err(VerifyDeny::UnknownIss);
-        }
+    let Some(cached_group) = store.lookup_by_iss(iss) else {
+        plugin_log.push("Deny unknown iss"); // NO iss value in log
+        return Err(VerifyDeny::UnknownIss);
     };
 
     // 5. Algorithm-confusion defense -- header.alg MUST match group.algorithm.
@@ -204,7 +196,7 @@ mod tests {
             "key": kid,
             "sub": "alice",
             "exp": (std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() + 3600) as u64,
+                .duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() + 3600),
         });
         let header = Header::new(alg);
         encode(&header, &claims, &EncodingKey::from_secret(secret_bytes)).unwrap()

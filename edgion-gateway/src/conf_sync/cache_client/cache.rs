@@ -58,8 +58,8 @@ where
     pub(crate) grpc_client: Arc<AsyncRwLock<Option<ConfigSyncClientService<Channel>>>>,
 
     // conf_client identification
-    pub(crate) client_id: Arc<String>,
-    pub(crate) client_name: Arc<String>,
+    pub(crate) client_id: Arc<str>,
+    pub(crate) client_name: Arc<str>,
 }
 
 impl<T: kube::Resource> Clone for ClientCache<T> {
@@ -78,8 +78,8 @@ impl<T: ResourceMeta + Resource> ClientCache<T> {
         Self {
             cache_data: Arc::new(RwLock::new(CacheData::new())),
             grpc_client: Arc::new(AsyncRwLock::new(None)),
-            client_id: Arc::new(client_id),
-            client_name: Arc::new(client_name),
+            client_id: Arc::from(client_id),
+            client_name: Arc::from(client_name),
         }
     }
 

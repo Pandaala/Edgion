@@ -16,7 +16,7 @@ fields. The struct is now:
 
 ```rust
 struct ListenerGatewayInfoSnapshot {
-    flat: HashMap<ListenerKey, Arc<Vec<Arc<GatewayInfo>>>>,
+    flat: HashMap<ListenerKey, Arc<[Arc<GatewayInfo>]>>,
     index: HashMap<ListenerKey, Arc<GatewayInfoIndex>>,
 }
 
@@ -34,7 +34,7 @@ guarantee. The snapshot type is private, so public callers cannot currently requ
 both views through one load.
 
 Each listener generation creates one `Arc<GatewayInfo>` shared by the flat view and
-the indexed `ListenerEntry` values. `get()` returns `Arc<Vec<Arc<GatewayInfo>>>`,
+the indexed `ListenerEntry` values. `get()` returns `Arc<[Arc<GatewayInfo>]>`,
 not the historical `Arc<Vec<GatewayInfo>>`. The original snapshot fix preserved
 the public signatures at that time; that historical claim does not describe the
 later per-entry Arc ownership change.

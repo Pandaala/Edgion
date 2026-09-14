@@ -86,11 +86,10 @@ impl TlsProxyProtocolTestSuite {
                     let response_str = String::from_utf8_lossy(&buf[..n]);
 
                     // The PP2 server returns JSON; find the JSON object boundary
-                    let json_str = if let Some(end) = response_str.find('}') {
-                        &response_str[..=end]
-                    } else {
+                    let Some(end) = response_str.find('}') else {
                         return TestResult::failed(start.elapsed(), format!("No JSON in response: {}", response_str));
                     };
+                    let json_str = &response_str[..=end];
 
                     let parsed: serde_json::Value = match serde_json::from_str(json_str) {
                         Ok(v) => v,

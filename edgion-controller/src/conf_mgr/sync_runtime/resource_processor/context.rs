@@ -23,7 +23,7 @@ pub struct HandlerContext {
     metadata_filter: Option<Arc<MetadataFilterConfig>>,
 
     /// Namespace filter (if set, only process resources in these namespaces)
-    namespace_filter: Option<Arc<Vec<String>>>,
+    namespace_filter: Option<Arc<[String]>>,
 
     /// Trigger chain up to and including the current resource being processed.
     /// Used for cycle detection when calling `requeue`.
@@ -43,7 +43,7 @@ impl HandlerContext {
     /// Create a new HandlerContext
     pub fn new(
         metadata_filter: Option<Arc<MetadataFilterConfig>>,
-        namespace_filter: Option<Arc<Vec<String>>>,
+        namespace_filter: Option<Arc<[String]>>,
         trigger_chain: TriggerChain,
         max_trigger_cycles: usize,
         max_trigger_depth: usize,
@@ -70,7 +70,7 @@ impl HandlerContext {
     }
 
     /// Get namespace filter
-    pub fn namespace_filter(&self) -> Option<&Vec<String>> {
+    pub fn namespace_filter(&self) -> Option<&[String]> {
         self.namespace_filter.as_ref().map(|arc| arc.as_ref())
     }
 

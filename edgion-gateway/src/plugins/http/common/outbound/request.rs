@@ -247,12 +247,12 @@ impl CompiledRequest {
     /// Build a `reqwest::Request` for the given session and call parameters.
     ///
     /// * `session`       — provides incoming-request fields for origin lookups
-    ///                     and template variable resolution.
+    ///   and template variable resolution.
     /// * `path_override` — caller-supplied path suffix; honoured only when
-    ///                     the compiled path spec has `allow_override = true`.
-    ///                     Ignored (not an error) when override is disallowed.
+    ///   the compiled path spec has `allow_override = true`.
+    ///   Ignored (not an error) when override is disallowed.
     /// * `base_url`      — service base URL (`scheme://host[:port]`).
-    ///                     A trailing `/` is stripped before appending the path.
+    ///   A trailing `/` is stripped before appending the path.
     ///
     /// Returns `Err` if:
     /// - a required origin field is absent from the incoming request,
@@ -1291,7 +1291,7 @@ mod tests {
         );
         assert_eq!(
             req.headers().get("content-length").map(|v| v.to_str().unwrap()),
-            Some(body.as_bytes().len().to_string().as_str())
+            Some(body.len().to_string().as_str())
         );
     }
 

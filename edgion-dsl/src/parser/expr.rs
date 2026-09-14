@@ -195,15 +195,15 @@ fn parse_atom<'a>(input: &'a str, ctx: &mut ParseCtx<'a>) -> IResult<&'a str, Ex
     }
 
     // Map literal: {"key": expr, ...}
-    if input.starts_with('{') {
+    if let Some(stripped) = input.strip_prefix('{') {
         ctx.enter_nesting().map_err(nom::Err::Failure)?;
-        let mut input = ws(&input[1..]);
+        let mut input = ws(stripped);
         let mut pairs: Vec<(Expr, Expr)> = Vec::new();
 
-        if input.starts_with('}') {
+        if let Some(stripped) = input.strip_prefix('}') {
             ctx.leave_nesting();
             ctx.add_node().map_err(nom::Err::Failure)?;
-            return Ok((&input[1..], Expr::with_span(ExprKind::MapLiteral(pairs), span)));
+            return Ok((stripped, Expr::with_span(ExprKind::MapLiteral(pairs), span)));
         }
 
         loop {
@@ -224,13 +224,13 @@ fn parse_atom<'a>(input: &'a str, ctx: &mut ParseCtx<'a>) -> IResult<&'a str, Ex
             let (rest, val_expr) = parse_expr(rest, ctx)?;
             pairs.push((key_expr, val_expr));
             let rest = ws(rest);
-            if rest.starts_with('}') {
+            if let Some(stripped) = rest.strip_prefix('}') {
                 ctx.leave_nesting();
-                input = &rest[1..];
+                input = stripped;
                 break;
             }
-            if rest.starts_with(',') {
-                input = ws(&rest[1..]);
+            if let Some(stripped) = rest.strip_prefix(',') {
+                input = ws(stripped);
             } else {
                 ctx.leave_nesting();
                 return Err(nom::Err::Failure(ParseError::new("expected ',' or '}' in map literal")));

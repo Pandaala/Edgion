@@ -153,6 +153,7 @@ impl EdgionControllerCli {
     /// The gRPC server uses a provider pattern to dynamically obtain the latest
     /// ConfigSyncServer instance, which allows it to use the new instance after
     /// reload operations without restarting the server.
+    #[allow(clippy::too_many_arguments)]
     async fn start_services(
         conf_mgr: Arc<ConfMgr>,
         schema_validator: Arc<SchemaValidator>,

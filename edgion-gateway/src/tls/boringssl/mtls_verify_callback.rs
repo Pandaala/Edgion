@@ -208,9 +208,8 @@ unsafe fn verify_callback_impl(preverify_ok: c_int, x509_ctx: *mut boring_sys::X
                 return 0;
             };
             let context = &*context_ptr;
-            let client_auth = match &context.edgion_tls.spec.client_auth {
-                Some(auth) => auth,
-                None => return 1,
+            let Some(client_auth) = &context.edgion_tls.spec.client_auth else {
+                return 1;
             };
 
             // SAFETY: ssl_ptr valid during callback (BoringSSL guarantee). SslRef is an
@@ -229,9 +228,8 @@ unsafe fn verify_callback_impl(preverify_ok: c_int, x509_ctx: *mut boring_sys::X
 }
 
 fn perform_whitelist_validation(ssl: &SslRef, client_auth: &ClientAuthConfig) -> Result<(), String> {
-    let cert_info = match extract_client_cert_info(ssl) {
-        Some(info) => info,
-        None => return Err("mTLS no client certificate".to_string()),
+    let Some(cert_info) = extract_client_cert_info(ssl) else {
+        return Err("mTLS no client certificate".to_string());
     };
 
     if let Some(ref allowed_sans) = client_auth.allowed_sans {

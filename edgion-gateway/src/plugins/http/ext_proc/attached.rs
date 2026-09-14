@@ -1,11 +1,13 @@
 //! Request-scoped ownership for one Envoy-compatible Process stream.
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use super::client::{ExtProcClient, ExtProcStream};
 use edgion_common::ext_proc::proto::{processing_mode, processing_response, ProcessingRequest, ProcessingResponse};
 use edgion_resources::plugin_configs::{BodySendMode, HeaderSendMode, ProcessingMode as ConfigProcessingMode};
+use parking_lot::Mutex;
 
+#[allow(clippy::large_enum_variant)]
 enum StreamState {
     Lazy,
     Open(ExtProcStream),
@@ -90,25 +92,17 @@ impl AttachedExtProc {
 
     #[cfg(test)]
     pub(crate) fn test_state(&self) -> (&'static str, &'static str, bool) {
-        let summary = self.summary.lock().expect("test summary lock");
-        let finished = self
-            .state
-            .lock()
-            .is_ok_and(|state| matches!(*state, StreamState::Finished));
+        let summary = self.summary.lock();
+        let finished = matches!(*self.state.lock(), StreamState::Finished);
         (summary.outcome, summary.reason, finished)
     }
 
     pub(super) fn effective_mode(&self) -> Result<ConfigProcessingMode, &'static str> {
-        self.effective_mode
-            .lock()
-            .map(|mode| mode.clone())
-            .map_err(|_| "mode override state unavailable")
+        Ok(self.effective_mode.lock().clone())
     }
 
     pub(super) fn is_terminal(&self) -> bool {
-        self.state.lock().map_or(true, |state| {
-            matches!(*state, StreamState::Finished | StreamState::Failed)
-        })
+        matches!(*self.state.lock(), StreamState::Finished | StreamState::Failed)
     }
 
     /// Apply a header-phase override atomically. Disabled, unlisted, late, or
@@ -120,10 +114,7 @@ impl AttachedExtProc {
         phase: OverridePhase,
         wire: Option<&edgion_common::ext_proc::proto::ProcessingMode>,
     ) -> Result<ConfigProcessingMode, &'static str> {
-        let mut current = self
-            .effective_mode
-            .lock()
-            .map_err(|_| "mode override state unavailable")?;
+        let mut current = self.effective_mode.lock();
         let Some(wire) = wire else {
             return Ok(current.clone());
         };
@@ -209,10 +200,7 @@ impl AttachedExtProc {
         // future drops the local stream and its target permit, while the owner
         // remains Failed and can never replay the phase.
         let prior = {
-            let mut state = self
-                .state
-                .lock()
-                .map_err(|_| tonic::Status::internal("ext_proc attached state lock poisoned"))?;
+            let mut state = self.state.lock();
             std::mem::replace(&mut *state, StreamState::Failed)
         };
         let mut stream = match prior {
@@ -228,7 +216,8 @@ impl AttachedExtProc {
                 Some(processing_response::Response::ImmediateResponse(_))
             )
         });
-        if let Ok(mut summary) = self.summary.lock() {
+        {
+            let mut summary = self.summary.lock();
             summary.phases = summary.phases.saturating_add(1);
             summary.input_bytes = summary.input_bytes.saturating_add(input_bytes as u64);
             if let Ok(response) = &result {
@@ -249,10 +238,7 @@ impl AttachedExtProc {
                 "pending"
             };
         }
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| tonic::Status::internal("ext_proc attached state lock poisoned"))?;
+        let mut state = self.state.lock();
         *state = if result.is_ok() && !last && (!immediate || !immediate_is_terminal) {
             StreamState::Open(stream)
         } else if result.is_ok() {
@@ -268,10 +254,7 @@ impl AttachedExtProc {
     /// mutex is held while the processor observes EOF and closes its side.
     pub(super) async fn finish_success(&self, reason: &'static str) -> Result<(), tonic::Status> {
         let prior = {
-            let mut state = self
-                .state
-                .lock()
-                .map_err(|_| tonic::Status::internal("ext_proc attached state lock poisoned"))?;
+            let mut state = self.state.lock();
             std::mem::replace(&mut *state, StreamState::Failed)
         };
         let result = match prior {
@@ -279,14 +262,13 @@ impl AttachedExtProc {
             StreamState::Open(mut stream) => stream.finish_success().await,
             StreamState::Failed => Err(tonic::Status::aborted("ext_proc transaction unavailable")),
         };
-        if let Ok(mut state) = self.state.lock() {
-            *state = if result.is_ok() {
-                StreamState::Finished
-            } else {
-                StreamState::Failed
-            };
-        }
-        if let Ok(mut summary) = self.summary.lock() {
+        *self.state.lock() = if result.is_ok() {
+            StreamState::Finished
+        } else {
+            StreamState::Failed
+        };
+        {
+            let mut summary = self.summary.lock();
             if result.is_ok() {
                 summary.outcome = "success";
                 summary.reason = reason;
@@ -299,10 +281,9 @@ impl AttachedExtProc {
     }
 
     pub(super) fn close(&self) {
-        if let Ok(mut state) = self.state.lock() {
-            *state = StreamState::Finished;
-        }
-        if let Ok(mut summary) = self.summary.lock() {
+        *self.state.lock() = StreamState::Finished;
+        {
+            let mut summary = self.summary.lock();
             if summary.outcome == "pending" {
                 summary.outcome = "cancelled";
                 summary.reason = "owner-closed";
@@ -311,48 +292,41 @@ impl AttachedExtProc {
     }
 
     pub(super) fn mark_terminal(&self, outcome: &'static str, reason: &'static str) {
-        if let Ok(mut state) = self.state.lock() {
-            *state = StreamState::Finished;
-        }
-        if let Ok(mut summary) = self.summary.lock() {
+        *self.state.lock() = StreamState::Finished;
+        {
+            let mut summary = self.summary.lock();
             summary.outcome = outcome;
             summary.reason = reason;
         }
     }
 
     pub(super) fn release_inflight(&self) {
-        if let Ok(mut state) = self.state.lock() {
-            *state = StreamState::Finished;
-        }
+        *self.state.lock() = StreamState::Finished;
     }
 
     pub(crate) fn terminalize_for_logging(&self) {
-        let was_open = if let Ok(mut state) = self.state.lock() {
+        let was_open = {
+            let mut state = self.state.lock();
             if matches!(*state, StreamState::Lazy | StreamState::Open(_)) {
                 *state = StreamState::Finished;
                 true
             } else {
                 false
             }
-        } else {
-            false
         };
-        if was_open || self.summary.lock().is_ok_and(|summary| summary.outcome == "pending") {
-            if let Ok(mut summary) = self.summary.lock() {
-                if summary.outcome == "pending" {
-                    summary.outcome = "cancelled";
-                    summary.reason = "logging-fallback";
-                }
+        if was_open || self.summary.lock().outcome == "pending" {
+            let mut summary = self.summary.lock();
+            if summary.outcome == "pending" {
+                summary.outcome = "cancelled";
+                summary.reason = "logging-fallback";
             }
         }
     }
 
+    #[allow(clippy::result_large_err)]
     fn validate_phase(&self, request: &ProcessingRequest) -> Result<(), tonic::Status> {
         use edgion_common::ext_proc::proto::processing_request::Request;
-        let mut phases = self
-            .phases
-            .lock()
-            .map_err(|_| tonic::Status::internal("ext_proc phase state lock poisoned"))?;
+        let mut phases = self.phases.lock();
         let rank = match request.request.as_ref() {
             Some(Request::RequestHeaders(_)) => {
                 if phases.request_headers_seen {
@@ -408,7 +382,7 @@ impl AttachedExtProc {
     }
 
     pub(crate) fn take_summary_line(&self) -> Option<String> {
-        let mut summary = self.summary.lock().ok()?;
+        let mut summary = self.summary.lock();
         if summary.emitted {
             return None;
         }
@@ -581,7 +555,7 @@ mod tests {
             reduction
         );
         assert_eq!(second.effective_mode().unwrap(), base.normalized_override());
-        assert!(matches!(*second.state.lock().unwrap(), StreamState::Lazy));
+        assert!(matches!(*second.state.lock(), StreamState::Lazy));
         drop(first);
         assert_eq!(
             second
@@ -601,7 +575,7 @@ mod tests {
             false,
             Arc::from([]),
         );
-        assert!(matches!(*owner.state.lock().unwrap(), StreamState::Lazy));
+        assert!(matches!(*owner.state.lock(), StreamState::Lazy));
         owner.terminalize_for_logging();
         let line = owner.take_summary_line().unwrap();
         assert!(line.contains("phases=0"));

@@ -101,12 +101,9 @@ impl TlsUnknownKindBackendTestSuite {
                             Err(_) => return TestResult::failed(start.elapsed(), "TCP connect timed out".to_string()),
                         };
 
-                        let mut tls = match connector.connect(sni, tcp).await {
-                            Ok(s) => s,
-                            Err(_) => {
-                                failed_closed += 1;
-                                continue;
-                            }
+                        let Ok(mut tls) = connector.connect(sni, tcp).await else {
+                            failed_closed += 1;
+                            continue;
                         };
 
                         if tls.write_all(payload).await.is_err() {

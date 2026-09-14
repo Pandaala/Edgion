@@ -164,7 +164,6 @@ async fn run_case<F>(
     headers: &[(&str, &str)],
     trace_prefix: &str,
     start: Instant,
-    expect_200: bool,
     assert_fn: F,
 ) -> TestResult
 where
@@ -176,7 +175,7 @@ where
         Err(e) => return TestResult::failed(start.elapsed(), e),
     };
     let status = resp.status().as_u16();
-    if expect_200 && status != 200 {
+    if status != 200 {
         return TestResult::failed(start.elapsed(), format!("expected 200, got {}", status));
     }
     let log = match fetch_log(ctx, &trace_id).await {
@@ -320,7 +319,6 @@ impl WebhookKeyGetTestSuite {
                         &[("X-Tenant-Id", "ep-tenant-1")],
                         "wh1",
                         start,
-                        true,
                         |log| {
                             // user_id = uid-<tenant>; a correct value proves both that
                             // the EndpointSlice-resolved backend was reachable AND that
@@ -359,7 +357,6 @@ impl WebhookKeyGetTestSuite {
                         ],
                         "wh3",
                         start,
-                        true,
                         |log| {
                             // wh3 extracts data.echo_headers.x-request-id — the value the
                             // backend received for the declared origin header X-Request-ID.
@@ -395,7 +392,6 @@ impl WebhookKeyGetTestSuite {
                         &[("X-Source", "incoming-should-be-overridden")],
                         "wh4",
                         start,
-                        true,
                         |log| {
                             // wh4 extracts data.echo_headers.x-source — the custom literal
                             // "edgion-gateway" must win over the incoming X-Source.
@@ -492,7 +488,7 @@ impl WebhookKeyGetTestSuite {
                 Box::pin(async move {
                     let start = Instant::now();
                     // Send WITHOUT X-Optional-Trace-Id (the warnIfMissing origin field).
-                    run_case(&ctx, "wh6.example.com", "/test/wh6", &[], "wh6", start, true, |log| {
+                    run_case(&ctx, "wh6.example.com", "/test/wh6", &[], "wh6", start, |log| {
                         // Field omitted, request proceeds → webhook resolves uid-unknown
                         // (no tenant declared). warnIfMissing never escalates to failure.
                         if log_has(log, "wh6_user_id", "uid-unknown") {
@@ -573,7 +569,7 @@ impl WebhookKeyGetTestSuite {
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
-                    run_case(&ctx, "wh8.example.com", "/test/wh8", &[], "wh8", start, true, |log| {
+                    run_case(&ctx, "wh8.example.com", "/test/wh8", &[], "wh8", start, |log| {
                         // wh8 extracts data.path (echoed by the backend) for two webhooks:
                         //  - wh8_overridden: allowOverride=true  → override path /webhook/override
                         //  - wh8_ignored:    allowOverride=false → template path /webhook/default
@@ -606,7 +602,6 @@ impl WebhookKeyGetTestSuite {
                         &[("X-User-Id", "user-99")],
                         "wh9",
                         start,
-                        true,
                         |log| {
                             // wh9 extracts data.echo_headers.x-resolved-user. The header is
                             // a custom template "${ctx:user_id}" (user_id <- X-User-Id).
@@ -640,7 +635,6 @@ impl WebhookKeyGetTestSuite {
                         &[("X-User-Id", "tmpl-user-10"), ("X-Request-ID", "rid-10")],
                         "wh10",
                         start,
-                        true,
                         |log| {
                             // wh10 extracts data.echo_headers.x-from-header, which is the
                             // custom template "${header:X-User-Id}".
@@ -709,15 +703,17 @@ impl WebhookKeyGetTestSuite {
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
-                    run_case(&ctx, "wh12.example.com", "/test/wh12", &[], "wh12", start, true, |log| {
+                    run_case(&ctx, "wh12.example.com", "/test/wh12", &[], "wh12", start, |log| {
                         // No origin field is declared, so the backend sees no
                         // X-Tenant-Id and defaults to uid-unknown. A correct value
                         // proves the URL target (http://localhost:30001, a
                         // hostname resolved through EgressResolver) was dialed
                         // successfully end to end.
                         if log_has(log, "wh12_user_id", "uid-unknown") {
-                            Ok("URL target (hostname) resolved via EgressResolver; value reached the upstream request"
-                                .into())
+                            Ok(
+                                "URL target (hostname) resolved via EgressResolver; value reached the upstream request"
+                                    .into(),
+                            )
                         } else {
                             Err("expected wh12_user_id=uid-unknown (URL target resolved)".into())
                         }
@@ -736,22 +732,13 @@ impl WebhookKeyGetTestSuite {
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
-                    run_case(
-                        &ctx,
-                        "wh13.example.com",
-                        "/test/wh13",
-                        &[],
-                        "wh13",
-                        start,
-                        true,
-                        |log| {
-                            if log_has(log, "wh13_user_id", "uid-unknown") {
-                                Ok("https:// URL target validated against custom CA and resolved successfully".into())
-                            } else {
-                                Err("expected wh13_user_id=uid-unknown (TLS URL target resolved)".into())
-                            }
-                        },
-                    )
+                    run_case(&ctx, "wh13.example.com", "/test/wh13", &[], "wh13", start, |log| {
+                        if log_has(log, "wh13_user_id", "uid-unknown") {
+                            Ok("https:// URL target validated against custom CA and resolved successfully".into())
+                        } else {
+                            Err("expected wh13_user_id=uid-unknown (TLS URL target resolved)".into())
+                        }
+                    })
                     .await
                 })
             },
@@ -836,25 +823,16 @@ impl WebhookKeyGetTestSuite {
                 Box::pin(async move {
                     let start = Instant::now();
 
-                    run_case(
-                        &ctx,
-                        "wh15.example.com",
-                        "/test/wh15",
-                        &[],
-                        "wh15",
-                        start,
-                        true,
-                        |log| {
-                            // x-attempt-history on the final (successful) response lists
-                            // every status returned so far for this test_id: "503,503,200"
-                            // is only reachable after exactly 3 inbound requests.
-                            if log_has(log, "wh15_result", "503,503,200") {
-                                Ok("retryOnStatus:[503] retried exactly twice; 3rd attempt (200) succeeded".into())
-                            } else {
-                                Err("expected wh15_result=503,503,200 (exactly 3 inbound requests)".into())
-                            }
-                        },
-                    )
+                    run_case(&ctx, "wh15.example.com", "/test/wh15", &[], "wh15", start, |log| {
+                        // x-attempt-history on the final (successful) response lists
+                        // every status returned so far for this test_id: "503,503,200"
+                        // is only reachable after exactly 3 inbound requests.
+                        if log_has(log, "wh15_result", "503,503,200") {
+                            Ok("retryOnStatus:[503] retried exactly twice; 3rd attempt (200) succeeded".into())
+                        } else {
+                            Err("expected wh15_result=503,503,200 (exactly 3 inbound requests)".into())
+                        }
+                    })
                     .await
                 })
             },
@@ -1002,7 +980,6 @@ impl WebhookKeyGetTestSuite {
                         &[("X-User-Id", "user-18")],
                         "wh18",
                         start,
-                        true,
                         |log| {
                             if !log_has(log, "wh18_body_user", "user-18") {
                                 return Err("body template variable did not reach the webhook backend".to_string());

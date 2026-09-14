@@ -145,12 +145,9 @@ impl ServerApp for EdgionTcpProxy {
 impl EdgionTcpProxy {
     async fn handle_connection(&self, downstream: Stream, ctx: &mut TcpContext) {
         // 1. Match TCPRoute unit from per-port route table
-        let unit = match select_route_unit(&self.tcp_route_manager) {
-            Some(unit) => unit,
-            None => {
-                ctx.status = TcpStatus::NoRouteMatched;
-                return;
-            }
+        let Some(unit) = select_route_unit(&self.tcp_route_manager) else {
+            ctx.status = TcpStatus::NoRouteMatched;
+            return;
         };
         let tcp_route = &unit.route;
 
@@ -198,12 +195,9 @@ impl EdgionTcpProxy {
         drop(resource);
 
         // 4. Select backend
-        let backend_ref = match unit.backend_finder.select() {
-            Ok(backend) => backend,
-            Err(_) => {
-                ctx.status = TcpStatus::NoBackendSelected;
-                return;
-            }
+        let Ok(backend_ref) = unit.backend_finder.select() else {
+            ctx.status = TcpStatus::NoBackendSelected;
+            return;
         };
         match classify_l4_selected_backend(
             backend_ref.ref_denied.as_ref(),
@@ -228,21 +222,16 @@ impl EdgionTcpProxy {
         let backend_ns = backend_ref.namespace.as_deref().unwrap_or(route_ns);
         let service_key = format!("{}/{}", backend_ns, backend_ref.name);
 
-        let section = match service_section_key_from_port(backend_ref.port) {
-            Ok(section) => section,
-            Err(_) => {
-                ctx.status = TcpStatus::NoBackendResolved;
-                return;
-            }
+        let Ok(section) = service_section_key_from_port(backend_ref.port) else {
+            ctx.status = TcpStatus::NoBackendResolved;
+            return;
         };
-        let endpoint =
-            match select_service_endpoint(&service_key, section, &None, ServiceDegradePolicy::Live, None, "", None) {
-                Ok(endpoint) => endpoint,
-                Err(_) => {
-                    ctx.status = TcpStatus::NoBackendResolved;
-                    return;
-                }
-            };
+        let Ok(endpoint) =
+            select_service_endpoint(&service_key, section, &None, ServiceDegradePolicy::Live, None, "", None)
+        else {
+            ctx.status = TcpStatus::NoBackendResolved;
+            return;
+        };
         let backend = endpoint.backend;
 
         // 6. Build upstream address
@@ -275,20 +264,17 @@ impl EdgionTcpProxy {
             edgion_resources::resources::edgion_gateway_config::resolve_tcp_connect_timeout(
                 self.edgion_gateway_config.spec.tcp_timeout.as_ref(),
             );
-        let upstream = match self.connector.new_stream(&peer).await {
-            Ok(stream) => stream,
-            Err(_) => {
-                ctx.status = TcpStatus::UpstreamConnectionFailed;
-                // L4 upstream connect failure — local-origin failure.
-                if let Some(token) = outlier_token.as_ref() {
-                    outlier_store.record_failure_for_backend_with_token(
-                        backend.as_ref(),
-                        token,
-                        crate::backends::FailureClass::LocalOrigin,
-                    );
-                }
-                return;
+        let Ok(upstream) = self.connector.new_stream(&peer).await else {
+            ctx.status = TcpStatus::UpstreamConnectionFailed;
+            // L4 upstream connect failure — local-origin failure.
+            if let Some(token) = outlier_token.as_ref() {
+                outlier_store.record_failure_for_backend_with_token(
+                    backend.as_ref(),
+                    token,
+                    crate::backends::FailureClass::LocalOrigin,
+                );
             }
+            return;
         };
 
         ctx.connection_established = true;

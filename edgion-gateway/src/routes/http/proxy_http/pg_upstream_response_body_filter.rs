@@ -564,7 +564,7 @@ mod tests {
             },
             metric_handles: Arc::new(crate::observe::metrics::route_handles::RouteMetricHandles::empty()),
             plugin_runtime: runtime,
-            backends: Arc::new(Vec::new()),
+            backends: Arc::from(Vec::new()),
             backend_finder: Arc::new(crate::lb::BackendSelector::new()),
         })
     }
@@ -631,7 +631,7 @@ mod tests {
             0,
             runtime,
         );
-        let logical = crate::backends::LogicalBackendHandle::new(Arc::new(vec![compiled]), 0).unwrap();
+        let logical = crate::backends::LogicalBackendHandle::new(Arc::from(vec![compiled]), 0).unwrap();
         crate::backends::SelectedHttpBackend::Invalid(logical)
     }
 

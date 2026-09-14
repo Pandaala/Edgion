@@ -560,6 +560,7 @@ where
 /// if it changed and this node is the leader.
 ///
 /// Returns `true` when the object was fully processed (caller should increment `init_count`).
+#[allow(clippy::too_many_arguments)]
 async fn run_init_apply_once<K>(
     obj: K,
     processor: &Arc<ResourceProcessor<K>>,

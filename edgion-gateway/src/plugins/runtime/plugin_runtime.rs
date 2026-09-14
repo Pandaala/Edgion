@@ -2527,7 +2527,7 @@ mod tests {
     use edgion_resources::resources::edgion_plugins::DslConfig;
     use edgion_resources::resources::{EdgionPlugin, KeyAuthConfig, RequestFilterEntry};
     use edgion_resources::EdgionErrorCode;
-    use std::sync::Mutex;
+    use parking_lot::Mutex;
     use tokio::io::AsyncWriteExt;
 
     fn compile_scoped_request_entries(
@@ -2605,7 +2605,7 @@ mod tests {
                 .write_response_header(Box::new(response), false)
                 .await
                 .expect("header should be delivered before the test closes the client");
-            drop(self.client.lock().unwrap().take());
+            drop(self.client.lock().take());
             let _ = session
                 .write_response_body(Some(bytes::Bytes::from_static(b"denied")), true)
                 .await;
@@ -2896,8 +2896,7 @@ mod tests {
         assert!(
             !ctx.diagnostics
                 .entries()
-                .iter()
-                .any(|e| *e == RequestDiagnostic::Error(EdgionErrorCode::PluginGrpcMessageBodyNotUtf8)),
+                .contains(&RequestDiagnostic::Error(EdgionErrorCode::PluginGrpcMessageBodyNotUtf8)),
             "a valid UTF-8 body must not raise the not-utf8 marker"
         );
     }

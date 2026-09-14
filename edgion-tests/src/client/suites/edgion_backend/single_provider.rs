@@ -111,26 +111,30 @@ fn request_url(ctx: &TestContext, host: &str, path: &str, query: &str) -> String
     format!("http://{}:{}{}{}", host, ctx.http_port, path, query)
 }
 
+struct PostOptions<'a> {
+    query: &'a str,
+    h2: bool,
+    trace_id: Option<&'a str>,
+    send_client_authorization: bool,
+    raw_gzip: bool,
+}
+
 async fn post_inner(
     ctx: &TestContext,
     host: &str,
     body: Value,
-    query: &str,
-    h2: bool,
-    trace_id: Option<&str>,
-    send_client_authorization: bool,
-    raw_gzip: bool,
+    options: PostOptions<'_>,
 ) -> Result<reqwest::Response, String> {
-    let mut request = client(ctx, host, h2, raw_gzip)?
-        .post(request_url(ctx, host, PATH, query))
+    let mut request = client(ctx, host, options.h2, options.raw_gzip)?
+        .post(request_url(ctx, host, PATH, options.query))
         .json(&body);
-    if raw_gzip {
+    if options.raw_gzip {
         request = request.header("accept-encoding", "gzip");
     }
-    if send_client_authorization {
+    if options.send_client_authorization {
         request = request.header("authorization", "Bearer client-key-must-be-stripped");
     }
-    if let Some(trace_id) = trace_id {
+    if let Some(trace_id) = options.trace_id {
         request = request
             .header(
                 "traceparent",
@@ -152,7 +156,19 @@ async fn post(
     h2: bool,
     trace_id: Option<&str>,
 ) -> Result<reqwest::Response, String> {
-    post_inner(ctx, host, body, query, h2, trace_id, false, false).await
+    post_inner(
+        ctx,
+        host,
+        body,
+        PostOptions {
+            query,
+            h2,
+            trace_id,
+            send_client_authorization: false,
+            raw_gzip: false,
+        },
+    )
+    .await
 }
 
 async fn post_with_client_authorization(
@@ -163,7 +179,19 @@ async fn post_with_client_authorization(
     h2: bool,
     trace_id: Option<&str>,
 ) -> Result<reqwest::Response, String> {
-    post_inner(ctx, host, body, query, h2, trace_id, true, false).await
+    post_inner(
+        ctx,
+        host,
+        body,
+        PostOptions {
+            query,
+            h2,
+            trace_id,
+            send_client_authorization: true,
+            raw_gzip: false,
+        },
+    )
+    .await
 }
 
 async fn post_with_raw_gzip_and_client_authorization(
@@ -173,7 +201,19 @@ async fn post_with_raw_gzip_and_client_authorization(
     query: &str,
     h2: bool,
 ) -> Result<reqwest::Response, String> {
-    post_inner(ctx, host, body, query, h2, None, true, true).await
+    post_inner(
+        ctx,
+        host,
+        body,
+        PostOptions {
+            query,
+            h2,
+            trace_id: None,
+            send_client_authorization: true,
+            raw_gzip: true,
+        },
+    )
+    .await
 }
 
 async fn post_with_quota_identity(

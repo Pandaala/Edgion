@@ -94,14 +94,10 @@ impl OpenidConnect {
         if !self.config.set_userinfo_header {
             return None;
         }
-        let discovery = match self.get_or_fetch_discovery().await {
-            Ok(v) => v,
-            Err(_) => return None,
+        let Ok(discovery) = self.get_or_fetch_discovery().await else {
+            return None;
         };
-        let userinfo_endpoint = match discovery.userinfo_endpoint.as_deref().filter(|v| !v.is_empty()) {
-            Some(v) => v,
-            None => return None,
-        };
+        let userinfo_endpoint = discovery.userinfo_endpoint.as_deref().filter(|v| !v.is_empty())?;
 
         if super::admit_oidc_outbound_url(userinfo_endpoint).is_err() {
             return None;

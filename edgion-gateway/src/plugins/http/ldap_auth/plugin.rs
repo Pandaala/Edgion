@@ -517,12 +517,9 @@ impl RequestFilter for LdapAuth {
             }
         };
 
-        let bind_dn = match self.build_bind_dn(credentials.username()) {
-            Ok(dn) => dn,
-            Err(_) => {
-                plugin_log.push("Deny bad username");
-                return self.unauthorized(session).await;
-            }
+        let Ok(bind_dn) = self.build_bind_dn(credentials.username()) else {
+            plugin_log.push("Deny bad username");
+            return self.unauthorized(session).await;
         };
 
         match self.ldap_bind(&bind_dn, credentials.password()).await {

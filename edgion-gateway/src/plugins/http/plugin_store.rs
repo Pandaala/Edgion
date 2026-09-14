@@ -625,6 +625,13 @@ impl PluginStore {
 }
 
 #[cfg(test)]
+impl Default for PluginStore {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(test)]
 mod kind_stats_tests {
     use super::*;
 

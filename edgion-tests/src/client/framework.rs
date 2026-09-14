@@ -10,6 +10,8 @@ use std::time::{Duration, Instant};
 
 use crate::port_config::{PortKind, SuitePorts};
 
+type PortResolver = dyn Fn(&str, PortKind) -> Result<SuitePorts, String> + Send + Sync;
+
 fn configured_host_or(value: Option<String>, fallback: &str) -> String {
     value
         .filter(|host| !host.trim().is_empty())
@@ -740,7 +742,7 @@ pub struct TestRunner {
     context: TestContext,
     suites: Vec<Box<dyn TestSuite>>,
     /// Resolves a suite listener contract to its complete port set.
-    port_resolver: Option<Box<dyn Fn(&str, PortKind) -> Result<SuitePorts, String> + Send + Sync>>,
+    port_resolver: Option<Box<PortResolver>>,
     allow_empty_selection: bool,
 }
 
@@ -758,10 +760,7 @@ impl TestRunner {
         self.suites.push(suite);
     }
 
-    pub fn set_port_resolver(
-        &mut self,
-        resolver: Box<dyn Fn(&str, PortKind) -> Result<SuitePorts, String> + Send + Sync>,
-    ) {
+    pub fn set_port_resolver(&mut self, resolver: Box<PortResolver>) {
         self.port_resolver = Some(resolver);
     }
 

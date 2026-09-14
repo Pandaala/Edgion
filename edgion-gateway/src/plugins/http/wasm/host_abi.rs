@@ -1261,11 +1261,10 @@ fn host_http_call(
 
     // The upstream parameter addresses the target directly as an origin URL
     // (Edgion has no Envoy-style cluster registry for guests to name).
-    let origin = match edgion_resources::plugin_configs::normalize_callout_origin_quiet(&upstream) {
-        Some(origin) => origin,
+    let Some(origin) = edgion_resources::plugin_configs::normalize_callout_origin_quiet(&upstream) else {
         // Data-plane hot path (Iron rule 3), guest-supplied origin (Iron rule 1):
         // reject via status code only, no tracing or raw-bearing error String.
-        None => return STATUS_BAD_ARGUMENT,
+        return STATUS_BAD_ARGUMENT;
     };
 
     let state = caller.data_mut();
@@ -1941,17 +1940,16 @@ pub fn add_to_linker(linker: &mut Linker<HostState>) -> anyhow::Result<()> {
                 None
             };
             let headers_profile = if headers_size > 0 {
-                let guest = match profile_guest_range(&mut caller, headers_ptr, headers_size) {
-                    Ok(profile) => profile,
-                    Err(status) => return status,
+                let guest_result = profile_guest_range(&mut caller, headers_ptr, headers_size);
+                let Ok(guest) = guest_result else {
+                    return guest_result.expect_err("failed guest-range profiling must carry an ABI status");
                 };
-                let memory = match guest_memory(&mut caller) {
-                    Some(memory) => memory,
-                    None => return STATUS_INVALID_MEMORY_ACCESS,
+                let Some(memory) = guest_memory(&mut caller) else {
+                    return STATUS_INVALID_MEMORY_ACCESS;
                 };
-                let bytes = match guest_bytes(&caller, memory, &guest) {
-                    Ok(bytes) => bytes,
-                    Err(status) => return status,
+                let bytes_result = guest_bytes(&caller, memory, &guest);
+                let Ok(bytes) = bytes_result else {
+                    return bytes_result.expect_err("failed guest-memory access must carry an ABI status");
                 };
                 match scan_serialized_map(bytes) {
                     Ok(map) => Some(GuestMapProfile { guest, map }),
@@ -2134,12 +2132,11 @@ pub fn add_to_linker(linker: &mut Linker<HostState>) -> anyhow::Result<()> {
                 Ok(profile) => profile,
                 Err(status) => return status,
             };
-            let allocation = match AllocationProfile::default()
+            let Ok(allocation) = AllocationProfile::default()
                 .add_bytes(key_profile.decoded_len)
                 .and_then(|profile| profile.add_bytes(MAX_SHARED_VALUE_BYTES))
-            {
-                Ok(profile) => profile,
-                Err(_) => return STATUS_BAD_ARGUMENT,
+            else {
+                return STATUS_BAD_ARGUMENT;
             };
             if allocation.bytes > caller.data().allocation_limits.transient_bytes {
                 return STATUS_BAD_ARGUMENT;
@@ -2196,15 +2193,14 @@ pub fn add_to_linker(linker: &mut Linker<HostState>) -> anyhow::Result<()> {
                 Some(profile)
             };
             let value_len = value_profile.as_ref().map_or(0, GuestRangeProfile::len);
-            let allocation = match AllocationProfile::default()
+            let Ok(allocation) = AllocationProfile::default()
                 // The SharedData map clones the decoded key on insertion.
                 .add_bytes(key_profile.decoded_len)
                 .and_then(|profile| profile.add_bytes(key_profile.decoded_len))
                 .and_then(|profile| profile.add_bytes(value_len))
                 .and_then(|profile| profile.add_bytes(ENTRY_OVERHEAD_BYTES))
-            {
-                Ok(profile) => profile,
-                Err(_) => return STATUS_BAD_ARGUMENT,
+            else {
+                return STATUS_BAD_ARGUMENT;
             };
             if allocation.bytes > caller.data().allocation_limits.transient_bytes {
                 return STATUS_BAD_ARGUMENT;
@@ -2301,6 +2297,8 @@ fn linker_value_type(value: WasmValueType) -> ValType {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::field_reassign_with_default)]
+
     use super::*;
     use crate::plugins::http::wasm::shared_data::{SharedData, MAX_SHARED_TOTAL_BYTES};
     use edgion_wasm::HostFunction;

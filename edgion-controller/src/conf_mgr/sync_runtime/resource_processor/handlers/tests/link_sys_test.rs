@@ -1352,9 +1352,8 @@ async fn test_webhook_secret_ref_resolved_into_resolved_secrets() {
 
     match result {
         ProcessResult::Continue(ls) => {
-            let w = match &ls.spec.config {
-                SystemConfig::Webhook(w) => w,
-                _ => panic!("expected Webhook"),
+            let SystemConfig::Webhook(w) = &ls.spec.config else {
+                panic!("expected Webhook")
             };
             let rs = w.resolved_secrets.as_ref().expect("resolved_secrets must be populated");
             // The map key is the raw var_name: "edgion-default/wh-tok:token"
@@ -1433,9 +1432,8 @@ async fn test_webhook_secret_ref_missing_secret_sets_resolved_refs_false() {
 
     match result {
         ProcessResult::Continue(ls) => {
-            let w = match &ls.spec.config {
-                SystemConfig::Webhook(w) => w,
-                _ => panic!("expected Webhook"),
+            let SystemConfig::Webhook(w) = &ls.spec.config else {
+                panic!("expected Webhook")
             };
             // resolved_secrets must remain None while the Secret is absent.
             assert!(

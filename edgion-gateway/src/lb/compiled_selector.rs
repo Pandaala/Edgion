@@ -74,13 +74,13 @@ fn backend_passes_health(
 /// `Backend` returned by the inner selector back to the live `Arc<LbBackend>`
 /// so no rewrapping occurs on the hot path.
 pub struct RrCore {
-    backends: Arc<Vec<Arc<LbBackend>>>,
+    backends: Arc<[Arc<LbBackend>]>,
     selector: RoundRobinSelector,
     addr_map: HashMap<SocketAddr, Arc<LbBackend>>,
 }
 
 impl RrCore {
-    fn build(backends: Arc<Vec<Arc<LbBackend>>>) -> Self {
+    fn build(backends: Arc<[Arc<LbBackend>]>) -> Self {
         let pingora_view: Vec<Backend> = backends.iter().map(|b| b.inner().clone()).collect();
         let selector = RoundRobinSelector::build(&pingora_view);
         let addr_map = build_addr_map(&backends);
@@ -111,13 +111,13 @@ impl RrCore {
 /// allocate a fresh `Vec<Backend>` and reset RR fairness on every keyless
 /// request (real-world scenario: missing cookie / unauthenticated traffic).
 pub struct ChCore {
-    backends: Arc<Vec<Arc<LbBackend>>>,
+    backends: Arc<[Arc<LbBackend>]>,
     ring: ConsistentHashRing,
     rr_fallback: RrCore,
 }
 
 impl ChCore {
-    fn build(backends: Arc<Vec<Arc<LbBackend>>>) -> Self {
+    fn build(backends: Arc<[Arc<LbBackend>]>) -> Self {
         let pingora_view: Vec<Backend> = backends.iter().map(|b| b.inner().clone()).collect();
         let ring = ConsistentHashRing::build(&pingora_view);
         let rr_fallback = RrCore::build(backends.clone());
@@ -147,11 +147,11 @@ impl ChCore {
 /// `Arc<LbBackend>` list; selection is done via P2C over per-backend
 /// atomic counters.
 pub struct MetricCore {
-    backends: Arc<Vec<Arc<LbBackend>>>,
+    backends: Arc<[Arc<LbBackend>]>,
 }
 
 impl MetricCore {
-    fn build(backends: Arc<Vec<Arc<LbBackend>>>) -> Self {
+    fn build(backends: Arc<[Arc<LbBackend>]>) -> Self {
         Self { backends }
     }
 }
@@ -256,7 +256,7 @@ impl CompiledSelector {
     }
 }
 
-pub(crate) fn compile(kind: PolicyKind, backends: Arc<Vec<Arc<LbBackend>>>) -> CompiledSelector {
+pub(crate) fn compile(kind: PolicyKind, backends: Arc<[Arc<LbBackend>]>) -> CompiledSelector {
     match kind {
         PolicyKind::RoundRobin => CompiledSelector::RoundRobin(RrCore::build(backends)),
         PolicyKind::ConsistentHash => CompiledSelector::ConsistentHash(ChCore::build(backends)),
@@ -278,7 +278,7 @@ pub struct CompiledSelectors {
 }
 
 impl CompiledSelectors {
-    pub(crate) fn build(backends: Arc<Vec<Arc<LbBackend>>>) -> Self {
+    pub(crate) fn build(backends: Arc<[Arc<LbBackend>]>) -> Self {
         Self {
             round_robin: Arc::new(compile(PolicyKind::RoundRobin, backends.clone())),
             consistent_hash: Arc::new(compile(PolicyKind::ConsistentHash, backends.clone())),
@@ -318,7 +318,7 @@ mod degrade_should_engage_tests {
     }
 
     fn rr_selector(n: u8) -> CompiledSelector {
-        CompiledSelector::RoundRobin(RrCore::build(Arc::new(backends(n))))
+        CompiledSelector::RoundRobin(RrCore::build(Arc::from(backends(n))))
     }
 
     #[test]
@@ -372,13 +372,13 @@ mod tests {
 
     #[test]
     fn empty_compiled_selector_returns_none() {
-        let sel = compile(PolicyKind::RoundRobin, Arc::new(Vec::new()));
+        let sel = compile(PolicyKind::RoundRobin, Arc::from(Vec::new()));
         assert!(sel.select(None, |_| true, 0).is_none());
     }
 
     #[test]
     fn rr_select_picks_a_backend() {
-        let sel = compile(PolicyKind::RoundRobin, Arc::new(vec![arc_backend(1), arc_backend(2)]));
+        let sel = compile(PolicyKind::RoundRobin, Arc::from(vec![arc_backend(1), arc_backend(2)]));
         let picked = sel.select(None, |_| true, 0);
         assert!(picked.is_some());
     }
@@ -387,7 +387,7 @@ mod tests {
     fn ch_with_empty_key_falls_back_to_rr() {
         let sel = compile(
             PolicyKind::ConsistentHash,
-            Arc::new(vec![arc_backend(1), arc_backend(2)]),
+            Arc::from(vec![arc_backend(1), arc_backend(2)]),
         );
         let picked = sel.select(Some(b""), |_| true, 0);
         assert!(picked.is_some());
@@ -399,7 +399,7 @@ mod tests {
         let b = arc_backend(2);
         a.inc_conn();
         a.inc_conn(); // a has 2, b has 0
-        let sel = compile(PolicyKind::LeastConn, Arc::new(vec![a.clone(), b.clone()]));
+        let sel = compile(PolicyKind::LeastConn, Arc::from(vec![a.clone(), b.clone()]));
         // P2C with equal metric would also pick b due to lower conn count
         for _ in 0..20 {
             let picked = sel.select(None, |_| true, 0).expect("must pick");
@@ -414,7 +414,7 @@ mod tests {
     #[test]
     fn rr_select_returns_live_arc() {
         let b = arc_backend(1);
-        let sel = compile(PolicyKind::RoundRobin, Arc::new(vec![b.clone()]));
+        let sel = compile(PolicyKind::RoundRobin, Arc::from(vec![b.clone()]));
         let picked = sel.select(None, |_| true, 0).expect("must pick");
         assert!(Arc::ptr_eq(&picked, &b), "must return the original Arc, not a rewrap");
     }

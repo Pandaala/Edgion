@@ -677,6 +677,7 @@ pub fn create_admin_router(
 /// Credentials come only from configuration (resolved into `local_auth_config` /
 /// `auth_config` upstream); they are never auto-generated. When neither is present,
 /// no provider loads and the Admin API returns 503 fail-close.
+#[allow(clippy::too_many_arguments)]
 pub async fn serve_with_shutdown(
     conf_mgr: Arc<ConfMgr>,
     schema_validator: Arc<SchemaValidator>,

@@ -583,9 +583,11 @@ mod tests {
     fn override_allow_list_rejects_normalized_duplicates() {
         let mut config = valid_base();
         config.allow_mode_override = true;
-        let mut first = ProcessingMode::default();
-        first.request_header_mode = HeaderSendMode::Send;
-        first.request_body_mode = BodySendMode::Skip;
+        let first = ProcessingMode {
+            request_header_mode: HeaderSendMode::Send,
+            request_body_mode: BodySendMode::Skip,
+            ..ProcessingMode::default()
+        };
         let mut duplicate = first.clone();
         duplicate.request_header_mode = HeaderSendMode::Skip;
         duplicate.request_body_mode = BodySendMode::None;

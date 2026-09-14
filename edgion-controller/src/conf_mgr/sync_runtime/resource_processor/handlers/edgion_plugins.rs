@@ -1538,9 +1538,8 @@ profiles:
             .as_ref()
             .and_then(|v| v.first())
             .expect("missing request plugin");
-        let config = match &entry.plugin {
-            EdgionPlugin::BasicAuth(c) => c,
-            _ => panic!("unexpected plugin type"),
+        let EdgionPlugin::BasicAuth(config) = &entry.plugin else {
+            panic!("unexpected plugin type")
         };
 
         let resolved_users = config.resolved_users.as_ref().expect("expected resolved users");
@@ -1822,9 +1821,8 @@ profiles:
             .as_ref()
             .and_then(|v| v.first())
             .expect("missing request plugin");
-        let config = match &entry.plugin {
-            EdgionPlugin::OpenidConnect(c) => c,
-            _ => panic!("unexpected plugin type"),
+        let EdgionPlugin::OpenidConnect(config) = &entry.plugin else {
+            panic!("unexpected plugin type")
         };
 
         assert_eq!(
@@ -1870,9 +1868,8 @@ profiles:
             .as_ref()
             .and_then(|v| v.first())
             .expect("missing request plugin");
-        let config = match &entry.plugin {
-            EdgionPlugin::JweDecrypt(c) => c,
-            _ => panic!("unexpected plugin type"),
+        let EdgionPlugin::JweDecrypt(config) = &entry.plugin else {
+            panic!("unexpected plugin type")
         };
 
         assert!(config.resolved_credential.is_some());
@@ -2012,9 +2009,8 @@ profiles:
             .as_ref()
             .and_then(|v| v.first())
             .expect("missing request plugin");
-        let config = match &entry.plugin {
-            EdgionPlugin::HmacAuth(c) => c,
-            _ => panic!("unexpected plugin type"),
+        let EdgionPlugin::HmacAuth(config) = &entry.plugin else {
+            panic!("unexpected plugin type")
         };
 
         let resolved = config
@@ -2200,9 +2196,8 @@ profiles:
             .as_ref()
             .and_then(|v| v.first())
             .expect("missing request plugin");
-        let config = match &entry.plugin {
-            EdgionPlugin::HeaderCertAuth(c) => c,
-            _ => panic!("unexpected plugin type"),
+        let EdgionPlugin::HeaderCertAuth(config) = &entry.plugin else {
+            panic!("unexpected plugin type")
         };
 
         let resolved = config
@@ -3596,9 +3591,8 @@ profiles:
         ))]);
 
         let handler = EdgionPluginsHandler::new();
-        let parsed = match handler.parse(ep, &ctx).await {
-            ProcessResult::Continue(ep) => ep,
-            _ => panic!("expected Continue"),
+        let ProcessResult::Continue(parsed) = handler.parse(ep, &ctx).await else {
+            panic!("expected Continue")
         };
 
         let r = parsed
@@ -4744,9 +4738,8 @@ profiles:
             ProcessResult::Continue(v) => v,
             ProcessResult::Skip { reason } => panic!("unexpected skip: {}", reason),
         };
-        let config = match &parsed.spec.request_plugins.as_ref().unwrap()[0].plugin {
-            EdgionPlugin::RequestAccessPolicy(c) => c,
-            _ => panic!("unexpected plugin type"),
+        let EdgionPlugin::RequestAccessPolicy(config) = &parsed.spec.request_plugins.as_ref().unwrap()[0].plugin else {
+            panic!("unexpected plugin type")
         };
         let condition = first_request_access_policy_condition(config);
         let Condition::SecretMatch(condition) = condition else {
@@ -4766,7 +4759,8 @@ profiles:
         use edgion_resources::common::KeyGet;
         use edgion_resources::resources::edgion_plugins::plugin_configs::{Condition, SecretMatchCondition};
 
-        let cases: [(&str, &[(&str, &[u8])], &str); 3] = [
+        type SecretCase<'a> = (&'a str, &'a [(&'a str, &'a [u8])], &'a str);
+        let cases: [SecretCase<'_>; 3] = [
             ("missing", &[("username", b"public-user")], "MissingKeys"),
             ("non-utf8", &[("token", &[0xff, 0xfe])], "DecodeError"),
             ("blank", &[("token", b" \n\t")], "DecodeError"),
@@ -4800,9 +4794,9 @@ profiles:
                 ProcessResult::Continue(value) => value,
                 ProcessResult::Skip { reason } => panic!("unexpected skip for {case}: {reason}"),
             };
-            let config = match &parsed.spec.request_plugins.as_ref().unwrap()[0].plugin {
-                EdgionPlugin::RequestAccessPolicy(config) => config,
-                _ => panic!("unexpected plugin type"),
+            let EdgionPlugin::RequestAccessPolicy(config) = &parsed.spec.request_plugins.as_ref().unwrap()[0].plugin
+            else {
+                panic!("unexpected plugin type")
             };
             let Condition::SecretMatch(condition) = first_request_access_policy_condition(config) else {
                 panic!("unexpected condition type")
@@ -4869,9 +4863,8 @@ profiles:
             ProcessResult::Continue(value) => value,
             ProcessResult::Skip { reason } => panic!("unexpected skip: {reason}"),
         };
-        let config = match &parsed.spec.request_plugins.as_ref().unwrap()[0].plugin {
-            EdgionPlugin::RequestAccessPolicy(config) => config,
-            _ => panic!("unexpected plugin type"),
+        let EdgionPlugin::RequestAccessPolicy(config) = &parsed.spec.request_plugins.as_ref().unwrap()[0].plugin else {
+            panic!("unexpected plugin type")
         };
         let Condition::HmacAuth(config) = first_request_access_policy_condition(config) else {
             panic!("unexpected condition type")
@@ -4920,9 +4913,9 @@ profiles:
             ProcessResult::Continue(value) => value,
             ProcessResult::Skip { reason } => panic!("unexpected skip: {reason}"),
         };
-        let first_config = match &first.spec.request_plugins.as_ref().unwrap()[0].plugin {
-            EdgionPlugin::RequestAccessPolicy(config) => config,
-            _ => panic!("unexpected plugin type"),
+        let EdgionPlugin::RequestAccessPolicy(first_config) = &first.spec.request_plugins.as_ref().unwrap()[0].plugin
+        else {
+            panic!("unexpected plugin type")
         };
         let Condition::HmacAuth(first_hmac) = first_request_access_policy_condition(first_config) else {
             panic!("unexpected condition type")
@@ -4946,9 +4939,9 @@ profiles:
             ProcessResult::Continue(value) => value,
             ProcessResult::Skip { reason } => panic!("unexpected skip: {reason}"),
         };
-        let second_config = match &second.spec.request_plugins.as_ref().unwrap()[0].plugin {
-            EdgionPlugin::RequestAccessPolicy(config) => config,
-            _ => panic!("unexpected plugin type"),
+        let EdgionPlugin::RequestAccessPolicy(second_config) = &second.spec.request_plugins.as_ref().unwrap()[0].plugin
+        else {
+            panic!("unexpected plugin type")
         };
         let Condition::HmacAuth(second_hmac) = first_request_access_policy_condition(second_config) else {
             panic!("unexpected condition type")
@@ -4996,9 +4989,8 @@ profiles:
             ProcessResult::Continue(v) => v,
             ProcessResult::Skip { reason } => panic!("unexpected skip: {}", reason),
         };
-        let config = match &parsed.spec.request_plugins.as_ref().unwrap()[0].plugin {
-            EdgionPlugin::RequestAccessPolicy(c) => c,
-            _ => panic!("unexpected plugin type"),
+        let EdgionPlugin::RequestAccessPolicy(config) = &parsed.spec.request_plugins.as_ref().unwrap()[0].plugin else {
+            panic!("unexpected plugin type")
         };
         let condition = first_request_access_policy_condition(config);
         let Condition::SecretMatch(condition) = condition else {
@@ -5298,9 +5290,8 @@ profiles:
             ProcessResult::Continue(v) => v,
             ProcessResult::Skip { reason } => panic!("unexpected skip: {}", reason),
         };
-        let config = match &parsed.spec.request_plugins.as_ref().unwrap()[0].plugin {
-            EdgionPlugin::RequestAccessPolicy(c) => c,
-            _ => panic!("unexpected plugin type"),
+        let EdgionPlugin::RequestAccessPolicy(config) = &parsed.spec.request_plugins.as_ref().unwrap()[0].plugin else {
+            panic!("unexpected plugin type")
         };
         let condition = first_request_access_policy_condition(config);
         let Condition::SecretMatch(condition) = condition else {
@@ -5441,9 +5432,8 @@ profiles:
             .as_ref()
             .and_then(|v| v.first())
             .expect("missing request plugin");
-        let config = match &entry.plugin {
-            EdgionPlugin::ExtProc(c) => c,
-            _ => panic!("unexpected plugin type"),
+        let EdgionPlugin::ExtProc(config) = &entry.plugin else {
+            panic!("unexpected plugin type")
         };
 
         assert!(
@@ -5527,9 +5517,8 @@ profiles:
             ProcessResult::Continue(value) => value,
             ProcessResult::Skip { reason } => panic!("unexpected skip: {reason}"),
         };
-        let config = match &parsed.spec.request_plugins.as_ref().unwrap()[0].plugin {
-            EdgionPlugin::Guardrail(config) => config,
-            _ => panic!("unexpected plugin type"),
+        let EdgionPlugin::Guardrail(config) = &parsed.spec.request_plugins.as_ref().unwrap()[0].plugin else {
+            panic!("unexpected plugin type")
         };
         assert_eq!(
             config

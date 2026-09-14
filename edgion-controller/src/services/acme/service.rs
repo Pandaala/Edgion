@@ -571,19 +571,16 @@ impl AcmeServiceWorker {
 
     /// Check if a certificate needs renewal based on expiry time
     fn needs_renewal(&self, acme: &EdgionAcme) -> bool {
-        let status = match &acme.status {
-            Some(s) => s,
-            None => return true, // No status means no cert
+        let Some(status) = &acme.status else {
+            return true; // No status means no cert
         };
 
-        let not_after = match &status.certificate_not_after {
-            Some(s) => s,
-            None => return true, // No expiry means no cert
+        let Some(not_after) = &status.certificate_not_after else {
+            return true; // No expiry means no cert
         };
 
-        let expiry = match chrono::DateTime::parse_from_rfc3339(not_after) {
-            Ok(dt) => dt,
-            Err(_) => return true, // Can't parse expiry
+        let Ok(expiry) = chrono::DateTime::parse_from_rfc3339(not_after) else {
+            return true; // Can't parse expiry
         };
 
         let renew_before = chrono::Duration::from_std(spec_duration_or(

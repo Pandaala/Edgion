@@ -218,9 +218,8 @@ pub fn build_grouped_matcher_partial(groups: &[IpGroup]) -> (IpRadixMatcher, Vec
             if validate_ip_or_cidr(cidr).is_err() {
                 continue;
             }
-            let norm = match to_cidr_format(cidr) {
-                Ok(n) => n,
-                Err(_) => continue, // also already reported as invalid CIDR
+            let Ok(norm) = to_cidr_format(cidr) else {
+                continue; // also already reported as invalid CIDR
             };
             // Keep-first duplicate drop: skip any occurrence after the first.
             if !seen_cidrs.insert(norm.clone()) {

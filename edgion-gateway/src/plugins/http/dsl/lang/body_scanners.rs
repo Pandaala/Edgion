@@ -430,12 +430,12 @@ impl<'de> Visitor<'de> for SelectVisitor<'_> {
             }
             index += 1;
         }
-        let selected = match seq.next_element_seed(SelectSeed {
+        let Some(selected) = seq.next_element_seed(SelectSeed {
             index: self.seed.index + 1,
             ..self.seed
-        })? {
-            Some(value) => value,
-            None => return Ok(JsonScanValue::Missing),
+        })?
+        else {
+            return Ok(JsonScanValue::Missing);
         };
         while seq.next_element::<IgnoredAny>()?.is_some() {}
         Ok(selected)

@@ -499,12 +499,9 @@ pub fn validate_cert(tls: &EdgionTls) -> CertValidationResult {
         return CertValidationResult::invalid(errors);
     }
 
-    let cert_pem = match tls.cert_pem() {
-        Ok(pem) => pem,
-        Err(_) => {
-            errors.push(CertValidationError::CertNotFound);
-            return CertValidationResult::invalid(errors);
-        }
+    let Ok(cert_pem) = tls.cert_pem() else {
+        errors.push(CertValidationError::CertNotFound);
+        return CertValidationResult::invalid(errors);
     };
 
     if tls.key_pem().is_err() {

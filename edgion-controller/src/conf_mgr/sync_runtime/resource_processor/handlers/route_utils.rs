@@ -19,6 +19,9 @@ use edgion_resources::resources::gateway::AllowedRoutes;
 use edgion_resources::resources::http_route::{LocalObjectReference, RouteParentStatus};
 use edgion_resources::ResourceKind;
 
+pub(super) type BackendRefTuple<'a> = (Option<&'a str>, Option<&'a str>, Option<&'a str>, &'a str);
+pub(super) type OwnedBackendRefTuple = (Option<String>, Option<String>, Option<String>, String);
+
 /// Result of validating a parentRef for acceptance.
 pub struct AcceptedResult {
     /// Acceptance errors. Non-empty means the route is rejected.
@@ -135,7 +138,7 @@ pub fn service_exists(namespace: &str, name: &str, runtime: &ControllerRuntime) 
 /// Returns typed errors for ResolvedRefs condition generation.
 pub fn validate_backend_refs(
     route_ns: &str,
-    backend_refs: &[(Option<&str>, Option<&str>, Option<&str>, &str)],
+    backend_refs: &[BackendRefTuple<'_>],
     runtime: &ControllerRuntime,
 ) -> Vec<ResolvedRefsError> {
     let mut errors = Vec::new();
@@ -439,7 +442,7 @@ pub fn register_service_backend_refs(
     route_kind: edgion_resources::ResourceKind,
     route_ns: &str,
     route_name: &str,
-    backend_refs: &[(Option<&str>, Option<&str>, Option<&str>, &str)], // (group, kind, namespace, name)
+    backend_refs: &[BackendRefTuple<'_>], // (group, kind, namespace, name)
     runtime: &ControllerRuntime,
 ) -> Vec<String> {
     use crate::conf_mgr::sync_runtime::resource_processor::ResourceRef;

@@ -1244,16 +1244,16 @@ mod tests {
 
     /// Build processor + worker over a temp conf dir. Returns what tests need
     /// to drive and assert; the JoinHandle keeps the worker alive.
-    fn fs_worker_test_harness(
-        conf_dir: &std::path::Path,
-    ) -> (
+    type FsWorkerTestHarness = (
         Arc<ResourceProcessor<HTTPRoute>>,
         Arc<PathRegistry>,
         Arc<LocalRawStore<HTTPRoute>>,
         FileSystemStatusHandler,
         Arc<RuntimeInvalidEnvelopes>,
         tokio::task::JoinHandle<()>,
-    ) {
+    );
+
+    fn fs_worker_test_harness(conf_dir: &std::path::Path) -> FsWorkerTestHarness {
         let processor = Arc::new(ResourceProcessor::<HTTPRoute>::new(
             "HTTPRoute",
             100,

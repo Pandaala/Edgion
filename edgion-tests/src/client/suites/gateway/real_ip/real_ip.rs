@@ -66,25 +66,19 @@ impl RealIpTestSuite {
 
                             match resp.json::<Value>().await {
                                 Ok(body) => {
-                                    let headers = match body["headers"].as_object() {
-                                        Some(h) => h,
-                                        None => {
-                                            return TestResult::failed(
-                                                start.elapsed(),
-                                                "Response body missing 'headers' object".to_string(),
-                                            )
-                                        }
+                                    let Some(headers) = body["headers"].as_object() else {
+                                        return TestResult::failed(
+                                            start.elapsed(),
+                                            "Response body missing 'headers' object".to_string(),
+                                        );
                                     };
 
                                     // Verify X-Real-IP is the first non-trusted IP (203.0.113.1)
-                                    let real_ip = match headers.get("x-real-ip").and_then(|v| v.as_str()) {
-                                        Some(ip) => ip,
-                                        None => {
-                                            return TestResult::failed(
-                                                start.elapsed(),
-                                                "x-real-ip header not found in response".to_string(),
-                                            )
-                                        }
+                                    let Some(real_ip) = headers.get("x-real-ip").and_then(|v| v.as_str()) else {
+                                        return TestResult::failed(
+                                            start.elapsed(),
+                                            "x-real-ip header not found in response".to_string(),
+                                        );
                                     };
 
                                     if real_ip != "203.0.113.1" {
@@ -95,14 +89,11 @@ impl RealIpTestSuite {
                                     }
 
                                     // Verify X-Forwarded-For keeps original chain and appends current client address.
-                                    let xff = match headers.get("x-forwarded-for").and_then(|v| v.as_str()) {
-                                        Some(x) => x,
-                                        None => {
-                                            return TestResult::failed(
-                                                start.elapsed(),
-                                                "x-forwarded-for header not found in response".to_string(),
-                                            )
-                                        }
+                                    let Some(xff) = headers.get("x-forwarded-for").and_then(|v| v.as_str()) else {
+                                        return TestResult::failed(
+                                            start.elapsed(),
+                                            "x-forwarded-for header not found in response".to_string(),
+                                        );
                                     };
 
                                     let expected_prefix = "203.0.113.1, 198.51.100.2, 192.168.1.1";
@@ -177,26 +168,20 @@ impl RealIpTestSuite {
 
                             match resp.json::<Value>().await {
                                 Ok(body) => {
-                                    let headers = match body["headers"].as_object() {
-                                        Some(h) => h,
-                                        None => {
-                                            return TestResult::failed(
-                                                start.elapsed(),
-                                                "Response body missing 'headers' object".to_string(),
-                                            )
-                                        }
+                                    let Some(headers) = body["headers"].as_object() else {
+                                        return TestResult::failed(
+                                            start.elapsed(),
+                                            "Response body missing 'headers' object".to_string(),
+                                        );
                                     };
 
                                     // Without XFF, X-Real-IP should be the resolved RemoteIp,
                                     // which starts from the direct peer on an unproxied request.
-                                    let real_ip = match headers.get("x-real-ip").and_then(|v| v.as_str()) {
-                                        Some(ip) => ip,
-                                        None => {
-                                            return TestResult::failed(
-                                                start.elapsed(),
-                                                "x-real-ip header not found in response".to_string(),
-                                            )
-                                        }
+                                    let Some(real_ip) = headers.get("x-real-ip").and_then(|v| v.as_str()) else {
+                                        return TestResult::failed(
+                                            start.elapsed(),
+                                            "x-real-ip header not found in response".to_string(),
+                                        );
                                     };
 
                                     if !Self::is_valid_ip(real_ip) {
@@ -207,14 +192,11 @@ impl RealIpTestSuite {
                                     }
 
                                     // X-Forwarded-For should be created with just the resolved RemoteIp.
-                                    let xff = match headers.get("x-forwarded-for").and_then(|v| v.as_str()) {
-                                        Some(x) => x,
-                                        None => {
-                                            return TestResult::failed(
-                                                start.elapsed(),
-                                                "x-forwarded-for header not found in response".to_string(),
-                                            )
-                                        }
+                                    let Some(xff) = headers.get("x-forwarded-for").and_then(|v| v.as_str()) else {
+                                        return TestResult::failed(
+                                            start.elapsed(),
+                                            "x-forwarded-for header not found in response".to_string(),
+                                        );
                                     };
 
                                     if xff != real_ip {

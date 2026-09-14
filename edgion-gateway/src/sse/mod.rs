@@ -112,6 +112,10 @@ impl RawSseBytesRef<'_> {
         self.chain.len()
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.chain.len() == 0
+    }
+
     pub fn for_each_slice(&self, visitor: impl FnMut(&[u8])) {
         let _ = self.chain.for_each_range(
             ByteRange {
@@ -168,6 +172,7 @@ impl<'a> SseEventRef<'a> {
     /// Map a range in the semantic `data:` view back to the original raw SSE
     /// record. A token crossing the synthetic newline inserted between two
     /// `data:` fields is deliberately rejected.
+    #[allow(clippy::result_unit_err)]
     pub fn semantic_range_to_raw(&self, semantic: ByteRange) -> Result<ByteRange, ()> {
         if semantic.start > semantic.end {
             return Err(());
@@ -209,6 +214,7 @@ impl<'a> SseEventRef<'a> {
                 .is_some_and(|value| value.as_ref() == literal)
     }
 
+    #[allow(clippy::result_unit_err)]
     pub fn semantic_data(&self) -> Result<Cow<'a, str>, ()> {
         if self.data.len() == 1 {
             return range_str(self.raw, self.data[0]);
@@ -236,6 +242,7 @@ impl<'a> SseEventRef<'a> {
         serde_json::from_reader(SemanticDataReader::new(self.raw, &self.data))
     }
 
+    #[allow(clippy::result_unit_err)]
     pub fn to_owned(&self) -> Result<SseEvent, ()> {
         Ok(SseEvent {
             event: self.event().map(Cow::into_owned),

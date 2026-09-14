@@ -154,36 +154,30 @@ impl RequestFilter for KeyAuth {
 
     async fn run_request(&self, session: &mut dyn PluginSession, plugin_log: &mut PluginLog) -> PluginRunningResult {
         // 1. Extract key from request using configured sources
-        let (key, used_source) = match self.extract_key(session) {
-            Some(found) => found,
-            None => {
-                // No key provided - check anonymous access
-                if let Some(ref anon_user) = self.anonymous {
-                    plugin_log.push("Allow anon");
+        let Some((key, used_source)) = self.extract_key(session) else {
+            // No key provided - check anonymous access
+            if let Some(ref anon_user) = self.anonymous {
+                plugin_log.push("Allow anon");
 
-                    // Set anonymous consumer header if in whitelist
-                    if self.forward_anonymous_username {
-                        let _ = set_sensitive_request_header(session, "X-Consumer-Username", anon_user);
-                    }
-                    let _ = set_sensitive_request_header(session, "X-Anonymous-Consumer", "true");
-
-                    return PluginRunningResult::GoodNext;
+                // Set anonymous consumer header if in whitelist
+                if self.forward_anonymous_username {
+                    let _ = set_sensitive_request_header(session, "X-Consumer-Username", anon_user);
                 }
+                let _ = set_sensitive_request_header(session, "X-Anonymous-Consumer", "true");
 
-                plugin_log.push("Deny no key");
-                apply_auth_failure_delay(self.auth_failure_delay_ms).await;
-                return self.unauthorized(session, MISSING_KEY_BODY).await;
+                return PluginRunningResult::GoodNext;
             }
+
+            plugin_log.push("Deny no key");
+            apply_auth_failure_delay(self.auth_failure_delay_ms).await;
+            return self.unauthorized(session, MISSING_KEY_BODY).await;
         };
 
         // 2. Validate key
-        let metadata = match self.validate_key(&key) {
-            Some(m) => m,
-            None => {
-                plugin_log.push("Deny bad key");
-                apply_auth_failure_delay(self.auth_failure_delay_ms).await;
-                return self.unauthorized(session, INVALID_KEY_BODY).await;
-            }
+        let Some(metadata) = self.validate_key(&key) else {
+            plugin_log.push("Deny bad key");
+            apply_auth_failure_delay(self.auth_failure_delay_ms).await;
+            return self.unauthorized(session, INVALID_KEY_BODY).await;
         };
 
         // Log key source (header / query / cookie / etc.)
@@ -468,7 +462,7 @@ mod tests {
     fn hit_log_without_user_still_has_group() {
         let mut log = PluginLog::new("KeyAuth");
         let meta = metadata_with_group("internal", None);
-        if meta.headers.get("X-Consumer-Username").is_none() {
+        if !meta.headers.contains_key("X-Consumer-Username") {
             log.push_fmt("OK group={}", la![meta.group.as_ref()]);
         }
         let entries = render_log(&log);

@@ -282,7 +282,7 @@ impl ProcessorHandler<UDPRoute> for UdpRouteHandler {
     }
 }
 
-fn collect_backend_ref_tuples(route: &UDPRoute) -> Vec<(Option<&str>, Option<&str>, Option<&str>, &str)> {
+fn collect_backend_ref_tuples(route: &UDPRoute) -> Vec<super::route_utils::BackendRefTuple<'_>> {
     let mut tuples = Vec::new();
     if let Some(rules) = &route.spec.rules {
         for rule in rules {

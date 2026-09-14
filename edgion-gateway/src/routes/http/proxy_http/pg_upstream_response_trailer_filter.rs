@@ -96,7 +96,9 @@ mod tests {
     use crate::plugins::runtime::UpstreamResponseTrailer;
     use async_trait::async_trait;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-    use std::sync::{Arc, Mutex};
+    use std::sync::Arc;
+
+    use parking_lot::Mutex;
     use tokio::io::AsyncWriteExt;
 
     async fn dispatch_upstream_response_trailers(
@@ -141,7 +143,7 @@ mod tests {
             _log: &mut PluginLog,
         ) -> UpstreamTrailerResult {
             self.calls.fetch_add(1, Ordering::SeqCst);
-            self.order.lock().expect("order lock").push(self.id);
+            self.order.lock().push(self.id);
             if let Some(trailers) = trailers {
                 trailers.append("x-order", http::HeaderValue::from_static(self.id));
             }
@@ -199,10 +201,7 @@ mod tests {
             .expect("duplicate transport evidence is ignored");
 
         assert_eq!(calls.load(Ordering::SeqCst), 4);
-        assert_eq!(
-            *order.lock().expect("order lock"),
-            ["route", "backend", "gateway", "global"]
-        );
+        assert_eq!(*order.lock(), ["route", "backend", "gateway", "global"]);
         assert_eq!(
             trailers
                 .get_all("x-order")
@@ -285,7 +284,7 @@ mod tests {
             .expect_err("fail-close companion must abort trailer forwarding");
         assert!(matches!(error.etype(), pingora_core::ErrorType::HTTPStatus(500)));
         assert!(!error.retry());
-        assert_eq!(*order.lock().expect("order lock"), ["first", "failure"]);
+        assert_eq!(*order.lock(), ["first", "failure"]);
         assert_eq!(calls.load(Ordering::SeqCst), 2);
         assert!(last_preempted.load(Ordering::SeqCst));
     }

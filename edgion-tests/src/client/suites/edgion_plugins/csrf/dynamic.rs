@@ -4,7 +4,7 @@
 //! report HTTP status and whether a CSRF cookie was present.
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
-use std::sync::Mutex;
+use parking_lot::{Mutex, MutexGuard};
 use std::time::Instant;
 
 const HOST: &str = "csrf-secret-rotation.example.com";
@@ -12,10 +12,8 @@ const TOKEN_HEADER: &str = "X-CSRF-Token";
 
 static PRE_ROTATION_TOKEN: Mutex<Option<String>> = Mutex::new(None);
 
-fn token_slot() -> std::sync::MutexGuard<'static, Option<String>> {
-    PRE_ROTATION_TOKEN
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
+fn token_slot() -> MutexGuard<'static, Option<String>> {
+    PRE_ROTATION_TOKEN.lock()
 }
 
 fn store_csrf_pre_rotation_token(token: String) {

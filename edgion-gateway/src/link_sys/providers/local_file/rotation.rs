@@ -37,9 +37,8 @@ pub fn get_size_rotated_path(base_path: &Path, index: u32) -> PathBuf {
 /// Find the next available index for size-based rotation
 /// Scans existing files and returns the next index to use
 pub fn find_next_size_index(base_path: &Path) -> u32 {
-    let parent = match base_path.parent() {
-        Some(p) => p,
-        None => return 0,
+    let Some(parent) = base_path.parent() else {
+        return 0;
     };
 
     let stem = base_path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
@@ -67,21 +66,6 @@ pub fn find_next_size_index(base_path: &Path) -> u32 {
     }
 
     max_index + 1
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn find_next_size_index_ignores_overlapping_base_name() {
-        let dir = tempfile::tempdir().unwrap();
-        let base = dir.path().join("a.a");
-        fs::write(&base, "active").unwrap();
-        fs::write(dir.path().join("a.2.a"), "archive").unwrap();
-
-        assert_eq!(find_next_size_index(&base), 3);
-    }
 }
 
 /// Append suffix before file extension
@@ -120,9 +104,8 @@ pub fn cleanup_old_files(base_path: &Path, max_files: usize) {
         return; // 0 means unlimited
     }
 
-    let parent = match base_path.parent() {
-        Some(p) => p,
-        None => return,
+    let Some(parent) = base_path.parent() else {
+        return;
     };
 
     let stem = base_path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
@@ -156,7 +139,7 @@ pub fn cleanup_old_files(base_path: &Path, max_files: usize) {
     }
 
     // Sort by modification time (newest first)
-    files.sort_by(|a, b| b.1.cmp(&a.1));
+    files.sort_by_key(|item| std::cmp::Reverse(item.1));
 
     // Remove files exceeding max_files
     for (path, _) in files.into_iter().skip(max_files) {
@@ -165,5 +148,20 @@ pub fn cleanup_old_files(base_path: &Path, max_files: usize) {
         } else {
             tracing::info!(path = %path.display(), "Cleaned up old log file");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn find_next_size_index_ignores_overlapping_base_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path().join("a.a");
+        fs::write(&base, "active").unwrap();
+        fs::write(dir.path().join("a.2.a"), "archive").unwrap();
+
+        assert_eq!(find_next_size_index(&base), 3);
     }
 }

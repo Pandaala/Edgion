@@ -766,13 +766,10 @@ impl ConfigSyncClient {
 
         for kind_name in &effective_kinds {
             // Resolve string -> ResourceKind via exhaustive enum
-            let kind = match ResourceKind::from_kind_name(kind_name) {
-                Some(k) => k,
-                None => {
-                    // Truly unknown kind string — forward compat with newer server
-                    tracing::warn!(kind = %kind_name, "Unknown resource kind from server, skipping");
-                    continue;
-                }
+            let Some(kind) = ResourceKind::from_kind_name(kind_name) else {
+                // Truly unknown kind string — forward compat with newer server
+                tracing::warn!(kind = %kind_name, "Unknown resource kind from server, skipping");
+                continue;
             };
 
             match self.config_client.get_dyn_cache(kind) {

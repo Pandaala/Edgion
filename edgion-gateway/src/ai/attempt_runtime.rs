@@ -49,6 +49,7 @@ pub struct AiAttemptAdmissionInput {
     pub limiter_core: Arc<RedisRateLimiter>,
 }
 
+#[allow(clippy::large_enum_variant)]
 pub enum AiAttemptAdmission {
     Ready(AiAttemptRuntime),
     Skip,
@@ -329,12 +330,14 @@ impl AiAttemptRuntimeState {
         self.ever_dispatched
     }
 
+    #[allow(clippy::result_unit_err)]
     pub fn charged_request_tokens(&self) -> Result<u64, ()> {
         (!self.accounting_overflow)
             .then_some(self.charged_request_tokens)
             .ok_or(())
     }
 
+    #[allow(clippy::result_unit_err)]
     pub fn metric_totals(&self) -> Result<&[AiAttemptTokenTotals], ()> {
         (!self.accounting_overflow)
             .then_some(self.metric_totals.as_slice())

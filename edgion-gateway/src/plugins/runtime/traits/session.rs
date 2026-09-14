@@ -100,6 +100,10 @@ pub trait RequestBodySnapshotReader: Send {
     /// Exact byte length of this snapshot.
     fn len(&self) -> u64;
 
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
     /// Bytes that must be copied to isolate this reader's in-memory segments.
     ///
     /// This is the size of the prospective independent payload, not the size
@@ -131,6 +135,7 @@ pub enum RouteProto {
 }
 
 #[cfg_attr(test, mockall::automock)]
+#[cfg_attr(test, allow(clippy::disallowed_types))]
 #[async_trait]
 pub trait PluginSession: Send + Sync {
     /// Borrowed access to the live request header map.

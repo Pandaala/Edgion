@@ -61,25 +61,19 @@ impl RealIpPluginTestSuite {
 
                             match resp.json::<Value>().await {
                                 Ok(body) => {
-                                    let headers = match body["headers"].as_object() {
-                                        Some(h) => h,
-                                        None => {
-                                            return TestResult::failed(
-                                                start.elapsed(),
-                                                "Response body missing 'headers' object".to_string(),
-                                            )
-                                        }
+                                    let Some(headers) = body["headers"].as_object() else {
+                                        return TestResult::failed(
+                                            start.elapsed(),
+                                            "Response body missing 'headers' object".to_string(),
+                                        );
                                     };
 
                                     // Verify X-Real-IP is the first non-trusted IP (203.0.113.1)
-                                    let real_ip = match headers.get("x-real-ip").and_then(|v| v.as_str()) {
-                                        Some(ip) => ip,
-                                        None => {
-                                            return TestResult::failed(
-                                                start.elapsed(),
-                                                "x-real-ip header not found in response".to_string(),
-                                            )
-                                        }
+                                    let Some(real_ip) = headers.get("x-real-ip").and_then(|v| v.as_str()) else {
+                                        return TestResult::failed(
+                                            start.elapsed(),
+                                            "x-real-ip header not found in response".to_string(),
+                                        );
                                     };
 
                                     // Plugin re-extracts, expected result is 203.0.113.1
@@ -135,25 +129,19 @@ impl RealIpPluginTestSuite {
 
                             match resp.json::<Value>().await {
                                 Ok(body) => {
-                                    let headers = match body["headers"].as_object() {
-                                        Some(h) => h,
-                                        None => {
-                                            return TestResult::failed(
-                                                start.elapsed(),
-                                                "Response body missing 'headers' object".to_string(),
-                                            )
-                                        }
+                                    let Some(headers) = body["headers"].as_object() else {
+                                        return TestResult::failed(
+                                            start.elapsed(),
+                                            "Response body missing 'headers' object".to_string(),
+                                        );
                                     };
 
                                     // Direct connection, X-Real-IP should carry the resolved RemoteIp.
-                                    let real_ip = match headers.get("x-real-ip").and_then(|v| v.as_str()) {
-                                        Some(ip) => ip,
-                                        None => {
-                                            return TestResult::failed(
-                                                start.elapsed(),
-                                                "x-real-ip header not found in response".to_string(),
-                                            )
-                                        }
+                                    let Some(real_ip) = headers.get("x-real-ip").and_then(|v| v.as_str()) else {
+                                        return TestResult::failed(
+                                            start.elapsed(),
+                                            "x-real-ip header not found in response".to_string(),
+                                        );
                                     };
 
                                     if !Self::is_valid_ip(real_ip) {
@@ -220,24 +208,18 @@ impl RealIpPluginTestSuite {
 
                             match resp.json::<Value>().await {
                                 Ok(body) => {
-                                    let headers = match body["headers"].as_object() {
-                                        Some(h) => h,
-                                        None => {
-                                            return TestResult::failed(
-                                                start.elapsed(),
-                                                "Response body missing 'headers' object".to_string(),
-                                            )
-                                        }
+                                    let Some(headers) = body["headers"].as_object() else {
+                                        return TestResult::failed(
+                                            start.elapsed(),
+                                            "Response body missing 'headers' object".to_string(),
+                                        );
                                     };
 
-                                    let real_ip = match headers.get("x-real-ip").and_then(|v| v.as_str()) {
-                                        Some(ip) => ip,
-                                        None => {
-                                            return TestResult::failed(
-                                                start.elapsed(),
-                                                "x-real-ip header not found in response".to_string(),
-                                            )
-                                        }
+                                    let Some(real_ip) = headers.get("x-real-ip").and_then(|v| v.as_str()) else {
+                                        return TestResult::failed(
+                                            start.elapsed(),
+                                            "x-real-ip header not found in response".to_string(),
+                                        );
                                     };
 
                                     // All trusted, should use the leftmost IP

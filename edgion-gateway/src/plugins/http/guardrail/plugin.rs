@@ -166,7 +166,7 @@ impl UpstreamResponse for Guardrail {
         if !(200..300).contains(&status) || !content_type_ok || !encoding_ok || !canonical_ai {
             return self.precommit_failure(session, &owner, "response-not-applicable", log);
         }
-        let processor = match GuardrailResponseProcessor::new(
+        let Ok(processor) = GuardrailResponseProcessor::new(
             Arc::clone(&self.client),
             Arc::clone(&self.permits),
             Arc::clone(&owner),
@@ -176,9 +176,8 @@ impl UpstreamResponse for Guardrail {
             self.max_replacement_bytes,
             self.fail_open,
             self.head_limits.is_some(),
-        ) {
-            Ok(processor) => processor,
-            Err(_) => return self.precommit_failure(session, &owner, "window-config", log),
+        ) else {
+            return self.precommit_failure(session, &owner, "window-config", log);
         };
         if !session.install_semantic_response_processor(Box::new(processor)) {
             return self.precommit_failure(session, &owner, "late-response-processor", log);

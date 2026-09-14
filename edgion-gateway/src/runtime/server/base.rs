@@ -98,16 +98,13 @@ impl GatewayBase {
         for gateway in gateways.iter() {
             // Get GatewayClass for this Gateway
             let gateway_class_name = &gateway.spec.gateway_class_name;
-            let gateway_class = match self.config_client.get_gateway_class(gateway_class_name) {
-                Some(gc) => gc,
-                None => {
-                    tracing::warn!(
-                        gateway = %gateway.key_name(),
-                        gateway_class = %gateway_class_name,
-                        "GatewayClass not found, skipping Gateway"
-                    );
-                    continue;
-                }
+            let Some(gateway_class) = self.config_client.get_gateway_class(gateway_class_name) else {
+                tracing::warn!(
+                    gateway = %gateway.key_name(),
+                    gateway_class = %gateway_class_name,
+                    "GatewayClass not found, skipping Gateway"
+                );
+                continue;
             };
 
             // Get EdgionGatewayConfig for this Gateway

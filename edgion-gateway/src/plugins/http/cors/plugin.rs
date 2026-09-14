@@ -233,23 +233,20 @@ impl RequestFilter for Cors {
             return PluginRunningResult::GoodNext;
         }
 
-        let allowed_origin = match self.get_validated_origin(session) {
-            Some(origin) => origin,
-            None => {
-                plugin_log.push("origin match:deny");
-                // For preflight with non-matching origin, return 204 directly
-                // to avoid forwarding a useless OPTIONS request to the backend.
-                if self.is_preflight_request(session) {
-                    plugin_log.push("cors preflight");
-                    if let Ok(resp) = ResponseHeader::build(204, None) {
-                        let _ = session.write_response_header(Box::new(resp), true).await;
-                        let _ = session.write_response_body(Some(Bytes::new()), true).await;
-                    }
-                    return PluginRunningResult::ErrTerminateRequest;
+        let Some(allowed_origin) = self.get_validated_origin(session) else {
+            plugin_log.push("origin match:deny");
+            // For preflight with non-matching origin, return 204 directly
+            // to avoid forwarding a useless OPTIONS request to the backend.
+            if self.is_preflight_request(session) {
+                plugin_log.push("cors preflight");
+                if let Ok(resp) = ResponseHeader::build(204, None) {
+                    let _ = session.write_response_header(Box::new(resp), true).await;
+                    let _ = session.write_response_body(Some(Bytes::new()), true).await;
                 }
-                // Simple request: allow through without CORS headers (browser will block)
-                return PluginRunningResult::GoodNext;
+                return PluginRunningResult::ErrTerminateRequest;
             }
+            // Simple request: allow through without CORS headers (browser will block)
+            return PluginRunningResult::GoodNext;
         };
 
         if self.is_preflight_request(session) {

@@ -766,7 +766,7 @@ impl ProcessorHandler<GRPCRoute> for GrpcRouteHandler {
 /// Delegation backendRefs (`kind: GRPCRoute`) are excluded — they are not
 /// Service backends; their resolution problems are reported through
 /// `DelegationIssue` (MissingChild → ResolvedRefs, drops → PartiallyInvalid).
-fn collect_backend_ref_tuples(route: &GRPCRoute) -> Vec<(Option<&str>, Option<&str>, Option<&str>, &str)> {
+fn collect_backend_ref_tuples(route: &GRPCRoute) -> Vec<super::route_utils::BackendRefTuple<'_>> {
     let mut tuples = Vec::new();
     if let Some(rules) = &route.spec.rules {
         for rule in rules {

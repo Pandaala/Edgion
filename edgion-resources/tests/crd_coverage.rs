@@ -67,9 +67,8 @@ fn diff(
     d1: &mut Vec<String>,
     d2: &mut Vec<String>,
 ) {
-    let (ep, ap) = match (properties(exp, edefs), properties(act, adefs)) {
-        (Some(ep), Some(ap)) => (ep, ap),
-        _ => return, // at least one side is a leaf → stop
+    let (Some(ep), Some(ap)) = (properties(exp, edefs), properties(act, adefs)) else {
+        return; // at least one side is a leaf → stop
     };
     for (name, esub) in ep {
         match ap.get(name) {

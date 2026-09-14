@@ -203,6 +203,13 @@ impl StreamPluginStore {
 }
 
 #[cfg(test)]
+impl Default for StreamPluginStore {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::plugins::stream::stream_plugin_trait::{StreamContext, StreamLayer, StreamPluginResult};

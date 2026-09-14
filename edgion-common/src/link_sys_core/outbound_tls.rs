@@ -417,12 +417,16 @@ mod tests {
 
     #[test]
     fn aggregate_verify_safest_wins() {
-        let mut a = OutboundTlsConfig::default();
-        a.verify = false;
+        let a = OutboundTlsConfig {
+            verify: false,
+            ..Default::default()
+        };
         let b = OutboundTlsConfig::default(); // verify = true
         assert!(aggregate_verify(&[a.clone(), b]).verify);
-        let mut c = OutboundTlsConfig::default();
-        c.verify = false;
+        let c = OutboundTlsConfig {
+            verify: false,
+            ..Default::default()
+        };
         assert!(!aggregate_verify(&[a, c]).verify);
     }
 

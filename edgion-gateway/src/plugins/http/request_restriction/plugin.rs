@@ -415,7 +415,9 @@ mod tests {
     #[tokio::test]
     async fn custom_deny_body_is_prepared_once_and_survives_caller_changes() {
         use mockall::Sequence;
-        use std::sync::{Arc, Mutex};
+        use std::sync::Arc;
+
+        use parking_lot::Mutex;
 
         const EXPECTED_BODY: &str = r#"{"message":"quoted \"slash\\line\n©"}"#;
 
@@ -457,9 +459,7 @@ mod tests {
                 .in_sequence(&mut sequence)
                 .returning(move |body, _| {
                     let body = body.expect("deny response must carry the prepared body");
-                    seen.lock()
-                        .expect("body observation lock must not be poisoned")
-                        .push(body);
+                    seen.lock().push(body);
                     Ok(())
                 });
             session
@@ -476,7 +476,7 @@ mod tests {
             assert_eq!(log.render_for_test(), "Deny (no allow alternative matched)");
         }
 
-        let observed = observed.lock().expect("body observation lock must not be poisoned");
+        let observed = observed.lock();
         assert_eq!(observed.len(), 2);
         assert_eq!(observed[0].as_ptr(), observed[1].as_ptr());
     }

@@ -351,6 +351,7 @@ fn prepare_policies(snapshot: &FrozenPolicySnapshot) -> Result<PreparedProxyProt
     Ok(PreparedProxyProtocolPolicies(prepared))
 }
 
+#[allow(clippy::result_large_err)]
 fn aggregate_snapshot<'a>(
     gateways: impl IntoIterator<Item = &'a Gateway>,
 ) -> std::result::Result<FrozenPolicySnapshot, ProxyProtocolFatalDiagnostic> {
@@ -361,6 +362,7 @@ fn aggregate_snapshot<'a>(
     Ok(snapshot)
 }
 
+#[allow(clippy::result_large_err)]
 fn add_gateway_contributions(
     snapshot: &mut FrozenPolicySnapshot,
     gateway: &Gateway,

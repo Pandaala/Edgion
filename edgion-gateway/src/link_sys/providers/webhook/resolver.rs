@@ -28,12 +28,9 @@ pub async fn resolve_webhook_key(
     extract: &WebhookExtract,
     diagnostics: &mut OutboundRequestDiagnostics,
 ) -> Option<String> {
-    let client = match get_webhook_manager().get(webhook_ref).await {
-        Some(c) => c,
-        None => {
-            record_webhook_resolve_error("not_found");
-            return None;
-        }
+    let Some(client) = get_webhook_manager().get(webhook_ref).await else {
+        record_webhook_resolve_error("not_found");
+        return None;
     };
 
     match outbound_call(

@@ -227,14 +227,11 @@ impl GatewayTlsTestSuite {
                     let start = Instant::now();
                     let servername = "gateway-tls.test.com";
 
-                    let openssl = match openssl_bin() {
-                        Some(bin) => bin,
-                        None => {
-                            return TestResult::passed_with_message(
-                                start.elapsed(),
-                                "skipped: genuine OpenSSL not found (LibreSSL cannot pin TLS 1.3 sigalgs)".to_string(),
-                            )
-                        }
+                    let Some(openssl) = openssl_bin() else {
+                        return TestResult::passed_with_message(
+                            start.elapsed(),
+                            "skipped: genuine OpenSSL not found (LibreSSL cannot pin TLS 1.3 sigalgs)".to_string(),
+                        );
                     };
 
                     // 1. Pin ECDSA: server must select the ECDSA cert slot.

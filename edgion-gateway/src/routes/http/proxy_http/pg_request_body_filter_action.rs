@@ -88,20 +88,18 @@ pub async fn request_body_filter_action(
     // Native WAF observes the post-mutation bytes that are about to be sent
     // upstream. A terminating body handler has already returned above, so an
     // unforwarded chunk is never charged as inspected by the WAF.
-    if let Some(verdict) = run_waf_body_stream(body.as_deref().unwrap_or_default(), event, ctx) {
-        if let ChunkVerdict::Terminate {
-            status,
-            grpc_status,
-            body: reply,
-            header_ops,
-        } = verdict
-        {
-            pg_request_body_filter::abandon_request_mirror(ctx, MirrorAbandonReason::BodyAbandoned);
-            if request_body_should_write_terminate_reply(session.response_head_selected_by_pipeline()) {
-                write_terminate_reply(session, ctx, status, grpc_status, reply, header_ops).await;
-            }
-            return Ok(RequestBodyAction::Terminate);
+    if let Some(ChunkVerdict::Terminate {
+        status,
+        grpc_status,
+        body: reply,
+        header_ops,
+    }) = run_waf_body_stream(body.as_deref().unwrap_or_default(), event, ctx)
+    {
+        pg_request_body_filter::abandon_request_mirror(ctx, MirrorAbandonReason::BodyAbandoned);
+        if request_body_should_write_terminate_reply(session.response_head_selected_by_pipeline()) {
+            write_terminate_reply(session, ctx, status, grpc_status, reply, header_ops).await;
         }
+        return Ok(RequestBodyAction::Terminate);
     }
 
     // Observation sees the exact post-mutation bytes about to reach the
@@ -285,6 +283,47 @@ fn terminate_grpc_reply(
         message.or_else(|| exact_grpc_status.is_none().then_some(default_msg)),
         invalid_utf8,
     )
+}
+
+/// Push every pending handler log under the `request_body_filters` stage.
+/// Called on terminate, on EOS, and as a leftover sweep from `pg_logging`
+/// (client-abort / futile-read paths).
+fn drain_handler_logs(handlers: &mut Handlers, ctx: &mut EdgionHttpContext) {
+    let filters: Vec<_> = handlers.iter_mut().filter_map(|h| h.get_mut().take_log()).collect();
+    if !filters.is_empty() {
+        ctx.push_stage_log(StageLogs {
+            stage: "request_body_filters",
+            filters,
+            edgion_plugins: Vec::new(),
+        });
+    }
+}
+
+/// Leftover-log sweep used by the logging phase for requests whose body pump
+/// never reached EOS (client abort, early upstream response).
+pub fn drain_leftover_stream_logs(ctx: &mut EdgionHttpContext) {
+    if !ctx.has_request_body_stream_handlers() {
+        return;
+    }
+    let mut handlers = ctx.take_request_body_stream_handlers();
+    drain_handler_logs(&mut handlers, ctx);
+    ctx.restore_request_body_stream_handlers(handlers);
+}
+
+/// Idempotent observer cleanup/log sweep for EOS, cancellation, early local
+/// replies, and upstream aborts. Observer failures never affect the request.
+pub fn drain_request_body_observer_logs(ctx: &mut EdgionHttpContext) {
+    let Some(observers) = ctx.request_body_observers_mut() else {
+        return;
+    };
+    let filters = observers.finalize_incomplete_and_take_logs();
+    if !filters.is_empty() {
+        ctx.push_stage_log(StageLogs {
+            stage: "request_body_observers",
+            filters,
+            edgion_plugins: Vec::new(),
+        });
+    }
 }
 
 #[cfg(test)]
@@ -537,46 +576,5 @@ mod tests {
         assert_eq!(written.headers.get("grpc-status").unwrap(), "8");
         assert_eq!(written.headers.get("x-local").unwrap(), "reply");
         assert_eq!(ctx.request_info.grpc_status(), Some(8));
-    }
-}
-
-/// Push every pending handler log under the `request_body_filters` stage.
-/// Called on terminate, on EOS, and as a leftover sweep from `pg_logging`
-/// (client-abort / futile-read paths).
-fn drain_handler_logs(handlers: &mut Handlers, ctx: &mut EdgionHttpContext) {
-    let filters: Vec<_> = handlers.iter_mut().filter_map(|h| h.get_mut().take_log()).collect();
-    if !filters.is_empty() {
-        ctx.push_stage_log(StageLogs {
-            stage: "request_body_filters",
-            filters,
-            edgion_plugins: Vec::new(),
-        });
-    }
-}
-
-/// Leftover-log sweep used by the logging phase for requests whose body pump
-/// never reached EOS (client abort, early upstream response).
-pub fn drain_leftover_stream_logs(ctx: &mut EdgionHttpContext) {
-    if !ctx.has_request_body_stream_handlers() {
-        return;
-    }
-    let mut handlers = ctx.take_request_body_stream_handlers();
-    drain_handler_logs(&mut handlers, ctx);
-    ctx.restore_request_body_stream_handlers(handlers);
-}
-
-/// Idempotent observer cleanup/log sweep for EOS, cancellation, early local
-/// replies, and upstream aborts. Observer failures never affect the request.
-pub fn drain_request_body_observer_logs(ctx: &mut EdgionHttpContext) {
-    let Some(observers) = ctx.request_body_observers_mut() else {
-        return;
-    };
-    let filters = observers.finalize_incomplete_and_take_logs();
-    if !filters.is_empty() {
-        ctx.push_stage_log(StageLogs {
-            stage: "request_body_observers",
-            filters,
-            edgion_plugins: Vec::new(),
-        });
     }
 }

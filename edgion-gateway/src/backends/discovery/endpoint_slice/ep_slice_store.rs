@@ -74,12 +74,12 @@ where
             .unwrap_or_default()
     }
 
-    pub fn get_backends_for_service(&self, service_key: &str) -> Arc<Vec<Arc<LbBackend>>> {
+    pub fn get_backends_for_service(&self, service_key: &str) -> Arc<[Arc<LbBackend>]> {
         self.coordinator
             .load_generation()
             .available(service_key)
             .map(|service| service.canonical_probe_backends())
-            .unwrap_or_else(|| Arc::new(Vec::new()))
+            .unwrap_or_else(|| Arc::from(Vec::new()))
     }
 
     pub fn slice_count(&self) -> usize {
@@ -171,6 +171,21 @@ where
         );
         affected
     }
+}
+
+impl<S> Default for EpSliceStore<S>
+where
+    S: BackendSelection + 'static,
+    S::Iter: pingora_load_balancing::selection::BackendIter,
+{
+    fn default() -> Self {
+        Self::new(get_service_discovery_coordinator())
+    }
+}
+
+#[cfg(test)]
+pub fn extract_service_key(slice: &EndpointSlice) -> String {
+    super::super::coordinator::endpoint_slice_service_key(slice)
 }
 
 #[cfg(test)]
@@ -404,19 +419,4 @@ mod inventory_tests {
         assert!(store.get_backends_for_service("default/backend").is_empty());
         assert!(store.keys().is_empty());
     }
-}
-
-impl<S> Default for EpSliceStore<S>
-where
-    S: BackendSelection + 'static,
-    S::Iter: pingora_load_balancing::selection::BackendIter,
-{
-    fn default() -> Self {
-        Self::new(get_service_discovery_coordinator())
-    }
-}
-
-#[cfg(test)]
-pub fn extract_service_key(slice: &EndpointSlice) -> String {
-    super::super::coordinator::endpoint_slice_service_key(slice)
 }

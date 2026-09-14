@@ -517,7 +517,7 @@ mod tests {
             metric_handles: Arc::new(crate::observe::metrics::route_handles::RouteMetricHandles::empty()),
             plugin_runtime: Arc::new(PluginRuntime::new()),
             backend_finder: Arc::new(BackendSelector::new()),
-            backends: Arc::new(Vec::new()),
+            backends: Arc::from(Vec::new()),
         })
     }
 

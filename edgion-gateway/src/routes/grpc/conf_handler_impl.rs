@@ -159,13 +159,12 @@ fn parse_route_to_units(resource_key: &str, route: &Arc<GRPCRoute>) -> Vec<Arc<G
     let route_namespace = route.metadata.namespace.as_deref().unwrap_or("default");
     let route_name = route.metadata.name.as_deref().unwrap_or("");
 
-    let accepted_refs = match filter_accepted_parent_refs(
+    let Some(accepted_refs) = filter_accepted_parent_refs(
         route.spec.parent_refs.as_deref(),
         route.status.as_ref().map(|s| s.parents.as_slice()),
         Some(route_namespace),
-    ) {
-        Some(refs) => refs,
-        None => return Vec::new(),
+    ) else {
+        return Vec::new();
     };
 
     // Derive attached gateway pairs before accepted_refs is moved into route_info.

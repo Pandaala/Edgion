@@ -55,9 +55,8 @@ const HOST: &str = "upstream-authority.example.com";
 /// been recorded yet (metrics crate does not pre-register label combinations).
 async fn rejected_total(ctx: &TestContext, reason: &str) -> f64 {
     let metrics_client = crate::metrics_helper::MetricsClient::from_host_port(&ctx.target_host, 12090);
-    let raw = match metrics_client.fetch_raw_metrics().await {
-        Ok(r) => r,
-        Err(_) => return 0.0,
+    let Ok(raw) = metrics_client.fetch_raw_metrics().await else {
+        return 0.0;
     };
     let needle = format!("reason=\"{}\"", reason);
     for line in raw.lines() {

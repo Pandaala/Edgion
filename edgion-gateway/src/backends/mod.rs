@@ -736,7 +736,7 @@ mod selected_service_input_tests {
             0,
             Arc::new(PluginRuntime::new()),
         );
-        let generation = Arc::new(vec![compiled]);
+        let generation = Arc::from(vec![compiled]);
         let logical = LogicalBackendHandle::new(generation, 0).unwrap();
         SelectedServiceBackend::new(logical, BackendTlsPolicyLookup::Absent).unwrap()
     }

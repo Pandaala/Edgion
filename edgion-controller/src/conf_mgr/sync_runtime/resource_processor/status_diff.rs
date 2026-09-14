@@ -57,13 +57,11 @@ pub fn status_semantically_changed(kind: &str, old_json: &str, new_json: &str) -
 /// - For each type, `status`, `reason`, `message`, and `observedGeneration` match
 /// - `lastTransitionTime` is intentionally ignored
 fn conditions_equal(old: &Value, new: &Value) -> bool {
-    let old_arr = match old.as_array() {
-        Some(a) => a,
-        None => return new.as_array().is_none_or(|a| a.is_empty()),
+    let Some(old_arr) = old.as_array() else {
+        return new.as_array().is_none_or(|a| a.is_empty());
     };
-    let new_arr = match new.as_array() {
-        Some(a) => a,
-        None => return old_arr.is_empty(),
+    let Some(new_arr) = new.as_array() else {
+        return old_arr.is_empty();
     };
 
     if old_arr.len() != new_arr.len() {

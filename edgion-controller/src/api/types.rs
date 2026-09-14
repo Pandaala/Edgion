@@ -490,8 +490,10 @@ mod cache_redact_tests {
 
         let mut secrets = BTreeMap::new();
         secrets.insert("ns/n:k".to_string(), "supersecret".to_string());
-        let mut webhook_config = WebhookServiceConfig::default();
-        webhook_config.resolved_secrets = Some(ResolvedSecrets(secrets));
+        let webhook_config = WebhookServiceConfig {
+            resolved_secrets: Some(ResolvedSecrets(secrets)),
+            ..Default::default()
+        };
 
         let link_sys = LinkSys {
             metadata: ObjectMeta {

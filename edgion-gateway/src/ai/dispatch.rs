@@ -1000,7 +1000,7 @@ mod tests {
             0,
             Arc::new(PluginRuntime::new()),
         );
-        crate::backends::LogicalBackendHandle::new(Arc::new(vec![compiled]), 0).unwrap()
+        crate::backends::LogicalBackendHandle::new(Arc::from(vec![compiled]), 0).unwrap()
     }
 
     fn denied_route_unit() -> Arc<HttpRouteRuleUnit> {
@@ -1070,7 +1070,7 @@ mod tests {
             },
             metric_handles: Arc::new(crate::observe::metrics::route_handles::RouteMetricHandles::empty()),
             plugin_runtime: Arc::new(PluginRuntime::new()),
-            backends: Arc::new(vec![backend]),
+            backends: Arc::from(vec![backend]),
             backend_finder: Arc::new(crate::lb::BackendSelector::new()),
         })
     }

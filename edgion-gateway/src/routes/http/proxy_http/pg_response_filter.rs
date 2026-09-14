@@ -273,6 +273,18 @@ pub async fn response_filter(
     Ok(())
 }
 
+fn final_response_eligibility(
+    method: &http::Method,
+    status: http::StatusCode,
+    stream_kind: crate::ctx::ResponseStreamKind,
+) -> crate::ai::terminal::FinalResponseEligibility {
+    crate::ai::terminal::FinalResponseEligibility {
+        method_allows_body: method != http::Method::HEAD,
+        status_allows_body: !status.is_informational() && !matches!(status.as_u16(), 204 | 304),
+        stream_kind,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -713,16 +725,5 @@ mod tests {
         compression.response_header_filter(&mut response, false);
 
         assert!(response.headers.get("content-encoding").is_none());
-    }
-}
-fn final_response_eligibility(
-    method: &http::Method,
-    status: http::StatusCode,
-    stream_kind: crate::ctx::ResponseStreamKind,
-) -> crate::ai::terminal::FinalResponseEligibility {
-    crate::ai::terminal::FinalResponseEligibility {
-        method_allows_body: method != http::Method::HEAD,
-        status_allows_body: !status.is_informational() && !matches!(status.as_u16(), 204 | 304),
-        stream_kind,
     }
 }

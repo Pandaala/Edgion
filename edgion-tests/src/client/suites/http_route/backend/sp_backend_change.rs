@@ -6,7 +6,8 @@
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use async_trait::async_trait;
-use std::sync::{Mutex, OnceLock};
+use parking_lot::Mutex;
+use std::sync::OnceLock;
 use std::time::Instant;
 
 /// Cross-phase cookie store: initial phase writes, final phase reads.
@@ -101,7 +102,7 @@ impl SpChangeInitialTestSuite {
 
                     // Store cookie for final phase
                     {
-                        let mut slot = cookie_slot().lock().unwrap();
+                        let mut slot = cookie_slot().lock();
                         *slot = Some(cookie_value.clone());
                     }
 
@@ -170,7 +171,7 @@ impl SpChangeFinalTestSuite {
 
                     // Read cookie captured by initial phase
                     let cookie_value = {
-                        let slot = cookie_slot().lock().unwrap();
+                        let slot = cookie_slot().lock();
                         match slot.as_ref() {
                             Some(c) => c.clone(),
                             None => {

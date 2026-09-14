@@ -2232,13 +2232,11 @@ impl DslTestSuite {
         )
     }
 
-    /// PathPrefix segment-boundary regression guard.
-    ///
-    /// Route is `PathPrefix /test/dsl-path-param/users/:uid/items/:item` and
-    /// the request appends `/extra` after the matched prefix. The radix
-    /// matcher must still bind `:item=book-7` (not `book-7/extra`), and the
-    /// route must still match (i.e. PathPrefix allows further suffix segments
-    /// beyond the template).
+    // PathPrefix segment-boundary regression guard: the route is
+    // `/test/dsl-path-param/users/:uid/items/:item`, and the request appends
+    // `/extra` after the matched prefix. The radix matcher must still bind
+    // `:item=book-7` rather than `book-7/extra`, while PathPrefix permits the
+    // suffix beyond the template.
     // ==================== Scenario 27: cached_query frozen at entry time ====================
 
     /// Verify cached_query is frozen at entry: even if a DSL set_uri rewrites

@@ -129,9 +129,8 @@ impl UpstreamResponseTrailer for ExtProcResponseTrailer {
             return self.finish_without_trailers(session, log).await;
         };
 
-        let observed = match collect_trailers(trailers, session.is_grpc_request()) {
-            Ok(observed) => observed,
-            Err(_) => return self.finish_failure(session, log, "input-trailers"),
+        let Ok(observed) = collect_trailers(trailers, session.is_grpc_request()) else {
+            return self.finish_failure(session, log, "input-trailers");
         };
         let request = ProcessingRequest {
             request: Some(processing_request::Request::ResponseTrailers(HttpTrailers {
@@ -333,8 +332,8 @@ mod tests {
     use edgion_common::ext_proc::proto::{
         HeaderValue as WireHeaderValue, HeaderValueOption, ImmediateResponse, TrailersResponse,
     };
+    use parking_lot::Mutex;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-    use std::sync::Mutex;
 
     struct Scripted {
         responses: Mutex<Vec<Result<ProcessingResponse, tonic::Status>>>,
@@ -349,24 +348,24 @@ mod tests {
     #[async_trait]
     impl TrailerExchange for Scripted {
         async fn exchange(&self, request: ProcessingRequest, last: bool) -> Result<ProcessingResponse, tonic::Status> {
-            self.requests.lock().unwrap().push((request, last));
-            let response = self.responses.lock().unwrap().remove(0);
+            self.requests.lock().push((request, last));
+            let response = self.responses.lock().remove(0);
             if last && response.is_ok() {
                 self.inactive.store(true, Ordering::SeqCst);
-                *self.terminal.lock().unwrap() = Some(("success", "normal-eos"));
+                *self.terminal.lock() = Some(("success", "normal-eos"));
             }
             response
         }
 
         async fn finish_success(&self, reason: &'static str) -> Result<(), tonic::Status> {
-            self.finishes.lock().unwrap().push(reason);
+            self.finishes.lock().push(reason);
             Ok(())
         }
 
         fn terminal(&self, outcome: &'static str, reason: &'static str) {
             self.terminal_writes.fetch_add(1, Ordering::SeqCst);
             self.inactive.store(true, Ordering::SeqCst);
-            *self.terminal.lock().unwrap() = Some((outcome, reason));
+            *self.terminal.lock() = Some((outcome, reason));
         }
 
         fn release_inflight(&self) {
@@ -456,13 +455,13 @@ mod tests {
         ] {
             for preempted in [false, true] {
                 let (mut processor, owner) = processor(Ok(response(None)), false, true);
-                *owner.terminal.lock().unwrap() = Some(summary);
+                *owner.terminal.lock() = Some(summary);
                 cleanup(&mut processor, preempted);
                 assert!(processor.done);
                 cleanup(&mut processor, preempted);
                 cleanup(&mut processor, !preempted);
                 processor.release_inflight();
-                assert_eq!(*owner.terminal.lock().unwrap(), Some(summary));
+                assert_eq!(*owner.terminal.lock(), Some(summary));
                 assert_eq!(owner.terminal_writes.load(Ordering::SeqCst), 0);
                 assert_eq!(owner.releases.load(Ordering::SeqCst), 0);
             }
@@ -482,7 +481,7 @@ mod tests {
             cleanup(&mut processor, preempted);
             cleanup(&mut processor, !preempted);
             processor.release_inflight();
-            assert_eq!(*owner.terminal.lock().unwrap(), Some(expected));
+            assert_eq!(*owner.terminal.lock(), Some(expected));
             assert_eq!(owner.terminal_writes.load(Ordering::SeqCst), 1);
             assert_eq!(owner.releases.load(Ordering::SeqCst), 0);
         }
@@ -492,27 +491,27 @@ mod tests {
     fn cleanup_hooks_preserve_release_only_pending_summary() {
         for preempted in [false, true] {
             let (mut processor, owner) = processor(Ok(response(None)), false, false);
-            *owner.terminal.lock().unwrap() = Some(("pending", "pending"));
+            *owner.terminal.lock() = Some(("pending", "pending"));
             // Another companion releases the owner without finalizing its summary.
             owner.release_inflight();
             cleanup(&mut processor, preempted);
             assert!(processor.done);
             cleanup(&mut processor, !preempted);
             processor.release_inflight();
-            assert_eq!(*owner.terminal.lock().unwrap(), Some(("pending", "pending")));
+            assert_eq!(*owner.terminal.lock(), Some(("pending", "pending")));
             assert_eq!(owner.terminal_writes.load(Ordering::SeqCst), 0);
             assert_eq!(owner.releases.load(Ordering::SeqCst), 1);
         }
 
         let (mut processor, owner) = processor(Ok(response(None)), false, false);
-        *owner.terminal.lock().unwrap() = Some(("pending", "pending"));
+        *owner.terminal.lock() = Some(("pending", "pending"));
         processor.release_inflight();
         processor.release_inflight();
         cleanup(&mut processor, false);
         cleanup(&mut processor, true);
         assert!(processor.done);
         assert!(owner.is_terminal());
-        assert_eq!(*owner.terminal.lock().unwrap(), Some(("pending", "pending")));
+        assert_eq!(*owner.terminal.lock(), Some(("pending", "pending")));
         assert_eq!(owner.terminal_writes.load(Ordering::SeqCst), 0);
         assert_eq!(owner.releases.load(Ordering::SeqCst), 1);
     }
@@ -547,14 +546,14 @@ mod tests {
             assert_eq!(trailers, original);
             assert!(processor.done);
             assert!(owner.is_terminal());
-            let requests = owner.requests.lock().unwrap();
+            let requests = owner.requests.lock();
             assert_eq!(requests.len(), 1);
             assert!(requests[0].1);
             drop(requests);
             cleanup(&mut processor, false);
             cleanup(&mut processor, true);
             assert_eq!(
-                *owner.terminal.lock().unwrap(),
+                *owner.terminal.lock(),
                 Some((if fail_open { "fail-open" } else { "fail-close" }, "bad-verdict"))
             );
             assert_eq!(owner.terminal_writes.load(Ordering::SeqCst), 1);
@@ -581,7 +580,7 @@ mod tests {
                 .await,
             UpstreamTrailerResult::Continue
         );
-        let requests = owner.requests.lock().unwrap();
+        let requests = owner.requests.lock();
         assert!(requests[0].1);
         let Some(processing_request::Request::ResponseTrailers(request)) = requests[0].0.request.as_ref() else {
             panic!("expected response trailer request")
@@ -665,7 +664,7 @@ mod tests {
                 UpstreamTrailerResult::Continue
             );
             assert_eq!(invalid_input, input_original, "forbidden input field {forbidden}");
-            assert!(owner.requests.lock().unwrap().is_empty());
+            assert!(owner.requests.lock().is_empty());
 
             for mutation in [
                 HeaderMutation {
@@ -773,7 +772,7 @@ mod tests {
             .run_upstream_response_trailer(Some(&mut oversized), &mut input_session, &mut log)
             .await;
         assert_eq!(oversized, original);
-        assert!(owner.requests.lock().unwrap().is_empty());
+        assert!(owner.requests.lock().is_empty());
 
         let mut too_many = HeaderMap::new();
         for index in 0..=TRAILER_FIELD_CAP {
@@ -814,8 +813,8 @@ mod tests {
                 .await,
             UpstreamTrailerResult::Continue
         );
-        assert!(owner.requests.lock().unwrap().is_empty());
-        assert_eq!(*owner.finishes.lock().unwrap(), ["response-no-trailers"]);
+        assert!(owner.requests.lock().is_empty());
+        assert_eq!(*owner.finishes.lock(), ["response-no-trailers"]);
     }
 
     #[tokio::test]
@@ -865,16 +864,13 @@ mod tests {
                 .await,
             UpstreamTrailerResult::Continue
         );
-        assert_eq!(
-            *owner.terminal.lock().unwrap(),
-            Some(("suppressed", "immediate-disabled"))
-        );
+        assert_eq!(*owner.terminal.lock(), Some(("suppressed", "immediate-disabled")));
 
         let (mut inactive, owner) = processor(Ok(response(None)), false, true);
         inactive
             .run_upstream_response_trailer(Some(&mut trailers), &mut session, &mut log)
             .await;
-        assert!(owner.requests.lock().unwrap().is_empty());
+        assert!(owner.requests.lock().is_empty());
     }
 
     #[tokio::test]

@@ -311,9 +311,8 @@ fn tool_round_trip(ctx: TestContext) -> std::pin::Pin<Box<dyn std::future::Futur
             Ok(value) => value,
             Err(error) => return TestResult::failed(start.elapsed(), format!("invalid tool completion: {error}")),
         };
-        let calls = match value.pointer("/choices/0/message/tool_calls").and_then(Value::as_array) {
-            Some(calls) => calls,
-            None => return TestResult::failed(start.elapsed(), format!("tool calls missing: {value}")),
+        let Some(calls) = value.pointer("/choices/0/message/tool_calls").and_then(Value::as_array) else {
+            return TestResult::failed(start.elapsed(), format!("tool calls missing: {value}"));
         };
         if calls.len() != 2
             || calls[0]["index"] != 0

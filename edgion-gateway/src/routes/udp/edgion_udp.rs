@@ -240,18 +240,15 @@ impl EdgionUdpProxy {
         let direct_peer_ip = crate::ctx::canonicalize_ip(direct_peer_addr.ip());
         let direct_peer_port = direct_peer_addr.port();
         let route_table = self.udp_route_manager.load_route_table();
-        let unit = match route_table.match_route() {
-            Some(unit) => unit,
-            None => {
-                log_udp(&UdpLogEntry::failure(
-                    self.listener_port,
-                    direct_peer_ip,
-                    direct_peer_port,
-                    UdpStatus::NoRouteMatched.as_str(),
-                ))
-                .await;
-                return;
-            }
+        let Some(unit) = route_table.match_route() else {
+            log_udp(&UdpLogEntry::failure(
+                self.listener_port,
+                direct_peer_ip,
+                direct_peer_port,
+                UdpStatus::NoRouteMatched.as_str(),
+            ))
+            .await;
+            return;
         };
         let udp_route = &unit.route;
 
@@ -314,18 +311,15 @@ impl EdgionUdpProxy {
 
         drop(resource);
 
-        let backend_ref = match unit.backend_finder.select() {
-            Ok(backend) => backend,
-            Err(_) => {
-                log_udp(&UdpLogEntry::failure(
-                    self.listener_port,
-                    direct_peer_ip,
-                    direct_peer_port,
-                    UdpStatus::NoBackendSelected.as_str(),
-                ))
-                .await;
-                return;
-            }
+        let Ok(backend_ref) = unit.backend_finder.select() else {
+            log_udp(&UdpLogEntry::failure(
+                self.listener_port,
+                direct_peer_ip,
+                direct_peer_port,
+                UdpStatus::NoBackendSelected.as_str(),
+            ))
+            .await;
+            return;
         };
         match classify_l4_selected_backend(
             backend_ref.ref_denied.as_ref(),
@@ -359,38 +353,32 @@ impl EdgionUdpProxy {
         let backend_ns = backend_ref.namespace.as_deref().unwrap_or(route_ns);
         let service_key = format!("{}/{}", backend_ns, backend_ref.name);
 
-        let section = match service_section_key_from_port(backend_ref.port) {
-            Ok(section) => section,
-            Err(_) => {
-                log_udp(&UdpLogEntry::failure(
-                    self.listener_port,
-                    direct_peer_ip,
-                    direct_peer_port,
-                    UdpStatus::NoBackendResolved.as_str(),
-                ))
-                .await;
-                return;
-            }
+        let Ok(section) = service_section_key_from_port(backend_ref.port) else {
+            log_udp(&UdpLogEntry::failure(
+                self.listener_port,
+                direct_peer_ip,
+                direct_peer_port,
+                UdpStatus::NoBackendResolved.as_str(),
+            ))
+            .await;
+            return;
         };
-        let endpoint =
-            match select_service_endpoint(&service_key, section, &None, ServiceDegradePolicy::Live, None, "", None) {
-                Ok(endpoint) => endpoint,
-                Err(_) => {
-                    log_udp(&UdpLogEntry::failure(
-                        self.listener_port,
-                        direct_peer_ip,
-                        direct_peer_port,
-                        UdpStatus::NoBackendResolved.as_str(),
-                    ))
-                    .await;
-                    return;
-                }
-            };
+        let Ok(endpoint) =
+            select_service_endpoint(&service_key, section, &None, ServiceDegradePolicy::Live, None, "", None)
+        else {
+            log_udp(&UdpLogEntry::failure(
+                self.listener_port,
+                direct_peer_ip,
+                direct_peer_port,
+                UdpStatus::NoBackendResolved.as_str(),
+            ))
+            .await;
+            return;
+        };
 
         let upstream_pingora_addr = endpoint.backend.inner().addr.clone();
-        let upstream_addr = match upstream_pingora_addr {
-            PingoraSocketAddr::Inet(sockaddr) => sockaddr,
-            PingoraSocketAddr::Unix(_) => return,
+        let PingoraSocketAddr::Inet(upstream_addr) = upstream_pingora_addr else {
+            return;
         };
         if validate_endpoint_backend_addr(&PingoraSocketAddr::Inet(upstream_addr), self.allow_loopback_upstream())
             .is_err()
@@ -405,21 +393,18 @@ impl EdgionUdpProxy {
             return;
         }
 
-        let session = match self
+        let Ok(session) = self
             .get_or_create_session(direct_peer_addr, upstream_addr, children)
             .await
-        {
-            Ok(session) => session,
-            Err(_) => {
-                log_udp(&UdpLogEntry::failure(
-                    self.listener_port,
-                    direct_peer_ip,
-                    direct_peer_port,
-                    UdpStatus::SessionLimitReached.as_str(),
-                ))
-                .await;
-                return;
-            }
+        else {
+            log_udp(&UdpLogEntry::failure(
+                self.listener_port,
+                direct_peer_ip,
+                direct_peer_port,
+                UdpStatus::SessionLimitReached.as_str(),
+            ))
+            .await;
+            return;
         };
 
         let send_result = session.upstream_socket.send_to(data, session.upstream_addr).await;
@@ -440,14 +425,11 @@ impl EdgionUdpProxy {
             return Ok(session.value().clone());
         }
 
-        let session_permit = match self.session_permits.clone().try_acquire_owned() {
-            Ok(permit) => permit,
-            Err(_) => {
-                if let Some(session) = self.client_sessions.get(&direct_peer_addr) {
-                    return Ok(session.value().clone());
-                }
-                return Err(());
+        let Ok(session_permit) = self.session_permits.clone().try_acquire_owned() else {
+            if let Some(session) = self.client_sessions.get(&direct_peer_addr) {
+                return Ok(session.value().clone());
             }
+            return Err(());
         };
 
         // Bind the upstream socket to the address family of the resolved upstream.

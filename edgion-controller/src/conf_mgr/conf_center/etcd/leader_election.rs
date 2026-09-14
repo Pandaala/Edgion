@@ -118,9 +118,8 @@ impl EtcdLeaderElection {
         term_token_slot: &Arc<ArcSwap<CancellationToken>>,
     ) -> TermOutcome {
         // 1. Session lease. On failure, retry until shutdown.
-        let lease = match self.grant_session_lease(shutdown).await {
-            Some(l) => l,
-            None => return TermOutcome::Shutdown,
+        let Some(lease) = self.grant_session_lease(shutdown).await else {
+            return TermOutcome::Shutdown;
         };
 
         // 2. Keepalive driver — started BEFORE campaign, because the lease must
@@ -252,10 +251,9 @@ impl EtcdLeaderElection {
         shutdown: &mut ShutdownSignal,
         tasks: &mut JoinSet<TaskExit>,
     ) -> CampaignResult {
-        let mut sess = match self.client.election_session().await {
-            Ok(s) => s,
+        let Ok(mut sess) = self.client.election_session().await else {
             // Treat a session-build failure as retryable.
-            Err(_) => return CampaignResult::LeaseDead,
+            return CampaignResult::LeaseDead;
         };
         tokio::select! {
             _ = shutdown.wait() => CampaignResult::Shutdown,

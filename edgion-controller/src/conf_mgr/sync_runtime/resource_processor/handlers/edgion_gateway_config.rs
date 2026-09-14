@@ -273,19 +273,21 @@ mod tests {
 
         let ctx = make_ctx_with_secrets(secrets);
 
-        let mut spec = EdgionGatewayConfigSpec::default();
-        spec.outbound_tls = Some(OutboundTlsConfig {
-            validation: Some(OutboundTlsValidation {
-                ca_certificate_refs: Some(vec![BackendTLSPolicyCACertificateRef {
-                    kind: "Secret".to_string(),
-                    name: "global-ca".to_string(),
-                    namespace: Some("default".to_string()),
+        let spec = EdgionGatewayConfigSpec {
+            outbound_tls: Some(OutboundTlsConfig {
+                validation: Some(OutboundTlsValidation {
+                    ca_certificate_refs: Some(vec![BackendTLSPolicyCACertificateRef {
+                        kind: "Secret".to_string(),
+                        name: "global-ca".to_string(),
+                        namespace: Some("default".to_string()),
+                        ..Default::default()
+                    }]),
                     ..Default::default()
-                }]),
+                }),
                 ..Default::default()
             }),
             ..Default::default()
-        });
+        };
         let egc = EdgionGatewayConfig::new("cluster-egc", spec);
 
         let handler = EdgionGatewayConfigHandler::new();
@@ -326,19 +328,21 @@ mod tests {
 
         let ctx = make_ctx_with_secrets(secrets);
 
-        let mut spec = EdgionGatewayConfigSpec::default();
-        spec.outbound_tls = Some(OutboundTlsConfig {
-            validation: Some(OutboundTlsValidation {
-                ca_certificate_refs: Some(vec![BackendTLSPolicyCACertificateRef {
-                    kind: "Secret".to_string(),
-                    name: "global-ca".to_string(),
-                    namespace: Some("default".to_string()),
+        let spec = EdgionGatewayConfigSpec {
+            outbound_tls: Some(OutboundTlsConfig {
+                validation: Some(OutboundTlsValidation {
+                    ca_certificate_refs: Some(vec![BackendTLSPolicyCACertificateRef {
+                        kind: "Secret".to_string(),
+                        name: "global-ca".to_string(),
+                        namespace: Some("default".to_string()),
+                        ..Default::default()
+                    }]),
                     ..Default::default()
-                }]),
+                }),
                 ..Default::default()
             }),
             ..Default::default()
-        });
+        };
         let egc = EdgionGatewayConfig::new("cluster-egc", spec);
 
         let handler = EdgionGatewayConfigHandler::new();
@@ -366,19 +370,21 @@ mod tests {
     async fn cross_namespace_ca_refs_replace_dependencies_and_clear_on_delete() {
         let ctx = make_ctx_with_secrets(HashMap::new());
         let handler = EdgionGatewayConfigHandler::new();
-        let mut spec = EdgionGatewayConfigSpec::default();
-        spec.outbound_tls = Some(OutboundTlsConfig {
-            validation: Some(OutboundTlsValidation {
-                ca_certificate_refs: Some(vec![BackendTLSPolicyCACertificateRef {
-                    kind: "Secret".to_string(),
-                    name: "global-ca".to_string(),
-                    namespace: Some("first-target".to_string()),
+        let spec = EdgionGatewayConfigSpec {
+            outbound_tls: Some(OutboundTlsConfig {
+                validation: Some(OutboundTlsValidation {
+                    ca_certificate_refs: Some(vec![BackendTLSPolicyCACertificateRef {
+                        kind: "Secret".to_string(),
+                        name: "global-ca".to_string(),
+                        namespace: Some("first-target".to_string()),
+                        ..Default::default()
+                    }]),
                     ..Default::default()
-                }]),
+                }),
                 ..Default::default()
             }),
             ..Default::default()
-        });
+        };
         let mut egc = EdgionGatewayConfig::new("cluster-egc", spec);
         let expected_ref = ResourceRef::new(ResourceKind::EdgionGatewayConfig, None, "cluster-egc".to_string());
 
@@ -425,18 +431,20 @@ mod tests {
 
         let ctx = make_ctx_with_secrets(HashMap::new());
 
-        let mut spec = EdgionGatewayConfigSpec::default();
-        spec.outbound_tls = Some(OutboundTlsConfig {
-            validation: Some(OutboundTlsValidation {
-                subject_alt_names: Some(vec![SubjectAltName {
-                    san_type: SubjectAltNameType::Hostname,
-                    hostname: Some("upstream.example.com".to_string()),
-                    uri: None,
-                }]),
+        let spec = EdgionGatewayConfigSpec {
+            outbound_tls: Some(OutboundTlsConfig {
+                validation: Some(OutboundTlsValidation {
+                    subject_alt_names: Some(vec![SubjectAltName {
+                        san_type: SubjectAltNameType::Hostname,
+                        hostname: Some("upstream.example.com".to_string()),
+                        uri: None,
+                    }]),
+                    ..Default::default()
+                }),
                 ..Default::default()
             }),
             ..Default::default()
-        });
+        };
         let mut egc = EdgionGatewayConfig::new("cluster-egc-san", spec);
 
         let handler = EdgionGatewayConfigHandler::new();
@@ -520,16 +528,18 @@ mod tests {
         use edgion_resources::resources::edgion_plugins::RealIpConfig;
 
         let ctx = make_ctx_with_secrets(HashMap::new());
-        let mut spec = EdgionGatewayConfigSpec::default();
-        spec.real_ip = Some(RealIpConfig {
-            trusted_ips: vec![IpGroup {
-                name: "internal".to_string(),
-                description: None,
-                cidrs: vec!["10.0.0.0/8".to_string()],
-            }],
-            real_ip_header: "X Forwarded For".to_string(),
+        let spec = EdgionGatewayConfigSpec {
+            real_ip: Some(RealIpConfig {
+                trusted_ips: vec![IpGroup {
+                    name: "internal".to_string(),
+                    description: None,
+                    cidrs: vec!["10.0.0.0/8".to_string()],
+                }],
+                real_ip_header: "X Forwarded For".to_string(),
+                ..Default::default()
+            }),
             ..Default::default()
-        });
+        };
         let mut egc = EdgionGatewayConfig::new("cluster-egc-real-ip", spec);
 
         let errors = EdgionGatewayConfigHandler::new().preparse(&mut egc, &ctx);
@@ -546,14 +556,16 @@ mod tests {
     async fn egc_with_hostname_rejected_phase1() {
         let ctx = make_ctx_with_secrets(HashMap::new());
 
-        let mut spec = EdgionGatewayConfigSpec::default();
-        spec.outbound_tls = Some(OutboundTlsConfig {
-            validation: Some(OutboundTlsValidation {
-                hostname: Some("upstream.example.com".to_string()),
+        let spec = EdgionGatewayConfigSpec {
+            outbound_tls: Some(OutboundTlsConfig {
+                validation: Some(OutboundTlsValidation {
+                    hostname: Some("upstream.example.com".to_string()),
+                    ..Default::default()
+                }),
                 ..Default::default()
             }),
             ..Default::default()
-        });
+        };
         let mut egc = EdgionGatewayConfig::new("cluster-egc-host", spec);
 
         let handler = EdgionGatewayConfigHandler::new();
@@ -575,21 +587,23 @@ mod tests {
     async fn egc_ca_only_no_san_accepted() {
         let ctx = make_ctx_with_secrets(HashMap::new());
 
-        let mut spec = EdgionGatewayConfigSpec::default();
-        spec.outbound_tls = Some(OutboundTlsConfig {
-            validation: Some(OutboundTlsValidation {
-                ca_certificate_refs: Some(vec![BackendTLSPolicyCACertificateRef {
-                    kind: "Secret".to_string(),
-                    name: "global-ca".to_string(),
-                    namespace: Some("default".to_string()),
-                    ..Default::default()
-                }]),
-                subject_alt_names: None,
-                hostname: None,
-                well_known_ca_certificates: None,
+        let spec = EdgionGatewayConfigSpec {
+            outbound_tls: Some(OutboundTlsConfig {
+                validation: Some(OutboundTlsValidation {
+                    ca_certificate_refs: Some(vec![BackendTLSPolicyCACertificateRef {
+                        kind: "Secret".to_string(),
+                        name: "global-ca".to_string(),
+                        namespace: Some("default".to_string()),
+                        ..Default::default()
+                    }]),
+                    subject_alt_names: None,
+                    hostname: None,
+                    well_known_ca_certificates: None,
+                }),
+                ..Default::default()
             }),
             ..Default::default()
-        });
+        };
         let mut egc = EdgionGatewayConfig::new("cluster-egc-ca", spec);
 
         let handler = EdgionGatewayConfigHandler::new();

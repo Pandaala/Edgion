@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 /// - `reject_invalid_percent_encoding`: `false` (forward malformed `%XX`)
 /// - `preserve_path_parameters`: `false` (strip `;param` from each segment)
 /// - `forward_normalized_path`: `true` (forward normalized path to upstream;
-///    set to `false` for v3.1-compatible raw forwarding)
+///   set to `false` for v3.1-compatible raw forwarding)
 ///
 /// ## YAML Configuration Example
 ///

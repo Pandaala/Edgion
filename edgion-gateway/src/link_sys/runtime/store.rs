@@ -813,6 +813,7 @@ where
 
 /// `dispatch_full_set` case: when not ready, carry the old Arc over into new_map.
 /// Returns `true` to indicate handled; the caller should `continue`.
+#[allow(clippy::too_many_arguments)]
 fn carry_over_if_not_ready<C>(
     key: &str,
     label: &'static str,

@@ -225,14 +225,11 @@ async fn resolve_link_sys(
             return Err(error);
         }
     };
-    let data = match secret.data.as_ref() {
-        Some(data) => data,
-        None => {
-            request_publication_reconcile(ctx, &consumer);
-            return Err(ResolvedRefsError::MissingKeys {
-                keys: vec!["bearerToken"],
-            });
-        }
+    let Some(data) = secret.data.as_ref() else {
+        request_publication_reconcile(ctx, &consumer);
+        return Err(ResolvedRefsError::MissingKeys {
+            keys: vec!["bearerToken"],
+        });
     };
     let material = match BearerResolver.parse(data).map_err(map_resolve_error) {
         Ok(material) => material,

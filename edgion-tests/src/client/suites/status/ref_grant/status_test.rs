@@ -453,11 +453,9 @@ impl RefGrantStatusTestSuite {
                     {
                         Ok(gw) => {
                             // Check matching listener
-                            let match_ok = if let Some(cond) =
+                            let Some(match_condition) =
                                 Self::find_listener_condition(&gw, "https-name-match", "ResolvedRefs")
-                            {
-                                cond["status"].as_str() == Some("True")
-                            } else {
+                            else {
                                 return TestResult::failed(
                                     start.elapsed(),
                                     format!(
@@ -466,6 +464,7 @@ impl RefGrantStatusTestSuite {
                                     ),
                                 );
                             };
+                            let match_ok = match_condition["status"].as_str() == Some("True");
 
                             if !match_ok {
                                 return TestResult::failed(
@@ -478,12 +477,9 @@ impl RefGrantStatusTestSuite {
                             }
 
                             // Check mismatched listener
-                            let mismatch_ok = if let Some(cond) =
+                            let Some(mismatch_condition) =
                                 Self::find_listener_condition(&gw, "https-name-mismatch", "ResolvedRefs")
-                            {
-                                cond["status"].as_str() == Some("False")
-                                    && cond["reason"].as_str() == Some("RefNotPermitted")
-                            } else {
+                            else {
                                 return TestResult::failed(
                                     start.elapsed(),
                                     format!(
@@ -492,6 +488,8 @@ impl RefGrantStatusTestSuite {
                                     ),
                                 );
                             };
+                            let mismatch_ok = mismatch_condition["status"].as_str() == Some("False")
+                                && mismatch_condition["reason"].as_str() == Some("RefNotPermitted");
 
                             if mismatch_ok {
                                 TestResult::passed_with_message(

@@ -1577,6 +1577,7 @@ dependencies = [
  "k8s-openapi",
  "kube",
  "mimalloc",
+ "parking_lot",
  "rand 0.9.5",
  "rcgen",
  "reqwest",

@@ -130,26 +130,22 @@ impl PortConflictTestSuite {
                     };
 
                     // Find the internal conflict Gateway
-                    let gateway = match find_gateway(&gateways.data, "port-conflict-internal") {
-                        Some(g) => g,
-                        None => {
-                            if is_k8s_mode() {
-                                return TestResult::passed_with_message(
-                                    start.elapsed(),
-                                    "K8s admission rejected internal duplicate listener manifest; treated as expected"
-                                        .to_string(),
-                                );
-                            }
-                            return TestResult::failed(
+                    let Some(gateway) = find_gateway(&gateways.data, "port-conflict-internal") else {
+                        if is_k8s_mode() {
+                            return TestResult::passed_with_message(
                                 start.elapsed(),
-                                "Gateway 'port-conflict-internal' not found".to_string(),
+                                "K8s admission rejected internal duplicate listener manifest; treated as expected"
+                                    .to_string(),
                             );
                         }
+                        return TestResult::failed(
+                            start.elapsed(),
+                            "Gateway 'port-conflict-internal' not found".to_string(),
+                        );
                     };
 
-                    let status = match &gateway.status {
-                        Some(s) => s,
-                        None => return TestResult::failed(start.elapsed(), "Gateway has no status".to_string()),
+                    let Some(status) = &gateway.status else {
+                        return TestResult::failed(start.elapsed(), "Gateway has no status".to_string());
                     };
 
                     // Check that Gateway has ListenersNotValid condition
@@ -309,19 +305,15 @@ impl PortConflictTestSuite {
                     };
 
                     // Find the no-conflict Gateway
-                    let gateway = match find_gateway(&gateways.data, "port-no-conflict-hostname") {
-                        Some(g) => g,
-                        None => {
-                            return TestResult::failed(
-                                start.elapsed(),
-                                "Gateway 'port-no-conflict-hostname' not found".to_string(),
-                            )
-                        }
+                    let Some(gateway) = find_gateway(&gateways.data, "port-no-conflict-hostname") else {
+                        return TestResult::failed(
+                            start.elapsed(),
+                            "Gateway 'port-no-conflict-hostname' not found".to_string(),
+                        );
                     };
 
-                    let status = match &gateway.status {
-                        Some(s) => s,
-                        None => return TestResult::failed(start.elapsed(), "Gateway has no status".to_string()),
+                    let Some(status) = &gateway.status else {
+                        return TestResult::failed(start.elapsed(), "Gateway has no status".to_string());
                     };
 
                     // Check that Gateway does NOT have ListenersNotValid condition

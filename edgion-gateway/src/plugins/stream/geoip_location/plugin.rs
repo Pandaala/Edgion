@@ -275,7 +275,6 @@ mod tests {
                 name: Some("office".into()),
                 rules: vec![rule(GeoRuleSource::DirectPeerIp, GeoRuleKey::Cidr, &["192.168.0.0/16"])],
             }],
-            ..Default::default()
         };
         let plugin = GeoIpLocationStreamPlugin::new(&cfg).unwrap();
         let recorder = metrics_exporter_prometheus::PrometheusBuilder::new().build_recorder();

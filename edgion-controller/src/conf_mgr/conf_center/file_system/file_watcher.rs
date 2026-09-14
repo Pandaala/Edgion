@@ -18,9 +18,10 @@ use anyhow::{Context, Result};
 use edgion_resources::ResourceKind;
 use notify::event::{ModifyKind, RenameMode};
 use notify::{Config, Event, EventKind, PollWatcher, RecursiveMode, Watcher};
+use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{broadcast, mpsc, RwLock};
 use walkdir::WalkDir;
@@ -29,6 +30,7 @@ use walkdir::WalkDir;
 pub type KindEventSender = broadcast::Sender<FileSystemEvent<String>>;
 /// Receiver type for parsed resource events per kind
 pub type KindEventReceiver = broadcast::Receiver<FileSystemEvent<String>>;
+type PrimedFiles = HashMap<&'static str, Vec<(PathBuf, String)>>;
 
 /// FileSystemWatcher - Centralized file watching with event dispatch by kind
 ///
@@ -58,7 +60,7 @@ pub struct FileSystemWatcher {
 
     /// Scan snapshot captured by `prime`, consumed by `dispatch_init`.
     /// Maps kind -> winning (path, content) pairs from the last scan.
-    primed: Mutex<Option<HashMap<&'static str, Vec<(PathBuf, String)>>>>,
+    primed: Mutex<Option<PrimedFiles>>,
 }
 
 impl FileSystemWatcher {
@@ -208,7 +210,7 @@ impl FileSystemWatcher {
             "Prime scan complete"
         );
 
-        *self.primed.lock().unwrap() = Some(files_by_kind);
+        *self.primed.lock() = Some(files_by_kind);
         Ok(())
     }
 
@@ -220,7 +222,7 @@ impl FileSystemWatcher {
         let senders = self.senders.read().await.clone();
         // Transfer subscribed kinds without retaining their raw documents in runtime.
         let mut per_kind: HashMap<&'static str, Vec<(PathBuf, String)>> = {
-            let mut guard = self.primed.lock().unwrap();
+            let mut guard = self.primed.lock();
             let snap = guard
                 .as_mut()
                 .ok_or_else(|| anyhow::anyhow!("dispatch_init called before prime"))?;
@@ -257,7 +259,7 @@ impl FileSystemWatcher {
     /// Runtime phase only: watch for changes and dispatch Apply/Delete events.
     pub async fn run_runtime(&self, mut shutdown_signal: ShutdownSignal) -> Result<()> {
         // Unsupported or unsubscribed kinds no longer need an initial snapshot.
-        self.primed.lock().unwrap().take();
+        self.primed.lock().take();
         self.runtime_phase(&mut shutdown_signal).await
     }
 
@@ -707,7 +709,7 @@ mod tests {
         let later_path = dir.path().join("EdgionPlugins_default_later.yaml");
         let first_document = "first document".to_owned();
         let later_document = "later document".to_owned();
-        *watcher.primed.lock().unwrap() = Some(HashMap::from([
+        *watcher.primed.lock() = Some(HashMap::from([
             ("Secret", vec![(first_path.clone(), first_document.clone())]),
             ("EdgionPlugins", vec![(later_path.clone(), later_document.clone())]),
         ]));
@@ -729,7 +731,7 @@ mod tests {
         assert!(matches!(empty.recv().await.unwrap(), FileSystemEvent::Init));
         assert!(matches!(empty.recv().await.unwrap(), FileSystemEvent::InitDone));
         {
-            let guard = watcher.primed.lock().unwrap();
+            let guard = watcher.primed.lock();
             let remaining = guard.as_ref().unwrap();
             assert!(!remaining.contains_key("Secret"));
             assert_eq!(remaining["EdgionPlugins"][0].1, later_document);
@@ -745,7 +747,7 @@ mod tests {
             event => panic!("unexpected event: {event:?}"),
         }
         assert!(matches!(later.recv().await.unwrap(), FileSystemEvent::InitDone));
-        assert!(watcher.primed.lock().unwrap().as_ref().unwrap().is_empty());
+        assert!(watcher.primed.lock().as_ref().unwrap().is_empty());
     }
 
     #[tokio::test]
@@ -759,14 +761,14 @@ mod tests {
             )])),
         ] {
             let watcher = FileSystemWatcher::new(dir.path().to_path_buf(), Arc::new(PathRegistry::new()), None);
-            *watcher.primed.lock().unwrap() = primed;
+            *watcher.primed.lock() = primed;
             let shutdown = crate::conf_mgr::sync_runtime::ShutdownHandle::new();
             shutdown.shutdown();
             tokio::time::timeout(Duration::from_secs(2), watcher.run_runtime(shutdown.signal()))
                 .await
                 .unwrap()
                 .unwrap();
-            assert!(watcher.primed.lock().unwrap().is_none());
+            assert!(watcher.primed.lock().is_none());
         }
     }
 

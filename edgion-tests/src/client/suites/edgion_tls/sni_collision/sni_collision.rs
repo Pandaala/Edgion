@@ -51,15 +51,13 @@ impl SniCollisionTestSuite {
                     let start = Instant::now();
                     let servername = "gateway-tls.test.com";
 
-                    let openssl =
-                        match openssl_bin() {
-                            Some(bin) => bin,
-                            None => return TestResult::passed_with_message(
-                                start.elapsed(),
-                                "skipped: genuine OpenSSL not found (LibreSSL s_client unreliable against BoringSSL)"
-                                    .to_string(),
-                            ),
-                        };
+                    let Some(openssl) = openssl_bin() else {
+                        return TestResult::passed_with_message(
+                            start.elapsed(),
+                            "skipped: genuine OpenSSL not found (LibreSSL s_client unreliable against BoringSSL)"
+                                .to_string(),
+                        );
+                    };
 
                     // Connect to the gateway by IP (target_host); the hostname is carried
                     // only in SNI (-servername). openssl s_client does real DNS for -connect

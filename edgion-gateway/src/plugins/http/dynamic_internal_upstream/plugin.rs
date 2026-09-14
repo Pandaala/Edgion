@@ -86,37 +86,31 @@ impl RequestFilter for DynamicInternalUpstream {
         };
 
         // 3. Resolve routing key → target backend_ref (name, namespace)
-        let (target_name, target_namespace) = match self.config.resolve_target(routing_key) {
-            Some(target) => target,
-            None => {
-                // Rules mode: no rule matched
-                return match self.config.on_no_match {
-                    UpstreamFallback::Fallback => {
-                        session.record_outcome(DyeOutcome::Fallback, "on-no-match");
-                        log.push("upstream miss");
-                        PluginRunningResult::GoodNext
+        let Some((target_name, target_namespace)) = self.config.resolve_target(routing_key) else {
+            // Rules mode: no rule matched
+            return match self.config.on_no_match {
+                UpstreamFallback::Fallback => {
+                    session.record_outcome(DyeOutcome::Fallback, "on-no-match");
+                    log.push("upstream miss");
+                    PluginRunningResult::GoodNext
+                }
+                UpstreamFallback::Reject => {
+                    session.record_outcome(DyeOutcome::Reject, "on-no-match");
+                    log.push_err("no matching rule");
+                    PluginRunningResult::ErrResponse {
+                        status: 400,
+                        body: Some(Bytes::from_static(b"No matching backend rule for routing key")),
                     }
-                    UpstreamFallback::Reject => {
-                        session.record_outcome(DyeOutcome::Reject, "on-no-match");
-                        log.push_err("no matching rule");
-                        PluginRunningResult::ErrResponse {
-                            status: 400,
-                            body: Some(Bytes::from_static(b"No matching backend rule for routing key")),
-                        }
-                    }
-                };
-            }
+                }
+            };
         };
 
         // 4. Pre-validate the resolved target against the route's canonical
         //    compiled backend view before publishing the jump.
         let ctx = session.ctx();
-        let route_unit = match ctx.route_unit.as_ref() {
-            Some(unit) => unit,
-            None => {
-                log.push("no route");
-                return PluginRunningResult::GoodNext; // No route matched, skip
-            }
+        let Some(route_unit) = ctx.route_unit.as_ref() else {
+            log.push("no route");
+            return PluginRunningResult::GoodNext; // No route matched, skip
         };
         let route_ns = &route_unit.matched_info.rsc.ns;
         // Kept ahead of the lookup on purpose: a rule that declares no

@@ -172,9 +172,8 @@ fn seed_existing_status<T: Serialize + DeserializeOwned + 'static>(obj: &mut T, 
         return;
     }
     let unknown_fields = capture_unknown_fields_sidecar(obj);
-    let mut obj_value = match serde_json::to_value(&*obj) {
-        Ok(v) => v,
-        Err(_) => return,
+    let Ok(mut obj_value) = serde_json::to_value(&*obj) else {
+        return;
     };
     let Some(map) = obj_value.as_object_mut() else {
         return;
@@ -346,7 +345,7 @@ where
     metadata_filter: RwLock<Option<Arc<MetadataFilterConfig>>>,
 
     /// Namespace filter
-    namespace_filter: RwLock<Option<Arc<Vec<String>>>>,
+    namespace_filter: RwLock<Option<Arc<[String]>>>,
 
     /// Raw data source for cross-resource key lookups (bypasses handler filter).
     /// K8s mode: injected as KubeRawStore after reflector::store() call.
@@ -412,7 +411,7 @@ where
 
     /// Set namespace filter
     pub fn set_namespace_filter(&self, namespaces: Vec<String>) {
-        *self.namespace_filter.write() = Some(Arc::new(namespaces));
+        *self.namespace_filter.write() = Some(namespaces.into());
     }
 
     /// Get workqueue reference (for external use like worker spawning)
@@ -852,7 +851,7 @@ where
     }
 
     fn set_namespace_filter_vec(&self, filter: Option<Vec<String>>) {
-        *self.namespace_filter.write() = filter.map(Arc::new);
+        *self.namespace_filter.write() = filter.map(Arc::from);
     }
 
     fn set_metadata_filter_config(&self, filter: Option<MetadataFilterConfig>) {
