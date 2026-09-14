@@ -87,17 +87,21 @@ impl HealthCheckManager {
             );
             // No new task to spawn, but still drop any existing one for this key.
             self.cancel_task(&service_key);
+            self.health_store.unregister_service(&service_key);
             return;
         };
 
-        let health_store = self.health_store.clone();
         let task_service_key = service_key.clone();
         let config = policy.config.clone();
         let policy_identity = Arc::clone(&policy.identity);
         // Reconciliation is serialized; retire the old task before admitting its replacement.
         self.cancel_task(&service_key);
+        // Status-marker ownership stays in the serialized reconciliation path.
+        // A task aborted during synchronous work must not be able to recreate a
+        // marker after removal.
+        self.health_store.register_service(&service_key, Vec::new());
         let handle = runtime_handle.spawn(async move {
-            health_check_loop(task_service_key, config, policy_identity, health_store).await;
+            health_check_loop(task_service_key, config, policy_identity).await;
         });
 
         // Atomically swap the per-service handle: the single write-locked insert
@@ -139,7 +143,6 @@ async fn health_check_loop(
     service_key: String,
     config: ActiveHealthCheckConfig,
     policy_identity: Arc<crate::backends::discovery::HealthPolicyIdentity>,
-    health_store: Arc<HealthStatusStore>,
 ) {
     let interval = parse_probe_duration(&config.interval, Duration::from_secs(10)).max(Duration::from_secs(1));
     let timeout = parse_probe_duration(&config.timeout, Duration::from_secs(3)).max(Duration::from_millis(100));
@@ -212,11 +215,6 @@ async fn health_check_loop(
         ticker.tick().await;
 
         let backends = get_service_backends(&service_key);
-        // Keep the service marker for panic-threshold gating, but do not put
-        // address hashes on the production write path. Routing health lives in
-        // the Coordinator's identity-keyed runtime state; hash-keyed methods
-        // remain only for isolated compatibility tests.
-        health_store.register_service(&service_key, Vec::new());
 
         // Best-effort: rebuild the shared HTTP client once per cycle if it could
         // not be built earlier. Hoisting the retry here (instead of doing it
@@ -422,6 +420,30 @@ fn get_service_backends(service_key: &str) -> Vec<Arc<LbBackend>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn reconciliation_owns_status_marker_lifecycle() {
+        let health_store = Arc::new(HealthStatusStore::new());
+        let config_store = Arc::new(HealthCheckConfigStore::new());
+        let manager = HealthCheckManager {
+            tasks: RwLock::new(HashMap::new()),
+            health_store: Arc::clone(&health_store),
+            config_store: Arc::clone(&config_store),
+            reconcile_lock: Mutex::new(()),
+        };
+        let service_key = "health-status-owner/service";
+
+        config_store.set_service_config(service_key, Some(ActiveHealthCheckConfig::default()));
+        manager.reconcile_service(service_key);
+        assert!(health_store.has_service(service_key));
+
+        config_store.remove_service(service_key);
+        manager.reconcile_service(service_key);
+        tokio::task::yield_now().await;
+
+        assert!(!health_store.has_service(service_key));
+        assert!(!manager.tasks.read().contains_key(service_key));
+    }
 
     #[test]
     fn test_derive_startup_jitter_within_bound() {

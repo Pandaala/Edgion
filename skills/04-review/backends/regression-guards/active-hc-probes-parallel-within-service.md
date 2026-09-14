@@ -1,6 +1,6 @@
 ---
 name: active-hc-probes-parallel-within-service
-description: Use when reviewing active health-check probe scheduling findings; covers the decision to probe all backends of one service concurrently (FuturesUnordered) instead of sequentially, while keeping record_check single-writer and the global probe semaphore per-probe.
+description: Use when reviewing active health-check probe scheduling findings; covers concurrent per-service probes, serialized Coordinator completion handling, and the per-probe global semaphore.
 status: fixed
 finding_id: lb-06
 closed: 2026-06-14
@@ -40,28 +40,21 @@ late in the iteration order were always probed last (systematic detection-latenc
 maintains a per-host connection + timer and probes every host in parallel, so its sweep is
 `max(RTT_i)`; the fix brings Edgion to the same property.
 
-**2. Parallelize only the probe I/O — keep `record_check` single-writer**
+**2. Parallelize only the probe I/O — serialize completion handling in the driver**
 
-The slow part is the network probe; `record_check` is a cheap counter update. The fix runs the
-probes concurrently but applies `record_check` **sequentially in the driver task** as each future
-resolves (`while let Some((hash, addr, result)) = probes.next().await`). This is deliberate:
-`HealthStatusStore::record_check` updates the per-service `unhealthy_backends` ArcSwap with a
-load-clone-modify-store **outside** the per-service `states` Mutex (`status_store.rs:144-152`).
-If `record_check` were called concurrently for different backends of the **same** service, that
-RCU would become a lost-update race. Keeping the cycle's write side single-writer means the fix
-**introduces no new concurrency hazard** while parallelizing the probe I/O, and avoids touching
-`status_store.rs`.
+The slow part is network I/O. The loop runs probe futures concurrently and handles
+their completions sequentially in the driver task as each future resolves. Current
+production completion writes go to
+`ServiceDiscoveryCoordinator::record_health_completion`, not
+`HealthStatusStore::record_check`. The Coordinator validates policy generation,
+Service membership, and endpoint identity under the endpoint completion lock, so
+an old probe cannot update a removed endpoint or replacement policy.
 
-Scope of the guarantee: this makes the *probe futures of one cycle* non-concurrent writers. It
-does **not** newly serialize the pre-existing, change-unrelated reconcile-overlap window —
-`upsert_task` spawns the new loop and only then `abort()`s the old one, so for a brief window two
-loops can both write the same `ServiceHealthState` and race the unlocked `unhealthy_backends` RCU.
-That window predates this fix (the old sequential loop had it too), is **self-healing** (each
-cycle's `register_service` recomputes `unhealthy_backends` from the `states` map,
-`status_store.rs:164-176`), and is *smaller* under parallel probing because cycles finish in
-`max(probe_i)` instead of `sum(probe_i)`. The only production writers to `ServiceHealthState` are
-this loop (`register_service` + `record_check`) and `unregister_service`; the request path only
-reads via `is_healthy`.
+`HealthStatusStore` no longer participates in routing-health publication. Its
+Service marker is owned by serialized reconciliation rather than a probe cycle;
+see [active health task status-marker ownership](active-health-task-status-ownership.md).
+The historical unlocked `unhealthy_backends` concern applies only if the legacy
+hash-keyed `record_check` API is restored to a concurrent production path.
 
 **3. Global semaphore semantics unchanged (backends-F016 preserved)**
 
@@ -81,9 +74,9 @@ because every permit is released after a single ~timeout-bounded probe.
   re-introduces a throttle Envoy does not have and is unnecessary because per-probe permit
   release already bounds any single service's permit hold to one `timeout` wave. Re-open only
   if a real cross-service starvation report appears under the parallel model.
-- "Apply `record_check` concurrently inside each probe future" — would expose the
-  `unhealthy_backends` RCU lost-update race in `HealthStatusStore`; keep the write side
-  single-writer in the driver task.
+- "Write completions from detached per-backend tasks" — unnecessary and would
+  complicate cancellation and generation ownership. Keep completion handling in
+  the service task unless the Coordinator contract is deliberately redesigned.
 - "Spawn a `tokio::task` per backend" — unnecessary; `FuturesUnordered` polled in the existing
   per-service task gives the same concurrency without per-backend task spawn/teardown.
 
@@ -93,9 +86,8 @@ Re-open this decision only if:
 
 - The loop reverts to a sequential per-backend `.await` (no `FuturesUnordered` / concurrent
   driving).
-- `record_check` is moved inside the concurrent probe futures, OR `HealthStatusStore` starts
-  protecting the `unhealthy_backends` update under the per-service lock (then concurrent
-  `record_check` would become safe and the single-writer constraint could be relaxed).
+- completion handling moves into detached per-backend tasks or stops using the
+  Coordinator's policy/membership/endpoint identity checks.
 - A real cross-service probe-starvation report appears under the parallel model (would justify
   the per-service sub-cap rejected above).
 

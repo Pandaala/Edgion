@@ -26,6 +26,7 @@ before applying a decision to current code.
 - [Retry-budget counters retain coherent epochs and monotonic windows](regression-guards/retry-budget-epoch-coherence.md)
 
 - [lb-06 — Active health-check probes run in parallel within a service — FIXED](regression-guards/active-hc-probes-parallel-within-service.md)
+- [Active health task status-marker ownership](regression-guards/active-health-task-status-ownership.md)
 - [BackendTLSPolicy partial publication is incremental and atomic](regression-guards/backend-tls-policy-incremental-atomic-publication.md)
 - [backends-F008 — build_client_cert_key duplicate PEM-parse block](regression-guards/build-client-cert-key-dedup.md)
 - [backends-F007 — build_peer_from_lb_selection inlines TLS-metadata write](regression-guards/build-peer-tls-helper-dedup.md)
