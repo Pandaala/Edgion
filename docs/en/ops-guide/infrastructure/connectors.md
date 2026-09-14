@@ -69,7 +69,7 @@ Secret keys follow a fixed, well-known convention — there are no `usernameKey`
 
 Application-layer key names use camelCase; TLS keys follow the Kubernetes `kubernetes.io/tls` standard.
 
-> **Webhook credentials are different.** The webhook connector no longer has a typed `auth` block. Instead, you inject any credential as a custom request header (or arg/cookie) that reads from a Secret. The Secret key name is **operator-chosen** (whatever you put in `key:`), and an optional `prefix:` lets you prepend `Bearer ` / `Basic ` / etc. See [Webhook connector → Custom field sources](#custom-field-sources).
+> **Webhook credentials are different.** The webhook connector no longer has a typed `auth` block. Instead, reference a Secret inside a custom request-field template, for example `template: "Bearer ${secretRef:production/webhook-token:token}"`. Both the namespace and data key are explicit. See [Webhook connector → Custom field sources](#custom-field-sources).
 
 ### TLS
 
@@ -398,53 +398,36 @@ response correlation (for example, a mismatched item count) is not retried becau
 ambiguous operation could duplicate a document. If the 429 budget is exhausted, the connector
 becomes unhealthy and a configured access-log fallback can receive new entries.
 
-### Failed-document cache
+### Access-log fallback and manual backfill
 
-> **Status: planned — not yet implemented.** The `failedCache` schema and example
-> below describe the intended design only. The gateway does **not** currently honor
-> a `failedCache` block (unknown CRD fields are pruned, so setting it has no effect).
-> Until it ships, register a `localFile` sink as a fallback so logs are not lost
-> during an Elasticsearch outage. Tracking: `edgion-gateway/src/link_sys/readme`.
-
-When indexing fails, documents can be buffered for later retry.
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `failedCache.type` | Enum | **Required** (when `failedCache` is set) | Cache backend. Allowed values: `localFile` \| `redis`. |
-| `failedCache.localFile.path` | String | **Required** (for `localFile`) | Directory path for failed-document storage. |
-| `failedCache.redis.linkSysRef` | String | **Required** (for `redis`) | `namespace/name` of a Redis connector. |
-| `failedCache.redis.listKey` | String | none | Redis list key for failed documents. |
-| `failedCache.redis.maxEntries` | Integer | none | Maximum entries retained in the list. |
-
-#### Example: Elasticsearch with Redis-backed failed cache
+There is no `failedCache` field in the Elasticsearch LinkSys schema. For access
+logs, configure a bounded LocalFile `fallback` next to the Elasticsearch primary
+in the Gateway process configuration:
 
 ```yaml
-apiVersion: edgion.io/v1
-kind: LinkSys
-metadata:
-  name: logs-es
-  namespace: production
-spec:
-  type: elasticsearch
-  config:
-    endpoints:
-      - "https://es-1.production.svc:9200"
-    auth:
-      type: apiKey
-      secretRef:
-        name: es-api-key
-    tls:
-      enabled: true
-    index:
-      prefix: "edgion-logs"
-      datePattern: "%Y.%m.%d"
-    failedCache:
-      type: redis
-      redis:
-        linkSysRef: "production/cache-redis"
-        listKey: "es-failed"
-        maxEntries: 100000
+access_log:
+  enabled: true
+  output:
+    es:
+      linkSysRef:
+        namespace: production
+        name: logs-es
+  fallback:
+    localFile:
+      path: logs/es_access_fallback.log
+      diskUsageThresholdPercent: 90
+      rotation:
+        strategy: { size: 104857600 }
+        maxFiles: 10
 ```
+
+First-healthy routing sends new entries to the fallback only after the primary
+reports unhealthy; a channel-full submission while Elasticsearch is still
+healthy is dropped instead. After Elasticsearch recovers, an authenticated
+operator can call `POST /api/v1/access-log/backfill` to replay the dedicated
+fallback files. The replay is Elasticsearch-only and at-least-once. See the
+[Access Log degradation and backfill guide](../observability/access-log.md#degradation-fallback-sink-and-backfill)
+for operational limits and response details.
 
 ## Webhook connector
 
@@ -476,11 +459,7 @@ spec:
           - name: X-Source
             value: edgion
           - name: Authorization
-            secret:
-              secretRef:
-                name: webhook-token
-              key: token
-              prefix: "Bearer "
+            template: "Bearer ${secretRef:production/webhook-token:token}"
     timeoutMs: 3000
     success:
       statusCodes: [200]
@@ -647,11 +626,7 @@ request:
       - name: X-User
         template: "${ctx:user_id}"
       - name: Authorization
-        secret:
-          secretRef:
-            name: webhook-token
-          key: token
-          prefix: "Bearer "
+        template: "Bearer ${secretRef:production/webhook-token:token}"
 
   cookies:
     origin:
@@ -667,7 +642,7 @@ request:
 | `request.path.allowOverride` | Boolean | `false` | When `true`, a consumer's `pathOverride` replaces the whole path at call time. When `false`, any `pathOverride` is ignored. |
 | `request.method.template` | String | frozen incoming method | Outbound HTTP method; literal (`POST`, `GET`, …) or template. |
 | `request.{args,headers,cookies}.origin` | Array | `[]` | Fields copied from the **frozen** incoming request by name. |
-| `request.{args,headers,cookies}.custom` | Array | `[]` | Operator-constructed fields (literal / template / secret). |
+| `request.{args,headers,cookies}.custom` | Array | `[]` | Operator-constructed fields using a literal or template source. |
 
 **Origin fields** copy the same-named value from a frozen entry-time snapshot of the incoming request — immune to any rewrite made by an earlier plugin in the chain. Each origin field is just `{ name, presence }`. There are three kinds of origin group, one per HTTP location:
 
@@ -699,21 +674,20 @@ Each `custom` entry is `{ name, <source> }` where the source is **exactly one** 
 |--------|------|----------|-------|
 | Literal | `value: "edgion"` | n/a | Verbatim static string. |
 | Template | `template: "${ctx:user_id}"` | call time | Interpolated by the ctx-set template engine (see [Template variables](#template-variables)). |
-| Secret | `secret: { secretRef: {...}, key: ..., prefix: ... }` | config time | Read from a Kubernetes Secret by the controller and shipped to the gateway over conf_sync. The resolved value is redacted in `/configclient` output. |
+| Secret template | `template: "Bearer ${secretRef:namespace/name:key}"` | config + call time | The controller resolves the Secret and ships the real value over conf_sync; admin and config-inspection output redacts it. The gateway substitutes it into the precompiled template per call. |
 
-The Secret form is how you inject credentials (there is no typed `auth` block anymore):
+Reference Secret material inside a template (there is no typed `auth` block or `secret:` custom source):
 
 ```yaml
 custom:
   - name: Authorization
-    secret:
-      secretRef:
-        name: webhook-token       # namespace defaults to the LinkSys namespace
-      key: token                  # operator-chosen key inside the Secret's data map
-      prefix: "Bearer "           # optional; prepended to the resolved value
+    template: "Bearer ${secretRef:production/webhook-token:token}"
 ```
 
-`prefix` is what turns a raw token into `Bearer <token>`, `Basic <encoded>`, and so on. Secret rotation is automatic: when the referenced Secret changes, the controller requeues the LinkSys resource, re-resolves the value, and re-emits it to the gateway — no operator action required.
+Literal text in the template supplies prefixes such as `Bearer ` or `Basic `.
+Secret rotation is automatic: when the referenced Secret changes, the controller
+requeues the LinkSys resource, re-resolves the value, and re-emits it to the
+gateway — no operator action required.
 
 #### Template variables
 
@@ -970,7 +944,7 @@ spec:
 
 #### 4. Custom fields from K8s Secrets
 
-Inject a credential from a Secret. The `prefix` builds the full header value (`Bearer <token>`).
+Inject credentials by embedding `${secretRef:namespace/name:key}` in templates.
 
 ```yaml
 spec:
@@ -983,16 +957,9 @@ spec:
       headers:
         custom:
           - name: Authorization
-            secret:
-              secretRef:
-                name: webhook-token   # in the LinkSys namespace
-              key: token
-              prefix: "Bearer "
+            template: "Bearer ${secretRef:default/webhook-token:token}"
           - name: X-API-Key
-            secret:
-              secretRef:
-                name: webhook-apikey
-              key: apiKey             # no prefix → raw value
+            template: "${secretRef:default/webhook-apikey:apiKey}"
 ```
 
 #### 5. Template variable substitution
@@ -1119,11 +1086,7 @@ spec:
       headers:
         custom:
           - name: Authorization
-            secret:
-              secretRef:
-                name: webhook-token
-              key: token
-              prefix: "Bearer "
+            template: "Bearer ${secretRef:production/webhook-token:token}"
     timeoutMs: 3000
     retry:
       maxRetries: 1
@@ -1152,9 +1115,9 @@ The webhook schema changed in this release. Old fields are accepted during a rol
 
 | Old | New |
 |-----|-----|
-| `target.type: uri` + `target.uri` | flat Service fields (`target.name`/`target.port`/...) to a (proxy) Service — raw URLs are no longer supported |
+| `target.type: uri` + `target.uri` | `target.url` containing only the origin; move the old URI path into `request.path.template` |
 | `target.type: service` + `target.name/port` | `target.{kind,name,namespace,port}` set directly under `target` (drop the `type` tag) |
-| `auth.bearer` / `auth.basic` / `auth.hmac` / `auth.apiKey` | `request.headers.custom` with `secret:` (use `prefix:` for `Bearer `/`Basic `) |
+| `auth.bearer` / `auth.basic` / `auth.hmac` / `auth.apiKey` | `request.headers.custom[].template` containing `${secretRef:namespace/name:key}` and any literal prefix |
 | `defaultHeaders` (static map) | `request.headers.custom` with `value:` per entry |
 | `requestMethod: POST` | `request.method.template: POST` (old default was `GET`) |
 | consumer `pathSuffix` | `request.path` on the webhook, or consumer `pathOverride` when `allowOverride: true` |
@@ -1185,11 +1148,10 @@ spec:
   type: webhook
   config:
     target:
-      kind: Service
-      name: key-service        # for an external endpoint, point this at a proxy Service
-      namespace: production
-      port: 8080
+      url: "https://key-service.internal"
     request:
+      path:
+        template: /resolve
       method:
         template: POST
       headers:
@@ -1197,11 +1159,7 @@ spec:
           - name: X-Source
             value: edgion
           - name: Authorization
-            secret:
-              secretRef:
-                name: webhook-token
-              key: token
-              prefix: "Bearer "
+            template: "Bearer ${secretRef:production/webhook-token:token}"
 ```
 
 Consumer-side, `pathSuffix` and `forwardHeaders` are removed. The operator-facing consumer is the `WebhookKeyGet` plugin (not a KeyGet `type: webhook` source):
@@ -1235,7 +1193,9 @@ Consumer-side, `pathSuffix` and `forwardHeaders` are removed. The operator-facin
         name: resolved_key
 ```
 
-> **External endpoints.** `target.type: uri` and `kind: ExternalName` are not supported. Front the external host with a proxy Service (LoadBalancer, or ClusterIP behind an ingress controller) and reference that Service by name.
+> **External endpoints.** Use the origin-only `target.url` form; put the path in
+> `request.path.template`. `kind: ExternalName` is not supported. URL targets are
+> subject to the connector's SSRF policy and optional `blockPrivate` restriction.
 
 ### Webhook troubleshooting
 
@@ -1262,8 +1222,9 @@ Editing any `request.*` field (or the target) rebuilds the webhook runtime and *
 
 ## Kafka connector
 
-The Kafka connector provides a live Gateway producer for log outputs. Each configured
-log output selects a topic, while the referenced LinkSys owns the shared client and
+Kafka is a live Gateway provider with a typed runtime store, full/partial hot
+reload, and background health recovery. Each async log output selects a topic
+through `KafkaLogSender`, while the referenced LinkSys owns the shared client and
 aggregate pending-data budgets.
 
 ```yaml
@@ -1289,16 +1250,23 @@ spec:
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `brokers` | Array\<String\> | **Required** | Kafka broker addresses (`host:port`); list multiple brokers for a cluster. |
+| `sasl` | Object | none | Optional SASL/PLAIN username plus a Secret-backed password slot. |
+| `tls` | Object | none | Optional shared LinkSys TLS policy; enabled Kafka TLS always verifies the peer. |
 | `channelSize` | Integer | `4096` | Capacity of each topic's non-blocking producer queue. |
 | `maxTopics` | Integer | `64` | Maximum topic producer queues owned by one Kafka LinkSys client. |
 | `maxPendingRecords` | Integer | `4096` | Maximum records queued or being produced across all topics. |
 | `maxPendingBytes` | Integer | `16777216` | Maximum UTF-8 payload bytes queued or being produced across all topics. This is a logical payload limit and excludes allocator, channel-node, task, and Kafka SDK overhead. |
-| `lingerMs` | Integer | `5` | Kafka batch linger duration. It must remain below the producer timeout. |
+| `lingerMs` | Integer | `5` | Kafka batch linger duration. It must remain below the 30-second producer timeout. |
 
 All queue limits must be greater than zero. When any aggregate limit is reached,
 the new log submission is dropped through the normal non-blocking sender path and
 the Kafka client's health state is unchanged. Increasing `channelSize` does not
 increase either aggregate pending-data limit.
+
+Select Kafka as a log sink in a Gateway log block with
+`kafka: { linkSysRef: { namespace: production, name: events-kafka }, topic: <topic> }`.
+The standalone integration entry point is
+`edgion-tests/integration/scripts/integration/link_sys/run_kafka_test.sh`.
 
 ## Common configuration scenarios
 

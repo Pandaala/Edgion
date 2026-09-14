@@ -1,10 +1,10 @@
 # LinkSys Integration Testing Guide
 
-> How to add, run, and debug integration tests for LinkSys connectors (Redis, Etcd, Elasticsearch, future Kafka, etc.).
+> How to add, run, and debug integration tests for LinkSys connectors (Redis, Etcd, Elasticsearch, Kafka, OTLP, etc.).
 >
 > **Redis** is integrated into the main runner (`run_integration.sh`) — invoked as the `LinkSys/Redis` suite, with assertions in `link_sys/redis_assertions.sh`. The runner auto-starts the Redis docker container as a precondition.
 >
-> **Etcd / Elasticsearch / future types** still ship as standalone scripts (`run_<type>_test.sh`) that manage their own lifecycle. New LinkSys types should follow the standalone-script pattern first; once stable, consider merging into the main runner the same way Redis was (assertions extracted into a `<type>_assertions.sh` driver, suite auto-discovered, runner adds a precondition + run_test invocation).
+> **Etcd / Elasticsearch / Kafka / OTLP** ship as standalone scripts that manage their own lifecycle. New LinkSys types should follow the standalone-script pattern first; once stable, consider merging into the main runner the same way Redis was (assertions extracted into a `<type>_assertions.sh` driver, suite auto-discovered, runner adds a precondition + run_test invocation).
 
 ## Architecture Overview
 
@@ -68,7 +68,7 @@ bash ./edgion-tests/integration/scripts/integration/link_sys/redis_assertions.sh
 bash ./edgion-tests/integration/scripts/integration/link_sys/redis_assertions.sh --include-lifecycle
 ```
 
-**Etcd / Elasticsearch (still standalone):**
+**Etcd / Elasticsearch / Kafka / OTLP (standalone):**
 
 ```bash
 ./edgion-tests/integration/scripts/integration/link_sys/run_etcd_test.sh           # full lifecycle
@@ -76,40 +76,49 @@ bash ./edgion-tests/integration/scripts/integration/link_sys/redis_assertions.sh
 ./edgion-tests/integration/scripts/integration/link_sys/run_etcd_test.sh --keep-alive
 
 ./edgion-tests/integration/scripts/integration/link_sys/run_es_test.sh
+./edgion-tests/integration/scripts/integration/link_sys/run_kafka_test.sh
+./edgion-tests/integration/scripts/integration/link_sys/run_otlp_test.sh
 ```
 
 ## Directory Structure
 
 ```
 edgion-tests/
-├── conf/
-│   ├── base/                              # Base config (GatewayClass, EdgionGatewayConfig)
-│   ├── Services/
-│   │   ├── redis/
-│   │   │   └── docker-compose.yaml        # Redis container for testing
-│   │   └── <future>/
-│   │       └── docker-compose.yaml
-│   └── LinkSys/
-│       ├── Redis/
-│       │   ├── 00_Secret_default_redis-test-auth.yaml
-│       │   └── 01_LinkSys_default_redis-test.yaml
-│       ├── Etcd/
-│       │   └── 01_LinkSys_default_etcd-*.yaml
-│       ├── Elasticsearch/
-│       │   └── 01_LinkSys_default_es-test.yaml
-│       └── <Future>/
-│           └── *.yaml
-├── scripts/
-│   └── integration/
-│       ├── run_integration.sh             # ← Main runner; auto-starts Redis,
-│       │                                  #   runs LinkSys/Redis assertions
-│       └── link_sys/
-│           ├── redis_assertions.sh        # ← Redis driver (invoked by the
-│           │                              #   main runner; can also be run
-│           │                              #   directly against a live stack)
-│           ├── run_etcd_test.sh           # ← Standalone (own lifecycle)
-│           ├── run_es_test.sh             # ← Standalone (own lifecycle)
-│           └── run_<future>_test.sh       # ← Future: Kafka, etc.
+├── integration/
+│   ├── conf/
+│   │   ├── base/                          # Base config (GatewayClass, EdgionGatewayConfig)
+│   │   ├── Services/
+│   │   │   ├── redis/
+│   │   │   │   └── docker-compose.yaml    # Redis container for testing
+│   │   │   ├── kafka/
+│   │   │   ├── otel-collector/
+│   │   │   └── <new-type>/
+│   │   │       └── docker-compose.yaml
+│   │   └── LinkSys/
+│   │       ├── Redis/
+│   │       │   ├── 00_Secret_default_redis-test-auth.yaml
+│   │       │   └── 01_LinkSys_default_redis-test.yaml
+│   │       ├── Etcd/
+│   │       │   └── 01_LinkSys_default_etcd-*.yaml
+│   │       ├── Elasticsearch/
+│   │       │   └── 01_LinkSys_default_es-test.yaml
+│   │       ├── Kafka/
+│   │       ├── Otlp/
+│   │       └── <NewType>/
+│   │           └── *.yaml
+│   └── scripts/
+│       └── integration/
+│           ├── run_integration.sh         # ← Main runner; auto-starts Redis,
+│           │                              #   runs LinkSys/Redis assertions
+│           └── link_sys/
+│               ├── redis_assertions.sh    # ← Redis driver (invoked by the
+│               │                          #   main runner; can also be run
+│               │                          #   directly against a live stack)
+│               ├── run_etcd_test.sh       # ← Standalone (own lifecycle)
+│               ├── run_es_test.sh         # ← Standalone (own lifecycle)
+│               ├── run_kafka_test.sh      # ← Standalone (own lifecycle)
+│               ├── run_otlp_test.sh       # ← Standalone (own lifecycle)
+│               └── run_<new_type>_test.sh # ← New connector template
 └── ...
 
 edgion-gateway/src/api/mod.rs               # Gateway Admin API with testing endpoints
@@ -220,6 +229,10 @@ services:
 - Document the mapping in the compose file comment
 - Current allocations:
   - Redis: `16379:6379`
+  - Etcd client: `12379:2379`
+  - Elasticsearch: `19200:9200` (plus TLS fixtures on `19201`/`19202`)
+  - Kafka: `19092:19092`
+  - OTLP/gRPC: `14317:4317` (collector health: `13133:13133`)
 
 ### Step 2: LinkSys CRD YAML
 
@@ -234,7 +247,7 @@ metadata:
 spec:
   type: <type>
   config:
-    # ... type-specific config matching RedisClientConfig / FutureConfig ...
+    # ... type-specific config matching the concrete <Type>ClientConfig ...
 ```
 
 **Naming convention:** `01_LinkSys_<namespace>_<name>.yaml`
@@ -424,3 +437,13 @@ tmp/integration_testing/redis_testing_YYYYMMDD_HHMMSS/
 | **Client name** | `default/redis-test` (URL: `default_redis-test`) |
 | **Test count** | 62 assertions across 10 sections (resource sync, client registration, health/PING, KV, hash, list, distributed lock, error handling, RateLimitRedis plugin, lifecycle delete) |
 | **API base** | `/api/v1/testing/link-sys/redis/` |
+
+### Standalone provider suites
+
+| Provider | Entry point | Primary coverage |
+|----------|-------------|------------------|
+| Etcd | `link_sys/run_etcd_test.sh` | Runtime operations, TLS validation, lifecycle replacement |
+| Elasticsearch | `link_sys/run_es_test.sh` | Bulk delivery, TLS/mTLS, health, lifecycle replacement |
+| Elasticsearch backfill | `link_sys/run_es_backfill_test.sh` | ES outage → LocalFile fallback → authenticated manual backfill |
+| Kafka | `link_sys/run_kafka_test.sh` | Live producer, Access Log delivery, health recovery, lifecycle replacement |
+| OTLP | `link_sys/run_otlp_test.sh` + `link_sys/otlp_test_assertions.py` | OTLP/gRPC export, masking, health, replacement and teardown |

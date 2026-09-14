@@ -3,7 +3,7 @@
 Use this for tasks such as:
 
 - Adding or extending an external system connection capability in `LinkSys`.
-- Adjusting runtime wiring for Redis / Etcd / Elasticsearch / Kafka / Webhook / HttpDns.
+- Adjusting runtime wiring for Redis / Etcd / Elasticsearch / Kafka / OTLP / Webhook / HttpDns.
 - Troubleshooting "the LinkSys YAML has synced but the gateway-side runtime client / webhook manager has not updated".
 
 ## Read these real entry points first
@@ -24,7 +24,9 @@ LinkSys is no longer "one resource kind per external system" — it is a single 
 - `Elasticsearch`
 - `Webhook`
 - `Kafka`
+- `Otlp`
 - `HttpDns`
+- `CredentialSource`
 
 Another easy point of confusion:
 
@@ -54,6 +56,7 @@ The current main pipeline:
    - `get_etcd_client("namespace/name")`
    - `get_es_client("namespace/name")`
    - `get_kafka_client("namespace/name")`
+   - `get_otlp_client("namespace/name")`
    - `get_webhook_manager().get("namespace/name")`
 
 In short:
@@ -83,9 +86,9 @@ Where:
 `Elasticsearch` additionally has:
 
 - `bulk.rs`
-- `data_sender.rs`
+- `log_sender.rs`
 
-because it now also serves `DataSender<String>` scenarios such as logs.
+because it also serves `DataSender<String>` scenarios such as logs.
 
 ### 2. Webhook
 
@@ -94,21 +97,24 @@ allow-listed request template; consumers supply the inbound session plus an opti
 Do not reintroduce the removed consumer-owned `WebhookCallRequest`, `forwardHeaders`, or
 `pathSuffix` model.
 
-Module layout:
+Webhook-specific module layout:
 
-- `providers/webhook/manager.rs`: global registry and upsert/remove lifecycle.
-- `providers/webhook/compiled_request.rs`: compile resource-owned method/path/headers/args/cookies.
-- `providers/webhook/runtime.rs`: compiled request, resolved target, client, and health state.
-- `providers/webhook/health.rs`: active + passive health checks.
-- `providers/webhook/call.rs`: bounded provider call implementation.
+- `providers/webhook/manager.rs`: sequence-checked prepare/commit publication and call-handle lookup.
+- `providers/webhook/client.rs`: prepared-entry bookkeeping for LinkSys store transitions.
+- `providers/webhook/runtime.rs`: shared sliding-window rate limiter.
 - `providers/webhook/resolver.rs`: `resolve_webhook_key` consumer adapter used by `WebhookKeyGet`.
-- `providers/webhook/client.rs`: HTTP client construction and TLS material.
+
+Compilation, target resolution, HTTP client construction, health management,
+bounded calls, and retries are owned by the shared engine under
+`plugins/http/common/outbound/`.
 
 Key points:
 
 - The key remains `namespace/name`.
-- `WebhookManager.upsert()` compiles the request, resolves credentials/target, and replaces runtime state.
-- The target is `backendRef`-only; request shape and presence policy are resource-owned.
+- `dispatch_full_set_with()` / `dispatch_partial_update_with()` acquire the
+  manager mutation guard, prepare a complete `ManagedOutboundClient`, commit the
+  manager change, and only then update `WEBHOOK_RUNTIME` bookkeeping.
+- The target is either a flat Service reference or an origin-only URL; request shape and presence policy are resource-owned.
 - Consumers must use the resolver/call APIs instead of building arbitrary outbound requests.
 - Full architecture: [09-link-sys.md](09-link-sys.md#webhook) and
   [03-controller-gateway-link/webhook.md](../03-controller-gateway-link/webhook.md).
@@ -128,8 +134,10 @@ The bridging for LinkSys is now fixed:
 3. `create_link_sys_handler()` returns the global `LinkSysStore`.
 4. `ConfHandler<LinkSys>::full_set()` / `partial_update()` first runs `validate_config()`.
 5. Then calls `LinkSysStore.replace_all()` / `update()`.
-6. `dispatch_full_set()` / `dispatch_partial_update()` in `runtime/store.rs` async-dispatches to
-   Redis / Etcd / Elasticsearch / Kafka / Webhook runtimes and deliberately skips HttpDns runtime-client creation.
+6. `runtime/store.rs` applies OTLP desired state at source publication, then
+   ordered `dispatch_full_set()` / `dispatch_partial_update()` handles Redis /
+   Etcd / Elasticsearch / Kafka and the specialized Webhook transaction.
+   HttpDns is consumed by DNS resolution, and CredentialSource is Controller-only.
 
 So if you are changing gateway-side runtime behavior, focus on:
 
@@ -209,6 +217,8 @@ Existing scripts and drivers:
 - `edgion-tests/integration/scripts/integration/run_integration.sh -r LinkSys -i Redis` (Redis is integrated into the main runner; the assertions live in `link_sys/redis_assertions.sh` and Redis docker is auto-started via the runner's `start_redis_service_if_needed` precondition)
 - `edgion-tests/integration/scripts/integration/link_sys/run_etcd_test.sh` (standalone)
 - `edgion-tests/integration/scripts/integration/link_sys/run_es_test.sh` (standalone)
+- `edgion-tests/integration/scripts/integration/link_sys/run_kafka_test.sh` (standalone)
+- `edgion-tests/integration/scripts/integration/link_sys/run_otlp_test.sh` (standalone)
 
 Configurations and dependencies are also layered:
 
@@ -233,7 +243,7 @@ These resemble the `local_file` provider rather than a new `SystemConfig`.
 - Adding only a `SystemConfig` variant and forgetting `validate_config()` or the CRD.
 - The provider is finished but `runtime/store.rs` does not dispatch, so the YAML is synced but the runtime does not take effect.
 - Only handling full sync, forgetting the partial-update / remove paths.
-- Failing to abort the old health task on Webhook update.
+- Publishing Webhook bookkeeping before the sequence-checked manager commit.
 - Treating LinkSys as "a new resource kind" and modifying controller framework code that should not be touched.
 - Writing the test compose and YAML but forgetting the gateway admin testing endpoint, making runtime-behavior assertions hard.
 
@@ -252,9 +262,11 @@ If you modified an existing system, run the corresponding entry point first:
 # Redis: now part of the main runner
 ./edgion-tests/integration/scripts/integration/run_integration.sh --no-prepare -r LinkSys -i Redis
 
-# Etcd / Elasticsearch: standalone
+# Etcd / Elasticsearch / Kafka / OTLP: standalone
 ./edgion-tests/integration/scripts/integration/link_sys/run_etcd_test.sh
 ./edgion-tests/integration/scripts/integration/link_sys/run_es_test.sh
+./edgion-tests/integration/scripts/integration/link_sys/run_kafka_test.sh
+./edgion-tests/integration/scripts/integration/link_sys/run_otlp_test.sh
 ```
 
 If you modified docs / skill / AI entry points, also run:

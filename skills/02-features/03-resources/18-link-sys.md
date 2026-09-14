@@ -226,8 +226,10 @@ spec:
   submitted after that queue fills are dropped and counted rather than sent to the fallback.
   Exhausting the retry budget marks the connector unhealthy so a configured access-log fallback
   can accept new entries.
-- Failed-cache spill/replay is planned but is not an accepted YAML field. Do not put it in a
-  LinkSys resource until both the Rust schema and CRD declare it.
+- There is no Elasticsearch `failedCache` field. Access-log outage retention is
+  configured on the Gateway's `LogConfig`, using an Elasticsearch `output` and
+  a bounded LocalFile `fallback`. After recovery, an operator may trigger the
+  Elasticsearch-only, at-least-once `POST /api/v1/access-log/backfill` flow.
 
 ### `type: webhook`
 
@@ -489,8 +491,8 @@ status:
 - `False/DecodeError` — UTF-8 decoding or JSON parsing of a key failed (only ACME private keys go through JSON validation; LinkSys essentially never hits this).
 
 **`UnknownConfigFields`**:
-- Present as `True/UnknownFieldsDetected` when a typed Redis, Etcd, Elasticsearch, Kafka, Webhook,
-  HttpDns, or credentialSource configuration contains an unrecognized key.
+- Present as `True/UnknownFieldsDetected` when a typed Redis, Etcd, Elasticsearch, Kafka, OTLP,
+  Webhook, HttpDns, or credentialSource configuration contains an unrecognized key.
 - Advisory only: it does not change `Accepted` or `ResolvedRefs` and never blocks synchronization.
 - Removed after the resource is reapplied without unknown keys.
 - Declared maps and arbitrary-JSON values are intentionally open below their boundary; an unknown
@@ -505,7 +507,7 @@ does not carry the token.
 ## Runtime Behavior
 
 - **Controller side for Gateway-client providers**: parse `secretRef` → register an owner→secret dependency in `SecretRefManager` (Secret update/delete cascades requeue this resource) → embed the entire `Secret` into `spec.config.<auth>.secret` / `spec.config.tls.certs.secret` → sync to the Gateway via conf_sync gRPC. The `Secret` itself is a `no_sync_kind` and is not synced separately.
-- **Gateway side**: after `LinkSysStore` receives the spec, it uses the resolvers in `edgion-resources/src/credentials` to recompute `Material` from the embedded `Secret.data` and hands it to the Redis / Etcd / ES / Webhook client to build the connection. Of the four credential states (`NotRequired` / `Pending` / `Invalid` / `Resolved`), only the former or `Resolved` allows building a client; the rest fail-fast and **do not** degrade to anonymous connections.
+- **Gateway side**: after `LinkSysStore` receives the spec, it uses the resolvers in `edgion-resources/src/credentials` to recompute `Material` from the embedded `Secret.data`. Redis, Etcd, Elasticsearch, and Kafka use the generic lifecycle; Webhook uses ordered prepare/manager-commit publication; OTLP owns a staged per-key generation. Of the four credential states (`NotRequired` / `Pending` / `Invalid` / `Resolved`), only the former or `Resolved` allows building a client; the rest fail-fast and **do not** degrade to anonymous connections.
 - **Hot reload**: when a Secret pointed to by secretRef changes → the Controller recomputes → pushes the new spec via conf_sync → the Gateway rebuilds the corresponding provider client and the old connections drain gracefully.
 - **`credentialSource`**: the Controller credential manager acquires and rotates the token. Persist-on writes a generated Secret; persist-off stores the map on `ControllerRuntime.credential_memory`. LinkSys conf_sync never carries that map. The Gateway `LinkSysStore` is a no-op for this variant; injection uses EdgionPlugins `resolvedCredential`.
 - **Publication mode changes**: persist-on to persist-off establishes a live memory credential before owned generated Secrets are deleted, and failed deletes are retried. Persist-off to persist-on keeps memory until every current consumer Secret is consistent.
@@ -518,7 +520,7 @@ does not carry the token.
 |---------------------|-----------------|-----------|------------------|
 | LinkSys → Secret | `Secret` | `secretRef` / `tls.certs.secretRef` + `SecretRefManager` | All auth / mTLS credentials |
 | LinkSys → ReferenceGrant | `ReferenceGrant` | Authorization for cross-namespace `secretRef` | Centralize credentials in a `credentials` namespace |
-| AccessLog → LinkSys | `LinkSys` (type=elasticsearch/redis/webhook) | Reference by `namespace/name` in configuration | Log output to ES / Redis |
+| AccessLog → LinkSys | `LinkSys` (type=elasticsearch/kafka/otlp) | Reference by `namespace/name` in configuration | External log output; LocalFile is configured directly and is not LinkSys |
 | EdgionPlugins → LinkSys | `LinkSys` (type=redis/webhook/credentialSource) | Reference by `namespace/name` in plugin configuration | Distributed rate limiting, Webhook key resolution, CredentialInjector |
 
 For the internal implementation and Handler flow, see [01-architecture/05-resources/18-link-sys.md](../../01-architecture/05-resources/18-link-sys.md).

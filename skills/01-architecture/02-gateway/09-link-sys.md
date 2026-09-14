@@ -29,7 +29,7 @@ provider; its key-only OtlpLogSender never owns an exporter or probe.
 providers/elasticsearch/
 ├── client.rs          # EsLinkClient (connection management, health check)
 ├── bulk.rs            # Bulk API batch operations
-├── data_sender.rs     # DataSender<String> implementation
+├── log_sender.rs      # key-only DataSender<String> adapter
 ├── config_mapping.rs  # configuration mapping
 ├── ops.rs             # ES operation wrappers
 └── mod.rs
@@ -40,7 +40,6 @@ providers/elasticsearch/
 ```
 providers/redis/
 ├── client.rs          # RedisLinkClient (fred client wrapper)
-├── data_sender.rs     # DataSender<String> implementation
 ├── config_mapping.rs  # configuration mapping (standalone / sentinel / cluster)
 ├── ops.rs             # Redis operation wrappers
 └── mod.rs
@@ -67,21 +66,19 @@ edgion-common/src/link_sys_core/providers/etcd/
 
 ```
 providers/webhook/
-├── manager.rs           # WebhookManager.upsert() — builds runtime, compiles request, resolves secrets, resets health
-├── compiled_request.rs  # CompiledOutboundRequest::{from_spec, build_request} (request templating)
-├── runtime.rs           # WebhookRuntime (compiled_request + health atomics + resolved_target)
+├── manager.rs           # ordered prepare/commit publication + call-handle lookup
+├── client.rs            # prepared WebhookLinkClient bookkeeping wrapper
 ├── resolver.rs          # resolve_webhook_key — WebhookKeyGet consumer entry, response extract
-├── call.rs              # webhook_call(runtime, session, path_override, max_bytes)
-├── client.rs            # reqwest client construction (TLS material)
-├── health.rs            # active / passive health check
+├── runtime.rs           # shared sliding-window rate limiter
 └── mod.rs
 ```
 
 > After the **target-unification + request-templating redesign**, the webhook target is
-> `backendRef`-only and the outbound request shape (path / method / allow-listed
+> either a flat Kubernetes Service reference or an origin-only URL. The outbound
+> request shape (path / method / allow-listed
 > args / headers / cookies, with `origin` / `custom` split and `presence` policy) is owned
-> entirely by the webhook resource and pre-compiled into `CompiledOutboundRequest` at upsert
-> time. Consumers pass only `session` + optional `path_override` (no more
+> entirely by the webhook resource. `ManagedOutboundClient::from_parts` compiles it during
+> ordered LinkSys publication. Consumers pass only `session` + optional `path_override` (no more
 > `forwardHeaders` / `pathSuffix`). Full architecture:
 > [03-controller-gateway-link/webhook.md](../03-controller-gateway-link/webhook.md).
 
@@ -159,7 +156,12 @@ pub trait DataSender<T>: Send + Sync where T: Send + 'static {
 
 - `DataSender<String>` — log delivery (LocalFile, Elasticsearch, Kafka, OTLP). The default
   `send_with_meta` delegates to `send`; structured exporters such as OTLP can use `LogMeta`.
-- The FailedCache pattern (spill to LocalFile / Redis when ES is unavailable, replay after recovery) is **planned, not yet implemented** — see `edgion-gateway/src/link_sys/readme`. Today a failed/unhealthy sink is handled only by the `AccessLogger` first-healthy fallback (drop + `access_log_dropped` metric when all senders are unhealthy).
+- `LogConfig.fallback` provides one first-healthy standby sink. The supported
+  outage-recovery pattern is an Elasticsearch primary plus a bounded LocalFile
+  fallback; an operator can replay those files through
+  `POST /api/v1/access-log/backfill` after Elasticsearch recovers. There is no
+  LinkSys `failedCache` field and no Redis-backed spill cache. Backfill is
+  Elasticsearch-only and at-least-once.
 
 ## ConfHandler
 
@@ -176,7 +178,8 @@ impl ConfHandler<LinkSys> for Arc<LinkSysStore> {
 
 ## Use cases
 
-- **AccessLog output** — AccessLogger registers a LocalFileWriter or an ES DataSender.
+- **AccessLog output** — AccessLogger supports LocalFile directly and Elasticsearch,
+  Kafka, or OTLP through LinkSys-backed DataSenders.
 - **Distributed rate limiting** — the `rate_limit_redis` plugin obtains a Redis client via `get_redis_client()`.
 - **External authentication** — the Webhook provider supports WebhookKeyGet resolution (KeyAuth and others then read the written ctx var).
 - **Custom integrations** — declare a connection via the LinkSys CRD; business logic obtains the client and uses it.

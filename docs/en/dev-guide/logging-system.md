@@ -15,7 +15,8 @@ Edgion provides a unified logging infrastructure supporting four log types:
 - **Unified configuration**: All log types use the same configuration pattern (enabled + output + rotation)
 - **Batch writing**: Reduces system calls, improves performance
 - **Log rotation**: Auto-rotate by time or size
-- **Multiple outputs**: Local file, Elasticsearch, Kafka (future support)
+- **Multiple outputs**: Local file, Elasticsearch, Kafka, and OTLP/gRPC
+- **Health-based fallback**: One optional standby sink; Elasticsearch-to-LocalFile access logs can be manually backfilled after recovery
 - **Metrics integration**: Track dropped log counts
 - **Flexible control**: Each log type can be independently enabled/disabled
 
@@ -184,7 +185,7 @@ Monitor the `access_log_dropped` metric via Prometheus to detect issues promptly
 
 ### Access Logger
 
-**Location**: `src/core/gateway/observe/access_log/`
+**Location**: `edgion-gateway/src/observe/access_log/`
 
 **Architecture**:
 
@@ -206,7 +207,7 @@ pub struct AccessLogger {
 
 ### SSL Logger
 
-**Location**: `src/core/gateway/observe/logs/ssl_log.rs`
+**Location**: `edgion-gateway/src/observe/logs/ssl_log.rs`
 
 **Architecture**:
 
@@ -238,7 +239,7 @@ log_ssl(&entry);  // Synchronous call, never blocks
 
 ### TCP Logger
 
-**Location**: `src/core/gateway/observe/logs/tcp_log.rs`
+**Location**: `edgion-gateway/src/observe/logs/tcp_log.rs`
 
 **Architecture**:
 
@@ -284,7 +285,7 @@ log_tcp(&log_entry).await;
 
 ### UDP Logger
 
-**Location**: `src/core/gateway/observe/logs/udp_log.rs`
+**Location**: `edgion-gateway/src/observe/logs/udp_log.rs`
 
 **Architecture**:
 
@@ -338,7 +339,7 @@ log_udp(&log_entry).await;
 
 ### LocalFileWriter
 
-**Location**: `src/core/gateway/link_sys/providers/local_file/`
+**Location**: `edgion-gateway/src/link_sys/providers/local_file/`
 
 **Responsibilities**:
 - Manage log file opening, writing, and closing
@@ -448,7 +449,7 @@ All log types follow the same configuration structure:
 
 **Configuration priority**:
 1. `enabled` flag (false means no initialization)
-2. `output` configuration (LocalFile/Elasticsearch/Kafka)
+2. `output` configuration (`localFile`, `es`, `kafka`, or `otlp`; SSL callback logs support LocalFile only)
 3. `queue_size` (optional, default cores * 10000)
 4. `rotation` (optional, default 100MB size-based rotation)
 
@@ -626,33 +627,35 @@ Example:
 
 ## Extending New Output Types
 
-### 1. Implement DataSender Trait
+### 1. Implement the LinkSys Provider and DataSender Adapter
 
 ```rust
 use async_trait::async_trait;
-use crate::core::link_sys::DataSender;
+use crate::link_sys::DataSender;
 
-pub struct ElasticsearchSender {
-    client: EsClient,
-    index: String,
+pub struct ExampleLogSender {
+    key: String,
 }
 
 #[async_trait]
-impl DataSender<String> for ElasticsearchSender {
+impl DataSender<String> for ExampleLogSender {
     async fn init(&mut self) -> Result<()> {
-        self.client.connect().await
+        Ok(()) // Persistent clients are owned by LinkSysStore.
     }
     
     fn healthy(&self) -> bool {
-        self.client.is_connected()
+        get_example_client(&self.key).is_some_and(|client| client.healthy())
     }
     
     async fn send(&self, data: String) -> Result<()> {
-        self.client.index(&self.index, data).await
+        get_example_client(&self.key)
+            .ok_or_else(|| anyhow!("example LinkSys client is unavailable"))?
+            .send(data)
+            .await
     }
     
     fn name(&self) -> &str {
-        "elasticsearch"
+        &self.key
     }
 }
 ```
@@ -665,18 +668,24 @@ impl DataSender<String> for ElasticsearchSender {
 #[serde(rename_all = "camelCase")]
 pub enum StringOutput {
     LocalFile(LocalFileWriterCfg),
-    Elasticsearch(ElasticsearchCfg),  // New
+    Es { link_sys_ref: LinkSysRef },
+    Kafka { link_sys_ref: LinkSysRef, topic: String },
+    Otlp { link_sys_ref: LinkSysRef },
+    Example { link_sys_ref: LinkSysRef }, // New
 }
 ```
 
 ### 3. Update Initialization Logic
 
 ```rust
-// src/core/gateway/observe/access_log/mod.rs
+// edgion-gateway/src/observe/logs/logger_factory.rs
 match &config.output {
     StringOutput::LocalFile(cfg) => { /* ... */ }
-    StringOutput::Elasticsearch(cfg) => {
-        let sender = ElasticsearchSender::new(cfg);
+    StringOutput::Es { link_sys_ref } => { /* existing ES adapter */ }
+    StringOutput::Kafka { link_sys_ref, topic } => { /* existing Kafka adapter */ }
+    StringOutput::Otlp { link_sys_ref } => { /* existing OTLP adapter */ }
+    StringOutput::Example { link_sys_ref } => {
+        let sender = ExampleLogSender::new(link_sys_ref.clone());
         logger.register(Box::new(sender));
     }
 }
@@ -731,14 +740,14 @@ match &config.output {
 
 ### Core Implementation
 
-- `src/core/gateway/observe/access_log/` - Access Log implementation
-- `src/core/gateway/observe/logs/ssl_log.rs` - SSL Log implementation
-- `src/core/gateway/link_sys/providers/local_file/` - LocalFileWriter implementation
-- `src/core/gateway/link_sys/runtime/data_sender.rs` - DataSender trait definition
+- `edgion-gateway/src/observe/access_log/` - Access Log implementation
+- `edgion-gateway/src/observe/logs/ssl_log.rs` - SSL Log implementation
+- `edgion-gateway/src/link_sys/providers/local_file/` - LocalFileWriter implementation
+- `edgion-gateway/src/link_sys/runtime/data_sender.rs` - DataSender trait definition
 
 ### Configuration
 
-- `src/core/gateway/cli/config.rs` - Gateway configuration structure
+- `edgion-gateway/src/cli/config.rs` - Gateway configuration structure
 - `edgion-resources/src/output.rs` - Log output configuration types (StringOutput, LocalFileWriterCfg)
 - `config/edgion-gateway.yaml` - Configuration example
 
@@ -803,26 +812,15 @@ match &config.output {
      enabled: true  # Debug TLS issues
    ```
 
-## Future Plans
+## Possible Future Work
 
-### Short-term (v0.2)
-
-- [ ] Add Elasticsearch output support
-- [ ] Add Kafka output support
-- [ ] Support custom log formats
-- [ ] Support log sampling (high traffic scenarios)
-
-### Long-term (v1.0)
-
-- [ ] Support structured logging (JSON)
-- [ ] Support log compression
-- [ ] Support remote syslog
-- [ ] Support log redaction
+- Custom log formats and sampling
+- Log compression
+- Remote syslog
 
 ---
 
-**Last updated**: 2025-01-05  
-**Version**: Edgion v0.1.0
+**Last updated**: 2026-09-14
 
 ## Shared OTLP ownership
 

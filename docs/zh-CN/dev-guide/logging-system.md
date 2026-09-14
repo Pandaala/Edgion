@@ -15,7 +15,8 @@ Edgion 提供了统一的日志基础设施，支持四种日志类型：
 - **统一配置**：所有日志类型使用相同的配置模式（enabled + output + rotation）
 - **批处理写入**：减少系统调用，提升性能
 - **日志轮转**：按时间或大小自动轮转
-- **多种输出**：本地文件、Elasticsearch、Kafka（未来支持）
+- **多种输出**：本地文件、Elasticsearch、Kafka 和 OTLP/gRPC
+- **基于健康状态的 fallback**：可配置一个备用 sink；Elasticsearch 恢复后可将 Access Log 的 LocalFile fallback 手动回填
 - **Metrics 集成**：记录丢弃日志数量
 - **灵活控制**：每种日志可独立启用/禁用
 
@@ -197,7 +198,7 @@ async fn send(&self, data: String) -> Result<()> {
 
 ### Access Logger
 
-**位置**：`src/core/gateway/observe/access_log/`
+**位置**：`edgion-gateway/src/observe/access_log/`
 
 **架构**：
 
@@ -219,7 +220,7 @@ pub struct AccessLogger {
 
 ### SSL Logger
 
-**位置**：`src/core/gateway/observe/logs/ssl_log.rs`
+**位置**：`edgion-gateway/src/observe/logs/ssl_log.rs`
 
 **架构**：
 
@@ -251,7 +252,7 @@ log_ssl(&entry);  // 同步调用，永不阻塞
 
 ### TCP Logger
 
-**位置**：`src/core/gateway/observe/logs/tcp_log.rs`
+**位置**：`edgion-gateway/src/observe/logs/tcp_log.rs`
 
 **架构**：
 
@@ -297,7 +298,7 @@ log_tcp(&log_entry).await;
 
 ### UDP Logger
 
-**位置**：`src/core/gateway/observe/logs/udp_log.rs`
+**位置**：`edgion-gateway/src/observe/logs/udp_log.rs`
 
 **架构**：
 
@@ -351,7 +352,7 @@ log_udp(&log_entry).await;
 
 ### LocalFileWriter
 
-**位置**：`src/core/gateway/link_sys/providers/local_file/`
+**位置**：`edgion-gateway/src/link_sys/providers/local_file/`
 
 **职责**：
 - 管理日志文件的打开、写入、关闭
@@ -461,7 +462,7 @@ udp_log:
 
 **配置优先级**：
 1. `enabled` 标志（false 则不初始化）
-2. `output` 配置（LocalFile/Elasticsearch/Kafka）
+2. `output` 配置（`localFile`、`es`、`kafka` 或 `otlp`；SSL callback 日志仅支持 LocalFile）
 3. `queue_size`（可选，默认 cores * 10000）
 4. `rotation`（可选，默认 100MB 按大小轮转）
 
@@ -638,34 +639,35 @@ sum(rate(edgion_*_log_dropped_total[5m])) > 0
 
 ## 扩展新的输出类型
 
-### 1. 实现 DataSender trait
+### 1. 实现 LinkSys provider 与 DataSender 适配器
 
 ```rust
 use async_trait::async_trait;
-use crate::core::link_sys::DataSender;
+use crate::link_sys::DataSender;
 
-pub struct ElasticsearchSender {
-    client: EsClient,
-    index: String,
+pub struct ExampleLogSender {
+    key: String,
 }
 
 #[async_trait]
-impl DataSender<String> for ElasticsearchSender {
+impl DataSender<String> for ExampleLogSender {
     async fn init(&mut self) -> Result<()> {
-        // 初始化连接
-        self.client.connect().await
+        Ok(()) // 持久连接由 LinkSysStore 管理。
     }
     
     fn healthy(&self) -> bool {
-        self.client.is_connected()
+        get_example_client(&self.key).is_some_and(|client| client.healthy())
     }
     
     async fn send(&self, data: String) -> Result<()> {
-        self.client.index(&self.index, data).await
+        get_example_client(&self.key)
+            .ok_or_else(|| anyhow!("example LinkSys client is unavailable"))?
+            .send(data)
+            .await
     }
     
     fn name(&self) -> &str {
-        "elasticsearch"
+        &self.key
     }
 }
 ```
@@ -678,18 +680,24 @@ impl DataSender<String> for ElasticsearchSender {
 #[serde(rename_all = "camelCase")]
 pub enum StringOutput {
     LocalFile(LocalFileWriterCfg),
-    Elasticsearch(ElasticsearchCfg),  // 新增
+    Es { link_sys_ref: LinkSysRef },
+    Kafka { link_sys_ref: LinkSysRef, topic: String },
+    Otlp { link_sys_ref: LinkSysRef },
+    Example { link_sys_ref: LinkSysRef }, // 新增
 }
 ```
 
 ### 3. 更新初始化逻辑
 
 ```rust
-// src/core/gateway/observe/access_log/mod.rs
+// edgion-gateway/src/observe/logs/logger_factory.rs
 match &config.output {
     StringOutput::LocalFile(cfg) => { /* ... */ }
-    StringOutput::Elasticsearch(cfg) => {
-        let sender = ElasticsearchSender::new(cfg);
+    StringOutput::Es { link_sys_ref } => { /* 现有 ES 适配器 */ }
+    StringOutput::Kafka { link_sys_ref, topic } => { /* 现有 Kafka 适配器 */ }
+    StringOutput::Otlp { link_sys_ref } => { /* 现有 OTLP 适配器 */ }
+    StringOutput::Example { link_sys_ref } => {
+        let sender = ExampleLogSender::new(link_sys_ref.clone());
         logger.register(Box::new(sender));
     }
 }
@@ -744,14 +752,14 @@ match &config.output {
 
 ### 核心实现
 
-- `src/core/gateway/observe/access_log/` - Access Log 实现
-- `src/core/gateway/observe/logs/ssl_log.rs` - SSL Log 实现
-- `src/core/gateway/link_sys/providers/local_file/` - LocalFileWriter 实现
-- `src/core/gateway/link_sys/runtime/data_sender.rs` - DataSender trait 定义
+- `edgion-gateway/src/observe/access_log/` - Access Log 实现
+- `edgion-gateway/src/observe/logs/ssl_log.rs` - SSL Log 实现
+- `edgion-gateway/src/link_sys/providers/local_file/` - LocalFileWriter 实现
+- `edgion-gateway/src/link_sys/runtime/data_sender.rs` - DataSender trait 定义
 
 ### 配置
 
-- `src/core/gateway/cli/config.rs` - Gateway 配置结构
+- `edgion-gateway/src/cli/config.rs` - Gateway 配置结构
 - `edgion-resources/src/output.rs` - 日志输出配置类型
 - `config/edgion-gateway.yaml` - 配置示例
 
@@ -816,26 +824,15 @@ match &config.output {
      enabled: true  # 调试 TLS 问题
    ```
 
-## 未来计划
+## 后续可选方向
 
-### 短期（v0.2）
-
-- [ ] 添加 Elasticsearch 输出支持
-- [ ] 添加 Kafka 输出支持
-- [ ] 支持自定义日志格式
-- [ ] 支持日志采样（高流量场景）
-
-### 长期（v1.0）
-
-- [ ] 支持结构化日志（JSON）
-- [ ] 支持日志压缩
-- [ ] 支持远程 syslog
-- [ ] 支持日志脱敏
+- 自定义日志格式与采样
+- 日志压缩
+- 远程 syslog
 
 ---
 
-**最后更新**：2025-01-05  
-**版本**：Edgion v0.1.0
+**最后更新**：2026-09-14
 
 ## OTLP 共享所有权
 

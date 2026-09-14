@@ -9,7 +9,7 @@ description: LinkSys resource — external system connector definition, multiple
 > **Credential resolution layer**: see the "Secret → Material resolution layer" section in [10-secret.md](10-secret.md)
 > **External contract / YAML schema**: see [../../02-features/03-resources/18-link-sys.md](../../02-features/03-resources/18-link-sys.md)
 
-LinkSys defines Redis, Etcd, Elasticsearch, Webhook, Kafka, HttpDns, and
+LinkSys defines Redis, Etcd, Elasticsearch, Webhook, Kafka, OTLP, HttpDns, and
 credentialSource configuration. It is used by access logging, rate limiting,
 Webhook key resolution, DNS resolution, CredentialInjector, and related features.
 
@@ -120,7 +120,7 @@ advisory condition:
 `UnknownConfigFields=True/UnknownFieldsDetected` is added when the operator-authored document
 contains a key that the generated typed LinkSys schema does not recognize. It is removed after a
 clean reapply and never changes `Accepted`, `ResolvedRefs`, credential resolution, or conf_sync.
-The detector covers all seven provider variants. Declared map values and arbitrary-JSON values remain
+The detector covers all eight `SystemConfig` variants. Declared map values and arbitrary-JSON values remain
 open boundaries, while unknown siblings are still reported. The same findings are available through
 the Admin write warning, read-only validate endpoint, fleet diagnostics endpoint, and the bounded
 per-kind Controller metric.
@@ -203,7 +203,7 @@ while URL targets retain their explicit `http` or `https` scheme.
 |---------|---------|---------|------|
 | LinkSys → Secret | `Secret` | `SecretRefManager` (auth + tls) | Secret change/delete → cascade requeue this LinkSys |
 | LinkSys → ReferenceGrant | `ReferenceGrant` | `ReferenceGrantStore` | Cross-ns secretRef authorization; Grant change → cascade requeue |
-| LinkSys ← AccessLog | AccessLog config | reference by `namespace/name` | ES / Redis / Webhook as log backends |
+| LinkSys ← AccessLog | AccessLog config | reference by `namespace/name` | Elasticsearch / Kafka / OTLP log backends; LocalFile is configured directly and is not LinkSys |
 | LinkSys ← EdgionPlugins | plugin config | reference by `namespace/name` | Redis distributed rate limiting, Webhook Key resolution, CredentialInjector (`credentialSource`) |
 
 The full internal-dependency and requeue cascade graph is in [19-resource-dependency.md](19-resource-dependency.md).

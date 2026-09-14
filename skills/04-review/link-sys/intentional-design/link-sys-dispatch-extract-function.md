@@ -6,7 +6,7 @@ knowledge_type: intentional-design
 
 # LinkSys store.rs dispatch functions — Extract-Function / Dedup — DESIGN-TRADEOFF
 
-**Audit date**: 2026-05-25 (re-confirmed 2026-06-09)
+**Audit date**: 2026-05-25 (re-confirmed 2026-06-09; re-evaluated 2026-09-14 after Kafka runtime and specialized Webhook/OTLP publication landed)
 **Linked issues**: link-sys F-013 (extract-function), link-sys F-008 (duplicate provider match arms) — both closed, not further refactored. A merged follow-up todo (`link-sys-dispatch-dedup-followup.md`) was re-evaluated with a skeptical design pass on 2026-06-09 and deleted: verdict unchanged (NO-GO-FOR-NOW).
 
 ## Conclusion
@@ -14,8 +14,8 @@ knowledge_type: intentional-design
 The one concrete, low-risk extraction these findings asked for — a shared
 credential-readiness prelude helper — is **already implemented** as
 `credential_readiness<M>(ls, auth_fn) -> (ready, tls_ok, auth)`
-(`edgion-gateway/src/link_sys/runtime/store.rs`), called from all six non-Webhook
-arms across both dispatch functions. Alongside it, `register_for_full_set`,
+(`edgion-gateway/src/link_sys/runtime/store.rs`), called from the Redis, Etcd,
+Elasticsearch, and Kafka arms across both dispatch functions. Alongside it, `register_for_full_set`,
 `swap_and_shutdown_olds`, `spawn_and_swap_partial`, `carry_over_if_not_ready`,
 `preserve_if_not_ready`, and `spawn_shutdown_if_present` are already extracted.
 
@@ -33,8 +33,9 @@ enum / `for_each_provider` closure" are not accepted.
 
 `dispatch_full_set`: snapshots all four runtime maps up front, carries over the
 *old snapshot's* Arc for not-ready resources, accumulates into four fresh maps,
-and after a **single** pass over `data` does an atomic swap-all-four +
-background shutdown of evicted old Arcs gated by `SHUTDOWN_ON_REPLACE`.
+and after a **single** pass over `data` replaces each of the four provider maps
+atomically in sequence, then starts background shutdown of evicted old Arcs
+gated by `SHUTDOWN_ON_REPLACE`. The four stores are not one joint transaction.
 
 `dispatch_partial_update`: preserves in place against the **live** runtime,
 swaps **per item**, and runs a separate uniform remove loop.
@@ -46,11 +47,11 @@ re-introducing the divergence it claims to remove while adding indirection — a
 the swap/carry-over semantics are exactly the kind of thing a mechanical
 collapse silently regresses.
 
-**2. The eight locals are inherent to "single pass + atomic swap-all-at-end"**
+**2. The provider maps are inherent to "single pass + per-store atomic replacement at the end"**
 
-`new_*_map` / `preserved_*_keys` exist because one loop interleaves all four
-providers and the four swaps happen *after* the loop. Per-provider extraction
-can't remove them without either iterating `data` four times (changes pass count
+`new_*_map` / `preserved_*_keys` exist because one loop interleaves four generic
+providers plus Webhook preparation, and publication happens *after* the loop.
+Per-provider extraction can't remove them without either iterating `data` repeatedly (changes pass count
 and operation ordering) or building a generic accumulator struct (more machinery
 than the locals it replaces). What's left is a form-only refactor.
 
@@ -66,15 +67,15 @@ readability gain. Same disposition class as
 
 ## Fix Suggestions Not Accepted
 
-- "Extract `dispatch_full_set_<provider>` per provider to drop the eight locals" — the locals are structural to single-pass-then-swap-all; extraction would force four passes over `data` or an accumulator struct, neither of which is a net improvement.
+- "Extract `dispatch_full_set_<provider>` per provider to drop the provider maps" — the locals are structural to single-pass-then-publish; extraction would force repeated passes over `data` or an accumulator struct, neither of which is a net improvement.
 - "Unify both dispatch functions behind a `LifecycleAction` enum / `dispatch_one` / `for_each_provider` closure (F-008)" — the two functions' carry-over/swap semantics genuinely differ; collapsing trades real regression risk for marginal readability.
-- "Adding a fifth provider requires editing both dispatch functions and the remove loop" — known trade-off, not a defect; the four provider arms are short and the `credential_readiness` prelude is already deduplicated.
+- "Adding another generic provider requires editing both dispatch functions and the remove loop" — known trade-off, not a defect; the four generic lifecycle arms are short and the `credential_readiness` prelude is already deduplicated. Webhook and OTLP intentionally use separate publication models.
 
 ## Re-evaluation Triggers
 
 Re-open only if:
 
-- A fifth LinkSys provider is **actually implemented** and the duplication cost can be amortized across a broader rewrite. Note: the `SystemConfig` enum already has five variants — Redis, Etcd, Elasticsearch, Webhook, and `Kafka`. `Kafka` is a no-runtime stub (`KafkaClientConfig { brokers }`, documented "placeholder / future release", no roadmap date) caught today by the `_ => debug!` fallthrough, so the natural trigger is Kafka gaining a real runtime — at which point the change is one explicit arm in each dispatch function plus one line in the remove loop, and only then is a small per-arm macro worth reassessing. Adding the arm is also not a silent gap: the failure mode is benign (`_ => debug!("runtime not yet implemented")`), and `SystemConfig::system_type()` is an exhaustive `_`-free match that compile-errors on any new variant.
+- Another provider is implemented on the **generic** lifecycle and materially increases the repeated readiness/build/swap/remove branches. Kafka already triggered the earlier re-evaluation condition and is now fully wired; the September 2026 re-evaluation retained the current shape because Webhook needs ordered prepare/commit publication, OTLP owns staged generations, HttpDns is resolver-consumed, and CredentialSource is Controller-only. Those variants are not evidence that the generic branches should be collapsed.
 - The `full_set` carry-over-from-snapshot and `partial_update` preserve-in-place semantics genuinely converge, so a single dispatch path no longer has to encode two flows.
 - A real bug is traced to a provider arm being added/changed in one function but not the other.
 
@@ -87,3 +88,4 @@ Re-open only if:
 ## Resolution references
 
 - `link-sys-F013` — 2026-05-25 (⚠️ accepted tradeoff).
+- `refresh-link-sys-documentation-set` — 2026-09-14 (documentation refreshed after the Kafka trigger fired; tradeoff retained).

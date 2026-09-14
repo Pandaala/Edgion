@@ -31,28 +31,18 @@ description: Webhook LinkSys provider after the target-unification + request-tem
 ## End-to-end flow (controller → conf_sync → gateway)
 
 ```
-  Controller (LinkSys manager)                       Gateway (WebhookRuntime)
-┌──────────────────────────────────┐            ┌──────────────────────────────────┐
-│ 1. Read WebhookServiceConfig      │            │ 5. ConfHandler<LinkSys> upserts   │
-│    from K8s (CR ingest)           │            │    WebhookManager runtime         │
-│ 2. validate_config():             │            │ 6. CompiledOutboundRequest::      │
-│    - target (Service port/kind    │  conf_sync │    from_spec(request)             │
-│      OR origin-only url)          │            │                                    │
-│    - request template syntax,     │  (full     │    parses templates (already      │
-│      origin/custom name conflicts │  struct,   │    parsed controller-side here too)│
-│ 3. Scan ${secretRef:...} vars;    │  serde)    │ 7. webhook_call(session,          │
-│    fetch; embed in resolved_      │───────────►│    path_override, resolved):      │
-│    secrets; ship full struct      │            │    substitute secretRef vars from │
-│ 4. (same struct carries resolved  │            │    resolved_secrets; evaluate      │
-│    secret values inline)          │            │    templates vs SessionSnapshot   │
-└──────────────────────────────────┘            │    templates vs SessionSnapshot   │
-                                                 └──────────────────────────────────┘
+Controller                                      Gateway
+1. Read WebhookServiceConfig                    5. Publish a sequenced LinkSys source event
+2. Validate target and request templates        6. Acquire the Webhook mutation guard
+3. Resolve ${secretRef:...} values               7. Prepare ManagedOutboundClient
+4. Send the full struct over conf_sync    --->   8. Commit manager, then runtime bookkeeping
+                                                9. outbound_call evaluates the compiled request
 ```
 
 ### Controller side (LinkSys handler)
 
 - Reads `WebhookServiceConfig` from the K8s CR. The LinkSys CRD is `x-kubernetes-preserve-unknown-fields: true`, so structural validation does **not** happen at the API server — the controller's `validate_config()` is the only admission gate, surfaced as the `Accepted` status condition.
-- **Validation** (`edgion-resources/src/resources/link_sys/webhook.rs`): `backend_ref.port.is_some()`, `kind` in the supported set, and `request` field consistency (`validate_request_fields`, which delegates to the shared `OutboundRequestSpec::validation_error()` in `edgion-resources/src/resources/common/outbound_request.rs`): no template parse errors, no field name appearing in both `origin` and `custom`, no duplicate names within a block, no `headers.origin: [{name: Cookie}]` colliding with a non-empty `cookies` block, no explicit `Content-Type` header combined with `request.body` type `json`/`form`, and — for `request.body` type `json` — a config-time canary lint (every template variable substituted with a placeholder, then the result parsed as JSON) that rejects a template whose skeleton is not valid JSON, including an unquoted placeholder like `"count": ${ctx:n}`. Any violation → `Accepted=False` with a descriptive message; the resource is **not** loaded into the gateway runtime.
+- **Validation** (`edgion-resources/src/resources/link_sys/webhook.rs`): the flat Service target requires a port and a supported kind, while the URL target must be origin-only and mutually exclusive with Service fields. Request-field validation delegates to the shared `OutboundRequestSpec::validation_error()` in `edgion-resources/src/resources/common/outbound_request.rs`: no template parse errors, no field name appearing in both `origin` and `custom`, no duplicate names within a block, no `headers.origin: [{name: Cookie}]` colliding with a non-empty `cookies` block, no explicit `Content-Type` header combined with `request.body` type `json`/`form`, and — for `request.body` type `json` — a config-time canary lint (every template variable substituted with a placeholder, then the result parsed as JSON) that rejects a template whose skeleton is not valid JSON, including an unquoted placeholder like `"count": ${ctx:n}`. Any violation → `Accepted=False` with a descriptive message; the resource is **not** loaded into the gateway runtime.
 - **Template/secret errors propagate**: a resource that fails compilation is not registered; a consumer calling it hits the "webhook not found" path (same as `statusOnError`).
 
 > **Secret resolution in custom templates.** Secret values in `request.*.custom` fields
@@ -70,13 +60,15 @@ description: Webhook LinkSys provider after the target-unification + request-tem
 ### conf_sync
 
 - The gateway receives the **full** `WebhookServiceConfig` struct (serde) — the standard LinkSys conf_sync path. The compiled request templates are re-derived gateway-side from the synced `request` block (no separate "compiled" wire format). Resolved secret values ride along in `spec.resolved_secrets` (a `ResolvedSecrets` newtype); admin `/configclient` output renders each entry as `"[redacted]"`.
-- The gateway compiles `CompiledOutboundRequest` once at upsert time, **not** per call — keeping the request-time (RT) loop free of template parsing. `${secretRef:...}` substitution happens at call time from the `resolved_secrets` passed through `webhook_call`.
+- The gateway compiles `CompiledRequest` once during ordered candidate preparation, **not** per call — keeping the request-time (RT) loop free of template parsing. `${secretRef:...}` substitution happens at call time from the `resolved_secrets` owned by the prepared `ManagedOutboundClient`.
 
-### Gateway side (WebhookRuntime)
+### Gateway side (ordered manager publication)
 
-- `WebhookManager.upsert()` (`providers/webhook/manager.rs`) builds a `WebhookRuntime` carrying a `compiled_request: CompiledOutboundRequest` field.
-- `CompiledRequest::from_spec(spec)` (`edgion-gateway/src/plugins/http/common/outbound/request.rs`) compiles every `path`/`method`/`args`/`headers`/`cookies` `custom.template`, and the optional `request.body` (`json`/`raw` template, or `form` field templates), into a `CompiledTemplate`. `${secretRef:ns/name:key}` vars in templates are NOT resolved here; they are stored as-is and substituted at call time from the `resolved_secrets` map carried in the spec.
-- At call time, `webhook_call(runtime, session, path_override, resolved, global_max_bytes)` (`providers/webhook/call.rs`) calls `compiled_request.build_request(session, path_override, base_url, resolved)`, substituting `${secretRef:...}` vars from the passed `resolved` map, then handles retry / health / rate-limit / response-size cap. The outbound `reqwest::Request` is built once and cloned per retry.
+- `dispatch_full_set_with()` and `dispatch_partial_update_with()` (`link_sys/runtime/store.rs`) acquire `WebhookManager::begin_mutation(sequence)`. A stale sequence is rejected before publication.
+- `WebhookMutationGuard::prepare()` calls `ManagedOutboundClient::from_parts()` (`plugins/http/common/outbound/client.rs`) to resolve the target, build the HTTP client, compile the request, and initialize health/rate/retry state before anything becomes visible.
+- `CompiledRequest::from_spec(spec)` (`plugins/http/common/outbound/request.rs`) compiles every `path`/`method`/`args`/`headers`/`cookies` `custom.template`, and the optional `request.body`, into `CompiledTemplate` values. `${secretRef:ns/name:key}` segments remain compiled tokens and are substituted at call time from the client-owned resolved map.
+- Publication commits the manager mutation first (`commit_one` or `commit_full`) and updates `WEBHOOK_RUNTIME` bookkeeping second. `WebhookLinkClient` deliberately does not implement the generic `LinkSysLifecycle` trait because that trait does not provide this ordered transaction.
+- At call time, `resolve_webhook_key()` or `WebhookCallHandle::call()` delegates to the shared `outbound_call()`, which builds one bounded request and handles target selection, retry, health, rate limit, response-size enforcement, and diagnostics.
 
 ## Consumer API change
 
@@ -109,7 +101,7 @@ pub async fn resolve_webhook_key(
 - `forward_headers` / `path_suffix` are **removed** from consumer config. Headers to forward must be declared on the webhook resource's `request.headers.origin` allow-list; per-call paths use `path_override`.
 - `path_override` is **only honored** when the webhook resource declares `request.path.allowOverride: true`. Otherwise it is silently ignored (not an error).
 - `extract` (response-side header/cookie/body extractor) is **kept** — it parses the response, unrelated to outbound construction.
-- Request construction receives `session` and `path_override`; the caller owns `diagnostics` and emits it through its `PluginLog` after the call.
+- Request construction receives `session` and `path_override`; resolved secrets are client-owned, while the caller owns `diagnostics` and emits it through its `PluginLog` after the call.
 - Consumers that need dynamic per-call values set them into the gateway context first (via a preceding CtxSet entry), then WebhookKeyGet runs and the webhook templates read `${ctx:NAME}`. CtxSet local vars and WebhookKeyGet vars must not share one plugin entry. No new "invoker arg" concept was added.
 
 ## Template engine reference
@@ -155,10 +147,10 @@ Note: webhook connector has no fail-open mode. When a webhook call fails for any
 
 The single invariant carried over from the prior endpoint-decouple work, preserved here:
 
-- **`request.*` config change → `upsert()` → health reset.** Editing `request.headers` (or any other `request.*` / target field) rebuilds the `WebhookRuntime` with a fresh `compiled_request` and **fresh** health atomics (`healthy`, passive counters). This is intentional: an operator-initiated config change is not pod churn.
-- **EndpointSlice churn → health preserved.** EndpointSlice changes do **not** trigger LinkSys re-emit, do **not** call `upsert()`, and do **not** reset health. Endpoint resolution happens at call time from `EpSliceStore` (`runtime.resolved_target.pick_url()`), so the readiness set can change without disturbing aggregate webhook health.
+- **`request.*` config change → ordered replacement → health reset.** Editing `request.headers` (or any other `request.*` / target field) prepares and commits a new `ManagedOutboundClient` with **fresh** health atomics (`healthy`, passive counters). This is intentional: an operator-initiated config change is not pod churn.
+- **EndpointSlice churn → health preserved.** EndpointSlice changes do **not** trigger LinkSys re-emit or replace the managed client. Endpoint resolution happens at call time from the current endpoint store, so the readiness set can change without disturbing aggregate webhook health.
 
-Tests: `manager.rs::upsert_resets_health_on_request_change` (reset path) and the prior decouple regression test (preserve-across-churn path).
+Tests: `manager.rs::upsert_resets_health_on_request_change` (a test-only helper exercises replacement) and `manager.rs::endpoint_churn_preserves_health_state`.
 
 ## Migration (operator-facing)
 
@@ -192,13 +184,17 @@ edgion-resources/src/resources/link_sys/webhook.rs   # WebhookServiceConfig, Web
 edgion-resources/src/resources/edgion_plugins/
     plugin_configs/webhook_key_get.rs                # WebhookKeyGetConfig / WebhookVar / WebhookExtract
 edgion-gateway/src/link_sys/providers/webhook/
-├── manager.rs          # WebhookManager.upsert() — builds runtime, resolves secrets, resets health
-├── compiled_request.rs # CompiledOutboundRequest::{from_spec, build_request}
-├── call.rs             # webhook_call(runtime, session, path_override, max_bytes)
+├── manager.rs          # sequence-checked prepare/commit publication + call handles
+├── client.rs           # prepared WebhookLinkClient bookkeeping wrapper
 ├── resolver.rs         # resolve_webhook_key() — consumer entry, response extract
-├── runtime.rs          # WebhookRuntime (compiled_request + health atomics + resolved_target)
-├── health.rs           # active/passive health
-└── client.rs           # reqwest client construction (TLS material)
+├── runtime.rs          # shared sliding-window rate limiter
+└── mod.rs
+
+edgion-gateway/src/plugins/http/common/outbound/
+├── client.rs           # ManagedOutboundClient, target/TLS/health ownership
+├── request.rs          # CompiledRequest and per-call request construction
+├── call.rs             # bounded outbound_call with retry and classification
+└── target.rs           # Service/URL target resolution
 ```
 
 ## Testing
@@ -208,7 +204,7 @@ Integration suite: `edgion-tests/src/client/suites/edgion_plugins/webhook_key_ge
 
 - **Target resolution** — `kind: Service`/`ServiceEndpointSlice` (call-time EndpointSlice path) and `kind: ServiceClusterIp` (ClusterIP DNS path).
 - **Origin allow-list** — only named `origin` fields forwarded; unnamed inbound headers/args/cookies are dropped.
-- **Custom fields** — `value` (literal), `template` (`${ctx:...}` / `${header:...}`), `secret` (resolved + `prefix`).
+- **Custom fields** — `value` (literal) and `template` (`${ctx:...}` / `${header:...}` / `${secretRef:ns/name:key}`).
 - **Presence policies** — `skipIfMissing` (silent), `warnIfMissing` (alert + continue), `required` (webhook failure; consuming plugin handles fallback).
 - **Path override** — honored only with `path.allowOverride: true`; ignored otherwise.
 - **ctx-set integration** — CtxSet writes local vars first; WebhookKeyGet runs after; webhook templates read `${ctx:...}`.
@@ -216,4 +212,7 @@ Integration suite: `edgion-tests/src/client/suites/edgion_plugins/webhook_key_ge
 - **Template substitution** — literal, single-var, multi-var, frozen-path/method reuse when `path`/`method` omitted.
 - **Health semantics** — `request.*` edit resets health; EndpointSlice churn preserves it.
 
-Unit tests: `compiled_request.rs` (compilation + `build_request`) and `manager.rs` (upsert, invalid-template rejection, health reset). See [05-testing/01-integration-testing.md](../../05-testing/01-integration-testing.md) for running the suite.
+Unit tests live in the shared outbound `request.rs` / `client.rs` / `call.rs`, the
+Webhook `manager.rs`, and LinkSys `runtime/store.rs`. See
+[05-testing/01-integration-testing.md](../../05-testing/01-integration-testing.md)
+for running the integration suite.

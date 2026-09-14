@@ -69,7 +69,7 @@ Secret 键名遵循固定的已知约定，不支持通过 `usernameKey` / `pass
 
 应用层键名使用 camelCase；TLS 键名遵循 Kubernetes `kubernetes.io/tls` 标准。
 
-> **Webhook 凭据有所不同。** Webhook 连接器不再有类型化的 `auth` 块。改为将任意凭据作为自定义请求头（或 arg/cookie）注入，并从 Secret 中读取。Secret 的键名由**运营者自行选择**（即 `key:` 中填写的内容），可选的 `prefix:` 用于在前面拼接 `Bearer ` / `Basic ` 等。详见 [Webhook 连接器 → 自定义字段来源](#自定义字段来源)。
+> **Webhook 凭据有所不同。** Webhook 连接器不再有类型化的 `auth` 块。请在自定义请求字段模板中引用 Secret，例如 `template: "Bearer ${secretRef:production/webhook-token:token}"`；命名空间和 data key 都必须显式给出。详见 [Webhook 连接器 → 自定义字段来源](#自定义字段来源)。
 
 ### TLS
 
@@ -386,52 +386,35 @@ item 级重试共用同一个 `bulk.maxRetries` 预算。串行重试期间，�
 重发结果不明确的操作可能产生重复文档。429 重试预算耗尽后，连接器会转为不健康，已配置的
 access-log fallback 可以接收后续日志。
 
-### 失败文档缓存
+### Access Log fallback 与手动回填
 
-> **状态：规划中 —— 尚未实现。** 下文的 `failedCache` 配置与示例仅描述设计意图。
-> 网关当前**不会**处理 `failedCache` 配置块（未知 CRD 字段会被裁剪，设置后不生效）。
-> 在其落地前，请额外注册一个 `localFile` sink 作为兜底，以免 Elasticsearch 故障期间丢日志。
-> 跟踪：`edgion-gateway/src/link_sys/readme`。
-
-索引失败时，可以将文档缓存以便后续重试。
-
-| 参数 | 类型 | 默认值 | 说明 |
-|------|------|--------|------|
-| `failedCache.type` | Enum | **必填**（设置 `failedCache` 时） | 缓存后端。可选值：`localFile` \| `redis`。 |
-| `failedCache.localFile.path` | String | **必填**（`localFile` 时） | 失败文档存储的目录路径。 |
-| `failedCache.redis.linkSysRef` | String | **必填**（`redis` 时） | Redis 连接器的 `namespace/name`。 |
-| `failedCache.redis.listKey` | String | none | 失败文档的 Redis 列表键名。 |
-| `failedCache.redis.maxEntries` | Integer | none | 列表中保留的最大条目数。 |
-
-#### 示例：带 Redis 失败缓存的 Elasticsearch
+Elasticsearch LinkSys schema 中没有 `failedCache` 字段。对于 Access Log，
+应在 Gateway 进程配置中为 Elasticsearch 主 sink 配置有界 LocalFile
+`fallback`：
 
 ```yaml
-apiVersion: edgion.io/v1
-kind: LinkSys
-metadata:
-  name: logs-es
-  namespace: production
-spec:
-  type: elasticsearch
-  config:
-    endpoints:
-      - "https://es-1.production.svc:9200"
-    auth:
-      type: apiKey
-      secretRef:
-        name: es-api-key
-    tls:
-      enabled: true
-    index:
-      prefix: "edgion-logs"
-      datePattern: "%Y.%m.%d"
-    failedCache:
-      type: redis
-      redis:
-        linkSysRef: "production/cache-redis"
-        listKey: "es-failed"
-        maxEntries: 100000
+access_log:
+  enabled: true
+  output:
+    es:
+      linkSysRef:
+        namespace: production
+        name: logs-es
+  fallback:
+    localFile:
+      path: logs/es_access_fallback.log
+      diskUsageThresholdPercent: 90
+      rotation:
+        strategy: { size: 104857600 }
+        maxFiles: 10
 ```
+
+first-healthy 路由只在主 sink 报告不健康后才将新日志发往 fallback；
+Elasticsearch 仍健康时的 channel-full 提交会被丢弃，不会切换到 fallback。
+Elasticsearch 恢复后，经过身份验证的运维人员可调用
+`POST /api/v1/access-log/backfill` 重放专用 fallback 文件。回填仅支持
+Elasticsearch，语义为至少一次。运维限制和响应说明详见
+[Access Log 降级与回填](../observability/access-log.md#降级fallback-sink-与手动回填)。
 
 ## Webhook 连接器
 
@@ -463,11 +446,7 @@ spec:
           - name: X-Source
             value: edgion
           - name: Authorization
-            secret:
-              secretRef:
-                name: webhook-token
-              key: token
-              prefix: "Bearer "
+            template: "Bearer ${secretRef:production/webhook-token:token}"
     timeoutMs: 3000
     success:
       statusCodes: [200]
@@ -589,11 +568,7 @@ request:
       - name: X-User
         template: "${ctx:user_id}"
       - name: Authorization
-        secret:
-          secretRef:
-            name: webhook-token
-          key: token
-          prefix: "Bearer "
+        template: "Bearer ${secretRef:production/webhook-token:token}"
 
   cookies:
     origin:
@@ -609,7 +584,7 @@ request:
 | `request.path.allowOverride` | Boolean | `false` | 为 `true` 时，消费方的 `pathOverride` 在调用时替换整个路径；为 `false` 时，任何 `pathOverride` 被忽略。 |
 | `request.method.template` | String | 冻结的传入方法 | 出站 HTTP 方法；字面（`POST`、`GET` 等）或模板。 |
 | `request.{args,headers,cookies}.origin` | Array | `[]` | 按名称从**冻结**的传入请求复制的字段。 |
-| `request.{args,headers,cookies}.custom` | Array | `[]` | 运营者构造的字段（字面 / 模板 / secret）。 |
+| `request.{args,headers,cookies}.custom` | Array | `[]` | 使用字面值或模板来源构造的字段。 |
 
 **Origin 字段**从传入请求的冻结入口快照中复制同名值——不受链中较早插件所做任何改写的影响。每个 origin 字段只有 `{ name, presence }`。共有三类 origin 组，对应 HTTP 的三个位置：
 
@@ -641,21 +616,17 @@ request:
 |------|------|----------|------|
 | 字面 | `value: "edgion"` | 无 | 逐字的静态字符串。 |
 | 模板 | `template: "${ctx:user_id}"` | 调用时 | 由 ctx-set 模板引擎插值（见[模板变量](#模板变量)）。 |
-| Secret | `secret: { secretRef: {...}, key: ..., prefix: ... }` | 配置时 | 由控制器从 Kubernetes Secret 读取并经 conf_sync 下发到网关。解析后的值在 `/configclient` 输出中被脱敏。 |
+| Secret 模板 | `template: "Bearer ${secretRef:namespace/name:key}"` | 配置时 + 调用时 | 控制器解析 Secret 并通过 conf_sync 下发真实值；管理接口与配置检查输出会将其脱敏。网关在每次调用时将其代入预编译模板。 |
 
-Secret 形式是注入凭据的方式（不再有类型化的 `auth` 块）：
+在模板中引用 Secret 材料（不再有类型化的 `auth` 块或 `secret:` 自定义来源）：
 
 ```yaml
 custom:
   - name: Authorization
-    secret:
-      secretRef:
-        name: webhook-token       # 命名空间默认为 LinkSys 所在命名空间
-      key: token                  # Secret data map 中由运营者选择的键
-      prefix: "Bearer "           # 可选；拼接到解析值之前
+    template: "Bearer ${secretRef:production/webhook-token:token}"
 ```
 
-`prefix` 用于把原始令牌变成 `Bearer <token>`、`Basic <encoded>` 等。Secret 轮换是自动的：当被引用的 Secret 变化时，控制器重新入队该 LinkSys 资源、重新解析值并重新下发到网关——无需运营者操作。
+模板中的字面文本用于添加 `Bearer `、`Basic ` 等前缀。Secret 轮换是自动的：当被引用的 Secret 变化时，控制器重新入队该 LinkSys 资源、重新解析值并重新下发到网关——无需运营者操作。
 
 #### 模板变量
 
@@ -907,7 +878,7 @@ spec:
 
 #### 4. 来自 K8s Secret 的 Custom 字段
 
-从 Secret 注入凭据。`prefix` 构造完整的请求头值（`Bearer <token>`）。
+通过在模板中嵌入 `${secretRef:namespace/name:key}` 注入凭据。
 
 ```yaml
 spec:
@@ -920,16 +891,9 @@ spec:
       headers:
         custom:
           - name: Authorization
-            secret:
-              secretRef:
-                name: webhook-token   # 在 LinkSys 所在命名空间
-              key: token
-              prefix: "Bearer "
+            template: "Bearer ${secretRef:default/webhook-token:token}"
           - name: X-API-Key
-            secret:
-              secretRef:
-                name: webhook-apikey
-              key: apiKey             # 无 prefix → 原始值
+            template: "${secretRef:default/webhook-apikey:apiKey}"
 ```
 
 #### 5. 模板变量替换
@@ -1056,11 +1020,7 @@ spec:
       headers:
         custom:
           - name: Authorization
-            secret:
-              secretRef:
-                name: webhook-token
-              key: token
-              prefix: "Bearer "
+            template: "Bearer ${secretRef:production/webhook-token:token}"
     timeoutMs: 3000
     retry:
       maxRetries: 1
@@ -1089,9 +1049,9 @@ Webhook schema 在本版本中发生变化。旧字段在滚动升级期间被�
 
 | 旧 | 新 |
 |----|----|
-| `target.type: uri` + `target.uri` | 指向（代理）Service 的展平 Service 字段（`target.name`/`target.port`/……）——不再支持原始 URL |
+| `target.type: uri` + `target.uri` | 仅包含 origin 的 `target.url`；将旧 URI 的路径移到 `request.path.template` |
 | `target.type: service` + `target.name/port` | 直接写在 `target` 下的 `target.{kind,name,namespace,port}`（去掉 `type` 标签） |
-| `auth.bearer` / `auth.basic` / `auth.hmac` / `auth.apiKey` | 带 `secret:` 的 `request.headers.custom`（用 `prefix:` 拼 `Bearer `/`Basic `） |
+| `auth.bearer` / `auth.basic` / `auth.hmac` / `auth.apiKey` | 在 `request.headers.custom[].template` 中使用 `${secretRef:namespace/name:key}` 并添加所需字面前缀 |
 | `defaultHeaders`（静态 map） | 每条用 `value:` 的 `request.headers.custom` |
 | `requestMethod: POST` | `request.method.template: POST`（旧默认是 `GET`） |
 | 消费方 `pathSuffix` | webhook 上的 `request.path`，或当 `allowOverride: true` 时消费方 `pathOverride` |
@@ -1122,11 +1082,10 @@ spec:
   type: webhook
   config:
     target:
-      kind: Service
-      name: key-service        # 对于外部端点，将此指向一个代理 Service
-      namespace: production
-      port: 8080
+      url: "https://key-service.internal"
     request:
+      path:
+        template: /resolve
       method:
         template: POST
       headers:
@@ -1134,11 +1093,7 @@ spec:
           - name: X-Source
             value: edgion
           - name: Authorization
-            secret:
-              secretRef:
-                name: webhook-token
-              key: token
-              prefix: "Bearer "
+            template: "Bearer ${secretRef:production/webhook-token:token}"
 ```
 
 消费方侧，`pathSuffix` 和 `forwardHeaders` 已移除。面向运维的消费方是 `WebhookKeyGet` 插件（不是 KeyGet 的 `type: webhook` 来源）：
@@ -1172,7 +1127,9 @@ spec:
         name: resolved_key
 ```
 
-> **外部端点。** `target.type: uri` 和 `kind: ExternalName` 不支持。用代理 Service（LoadBalancer，或由 ingress controller 前置的 ClusterIP）前置外部主机，并按名称引用该 Service。
+> **外部端点。** 使用仅含 origin 的 `target.url`，路径写入
+> `request.path.template`。不支持 `kind: ExternalName`；URL 目标受连接器的
+> SSRF 策略和可选 `blockPrivate` 限制保护。
 
 ### Webhook 故障排查
 
@@ -1199,7 +1156,8 @@ spec:
 
 ## Kafka 连接器
 
-Kafka 连接器为日志输出提供 Gateway 侧的可用 producer。每个日志输出选择一个 topic，
+Kafka 是已上线的 Gateway provider，具有强类型 runtime store、full/partial
+热更新和后台健康恢复。每个异步日志输出通过 `KafkaLogSender` 选择一个 topic，
 被引用的 LinkSys 负责共享客户端和待发送数据的总预算。
 
 ```yaml
@@ -1225,14 +1183,21 @@ spec:
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `brokers` | Array\<String\> | **必填** | Kafka broker 地址（`host:port`），集群时列出多个。 |
+| `sasl` | Object | none | 可选 SASL/PLAIN 用户名与 Secret 支持的密码槽。 |
+| `tls` | Object | none | 可选的共享 LinkSys TLS 策略；启用 Kafka TLS 时始终验证对端。 |
 | `channelSize` | Integer | `4096` | 每个 topic 的非阻塞 producer 队列容量。 |
 | `maxTopics` | Integer | `64` | 单个 Kafka LinkSys 客户端最多持有的 topic producer 队列数。 |
 | `maxPendingRecords` | Integer | `4096` | 所有 topic 中排队或正在发送的记录总数上限。 |
 | `maxPendingBytes` | Integer | `16777216` | 所有 topic 中排队或正在发送的 UTF-8 载荷总字节数上限。它是逻辑载荷限制，不包含分配器、channel 节点、task 和 Kafka SDK 的额外开销。 |
-| `lingerMs` | Integer | `5` | Kafka 批处理等待时间，必须小于 producer 超时时间。 |
+| `lingerMs` | Integer | `5` | Kafka 批处理等待时间，必须小于 30 秒 producer 超时时间。 |
 
 所有队列限制都必须大于零。达到任一总限额时，新日志会通过现有非阻塞发送路径被丢弃，
 Kafka 客户端健康状态保持不变。增大 `channelSize` 不会增大两个待发送数据总限额。
+
+在 Gateway 日志配置中使用
+`kafka: { linkSysRef: { namespace: production, name: events-kafka }, topic: <topic> }`
+选择 Kafka sink。独立集成测试入口为
+`edgion-tests/integration/scripts/integration/link_sys/run_kafka_test.sh`。
 
 ## 常见配置场景
 
