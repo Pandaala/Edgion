@@ -573,6 +573,10 @@ fn parse_http_routes_to_domain_rules(data: &HashMap<String, Arc<HTTPRoute>>) -> 
                     tracing::warn!(route = %resource_key, rule_id, %reason, "skipping unsupported HTTPRoute rule");
                     return None;
                 }
+                if let Some(reason) = rule.request_mirror_validation_error() {
+                    tracing::warn!(route = %resource_key, rule_id, %reason, "skipping invalid HTTPRoute rule");
+                    return None;
+                }
                 // Share one runtime across every hostname and match of this rule.
                 let runtime = HttpRouteRuleUnit::compile_http_rule(rule, &validated.namespace);
                 let rule = Arc::new(rule.clone());
@@ -2083,6 +2087,36 @@ mod tests {
         let domain_rules = parse_http_routes_to_domain_rules(&data);
         let paths = domain_unit_paths(&domain_rules, "test.example.com");
         assert_eq!(paths, vec!["/spec-b"], "indices must still apply to spec.rules");
+    }
+
+    #[test]
+    fn invalid_request_mirror_is_skipped_even_in_resolved_rules() {
+        let mut route = build_route_with_two_rules("test-mirror-validation", "flat");
+        route.spec.resolved_rules = Some(
+            serde_json::from_value(serde_json::json!([
+                {
+                    "matches": [{"path": {"type": "PathPrefix", "value": "/invalid"}}],
+                    "filters": [{"type": "RequestMirror", "requestMirror": {
+                        "backendRef": {"name": "shadow", "port": 8080},
+                        "fraction": {"numerator": 1}, "percent": 50
+                    }}],
+                    "backendRefs": [{"name": "svc", "port": 8080}]
+                },
+                {
+                    "matches": [{"path": {"type": "PathPrefix", "value": "/valid"}}],
+                    "filters": [{"type": "RequestMirror", "requestMirror": {
+                        "backendRef": {"name": "shadow", "port": 8080}, "percent": 100
+                    }}],
+                    "backendRefs": [{"name": "svc", "port": 8080}]
+                }
+            ]))
+            .unwrap(),
+        );
+        route.pre_parse();
+
+        let data = HashMap::from([("test-mirror-validation/flat".to_string(), Arc::new(route))]);
+        let domain_rules = parse_http_routes_to_domain_rules(&data);
+        assert_eq!(domain_unit_paths(&domain_rules, "test.example.com"), vec!["/valid"]);
     }
 
     #[test]

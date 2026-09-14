@@ -206,6 +206,47 @@ pub struct HTTPRouteRule {
 }
 
 impl HTTPRouteRule {
+    /// Return the first invalid standard RequestMirror configuration in this
+    /// rule, including filters attached to an individual backendRef.
+    pub fn request_mirror_validation_error(&self) -> Option<String> {
+        let validate = |filter: &HTTPRouteFilter| match (
+            filter.filter_type == HTTPRouteFilterType::RequestMirror,
+            filter.request_mirror.as_ref(),
+        ) {
+            (true, Some(config)) => config.validation_error(),
+            (true, None) => Some("requestMirror must be specified when filter.type is RequestMirror".to_string()),
+            (false, Some(_)) => Some("requestMirror must be absent when filter.type is not RequestMirror".to_string()),
+            (false, None) => None,
+        };
+
+        if let Some((index, error)) = self
+            .filters
+            .iter()
+            .flatten()
+            .enumerate()
+            .find_map(|(index, filter)| validate(filter).map(|error| (index, error)))
+        {
+            return Some(format!("filters[{index}] RequestMirror: {error}"));
+        }
+
+        self.backend_refs
+            .iter()
+            .flatten()
+            .enumerate()
+            .find_map(|(backend_index, backend)| {
+                backend
+                    .filters
+                    .iter()
+                    .flatten()
+                    .enumerate()
+                    .find_map(|(filter_index, filter)| {
+                        validate(filter).map(|error| {
+                            format!("backendRefs[{backend_index}].filters[{filter_index}] RequestMirror: {error}")
+                        })
+                    })
+            })
+    }
+
     /// Invalid or unsupported native CORS policies invalidate the whole rule
     /// before Controller delegation or Gateway publication.
     pub fn unsupported_cors_reason(&self) -> Option<String> {
@@ -809,6 +850,49 @@ pub struct HTTPRequestMirrorFilter {
     /// Percent of requests to mirror (0-100). Gateway API v1.5 field name.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub percent: Option<i32>,
+}
+
+impl HTTPRequestMirrorFilter {
+    /// Validate the standard Gateway API RequestMirror fields independently of
+    /// Kubernetes admission. File, etcd, and preserved plugin configuration do
+    /// not necessarily pass through the vendored CRD's schema and CEL rules.
+    pub fn validation_error(&self) -> Option<String> {
+        if self.fraction.is_some() && self.percent.is_some() {
+            return Some("only one of fraction or percent may be specified".to_string());
+        }
+
+        if let Some(fraction) = &self.fraction {
+            let denominator = fraction.denominator.unwrap_or(100);
+            if denominator < 1 {
+                return Some("fraction.denominator must be at least 1".to_string());
+            }
+            if fraction.numerator < 0 || fraction.numerator > denominator {
+                return Some(format!("fraction.numerator must be between 0 and {denominator}"));
+            }
+        }
+
+        if let Some(percent) = self.percent {
+            if !(0..=100).contains(&percent) {
+                return Some("percent must be between 0 and 100".to_string());
+            }
+        }
+
+        if self.backend_ref.name.is_empty() {
+            return Some("backendRef.name must not be empty".to_string());
+        }
+        if !self.backend_ref.is_service() {
+            return Some("backendRef must reference a core Service".to_string());
+        }
+        match self.backend_ref.port {
+            Some(port) if !crate::gwapi_types::is_valid_port(port as i64) => Some(format!(
+                "backendRef.port must be between {} and {}",
+                crate::gwapi_types::PORT_MIN,
+                crate::gwapi_types::PORT_MAX
+            )),
+            None => Some("backendRef.port is required for a Service reference".to_string()),
+            Some(_) => None,
+        }
+    }
 }
 
 /// Edgion-specific tuning knobs for the RequestMirror filter.
@@ -2087,6 +2171,32 @@ mod tests {
             "spec": spec
         }))
         .expect("route should deserialize")
+    }
+
+    #[test]
+    fn request_mirror_filter_type_and_config_must_match() {
+        let missing_config: HTTPRouteRule = serde_json::from_value(serde_json::json!({
+            "filters": [{"type": "RequestMirror"}]
+        }))
+        .expect("rule should deserialize");
+        assert_eq!(
+            missing_config.request_mirror_validation_error().as_deref(),
+            Some("filters[0] RequestMirror: requestMirror must be specified when filter.type is RequestMirror")
+        );
+
+        let unexpected_config: HTTPRouteRule = serde_json::from_value(serde_json::json!({
+            "filters": [{
+                "type": "URLRewrite",
+                "requestMirror": {
+                    "backendRef": {"name": "mirror", "port": 8080}
+                }
+            }]
+        }))
+        .expect("rule should deserialize");
+        assert_eq!(
+            unexpected_config.request_mirror_validation_error().as_deref(),
+            Some("filters[0] RequestMirror: requestMirror must be absent when filter.type is not RequestMirror")
+        );
     }
 
     #[test]

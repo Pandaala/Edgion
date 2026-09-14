@@ -48,11 +48,16 @@ Without a matching grant, the route reports `ResolvedRefs=False` with reason
 `RefNotPermitted`. Edgion skips the denied mirror, records `mirror ref denied`
 in the request's plugin log, and continues the primary request. The same rule
 applies to rule-level and backend-level mirror filters. Unsupported target
-groups or kinds are skipped and reported as `InvalidKind`.
+groups or kinds are rejected as invalid standard RequestMirror configuration;
+the owning rule follows the normal `PartiallyInvalid` behavior.
 
 Grant creation, modification and deletion trigger revalidation. The new decision
 applies to new requests after the updated configuration reaches the Gateway;
 already-started mirror tasks are not cancelled by grant revocation.
+
+A missing target Service sets `ResolvedRefs=False/BackendNotFound`. Service and
+EndpointSlice changes requeue the declaring route, so the condition and mirror
+configuration recover without an unrelated route edit when the target appears.
 
 ## Configuration
 
@@ -82,6 +87,13 @@ The filter accepts only the standard Gateway API fields:
 |-----------|------|---------|-------------|
 | `fraction.numerator` | Integer | none | Numerator of the mirrored fraction |
 | `fraction.denominator` | Integer | `100` | Denominator of the mirrored fraction |
+
+`fraction` and `percent` are mutually exclusive. A fraction denominator must be
+at least `1`, and its numerator must be between `0` and the denominator. The
+Service name must be non-empty and its port is required in `1..=65535`. These
+rules are enforced for file and etcd inputs as well as by Kubernetes admission.
+An invalid mirror drops its owning rule through the route's normal
+`PartiallyInvalid` behavior when another rule remains available.
 
 ### Tuning annotations
 

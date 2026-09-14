@@ -31,7 +31,10 @@ impl EndpointSliceHandler {
         let ns = eps.metadata.namespace.as_deref().unwrap_or("default");
         let service_key = format!("{ns}/{svc_name}");
 
-        let refs = ctx.runtime().service_ref_mgr.get_refs(&service_key);
+        let refs = crate::conf_mgr::sync_runtime::resource_processor::service_ref::service_event_refs(
+            &ctx.runtime().service_ref_mgr,
+            &service_key,
+        );
         if refs.is_empty() {
             return;
         }

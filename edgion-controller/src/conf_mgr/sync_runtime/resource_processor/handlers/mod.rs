@@ -263,7 +263,10 @@ pub(crate) async fn requeue_backend_policies_for_route(
     ctx: &HandlerContext,
 ) {
     let route_ref = ResourceRef::new(route_kind, Some(route_ns.to_string()), route_name.to_string());
-    let service_keys = ctx.runtime().service_ref_mgr.get_dependencies(&route_ref.key());
+    let service_keys = crate::conf_mgr::sync_runtime::resource_processor::service_ref::forwarding_service_dependencies(
+        &ctx.runtime().service_ref_mgr,
+        &route_ref.key(),
+    );
 
     for service_key in &service_keys {
         for btp_ref in btp_refs_for_service(&ctx.runtime().service_ref_mgr, service_key) {

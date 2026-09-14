@@ -28,7 +28,9 @@ pub struct RequestMirrorPluginConfig {
 
 impl PluginValidation for RequestMirrorPluginConfig {
     fn validation_error(&self) -> Option<String> {
-        self.tuning.resolve_limits().err()
+        self.filter
+            .validation_error()
+            .or_else(|| self.tuning.resolve_limits().err())
     }
 }
 
@@ -145,5 +147,76 @@ mod tests {
             2 * 1024 * 1024
         );
         assert_eq!(serde_json::to_value(config).unwrap()["maxBufferedBytes"], "2MiB");
+    }
+
+    #[test]
+    fn mirror_standard_field_validation_matrix() {
+        let validate = |config| {
+            let config: RequestMirrorPluginConfig = serde_json::from_value(config).unwrap();
+            config.validation_error()
+        };
+        for valid in [
+            serde_json::json!({"backendRef": {"name": "mirror", "port": 1}}),
+            serde_json::json!({"backendRef": {"name": "mirror", "port": 65535}, "fraction": {"numerator": 0, "denominator": 1}}),
+            serde_json::json!({"backendRef": {"name": "mirror", "port": 8080}, "fraction": {"numerator": 100}}),
+            serde_json::json!({"backendRef": {"name": "mirror", "port": 8080}, "percent": 0}),
+            serde_json::json!({"backendRef": {"name": "mirror", "port": 8080}, "percent": 100}),
+        ] {
+            assert_eq!(validate(valid), None);
+        }
+
+        for (invalid, expected) in [
+            (
+                serde_json::json!({"backendRef": {"name": "mirror", "port": 8080}, "fraction": {"numerator": 1}, "percent": 50}),
+                "only one of fraction or percent",
+            ),
+            (
+                serde_json::json!({"backendRef": {"name": "mirror", "port": 8080}, "fraction": {"numerator": 0, "denominator": 0}}),
+                "fraction.denominator",
+            ),
+            (
+                serde_json::json!({"backendRef": {"name": "mirror", "port": 8080}, "fraction": {"numerator": -1}}),
+                "fraction.numerator",
+            ),
+            (
+                serde_json::json!({"backendRef": {"name": "mirror", "port": 8080}, "fraction": {"numerator": 2, "denominator": 1}}),
+                "fraction.numerator",
+            ),
+            (
+                serde_json::json!({"backendRef": {"name": "mirror", "port": 8080}, "percent": -1}),
+                "percent",
+            ),
+            (
+                serde_json::json!({"backendRef": {"name": "mirror", "port": 8080}, "percent": 101}),
+                "percent",
+            ),
+            (
+                serde_json::json!({"backendRef": {"name": "", "port": 8080}}),
+                "backendRef.name",
+            ),
+            (
+                serde_json::json!({"backendRef": {"group": "example.io", "kind": "Foo", "name": "mirror", "port": 8080}}),
+                "core Service",
+            ),
+            (
+                serde_json::json!({"backendRef": {"kind": "ConfigMap", "name": "mirror", "port": 8080}}),
+                "core Service",
+            ),
+            (
+                serde_json::json!({"backendRef": {"name": "mirror"}}),
+                "backendRef.port is required",
+            ),
+            (
+                serde_json::json!({"backendRef": {"name": "mirror", "port": 0}}),
+                "backendRef.port",
+            ),
+            (
+                serde_json::json!({"backendRef": {"name": "mirror", "port": 65536}}),
+                "backendRef.port",
+            ),
+        ] {
+            let error = validate(invalid).expect("invalid mirror config");
+            assert!(error.contains(expected), "expected {expected:?} in {error:?}");
+        }
     }
 }

@@ -62,10 +62,15 @@ spec:
 
 A denied target sets `ResolvedRefs=False/RefNotPermitted` on EdgionPlugins.
 Edgion skips that mirror with `mirror ref denied` in the request's plugin log;
-the primary request continues. Unsupported target groups or kinds are skipped
-and reported as `InvalidKind`. Grant changes automatically revalidate the plugin.
+the primary request continues. Unsupported target groups or kinds are invalid
+standard configuration and set `Accepted=False/Invalid`. Grant changes
+automatically revalidate the plugin.
 New requests use the updated decision after configuration sync; already-started
 mirror tasks are not cancelled by revocation.
+
+A missing target Service sets `ResolvedRefs=False/BackendNotFound`. Service and
+EndpointSlice changes requeue the EdgionPlugins resource so status recovers when
+the target appears.
 
 If either the previous or incoming plugin configuration contains an enabled
 cross-namespace mirror permitted by the current GatewayClass
@@ -96,6 +101,12 @@ mirror denial only skips the mirror.
 | `mirrorLog` | Boolean | `true` | Emit a dedicated mirror line in the access log |
 | `maxConcurrent` | Integer | `1024` | Maximum concurrent tasks per plugin instance, `1..=65536`, subject to the shared process limit |
 | `channelFullTimeoutMs` | Integer | `0` | Max ms to wait for mirror channel space before abandoning the mirror. `0` = abandon immediately (zero impact on the main request) |
+
+`fraction` and `percent` are mutually exclusive. A fraction denominator must be
+at least `1`, its numerator must be between `0` and the denominator, and
+`percent` must be in `0..=100`. The core Service name must be non-empty and its
+port is required in `1..=65535`. Invalid standard fields set
+`Accepted=False/Invalid`; Controller and Gateway use the same validation text.
 
 Invalid capacities, including zero, are configuration errors in EdgionPlugins.
 The equivalent HTTPRoute annotations log invalid values at configuration loading

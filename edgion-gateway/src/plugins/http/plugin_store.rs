@@ -898,6 +898,26 @@ mod compile_plugins_tests {
         .unwrap()
     }
 
+    #[test]
+    fn request_mirror_standard_validation_has_controller_gateway_parity() {
+        let resource: EdgionPlugins = serde_json::from_value(serde_json::json!({
+            "apiVersion": "edgion.io/v1", "kind": "EdgionPlugins",
+            "metadata": {"name": "invalid-mirror", "namespace": "default"},
+            "spec": {"requestPlugins": [{"type": "RequestMirror", "config": {
+                "backendRef": {"name": "shadow", "port": 8080},
+                "fraction": {"numerator": 1}, "percent": 50
+            }}]}
+        }))
+        .unwrap();
+
+        let controller_errors = resource.validate_plugins();
+        let compiled = compile_plugins(&resource);
+        assert_eq!(compiled.preparse_errors, controller_errors);
+        assert_eq!(compiled.preparse_errors.len(), 1);
+        assert!(compiled.preparse_errors[0].contains("only one of fraction or percent"));
+        assert!(!compiled.is_activatable);
+    }
+
     #[tokio::test]
     async fn ai_ordering_invalid_generation_rejects_once_before_request_plugins() {
         for types in [

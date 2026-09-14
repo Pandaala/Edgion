@@ -159,13 +159,32 @@ impl HttpRouteHandler {
             backend_refs_list.push((group.as_deref(), kind.as_deref(), namespace.as_deref(), name.as_str()));
         }
 
-        super::route_utils::register_service_backend_refs(
+        let dropped = super::route_utils::register_service_backend_refs(
             ResourceKind::HTTPRoute,
             route_ns,
             route_name,
             &backend_refs_list,
             ctx.runtime(),
-        )
+        );
+        // Keep the owner identity identical to register_service_backend_refs()
+        // and clear_service_backend_refs(). File input can omit namespace;
+        // namespaced route semantics normalize that case to "default".
+        let owner = ResourceRef::new(
+            ResourceKind::HTTPRoute,
+            Some(route_ns.to_string()),
+            route_name.to_string(),
+        );
+        super::request_mirror::register_service_refs(
+            &owner,
+            route_ns,
+            route
+                .effective_rules()
+                .into_iter()
+                .flatten()
+                .flat_map(super::request_mirror::refs),
+            ctx.runtime(),
+        );
+        dropped
     }
 
     /// Record cross-namespace references from backend_refs.
@@ -697,6 +716,7 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
                 .into_iter()
                 .flatten()
                 .flat_map(super::request_mirror::refs),
+            _ctx.runtime(),
         ));
         let ref_denied_list = collect_ref_denied_list(route);
         resolved_refs_errors.extend(super::route_utils::collect_ref_denied_errors(
@@ -1396,6 +1416,7 @@ fn backend_waf_ownership_errors(
 /// - It has conflicting URLRewrite + RequestRedirect filters (rule-level, per-backendRef, or cross-level)
 /// - It has backendRef-scoped CORS, or malformed rule-level CORS (missing `cors:` block or invalid origin)
 /// - It has malformed or repeated native header modifiers in a rule or backend filter list
+/// - It has invalid standard RequestMirror fields
 /// - It has an ExtensionRef filter targeting an unsupported kind (only EdgionPlugins is supported)
 ///
 /// The reason string is rendered into the `PartiallyInvalid` condition message
@@ -1419,6 +1440,10 @@ pub(crate) fn find_invalid_rule_details(route: &HTTPRoute, _route_ns: &str) -> V
             continue;
         }
         if let Some(reason) = invalid_cors_reason(rule) {
+            details.push((idx, reason));
+            continue;
+        }
+        if let Some(reason) = rule.request_mirror_validation_error() {
             details.push((idx, reason));
             continue;
         }
@@ -3318,6 +3343,45 @@ spec:
             "rewrite/redirect reason text must mention both filters; got: {}",
             details[0].1
         );
+    }
+
+    #[test]
+    fn invalid_request_mirror_fields_drop_only_the_owning_rules() {
+        let route: HTTPRoute = serde_json::from_value(serde_json::json!({
+            "apiVersion": "gateway.networking.k8s.io/v1",
+            "kind": "HTTPRoute",
+            "metadata": {"name": "mirrors", "namespace": "default"},
+            "spec": {"parentRefs": [{"name": "gateway"}], "rules": [
+                {"filters": [{"type": "RequestMirror", "requestMirror": {
+                    "backendRef": {"name": "shadow", "port": 8080},
+                    "fraction": {"numerator": 1}, "percent": 50
+                }}]},
+                {"backendRefs": [{"name": "primary", "port": 8080, "filters": [
+                    {"type": "RequestMirror", "requestMirror": {
+                        "backendRef": {"name": "shadow"}
+                    }}
+                ]}]},
+                {"filters": [{"type": "RequestMirror", "requestMirror": {
+                    "backendRef": {"name": "shadow", "port": 8080}, "percent": 100
+                }}]}
+            ]}
+        }))
+        .unwrap();
+
+        let details = find_invalid_rule_details(&route, "default");
+        assert_eq!(indices_only(details.clone()), vec![0, 1]);
+        assert!(details[0].1.contains("only one of fraction or percent"));
+        assert!(details[1].1.contains("backendRef.port is required"));
+
+        let mut route = route;
+        HttpRouteHandler::default().update_status(&mut route, &make_ctx(), &[]);
+        assert_eq!(route.spec.invalid_rule_indices.as_deref(), Some(&[0, 1][..]));
+        let conditions = &route.status.as_ref().unwrap().parents[0].conditions;
+        assert!(conditions.iter().any(|condition| {
+            condition.type_ == "PartiallyInvalid"
+                && condition.status == "True"
+                && condition.message.contains("1 of 3 rules active")
+        }));
     }
 }
 

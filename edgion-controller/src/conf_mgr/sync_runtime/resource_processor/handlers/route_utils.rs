@@ -453,7 +453,13 @@ pub fn register_service_backend_refs(
 
     // Snapshot the Services this route referenced before this reconcile so the
     // caller can requeue BTPs bound to any Service dropped from backendRefs.
-    let old_service_keys: HashSet<String> = manager.get_dependencies(&resource_ref.key()).into_iter().collect();
+    let old_service_keys: HashSet<String> =
+        crate::conf_mgr::sync_runtime::resource_processor::service_ref::forwarding_service_dependencies(
+            manager,
+            &resource_ref.key(),
+        )
+        .into_iter()
+        .collect();
 
     manager.clear_resource_refs(&resource_ref);
 

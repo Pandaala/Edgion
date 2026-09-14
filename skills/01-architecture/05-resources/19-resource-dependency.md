@@ -27,6 +27,7 @@ flowchart LR
 
     subgraph ServiceDeps
         Service -- "on_change requeue\nServiceRefManager registrants" --> Routes["Route family\n(HTTP/GRPC/TCP/TLS/UDP)"]
+        Service -- "RequestMirror target\nService / EndpointSlice requeue" --> MirrorPlugins[EdgionPlugins]
         Service -- "backendRef\nclusterIP" --> Gateway3["Gateway\n(derives status address)"]
     end
 
@@ -64,7 +65,7 @@ flowchart LR
 | **NamespaceStore** | K8s Namespace informer | Route family (allowedRoutes Selector) |
 | **ReferenceGrantStore** | ReferenceGrantHandler | Gateway, Route family (cross-ns authorization) |
 | **SecretRefManager** | Gateway/EdgionTls/EdgionPlugins/BackendTLSPolicy/EdgionAcme/EdgionBackend (register during parse) | SecretHandler/ConfigMapHandler (look up dependents on on_change) |
-| **ServiceRefManager** | Route family (register backends during parse) | ServiceHandler (look up dependents on on_change), BackendTLSPolicy (read in resolve_ancestor_gateways) |
+| **ServiceRefManager** | Route family (register forwarding and mirror targets during parse), EdgionPlugins (register enabled mirror targets during parse) | ServiceHandler and EndpointSliceHandler (look up dependents on apply/delete), BackendTLSPolicy (read forwarding-only keys in resolve_ancestor_gateways) |
 | **CrossNsRefManager** | Gateway / Route family (register cross-ns references during parse) | ReferenceGrantHandler (look up dependents on on_change) |
 | **EdgionConfigDataRefManager** | Gateway and plugin resources (clear-before-add during parse) | EdgionConfigData handler (requeue dependents on apply/delete) |
 | **ProxyProtocolListenerPolicyManager** | Gateway (atomic whole-Gateway contribution replacement) | Gateway handler (requeue only peers affected by a net physical-listener declaration change) |

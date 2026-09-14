@@ -289,6 +289,7 @@ impl ProcessorHandler<EdgionPlugins> for EdgionPluginsHandler {
 
         ctx.secret_ref_manager().clear_resource_refs(&resource_ref);
         ctx.runtime().link_sys_ref_mgr.clear_resource_refs(&resource_ref);
+        ctx.runtime().service_ref_mgr.clear_resource_refs(&resource_ref);
         ctx.runtime()
             .credential_source_registry
             .remove_consumer(&resource_ref.resource_key());
@@ -386,6 +387,23 @@ impl ProcessorHandler<EdgionPlugins> for EdgionPluginsHandler {
                 });
             }
         }
+        super::request_mirror::register_service_refs(
+            &resource_ref,
+            &ns,
+            ep.spec
+                .request_plugins
+                .iter()
+                .flatten()
+                .filter(|entry| entry.is_enabled())
+                .filter_map(|entry| {
+                    if let EdgionPlugin::RequestMirror(config) = &entry.plugin {
+                        Some(&config.filter.backend_ref)
+                    } else {
+                        None
+                    }
+                }),
+            ctx.runtime(),
+        );
 
         // Two ordered passes over every Condition tree: ConfigData expansion
         // (resolved_profiles / resolved_candidates / ipRefs) then credentials
@@ -407,6 +425,7 @@ impl ProcessorHandler<EdgionPlugins> for EdgionPluginsHandler {
         );
         ctx.secret_ref_manager().clear_resource_refs(&resource_ref);
         ctx.runtime().link_sys_ref_mgr.clear_resource_refs(&resource_ref);
+        ctx.runtime().service_ref_mgr.clear_resource_refs(&resource_ref);
         ctx.runtime()
             .credential_source_registry
             .forget_consumer(&resource_ref.resource_key());
@@ -470,6 +489,7 @@ impl ProcessorHandler<EdgionPlugins> for EdgionPluginsHandler {
                         None
                     }
                 }),
+            ctx.runtime(),
         ));
         dedup_resolved_ref_errors(&mut resolved_errors);
         let resolved_refs = if resolved_errors.is_empty() {

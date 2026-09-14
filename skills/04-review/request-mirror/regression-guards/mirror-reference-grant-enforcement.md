@@ -25,8 +25,8 @@ references require no grant; the existing Controller-global validation switch
 continues to control cross-namespace authorization.
 
 Mirror selection supports only core Service targets (`group: ""`, default
-`kind: Service`). Unsupported groups/kinds are reported as `InvalidKind` and
-skipped before selection, so granting a different resource cannot authorize a
+`kind: Service`). Unsupported groups/kinds fail shared standard validation and
+are not published for selection, so granting a different resource cannot authorize a
 same-named Service. This does not expand the mirror's backend capabilities.
 
 ## Rationale and evidence
@@ -91,10 +91,10 @@ mirrors permits the wrong namespace to authorize a child's traffic destination.
 Grant revocation applies to new requests after the updated configuration reaches
 the Gateway. Already-started mirror tasks retain their request snapshot and are
 not cancelled retroactively. This task does not add an immediate revocation fence,
-mirror BackendTLSPolicy support, or new load-balancing policy behavior. Missing
-mirror Service status remains a separate unresolved defect; existing
-endpoint-resolution failures still skip the mirror. Port-status
-completeness is not claimed by this authorization correction.
+mirror BackendTLSPolicy support, or new load-balancing policy behavior.
+Standard field validation and missing-Service status are separate from this
+authorization rule and are covered by
+[standard validation and Service dependency lifecycle](mirror-standard-validation-and-service-status.md).
 
 ## Verification and re-evaluation
 

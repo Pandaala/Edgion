@@ -17,6 +17,7 @@ before applying a decision to current code.
 ## Regression guards
 
 - [Mirror backend ReferenceGrant enforcement](regression-guards/mirror-reference-grant-enforcement.md)
+- [Standard validation and Service dependency lifecycle](regression-guards/mirror-standard-validation-and-service-status.md)
 
 - [Unit tests isolate the writer transport](regression-guards/unit-tests-without-network.md)
 - [Shared concurrency and retained body budgets](regression-guards/mirror-resource-budgets.md)
