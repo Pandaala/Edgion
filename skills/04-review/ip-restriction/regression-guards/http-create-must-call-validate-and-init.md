@@ -18,7 +18,7 @@ default action. Fixed by `fr-types-01` (2026-05-29).
 for inline `allow`/`deny` group compilation. Individual bad CIDR entries are **skipped** (not
 fatal), so a bad CIDR no longer triggers `init_failed`. The plugin loads with the valid entries.
 `init_failed` is now only set by structural failures: both `allow` and `deny` absent/empty with
-no `allowRefs`/`denyRefs`, or an invalid `status` code (100–599 range). Bad entries surface as
+no `allowRefs`/`denyRefs`, or an invalid final `status` code (200–599 range). Bad entries surface as
 `PartiallyInvalid` status condition + `edgion_ip_deny_entries_skipped_total{scope="http"}` metric
 (for skipped deny entries). Fix suggestions of the form "bad inline CIDR drives HTTP IpRestriction
 to `init_failed`/deny-all" are **no longer correct** — verify the `build_grouped_matcher_partial`
@@ -87,3 +87,4 @@ Re-open only if:
   (data-plane `clone → validate_and_init → init_failed` constructors).
 - Source: `edgion-gateway/src/plugins/http/ip_restriction/plugin.rs` (`IpRestriction::create`, `run_request`),
   `edgion-gateway/src/plugins/stream/tls_route/ip_restriction.rs` (`TlsRouteIpRestriction::new`).
+- Final-status validation: [`request-local-reply-final-status-validation.md`](../../resources/regression-guards/request-local-reply-final-status-validation.md).

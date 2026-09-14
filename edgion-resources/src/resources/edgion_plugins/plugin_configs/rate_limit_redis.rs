@@ -185,7 +185,7 @@ pub struct RateLimitRedisConfig {
 
     /// HTTP status code for rejected requests (default: 429)
     #[serde(default = "default_reject_status")]
-    #[schemars(range(min = 100, max = 599))]
+    #[schemars(range(min = 200, max = 599))]
     pub reject_status: u16,
 
     /// Custom rejection message (JSON body)
@@ -352,7 +352,7 @@ impl RateLimitRedisConfig {
             }
         }
 
-        if self.reject_status < 100 || self.reject_status >= 600 {
+        if !crate::http_status::is_valid_final_http_status(self.reject_status) {
             return Some(format!("Invalid reject_status: {}", self.reject_status));
         }
 
@@ -466,8 +466,11 @@ mod tests {
 
     #[test]
     fn test_valid_config() {
-        let mut config = create_valid_config();
-        assert!(config.validate().is_ok());
+        for reject_status in [200, 599] {
+            let mut config = create_valid_config();
+            config.reject_status = reject_status;
+            assert!(config.validate().is_ok(), "{reject_status}");
+        }
     }
 
     #[test]
@@ -718,10 +721,20 @@ keyPrefix: "myapp:rl:"
 
     #[test]
     fn test_invalid_reject_status() {
-        let mut config = create_valid_config();
-        config.reject_status = 600;
-        let err = config.validate().unwrap_err();
-        assert!(err.contains("reject_status"));
+        for reject_status in [100, 101, 199, 600] {
+            let mut config = create_valid_config();
+            config.reject_status = reject_status;
+            let err = config.validate().unwrap_err();
+            assert!(err.contains("reject_status"), "{reject_status}: {err}");
+        }
+    }
+
+    #[test]
+    fn reject_status_schema_matches_final_response_range() {
+        let schema = serde_json::to_value(schemars::schema_for!(RateLimitRedisConfig)).unwrap();
+        let status = &schema["properties"]["rejectStatus"];
+        assert_eq!(status["minimum"].as_u64(), Some(200));
+        assert_eq!(status["maximum"].as_u64(), Some(599));
     }
 
     #[test]

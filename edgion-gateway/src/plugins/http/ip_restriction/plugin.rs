@@ -237,7 +237,7 @@ impl RequestFilter for IpRestriction {
         };
 
         if should_deny {
-            // `self.status` is validated in range 100..600 by IpRestrictionConfig::validate_and_init,
+            // `self.status` is validated as a final 200..=599 response by IpRestrictionConfig::validate_and_init,
             // so the helper's ResponseHeader::build never fails here in practice.
             if let Err(_e) =
                 send_gateway_plain_error_response(session, self.status, "application/json", self.deny_body.clone())

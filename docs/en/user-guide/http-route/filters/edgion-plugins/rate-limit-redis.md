@@ -92,7 +92,7 @@ spec:
 | `key` | Array\<Object\> | `[{type: remoteIp}]` | Rate limiting dimension list. A single key is used verbatim; multiple keys are length-prefixed and joined with `_`. See Key Configuration below |
 | `onKeyMiss` | Enum | `Allow` | Behavior when key cannot be extracted. Values: `Allow` \| `Deny` |
 | `defaultKey` | String | none | Default key value when extraction fails, takes precedence over `onKeyMiss` |
-| `rejectStatus` | Integer | `429` | HTTP status code on rejection (100–599) |
+| `rejectStatus` | Integer | `429` | Final HTTP status code on rejection (200–599) |
 | `rejectMessage` | String | none | JSON response body on rejection |
 | `showLimitHeaders` | Boolean | `true` | Whether to return rate limit response headers |
 | `headerNames` | Object | none | Custom response header names. See HeaderNames Configuration below |

@@ -41,7 +41,7 @@ spec:
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `statusCode` | Integer | `200` | HTTP 状态码。有效范围：`100`–`599` |
+| `statusCode` | Integer | `200` | 最终 HTTP 状态码。有效范围：`200`–`599` |
 | `body` | String | 无 | 响应体内容（JSON、XML、纯文本等） |
 | `headers` | Object | 无 | 自定义响应头，以键值对形式表示；名称和值必须符合 HTTP 响应头语法 |
 | `contentType` | String | `"application/json"` | 合法的 `Content-Type` 响应头值 |

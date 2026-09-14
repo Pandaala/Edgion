@@ -154,7 +154,8 @@ impl RateLimitLocal {
 
     /// Build rejection response
     async fn reject_request(&self, session: &mut dyn PluginSession, retry_after: Duration) -> PluginRunningResult {
-        // invariant: 429 is a compile-time-literal HTTP status code; ResponseHeader::build cannot fail.
+        // Resource validation restricts reject_status to final 200..=599 values;
+        // 429 remains a defensive fallback if that invariant is ever bypassed.
         let mut resp = Box::new(
             ResponseHeader::build(self.config.reject_status, None)
                 .unwrap_or_else(|_| ResponseHeader::build(429, None).expect("429 is valid")),

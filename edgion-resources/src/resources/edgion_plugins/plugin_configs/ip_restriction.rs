@@ -75,7 +75,7 @@ pub struct IpRestrictionConfig {
 
     /// HTTP status code for rejection (default: 403)
     #[serde(default = "default_status")]
-    #[schemars(range(min = 100, max = 599))]
+    #[schemars(range(min = 200, max = 599))]
     pub status: u16,
 
     /// Default action when no rules match (default: Allow)
@@ -172,7 +172,7 @@ impl IpRestrictionConfig {
             return Err("At least one of 'allow'/'deny' or 'allowRefs'/'denyRefs' must be non-empty".to_string());
         }
 
-        if self.status < 100 || self.status >= 600 {
+        if !crate::http_status::is_valid_final_http_status(self.status) {
             return Err(format!("Invalid status code: {}", self.status));
         }
 
@@ -306,24 +306,28 @@ mod validation_trait_tests {
 
     #[test]
     fn validation_error_valid_status_200() {
-        let config = IpRestrictionConfig {
-            allow: Some(vec![group("default", &["192.168.1.1"])]),
-            status: 200,
-            ..Default::default()
-        };
-        let result = PluginValidation::validation_error(&config);
-        assert!(result.is_none());
+        for status in [200, 599] {
+            let config = IpRestrictionConfig {
+                allow: Some(vec![group("default", &["192.168.1.1"])]),
+                status,
+                ..Default::default()
+            };
+            let result = PluginValidation::validation_error(&config);
+            assert!(result.is_none(), "{status}");
+        }
     }
 
     #[test]
-    fn validation_error_status_600() {
-        let config = IpRestrictionConfig {
-            allow: Some(vec![group("default", &["192.168.1.1"])]),
-            status: 600,
-            ..Default::default()
-        };
-        let result = PluginValidation::validation_error(&config);
-        assert_eq!(result, Some("Invalid status code: 600".to_string()));
+    fn validation_error_rejects_non_final_statuses() {
+        for status in [100, 101, 199, 600] {
+            let config = IpRestrictionConfig {
+                allow: Some(vec![group("default", &["192.168.1.1"])]),
+                status,
+                ..Default::default()
+            };
+            let result = PluginValidation::validation_error(&config);
+            assert_eq!(result, Some(format!("Invalid status code: {status}")));
+        }
     }
 
     #[test]
@@ -342,7 +346,7 @@ mod validation_trait_tests {
     fn status_field_has_range_in_json_schema() {
         let schema = serde_json::to_value(schemars::schema_for!(IpRestrictionConfig)).unwrap();
         let props = &schema["properties"]["status"];
-        assert_eq!(props["minimum"].as_f64(), Some(100.0), "status minimum should be 100");
+        assert_eq!(props["minimum"].as_f64(), Some(200.0), "status minimum should be 200");
         assert_eq!(props["maximum"].as_f64(), Some(599.0), "status maximum should be 599");
     }
 }
@@ -358,7 +362,7 @@ impl PluginValidation for IpRestrictionConfig {
         if !any_allow && !any_deny {
             return Some("At least one of 'allow'/'deny' or 'allowRefs'/'denyRefs' must be non-empty".to_string());
         }
-        if self.status < 100 || self.status >= 600 {
+        if !crate::http_status::is_valid_final_http_status(self.status) {
             return Some(format!("Invalid status code: {}", self.status));
         }
         if let Some(refs) = &self.allow_refs {
@@ -417,14 +421,16 @@ mod tests {
 
     #[test]
     fn test_invalid_status_code() {
-        let mut config = IpRestrictionConfig {
-            allow: Some(vec![group("default", &["192.168.1.1"])]),
-            status: 999,
-            ..Default::default()
-        };
-        let result = config.validate_and_init();
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("Invalid status code"));
+        for status in [100, 101, 199, 600] {
+            let mut config = IpRestrictionConfig {
+                allow: Some(vec![group("default", &["192.168.1.1"])]),
+                status,
+                ..Default::default()
+            };
+            let result = config.validate_and_init();
+            assert!(result.is_err(), "{status}");
+            assert!(result.unwrap_err().contains("Invalid status code"));
+        }
     }
 
     #[test]

@@ -2974,4 +2974,88 @@ mod compile_plugins_tests {
             );
         }
     }
+
+    #[test]
+    fn request_local_reply_status_validation_matches_controller_and_gateway() {
+        for status in [100, 101, 199, 200, 599] {
+            let cases = vec![
+                ("FaultInjection", serde_json::json!({"abort": {"statusCode": status}})),
+                ("Mock", serde_json::json!({"statusCode": status})),
+                (
+                    "RequestAccessPolicy",
+                    serde_json::json!({
+                        "defaultProfile": "default",
+                        "profiles": {
+                            "default": {
+                                "requiredRuleGroups": [{
+                                    "name": "source",
+                                    "anyOfRules": [{
+                                        "name": "loopback",
+                                        "type": "directPeerIp",
+                                        "config": {"ips": ["127.0.0.1"]}
+                                    }]
+                                }]
+                            }
+                        },
+                        "status": status
+                    }),
+                ),
+                ("RateLimitLocal", serde_json::json!({"rate": 1, "rejectStatus": status})),
+                (
+                    "RateLimitRedis",
+                    serde_json::json!({
+                        "redisRef": "default/redis",
+                        "policies": [{"rate": 1, "interval": "1s"}],
+                        "rejectStatus": status
+                    }),
+                ),
+                (
+                    "IpRestriction",
+                    serde_json::json!({
+                        "allow": [{"name": "loopback", "cidrs": ["127.0.0.1"]}],
+                        "status": status
+                    }),
+                ),
+                (
+                    "RequestRestriction",
+                    serde_json::json!({
+                        "mode": "Deny",
+                        "conditions": {
+                            "allOf": [{
+                                "type": "keyMatch",
+                                "key": {"type": "method"},
+                                "values": ["POST"]
+                            }]
+                        },
+                        "status": status
+                    }),
+                ),
+            ];
+
+            for (kind, config) in cases {
+                let plugin: EdgionPlugin = serde_json::from_value(serde_json::json!({
+                    "type": kind,
+                    "config": config
+                }))
+                .unwrap();
+                let resource = EdgionPlugins {
+                    metadata: Default::default(),
+                    spec: EdgionPluginsSpec {
+                        request_plugins: Some(vec![RequestFilterEntry::new(plugin)]),
+                        ..Default::default()
+                    },
+                    status: None,
+                };
+
+                let controller_errors = resource.validate_plugins();
+                let gateway_errors = compile_plugins(&resource).preparse_errors.clone();
+                assert_eq!(gateway_errors, controller_errors, "{kind} status {status}");
+                assert_eq!(
+                    controller_errors.is_empty(),
+                    edgion_resources::http_status::is_valid_final_http_status(status),
+                    "{kind} status {status}: {controller_errors:?}"
+                );
+            }
+        }
+    }
 }

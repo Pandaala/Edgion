@@ -273,7 +273,7 @@ pub struct RateLimitLocalConfig {
 
     /// HTTP status code for rejected requests (default: 429)
     #[serde(default = "default_reject_status")]
-    #[schemars(range(min = 100, max = 599))]
+    #[schemars(range(min = 200, max = 599))]
     pub reject_status: u16,
 
     /// Custom rejection message
@@ -485,7 +485,7 @@ impl RateLimitLocalConfig {
         }
 
         // Validate reject_status
-        if self.reject_status < 100 || self.reject_status >= 600 {
+        if !crate::http_status::is_valid_final_http_status(self.reject_status) {
             return Some(format!("Invalid reject_status: {}", self.reject_status));
         }
 
@@ -629,6 +629,24 @@ mod tests {
         };
         config.validate().expect("validate should succeed");
         assert_eq!(config.get_interval_duration(), Duration::from_secs(1));
+    }
+
+    #[test]
+    fn reject_status_uses_final_response_range() {
+        for reject_status in [100, 101, 199, 600] {
+            let config = RateLimitLocalConfig {
+                reject_status,
+                ..Default::default()
+            };
+            assert!(config.validation_error().is_some(), "{reject_status}");
+        }
+        for reject_status in [200, 599] {
+            let config = RateLimitLocalConfig {
+                reject_status,
+                ..Default::default()
+            };
+            assert!(config.validation_error().is_none(), "{reject_status}");
+        }
     }
 
     #[test]
@@ -1080,8 +1098,8 @@ mod validation_trait_tests {
         let props = &schema["properties"]["rejectStatus"];
         assert_eq!(
             props["minimum"].as_f64(),
-            Some(100.0),
-            "rejectStatus minimum should be 100"
+            Some(200.0),
+            "rejectStatus minimum should be 200"
         );
         assert_eq!(
             props["maximum"].as_f64(),

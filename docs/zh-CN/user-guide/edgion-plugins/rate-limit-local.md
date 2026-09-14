@@ -51,7 +51,7 @@ spec:
 | `skewTolerance` | Float | `1.2` | 流量倾斜容忍度（仅 Cluster 模式生效，范围 1.0~2.0） |
 | `onKeyMiss` | Enum | `Allow` | key 无法提取时的行为。可选值：`Allow` | `Deny` |
 | `defaultKey` | String | 无 | key 无法提取时使用的默认 key |
-| `rejectStatus` | Integer | `429` | 拒绝请求时的 HTTP 状态码（100~599） |
+| `rejectStatus` | Integer | `429` | 拒绝请求时的最终 HTTP 状态码（200–599） |
 | `rejectMessage` | String | `"Rate limit exceeded"` | 拒绝请求时的响应消息 |
 | `showLimitHeaders` | Boolean | `true` | 是否在响应中添加限流头 |
 | `headerNames` | Object | 无 | 自定义限流响应头名称 |

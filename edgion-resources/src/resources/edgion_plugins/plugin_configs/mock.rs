@@ -21,8 +21,9 @@ use std::collections::{HashMap, HashSet};
 pub struct MockConfig {
     /// HTTP status code to return (default: 200)
     ///
-    /// Valid range: 100-599
+    /// Valid range: 200-599
     #[serde(default = "default_status_code")]
+    #[schemars(range(min = 200, max = 599))]
     pub status_code: u16,
 
     /// Response body content
@@ -95,9 +96,9 @@ impl Default for MockConfig {
 impl MockConfig {
     /// Validate the configuration
     pub fn validate(&self) -> Result<(), String> {
-        if self.status_code < 100 || self.status_code >= 600 {
+        if !crate::http_status::is_valid_final_http_status(self.status_code) {
             return Err(format!(
-                "Invalid status code: {}. Must be between 100 and 599",
+                "Invalid status code: {}. Must be between 200 and 599",
                 self.status_code
             ));
         }
@@ -208,27 +209,33 @@ mod tests {
 
     #[test]
     fn test_validate_success() {
-        let config = MockConfig {
-            headers: headers(&[("X-Mock", "yes"), ("Cache-Control", "no-cache")]),
-            content_type: "application/json; charset=utf-8".to_string(),
-            ..MockConfig::new(200, "OK".to_string())
-        };
-        assert!(config.validate().is_ok());
+        for status_code in [200, 599] {
+            let config = MockConfig {
+                headers: headers(&[("X-Mock", "yes"), ("Cache-Control", "no-cache")]),
+                content_type: "application/json; charset=utf-8".to_string(),
+                ..MockConfig::new(status_code, "OK".to_string())
+            };
+            assert!(config.validate().is_ok(), "{status_code}");
+        }
     }
 
     #[test]
     fn test_validate_invalid_status() {
-        let config = MockConfig {
-            status_code: 99,
-            ..Default::default()
-        };
-        assert!(config.validate().is_err());
+        for status_code in [100, 101, 199, 600] {
+            let config = MockConfig {
+                status_code,
+                ..Default::default()
+            };
+            assert!(config.validate().is_err(), "{status_code}");
+        }
+    }
 
-        let config = MockConfig {
-            status_code: 600,
-            ..Default::default()
-        };
-        assert!(config.validate().is_err());
+    #[test]
+    fn status_code_schema_matches_final_response_range() {
+        let schema = serde_json::to_value(schemars::schema_for!(MockConfig)).unwrap();
+        let status = &schema["properties"]["statusCode"];
+        assert_eq!(status["minimum"].as_u64(), Some(200));
+        assert_eq!(status["maximum"].as_u64(), Some(599));
     }
 
     #[test]
@@ -318,7 +325,7 @@ mod tests {
         };
         assert_eq!(
             config.validate().unwrap_err(),
-            "Invalid status code: 99. Must be between 100 and 599"
+            "Invalid status code: 99. Must be between 200 and 599"
         );
 
         config.status_code = 200;

@@ -59,7 +59,7 @@ filters:
 | `allowRefs` | Array\<Object\> | none | References to central `IpList` EdgionConfigData whose CIDRs merge into the allowlist. Each ref is `{name, namespace?}`; `namespace` defaults to the resource's namespace. Configuring any `allowRefs` puts the plugin in whitelist mode. A missing or disabled IpList fails closed (deny-all) and is reported via `ResolvedRefs=False`. |
 | `denyRefs` | Array\<Object\> | none | Same as `allowRefs` but merges into the denylist. A missing or disabled IpList under-blocks (still reported via `ResolvedRefs=False`). |
 | `ipSource` | Enum | `RemoteIp` | IP source. `RemoteIp`: reads the resolved client identity (pre-processed by the RealIp plugin or global `spec.realIp`; falls back to the effective L4 remote IP when neither is configured). `DirectPeerIp`: always the physical transport peer address. |
-| `status` | Integer | `403` | HTTP status code returned when denied (100..=599). |
+| `status` | Integer | `403` | Final HTTP status code returned when denied (200–599). |
 | `message` | String | none | Custom message returned when denied. |
 | `defaultAction` | Enum | `allow` | Action when an IP matches no rule. Allowed values: `allow` / `deny`. |
 

@@ -51,7 +51,7 @@ spec:
 | `skewTolerance` | Float | `1.2` | Traffic skew tolerance (Cluster mode only, range 1.0~2.0) |
 | `onKeyMiss` | Enum | `Allow` | Behavior when key cannot be extracted. Values: `Allow` | `Deny` |
 | `defaultKey` | String | none | Default key when extraction fails |
-| `rejectStatus` | Integer | `429` | HTTP status code on rejection (100~599) |
+| `rejectStatus` | Integer | `429` | Final HTTP status code on rejection (200–599) |
 | `rejectMessage` | String | `"Rate limit exceeded"` | Response message on rejection |
 | `showLimitHeaders` | Boolean | `true` | Whether to add rate limiting headers to the response |
 | `headerNames` | Object | none | Custom rate limiting response header names |

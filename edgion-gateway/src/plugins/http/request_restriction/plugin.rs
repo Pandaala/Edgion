@@ -148,9 +148,9 @@ impl RequestFilter for RequestRestriction {
                 plugin_log.push("Deny (no allow alternative matched)");
             }
 
-            // invariant: `check_fields` enforces 100 <= status < 600 before the plugin is
-            // built, and a failed validation short-circuits above, so the helper's
-            // `ResponseHeader::build` cannot fail on the configured status.
+            // Invariant: resource validation accepts only final statuses in
+            // 200..=599 before the plugin is built, so the response helper can
+            // construct the configured status.
             if let Err(_e) =
                 send_gateway_plain_error_response(session, policy.status, "application/json", policy.deny_body.clone())
                     .await

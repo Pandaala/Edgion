@@ -49,7 +49,7 @@ pub struct RequestAccessPolicyConfig {
 
     /// HTTP status returned when access is denied.
     #[serde(default = "default_status")]
-    #[schemars(range(min = 100, max = 599))]
+    #[schemars(range(min = 200, max = 599))]
     pub status: u16,
 
     /// Optional denial body.
@@ -248,7 +248,7 @@ impl RequestAccessPolicyConfig {
                 self.default_profile
             ));
         }
-        if !(100..600).contains(&self.status) {
+        if !crate::http_status::is_valid_final_http_status(self.status) {
             return Err(format!("requestAccessPolicy: invalid status code: {}", self.status));
         }
         Ok(())
@@ -476,6 +476,25 @@ mod tests {
     #[test]
     fn validates_required_group_model() {
         assert!(config().validate_and_init().is_ok());
+    }
+
+    #[test]
+    fn status_uses_final_response_range() {
+        for status in [100, 101, 199, 600] {
+            let mut value = config();
+            value.status = status;
+            assert!(value.validate_and_init().is_err(), "{status}");
+        }
+        for status in [200, 599] {
+            let mut value = config();
+            value.status = status;
+            assert!(value.validate_and_init().is_ok(), "{status}");
+        }
+
+        let schema = serde_json::to_value(schemars::schema_for!(RequestAccessPolicyConfig)).unwrap();
+        let status = &schema["properties"]["status"];
+        assert_eq!(status["minimum"].as_u64(), Some(200));
+        assert_eq!(status["maximum"].as_u64(), Some(599));
     }
 
     #[test]

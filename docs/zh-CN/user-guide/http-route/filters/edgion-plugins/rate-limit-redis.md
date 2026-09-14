@@ -92,7 +92,7 @@ spec:
 | `key` | Array\<Object\> | `[{type: remoteIp}]` | 限流维度列表。单个 key 原样使用，多个 key 带长度前缀后用 `_` 拼接，见下方 Key 配置 |
 | `onKeyMiss` | Enum | `Allow` | key 缺失时的行为。可选值：`Allow` \| `Deny` |
 | `defaultKey` | String | 无 | key 缺失时的默认值，优先于 `onKeyMiss` |
-| `rejectStatus` | Integer | `429` | 拒绝时的 HTTP 状态码（100–599） |
+| `rejectStatus` | Integer | `429` | 拒绝时的最终 HTTP 状态码（200–599） |
 | `rejectMessage` | String | 无 | 拒绝时的 JSON 响应体 |
 | `showLimitHeaders` | Boolean | `true` | 是否返回限流响应头 |
 | `headerNames` | Object | 无 | 自定义响应头名称，见下方 HeaderNames 配置 |

@@ -112,7 +112,7 @@ pub struct RequestRestrictionConfig {
 
     /// HTTP status code for rejection (default: 403).
     #[serde(default = "default_status")]
-    #[schemars(range(min = 100, max = 599))]
+    #[schemars(range(min = 200, max = 599))]
     pub status: u16,
 
     /// Custom rejection message.
@@ -173,7 +173,7 @@ impl RequestRestrictionConfig {
         if self.mode.is_none() {
             return Err("mode must be specified (Deny | Allow)".to_string());
         }
-        if self.status < 100 || self.status >= 600 {
+        if !crate::http_status::is_valid_final_http_status(self.status) {
             return Err(format!("Invalid status code: {}", self.status));
         }
         self.conditions
@@ -292,6 +292,25 @@ mod tests {
 
         config.mode = Some(RestrictionMode::Allow);
         assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn status_uses_final_response_range() {
+        for status in [100, 101, 199, 600] {
+            let mut config = deny_cfg(vec![group(vec![key_match(KeyGet::Path, &["/admin"])])]);
+            config.status = status;
+            assert!(config.validate().is_err(), "{status}");
+        }
+        for status in [200, 599] {
+            let mut config = deny_cfg(vec![group(vec![key_match(KeyGet::Path, &["/admin"])])]);
+            config.status = status;
+            assert!(config.validate().is_ok(), "{status}");
+        }
+
+        let schema = serde_json::to_value(schemars::schema_for!(RequestRestrictionConfig)).unwrap();
+        let status = &schema["properties"]["status"];
+        assert_eq!(status["minimum"].as_u64(), Some(200));
+        assert_eq!(status["maximum"].as_u64(), Some(599));
     }
 
     #[test]

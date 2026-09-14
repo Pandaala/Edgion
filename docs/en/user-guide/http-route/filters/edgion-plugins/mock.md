@@ -41,7 +41,7 @@ spec:
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `statusCode` | Integer | `200` | HTTP status code. Valid range: `100`–`599` |
+| `statusCode` | Integer | `200` | Final HTTP status code. Valid range: `200`–`599` |
 | `body` | String | none | Response body content (JSON, XML, plain text, etc.) |
 | `headers` | Object | none | Custom response headers as key-value pairs. Names and values must be valid HTTP header syntax |
 | `contentType` | String | `"application/json"` | Valid `Content-Type` header value |

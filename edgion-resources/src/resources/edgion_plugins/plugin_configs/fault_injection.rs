@@ -62,6 +62,7 @@ pub struct AbortConfig {
 
     /// HTTP status code returned on abort; default 500.
     #[serde(default = "default_abort_status")]
+    #[schemars(range(min = 200, max = 599))]
     pub status_code: u16,
 
     /// Response body. Omitted = empty body.
@@ -158,8 +159,8 @@ impl AbortConfig {
         if !(0.0..=1.0).contains(&self.ratio) {
             return Err(format!("abort.ratio must be in [0.0, 1.0], got {}", self.ratio));
         }
-        if !(100..=599).contains(&self.status_code) {
-            return Err(format!("abort.statusCode ({}) must be in [100, 599]", self.status_code));
+        if !crate::http_status::is_valid_final_http_status(self.status_code) {
+            return Err(format!("abort.statusCode ({}) must be in [200, 599]", self.status_code));
         }
         if let Some(hs) = &self.headers {
             for h in hs {
@@ -381,8 +382,17 @@ mod tests {
 
     #[test]
     fn validate_rule7_status_out_of_range() {
-        assert!(cfg_abort(99).validate().is_err());
-        assert!(cfg_abort(600).validate().is_err());
+        for status in [100, 101, 199, 600] {
+            assert!(cfg_abort(status).validate().is_err(), "{status}");
+        }
+    }
+
+    #[test]
+    fn abort_status_schema_matches_final_response_range() {
+        let schema = serde_json::to_value(schemars::schema_for!(AbortConfig)).unwrap();
+        let status = &schema["properties"]["statusCode"];
+        assert_eq!(status["minimum"].as_u64(), Some(200));
+        assert_eq!(status["maximum"].as_u64(), Some(599));
     }
 
     #[test]
