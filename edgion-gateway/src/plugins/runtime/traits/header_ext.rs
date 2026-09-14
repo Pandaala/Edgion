@@ -1,12 +1,13 @@
-//! Borrowed request-header accessors for [`PluginSession`].
+//! Borrowed header accessors for [`PluginSession`].
 //!
 //! These live outside the `#[cfg_attr(test, mockall::automock)]` trait on
 //! purpose. `mockall` 0.14 accepts only bare-reference (`&T`) or owned returns;
 //! it rejects any return type nesting a non-`'static` lifetime (`Option<&str>`,
 //! `Option<&[u8]>`, a borrowed view struct) and rejects `Fn`-object parameters.
-//! By deriving everything here from the single bare-reference method
-//! [`PluginSession::request_header_map`], this trait can use whatever shape is
-//! most ergonomic while the generated mock only ever needs one expectation.
+//! Request and response accessors derive from the corresponding bare-reference
+//! [`PluginSession::request_header_map`] and [`PluginSession::response_header_map`]
+//! methods. This trait can use ergonomic borrowed shapes while each side adds only
+//! one expectation to the generated mock.
 //!
 //! The blanket impl covers `dyn PluginSession`, which is how plugins actually
 //! receive the session.
@@ -38,6 +39,11 @@ pub trait PluginSessionHeaderExt {
     /// value insertion order. Distinct names follow `HeaderMap`'s arbitrary
     /// iteration order; callers must not treat it as wire order.
     fn iter_headers(&self) -> impl Iterator<Item = (&str, &[u8])>;
+
+    /// Every live response (name, raw value) pair, preserving duplicates and
+    /// each name's value insertion order. Returns an empty iterator before a
+    /// response is bound.
+    fn iter_response_headers(&self) -> impl Iterator<Item = (&str, &[u8])>;
 }
 
 impl<T: PluginSession + ?Sized> PluginSessionHeaderExt for T {
@@ -62,6 +68,13 @@ impl<T: PluginSession + ?Sized> PluginSessionHeaderExt for T {
             .iter()
             .map(|(name, value)| (name.as_str(), value.as_bytes()))
     }
+
+    #[inline]
+    fn iter_response_headers(&self) -> impl Iterator<Item = (&str, &[u8])> {
+        self.response_header_map()
+            .iter()
+            .map(|(name, value)| (name.as_str(), value.as_bytes()))
+    }
 }
 
 #[cfg(test)]
@@ -77,6 +90,17 @@ mod tests {
         }
         let mut mock = MockPluginSession::new();
         mock.expect_request_header_map().return_const(map);
+        mock
+    }
+
+    fn response_mock_with(headers: &[(&str, &[u8])]) -> MockPluginSession {
+        let mut map = http::HeaderMap::new();
+        for (name, value) in headers {
+            let name = http::HeaderName::from_bytes(name.as_bytes()).unwrap();
+            map.append(name, http::HeaderValue::from_bytes(value).unwrap());
+        }
+        let mut mock = MockPluginSession::new();
+        mock.expect_response_header_map().return_const(map);
         mock
     }
 
@@ -119,5 +143,13 @@ mod tests {
 
         let pairs: Vec<_> = session.iter_headers().collect();
         assert_eq!(pairs, vec![("accept", &b"a"[..]), ("accept", &b"b"[..])]);
+    }
+
+    #[test]
+    fn response_headers_preserve_raw_values_and_duplicate_order() {
+        let session = response_mock_with(&[("set-cookie", b"a=1"), ("set-cookie", &[0xff][..])]);
+
+        let pairs: Vec<_> = session.iter_response_headers().collect();
+        assert_eq!(pairs, vec![("set-cookie", &b"a=1"[..]), ("set-cookie", &[0xff][..])]);
     }
 }

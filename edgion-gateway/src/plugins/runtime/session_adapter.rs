@@ -10,7 +10,9 @@ use std::sync::Arc;
 use super::conditions::EvaluationResult;
 use super::dye_plan::{CompiledDyePlan, CompiledDyeRule};
 use super::log::{EdgionPluginsLog, EdgionPluginsLogToken, PluginLog};
-use super::traits::session::{BodyReadError, BodyReadResult, RequestBodySnapshotReader, RouteProto};
+use super::traits::session::{
+    empty_response_header_map, BodyReadError, BodyReadResult, RequestBodySnapshotReader, RouteProto,
+};
 use super::traits::{DyeOutcome, PluginSession, PluginSessionError, PluginSessionResult};
 use crate::ai::{AiAttemptPlan, AiRequestContext};
 use crate::link_sys::template::evaluate_template;
@@ -1146,6 +1148,13 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
             .and_then(|resp| resp.headers.get(name))
             .and_then(|value| value.to_str().ok())
             .map(|s| s.to_string())
+    }
+
+    fn response_header_map(&self) -> &http::HeaderMap {
+        match self.response_header.as_deref() {
+            Some(response) => &response.headers,
+            None => empty_response_header_map(),
+        }
     }
 
     fn has_response_header(&self, name: &str) -> bool {
@@ -3119,6 +3128,7 @@ pub(crate) mod record_outcome_tests {
                 .append_response_header_value("x-private", value.clone())
                 .unwrap();
             assert!(!adapter.has_response_header("x-private"));
+            assert!(adapter.response_header_map().is_empty());
             assert!(adapter.response_headers_bytes().is_empty());
         }
         let mut response = ResponseHeader::build(200, None).unwrap();
@@ -3140,6 +3150,7 @@ pub(crate) mod record_outcome_tests {
         {
             let mut adapter = PingoraSessionAdapter::with_response_header(&mut session, &mut ctx, &mut response);
             assert!(adapter.has_response_header("X-Private"));
+            assert_eq!(adapter.response_header_map().get_all("x-private").iter().count(), 2);
             assert!(adapter.get_response_header("x-private").is_none());
             adapter.set_response_header_value("x-private", value.clone()).unwrap();
             adapter.append_response_header_value("x-private", value).unwrap();

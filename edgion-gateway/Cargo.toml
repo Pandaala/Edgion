@@ -216,3 +216,7 @@ proptest.workspace = true
 name = "otlp_transport"
 path = "tests/otlp_transport.rs"
 required-features = ["test-util"]
+
+[[bench]]
+name = "waf_header_ingestion"
+harness = false

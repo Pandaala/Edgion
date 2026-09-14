@@ -389,10 +389,12 @@ impl UpstreamResponseFilter for WafPlugin {
                 body: None,
             };
         };
-        let raw_headers = session.response_headers_bytes();
-        let headers: Vec<_> = raw_headers
-            .iter()
-            .map(|(name, value)| ResponseHeader::new(name, value))
+        // Borrow the live response map until `publish_response_head` builds
+        // the transaction-owned response state. The transaction outlives this
+        // callback, but the temporary per-header byte copies do not need to.
+        let headers: Vec<_> = session
+            .iter_response_headers()
+            .map(|(name, value)| ResponseHeader::new(name.as_bytes(), value))
             .collect();
         let status = session.get_response_status().unwrap_or(500);
         if let Err(error) = transaction.publish_response_head(ResponseHead::new(status, &headers)) {
@@ -629,6 +631,48 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn duplicate_response_headers_are_preserved_for_phase_three() {
+        let plugin = plugin(
+            "SecRule RESPONSE_HEADERS:X-Test \"@streq blocked\" \"id:30,phase:3,deny,status:409\"\n",
+            WafMode::On,
+        );
+        let slot = Arc::new(parking_lot::Mutex::new(None));
+        let mut session = MockPluginSession::new();
+        expect_request_head(&mut session, "/headers");
+        let install_slot = Arc::clone(&slot);
+        session
+            .expect_install_waf_transaction()
+            .return_once(move |_, transaction| {
+                *install_slot.lock() = Some(transaction);
+                true
+            });
+        let take_slot = Arc::clone(&slot);
+        session
+            .expect_take_waf_transaction()
+            .return_once(move |_| take_slot.lock().take());
+        let mut response_headers = http::HeaderMap::new();
+        response_headers.append("x-test", http::HeaderValue::from_static("allowed"));
+        response_headers.append("x-test", http::HeaderValue::from_static("blocked"));
+        session.expect_response_header_map().return_const(response_headers);
+        session.expect_get_response_status().return_const(Some(200_u16));
+
+        let mut request_log = PluginLog::new(NAME);
+        assert_eq!(
+            RequestFilter::run_request(&plugin, &mut session, &mut request_log).await,
+            PluginRunningResult::GoodNext
+        );
+
+        let mut response_log = PluginLog::new(NAME);
+        assert_eq!(
+            UpstreamResponseFilter::run_upstream_response_filter(&plugin, &mut session, &mut response_log),
+            PluginRunningResult::ErrResponse {
+                status: 409,
+                body: None
+            }
+        );
+    }
+
+    #[tokio::test]
     async fn malformed_structured_body_fails_closed_without_payload_logging() {
         let plugin = plugin("SecRule ARGS \"@contains value\" \"id:4,phase:2,pass\"\n", WafMode::On);
         let mut session = MockPluginSession::new();
@@ -751,7 +795,9 @@ mod tests {
             .expect_take_waf_transaction()
             .times(2)
             .returning(move |_| take_slot.lock().take());
-        session.expect_response_headers_bytes().return_once(Vec::new);
+        session
+            .expect_response_header_map()
+            .return_const(http::HeaderMap::new());
         session.expect_get_response_status().return_const(Some(201_u16));
 
         let mut request_log = PluginLog::new(NAME);

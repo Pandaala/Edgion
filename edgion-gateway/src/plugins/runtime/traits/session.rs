@@ -17,6 +17,11 @@ use std::sync::Arc;
 pub type PluginSessionError = Box<dyn std::error::Error + Send + Sync>;
 pub type PluginSessionResult<T> = Result<T, PluginSessionError>;
 
+pub(crate) fn empty_response_header_map() -> &'static http::HeaderMap {
+    static EMPTY: std::sync::OnceLock<http::HeaderMap> = std::sync::OnceLock::new();
+    EMPTY.get_or_init(http::HeaderMap::new)
+}
+
 #[inline]
 const fn safe_default_downstream_response_trailers_representable() -> bool {
     false
@@ -322,6 +327,16 @@ pub trait PluginSession: Send + Sync {
 
     /// Get a response header value by name (for ResponseRewrite)
     fn get_response_header(&self, name: &str) -> Option<String>;
+
+    /// Borrowed access to the live response header map.
+    ///
+    /// Before a response is bound this returns an empty map. Consumers that
+    /// need to distinguish that stage must use [`Self::get_response_status`].
+    /// Prefer this over the owned bulk accessors when values do not need to
+    /// outlive the current synchronous plugin callback.
+    fn response_header_map(&self) -> &http::HeaderMap {
+        empty_response_header_map()
+    }
 
     /// Get all response header names (for DSL resp.header_names())
     fn response_header_names(&self) -> Vec<String> {

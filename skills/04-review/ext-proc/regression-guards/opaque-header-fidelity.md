@@ -36,7 +36,7 @@ Request projection borrows the existing HeaderMap. Response projection consumes
 the byte accessor's owned values. Presence checks must not copy the response
 map. Typed writes preserve sensitivity metadata and successful request writes
 retain the adapter's deferred-credential invalidation semantics. See
-[borrowed header access](../../plugin-runtime/regression-guards/borrowed-request-header-access.md)
+[borrowed header access](../../plugin-runtime/regression-guards/borrowed-plugin-header-access.md)
 and [sensitive header ownership](../../security/mandatory-design/secret-header-values-must-be-sensitive.md).
 
 Envoy's [ExtProc API](https://github.com/envoyproxy/envoy/blob/main/api/envoy/service/ext_proc/v3/external_processor.proto)

@@ -92,7 +92,7 @@ Sensitive header provenance is recorded in the
 The `auth-borrowed-authorization-header` / D0035 shared-accessor follow-up is
 already implemented; its current consumer scope and residual ownership limits
 are maintained in the
-[borrowed request-header guard](../../plugin-runtime/regression-guards/borrowed-request-header-access.md).
+[borrowed plugin-header guard](../../plugin-runtime/regression-guards/borrowed-plugin-header-access.md).
 
 ## Adjacent managed credentials, SDKs, and ACME
 

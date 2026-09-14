@@ -23,7 +23,7 @@ before applying a decision to current code.
 
 ## Regression guards
 
-- [Borrowed request-header access](regression-guards/borrowed-request-header-access.md)
+- [Borrowed plugin header access](regression-guards/borrowed-plugin-header-access.md)
 
 - [Header modifier validation and construction](regression-guards/header-modifier-validation.md)
 
