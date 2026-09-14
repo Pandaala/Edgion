@@ -21,7 +21,9 @@ The shared outbound TLS resolver owns the same boundary for every consumer:
   resolved material;
 - a declared reference without all matching material fails closed;
 - every declared CA reference must resolve to a Secret containing `ca.crt`;
-- a custom CA bundle that parses to zero certificates is invalid;
+- every declared custom CA bundle must independently parse to at least one
+  certificate; a valid sibling bundle cannot mask an empty, whitespace-only,
+  or non-PEM bundle;
 - conflicting global client identities keep the reference but clear the
   material, causing the resolver to fail closed rather than choosing one
   nondeterministically.
@@ -35,7 +37,10 @@ authorization for construction-time fallback.
 
 1. Search OIDC construction for any fallback to the default shared client
    after a TLS resolver, rustls, SAN verifier, or reqwest builder error.
-2. Verify partial CA lists and unresolved client references return errors.
+2. Verify partial CA lists and unresolved client references return errors. For
+   every rustls and reqwest adapter, exercise mixed valid/zero-certificate CA
+   bundles in both orders; retain multi-valid and multi-certificate bundle
+   coverage.
 3. Verify global mTLS-only defaults survive aggregation and conflicting
    identities produce a deterministic fail-closed state.
 4. Keep error detail in cold-path diagnostics; plugin construction returns a
@@ -46,10 +51,15 @@ authorization for construction-time fallback.
 
 ## Regression evidence
 
-- OIDC construction tests cover unresolved CA, zero-certificate CA, unresolved
-  mTLS identity, and the SAN-specific invalid-CA path.
+- OIDC construction tests cover unresolved CA, zero-certificate CA, mixed valid
+  and empty CA bundles in both ordinary and SAN-constrained construction,
+  unresolved mTLS identity, and the SAN-specific invalid-CA path.
 - Shared resolver tests cover partial CA resolution and local/global identity
   ownership and inheritance.
+- Gateway verified-rustls and Common LinkSys rustls/reqwest tests cover empty
+  and non-PEM siblings in both bundle orders. AllEndpointStatus verifies that
+  the same construction failure remains mapped to the generic
+  `probe configuration unavailable` response.
 - Gateway configuration tests cover mTLS-only global defaults and conflicting
   global identities.
 - The complete `edgion-common` library suite passes repeatedly under parallel
@@ -58,3 +68,5 @@ authorization for construction-time fallback.
 ## Resolution references
 
 - `OIDC-TLS-01` — 2026-08-29.
+- `reject-empty-individual-outbound-ca-bundles` — fixed 2026-09-14; each
+  declared bundle is now checked independently in all three TLS adapters.

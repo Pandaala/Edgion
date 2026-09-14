@@ -65,8 +65,11 @@ pub fn build_rustls_client_config(tls: &TlsConfig) -> Result<Option<ClientConfig
 
     match &resolved.ca {
         EffectiveCa::Custom(bundles) => {
-            let mut added = 0usize;
+            if bundles.is_empty() {
+                anyhow::bail!("LinkSys TLS CA PEM did not contain any valid certificates");
+            }
             for bundle in bundles {
+                let mut added = 0usize;
                 for cert in CertificateDer::pem_slice_iter(bundle.as_slice()) {
                     let cert = cert.context("failed to parse CA certificate PEM from LinkSys TLS material")?;
                     roots
@@ -74,9 +77,9 @@ pub fn build_rustls_client_config(tls: &TlsConfig) -> Result<Option<ClientConfig
                         .context("failed to add CA certificate to rustls RootCertStore")?;
                     added += 1;
                 }
-            }
-            if added == 0 {
-                anyhow::bail!("LinkSys TLS CA PEM did not contain any valid certificates");
+                if added == 0 {
+                    anyhow::bail!("LinkSys TLS CA PEM bundle did not contain any valid certificates");
+                }
             }
         }
         EffectiveCa::System => {
@@ -139,18 +142,17 @@ pub fn apply_custom_ca_pem(
     bundles: &[Vec<u8>],
 ) -> anyhow::Result<reqwest::ClientBuilder> {
     let mut builder = builder.tls_built_in_root_certs(false);
-    let mut certificate_count = 0usize;
+    anyhow::ensure!(!bundles.is_empty(), "TLS: custom CA bundle contains no certificates");
     for bundle in bundles {
         // Split the bundle into individual PEM blocks (handles root + intermediate chains).
         let pem_blocks = split_pem_certificates(bundle.as_slice());
+        anyhow::ensure!(!pem_blocks.is_empty(), "TLS: custom CA bundle contains no certificates");
         for cert_pem in pem_blocks {
             let cert =
                 reqwest::Certificate::from_pem(cert_pem.as_slice()).context("TLS: invalid CA certificate PEM")?;
             builder = builder.add_root_certificate(cert);
-            certificate_count += 1;
         }
     }
-    anyhow::ensure!(certificate_count > 0, "TLS: custom CA bundle contains no certificates");
     Ok(builder)
 }
 
@@ -225,14 +227,23 @@ mod tests {
     /// Build an `OutboundTlsLocal` that declares one CA ref (name only; the
     /// resolved bytes come from `resolved_ca_certificates`).
     fn outbound_with_ca_ref(name: &str) -> OutboundTlsLocal {
+        outbound_with_ca_refs(&[name])
+    }
+
+    fn outbound_with_ca_refs(names: &[&str]) -> OutboundTlsLocal {
         OutboundTlsLocal {
             validation: Some(OutboundTlsValidation {
-                ca_certificate_refs: Some(vec![BackendTLSPolicyCACertificateRef {
-                    group: String::new(),
-                    kind: "Secret".into(),
-                    name: name.into(),
-                    namespace: None,
-                }]),
+                ca_certificate_refs: Some(
+                    names
+                        .iter()
+                        .map(|name| BackendTLSPolicyCACertificateRef {
+                            group: String::new(),
+                            kind: "Secret".into(),
+                            name: (*name).into(),
+                            namespace: None,
+                        })
+                        .collect(),
+                ),
                 ..Default::default()
             }),
             ..Default::default()
@@ -318,6 +329,55 @@ mod tests {
             resolved_client_certificate: None,
         };
         assert!(build_rustls_client_config(&tls).is_err());
+    }
+
+    #[test]
+    fn rustls_config_rejects_each_zero_certificate_ca_bundle() {
+        let _guard = outbound_tls::outbound_tls_test_guard();
+        install_test_crypto_provider();
+        let (ca_pem, _cert_pem, _key_pem) = gen_ca_and_leaf();
+
+        for invalid in [b"".as_slice(), b" \n\t".as_slice(), b"not-a-pem".as_slice()] {
+            for invalid_first in [false, true] {
+                let mut bundles = vec![ca_secret(ca_pem.as_bytes()), ca_secret(invalid)];
+                if invalid_first {
+                    bundles.swap(0, 1);
+                }
+                let tls = TlsConfig {
+                    enabled: true,
+                    outbound: outbound_with_ca_refs(&["ca-a", "ca-b"]),
+                    resolved_ca_certificates: Some(bundles),
+                    resolved_client_certificate: None,
+                };
+
+                build_rustls_client_config(&tls)
+                    .expect_err("every declared rustls CA bundle must contain a certificate");
+            }
+        }
+    }
+
+    #[test]
+    fn rustls_config_accepts_multiple_valid_bundles_and_certificates() {
+        let _guard = outbound_tls::outbound_tls_test_guard();
+        install_test_crypto_provider();
+        let (ca_pem_a, _cert_pem, _key_pem) = gen_ca_and_leaf();
+        let (ca_pem_b, _cert_pem, _key_pem) = gen_ca_and_leaf();
+        let multiple_bundles = TlsConfig {
+            enabled: true,
+            outbound: outbound_with_ca_refs(&["ca-a", "ca-b"]),
+            resolved_ca_certificates: Some(vec![ca_secret(ca_pem_a.as_bytes()), ca_secret(ca_pem_b.as_bytes())]),
+            resolved_client_certificate: None,
+        };
+        assert!(build_rustls_client_config(&multiple_bundles).is_ok());
+
+        let combined_pem = format!("{ca_pem_a}\n{ca_pem_b}\n");
+        let multiple_certificates = TlsConfig {
+            enabled: true,
+            outbound: outbound_with_ca_ref("ca-chain"),
+            resolved_ca_certificates: Some(vec![ca_secret(combined_pem.as_bytes())]),
+            resolved_client_certificate: None,
+        };
+        assert!(build_rustls_client_config(&multiple_certificates).is_ok());
     }
 
     /// `apply_resolved_outbound_tls` must return `Ok` and apply
@@ -425,6 +485,30 @@ mod tests {
 
         apply_resolved_outbound_tls(reqwest::Client::builder(), &tls, "Test")
             .expect_err("custom CA bundle without a certificate must fail closed");
+    }
+
+    #[test]
+    fn apply_resolved_outbound_tls_rejects_each_zero_certificate_ca_bundle() {
+        let _guard = outbound_tls::outbound_tls_test_guard();
+        let (ca_pem, _cert_pem, _key_pem) = gen_ca_and_leaf();
+
+        for invalid in [b"".as_slice(), b" \n\t".as_slice(), b"not-a-pem".as_slice()] {
+            for invalid_first in [false, true] {
+                let mut bundles = vec![ca_secret(ca_pem.as_bytes()), ca_secret(invalid)];
+                if invalid_first {
+                    bundles.swap(0, 1);
+                }
+                let tls = TlsConfig {
+                    enabled: true,
+                    outbound: outbound_with_ca_refs(&["ca-a", "ca-b"]),
+                    resolved_ca_certificates: Some(bundles),
+                    resolved_client_certificate: None,
+                };
+
+                apply_resolved_outbound_tls(reqwest::Client::builder(), &tls, "Test")
+                    .expect_err("every declared reqwest CA bundle must contain a certificate");
+            }
+        }
     }
 
     #[test]

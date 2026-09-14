@@ -2561,6 +2561,59 @@ fn oidc_construction_fails_closed_when_custom_ca_contains_no_certificate() {
 }
 
 #[test]
+fn oidc_construction_rejects_mixed_custom_ca_with_and_without_san() {
+    use edgion_resources::resources::backend_tls_policy::{
+        BackendTLSPolicyCACertificateRef, SubjectAltName, SubjectAltNameType,
+    };
+    use edgion_resources::resources::common::outbound_tls::OutboundTlsValidation;
+    use k8s_openapi::ByteString;
+    use std::collections::BTreeMap;
+
+    let certificate =
+        rcgen::generate_simple_self_signed(vec!["idp.example.com".to_string()]).expect("generate OIDC CA certificate");
+    let ca_secret = |pem: &[u8]| k8s_openapi::api::core::v1::Secret {
+        data: Some(BTreeMap::from([("ca.crt".to_string(), ByteString(pem.to_vec()))])),
+        ..Default::default()
+    };
+
+    for with_san in [false, true] {
+        let mut config = base_config();
+        config.tls.verify = Some(true);
+        config.tls.validation = Some(OutboundTlsValidation {
+            ca_certificate_refs: Some(
+                ["idp-ca-valid", "idp-ca-empty"]
+                    .map(|name| BackendTLSPolicyCACertificateRef {
+                        group: String::new(),
+                        kind: "Secret".to_string(),
+                        name: name.to_string(),
+                        namespace: None,
+                    })
+                    .to_vec(),
+            ),
+            subject_alt_names: with_san.then(|| {
+                vec![SubjectAltName {
+                    san_type: SubjectAltNameType::Hostname,
+                    hostname: Some("idp.example.com".to_string()),
+                    uri: None,
+                }]
+            }),
+            ..Default::default()
+        });
+        config.resolved_ca_certificates = Some(vec![ca_secret(certificate.cert.pem().as_bytes()), ca_secret(b"")]);
+
+        let error = OpenidConnect::try_new(&config, "default".to_string())
+            .err()
+            .expect("a mixed valid and empty CA list must reject OIDC construction");
+        let expected = if with_san {
+            "openid_connect SAN-pinning TLS config build failed"
+        } else {
+            "openid_connect outbound HTTP client build failed"
+        };
+        assert_eq!(error, expected);
+    }
+}
+
+#[test]
 fn oidc_construction_fails_closed_when_mtls_secret_is_unresolved() {
     use edgion_resources::resources::common::SecretObjectReference;
 

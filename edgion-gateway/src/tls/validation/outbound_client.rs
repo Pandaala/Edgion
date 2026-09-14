@@ -31,8 +31,11 @@ pub fn build_verified_outbound_tls(
             roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
         }
         EffectiveCa::Custom(bundles) => {
-            let mut added = 0usize;
+            if bundles.is_empty() {
+                return Err(format!("{context} TLS: CA PEM contained no valid certificates"));
+            }
             for bundle in bundles {
+                let mut added = 0usize;
                 for cert in CertificateDer::pem_slice_iter(bundle) {
                     let cert = cert.map_err(|e| format!("{context} TLS: invalid CA PEM: {e}"))?;
                     roots
@@ -40,9 +43,9 @@ pub fn build_verified_outbound_tls(
                         .map_err(|e| format!("{context} TLS: add CA failed: {e}"))?;
                     added += 1;
                 }
-            }
-            if added == 0 {
-                return Err(format!("{context} TLS: CA PEM contained no valid certificates"));
+                if added == 0 {
+                    return Err(format!("{context} TLS: CA PEM bundle contained no valid certificates"));
+                }
             }
         }
     }
@@ -174,5 +177,52 @@ mod tests {
         ));
         let config = build_verified_outbound_tls(&resolved, vec![], "Test").unwrap();
         assert!(config.client_auth_cert_resolver.has_certs());
+    }
+
+    #[test]
+    fn verified_tls_rejects_each_zero_certificate_ca_bundle() {
+        let certificate = rcgen::generate_simple_self_signed(vec!["backend.example.com".to_string()]).unwrap();
+
+        for invalid in [b"".as_slice(), b" \n\t".as_slice(), b"not-a-pem".as_slice()] {
+            for invalid_first in [false, true] {
+                let mut bundles = vec![certificate.cert.pem().into_bytes(), invalid.to_vec()];
+                if invalid_first {
+                    bundles.swap(0, 1);
+                }
+                let resolved = ResolvedOutboundTls {
+                    verify: true,
+                    ca: EffectiveCa::Custom(bundles),
+                    client_identity: None,
+                    san: None,
+                };
+
+                build_verified_outbound_tls(&resolved, vec![], "Test")
+                    .expect_err("every declared verified TLS CA bundle must contain a certificate");
+            }
+        }
+    }
+
+    #[test]
+    fn verified_tls_accepts_multiple_valid_bundles_and_certificates() {
+        let certificate_a = rcgen::generate_simple_self_signed(vec!["backend-a.example.com".to_string()]).unwrap();
+        let certificate_b = rcgen::generate_simple_self_signed(vec!["backend-b.example.com".to_string()]).unwrap();
+        let pem_a = certificate_a.cert.pem();
+        let pem_b = certificate_b.cert.pem();
+
+        let multiple_bundles = ResolvedOutboundTls {
+            verify: true,
+            ca: EffectiveCa::Custom(vec![pem_a.clone().into_bytes(), pem_b.clone().into_bytes()]),
+            client_identity: None,
+            san: None,
+        };
+        assert!(build_verified_outbound_tls(&multiple_bundles, vec![], "Test").is_ok());
+
+        let multiple_certificates = ResolvedOutboundTls {
+            verify: true,
+            ca: EffectiveCa::Custom(vec![format!("{pem_a}\n{pem_b}\n").into_bytes()]),
+            client_identity: None,
+            san: None,
+        };
+        assert!(build_verified_outbound_tls(&multiple_certificates, vec![], "Test").is_ok());
     }
 }
