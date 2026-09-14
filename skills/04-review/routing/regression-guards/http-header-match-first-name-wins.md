@@ -92,15 +92,29 @@ The successful run used the standard runner's fresh topology, deferred the
 residue wipe until after the dynamic test, and did not restart during scenario
 phases. This correction does not claim to fix listener deletion/recreation.
 
-The mandatory Kubernetes inventory-parity guard still fails for five
-pre-existing scenario gaps, identically on baseline and changed inventories.
-Its own regression test passes, and this new scenario is registered in both
-inventories. The follow-up was recorded under
-`k8s-dynamic-scenario-inventory-parity`; no active task file currently tracks it.
-At review closure, the selected task was retained as blocked by this gate, with its live
-Kubernetes acceptance evidence still outstanding; no empty registrations or
-unsupported exceptions were added. Full workspace tests and live Kubernetes
-traffic were not run.
+Fresh live Kubernetes verification on 2026-09-14 used current-source arm64
+Controller, Gateway, test-client, and test-server images on the `orbstack`
+context. After the standard post-fixture Gateway restart, `HTTPRoute/Match`
+passed 17/17, including all five duplicate-header groups. The route reported
+`Accepted=True` and `ResolvedRefs=True`; its selector-owned Service resolved to
+three Pod endpoints. `HttpRouteDuplicateHeaders` then passed delete -> initial
+(`one`/30001) -> update (`two`/30002) -> initial -> cleanup/restore with observed
+Controller/Gateway resource-version convergence.
+
+The first Kubernetes prepare attempt exposed a test-fixture layout defect: this
+scenario used `updated/`, but the canonical initial loader and ownership guard
+exclude only `updates*` and `delete*` generations. Renaming both local and
+Kubernetes fixture directories to `updates/` and changing the scenario path
+restored the standard dynamic-fixture contract. The ownership validator's own
+regression test and a full-conf ownership scan then passed.
+
+The mandatory Kubernetes inventory-parity guard still fails for six unrelated
+dynamic scenario gaps. Its own regression test passes, this scenario is
+registered in both inventories, and the remaining work is tracked by
+`tasks/todo/k8s-dynamic-scenario-inventory-parity.md`. The selected task remains
+blocked only by that global gate; no empty registrations or unsupported
+exceptions were added. Full workspace tests were not run as part of the live
+traffic reproduction.
 
 Re-evaluate if the protocol contract, typed ingress, delegation merge,
 programmatic match producers, or compilation/indexing ownership changes.
@@ -108,6 +122,6 @@ programmatic match producers, or compilation/indexing ownership changes.
 ## Resolution references
 
 - `CAND-P2-002` / `http-route-duplicate-header-match-names`: confirmed correctness
-  defect, corrected with targeted and wire verification on 2026-09-12;
-  active task retained pending live Kubernetes evidence and the unrelated
-  inventory-parity closure gate.
+  defect, corrected with targeted and FileSystem wire verification on
+  2026-09-12 and live Kubernetes wire verification on 2026-09-14; active task
+  retained only for the unrelated inventory-parity closure gate.

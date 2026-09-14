@@ -57,8 +57,8 @@ the repository root:
 ```
 
 Run this before the shared topology's final `cache_residue` wipe-all. Reloading
-Gateways after that wipe hits the separately tracked
-[TLS listener manager recreation defect](../../../../../tasks/todo/tls-listener-recreation-stale-route-manager.md).
+Gateways after that wipe requires a data-plane restart under the documented
+[Gateway recreation lifecycle](../../../../../skills/04-review/listeners/intentional-design/gateway-recreation-requires-restart.md).
 
 The scenario does not claim full Gateway API conformance or exercise independent
 same-socket Listener specificity when two valid Listener attachments overlap.

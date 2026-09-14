@@ -93,7 +93,7 @@ fn run(ctx: ScenarioCtx) -> ScenarioRunFuture {
             cleanup(&ctx).await?;
             ctx.apply_dir("initial/").await?;
             ctx.wait_phase(SCENARIO, "initial", Duration::from_secs(20)).await?;
-            ctx.apply_dir("updated/").await?;
+            ctx.apply_dir("updates/").await?;
             ctx.wait_phase(SCENARIO, "updated", Duration::from_secs(20)).await?;
             ctx.apply_dir("initial/").await?;
             ctx.wait_phase(SCENARIO, "initial", Duration::from_secs(20)).await
