@@ -1204,7 +1204,8 @@ spec:
 
 ## Kafka 连接器
 
-⚠️ **Kafka 当前为占位实现。** schema 有效且资源报告 `Accepted=True`，但 Gateway 尚未集成 Kafka provider。实际可用性取决于后续版本。
+Kafka 连接器为日志输出提供 Gateway 侧的可用 producer。每个日志输出选择一个 topic，
+被引用的 LinkSys 负责共享客户端和待发送数据的总预算。
 
 ```yaml
 apiVersion: edgion.io/v1
@@ -1219,11 +1220,24 @@ spec:
       - "kafka-1.production.svc:9092"
       - "kafka-2.production.svc:9092"
       - "kafka-3.production.svc:9092"
+    channelSize: 4096
+    maxTopics: 64
+    maxPendingRecords: 4096
+    maxPendingBytes: 16777216
+    lingerMs: 5
 ```
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `brokers` | Array\<String\> | **必填** | Kafka broker 地址（`host:port`），集群时列出多个。 |
+| `channelSize` | Integer | `4096` | 每个 topic 的非阻塞 producer 队列容量。 |
+| `maxTopics` | Integer | `64` | 单个 Kafka LinkSys 客户端最多持有的 topic producer 队列数。 |
+| `maxPendingRecords` | Integer | `4096` | 所有 topic 中排队或正在发送的记录总数上限。 |
+| `maxPendingBytes` | Integer | `16777216` | 所有 topic 中排队或正在发送的 UTF-8 载荷总字节数上限。它是逻辑载荷限制，不包含分配器、channel 节点、task 和 Kafka SDK 的额外开销。 |
+| `lingerMs` | Integer | `5` | Kafka 批处理等待时间，必须小于 producer 超时时间。 |
+
+所有队列限制都必须大于零。达到任一总限额时，新日志会通过现有非阻塞发送路径被丢弃，
+Kafka 客户端健康状态保持不变。增大 `channelSize` 不会增大两个待发送数据总限额。
 
 ## 常见配置场景
 

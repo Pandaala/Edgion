@@ -210,6 +210,18 @@ impl LinkSys {
                 if kafka_config.brokers.is_empty() {
                     errors.push("Kafka configuration has no brokers".to_string());
                 }
+                if kafka_config.channel_size == Some(0) {
+                    errors.push("Kafka channelSize must be greater than zero".to_string());
+                }
+                if kafka_config.max_topics == Some(0) {
+                    errors.push("Kafka maxTopics must be greater than zero".to_string());
+                }
+                if kafka_config.max_pending_records == Some(0) {
+                    errors.push("Kafka maxPendingRecords must be greater than zero".to_string());
+                }
+                if kafka_config.max_pending_bytes == Some(0) {
+                    errors.push("Kafka maxPendingBytes must be greater than zero".to_string());
+                }
             }
             SystemConfig::Otlp(config) => {
                 let reference = crate::output::LinkSysRef {
@@ -333,5 +345,26 @@ config:
         let spec: LinkSysSpec = serde_yaml::from_str(yaml).unwrap();
         let ls = make_link_sys("h", spec);
         assert!(!ls.validate_config().is_empty());
+    }
+
+    #[test]
+    fn kafka_zero_queue_limits_are_invalid() {
+        let yaml = r#"
+type: kafka
+config:
+  brokers: ["kafka:9092"]
+  channelSize: 0
+  maxTopics: 0
+  maxPendingRecords: 0
+  maxPendingBytes: 0
+"#;
+        let spec: LinkSysSpec = serde_yaml::from_str(yaml).expect("parse Kafka LinkSys");
+        let errors = make_link_sys("k", spec).validate_config();
+
+        assert_eq!(errors.len(), 4);
+        assert!(errors.iter().any(|error| error.contains("channelSize")));
+        assert!(errors.iter().any(|error| error.contains("maxTopics")));
+        assert!(errors.iter().any(|error| error.contains("maxPendingRecords")));
+        assert!(errors.iter().any(|error| error.contains("maxPendingBytes")));
     }
 }

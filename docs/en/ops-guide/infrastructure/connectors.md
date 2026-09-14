@@ -1263,7 +1263,9 @@ Editing any `request.*` field (or the target) rebuilds the webhook runtime and *
 
 ## Kafka connector
 
-⚠️ **Kafka is currently a placeholder.** The schema is valid and the resource reports `Accepted=True`, but the Gateway has not yet integrated a Kafka provider. Runtime availability depends on a later release.
+The Kafka connector provides a live Gateway producer for log outputs. Each configured
+log output selects a topic, while the referenced LinkSys owns the shared client and
+aggregate pending-data budgets.
 
 ```yaml
 apiVersion: edgion.io/v1
@@ -1278,11 +1280,26 @@ spec:
       - "kafka-1.production.svc:9092"
       - "kafka-2.production.svc:9092"
       - "kafka-3.production.svc:9092"
+    channelSize: 4096
+    maxTopics: 64
+    maxPendingRecords: 4096
+    maxPendingBytes: 16777216
+    lingerMs: 5
 ```
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `brokers` | Array\<String\> | **Required** | Kafka broker addresses (`host:port`); list multiple brokers for a cluster. |
+| `channelSize` | Integer | `4096` | Capacity of each topic's non-blocking producer queue. |
+| `maxTopics` | Integer | `64` | Maximum topic producer queues owned by one Kafka LinkSys client. |
+| `maxPendingRecords` | Integer | `4096` | Maximum records queued or being produced across all topics. |
+| `maxPendingBytes` | Integer | `16777216` | Maximum UTF-8 payload bytes queued or being produced across all topics. This is a logical payload limit and excludes allocator, channel-node, task, and Kafka SDK overhead. |
+| `lingerMs` | Integer | `5` | Kafka batch linger duration. It must remain below the producer timeout. |
+
+All queue limits must be greater than zero. When any aggregate limit is reached,
+the new log submission is dropped through the normal non-blocking sender path and
+the Kafka client's health state is unchanged. Increasing `channelSize` does not
+increase either aggregate pending-data limit.
 
 ## Common configuration scenarios
 

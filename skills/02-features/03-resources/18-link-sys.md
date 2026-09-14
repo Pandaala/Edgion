@@ -386,9 +386,21 @@ spec:
   config:
     brokers:
       - "kafka:9092"
+    channelSize: 4096
+    maxTopics: 64
+    maxPendingRecords: 4096
+    maxPendingBytes: 16777216
+    lingerMs: 5
 ```
 
 - Kafka has a live Gateway provider, runtime store, and full/partial update lifecycle.
+- `channelSize` bounds each topic queue. `maxTopics` (default 64),
+  `maxPendingRecords` (default 4096), and `maxPendingBytes` (default 16 MiB)
+  bound one client's aggregate queued and in-flight producer state. All limits
+  must be greater than zero. Aggregate saturation rejects the new non-blocking
+  submission without changing the client's health state.
+- `maxPendingBytes` counts UTF-8 payload bytes. It does not include allocator,
+  channel-node, task, or Kafka SDK overhead.
 
 ### `type: httpdns`
 

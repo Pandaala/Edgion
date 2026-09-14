@@ -23,6 +23,7 @@ before applying a decision to current code.
 
 ## Regression guards
 
+- [Kafka producer state has per-client aggregate bounds](regression-guards/kafka-aggregate-queue-bounds.md)
 - [Redis DNS and egress policy is enforced at every Fred dial](regression-guards/redis-dial-time-egress-policy.md)
 - [ResolvedTarget Has No Webhook Compatibility Alias — FIXED](regression-guards/resolved-target-has-no-webhook-compatibility-alias.md)
 - [LinkSys outbound TLS enablement and shared loading](regression-guards/shared-outbound-tls-loading.md)

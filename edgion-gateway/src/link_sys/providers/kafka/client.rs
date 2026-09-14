@@ -1,7 +1,7 @@
 //! Kafka LinkSys runtime client.
 
 use std::collections::BTreeMap;
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -21,10 +21,11 @@ use crate::link_sys::credential::{CredentialState, ResolvedCredential};
 use crate::link_sys::lifecycle::LinkSysLifecycle;
 use crate::link_sys::runtime::health_probe::flip_log_allowed;
 use edgion_resources::resources::common::TlsConfig;
-use edgion_resources::resources::link_sys::kafka::KafkaClientConfig;
+use edgion_resources::resources::link_sys::kafka::{
+    KafkaClientConfig, DEFAULT_KAFKA_CHANNEL_SIZE, DEFAULT_KAFKA_LINGER_MS, DEFAULT_KAFKA_MAX_PENDING_BYTES,
+    DEFAULT_KAFKA_MAX_PENDING_RECORDS, DEFAULT_KAFKA_MAX_TOPICS,
+};
 
-const DEFAULT_CHANNEL_SIZE: usize = 4096;
-const DEFAULT_LINGER_MS: u64 = 5;
 const MAX_BATCH_SIZE: usize = 1_000_000;
 /// Consecutive probe failures before the probe rebuilds `inner_client` from the
 /// configured bootstrap brokers (rskafka otherwise only reconnects to the
@@ -38,6 +39,104 @@ const KAFKA_REBUILD_THRESHOLD: u32 = 3;
 /// `from_config` rejects linger durations at or above this ceiling so every
 /// accepted configuration leaves time for the produce operation itself.
 const PRODUCE_TIMEOUT: Duration = Duration::from_secs(30);
+
+struct QueueBudget {
+    max_records: usize,
+    max_bytes: usize,
+    pending_records: AtomicUsize,
+    pending_bytes: AtomicUsize,
+}
+
+impl QueueBudget {
+    fn new(max_records: usize, max_bytes: usize) -> Arc<Self> {
+        Arc::new(Self {
+            max_records,
+            max_bytes,
+            pending_records: AtomicUsize::new(0),
+            pending_bytes: AtomicUsize::new(0),
+        })
+    }
+
+    fn try_reserve(self: &Arc<Self>, bytes: usize) -> Result<QueueReservation, QueueBudgetError> {
+        if !try_reserve_counter(&self.pending_bytes, bytes, self.max_bytes) {
+            return Err(QueueBudgetError::Bytes);
+        }
+        if !try_reserve_counter(&self.pending_records, 1, self.max_records) {
+            self.pending_bytes.fetch_sub(bytes, Ordering::AcqRel);
+            return Err(QueueBudgetError::Records);
+        }
+        Ok(QueueReservation {
+            budget: Arc::clone(self),
+            bytes,
+        })
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum QueueBudgetError {
+    Records,
+    Bytes,
+}
+
+struct QueueReservation {
+    budget: Arc<QueueBudget>,
+    bytes: usize,
+}
+
+impl Drop for QueueReservation {
+    fn drop(&mut self) {
+        self.budget.pending_records.fetch_sub(1, Ordering::AcqRel);
+        self.budget.pending_bytes.fetch_sub(self.bytes, Ordering::AcqRel);
+    }
+}
+
+struct TopicBudget {
+    max_topics: usize,
+    topics: AtomicUsize,
+}
+
+impl TopicBudget {
+    fn new(max_topics: usize) -> Arc<Self> {
+        Arc::new(Self {
+            max_topics,
+            topics: AtomicUsize::new(0),
+        })
+    }
+
+    fn try_reserve(self: &Arc<Self>) -> Option<TopicReservation> {
+        try_reserve_counter(&self.topics, 1, self.max_topics).then(|| TopicReservation {
+            budget: Arc::clone(self),
+        })
+    }
+}
+
+struct TopicReservation {
+    budget: Arc<TopicBudget>,
+}
+
+impl Drop for TopicReservation {
+    fn drop(&mut self) {
+        self.budget.topics.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+fn try_reserve_counter(counter: &AtomicUsize, amount: usize, maximum: usize) -> bool {
+    counter
+        .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+            current.checked_add(amount).filter(|next| *next <= maximum)
+        })
+        .is_ok()
+}
+
+struct QueuedRecord {
+    data: String,
+    reservation: QueueReservation,
+}
+
+struct TopicEntry {
+    sender: mpsc::Sender<QueuedRecord>,
+    _reservation: TopicReservation,
+}
 
 /// Fold a single produce result into the shared `healthy` flag.
 ///
@@ -89,7 +188,9 @@ pub struct KafkaLinkClient {
     channel_size: usize,
     linger_ms: u64,
     inner_client: Arc<ArcSwapOption<rskafka::client::Client>>,
-    topics: DashMap<String, mpsc::Sender<String>>,
+    topics: DashMap<String, TopicEntry>,
+    topic_budget: Arc<TopicBudget>,
+    queue_budget: Arc<QueueBudget>,
     healthy: Arc<AtomicBool>,
     /// Monotonic-ms timestamp of the last emitted flip log; gate for log rate limiting.
     last_flip_log_ms: Arc<AtomicU64>,
@@ -108,10 +209,22 @@ impl KafkaLinkClient {
         if config.brokers.is_empty() {
             anyhow::bail!("Kafka brokers list is empty for '{}'", name);
         }
-        let channel_size = config.channel_size.unwrap_or(DEFAULT_CHANNEL_SIZE);
-        let linger_ms = config.linger_ms.unwrap_or(DEFAULT_LINGER_MS);
+        let channel_size = config.channel_size.unwrap_or(DEFAULT_KAFKA_CHANNEL_SIZE);
+        let max_topics = config.max_topics.unwrap_or(DEFAULT_KAFKA_MAX_TOPICS);
+        let max_pending_records = config.max_pending_records.unwrap_or(DEFAULT_KAFKA_MAX_PENDING_RECORDS);
+        let max_pending_bytes = config.max_pending_bytes.unwrap_or(DEFAULT_KAFKA_MAX_PENDING_BYTES);
+        let linger_ms = config.linger_ms.unwrap_or(DEFAULT_KAFKA_LINGER_MS);
         if channel_size == 0 {
             anyhow::bail!("Kafka channel size must be greater than zero for '{}'", name);
+        }
+        if max_topics == 0 {
+            anyhow::bail!("Kafka max topics must be greater than zero for '{}'", name);
+        }
+        if max_pending_records == 0 {
+            anyhow::bail!("Kafka max pending records must be greater than zero for '{}'", name);
+        }
+        if max_pending_bytes == 0 {
+            anyhow::bail!("Kafka max pending bytes must be greater than zero for '{}'", name);
         }
         if Duration::from_millis(linger_ms) >= PRODUCE_TIMEOUT {
             anyhow::bail!(
@@ -128,6 +241,8 @@ impl KafkaLinkClient {
             linger_ms,
             inner_client: Arc::new(ArcSwapOption::empty()),
             topics: DashMap::new(),
+            topic_budget: TopicBudget::new(max_topics),
+            queue_budget: QueueBudget::new(max_pending_records, max_pending_bytes),
             healthy: Arc::new(AtomicBool::new(false)),
             last_flip_log_ms: Arc::new(AtomicU64::new(0)),
             shutdown_tx: parking_lot::Mutex::new(None),
@@ -183,10 +298,29 @@ impl KafkaLinkClient {
             anyhow::bail!("Kafka [{}] not initialized", self.name);
         }
 
-        let sender = self
-            .topics
-            .entry(topic.to_string())
-            .or_insert_with(|| {
+        let reservation = self.queue_budget.try_reserve(data.len()).map_err(|limit| match limit {
+            QueueBudgetError::Records => anyhow::anyhow!(
+                "Kafka [{}] aggregate pending record limit ({}) reached",
+                self.name,
+                self.queue_budget.max_records
+            ),
+            QueueBudgetError::Bytes => anyhow::anyhow!(
+                "Kafka [{}] aggregate pending byte limit ({}) reached",
+                self.name,
+                self.queue_budget.max_bytes
+            ),
+        })?;
+
+        let sender = match self.topics.entry(topic.to_string()) {
+            dashmap::mapref::entry::Entry::Occupied(entry) => entry.get().sender.clone(),
+            dashmap::mapref::entry::Entry::Vacant(entry) => {
+                let topic_reservation = self.topic_budget.try_reserve().ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "Kafka [{}] topic limit ({}) reached",
+                        self.name,
+                        self.topic_budget.max_topics
+                    )
+                })?;
                 let (tx, rx) = mpsc::channel(self.channel_size);
                 let topic_owned = topic.to_string();
                 let linger_ms = self.linger_ms;
@@ -196,32 +330,40 @@ impl KafkaLinkClient {
                 tokio::spawn(async move {
                     Self::run_producer_task(client, topic_owned, rx, linger_ms, name, healthy, last_flip_log_ms).await;
                 });
+                entry.insert(TopicEntry {
+                    sender: tx.clone(),
+                    _reservation: topic_reservation,
+                });
                 tx
-            })
-            .clone();
+            }
+        };
 
-        match sender.try_send(data) {
+        let record = QueuedRecord { data, reservation };
+
+        match sender.try_send(record) {
             Ok(()) => Ok(()),
-            Err(mpsc::error::TrySendError::Closed(_)) => {
+            Err(mpsc::error::TrySendError::Closed(_record)) => {
                 // The producer task exited (PartitionClient init failure, or a
                 // PRODUCE_TIMEOUT wedge). Evict the dead entry by value so a
                 // concurrent healthy respawn is never removed; the next produce
                 // re-spawns on the current (possibly rebuilt) inner_client.
-                self.topics.remove_if(topic, |_, tx| tx.is_closed());
+                self.topics.remove_if(topic, |_, entry| entry.sender.is_closed());
                 anyhow::bail!(
                     "Kafka [{}] topic {}: producer task closed; evicted for respawn",
                     self.name,
                     topic
                 )
             }
-            Err(e) => Err(anyhow::anyhow!("Kafka [{}] topic {}: {}", self.name, topic, e)),
+            Err(mpsc::error::TrySendError::Full(_record)) => {
+                anyhow::bail!("Kafka [{}] topic {}: per-topic channel is full", self.name, topic)
+            }
         }
     }
 
     async fn run_producer_task(
         client: Option<Arc<rskafka::client::Client>>,
         topic: String,
-        mut rx: mpsc::Receiver<String>,
+        mut rx: mpsc::Receiver<QueuedRecord>,
         linger_ms: u64,
         name: String,
         healthy: Arc<AtomicBool>,
@@ -252,14 +394,17 @@ impl KafkaLinkClient {
             .with_linger(Duration::from_millis(linger_ms))
             .build(RecordAggregator::new(MAX_BATCH_SIZE));
 
-        while let Some(data) = rx.recv().await {
+        while let Some(queued) = rx.recv().await {
+            let QueuedRecord { data, reservation } = queued;
             let record = Record {
                 key: None,
                 value: Some(data.into_bytes()),
                 headers: BTreeMap::new(),
                 timestamp: Utc::now(),
             };
-            match tokio::time::timeout(PRODUCE_TIMEOUT, producer.produce(record)).await {
+            let result = tokio::time::timeout(PRODUCE_TIMEOUT, producer.produce(record)).await;
+            drop(reservation);
+            match result {
                 Ok(Ok(_)) => {
                     if record_produce_result(&healthy, true) {
                         crate::observe::metrics::registry::record_link_sys_health(&name, true);
@@ -408,6 +553,9 @@ mod tests {
             sasl: None,
             tls: None,
             channel_size: None,
+            max_topics: None,
+            max_pending_records: None,
+            max_pending_bytes: None,
             linger_ms: None,
         };
         let auth = CredentialState::NotRequired;
@@ -425,6 +573,9 @@ mod tests {
             sasl: None,
             tls: None,
             channel_size: None,
+            max_topics: None,
+            max_pending_records: None,
+            max_pending_bytes: None,
             linger_ms: None,
         };
         let auth = CredentialState::NotRequired;
@@ -432,8 +583,11 @@ mod tests {
         assert!(result.is_ok());
         let client = result.unwrap();
         assert!(!client.healthy()); // not initialized yet
-        assert_eq!(client.channel_size, 4096);
-        assert_eq!(client.linger_ms, 5);
+        assert_eq!(client.channel_size, DEFAULT_KAFKA_CHANNEL_SIZE);
+        assert_eq!(client.topic_budget.max_topics, DEFAULT_KAFKA_MAX_TOPICS);
+        assert_eq!(client.queue_budget.max_records, DEFAULT_KAFKA_MAX_PENDING_RECORDS);
+        assert_eq!(client.queue_budget.max_bytes, DEFAULT_KAFKA_MAX_PENDING_BYTES);
+        assert_eq!(client.linger_ms, DEFAULT_KAFKA_LINGER_MS);
     }
 
     #[test]
@@ -443,6 +597,9 @@ mod tests {
             sasl: None,
             tls: None,
             channel_size: Some(0),
+            max_topics: None,
+            max_pending_records: None,
+            max_pending_bytes: None,
             linger_ms: None,
         };
         let result = KafkaLinkClient::from_config("default/kafka-main", &config, &CredentialState::NotRequired);
@@ -458,12 +615,54 @@ mod tests {
             sasl: None,
             tls: None,
             channel_size: None,
+            max_topics: None,
+            max_pending_records: None,
+            max_pending_bytes: None,
             linger_ms: Some(PRODUCE_TIMEOUT.as_millis() as u64),
         };
         let result = KafkaLinkClient::from_config("default/kafka-main", &config, &CredentialState::NotRequired);
 
         let error = result.err().expect("linger at the produce timeout must be rejected");
         assert!(error.to_string().contains("produce timeout"));
+    }
+
+    #[test]
+    fn queue_budget_enforces_record_limit_and_rolls_back_byte_reservation() {
+        let budget = QueueBudget::new(1, 100);
+        let first = budget.try_reserve(7).expect("first record must fit");
+
+        assert!(matches!(budget.try_reserve(11), Err(QueueBudgetError::Records)));
+        assert_eq!(budget.pending_records.load(Ordering::Acquire), 1);
+        assert_eq!(budget.pending_bytes.load(Ordering::Acquire), 7);
+
+        drop(first);
+        assert_eq!(budget.pending_records.load(Ordering::Acquire), 0);
+        assert_eq!(budget.pending_bytes.load(Ordering::Acquire), 0);
+    }
+
+    #[test]
+    fn queue_budget_enforces_bytes_and_releases_on_drop() {
+        let budget = QueueBudget::new(4, 5);
+        let first = budget.try_reserve(3).expect("first payload must fit");
+        let second = budget.try_reserve(2).expect("exact byte limit must fit");
+
+        assert!(matches!(budget.try_reserve(1), Err(QueueBudgetError::Bytes)));
+        drop(first);
+        assert_eq!(budget.pending_records.load(Ordering::Acquire), 1);
+        assert_eq!(budget.pending_bytes.load(Ordering::Acquire), 2);
+        drop(second);
+        assert_eq!(budget.pending_records.load(Ordering::Acquire), 0);
+        assert_eq!(budget.pending_bytes.load(Ordering::Acquire), 0);
+    }
+
+    #[test]
+    fn topic_budget_reuses_released_slots() {
+        let budget = TopicBudget::new(1);
+        let first = budget.try_reserve().expect("first topic must fit");
+
+        assert!(budget.try_reserve().is_none());
+        drop(first);
+        assert!(budget.try_reserve().is_some());
     }
 
     #[test]
