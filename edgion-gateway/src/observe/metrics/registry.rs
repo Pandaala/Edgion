@@ -142,8 +142,8 @@ pub mod names {
     // chunk, not the whole body.
     pub const WASM_BODY_PAUSE_UNSUPPORTED_TOTAL: &str = "edgion_wasm_body_pause_unsupported_total";
 
-    // Plugin policy enforcement (controller allowlist/denylist, spec
-    // 2026-07-17). Labeled by qualified plugin name (bounded by policy size).
+    // GatewayClass-scoped plugin policy enforcement. Labeled by qualified
+    // plugin name (bounded by policy size).
     pub const PLUGIN_POLICY_BLOCKED_TOTAL: &str = "edgion_gateway_plugin_policy_blocked_total";
     pub const PLUGIN_POLICY_BYPASSED_TOTAL: &str = "edgion_gateway_plugin_policy_bypassed_total";
 
@@ -1035,17 +1035,17 @@ pub fn record_wasm_body_pause_unsupported(module: &str) {
 // ============================================================
 //
 // Emitted by `policy_filter::PolicyBlockFilter` / `PolicyBypassNote`
-// (edgion-gateway/src/plugins/runtime/policy_filter.rs) when a request's
-// chain contains a controller-stamped `PluginPolicyAction`. `plugin` is the
+// (edgion-gateway/src/plugins/runtime/policy_filter.rs) when the published
+// GatewayClass-scoped policy for a request restricts an entry. `plugin` is the
 // qualified name (`http/<TypeName>`); cardinality is bounded by the number
 // of distinct plugin types the operator's policy touches.
 
-/// A request was rejected because its chain contains a Block-stamped plugin.
+/// A request was rejected because its scoped policy blocks a plugin.
 pub fn record_plugin_policy_blocked(plugin: &str) {
     counter!(names::PLUGIN_POLICY_BLOCKED_TOTAL, "plugin" => plugin.to_string()).increment(1);
 }
 
-/// A request passed through a chain with a Bypass-stamped plugin skipped.
+/// A request passed through a chain with a plugin bypassed by its scoped policy.
 pub fn record_plugin_policy_bypassed(plugin: &str) {
     counter!(names::PLUGIN_POLICY_BYPASSED_TOTAL, "plugin" => plugin.to_string()).increment(1);
 }

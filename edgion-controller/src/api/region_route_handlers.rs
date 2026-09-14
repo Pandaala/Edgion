@@ -65,10 +65,7 @@ pub async fn list_region_routes_effective(State(state): State<Arc<AdminState>>) 
 
         for (entry_index, entry) in entries.iter().enumerate() {
             let enabled = entry.get("enable").and_then(Value::as_bool).unwrap_or(true);
-            if !enabled
-                || entry.get("policyAction").is_some_and(|action| !action.is_null())
-                || entry.get("type").and_then(Value::as_str) != Some("RegionRoute")
-            {
+            if !enabled || entry.get("type").and_then(Value::as_str) != Some("RegionRoute") {
                 continue;
             }
             let Some(config) = entry.get("config") else {

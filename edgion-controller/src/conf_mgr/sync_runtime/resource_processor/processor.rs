@@ -242,7 +242,7 @@ pub trait ProcessorObj: Send + Sync {
     ///
     /// Unlike `get_raw_any`, this returns the handler-filtered object after
     /// `preparse`, `parse`, and status resolution. Use it for cross-kind reads
-    /// that must observe Controller-derived fields such as PluginPolicy stamps.
+    /// that must observe Controller-resolved references and authorization results.
     /// Do not use it for an `on_change` self-lookup: the current object is saved
     /// only after `on_change` returns.
     ///
