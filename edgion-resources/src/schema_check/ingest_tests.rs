@@ -425,6 +425,32 @@ fn link_sys_gate_off_and_on_preserve_advisory_semantics() {
 }
 
 #[test]
+fn link_sys_redis_removed_fields_are_reported_as_unknown() {
+    let _guard = GateGuard::set(&GATE_LOCK, true);
+    let spec: LinkSysSpec = serde_json::from_value(json!({
+        "type": "redis",
+        "config": {
+            "endpoints": ["redis://127.0.0.1:6379"],
+            "retry": {"maxAttempts": 3},
+            "pool": {"minIdle": 1},
+            "topology": {"mode": "cluster", "cluster": {"readFromReplicas": true}},
+            "observability": {"metrics": {"enabled": true}}
+        }
+    }))
+    .expect("removed Redis fields remain advisory rather than rejecting ingest");
+
+    assert_eq!(
+        spec.unknown_fields,
+        [
+            "config.observability",
+            "config.pool.minIdle",
+            "config.retry",
+            "config.topology.cluster.readFromReplicas",
+        ]
+    );
+}
+
+#[test]
 fn link_sys_strict_credential_boundary_is_unchanged_by_gate() {
     let doc = json!({
         "type": "redis",

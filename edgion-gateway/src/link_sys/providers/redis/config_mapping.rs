@@ -4,8 +4,6 @@
 //! with fred's native configuration structs. The mapping follows the Library-First
 //! principle: we use fred's API directly without inventing our own abstractions.
 
-use std::time::Duration;
-
 use anyhow::{Context, Result};
 use fred::types::config::{Config, ReconnectPolicy, ServerConfig, TcpConfig};
 use fred::types::Builder;
@@ -13,36 +11,7 @@ use fred::types::Builder;
 use crate::link_sys::credential::CredentialState;
 use edgion_resources::credentials::materials::BasicAuthMaterial;
 use edgion_resources::resources::common::TlsConfig;
-use edgion_resources::resources::link_sys::redis::{RedisClientConfig, RedisTopologyMode};
-
-// ============================================================================
-// Safety ceilings for connection configuration
-// ============================================================================
-
-const MAX_CONNECT_TIMEOUT_MS: u64 = 10_000;
-const MAX_COMMAND_TIMEOUT_MS: u64 = 30_000;
-const MAX_POOL_SIZE: usize = 64;
-const DEFAULT_POOL_SIZE: usize = 8;
-const DEFAULT_CONNECT_TIMEOUT_MS: u64 = 5_000;
-const DEFAULT_COMMAND_TIMEOUT_MS: u64 = 5_000;
-
-// ============================================================================
-// Timeout helpers
-// ============================================================================
-
-/// Resolve an effective timeout in milliseconds from an optional CRD value.
-///
-/// `None` (unset) and `Some(0)` both fall back to `default_ms`. fred treats a
-/// zero command/connect timeout as "disabled"; an explicit `0` in the CRD is a
-/// common "use the default" misreading that would otherwise disable fred's
-/// timeout and let a connected-but-hung Redis hang requests forever. Any
-/// positive value is capped at `max_ms`.
-fn effective_timeout_ms(configured: Option<u64>, default_ms: u64, max_ms: u64) -> u64 {
-    match configured {
-        None | Some(0) => default_ms,
-        Some(ms) => ms.min(max_ms),
-    }
-}
+use edgion_resources::resources::link_sys::redis::{RedisClientConfig, RedisTopologyMode, REDIS_DEFAULT_POOL_SIZE};
 
 // ============================================================================
 // Config mapping (CRD → fred Config)
@@ -63,6 +32,10 @@ fn effective_timeout_ms(configured: Option<u64>, default_ms: u64, max_ms: u64) -
 /// to filter these out up-front by checking
 /// `auth_state.is_buildable() && credential::tls_ready(ls)`.
 pub fn build_fred_config(crd: &RedisClientConfig, auth: &CredentialState<BasicAuthMaterial>) -> Result<Config> {
+    let validation_errors = crd.validation_errors();
+    if !validation_errors.is_empty() {
+        anyhow::bail!(validation_errors.join("; "));
+    }
     let server = build_server_config(crd)?;
 
     let mut config = Config {
@@ -143,7 +116,8 @@ fn build_server_config(crd: &RedisClientConfig) -> Result<ServerConfig> {
 pub fn build_fred_pool(crd: &RedisClientConfig, config: Config) -> Result<(Builder, usize)> {
     let mut builder = Builder::from_config(config);
 
-    // Reconnection policy: exponential backoff, retry forever (max_attempts = 0)
+    // Reconnect indefinitely so a published client can recover, but do not
+    // transparently replay commands whose execution outcome is unknown.
     builder.set_policy(ReconnectPolicy::new_exponential(
         0,      // max_attempts: 0 = infinite
         100,    // min_delay: 100ms
@@ -152,14 +126,19 @@ pub fn build_fred_pool(crd: &RedisClientConfig, config: Config) -> Result<(Build
     ));
 
     // Connection config (timeouts, TCP settings)
-    let connect_timeout = effective_timeout_ms(
-        crd.timeout.as_ref().and_then(|t| t.connect),
-        DEFAULT_CONNECT_TIMEOUT_MS,
-        MAX_CONNECT_TIMEOUT_MS,
-    );
+    let connect_timeout = crd.connect_timeout().map_err(anyhow::Error::msg)?;
+    let max_redirections = crd
+        .topology
+        .as_ref()
+        .and_then(|topology| topology.cluster.as_ref())
+        .and_then(|cluster| cluster.max_redirects);
 
     builder.with_connection_config(|conn| {
-        conn.connection_timeout = Duration::from_millis(connect_timeout);
+        conn.connection_timeout = connect_timeout;
+        conn.max_command_attempts = 1;
+        if let Some(max_redirections) = max_redirections {
+            conn.max_redirections = max_redirections;
+        }
         conn.tcp = TcpConfig {
             nodelay: Some(true),
             ..Default::default()
@@ -167,14 +146,10 @@ pub fn build_fred_pool(crd: &RedisClientConfig, config: Config) -> Result<(Build
     });
 
     // Performance config (command timeout)
-    let cmd_timeout = effective_timeout_ms(
-        crd.timeout.as_ref().and_then(|t| t.read.or(t.write)),
-        DEFAULT_COMMAND_TIMEOUT_MS,
-        MAX_COMMAND_TIMEOUT_MS,
-    );
+    let command_timeout = crd.command_timeout().map_err(anyhow::Error::msg)?;
 
     builder.with_performance_config(|perf| {
-        perf.default_command_timeout = Duration::from_millis(cmd_timeout);
+        perf.default_command_timeout = command_timeout;
     });
 
     let explicit_tls = crd.tls.as_ref().is_some_and(|tls| tls.enabled);
@@ -223,8 +198,7 @@ pub fn build_fred_pool(crd: &RedisClientConfig, config: Config) -> Result<(Build
         .pool
         .as_ref()
         .and_then(|p| p.size)
-        .map(|s| (s as usize).min(MAX_POOL_SIZE))
-        .unwrap_or(DEFAULT_POOL_SIZE);
+        .unwrap_or(REDIS_DEFAULT_POOL_SIZE) as usize;
 
     Ok((builder, pool_size))
 }
@@ -330,10 +304,8 @@ mod tests {
             db: None,
             timeout: None,
             pool: None,
-            retry: None,
             topology: None,
             tls: None,
-            observability: None,
         }
     }
 
@@ -418,10 +390,7 @@ mod tests {
             topology: Some(RedisTopology {
                 mode: RedisTopologyMode::Cluster,
                 sentinel: None,
-                cluster: Some(RedisCluster {
-                    read_from_replicas: Some(true),
-                    max_redirects: Some(5),
-                }),
+                cluster: Some(RedisCluster { max_redirects: Some(5) }),
             }),
             ..minimal_config(vec![])
         };
@@ -590,17 +559,13 @@ mod tests {
     }
 
     #[test]
-    fn test_pool_size_clamped_to_max() {
+    fn pool_size_above_max_is_rejected() {
         let crd = RedisClientConfig {
-            pool: Some(RedisPool {
-                size: Some(200),
-                min_idle: None,
-            }),
+            pool: Some(RedisPool { size: Some(200) }),
             ..minimal_config(vec!["redis://localhost:6379".to_string()])
         };
-        let config = build_fred_config(&crd, &no_auth()).unwrap();
-        let (_builder, pool_size) = build_fred_pool(&crd, config).unwrap();
-        assert_eq!(pool_size, MAX_POOL_SIZE);
+        let error = build_fred_config(&crd, &no_auth()).unwrap_err();
+        assert!(error.to_string().contains("pool.size must be between 1 and 64"));
     }
 
     #[test]
@@ -608,7 +573,7 @@ mod tests {
         let crd = minimal_config(vec!["redis://localhost:6379".to_string()]);
         let config = build_fred_config(&crd, &no_auth()).unwrap();
         let (_builder, pool_size) = build_fred_pool(&crd, config).unwrap();
-        assert_eq!(pool_size, DEFAULT_POOL_SIZE);
+        assert_eq!(pool_size, REDIS_DEFAULT_POOL_SIZE as usize);
     }
 
     #[test]
@@ -705,10 +670,7 @@ mod tests {
                 topology: Some(RedisTopology {
                     mode: RedisTopologyMode::Cluster,
                     sentinel: None,
-                    cluster: Some(RedisCluster {
-                        read_from_replicas: Some(true),
-                        max_redirects: Some(5),
-                    }),
+                    cluster: Some(RedisCluster { max_redirects: Some(5) }),
                 }),
                 ..minimal_config(vec![])
             };
@@ -727,10 +689,7 @@ mod tests {
             topology: Some(RedisTopology {
                 mode: RedisTopologyMode::Cluster,
                 sentinel: None,
-                cluster: Some(RedisCluster {
-                    read_from_replicas: Some(true),
-                    max_redirects: Some(5),
-                }),
+                cluster: Some(RedisCluster { max_redirects: Some(5) }),
             }),
             ..minimal_config(vec![])
         };
@@ -780,10 +739,7 @@ mod tests {
                 topology: Some(RedisTopology {
                     mode: RedisTopologyMode::Cluster,
                     sentinel: None,
-                    cluster: Some(RedisCluster {
-                        read_from_replicas: Some(true),
-                        max_redirects: Some(5),
-                    }),
+                    cluster: Some(RedisCluster { max_redirects: Some(5) }),
                 }),
                 tls: Some(TlsConfig {
                     enabled: true,
@@ -797,11 +753,28 @@ mod tests {
     }
 
     #[test]
-    fn effective_timeout_treats_zero_and_none_as_default() {
-        assert_eq!(effective_timeout_ms(None, 5_000, 30_000), 5_000);
-        assert_eq!(effective_timeout_ms(Some(0), 5_000, 30_000), 5_000);
-        assert_eq!(effective_timeout_ms(Some(1_000), 5_000, 30_000), 1_000);
-        assert_eq!(effective_timeout_ms(Some(99_999), 5_000, 30_000), 30_000);
+    fn command_contract_maps_timeouts_retries_and_redirects() {
+        let crd = RedisClientConfig {
+            timeout: Some(RedisTimeout {
+                connect: Some("3s".to_string()),
+                command: Some("2s".to_string()),
+            }),
+            topology: Some(RedisTopology {
+                mode: RedisTopologyMode::Cluster,
+                sentinel: None,
+                cluster: Some(RedisCluster { max_redirects: Some(6) }),
+            }),
+            ..minimal_config(vec!["redis://redis.example.com:6379".to_string()])
+        };
+        let config = build_fred_config(&crd, &no_auth()).unwrap();
+        let (builder, _) = build_fred_pool(&crd, config).unwrap();
+        let connection = builder.get_connection_config();
+        let performance = builder.get_performance_config();
+
+        assert_eq!(connection.connection_timeout, std::time::Duration::from_secs(3));
+        assert_eq!(connection.max_command_attempts, 1);
+        assert_eq!(connection.max_redirections, 6);
+        assert_eq!(performance.default_command_timeout, std::time::Duration::from_secs(2));
     }
 
     /// Guard: fred's rustls connector always verifies — verify=false must be

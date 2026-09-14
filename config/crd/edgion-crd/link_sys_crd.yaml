@@ -158,21 +158,19 @@ spec:
                           required: [name]
                     timeout:
                       type: object
-                      description: "Timeout configuration (milliseconds)"
+                      description: "Provider timeout configuration"
                       x-kubernetes-preserve-unknown-fields: true
                     # Redis specific
                     db:
                       type: integer
-                      description: "Redis database number (0-15)"
+                      description: "Redis database number (0-255)"
                       format: int32
                     pool:
                       type: object
                       description: "Connection pool configuration"
+                      x-kubernetes-preserve-unknown-fields: true
                       properties:
                         size:
-                          type: integer
-                          format: int32
-                        minIdle:
                           type: integer
                           format: int32
                     topology:
@@ -193,9 +191,8 @@ spec:
                                 type: string
                         cluster:
                           type: object
+                          x-kubernetes-preserve-unknown-fields: true
                           properties:
-                            readFromReplicas:
-                              type: boolean
                             maxRedirects:
                               type: integer
                               format: int32

@@ -175,19 +175,12 @@ impl LinkSys {
                 if redis_config.endpoints.is_empty() {
                     errors.push("Redis configuration has no endpoints".to_string());
                 }
+                errors.extend(redis_config.validation_errors());
 
                 // Topology consistency
                 if let Some(topology) = &redis_config.topology {
-                    match topology.mode {
-                        redis::RedisTopologyMode::Sentinel => {
-                            if topology.sentinel.is_none() {
-                                errors.push("Sentinel mode specified but sentinel config is missing".to_string());
-                            }
-                        }
-                        redis::RedisTopologyMode::Cluster if topology.cluster.is_none() => {
-                            errors.push("Cluster mode specified but cluster config is missing".to_string());
-                        }
-                        _ => {}
+                    if topology.mode == redis::RedisTopologyMode::Sentinel && topology.sentinel.is_none() {
+                        errors.push("Sentinel mode specified but sentinel config is missing".to_string());
                     }
                 }
             }
@@ -366,5 +359,32 @@ config:
         assert!(errors.iter().any(|error| error.contains("maxTopics")));
         assert!(errors.iter().any(|error| error.contains("maxPendingRecords")));
         assert!(errors.iter().any(|error| error.contains("maxPendingBytes")));
+    }
+
+    #[test]
+    fn redis_contract_errors_flow_through_link_sys_validation() {
+        let yaml = r#"
+type: redis
+config:
+  endpoints: ["redis://redis.example.com:6379"]
+  db: 256
+  pool:
+    size: 0
+  timeout:
+    connect: 0s
+    command: 31s
+  topology:
+    mode: cluster
+    cluster:
+      maxRedirects: 65
+"#;
+        let spec: LinkSysSpec = serde_yaml::from_str(yaml).expect("parse Redis LinkSys");
+        let errors = make_link_sys("r", spec).validate_config().join("; ");
+
+        assert!(errors.contains("db must be between 0 and 255"));
+        assert!(errors.contains("pool.size must be between 1 and 64"));
+        assert!(errors.contains("timeout.connect must be greater than zero"));
+        assert!(errors.contains("timeout.command must not exceed 30000ms"));
+        assert!(errors.contains("maxRedirects must not exceed 64"));
     }
 }

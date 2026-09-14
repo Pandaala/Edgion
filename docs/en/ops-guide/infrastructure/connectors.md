@@ -114,7 +114,9 @@ block. The same rule applies to the TLS block of a `credentialSource` provider.
 
 ### Observability
 
-Redis, Etcd, and Elasticsearch accept a shared `observability` block.
+Etcd and Elasticsearch accept a shared `observability` block. Redis observability
+uses the Gateway's binary-owned logs and inventory-managed metrics instead of a
+per-connector configuration block.
 
 ```yaml
 observability:
@@ -155,11 +157,9 @@ spec:
         name: redis-auth
     pool:
       size: 16
-      minIdle: 2
     timeout:
-      connect: 3000
-      read: 2000
-      write: 2000
+      connect: 3s
+      command: 2s
 ```
 
 ### Basic parameters
@@ -167,25 +167,23 @@ spec:
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `endpoints` | Array\<String\> | **Required** | Redis endpoints; at least one. Example: `"redis://redis:6379"` or `"rediss://..."` for TLS. |
-| `db` | Integer | none | Database index (0–15). |
+| `db` | Integer | none | Database index (0–255). The Redis server must expose the selected database. |
 | `auth` | Object | none | Authentication. When present, `auth.secretRef` is required. The Secret must provide `password`; `username` is optional (Redis 6+ ACL). |
 | `tls` | Object | none | TLS configuration; see [TLS](#tls). |
-| `observability` | Object | none | Logging and metrics; see [Observability](#observability). |
 
 ### Connection pool and timeouts
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `pool.size` | Integer | none | Maximum pool size. |
-| `pool.minIdle` | Integer | none | Minimum idle connections to keep. |
-| `timeout.connect` | Integer | none | Connection timeout in milliseconds. |
-| `timeout.read` | Integer | none | Read timeout in milliseconds. |
-| `timeout.write` | Integer | none | Write timeout in milliseconds. |
-| `retry.maxRetries` | Integer | none | Maximum operation retries. |
-| `retry.backoff.type` | String | **Required** (when `backoff` is set) | Backoff strategy. Example: `exponential`, `linear`, `fixed`. |
-| `retry.backoff.initialDelay` | Integer | none | Initial retry delay in milliseconds. |
-| `retry.backoff.maxDelay` | Integer | none | Maximum retry delay in milliseconds. |
-| `retry.backoff.multiplier` | Number | none | Multiplier for exponential backoff. |
+| `pool.size` | Integer | `8` | Fixed connection count, from 1 through 64. All connections are initialized eagerly. |
+| `timeout.connect` | Duration | `5s` | Connection timeout; must be greater than zero and no more than `10s`. |
+| `timeout.command` | Duration | `5s` | Timeout for one Redis command; must be greater than zero and no more than `30s`. |
+
+Redis durations use the Gateway API duration syntax, such as `500ms`, `3s`, or
+`10s`. The connector continuously retries connection establishment with a fixed
+bounded exponential backoff so it can recover after an outage. It does not
+transparently replay an ordinary command after an ambiguous connection failure;
+callers must decide whether repeating their operation is safe.
 
 ### Topology: standalone, sentinel, cluster
 
@@ -193,13 +191,15 @@ spec:
 |-----------|------|---------|-------------|
 | `topology.mode` | Enum | — (required when `topology` is set) | Deployment topology. Allowed values: `standalone` \| `sentinel` \| `cluster`. |
 | `topology.sentinel` | Object | none | Sentinel configuration. **Required when `mode=sentinel`.** |
-| `topology.cluster` | Object | none | Cluster configuration. **Required when `mode=cluster`.** |
+| `topology.cluster` | Object | none | Optional Cluster routing configuration. |
 | `topology.sentinel.masterName` | String | **Required** | Master name monitored by Sentinel. |
 | `topology.sentinel.sentinels` | Array\<String\> | **Required** | Sentinel addresses (`host:port`). |
-| `topology.cluster.readFromReplicas` | Boolean | none | Allow reads to be served from replica nodes. |
-| `topology.cluster.maxRedirects` | Integer | none | Maximum cluster redirects to follow. |
+| `topology.cluster.maxRedirects` | Integer | `5` | Maximum cluster redirects to follow, from 0 through 64. |
 
-When `topology` is omitted, the connector runs in standalone mode. When `mode=sentinel` but `sentinel` is missing (or `mode=cluster` but `cluster` is missing), the status reports `Accepted=False/Invalid`.
+When `topology` is omitted, the connector runs in standalone mode. When
+`mode=sentinel` but `sentinel` is missing, the status reports
+`Accepted=False/Invalid`. Cluster mode needs a `cluster` block only when
+overriding `maxRedirects`.
 
 ### DNS and egress policy
 
@@ -264,7 +264,6 @@ spec:
     topology:
       mode: cluster
       cluster:
-        readFromReplicas: true
         maxRedirects: 6
 ```
 

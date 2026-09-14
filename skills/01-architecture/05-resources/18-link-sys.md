@@ -159,7 +159,7 @@ Publication and teardown invariants:
 
 `LinkSysStore` manages the provider client lifecycle:
 - LinkSys created → build the provider client
-- LinkSys updated → consult `config_mapping` to decide whether the client must be rebuilt (Redis params changed, endpoints changed, auth changed, tls changed → rebuild; observability changed → only update hot fields)
+- LinkSys updated → consult `config_mapping` to decide whether the client must be rebuilt (Redis params changed, endpoints changed, auth changed, or TLS changed → rebuild)
 - LinkSys deleted → gracefully close connections / return them to the pool
 - `type: credentialSource` is a no-op in `LinkSysStore` (no runtime client). The
   Gateway never contacts the issuer; the active token arrives on EdgionPlugins

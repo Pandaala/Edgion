@@ -66,18 +66,12 @@ fn redis_config() -> (RedisClientConfig, CredentialState<BasicAuthMaterial>) {
         }),
         db: Some(0),
         timeout: Some(RedisTimeout {
-            connect: Some(3_000),
-            read: Some(2_000),
-            write: Some(2_000),
+            connect: Some("3s".to_string()),
+            command: Some("2s".to_string()),
         }),
-        pool: Some(RedisPool {
-            size: Some(1),
-            min_idle: None,
-        }),
-        retry: None,
+        pool: Some(RedisPool { size: Some(1) }),
         topology: None,
         tls: None,
-        observability: None,
     };
     let auth = CredentialState::Resolved(BasicAuthMaterial {
         username: None,

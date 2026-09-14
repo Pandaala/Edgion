@@ -546,3 +546,39 @@ fn linksys_auth_reference_fields_survive_kubernetes_pruning() {
         assert!(config.validate().is_err());
     }
 }
+
+#[test]
+fn linksys_removed_redis_fields_survive_kubernetes_pruning_for_advisory_reporting() {
+    let crd = crd_section("link_sys_crd.yaml", "spec");
+    let config = &crd["properties"]["config"];
+
+    for path in [
+        &["properties", "pool"][..],
+        &["properties", "topology", "properties", "cluster"][..],
+    ] {
+        let mut node = config;
+        for segment in path {
+            node = &node[*segment];
+        }
+        assert_eq!(
+            node["x-kubernetes-preserve-unknown-fields"],
+            serde_json::json!(true),
+            "removed Redis fields must reach strict ingest and become advisory unknown_fields"
+        );
+    }
+
+    for (field, node) in [
+        ("db", &config["properties"]["db"]),
+        ("pool.size", &config["properties"]["pool"]["properties"]["size"]),
+    ] {
+        assert!(
+            node.get("minimum").is_none() && node.get("maximum").is_none(),
+            "Redis value bounds belong to lenient Controller validation: {field}"
+        );
+    }
+    let redirects = &config["properties"]["topology"]["properties"]["cluster"]["properties"]["maxRedirects"];
+    assert!(
+        redirects.get("minimum").is_none() && redirects.get("maximum").is_none(),
+        "Redis redirect bounds belong to lenient Controller validation"
+    );
+}

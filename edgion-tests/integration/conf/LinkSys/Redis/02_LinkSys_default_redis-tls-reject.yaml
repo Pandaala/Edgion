@@ -28,6 +28,5 @@ spec:
     pool:
       size: 2
     timeout:
-      connect: 3000
-      read: 2000
-      write: 2000
+      connect: 3s
+      command: 2s

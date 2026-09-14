@@ -2,9 +2,18 @@
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::time::Duration;
 
+use crate::duration::parse_duration;
 use crate::resources::common::{SecretSlot, TlsConfig};
+
+pub const REDIS_DEFAULT_POOL_SIZE: u32 = 8;
+pub const REDIS_MAX_POOL_SIZE: u32 = 64;
+pub const REDIS_DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+pub const REDIS_MAX_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+pub const REDIS_DEFAULT_COMMAND_TIMEOUT: Duration = Duration::from_secs(5);
+pub const REDIS_MAX_COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
+pub const REDIS_MAX_REDIRECTS: u32 = 64;
 
 /// Redis client configuration
 #[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
@@ -17,7 +26,7 @@ pub struct RedisClientConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auth: Option<RedisAuth>,
 
-    /// Database number (0-15 for standard Redis)
+    /// Database number (0-255; the server must expose the selected database)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub db: Option<i32>,
 
@@ -29,10 +38,6 @@ pub struct RedisClientConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pool: Option<RedisPool>,
 
-    /// Retry configuration
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub retry: Option<RedisRetry>,
-
     /// Redis topology configuration
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub topology: Option<RedisTopology>,
@@ -40,10 +45,90 @@ pub struct RedisClientConfig {
     /// TLS configuration
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tls: Option<TlsConfig>,
+}
 
-    /// Observability configuration
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub observability: Option<RedisObservability>,
+impl RedisClientConfig {
+    pub fn validation_errors(&self) -> Vec<String> {
+        let mut errors = Vec::new();
+
+        if !(0..=255).contains(&self.db.unwrap_or_default()) {
+            errors.push("Redis db must be between 0 and 255".to_string());
+        }
+
+        if let Some(size) = self.pool.as_ref().and_then(|pool| pool.size) {
+            if !(1..=REDIS_MAX_POOL_SIZE).contains(&size) {
+                errors.push(format!("Redis pool.size must be between 1 and {REDIS_MAX_POOL_SIZE}"));
+            }
+        }
+
+        if let Some(timeout) = &self.timeout {
+            validate_timeout(
+                timeout.connect.as_deref(),
+                REDIS_MAX_CONNECT_TIMEOUT,
+                "timeout.connect",
+                &mut errors,
+            );
+            validate_timeout(
+                timeout.command.as_deref(),
+                REDIS_MAX_COMMAND_TIMEOUT,
+                "timeout.command",
+                &mut errors,
+            );
+        }
+
+        if let Some(max_redirects) = self
+            .topology
+            .as_ref()
+            .and_then(|topology| topology.cluster.as_ref())
+            .and_then(|cluster| cluster.max_redirects)
+        {
+            if max_redirects > REDIS_MAX_REDIRECTS {
+                errors.push(format!(
+                    "Redis topology.cluster.maxRedirects must not exceed {REDIS_MAX_REDIRECTS}"
+                ));
+            }
+        }
+
+        errors
+    }
+
+    pub fn connect_timeout(&self) -> Result<Duration, String> {
+        resolve_timeout(
+            self.timeout.as_ref().and_then(|timeout| timeout.connect.as_deref()),
+            REDIS_DEFAULT_CONNECT_TIMEOUT,
+            REDIS_MAX_CONNECT_TIMEOUT,
+            "timeout.connect",
+        )
+    }
+
+    pub fn command_timeout(&self) -> Result<Duration, String> {
+        resolve_timeout(
+            self.timeout.as_ref().and_then(|timeout| timeout.command.as_deref()),
+            REDIS_DEFAULT_COMMAND_TIMEOUT,
+            REDIS_MAX_COMMAND_TIMEOUT,
+            "timeout.command",
+        )
+    }
+}
+
+fn validate_timeout(value: Option<&str>, maximum: Duration, field: &str, errors: &mut Vec<String>) {
+    if let Err(error) = resolve_timeout(value, Duration::from_secs(1), maximum, field) {
+        errors.push(error);
+    }
+}
+
+fn resolve_timeout(value: Option<&str>, default: Duration, maximum: Duration, field: &str) -> Result<Duration, String> {
+    let Some(value) = value else {
+        return Ok(default);
+    };
+    let duration = parse_duration(value).map_err(|error| format!("Redis {field} is invalid: {error}"))?;
+    if duration.is_zero() {
+        return Err(format!("Redis {field} must be greater than zero"));
+    }
+    if duration > maximum {
+        return Err(format!("Redis {field} must not exceed {}ms", maximum.as_millis()));
+    }
+    Ok(duration)
 }
 
 /// Redis authentication configuration.
@@ -58,21 +143,19 @@ pub struct RedisAuth {
     pub slot: SecretSlot,
 }
 
-/// Redis timeout configuration (in milliseconds)
+/// Redis timeout configuration
 #[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct RedisTimeout {
-    /// Connection timeout in milliseconds
+    /// Connection establishment timeout in GEP-2257 format
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub connect: Option<u64>,
+    #[schemars(pattern(crate::duration::GEP2257_PATTERN))]
+    pub connect: Option<String>,
 
-    /// Read timeout in milliseconds
+    /// Timeout for one Redis command in GEP-2257 format
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub read: Option<u64>,
-
-    /// Write timeout in milliseconds
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub write: Option<u64>,
+    #[schemars(pattern(crate::duration::GEP2257_PATTERN))]
+    pub command: Option<String>,
 }
 
 /// Redis connection pool configuration
@@ -82,44 +165,6 @@ pub struct RedisPool {
     /// Maximum pool size
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub size: Option<u32>,
-
-    /// Minimum idle connections
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub min_idle: Option<u32>,
-}
-
-/// Redis retry configuration
-#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct RedisRetry {
-    /// Maximum number of retries
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_retries: Option<u32>,
-
-    /// Backoff configuration (e.g., "exponential", "linear", "fixed")
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub backoff: Option<RedisBackoff>,
-}
-
-/// Redis backoff strategy
-#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct RedisBackoff {
-    /// Backoff strategy type
-    #[serde(rename = "type")]
-    pub backoff_type: String,
-
-    /// Initial delay in milliseconds
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub initial_delay: Option<u64>,
-
-    /// Maximum delay in milliseconds
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_delay: Option<u64>,
-
-    /// Multiplier for exponential backoff
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub multiplier: Option<f64>,
 }
 
 /// Redis topology configuration
@@ -162,56 +207,9 @@ pub struct RedisSentinel {
 #[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct RedisCluster {
-    /// Read from replicas
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub read_from_replicas: Option<bool>,
-
     /// Maximum redirects
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_redirects: Option<u32>,
-}
-
-/// Redis observability configuration
-#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct RedisObservability {
-    /// Enable metrics collection
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub metrics: Option<RedisMetrics>,
-
-    /// Logging configuration
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub logging: Option<RedisLogging>,
-}
-
-/// Redis metrics configuration
-#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct RedisMetrics {
-    /// Enable metrics
-    #[serde(default)]
-    pub enabled: bool,
-
-    /// Metrics labels
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub labels: Option<HashMap<String, String>>,
-}
-
-/// Redis logging configuration
-#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct RedisLogging {
-    /// Enable logging
-    #[serde(default)]
-    pub enabled: bool,
-
-    /// Log level (e.g., "debug", "info", "warn", "error")
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub level: Option<String>,
-
-    /// Log slow operations (threshold in milliseconds)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub slow_log_threshold: Option<u64>,
 }
 
 // =============================================================================
@@ -221,6 +219,79 @@ pub struct RedisLogging {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn minimal_config() -> RedisClientConfig {
+        RedisClientConfig {
+            endpoints: vec!["redis://redis.example.com:6379".to_string()],
+            auth: None,
+            db: None,
+            timeout: None,
+            pool: None,
+            topology: None,
+            tls: None,
+        }
+    }
+
+    #[test]
+    fn redis_configuration_contract_accepts_supported_boundaries() {
+        let config = RedisClientConfig {
+            db: Some(255),
+            timeout: Some(RedisTimeout {
+                connect: Some("10s".to_string()),
+                command: Some("30s".to_string()),
+            }),
+            pool: Some(RedisPool {
+                size: Some(REDIS_MAX_POOL_SIZE),
+            }),
+            topology: Some(RedisTopology {
+                mode: RedisTopologyMode::Cluster,
+                sentinel: None,
+                cluster: Some(RedisCluster {
+                    max_redirects: Some(REDIS_MAX_REDIRECTS),
+                }),
+            }),
+            ..minimal_config()
+        };
+
+        assert!(config.validation_errors().is_empty());
+        assert_eq!(config.connect_timeout().unwrap(), REDIS_MAX_CONNECT_TIMEOUT);
+        assert_eq!(config.command_timeout().unwrap(), REDIS_MAX_COMMAND_TIMEOUT);
+    }
+
+    #[test]
+    fn redis_configuration_contract_rejects_unsupported_values() {
+        let config = RedisClientConfig {
+            db: Some(256),
+            timeout: Some(RedisTimeout {
+                connect: Some("0s".to_string()),
+                command: Some("31s".to_string()),
+            }),
+            pool: Some(RedisPool { size: Some(0) }),
+            topology: Some(RedisTopology {
+                mode: RedisTopologyMode::Cluster,
+                sentinel: None,
+                cluster: Some(RedisCluster {
+                    max_redirects: Some(REDIS_MAX_REDIRECTS + 1),
+                }),
+            }),
+            ..minimal_config()
+        };
+        let errors = config.validation_errors().join("; ");
+
+        assert!(errors.contains("db must be between 0 and 255"));
+        assert!(errors.contains("pool.size must be between 1 and 64"));
+        assert!(errors.contains("timeout.connect must be greater than zero"));
+        assert!(errors.contains("timeout.command must not exceed 30000ms"));
+        assert!(errors.contains("maxRedirects must not exceed 64"));
+    }
+
+    #[test]
+    fn redis_timeout_defaults_are_explicit_and_bounded() {
+        let config = minimal_config();
+
+        assert_eq!(config.connect_timeout().unwrap(), REDIS_DEFAULT_CONNECT_TIMEOUT);
+        assert_eq!(config.command_timeout().unwrap(), REDIS_DEFAULT_COMMAND_TIMEOUT);
+    }
 
     #[test]
     fn redis_auth_requires_secret_ref() {

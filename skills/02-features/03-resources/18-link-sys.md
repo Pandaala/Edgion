@@ -115,34 +115,33 @@ spec:
   config:
     endpoints:                    # Required, at least one
       - "redis://redis:6379"
-    db: 0                         # 0-15, Redis standard database index
+    db: 0                         # 0-255; the server must expose the database
     auth:                         # Optional; secretRef is required when present
       secretRef:
         name: redis-auth
     pool:
       size: 16
-      minIdle: 2
     timeout:
-      connect: 3000               # ms
-      read: 2000
-      write: 2000
+      connect: 3s
+      command: 2s
     topology:                     # standalone (default) | sentinel | cluster
       mode: sentinel
       sentinel:
         masterName: mymaster
         sentinels: ["sentinel-1:26379", "sentinel-2:26379"]
       # cluster:
-      #   readFromReplicas: true
       #   maxRedirects: 6
     tls:
       enabled: true
       clientCertificateRef: { name: redis-client-tls }
-    observability:
-      logging: { enabled: true, level: info, slowLogThreshold: 200 }
-      metrics: { enabled: true, labels: { env: prod } }
 ```
 
-- When `topology.mode=sentinel`, `sentinel` is required; when `mode=cluster`, `cluster` is required; otherwise `Accepted=False/Invalid`.
+- When `topology.mode=sentinel`, `sentinel` is required; otherwise the resource is `Accepted=False/Invalid`. Cluster mode uses Fred defaults when its optional `cluster` block is absent.
+- `pool.size` is a fixed eager connection count in the range 1-64 (default 8).
+- `timeout.connect` and `timeout.command` use GEP-2257 durations. Their defaults are `5s`; the maxima are `10s` and `30s`, respectively.
+- Cluster `maxRedirects` defaults to 5 and accepts 0-64. The `cluster` block is optional when the default is sufficient.
+- Redis retries connection establishment with fixed bounded exponential backoff, but does not transparently replay an ordinary command after an ambiguous connection failure.
+- Redis logging and metrics are owned by the Gateway binary; Redis has no per-connector observability block or arbitrary metric labels.
 - `auth` uses `BasicAuthResolver`: the Secret must provide at least `password`; `username` is optional (Redis 6+ ACL).
 - Fred resolves every configured, reconnect, Sentinel-discovered, and Cluster-discovered dial through the canonical Gateway `EgressResolver` with `ResolverSpec::System`. This happens per connection attempt, not per Redis command. Loopback/link-local/unspecified addresses are rejected in production; private/unique-local addresses follow the Gateway-wide `outbound_egress_block_private` setting. Redis has no resource-level override, and results use `outbound_egress_dns_cache_ttl_ms`.
 

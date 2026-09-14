@@ -109,19 +109,13 @@ impl Fixture {
             endpoints: vec![self.endpoint.clone()],
             db: Some(0),
             timeout: Some(RedisTimeout {
-                connect: Some(3_000),
-                read: Some(2_000),
-                write: Some(2_000),
+                connect: Some("3s".to_string()),
+                command: Some("2s".to_string()),
             }),
-            pool: Some(RedisPool {
-                size: Some(4),
-                min_idle: None,
-            }),
+            pool: Some(RedisPool { size: Some(4) }),
             auth: None,
-            retry: None,
             topology: None,
             tls: None,
-            observability: None,
         };
         let auth = if let Some(password) = &self.password {
             config.auth = Some(RedisAuth {

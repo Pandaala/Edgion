@@ -110,7 +110,8 @@ tls:
 
 ### 可观测性
 
-Redis、Etcd 和 Elasticsearch 支持共享的 `observability` 块。
+Etcd 和 Elasticsearch 支持共享的 `observability` 块。Redis 使用 Gateway
+二进制统一管理的日志以及指标清单约束的指标，不提供连接器级观测配置块。
 
 ```yaml
 observability:
@@ -151,11 +152,9 @@ spec:
         name: redis-auth
     pool:
       size: 16
-      minIdle: 2
     timeout:
-      connect: 3000
-      read: 2000
-      write: 2000
+      connect: 3s
+      command: 2s
 ```
 
 ### 基础参数
@@ -163,25 +162,21 @@ spec:
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `endpoints` | Array\<String\> | **必填** | Redis 端点，至少一个。示例：`"redis://redis:6379"` 或 `"rediss://..."` 表示 TLS。 |
-| `db` | Integer | none | 数据库索引（0–15）。 |
+| `db` | Integer | none | 数据库索引（0–255）；Redis 服务端必须提供所选数据库。 |
 | `auth` | Object | none | 认证配置。存在时 `auth.secretRef` 必填。Secret 需提供 `password`；`username` 可选（Redis 6+ ACL）。 |
 | `tls` | Object | none | TLS 配置；详见 [TLS](#tls)。 |
-| `observability` | Object | none | 日志和指标；详见[可观测性](#可观测性)。 |
 
 ### 连接池与超时
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `pool.size` | Integer | none | 连接池最大大小。 |
-| `pool.minIdle` | Integer | none | 保持的最小空闲连接数。 |
-| `timeout.connect` | Integer | none | 连接超时（毫秒）。 |
-| `timeout.read` | Integer | none | 读超时（毫秒）。 |
-| `timeout.write` | Integer | none | 写超时（毫秒）。 |
-| `retry.maxRetries` | Integer | none | 最大重试次数。 |
-| `retry.backoff.type` | String | **必填**（设置 `backoff` 时） | 退避策略。示例：`exponential`、`linear`、`fixed`。 |
-| `retry.backoff.initialDelay` | Integer | none | 初始重试延迟（毫秒）。 |
-| `retry.backoff.maxDelay` | Integer | none | 最大重试延迟（毫秒）。 |
-| `retry.backoff.multiplier` | Number | none | 指数退避乘数。 |
+| `pool.size` | Integer | `8` | 固定连接数，范围 1–64；所有连接在初始化时建立。 |
+| `timeout.connect` | Duration | `5s` | 连接超时，必须大于零且不超过 `10s`。 |
+| `timeout.command` | Duration | `5s` | 单条 Redis 命令超时，必须大于零且不超过 `30s`。 |
+
+Redis duration 使用 Gateway API 格式，例如 `500ms`、`3s` 或 `10s`。连接器以固定的
+有界指数退避持续恢复连接，但不会在连接失败且执行结果未知时透明重放普通命令；调用方
+必须自行判断重复操作是否安全。
 
 ### 拓扑：standalone、sentinel、cluster
 
@@ -189,13 +184,14 @@ spec:
 |------|------|--------|------|
 | `topology.mode` | Enum | — （设置 `topology` 时必填） | 部署拓扑。可选值：`standalone` \| `sentinel` \| `cluster`。 |
 | `topology.sentinel` | Object | none | Sentinel 配置。**`mode=sentinel` 时必填。** |
-| `topology.cluster` | Object | none | 集群配置。**`mode=cluster` 时必填。** |
+| `topology.cluster` | Object | none | 可选的 Cluster 路由配置。 |
 | `topology.sentinel.masterName` | String | **必填** | Sentinel 监控的主节点名称。 |
 | `topology.sentinel.sentinels` | Array\<String\> | **必填** | Sentinel 地址（`host:port`）。 |
-| `topology.cluster.readFromReplicas` | Boolean | none | 允许从副本节点读取。 |
-| `topology.cluster.maxRedirects` | Integer | none | 最大集群重定向跳数。 |
+| `topology.cluster.maxRedirects` | Integer | `5` | 最大集群重定向跳数，范围 0–64。 |
 
-省略 `topology` 时连接器以 standalone 模式运行。`mode=sentinel` 但缺少 `sentinel` 块（或 `mode=cluster` 但缺少 `cluster` 块）时，状态报告 `Accepted=False/Invalid`。
+省略 `topology` 时连接器以 standalone 模式运行。`mode=sentinel` 但缺少 `sentinel`
+块时，状态报告 `Accepted=False/Invalid`。Cluster 模式仅在覆盖 `maxRedirects` 时需要
+`cluster` 块。
 
 ### DNS 与出站流量策略
 
@@ -258,7 +254,6 @@ spec:
     topology:
       mode: cluster
       cluster:
-        readFromReplicas: true
         maxRedirects: 6
 ```
 

@@ -195,14 +195,9 @@ mod tests {
             auth: None,
             db: None,
             timeout: None,
-            pool: Some(RedisPool {
-                size: Some(1),
-                min_idle: None,
-            }),
-            retry: None,
+            pool: Some(RedisPool { size: Some(1) }),
             topology: None,
             tls: None,
-            observability: None,
         };
         let client =
             RedisLinkClient::from_config("test/blocked-redis", &config, &CredentialState::NotRequired).unwrap();

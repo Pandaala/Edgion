@@ -69,10 +69,8 @@ fn make_redis_link_sys(ns: &str, name: &str, secret_name: &str, secret_ns: Optio
                 db: None,
                 timeout: None,
                 pool: None,
-                retry: None,
                 topology: None,
                 tls: None,
-                observability: None,
             }),
         },
         status: None,
@@ -854,10 +852,8 @@ async fn test_no_auth_configured() {
                 db: None,
                 timeout: None,
                 pool: None,
-                retry: None,
                 topology: None,
                 tls: None,
-                observability: None,
             }),
         },
         status: None,
@@ -950,7 +946,6 @@ async fn test_redis_tls_secret_ref_resolution() {
         db: None,
         timeout: None,
         pool: None,
-        retry: None,
         topology: None,
         tls: Some(TlsConfig {
             enabled: true,
@@ -970,7 +965,6 @@ async fn test_redis_tls_secret_ref_resolution() {
             resolved_ca_certificates: None,
             resolved_client_certificate: None,
         }),
-        observability: None,
     });
 
     let ls = match handler.parse(ls, &ctx).await {
@@ -1049,7 +1043,6 @@ async fn test_auth_and_tls_both_fail_collects_both_errors() {
         db: None,
         timeout: None,
         pool: None,
-        retry: None,
         topology: None,
         tls: Some(TlsConfig {
             enabled: true,
@@ -1069,7 +1062,6 @@ async fn test_auth_and_tls_both_fail_collects_both_errors() {
             resolved_ca_certificates: None,
             resolved_client_certificate: None,
         }),
-        observability: None,
     });
 
     let ls = match handler.parse(ls, &ctx).await {
@@ -1495,9 +1487,7 @@ async fn redis_with_san_rejected_phase1() {
                 db: None,
                 timeout: None,
                 pool: None,
-                retry: None,
                 topology: None,
-                observability: None,
             }),
         },
         status: None,
@@ -1626,9 +1616,7 @@ async fn redis_ca_only_no_san_accepted() {
                 db: None,
                 timeout: None,
                 pool: None,
-                retry: None,
                 topology: None,
-                observability: None,
             }),
         },
         status: None,

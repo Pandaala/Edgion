@@ -9,4 +9,4 @@ spec:
     endpoints:
       - redis://127.0.0.1:6379
     timeout:
-      connect: 1000
+      connect: 1s
