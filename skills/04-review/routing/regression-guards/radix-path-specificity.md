@@ -123,11 +123,29 @@ dense ranks, and old/new snapshot capture names. Algebraic tests in
 antisymmetry, and transitivity. These are in-process tests, not fresh evidence
 of HTTP traffic, control-plane synchronization, or live hot reload.
 
-Cross-process route-selection and dynamic integration evidence was deferred under
-`http-route-named-parameter-precedence-integration`; no active task file currently
-tracks that coverage.
-Existing `edgion-tests/**` files were outside the named-parameter repair scope.
-The full workspace test suite was not run during that repair.
+The follow-up `http-route-named-parameter-precedence-integration` added the
+`HttpRouteNamedParameterPrecedence` dynamic scenario. In the real FileSystem
+Controller -> Gateway -> test-server topology it verifies that a static Exact
+route beats a matching named-parameter Exact route, then exercises
+initial -> updated -> initial publication for equal path-specificity routes.
+The winning backend changes from 30001 to 30002 and back to 30001 while the
+observable capture changes from `short=value` to
+`customerIdentifier=value` and back; the inactive capture remains unresolved.
+Cleanup also verifies that removing the routes returns both requests to 404.
+
+Fresh verification for that integration follow-up on 2026-09-14:
+
+- `cargo test -p edgion-tests --bin test_client dynamic --no-fail-fast`: passed
+  (3 tests).
+- `cargo test -p edgion-tests --test conf_corpus_unknown_fields`: passed.
+- Standard integration startup and `HTTPRoute/Basic` baseline: passed.
+- `target/debug/test_client -g --dynamic-scenario
+  HttpRouteNamedParameterPrecedence`: passed against the live local stack.
+
+The Kubernetes integration path was not run and this scenario is not registered
+in the Kubernetes dynamic inventory or fixture tree. Fresh cross-process evidence
+currently covers only the FileSystem configuration backend. The full workspace
+test suite was not run during the original repair.
 
 Agent-doc validation initially found an unrelated pre-existing broken reference
 to the UDP shutdown wire-coverage task. The then-deferred task was restored from
@@ -146,7 +164,7 @@ would also invalidate global pre-ranking and requires a separate design.
 
 - `http-route-named-parameter-precedence`: identifier-dependent route selection;
   fixed and verified on 2026-09-12 under the explicitly approved aggregate policy.
-  The active source task was removed; the deferred integration gap is described above.
+  The active source task was removed; its integration follow-up is verified above.
 - `gw-http-match-02`: historical byte-to-character correction, 2026-07-28;
   static Unicode character coverage retained under the new key.
 

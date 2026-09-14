@@ -45,5 +45,6 @@ pub mod request_id_dynamic;
 
 pub mod ext_proc_tls_policy_recovery;
 pub mod http_route_duplicate_headers;
+pub mod http_route_named_parameter_precedence;
 pub mod http_route_path_prefix_trailing_slash;
 pub mod plugin_policy;

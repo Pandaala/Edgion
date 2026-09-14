@@ -1,5 +1,5 @@
 {
-  "current_max": 31976,
+  "current_max": 31977,
   "suites": {
     "PluginPolicy": {
       "udp": 58338,
@@ -9,6 +9,9 @@
     },
     "HTTPRoute/Basic": {
       "http": 31000
+    },
+    "HTTPRoute/NamedParameterPrecedence": {
+      "http": 31977
     },
     "HTTPRoute/Match": {
       "http": 31020,

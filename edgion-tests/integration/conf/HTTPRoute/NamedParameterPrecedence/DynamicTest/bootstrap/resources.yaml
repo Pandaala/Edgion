@@ -1,0 +1,74 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata: {name: named-parameter-precedence-gateway, namespace: edgion-test}
+spec:
+  gatewayClassName: public-gateway
+  listeners:
+    - {name: http, protocol: HTTP, port: 31977}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: named-precedence-30001, namespace: edgion-test}
+spec:
+  ports: [{name: http, port: 30001, targetPort: 30001}]
+---
+apiVersion: discovery.k8s.io/v1
+kind: EndpointSlice
+metadata:
+  name: named-precedence-30001
+  namespace: edgion-test
+  labels: {kubernetes.io/service-name: named-precedence-30001}
+addressType: IPv4
+ports: [{name: http, port: 30001, protocol: TCP}]
+endpoints:
+  - addresses: ["127.0.0.1"]
+    conditions: {ready: true}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: named-precedence-30002, namespace: edgion-test}
+spec:
+  ports: [{name: http, port: 30002, targetPort: 30002}]
+---
+apiVersion: discovery.k8s.io/v1
+kind: EndpointSlice
+metadata:
+  name: named-precedence-30002
+  namespace: edgion-test
+  labels: {kubernetes.io/service-name: named-precedence-30002}
+addressType: IPv4
+ports: [{name: http, port: 30002, protocol: TCP}]
+endpoints:
+  - addresses: ["127.0.0.1"]
+    conditions: {ready: true}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: named-precedence-30003, namespace: edgion-test}
+spec:
+  ports: [{name: http, port: 30003, targetPort: 30003}]
+---
+apiVersion: discovery.k8s.io/v1
+kind: EndpointSlice
+metadata:
+  name: named-precedence-30003
+  namespace: edgion-test
+  labels: {kubernetes.io/service-name: named-precedence-30003}
+addressType: IPv4
+ports: [{name: http, port: 30003, protocol: TCP}]
+endpoints:
+  - addresses: ["127.0.0.1"]
+    conditions: {ready: true}
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata: {name: named-capture-observer, namespace: edgion-test}
+spec:
+  requestPlugins:
+    - enable: true
+      type: ProxyRewrite
+      config:
+        headers:
+          set:
+            - {name: X-Capture-Short, value: "$short"}
+            - {name: X-Capture-Customer-Identifier, value: "$customerIdentifier"}
