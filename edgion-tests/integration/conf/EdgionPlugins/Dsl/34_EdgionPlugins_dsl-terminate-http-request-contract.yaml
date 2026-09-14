@@ -1,0 +1,30 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: dsl-terminate-http-request-contract
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: Dsl
+      config:
+        name: "terminate-http-request-source"
+        source: |
+          if req.header("x-dsl-form") == "source" {
+            resp.set_header("x-dsl-queued", "source")
+            return terminate()
+          }
+        errorPolicy: ignore
+    - enable: true
+      type: Dsl
+      config:
+        name: "terminate-http-request-bytecode"
+        bytecode: "eyJ2ZXJzaW9uIjo1LCJjb2RlIjpbeyJMb2FkQ29uc3QiOjB9LHsiQ2FsbEJ1aWx0aW4iOlsiUmVxSGVhZGVyIiwxXX0seyJMb2FkQ29uc3QiOjF9LCJFcXVhbCIseyJKdW1wSWZGYWxzZSI6NX0seyJMb2FkQ29uc3QiOjJ9LHsiTG9hZENvbnN0IjoxfSx7IkNhbGxCdWlsdGluIjpbIlJlc3BTZXRIZWFkZXIiLDJdfSwiUG9wIiwiUmV0dXJuVGVybWluYXRlIl0sImNvbnN0YW50cyI6W3siU3RyIjoieC1kc2wtZm9ybSJ9LHsiU3RyIjoiYnl0ZWNvZGUifSx7IlN0ciI6IngtZHNsLXF1ZXVlZCJ9XSwibG9jYWxfY291bnQiOjAsIm1heF9sb29wX2RlcHRoIjowLCJzb3VyY2UiOiJpZiByZXEuaGVhZGVyKFwieC1kc2wtZm9ybVwiKSA9PSBcImJ5dGVjb2RlXCIge1xuICByZXNwLnNldF9oZWFkZXIoXCJ4LWRzbC1xdWV1ZWRcIiwgXCJieXRlY29kZVwiKVxuICByZXR1cm4gdGVybWluYXRlKClcbn0iLCJzb3VyY2VfbWFwIjpbWzUsMV0sWzQsMl0sWzEsM11dfQ=="
+        errorPolicy: ignore
+    - enable: true
+      type: Dsl
+      config:
+        name: "terminate-http-request-follow-on"
+        source: |
+          return deny(409, "request-stage chain continued")
+        errorPolicy: deny

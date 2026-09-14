@@ -10,6 +10,8 @@
 // - GRPCRoute/Basic/Gateway.yaml  (grpc-test-gateway, port 31050)
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
+use bytes::Bytes;
+use prost::Message;
 use std::time::Instant;
 
 // Proto types — re-exported from the grpc_route module
@@ -19,6 +21,132 @@ use crate::suites::grpc_route::test::HelloRequest;
 pub struct DslGrpcErrorTestSuite;
 
 impl DslGrpcErrorTestSuite {
+    async fn call_terminate_contract(
+        ctx: &TestContext,
+        authority: &str,
+        form: &str,
+        marker: &str,
+        expected_upstreams: usize,
+    ) -> Result<(), String> {
+        let tcp = tokio::net::TcpStream::connect((ctx.target_host.as_str(), ctx.grpc_port))
+            .await
+            .map_err(|error| format!("connect native gRPC gateway: {error}"))?;
+        let (mut client, connection) = h2::client::handshake(tcp)
+            .await
+            .map_err(|error| format!("native gRPC H2 handshake: {error}"))?;
+        let driver = tokio::spawn(async move { connection.await });
+
+        let message = HelloRequest {
+            name: "terminate-contract".to_string(),
+        }
+        .encode_to_vec();
+        let mut frame = Vec::with_capacity(message.len() + 5);
+        frame.push(0);
+        frame.extend_from_slice(&(message.len() as u32).to_be_bytes());
+        frame.extend_from_slice(&message);
+
+        let uri = format!("http://{authority}/test.TestService/SayHello")
+            .parse::<http::Uri>()
+            .map_err(|error| format!("build native gRPC URI: {error}"))?;
+        let request = http::Request::builder()
+            .method(http::Method::POST)
+            .uri(uri)
+            .header(http::header::CONTENT_TYPE, "application/grpc")
+            .header("te", "trailers")
+            .header("x-dsl-form", form)
+            .header("traceparent", crate::access_log_client::traceparent_for_marker(marker))
+            .header("access_log", "test_store")
+            .body(())
+            .map_err(|error| format!("build native gRPC request: {error}"))?;
+        let (response, mut request_body) = client
+            .send_request(request, false)
+            .map_err(|error| format!("send native gRPC headers: {error}"))?;
+        request_body
+            .send_data(Bytes::from(frame), true)
+            .map_err(|error| format!("send native gRPC message: {error}"))?;
+        let response = response
+            .await
+            .map_err(|error| format!("receive native gRPC response: {error}"))?;
+        if response.status() != http::StatusCode::OK {
+            driver.abort();
+            return Err(format!("expected native gRPC HTTP 200, got {}", response.status()));
+        }
+        let response_headers = response.headers().clone();
+
+        let mut body = response.into_body();
+        let mut body_bytes = 0usize;
+        while let Some(chunk) = body.data().await {
+            let chunk = chunk.map_err(|error| format!("receive native gRPC body: {error}"))?;
+            body_bytes += chunk.len();
+            body.flow_control()
+                .release_capacity(chunk.len())
+                .map_err(|error| format!("release native gRPC capacity: {error}"))?;
+        }
+        let trailers = body
+            .trailers()
+            .await
+            .map_err(|error| format!("receive native gRPC trailers: {error}"))?;
+        // A native gRPC Trailers-Only response carries grpc-status in the
+        // initial HEADERS frame with END_STREAM. A response that already sent
+        // DATA carries it in a trailing HEADERS frame instead.
+        let terminal_headers = trailers.as_ref().unwrap_or(&response_headers);
+        let grpc_status = terminal_headers
+            .get("grpc-status")
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or("");
+        if grpc_status != "13" || body_bytes != 0 {
+            driver.abort();
+            return Err(format!(
+                "expected empty native gRPC INTERNAL Trailers-Only response, got grpc-status={grpc_status:?} body_bytes={body_bytes} response_headers={response_headers:?} trailers={trailers:?}"
+            ));
+        }
+
+        drop(client);
+        driver.abort();
+        let _ = driver.await;
+
+        let entry = ctx
+            .access_log_client()
+            .get_access_log_with_retry(marker, 10, 200)
+            .await
+            .map_err(|error| format!("terminate access log was not available: {error}"))?;
+        if entry.has_diagnostic("error", "PluginTerminateWithoutResponse") {
+            return Err(format!(
+                "explicit DSL termination incorrectly used the naked-terminate fallback: {}",
+                entry.data
+            ));
+        }
+        if entry.upstream_count() != expected_upstreams {
+            return Err(format!(
+                "expected {expected_upstreams} upstream attempt(s), observed {}: {}",
+                entry.upstream_count(),
+                entry.data
+            ));
+        }
+        Ok(())
+    }
+
+    fn terminate_contract_case(
+        name: &'static str,
+        authority: &'static str,
+        form: &'static str,
+        expected_upstreams: usize,
+    ) -> TestCase {
+        TestCase::new(
+            name,
+            "DSL terminate produces native gRPC HTTP 200 with empty INTERNAL trailers and stops the chain",
+            move |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    match Self::call_terminate_contract(&ctx, authority, form, name, expected_upstreams).await {
+                        Ok(()) => TestResult::passed(start.elapsed()),
+                        Err(error) => TestResult::failed(start.elapsed(), error),
+                    }
+                })
+            },
+        )
+    }
+
     /// Helper: build a tonic Endpoint targeting the gRPC gateway with the
     /// correct `:authority` pseudo-header (`dsl-grpc-error.example.com`).
     fn build_endpoint(ctx: &TestContext) -> Result<tonic::transport::Endpoint, String> {
@@ -340,6 +468,42 @@ impl DslGrpcErrorTestSuite {
             },
         )
     }
+
+    fn test_terminate_request_source_contract() -> TestCase {
+        Self::terminate_contract_case(
+            "dsl_terminate_grpc_request_source_contract",
+            "dsl-terminate-grpc-request.example.com",
+            "source",
+            0,
+        )
+    }
+
+    fn test_terminate_request_bytecode_contract() -> TestCase {
+        Self::terminate_contract_case(
+            "dsl_terminate_grpc_request_bytecode_contract",
+            "dsl-terminate-grpc-request.example.com",
+            "bytecode",
+            0,
+        )
+    }
+
+    fn test_terminate_response_source_contract() -> TestCase {
+        Self::terminate_contract_case(
+            "dsl_terminate_grpc_response_source_contract",
+            "dsl-terminate-grpc-response.example.com",
+            "source",
+            1,
+        )
+    }
+
+    fn test_terminate_response_bytecode_contract() -> TestCase {
+        Self::terminate_contract_case(
+            "dsl_terminate_grpc_response_bytecode_contract",
+            "dsl-terminate-grpc-response.example.com",
+            "bytecode",
+            1,
+        )
+    }
 }
 
 impl TestSuite for DslGrpcErrorTestSuite {
@@ -354,6 +518,10 @@ impl TestSuite for DslGrpcErrorTestSuite {
             Self::test_grpc_error_pass_through(),
             Self::test_resp_stage_deny_maps_to_grpc_status(),
             Self::test_resp_stage_grpc_error_keeps_exact_code(),
+            Self::test_terminate_request_source_contract(),
+            Self::test_terminate_request_bytecode_contract(),
+            Self::test_terminate_response_source_contract(),
+            Self::test_terminate_response_bytecode_contract(),
         ]
     }
 }

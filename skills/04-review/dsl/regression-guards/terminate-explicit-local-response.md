@@ -129,11 +129,43 @@ Protocol correction verification on 2026-09-13:
   the pinned fork and test driver ordering without rerunning Cargo; test results
   above were produced by the implementing agent.
 
-Existing integration files were frozen by the selected task. New E2E and dynamic
-coverage was deferred under `dsl-terminate-explicit-response-integration`.
-The verification recorded above does not establish that deferred coverage.
-Re-evaluate if the terminate result, bytecode validation, phase dispatch,
-response ownership, or HTTP-to-gRPC mapping changes.
+End-to-end closure verification on 2026-09-14:
+
+- New Controller/Gateway/test-server integration fixtures cover request and
+  response stages for both source and precompiled bytecode. The HTTP cases
+  verify the exact empty 502 response, HEAD and a bodyless upstream response,
+  queued response headers, response-stage HTTP/1 connection close, chain
+  termination, upstream-attempt count, and the absence of
+  `PluginTerminateWithoutResponse`. The dedicated suite passed 4/4.
+- Native HTTP/2 gRPC cases verify the protocol's Trailers-Only form: HTTP 200,
+  `grpc-status: 13` in the END_STREAM HEADERS frame, and zero DATA bytes. They
+  also verify request/response stages, source/bytecode parity, chain
+  termination, upstream-attempt count, and the absence of the naked-terminate
+  diagnostic. The complete DSL gRPC suite passed 9/9, including its five
+  pre-existing cases.
+- A separate dynamic scenario preserves the earlier v1/v2 reload regression
+  and publishes `next()` -> `terminate()` -> `next()` with
+  `errorPolicy: ignore`. It uses `wait_phase` and a queued generation header to
+  verify 200/pass-v1 -> empty 502/terminate -> 200/pass-v2 for new requests.
+  `DslTerminateDynamic` passed through the shared process topology.
+- The test-client registration guards passed 22/22, and
+  `cargo check -p edgion-tests --all-targets` passed.
+- Fresh workspace `cargo check --workspace --all-targets` and
+  `cargo clippy --workspace --all-targets` passed; clippy retained existing
+  warnings. Format, SSA-force, metrics-inventory, and Pingora-source checks also
+  passed. Global agent-doc validation failed only on two unrelated missing task
+  links in the listener-recreation and gRPC header-matching knowledge pages, so
+  the pending task remains until that repository-wide gate is repaired.
+- The independent final review found and prompted fixes for dynamic-delta
+  preloading, unconditional scenario cleanup, and response-body read-error
+  handling. After correction and fresh affected-suite runs, the reviewer
+  returned LGTM with no blocking issues.
+
+This evidence exercises filesystem-mode publication and the live data-plane
+protocols; it does not independently repeat the scenario against a Kubernetes
+API-server-backed controller. Re-evaluate if the terminate result, bytecode
+validation, phase dispatch, response ownership, HTTP-to-gRPC mapping, plugin
+generation publication, or integration topology changes.
 
 ## Resolution references
 
@@ -141,3 +173,6 @@ response ownership, or HTTP-to-gRPC mapping changes.
   approved the explicit 502/empty-body implementation and independent review
   on 2026-09-13. The runtime correction is implemented; task closure remains
   subject to the verification gate above.
+- `dsl-terminate-explicit-response-integration`: added live HTTP/native-gRPC
+  source and bytecode coverage plus a three-generation hot-reload scenario on
+  2026-09-14.

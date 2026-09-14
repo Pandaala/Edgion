@@ -91,7 +91,9 @@ pub use ctx_set::CtxSetTestSuite;
 pub use debug_access_log::PluginLogsTestSuite;
 pub use direct_endpoint::DirectEndpointTestSuite;
 pub use dsl::{
-    DslBodyTestSuite, DslDynamicInitialTestSuite, DslDynamicUpdateTestSuite, DslGrpcErrorTestSuite, DslTestSuite,
+    DslBodyTestSuite, DslDynamicInitialTestSuite, DslDynamicUpdateTestSuite, DslGrpcErrorTestSuite,
+    DslTerminateDynamicInitialTestSuite, DslTerminateDynamicRestoredTestSuite, DslTerminateDynamicUpdatedTestSuite,
+    DslTerminateTestSuite, DslTestSuite,
 };
 pub use dynamic_external_upstream::DynamicExternalUpstreamTestSuite;
 pub use dynamic_internal_upstream::{DeniedNamedJumpTestSuite, DynamicInternalUpstreamTestSuite};

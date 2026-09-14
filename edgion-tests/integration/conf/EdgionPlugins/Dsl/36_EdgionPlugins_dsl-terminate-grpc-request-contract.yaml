@@ -1,0 +1,29 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: dsl-terminate-grpc-request-contract
+  namespace: edgion-test
+spec:
+  requestPlugins:
+    - enable: true
+      type: Dsl
+      config:
+        name: "terminate-grpc-request-source"
+        source: |
+          if req.header("x-dsl-form") == "source" {
+            return terminate()
+          }
+        errorPolicy: ignore
+    - enable: true
+      type: Dsl
+      config:
+        name: "terminate-grpc-request-bytecode"
+        bytecode: "eyJ2ZXJzaW9uIjo1LCJjb2RlIjpbeyJMb2FkQ29uc3QiOjB9LHsiQ2FsbEJ1aWx0aW4iOlsiUmVxSGVhZGVyIiwxXX0seyJMb2FkQ29uc3QiOjF9LCJFcXVhbCIseyJKdW1wSWZGYWxzZSI6MX0sIlJldHVyblRlcm1pbmF0ZSJdLCJjb25zdGFudHMiOlt7IlN0ciI6IngtZHNsLWZvcm0ifSx7IlN0ciI6ImJ5dGVjb2RlIn1dLCJsb2NhbF9jb3VudCI6MCwibWF4X2xvb3BfZGVwdGgiOjAsInNvdXJjZSI6ImlmIHJlcS5oZWFkZXIoXCJ4LWRzbC1mb3JtXCIpID09IFwiYnl0ZWNvZGVcIiB7XG4gIHJldHVybiB0ZXJtaW5hdGUoKVxufSIsInNvdXJjZV9tYXAiOltbNSwxXSxbMSwyXV19"
+        errorPolicy: ignore
+    - enable: true
+      type: Dsl
+      config:
+        name: "terminate-grpc-request-follow-on"
+        source: |
+          return grpc_error(7, "request-stage chain continued")
+        errorPolicy: deny

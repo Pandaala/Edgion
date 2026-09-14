@@ -23,6 +23,7 @@ pub fn all() -> Vec<&'static Scenario> {
         crate::dynamic::scenarios::ai_backend_weighted::SCENARIO,
         crate::dynamic::scenarios::gateway_dynamic::SCENARIO,
         crate::dynamic::scenarios::dsl_dynamic::SCENARIO,
+        crate::dynamic::scenarios::dsl_terminate_dynamic::SCENARIO,
         crate::dynamic::scenarios::body_dynamic::SCENARIO,
         crate::dynamic::scenarios::condition_refs_dynamic::SCENARIO,
         crate::dynamic::scenarios::credential_injector_dynamic::SCENARIO,

@@ -1,0 +1,37 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: dsl-terminate-http-response-contract
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: Dsl
+      config:
+        name: "terminate-response-queued-header"
+        source: |
+          resp.set_header("x-dsl-queued", "response-stage")
+        errorPolicy: deny
+  upstreamResponseFilterPlugins:
+    - enable: true
+      type: Dsl
+      config:
+        name: "terminate-http-response-source"
+        source: |
+          if req.header("x-dsl-form") == "source" {
+            return terminate()
+          }
+        errorPolicy: ignore
+    - enable: true
+      type: Dsl
+      config:
+        name: "terminate-http-response-bytecode"
+        bytecode: "eyJ2ZXJzaW9uIjo1LCJjb2RlIjpbeyJMb2FkQ29uc3QiOjB9LHsiQ2FsbEJ1aWx0aW4iOlsiUmVxSGVhZGVyIiwxXX0seyJMb2FkQ29uc3QiOjF9LCJFcXVhbCIseyJKdW1wSWZGYWxzZSI6MX0sIlJldHVyblRlcm1pbmF0ZSJdLCJjb25zdGFudHMiOlt7IlN0ciI6IngtZHNsLWZvcm0ifSx7IlN0ciI6ImJ5dGVjb2RlIn1dLCJsb2NhbF9jb3VudCI6MCwibWF4X2xvb3BfZGVwdGgiOjAsInNvdXJjZSI6ImlmIHJlcS5oZWFkZXIoXCJ4LWRzbC1mb3JtXCIpID09IFwiYnl0ZWNvZGVcIiB7XG4gIHJldHVybiB0ZXJtaW5hdGUoKVxufSIsInNvdXJjZV9tYXAiOltbNSwxXSxbMSwyXV19"
+        errorPolicy: ignore
+    - enable: true
+      type: Dsl
+      config:
+        name: "terminate-http-response-follow-on"
+        source: |
+          return deny(409, "response-stage chain continued")
+        errorPolicy: deny

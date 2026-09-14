@@ -1,0 +1,15 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: dsl-terminate-dynamic
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: Dsl
+      config:
+        name: "dsl-terminate-generation"
+        source: |
+          resp.set_header("x-dsl-generation", "terminate")
+          return terminate()
+        errorPolicy: ignore

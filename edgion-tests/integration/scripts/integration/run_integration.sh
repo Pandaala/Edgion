@@ -1866,6 +1866,7 @@ run_all_tests() {
                     run_test "EdgionPlugins_WebhookKeyGet" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i WebhookKeyGet" || test_failed=true
                     run_test "EdgionPlugins_Cors" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i Cors" || test_failed=true
                     run_test "EdgionPlugins_Dsl" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i Dsl" || test_failed=true
+                    run_test "EdgionPlugins_DslTerminate" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i DslTerminate" || test_failed=true
                     run_test "EdgionPlugins_DslGrpcError" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i DslGrpcError" || test_failed=true
                     run_test "EdgionPlugins_DslBody" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i DslBody" || test_failed=true
                     run_test "EdgionPlugins_BodyPlugins" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i BodyPlugins" || test_failed=true
@@ -2141,6 +2142,7 @@ run_all_tests() {
         run_test "EdgionPlugins_WebhookKeyGet" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i WebhookKeyGet" || test_failed=true
         run_test "EdgionPlugins_Cors" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i Cors" || test_failed=true
         run_test "EdgionPlugins_Dsl" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i Dsl" || test_failed=true
+        run_test "EdgionPlugins_DslTerminate" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i DslTerminate" || test_failed=true
         run_test "EdgionPlugins_DslGrpcError" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i DslGrpcError" || test_failed=true
         run_test "EdgionPlugins_DslBody" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i DslBody" || test_failed=true
         run_test "EdgionPlugins_BodyPlugins" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i BodyPlugins" || test_failed=true
@@ -2366,6 +2368,8 @@ main() {
                     log_info "LdapAuth suite requires --full-test, config load will be skipped"
                 elif [ "${G_RESOURCE}/${G_ITEM}" = "EdgionPlugins/LdapAuthTls" ] && ! $FULL_TEST; then
                     log_info "LdapAuthTls suite requires --full-test, config load will be skipped"
+                elif [ "${G_RESOURCE}/${G_ITEM}" = "EdgionPlugins/DslTerminate" ]; then
+                    suites="${base_suites},EdgionPlugins/Dsl"
                 elif [ "${G_RESOURCE}/${G_ITEM}" = "EdgionPlugins/DslGrpcError" ]; then
                     suites="${base_suites},GRPCRoute/Basic,LinkSys/Redis,EdgionPlugins/Dsl"
                 elif [ "${G_RESOURCE}/${G_ITEM}" = "EdgionPlugins/Dsl" ]; then

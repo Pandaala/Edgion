@@ -39,6 +39,7 @@ const EXPECTED_DYNAMIC_SCENARIO_IDS: &[&str] = &[
     "AiBackendWeighted",
     "GatewayDynamic",
     "DslDynamic",
+    "DslTerminateDynamic",
     "BodyDynamic",
     "ConditionRefsDynamic",
     "CredentialInjectorDynamic",
@@ -1200,6 +1201,7 @@ fn resolve_suite(resource: Option<&str>, item: Option<&str>, legacy: Option<&str
             "webhook-keyget" | "webhookkeyget" => "EdgionPlugins/WebhookKeyGet".to_string(),
             "rate-limit-redis" | "ratelimitredis" | "rlr" => "EdgionPlugins/RateLimitRedis".to_string(),
             "dsl" => "EdgionPlugins/Dsl".to_string(),
+            "dsl-terminate" | "dslterminate" => "EdgionPlugins/DslTerminate".to_string(),
             "dsl-body" | "dslbody" => "EdgionPlugins/DslBody".to_string(),
             "body-plugins" | "bodyplugins" => "EdgionPlugins/BodyPlugins".to_string(),
             "json-schema-validation" | "jsonschemavalidation" => "EdgionPlugins/JsonSchemaValidation".to_string(),
@@ -1402,11 +1404,13 @@ fn suite_to_port_key(suite: &str) -> &str {
         "EdgionPlugins/AccessLogExtern" => "EdgionPlugins/AccessLogExtern",
         "EdgionPlugins/WebhookKeyGet" => "EdgionPlugins",
         "EdgionPlugins/Dsl" => "EdgionPlugins",
+        "EdgionPlugins/DslTerminate" => "EdgionPlugins",
         "EdgionPlugins/DslBody" => "EdgionPlugins",
         "EdgionPlugins/BodyPlugins" => "EdgionPlugins",
         "EdgionPlugins/JsonSchemaValidation" => "EdgionPlugins",
         "EdgionPlugins/BodyDynamic" => "EdgionPlugins",
         "EdgionPlugins/DslDynamic" => "EdgionPlugins",
+        "EdgionPlugins/DslTerminateDynamic" => "EdgionPlugins",
         "EdgionPlugins/Waf" => "EdgionPlugins",
         "EdgionPlugins/DslGrpcError" => "GRPCRoute/Basic",
         "Gateway/AllowedRoutes/Selector" => "Gateway/AllowedRoutes/Selector",
@@ -1485,6 +1489,7 @@ fn dynamic_port_contract(id: &str) -> Result<Option<(&'static str, port_config::
         | "CredentialInjectorDynamic"
         | "CsrfSecretRotation"
         | "DslDynamic"
+        | "DslTerminateDynamic"
         | "FormJsonTransformDynamic"
         | "JsonSchemaValidationDynamic"
         | "PmdRefFlap"
@@ -2795,6 +2800,13 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
             }
             runner.add_suite(Box::new(suites::DslTestSuite));
         }
+        "EdgionPlugins/DslTerminate" => {
+            if !gateway {
+                eprintln!("Error: EdgionPlugins/DslTerminate tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::DslTerminateTestSuite));
+        }
         "EdgionPlugins/DslBody" => {
             if !gateway {
                 eprintln!("Error: EdgionPlugins/DslBody tests require --gateway flag");
@@ -2856,6 +2868,26 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                 }
                 _ => {
                     eprintln!("Error: Invalid phase '{}'. Use 'initial' or 'update'", phase.unwrap());
+                    std::process::exit(1);
+                }
+            }
+        }
+        "EdgionPlugins/DslTerminateDynamic" => {
+            if !gateway {
+                eprintln!("Error: EdgionPlugins/DslTerminateDynamic tests require --gateway flag");
+                std::process::exit(1);
+            }
+            match phase {
+                Some("initial") => runner.add_suite(Box::new(suites::DslTerminateDynamicInitialTestSuite)),
+                Some("updated") => runner.add_suite(Box::new(suites::DslTerminateDynamicUpdatedTestSuite)),
+                Some("restored") => runner.add_suite(Box::new(suites::DslTerminateDynamicRestoredTestSuite)),
+                None => {
+                    runner.add_suite(Box::new(suites::DslTerminateDynamicInitialTestSuite));
+                    runner.add_suite(Box::new(suites::DslTerminateDynamicUpdatedTestSuite));
+                    runner.add_suite(Box::new(suites::DslTerminateDynamicRestoredTestSuite));
+                }
+                _ => {
+                    eprintln!("Error: Invalid DslTerminateDynamic phase: {}", phase.unwrap());
                     std::process::exit(1);
                 }
             }
