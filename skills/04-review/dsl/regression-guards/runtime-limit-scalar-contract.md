@@ -35,6 +35,13 @@ retain their separate resource-owned policy validation because their rate,
 window, and timeout form one atomic algorithm contract rather than a top-level
 VM/runtime scalar.
 
+For `http.call`, `maxMapSize` bounds only the nested response-header Map. Header
+processing retains the raw traversal prefix until that Map contains exactly the
+configured number of names, then ignores the tail. The fixed outer result envelope
+always contains `status`, `body`, and `headers`, even when `maxMapSize` is below
+three; applying the collection limit to that protocol envelope would make the
+documented result shape unusable.
+
 ## Rationale and evidence
 
 The canonical sandbox model requires a finite product of instruction, call,
@@ -104,8 +111,25 @@ policy, or the shared outbound timeout contract changes. A new runtime-limit
 field must join `resolve_runtime_limits`, its boundary tests, both user-doc
 languages, and its `VmLimits` or `DslRuntime` consumer.
 
+Verified on 2026-09-14 for the `http.call` Map boundary:
+
+- Synthetic in-memory responses passed focused tests for retaining exactly the
+  `maxMapSize` response-header prefix and for preserving all three outer result
+  fields when `maxMapSize = 2`.
+- The DSL sandbox test selection passed 9/9 after removing its two Wiremock-backed
+  cases. Those unit scenarios no longer listen or dial; the existing end-to-end
+  integration bytes were not changed.
+- `cargo fmt --all`, `cargo check --workspace --all-targets`, and
+  `cargo clippy --workspace --all-targets` passed. Clippy retained the existing
+  `edgion-tests` `redundant_async_block` warning.
+- Agent-doc validation, SSA-force, metrics-inventory, and Pingora-source guards
+  passed. No full `cargo test --all` or end-to-end integration run is claimed.
+
 ## Resolution references
 
 - `bound-dsl-runtime-limit-scalars.md` (created 2026-09-10, P1 bugfix task):
   fixed by the resource-owned scalar contract and Gateway factory parity on
   2026-09-13.
+- `isolate-dsl-sandbox-unit-tests-from-network.md`: moved the two response-Map
+  boundary scenarios to synthetic responses without changing their contracts on
+  2026-09-14.

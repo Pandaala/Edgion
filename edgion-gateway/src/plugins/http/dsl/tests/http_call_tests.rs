@@ -403,6 +403,60 @@ fn test_http_call_complete_response_preserves_status_body_and_lowercase_header()
 }
 
 #[test]
+fn test_http_call_response_headers_retain_prefix_at_map_limit() {
+    let response: reqwest::Response = http::Response::builder()
+        .header("x-first", "one")
+        .header("x-second", "two")
+        .header("x-tail", "three")
+        .body(reqwest::Body::from(""))
+        .unwrap()
+        .into();
+    let expected_prefix: Vec<_> = response
+        .headers()
+        .iter()
+        .take(2)
+        .map(|(name, value)| (name.as_str().to_string(), value.to_str().unwrap().to_string()))
+        .collect();
+    let omitted_tail: Vec<_> = response
+        .headers()
+        .iter()
+        .skip(2)
+        .map(|(name, _)| name.as_str().to_string())
+        .collect();
+    let result = result_map(finish_response(Ok(response), 8, 8, 2));
+    let Some(Value::Map(headers)) = result.get("headers") else {
+        panic!("expected response headers Map");
+    };
+    assert_eq!(headers.len(), 2);
+    for (name, value) in expected_prefix {
+        assert_eq!(headers.get(&name), Some(&Value::Str(value.into())));
+    }
+    for name in omitted_tail {
+        assert!(!headers.contains_key(&name));
+    }
+}
+
+#[test]
+fn test_http_call_outer_response_map_keeps_three_fields_below_map_limit() {
+    let response = http::Response::builder()
+        .status(200)
+        .header("x-first", "one")
+        .header("x-second", "two")
+        .header("x-tail", "three")
+        .body(reqwest::Body::from("hi"))
+        .unwrap()
+        .into();
+    let result = result_map(finish_response(Ok(response), 8, 8, 2));
+    assert_eq!(result.len(), 3);
+    assert_eq!(result.get("status"), Some(&Value::Int(200)));
+    assert_eq!(result.get("body"), Some(&Value::Str("hi".into())));
+    let Some(Value::Map(headers)) = result.get("headers") else {
+        panic!("expected response headers Map");
+    };
+    assert_eq!(headers.len(), 2);
+}
+
+#[test]
 fn test_http_call_declared_oversize_fails_without_polling_body() {
     let body = reqwest::Body::wrap_stream(futures::stream::poll_fn(
         |_| -> std::task::Poll<Option<Result<Bytes, io::Error>>> {
