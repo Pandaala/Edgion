@@ -35,9 +35,10 @@ persists beyond the accepted brief cross-store publication window.
 - Candidate support: runtime handler, Gateway store only for necessary mutation/
   local-test seam, and CacheData compressed-event tests. Freeze final paths in
   the reviewed plan; do not create a new merged global store.
-- [Authoritative backend TLS identity replacement](replace-gateway-backend-tls-identities-authoritatively.md)
-  owns omitted-key removal during full snapshots. This task owns coalesced delta
-  replacement; neither fix substitutes for the other. Immutable key precomputation
-  is unrelated and must not be expanded here.
+- [Gateway recreation requires a data-plane restart](../../skills/04-review/listeners/intentional-design/gateway-recreation-requires-restart.md)
+  records why omitted-key backend TLS identity pruning during full snapshots was
+  declined with dynamic Gateway deletion outside the supported lifecycle. This
+  task still owns coalesced delta replacement for its separately stated scope.
+  Immutable key precomputation is unrelated and must not be expanded here.
 - Defer delete/recreate wire integration coverage; existing integration tests
   remain unchanged until the exact test paths are separately authorized.

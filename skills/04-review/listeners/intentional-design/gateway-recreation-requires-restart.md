@@ -52,6 +52,22 @@ Keeping construction-time handles avoids a write-acquiring global lookup on
 every request/connection. Empty publication and reclamation of removed route
 contents remain required; retaining stale routes is not an availability fix.
 
+The same boundary applies to the Gateway-level backend TLS identity fallback.
+`GatewayHandler::full_set` updates `GatewayBackendTlsStore` for Gateway keys in
+the incoming snapshot but does not prune identities for omitted Gateway keys.
+Removing a client certificate or its Secret while the Gateway remains present
+still publishes that Gateway and removes or replaces the identity normally.
+Only omitting the Gateway key from a later authoritative snapshot can leave the
+identity store-owned until the required data-plane restart. Resource deletion,
+GatewayClass or namespace filtering, and runtime ownership reassignment are
+examples of that unsupported logical removal. The Admin API's
+`gateway_backend_tls_store.count` can consequently exceed the current Gateway
+snapshot size until restart. Removing that store owner would not erase
+outstanding `Arc<Secret>` readers or cryptographic copies, and it does not make
+dynamic Gateway removal/recreation supported. The proposed authoritative
+replacement was therefore declined as unnecessary work for the unsupported
+lifecycle, not because the residual owner or count divergence was disproved.
+
 A serving-owned stable handle or recoverable registration could implement
 same-socket recovery, but requires an explicitly scoped lifecycle design across
 protocols, publication, and bounded reclamation. The user declined that scope.
@@ -97,4 +113,7 @@ configured. The last case is outside this acceptance and needs investigation.
 - `http-listener-recreation-stale-route-manager` and
   `tls-listener-recreation-stale-route-manager`: accepted unsupported-lifecycle
   recovery limitation on 2026-09-13; no production fix.
+- `replace-gateway-backend-tls-identities-authoritatively`: accepted residual
+  Gateway identity-store ownership in the same unsupported deletion lifecycle;
+  supported in-place certificate removal and replacement remain unchanged.
 - Source task: `listener-route-manager-lifecycle`.
