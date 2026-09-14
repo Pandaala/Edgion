@@ -2117,6 +2117,45 @@ mod tests {
     }
 
     #[test]
+    fn invalid_native_cors_rejected_before_publication_without_controller_indices() {
+        use serde_json::json;
+        let invalid_filters = [
+            json!({"type": "CORS"}),
+            json!({"type": "CORS", "cors": {"allowOrigins": ["ftp://example.com"]}}),
+            json!({"type": "CORS", "cors": {"allowMethods": ["get"]}}),
+            json!({"type": "CORS", "cors": {"allowHeaders": ["bad header"]}}),
+            json!({"type": "CORS", "cors": {"maxAge": 0}}),
+            json!({"type": "CORS", "cors": {"maxAge": 2147483648_u32}}),
+        ];
+        for invalid_filter in invalid_filters {
+            for resolved in [false, true] {
+                let mut route = route_with_paths(
+                    "cors-validation",
+                    "route",
+                    vec!["cors.example"],
+                    "2026-09-14T00:00:00Z",
+                    json!([
+                        {"matches": [{"path": {"value": "/invalid"}}], "filters": [invalid_filter.clone()]},
+                        {"matches": [{"path": {"value": "/valid"}}], "filters": [{"type": "CORS",
+                            "cors": {"allowOrigins": ["https://app.example"]}}]}
+                    ]),
+                );
+                if resolved {
+                    route.spec.resolved_rules = route.spec.rules.take();
+                }
+                route.pre_parse();
+                assert!(route.spec.invalid_rule_indices.is_none());
+                let domains = parse_http_routes_to_domain_rules(&HashMap::from([(
+                    "cors-validation/route".into(),
+                    Arc::new(route),
+                )]));
+                assert_eq!(domain_unit_paths(&domains, "cors.example"), ["/valid"]);
+                assert_eq!(domains["cors.example"].0[0].matched_info.rule_id, 1);
+            }
+        }
+    }
+
+    #[test]
     fn backend_cors_scope_rejected_without_controller_status_or_for_resolved_rules() {
         use serde_json::json;
         let cors = json!({"type": "CORS", "cors": {"allowOrigins": ["https://app.example"]}});

@@ -1,6 +1,6 @@
 //! Gateway API native CORS filter (GEP-1767)
 //!
-//! Implements the `type: CORS` HTTPRoute filter as defined in Gateway API v1.4.
+//! Implements the `type: CORS` HTTPRoute filter as defined in Gateway API v1.5.
 //! Handles both preflight (OPTIONS) and normal CORS requests.
 
 use async_trait::async_trait;
@@ -160,7 +160,7 @@ impl GapiCorsFilter {
         }
 
         // Access-Control-Max-Age (preflight only)
-        if is_preflight && self.config.max_age > 0 {
+        if is_preflight {
             headers.push(("Access-Control-Max-Age", self.config.max_age.to_string()));
         }
 
@@ -310,6 +310,26 @@ mod tests {
     }
 
     #[test]
+    fn max_age_default_is_emitted_and_explicit_zero_is_rejected() {
+        let config: HTTPCORSFilter = serde_json::from_value(serde_json::json!({
+            "allowOrigins": ["https://app.example"]
+        }))
+        .expect("default maxAge CORS fixture must deserialize");
+        let filter = GapiCorsFilter::try_new(config).expect("default maxAge must be valid");
+        let mut session = MockPluginSession::new();
+        let headers = filter.build_cors_headers(&mut session, "https://app.example", true);
+        assert!(headers
+            .iter()
+            .any(|(name, value)| *name == "Access-Control-Max-Age" && value == "5"));
+
+        let zero: HTTPCORSFilter = serde_json::from_value(serde_json::json!({"maxAge": 0}))
+            .expect("zero maxAge CORS fixture must deserialize");
+        assert!(GapiCorsFilter::try_new(zero)
+            .unwrap_err()
+            .contains("maxAge must be between 1"));
+    }
+
+    #[test]
     fn test_origin_match_exact() {
         let filter = GapiCorsFilter::try_new(HTTPCORSFilter {
             allow_origins: Some(vec!["https://app.example".to_string()]),
@@ -425,15 +445,18 @@ mod tests {
                 "https://example.com:8443".to_string(),
                 "http://localhost:3000".to_string(),
                 "https://*.example.com".to_string(),
-                "*".to_string(),
             ]),
             allow_credentials: None,
             allow_methods: None,
             allow_headers: None,
             expose_headers: None,
-            max_age: 0,
+            max_age: 5,
         };
         assert!(GapiCorsFilter::try_new(config).is_ok());
+
+        let wildcard: HTTPCORSFilter = serde_json::from_value(serde_json::json!({"allowOrigins": ["*"]}))
+            .expect("wildcard CORS fixture must deserialize");
+        assert!(GapiCorsFilter::try_new(wildcard).is_ok());
     }
 
     #[test]
@@ -444,7 +467,7 @@ mod tests {
             allow_methods: None,
             allow_headers: None,
             expose_headers: None,
-            max_age: 0,
+            max_age: 5,
         };
         let err = GapiCorsFilter::try_new(config).unwrap_err();
         assert!(err.contains("path component"), "got: {}", err);
@@ -458,7 +481,7 @@ mod tests {
             allow_methods: None,
             allow_headers: None,
             expose_headers: None,
-            max_age: 0,
+            max_age: 5,
         };
         assert!(GapiCorsFilter::try_new(config).is_err());
     }
@@ -471,7 +494,7 @@ mod tests {
             allow_methods: None,
             allow_headers: None,
             expose_headers: None,
-            max_age: 0,
+            max_age: 5,
         };
         let err = GapiCorsFilter::try_new(config).unwrap_err();
         assert!(err.contains("query string"), "got: {}", err);
@@ -485,7 +508,7 @@ mod tests {
             allow_methods: None,
             allow_headers: None,
             expose_headers: None,
-            max_age: 0,
+            max_age: 5,
         };
         let err = GapiCorsFilter::try_new(config).unwrap_err();
         assert!(err.contains("fragment"), "got: {}", err);
@@ -499,7 +522,7 @@ mod tests {
             allow_methods: None,
             allow_headers: None,
             expose_headers: None,
-            max_age: 0,
+            max_age: 5,
         };
         let err = GapiCorsFilter::try_new(config).unwrap_err();
         assert!(err.contains("scheme"), "got: {}", err);
@@ -513,7 +536,7 @@ mod tests {
             allow_methods: None,
             allow_headers: None,
             expose_headers: None,
-            max_age: 0,
+            max_age: 5,
         };
         let err = GapiCorsFilter::try_new(config).unwrap_err();
         assert!(err.contains("wildcard"), "got: {}", err);

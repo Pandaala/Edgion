@@ -585,12 +585,9 @@ impl PluginRuntime {
                 }
                 HTTPRouteFilterType::CORS => {
                     if let Some(config) = &filter.cors {
-                        // try_new validation failures are reported via the controller:
-                        // bad configs flag the rule in HTTPRoute.spec.invalid_rule_indices
-                        // and surface as PartiallyInvalid status (see http_route handler's
-                        // find_invalid_rule_details). Silently drop here — the affected
-                        // rule is excluded from the data-plane route table so this filter
-                        // would never be invoked anyway.
+                        // Controller status and Gateway route publication both reject
+                        // invalid CORS rules before runtime compilation. Keep try_new as
+                        // a final defensive boundary for direct construction.
                         if let Ok(cors_filter) = GapiCorsFilter::try_new(config.clone()) {
                             self.add_request_filter(Box::new(cors_filter.clone()));
                             self.add_upstream_response_filter(Box::new(cors_filter));

@@ -206,18 +206,21 @@ pub struct HTTPRouteRule {
 }
 
 impl HTTPRouteRule {
-    /// Unsupported native CORS policies invalidate the whole rule before publication.
+    /// Invalid or unsupported native CORS policies invalidate the whole rule
+    /// before Controller delegation or Gateway publication.
     pub fn unsupported_cors_reason(&self) -> Option<String> {
         self.unsupported_backend_cors_reason().or_else(|| {
             self.filters.as_ref()?.iter().find_map(|filter| {
                 if filter.filter_type != HTTPRouteFilterType::CORS {
                     return None;
                 }
-                filter
-                    .cors
-                    .as_ref()?
-                    .credentialed_expose_headers_error()
-                    .map(str::to_owned)
+                match filter.cors.as_ref() {
+                    None => Some("CORS filter missing 'cors' configuration block".to_string()),
+                    Some(config) => config
+                        .validate()
+                        .err()
+                        .map(|errors| format!("CORS {}", errors.join("; "))),
+                }
             })
         })
     }
@@ -969,9 +972,8 @@ fn default_mirror_max_concurrent() -> usize {
 
 /// HTTPCORSFilter defines a Gateway API native CORS filter (GEP-1767).
 ///
-/// Per Gateway API v1.5, origin values are validated to reject malformed entries
-/// containing path components, query strings, fragments, or trailing slashes in
-/// the host portion.
+/// The shared validator mirrors the Gateway API v1.5 admission contract for
+/// Kubernetes and non-Kubernetes ingestion.
 #[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct HTTPCORSFilter {
@@ -1000,8 +1002,21 @@ pub struct HTTPCORSFilter {
     pub expose_headers: Option<Vec<String>>,
 
     /// MaxAge defines the maximum time (in seconds) a preflight response can be cached.
-    #[serde(default)]
+    /// Gateway API defaults an omitted value to 5 and accepts positive int32 values.
+    #[serde(default = "default_cors_max_age")]
     pub max_age: u32,
+}
+
+const CORS_LIST_MAX_ITEMS: usize = 64;
+const CORS_ALLOW_METHODS_MAX_ITEMS: usize = 9;
+const CORS_ORIGIN_MAX_LEN: usize = 253;
+const CORS_MAX_AGE: u32 = i32::MAX as u32;
+const CORS_ALLOWED_METHODS: [&str; 10] = [
+    "GET", "HEAD", "POST", "PUT", "DELETE", "CONNECT", "OPTIONS", "TRACE", "PATCH", "*",
+];
+
+fn default_cors_max_age() -> u32 {
+    5
 }
 
 impl HTTPCORSFilter {
@@ -1016,30 +1031,42 @@ impl HTTPCORSFilter {
         .then_some("CORS exposeHeaders must not contain '*' when allowCredentials is true; use explicit header names")
     }
 
-    /// Validate origin syntax and Edgion's credentialed exposure support restriction.
-    ///
-    /// Rejects origins that contain:
-    /// - Path components (e.g. `https://example.com/path`)
-    /// - Query strings (e.g. `https://example.com?q=1`)
-    /// - Fragments (e.g. `https://example.com#section`)
-    /// - Trailing slashes (e.g. `https://example.com/`)
-    /// - Missing scheme (e.g. `example.com`)
-    /// - Empty host (e.g. `https://`)
+    /// Validate the vendored Gateway API v1.5 CORS admission contract and
+    /// Edgion's credentialed exposure support restriction.
     pub fn validate(&self) -> Result<(), Vec<String>> {
         let mut errors = Vec::new();
         if let Some(error) = self.credentialed_expose_headers_error() {
             errors.push(error.to_owned());
         }
 
-        if let Some(ref origins) = self.allow_origins {
+        if let Some(origins) = &self.allow_origins {
+            Self::validate_set("allowOrigins", origins, CORS_LIST_MAX_ITEMS, true, &mut errors);
             for (i, origin) in origins.iter().enumerate() {
-                if origin == "*" {
-                    continue;
-                }
                 if let Err(e) = Self::validate_origin(origin) {
                     errors.push(format!("allowOrigins[{}] \"{}\": {}", i, origin, e));
                 }
             }
+        }
+        if let Some(methods) = &self.allow_methods {
+            Self::validate_set("allowMethods", methods, CORS_ALLOW_METHODS_MAX_ITEMS, true, &mut errors);
+            for (i, method) in methods.iter().enumerate() {
+                if !CORS_ALLOWED_METHODS.contains(&method.as_str()) {
+                    errors.push(format!(
+                        "allowMethods[{i}] \"{method}\": must be a Gateway API v1.5 HTTP method or '*'"
+                    ));
+                }
+            }
+        }
+        if let Some(headers) = &self.allow_headers {
+            Self::validate_set("allowHeaders", headers, CORS_LIST_MAX_ITEMS, true, &mut errors);
+            Self::validate_header_names("allowHeaders", headers, &mut errors);
+        }
+        if let Some(headers) = &self.expose_headers {
+            Self::validate_set("exposeHeaders", headers, CORS_LIST_MAX_ITEMS, false, &mut errors);
+            Self::validate_header_names("exposeHeaders", headers, &mut errors);
+        }
+        if !(1..=CORS_MAX_AGE).contains(&self.max_age) {
+            errors.push(format!("maxAge must be between 1 and {CORS_MAX_AGE} seconds"));
         }
 
         if errors.is_empty() {
@@ -1049,72 +1076,99 @@ impl HTTPCORSFilter {
         }
     }
 
+    fn validate_set(
+        field: &str,
+        values: &[String],
+        max_items: usize,
+        wildcard_exclusive: bool,
+        errors: &mut Vec<String>,
+    ) {
+        if values.len() > max_items {
+            errors.push(format!("{field} must contain at most {max_items} entries"));
+        }
+        let mut seen = HashSet::with_capacity(values.len());
+        for (i, value) in values.iter().enumerate() {
+            if !seen.insert(value.as_str()) {
+                errors.push(format!("{field}[{i}] \"{value}\": duplicate entry"));
+            }
+        }
+        if wildcard_exclusive && values.len() > 1 && values.iter().any(|value| value == "*") {
+            errors.push(format!("{field} must not contain '*' alongside other entries"));
+        }
+    }
+
+    fn validate_header_names(field: &str, headers: &[String], errors: &mut Vec<String>) {
+        for (i, header) in headers.iter().enumerate() {
+            if header.len() > crate::gwapi_types::HEADER_NAME_MAX_LEN as usize
+                || !crate::gwapi_types::is_valid_header_token(header)
+            {
+                errors.push(format!("{field}[{i}] \"{header}\": must be a valid HTTP header name"));
+            }
+        }
+    }
+
     /// Validate a single origin value per Gateway API v1.5 rules.
     /// Valid format: `scheme://host[:port]` where host may use `*` only as
     /// a subdomain wildcard prefix (e.g. `*.example.com`).
     fn validate_origin(origin: &str) -> Result<(), String> {
-        // Must contain ://
-        let Some(scheme_end) = origin.find("://") else {
-            return Err("missing scheme (expected scheme://host)".to_string());
+        if origin.is_empty() {
+            return Err("must not be empty".to_string());
+        }
+        if origin.len() > CORS_ORIGIN_MAX_LEN {
+            return Err(format!("must be at most {CORS_ORIGIN_MAX_LEN} characters"));
+        }
+        if origin == "*" {
+            return Ok(());
+        }
+
+        let Some((scheme, authority)) = origin.split_once("://") else {
+            return Err("missing scheme (expected http://host or https://host)".to_string());
         };
-
-        let scheme = &origin[..scheme_end];
-        if scheme.is_empty() {
-            return Err("empty scheme".to_string());
+        if !matches!(scheme, "http" | "https") {
+            return Err("scheme must be 'http' or 'https'".to_string());
         }
-
-        // Scheme must be alphanumeric (+ hyphen)
-        if !scheme
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '-' || c == '.')
-        {
-            return Err("invalid scheme characters".to_string());
-        }
-
-        let after_scheme = &origin[scheme_end + 3..];
-
-        if after_scheme.is_empty() {
+        if authority.is_empty() {
             return Err("empty host".to_string());
         }
-
-        // Reject path components, query strings, fragments
-        if after_scheme.contains('/') {
+        if authority.contains('/') {
             return Err("origin must not contain a path component".to_string());
         }
-        if after_scheme.contains('?') {
+        if authority.contains('?') {
             return Err("origin must not contain a query string".to_string());
         }
-        if after_scheme.contains('#') {
+        if authority.contains('#') {
             return Err("origin must not contain a fragment".to_string());
         }
 
-        // Extract host (strip port if present)
-        let host = if let Some(colon_pos) = after_scheme.rfind(':') {
-            let port_candidate = &after_scheme[colon_pos + 1..];
-            if port_candidate.chars().all(|c| c.is_ascii_digit()) && !port_candidate.is_empty() {
-                &after_scheme[..colon_pos]
-            } else {
-                after_scheme
-            }
-        } else {
-            after_scheme
+        let (host, port) = match authority.rsplit_once(':') {
+            Some((host, port)) => (host, Some(port)),
+            None => (authority, None),
         };
-
-        if host.is_empty() {
-            return Err("empty host".to_string());
-        }
-
-        // Wildcard is only valid as `*.suffix` (subdomain wildcard)
-        if host.contains('*') {
-            if !host.starts_with("*.") {
-                return Err("wildcard '*' is only valid as a subdomain prefix (e.g. *.example.com)".to_string());
+        if let Some(port) = port {
+            if port.is_empty() || port.len() > 5 || !port.bytes().all(|byte| byte.is_ascii_digit()) {
+                return Err("port must be an integer between 1 and 65535".to_string());
             }
-            let suffix = &host[2..];
-            if suffix.is_empty() || suffix.contains('*') {
-                return Err("invalid wildcard pattern in host".to_string());
+            let port = port
+                .parse::<i64>()
+                .map_err(|_| "port must be an integer between 1 and 65535".to_string())?;
+            if !crate::gwapi_types::is_valid_port(port) {
+                return Err("port must be an integer between 1 and 65535".to_string());
             }
         }
 
+        if host == "*" {
+            return Ok(());
+        }
+        let host = host.strip_prefix("*.").unwrap_or(host);
+        if host.is_empty() || host.contains('*') {
+            return Err("wildcard '*' is valid only as the complete host or a '*.' prefix".to_string());
+        }
+        if host
+            .split('.')
+            .any(|label| label.is_empty() || !label.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'-'))
+        {
+            return Err("host must contain only non-empty DNS labels".to_string());
+        }
         Ok(())
     }
 }
@@ -1631,6 +1685,134 @@ mod tests {
                 }
             }
         }
+    }
+
+    fn cors_from(value: serde_json::Value) -> super::HTTPCORSFilter {
+        serde_json::from_value(value).expect("CORS test fixture must deserialize")
+    }
+
+    #[test]
+    fn native_cors_max_age_defaults_and_int32_bounds_match_v15() {
+        let omitted = cors_from(serde_json::json!({}));
+        assert_eq!(omitted.max_age, 5);
+        assert!(omitted.validate().is_ok());
+
+        for max_age in [1, 3600, CORS_MAX_AGE] {
+            let explicit = cors_from(serde_json::json!({"maxAge": max_age}));
+            assert_eq!(explicit.max_age, max_age);
+            assert!(explicit.validate().is_ok());
+        }
+
+        for max_age in [0, CORS_MAX_AGE + 1] {
+            let invalid = cors_from(serde_json::json!({"maxAge": max_age}));
+            assert!(invalid
+                .validate()
+                .unwrap_err()
+                .iter()
+                .any(|error| error.contains("maxAge")));
+        }
+    }
+
+    #[test]
+    fn native_cors_origin_boundaries_match_v15_schema() {
+        let longest_origin = format!("https://{}", "a".repeat(CORS_ORIGIN_MAX_LEN - "https://".len()));
+        for origin in [
+            "*".to_string(),
+            "http://example.com:1".to_string(),
+            "https://*.example.com:65535".to_string(),
+            "https://*".to_string(),
+            longest_origin,
+        ] {
+            let config = cors_from(serde_json::json!({"allowOrigins": [origin]}));
+            assert!(config.validate().is_ok(), "origin should be valid: {config:?}");
+        }
+
+        for origin in [
+            "",
+            "ftp://example.com",
+            "https://example.com/path",
+            "https://bad_host.example",
+            "https://example.com:0",
+            "https://example.com:65536",
+            "https://example.com:not-a-port",
+            "https://*.*.example.com",
+        ] {
+            let config = cors_from(serde_json::json!({"allowOrigins": [origin]}));
+            assert!(config.validate().is_err(), "origin should be invalid: {origin}");
+        }
+        let oversized = format!("https://{}", "a".repeat(CORS_ORIGIN_MAX_LEN - "https://".len() + 1));
+        let config = cors_from(serde_json::json!({"allowOrigins": [oversized]}));
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn native_cors_lists_enforce_bounds_sets_and_wildcard_exclusivity() {
+        let origins: Vec<String> = (0..CORS_LIST_MAX_ITEMS)
+            .map(|index| format!("https://h{index}.example"))
+            .collect();
+        let headers: Vec<String> = (0..CORS_LIST_MAX_ITEMS)
+            .map(|index| format!("X-Test-{index}"))
+            .collect();
+        let valid = cors_from(serde_json::json!({
+            "allowOrigins": origins,
+            "allowMethods": ["GET", "HEAD", "POST", "PUT", "DELETE", "CONNECT", "OPTIONS", "TRACE", "PATCH"],
+            "allowHeaders": headers.clone(),
+            "exposeHeaders": headers,
+        }));
+        assert!(valid.validate().is_ok());
+
+        for value in [
+            serde_json::json!({"allowOrigins": ["*", "https://example.com"]}),
+            serde_json::json!({"allowMethods": ["*", "GET"]}),
+            serde_json::json!({"allowHeaders": ["*", "X-Test"]}),
+            serde_json::json!({"allowOrigins": ["https://example.com", "https://example.com"]}),
+            serde_json::json!({"allowMethods": ["GET", "GET"]}),
+            serde_json::json!({"allowHeaders": ["X-Test", "X-Test"]}),
+            serde_json::json!({"exposeHeaders": ["X-Test", "X-Test"]}),
+        ] {
+            assert!(cors_from(value).validate().is_err());
+        }
+
+        let too_many_origins: Vec<String> = (0..=CORS_LIST_MAX_ITEMS)
+            .map(|index| format!("https://h{index}.example"))
+            .collect();
+        assert!(cors_from(serde_json::json!({"allowOrigins": too_many_origins}))
+            .validate()
+            .is_err());
+
+        let too_many_headers: Vec<String> = (0..=CORS_LIST_MAX_ITEMS)
+            .map(|index| format!("X-Test-{index}"))
+            .collect();
+        assert!(cors_from(serde_json::json!({"allowHeaders": too_many_headers.clone()}))
+            .validate()
+            .is_err());
+        assert!(cors_from(serde_json::json!({"exposeHeaders": too_many_headers}))
+            .validate()
+            .is_err());
+    }
+
+    #[test]
+    fn native_cors_methods_and_header_names_match_v15_schema() {
+        let maximum_header = "x".repeat(crate::gwapi_types::HEADER_NAME_MAX_LEN as usize);
+        assert!(cors_from(serde_json::json!({"allowHeaders": [maximum_header]}))
+            .validate()
+            .is_ok());
+        for value in [
+            serde_json::json!({"allowMethods": ["get"]}),
+            serde_json::json!({"allowMethods": ["CUSTOM"]}),
+            serde_json::json!({"allowHeaders": [""]}),
+            serde_json::json!({"allowHeaders": ["bad header"]}),
+            serde_json::json!({"exposeHeaders": [":method"]}),
+            serde_json::json!({"allowHeaders": ["x".repeat(crate::gwapi_types::HEADER_NAME_MAX_LEN as usize + 1)]}),
+        ] {
+            assert!(cors_from(value).validate().is_err());
+        }
+
+        let wildcard_exposure = cors_from(serde_json::json!({
+            "allowCredentials": false,
+            "exposeHeaders": ["*", "X-Test"]
+        }));
+        assert!(wildcard_exposure.validate().is_ok());
     }
 
     #[test]

@@ -130,6 +130,17 @@ the invalid rule; another valid rule may match, otherwise the response is `404`.
 Move the policy to rule scope to apply it to all backends of that rule. This also
 applies to delegated routes and updates without a Gateway restart.
 
+Native CORS configuration follows the Gateway API v1.5.0 admission limits on every
+configuration backend, including file-system input. Origins must use `http` or `https`
+with a valid host and optional port from `1` through `65535`. Origin, method, and
+request-header wildcards cannot be combined with other entries in the same list;
+lists use set semantics and retain the upstream size limits. Methods and header names
+must use the values and syntax accepted by Gateway API. `maxAge` must be from `1`
+through `2147483647`;
+when omitted, it defaults to `5` and a successful preflight emits
+`Access-Control-Max-Age: 5`. Invalid values make the owning rule partially or wholly
+invalid as described above.
+
 For native CORS, `allowCredentials: true` requires explicit names in `exposeHeaders`
 (for example, `exposeHeaders: ["X-Request-Id", "X-Total-Count"]`). Any entry equal to
 `"*"`, including a mixture with explicit names, invalidates the whole rule with the

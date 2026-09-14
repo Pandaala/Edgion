@@ -1027,26 +1027,7 @@ fn has_rewrite_redirect_conflict(
 /// `PartiallyInvalid=True` leaves those rules active. An unsupported CORS policy
 /// with no surviving effective rule escalates to `Accepted=False/UnsupportedValue`.
 fn invalid_cors_reason(rule: &edgion_resources::resources::http_route::HTTPRouteRule) -> Option<String> {
-    if let Some(reason) = rule.unsupported_cors_reason() {
-        return Some(reason);
-    }
-    let filter_reason = |f: &edgion_resources::resources::http_route::HTTPRouteFilter| -> Option<String> {
-        if f.filter_type != HTTPRouteFilterType::CORS {
-            return None;
-        }
-        match f.cors.as_ref() {
-            None => Some("CORS filter missing 'cors' configuration block".to_string()),
-            Some(cfg) => cfg.validate().err().map(|errs| format!("CORS {}", errs.join("; "))),
-        }
-    };
-    if let Some(filters) = rule.filters.as_ref() {
-        for f in filters {
-            if let Some(reason) = filter_reason(f) {
-                return Some(reason);
-            }
-        }
-    }
-    None
+    rule.unsupported_cors_reason()
 }
 
 /// Returns a reason string if a rule has an invalid `ExtensionRef` filter.
@@ -2640,6 +2621,35 @@ spec:
     fn valid_cors_does_not_flag_rule() {
         let route = route_with_one_cors_rule(&["https://good.example.com", "https://*.foo.com:8443"]);
         assert!(find_invalid_rule_details(&route, "default").is_empty());
+    }
+
+    #[test]
+    fn native_cors_v15_validation_reasons_reach_controller_rule_status() {
+        for (cors, expected_field) in [
+            (
+                serde_json::json!({"allowOrigins": ["ftp://example.com"]}),
+                "allowOrigins",
+            ),
+            (serde_json::json!({"allowMethods": ["get"]}), "allowMethods"),
+            (serde_json::json!({"allowHeaders": ["bad header"]}), "allowHeaders"),
+            (serde_json::json!({"exposeHeaders": [":method"]}), "exposeHeaders"),
+            (serde_json::json!({"maxAge": 0}), "maxAge"),
+        ] {
+            let route: HTTPRoute = serde_json::from_value(serde_json::json!({
+                "apiVersion": "gateway.networking.k8s.io/v1",
+                "kind": "HTTPRoute",
+                "metadata": {"name": "r1", "namespace": "default"},
+                "spec": {"rules": [{"filters": [{"type": "CORS", "cors": cors}]}]}
+            }))
+            .expect("HTTPRoute CORS fixture must deserialize");
+            let details = find_invalid_rule_details(&route, "default");
+            assert_eq!(indices_only(details.clone()), vec![0]);
+            assert!(
+                details[0].1.contains(expected_field),
+                "expected {expected_field} in controller diagnostic: {}",
+                details[0].1
+            );
+        }
     }
 
     #[test]

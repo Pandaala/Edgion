@@ -1183,6 +1183,25 @@ mod tests {
     }
 
     #[test]
+    fn native_cors_validation_detail_survives_delegation() {
+        let parent = simple_parent("/api", "infra", "child");
+        for (cors, expected_field) in [
+            (serde_json::json!({"allowMethods": ["get"]}), "allowMethods"),
+            (serde_json::json!({"allowHeaders": ["bad header"]}), "allowHeaders"),
+            (serde_json::json!({"maxAge": 0}), "maxAge"),
+        ] {
+            let mut rule = service_rule("/api/child", "svc");
+            rule["filters"] = serde_json::json!([{"type": "CORS", "cors": cors}]);
+            let child = route("infra", "child", serde_json::json!({"rules": [rule]}));
+            let outcome = flatten_route(&parent, &FakeLookup::new(vec![child]));
+            assert!(outcome.resolved_rules.as_ref().unwrap().is_empty());
+            assert!(dropped_messages(&outcome).iter().any(|message| {
+                message.contains("child 'infra/child' rules[0]") && message.contains(expected_field)
+            }));
+        }
+    }
+
+    #[test]
     fn no_delegation_yields_none() {
         let parent = parent_with_rules(serde_json::json!([service_rule("/a", "svc")]));
         let outcome = flatten_route(&parent, &FakeLookup::new(vec![]));
