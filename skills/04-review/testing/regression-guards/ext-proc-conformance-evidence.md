@@ -20,6 +20,11 @@ Default tests use Edgion's deterministic fake processor. Wall-clock idle,
 stress, repeated transport combinations, certificate rotation, and an
 independently generated processor belong behind `--full-test`.
 
+ExtProc client state-machine unit tests are network-free. They drive
+`ExtProcStream` through bounded request/response channels and reserve real
+gRPC transport, HTTP/2 framing, TLS, and peer-observed half-close evidence for
+the integration tier.
+
 ## Core rationale
 
 1. Envoy's own ExtProc suite primarily uses repository fake/mock processors;
@@ -32,6 +37,27 @@ independently generated processor belong behind `--full-test`.
    proxy produces or consumes trailer phases.
 4. Short deterministic failure and TLS/mTLS cases stay in the default suite.
    Real waits and stress are opt-in so the default feedback loop remains fast.
+5. Internal stream transitions and exact error mapping do not require a socket.
+   The test-only `InboundState::Test` receiver exercises the same
+   `exchange`/`finish_success` state machine while the integration processors
+   prove that tonic carries those messages and terminal states over the wire.
+
+## Unit isolation boundary
+
+The channel-backed `client.rs::tests::stream_state` cases retain the former
+live-server assertions for:
+
+- request headers followed by multiple body chunks;
+- request and response phases on one ordered logical stream;
+- response body followed by response trailers;
+- final-body and final-trailer outbound EOF;
+- extra terminal verdict, terminal status, and terminal-drain timeout errors;
+- a second exchange after outbound half-close.
+
+The unit selection contains no listener, server builder, or network exchange.
+The default and full ExtProc integration suites remain responsible for the
+actual gRPC transport, phase/EOS observations, response trailers, normal
+half-close, timeout behavior, and TLS/mTLS connections.
 
 ## Fix suggestions not accepted
 
@@ -67,3 +93,7 @@ modes.
 ## Resolution references
 
 - `ext-proc-conformance-coverage` — 2026-08-26.
+- `isolate-ext-proc-live-stream-unit-tests` — 2026-09-14. The 25 focused
+  ExtProc client tests passed after the live tonic servers were replaced with
+  deterministic bounded channels; this focused result is not a fresh run of
+  the integration suite.
