@@ -20,7 +20,7 @@
   - `set_claims_headers()` 做 payload 字段到头映射（含注入防护与大小限制）
 - 支持严格模式（`strict`）和旁路模式
 - 每一代插件运行时在构造时准备一个不可变的 AES-GCM cipher；Secret 更新由 Controller 重新解析，并通过发布替换代生效
-- 拒绝包含 `zip` 或 `crit` 的 protected header；未知的非 critical 参数仍可接受，并作为原始 protected-header AAD 的一部分参与认证
+- protected header 必须是成员名唯一的 JSON 对象，并拒绝包含 `zip` 或 `crit` 的 protected header；未知的非 critical 参数仍可接受，并作为原始 protected-header AAD 的一部分参与认证
 - 支持 `payloadToHeaders` dot-notation 路径（如 `user.department`）
 - 支持失败延迟（`authFailureDelayMs`）降低时序侧信道风险
 - 支持 `base64Secret` 对双重 base64 编码的密钥做额外解码
@@ -204,7 +204,7 @@ Operator-facing 配置错误通过 `Accepted` 报告。引用的 Secret 不存�
 | 场景 | 状态码 | 客户端响应体 | PluginLog |
 |------|--------|--------------|-----------|
 | 缺少 JWE 且 `strict=true` | `401` | `401 JWE token required` | `no token` |
-| JWE 格式错误，包括 protected `zip` 或 `crit` | `400` | `400 Invalid JWE format` | `invalid format` |
+| JWE 格式错误，包括 protected header 不是对象、含重复成员、含 `zip` 或 `crit` | `400` | `400 Invalid JWE format` | `invalid format` |
 | JWE 缺少必要头（`alg`/`enc`） | `400` | `400 JWE missing required headers` | `missing header` |
 | 引用的 Secret/密钥不可用或无法解码 | `401` | `401 JWE decryption failed` | `err: key load fail` |
 | 已解析密钥长度不符合 A256GCM | `401` | `401 JWE decryption failed` | `err: key len err` |

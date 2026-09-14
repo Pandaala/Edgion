@@ -16,3 +16,4 @@ before applying a decision to current code.
 ## Regression guards
 
 - [JWE resolved-credential failures remain authentication failures](regression-guards/resolved-credential-failure-policy.md)
+- [JWE protected headers use strict object parsing and raw AAD](regression-guards/strict-protected-header-json.md)

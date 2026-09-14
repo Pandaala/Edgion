@@ -20,7 +20,7 @@ Use cases:
   - `set_claims_headers()` for payload field-to-header mapping (with injection protection and size limits)
 - Supports strict mode (`strict`) and bypass mode
 - Prepares one immutable AES-GCM cipher when each plugin runtime generation is constructed; a Secret update is resolved by the Controller and takes effect through publication of a replacement generation
-- Rejects protected headers containing `zip` or `crit`; unknown non-critical parameters remain accepted and are authenticated as part of the original protected-header AAD
+- Requires the protected header to be a JSON object with unique member names and rejects `zip` or `crit`; unknown non-critical parameters remain accepted and are authenticated as part of the original protected-header AAD
 - Supports `payloadToHeaders` dot-notation paths (e.g., `user.department`)
 - Supports failure delay (`authFailureDelayMs`) to reduce timing side-channel risks
 - Supports `base64Secret` for double-base64-encoded keys
@@ -206,7 +206,7 @@ Missing credentials, unusable key material, and ciphertext authentication failur
 | Scenario | Status Code | Client Body | PluginLog |
 |----------|------------|-------------|-----------|
 | Missing JWE and `strict=true` | `401` | `401 JWE token required` | `no token` |
-| Invalid JWE format, including protected `zip` or `crit` | `400` | `400 Invalid JWE format` | `invalid format` |
+| Invalid JWE format, including a non-object or duplicate-member protected header, `zip`, or `crit` | `400` | `400 Invalid JWE format` | `invalid format` |
 | JWE missing required headers (`alg`/`enc`) | `400` | `400 JWE missing required headers` | `missing header` |
 | Referenced Secret/key unavailable or undecodable | `401` | `401 JWE decryption failed` | `err: key load fail` |
 | Resolved key length does not match A256GCM | `401` | `401 JWE decryption failed` | `err: key len err` |

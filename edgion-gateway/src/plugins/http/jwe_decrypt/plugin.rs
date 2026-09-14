@@ -8,6 +8,10 @@ use aes_gcm::{Aes256Gcm, Nonce, Tag};
 use async_trait::async_trait;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
+use serde::de::{self, IgnoredAny, MapAccess, Visitor};
+use serde::Deserialize;
+use std::collections::HashSet;
+use std::fmt;
 
 use crate::plugins::http::common::auth_common::{
     apply_auth_failure_delay, send_gateway_auth_error_response, set_claims_headers,
@@ -70,6 +74,87 @@ struct ParsedJwe<'a> {
     iv_segment: &'a str,
     ciphertext_segment: &'a str,
     tag_segment: &'a str,
+}
+
+struct ProtectedHeader {
+    alg: Option<serde_json::Value>,
+    enc: Option<serde_json::Value>,
+    has_zip: bool,
+    has_crit: bool,
+}
+
+struct ProtectedHeaderVisitor;
+
+enum ProtectedHeaderField {
+    Alg,
+    Enc,
+    Zip,
+    Crit,
+    Other,
+}
+
+impl<'de> Visitor<'de> for ProtectedHeaderVisitor {
+    type Value = ProtectedHeader;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("a JWE protected header JSON object with unique member names")
+    }
+
+    fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+    where
+        A: MapAccess<'de>,
+    {
+        let mut seen = HashSet::new();
+        let mut alg = None;
+        let mut enc = None;
+        let mut has_zip = false;
+        let mut has_crit = false;
+
+        while let Some(field) = map.next_key::<String>()? {
+            let field_kind = match field.as_str() {
+                "alg" => ProtectedHeaderField::Alg,
+                "enc" => ProtectedHeaderField::Enc,
+                "zip" => ProtectedHeaderField::Zip,
+                "crit" => ProtectedHeaderField::Crit,
+                _ => ProtectedHeaderField::Other,
+            };
+            if !seen.insert(field) {
+                return Err(de::Error::custom("duplicate JWE protected header member"));
+            }
+
+            match field_kind {
+                ProtectedHeaderField::Alg => alg = Some(map.next_value()?),
+                ProtectedHeaderField::Enc => enc = Some(map.next_value()?),
+                ProtectedHeaderField::Zip => {
+                    has_zip = true;
+                    map.next_value::<IgnoredAny>()?;
+                }
+                ProtectedHeaderField::Crit => {
+                    has_crit = true;
+                    map.next_value::<IgnoredAny>()?;
+                }
+                ProtectedHeaderField::Other => {
+                    map.next_value::<IgnoredAny>()?;
+                }
+            }
+        }
+
+        Ok(ProtectedHeader {
+            alg,
+            enc,
+            has_zip,
+            has_crit,
+        })
+    }
+}
+
+impl<'de> Deserialize<'de> for ProtectedHeader {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        deserializer.deserialize_map(ProtectedHeaderVisitor)
+    }
 }
 
 #[allow(clippy::large_enum_variant)]
@@ -213,19 +298,21 @@ impl JweDecrypt {
         let protected_bytes = URL_SAFE_NO_PAD
             .decode(protected_segment)
             .map_err(|_| JweFailure::InvalidFormat)?;
-        let protected_json: serde_json::Value =
+        let protected_header: ProtectedHeader =
             serde_json::from_slice(&protected_bytes).map_err(|_| JweFailure::InvalidFormat)?;
 
-        let alg = protected_json
-            .get("alg")
+        let alg = protected_header
+            .alg
+            .as_ref()
             .and_then(|v| v.as_str())
             .ok_or(JweFailure::MissingHeader)?;
         if alg != self.config.key_management_algorithm.as_str() {
             return Err(JweFailure::BadAlg);
         }
 
-        let enc_raw = protected_json
-            .get("enc")
+        let enc_raw = protected_header
+            .enc
+            .as_ref()
             .and_then(|v| v.as_str())
             .ok_or(JweFailure::MissingHeader)?;
         let enc = JweContentEncryption::parse(enc_raw).ok_or(JweFailure::BadAlg)?;
@@ -238,7 +325,7 @@ impl JweDecrypt {
                 return Err(JweFailure::AlgDenied);
             }
         }
-        if protected_json.get("zip").is_some() || protected_json.get("crit").is_some() {
+        if protected_header.has_zip || protected_header.has_crit {
             return Err(JweFailure::InvalidFormat);
         }
 
@@ -628,6 +715,42 @@ mod tests {
             let result = plugin.run_request(&mut session, &mut log).await;
             assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
             assert_eq!(log.render_for_test(), "invalid format");
+        }
+    }
+
+    #[test]
+    fn duplicate_protected_header_members_are_rejected() {
+        let plugin = build_plugin(None);
+        let cases = [
+            r#"{"alg":"dir","alg":"dir","enc":"A256GCM"}"#,
+            r#"{"alg":"dir","enc":"A256GCM","enc":"A256GCM"}"#,
+            r#"{"alg":"dir","enc":"A256GCM","x-private":1,"x-private":2}"#,
+        ];
+
+        for (index, protected) in cases.into_iter().enumerate() {
+            let token =
+                encrypt_compact_jwe_with_protected(r#"{"sub":"alice"}"#, &test_key(), protected, index as u8 + 30);
+            assert_eq!(
+                decrypt_with_prepared(&plugin, &token),
+                Err(JweFailure::InvalidFormat),
+                "duplicate protected header member was accepted: {protected}"
+            );
+        }
+    }
+
+    #[test]
+    fn non_object_protected_headers_are_invalid_format() {
+        let plugin = build_plugin(None);
+        let cases = [r#"[]"#, r#""header""#, "42", "true", "null"];
+
+        for (index, protected) in cases.into_iter().enumerate() {
+            let token =
+                encrypt_compact_jwe_with_protected(r#"{"sub":"alice"}"#, &test_key(), protected, index as u8 + 40);
+            assert_eq!(
+                decrypt_with_prepared(&plugin, &token),
+                Err(JweFailure::InvalidFormat),
+                "non-object protected header was not invalid format: {protected}"
+            );
         }
     }
 
