@@ -1,7 +1,7 @@
 //! Secret utilities for resource processing
 //!
 //! This module provides:
-//! - `SecretRefManager`: Manages references between Secrets and dependent resources
+//! - `SecretRefManager`: Manages kind-preserving Secret/ConfigMap material dependencies
 //! - `SecretStore`: Global store for Secret data (used by TLS callbacks)
 
 mod secret_ref;

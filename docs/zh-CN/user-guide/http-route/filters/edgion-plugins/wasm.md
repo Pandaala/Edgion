@@ -93,7 +93,7 @@ config:
 | `source.inline` | String (base64) | — | base64 编码、内嵌在资源里的字节码。**仅作为开发/测试便利**——解码后硬上限 1MiB（超出为校验错误），超过 512KiB 网关在加载时 WARN。见[来源形态选型](#来源形态选型)。 |
 | `source.url` | String | — | 网关拉取字节码的 `http://` / `https://` URL。**必须配 `sha256`。** 连接行为可通过 `source.fetch` 调整。 |
 | `source.fetch` | Object | — | `url` 来源的可选拉取强化（与 `file`/`inline`/`oci` 同用为校验错误）：TLS、认证、超时、重试。 |
-| `source.fetch.tls` | Object | — | 共享 `TlsConfig` 结构：自定义 CA（`validation.caCertificateRefs`）和/或 mTLS 客户端身份（`clientCertificateRef`）。Secret 引用由 controller 解析（跨 namespace 需要 `ReferenceGrant`）。 |
+| `source.fetch.tls` | Object | — | 共享 `TlsConfig` 结构：自定义 CA（`validation.caCertificateRefs`）和/或 mTLS 客户端身份（`clientCertificateRef`）。Controller 会解析 Secret 和 ConfigMap CA 引用（跨 namespace 时需要 kind 匹配的 `ReferenceGrant`）；ConfigMap 缺失时报告 `ResolvedRefs=False/ConfigMapNotFound`。 |
 | `source.fetch.authHeaderSecretRef` | Object | — | `{name, namespace?, key}`：Secret 的 `key`（默认 `authorization`）保存拉取时发送的完整 `Authorization` 头值（如 `Bearer <token>`）。设置了引用但 Secret 尚未解析时，加载**失败**而不是静默匿名拉取。 |
 | `source.fetch.timeoutMs` | Integer | `10000` | 单次尝试超时。范围 `1..=60000`。 |
 | `source.fetch.retry` | Object | — | `{attempts, backoffMs}`——含首次的总尝试数（`1..=10`，默认 3）与逐次翻倍的基础退避（默认 500，上限 30000）。策略固定：传输错误与 `5xx` 重试；**`4xx` 永不重试**。 |

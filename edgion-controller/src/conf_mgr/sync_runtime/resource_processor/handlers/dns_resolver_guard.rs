@@ -13,6 +13,8 @@ use std::collections::BTreeMap;
 use edgion_common::dns::resolver_select::LinkSysKey;
 use edgion_resources::constants::annotations::edgion::DNS_RESOLVER_REF;
 
+use super::super::ref_grant::read_after_registering_cross_ns_dependency;
+use super::super::ResourceRef;
 use crate::conf_mgr::ControllerRuntime;
 use crate::config::is_reference_grant_validation_enabled;
 
@@ -31,32 +33,35 @@ const LINK_SYS_KIND: &str = "LinkSys";
 /// httpdns LinkSys reference that lacks a ReferenceGrant.
 ///
 /// Returns `None` for a same-namespace ref, an absent / malformed annotation, or
-/// when grant validation is disabled. `from_group`/`from_kind` identify the
-/// referrer (`"gateway.networking.k8s.io"`/`"Gateway"` or `""`/`"Service"`).
+/// when grant validation is disabled. A valid cross-namespace ref is registered
+/// before the validation-mode or authorization read. `from_group`/`from_kind`
+/// identify the referrer (`"gateway.networking.k8s.io"`/`"Gateway"` or
+/// `""`/`"Service"`).
 pub fn check_dns_resolver_ref_grant(
     from_ns: &str,
     from_group: &str,
     from_kind: &str,
     annotations: Option<&BTreeMap<String, String>>,
+    owner: &ResourceRef,
     runtime: &ControllerRuntime,
 ) -> Option<DnsResolverRefDenial> {
-    if !is_reference_grant_validation_enabled() {
-        return None;
-    }
     let value = annotations?.get(DNS_RESOLVER_REF)?;
     let key = LinkSysKey::parse(value)?;
     if key.namespace == from_ns {
         return None;
     }
-    let allowed = runtime.ref_grant_store.check_reference_allowed(
-        from_ns,
-        from_group,
-        from_kind,
-        &key.namespace,
-        LINK_SYS_GROUP,
-        LINK_SYS_KIND,
-        Some(&key.name),
-    );
+    let allowed = read_after_registering_cross_ns_dependency(runtime, &key.namespace, owner, || {
+        !is_reference_grant_validation_enabled()
+            || runtime.ref_grant_store.check_reference_allowed(
+                from_ns,
+                from_group,
+                from_kind,
+                &key.namespace,
+                LINK_SYS_GROUP,
+                LINK_SYS_KIND,
+                Some(&key.name),
+            )
+    });
     if allowed {
         None
     } else {
@@ -82,6 +87,7 @@ pub fn strip_dns_resolver_ref(annotations: &mut Option<BTreeMap<String, String>>
 mod tests {
     use super::*;
     use crate::conf_mgr::ControllerRuntime;
+    use edgion_resources::ResourceKind;
 
     fn ann(reference: &str) -> BTreeMap<String, String> {
         let mut m = BTreeMap::new();
@@ -89,19 +95,24 @@ mod tests {
         m
     }
 
+    fn owner() -> ResourceRef {
+        ResourceRef::new(ResourceKind::Service, Some("app".to_string()), "backend".to_string())
+    }
+
     #[test]
     fn absent_annotation_is_not_denied() {
         let runtime = ControllerRuntime::default();
-        assert!(check_dns_resolver_ref_grant("app", "", "Service", None, &runtime).is_none());
+        let owner = owner();
+        assert!(check_dns_resolver_ref_grant("app", "", "Service", None, &owner, &runtime).is_none());
         let empty = BTreeMap::new();
-        assert!(check_dns_resolver_ref_grant("app", "", "Service", Some(&empty), &runtime).is_none());
+        assert!(check_dns_resolver_ref_grant("app", "", "Service", Some(&empty), &owner, &runtime).is_none());
     }
 
     #[test]
     fn same_namespace_ref_is_not_denied() {
         let runtime = ControllerRuntime::default();
         let a = ann("app/aliyun");
-        assert!(check_dns_resolver_ref_grant("app", "", "Service", Some(&a), &runtime).is_none());
+        assert!(check_dns_resolver_ref_grant("app", "", "Service", Some(&a), &owner(), &runtime).is_none());
     }
 
     #[test]
@@ -109,10 +120,12 @@ mod tests {
         // Empty ref_grant_store + default (enabled) validation → cross-ns denied.
         let runtime = ControllerRuntime::default();
         let a = ann("dns/aliyun");
-        let denial = check_dns_resolver_ref_grant("app", "", "Service", Some(&a), &runtime);
+        let owner = owner();
+        let denial = check_dns_resolver_ref_grant("app", "", "Service", Some(&a), &owner, &runtime);
         let denial = denial.expect("cross-namespace ref without grant must be denied");
         assert_eq!(denial.ref_namespace, "dns");
         assert_eq!(denial.name, "aliyun");
+        assert_eq!(runtime.cross_ns_ref_mgr.get_refs("dns"), vec![owner]);
     }
 
     #[test]

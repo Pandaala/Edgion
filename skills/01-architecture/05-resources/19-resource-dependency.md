@@ -36,6 +36,8 @@ flowchart LR
         ReferenceGrant -- "cross-ns gatewayRef" --> EdgionAcmeGrant[EdgionAcme]
         EdgionConfigData -- "ProxyProtocolTrust change/delete\nworkqueue requeue" --> Gateway4
         ReferenceGrant -- "cross-ns authorization check" --> Routes2["Route family\n(cross-ns backendRef)"]
+        ReferenceGrant -- "cross-ns dns-resolver-ref" --> ServiceGrant[Service]
+        ReferenceGrant -- "grant-gated ConfigMap CA" --> ConfigConsumers["EdgionGatewayConfig / EdgionPlugins"]
     end
 
     subgraph NamespaceDeps
@@ -63,12 +65,12 @@ flowchart LR
 | Store | Writer | Reader |
 |-------|--------|--------|
 | **SecretStore** | SecretHandler | Gateway, EdgionTls, EdgionPlugins, BackendTLSPolicy, EdgionAcme, EdgionBackend |
-| **ConfigMapStore** | ConfigMapHandler | Gateway (frontend CA), BackendTLSPolicy (backend CA) |
+| **ConfigMapStore** | ConfigMapHandler | Gateway (frontend CA), BackendTLSPolicy (backend CA), EdgionGatewayConfig and EdgionPlugins (grant-gated outbound CA) |
 | **NamespaceStore** | K8s Namespace informer | Route family (allowedRoutes Selector) |
-| **ReferenceGrantStore** | ReferenceGrantHandler | Gateway, Route family, EdgionAcme (cross-ns authorization) |
-| **SecretRefManager** | Gateway/EdgionTls/EdgionPlugins/BackendTLSPolicy/EdgionAcme/EdgionBackend (register during parse) | SecretHandler/ConfigMapHandler (look up dependents on on_change) |
+| **ReferenceGrantStore** | ReferenceGrantHandler | Gateway, Route family, Service, EdgionAcme, EdgionGatewayConfig, and EdgionPlugins (cross-ns authorization) |
+| **SecretRefManager** | Gateway/EdgionTls/EdgionPlugins/BackendTLSPolicy/EdgionAcme/EdgionBackend (register during parse; ConfigMap material uses `ConfigMap/ns/name` keys to preserve kind) | SecretHandler/ConfigMapHandler (look up dependents on on_change using their kind-specific key) |
 | **ServiceRefManager** | Route family (register forwarding and mirror targets during parse), EdgionPlugins (register enabled mirror targets during parse) | ServiceHandler and EndpointSliceHandler (look up dependents on apply/delete), BackendTLSPolicy (read forwarding-only keys in resolve_ancestor_gateways) |
-| **CrossNsRefManager** | Gateway / Route family / EdgionAcme (register cross-ns references during parse) | ReferenceGrantHandler (look up dependents on on_change) |
+| **CrossNsRefManager** | Gateway / Route family / Service / EdgionAcme / EdgionGatewayConfig / EdgionPlugins / EdgionStreamPlugins (clear-before-add and register cross-ns references during parse) | ReferenceGrantHandler (look up dependents on on_change) |
 | **EdgionConfigDataRefManager** | Gateway and plugin resources (clear-before-add during parse) | EdgionConfigData handler (requeue dependents on apply/delete) |
 | **ProxyProtocolListenerPolicyManager** | Gateway (atomic whole-Gateway contribution replacement) | Gateway handler (requeue only peers affected by a net physical-listener declaration change) |
 | **GatewayRouteIndex** | Route family / EdgionTls / EdgionAcme (write on reconcile) | GatewayHandler (requeue route and attachment-proof consumers), BackendTLSPolicy (read in resolve_ancestor_gateways) |
@@ -92,7 +94,7 @@ credential.
 
 ## Resources without external dependencies
 
-EdgionGatewayConfig, EdgionStreamPlugins, LinkSys, ConfigMap, EndpointSlice, Namespace
+ConfigMap, EndpointSlice, Namespace
 
 EdgionConfigData is a provider for Gateway inbound PROXY protocol `resourceRef` policies and is
 therefore no longer dependency-free. Provider changes and deletes requeue registered Gateways.

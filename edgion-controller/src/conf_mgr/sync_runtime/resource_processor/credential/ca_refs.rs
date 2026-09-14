@@ -28,7 +28,7 @@ use edgion_resources::constants::secret_keys::tls::CA_CERT;
 use edgion_resources::resources::backend_tls_policy::BackendTLSPolicyCACertificateRef;
 use edgion_resources::resources::common::{is_core_api_group, SecretObjectReference};
 
-use super::super::{format_secret_key, HandlerContext, ResourceRef};
+use super::super::{format_configmap_ref_key, format_secret_key, HandlerContext, ResourceRef};
 use super::pipeline::{fetch_configmap, fetch_secret, FetchOutcome};
 
 // ---------------------------------------------------------------------------
@@ -125,7 +125,11 @@ pub fn resolve_ca_certificate_refs(
         // Register with SecretRefManager so the owner is requeued when the
         // referenced Secret/ConfigMap is created, updated, or deleted.
         let key_ns = effective_ns.to_string();
-        let ref_key = format_secret_key(Some(&key_ns), &ca_ref.name);
+        let ref_key = if is_configmap {
+            format_configmap_ref_key(Some(&key_ns), &ca_ref.name)
+        } else {
+            format_secret_key(Some(&key_ns), &ca_ref.name)
+        };
         ctx.secret_ref_manager().add_ref(ref_key.clone(), resource_ref.clone());
 
         if is_secret {
@@ -424,7 +428,7 @@ mod tests {
         );
 
         // SecretRefManager must have registered the ref.
-        let refs = ctx.secret_ref_manager().get_refs("default/corp-ca-cm");
+        let refs = ctx.secret_ref_manager().get_refs("ConfigMap/default/corp-ca-cm");
         assert!(
             refs.contains(&resource_ref),
             "ConfigMap ref must be registered in SecretRefManager"
@@ -535,5 +539,10 @@ mod tests {
             }
             other => panic!("expected Pending(ReferenceGrantMissing), got {:?}", other),
         }
+        assert!(ctx
+            .runtime()
+            .cross_ns_ref_mgr
+            .get_refs("other-ns")
+            .contains(&resource_ref));
     }
 }

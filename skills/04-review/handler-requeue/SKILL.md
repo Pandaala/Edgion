@@ -26,4 +26,5 @@ before applying a decision to current code.
 - [Controller-derived Fields Use the Processed Cache](regression-guards/controller-derived-fields-use-processed-cache.md)
 - [BackendTLSPolicy Requeues Use the EBTP Typed Service Key](regression-guards/ebtp-typed-service-key-btp-requeue.md)
 - [Merge-patch cannot clear skip-serialized status lists — FIXED (routes) / AUDITED (rest)](regression-guards/status-list-merge-patch-tombstone.md)
+- [Register ReferenceGrant dependencies before authorization reads](regression-guards/reference-grant-dependency-before-authorization.md)
 - [EdgionPlugins Wasm fetch/OCI Secret status derivation — FIXED](regression-guards/wasm-secret-refs-status-derivation.md)

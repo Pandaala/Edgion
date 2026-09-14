@@ -5,7 +5,9 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use super::super::ref_grant::{is_cross_ns_ref_allowed, validate_http_route_if_enabled};
+use super::super::ref_grant::{
+    is_cross_ns_ref_allowed, read_after_registering_cross_ns_dependency, validate_http_route_if_enabled,
+};
 use super::route_delegation::{flatten_route, populate_terminal_rule_identities, DelegationLookup};
 use super::{
     remove_from_attached_route_tracker, remove_from_gateway_route_index, requeue_backend_policies_for_backend_targets,
@@ -90,20 +92,22 @@ impl DelegationLookup for RuntimeDelegationLookup<'_> {
         name: &str,
         to_ns: &str,
     ) -> bool {
-        if let Some(owner) = &self.grant_owner {
-            self.runtime.cross_ns_ref_mgr.add_ref(to_ns.to_string(), owner.clone());
-        }
         let group = group.map(str::to_string);
         let kind = kind.map(str::to_string);
-        is_cross_ns_ref_allowed(
-            from_ns,
-            "HTTPRoute",
-            to_ns,
-            group.as_ref(),
-            kind.as_ref(),
-            name,
-            self.runtime,
-        )
+        let read = || {
+            is_cross_ns_ref_allowed(
+                from_ns,
+                "HTTPRoute",
+                to_ns,
+                group.as_ref(),
+                kind.as_ref(),
+                name,
+                self.runtime,
+            )
+        };
+        self.grant_owner.as_ref().map_or_else(read, |owner| {
+            read_after_registering_cross_ns_dependency(self.runtime, to_ns, owner, read)
+        })
     }
 }
 
@@ -392,11 +396,12 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
         if let Some(rules) = &mut route.spec.rules {
             for rule in rules {
                 super::request_mirror::resolve_rule(rule, route_ns, |backend| {
-                    _ctx.runtime().cross_ns_ref_mgr.add_ref(
-                        backend.namespace.as_deref().unwrap_or(route_ns).to_string(),
-                        grant_owner.clone(),
-                    );
-                    super::request_mirror::allowed(backend, route_ns, ResourceKind::HTTPRoute, _ctx.runtime())
+                    read_after_registering_cross_ns_dependency(
+                        _ctx.runtime(),
+                        backend.namespace.as_deref().unwrap_or(route_ns),
+                        &grant_owner,
+                        || super::request_mirror::allowed(backend, route_ns, ResourceKind::HTTPRoute, _ctx.runtime()),
+                    )
                 });
                 if let Some(backend_refs) = &mut rule.backend_refs {
                     for backend_ref in backend_refs {
@@ -410,14 +415,21 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
                         }
                         if let Some(backend_ns) = &backend_ref.namespace {
                             if backend_ns != route_ns {
-                                let allowed = is_cross_ns_ref_allowed(
-                                    route_ns,
-                                    "HTTPRoute",
-                                    backend_ns,
-                                    backend_ref.group.as_ref(),
-                                    backend_ref.kind.as_ref(),
-                                    &backend_ref.name,
+                                let allowed = read_after_registering_cross_ns_dependency(
                                     _ctx.runtime(),
+                                    backend_ns,
+                                    &grant_owner,
+                                    || {
+                                        is_cross_ns_ref_allowed(
+                                            route_ns,
+                                            "HTTPRoute",
+                                            backend_ns,
+                                            backend_ref.group.as_ref(),
+                                            backend_ref.kind.as_ref(),
+                                            &backend_ref.name,
+                                            _ctx.runtime(),
+                                        )
+                                    },
                                 );
                                 if !allowed {
                                     backend_ref.ref_denied = Some(RefDenied {

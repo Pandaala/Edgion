@@ -366,15 +366,14 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn cross_namespace_ca_refs_replace_dependencies_and_clear_on_delete() {
+    async fn assert_cross_namespace_ca_refs_replace_dependencies_and_clear_on_delete(kind: &str) {
         let ctx = make_ctx_with_secrets(HashMap::new());
         let handler = EdgionGatewayConfigHandler::new();
         let spec = EdgionGatewayConfigSpec {
             outbound_tls: Some(OutboundTlsConfig {
                 validation: Some(OutboundTlsValidation {
                     ca_certificate_refs: Some(vec![BackendTLSPolicyCACertificateRef {
-                        kind: "Secret".to_string(),
+                        kind: kind.to_string(),
                         name: "global-ca".to_string(),
                         namespace: Some("first-target".to_string()),
                         ..Default::default()
@@ -387,12 +386,23 @@ mod tests {
         };
         let mut egc = EdgionGatewayConfig::new("cluster-egc", spec);
         let expected_ref = ResourceRef::new(ResourceKind::EdgionGatewayConfig, None, "cluster-egc".to_string());
+        let material_key = |namespace: &str| {
+            if kind == "ConfigMap" {
+                format!("ConfigMap/{namespace}/global-ca")
+            } else {
+                format!("{namespace}/global-ca")
+            }
+        };
 
         let _ = handler.parse(egc.clone(), &ctx).await;
         assert!(ctx
             .runtime()
             .cross_ns_ref_mgr
             .get_refs("first-target")
+            .contains(&expected_ref));
+        assert!(ctx
+            .secret_ref_manager()
+            .get_refs(&material_key("first-target"))
             .contains(&expected_ref));
 
         egc.spec
@@ -412,13 +422,35 @@ mod tests {
         };
         assert!(ctx.runtime().cross_ns_ref_mgr.get_refs("first-target").is_empty());
         assert!(ctx
+            .secret_ref_manager()
+            .get_refs(&material_key("first-target"))
+            .is_empty());
+        assert!(ctx
             .runtime()
             .cross_ns_ref_mgr
             .get_refs("second-target")
             .contains(&expected_ref));
+        assert!(ctx
+            .secret_ref_manager()
+            .get_refs(&material_key("second-target"))
+            .contains(&expected_ref));
 
         handler.on_delete(&parsed, &ctx).await;
         assert!(ctx.runtime().cross_ns_ref_mgr.get_refs("second-target").is_empty());
+        assert!(ctx
+            .secret_ref_manager()
+            .get_refs(&material_key("second-target"))
+            .is_empty());
+    }
+
+    #[tokio::test]
+    async fn cross_namespace_secret_ca_refs_replace_dependencies_and_clear_on_delete() {
+        assert_cross_namespace_ca_refs_replace_dependencies_and_clear_on_delete("Secret").await;
+    }
+
+    #[tokio::test]
+    async fn cross_namespace_configmap_ca_refs_replace_dependencies_and_clear_on_delete() {
+        assert_cross_namespace_ca_refs_replace_dependencies_and_clear_on_delete("ConfigMap").await;
     }
 
     // ── Phase 1 SAN guard tests ───────────────────────────────────────────────

@@ -2588,11 +2588,17 @@ fn validate_gateway_plugin_ref(gateway: &Gateway, runtime: &ControllerRuntime) -
 fn validate_gateway_dns_resolver_ref(gateway: &Gateway, runtime: &ControllerRuntime) -> Option<String> {
     use super::dns_resolver_guard::check_dns_resolver_ref_grant;
     let gateway_ns = gateway.metadata.namespace.as_deref().unwrap_or("default");
+    let owner = ResourceRef::new(
+        ResourceKind::Gateway,
+        gateway.metadata.namespace.clone(),
+        gateway.metadata.name.clone().unwrap_or_default(),
+    );
     let denial = check_dns_resolver_ref_grant(
         gateway_ns,
         "gateway.networking.k8s.io",
         "Gateway",
         gateway.metadata.annotations.as_ref(),
+        &owner,
         runtime,
     )?;
     Some(format!(

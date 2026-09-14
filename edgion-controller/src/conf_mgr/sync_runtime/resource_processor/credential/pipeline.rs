@@ -23,7 +23,8 @@ use k8s_openapi::api::core::v1::{ConfigMap, Secret};
 use edgion_resources::credentials::{ResolveError, SecretMaterialResolver};
 use edgion_resources::resources::common::SecretObjectReference;
 
-use super::super::{format_secret_key, HandlerContext, ResourceRef};
+use super::super::ref_grant::read_after_registering_cross_ns_dependency;
+use super::super::{format_configmap_ref_key, format_secret_key, HandlerContext, ResourceRef};
 
 // ---------------------------------------------------------------------------
 // Public outcome types
@@ -225,7 +226,7 @@ pub fn fetch_configmap(
 
     // ── Step 2: register SecretRefManager dependency ─────────────────────
     let key_ns = effective_ns.to_string();
-    let cm_key = format_secret_key(Some(&key_ns), name);
+    let cm_key = format_configmap_ref_key(Some(&key_ns), name);
     ctx.secret_ref_manager().add_ref(cm_key, resource_ref.clone());
 
     // ── Step 3: cross-namespace ReferenceGrant check ─────────────────────
@@ -236,15 +237,17 @@ pub fn fetch_configmap(
     };
     if cross_ns {
         let from_ns = owner_ns.unwrap_or("");
-        let allowed = ctx.runtime().ref_grant_store.check_reference_allowed(
-            from_ns,
-            owner_group,
-            owner_kind,
-            effective_ns,
-            "",
-            "ConfigMap",
-            Some(name),
-        );
+        let allowed = read_after_registering_cross_ns_dependency(ctx.runtime(), effective_ns, resource_ref, || {
+            ctx.runtime().ref_grant_store.check_reference_allowed(
+                from_ns,
+                owner_group,
+                owner_kind,
+                effective_ns,
+                "",
+                "ConfigMap",
+                Some(name),
+            )
+        });
         if !allowed {
             return FetchOutcome::Pending(PendingReason::ReferenceGrantMissing {
                 from_ns: from_ns.to_string(),

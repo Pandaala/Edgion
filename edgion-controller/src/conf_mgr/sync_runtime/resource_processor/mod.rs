@@ -109,6 +109,14 @@ pub fn format_secret_key(namespace: Option<&String>, name: &str) -> String {
     }
 }
 
+/// Prefix that distinguishes ConfigMap material dependencies from Secrets.
+pub(crate) const CONFIG_MAP_REF_KEY_PREFIX: &str = "ConfigMap/";
+
+/// Format a ConfigMap dependency key without colliding with a same-name Secret.
+pub(crate) fn format_configmap_ref_key(namespace: Option<&String>, name: &str) -> String {
+    format!("{CONFIG_MAP_REF_KEY_PREFIX}{}", format_secret_key(namespace, name))
+}
+
 /// Create a resource key from object: "namespace/name" or "name" for cluster-scoped
 pub fn make_resource_key<K>(obj: &K) -> String
 where

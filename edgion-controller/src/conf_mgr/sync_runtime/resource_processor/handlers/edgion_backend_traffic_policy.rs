@@ -1714,6 +1714,11 @@ mod tests {
         for ca_kind in ["Secret", "ConfigMap"] {
             let (ctx, runtime) = make_ctx();
             let handler = make_handler();
+            let ca_ref_key = if ca_kind == "ConfigMap" {
+                "ConfigMap/ns/health-ca"
+            } else {
+                "ns/health-ca"
+            };
             wire_service_to_gateway(&runtime, "ns", "payments", "route", "gw");
             let mut policy = parse_health_policy(&handler, encrypted_policy(ca_kind), &ctx).await;
             assert!(health_active(&policy).resolved_tls_error.is_some());
@@ -1721,7 +1726,7 @@ mod tests {
                 policy.spec.resolved_target_class,
                 Some(ResolvedPolicyTargetClass::Service)
             );
-            assert_eq!(ctx.secret_ref_manager().get_refs("ns/health-ca").len(), 1);
+            assert_eq!(ctx.secret_ref_manager().get_refs(ca_ref_key).len(), 1);
             assert_eq!(ctx.secret_ref_manager().get_refs("ns/health-client").len(), 1);
             assert!(runtime
                 .edgion_backend_traffic_policy
@@ -1767,7 +1772,7 @@ mod tests {
             policy = parse_health_policy(&handler, policy, &ctx).await;
             assert!(health_active(&policy).resolved_tls_error.is_none());
             handler.on_delete(&policy, &ctx).await;
-            assert!(ctx.secret_ref_manager().get_refs("ns/health-ca").is_empty());
+            assert!(ctx.secret_ref_manager().get_refs(ca_ref_key).is_empty());
             assert!(ctx.secret_ref_manager().get_refs("ns/health-client").is_empty());
         }
     }

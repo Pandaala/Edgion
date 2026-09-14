@@ -15,7 +15,7 @@ use crate::conf_mgr::sync_runtime::resource_processor::status_utils::{
     update_condition, ResolvedRefsError,
 };
 use crate::conf_mgr::sync_runtime::resource_processor::{
-    condition_types, HandlerContext, ProcessResult, ProcessorHandler, ResourceRef,
+    condition_types, HandlerContext, ProcessResult, ProcessorHandler, ResourceRef, CONFIG_MAP_REF_KEY_PREFIX,
 };
 use crate::observe::unknown_fields_registry::bounded_unknown_field_paths;
 use edgion_resources::prelude_resources::EdgionPlugins;
@@ -637,8 +637,9 @@ fn dedup_resolved_ref_errors(errors: &mut Vec<ResolvedRefsError>) {
 }
 
 impl EdgionPluginsHandler {
-    /// Inspect every Secret this EdgionPlugins depends on (tracked in `SecretRefManager`
-    /// by the `parse()` resolvers) and flag any that aren't present in the Secret store.
+    /// Inspect every Secret or ConfigMap this EdgionPlugins depends on (tracked
+    /// in `SecretRefManager` by the `parse()` resolvers) and flag missing or
+    /// unauthorized material using its encoded target kind.
     fn resolve_secret_refs(ep: &EdgionPlugins, ctx: &HandlerContext) -> Vec<ResolvedRefsError> {
         let owner_namespace = ep.metadata.namespace.as_deref().unwrap_or("default");
         let resource_ref = ResourceRef::new(
@@ -655,10 +656,15 @@ impl EdgionPluginsHandler {
         let mut deps = ctx.secret_ref_manager().get_dependencies(&resource_ref.key());
         deps.sort();
         for dep_key in deps {
-            // dep_key is "<ns>/<name>" (or just "<name>" if namespace-less, per format_secret_key).
-            let (ns, name) = match dep_key.split_once('/') {
+            let (to_kind, object_key) = match dep_key.strip_prefix(CONFIG_MAP_REF_KEY_PREFIX) {
+                Some(key) => ("ConfigMap", key),
+                None => ("Secret", dep_key.as_str()),
+            };
+            // object_key is "<ns>/<name>" (or just "<name>" for a
+            // namespace-less Secret, per format_secret_key).
+            let (ns, name) = match object_key.split_once('/') {
                 Some((ns, name)) => (ns.to_string(), name.to_string()),
-                None => (String::new(), dep_key.clone()),
+                None => (String::new(), object_key.to_string()),
             };
             let ns_opt = if ns.is_empty() { None } else { Some(ns.as_str()) };
             if let Some(target_namespace) = ns_opt.filter(|target_namespace| *target_namespace != owner_namespace) {
@@ -668,7 +674,7 @@ impl EdgionPluginsHandler {
                     "EdgionPlugins",
                     target_namespace,
                     "",
-                    "Secret",
+                    to_kind,
                     Some(&name),
                 );
                 if !allowed {
@@ -681,10 +687,15 @@ impl EdgionPluginsHandler {
                     continue;
                 }
             }
-            if ctx.runtime().secret_store.get(ns_opt, &name).is_none() {
-                errors.push(ResolvedRefsError::SecretNotFound {
-                    namespace: if ns.is_empty() { "default".to_string() } else { ns },
-                    name,
+            let missing = match to_kind {
+                "ConfigMap" => ctx.runtime().configmap_store.get(ns_opt, &name).is_none(),
+                _ => ctx.runtime().secret_store.get(ns_opt, &name).is_none(),
+            };
+            if missing {
+                let namespace = if ns.is_empty() { "default".to_string() } else { ns };
+                errors.push(match to_kind {
+                    "ConfigMap" => ResolvedRefsError::ConfigMapNotFound { namespace, name },
+                    _ => ResolvedRefsError::SecretNotFound { namespace, name },
                 });
             }
         }
@@ -1181,7 +1192,7 @@ mod tests {
         RegionRouteConfig, RequestFilterEntry, ResolvedJweCredential, ResolvedJwtCredential, ResolvedJwtIssuerGroup,
     };
     use edgion_resources::resources::gateway::SecretObjectReference;
-    use k8s_openapi::api::core::v1::Secret;
+    use k8s_openapi::api::core::v1::{ConfigMap, Secret};
     use k8s_openapi::ByteString;
     use kube::api::ObjectMeta;
     use std::collections::{BTreeMap, HashMap};
@@ -2491,6 +2502,95 @@ profiles:
         assert!(
             matches!(&errors[0], ResolvedRefsError::RefNotPermitted { target_name, .. } if target_name == "wasm-ca-cm")
         );
+    }
+
+    #[tokio::test]
+    async fn wasm_tls_ca_configmap_cross_ns_granted_reports_resolved() {
+        use edgion_resources::resources::{ReferenceGrant, ReferenceGrantFrom, ReferenceGrantSpec, ReferenceGrantTo};
+
+        let (ctx, runtime) = make_ctx_with_secrets(HashMap::new());
+        let configmap = ConfigMap {
+            metadata: ObjectMeta {
+                namespace: Some("other-ns".to_string()),
+                name: Some("wasm-ca-cm".to_string()),
+                ..Default::default()
+            },
+            data: Some(BTreeMap::from([("ca.crt".to_string(), "pem".to_string())])),
+            ..Default::default()
+        };
+        runtime
+            .configmap_store
+            .replace_all(HashMap::from([("other-ns/wasm-ca-cm".to_string(), configmap)]));
+        let mut grant = ReferenceGrant::new(
+            "allow-configmap-ca",
+            ReferenceGrantSpec {
+                from: vec![ReferenceGrantFrom {
+                    group: "edgion.io".to_string(),
+                    kind: "EdgionPlugins".to_string(),
+                    namespace: "default".to_string(),
+                }],
+                to: vec![ReferenceGrantTo {
+                    group: String::new(),
+                    kind: "ConfigMap".to_string(),
+                    name: Some("wasm-ca-cm".to_string()),
+                }],
+            },
+        );
+        grant.metadata.namespace = Some("other-ns".to_string());
+        runtime
+            .ref_grant_store
+            .upsert("other-ns/allow-configmap-ca".to_string(), Arc::new(grant));
+
+        let ep = wasm_ep_with_fetch_tls(
+            "default",
+            vec![ca_ref("ConfigMap", "wasm-ca-cm", Some("other-ns"))],
+            None,
+        );
+        let handler = EdgionPluginsHandler::new();
+        let mut parsed = match handler.parse(ep, &ctx).await {
+            ProcessResult::Continue(value) => value,
+            ProcessResult::Skip { reason } => panic!("unexpected skip: {reason}"),
+        };
+        handler.update_status(&mut parsed, &ctx, &[]);
+
+        let resolved = parsed
+            .status
+            .as_ref()
+            .unwrap()
+            .conditions
+            .iter()
+            .find(|condition| condition.type_ == "ResolvedRefs")
+            .unwrap();
+        assert_eq!(resolved.status, "True", "unexpected status: {resolved:?}");
+        assert_eq!(
+            ctx.secret_ref_manager().get_refs("ConfigMap/other-ns/wasm-ca-cm").len(),
+            1
+        );
+        assert!(ctx.secret_ref_manager().get_refs("other-ns/wasm-ca-cm").is_empty());
+    }
+
+    #[tokio::test]
+    async fn wasm_tls_ca_configmap_missing_reports_configmap_not_found() {
+        let (ctx, _runtime) = make_ctx_with_secrets(HashMap::new());
+        let ep = wasm_ep_with_fetch_tls("default", vec![ca_ref("ConfigMap", "missing-ca", None)], None);
+        let handler = EdgionPluginsHandler::new();
+        let mut parsed = match handler.parse(ep, &ctx).await {
+            ProcessResult::Continue(value) => value,
+            ProcessResult::Skip { reason } => panic!("unexpected skip: {reason}"),
+        };
+        handler.update_status(&mut parsed, &ctx, &[]);
+
+        let resolved = parsed
+            .status
+            .as_ref()
+            .unwrap()
+            .conditions
+            .iter()
+            .find(|condition| condition.type_ == "ResolvedRefs")
+            .unwrap();
+        assert_eq!(resolved.status, "False");
+        assert_eq!(resolved.reason, "ConfigMapNotFound");
+        assert!(resolved.message.contains("default/missing-ca"));
     }
 
     #[test]

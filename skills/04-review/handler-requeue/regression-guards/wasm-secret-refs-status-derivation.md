@@ -60,10 +60,11 @@ plane was never at risk. No gateway change was made.
 
 ## Fix Suggestions Not Accepted
 
-- "Have the generic `resolve_secret_refs` own Wasm refs too" — it is shared
-  across all plugin types and only tracks dependency keys; it cannot classify
-  per-ref content without plugin-type knowledge. The additive `resolve_wasm_refs`
-  layer is the minimal correct shape.
+- "Have the generic `resolve_secret_refs` own all Wasm content checks" — it is
+  shared across all plugin types and can classify only material kind,
+  authorization, and object existence. Per-ref content still requires plugin
+  knowledge, so the additive `resolve_wasm_refs` layer remains the correct
+  place for key/type usability checks.
 - "Report `SecretNotFound` from `resolve_wasm_refs` as well" — double-reports the
   common not-found path; the generic path already covers it.
 - "Distinguish missing vs empty vs non-UTF-8 into separate reasons" — the
@@ -89,6 +90,22 @@ plane was never at risk. No gateway change was made.
   extraction not worth the churn. The gateway fail-closes on the pull; status
   accuracy is the only cost. Rationale lives at the `resolve_wasm_refs` doc
   comment. Reconsider only if a real cluster shows repeated host-mismatch churn.
+
+## Follow-up Resolution (2026-09-15)
+
+- ConfigMap CA status kind preservation: **DONE**. ConfigMap material now uses
+  `ConfigMap/ns/name` keys in the shared dependency manager, while Secret keys
+  retain `ns/name`. `resolve_secret_refs` decodes that kind before the
+  ReferenceGrant read and store lookup, so a valid ConfigMap-only grant no
+  longer produces a false Secret denial or lookup. A missing ConfigMap reports
+  `ConfigMapNotFound` rather than `SecretNotFound`.
+- ConfigMap change/delete requeue uses the same typed key. Same-name Secret and
+  ConfigMap dependencies can coexist without collision, while owner-level
+  clear-before-add and delete cleanup remain unchanged.
+- Verification includes a full Wasm parse-to-status positive case with only a
+  ConfigMap grant, a missing-ConfigMap status case, and a ConfigMap event
+  requeue test. Re-evaluate if another material kind is added to
+  `caCertificateRefs` or dependency keys become structured values.
 
 ## Reference Cases
 

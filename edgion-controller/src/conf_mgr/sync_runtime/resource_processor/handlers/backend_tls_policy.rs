@@ -362,7 +362,7 @@ impl BackendTlsPolicyHandler {
                         );
                     }
                 } else if Self::is_configmap_ref(ca_ref) {
-                    let cm_key = format_secret_key(policy_ns, &ca_ref.name);
+                    let cm_key = super::super::format_configmap_ref_key(policy_ns, &ca_ref.name);
                     ctx.secret_ref_manager().add_ref(cm_key.clone(), resource_ref.clone());
 
                     if let Some(cm) = ctx

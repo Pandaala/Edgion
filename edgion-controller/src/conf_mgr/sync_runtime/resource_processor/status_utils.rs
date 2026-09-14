@@ -62,7 +62,7 @@ pub mod condition_reasons {
     // pinpoint *why* the referenced Secret could not be turned into usable
     // credential material.
     //
-    // NOTE: These four reasons are **Edgion extensions**, not Gateway API
+    // NOTE: These five reasons are **Edgion extensions**, not Gateway API
     // upstream reasons. Third-party Gateway-API tooling (Envoy Gateway / Kuma
     // dashboards, etc.) will not recognise them by name. Cross-namespace
     // denial intentionally uses the upstream `RefNotPermitted` and is *not*
@@ -70,6 +70,8 @@ pub mod condition_reasons {
     // "grant denies", so a more specific reason would be misleading.
     /// Edgion extension · The referenced Secret does not exist (or has not yet been cached).
     pub const SECRET_NOT_FOUND: &str = "SecretNotFound";
+    /// Edgion extension · The referenced ConfigMap does not exist (or has not yet been cached).
+    pub const CONFIG_MAP_NOT_FOUND: &str = "ConfigMapNotFound";
     // NOTE: There is intentionally *no* `REFERENCE_GRANT_MISSING` /
     // `CROSS_NS_REF_NOT_PERMITTED` / similar reason here. Cross-namespace
     // denial uses the upstream `REF_NOT_PERMITTED`: the pipeline
@@ -227,6 +229,8 @@ pub enum ResolvedRefsError {
     LinkSysNotFound { namespace: String, name: String },
     /// Referenced Secret not found
     SecretNotFound { namespace: String, name: String },
+    /// Referenced ConfigMap not found
+    ConfigMapNotFound { namespace: String, name: String },
     /// Cross-namespace reference denied by ReferenceGrant policy.
     ///
     /// Carries the referrer's `(from_namespace, from_kind)` so the message
@@ -307,6 +311,7 @@ impl ResolvedRefsError {
             Self::EdgionBackendNotFound { .. } => condition_reasons::BACKEND_NOT_FOUND,
             Self::LinkSysNotFound { .. } => condition_reasons::BACKEND_NOT_FOUND,
             Self::SecretNotFound { .. } => condition_reasons::SECRET_NOT_FOUND,
+            Self::ConfigMapNotFound { .. } => condition_reasons::CONFIG_MAP_NOT_FOUND,
             Self::RefNotPermitted { .. } => condition_reasons::REF_NOT_PERMITTED,
             Self::EdgionConfigDataNotFound { .. } | Self::EdgionConfigDataInvalid { .. } => {
                 condition_reasons::INVALID_EDGION_CONFIG_DATA_REF
@@ -335,6 +340,9 @@ impl ResolvedRefsError {
             }
             Self::SecretNotFound { namespace, name } => {
                 format!("Secret '{}/{}' not found", namespace, name)
+            }
+            Self::ConfigMapNotFound { namespace, name } => {
+                format!("ConfigMap '{}/{}' not found", namespace, name)
             }
             Self::RefNotPermitted {
                 from_namespace,
@@ -538,7 +546,7 @@ pub fn resolved_refs_condition(errors: &[ResolvedRefsError], observed_generation
 /// 4. InvalidSecretType — Secret exists but wrong type (akin to InvalidKind, but for Secrets)
 /// 5. EdgionConfigDataNotFound — dependent EdgionConfigData missing
 /// 6. BackendNotFound — target Service missing
-/// 7. SecretNotFound — target Secret missing
+/// 7. SecretNotFound / ConfigMapNotFound — target credential material missing
 /// 8. DecodeError — Secret content unusable (parse failure)
 /// 9. MissingKeys — Secret content incomplete
 ///
@@ -567,7 +575,7 @@ pub(crate) fn pick_resolved_refs_reason(errors: &[ResolvedRefsError]) -> &'stati
             // Delegation child missing is the same severity class as a missing
             // Service backend (both surface as BACKEND_NOT_FOUND).
             ResolvedRefsError::DelegationChildNotFound { .. } => 5,
-            ResolvedRefsError::SecretNotFound { .. } => 6,
+            ResolvedRefsError::SecretNotFound { .. } | ResolvedRefsError::ConfigMapNotFound { .. } => 6,
             ResolvedRefsError::DecodeError { .. } | ResolvedRefsError::SecretMatchValueInvalid { .. } => 7,
             ResolvedRefsError::MissingKeys { .. } | ResolvedRefsError::SecretMatchKeyMissing { .. } => 8,
         }
@@ -992,6 +1000,16 @@ mod tests {
         };
         assert_eq!(err.reason(), "SecretNotFound");
         assert!(err.message().contains("ns/missing"));
+    }
+
+    #[test]
+    fn test_resolved_refs_error_configmap_not_found() {
+        let err = ResolvedRefsError::ConfigMapNotFound {
+            namespace: "default".to_string(),
+            name: "ca-bundle".to_string(),
+        };
+        assert_eq!(err.reason(), "ConfigMapNotFound");
+        assert_eq!(err.message(), "ConfigMap 'default/ca-bundle' not found");
     }
 
     #[test]

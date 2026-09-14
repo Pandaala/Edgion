@@ -1,14 +1,16 @@
-//! Secret Reference Manager
+//! Credential Material Reference Manager
 //!
 //! Type alias over the generic `BidirectionalRefManager` for tracking
-//! Secret → Resource dependencies.
+//! Secret/ConfigMap → Resource dependencies.
 
 use super::super::ref_manager::{BidirectionalRefManager, ResourceRef};
 
-/// Manages Secret references and dependencies.
+/// Manages Secret and ConfigMap material references and dependencies.
 ///
-/// - Forward: `secret_key → Set<ResourceRef>` (resources that depend on this secret)
-/// - Reverse: `resource_key → Set<secret_key>` (secrets a resource depends on)
+/// - Secret key: `namespace/name`
+/// - ConfigMap key: `ConfigMap/namespace/name`
+/// - Forward: `material_key → Set<ResourceRef>`
+/// - Reverse: `resource_key → Set<material_key>`
 pub type SecretRefManager = BidirectionalRefManager<ResourceRef>;
 
 /// Create a `SecretRefManager` with the canonical component name.

@@ -5,6 +5,7 @@
 use std::sync::Arc;
 
 use super::ReferenceGrantStore;
+use crate::conf_mgr::sync_runtime::resource_processor::ref_manager::ResourceRef;
 use crate::conf_mgr::ControllerRuntime;
 use crate::config::is_reference_grant_validation_enabled;
 use edgion_resources::resources::{gateway::SecretObjectReference, http_route::BackendObjectReference};
@@ -122,6 +123,21 @@ fn normalize_group(group: Option<&String>) -> &str {
 
 fn normalize_kind(kind: Option<&String>) -> &str {
     kind.map(String::as_str).unwrap_or("Service")
+}
+
+/// Register a cross-namespace dependency before reading the authorization
+/// source. This ordering ensures a concurrent ReferenceGrant change either
+/// precedes `read` or observes `owner` and requeues it afterwards.
+pub(crate) fn read_after_registering_cross_ns_dependency<T>(
+    runtime: &ControllerRuntime,
+    target_namespace: &str,
+    owner: &ResourceRef,
+    read: impl FnOnce() -> T,
+) -> T {
+    runtime
+        .cross_ns_ref_mgr
+        .add_ref(target_namespace.to_string(), owner.clone());
+    read()
 }
 
 /// Check if a single cross-namespace reference is allowed
@@ -842,5 +858,22 @@ mod tests {
 
         assert_eq!(normalize_kind(None), "Service");
         assert_eq!(normalize_kind(Some(&"Secret".to_string())), "Secret");
+    }
+
+    #[test]
+    fn dependency_is_visible_before_authorization_read() {
+        let runtime = ControllerRuntime::default();
+        let owner = ResourceRef::new(
+            edgion_resources::ResourceKind::HTTPRoute,
+            Some("app".to_string()),
+            "route".to_string(),
+        );
+
+        let dependency_visible_during_read =
+            read_after_registering_cross_ns_dependency(&runtime, "backend", &owner, || {
+                runtime.cross_ns_ref_mgr.get_refs("backend").contains(&owner)
+            });
+
+        assert!(dependency_visible_during_read);
     }
 }

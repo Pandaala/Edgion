@@ -65,10 +65,11 @@ Mirror dependencies are registered before reading the grant store. HTTPRoute
 clears the previous set once at parse entry and only extends it afterwards;
 delegated reads register the root owner's dependency while authorizing the
 declaring child's identity. Thus a concurrent grant revocation either precedes
-the authorization read or finds the registered owner for requeue. This correction
-is limited to mirrors. Ordinary references with check-before-register ordering
-remain outside this correction; their dependency-registration race requires
-separate verification and repair.
+the authorization read or finds the registered owner for requeue. The later
+`reference-grant-dependency-registration-race` correction moved ordinary HTTPRoute
+and GRPCRoute backend authorization onto the same shared register-before-read
+ordering; see the
+[general handler guard](../../handler-requeue/regression-guards/reference-grant-dependency-before-authorization.md).
 
 Gateway `plugin_store.rs::can_retain_previous` rejects whole-runtime LKG when
 either previous or incoming configuration has an executable request-stage

@@ -24,6 +24,7 @@ pub use revalidation_listener::{
     trigger_gateway_secret_revalidation, CrossNsRevalidationListener,
 };
 pub use store::ReferenceGrantStore;
+pub(crate) use validator::read_after_registering_cross_ns_dependency;
 pub use validator::{
     is_cross_ns_ref_allowed, validate_grpc_route_if_enabled, validate_http_route_if_enabled,
     validate_tcp_route_if_enabled, validate_tls_route_if_enabled, validate_udp_route_if_enabled,

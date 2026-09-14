@@ -1,7 +1,7 @@
 //! HandlerContext - Context for ProcessorHandler methods
 //!
 //! Provides access to shared resources needed during processing:
-//! - SecretRefManager for tracking Secret dependencies
+//! - SecretRefManager for tracking Secret/ConfigMap material dependencies
 //! - Requeue function for cross-resource notifications
 //! - Trigger chain for cascade tracking and cycle detection
 //! - Process configuration (metadata filter, namespace filter)

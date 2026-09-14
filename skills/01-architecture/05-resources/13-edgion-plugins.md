@@ -42,8 +42,8 @@ Clear all references for this EdgionPlugins in SecretRefManager and ServiceRefMa
 Two Gateway-API-style conditions (`k8s_openapi::Condition` type):
 
 - **`Accepted`**: True (reason=Accepted) when there are no validation_errors; False (reason=Invalid) when errors exist. Stays `True` even when inline IP lists have bad entries (partial-good; see `PartiallyInvalid` below).
-- **`ResolvedRefs`**: checks Secret references and EdgionConfigData cross-namespace refs:
-  - Secret refs: aggregate via `SecretRefManager::get_dependencies(ep_key)`, check `secret_store.get(ns, name)` one by one. Any unresolved Secret → `ResolvedRefsError::SecretNotFound` (reason `SecretNotFound`); the message lists all missing `ns/name`.
+- **`ResolvedRefs`**: checks credential-material references and EdgionConfigData cross-namespace refs:
+  - Secret/ConfigMap material refs: aggregate via `SecretRefManager::get_dependencies(ep_key)`. Secret keys retain `ns/name`; ConfigMap keys use `ConfigMap/ns/name`, so status applies the declared ReferenceGrant kind and queries the matching store without colliding with a same-name Secret. Missing material reports `SecretNotFound` or `ConfigMapNotFound` respectively.
   - Enabled RequestMirror refs: require a core Service with a valid name and port. A missing target sets `ResolvedRefs=False/BackendNotFound`; cross-namespace authorization still uses ReferenceGrant and `RefNotPermitted`.
   - JWE credential content: a present Secret missing `data.secret`, containing invalid inner Base64 for `base64Secret`, or decoding to a non-32-byte A256GCM key sets `ResolvedRefs=False` with `MissingKeys` or `DecodeError`. The Gateway still publishes a fail-closed JWE runtime for that generation and never retains the prior key.
   - EdgionConfigData cross-ns refs (`overrideRef`, `RequestAccessPolicy.activeProfileRef`, RequestAccessPolicy nested IpList refs, `allowRefs`/`denyRefs`): if `ref_denied` is set on the ref (cross-ns without a matching `ReferenceGrant` and target `visibility ≠ Cluster`), → `ResolvedRefsError::RefNotPermitted` (reason `RefNotPermitted`). If the target is missing/disabled/wrong-type → reason `InvalidEdgionConfigDataRef`.
