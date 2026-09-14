@@ -1896,49 +1896,6 @@ fn check_malformed_quota_body(body: &[u8]) -> Option<String> {
     None
 }
 
-#[cfg(test)]
-mod tests {
-    use super::{check_malformed_quota_body, select_long_stream_observation, QUOTA_UNENFORCEABLE_SSE_EVENT};
-    use serde_json::json;
-
-    const UPSTREAM_PREFIX: &[u8] = b"data: \xff\n\ndata: {\"choices\":[{\"delta\":{\"content\":\"valid-middle\"}}]}\n\ndata: \xfe\n\ndata: quota-malformed-boundary-probe";
-
-    #[test]
-    fn injected_error_requires_its_own_sse_boundary() {
-        let mut correctly_bounded = UPSTREAM_PREFIX.to_vec();
-        correctly_bounded.extend_from_slice(QUOTA_UNENFORCEABLE_SSE_EVENT);
-        assert_eq!(check_malformed_quota_body(&correctly_bounded), None);
-
-        let mut missing_boundary = UPSTREAM_PREFIX.to_vec();
-        missing_boundary.extend_from_slice(&QUOTA_UNENFORCEABLE_SSE_EVENT[2..]);
-        assert!(
-            check_malformed_quota_body(&missing_boundary).is_some_and(|error| error.contains("independently close"))
-        );
-    }
-
-    #[test]
-    fn replica_observation_selects_the_only_matching_trace() {
-        let selected = select_long_stream_observation(
-            "trace-a",
-            vec![
-                json!({"found": false}),
-                json!({"found": true, "observation": {"provider_completed": true}}),
-                json!({"found": false}),
-            ],
-        )
-        .expect("one replica should own the trace");
-        assert_eq!(selected["found"], true);
-        assert_eq!(selected["observation"]["provider_completed"], true);
-    }
-
-    #[test]
-    fn replica_observation_rejects_duplicate_trace_owners() {
-        let error = select_long_stream_observation("trace-a", vec![json!({"found": true}), json!({"found": true})])
-            .expect_err("a trace cannot be owned by two replicas");
-        assert!(error.contains("more than one test-server replica"));
-    }
-}
-
 /// Item 1+2 (H1): the pre-termination content, the injected SSE error event,
 /// and a clean end of response — asserted on the *raw* wire (a hand-driven
 /// H1 connection, not a client library that would hide `Transfer-Encoding`).
@@ -3066,5 +3023,48 @@ impl TestSuite for AiBackendSecretRotationUpdatedTestSuite {
             "A fresh request uses only the rotated credential and Admin output stays redacted",
             credential_generation_b_redacted,
         )]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{check_malformed_quota_body, select_long_stream_observation, QUOTA_UNENFORCEABLE_SSE_EVENT};
+    use serde_json::json;
+
+    const UPSTREAM_PREFIX: &[u8] = b"data: \xff\n\ndata: {\"choices\":[{\"delta\":{\"content\":\"valid-middle\"}}]}\n\ndata: \xfe\n\ndata: quota-malformed-boundary-probe";
+
+    #[test]
+    fn injected_error_requires_its_own_sse_boundary() {
+        let mut correctly_bounded = UPSTREAM_PREFIX.to_vec();
+        correctly_bounded.extend_from_slice(QUOTA_UNENFORCEABLE_SSE_EVENT);
+        assert_eq!(check_malformed_quota_body(&correctly_bounded), None);
+
+        let mut missing_boundary = UPSTREAM_PREFIX.to_vec();
+        missing_boundary.extend_from_slice(&QUOTA_UNENFORCEABLE_SSE_EVENT[2..]);
+        assert!(
+            check_malformed_quota_body(&missing_boundary).is_some_and(|error| error.contains("independently close"))
+        );
+    }
+
+    #[test]
+    fn replica_observation_selects_the_only_matching_trace() {
+        let selected = select_long_stream_observation(
+            "trace-a",
+            vec![
+                json!({"found": false}),
+                json!({"found": true, "observation": {"provider_completed": true}}),
+                json!({"found": false}),
+            ],
+        )
+        .expect("one replica should own the trace");
+        assert_eq!(selected["found"], true);
+        assert_eq!(selected["observation"]["provider_completed"], true);
+    }
+
+    #[test]
+    fn replica_observation_rejects_duplicate_trace_owners() {
+        let error = select_long_stream_observation("trace-a", vec![json!({"found": true}), json!({"found": true})])
+            .expect_err("a trace cannot be owned by two replicas");
+        assert!(error.contains("more than one test-server replica"));
     }
 }

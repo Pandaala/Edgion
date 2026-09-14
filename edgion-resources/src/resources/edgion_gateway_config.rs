@@ -1141,7 +1141,7 @@ mod tests {
             "outboundTls": {"verify": false}
         }))
         .unwrap();
-        assert_eq!(s.outbound_tls.unwrap().verify, false);
+        assert!(!s.outbound_tls.unwrap().verify);
     }
 
     #[test]

@@ -761,7 +761,7 @@ impl ConditionExt for Condition {
             // CompiledCondition, which owns the snapshot verifier.
             Condition::HmacAuth(_) => false,
             Condition::JwtClaimMatch(c) => evaluate_jwt_claim_match(c, session, log.as_deref_mut()),
-            Condition::MtlsMatch(c) => evaluate_mtls_match(c, session, log.as_deref_mut()),
+            Condition::MtlsMatch(c) => evaluate_mtls_match(c, session, log),
             // This request-only predicate requires a bound Gateway slot.
             Condition::RateLimitExceeded(_) => false,
         };
@@ -779,10 +779,10 @@ impl ConditionExt for Condition {
                     .secret_groups
                     .as_ref()
                     .is_some_and(|groups| !groups.is_empty())
-                    && !condition
+                    && condition
                         .resolved_credentials
                         .as_ref()
-                        .is_some_and(|credentials| !credentials.is_empty())
+                        .is_none_or(|credentials| credentials.is_empty())
             }
             _ => false,
         }

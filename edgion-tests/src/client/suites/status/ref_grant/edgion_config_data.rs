@@ -360,15 +360,12 @@ impl EdgionConfigDataRefGrantTestSuite {
                     let mut grant_observed = false;
                     let mut last_conds: Option<Vec<Value>> = None;
                     while tokio::time::Instant::now() < grant_deadline {
-                        match fetch_ep_conditions(&ctx, ep_name, 1).await {
-                            Ok(conds) => {
-                                if is_resolved_true(&conds) {
-                                    grant_observed = true;
-                                    break;
-                                }
-                                last_conds = Some(conds);
+                        if let Ok(conds) = fetch_ep_conditions(&ctx, ep_name, 1).await {
+                            if is_resolved_true(&conds) {
+                                grant_observed = true;
+                                break;
                             }
-                            Err(_) => {}
+                            last_conds = Some(conds);
                         }
                         tokio::time::sleep(Duration::from_millis(300)).await;
                     }
@@ -399,15 +396,12 @@ impl EdgionConfigDataRefGrantTestSuite {
                     let mut del_observed = false;
                     let mut last_del_conds: Option<Vec<Value>> = None;
                     while tokio::time::Instant::now() < del_deadline {
-                        match fetch_ep_conditions(&ctx, ep_name, 1).await {
-                            Ok(conds) => {
-                                if is_ref_not_permitted(&conds) {
-                                    del_observed = true;
-                                    break;
-                                }
-                                last_del_conds = Some(conds);
+                        if let Ok(conds) = fetch_ep_conditions(&ctx, ep_name, 1).await {
+                            if is_ref_not_permitted(&conds) {
+                                del_observed = true;
+                                break;
                             }
-                            Err(_) => {}
+                            last_del_conds = Some(conds);
                         }
                         tokio::time::sleep(Duration::from_millis(300)).await;
                     }

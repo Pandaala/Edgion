@@ -330,13 +330,11 @@ impl Validator {
         // 8. Local variable slot validation
         for (i, op) in script.code.iter().enumerate() {
             match op {
-                OpCode::GetLocal(slot) | OpCode::SetLocal(slot) => {
-                    if *slot >= script.local_count {
-                        errors.push(ValidationError::new(format!(
-                            "instruction {} references local slot {} but only {} locals declared",
-                            i, slot, script.local_count
-                        )));
-                    }
+                OpCode::GetLocal(slot) | OpCode::SetLocal(slot) if *slot >= script.local_count => {
+                    errors.push(ValidationError::new(format!(
+                        "instruction {} references local slot {} but only {} locals declared",
+                        i, slot, script.local_count
+                    )));
                 }
                 _ => {}
             }
@@ -368,13 +366,11 @@ impl Validator {
                             )));
                         }
                     }
-                    OpCode::LoopBack(_) => {
-                        if loop_depth <= 0 {
-                            errors.push(ValidationError::new(format!(
-                                "LoopBack at instruction {} without active LoopInit",
-                                i
-                            )));
-                        }
+                    OpCode::LoopBack(_) if loop_depth <= 0 => {
+                        errors.push(ValidationError::new(format!(
+                            "LoopBack at instruction {} without active LoopInit",
+                            i
+                        )));
                     }
                     _ => {}
                 }

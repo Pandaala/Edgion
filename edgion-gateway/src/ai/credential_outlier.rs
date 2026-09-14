@@ -8,7 +8,9 @@ use dashmap::DashMap;
 use edgion_resources::resources::edgion_backend_traffic_policy::{PolicyTargetKey, PolicyTargetKind};
 use edgion_resources::resources::outlier_detection::OutlierDetectionResolved;
 use std::collections::HashSet;
-use std::sync::{Arc, LazyLock, Mutex};
+use std::sync::{Arc, LazyLock};
+
+use parking_lot::Mutex;
 use std::time::{Duration, SystemTime};
 
 const DEFAULT_COOLDOWN_CAP: Duration = Duration::from_secs(5 * 60);
@@ -117,11 +119,7 @@ impl AiCredentialOutlierHandle {
         {
             return self.state.finish_failure(candidate, true);
         }
-        let _guard = self
-            .backend
-            .eject_lock
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _guard = self.backend.eject_lock.lock();
         self.state.finish_failure(candidate, self.backend.failure_allowed())
     }
 

@@ -575,7 +575,7 @@ async fn external_h2_response_trailers(
     let (mut client, connection) = h2::client::handshake(tcp)
         .await
         .map_err(|error| format!("h2 handshake: {error}"))?;
-    let driver = tokio::spawn(async move { connection.await });
+    let driver = tokio::spawn(connection);
     let uri = format!("http://{EXTERNAL_RESPONSE_TRAILERS_HOST}/transport")
         .parse::<http::Uri>()
         .map_err(|error| format!("build h2 URI: {error}"))?;
@@ -715,7 +715,7 @@ async fn external_opaque_h2(
     let (mut client, connection) = h2::client::handshake(tcp)
         .await
         .map_err(|error| format!("HTTP/2 opaque handshake: {error}"))?;
-    let driver = tokio::spawn(async move { connection.await });
+    let driver = tokio::spawn(connection);
     let uri = format!("http://{EXTERNAL_HOST}/headers")
         .parse::<http::Uri>()
         .map_err(|error| format!("build HTTP/2 opaque URI: {error}"))?;
@@ -769,14 +769,13 @@ fn assert_opaque_downstream_headers(headers: &[(String, Vec<u8>)], immediate: bo
     if raw_header_values(headers, name) != expected {
         return Err(format!("{name} values were not byte-exact: {headers:?}"));
     }
-    if !immediate {
-        if raw_header_values(headers, "x-opaque-overwrite") != [b"\x81response-overwrite".to_vec()]
+    if !immediate
+        && (raw_header_values(headers, "x-opaque-overwrite") != [b"\x81response-overwrite".to_vec()]
             || raw_header_values(headers, "x-opaque-added")
                 != [b"\x82response-add".to_vec(), b"\x83response-append".to_vec()]
-            || raw_header_values(headers, "x-opaque-empty") != [Vec::<u8>::new()]
-        {
-            return Err(format!("ordinary opaque mutations were not byte-exact: {headers:?}"));
-        }
+            || raw_header_values(headers, "x-opaque-empty") != [Vec::<u8>::new()])
+    {
+        return Err(format!("ordinary opaque mutations were not byte-exact: {headers:?}"));
     }
     if headers
         .iter()
@@ -2029,7 +2028,7 @@ impl ExtProcTestSuite {
                             return TestResult::failed(start.elapsed(), error);
                         }
                         if !stream.request_opaque_headers_ok
-                            || stream.response_opaque_headers_ok != !immediate
+                            || stream.response_opaque_headers_ok == immediate
                             || (immediate && (!stream.cancelled || stream.client_half_closed))
                         {
                             return TestResult::failed(

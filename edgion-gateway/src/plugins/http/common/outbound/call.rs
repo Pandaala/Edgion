@@ -635,20 +635,19 @@ fn should_halfopen_probe(client: &ManagedOutboundClient) -> bool {
     let last = client.health.last_halfopen.load(Ordering::Acquire);
     let interval = client.health.backoff_sec.load(Ordering::Relaxed);
 
-    if halfopen_window_due(now, last, interval) {
-        if client
+    if halfopen_window_due(now, last, interval)
+        && client
             .health
             .last_halfopen
             .compare_exchange(last, now, Ordering::AcqRel, Ordering::Relaxed)
             .is_ok()
-        {
-            let next_backoff = ((interval as f64) * backoff.multiplier) as u64;
-            client
-                .health
-                .backoff_sec
-                .store(next_backoff.min(backoff.max_sec), Ordering::Relaxed);
-            return true;
-        }
+    {
+        let next_backoff = ((interval as f64) * backoff.multiplier) as u64;
+        client
+            .health
+            .backoff_sec
+            .store(next_backoff.min(backoff.max_sec), Ordering::Relaxed);
+        return true;
     }
     false
 }

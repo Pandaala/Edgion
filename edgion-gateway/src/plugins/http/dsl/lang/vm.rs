@@ -1298,9 +1298,11 @@ fn apply_error_policy(session: &mut dyn PluginSession, policy: &DslErrorPolicy) 
         DslErrorPolicy::DenyWith { status, body } => {
             session.record_outcome(DyeOutcome::FailClose, "script-error");
             PluginRunningResult::ErrResponse {
-                status: edgion_resources::http_status::is_valid_final_http_status(*status)
-                    .then_some(*status)
-                    .unwrap_or(500),
+                status: if edgion_resources::http_status::is_valid_final_http_status(*status) {
+                    *status
+                } else {
+                    500
+                },
                 body: body.clone().map(Bytes::from),
             }
         }

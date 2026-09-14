@@ -328,9 +328,11 @@ fn unregister_drops_memory_without_consuming_leftover_cleanup_state() {
         let runtime = ControllerRuntime::new();
         let source = persist_source(false);
         publish_to_memory(&runtime, &source, &retained_publication()).expect("seed memory");
-        let publications = with_leftover_publication
-            .then(|| HashMap::from([("apps/plugin".to_string(), leftover_delete_expectation())]))
-            .unwrap_or_default();
+        let publications = if with_leftover_publication {
+            HashMap::from([("apps/plugin".to_string(), leftover_delete_expectation())])
+        } else {
+            Default::default()
+        };
         let state = SourceState {
             identity: source.identity_key(),
             publications,

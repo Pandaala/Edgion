@@ -769,11 +769,11 @@ impl TlsCallback {
         #[cfg(feature = "boringssl")]
         match boring::asn1::Asn1Time::days_from_now(0) {
             Ok(now) => {
-                if cert.not_after() < &now {
+                if cert.not_after() < now {
                     ssl_ctx.meta.err_log = Some(format!("cert_expired: not_after={}", cert.not_after()));
                     return;
                 }
-                if cert.not_before() > &now {
+                if cert.not_before() > now {
                     ssl_ctx.meta.err_log = Some(format!("cert_not_yet_valid: not_before={}", cert.not_before()));
                     return;
                 }
@@ -811,7 +811,6 @@ impl TlsCallback {
         };
         if let Err(e) = pingora_core::tls::ext::ssl_use_private_key(ssl, &key) {
             ssl_ctx.meta.err_log = Some(format!("set key: {e}"));
-            return;
         }
     }
 
@@ -919,9 +918,7 @@ impl TlsCallback {
         }
 
         self.apply_compiled_certificate_to_ssl(ssl, certificate, ssl_ctx);
-        if ssl_ctx.meta.err_log.is_some() {
-            return;
-        }
+        if ssl_ctx.meta.err_log.is_some() {}
     }
 
     /// Whether the connecting client advertised an ECDSA signature algorithm in

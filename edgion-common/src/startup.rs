@@ -32,7 +32,7 @@ fn panic_payload_message(payload: &(dyn std::any::Any + Send)) -> Cow<'static, s
         .downcast_ref::<&str>()
         .map(|message| Cow::Owned((*message).to_string()))
         .or_else(|| payload.downcast_ref::<String>().cloned().map(Cow::Owned))
-        .unwrap_or_else(|| Cow::Borrowed("<non-string panic payload>"))
+        .unwrap_or(Cow::Borrowed("<non-string panic payload>"))
 }
 
 /// Opaque result of a panic caught at a redacted extension boundary.

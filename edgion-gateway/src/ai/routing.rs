@@ -145,11 +145,11 @@ fn is_selectable(candidate: &RouteCandidate) -> bool {
     candidate.weight > 0 && candidate.eligibility.selectable()
 }
 
-fn pick_weighted<'a>(
-    candidates: &'a [RouteCandidate],
+fn pick_weighted(
+    candidates: &[RouteCandidate],
     entropy: u128,
     extra: impl Fn(&RouteCandidate) -> bool,
-) -> Result<&'a RouteCandidate, PickerError> {
+) -> Result<&RouteCandidate, PickerError> {
     let total = candidates
         .iter()
         .filter(|candidate| is_selectable(candidate) && extra(candidate))

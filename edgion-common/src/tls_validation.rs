@@ -111,7 +111,7 @@ fn parse_ordered_certificate_pem(input: &[u8]) -> Result<Vec<Vec<u8>>, CaBundleE
         if certificates_der.len() >= MAX_CA_CERTIFICATES_PER_REF {
             return Err(CaBundleError::TooManyCertificates);
         }
-        certificates_der.push(pem.contents.to_vec());
+        certificates_der.push(pem.contents.clone());
         remaining = &remaining[end_offset..];
     }
     if certificates_der.is_empty() {
@@ -593,7 +593,7 @@ fn parse_leaf_cert(pem_str: &str) -> Result<(Vec<u8>, i64, i64), String> {
         .ok_or_else(|| "No PEM block found".to_string())?
         .map_err(|e| format!("PEM parse error: {}", e))?;
 
-    let der_data = pem.contents.to_vec();
+    let der_data = pem.contents.clone();
     let (_, cert) = X509Certificate::from_der(&der_data).map_err(|e| format!("X.509 parse error: {}", e))?;
 
     let not_before_ts = cert.validity().not_before.timestamp();

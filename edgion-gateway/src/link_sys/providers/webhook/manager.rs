@@ -338,9 +338,7 @@ mod tests {
 
         // Acquire outside the runtime: no synchronous mutex is held across an
         // await inside an async task. Full-set dispatch tests share this lock.
-        let _guard = crate::link_sys::runtime::store::I5_DISPATCH_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let _guard = crate::link_sys::runtime::store::I5_DISPATCH_LOCK.blocking_lock();
         tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()

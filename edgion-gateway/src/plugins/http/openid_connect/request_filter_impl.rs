@@ -3,7 +3,7 @@ use super::*;
 #[async_trait]
 impl RequestFilter for OpenidConnect {
     fn name(&self) -> &str {
-        &self.name
+        self.name
     }
 
     async fn run_request(&self, session: &mut dyn PluginSession, plugin_log: &mut PluginLog) -> PluginRunningResult {

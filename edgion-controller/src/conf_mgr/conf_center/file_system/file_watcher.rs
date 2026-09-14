@@ -392,7 +392,7 @@ impl FileSystemWatcher {
                 Some(event) = rx.recv() => {
                     for path in event.paths {
                         if is_yaml_file(&path) {
-                            self.dispatch_file_event(&path, event.kind.clone()).await;
+                            self.dispatch_file_event(&path, event.kind).await;
                         }
                     }
                 }

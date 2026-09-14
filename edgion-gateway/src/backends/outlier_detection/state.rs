@@ -2,7 +2,9 @@
 
 use super::config::OutlierDetectionResolved;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+
+use parking_lot::Mutex;
 use std::time::{Duration, Instant};
 
 /// Classification of a recorded upstream failure.
@@ -138,7 +140,7 @@ impl PassiveEjectionState {
     /// open window expires.
     pub fn admit(self: &Arc<Self>) -> EjectionAdmission {
         let (generation, expired) = {
-            let state = self.inner.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let state = self.inner.lock();
             match state.effective_open_until() {
                 None => return EjectionAdmission::Closed,
                 Some(until) => (state.generation, Instant::now() >= until),
@@ -157,7 +159,7 @@ impl PassiveEjectionState {
 
         // A success, config replacement, or new cooldown may have raced the CAS.
         let valid = {
-            let state = self.inner.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let state = self.inner.lock();
             state.generation == generation
                 && state
                     .effective_open_until()
@@ -195,7 +197,7 @@ impl PassiveEjectionState {
         let Some(config) = self.config.as_ref() else {
             return None;
         };
-        let mut state = self.inner.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut state = self.inner.lock();
         if state.effective_open_until().is_some() {
             return None;
         }
@@ -222,7 +224,7 @@ impl PassiveEjectionState {
         let Some(config) = self.config.as_ref() else {
             return FailureTransition::None;
         };
-        let mut state = self.inner.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut state = self.inner.lock();
         let threshold_reached = state.app_failures >= config.consecutive_errors
             || state.gateway_failures >= config.consecutive_gateway_errors
             || state.local_origin_failures >= config.consecutive_local_origin_failures;
@@ -239,7 +241,7 @@ impl PassiveEjectionState {
 
     /// Apply a bounded explicit cooldown, such as a provider Retry-After hint.
     pub fn open_for(&self, duration: Duration) {
-        let mut state = self.inner.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut state = self.inner.lock();
         let until = instant_deadline(duration);
         state.explicit_cooldown_until = Some(
             state
@@ -254,7 +256,7 @@ impl PassiveEjectionState {
     /// Explicit cooldowns belong to the provider and survive unrelated
     /// in-flight successes until their half-open probe completes.
     pub fn record_success(&self) -> bool {
-        let mut state = self.inner.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut state = self.inner.lock();
         let was_open = state.open_until.take().is_some();
         state.app_failures = 0;
         state.gateway_failures = 0;
@@ -272,17 +274,13 @@ impl PassiveEjectionState {
     /// Whether the target is in Open or HalfOpen. This quiet inspection is for
     /// wrapper arbitration and cleanup; it does not acquire a probe.
     pub fn is_open(&self) -> bool {
-        self.inner
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .effective_open_until()
-            .is_some()
+        self.inner.lock().effective_open_until().is_some()
     }
 
     /// Compatibility read for existing Service selection. It preserves the
     /// historical automatic recovery until Service callsites retain probe guards.
     pub fn legacy_ejection_status(&self) -> (bool, bool) {
-        let mut state = self.inner.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut state = self.inner.lock();
         let Some(until) = state.effective_open_until() else {
             return (false, false);
         };
@@ -303,7 +301,7 @@ impl PassiveEjectionState {
     /// history. Identity-bound Service runtime calls this at the same expiry
     /// edge that clears its lock-free gate and gauge.
     pub(crate) fn expire_legacy_ejection(&self) -> bool {
-        let mut state = self.inner.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut state = self.inner.lock();
         let Some(until) = state.effective_open_until() else {
             return false;
         };
@@ -325,7 +323,7 @@ impl PassiveEjectionState {
     /// Identity-bound Service runtime state copies this cold completion result
     /// into an atomic deadline so request selection never locks this state.
     pub(crate) fn legacy_ejection_remaining(&self) -> Option<Duration> {
-        let state = self.inner.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let state = self.inner.lock();
         state
             .effective_open_until()
             .map(|until| until.saturating_duration_since(Instant::now()))
@@ -333,17 +331,14 @@ impl PassiveEjectionState {
 
     #[cfg(test)]
     pub(crate) fn num_ejections(&self) -> u32 {
-        self.inner
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .num_ejections
+        self.inner.lock().num_ejections
     }
 
     /// Move active open deadlines to an already-expired instant without
     /// changing counters, generation, or the half-open probe lease.
     #[cfg(test)]
     pub(crate) fn expire_deadlines_for_test(&self) {
-        let mut state = self.inner.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut state = self.inner.lock();
         let expired = Instant::now();
         if state.open_until.is_some() {
             state.open_until = Some(expired);
@@ -354,7 +349,7 @@ impl PassiveEjectionState {
     }
 
     fn finish_probe(&self, generation: u64, success: bool, class: Option<FailureClass>) {
-        let mut state = self.inner.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut state = self.inner.lock();
         if state.generation != generation || !self.probe_in_flight.load(Ordering::Acquire) {
             return;
         }
@@ -380,7 +375,7 @@ impl PassiveEjectionState {
     }
 
     fn release_probe(&self, generation: u64) {
-        let state = self.inner.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let state = self.inner.lock();
         if state.generation == generation {
             self.probe_in_flight.store(false, Ordering::Release);
         }

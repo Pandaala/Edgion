@@ -83,7 +83,7 @@ fn denied_response() -> Response {
 fn log_denied(peer: Option<std::net::IpAddr>) {
     static DENIED: AtomicU64 = AtomicU64::new(0);
     let n = DENIED.fetch_add(1, Ordering::Relaxed);
-    if n == 0 || n % 256 == 0 {
+    if n == 0 || n.is_multiple_of(256) {
         tracing::warn!(
             component = "admin_ip_allowlist",
             peer = ?peer,

@@ -179,7 +179,7 @@ fn collect_route_usages(
             }
         }
     }
-    usages.sort_by(|left, right| left.to_string().cmp(&right.to_string()));
+    usages.sort_by_key(|left| left.to_string());
     usages
 }
 

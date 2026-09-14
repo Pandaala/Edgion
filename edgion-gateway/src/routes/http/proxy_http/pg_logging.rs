@@ -316,7 +316,7 @@ async fn finalize_ai_quota(ctx: &mut EdgionHttpContext) {
 
 #[inline]
 const fn ceil_chars_div_four(chars: u64) -> u64 {
-    chars / 4 + if chars % 4 == 0 { 0 } else { 1 }
+    chars / 4 + if chars.is_multiple_of(4) { 0 } else { 1 }
 }
 
 #[inline]

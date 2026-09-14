@@ -408,7 +408,7 @@ fn prepare_ready_attempt(
     if ctx.ai_state().is_none_or(|state| state.request_baseline.is_none()) {
         ctx.ensure_ai_state().request_baseline = Some(session.req_header().clone());
     }
-    apply_backend_request_headers(session, ctx, &selected_route_backend)?;
+    apply_backend_request_headers(session, ctx, selected_route_backend)?;
     let uri = provider_uri(
         ai_backend.provider,
         &ai_backend.endpoint.path_prefix,

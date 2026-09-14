@@ -9,6 +9,12 @@ use std::time::Duration;
 
 pub struct ConsoleReporter;
 
+impl Default for ConsoleReporter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ConsoleReporter {
     pub fn new() -> Self {
         Self
@@ -97,6 +103,12 @@ impl ConsoleReporter {
 
 /// JSON test report serializer.
 pub struct JsonReporter;
+
+impl Default for JsonReporter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl JsonReporter {
     pub fn new() -> Self {

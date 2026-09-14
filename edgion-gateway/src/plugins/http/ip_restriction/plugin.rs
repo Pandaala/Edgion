@@ -173,47 +173,50 @@ impl RequestFilter for IpRestriction {
         let source_ip = self.get_source_ip(session);
 
         let should_deny = match source_ip {
-            Some(ip) => match {
-                // Keep the optional snapshot and every matcher borrow inside this
-                // lexical scope, which ends before any response-write await below.
-                // Declare the owner first so it outlives the matcher containers.
-                let snapshot =
-                    capture_global_edgion_config_data_snapshot_for_refs(&self.deny_ref_keys, &self.allow_ref_keys);
-                let mut deny_matchers: SmallVec<[&IpRadixMatcher; 4]> = self.deny_matcher.iter().collect();
-                let mut allow_matchers: SmallVec<[&IpRadixMatcher; 4]> = self.allow_matcher.iter().collect();
-                if let Some(snapshot) = snapshot.as_ref() {
-                    snapshot.append_ip_list_matchers(&self.deny_ref_keys, &mut deny_matchers);
-                    snapshot.append_ip_list_matchers(&self.allow_ref_keys, &mut allow_matchers);
+            Some(ip) => {
+                let res = {
+                    // Keep the optional snapshot and every matcher borrow inside this
+                    // lexical scope, which ends before any response-write await below.
+                    // Declare the owner first so it outlives the matcher containers.
+                    let snapshot =
+                        capture_global_edgion_config_data_snapshot_for_refs(&self.deny_ref_keys, &self.allow_ref_keys);
+                    let mut deny_matchers: SmallVec<[&IpRadixMatcher; 4]> = self.deny_matcher.iter().collect();
+                    let mut allow_matchers: SmallVec<[&IpRadixMatcher; 4]> = self.allow_matcher.iter().collect();
+                    if let Some(snapshot) = snapshot.as_ref() {
+                        snapshot.append_ip_list_matchers(&self.deny_ref_keys, &mut deny_matchers);
+                        snapshot.append_ip_list_matchers(&self.allow_ref_keys, &mut allow_matchers);
+                    }
+                    evaluate_ip_access_multi(
+                        &deny_matchers,
+                        &allow_matchers,
+                        self.allow_mode,
+                        &self.default_action,
+                        &ip,
+                    )
+                };
+                match res {
+                    AccessDecision::AllowByGroup(g) => {
+                        plugin_log.push_fmt("allow:group={}", la![g.as_ref()]);
+                        false
+                    }
+                    AccessDecision::DenyByGroup(g) => {
+                        plugin_log.push_fmt("deny:group={}", la![g.as_ref()]);
+                        true
+                    }
+                    AccessDecision::DenyByWhitelistMiss => {
+                        plugin_log.push("deny:not-in-allow");
+                        true
+                    }
+                    AccessDecision::Default(DefaultAction::Allow) => {
+                        plugin_log.push("allow:default");
+                        false
+                    }
+                    AccessDecision::Default(DefaultAction::Deny) => {
+                        plugin_log.push("deny:default");
+                        true
+                    }
                 }
-                evaluate_ip_access_multi(
-                    &deny_matchers,
-                    &allow_matchers,
-                    self.allow_mode,
-                    &self.default_action,
-                    &ip,
-                )
-            } {
-                AccessDecision::AllowByGroup(g) => {
-                    plugin_log.push_fmt("allow:group={}", la![g.as_ref()]);
-                    false
-                }
-                AccessDecision::DenyByGroup(g) => {
-                    plugin_log.push_fmt("deny:group={}", la![g.as_ref()]);
-                    true
-                }
-                AccessDecision::DenyByWhitelistMiss => {
-                    plugin_log.push("deny:not-in-allow");
-                    true
-                }
-                AccessDecision::Default(DefaultAction::Allow) => {
-                    plugin_log.push("allow:default");
-                    false
-                }
-                AccessDecision::Default(DefaultAction::Deny) => {
-                    plugin_log.push("deny:default");
-                    true
-                }
-            },
+            }
             None => {
                 // No client IP. Whitelist mode is decided by configured intent (inline allow
                 // OR allow refs), NOT by resolved-matcher presence — so a refs-only allowlist

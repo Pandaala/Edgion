@@ -295,7 +295,7 @@ fn compile_serving_certificates(
         let group = reference.group.as_deref().unwrap_or("");
         let kind = reference.kind.as_deref().unwrap_or("Secret");
         let namespace = reference.namespace.as_deref().unwrap_or(gateway_namespace);
-        if group != ""
+        if !group.is_empty()
             || kind != "Secret"
             || outcome.index as usize != index
             || outcome.source.group != group

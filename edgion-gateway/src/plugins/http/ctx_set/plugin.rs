@@ -181,15 +181,12 @@ impl RequestFilter for CtxSet {
         for (idx, rule) in self.config.vars.iter().enumerate() {
             let value = self.process_rule(rule, idx, session, plugin_log);
 
-            match value {
-                Some(v) => {
-                    if let Err(_) = session.set_ctx_var(&rule.name, &v) {
-                        plugin_log.push_err("ctx var set fail");
-                    } else {
-                        plugin_log.push_fmt("key {} set", la![rule.name.as_str()]);
-                    }
+            if let Some(v) = value {
+                if let Err(_) = session.set_ctx_var(&rule.name, &v) {
+                    plugin_log.push_err("ctx var set fail");
+                } else {
+                    plugin_log.push_fmt("key {} set", la![rule.name.as_str()]);
                 }
-                None => {}
             }
         }
 

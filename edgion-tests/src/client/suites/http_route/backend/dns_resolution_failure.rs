@@ -62,7 +62,7 @@ impl DnsResolutionFailureTestSuite {
                             Ok(resp) => {
                                 let status = resp.status().as_u16();
                                 last_status = Some(status);
-                                if status >= 500 && status < 600 {
+                                if (500..600).contains(&status) {
                                     return TestResult::passed_with_message(
                                         start.elapsed(),
                                         format!(

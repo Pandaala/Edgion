@@ -788,7 +788,7 @@ impl BodyStorageView {
         if offset > snapshot.len {
             return Err(BodyOperationError::InvalidRange);
         }
-        let end = offset.checked_add(max_bytes).unwrap_or(u64::MAX).min(snapshot.len);
+        let end = offset.saturating_add(max_bytes).min(snapshot.len);
         let slice = Arc::new(BodySnapshot::from_segments(snapshot.slice(offset..end)?)?);
         // Range reads preflight the complete raw slice, preserving scan-limit
         // precedence even when bounded text collection could stop early.

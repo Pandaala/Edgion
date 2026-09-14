@@ -68,10 +68,11 @@ fn backend_yaml(name: &str, secret: &str, endpoint: &str) -> String {
 }
 
 fn backend_yaml_with_max_output(name: &str, secret: &str, endpoint: &str, max_output: Option<u64>) -> String {
-    let insecure_http = endpoint
-        .starts_with("http://")
-        .then_some("    allowInsecureHttp: true\n")
-        .unwrap_or_default();
+    let insecure_http = if endpoint.starts_with("http://") {
+        "    allowInsecureHttp: true\n"
+    } else {
+        Default::default()
+    };
     let defaults = max_output.map_or(String::new(), |value| {
         format!("    defaults:\n      maxOutputTokens: {value}\n")
     });

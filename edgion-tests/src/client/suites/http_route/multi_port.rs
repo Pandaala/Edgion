@@ -117,7 +117,7 @@ impl MultiPortTestSuite {
                                     start.elapsed(),
                                     "Correctly got 404 on wrong port (isolation works)".to_string(),
                                 )
-                            } else if status >= 200 && status < 300 {
+                            } else if (200..300).contains(&status) {
                                 TestResult::failed(
                                     start.elapsed(),
                                     format!(
@@ -165,7 +165,7 @@ impl MultiPortTestSuite {
                                     start.elapsed(),
                                     "Correctly got 404 on wrong port (isolation works)".to_string(),
                                 )
-                            } else if status >= 200 && status < 300 {
+                            } else if (200..300).contains(&status) {
                                 TestResult::failed(
                                     start.elapsed(),
                                     format!(

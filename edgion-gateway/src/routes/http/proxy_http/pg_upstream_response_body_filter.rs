@@ -397,7 +397,7 @@ fn merge_max_delay(max_delay: &mut Option<Duration>, delay: Option<Duration>) {
 /// absent, while later chunks never overwrite the first observation.
 #[inline]
 fn record_first_body_time(ctx: &mut EdgionHttpContext, body: Option<&bytes::Bytes>) {
-    if !body.is_some_and(|bytes| !bytes.is_empty()) {
+    if body.is_none_or(|bytes| bytes.is_empty()) {
         return;
     }
     if let Some(upstream) = ctx.get_current_upstream_mut() {

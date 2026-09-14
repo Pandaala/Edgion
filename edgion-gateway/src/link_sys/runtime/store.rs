@@ -1239,7 +1239,7 @@ pub fn get_global_link_sys_store() -> Arc<LinkSysStore> {
 // ============================================================
 
 #[cfg(test)]
-pub(crate) static I5_DISPATCH_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+pub(crate) static I5_DISPATCH_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 #[cfg(test)]
 mod tests {
@@ -1517,7 +1517,7 @@ mod tests {
     }
 
     async fn assert_newer_source_event_wins(older_full: bool, newer_full: bool) {
-        let _global_guard = I5_DISPATCH_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _global_guard = I5_DISPATCH_LOCK.lock().await;
         let store = LinkSysStore::new();
         let source_lock = Mutex::new(());
         let counter = AtomicU64::new(0);
@@ -1709,7 +1709,7 @@ mod tests {
 
     #[test]
     fn ordered_otlp_type_change_removes_foreign_clients_before_unrelated_delta() {
-        let _guard = I5_DISPATCH_LOCK.lock().unwrap_or_else(|error| error.into_inner());
+        let _guard = I5_DISPATCH_LOCK.blocking_lock();
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -1946,7 +1946,7 @@ mod tests {
     /// Secret has not been injected yet.
     #[tokio::test]
     async fn dispatch_full_set_skips_build_when_credential_not_ready() {
-        let _guard = I5_DISPATCH_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = I5_DISPATCH_LOCK.lock().await;
         let key = "i5-ns/pending-full-set".to_string();
         let ls = create_redis_linksys("i5-ns", "pending-full-set", InjectedSecret::Missing);
         let mut data = HashMap::new();
@@ -1965,7 +1965,7 @@ mod tests {
     /// the existing client is preserved rather than torn down.
     #[tokio::test]
     async fn dispatch_full_set_preserves_existing_client_on_pending_update() {
-        let _guard = I5_DISPATCH_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = I5_DISPATCH_LOCK.lock().await;
         let key = "i5-ns/preserve-full-set".to_string();
 
         // Seed with a ready LinkSys so a client is inserted.
@@ -1995,7 +1995,7 @@ mod tests {
     /// credentials.
     #[tokio::test]
     async fn dispatch_partial_update_skips_build_when_credential_not_ready() {
-        let _guard = I5_DISPATCH_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = I5_DISPATCH_LOCK.lock().await;
         let key = "i5-ns/pending-partial-add".to_string();
         let ls = create_redis_linksys("i5-ns", "pending-partial-add", InjectedSecret::Missing);
         let mut add = HashMap::new();
@@ -2013,7 +2013,7 @@ mod tests {
     /// client.
     #[tokio::test]
     async fn dispatch_partial_update_preserves_existing_client_on_pending_update() {
-        let _guard = I5_DISPATCH_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = I5_DISPATCH_LOCK.lock().await;
         let key = "i5-ns/preserve-partial".to_string();
 
         // Seed
@@ -2044,7 +2044,7 @@ mod tests {
     /// them differently at the dispatch layer.
     #[tokio::test]
     async fn dispatch_full_set_skips_build_when_credential_invalid() {
-        let _guard = I5_DISPATCH_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = I5_DISPATCH_LOCK.lock().await;
         let key = "i5-ns/invalid-full-set".to_string();
         let ls = create_redis_linksys("i5-ns", "invalid-full-set", InjectedSecret::MalformedForInvalid);
         let mut data = HashMap::new();
@@ -2062,7 +2062,7 @@ mod tests {
     /// out.
     #[tokio::test]
     async fn dispatch_partial_update_skips_build_when_credential_invalid() {
-        let _guard = I5_DISPATCH_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = I5_DISPATCH_LOCK.lock().await;
         let key = "i5-ns/invalid-partial-add".to_string();
         let ls = create_redis_linksys("i5-ns", "invalid-partial-add", InjectedSecret::MalformedForInvalid);
         let mut add = HashMap::new();
@@ -2112,7 +2112,7 @@ mod tests {
         // holding the lock, their `dispatch_full_set` calls would wipe the key
         // inserted by this test via an empty new_webhook_map through
         // `WEBHOOK_RUNTIME.replace_all`.
-        let _guard = I5_DISPATCH_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = I5_DISPATCH_LOCK.lock().await;
 
         // Use a unique key to also avoid interference with other tests' add/remove paths.
         let key = "t13-ns/wh-arc-swap".to_string();
@@ -2236,7 +2236,7 @@ mod runtime_stats_tests {
 
     #[test]
     fn otlp_full_partial_invalid_type_change_and_remove_keep_owner_scope() {
-        let _guard = I5_DISPATCH_LOCK.lock().unwrap_or_else(|error| error.into_inner());
+        let _guard = I5_DISPATCH_LOCK.blocking_lock();
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -2295,7 +2295,7 @@ mod runtime_stats_tests {
 
     #[test]
     fn otlp_source_entries_precede_ordered_unrelated_async_dispatch() {
-        let _guard = I5_DISPATCH_LOCK.lock().unwrap_or_else(|error| error.into_inner());
+        let _guard = I5_DISPATCH_LOCK.blocking_lock();
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()

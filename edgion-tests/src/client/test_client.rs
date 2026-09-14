@@ -893,7 +893,7 @@ mod capability_tests {
             let rest = &runner[i + "${EDGION_TEST_CLIENT_BIN}".len()..];
             let Some(end) = rest.find('"') else { continue };
             let args: Vec<&str> = rest[..end].split_whitespace().collect();
-            if args.iter().any(|a| a.contains('$')) && !args.iter().any(|a| *a == "-r") {
+            if args.iter().any(|a| a.contains('$')) && !args.contains(&"-r") {
                 continue; // dynamic `${item_safe}` invocation, nothing static to resolve
             }
             let val = |flag: &str| -> Option<String> {

@@ -1143,7 +1143,7 @@ fn source_epoch_requirement(state: &CoordinatorState, affected: &[String]) -> us
         .iter()
         .filter(|(key, source)| affected.contains(key.as_str()) && source.identity.is_none())
         .count()
-        .checked_add(
+        .saturating_add(
             state
                 .endpoint_slices
                 .values()
@@ -1153,7 +1153,6 @@ fn source_epoch_requirement(state: &CoordinatorState, affected: &[String]) -> us
                 })
                 .count(),
         )
-        .unwrap_or(usize::MAX)
 }
 
 fn assign_source_epochs(state: &mut CoordinatorState, affected: &[String], epochs: impl Iterator<Item = u64>) {

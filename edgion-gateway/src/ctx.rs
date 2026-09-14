@@ -2097,6 +2097,7 @@ pub(crate) struct DeferredCredentialMutations {
 /// logs, and request-pinned runtime generations remain inline. Empty vectors
 /// and nullable `Arc`s do not allocate, while the inline layout avoids an
 /// extra branch and heap indirection at every plugin callback.
+#[derive(Default)]
 struct PluginExecutionState {
     scope: Option<Arc<crate::plugins::publication::GatewayScope>>,
     stage_logs: Vec<StageLogs>,
@@ -2106,21 +2107,6 @@ struct PluginExecutionState {
     resolved_global_plugins: Option<Arc<[Arc<PluginRuntime>]>>,
     resolved_gateway_plugins: Option<Arc<[Arc<PluginRuntime>]>>,
     resolved_route_ext_refs: Option<Arc<[Option<Arc<PluginRuntime>>]>>,
-}
-
-impl Default for PluginExecutionState {
-    fn default() -> Self {
-        Self {
-            scope: None,
-            stage_logs: Vec::new(),
-            pending_edgion_plugins_logs: Vec::new(),
-            terminated: false,
-            current_entry: None,
-            resolved_global_plugins: None,
-            resolved_gateway_plugins: None,
-            resolved_route_ext_refs: None,
-        }
-    }
 }
 
 /// Sparse plugin side effects and feature-specific caches.

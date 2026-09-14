@@ -63,6 +63,12 @@ pub struct AttachedRouteTracker {
     inner: RwLock<Inner>,
 }
 
+impl Default for AttachedRouteTracker {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl AttachedRouteTracker {
     pub fn new() -> Self {
         Self {

@@ -91,7 +91,7 @@ pub fn format_grpc_timeout(d: Duration) -> String {
     for (unit_nanos, suffix) in TIMEOUT_UNITS {
         // Quotient-plus-remainder avoids the overflow of
         // `(nanos + unit_nanos - 1) / unit_nanos` near `u128::MAX`.
-        let value = nanos / unit_nanos + u128::from(nanos % unit_nanos != 0);
+        let value = nanos / unit_nanos + u128::from(!nanos.is_multiple_of(unit_nanos));
         if value <= MAX_TIMEOUT_VALUE {
             return format!("{value}{suffix}");
         }

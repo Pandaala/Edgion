@@ -184,10 +184,8 @@ impl LinkSys {
                                 errors.push("Sentinel mode specified but sentinel config is missing".to_string());
                             }
                         }
-                        redis::RedisTopologyMode::Cluster => {
-                            if topology.cluster.is_none() {
-                                errors.push("Cluster mode specified but cluster config is missing".to_string());
-                            }
+                        redis::RedisTopologyMode::Cluster if topology.cluster.is_none() => {
+                            errors.push("Cluster mode specified but cluster config is missing".to_string());
                         }
                         _ => {}
                     }

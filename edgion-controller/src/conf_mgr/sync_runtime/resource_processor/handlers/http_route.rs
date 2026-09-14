@@ -1731,7 +1731,7 @@ mod tests {
         let plugin_processor = Arc::new(ResourceProcessor::<EdgionPlugins>::new(
             "EdgionPlugins",
             16,
-            Arc::new(EdgionPluginsHandler::default()),
+            Arc::new(EdgionPluginsHandler),
             runtime.clone(),
         ));
         let mut plugins = EdgionPlugins::new(
@@ -2211,7 +2211,7 @@ modelRoutes:
         let processor = Arc::new(ResourceProcessor::<EdgionPlugins>::new(
             "EdgionPlugins",
             16,
-            Arc::new(EdgionPluginsHandler::default()),
+            Arc::new(EdgionPluginsHandler),
             runtime.clone(),
         ));
         let config: AiProxyConfig = serde_json::from_value(serde_json::json!({})).unwrap();

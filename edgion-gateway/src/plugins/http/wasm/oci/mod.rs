@@ -505,11 +505,10 @@ fn guard_remote_target_and_record(
     registry_origin: &Origin,
     policy: EgressPolicy,
 ) -> Result<(), RemoteTargetError> {
-    guard_remote_target(target, registry_origin, policy).map_err(|error| {
+    guard_remote_target(target, registry_origin, policy).inspect_err(|&error| {
         if let RemoteTargetError::Blocked(reason) = error {
             record_egress_blocked(reason);
         }
-        error
     })
 }
 

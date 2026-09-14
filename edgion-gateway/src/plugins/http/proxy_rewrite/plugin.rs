@@ -672,10 +672,10 @@ fn json_numbers_equal(left: &serde_json::Number, right: &serde_json::Number) -> 
         if integer < 0 {
             const MIN_I64_AS_F64: f64 = -9_223_372_036_854_775_808.0;
             const I64_UPPER_BOUND_AS_F64: f64 = 9_223_372_036_854_775_808.0;
-            float >= MIN_I64_AS_F64 && float < I64_UPPER_BOUND_AS_F64 && i128::from(float as i64) == integer
+            (MIN_I64_AS_F64..I64_UPPER_BOUND_AS_F64).contains(&float) && i128::from(float as i64) == integer
         } else {
             const U64_UPPER_BOUND_AS_F64: f64 = 18_446_744_073_709_551_616.0;
-            float >= 0.0 && float < U64_UPPER_BOUND_AS_F64 && i128::from(float as u64) == integer
+            (0.0..U64_UPPER_BOUND_AS_F64).contains(&float) && i128::from(float as u64) == integer
         }
     }
 

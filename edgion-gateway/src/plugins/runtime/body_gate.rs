@@ -152,11 +152,9 @@ impl RequestFilter for BodyGatedRequestFilter {
     async fn run_request(&self, session: &mut dyn PluginSession, log: &mut PluginLog) -> PluginRunningResult {
         // 1. Secondary gate: is the body required for this request?
         if let Some(conds) = &self.policy.conditions {
-            if conds.should_evaluate() {
-                if conds.evaluate(session) == EvaluationResult::Skip {
-                    // Body not required — run the plugin without body enforcement.
-                    return self.inner.run_request(session, log).await;
-                }
+            if conds.should_evaluate() && conds.evaluate(session) == EvaluationResult::Skip {
+                // Body not required — run the plugin without body enforcement.
+                return self.inner.run_request(session, log).await;
             }
         }
 
@@ -217,10 +215,8 @@ impl UpstreamResponse for BodyGatedUpstreamResponse {
 
     async fn run_upstream_response(&self, session: &mut dyn PluginSession, log: &mut PluginLog) -> PluginRunningResult {
         if let Some(conds) = &self.policy.conditions {
-            if conds.should_evaluate() {
-                if conds.evaluate(session) == EvaluationResult::Skip {
-                    return self.inner.run_upstream_response(session, log).await;
-                }
+            if conds.should_evaluate() && conds.evaluate(session) == EvaluationResult::Skip {
+                return self.inner.run_upstream_response(session, log).await;
             }
         }
 

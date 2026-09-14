@@ -157,7 +157,7 @@ impl CompiledEvaluator {
             .map(|(key, current)| RequestSpan {
                 message_index: key.message_index,
                 part: key.part.into(),
-                current: *current,
+                current,
             })
             .collect();
         let request = encode_request(&payload, self.max_request_bytes)?;

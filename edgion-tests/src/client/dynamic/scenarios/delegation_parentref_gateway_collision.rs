@@ -414,7 +414,7 @@ async fn grpc_say_hello(
     if let Some(trace) = &trace {
         request.metadata_mut().insert(
             "traceparent",
-            crate::access_log_client::traceparent_for_marker(&trace).parse()?,
+            crate::access_log_client::traceparent_for_marker(trace).parse()?,
         );
         request.metadata_mut().insert("access_log", "test_store".parse()?);
     }
@@ -443,7 +443,7 @@ async fn grpc_stream_numbers(
     if let Some(trace) = &trace {
         request.metadata_mut().insert(
             "traceparent",
-            crate::access_log_client::traceparent_for_marker(&trace).parse()?,
+            crate::access_log_client::traceparent_for_marker(trace).parse()?,
         );
         request.metadata_mut().insert("access_log", "test_store".parse()?);
     }

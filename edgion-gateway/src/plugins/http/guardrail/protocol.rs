@@ -154,9 +154,9 @@ impl io::Write for CappedWriter {
             .bytes
             .len()
             .checked_add(input.len())
-            .ok_or_else(|| io::Error::new(io::ErrorKind::Other, "Guardrail request length overflow"))?;
+            .ok_or_else(|| io::Error::other("Guardrail request length overflow"))?;
         if next > self.cap {
-            return Err(io::Error::new(io::ErrorKind::Other, "Guardrail request exceeds cap"));
+            return Err(io::Error::other("Guardrail request exceeds cap"));
         }
         self.bytes.extend_from_slice(input);
         Ok(input.len())

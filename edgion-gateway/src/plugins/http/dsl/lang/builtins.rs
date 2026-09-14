@@ -576,7 +576,7 @@ fn checked_value_opt_str_ref(s: Option<&str>, limit: usize) -> Result<Value, Run
 fn api_error(function: &'static str, err: impl std::fmt::Display) -> RuntimeError {
     RuntimeError::ApiError {
         function: function.into(),
-        message: format!("plugin session operation failed: {err}").into(),
+        message: format!("plugin session operation failed: {err}"),
     }
 }
 

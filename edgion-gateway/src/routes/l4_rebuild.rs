@@ -145,10 +145,8 @@ pub(crate) fn rebuild_affected_l4_listener_managers<R, M>(
     for (key, routes) in &listener_buckets {
         let manager = get_or_create(key);
         rebuild_one(&manager, routes);
-        if routes.is_empty() && !active_listeners.contains(key) {
-            if by_listener.remove(key).is_some() {
-                removed_stale += 1;
-            }
+        if routes.is_empty() && !active_listeners.contains(key) && by_listener.remove(key).is_some() {
+            removed_stale += 1;
         }
     }
 

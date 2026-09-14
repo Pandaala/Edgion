@@ -17,6 +17,12 @@ pub struct NamespaceStore {
     store: RwLock<HashMap<String, Namespace>>,
 }
 
+impl Default for NamespaceStore {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl NamespaceStore {
     pub fn new() -> Self {
         Self {

@@ -654,7 +654,7 @@ impl ConfigSync for ConfigSyncGrpcServer {
         // a later slot swap must not affect this stream), plus the process token.
         let term_token = self.term_token_slot.load_full();
         let process_token = self.process_token.clone();
-        let shutdown_kind = kind_name.to_string();
+        let shutdown_kind = kind_name.clone();
         let shutdown_client_id = client_id_log.clone();
 
         tokio::spawn(async move {

@@ -24,6 +24,7 @@ const LEGACY_HTTP_FIELDS: &[&str] = &["ipSource", "message", "status"];
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
+#[derive(Default)]
 pub struct ConnectionIpRestrictionRules {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub allow: Option<Vec<IpGroup>>,
@@ -56,21 +57,6 @@ pub struct ConnectionIpRestrictionRules {
     #[serde(skip)]
     #[schemars(skip)]
     pub(crate) deny_matcher: Option<IpRadixMatcher>,
-}
-
-impl Default for ConnectionIpRestrictionRules {
-    fn default() -> Self {
-        Self {
-            allow: None,
-            deny: None,
-            default_action: DefaultAction::default(),
-            allow_refs: None,
-            deny_refs: None,
-            unknown_fields: BTreeMap::new(),
-            allow_matcher: None,
-            deny_matcher: None,
-        }
-    }
 }
 
 impl ConnectionIpRestrictionRules {

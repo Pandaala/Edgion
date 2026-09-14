@@ -5,7 +5,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU32, AtomicU64, AtomicU8, Ordering};
-use std::sync::{Arc, LazyLock, Mutex};
+use std::sync::{Arc, LazyLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use arc_swap::ArcSwap;
@@ -202,7 +202,7 @@ impl Buckets {
 /// One state handle retained by request plans and cleanup-safe captured Arcs.
 pub struct AdaptiveTelemetryState {
     buckets: Buckets,
-    tick_lock: Mutex<()>,
+    tick_lock: ParkingMutex<()>,
     published: ArcSwap<AdaptiveSnapshot>,
 }
 
@@ -210,7 +210,7 @@ impl AdaptiveTelemetryState {
     fn new() -> Arc<Self> {
         Arc::new(Self {
             buckets: Buckets::default(),
-            tick_lock: Mutex::new(()),
+            tick_lock: ParkingMutex::new(()),
             published: ArcSwap::from_pointee(AdaptiveSnapshot::default()),
         })
     }
@@ -244,7 +244,7 @@ impl AdaptiveTelemetryState {
     /// Publish windows ending immediately before `now_second`; the current
     /// in-progress second is never included.
     pub fn tick(&self, now_second: u64) {
-        let _tick_guard = self.tick_lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _tick_guard = self.tick_lock.lock();
         let latency_start = now_second.saturating_sub(LATENCY_WINDOW_SECONDS);
         let usage_start = now_second.saturating_sub(USAGE_WINDOW_SECONDS);
         let mut histogram = [0u64; TTFT_HISTOGRAM_BUCKETS];
@@ -334,7 +334,7 @@ fn histogram_p50(histogram: &[u64; TTFT_HISTOGRAM_BUCKETS]) -> Option<u64> {
 /// captured state Arcs and do not consult the map after construction.
 pub struct AdaptiveTelemetryStore {
     states: ArcSwap<HashMap<AdaptiveTelemetryKey, Arc<AdaptiveTelemetryState>>>,
-    writer: Mutex<()>,
+    writer: ParkingMutex<()>,
     selection_sequence: AtomicU8,
 }
 
@@ -348,7 +348,7 @@ impl AdaptiveTelemetryStore {
     pub fn new() -> Self {
         Self {
             states: ArcSwap::from_pointee(HashMap::new()),
-            writer: Mutex::new(()),
+            writer: ParkingMutex::new(()),
             selection_sequence: AtomicU8::new(0),
         }
     }
@@ -362,7 +362,7 @@ impl AdaptiveTelemetryStore {
     /// Atomically publish the complete cold-path key set. Equivalent keys keep
     /// their Arc; new configured keys are prebuilt; residue is removed.
     pub fn reconcile_keys(&self, retained: &HashSet<AdaptiveTelemetryKey>) {
-        let _guard = self.writer.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _guard = self.writer.lock();
         let current = self.states.load();
         let next = retained
             .iter()
@@ -383,7 +383,7 @@ impl AdaptiveTelemetryStore {
     }
 
     pub fn remove(&self, key: &AdaptiveTelemetryKey) -> bool {
-        let _guard = self.writer.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _guard = self.writer.lock();
         let mut next = (**self.states.load()).clone();
         let removed = next.remove(key).is_some();
         self.states.store(Arc::new(next));
@@ -393,7 +393,7 @@ impl AdaptiveTelemetryStore {
     /// Remove every discoverable generation for one typed backend target.
     /// Request plans that already captured a state Arc remain valid.
     pub fn remove_target(&self, target: &PolicyTargetKey) -> usize {
-        let _guard = self.writer.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _guard = self.writer.lock();
         let current = self.states.load();
         let removed = current.keys().filter(|key| &key.target == target).count();
         let next = current

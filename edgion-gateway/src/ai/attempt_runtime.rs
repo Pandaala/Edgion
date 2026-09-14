@@ -178,9 +178,11 @@ impl AiAttemptRuntime {
             None => (
                 ReportedAiUsage {
                     input_tokens: self.estimated_input_tokens,
-                    output_tokens: include_estimated_output
-                        .then(|| ceil_chars_div_four(self.usage.output_chars()))
-                        .unwrap_or_default(),
+                    output_tokens: if include_estimated_output {
+                        ceil_chars_div_four(self.usage.output_chars())
+                    } else {
+                        Default::default()
+                    },
                     cache_read_input_tokens: 0,
                     cache_write_input_tokens: 0,
                 },
@@ -594,7 +596,7 @@ fn bounded_string(value: &str, max_bytes: usize) -> String {
 }
 
 const fn ceil_chars_div_four(chars: u64) -> u64 {
-    chars / 4 + if chars % 4 == 0 { 0 } else { 1 }
+    chars / 4 + if chars.is_multiple_of(4) { 0 } else { 1 }
 }
 
 pub(crate) fn cooldown_delta_seconds(cooldown: Duration) -> u64 {
@@ -632,8 +634,8 @@ async fn reserve(
     )
     .map_err(|_| ())?;
     let limits = CredentialReservationLimits {
-        rpm: limits.requests_per_minute.map(u64::from),
-        tpm: limits.tokens_per_minute.map(u64::from),
+        rpm: limits.requests_per_minute,
+        tpm: limits.tokens_per_minute,
     };
     let core = Arc::clone(&input.limiter_core);
     let result = tokio::time::timeout(

@@ -193,6 +193,12 @@ pub struct DomainRouteRules {
     pub(crate) hostname_build_failed: bool,
 }
 
+impl Default for DomainRouteRules {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl DomainRouteRules {
     pub fn new() -> Self {
         Self {
@@ -474,10 +480,8 @@ impl GlobalHttpRouteManagers {
             let previous = manager.load_route_table();
             let table = patch_domain_route_rules(routes, &previous, changes);
             manager.store_route_table(table);
-            if routes.is_empty() && !active_listeners.contains(key) {
-                if self.by_listener.remove(key).is_some() {
-                    removed_stale += 1;
-                }
+            if routes.is_empty() && !active_listeners.contains(key) && self.by_listener.remove(key).is_some() {
+                removed_stale += 1;
             }
         }
 

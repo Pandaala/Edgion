@@ -111,7 +111,7 @@ fn distribution_delta(
             "Expected {expected_requests} endpoint-attributed requests, got {observed_requests}: {delta:?}"
         ));
     }
-    if expected_endpoints.is_empty() || expected_requests % expected_endpoints.len() as u64 != 0 {
+    if expected_endpoints.is_empty() || !expected_requests.is_multiple_of(expected_endpoints.len() as u64) {
         return Err("RoundRobin test fixture must divide requests evenly across endpoints".to_string());
     }
     let expected_per_endpoint = expected_requests / expected_endpoints.len() as u64;

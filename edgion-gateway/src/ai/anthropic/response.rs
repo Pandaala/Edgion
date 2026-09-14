@@ -760,11 +760,12 @@ impl StreamingResponseProcessor for AnthropicResponseProcessor {
             }
             // Publish an empty active batch at EOS as an explicit semantic
             // source boundary for a window retained by an earlier callback.
-            if (!batch.is_empty() || end_of_stream) && session.publish_canonical_records(batch).is_err() {
-                if session.try_claim_response_terminal(crate::ai::terminal::ResponseTerminalCause::ProcessorFailure) {
-                    session.mark_response_terminal_emission(crate::ai::terminal::TerminalEmission::NoEvent);
-                    sink.terminate();
-                }
+            if (!batch.is_empty() || end_of_stream)
+                && session.publish_canonical_records(batch).is_err()
+                && session.try_claim_response_terminal(crate::ai::terminal::ResponseTerminalCause::ProcessorFailure)
+            {
+                session.mark_response_terminal_emission(crate::ai::terminal::TerminalEmission::NoEvent);
+                sink.terminate();
             }
         }
         if !sink.is_terminated() {

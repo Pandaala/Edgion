@@ -261,8 +261,10 @@ pub struct OriginField {
 /// Presence policy for origin fields.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
+#[derive(Default)]
 pub enum PresencePolicy {
     /// Absent field is silently omitted (default).
+    #[default]
     SkipIfMissing,
 
     /// Absent field causes the call to fail. In forward_auth this surfaces as
@@ -272,12 +274,6 @@ pub enum PresencePolicy {
 
     /// Absent field triggers PluginLog alert but request continues.
     WarnIfMissing,
-}
-
-impl Default for PresencePolicy {
-    fn default() -> Self {
-        Self::SkipIfMissing
-    }
 }
 
 // ============================================================

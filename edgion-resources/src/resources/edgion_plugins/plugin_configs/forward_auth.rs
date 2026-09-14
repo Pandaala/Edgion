@@ -19,6 +19,7 @@ use crate::resources::common::{ExternalHttpConnection, OutboundRequestSpec, Reso
 /// propagate upstream or back to the client, and timing.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[derive(Default)]
 pub struct ForwardAuthDecision {
     /// Headers to copy from the auth service response to the upstream request
     /// (forwarded to upstream on success).
@@ -47,17 +48,6 @@ pub struct ForwardAuthDecision {
     /// Default: 0 (no delay).
     #[serde(default)]
     pub auth_failure_delay_ms: u64,
-}
-
-impl Default for ForwardAuthDecision {
-    fn default() -> Self {
-        Self {
-            upstream_headers: Vec::new(),
-            client_headers: Vec::new(),
-            hide_credentials: false,
-            auth_failure_delay_ms: 0,
-        }
-    }
 }
 
 /// Serde default for `request`: forward_auth forwards all request headers by

@@ -91,7 +91,7 @@ async fn grpc_call(ctx: &TestContext, trace: &str, reset_first: Option<usize>) -
     metadata.insert("grpc-timeout", CLIENT_TIMEOUT.parse().unwrap());
     metadata.insert(
         "traceparent",
-        crate::access_log_client::traceparent_for_marker(&trace)
+        crate::access_log_client::traceparent_for_marker(trace)
             .parse()
             .map_err(|e| format!("trace metadata: {e}"))?,
     );

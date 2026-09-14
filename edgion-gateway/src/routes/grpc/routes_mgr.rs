@@ -213,7 +213,7 @@ impl GlobalGrpcRouteManagers {
     fn rebuild_all_listener_managers_with_active(&self, active_listener_keys: Vec<ListenerKey>) {
         // Pre-create listener managers for all known listeners from ListenerGatewayInfoStore
         for key in &active_listener_keys {
-            self.get_or_create_listener_manager(&key);
+            self.get_or_create_listener_manager(key);
         }
 
         let listener_buckets = self.bucket_units_by_listener();
@@ -298,10 +298,8 @@ impl GlobalGrpcRouteManagers {
             let previous = manager.load_route_table();
             let table = build_grpc_route_rules_from_units(units, Some(&previous));
             manager.store_route_table(table);
-            if units.is_empty() && !active_listeners.contains(key) {
-                if self.by_listener.remove(key).is_some() {
-                    removed_stale += 1;
-                }
+            if units.is_empty() && !active_listeners.contains(key) && self.by_listener.remove(key).is_some() {
+                removed_stale += 1;
             }
         }
 

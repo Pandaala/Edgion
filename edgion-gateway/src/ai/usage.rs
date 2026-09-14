@@ -1514,24 +1514,24 @@ impl StreamingResponseProcessor for UsageExtractionProcessor {
                 });
                 // An empty batch is the explicit EOS signal that makes the
                 // guard resolve a below-threshold window retained earlier.
-                if finish_overflowed || session.publish_canonical_records(batch).is_err() {
-                    if session.try_claim_response_terminal(ResponseTerminalCause::ProcessorFailure) {
-                        session.mark_response_terminal_emission(TerminalEmission::NoEvent);
-                        self.shared.mark_gateway_terminated();
-                        sink.terminate();
-                    }
+                if (finish_overflowed || session.publish_canonical_records(batch).is_err())
+                    && session.try_claim_response_terminal(ResponseTerminalCause::ProcessorFailure)
+                {
+                    session.mark_response_terminal_emission(TerminalEmission::NoEvent);
+                    self.shared.mark_gateway_terminated();
+                    sink.terminate();
                 }
             }
             self.finish(stream_kind);
             return;
         }
         if let Some(batch) = canonical_batch {
-            if session.publish_canonical_records(batch).is_err() {
-                if session.try_claim_response_terminal(ResponseTerminalCause::ProcessorFailure) {
-                    session.mark_response_terminal_emission(TerminalEmission::NoEvent);
-                    self.shared.mark_gateway_terminated();
-                    sink.terminate();
-                }
+            if session.publish_canonical_records(batch).is_err()
+                && session.try_claim_response_terminal(ResponseTerminalCause::ProcessorFailure)
+            {
+                session.mark_response_terminal_emission(TerminalEmission::NoEvent);
+                self.shared.mark_gateway_terminated();
+                sink.terminate();
             }
         }
         // Gated on `requested_streaming`, not `stream_kind`. In the ordinary

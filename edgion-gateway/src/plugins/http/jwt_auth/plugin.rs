@@ -77,7 +77,7 @@ impl RequestFilter for JwtAuth {
                 let username = ok.claims.get("sub").and_then(|v| v.as_str()).unwrap_or("(missing sub)");
                 plugin_log.push_fmt(
                     "OK group={} iss={} u={}",
-                    la![ok.group.group.as_str(), ok.iss.as_str(), sensitive(&username)],
+                    la![ok.group.group.as_str(), ok.iss.as_str(), sensitive(username)],
                 );
                 self.set_claims_headers(session, &ok.claims);
                 if self.config.store_claims_in_ctx {

@@ -84,7 +84,7 @@ impl RequestFilter for DynamicExternalUpstream {
         };
 
         // 3. Look up domain in domainMap
-        let target = match self.config.lookup_domain(&routing_key) {
+        let target = match self.config.lookup_domain(routing_key) {
             Some(t) => t,
             None => {
                 return match self.config.on_no_match {

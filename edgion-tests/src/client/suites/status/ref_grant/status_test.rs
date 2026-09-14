@@ -659,16 +659,14 @@ impl RefGrantStatusTestSuite {
                     let mut delete_observed = false;
                     let mut last_route_status: Option<Value> = None;
                     while tokio::time::Instant::now() < delete_deadline {
-                        match helpers::fetch_resource_status(&ctx, "HTTPRoute", ROUTE_NAMESPACE, "cross-ns-route").await
+                        if let Ok(route) =
+                            helpers::fetch_resource_status(&ctx, "HTTPRoute", ROUTE_NAMESPACE, "cross-ns-route").await
                         {
-                            Ok(route) => {
-                                if Self::has_resolved_refs_false_with_reason(&route, "RefNotPermitted") {
-                                    delete_observed = true;
-                                    break;
-                                }
-                                last_route_status = Some(route);
+                            if Self::has_resolved_refs_false_with_reason(&route, "RefNotPermitted") {
+                                delete_observed = true;
+                                break;
                             }
-                            Err(_) => {}
+                            last_route_status = Some(route);
                         }
                         tokio::time::sleep(Duration::from_millis(300)).await;
                     }
@@ -718,16 +716,14 @@ impl RefGrantStatusTestSuite {
                     let mut restore_observed = false;
                     let mut last_restore_status: Option<Value> = None;
                     while tokio::time::Instant::now() < restore_deadline {
-                        match helpers::fetch_resource_status(&ctx, "HTTPRoute", ROUTE_NAMESPACE, "cross-ns-route").await
+                        if let Ok(route) =
+                            helpers::fetch_resource_status(&ctx, "HTTPRoute", ROUTE_NAMESPACE, "cross-ns-route").await
                         {
-                            Ok(route) => {
-                                if helpers::has_condition(&route, "ResolvedRefs", "True") {
-                                    restore_observed = true;
-                                    break;
-                                }
-                                last_restore_status = Some(route);
+                            if helpers::has_condition(&route, "ResolvedRefs", "True") {
+                                restore_observed = true;
+                                break;
                             }
-                            Err(_) => {}
+                            last_restore_status = Some(route);
                         }
                         tokio::time::sleep(Duration::from_millis(300)).await;
                     }

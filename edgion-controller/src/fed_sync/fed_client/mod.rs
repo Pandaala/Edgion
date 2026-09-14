@@ -82,6 +82,12 @@ pub struct ReconnectBackoff {
     current: u64,
 }
 
+impl Default for ReconnectBackoff {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ReconnectBackoff {
     pub fn new() -> Self {
         Self { current: 1 }

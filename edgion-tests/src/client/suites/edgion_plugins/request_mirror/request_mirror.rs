@@ -87,7 +87,7 @@ async fn poll_mirror_received(
             let direct_url = format!(
                 "http://{}:30001/mirror/query/{}",
                 host,
-                crate::access_log_client::trace_id_for_marker(&trace_id)
+                crate::access_log_client::trace_id_for_marker(trace_id)
             );
             match client.get(&direct_url).send().await {
                 Ok(resp) => {
@@ -573,7 +573,7 @@ impl RequestMirrorTestSuite {
                             let direct = format!(
                                 "http://{}:30001/mirror/query/{}",
                                 host,
-                                crate::access_log_client::trace_id_for_marker(&tid)
+                                crate::access_log_client::trace_id_for_marker(tid)
                             );
                             if let Ok(resp) = ctx.http_client.get(&direct).send().await {
                                 if let Ok(body) = resp.json::<Value>().await {

@@ -443,7 +443,7 @@ impl HmacAuth {
                     signing.push(ch.to_ascii_lowercase());
                 }
                 signing.push(' ');
-                signing.push_str(&path);
+                signing.push_str(path);
                 if let Some(query) = query.filter(|query| !query.is_empty()) {
                     signing.push('?');
                     signing.push_str(&query);

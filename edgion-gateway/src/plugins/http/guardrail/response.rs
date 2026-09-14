@@ -391,7 +391,7 @@ impl GuardrailResponseProcessor {
             for record in records {
                 for slice in record.into_raw_slices() {
                     let next = output.len().checked_add(slice.len());
-                    if !next.is_some_and(|next| next <= MAX_GUARDRAIL_CALLBACK_ROLLBACK_BYTES) {
+                    if next.is_none_or(|next| next > MAX_GUARDRAIL_CALLBACK_ROLLBACK_BYTES) {
                         output.clear();
                         self.terminate_dependency(sink, session, "callback-output-limit");
                         return;

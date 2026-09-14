@@ -121,7 +121,7 @@ impl RequestFilter for RequestRedirectFilter {
                 .and_then(|unit| unit.matched_info.m.path.as_ref())
                 .and_then(|path_match| {
                     (path_match.match_type.as_deref() == Some("PathPrefix"))
-                        .then(|| path_match.value.as_deref())
+                        .then_some(path_match.value.as_deref())
                         .flatten()
                 });
 

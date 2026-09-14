@@ -59,7 +59,7 @@ pub fn status_semantically_changed(kind: &str, old_json: &str, new_json: &str) -
 fn conditions_equal(old: &Value, new: &Value) -> bool {
     let old_arr = match old.as_array() {
         Some(a) => a,
-        None => return new.as_array().map_or(true, |a| a.is_empty()),
+        None => return new.as_array().is_none_or(|a| a.is_empty()),
     };
     let new_arr = match new.as_array() {
         Some(a) => a,

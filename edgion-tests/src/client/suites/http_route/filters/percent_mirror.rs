@@ -42,7 +42,7 @@ async fn poll_mirror_received(
     let direct_url = format!(
         "http://{}:30001/mirror/query/{}",
         mirror_server_host(ctx),
-        crate::access_log_client::trace_id_for_marker(&trace_id)
+        crate::access_log_client::trace_id_for_marker(trace_id)
     );
     let client = &ctx.http_client;
 
@@ -254,7 +254,7 @@ impl PercentMirrorTestSuite {
                         let direct = format!(
                             "http://{}:30001/mirror/query/{}",
                             mirror_server_host(&ctx),
-                            crate::access_log_client::trace_id_for_marker(&tid)
+                            crate::access_log_client::trace_id_for_marker(tid)
                         );
                         if let Ok(resp) = ctx.http_client.get(&direct).send().await {
                             if let Ok(body) = resp.json::<Value>().await {
@@ -322,7 +322,7 @@ impl PercentMirrorTestSuite {
                         let direct = format!(
                             "http://{}:30001/mirror/query/{}",
                             mirror_server_host(&ctx),
-                            crate::access_log_client::trace_id_for_marker(&tid)
+                            crate::access_log_client::trace_id_for_marker(tid)
                         );
                         if let Ok(resp) = ctx.http_client.get(&direct).send().await {
                             if let Ok(body) = resp.json::<Value>().await {

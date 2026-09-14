@@ -62,8 +62,9 @@ pub enum ResponseClose {
     DownstreamCancel,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum ResponseTerminalState {
+    #[default]
     Open,
     Claimed {
         winner: ResponseProcessorSlot,
@@ -76,12 +77,6 @@ pub enum ResponseTerminalState {
         emission: Option<TerminalEmission>,
         close: ResponseClose,
     },
-}
-
-impl Default for ResponseTerminalState {
-    fn default() -> Self {
-        Self::Open
-    }
 }
 
 impl ResponseTerminalState {

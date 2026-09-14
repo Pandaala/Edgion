@@ -81,9 +81,7 @@ impl RequestDiagnostics {
 
     #[inline]
     pub fn contains_error(&self, code: EdgionErrorCode) -> bool {
-        self.entries
-            .iter()
-            .any(|entry| *entry == RequestDiagnostic::Error(code))
+        self.entries.contains(&RequestDiagnostic::Error(code))
     }
 }
 

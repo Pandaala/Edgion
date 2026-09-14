@@ -123,6 +123,7 @@ pub enum WebhookAuth {
 /// disables it anyway (spec §3.2); removing it makes the relaxation explicit.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
+#[derive(Default)]
 pub struct WebhookServiceConfig {
     // ============================================================
     // Connection (flattened — target, tls, timeout, retry, rate_limit,
@@ -199,19 +200,6 @@ pub struct WebhookServiceConfig {
 // ============================================================
 // Default + Validation
 // ============================================================
-
-impl Default for WebhookServiceConfig {
-    fn default() -> Self {
-        Self {
-            conn: ExternalHttpConnection::default(),
-            auth: None,
-            request: OutboundRequestSpec::default(),
-            resolved_secrets: None,
-            request_method: None,
-            default_headers: None,
-        }
-    }
-}
 
 impl WebhookServiceConfig {
     /// Validate the configuration and return an error message if invalid.
@@ -437,7 +425,7 @@ headers: {}
         let request: WebhookOutboundRequest = serde_yaml::from_str(yaml_str).expect("deserialize");
         assert!(request.path.is_some());
         assert_eq!(request.path.as_ref().unwrap().template, "/webhook/${ctx:action}");
-        assert_eq!(request.path.as_ref().unwrap().allow_override, true);
+        assert!(request.path.as_ref().unwrap().allow_override);
         assert!(request.method.is_some());
         assert_eq!(request.method.as_ref().unwrap().template, "POST");
     }
@@ -529,7 +517,7 @@ headers:
         let request: WebhookOutboundRequest = serde_yaml::from_str(yaml_str).expect("deserialize");
         assert!(request.path.is_some());
         assert!(request.method.is_some());
-        assert_eq!(request.path.as_ref().unwrap().allow_override, true);
+        assert!(request.path.as_ref().unwrap().allow_override);
         assert_eq!(request.args.custom.len(), 2);
         assert_eq!(request.headers.custom.len(), 1);
     }

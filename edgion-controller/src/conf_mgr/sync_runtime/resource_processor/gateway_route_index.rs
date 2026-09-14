@@ -170,6 +170,12 @@ pub struct GatewayRouteIndex {
     inner: RwLock<Inner>,
 }
 
+impl Default for GatewayRouteIndex {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl GatewayRouteIndex {
     pub fn new() -> Self {
         Self {
