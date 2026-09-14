@@ -47,16 +47,18 @@ spec:
 | `name` | String | ✅ | 无 | 脚本名称（用于日志和调试），长度为 1–36 个 UTF-8 字节 |
 | `source` | String | ✅* | 无 | DSL 源代码 |
 | `bytecode` | String | ✅* | 无 | 预编译的字节码（Base64） |
-| `maxSteps` | Integer | ❌ | `10000` | 最大执行步数 |
-| `maxLoopIterations` | Integer | ❌ | `100` | 最大循环迭代次数 |
-| `maxCallCount` | Integer | ❌ | `500` | 最大函数调用次数 |
-| `maxStackDepth` | Integer | ❌ | `128` | 最大栈深度 |
+| `maxSteps` | Integer | ❌ | `10000` | 最大执行步数（`1`–`1000000`） |
+| `maxLoopIterations` | Integer | ❌ | `100` | 最大循环迭代次数（`1`–`100000`） |
+| `maxCallCount` | Integer | ❌ | `500` | 最大函数调用次数（`1`–`100000`） |
+| `maxStackDepth` | Integer | ❌ | `128` | 最大栈深度（`1`–`1024`） |
 | `maxStringLen` | Integer | ❌ | `8192` | 运行时字符串及单次 Body.read 请求的最大字节数（1–1,048,576） |
+| `maxListLen` | Integer | ❌ | `1024` | `split` 等动态 List 构造的最大元素数（`1`–`16384`）；使用独立硬上限的 API 保留其自身上限 |
+| `maxMapSize` | Integer | ❌ | `512` | 动态 Map 构造和投影的最大条目数（`1`–`4096`）；固定三字段 HTTP/Redis 结果 envelope 保留既定 schema，`redis.rate_limit` decision 则要求至少为 `5` |
 | `maxBodyScanPasses` | Integer | ❌ | `4` | 请求 body 累计扫描预算，以物理 body 上限的完整扫描次数计，范围 `1`–`16` |
 | `errorPolicy` | String | ❌ | `Ignore` | 错误策略：`Ignore` / `Deny` / `DenyWith` |
-| `httpMaxTimeoutMs` | Integer | ❌ | `5000` | `http.call()` 单次调用超时上限（毫秒） |
+| `httpMaxTimeoutMs` | Integer | ❌ | `5000` | `http.call()` 单次调用超时上限（`1`–`60000` 毫秒） |
 | `httpMaxRequestBodyBytes` | Integer | ❌ | `1048576` | `http.call()` 发送不透明 `Body` 的最大字节数（`1`–`33554432`，同时受网关物理请求 body 上限约束） |
-| `httpMaxResponseBodyBytes` | Integer | ❌ | `1048576` | `http.call()` 响应体最大字节数 |
+| `httpMaxResponseBodyBytes` | Integer | ❌ | `1048576` | `http.call()` 响应体最大字节数（`1`–`1048576`） |
 | `httpBlockPrivateIps` | Boolean | ❌ | `false` | 拦截 `http.call()` 对私有/回环/链路本地 IP 的调用 |
 | `linkSysRefs` | Vec<{namespace, name}> | ❌† | `[]` | LinkSys Redis 资源列表。每个 `name` 是作为 `redis.*` 调用第一个参数的别名 |
 

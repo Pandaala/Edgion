@@ -5,7 +5,10 @@ use std::sync::{Arc, OnceLock};
 
 use crate::plugins::common::redis_rate_limiter::RedisRateLimiter;
 use edgion_common::dns::ResolverSpec;
-use edgion_resources::resources::edgion_plugins::plugin_configs::dsl::DslConfig;
+use edgion_resources::resources::edgion_plugins::plugin_configs::dsl::{
+    DslConfig, DSL_DEFAULT_HTTP_MAX_REQUEST_BODY_BYTES, DSL_DEFAULT_HTTP_MAX_RESPONSE_BODY_BYTES,
+    DSL_DEFAULT_HTTP_MAX_TIMEOUT_MS, DSL_DEFAULT_MAX_BODY_SCAN_PASSES,
+};
 use edgion_resources::resources::edgion_plugins::RateLimitAlgorithm;
 use std::time::Duration;
 
@@ -37,13 +40,13 @@ pub struct DslRuntime {
 impl Default for DslRuntime {
     fn default() -> Self {
         Self {
-            max_timeout_ms: 5_000,
-            max_response_body_bytes: 1024 * 1024, // 1 MiB
-            max_request_body_bytes: 1024 * 1024,  // 1 MiB
+            max_timeout_ms: DSL_DEFAULT_HTTP_MAX_TIMEOUT_MS,
+            max_response_body_bytes: DSL_DEFAULT_HTTP_MAX_RESPONSE_BODY_BYTES,
+            max_request_body_bytes: DSL_DEFAULT_HTTP_MAX_REQUEST_BODY_BYTES,
             block_private_ips: false,
             redis_links: HashMap::new(),
             rate_limits: DslRateLimits::default(),
-            max_body_scan_passes: 4,
+            max_body_scan_passes: DSL_DEFAULT_MAX_BODY_SCAN_PASSES,
         }
     }
 }

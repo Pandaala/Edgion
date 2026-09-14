@@ -25,7 +25,12 @@ EdgionDSL 的沙盒设计遵循以下核心原则：
 | 最大函数调用次数 | `maxCallCount` | 500 | 1 | 100,000 | 内置函数调用总数 |
 | 最大栈深度 | `maxStackDepth` | 128 | 1 | 1,024 | 值栈深度 |
 | 最大字符串长度 | `maxStringLen` | 8,192 | 1 | 1,048,576 | 运行时字符串及单次 Body.read 请求的最大字节数 |
+| 动态 List 长度 | `maxListLen` | 1,024 | 1 | 16,384 | 受此限制控制的动态 List 构造可产生的最大元素数 |
+| 动态 Map 大小 | `maxMapSize` | 512 | 1 | 4,096 | 受此限制控制的动态 Map 构造和投影可产生的最大条目数 |
 | 最大 body 扫描次数 | `maxBodyScanPasses` | 4 | 1 | 16 | 累计扫描原始字节预算，以解析后的物理请求 body 上限计 |
+| HTTP 调用超时 | `httpMaxTimeoutMs` | 5,000 毫秒 | 1 毫秒 | 60,000 毫秒 | 单次出站调用的最大墙钟超时 |
+| HTTP 请求 Body | `httpMaxRequestBodyBytes` | 1 MiB | 1 字节 | 32 MiB | 单次出站调用可发送的不透明请求 Body 上限 |
+| HTTP 响应体 | `httpMaxResponseBodyBytes` | 1 MiB | 1 字节 | 1 MiB | 单次出站调用可保留的响应字节上限 |
 
 ### 各限制详细说明
 
@@ -75,6 +80,17 @@ early-exit 谓词或文本超限读取在最终 chunk 开头停止，也可能�
 `req.body.md5()` 和 `req.body.hmac_sha256(key)` 不缓存，每次调用都消耗实际扫描
 字节。MD5 仅用于遗留兼容，包括 FIPS build。Body HMAC 不新增持久 key/MAC 缓存，
 并且只用于生成，不用于入站验证：普通 DSL 相等比较不是 constant-time。
+
+`maxListLen` 和 `maxMapSize` 限制运行时集合构造，包括字符串拆分、响应头投影和
+Redis hash 投影。零值不是关闭开关：每个运行时限制都必须至少为一。
+即使 `maxMapSize` 更小，固定三字段的 HTTP 顶层结果 Map 和 Redis 结果 envelope
+仍保留其文档定义的 schema；五字段 `redis.rate_limit` decision 仍要求
+`maxMapSize >= 5`。header-name API 继续使用独立的 256 项硬上限，而不使用
+`maxListLen`。
+
+三个 `httpMax*` 字段限制一次独立的出站交换。超时复用统一的 60 秒出站上限；
+响应保留不能超过 1 MiB，并继续受 `maxStringLen` 的更严格限制；不透明请求 Body
+上传继续受网关物理请求 body 上限的更严格限制。
 
 ### 配置示例
 

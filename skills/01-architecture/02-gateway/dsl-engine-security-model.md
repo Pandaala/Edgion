@@ -25,7 +25,7 @@ The compile-time layers (parser, validator, compiler, bytecode loader) now live 
 | Body operation layer | runtime | cumulative scan bytes, physical body cap, bounded returned strings, mutation ranges and segment count | `lang/body_ops.rs`, `lang/body_scan_budget.rs`, `lang/body_scanners.rs`, `request_body/operation.rs` |
 | Panic isolation | the whole `execute` | catches everything else | `lang/vm.rs` → `execute_safe` (`AssertUnwindSafe + catch_unwind`); see `dsl-engine.md` §5 |
 
-**Gateway validation is independent of Controller acceptance.** Config sync may carry inline source, pre-compiled bytecode, or both serialized `DslConfig` fields (bytecode wins). Controller validation does not convert the resource to bytecode-only transport. Gateway `DslConfig::compile_and_validate` → `edgion_dsl::resolve_script` parses/compiles/validates selected source, or decodes and re-validates selected bytecode through `Validator` before VM initialization. Hand-crafted bytecode cannot bypass that check by having passed Controller admission. `Vm::new` is a separate Gateway-owned initialization step, not a replacement for static validation. See [the current data flow](dsl-engine.md#1-data-flow).
+**Gateway validation is independent of Controller acceptance.** Config sync may carry inline source, pre-compiled bytecode, or both serialized `DslConfig` fields (bytecode wins). Controller validation does not convert the resource to bytecode-only transport. Gateway `DslConfig::compile_and_validate` first applies the resource-owned runtime-limit range contract, then `edgion_dsl::resolve_script` parses/compiles/validates selected source, or decodes and re-validates selected bytecode through `Validator` before VM initialization. Hand-crafted bytecode or an out-of-range runtime scalar cannot bypass those checks by having passed Controller admission. `Vm::new` is a separate Gateway-owned initialization step, not a replacement for static validation. See [the current data flow](dsl-engine.md#1-data-flow).
 
 ## 2. Runtime limit enforcement — source map
 
@@ -40,6 +40,14 @@ These are the `VmLimits` fields and where every breach is raised. **When adding 
 | `max_string_len` | 8_192 | concat and regex results, every checked builtin return, and `http.call` response body plus each retained response-header name/value; HTTP response-limit breaches return the existing status-zero failure map |
 | `max_list_len` | 1_024 | List construction lives entirely in builtins — `builtins.rs:510-549` (`split` pre-allocation estimate, `range` with `hard_cap = max_list_len.min(1000)`); also bounds `req.header_names` / `resp.header_names` via their own hard 256 cap (predates Point 02) |
 | `max_map_size` | 512 | `vm.rs` `MakeMap`, `http.call` response-header retained-prefix traversal, `redis.hgetall` rejection, and the compile-time `MakeMap(n)` operand check in `edgion-dsl` |
+
+`DslConfig::resolve_runtime_limits` owns the defaults and accepted ranges for
+these fields: steps `1..=1_000_000`, loop iterations and calls
+`1..=100_000`, stack depth `1..=1_024`, string bytes `1..=1_048_576`, List
+elements `1..=16_384`, and Map entries `1..=4_096`. It also resolves the
+non-VM scan and HTTP limits described below. Both Controller validation and
+the standalone Gateway request/response factories call this contract; zero is
+invalid for every limit.
 
 Each entered loop emits one `LoopInit` and reaches exactly one matching
 `LoopEnd` on natural exhaustion or `break`. The compiler patches `break` to
@@ -60,8 +68,18 @@ fetched raw chunks, not decoded bytes or the exact match position. A bounded
 text-overflow result settles its fetched bytes before becoming `StringTooLong`;
 storage failures without accounting retain the conservative reservation.
 
+The outbound exchange limits are resolved by the same resource contract:
+`httpMaxTimeoutMs` is `1..=60_000` and reuses the shared outbound timeout
+ceiling; `httpMaxRequestBodyBytes` is `1..=32 MiB`; and
+`httpMaxResponseBodyBytes` is `1..=1 MiB`. The response cap remains further
+limited by `max_string_len`, and the opaque request Body remains further
+limited by the gateway physical request-body cap.
+
 Adding a new runtime limit requires:
-1. Field + default in `VmLimits` (`vm.rs:34-95`).
+
+1. Field, default, and range in the resource-owned
+   `DslConfig::resolve_runtime_limits` contract, plus the consuming `VmLimits`
+   or `DslRuntime` field.
 2. Mirror the compile-time portion in `edgion-dsl/src/validator.rs` `Limits` if the bytecode can declare the value statically (`MakeMap(n)` is the model).
 3. Raise the matching `RuntimeError` variant from every code path that can blow the cap.
 4. Extend the user docs in `docs/en/.../dsl/sandbox-security.md` (and the zh-CN mirror).

@@ -77,10 +77,16 @@ The language core (parser, AST, compiler, bytecode, errors, value, validator) li
 Both factories call `resolve_parts()`, which:
 
 1. Calls `config.compile_and_validate()` (`edgion-resources`, backed by the `edgion-dsl` crate) — the single source of truth for the static validation pipeline, in order:
+   - Validate the plugin name, require `source` or `bytecode`, resolve every
+     runtime-limit default/range through `DslConfig::resolve_runtime_limits()`,
+     and validate the error-policy status.
    - `edgion_dsl::resolve_script()` — prefers pre-compiled `bytecode` over inline `source`. Source is compiled via `compile_dsl_source()`. Bytecode is re-validated through `Validator` after `CompiledScript::deserialize_base64`.
-   - `DslConfig::validate()` for static config sanity (limits, errorPolicy enum, etc.).
+   - Reject the unsupported proxied response-body API, then run
+     `DslConfig::validate()` for LinkSys and Redis policy sanity.
    - `edgion_dsl::check_redis_link_names()` — a best-effort bytecode scan that rejects `redis.*` calls whose first-arg link name is not in `linkSysRefs`. False-positive / false-negative limitations are documented inline in `edgion-dsl/src/script.rs`; runtime `ok=false` is the fallback.
-2. Builds `VmLimits` and `DslRuntime` from the config and constructs the `Vm`.
+2. Reuses the validated, default-resolved values from
+   `DslConfig::resolve_runtime_limits()` to build `VmLimits` and `DslRuntime`,
+   then constructs the `Vm`.
 
 A static request-stage reference to `req.body` registers the fixed fail-close
 body gate so capture is available before VM execution. The VM receives only an

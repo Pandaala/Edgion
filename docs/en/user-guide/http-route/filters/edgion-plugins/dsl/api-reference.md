@@ -1653,9 +1653,9 @@ fail-close `BodyAccess` error.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `httpMaxTimeoutMs` | Integer | `5000` | Hard cap on per-call timeout (ms) |
+| `httpMaxTimeoutMs` | Integer | `5000` | Hard cap on per-call timeout (`1`–`60000` ms) |
 | `httpMaxRequestBodyBytes` | Integer | `1048576` | Maximum opaque `Body` request size; range `1`–`33554432`, further capped by the gateway physical request-body limit |
-| `httpMaxResponseBodyBytes` | Integer | `1048576` | Maximum response body size (bytes); the complete call fails if exceeded |
+| `httpMaxResponseBodyBytes` | Integer | `1048576` | Maximum response body size; range `1`–`1048576` bytes, and the complete call fails if exceeded |
 | `httpBlockPrivateIps` | Boolean | `false` | Block outbound calls to private/loopback/link-local/unspecified IP addresses, including hostname results checked at dial time |
 
 **Example — call a health endpoint and branch on status**:

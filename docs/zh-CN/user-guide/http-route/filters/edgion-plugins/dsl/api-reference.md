@@ -1618,9 +1618,9 @@ if values["id"] != nil {
 
 | 字段 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `httpMaxTimeoutMs` | Integer | `5000` | 单次调用超时上限（毫秒） |
+| `httpMaxTimeoutMs` | Integer | `5000` | 单次调用超时上限（`1`–`60000` 毫秒） |
 | `httpMaxRequestBodyBytes` | Integer | `1048576` | 不透明 `Body` 请求最大字节数，范围 `1`–`33554432`，并进一步受网关物理请求 body 上限约束 |
-| `httpMaxResponseBodyBytes` | Integer | `1048576` | 响应体最大字节数；超出时整个调用失败 |
+| `httpMaxResponseBodyBytes` | Integer | `1048576` | 响应体最大字节数；范围 `1`–`1048576`，超出时整个调用失败 |
 | `httpBlockPrivateIps` | Boolean | `false` | 拦截对私有/回环/链路本地/未指定 IP 的出站调用，包括在连接时检查域名解析结果 |
 
 **示例 — 调用健康检查端点并根据状态分支**：

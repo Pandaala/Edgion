@@ -11,10 +11,61 @@ use serde::{Deserialize, Serialize};
 use super::rate_limit_redis::RateLimitAlgorithm;
 use crate::duration::parse_duration;
 use crate::redis_rate_limit::validate_rate_limit_policy;
+use crate::resources::common::external_http::MAX_OUTBOUND_TIMEOUT_MS;
 use edgion_dsl::bytecode::BuiltinId;
 
 use crate::resources::edgion_plugins::plugin_configs::LinkSysRef;
 use crate::resources::edgion_plugins::PluginValidation;
+
+pub const DSL_DEFAULT_MAX_STEPS: u32 = 10_000;
+pub const DSL_MAX_STEPS: u32 = 1_000_000;
+pub const DSL_DEFAULT_MAX_LOOP_ITERATIONS: u32 = 100;
+pub const DSL_MAX_LOOP_ITERATIONS: u32 = 100_000;
+pub const DSL_DEFAULT_MAX_CALL_COUNT: u32 = 500;
+pub const DSL_MAX_CALL_COUNT: u32 = 100_000;
+pub const DSL_DEFAULT_MAX_STACK_DEPTH: usize = 128;
+pub const DSL_MAX_STACK_DEPTH: usize = 1_024;
+pub const DSL_DEFAULT_MAX_STRING_LEN: usize = 8_192;
+pub const DSL_MAX_STRING_LEN: usize = 1_048_576;
+pub const DSL_DEFAULT_MAX_LIST_LEN: usize = 1_024;
+pub const DSL_MAX_LIST_LEN: usize = 16_384;
+pub const DSL_DEFAULT_MAX_MAP_SIZE: usize = 512;
+pub const DSL_MAX_MAP_SIZE: usize = 4_096;
+pub const DSL_DEFAULT_MAX_BODY_SCAN_PASSES: u8 = 4;
+pub const DSL_MAX_BODY_SCAN_PASSES: u8 = 16;
+pub const DSL_DEFAULT_HTTP_MAX_TIMEOUT_MS: u64 = 5_000;
+pub const DSL_DEFAULT_HTTP_MAX_RESPONSE_BODY_BYTES: usize = 1_048_576;
+pub const DSL_MAX_HTTP_RESPONSE_BODY_BYTES: usize = 1_048_576;
+pub const DSL_DEFAULT_HTTP_MAX_REQUEST_BODY_BYTES: usize = 1_048_576;
+pub const DSL_MAX_HTTP_REQUEST_BODY_BYTES: usize = 33_554_432;
+
+/// Validated, default-resolved runtime limits shared by Controller validation
+/// and every Gateway DSL factory.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ResolvedDslRuntimeLimits {
+    pub max_steps: u32,
+    pub max_loop_iterations: u32,
+    pub max_call_count: u32,
+    pub max_stack_depth: usize,
+    pub max_string_len: usize,
+    pub max_list_len: usize,
+    pub max_map_size: usize,
+    pub max_body_scan_passes: u8,
+    pub http_max_timeout_ms: u64,
+    pub http_max_response_body_bytes: usize,
+    pub http_max_request_body_bytes: usize,
+}
+
+fn resolve_limit<T>(value: Option<T>, default: T, max: T, field: &str) -> Result<T, String>
+where
+    T: Copy + Ord + std::fmt::Display + From<u8>,
+{
+    let value = value.unwrap_or(default);
+    if value < T::from(1) || value > max {
+        return Err(format!("{field} must be between 1 and {max}"));
+    }
+    Ok(value)
+}
 
 /// A load-time Redis policy selected by `redis.rate_limit(link, policy, key, cost)`.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -118,19 +169,19 @@ pub struct DslConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bytecode: Option<String>,
 
-    /// Max VM instructions per execution (default: 10000)
+    /// Max VM instructions per execution (default: 10000; range: 1..=1000000)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_steps: Option<u32>,
 
-    /// Max loop iterations per loop (default: 100)
+    /// Max loop iterations per loop (default: 100; range: 1..=100000)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_loop_iterations: Option<u32>,
 
-    /// Max builtin API calls per execution (default: 500)
+    /// Max builtin API calls per execution (default: 500; range: 1..=100000)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_call_count: Option<u32>,
 
-    /// Max value stack depth (default: 128)
+    /// Max value stack depth (default: 128; range: 1..=1024)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_stack_depth: Option<usize>,
 
@@ -139,15 +190,15 @@ pub struct DslConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_string_len: Option<usize>,
 
-    /// Max number of elements in a List value (default: 1024)
+    /// Max number of elements in a List value (default: 1024; range: 1..=16384)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_list_len: Option<usize>,
 
-    /// Max number of entries in a Map value (default: 512)
+    /// Max number of entries in a Map value (default: 512; range: 1..=4096)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_map_size: Option<usize>,
 
-    /// Maximum cumulative full-body scan passes per execution (default: 4).
+    /// Maximum cumulative full-body scan passes per execution (default: 4; range: 1..=16).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_body_scan_passes: Option<u8>,
 
@@ -155,15 +206,15 @@ pub struct DslConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error_policy: Option<DslErrorPolicy>,
 
-    /// Max timeout for http.call in milliseconds (default: 5000, hard ceiling)
+    /// Max timeout for http.call in milliseconds (default: 5000; range: 1..=60000)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub http_max_timeout_ms: Option<u64>,
 
-    /// Max response body size for http.call in bytes (default: 1048576 = 1 MB)
+    /// Max response body size for http.call in bytes (default and maximum: 1048576 = 1 MiB)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub http_max_response_body_bytes: Option<usize>,
 
-    /// Max request body size for http.call in bytes (default: 1048576 = 1 MiB)
+    /// Max request body size for http.call in bytes (default: 1048576; range: 1..=33554432)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub http_max_request_body_bytes: Option<usize>,
 
@@ -197,6 +248,73 @@ impl DslConfig {
             ));
         }
         Ok(())
+    }
+
+    /// Validate and resolve every top-level runtime resource limit.
+    pub fn resolve_runtime_limits(&self) -> Result<ResolvedDslRuntimeLimits, String> {
+        Ok(ResolvedDslRuntimeLimits {
+            max_steps: resolve_limit(self.max_steps, DSL_DEFAULT_MAX_STEPS, DSL_MAX_STEPS, "maxSteps")?,
+            max_loop_iterations: resolve_limit(
+                self.max_loop_iterations,
+                DSL_DEFAULT_MAX_LOOP_ITERATIONS,
+                DSL_MAX_LOOP_ITERATIONS,
+                "maxLoopIterations",
+            )?,
+            max_call_count: resolve_limit(
+                self.max_call_count,
+                DSL_DEFAULT_MAX_CALL_COUNT,
+                DSL_MAX_CALL_COUNT,
+                "maxCallCount",
+            )?,
+            max_stack_depth: resolve_limit(
+                self.max_stack_depth,
+                DSL_DEFAULT_MAX_STACK_DEPTH,
+                DSL_MAX_STACK_DEPTH,
+                "maxStackDepth",
+            )?,
+            max_string_len: resolve_limit(
+                self.max_string_len,
+                DSL_DEFAULT_MAX_STRING_LEN,
+                DSL_MAX_STRING_LEN,
+                "maxStringLen",
+            )?,
+            max_list_len: resolve_limit(
+                self.max_list_len,
+                DSL_DEFAULT_MAX_LIST_LEN,
+                DSL_MAX_LIST_LEN,
+                "maxListLen",
+            )?,
+            max_map_size: resolve_limit(
+                self.max_map_size,
+                DSL_DEFAULT_MAX_MAP_SIZE,
+                DSL_MAX_MAP_SIZE,
+                "maxMapSize",
+            )?,
+            max_body_scan_passes: resolve_limit(
+                self.max_body_scan_passes,
+                DSL_DEFAULT_MAX_BODY_SCAN_PASSES,
+                DSL_MAX_BODY_SCAN_PASSES,
+                "maxBodyScanPasses",
+            )?,
+            http_max_timeout_ms: resolve_limit(
+                self.http_max_timeout_ms,
+                DSL_DEFAULT_HTTP_MAX_TIMEOUT_MS,
+                MAX_OUTBOUND_TIMEOUT_MS,
+                "httpMaxTimeoutMs",
+            )?,
+            http_max_response_body_bytes: resolve_limit(
+                self.http_max_response_body_bytes,
+                DSL_DEFAULT_HTTP_MAX_RESPONSE_BODY_BYTES,
+                DSL_MAX_HTTP_RESPONSE_BODY_BYTES,
+                "httpMaxResponseBodyBytes",
+            )?,
+            http_max_request_body_bytes: resolve_limit(
+                self.http_max_request_body_bytes,
+                DSL_DEFAULT_HTTP_MAX_REQUEST_BODY_BYTES,
+                DSL_MAX_HTTP_REQUEST_BODY_BYTES,
+                "httpMaxRequestBodyBytes",
+            )?,
+        })
     }
 
     /// Validate linkSysRefs: names must be unique and contain only [a-z0-9_-].
@@ -241,18 +359,26 @@ impl DslConfig {
     /// the one failure that cannot be predicted statically and is covered by
     /// the data-plane seal backstop.
     ///
-    /// The name is checked first because it must fit the runtime log identity.
-    /// For valid names, check order mirrors the original gateway
-    /// `validate_config`: resolve the script (compile `source` /
-    /// deserialize+validate `bytecode`) first, then the linkSysRefs format
-    /// check, then the redis link-name scan — so a dual-fault config reports
-    /// the compile error. Returns the validated `CompiledScript` so data-plane
-    /// callers can reuse it without paying for a second compile/deserialize
-    /// cycle.
+    /// The deterministic order is name, script presence, runtime-limit ranges,
+    /// error-policy status, script resolution, response-body prohibition,
+    /// LinkSys/policy validation, then the Redis link-name scan. A compile
+    /// error therefore wins over a LinkSys format error, while a runtime-limit
+    /// error wins over a compile error. Returns the validated `CompiledScript`
+    /// so data-plane callers can reuse it without paying for a second
+    /// compile/deserialize cycle.
     pub fn compile_and_validate(&self) -> Result<edgion_dsl::bytecode::CompiledScript, String> {
         self.validate_name()?;
+        if self.source.is_none() && self.bytecode.is_none() {
+            return Err("either source or bytecode must be provided".to_string());
+        }
+        let runtime_limits = self.resolve_runtime_limits()?;
+        if let Some(DslErrorPolicy::DenyWith { status, .. }) = &self.error_policy {
+            if !crate::http_status::is_valid_final_http_status(*status) {
+                return Err("errorPolicy denyWith status must be between 200 and 599".to_string());
+            }
+        }
         let val_limits = edgion_dsl::validator::ValidationLimits {
-            max_map_size: self.max_map_size.unwrap_or(512),
+            max_map_size: runtime_limits.max_map_size,
             ..Default::default()
         };
         let script = edgion_dsl::resolve_script(self.source.as_deref(), self.bytecode.as_deref(), &val_limits)?;
@@ -327,56 +453,6 @@ impl PluginValidation for DslConfig {
     /// init (`Vm::new`) is the one remaining gateway-only failure — it cannot
     /// be predicted statically and is covered by the data-plane seal backstop.
     fn validation_error(&self) -> Option<String> {
-        if let Err(error) = self.validate_name() {
-            return Some(error);
-        }
-        if self.source.is_none() && self.bytecode.is_none() {
-            return Some("either source or bytecode must be provided".to_string());
-        }
-        if let Some(steps) = self.max_steps {
-            if steps == 0 || steps > 1_000_000 {
-                return Some("maxSteps must be between 1 and 1000000".to_string());
-            }
-        }
-        if let Some(loop_iter) = self.max_loop_iterations {
-            if loop_iter == 0 || loop_iter > 100_000 {
-                return Some("maxLoopIterations must be between 1 and 100000".to_string());
-            }
-        }
-        if let Some(calls) = self.max_call_count {
-            if calls == 0 || calls > 100_000 {
-                return Some("maxCallCount must be between 1 and 100000".to_string());
-            }
-        }
-        if let Some(depth) = self.max_stack_depth {
-            if depth == 0 || depth > 1024 {
-                return Some("maxStackDepth must be between 1 and 1024".to_string());
-            }
-        }
-        if let Some(len) = self.max_string_len {
-            if len == 0 || len > 1_048_576 {
-                return Some("maxStringLen must be between 1 and 1048576".to_string());
-            }
-        }
-        if let Some(passes) = self.max_body_scan_passes {
-            if !(1..=16).contains(&passes) {
-                return Some("maxBodyScanPasses must be between 1 and 16".to_string());
-            }
-        }
-        if let Some(bytes) = self.http_max_request_body_bytes {
-            if !(1..=33_554_432).contains(&bytes) {
-                return Some("httpMaxRequestBodyBytes must be between 1 and 33554432".to_string());
-            }
-        }
-        if let Some(DslErrorPolicy::DenyWith { status, .. }) = &self.error_policy {
-            if !crate::http_status::is_valid_final_http_status(*status) {
-                return Some("errorPolicy denyWith status must be between 200 and 599".to_string());
-            }
-        }
-        // Deep static checks last. `compile_and_validate` preserves the
-        // gateway error priority (compile error wins over a linkSysRefs error
-        // on a dual-fault config), so running it after the light checks keeps
-        // the combined ordering identical to the gateway's.
         self.compile_and_validate().err()
     }
 }
@@ -384,6 +460,15 @@ impl PluginValidation for DslConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn config_with_limit(field: &str, value: u64) -> DslConfig {
+        let mut config = serde_json::json!({
+            "name": "limits",
+            "source": "return next()"
+        });
+        config[field] = serde_json::json!(value);
+        serde_json::from_value(config).unwrap()
+    }
 
     #[test]
     fn validation_error_passes_for_valid_config() {
@@ -395,6 +480,121 @@ mod tests {
         };
         // Full pipeline — the trivial script compiles, so no error.
         assert_eq!(config.validation_error(), None);
+    }
+
+    #[test]
+    fn runtime_limit_defaults_are_resolved_by_the_resource_contract() {
+        let limits = DslConfig::default().resolve_runtime_limits().unwrap();
+        assert_eq!(limits.max_steps, DSL_DEFAULT_MAX_STEPS);
+        assert_eq!(limits.max_loop_iterations, DSL_DEFAULT_MAX_LOOP_ITERATIONS);
+        assert_eq!(limits.max_call_count, DSL_DEFAULT_MAX_CALL_COUNT);
+        assert_eq!(limits.max_stack_depth, DSL_DEFAULT_MAX_STACK_DEPTH);
+        assert_eq!(limits.max_string_len, DSL_DEFAULT_MAX_STRING_LEN);
+        assert_eq!(limits.max_list_len, DSL_DEFAULT_MAX_LIST_LEN);
+        assert_eq!(limits.max_map_size, DSL_DEFAULT_MAX_MAP_SIZE);
+        assert_eq!(limits.max_body_scan_passes, DSL_DEFAULT_MAX_BODY_SCAN_PASSES);
+        assert_eq!(limits.http_max_timeout_ms, DSL_DEFAULT_HTTP_MAX_TIMEOUT_MS);
+        assert_eq!(
+            limits.http_max_response_body_bytes,
+            DSL_DEFAULT_HTTP_MAX_RESPONSE_BODY_BYTES
+        );
+        assert_eq!(
+            limits.http_max_request_body_bytes,
+            DSL_DEFAULT_HTTP_MAX_REQUEST_BODY_BYTES
+        );
+    }
+
+    #[test]
+    fn runtime_limit_contract_accepts_exact_minimum_and_maximum() {
+        for (field, max) in [
+            ("maxSteps", u64::from(DSL_MAX_STEPS)),
+            ("maxLoopIterations", u64::from(DSL_MAX_LOOP_ITERATIONS)),
+            ("maxCallCount", u64::from(DSL_MAX_CALL_COUNT)),
+            ("maxStackDepth", DSL_MAX_STACK_DEPTH as u64),
+            ("maxStringLen", DSL_MAX_STRING_LEN as u64),
+            ("maxListLen", DSL_MAX_LIST_LEN as u64),
+            ("maxMapSize", DSL_MAX_MAP_SIZE as u64),
+            ("maxBodyScanPasses", u64::from(DSL_MAX_BODY_SCAN_PASSES)),
+            ("httpMaxTimeoutMs", MAX_OUTBOUND_TIMEOUT_MS),
+            ("httpMaxResponseBodyBytes", DSL_MAX_HTTP_RESPONSE_BODY_BYTES as u64),
+            ("httpMaxRequestBodyBytes", DSL_MAX_HTTP_REQUEST_BODY_BYTES as u64),
+        ] {
+            for value in [1, max] {
+                let config = config_with_limit(field, value);
+                assert!(config.resolve_runtime_limits().is_ok(), "rejected {field}={value}");
+                assert_eq!(config.validation_error(), None, "rejected {field}={value}");
+                assert!(config.compile_and_validate().is_ok(), "rejected {field}={value}");
+            }
+        }
+    }
+
+    #[test]
+    fn runtime_limit_contract_rejects_zero_and_above_maximum() {
+        for (field, max) in [
+            ("maxSteps", u64::from(DSL_MAX_STEPS)),
+            ("maxLoopIterations", u64::from(DSL_MAX_LOOP_ITERATIONS)),
+            ("maxCallCount", u64::from(DSL_MAX_CALL_COUNT)),
+            ("maxStackDepth", DSL_MAX_STACK_DEPTH as u64),
+            ("maxStringLen", DSL_MAX_STRING_LEN as u64),
+            ("maxListLen", DSL_MAX_LIST_LEN as u64),
+            ("maxMapSize", DSL_MAX_MAP_SIZE as u64),
+            ("maxBodyScanPasses", u64::from(DSL_MAX_BODY_SCAN_PASSES)),
+            ("httpMaxTimeoutMs", MAX_OUTBOUND_TIMEOUT_MS),
+            ("httpMaxResponseBodyBytes", DSL_MAX_HTTP_RESPONSE_BODY_BYTES as u64),
+            ("httpMaxRequestBodyBytes", DSL_MAX_HTTP_REQUEST_BODY_BYTES as u64),
+        ] {
+            for value in [0, max + 1] {
+                let config = config_with_limit(field, value);
+                let expected = format!("{field} must be between 1 and {max}");
+                assert_eq!(config.resolve_runtime_limits().unwrap_err(), expected);
+                assert_eq!(config.validation_error(), Some(expected.clone()));
+                assert_eq!(config.compile_and_validate().unwrap_err(), expected);
+            }
+        }
+    }
+
+    #[test]
+    fn runtime_limit_contract_rejects_u64_max_timeout_without_overflow() {
+        let config = config_with_limit("httpMaxTimeoutMs", u64::MAX);
+        assert_eq!(
+            config.compile_and_validate().unwrap_err(),
+            format!("httpMaxTimeoutMs must be between 1 and {MAX_OUTBOUND_TIMEOUT_MS}")
+        );
+    }
+
+    #[test]
+    fn missing_script_precedes_runtime_limit_error() {
+        let config = DslConfig {
+            name: "dual".to_string(),
+            max_steps: Some(0),
+            ..Default::default()
+        };
+        assert_eq!(
+            config.validation_error(),
+            Some("either source or bytecode must be provided".to_string())
+        );
+        assert_eq!(
+            config.compile_and_validate().unwrap_err(),
+            "either source or bytecode must be provided"
+        );
+    }
+
+    #[test]
+    fn runtime_limit_error_precedes_compile_error() {
+        let config = DslConfig {
+            name: "dual".to_string(),
+            source: Some("this is not valid dsl @@@".to_string()),
+            max_steps: Some(0),
+            ..Default::default()
+        };
+        assert_eq!(
+            config.validation_error(),
+            Some("maxSteps must be between 1 and 1000000".to_string())
+        );
+        assert_eq!(
+            config.compile_and_validate().unwrap_err(),
+            "maxSteps must be between 1 and 1000000"
+        );
     }
 
     #[test]

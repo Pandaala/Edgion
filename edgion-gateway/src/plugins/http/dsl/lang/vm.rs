@@ -32,6 +32,10 @@ use crate::plugins::http::common::{replace_all_bounded, BoundedRegexReplacementE
 use crate::plugins::runtime::{DyeOutcome, PluginLog, PluginSession};
 use crate::request_body::{BodyTextOperation, LossyTextScanner, TextBodyScanner};
 use edgion_resources::filters::PluginRunningResult;
+use edgion_resources::resources::edgion_plugins::plugin_configs::dsl::{
+    DSL_DEFAULT_MAX_CALL_COUNT, DSL_DEFAULT_MAX_LIST_LEN, DSL_DEFAULT_MAX_LOOP_ITERATIONS, DSL_DEFAULT_MAX_MAP_SIZE,
+    DSL_DEFAULT_MAX_STACK_DEPTH, DSL_DEFAULT_MAX_STEPS, DSL_DEFAULT_MAX_STRING_LEN,
+};
 
 use super::super::runtime::DslRuntime;
 use super::body_ops::{body_access_error, expect_body, map_body_error, DslBodyOps};
@@ -122,37 +126,37 @@ pub struct VmLimits {
 }
 
 fn default_max_steps() -> u32 {
-    10_000
+    DSL_DEFAULT_MAX_STEPS
 }
 fn default_max_loop_iterations() -> u32 {
-    100
+    DSL_DEFAULT_MAX_LOOP_ITERATIONS
 }
 fn default_max_call_count() -> u32 {
-    500
+    DSL_DEFAULT_MAX_CALL_COUNT
 }
 fn default_max_stack_depth() -> usize {
-    128
+    DSL_DEFAULT_MAX_STACK_DEPTH
 }
 fn default_max_string_len() -> usize {
-    8192
+    DSL_DEFAULT_MAX_STRING_LEN
 }
 fn default_max_list_len() -> usize {
-    1024
+    DSL_DEFAULT_MAX_LIST_LEN
 }
 fn default_max_map_size() -> usize {
-    512
+    DSL_DEFAULT_MAX_MAP_SIZE
 }
 
 impl Default for VmLimits {
     fn default() -> Self {
         Self {
-            max_steps: 10_000,
-            max_loop_iterations: 100,
-            max_call_count: 500,
-            max_stack_depth: 128,
-            max_string_len: 8192,
-            max_list_len: 1024,
-            max_map_size: 512,
+            max_steps: DSL_DEFAULT_MAX_STEPS,
+            max_loop_iterations: DSL_DEFAULT_MAX_LOOP_ITERATIONS,
+            max_call_count: DSL_DEFAULT_MAX_CALL_COUNT,
+            max_stack_depth: DSL_DEFAULT_MAX_STACK_DEPTH,
+            max_string_len: DSL_DEFAULT_MAX_STRING_LEN,
+            max_list_len: DSL_DEFAULT_MAX_LIST_LEN,
+            max_map_size: DSL_DEFAULT_MAX_MAP_SIZE,
         }
     }
 }

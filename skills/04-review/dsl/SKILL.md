@@ -25,6 +25,8 @@ before applying a decision to current code.
 
 ## Regression guards
 
+- [DSL runtime-limit scalars use one resource-owned contract](regression-guards/runtime-limit-scalar-contract.md)
+
 - [Request methods preserve case](regression-guards/request-method-case-contract.md)
 
 - [Terminate uses an explicit local response](regression-guards/terminate-explicit-local-response.md)

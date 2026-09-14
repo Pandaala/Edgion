@@ -47,16 +47,18 @@ spec:
 | `name` | String | **Required** | Script name (used for logging and debugging); 1–36 UTF-8 bytes |
 | `source` | String | **Required** (or `bytecode`) | DSL source code |
 | `bytecode` | String | **Required** (or `source`) | Pre-compiled bytecode (Base64) |
-| `maxSteps` | Integer | `10000` | Maximum execution steps |
-| `maxLoopIterations` | Integer | `100` | Maximum loop iterations |
-| `maxCallCount` | Integer | `500` | Maximum function call count |
-| `maxStackDepth` | Integer | `128` | Maximum stack depth |
+| `maxSteps` | Integer | `10000` | Maximum execution steps (`1`–`1000000`) |
+| `maxLoopIterations` | Integer | `100` | Maximum loop iterations (`1`–`100000`) |
+| `maxCallCount` | Integer | `500` | Maximum function call count (`1`–`100000`) |
+| `maxStackDepth` | Integer | `128` | Maximum stack depth (`1`–`1024`) |
 | `maxStringLen` | Integer | `8192` | Maximum runtime string bytes and raw bytes requested per Body.read call (1–1,048,576) |
+| `maxListLen` | Integer | `1024` | Maximum elements produced by dynamic List constructors such as `split` (`1`–`16384`); APIs with independent hard caps keep those caps |
+| `maxMapSize` | Integer | `512` | Maximum entries produced by dynamic Map constructors and projections (`1`–`4096`); fixed three-field HTTP/Redis result envelopes keep their schema, while `redis.rate_limit` decisions require at least `5` |
 | `maxBodyScanPasses` | Integer | `4` | Cumulative request-body scan budget, measured in physical-body-cap passes (`1`–`16`) |
 | `errorPolicy` | Enum | `Ignore` | Error policy. Allowed values: `Ignore` / `Deny` / `DenyWith` |
-| `httpMaxTimeoutMs` | Integer | `5000` | Hard cap on `http.call()` timeout per request (ms) |
+| `httpMaxTimeoutMs` | Integer | `5000` | Hard cap on `http.call()` timeout per request (`1`–`60000` ms) |
 | `httpMaxRequestBodyBytes` | Integer | `1048576` | Maximum opaque `Body` sent by `http.call()` (`1`–`33554432` bytes; also capped by the gateway physical request-body limit) |
-| `httpMaxResponseBodyBytes` | Integer | `1048576` | Maximum `http.call()` response body size (bytes) |
+| `httpMaxResponseBodyBytes` | Integer | `1048576` | Maximum `http.call()` response body size (`1`–`1048576` bytes) |
 | `httpBlockPrivateIps` | Boolean | `false` | Block `http.call()` to private/loopback/link-local IPs |
 | `linkSysRefs` | Array\<Object\> | `[]` | List of LinkSys Redis resources. **Required** if any `redis.*` builtin appears in the script. Each `name` is the alias used as the first arg to `redis.*` calls |
 

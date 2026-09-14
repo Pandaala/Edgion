@@ -51,15 +51,16 @@ impl DslPlugin {
     /// returns rather than running the same pipeline a second time.
     fn resolve_parts(config: &DslConfig) -> Result<(CompiledScript, VmLimits, DslErrorPolicy, DslRuntime), String> {
         let script = config.compile_and_validate()?;
+        let resolved = config.resolve_runtime_limits()?;
 
         let limits = VmLimits {
-            max_steps: config.max_steps.unwrap_or(10_000),
-            max_loop_iterations: config.max_loop_iterations.unwrap_or(100),
-            max_call_count: config.max_call_count.unwrap_or(500),
-            max_stack_depth: config.max_stack_depth.unwrap_or(128),
-            max_string_len: config.max_string_len.unwrap_or(8192),
-            max_list_len: config.max_list_len.unwrap_or(1024),
-            max_map_size: config.max_map_size.unwrap_or(512),
+            max_steps: resolved.max_steps,
+            max_loop_iterations: resolved.max_loop_iterations,
+            max_call_count: resolved.max_call_count,
+            max_stack_depth: resolved.max_stack_depth,
+            max_string_len: resolved.max_string_len,
+            max_list_len: resolved.max_list_len,
+            max_map_size: resolved.max_map_size,
         };
         let policy = config.error_policy.clone().unwrap_or_default();
         let redis_links: HashMap<String, String> = config
@@ -68,13 +69,13 @@ impl DslPlugin {
             .map(|r| (r.name.clone(), format!("{}/{}", r.namespace, r.name)))
             .collect();
         let runtime = DslRuntime {
-            max_timeout_ms: config.http_max_timeout_ms.unwrap_or(5_000),
-            max_response_body_bytes: config.http_max_response_body_bytes.unwrap_or(1024 * 1024),
-            max_request_body_bytes: config.http_max_request_body_bytes.unwrap_or(1024 * 1024),
+            max_timeout_ms: resolved.http_max_timeout_ms,
+            max_response_body_bytes: resolved.http_max_response_body_bytes,
+            max_request_body_bytes: resolved.http_max_request_body_bytes,
             block_private_ips: config.http_block_private_ips.unwrap_or(false),
             redis_links,
             rate_limits: DslRateLimits::from_config(config)?,
-            max_body_scan_passes: config.max_body_scan_passes.unwrap_or(4),
+            max_body_scan_passes: resolved.max_body_scan_passes,
         };
         Ok((script, limits, policy, runtime))
     }
@@ -180,6 +181,12 @@ impl UpstreamResponseFilter for DslPlugin {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use edgion_resources::resources::common::external_http::MAX_OUTBOUND_TIMEOUT_MS;
+    use edgion_resources::resources::edgion_plugins::plugin_configs::dsl::{
+        DSL_MAX_BODY_SCAN_PASSES, DSL_MAX_CALL_COUNT, DSL_MAX_HTTP_REQUEST_BODY_BYTES,
+        DSL_MAX_HTTP_RESPONSE_BODY_BYTES, DSL_MAX_LIST_LEN, DSL_MAX_LOOP_ITERATIONS, DSL_MAX_MAP_SIZE,
+        DSL_MAX_STACK_DEPTH, DSL_MAX_STEPS, DSL_MAX_STRING_LEN,
+    };
 
     fn config(source: &str) -> DslConfig {
         DslConfig {
@@ -211,6 +218,38 @@ mod tests {
         let overlong = config_with_name("a".repeat(DslConfig::MAX_NAME_BYTES + 1));
         assert!(DslPlugin::from_config(&overlong).is_none());
         assert!(DslPlugin::from_config_response(&overlong).is_none());
+    }
+
+    #[test]
+    fn standalone_factories_reject_unbounded_runtime_limits() {
+        for (field, limit_value) in [
+            ("maxSteps", u64::from(DSL_MAX_STEPS) + 1),
+            ("maxLoopIterations", u64::from(DSL_MAX_LOOP_ITERATIONS) + 1),
+            ("maxCallCount", u64::from(DSL_MAX_CALL_COUNT) + 1),
+            ("maxStackDepth", DSL_MAX_STACK_DEPTH as u64 + 1),
+            ("maxStringLen", DSL_MAX_STRING_LEN as u64 + 1),
+            ("maxListLen", DSL_MAX_LIST_LEN as u64 + 1),
+            ("maxMapSize", DSL_MAX_MAP_SIZE as u64 + 1),
+            ("maxBodyScanPasses", u64::from(DSL_MAX_BODY_SCAN_PASSES) + 1),
+            ("httpMaxTimeoutMs", MAX_OUTBOUND_TIMEOUT_MS + 1),
+            ("httpMaxResponseBodyBytes", DSL_MAX_HTTP_RESPONSE_BODY_BYTES as u64 + 1),
+            ("httpMaxRequestBodyBytes", DSL_MAX_HTTP_REQUEST_BODY_BYTES as u64 + 1),
+        ] {
+            let mut config_value = serde_json::json!({
+                "name": "factory-limits",
+                "source": "return next()"
+            });
+            config_value[field] = serde_json::json!(limit_value);
+            let config: DslConfig = serde_json::from_value(config_value).unwrap();
+            assert!(
+                DslPlugin::from_config(&config).is_none(),
+                "request factory accepted invalid {field}"
+            );
+            assert!(
+                DslPlugin::from_config_response(&config).is_none(),
+                "response factory accepted invalid {field}"
+            );
+        }
     }
 
     #[test]

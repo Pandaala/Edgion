@@ -69,9 +69,9 @@ arguments.
 
 `DslRuntime` receives these fields from `DslConfig`:
 
-- `httpMaxTimeoutMs` (default 5000)
+- `httpMaxTimeoutMs` (default 5000, range 1–60000 ms)
 - `httpMaxRequestBodyBytes` (default 1 MiB, explicit maximum 32 MiB)
-- `httpMaxResponseBodyBytes` (default 1 MiB)
+- `httpMaxResponseBodyBytes` (default and explicit maximum 1 MiB)
 - `httpBlockPrivateIps` (default false)
 
 Call timeouts are clamped to the configured maximum. For an opaque `Body`, the effective

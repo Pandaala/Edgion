@@ -25,7 +25,12 @@ The following limits are tracked independently on each request and do not interf
 | Max function calls | `maxCallCount` | 500 | 1 | 100,000 | Total number of built-in function calls |
 | Max stack depth | `maxStackDepth` | 128 | 1 | 1,024 | Value stack depth |
 | Max string length | `maxStringLen` | 8,192 | 1 | 1,048,576 | Maximum runtime string bytes and requested Body.read bytes per call |
+| Dynamic list length | `maxListLen` | 1,024 | 1 | 16,384 | Maximum elements produced by dynamic List constructors governed by this limit |
+| Dynamic map size | `maxMapSize` | 512 | 1 | 4,096 | Maximum entries produced by dynamic Map constructors and projections governed by this limit |
 | Max body scan passes | `maxBodyScanPasses` | 4 | 1 | 16 | Cumulative raw bytes scanned, measured against the resolved physical request-body cap |
+| HTTP call timeout | `httpMaxTimeoutMs` | 5,000 ms | 1 ms | 60,000 ms | Maximum wall-clock timeout for one outbound call |
+| HTTP request Body | `httpMaxRequestBodyBytes` | 1 MiB | 1 byte | 32 MiB | Maximum opaque request Body sent by one outbound call |
+| HTTP response body | `httpMaxResponseBodyBytes` | 1 MiB | 1 byte | 1 MiB | Maximum response bytes retained by one outbound call |
 
 ### Limit Details
 
@@ -84,6 +89,19 @@ consume actual scan bytes on every call. MD5 is legacy interoperability only,
 including in FIPS builds. Body HMAC adds no persistent key/MAC cache and is a
 generation API, not an inbound verification API: normal DSL equality is not
 constant-time.
+
+`maxListLen` and `maxMapSize` bound runtime collection construction, including
+string splitting, response-header projection, and Redis hash projection. A
+zero value is not a disable switch: every runtime limit must be at least one.
+The fixed three-field top-level HTTP result Map and Redis result envelope retain
+their documented schemas even when `maxMapSize` is smaller. The five-field
+`redis.rate_limit` decision still requires `maxMapSize >= 5`. Header-name APIs
+retain their independent 256-element hard cap instead of using `maxListLen`.
+
+The three `httpMax*` fields bound a separate outbound exchange. The timeout
+uses the shared 60-second outbound ceiling. Response retention cannot exceed
+1 MiB and remains further limited by `maxStringLen`; opaque request Body
+uploads remain further limited by the gateway physical request-body cap.
 
 ### Configuration Example
 
