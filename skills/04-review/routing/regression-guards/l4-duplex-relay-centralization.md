@@ -53,7 +53,9 @@ error categories, timeouts. Cross-check:
   `idle_timeout: Option<Duration>` and is bounded by a single idle clock reset on
   any byte progress (read or partial write) in either direction.
   `DuplexError::IdleTimeout` maps to `TcpStatus::IdleTimeout` and the TLS
-  `"idle timeout"` err_log. Value comes from `resolve_tcp_idle_timeout(spec.tcpTimeout)`.
+  `"idle timeout"` err_log. The EGC publication path resolves the value with
+  `resolve_tcp_idle_timeout(spec.tcpTimeout)`; each connection pins it before
+  route processing and passes it to the shared relay.
 
 ## Independent progress under backpressure
 

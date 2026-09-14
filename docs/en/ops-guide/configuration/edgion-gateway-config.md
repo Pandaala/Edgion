@@ -143,6 +143,13 @@ Timeouts for L4 relays — plain TCP, TLS-terminated, and TLS-passthrough. UDP h
 
 **Secure by default:** If you omit the entire `tcpTimeout` section, the `1h` idle timeout and `10s` connect timeout still apply — every L4 relay is bounded without configuration.
 
+**Dynamic updates:** Changing `tcpTimeout` does not require a listener restart. A
+TCP, TLS-terminated, or TLS-passthrough connection copies the latest resolved
+values when it enters L4 proxy processing. Existing connections keep the values
+they started with, including across TLSRoute connect retries and the relay. A
+GatewayClass `parametersRef` change or shared-listener ownership change remains a
+listener-lifecycle change and is not applied dynamically.
+
 **Opt-out and risk:** Set `idleTimeout: "0s"` (any zero-valued duration; a bare `"0"` is not valid GEP-2257 and is rejected at admission) to disable the idle timeout (unbounded relay). This re-opens a resource-exhaustion risk: a stalled or trickle-sending peer can hold a relay — and its socket, task, and buffers — open indefinitely, with no in-process connection cap. Only disable it if a higher layer bounds connection lifetime. Setting `connectTimeout: "0s"` likewise removes the application-level connect bound, falling back to the OS TCP retransmit timeout (~2m on Linux).
 
 > **Known limitation:** An idle timeout does not stop a determined trickle attacker (a byte every N seconds resets the clock, on either the read or write half). Bounding that would require a total-duration cap, which would sever legitimate long-idle connections (DB pools, message queues, long-poll, SSH) and is not a sane default.

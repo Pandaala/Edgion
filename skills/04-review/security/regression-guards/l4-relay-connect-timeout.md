@@ -27,9 +27,11 @@ using the closed finding as a blanket rejection of a new report.
 
 ### Peer-owned connect bound
 
-Each connect site sets `peer.options.connection_timeout` with the shared
-`resolve_tcp_connect_timeout` immediately before calling
-`TransportConnector::new_stream`:
+The EdgionGatewayConfig publication path resolves `tcpTimeout` with the shared
+`resolve_tcp_connect_timeout` and stores the result in the immutable runtime
+snapshot. Each L4 proxy copies that policy once when it enters `process_new`,
+then every connect site assigns the pinned `connect_timeout` to
+`peer.options.connection_timeout` before calling `TransportConnector::new_stream`:
 
 - `edgion-gateway/src/routes/tcp/edgion_tcp.rs`
 - `edgion-gateway/src/routes/tls/proxy.rs`
@@ -39,6 +41,11 @@ The inspected Pingora revision `518f727` applies `peer.connection_timeout()`
 around the ordinary TCP connect future in `pingora-core/src/connectors/l4.rs`.
 `TransportConnector::new(None)` therefore does not mean that the peer's connect
 is unbounded; changing connector construction is unnecessary for this bound.
+
+EdgionGatewayConfig updates affect subsequent connections without listener
+reconstruction. A connection already in proxy processing keeps one policy
+generation through every TLSRoute retry and the eventual relay. See the
+[listener snapshot boundary](../../listeners/regression-guards/l4-timeout-snapshot-publication.md).
 
 All three upstream connections here are plain TCP. Downstream TLS termination
 is separate, and passthrough carries the end-to-end TLS handshake over the
@@ -91,7 +98,10 @@ this behavior.
 
 The original correction was closed on 2026-06-14 as `listener-06`. Its useful
 regression boundary is the shared default plus assignment at all three connect
-sites. Two statements from that record are historical, not current guarantees:
+sites. Parsing immediately at each connect site was replaced by the resolved
+snapshot publication tracked as `pre-resolve-l4-listener-timeouts`; it is not a
+required implementation detail. Two other statements from the historical record
+are not current guarantees:
 
 - The CRD once omitted `tcpTimeout` and pruned its child fields. The former
   `crd-struct-sync-gap-edgion-gateway-config` task reference no longer resolves;

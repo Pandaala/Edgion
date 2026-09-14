@@ -3,15 +3,48 @@ use crate::request_body::ResolvedRequestBodyConfig;
 use arc_swap::ArcSwap;
 use edgion_common::conf_sync::traits::{arc_map_to_owned, ConfHandler};
 use edgion_resources::prelude_resources::EdgionGatewayConfig;
-use edgion_resources::resources::edgion_gateway_config::DnsResolverConfig;
+use edgion_resources::resources::edgion_gateway_config::{
+    resolve_tcp_connect_timeout, resolve_tcp_idle_timeout, DnsResolverConfig,
+};
 use kube::ResourceExt;
 use parking_lot::Mutex;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
+use std::time::Duration;
+
+/// Connection-scoped L4 timeout policy resolved from an EdgionGatewayConfig.
+///
+/// A new connection copies this value from the current immutable configuration
+/// snapshot. In-flight connections keep their copy across retries and relay.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ResolvedL4Timeouts {
+    pub connect_timeout: Option<Duration>,
+    pub idle_timeout: Option<Duration>,
+}
+
+impl ResolvedL4Timeouts {
+    fn resolve(config: &EdgionGatewayConfig) -> Self {
+        let tcp_timeout = config.spec.tcp_timeout.as_ref();
+        Self {
+            connect_timeout: resolve_tcp_connect_timeout(tcp_timeout),
+            idle_timeout: resolve_tcp_idle_timeout(tcp_timeout),
+        }
+    }
+}
+
+impl Default for ResolvedL4Timeouts {
+    fn default() -> Self {
+        Self {
+            connect_timeout: resolve_tcp_connect_timeout(None),
+            idle_timeout: resolve_tcp_idle_timeout(None),
+        }
+    }
+}
 
 struct EdgionGatewayConfigSnapshot {
     configs: HashMap<String, EdgionGatewayConfig>,
     request_body_configs: HashMap<String, ResolvedRequestBodyConfig>,
+    l4_timeouts: HashMap<String, ResolvedL4Timeouts>,
     remote_ip_headers: HashMap<String, http::HeaderName>,
     dns_resolver_default: Option<DnsResolverConfig>,
 }
@@ -31,6 +64,10 @@ impl EdgionGatewayConfigSnapshot {
                     ResolvedRequestBodyConfig::resolve(&config.spec.request_body),
                 )
             })
+            .collect();
+        let l4_timeouts = configs
+            .values()
+            .map(|config| (config.name_any(), ResolvedL4Timeouts::resolve(config)))
             .collect();
         let remote_ip_headers = configs
             .values()
@@ -56,6 +93,7 @@ impl EdgionGatewayConfigSnapshot {
         Self {
             configs,
             request_body_configs,
+            l4_timeouts,
             remote_ip_headers,
             dns_resolver_default,
         }
@@ -115,6 +153,21 @@ pub fn get_resolved_request_body_config(config_name: Option<&str>) -> ResolvedRe
     let snapshot = EDGION_GATEWAY_CONFIG_STORE.load();
     config_name
         .and_then(|name| snapshot.request_body_configs.get(name))
+        .copied()
+        .unwrap_or_default()
+}
+
+/// Load the L4 timeout policy referenced by a listener's GatewayClass.
+///
+/// The configuration update path has already parsed the duration strings. A
+/// connection performs one lock-free snapshot load and one bounded map lookup,
+/// then keeps the copied value for its lifetime. Missing and deleted configs,
+/// and GatewayClasses without a parametersRef, use the built-in safe defaults.
+#[inline]
+pub fn get_resolved_l4_timeouts(config_name: Option<&str>) -> ResolvedL4Timeouts {
+    let snapshot = EDGION_GATEWAY_CONFIG_STORE.load();
+    config_name
+        .and_then(|name| snapshot.l4_timeouts.get(name))
         .copied()
         .unwrap_or_default()
 }
@@ -371,7 +424,9 @@ pub fn create_edgion_gateway_config_handler() -> Box<dyn ConfHandler<EdgionGatew
 #[cfg(test)]
 mod tests {
     use super::*;
-    use edgion_resources::resources::edgion_gateway_config::EdgionGatewayConfigSpec;
+    use edgion_resources::resources::edgion_gateway_config::{
+        EdgionGatewayConfigSpec, TcpTimeout, DEFAULT_TCP_CONNECT, DEFAULT_TCP_IDLE,
+    };
     use std::collections::HashMap;
 
     // Serialize against every test module that mutates gateway-wide stores.
@@ -399,6 +454,15 @@ mod tests {
                 dns_resolver: None,
             },
         )
+    }
+
+    fn make_config_with_l4_timeouts(name: &str, connect: &str, idle: &str) -> EdgionGatewayConfig {
+        let mut config = make_config(name);
+        config.spec.tcp_timeout = Some(TcpTimeout {
+            connect_timeout: connect.to_string(),
+            idle_timeout: idle.to_string(),
+        });
+        config
     }
 
     fn clear_store() {
@@ -612,6 +676,126 @@ mod tests {
         assert_eq!(
             get_resolved_request_body_config(Some("invalid-body-policy")),
             ResolvedRequestBodyConfig::default()
+        );
+    }
+
+    #[test]
+    fn l4_timeout_policy_updates_for_new_loads_and_pins_old_values() {
+        let _g = TEST_MUTEX.lock();
+        clear_store();
+        let handler = EdgionGatewayConfigHandler::new();
+
+        handler.partial_update(
+            HashMap::from([(
+                "l4-policy".to_string(),
+                Arc::new(make_config_with_l4_timeouts("l4-policy", "3s", "5m")),
+            )]),
+            HashMap::new(),
+            HashSet::new(),
+        );
+        let pinned = get_resolved_l4_timeouts(Some("l4-policy"));
+        assert_eq!(pinned.connect_timeout, Some(Duration::from_secs(3)));
+        assert_eq!(pinned.idle_timeout, Some(Duration::from_secs(300)));
+
+        handler.partial_update(
+            HashMap::new(),
+            HashMap::from([(
+                "l4-policy".to_string(),
+                Arc::new(make_config_with_l4_timeouts("l4-policy", "0s", "0ms")),
+            )]),
+            HashSet::new(),
+        );
+        assert_eq!(
+            pinned,
+            ResolvedL4Timeouts {
+                connect_timeout: Some(Duration::from_secs(3)),
+                idle_timeout: Some(Duration::from_secs(300)),
+            },
+            "a connection-scoped copy must not change after publication"
+        );
+        assert_eq!(
+            get_resolved_l4_timeouts(Some("l4-policy")),
+            ResolvedL4Timeouts {
+                connect_timeout: None,
+                idle_timeout: None,
+            },
+            "a new connection load must observe the updated policy"
+        );
+
+        handler.partial_update(HashMap::new(), HashMap::new(), HashSet::from(["l4-policy".to_string()]));
+        assert_eq!(
+            get_resolved_l4_timeouts(Some("l4-policy")),
+            ResolvedL4Timeouts::default()
+        );
+    }
+
+    #[test]
+    fn l4_timeout_policy_preserves_defaults_isolation_and_invalid_fallback() {
+        let _g = TEST_MUTEX.lock();
+        clear_store();
+        let handler = EdgionGatewayConfigHandler::new();
+
+        handler.full_set(&HashMap::from([
+            (
+                "default".to_string(),
+                Arc::new(make_config_with_l4_timeouts("default", "1s", "2s")),
+            ),
+            (
+                "mixed".to_string(),
+                Arc::new(make_config_with_l4_timeouts("mixed", "invalid", "0s")),
+            ),
+        ]));
+
+        assert_eq!(
+            get_resolved_l4_timeouts(None),
+            ResolvedL4Timeouts {
+                connect_timeout: Some(DEFAULT_TCP_CONNECT),
+                idle_timeout: Some(DEFAULT_TCP_IDLE),
+            },
+            "no parametersRef must not select a real EGC named default"
+        );
+        assert_eq!(
+            get_resolved_l4_timeouts(Some("default")),
+            ResolvedL4Timeouts {
+                connect_timeout: Some(Duration::from_secs(1)),
+                idle_timeout: Some(Duration::from_secs(2)),
+            }
+        );
+        assert_eq!(
+            get_resolved_l4_timeouts(Some("mixed")),
+            ResolvedL4Timeouts {
+                connect_timeout: Some(DEFAULT_TCP_CONNECT),
+                idle_timeout: None,
+            },
+            "each invalid field must fall back independently through its canonical resolver"
+        );
+
+        handler.full_set(&HashMap::new());
+        assert_eq!(get_resolved_l4_timeouts(Some("default")), ResolvedL4Timeouts::default());
+    }
+
+    #[test]
+    fn l4_timeout_accessor_does_not_retain_an_obsolete_parent_snapshot() {
+        let _g = TEST_MUTEX.lock();
+        clear_store();
+        let handler = EdgionGatewayConfigHandler::new();
+        handler.full_set(&HashMap::from([(
+            "l4-policy".to_string(),
+            Arc::new(make_config_with_l4_timeouts("l4-policy", "4s", "6s")),
+        )]));
+
+        let old_snapshot = EDGION_GATEWAY_CONFIG_STORE.load_full();
+        let weak = Arc::downgrade(&old_snapshot);
+        assert_eq!(
+            get_resolved_l4_timeouts(Some("l4-policy")).connect_timeout,
+            Some(Duration::from_secs(4))
+        );
+        handler.full_set(&HashMap::new());
+        drop(old_snapshot);
+
+        assert!(
+            weak.upgrade().is_none(),
+            "the copied policy must not retain its parent snapshot"
         );
     }
 

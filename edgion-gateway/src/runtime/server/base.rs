@@ -108,7 +108,7 @@ impl GatewayBase {
             };
 
             // Get EdgionGatewayConfig for this Gateway
-            let (edgion_gateway_config, request_body_config_name) = match gateway_class.spec.parameters_ref.as_ref() {
+            let (edgion_gateway_config, edgion_gateway_config_name) = match gateway_class.spec.parameters_ref.as_ref() {
                 Some(params_ref) => match self.config_client.get_edgion_gateway_config(&params_ref.name) {
                     Some(egwc) => (egwc, Some(params_ref.name.clone())),
                     None => {
@@ -202,7 +202,7 @@ impl GatewayBase {
                         listener_key: listener_key.clone(),
                         access_logger: self.get_access_logger(),
                         edgion_gateway_config: Arc::new(edgion_gateway_config.clone()),
-                        request_body_config_name: request_body_config_name.clone(),
+                        edgion_gateway_config_name: edgion_gateway_config_name.clone(),
                         server_conf: server_conf_arc.clone(),
                         enable_http2,
                         gateway_annotations: gateway_annotations.clone(),

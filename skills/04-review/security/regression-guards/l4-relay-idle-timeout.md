@@ -33,16 +33,22 @@ as an `"idle timeout"` `err_log` entry for TLS proxies.
 
 **2. Secure-by-default with explicit opt-out**
 
-`resolve_tcp_idle_timeout(spec.tcpTimeout)` returns 1 hour even when no `tcpTimeout`
-section is configured. Only an explicit `idleTimeout: "0s"` (any zero-valued
-GEP-2257 duration; a bare `"0"` is rejected at admission) opts out. Operators who
-legitimately need unbounded connections must consciously disable the timeout.
+The EdgionGatewayConfig publication path uses
+`resolve_tcp_idle_timeout(spec.tcpTimeout)` to produce 1 hour even when no
+`tcpTimeout` section is configured. Only an explicit `idleTimeout: "0s"` (any
+zero-valued GEP-2257 duration; a bare `"0"` is rejected at admission) opts out.
+Each connection pins the current resolved value before entering route processing;
+later config updates affect new connections, not an in-flight relay. Operators
+who legitimately need unbounded connections must consciously disable the timeout.
 
 **3. All three L4 proxy types route through the same helper**
 
 Plain TCP (`edgion_tcp.rs`), TLS-terminated (`tls/proxy.rs`), and TLS-passthrough
 (`tls/passthrough_proxy.rs`) all call `bidirectional_relay`. The protection cannot be
 selectively absent from one proxy variant.
+
+The publication and connection-generation boundary is maintained in the
+[listener snapshot regression guard](../../listeners/regression-guards/l4-timeout-snapshot-publication.md).
 
 ## Scope and non-goals
 

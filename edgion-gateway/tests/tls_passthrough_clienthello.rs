@@ -123,6 +123,7 @@ impl Fixture {
             tls_route_manager: routes.get_or_create_listener_manager(&key),
             access_logger: Arc::new(logger),
             edgion_gateway_config: Arc::new(config),
+            edgion_gateway_config_name: None,
             connector: TransportConnector::new(None),
         });
         Self {

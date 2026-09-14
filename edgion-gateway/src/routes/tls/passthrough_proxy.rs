@@ -5,6 +5,7 @@
 //! then transparently relays all bytes (including the original ClientHello)
 //! to the selected upstream.
 
+use crate::config::{get_resolved_l4_timeouts, ResolvedL4Timeouts};
 use crate::plugins::publication::global_publisher;
 use async_trait::async_trait;
 use std::net::IpAddr;
@@ -59,6 +60,7 @@ pub struct EdgionTlsPassthroughProxy {
     pub tls_route_manager: Arc<TlsRouteManager>,
     pub access_logger: Arc<AccessLogger>,
     pub edgion_gateway_config: Arc<EdgionGatewayConfig>,
+    pub edgion_gateway_config_name: Option<String>,
     pub connector: TransportConnector,
 }
 
@@ -84,6 +86,8 @@ impl ServerApp for EdgionTlsPassthroughProxy {
             self.log_disconnect(&mut ctx).await;
             return None;
         }
+
+        let l4_timeouts = get_resolved_l4_timeouts(self.edgion_gateway_config_name.as_deref());
 
         // 1. Read the beginning of the stream to extract SNI from ClientHello.
         //    We read into a bounded buffer with an absolute deadline. SNI is
@@ -114,7 +118,8 @@ impl ServerApp for EdgionTlsPassthroughProxy {
         //    ClientHello record — so any trailing 0-RTT EarlyData reaches
         //    the backend.
         peek_buf.truncate(filled);
-        self.handle_connection(downstream, &mut ctx, &sni, peek_buf).await;
+        self.handle_connection(downstream, &mut ctx, &sni, peek_buf, l4_timeouts)
+            .await;
         self.log_disconnect(&mut ctx).await;
 
         None
@@ -179,7 +184,14 @@ impl EdgionTlsPassthroughProxy {
     /// `initial_bytes` contains the raw ClientHello bytes already read from
     /// downstream. These must be forwarded to upstream before starting the
     /// bidirectional relay.
-    async fn handle_connection(&self, downstream: Stream, ctx: &mut TlsContext, sni: &str, initial_bytes: Vec<u8>) {
+    async fn handle_connection(
+        &self,
+        downstream: Stream,
+        ctx: &mut TlsContext,
+        sni: &str,
+        initial_bytes: Vec<u8>,
+        l4_timeouts: ResolvedL4Timeouts,
+    ) {
         // 1. Match TLSRoute unit by SNI
         let publication = global_publisher().snapshot();
         let Some(selected) = super::select_tls_route(&self.tls_route_manager, &publication, &self.listener_key, sni)
@@ -309,10 +321,7 @@ impl EdgionTlsPassthroughProxy {
             // Bound the connect (TCP handshake; the TLS handshake is end-to-end
             // for passthrough) so an unreachable backend fails fast instead of
             // stranding the downstream connection until the OS retransmit timeout.
-            peer.options.connection_timeout =
-                edgion_resources::resources::edgion_gateway_config::resolve_tcp_connect_timeout(
-                    self.edgion_gateway_config.spec.tcp_timeout.as_ref(),
-                );
+            peer.options.connection_timeout = l4_timeouts.connect_timeout;
             match self.connector.new_stream(&peer).await {
                 Ok(stream) => {
                     if let Some(info) = ctx.current_upstream_mut() {
@@ -391,15 +400,13 @@ impl EdgionTlsPassthroughProxy {
         }
 
         // 7. Bidirectional relay of raw TLS traffic
-        self.duplex(downstream, upstream_stream, ctx).await;
+        self.duplex(downstream, upstream_stream, ctx, l4_timeouts.idle_timeout)
+            .await;
     }
 
     /// Bidirectional data transfer between downstream and upstream.
-    async fn duplex(&self, downstream: Stream, upstream: Stream, ctx: &mut TlsContext) {
-        let idle = edgion_resources::resources::edgion_gateway_config::resolve_tcp_idle_timeout(
-            self.edgion_gateway_config.spec.tcp_timeout.as_ref(),
-        );
-        bidirectional_relay(downstream, upstream, TlsDuplexHooks { ctx }, idle).await;
+    async fn duplex(&self, downstream: Stream, upstream: Stream, ctx: &mut TlsContext, idle_timeout: Option<Duration>) {
+        bidirectional_relay(downstream, upstream, TlsDuplexHooks { ctx }, idle_timeout).await;
     }
 
     fn is_tls_proxy_log_enabled(&self) -> bool {

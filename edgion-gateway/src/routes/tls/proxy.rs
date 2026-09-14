@@ -2,7 +2,7 @@ use crate::plugins::publication::global_publisher;
 use async_trait::async_trait;
 use std::net::IpAddr;
 use std::sync::Arc;
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::io::AsyncWriteExt;
 
 use pingora_core::apps::ServerApp;
@@ -16,6 +16,7 @@ use pingora_core::upstreams::peer::BasicPeer;
 use crate::backends::{
     select_service_endpoint, service_section_key_from_port, validate_endpoint_backend_addr, ServiceDegradePolicy,
 };
+use crate::config::{get_resolved_l4_timeouts, ResolvedL4Timeouts};
 use crate::observe::log_tls;
 use crate::observe::logs::LogBuffer;
 use crate::observe::AccessLogger;
@@ -148,6 +149,7 @@ pub struct EdgionTlsTcpProxy {
     pub tls_route_manager: Arc<TlsRouteManager>,
     pub access_logger: Arc<AccessLogger>,
     pub edgion_gateway_config: Arc<EdgionGatewayConfig>,
+    pub edgion_gateway_config_name: Option<String>,
     pub connector: TransportConnector,
 }
 
@@ -196,7 +198,8 @@ impl ServerApp for EdgionTlsTcpProxy {
             }
         };
 
-        self.handle_connection(downstream, &mut ctx, &sni).await;
+        let l4_timeouts = get_resolved_l4_timeouts(self.edgion_gateway_config_name.as_deref());
+        self.handle_connection(downstream, &mut ctx, &sni, l4_timeouts).await;
         self.log_disconnect(&mut ctx).await;
 
         None
@@ -218,7 +221,13 @@ impl EdgionTlsTcpProxy {
     }
 
     /// Core logic for handling TLS-terminated connections
-    async fn handle_connection(&self, downstream: Stream, ctx: &mut TlsContext, sni: &str) {
+    async fn handle_connection(
+        &self,
+        downstream: Stream,
+        ctx: &mut TlsContext,
+        sni: &str,
+        l4_timeouts: ResolvedL4Timeouts,
+    ) {
         // 1. Match TLSRoute unit by SNI from the per-listener route table.
         let publication = global_publisher().snapshot();
         let Some(selected) = super::select_tls_route(&self.tls_route_manager, &publication, &self.listener_key, sni)
@@ -354,10 +363,7 @@ impl EdgionTlsTcpProxy {
             // TCP retransmit timeout; mirrors the HTTP path. The upstream connect
             // is plain TCP here (downstream TLS is terminated separately), so this
             // bounds the connect itself, not a TLS handshake.
-            peer.options.connection_timeout =
-                edgion_resources::resources::edgion_gateway_config::resolve_tcp_connect_timeout(
-                    self.edgion_gateway_config.spec.tcp_timeout.as_ref(),
-                );
+            peer.options.connection_timeout = l4_timeouts.connect_timeout;
             match self.connector.new_stream(&peer).await {
                 Ok(stream) => {
                     if let Some(info) = ctx.current_upstream_mut() {
@@ -415,7 +421,8 @@ impl EdgionTlsTcpProxy {
         }
 
         // 6. Bidirectional data forwarding
-        self.duplex(downstream, upstream_stream, ctx).await
+        self.duplex(downstream, upstream_stream, ctx, l4_timeouts.idle_timeout)
+            .await
     }
 
     /// Send Proxy Protocol v2 header to upstream if PP2 is enabled.
@@ -459,11 +466,8 @@ impl EdgionTlsTcpProxy {
     }
 
     /// Bidirectional data transfer between downstream (TLS-terminated) and upstream (TCP)
-    async fn duplex(&self, downstream: Stream, upstream: Stream, ctx: &mut TlsContext) {
-        let idle = edgion_resources::resources::edgion_gateway_config::resolve_tcp_idle_timeout(
-            self.edgion_gateway_config.spec.tcp_timeout.as_ref(),
-        );
-        bidirectional_relay(downstream, upstream, TlsDuplexHooks { ctx }, idle).await;
+    async fn duplex(&self, downstream: Stream, upstream: Stream, ctx: &mut TlsContext, idle_timeout: Option<Duration>) {
+        bidirectional_relay(downstream, upstream, TlsDuplexHooks { ctx }, idle_timeout).await;
     }
 
     fn is_tls_proxy_log_enabled(&self) -> bool {

@@ -47,7 +47,7 @@ pub struct ListenerContext {
     pub edgion_gateway_config: Arc<EdgionGatewayConfig>,
     /// Name of the EGC referenced by this listener's GatewayClass.
     /// `None` means the GatewayClass uses built-in defaults.
-    pub request_body_config_name: Option<String>,
+    pub edgion_gateway_config_name: Option<String>,
     pub server_conf: Arc<ServerConf>,
     /// Whether to enable HTTP/2 support (from Gateway annotation)
     pub enable_http2: bool,
@@ -242,7 +242,7 @@ pub fn add_http_listener(
         },
         access_logger: context.access_logger.clone(),
         edgion_gateway_config: context.edgion_gateway_config.clone(),
-        request_body_config_name: context.request_body_config_name.clone(),
+        request_body_config_name: context.edgion_gateway_config_name.clone(),
         parsed_timeouts,
         enable_http2: context.enable_http2,
         real_ip_extractor,
@@ -354,6 +354,7 @@ pub fn add_tcp_listener(server: &mut Server, context: &ListenerContext) -> Resul
         listener_key: context.listener_key.clone(),
         tcp_route_manager,
         edgion_gateway_config: context.edgion_gateway_config.clone(),
+        edgion_gateway_config_name: context.edgion_gateway_config_name.clone(),
         connector: TransportConnector::new(None),
     };
 
@@ -442,6 +443,7 @@ pub fn add_tls_terminate_to_tcp_listener(server: &mut Server, context: &Listener
         tls_route_manager,
         access_logger: context.access_logger.clone(),
         edgion_gateway_config: context.edgion_gateway_config.clone(),
+        edgion_gateway_config_name: context.edgion_gateway_config_name.clone(),
         connector: TransportConnector::new(None),
     };
 
@@ -493,6 +495,7 @@ pub fn add_tls_passthrough_listener(server: &mut Server, context: &ListenerConte
         tls_route_manager,
         access_logger: context.access_logger.clone(),
         edgion_gateway_config: context.edgion_gateway_config.clone(),
+        edgion_gateway_config_name: context.edgion_gateway_config_name.clone(),
         connector: TransportConnector::new(None),
     };
 

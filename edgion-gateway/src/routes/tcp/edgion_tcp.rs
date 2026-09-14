@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use pingora_core::apps::ServerApp;
 use pingora_core::connectors::TransportConnector;
@@ -11,6 +11,7 @@ use pingora_core::upstreams::peer::BasicPeer;
 use crate::backends::{
     select_service_endpoint, service_section_key_from_port, validate_endpoint_backend_addr, ServiceDegradePolicy,
 };
+use crate::config::{get_resolved_l4_timeouts, ResolvedL4Timeouts};
 use crate::observe::{log_tcp, TcpLogEntry};
 use crate::plugins::publication::global_publisher;
 use crate::plugins::stream::connection_filter_bridge::resolve_route_scope;
@@ -102,6 +103,7 @@ pub struct EdgionTcpProxy {
     pub listener_key: ListenerKey,
     pub tcp_route_manager: Arc<TcpPortRouteManager>,
     pub edgion_gateway_config: Arc<EdgionGatewayConfig>,
+    pub edgion_gateway_config_name: Option<String>,
     pub connector: TransportConnector,
 }
 
@@ -134,7 +136,8 @@ impl ServerApp for EdgionTcpProxy {
             deny_reason: None,
         };
 
-        self.handle_connection(downstream, &mut ctx).await;
+        let l4_timeouts = get_resolved_l4_timeouts(self.edgion_gateway_config_name.as_deref());
+        self.handle_connection(downstream, &mut ctx, l4_timeouts).await;
 
         self.log_connection(&ctx).await;
 
@@ -143,7 +146,7 @@ impl ServerApp for EdgionTcpProxy {
 }
 
 impl EdgionTcpProxy {
-    async fn handle_connection(&self, downstream: Stream, ctx: &mut TcpContext) {
+    async fn handle_connection(&self, downstream: Stream, ctx: &mut TcpContext, l4_timeouts: ResolvedL4Timeouts) {
         // 1. Match TCPRoute unit from per-port route table
         let Some(unit) = select_route_unit(&self.tcp_route_manager) else {
             ctx.status = TcpStatus::NoRouteMatched;
@@ -260,10 +263,7 @@ impl EdgionTcpProxy {
         // Bound the connect (TCP handshake) so an unreachable backend fails fast
         // instead of stranding the downstream connection until the OS TCP
         // retransmit timeout; mirrors the HTTP path's connection_timeout.
-        peer.options.connection_timeout =
-            edgion_resources::resources::edgion_gateway_config::resolve_tcp_connect_timeout(
-                self.edgion_gateway_config.spec.tcp_timeout.as_ref(),
-            );
+        peer.options.connection_timeout = l4_timeouts.connect_timeout;
         let Ok(upstream) = self.connector.new_stream(&peer).await else {
             ctx.status = TcpStatus::UpstreamConnectionFailed;
             // L4 upstream connect failure — local-origin failure.
@@ -285,14 +285,11 @@ impl EdgionTcpProxy {
         }
 
         // 8. Bidirectional data forwarding
-        self.duplex(downstream, upstream, ctx).await;
+        self.duplex(downstream, upstream, ctx, l4_timeouts.idle_timeout).await;
     }
 
-    async fn duplex(&self, downstream: Stream, upstream: Stream, ctx: &mut TcpContext) {
-        let idle = edgion_resources::resources::edgion_gateway_config::resolve_tcp_idle_timeout(
-            self.edgion_gateway_config.spec.tcp_timeout.as_ref(),
-        );
-        bidirectional_relay(downstream, upstream, TcpDuplexHooks { ctx }, idle).await;
+    async fn duplex(&self, downstream: Stream, upstream: Stream, ctx: &mut TcpContext, idle_timeout: Option<Duration>) {
+        bidirectional_relay(downstream, upstream, TcpDuplexHooks { ctx }, idle_timeout).await;
     }
 
     async fn log_connection(&self, ctx: &TcpContext) {

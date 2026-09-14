@@ -187,6 +187,13 @@ spec:
 | `idleTimeout` | `Duration` | `1h` | Established L4 relay inactivity timeout; `0s` disables it. Applies to TCP, TLS termination, and TLS passthrough, not UDP. |
 | `connectTimeout` | `Duration` | `10s` | Upstream TCP connection bound; `0s` delegates to the OS bound. |
 
+Updates are parsed when the Gateway receives the EdgionGatewayConfig generation.
+Each TCP, TLS-terminated, or TLS-passthrough connection copies the latest resolved
+pair when it enters L4 proxy processing, so later connections adopt an update
+without rebinding the listener. An in-flight connection keeps its original pair
+through all connect retries and the relay. Changing a GatewayClass `parametersRef`
+or the owner of a shared physical listener still requires a process restart.
+
 ### spec.loadBalancing
 
 | Field | Type | Default | Description |

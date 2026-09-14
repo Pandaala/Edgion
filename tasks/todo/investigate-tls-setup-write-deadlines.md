@@ -21,8 +21,9 @@ bounded payload normally fits socket buffers; no unbounded hang is established.
 - If a real gap is confirmed, test Pending write/flush with paused time and
   preserve PP2 followed by the exact full initial-byte sequence and accounting.
 - Keep setup-write deadline ownership separate from
-  [L4 timeout pre-resolution](pre-resolve-l4-listener-timeouts.md), which removes
-  repeated configuration parsing without changing waiting policy.
+  [L4 timeout snapshot publication](../../skills/04-review/listeners/regression-guards/l4-timeout-snapshot-publication.md),
+  which dynamically publishes resolved connect and relay idle policy for new
+  connections without changing setup-write waiting policy.
 - Defer new end-to-end scenarios and do not modify frozen integration files
   unless their exact paths are explicitly authorized. Do not change setup waiting
   policy until the transport investigation establishes a concrete gap.

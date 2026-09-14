@@ -470,7 +470,8 @@ pub const DEFAULT_TCP_IDLE: std::time::Duration = std::time::Duration::from_secs
 /// - any other valid duration                     -> `Some(parsed)`
 /// - parse error (schema-validated upstream)       -> `Some(DEFAULT_TCP_IDLE)` (fail-safe, silent)
 ///
-/// Runs per connection on the data plane; intentionally emits no `tracing`.
+/// Used while publishing the gateway's resolved runtime policy; intentionally
+/// emits no `tracing`.
 pub fn resolve_tcp_idle_timeout(cfg: Option<&TcpTimeout>) -> Option<std::time::Duration> {
     match cfg {
         None => Some(DEFAULT_TCP_IDLE),
@@ -497,7 +498,8 @@ pub const DEFAULT_TCP_CONNECT: std::time::Duration = std::time::Duration::from_s
 /// - any other valid duration                     -> `Some(parsed)`
 /// - parse error (schema-validated upstream)       -> `Some(DEFAULT_TCP_CONNECT)` (fail-safe, silent)
 ///
-/// Runs per connection on the data plane; intentionally emits no `tracing`.
+/// Used while publishing the gateway's resolved runtime policy; intentionally
+/// emits no `tracing`.
 pub fn resolve_tcp_connect_timeout(cfg: Option<&TcpTimeout>) -> Option<std::time::Duration> {
     match cfg {
         None => Some(DEFAULT_TCP_CONNECT),
