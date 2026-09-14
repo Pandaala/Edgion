@@ -14,6 +14,7 @@
 //! of 0 writes unconditionally. Setting a null value deletes the key.
 
 use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
+use std::sync::Arc;
 
 use dashmap::DashMap;
 
@@ -68,8 +69,8 @@ pub struct SharedData {
     /// Last store-wide CAS token allocated to a successful value write.
     /// Zero is reserved for unconditional guest writes and is never issued.
     last_cas_token: AtomicU32,
-    /// Bounded-cardinality module descriptor for the byte-total gauge.
-    metrics_label: String,
+    /// Shared exporter handle for all live stores with the same module label.
+    bytes_gauge: Option<Arc<metrics::Gauge>>,
 }
 
 impl SharedData {
@@ -77,8 +78,11 @@ impl SharedData {
     /// `edgion_wasm_shared_data_bytes{module}` gauge).
     pub fn new(metrics_label: String) -> Self {
         SharedData {
-            metrics_label,
-            ..Default::default()
+            bytes_gauge: (!metrics_label.is_empty())
+                .then(|| crate::observe::metrics::registry::wasm_shared_data_bytes_gauge(&metrics_label)),
+            map: DashMap::new(),
+            total_bytes: AtomicUsize::new(0),
+            last_cas_token: AtomicU32::new(0),
         }
     }
 
@@ -181,9 +185,11 @@ impl SharedData {
                             // `occ` still owns the shard guard, so no delete can
                             // release these bytes before rollback is disarmed.
                             reservation.commit();
+                            self.increment_bytes_gauge(new_len - old_len);
                         }
                         if new_len < old_len {
                             self.total_bytes.fetch_sub(old_len - new_len, Ordering::Relaxed);
+                            self.decrement_bytes_gauge(old_len - new_len);
                         }
                         drop(occ);
                         drop(old);
@@ -193,9 +199,9 @@ impl SharedData {
                         // Release only after deletion is visible.
                         self.total_bytes
                             .fetch_sub(ENTRY_OVERHEAD_BYTES + key.len() + old_len, Ordering::Relaxed);
+                        self.decrement_bytes_gauge(ENTRY_OVERHEAD_BYTES + key.len() + old_len);
                     }
                 }
-                self.emit_bytes_gauge();
                 Ok(())
             }
             dashmap::mapref::entry::Entry::Vacant(vac) => {
@@ -218,21 +224,24 @@ impl SharedData {
                 // longer roll back, preventing a concurrent delete from
                 // releasing the same bytes first.
                 reservation.commit();
+                // Publish growth before releasing the key guard so a delete
+                // cannot subtract this contribution before it is registered.
+                self.increment_bytes_gauge(add);
                 drop(inserted);
-                self.emit_bytes_gauge();
                 Ok(())
             }
         }
     }
 
-    /// Publish the current byte total to the per-module gauge. Skipped when
-    /// no label is set (test-constructed via `default()`).
-    fn emit_bytes_gauge(&self) {
-        if !self.metrics_label.is_empty() {
-            crate::observe::metrics::registry::set_wasm_shared_data_bytes(
-                &self.metrics_label,
-                self.total_bytes.load(Ordering::Relaxed),
-            );
+    fn increment_bytes_gauge(&self, bytes: usize) {
+        if let Some(gauge) = &self.bytes_gauge {
+            gauge.increment(bytes as f64);
+        }
+    }
+
+    fn decrement_bytes_gauge(&self, bytes: usize) {
+        if let Some(gauge) = &self.bytes_gauge {
+            gauge.decrement(bytes as f64);
         }
     }
 
@@ -242,12 +251,167 @@ impl SharedData {
     }
 }
 
+impl Drop for SharedData {
+    fn drop(&mut self) {
+        // Exclusive destruction means every mutation and reservation has
+        // finished. Withdraw only this store's remaining contribution.
+        let remaining = *self.total_bytes.get_mut();
+        self.decrement_bytes_gauge(remaining);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
     use std::sync::{Arc, Barrier};
 
     use super::*;
+
+    fn assert_gauge(handle: &metrics_exporter_prometheus::PrometheusHandle, module: &str, bytes: usize) {
+        let rendered = crate::observe::metrics::registry::with_live_wasm_shared_data_gauges(|| handle.render());
+        let sample = format!("edgion_wasm_shared_data_bytes{{module=\"{module}\"}} {bytes}");
+        assert!(
+            rendered.lines().any(|line| line == sample),
+            "expected {sample}:\n{rendered}"
+        );
+    }
+
+    #[test]
+    fn gauge_aggregates_generations_and_withdraws_only_the_dropped_store() {
+        for old_first in [true, false] {
+            let recorder = metrics_exporter_prometheus::PrometheusBuilder::new().build_recorder();
+            let handle = recorder.handle();
+            metrics::with_local_recorder(&recorder, || {
+                let module = format!("generation-{old_first}");
+                let old = SharedData::new(module.clone());
+                old.set("k", Some(vec![0; 100]), 0).unwrap();
+                let new = SharedData::new(module.clone());
+                assert_gauge(&handle, &module, 229);
+                new.set("k", Some(vec![0; 40]), 0).unwrap();
+                assert_gauge(&handle, &module, 398);
+                old.set("k", Some(vec![0; 140]), 0).unwrap();
+                new.set("k", Some(vec![0; 10]), 0).unwrap();
+                assert_gauge(&handle, &module, 408);
+                assert_eq!(new.set("missing", Some(vec![0]), 1), Err(SharedDataError::CasMismatch));
+                assert_eq!(
+                    new.set("large", Some(vec![0; MAX_SHARED_VALUE_BYTES + 1]), 0),
+                    Err(SharedDataError::TooLarge)
+                );
+                assert_eq!(
+                    new.set_with_total_limit("extra", Some(vec![0]), 0, 139),
+                    Err(SharedDataError::TooLarge)
+                );
+                new.set("missing", None, 0).unwrap();
+                assert_gauge(&handle, &module, 408);
+                if old_first {
+                    drop(old);
+                    assert_gauge(&handle, &module, 139);
+                    new.set("k", None, 0).unwrap();
+                    assert_gauge(&handle, &module, 0);
+                    new.set("k", Some(vec![0; 10]), 0).unwrap();
+                    drop(new);
+                } else {
+                    drop(new);
+                    assert_gauge(&handle, &module, 269);
+                    drop(old);
+                }
+                assert_gauge(&handle, &module, 0);
+                let recreated = SharedData::new(module.clone());
+                recreated.set("k", Some(vec![0]), 0).unwrap();
+                assert_gauge(&handle, &module, 130);
+                drop(recreated);
+                assert_gauge(&handle, &module, 0);
+                assert!(!crate::observe::metrics::registry::wasm_shared_data_metric_stats()
+                    .keys
+                    .contains(&module));
+            });
+        }
+    }
+
+    #[test]
+    fn gauge_concurrent_mutations_registration_and_drop_balance() {
+        let recorder = metrics_exporter_prometheus::PrometheusBuilder::new().build_recorder();
+        let handle = recorder.handle();
+        let module = "concurrent-shared-data";
+        let retained = metrics::with_local_recorder(&recorder, || Arc::new(SharedData::new(module.into())));
+        retained.set("retained", Some(vec![0; 20]), 0).unwrap();
+        let start = Barrier::new(8);
+        std::thread::scope(|scope| {
+            for _ in 0..8 {
+                let recorder = &recorder;
+                let start = &start;
+                let retained = &retained;
+                scope.spawn(move || {
+                    start.wait();
+                    metrics::with_local_recorder(recorder, || {
+                        for _ in 0..100 {
+                            let temporary = SharedData::new(module.into());
+                            temporary.set("tmp", Some(vec![0; 50]), 0).unwrap();
+                            retained.set("contended", Some(vec![0; 30]), 0).unwrap();
+                            retained.set("contended", Some(vec![0; 5]), 0).unwrap();
+                            retained.set("contended", None, 0).unwrap();
+                        }
+                    });
+                });
+            }
+        });
+        assert_gauge(&handle, module, accounted_map_bytes(&retained));
+        // A request-held Arc keeps the contribution after its cache owner drops.
+        let request = retained.clone();
+        drop(retained);
+        assert_gauge(&handle, module, 156);
+        drop(request);
+        assert_gauge(&handle, module, 0);
+    }
+
+    #[test]
+    fn gauge_live_store_survives_idle_eviction_and_releases_its_handle() {
+        let recorder = metrics_exporter_prometheus::PrometheusBuilder::new()
+            .idle_timeout(metrics_util::MetricKindMask::ALL, Some(std::time::Duration::ZERO))
+            .build_recorder();
+        let handle = recorder.handle();
+        let module = "idle-shared-data";
+        let store = metrics::with_local_recorder(&recorder, || SharedData::new(module.into()));
+        store.set("k", Some(vec![0; 10]), 0).unwrap();
+        for _ in 0..4 {
+            assert_gauge(&handle, module, 139);
+        }
+        let overlap = metrics::with_local_recorder(&recorder, || SharedData::new(module.into()));
+        overlap.set("k", Some(vec![0; 20]), 0).unwrap();
+        drop(store);
+        assert_gauge(&handle, module, 149);
+        drop(overlap);
+        assert_gauge(&handle, module, 0);
+        // No owners remain, so a subsequent scrape may evict the zero series.
+        let _ = handle.render();
+        assert!(!handle.render().contains("edgion_wasm_shared_data_bytes{"));
+    }
+
+    #[test]
+    fn gauge_last_drop_racing_registration_preserves_the_new_store() {
+        let recorder = metrics_exporter_prometheus::PrometheusBuilder::new().build_recorder();
+        let handle = recorder.handle();
+        let module = "drop-register-shared-data";
+        for _ in 0..32 {
+            let old = metrics::with_local_recorder(&recorder, || SharedData::new(module.into()));
+            old.set("k", Some(vec![0; 100]), 0).unwrap();
+            let start = Barrier::new(2);
+            let new = std::thread::scope(|scope| {
+                let start_ref = &start;
+                scope.spawn(move || {
+                    start_ref.wait();
+                    drop(old);
+                });
+                start.wait();
+                let new = metrics::with_local_recorder(&recorder, || SharedData::new(module.into()));
+                new.set("k", Some(vec![0; 40]), 0).unwrap();
+                new
+            });
+            assert_gauge(&handle, module, 169);
+            drop(new);
+            assert_gauge(&handle, module, 0);
+        }
+    }
 
     fn accounted_map_bytes(sd: &SharedData) -> usize {
         sd.map

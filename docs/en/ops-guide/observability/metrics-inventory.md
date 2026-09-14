@@ -80,7 +80,7 @@ EdgionBackend retains its separate withdrawal policy.
 | edgion_wasm_fail_mode_total | Counter | gateway | module, reason, mode (open/close) | self | Fail-mode decision taken by the Wasm plugin host | - |
 | edgion_wasm_callout_total | Counter | gateway | module, result (ok/error/denied/over_limit/tick_config_conflict) | self | Guest-dispatched HTTP callout outcome | - |
 | edgion_wasm_modules_loaded | Gauge | gateway | none | self | Number of compiled Wasm modules currently held in the global cache (sizing input for pooling-allocator capacity) | - |
-| edgion_wasm_shared_data_bytes | Gauge | gateway | module | self | Current shared-data byte total for a Wasm module | - |
+| edgion_wasm_shared_data_bytes | Gauge | gateway | module | self | Sum of accounted bytes across all live stores sharing a module label, including overlapping generations; zero after the last store drops (4MiB cap per store, not per series) | - |
 | edgion_wasm_body_pause_unsupported_total | Counter | gateway | module | self | A Wasm guest returned `Action::Pause` from the response-body hook, which this host cannot honor (per-chunk window, not a cumulative buffer) — the guest silently observes only the current chunk | alert on this counter (no fixed threshold) |
 | edgion_gateway_plugin_policy_blocked_total | Counter | gateway | plugin | self | A request was rejected because its plugin chain contains an entry blocked by the captured GatewayClass policy | - |
 | edgion_gateway_plugin_policy_bypassed_total | Counter | gateway | plugin | self | A request passed through a chain with an entry bypassed by the captured GatewayClass policy | - |

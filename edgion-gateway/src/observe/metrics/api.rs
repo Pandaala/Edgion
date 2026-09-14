@@ -43,7 +43,9 @@ pub fn init_metrics_exporter(cfg: &MetricsConfig) -> Result<(), String> {
 /// Preserve live Service metric handles before the shared exporter can evict
 /// idle series. The synchronous section contains no await or data-plane lock.
 async fn metrics_handler() -> Response {
-    crate::observe::metrics::GatewayMetrics::with_live_lb_degrade_counters(render_metrics)
+    crate::observe::metrics::GatewayMetrics::with_live_lb_degrade_counters(|| {
+        super::registry::with_live_wasm_shared_data_gauges(render_metrics)
+    })
 }
 
 /// Gateway's standalone metrics listener. All Gateway scrapes must use the

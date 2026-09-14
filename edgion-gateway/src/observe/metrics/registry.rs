@@ -1015,9 +1015,61 @@ pub fn set_wasm_modules_loaded(count: usize) {
     gauge!(names::WASM_MODULES_LOADED).set(count as f64);
 }
 
-/// Set the current shared-data byte total for a module.
-pub fn set_wasm_shared_data_bytes(module: &str, bytes: usize) {
-    gauge!(names::WASM_SHARED_DATA_BYTES, "module" => module.to_string()).set(bytes as f64);
+// No byte ledger: the exporter gauge itself aggregates mutation deltas.
+// Weak handles cover old request-held generations without retaining stores.
+static WASM_SHARED_DATA_GAUGES: LazyLock<Mutex<HashMap<String, Weak<Gauge>>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+fn live_wasm_shared_data_gauges() -> parking_lot::MutexGuard<'static, HashMap<String, Weak<Gauge>>> {
+    let mut gauges = WASM_SHARED_DATA_GAUGES.lock();
+    gauges.retain(|_, gauge| gauge.strong_count() > 0);
+    gauges
+}
+
+/// Register once per live module label; never reset another store's contribution.
+pub(crate) fn wasm_shared_data_bytes_gauge(module: &str) -> Arc<Gauge> {
+    let mut gauges = live_wasm_shared_data_gauges();
+    if let Some(gauge) = gauges.get(module).and_then(Weak::upgrade) {
+        return gauge;
+    }
+    let gauge = Arc::new(gauge!(names::WASM_SHARED_DATA_BYTES, "module" => module.to_string()));
+    gauges.insert(module.to_string(), Arc::downgrade(&gauge));
+    gauge
+}
+
+/// Keep live byte gauges attached across exporter idle eviction. Registration
+/// shares this cold-path lock with render; mutation and store Drop never do.
+pub(crate) fn with_live_wasm_shared_data_gauges<R>(render: impl FnOnce() -> R) -> R {
+    let mut gauges = live_wasm_shared_data_gauges();
+    let live: Vec<_> = gauges.values().filter_map(Weak::upgrade).collect();
+    for gauge in &live {
+        gauge.increment(0.0);
+    }
+    let result = render();
+    drop(live);
+    gauges.retain(|_, gauge| gauge.strong_count() > 0);
+    result
+}
+
+#[derive(Default, serde::Serialize)]
+pub(crate) struct WasmSharedDataMetricStats {
+    pub count: usize,
+    pub keys: Vec<String>,
+}
+
+pub(crate) fn wasm_shared_data_metric_stats() -> WasmSharedDataMetricStats {
+    let gauges = live_wasm_shared_data_gauges();
+    shared_data_metric_stats(&gauges)
+}
+
+fn shared_data_metric_stats(gauges: &HashMap<String, Weak<Gauge>>) -> WasmSharedDataMetricStats {
+    let mut keys: Vec<_> = gauges.keys().cloned().collect();
+    keys.sort_unstable();
+    keys.truncate(100);
+    WasmSharedDataMetricStats {
+        count: gauges.len(),
+        keys,
+    }
 }
 
 /// Record a guest returning `Action::Pause` from the response-body hook.
@@ -1136,6 +1188,18 @@ pub fn record_geoip_lookup_panic() {
 /// Neither label carries a client address.
 pub fn record_geoip_denied(layer: StreamLayer, reason: &'static str) {
     counter!(names::GEOIP_DENIED, "layer" => layer.as_metric_label(), "reason" => reason).increment(1);
+}
+
+#[cfg(test)]
+mod wasm_shared_data_metric_tests {
+    use super::*;
+
+    #[test]
+    fn empty_shared_data_metric_registry_reports_zero() {
+        let stats = shared_data_metric_stats(&HashMap::new());
+        assert_eq!(stats.count, 0);
+        assert!(stats.keys.is_empty());
+    }
 }
 
 #[cfg(test)]
