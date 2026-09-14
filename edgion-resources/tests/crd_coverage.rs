@@ -482,6 +482,10 @@ fn acme_challenge_crd_matches_http01_only_runtime() {
     let types = challenge["properties"]["type"]["enum"].as_array().unwrap();
     assert_eq!(types, &[serde_json::json!("http-01")]);
     assert!(has_property(&spec, "challenge.gatewayRef.name"));
+    assert!(
+        !has_property(&spec, "resolvedListenerAttachments"),
+        "controller-resolved ACME listener attachments must not be operator-visible"
+    );
     assert!(!has_property(&spec, "dnsCredentialSecret"));
     assert!(!has_property(&spec, "accountSecret"));
     assert!(has_property(&spec, "privateKeySecretRef.name"));

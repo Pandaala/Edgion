@@ -1,0 +1,25 @@
+apiVersion: edgion.io/v1
+kind: EdgionAcme
+metadata:
+  name: acme-gatewayref-ownership
+  namespace: edgion-test
+spec:
+  email: admin@example.com
+  privateKeySecretRef:
+    name: acme-gatewayref-account
+  domains:
+    - acme-ownership.example.com
+  challenge:
+    type: http-01
+    gatewayRef:
+      name: acme-ownership-b
+      sectionName: http
+      port: 31411
+  storage:
+    secretName: acme-gatewayref-certificate
+status:
+  activeChallenges:
+    - domain: acme-ownership.example.com
+      token: ownership-token
+      keyAuthorization: ownership-token.authorization
+      expireAt: 4102444800

@@ -34,6 +34,124 @@ pub struct AcceptedResult {
     pub matched_listener_protocols: Vec<String>,
 }
 
+/// Failure to resolve the single Gateway attachment used by an EdgionAcme
+/// HTTP-01 challenge.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum AcmeGatewayRefError {
+    InvalidKind { group: String, kind: String },
+    RefNotPermitted { namespace: String, name: String },
+    ParentNotFound { namespace: String, name: String },
+    NoMatchingListener,
+    NoHttpListener,
+    TooManyListeners,
+    UnresolvedGateway,
+}
+
+/// Resolve an EdgionAcme `gatewayRef` to Controller-owned HTTP listeners.
+///
+/// Unlike Route attachment resolution, this deliberately ignores
+/// `allowedRoutes`, Route kinds, and Route hostname intersection. EdgionAcme is
+/// not a Route. Only the projected Gateway cache is authoritative here: raw
+/// Gateways have no resolved attachment proof and cannot mint serving rights.
+pub(crate) fn resolve_acme_listener_attachments(
+    parent_ref: &ParentReference,
+    owner_namespace: &str,
+    runtime: &ControllerRuntime,
+) -> Result<Vec<ResolvedListenerAttachment>, AcmeGatewayRefError> {
+    let group = parent_ref.group.as_deref().unwrap_or("gateway.networking.k8s.io");
+    let kind = parent_ref.kind.as_deref().unwrap_or("Gateway");
+    if group != "gateway.networking.k8s.io" || kind != "Gateway" {
+        return Err(AcmeGatewayRefError::InvalidKind {
+            group: group.to_string(),
+            kind: kind.to_string(),
+        });
+    }
+
+    let gateway_namespace = parent_ref.namespace.as_deref().unwrap_or(owner_namespace);
+    if gateway_namespace != owner_namespace
+        && crate::config::is_reference_grant_validation_enabled()
+        && !runtime.ref_grant_store.check_reference_allowed(
+            owner_namespace,
+            "edgion.io",
+            "EdgionAcme",
+            gateway_namespace,
+            "gateway.networking.k8s.io",
+            "Gateway",
+            Some(&parent_ref.name),
+        )
+    {
+        return Err(AcmeGatewayRefError::RefNotPermitted {
+            namespace: gateway_namespace.to_string(),
+            name: parent_ref.name.clone(),
+        });
+    }
+
+    let gateway = lookup_projected_gateway(gateway_namespace, &parent_ref.name, runtime).ok_or_else(|| {
+        AcmeGatewayRefError::ParentNotFound {
+            namespace: gateway_namespace.to_string(),
+            name: parent_ref.name.clone(),
+        }
+    })?;
+    let proof = edgion_resources::resources::gateway::gateway_attachment_proof(&gateway);
+    if !proof.is_resolved() {
+        return Err(AcmeGatewayRefError::UnresolvedGateway);
+    }
+
+    let listeners = gateway.spec.listeners.as_deref().unwrap_or_default();
+    if listeners.len() > edgion_resources::resources::gateway::MAX_GATEWAY_LISTENERS {
+        return Err(AcmeGatewayRefError::TooManyListeners);
+    }
+
+    let selected: Vec<_> = listeners
+        .iter()
+        .filter(|listener| {
+            parent_ref
+                .section_name
+                .as_ref()
+                .is_none_or(|section_name| listener.name == *section_name)
+                && parent_ref.port.is_none_or(|port| listener.port == port)
+                && !edgion_resources::resources::gateway::gateway_listener_is_explicitly_ineligible(
+                    &gateway,
+                    &listener.name,
+                )
+        })
+        .collect();
+    if selected.is_empty() {
+        return Err(AcmeGatewayRefError::NoMatchingListener);
+    }
+
+    let mut attachments: Vec<_> = selected
+        .into_iter()
+        .filter(|listener| listener.protocol == "HTTP")
+        .map(|listener| ResolvedListenerAttachment {
+            gateway_namespace: gateway_namespace.to_string(),
+            gateway_name: parent_ref.name.clone(),
+            listener_name: listener.name.clone(),
+            listener_key: ListenerKey::new(
+                resolve_listener_addr(gateway.spec.addresses.as_ref(), listener.port),
+                &listener.protocol,
+            ),
+            gateway_proof: proof.clone(),
+        })
+        .collect();
+    if attachments.is_empty() {
+        return Err(AcmeGatewayRefError::NoHttpListener);
+    }
+    if attachments.len() > edgion_resources::resources::edgion_acme::MAX_ACME_RESOLVED_ATTACHMENTS {
+        return Err(AcmeGatewayRefError::TooManyListeners);
+    }
+    attachments.sort_by(|a, b| {
+        (&a.gateway_namespace, &a.gateway_name, &a.listener_name, &a.listener_key).cmp(&(
+            &b.gateway_namespace,
+            &b.gateway_name,
+            &b.listener_name,
+            &b.listener_key,
+        ))
+    });
+    attachments.dedup();
+    Ok(attachments)
+}
+
 /// Return the validation error for an EdgionPlugins backend filter whose
 /// desired resource declares a plugin unavailable at backend scope.
 ///

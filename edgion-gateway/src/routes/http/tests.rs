@@ -43,6 +43,7 @@ mod route_matching_tests {
                                 Vec::new(),
                                 None,
                             )),
+                            gateway_proof: None,
                             hostname: hostname.map(str::to_owned),
                             allowed_routes: None,
                         },

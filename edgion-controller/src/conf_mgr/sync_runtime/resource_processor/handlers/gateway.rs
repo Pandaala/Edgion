@@ -903,15 +903,17 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
         let route_index = &ctx.runtime().gateway_route_index;
         if let Some(routes) = route_index.update_listener_config_and_collect_routes(&gateway_key, gateway) {
             for (route_kind, route_key) in routes {
-                if route_kind != ResourceKind::EdgionTls {
+                if !matches!(route_kind, ResourceKind::EdgionTls | ResourceKind::EdgionAcme) {
                     ctx.requeue(route_kind.as_str(), route_key).await;
                 }
             }
         }
-        // EdgionTls consumes the publication proof and must refresh each epoch.
+        // EdgionTls and EdgionAcme consume the publication proof and must
+        // refresh on every epoch, even when listener routing inputs did not
+        // otherwise change.
         for (route_kind, route_key) in route_index.get_routes_for_gateway(&gateway_key) {
-            if route_kind == ResourceKind::EdgionTls {
-                ctx.requeue(ResourceKind::EdgionTls.as_str(), route_key).await;
+            if matches!(route_kind, ResourceKind::EdgionTls | ResourceKind::EdgionAcme) {
+                ctx.requeue(route_kind.as_str(), route_key).await;
             }
         }
     }

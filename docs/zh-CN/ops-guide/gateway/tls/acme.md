@@ -96,9 +96,14 @@ spec:
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `gatewayRef` | Object | **必填** | 提供校验响应的 Gateway 的 HTTP 监听器引用 |
+| `gatewayRef` | Object | **必填** | 提供校验响应的 Gateway HTTP 监听器引用；可用 `namespace`、`sectionName` 和 `port` 缩小目标范围 |
 
-Controller 将 token 发布到 `status.activeChallenges`；Gateway 读取后仅在校验进行中时响应 `http://<domain>/.well-known/acme-challenge/<token>`，校验结束后停止拦截该路径。
+只有被选中的明文 HTTP 监听器可以响应。若同时设置 `sectionName` 和
+`port`，两者必须同时匹配。跨命名空间引用需要 `ReferenceGrant` 允许
+`edgion.io/EdgionAcme` 引用 `gateway.networking.k8s.io/Gateway`；
+`allowedRoutes` 不适用于 EdgionAcme。
+
+Controller 将 token 发布到 `status.activeChallenges`；仅当校验、所选监听器和当前 Gateway 代次都匹配时，Gateway 才响应 `http://<domain>/.well-known/acme-challenge/<token>`，校验结束后停止拦截该路径。
 
 ### 续期与重试（renewal）
 

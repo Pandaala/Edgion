@@ -139,4 +139,4 @@ pub use status::TlsRouteCrossNsSvcTestSuite;
 pub use status::TlsRouteStatusTestSuite;
 
 // Services tests (ACME, etc.)
-pub use services::AcmeTestSuite;
+pub use services::{AcmeGatewayRefOwnershipPhase, AcmeGatewayRefOwnershipTestSuite, AcmeTestSuite};

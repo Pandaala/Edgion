@@ -6,4 +6,4 @@
 
 mod acme;
 
-pub use acme::AcmeTestSuite;
+pub use acme::{AcmeGatewayRefOwnershipPhase, AcmeGatewayRefOwnershipTestSuite, AcmeTestSuite};

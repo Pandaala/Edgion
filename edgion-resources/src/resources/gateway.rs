@@ -476,6 +476,47 @@ pub struct ListenerStatus {
     pub conditions: Vec<Condition>,
 }
 
+/// Return whether Controller status explicitly excludes a Gateway listener
+/// from data-plane publication.
+///
+/// Missing Gateway/listener status is allowed during initial publication. An
+/// explicit conflict or negative Accepted/Programmed condition is authoritative
+/// and must be applied consistently by Controller attachment resolvers and the
+/// Gateway listener index.
+pub fn gateway_listener_is_explicitly_ineligible(gateway: &Gateway, listener_name: &str) -> bool {
+    gateway_listener_is_conflicted(gateway, listener_name) || gateway_listener_is_not_programmed(gateway, listener_name)
+}
+
+/// Return whether status marks the listener as conflicted.
+pub fn gateway_listener_is_conflicted(gateway: &Gateway, listener_name: &str) -> bool {
+    gateway
+        .status
+        .as_ref()
+        .and_then(|status| status.listeners.as_ref())
+        .and_then(|listeners| listeners.iter().find(|listener| listener.name == listener_name))
+        .is_some_and(|listener| {
+            listener
+                .conditions
+                .iter()
+                .any(|condition| condition.type_ == "Conflicted" && condition.status == "True")
+        })
+}
+
+/// Return whether status explicitly marks the listener Accepted or Programmed
+/// false. Missing status remains eligible during initial publication.
+pub fn gateway_listener_is_not_programmed(gateway: &Gateway, listener_name: &str) -> bool {
+    gateway
+        .status
+        .as_ref()
+        .and_then(|status| status.listeners.as_ref())
+        .and_then(|listeners| listeners.iter().find(|listener| listener.name == listener_name))
+        .is_some_and(|listener| {
+            listener.conditions.iter().any(|condition| {
+                (condition.type_ == "Programmed" || condition.type_ == "Accepted") && condition.status == "False"
+            })
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

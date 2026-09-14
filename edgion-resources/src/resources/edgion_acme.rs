@@ -7,6 +7,7 @@ use super::common::Condition;
 
 crate::redact::impl_redacted_debug!(ActiveHttpChallenge);
 use super::common::{ParentReference, SecretObjectReference};
+use super::edgion_tls::ResolvedListenerAttachment;
 use kube::CustomResource;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -14,6 +15,11 @@ use serde::{Deserialize, Serialize};
 // ============================================================================
 // ACME Challenge types
 // ============================================================================
+
+/// Maximum number of Controller-resolved HTTP listener attachments for one
+/// `EdgionAcme`. A single `gatewayRef` cannot expand beyond one Gateway's
+/// bounded listener set.
+pub const MAX_ACME_RESOLVED_ATTACHMENTS: usize = super::gateway::MAX_GATEWAY_LISTENERS;
 
 /// ACME challenge configuration.
 ///
@@ -234,6 +240,13 @@ pub struct EdgionAcmeSpec {
     /// Challenge configuration
     pub challenge: AcmeChallenge,
 
+    /// Controller-resolved logical Gateway listener identities authorized to
+    /// serve this resource's HTTP-01 challenges. This internal transport field
+    /// is recomputed on every reconcile and is never operator-authored.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
+    pub resolved_listener_attachments: Option<Vec<ResolvedListenerAttachment>>,
+
     /// Certificate renewal configuration
     #[serde(default)]
     pub renewal: AcmeRenewalConfig,
@@ -371,6 +384,7 @@ impl EdgionAcme {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::resources::edgion_tls::GatewayAttachmentProof;
 
     #[test]
     fn test_http01_yaml_deserialization() {
@@ -585,6 +599,50 @@ spec:
         assert_eq!(
             acme.spec.private_key_secret_ref.namespace.as_deref(),
             Some("secrets-ns")
+        );
+    }
+
+    #[test]
+    fn resolved_listener_attachments_survive_transport_round_trip() {
+        let yaml = r#"
+apiVersion: edgion.io/v1
+kind: EdgionAcme
+metadata:
+  name: test
+  namespace: default
+spec:
+  email: admin@example.com
+  privateKeySecretRef:
+    name: account
+  domains: [example.com]
+  challenge:
+    type: http-01
+    gatewayRef:
+      name: gw
+  storage:
+    secretName: cert
+"#;
+        let mut acme: EdgionAcme = serde_yaml::from_str(yaml).expect("test resource must deserialize");
+        acme.spec.resolved_listener_attachments = Some(vec![ResolvedListenerAttachment {
+            gateway_namespace: "default".to_string(),
+            gateway_name: "gw".to_string(),
+            listener_name: "http".to_string(),
+            listener_key: crate::ListenerKey::new(
+                "0.0.0.0:80".parse().expect("test listener address must parse"),
+                "HTTP",
+            ),
+            gateway_proof: GatewayAttachmentProof {
+                instance: "instance".to_string(),
+                generation: 1,
+                epoch: "1".to_string(),
+                attachment_digest: "a".repeat(64),
+            },
+        }]);
+        let encoded = serde_json::to_vec(&acme).expect("transport resource must serialize");
+        let decoded: EdgionAcme = serde_json::from_slice(&encoded).expect("transport resource must deserialize");
+        assert_eq!(
+            decoded.spec.resolved_listener_attachments,
+            acme.spec.resolved_listener_attachments
         );
     }
 }

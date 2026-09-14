@@ -96,9 +96,14 @@ After creation the Controller registers the ACME account (storing its key in `pr
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `gatewayRef` | Object | **Required** | Gateway whose HTTP listener serves the challenge response |
+| `gatewayRef` | Object | **Required** | Gateway HTTP listener attachment that serves the challenge response; `namespace`, `sectionName`, and `port` may narrow the target |
 
-The Controller publishes the token in `status.activeChallenges`; the Gateway reads it and answers `http://<domain>/.well-known/acme-challenge/<token>` only while a challenge is in flight, then stops intercepting that path.
+Only selected plain-HTTP listeners can answer. If both `sectionName` and `port`
+are present, both must match. A cross-namespace reference requires a
+`ReferenceGrant` from `edgion.io/EdgionAcme` to
+`gateway.networking.k8s.io/Gateway`; `allowedRoutes` is unrelated.
+
+The Controller publishes the token in `status.activeChallenges`; the Gateway answers `http://<domain>/.well-known/acme-challenge/<token>` only while the challenge, selected listener, and current Gateway generation all match, then stops intercepting that path.
 
 ### Renewal
 

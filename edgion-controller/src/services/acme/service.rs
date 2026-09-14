@@ -37,9 +37,15 @@ use super::secret_io::{
     account_credentials_from_json, create_account_secret, extract_account_json_string,
     patch_account_key_into_existing_secret,
 };
+use crate::conf_mgr::sync_runtime::resource_processor::handlers::route_utils::{
+    resolve_acme_listener_attachments, AcmeGatewayRefError,
+};
+use crate::conf_mgr::ControllerRuntime;
 use edgion_common::time::now_rfc3339;
 use edgion_resources::duration::parse_duration;
-use edgion_resources::resources::edgion_acme::{AcmeCertPhase, ActiveHttpChallenge, EdgionAcme, EdgionAcmeStatus};
+use edgion_resources::resources::edgion_acme::{
+    AcmeCertPhase, AcmeChallenge, ActiveHttpChallenge, EdgionAcme, EdgionAcmeStatus, MAX_ACME_RESOLVED_ATTACHMENTS,
+};
 
 // ============================================================================
 // Global singleton (re-initializable for controller re-election)
@@ -81,6 +87,8 @@ enum AcmeCommand {
     ResourceChanged { key: String },
     /// Trigger a renewal check for a specific resource
     RenewalCheck { key: String },
+    /// Recheck Controller-processed eligibility after a transient cache skew.
+    EligibilityCheck { key: String },
 }
 
 /// Initialize and start the global ACME service.
@@ -90,7 +98,7 @@ enum AcmeCommand {
 ///
 /// On startup, the service scans EdgionAcme resources in the configured watch
 /// namespaces to recover renewal timers that were lost during controller restart.
-pub fn start_acme_service(client: Client, watch_namespaces: Vec<String>) {
+pub fn start_acme_service(client: Client, watch_namespaces: Vec<String>, runtime: Arc<ControllerRuntime>) {
     let mut guard = ACME_SERVICE.lock();
     if guard.is_some() {
         tracing::warn!(
@@ -108,7 +116,7 @@ pub fn start_acme_service(client: Client, watch_namespaces: Vec<String>) {
     *guard = Some(AcmeServiceHandle { tx, generation });
     drop(guard); // Release lock before spawning tasks
 
-    let service = AcmeServiceWorker::new(client.clone(), generation);
+    let service = AcmeServiceWorker::new(client.clone(), runtime, generation);
     let worker_handle = tokio::spawn(async move {
         service.run(rx).await;
     });
@@ -316,6 +324,9 @@ fn schedule_renewal_check(generation: u64, key: String, delay: Duration) {
 /// the user edits the CRD (which resets the retry counter).
 const MAX_RETRY_ATTEMPTS: u32 = 5;
 
+/// Short convergence delay for raw-object and processed-cache publication skew.
+const ELIGIBILITY_RECHECK_DELAY: Duration = Duration::from_secs(1);
+
 /// Compute exponential backoff duration for a given attempt.
 ///
 /// Formula: `base * 4^attempt`
@@ -356,6 +367,7 @@ fn spec_duration_or(value: &str, field: &'static str, default: Duration) -> Dura
 /// The background worker that processes ACME commands
 struct AcmeServiceWorker {
     client: Client,
+    runtime: Arc<ControllerRuntime>,
     /// Generation this worker belongs to; stamped onto timers it schedules.
     generation: u64,
     /// Keys of resources currently being processed (prevents duplicate work)
@@ -363,15 +375,20 @@ struct AcmeServiceWorker {
     /// Consecutive failure count per resource key (for exponential backoff).
     /// Reset to 0 on success or when the user edits the CRD (ResourceChanged).
     retry_tracker: Arc<RwLock<HashMap<String, u32>>>,
+    /// At most one processed-cache convergence timer per resource key and
+    /// service generation. Timers remove their marker before re-enqueueing.
+    eligibility_waiting: Arc<RwLock<HashSet<String>>>,
 }
 
 impl AcmeServiceWorker {
-    fn new(client: Client, generation: u64) -> Self {
+    fn new(client: Client, runtime: Arc<ControllerRuntime>, generation: u64) -> Self {
         Self {
             client,
+            runtime,
             generation,
             processing: Arc::new(RwLock::new(HashSet::new())),
             retry_tracker: Arc::new(RwLock::new(HashMap::new())),
+            eligibility_waiting: Arc::new(RwLock::new(HashSet::new())),
         }
     }
 
@@ -387,6 +404,11 @@ impl AcmeServiceWorker {
                 }
                 AcmeCommand::RenewalCheck { key } => {
                     // Timer-driven check (renewal or retry): don't reset counter
+                    self.handle_resource_check(&key).await;
+                }
+                AcmeCommand::EligibilityCheck { key } => {
+                    // Cache-convergence checks are not issuance retries and do
+                    // not reset or increment the retry budget.
                     self.handle_resource_check(&key).await;
                 }
             }
@@ -423,6 +445,15 @@ impl AcmeServiceWorker {
                 return;
             }
         };
+
+        match evaluate_issuance_eligibility(&acme, key, &self.runtime) {
+            EligibilityDecision::Eligible => {}
+            EligibilityDecision::AuthoritativelyIneligible => return,
+            EligibilityDecision::Transient => {
+                self.schedule_eligibility_recheck(key);
+                return;
+            }
+        }
 
         let phase = acme
             .status
@@ -569,6 +600,22 @@ impl AcmeServiceWorker {
         });
     }
 
+    fn schedule_eligibility_recheck(&self, key: &str) {
+        if !self.eligibility_waiting.write().insert(key.to_string()) {
+            return;
+        }
+        let pending = self.eligibility_waiting.clone();
+        let key = key.to_string();
+        let generation = self.generation;
+        tokio::spawn(async move {
+            tokio::time::sleep(ELIGIBILITY_RECHECK_DELAY).await;
+            pending.write().remove(&key);
+            if let Some(tx) = get_sender_for_generation(generation) {
+                let _ = tx.send(AcmeCommand::EligibilityCheck { key }).await;
+            }
+        });
+    }
+
     /// Check if a certificate needs renewal based on expiry time
     fn needs_renewal(&self, acme: &EdgionAcme) -> bool {
         let Some(status) = &acme.status else {
@@ -593,6 +640,108 @@ impl AcmeServiceWorker {
 
         chrono::Utc::now() >= renew_at
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EligibilityDecision {
+    Eligible,
+    AuthoritativelyIneligible,
+    Transient,
+}
+
+fn evaluate_issuance_eligibility(raw: &EdgionAcme, key: &str, runtime: &ControllerRuntime) -> EligibilityDecision {
+    let Some(uid) = raw.metadata.uid.as_deref() else {
+        return EligibilityDecision::Transient;
+    };
+    let Some(generation) = raw.metadata.generation else {
+        return EligibilityDecision::Transient;
+    };
+    let Some(processor) = runtime.processor_registry.get("EdgionAcme") else {
+        return EligibilityDecision::Transient;
+    };
+    let Some(processed) = processor
+        .get_cached_any(key)
+        .and_then(|value| value.downcast::<EdgionAcme>().ok())
+    else {
+        return EligibilityDecision::Transient;
+    };
+    if processed.metadata.uid.as_deref() != Some(uid) || processed.metadata.generation != Some(generation) {
+        return EligibilityDecision::Transient;
+    }
+
+    let Some(status) = processed.status.as_ref() else {
+        return EligibilityDecision::Transient;
+    };
+    let accepted = status.conditions.iter().find(|condition| condition.type_ == "Accepted");
+    let Some(accepted) = accepted else {
+        return EligibilityDecision::Transient;
+    };
+    if accepted.observed_generation != Some(generation) {
+        return EligibilityDecision::Transient;
+    }
+    if accepted.status != "True" {
+        return EligibilityDecision::AuthoritativelyIneligible;
+    }
+
+    let resolved_refs = status
+        .conditions
+        .iter()
+        .find(|condition| condition.type_ == "ResolvedRefs");
+    let Some(resolved_refs) = resolved_refs else {
+        return EligibilityDecision::Transient;
+    };
+    if resolved_refs.observed_generation != Some(generation) {
+        return EligibilityDecision::Transient;
+    }
+    let refs_eligible = resolved_refs.status == "True"
+        || (resolved_refs.status == "Unknown" && resolved_refs.reason == "NeedsRegistration");
+    if !refs_eligible {
+        return EligibilityDecision::AuthoritativelyIneligible;
+    }
+
+    let Some(processed_attachments) = processed.spec.resolved_listener_attachments.as_deref() else {
+        return EligibilityDecision::AuthoritativelyIneligible;
+    };
+    if processed_attachments.is_empty()
+        || processed_attachments.len() > MAX_ACME_RESOLVED_ATTACHMENTS
+        || processed_attachments
+            .iter()
+            .any(|attachment| !attachment.gateway_proof.is_resolved())
+    {
+        return EligibilityDecision::AuthoritativelyIneligible;
+    }
+
+    let gateway_ref = match &raw.spec.challenge {
+        AcmeChallenge::Http01 { gateway_ref } => gateway_ref,
+    };
+    let live_attachments = match resolve_acme_listener_attachments(
+        gateway_ref,
+        raw.metadata.namespace.as_deref().unwrap_or("default"),
+        runtime,
+    ) {
+        Ok(attachments) => attachments,
+        // A projected Gateway can disappear briefly while a publication epoch
+        // changes. The proof-only requeue intentionally does not notify the
+        // service, so startup/Admin work must retain one convergence check.
+        Err(AcmeGatewayRefError::ParentNotFound { .. } | AcmeGatewayRefError::UnresolvedGateway) => {
+            return EligibilityDecision::Transient;
+        }
+        // Invalid operator input or a currently denied/unsupported live target
+        // is authoritative. Its dependency requeue will notify again if the
+        // condition later becomes eligible.
+        Err(
+            AcmeGatewayRefError::InvalidKind { .. }
+            | AcmeGatewayRefError::RefNotPermitted { .. }
+            | AcmeGatewayRefError::NoMatchingListener
+            | AcmeGatewayRefError::NoHttpListener
+            | AcmeGatewayRefError::TooManyListeners,
+        ) => return EligibilityDecision::AuthoritativelyIneligible,
+    };
+    if live_attachments.as_slice() != processed_attachments {
+        return EligibilityDecision::Transient;
+    }
+
+    EligibilityDecision::Eligible
 }
 
 // ============================================================================
@@ -1120,11 +1269,132 @@ fn parse_resource_key(key: &str) -> (String, String) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::conf_mgr::sync_runtime::resource_processor::status_utils::{
+        condition_false, condition_reasons, condition_true, condition_types,
+    };
+    use crate::conf_mgr::sync_runtime::resource_processor::{ProcessorHandler, ResourceProcessor};
+    use edgion_resources::prelude_resources::Gateway;
+    use edgion_resources::resources::edgion_tls::GatewayAttachmentProof;
+    use edgion_resources::resources::gateway::{GatewaySpec, Listener};
     use http::{Response, StatusCode};
     use kube::client::Body;
     use serde_json::json;
     use std::convert::Infallible;
     use tower::service_fn;
+
+    struct NoopGatewayHandler;
+
+    #[async_trait::async_trait]
+    impl ProcessorHandler<Gateway> for NoopGatewayHandler {}
+
+    struct NoopAcmeHandler;
+
+    #[async_trait::async_trait]
+    impl ProcessorHandler<EdgionAcme> for NoopAcmeHandler {}
+
+    fn test_gateway(proof_epoch: &str) -> Gateway {
+        Gateway {
+            metadata: kube::api::ObjectMeta {
+                namespace: Some("default".to_string()),
+                name: Some("gw".to_string()),
+                generation: Some(1),
+                ..Default::default()
+            },
+            spec: GatewaySpec {
+                gateway_class_name: "edgion".to_string(),
+                listeners: Some(vec![Listener {
+                    name: "http".to_string(),
+                    hostname: None,
+                    port: 80,
+                    protocol: "HTTP".to_string(),
+                    tls: None,
+                    allowed_routes: None,
+                }]),
+                addresses: None,
+                tls: None,
+                resolved_inbound_proxy_protocol: Default::default(),
+                resolved_attachment_proof: Some(GatewayAttachmentProof {
+                    instance: "test-instance".to_string(),
+                    generation: 1,
+                    epoch: proof_epoch.to_string(),
+                    attachment_digest: "a".repeat(64),
+                }),
+            },
+            status: None,
+        }
+    }
+
+    fn test_acme() -> EdgionAcme {
+        serde_yaml::from_str(
+            r#"
+apiVersion: edgion.io/v1
+kind: EdgionAcme
+metadata:
+  namespace: default
+  name: test
+  uid: uid-1
+  generation: 1
+spec:
+  email: admin@example.com
+  privateKeySecretRef:
+    name: account
+  domains:
+    - example.com
+  challenge:
+    type: http-01
+    gatewayRef:
+      name: gw
+  storage:
+    secretName: certificate
+"#,
+        )
+        .expect("test EdgionAcme must deserialize")
+    }
+
+    fn eligibility_runtime(processed: &mut EdgionAcme) -> Arc<ControllerRuntime> {
+        let runtime = Arc::new(ControllerRuntime::default());
+        let gateway_processor = Arc::new(ResourceProcessor::<Gateway>::new(
+            "Gateway",
+            8,
+            Arc::new(NoopGatewayHandler),
+            runtime.clone(),
+        ));
+        gateway_processor.save(test_gateway("1"), None);
+        runtime.processor_registry.register(gateway_processor);
+
+        let gateway_ref = match &processed.spec.challenge {
+            AcmeChallenge::Http01 { gateway_ref } => gateway_ref,
+        };
+        processed.spec.resolved_listener_attachments = Some(
+            resolve_acme_listener_attachments(gateway_ref, "default", &runtime)
+                .expect("test Gateway attachment must resolve"),
+        );
+        let generation = processed.metadata.generation;
+        let status = processed.status.get_or_insert_with(Default::default);
+        status.conditions = vec![
+            condition_true(
+                condition_types::ACCEPTED,
+                condition_reasons::ACCEPTED,
+                "Resource accepted",
+                generation,
+            ),
+            condition_true(
+                condition_types::RESOLVED_REFS,
+                condition_reasons::RESOLVED_REFS,
+                "References resolved",
+                generation,
+            ),
+        ];
+        let acme_processor = Arc::new(ResourceProcessor::<EdgionAcme>::new(
+            "EdgionAcme",
+            8,
+            Arc::new(NoopAcmeHandler),
+            runtime.clone(),
+        ));
+        acme_processor.save(processed.clone(), None);
+        runtime.processor_registry.register(acme_processor);
+        runtime
+    }
 
     fn empty_acme_list() -> Response<Body> {
         Response::builder()
@@ -1192,6 +1462,103 @@ mod tests {
         // Very large attempt should not overflow (saturating_pow + saturating_mul)
         let result = exponential_backoff(300, 100);
         assert!(result.as_secs() > 0); // Should not be zero/wrap
+    }
+
+    #[tokio::test]
+    async fn issuance_eligibility_requires_matching_processed_generation_and_live_proof() {
+        let raw = test_acme();
+        let mut processed = raw.clone();
+        let runtime = eligibility_runtime(&mut processed);
+        assert_eq!(
+            evaluate_issuance_eligibility(&raw, "default/test", &runtime),
+            EligibilityDecision::Eligible
+        );
+
+        let mut replaced_raw = raw.clone();
+        replaced_raw.metadata.uid = Some("uid-2".to_string());
+        assert_eq!(
+            evaluate_issuance_eligibility(&replaced_raw, "default/test", &runtime),
+            EligibilityDecision::Transient
+        );
+
+        let replacement = Arc::new(ResourceProcessor::<Gateway>::new(
+            "Gateway",
+            8,
+            Arc::new(NoopGatewayHandler),
+            runtime.clone(),
+        ));
+        replacement.save(test_gateway("2"), None);
+        runtime.processor_registry.register(replacement);
+        assert_eq!(
+            evaluate_issuance_eligibility(&raw, "default/test", &runtime),
+            EligibilityDecision::Transient,
+            "a proof-only Gateway publication must invalidate stale processed authority"
+        );
+
+        let missing = Arc::new(ResourceProcessor::<Gateway>::new(
+            "Gateway",
+            8,
+            Arc::new(NoopGatewayHandler),
+            runtime.clone(),
+        ));
+        runtime.processor_registry.register(missing);
+        assert_eq!(
+            evaluate_issuance_eligibility(&raw, "default/test", &runtime),
+            EligibilityDecision::Transient,
+            "a projected-Gateway publication gap must retain a convergence check"
+        );
+
+        let mut no_http_gateway = test_gateway("3");
+        let listener = no_http_gateway
+            .spec
+            .listeners
+            .as_mut()
+            .and_then(|listeners| listeners.first_mut())
+            .expect("test Gateway listener must exist");
+        listener.protocol = "HTTPS".to_string();
+        listener.port = 443;
+        let no_http = Arc::new(ResourceProcessor::<Gateway>::new(
+            "Gateway",
+            8,
+            Arc::new(NoopGatewayHandler),
+            runtime.clone(),
+        ));
+        no_http.save(no_http_gateway, None);
+        runtime.processor_registry.register(no_http);
+        assert_eq!(
+            evaluate_issuance_eligibility(&raw, "default/test", &runtime),
+            EligibilityDecision::AuthoritativelyIneligible,
+            "a live non-HTTP selection is an authoritative invalid result"
+        );
+    }
+
+    #[tokio::test]
+    async fn issuance_eligibility_rejects_current_false_condition() {
+        let raw = test_acme();
+        let mut processed = raw.clone();
+        let runtime = eligibility_runtime(&mut processed);
+        let status = processed.status.get_or_insert_with(Default::default);
+        status
+            .conditions
+            .retain(|condition| condition.type_ != condition_types::RESOLVED_REFS);
+        status.conditions.push(condition_false(
+            condition_types::RESOLVED_REFS,
+            condition_reasons::NO_MATCHING_PARENT,
+            "No HTTP listener",
+            processed.metadata.generation,
+        ));
+        let replacement = Arc::new(ResourceProcessor::<EdgionAcme>::new(
+            "EdgionAcme",
+            8,
+            Arc::new(NoopAcmeHandler),
+            runtime.clone(),
+        ));
+        replacement.save(processed, None);
+        runtime.processor_registry.register(replacement);
+        assert_eq!(
+            evaluate_issuance_eligibility(&raw, "default/test", &runtime),
+            EligibilityDecision::AuthoritativelyIneligible
+        );
     }
 
     // ================================================================
@@ -1286,6 +1653,22 @@ mod tests {
 
         // Cleanup global state.
         ACME_SERVICE.lock().take();
+    }
+
+    #[tokio::test]
+    async fn eligibility_recheck_timer_is_deduplicated_per_key() {
+        let _guard = ACME_TEST_MUTEX.lock().await;
+        ACME_SERVICE.lock().take();
+        let client = Client::new(
+            service_fn(|_request: http::Request<Body>| async move { Ok::<_, Infallible>(empty_acme_list()) }),
+            "default",
+        );
+        let worker = AcmeServiceWorker::new(client, Arc::new(ControllerRuntime::default()), 99);
+        worker.schedule_eligibility_recheck("default/test");
+        worker.schedule_eligibility_recheck("default/test");
+        assert_eq!(worker.eligibility_waiting.read().len(), 1);
+        tokio::time::sleep(ELIGIBILITY_RECHECK_DELAY + Duration::from_millis(100)).await;
+        assert!(worker.eligibility_waiting.read().is_empty());
     }
 
     #[test]

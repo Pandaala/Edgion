@@ -42,8 +42,8 @@ User creates/updates EdgionAcme
 ### Detailed Steps
 
 1. **Resource intake**: the user creates or updates an EdgionAcme resource; it enters the Workqueue → ResourceProcessor pipeline
-2. **Handler processing**: the EdgionAcme Handler validates configuration, resolves credential references, updates `Accepted`/`ResolvedRefs`, and notifies the ACME service
-3. **Background worker**: the Kubernetes leader's AcmeService consumes its own `mpsc<AcmeCommand>` queue and requests issuance from the ACME server
+2. **Handler processing**: the EdgionAcme Handler validates configuration, resolves the account credential and `challenge.gatewayRef`, publishes Controller-owned HTTP listener attachments, updates `Accepted`/`ResolvedRefs`, and notifies the ACME service only when the attachment is usable
+3. **Background worker**: the Kubernetes leader's AcmeService consumes its own `mpsc<AcmeCommand>` queue, verifies the raw object against the current processed generation and live Gateway attachment, then requests issuance from the ACME server
 4. **Domain validation**: performs proof of domain ownership using HTTP-01
 5. **Certificate issuance**: once validation passes, the ACME server issues the certificate; the client downloads the certificate chain and private key
 6. **Secret storage**: writes the issued certificate and private key into the corresponding Secret resource for use by Gateway TLS
@@ -94,3 +94,18 @@ State changes of an EdgionAcme resource trigger reprocessing of related resource
 - Certificate about to expire → AcmeService timer sends `RenewalCheck` on its own command queue → renewal flow starts
 
 The renewal/retry queue is distinct from the resource Workqueue.
+
+### HTTP-01 serving authority
+
+`challenge.gatewayRef` authorizes only the selected plain-HTTP listeners. The
+handler resolves `sectionName` and `port` against the Controller-published
+Gateway, checks cross-namespace `ReferenceGrant`, and transports bounded
+`ResolvedListenerAttachment` values over conf-sync. `allowedRoutes` does not
+apply because EdgionAcme is not a Route.
+
+Every service command, including startup, Admin, renewal, and retry work,
+passes the same eligibility gate. The raw and processed objects must have the
+same UID and generation, current `Accepted`/`ResolvedRefs` conditions, and an
+attachment vector equal to a fresh live resolution. Cache publication skew is
+retried by one generation-scoped timer per key without consuming the issuance
+retry budget.

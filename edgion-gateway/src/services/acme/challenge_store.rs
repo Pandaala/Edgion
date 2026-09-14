@@ -8,10 +8,16 @@
 //! with active_challenges are synced from the Controller.
 
 use crate::observe::metrics::record_acme_challenge_lookup;
+use crate::runtime::hostname_matches_listener;
+use crate::runtime::store::GatewayInfoIndex;
 use arc_swap::ArcSwap;
 use bytes::Bytes;
-use edgion_resources::resources::edgion_acme::EdgionAcme;
+use edgion_resources::resources::edgion_acme::{EdgionAcme, MAX_ACME_RESOLVED_ATTACHMENTS};
+use edgion_resources::resources::edgion_tls::GatewayAttachmentProof;
+use edgion_resources::ListenerKey;
 use parking_lot::RwLock;
+use std::cmp::Ordering;
+use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -21,15 +27,39 @@ use std::time::{SystemTime, UNIX_EPOCH};
 /// `key_authorization` is stored as `Bytes` so the request hot path can return
 /// it via cheap refcount-bumping clones instead of allocating a fresh `String`
 /// per lookup hit. Downstream writes the body as `Bytes` regardless.
-#[derive(Debug, Clone)]
-pub struct ChallengeEntry {
-    pub domain: String,
-    pub key_authorization: Bytes,
-    pub expire_at: u64,
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CompiledAcmeAttachment {
+    listener_key: ListenerKey,
+    gateway_key: Arc<str>,
+    listener_name: Arc<str>,
+    gateway_proof: GatewayAttachmentProof,
 }
 
-type ChallengeTokenMap = HashMap<String, ChallengeEntry>;
-type ResourceTokenMap = HashMap<String, Vec<String>>;
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChallengeEntry {
+    resource_key: Arc<str>,
+    pub domain: Arc<str>,
+    pub key_authorization: Bytes,
+    pub expire_at: u64,
+    attachments: Arc<[CompiledAcmeAttachment]>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ChallengeBucket {
+    Candidates(Arc<[ChallengeEntry]>),
+    Overflow,
+}
+
+#[derive(Debug, Clone)]
+struct ResourceChallenge {
+    token: String,
+    entry: ChallengeEntry,
+}
+
+const MAX_ACME_TOKEN_CANDIDATES: usize = 64;
+
+type ChallengeTokenMap = HashMap<String, ChallengeBucket>;
+type ResourceChallengeMap = HashMap<String, Vec<ResourceChallenge>>;
 
 /// Global challenge token store
 ///
@@ -42,25 +72,125 @@ type ResourceTokenMap = HashMap<String, Vec<String>>;
 pub struct AcmeChallengeStore {
     /// Flat map: token -> ChallengeEntry (lock-free snapshot reads in hot path)
     tokens: ArcSwap<ChallengeTokenMap>,
-    /// Per-resource tracking: resource_key -> list of token strings
-    /// Used to correctly remove tokens when a resource is updated or deleted.
-    resource_tokens: RwLock<ResourceTokenMap>,
+    /// Per-resource compiled challenges used to rebuild token buckets without
+    /// losing colliding candidates when a resource is updated or deleted.
+    resource_challenges: RwLock<ResourceChallengeMap>,
 }
 
 impl AcmeChallengeStore {
     pub fn new() -> Self {
         Self {
             tokens: ArcSwap::from_pointee(HashMap::new()),
-            resource_tokens: RwLock::new(HashMap::new()),
+            resource_challenges: RwLock::new(HashMap::new()),
         }
     }
 
-    fn build_entry(domain: &str, key_authorization: &str, expire_at: u64) -> ChallengeEntry {
-        ChallengeEntry {
-            domain: domain.to_string(),
-            key_authorization: Bytes::from(key_authorization.to_string()),
-            expire_at,
+    fn compile_resource(resource_key: &str, acme: &EdgionAcme) -> Vec<ResourceChallenge> {
+        let Some(resolved) = acme.spec.resolved_listener_attachments.as_deref() else {
+            return Vec::new();
+        };
+        if resolved.is_empty() || resolved.len() > MAX_ACME_RESOLVED_ATTACHMENTS {
+            return Vec::new();
         }
+
+        let mut attachments = Vec::with_capacity(resolved.len());
+        for attachment in resolved {
+            if attachment.gateway_namespace.is_empty()
+                || attachment.gateway_name.is_empty()
+                || attachment.listener_name.is_empty()
+                || attachment.listener_key.protocol() != "HTTP"
+                || !attachment.gateway_proof.is_resolved()
+            {
+                return Vec::new();
+            }
+            attachments.push(CompiledAcmeAttachment {
+                listener_key: attachment.listener_key.clone(),
+                gateway_key: Arc::from(format!("{}/{}", attachment.gateway_namespace, attachment.gateway_name)),
+                listener_name: Arc::from(attachment.listener_name.as_str()),
+                gateway_proof: attachment.gateway_proof.clone(),
+            });
+        }
+        attachments.sort_by(compiled_attachment_cmp);
+        attachments.dedup();
+        let attachments: Arc<[CompiledAcmeAttachment]> = Arc::from(attachments);
+        let resource_key: Arc<str> = Arc::from(resource_key);
+
+        acme.active_challenges()
+            .iter()
+            .filter(|challenge| {
+                !challenge.token.is_empty() && !challenge.domain.is_empty() && !challenge.key_authorization.is_empty()
+            })
+            .map(|challenge| ResourceChallenge {
+                token: challenge.token.clone(),
+                entry: ChallengeEntry {
+                    resource_key: Arc::clone(&resource_key),
+                    domain: Arc::from(challenge.domain.as_str()),
+                    key_authorization: Bytes::copy_from_slice(challenge.key_authorization.as_bytes()),
+                    expire_at: challenge.expire_at,
+                    attachments: Arc::clone(&attachments),
+                },
+            })
+            .collect()
+    }
+
+    fn build_token_snapshot(resources: &ResourceChallengeMap) -> ChallengeTokenMap {
+        let mut building: HashMap<String, Option<Vec<ChallengeEntry>>> = HashMap::new();
+        for challenge in resources.values().flatten() {
+            match building.entry(challenge.token.clone()) {
+                Entry::Vacant(slot) => {
+                    slot.insert(Some(vec![challenge.entry.clone()]));
+                }
+                Entry::Occupied(mut slot) => {
+                    let Some(candidates) = slot.get_mut() else {
+                        continue;
+                    };
+                    if candidates.iter().any(|existing| existing == &challenge.entry) {
+                        continue;
+                    }
+                    if candidates.len() == MAX_ACME_TOKEN_CANDIDATES {
+                        slot.insert(None);
+                    } else {
+                        candidates.push(challenge.entry.clone());
+                    }
+                }
+            }
+        }
+
+        building
+            .into_iter()
+            .map(|(token, candidates)| {
+                let bucket = match candidates {
+                    Some(mut candidates) => {
+                        candidates.sort_by(challenge_entry_cmp);
+                        ChallengeBucket::Candidates(Arc::from(candidates))
+                    }
+                    None => ChallengeBucket::Overflow,
+                };
+                (token, bucket)
+            })
+            .collect()
+    }
+
+    fn build_token_bucket(resources: &ResourceChallengeMap, token: &str) -> Option<ChallengeBucket> {
+        let mut candidates = Vec::new();
+        for challenge in resources
+            .values()
+            .flatten()
+            .filter(|challenge| challenge.token == token)
+        {
+            if candidates.iter().any(|existing| existing == &challenge.entry) {
+                continue;
+            }
+            if candidates.len() == MAX_ACME_TOKEN_CANDIDATES {
+                return Some(ChallengeBucket::Overflow);
+            }
+            candidates.push(challenge.entry.clone());
+        }
+        if candidates.is_empty() {
+            return None;
+        }
+        candidates.sort_by(challenge_entry_cmp);
+        Some(ChallengeBucket::Candidates(Arc::from(candidates)))
     }
 
     /// Check if the store has any active challenges.
@@ -72,70 +202,112 @@ impl AcmeChallengeStore {
 
     /// Look up a challenge token and return the key authorization if found and not expired.
     /// Also validates the domain matches.
-    pub fn lookup(&self, token: &str, host: &str) -> Option<Bytes> {
+    pub fn lookup_for_listener(
+        &self,
+        listener_key: &ListenerKey,
+        gateway_index: &GatewayInfoIndex,
+        token: &str,
+        challenge_host: &str,
+        listener_host: &str,
+    ) -> Option<Bytes> {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
-        self.lookup_at_epoch_seconds(token, host, now)
+        self.lookup_for_listener_at_epoch_seconds(
+            listener_key,
+            gateway_index,
+            token,
+            challenge_host,
+            listener_host,
+            now,
+        )
     }
 
-    fn lookup_at_epoch_seconds(&self, token: &str, host: &str, now: u64) -> Option<Bytes> {
+    fn lookup_for_listener_at_epoch_seconds(
+        &self,
+        listener_key: &ListenerKey,
+        gateway_index: &GatewayInfoIndex,
+        token: &str,
+        challenge_host: &str,
+        listener_host: &str,
+        now: u64,
+    ) -> Option<Bytes> {
         let tokens = self.tokens.load();
-        if let Some(entry) = tokens.get(token) {
-            // Check expiry
-            if now >= entry.expire_at {
-                record_acme_challenge_lookup("expired");
-                return None;
-            }
-
-            // Check domain matches (ASCII-case-insensitive per RFC 4343).
-            // An empty/unparseable host can no longer match: ACME HTTP-01
-            // validation always carries a Host header equal to the domain being
-            // validated, so an empty host is never a legitimate hit and must not
-            // bypass the per-domain binding.
-            if host.is_empty() {
-                record_acme_challenge_lookup("empty_host");
-                return None;
-            }
-            if entry.domain.eq_ignore_ascii_case(host) {
-                record_acme_challenge_lookup("hit");
-                return Some(entry.key_authorization.clone());
-            }
-
+        let Some(ChallengeBucket::Candidates(candidates)) = tokens.get(token) else {
+            record_acme_challenge_lookup("not_found");
+            return None;
+        };
+        if challenge_host.is_empty() {
+            record_acme_challenge_lookup("empty_host");
+            return None;
+        }
+        if !canonical_host_identity(challenge_host).eq_ignore_ascii_case(canonical_host_identity(listener_host)) {
             record_acme_challenge_lookup("domain_mismatch");
             return None;
         }
-        record_acme_challenge_lookup("not_found");
+
+        let mut saw_domain = false;
+        let mut saw_unexpired_domain = false;
+        let mut matched: Option<&Bytes> = None;
+        for candidate in candidates.iter() {
+            if !candidate.domain.eq_ignore_ascii_case(challenge_host) {
+                continue;
+            }
+            saw_domain = true;
+            if now >= candidate.expire_at {
+                continue;
+            }
+            saw_unexpired_domain = true;
+            if !candidate
+                .attachments
+                .iter()
+                .any(|attachment| attachment_matches(attachment, listener_key, gateway_index, listener_host))
+            {
+                continue;
+            }
+
+            match matched {
+                Some(existing) if existing != &candidate.key_authorization => {
+                    record_acme_challenge_lookup("not_found");
+                    return None;
+                }
+                Some(_) => {}
+                None => matched = Some(&candidate.key_authorization),
+            }
+        }
+
+        if let Some(key_authorization) = matched {
+            record_acme_challenge_lookup("hit");
+            return Some(key_authorization.clone());
+        }
+        if saw_domain && !saw_unexpired_domain {
+            record_acme_challenge_lookup("expired");
+        } else if !saw_domain {
+            record_acme_challenge_lookup("domain_mismatch");
+        } else {
+            record_acme_challenge_lookup("not_found");
+        }
         None
     }
 
     /// Replace all tokens with a new set from EdgionAcme resources.
     /// Called by the ConfHandler on full_set.
     pub fn full_set(&self, data: &HashMap<String, EdgionAcme>) {
-        let mut new_tokens: ChallengeTokenMap = HashMap::new();
-        let mut new_resource_tokens: ResourceTokenMap = HashMap::new();
-
-        for (key, acme) in data {
-            let challenges = acme.active_challenges();
-            if !challenges.is_empty() {
-                let mut keys_for_resource = Vec::new();
-                for c in challenges {
-                    keys_for_resource.push(c.token.clone());
-                    new_tokens.insert(
-                        c.token.clone(),
-                        Self::build_entry(&c.domain, &c.key_authorization, c.expire_at),
-                    );
-                }
-                new_resource_tokens.insert(key.clone(), keys_for_resource);
-            }
-        }
+        let new_resource_challenges: ResourceChallengeMap = data
+            .iter()
+            .filter_map(|(key, acme)| {
+                let challenges = Self::compile_resource(key, acme);
+                (!challenges.is_empty()).then(|| (key.clone(), challenges))
+            })
+            .collect();
+        let new_tokens = Self::build_token_snapshot(&new_resource_challenges);
 
         let token_count = new_tokens.len();
 
         {
-            let mut resource_tokens = self.resource_tokens.write();
-            *resource_tokens = new_resource_tokens;
+            let mut resource_challenges = self.resource_challenges.write();
+            *resource_challenges = new_resource_challenges;
             self.tokens.store(Arc::new(new_tokens));
         }
 
@@ -149,45 +321,94 @@ impl AcmeChallengeStore {
     /// - `upsert`: resources that were added or updated — replace their tokens
     /// - `remove_keys`: resource keys that were deleted — remove their tokens
     pub fn partial_update(&self, upsert: &HashMap<String, EdgionAcme>, remove_keys: &HashSet<String>) {
-        let mut resource_tokens = self.resource_tokens.write();
-        let current = self.tokens.load();
-        let mut new_tokens: ChallengeTokenMap = (**current).clone();
+        let mut resource_challenges = self.resource_challenges.write();
+        let mut touched_tokens = HashSet::new();
 
         // Remove tokens for deleted resources
         for key in remove_keys {
-            if let Some(old_tokens) = resource_tokens.remove(key) {
-                for t in old_tokens {
-                    new_tokens.remove(&t);
-                }
+            if let Some(previous) = resource_challenges.remove(key) {
+                touched_tokens.extend(previous.into_iter().map(|challenge| challenge.token));
             }
         }
 
         // Upsert tokens for added/updated resources
         for (key, acme) in upsert {
-            // Remove old tokens for this resource first
-            if let Some(old_tokens) = resource_tokens.remove(key) {
-                for t in &old_tokens {
-                    new_tokens.remove(t);
-                }
+            if let Some(previous) = resource_challenges.remove(key) {
+                touched_tokens.extend(previous.into_iter().map(|challenge| challenge.token));
             }
-
-            // Insert new tokens
-            let challenges = acme.active_challenges();
+            let challenges = Self::compile_resource(key, acme);
+            touched_tokens.extend(challenges.iter().map(|challenge| challenge.token.clone()));
             if !challenges.is_empty() {
-                let mut keys_for_resource = Vec::new();
-                for c in challenges {
-                    keys_for_resource.push(c.token.clone());
-                    new_tokens.insert(
-                        c.token.clone(),
-                        Self::build_entry(&c.domain, &c.key_authorization, c.expire_at),
-                    );
-                }
-                resource_tokens.insert(key.clone(), keys_for_resource);
+                resource_challenges.insert(key.clone(), challenges);
             }
         }
 
+        let current = self.tokens.load();
+        let mut new_tokens = (**current).clone();
+        for token in touched_tokens {
+            match Self::build_token_bucket(&resource_challenges, &token) {
+                Some(bucket) => {
+                    new_tokens.insert(token, bucket);
+                }
+                None => {
+                    new_tokens.remove(&token);
+                }
+            }
+        }
         self.tokens.store(Arc::new(new_tokens));
     }
+}
+
+fn compiled_attachment_cmp(left: &CompiledAcmeAttachment, right: &CompiledAcmeAttachment) -> Ordering {
+    left.listener_key
+        .cmp(&right.listener_key)
+        .then_with(|| left.gateway_key.cmp(&right.gateway_key))
+        .then_with(|| left.listener_name.cmp(&right.listener_name))
+        .then_with(|| left.gateway_proof.instance.cmp(&right.gateway_proof.instance))
+        .then_with(|| left.gateway_proof.generation.cmp(&right.gateway_proof.generation))
+        .then_with(|| left.gateway_proof.epoch.cmp(&right.gateway_proof.epoch))
+        .then_with(|| {
+            left.gateway_proof
+                .attachment_digest
+                .cmp(&right.gateway_proof.attachment_digest)
+        })
+}
+
+fn challenge_entry_cmp(left: &ChallengeEntry, right: &ChallengeEntry) -> Ordering {
+    left.resource_key
+        .cmp(&right.resource_key)
+        .then_with(|| left.domain.cmp(&right.domain))
+        .then_with(|| left.key_authorization.cmp(&right.key_authorization))
+        .then_with(|| left.expire_at.cmp(&right.expire_at))
+}
+
+fn attachment_matches(
+    attachment: &CompiledAcmeAttachment,
+    listener_key: &ListenerKey,
+    gateway_index: &GatewayInfoIndex,
+    host: &str,
+) -> bool {
+    if listener_key.protocol() != "HTTP" || &attachment.listener_key != listener_key {
+        return false;
+    }
+    let Some(live) = gateway_index.get(&attachment.gateway_key, &attachment.listener_name) else {
+        return false;
+    };
+    if live.gateway_proof.as_ref() != Some(&attachment.gateway_proof) {
+        return false;
+    }
+    live.hostname
+        .as_deref()
+        .is_none_or(|hostname| hostname_matches_listener(host, hostname))
+}
+
+fn canonical_host_identity(host: &str) -> &str {
+    let host = host.trim();
+    let host = host
+        .strip_prefix('[')
+        .and_then(|host| host.strip_suffix(']'))
+        .unwrap_or(host);
+    host.strip_suffix('.').unwrap_or(host)
 }
 
 impl Default for AcmeChallengeStore {
@@ -210,7 +431,76 @@ pub fn get_global_challenge_store() -> &'static AcmeChallengeStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::runtime::gateway_info::GatewayInfo;
+    use crate::runtime::store::listener_gateway_info::ListenerEntry;
     use edgion_resources::resources::edgion_acme::ActiveHttpChallenge;
+    use edgion_resources::resources::edgion_tls::ResolvedListenerAttachment;
+
+    fn test_proof() -> GatewayAttachmentProof {
+        GatewayAttachmentProof {
+            instance: "controller-a".to_string(),
+            generation: 1,
+            epoch: "epoch-a".to_string(),
+            attachment_digest: "a".repeat(64),
+        }
+    }
+
+    fn test_listener_key() -> ListenerKey {
+        ListenerKey("0.0.0.0:80/HTTP".to_string())
+    }
+
+    fn test_gateway_index(proof: Option<GatewayAttachmentProof>) -> GatewayInfoIndex {
+        test_gateway_index_for("gw", "http", None, proof)
+    }
+
+    fn test_gateway_index_for(
+        gateway_name: &str,
+        listener_name: &str,
+        hostname: Option<&str>,
+        proof: Option<GatewayAttachmentProof>,
+    ) -> GatewayInfoIndex {
+        GatewayInfoIndex::from_entries_for_test(vec![(
+            format!("default/{gateway_name}"),
+            ListenerEntry {
+                info: Arc::new(GatewayInfo::new(
+                    Some("default".to_string()),
+                    gateway_name.to_string(),
+                    Some(listener_name.to_string()),
+                    None,
+                    None,
+                    None,
+                    Vec::new(),
+                    None,
+                )),
+                gateway_proof: proof,
+                hostname: hostname.map(str::to_string),
+                allowed_routes: None,
+            },
+        )])
+    }
+
+    impl AcmeChallengeStore {
+        fn lookup(&self, token: &str, host: &str) -> Option<Bytes> {
+            self.lookup_for_listener(
+                &test_listener_key(),
+                &test_gateway_index(Some(test_proof())),
+                token,
+                host,
+                host,
+            )
+        }
+
+        fn lookup_at_epoch_seconds(&self, token: &str, host: &str, now: u64) -> Option<Bytes> {
+            self.lookup_for_listener_at_epoch_seconds(
+                &test_listener_key(),
+                &test_gateway_index(Some(test_proof())),
+                token,
+                host,
+                host,
+                now,
+            )
+        }
+    }
 
     /// Helper: build a minimal EdgionAcme from JSON with optional active challenges.
     fn make_acme(challenges: Vec<ActiveHttpChallenge>) -> EdgionAcme {
@@ -229,12 +519,42 @@ mod tests {
                     "gatewayRef": { "name": "gw" },
                 },
                 "storage": { "secretName": "test-cert" },
+                "resolvedListenerAttachments": [{
+                    "gatewayNamespace": "default",
+                    "gatewayName": "gw",
+                    "listenerName": "http",
+                    "listenerKey": "0.0.0.0:80/HTTP",
+                    "gatewayProof": {
+                        "instance": "controller-a",
+                        "generation": 1,
+                        "epoch": "epoch-a",
+                        "attachmentDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                    }
+                }],
             },
             "status": {
                 "activeChallenges": active,
             }
         }))
         .unwrap()
+    }
+
+    fn make_acme_for(
+        challenges: Vec<ActiveHttpChallenge>,
+        gateway_name: &str,
+        listener_name: &str,
+        listener_key: ListenerKey,
+        proof: GatewayAttachmentProof,
+    ) -> EdgionAcme {
+        let mut acme = make_acme(challenges);
+        acme.spec.resolved_listener_attachments = Some(vec![ResolvedListenerAttachment {
+            gateway_namespace: "default".to_string(),
+            gateway_name: gateway_name.to_string(),
+            listener_name: listener_name.to_string(),
+            listener_key,
+            gateway_proof: proof,
+        }]);
+        acme
     }
 
     /// Helper: build an ActiveHttpChallenge with the given fields.
@@ -559,5 +879,199 @@ mod tests {
         assert_eq!(reads, 500);
         assert!(store.lookup("token-a", "a.com").is_none());
         assert_eq!(store.lookup("token-b", "b.com"), Some(Bytes::from_static(b"auth-b")));
+    }
+
+    #[test]
+    fn lookup_requires_physical_logical_proof_and_hostname_ownership() {
+        let store = AcmeChallengeStore::new();
+        let listener_key = test_listener_key();
+        let proof = test_proof();
+        let mut data = HashMap::new();
+        data.insert(
+            "default/acme".to_string(),
+            make_acme_for(
+                vec![challenge("api.example.com", "owned", "authorization", future_time())],
+                "gw",
+                "http",
+                listener_key.clone(),
+                proof.clone(),
+            ),
+        );
+        store.full_set(&data);
+
+        let matching = test_gateway_index_for("gw", "http", Some("*.example.com"), Some(proof.clone()));
+        assert_eq!(
+            store.lookup_for_listener(&listener_key, &matching, "owned", "API.Example.com", "api.example.com",),
+            Some(Bytes::from_static(b"authorization"))
+        );
+        assert!(store
+            .lookup_for_listener(
+                &listener_key,
+                &matching,
+                "owned",
+                "api.example.com",
+                "other.example.com",
+            )
+            .is_none());
+
+        let wrong_gateway = test_gateway_index_for("other", "http", None, Some(proof.clone()));
+        assert!(store
+            .lookup_for_listener(
+                &listener_key,
+                &wrong_gateway,
+                "owned",
+                "api.example.com",
+                "api.example.com",
+            )
+            .is_none());
+        let wrong_listener = test_gateway_index_for("gw", "other", None, Some(proof.clone()));
+        assert!(store
+            .lookup_for_listener(
+                &listener_key,
+                &wrong_listener,
+                "owned",
+                "api.example.com",
+                "api.example.com",
+            )
+            .is_none());
+        let stale = test_gateway_index_for(
+            "gw",
+            "http",
+            None,
+            Some(GatewayAttachmentProof {
+                generation: 2,
+                ..proof.clone()
+            }),
+        );
+        assert!(store
+            .lookup_for_listener(&listener_key, &stale, "owned", "api.example.com", "api.example.com",)
+            .is_none());
+        let wrong_hostname = test_gateway_index_for("gw", "http", Some("other.example.com"), Some(proof));
+        assert!(store
+            .lookup_for_listener(
+                &listener_key,
+                &wrong_hostname,
+                "owned",
+                "api.example.com",
+                "api.example.com",
+            )
+            .is_none());
+        let wrong_physical = ListenerKey("127.0.0.1:80/HTTP".to_string());
+        assert!(store
+            .lookup_for_listener(
+                &wrong_physical,
+                &matching,
+                "owned",
+                "api.example.com",
+                "api.example.com",
+            )
+            .is_none());
+    }
+
+    #[test]
+    fn conflicting_authorizations_fail_closed_but_identical_authorizations_coexist() {
+        let store = AcmeChallengeStore::new();
+        let listener_key = test_listener_key();
+        let index = test_gateway_index(Some(test_proof()));
+        let ft = future_time();
+        let mut data = HashMap::new();
+        for (resource, authorization) in [("a", "same"), ("b", "same")] {
+            data.insert(
+                format!("default/{resource}"),
+                make_acme(vec![challenge("example.com", "collision", authorization, ft)]),
+            );
+        }
+        store.full_set(&data);
+        assert_eq!(
+            store.lookup_for_listener(&listener_key, &index, "collision", "example.com", "example.com",),
+            Some(Bytes::from_static(b"same"))
+        );
+
+        data.insert(
+            "default/b".to_string(),
+            make_acme(vec![challenge("example.com", "collision", "different", ft)]),
+        );
+        store.full_set(&data);
+        assert!(store
+            .lookup_for_listener(&listener_key, &index, "collision", "example.com", "example.com",)
+            .is_none());
+    }
+
+    #[test]
+    fn token_candidate_overflow_fails_closed_and_partial_removal_recovers() {
+        let store = AcmeChallengeStore::new();
+        let listener_key = test_listener_key();
+        let index = test_gateway_index(Some(test_proof()));
+        let ft = future_time();
+        let mut data = HashMap::new();
+        for i in 0..MAX_ACME_TOKEN_CANDIDATES {
+            data.insert(
+                format!("default/acme-{i}"),
+                make_acme(vec![challenge("example.com", "shared", "same", ft)]),
+            );
+        }
+        store.full_set(&data);
+        assert_eq!(
+            store.lookup_for_listener(&listener_key, &index, "shared", "example.com", "example.com",),
+            Some(Bytes::from_static(b"same"))
+        );
+
+        let overflow_key = format!("default/acme-{}", MAX_ACME_TOKEN_CANDIDATES);
+        let mut upsert = HashMap::new();
+        upsert.insert(
+            overflow_key.clone(),
+            make_acme(vec![challenge("example.com", "shared", "same", ft)]),
+        );
+        store.partial_update(&upsert, &HashSet::new());
+        assert!(store
+            .lookup_for_listener(&listener_key, &index, "shared", "example.com", "example.com",)
+            .is_none());
+
+        let mut remove = HashSet::new();
+        remove.insert(overflow_key);
+        store.partial_update(&HashMap::new(), &remove);
+        assert_eq!(
+            store.lookup_for_listener(&listener_key, &index, "shared", "example.com", "example.com",),
+            Some(Bytes::from_static(b"same"))
+        );
+    }
+
+    #[test]
+    fn forged_oversized_attachment_vector_is_not_published() {
+        let store = AcmeChallengeStore::new();
+        let mut resource = make_acme(vec![challenge(
+            "example.com",
+            "oversized",
+            "authorization",
+            future_time(),
+        )]);
+        let attachment = resource.spec.resolved_listener_attachments.as_ref().unwrap()[0].clone();
+        resource.spec.resolved_listener_attachments = Some(vec![attachment; MAX_ACME_RESOLVED_ATTACHMENTS + 1]);
+        store.full_set(&HashMap::from([("default/oversized".to_string(), resource)]));
+        assert!(store.lookup("oversized", "example.com").is_none());
+    }
+
+    #[test]
+    fn full_and_partial_updates_build_the_same_canonical_buckets() {
+        let ft = future_time();
+        let data = HashMap::from([
+            (
+                "default/a".to_string(),
+                make_acme(vec![challenge("a.example.com", "token", "same", ft)]),
+            ),
+            (
+                "default/b".to_string(),
+                make_acme(vec![challenge("b.example.com", "token", "same", ft)]),
+            ),
+        ]);
+        let full = AcmeChallengeStore::new();
+        full.full_set(&data);
+
+        let partial = AcmeChallengeStore::new();
+        for (key, acme) in &data {
+            partial.partial_update(&HashMap::from([(key.clone(), acme.clone())]), &HashSet::new());
+        }
+
+        assert_eq!(**full.tokens.load(), **partial.tokens.load());
     }
 }

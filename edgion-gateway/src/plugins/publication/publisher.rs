@@ -669,6 +669,7 @@ impl Inputs {
                     key.clone(),
                     ListenerEntry {
                         info,
+                        gateway_proof: None,
                         hostname: listener.hostname.clone(),
                         allowed_routes: listener.allowed_routes.clone(),
                     },

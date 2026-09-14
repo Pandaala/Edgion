@@ -1,10 +1,16 @@
 //! Unit tests for `edgion_acme.rs` (see `super`).
 use super::*;
+use crate::conf_mgr::sync_runtime::resource_processor::handlers::GatewayHandler;
+use crate::conf_mgr::sync_runtime::resource_processor::{ProcessorHandler, ResourceProcessor};
 use crate::conf_mgr::sync_runtime::workqueue::TriggerChain;
 use crate::conf_mgr::ControllerRuntime;
+use edgion_resources::prelude_resources::Gateway;
 use edgion_resources::resources::common::ParentReference;
 use edgion_resources::resources::common::SecretObjectReference;
 use edgion_resources::resources::edgion_acme::{AcmeChallenge, AcmeStorageConfig};
+use edgion_resources::resources::edgion_tls::GatewayAttachmentProof;
+use edgion_resources::resources::gateway::{GatewaySpec, GatewayStatus, Listener, ListenerStatus};
+use edgion_resources::resources::{ReferenceGrant, ReferenceGrantFrom, ReferenceGrantSpec, ReferenceGrantTo};
 use k8s_openapi::api::core::v1::Secret;
 use k8s_openapi::ByteString;
 use kube::api::ObjectMeta;
@@ -18,8 +24,57 @@ use std::sync::Arc;
 fn make_ctx(secrets: HashMap<String, Secret>) -> (HandlerContext, Arc<ControllerRuntime>) {
     let runtime = Arc::new(ControllerRuntime::default());
     runtime.secret_store.replace_all(secrets);
+    let gateway_processor = Arc::new(ResourceProcessor::<Gateway>::new(
+        "Gateway",
+        16,
+        Arc::new(NoopGatewayHandler),
+        runtime.clone(),
+    ));
+    gateway_processor.save(make_gateway("default", "gw", vec![listener("http", 80, "HTTP")]), None);
+    runtime.processor_registry.register(gateway_processor);
     let ctx = HandlerContext::new(None, None, TriggerChain::default(), 5, 20, runtime.clone());
     (ctx, runtime)
+}
+
+struct NoopGatewayHandler;
+
+#[async_trait::async_trait]
+impl ProcessorHandler<Gateway> for NoopGatewayHandler {}
+
+fn listener(name: &str, port: i32, protocol: &str) -> Listener {
+    Listener {
+        name: name.to_string(),
+        hostname: None,
+        port,
+        protocol: protocol.to_string(),
+        tls: None,
+        allowed_routes: None,
+    }
+}
+
+fn make_gateway(namespace: &str, name: &str, listeners: Vec<Listener>) -> Gateway {
+    Gateway {
+        metadata: ObjectMeta {
+            namespace: Some(namespace.to_string()),
+            name: Some(name.to_string()),
+            generation: Some(1),
+            ..Default::default()
+        },
+        spec: GatewaySpec {
+            gateway_class_name: "edgion".to_string(),
+            listeners: Some(listeners),
+            addresses: None,
+            tls: None,
+            resolved_inbound_proxy_protocol: Default::default(),
+            resolved_attachment_proof: Some(GatewayAttachmentProof {
+                instance: "test-instance".to_string(),
+                generation: 1,
+                epoch: "1".to_string(),
+                attachment_digest: "a".repeat(64),
+            }),
+        },
+        status: None,
+    }
 }
 
 fn make_secret(namespace: &str, name: &str, data: &[(&str, &[u8])]) -> (String, Secret) {
@@ -69,6 +124,7 @@ fn make_acme(ns: &str, name: &str, secret_name: &str) -> EdgionAcme {
                     port: None,
                 },
             },
+            resolved_listener_attachments: None,
             renewal: Default::default(),
             external_account_binding: None,
             storage: AcmeStorageConfig {
@@ -251,12 +307,210 @@ async fn test_on_delete_clears_refs() {
     );
     let refs = ctx.secret_ref_manager().get_refs("default/acme-account");
     assert!(refs.contains(&owner), "reference should be registered after parse");
+    ctx.runtime()
+        .cross_ns_ref_mgr
+        .add_ref("other".to_string(), owner.clone());
+    assert_eq!(
+        ctx.runtime().gateway_route_index.get_routes_for_gateway("default/gw"),
+        vec![(ResourceKind::EdgionAcme, "default/my-acme".to_string())]
+    );
 
     // Delete
     handler.on_delete(&acme, &ctx).await;
 
     let refs = ctx.secret_ref_manager().get_refs("default/acme-account");
     assert!(!refs.contains(&owner), "reference should be cleared after on_delete");
+    assert!(!ctx.runtime().cross_ns_ref_mgr.get_refs("other").contains(&owner));
+    assert!(ctx
+        .runtime()
+        .gateway_route_index
+        .get_routes_for_gateway("default/gw")
+        .is_empty());
+}
+
+#[tokio::test]
+async fn test_parse_resolves_only_selected_http_listener() {
+    let _acme_guard = crate::services::acme::service::ACME_TEST_MUTEX.lock().await;
+    let (key, secret) = make_secret("default", "acme-account", &[("accountCredentials", br#"{"ok":true}"#)]);
+    let (ctx, runtime) = make_ctx(HashMap::from([(key, secret)]));
+    let gateway_processor = runtime
+        .processor_registry
+        .get("Gateway")
+        .expect("Gateway processor must exist");
+    let gateway = make_gateway(
+        "default",
+        "gw",
+        vec![listener("http", 80, "HTTP"), listener("https", 443, "HTTPS")],
+    );
+    gateway_processor
+        .get_cached_any("default/gw")
+        .expect("baseline Gateway must exist");
+    // Replace the typed processor so the authoritative cache carries both listeners.
+    let replacement = Arc::new(ResourceProcessor::<Gateway>::new(
+        "Gateway",
+        16,
+        Arc::new(NoopGatewayHandler),
+        runtime.clone(),
+    ));
+    replacement.save(gateway, None);
+    runtime.processor_registry.register(replacement);
+
+    let mut acme = make_acme("default", "my-acme", "acme-account");
+    let AcmeChallenge::Http01 { gateway_ref } = &mut acme.spec.challenge;
+    gateway_ref.section_name = Some("http".to_string());
+    gateway_ref.port = Some(80);
+    let parsed = match EdgionAcmeHandler::new().parse(acme, &ctx).await {
+        ProcessResult::Continue(parsed) => parsed,
+        ProcessResult::Skip { reason } => panic!("unexpected skip: {reason}"),
+    };
+    let attachments = parsed
+        .spec
+        .resolved_listener_attachments
+        .expect("selected HTTP listener must resolve");
+    assert_eq!(attachments.len(), 1);
+    assert_eq!(attachments[0].listener_name, "http");
+
+    let mut https_only = make_acme("default", "https-only", "acme-account");
+    let AcmeChallenge::Http01 { gateway_ref } = &mut https_only.spec.challenge;
+    gateway_ref.section_name = Some("https".to_string());
+    let parsed = match EdgionAcmeHandler::new().parse(https_only, &ctx).await {
+        ProcessResult::Continue(parsed) => parsed,
+        ProcessResult::Skip { reason } => panic!("unexpected skip: {reason}"),
+    };
+    assert!(parsed.spec.resolved_listener_attachments.is_none());
+    let resolved = parsed
+        .status
+        .expect("status must exist")
+        .conditions
+        .into_iter()
+        .find(|condition| condition.type_ == "ResolvedRefs")
+        .expect("ResolvedRefs must exist");
+    assert_eq!(resolved.status, "False");
+    assert_eq!(resolved.reason, condition_reasons::NO_MATCHING_PARENT);
+}
+
+#[tokio::test]
+async fn test_parse_rejects_explicitly_ineligible_gateway_listeners() {
+    let _acme_guard = crate::services::acme::service::ACME_TEST_MUTEX.lock().await;
+    for condition in [
+        condition_false("Programmed", "Pending", "not programmed", Some(1)),
+        condition_false("Accepted", "Invalid", "not accepted", Some(1)),
+        condition_true("Conflicted", "PortConflict", "conflicted", Some(1)),
+    ] {
+        let (ctx, runtime) = make_ctx(HashMap::new());
+        let mut gateway = make_gateway("default", "gw", vec![listener("http", 80, "HTTP")]);
+        gateway.status = Some(GatewayStatus {
+            addresses: None,
+            conditions: None,
+            listeners: Some(vec![ListenerStatus {
+                name: "http".to_string(),
+                supported_kinds: Vec::new(),
+                attached_routes: 0,
+                conditions: vec![condition],
+            }]),
+        });
+        let replacement = Arc::new(ResourceProcessor::<Gateway>::new(
+            "Gateway",
+            16,
+            Arc::new(NoopGatewayHandler),
+            runtime.clone(),
+        ));
+        replacement.save(gateway, None);
+        runtime.processor_registry.register(replacement);
+        let parsed = match EdgionAcmeHandler::new()
+            .parse(make_acme("default", "ownership", "account"), &ctx)
+            .await
+        {
+            ProcessResult::Continue(parsed) => parsed,
+            ProcessResult::Skip { reason } => panic!("unexpected skip: {reason}"),
+        };
+        assert!(parsed.spec.resolved_listener_attachments.is_none());
+    }
+}
+
+#[tokio::test]
+async fn test_cross_namespace_gateway_requires_exact_reference_grant() {
+    let _acme_guard = crate::services::acme::service::ACME_TEST_MUTEX.lock().await;
+    let (ctx, runtime) = make_ctx(HashMap::new());
+    let replacement = Arc::new(ResourceProcessor::<Gateway>::new(
+        "Gateway",
+        16,
+        Arc::new(NoopGatewayHandler),
+        runtime.clone(),
+    ));
+    replacement.save(make_gateway("infra", "gw", vec![listener("http", 80, "HTTP")]), None);
+    runtime.processor_registry.register(replacement);
+    let mut resource = make_acme("apps", "ownership", "account");
+    let AcmeChallenge::Http01 { gateway_ref } = &mut resource.spec.challenge;
+    gateway_ref.namespace = Some("infra".to_string());
+
+    let denied = match EdgionAcmeHandler::new().parse(resource.clone(), &ctx).await {
+        ProcessResult::Continue(parsed) => parsed,
+        ProcessResult::Skip { reason } => panic!("unexpected skip: {reason}"),
+    };
+    assert!(denied.spec.resolved_listener_attachments.is_none());
+
+    let grant: ReferenceGrant = ReferenceGrant {
+        metadata: ObjectMeta {
+            namespace: Some("infra".to_string()),
+            name: Some("allow-acme".to_string()),
+            ..Default::default()
+        },
+        spec: ReferenceGrantSpec {
+            from: vec![ReferenceGrantFrom {
+                group: "edgion.io".to_string(),
+                kind: "EdgionAcme".to_string(),
+                namespace: "apps".to_string(),
+            }],
+            to: vec![ReferenceGrantTo {
+                group: "gateway.networking.k8s.io".to_string(),
+                kind: "Gateway".to_string(),
+                name: Some("gw".to_string()),
+            }],
+        },
+    };
+    runtime
+        .ref_grant_store
+        .upsert("infra/allow-acme".to_string(), Arc::new(grant));
+    let allowed = match EdgionAcmeHandler::new().parse(resource, &ctx).await {
+        ProcessResult::Continue(parsed) => parsed,
+        ProcessResult::Skip { reason } => panic!("unexpected skip: {reason}"),
+    };
+    assert_eq!(allowed.spec.resolved_listener_attachments.unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn gateway_proof_publication_requeues_acme_consumers() {
+    let runtime = Arc::new(ControllerRuntime::default());
+    let acme_processor = Arc::new(ResourceProcessor::<EdgionAcme>::new(
+        ResourceKind::EdgionAcme.as_str(),
+        16,
+        Arc::new(EdgionAcmeHandler::new()),
+        runtime.clone(),
+    ));
+    runtime.processor_registry.register(acme_processor.clone());
+    runtime.gateway_route_index.update_route(
+        ResourceKind::EdgionAcme,
+        "default/ownership",
+        &[ParentReference {
+            group: None,
+            kind: None,
+            namespace: None,
+            name: "gw".to_string(),
+            section_name: Some("http".to_string()),
+            port: None,
+        }],
+        "default",
+    );
+    let ctx = HandlerContext::new(None, None, TriggerChain::default(), 5, 20, runtime);
+    GatewayHandler::new(None, None)
+        .after_publish(&make_gateway("default", "gw", vec![listener("http", 80, "HTTP")]), &ctx)
+        .await;
+    let queued = tokio::time::timeout(std::time::Duration::from_secs(1), acme_processor.workqueue().dequeue())
+        .await
+        .expect("proof consumer must be requeued")
+        .expect("ACME workqueue must remain open");
+    assert_eq!(queued.key, "default/ownership");
 }
 
 #[tokio::test]

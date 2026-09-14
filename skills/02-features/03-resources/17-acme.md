@@ -81,7 +81,12 @@ spec:
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `gatewayRef` | `ParentReference` | Yes | Gateway used to respond to the ACME challenge |
+| `gatewayRef` | `ParentReference` | Yes | Gateway HTTP listener attachment used to respond to the ACME challenge; supports `namespace`, `sectionName`, and `port` |
+
+Only selected `HTTP` listeners may serve the token. If both `sectionName` and
+`port` are set, both must match. Cross-namespace references require a
+`ReferenceGrant` allowing `edgion.io/EdgionAcme` to reference
+`gateway.networking.k8s.io/Gateway`. Gateway `allowedRoutes` does not apply.
 
 ### renewal — Renewal Configuration
 
@@ -126,7 +131,7 @@ status:
       expireAt: 1700000000
 ```
 
-`activeChallenges` is written by `AcmeService` via the `/status` subresource SSA (with a dedicated fieldManager `edgion-acme-challenges`). The Gateway reads it via the `EdgionAcme.active_challenges()` helper to serve `/.well-known/acme-challenge/<token>`. Non-empty only while HTTP-01 is in flight. Operators must not write it manually.
+`activeChallenges` is written by `AcmeService` via the `/status` subresource SSA (with a dedicated fieldManager `edgion-acme-challenges`). The Gateway serves a token only when its domain, expiry, physical listener, logical Gateway/listener, and current attachment proof all match. Non-empty only while HTTP-01 is in flight. Operators must not write it manually.
 
 **AcmeCertPhase enum**:
 

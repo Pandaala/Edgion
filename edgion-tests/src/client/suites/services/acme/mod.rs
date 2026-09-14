@@ -11,5 +11,7 @@
 //   - AcmeClient account creation & credential restore
 
 mod acme;
+mod gatewayref_ownership;
 
 pub use acme::AcmeTestSuite;
+pub use gatewayref_ownership::{AcmeGatewayRefOwnershipPhase, AcmeGatewayRefOwnershipTestSuite};

@@ -1,5 +1,6 @@
 // Scenario implementations. Each scenario lives in its own file.
 
+pub mod acme_gatewayref_ownership;
 pub mod ai_backend_lifecycle;
 pub mod ai_backend_policy_integration;
 pub mod ai_backend_secret_rotation;

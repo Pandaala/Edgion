@@ -69,6 +69,7 @@ const EXPECTED_DYNAMIC_SCENARIO_IDS: &[&str] = &[
     "GcParamsFlap",
     "TlsLastKnownGood",
     "WafDynamic",
+    "AcmeGatewayRefOwnership",
 ];
 
 fn capability_entry_applies(kind: &str, entry_id: &str, id: &str) -> bool {
@@ -1520,6 +1521,7 @@ fn dynamic_port_contract(id: &str) -> Result<Option<(&'static str, port_config::
         "TcpEspReload" => Some(("TCPRoute/StreamPlugins/Dynamic", PortKind::Tcp)),
         "TlsRoutePluginsReload" => Some(("TLSRoute/StreamPlugins", PortKind::Tls)),
         "TlsLastKnownGood" => Some(("EdgionTls/LastKnownGood", PortKind::Https)),
+        "AcmeGatewayRefOwnership" => Some(("Gateway/AcmeGatewayRefOwnership", PortKind::Http)),
         // This scenario only inspects control-plane status and intentionally has
         // no data-plane listener.
         "GcParamsFlap" => None,

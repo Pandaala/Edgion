@@ -11,16 +11,15 @@ knowledge_type: intentional-design
 
 ## Conclusion
 
-A standalone blocked integration todo for HTTP-01 `gatewayRef` isolation is not
-an independently actionable defect. The missing contract is D0026: Controller
-validation, resolved serving attachment, Gateway dependency requeue, and
-receiving-listener enforcement. Current challenge lookup is global by token and
-Host only.
+A standalone integration todo for HTTP-01 `gatewayRef` isolation is not an
+independently actionable defect. D0026 now owns and implements Controller
+validation, resolved serving attachments, Gateway dependency requeue, bounded
+challenge publication, and receiving-listener enforcement.
 
 This closes D0027 and deletes
-`tasks/todo/add-acme-gatewayref-isolation-integration-coverage.md`. It does
-**not** close D0026. After that serving-attachment design is implemented, the
-multi-Gateway HTTP-01 isolation scenario belongs on D0026.
+`tasks/todo/add-acme-gatewayref-isolation-integration-coverage.md`. The
+multi-Gateway HTTP-01 isolation scenario belongs to D0026 rather than a
+second finding.
 
 Fix suggestions of the form "add the isolation integration scenario now",
 "encode current global token/Host serving as the desired ownership contract",
@@ -28,26 +27,22 @@ or "keep a separate blocked D0027 todo" are **not accepted**.
 
 ## Core Rationale
 
-**1. The tested ownership contract does not exist yet.**
+**1. The ownership contract must be tested at its D0026 owner.**
 
-`spec.challenge.gatewayRef` is serialized with `EdgionAcme` and reaches the
-Gateway conf handler, but the Controller does not validate or resolve it into a
-serving attachment or register Gateway dependency requeue. The Gateway store
-indexes every synced challenge globally by token. Pre-route HTTP-01
-interception in `try_serve_acme_challenge` matches Host/token before route or
-Gateway selection. Writing the D0027 scenario now would either fail against
-that global lookup or lock it in as desired product behavior.
+`spec.challenge.gatewayRef` is now resolved to Controller-owned listener
+attachments. Pre-route interception validates the receiving listener and live
+Gateway proof in addition to Host/token/expiry. Regression coverage must evolve
+with that shared ownership contract, not as a detached D0027 task.
 
 **2. The missing coverage is D0026's acceptance, not a second finding.**
 
 At that audit, ACME integration coverage was account and DNS-01 oriented. The DNS-01 cases were removed with the feature on 2026-09-09; account integration and HTTP-01 store tests remain. Source-local
-store tests cannot prove Controller-to-conf-sync-to-listener ownership across
-two Gateway identities. After D0026 lands, add one new dynamic scenario there:
-two Gateway/listener ports share one challenge Host/token; selected A serves
-and non-selected B falls through; a hot retarget from A to B reverses the
-result; challenge removal or expiry makes both fall through. Reuse one existing
-topology and readiness/`wait_phase` polling. Do not use fixed sleeps or edit
-existing integration assertions.
+store tests alone could not prove Controller-to-conf-sync-to-listener ownership
+across two Gateway identities. D0026 now combines Controller resolver and
+service-gate tests, Gateway ownership tests, and a shared-topology dynamic
+scenario with real config apply, conf-sync, and HTTP requests: selected A
+serves, non-selected B falls through, retargeting to B reverses the result, and
+challenge removal or expiry makes both fall through.
 
 **3. Guessing serving-attachment shape is not a test substitute.**
 
@@ -71,8 +66,8 @@ encode an unapproved API and freeze the campaign's existing ACME files.
 
 Re-open this decision only if:
 
-- D0026 is implemented and still has no multi-Gateway HTTP-01 isolation
-  scenario.
+- D0026's ownership tests stop covering selected/non-selected listeners,
+  retarget/removal, or expiry.
 - Challenge serving starts enforcing target ownership while reviews still claim
   isolation coverage is a separate defect solely because this standalone todo
   is gone.
@@ -81,8 +76,8 @@ Re-open this decision only if:
 
 ## Reference Cases
 
-- Active D0026 design task:
-  [`acme-http01-gatewayref-serving-ownership`](../../../../tasks/todo/acme-http01-gatewayref-serving-ownership/acme-http01-gatewayref-serving-ownership.md)
+- D0026 regression guard:
+  [ACME HTTP-01 GatewayRef serving ownership](../../acme/regression-guards/acme-http01-gatewayref-serving-ownership.md)
 - Closed D0027 / `tasks/todo/add-acme-gatewayref-isolation-integration-coverage.md`
 - Store and intercept: `edgion-gateway/src/services/acme/challenge_store.rs`,
   `edgion-gateway/src/routes/http/proxy_http/pg_request_filter.rs`

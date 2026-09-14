@@ -162,6 +162,11 @@
     "Gateway/Dynamic": {
       "http": 31250
     },
+    "Gateway/AcmeGatewayRefOwnership": {
+      "http": 31410,
+      "http_a": 31410,
+      "http_b": 31411
+    },
     "Gateway/PortConflict": {
       "internal_conflict": 31260,
       "cross_conflict": 31261,

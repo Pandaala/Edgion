@@ -47,6 +47,10 @@ pub async fn request_filter(
     // Load the pre-built GatewayInfoIndex for O(1) gateway/listener lookups.
     let gateway_index = get_listener_gateway_info_store().get_index(&edgion_http.listener_key);
 
+    if try_serve_acme_challenge(edgion_http, session, ctx, &gateway_index).await? {
+        return Ok(true);
+    }
+
     // HTTPS listener isolation: 421 Misdirected Request (Gateway API spec).
     // If SNI matched listener A but Host should be served by a different listener → 421.
     // Enabled by global requireSniHostMatch OR per-Gateway annotation edgion.io/require-sni-host-match.
@@ -425,10 +429,6 @@ async fn build_request_metadata(
         return Ok(true);
     }
 
-    if try_serve_acme_challenge(edgion_http, session, ctx).await? {
-        return Ok(true);
-    }
-
     // Validate hostname is present.
     //
     // RFC 9110 §7.2 (HTTP/1.1) and RFC 9113 §8.3.1 (HTTP/2 :authority) both
@@ -550,17 +550,21 @@ async fn try_serve_acme_challenge(
     edgion_http: &EdgionHttpProxy,
     session: &mut Session,
     ctx: &mut EdgionHttpContext,
+    gateway_index: &crate::runtime::store::GatewayInfoIndex,
 ) -> pingora_core::Result<bool> {
     let store = get_global_challenge_store();
-    if store.is_empty() {
-        return Ok(false);
-    }
 
     let Some((token, host)) = acme_challenge_token_and_host(session.req_header()) else {
         return Ok(false);
     };
 
-    let Some(key_auth) = store.lookup(token, &host) else {
+    let Some(key_auth) = store.lookup_for_listener(
+        &edgion_http.listener_key,
+        gateway_index,
+        token,
+        host,
+        ctx.request_info.hostname.as_str(),
+    ) else {
         return Ok(false);
     };
 
@@ -581,7 +585,7 @@ async fn try_serve_acme_challenge(
     Ok(true)
 }
 
-fn acme_challenge_token_and_host(req_header: &RequestHeader) -> Option<(&str, String)> {
+fn acme_challenge_token_and_host(req_header: &RequestHeader) -> Option<(&str, &str)> {
     let token = match req_header.uri.path().strip_prefix(ACME_CHALLENGE_PREFIX) {
         Some(t) if !t.is_empty() => t,
         _ => return None,
@@ -592,8 +596,7 @@ fn acme_challenge_token_and_host(req_header: &RequestHeader) -> Option<(&str, St
         .get("host")
         .and_then(|v| v.to_str().ok())
         .map(host_without_port)
-        .unwrap_or_default()
-        .to_string();
+        .unwrap_or_default();
 
     Some((token, host))
 }

@@ -15,6 +15,8 @@ use crate::conf_mgr::sync_runtime::resource_processor::credential::{
     resolve_secret, InvalidCredentialError, PendingReason, ResolveOutcome,
 };
 
+use super::route_utils::{resolve_acme_listener_attachments, AcmeGatewayRefError};
+use super::{remove_from_gateway_route_index, update_gateway_route_index};
 use crate::conf_mgr::sync_runtime::resource_processor::status_utils::{
     condition_false, condition_reasons, condition_true, condition_types, condition_unknown, update_condition,
 };
@@ -24,7 +26,7 @@ use edgion_resources::credentials::resolvers::AcmeAccountResolver;
 use edgion_resources::duration::parse_duration;
 use edgion_resources::prelude_resources::EdgionAcme;
 use edgion_resources::resources::common::Condition;
-use edgion_resources::resources::edgion_acme::EdgionAcmeStatus;
+use edgion_resources::resources::edgion_acme::{AcmeChallenge, EdgionAcmeStatus};
 use edgion_resources::ResourceKind;
 
 /// EdgionAcme handler
@@ -109,6 +111,9 @@ impl ProcessorHandler<EdgionAcme> for EdgionAcmeHandler {
     }
 
     async fn parse(&self, mut acme: EdgionAcme, ctx: &HandlerContext) -> ProcessResult<EdgionAcme> {
+        // Controller-derived serving authority is never trusted from input or
+        // carried across reconciles.
+        acme.spec.resolved_listener_attachments = None;
         let resource_ref = ResourceRef::new(
             ResourceKind::EdgionAcme,
             acme.metadata.namespace.clone(),
@@ -117,6 +122,42 @@ impl ProcessorHandler<EdgionAcme> for EdgionAcmeHandler {
 
         // Clear old references first (for update scenario)
         ctx.secret_ref_manager().clear_resource_refs(&resource_ref);
+        ctx.runtime().cross_ns_ref_mgr.clear_resource_refs(&resource_ref);
+
+        let resource_namespace = acme.metadata.namespace.as_deref().unwrap_or("default");
+        let resource_name = acme.metadata.name.as_deref().unwrap_or_default();
+        let gateway_ref = match &acme.spec.challenge {
+            AcmeChallenge::Http01 { gateway_ref } => gateway_ref.clone(),
+        };
+        let parent_refs = vec![gateway_ref.clone()];
+        let dropped_gateways = update_gateway_route_index(
+            ResourceKind::EdgionAcme,
+            resource_namespace,
+            resource_name,
+            Some(&parent_refs),
+            ctx.runtime(),
+        );
+        for gateway_key in dropped_gateways {
+            ctx.requeue(ResourceKind::Gateway.as_str(), gateway_key).await;
+        }
+
+        let gateway_group = gateway_ref.group.as_deref().unwrap_or("gateway.networking.k8s.io");
+        let gateway_kind = gateway_ref.kind.as_deref().unwrap_or("Gateway");
+        let gateway_namespace = gateway_ref.namespace.as_deref().unwrap_or(resource_namespace);
+        if gateway_group == "gateway.networking.k8s.io"
+            && gateway_kind == "Gateway"
+            && gateway_namespace != resource_namespace
+        {
+            ctx.runtime()
+                .cross_ns_ref_mgr
+                .add_ref(gateway_namespace.to_string(), resource_ref.clone());
+        }
+
+        let gateway_outcome = resolve_acme_listener_attachments(&gateway_ref, resource_namespace, ctx.runtime());
+        let gateway_resolved = gateway_outcome.is_ok();
+        if let Ok(attachments) = &gateway_outcome {
+            acme.spec.resolved_listener_attachments = Some(attachments.clone());
+        }
 
         // Snapshot pre-parse state for change-gated notification (see notify guard below).
         // `prev_controller_gen` is the generation last written by `update_status`; it differs
@@ -157,22 +198,21 @@ impl ProcessorHandler<EdgionAcme> for EdgionAcmeHandler {
         // We still return Continue so `update_status` persists the condition,
         // but we must NOT notify AcmeService — it must not attempt registration
         // against a broken account.
-        let account_corrupted = match account_action {
-            AcmeResolveAction::Continue(cond) => {
-                update_condition(&mut status.conditions, cond);
-                false
-            }
-            AcmeResolveAction::Abort(cond) => {
-                update_condition(&mut status.conditions, cond);
-                true
-            }
+        let (account_condition, account_corrupted) = match account_action {
+            AcmeResolveAction::Continue(cond) => (cond, false),
+            AcmeResolveAction::Abort(cond) => (cond, true),
         };
+        let resolved_refs_condition = match &gateway_outcome {
+            Ok(_) => account_condition,
+            Err(error) => gateway_ref_error_condition(error, generation),
+        };
+        update_condition(&mut status.conditions, resolved_refs_condition);
 
         // `outcome` was already mapped to a condition above; the resolved
         // Secret bytes are intentionally NOT attached to the in-memory
         // resource — AcmeService re-fetches via the Kubernetes API.
 
-        if account_corrupted {
+        if account_corrupted || !gateway_resolved {
             // Return Continue so `update_status` persists `ResolvedRefs=False`
             // and Gateway/operators can see the failure. We intentionally skip
             // `notify_resource_changed` — without
@@ -219,9 +259,18 @@ impl ProcessorHandler<EdgionAcme> for EdgionAcmeHandler {
             acme.metadata.name.clone().unwrap_or_default(),
         );
         ctx.secret_ref_manager().clear_resource_refs(&resource_ref);
+        ctx.runtime().cross_ns_ref_mgr.clear_resource_refs(&resource_ref);
+        let resource_namespace = acme.metadata.namespace.as_deref().unwrap_or("default");
+        let resource_name = acme.metadata.name.as_deref().unwrap_or_default();
+        remove_from_gateway_route_index(
+            ResourceKind::EdgionAcme,
+            resource_namespace,
+            resource_name,
+            ctx.runtime(),
+        );
         tracing::debug!(
             edgion_acme = %resource_ref.key(),
-            "Cleared secret references on EdgionAcme delete"
+            "Cleared EdgionAcme dependency references on delete"
         );
     }
 
@@ -262,6 +311,40 @@ impl ProcessorHandler<EdgionAcme> for EdgionAcmeHandler {
             status.last_failure_reason = Some(validation_errors.join("; "));
         }
     }
+}
+
+fn gateway_ref_error_condition(error: &AcmeGatewayRefError, generation: Option<i64>) -> Condition {
+    let (reason, message) = match error {
+        AcmeGatewayRefError::InvalidKind { group, kind } => (
+            condition_reasons::INVALID_KIND,
+            format!("challenge.gatewayRef must reference gateway.networking.k8s.io/Gateway, got {group}/{kind}"),
+        ),
+        AcmeGatewayRefError::RefNotPermitted { namespace, name } => (
+            condition_reasons::REF_NOT_PERMITTED,
+            format!("Reference to Gateway \"{namespace}/{name}\" is not permitted without a ReferenceGrant"),
+        ),
+        AcmeGatewayRefError::ParentNotFound { namespace, name } => (
+            condition_reasons::NO_MATCHING_PARENT,
+            format!("Referenced Gateway \"{namespace}/{name}\" was not found or is not controlled by Edgion"),
+        ),
+        AcmeGatewayRefError::NoMatchingListener => (
+            condition_reasons::NO_MATCHING_PARENT,
+            "challenge.gatewayRef sectionName and port do not select a listener".to_string(),
+        ),
+        AcmeGatewayRefError::NoHttpListener => (
+            condition_reasons::NO_MATCHING_PARENT,
+            "challenge.gatewayRef does not select an HTTP listener".to_string(),
+        ),
+        AcmeGatewayRefError::TooManyListeners => (
+            condition_reasons::INVALID,
+            "Referenced Gateway exceeds the HTTP-01 listener attachment limit".to_string(),
+        ),
+        AcmeGatewayRefError::UnresolvedGateway => (
+            condition_reasons::NO_MATCHING_PARENT,
+            "Referenced Gateway does not have a current Controller attachment proof".to_string(),
+        ),
+    };
+    condition_false(condition_types::RESOLVED_REFS, reason, message, generation)
 }
 
 // ============================================================================

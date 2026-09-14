@@ -33,6 +33,7 @@ flowchart LR
 
     subgraph ReferenceGrantDeps
         ReferenceGrant -- "on_change requeue\ncross-ns referrers" --> Gateway4["Gateway\n(cross-ns Secret/CA)"]
+        ReferenceGrant -- "cross-ns gatewayRef" --> EdgionAcmeGrant[EdgionAcme]
         EdgionConfigData -- "ProxyProtocolTrust change/delete\nworkqueue requeue" --> Gateway4
         ReferenceGrant -- "cross-ns authorization check" --> Routes2["Route family\n(cross-ns backendRef)"]
     end
@@ -44,6 +45,7 @@ flowchart LR
     subgraph GatewayDeps
         GW[Gateway] -- "on_change requeue\ngateway_route_index" --> Routes4["Route family\n(verifies listener match)"]
         GW -- "parentRef" --> EdgionTls2[EdgionTls]
+        GW -- "gatewayRef / proof epoch" --> EdgionAcme2[EdgionAcme]
         Routes4 -- "on_change requeue" --> GW
     end
 
@@ -63,13 +65,13 @@ flowchart LR
 | **SecretStore** | SecretHandler | Gateway, EdgionTls, EdgionPlugins, BackendTLSPolicy, EdgionAcme, EdgionBackend |
 | **ConfigMapStore** | ConfigMapHandler | Gateway (frontend CA), BackendTLSPolicy (backend CA) |
 | **NamespaceStore** | K8s Namespace informer | Route family (allowedRoutes Selector) |
-| **ReferenceGrantStore** | ReferenceGrantHandler | Gateway, Route family (cross-ns authorization) |
+| **ReferenceGrantStore** | ReferenceGrantHandler | Gateway, Route family, EdgionAcme (cross-ns authorization) |
 | **SecretRefManager** | Gateway/EdgionTls/EdgionPlugins/BackendTLSPolicy/EdgionAcme/EdgionBackend (register during parse) | SecretHandler/ConfigMapHandler (look up dependents on on_change) |
 | **ServiceRefManager** | Route family (register forwarding and mirror targets during parse), EdgionPlugins (register enabled mirror targets during parse) | ServiceHandler and EndpointSliceHandler (look up dependents on apply/delete), BackendTLSPolicy (read forwarding-only keys in resolve_ancestor_gateways) |
-| **CrossNsRefManager** | Gateway / Route family (register cross-ns references during parse) | ReferenceGrantHandler (look up dependents on on_change) |
+| **CrossNsRefManager** | Gateway / Route family / EdgionAcme (register cross-ns references during parse) | ReferenceGrantHandler (look up dependents on on_change) |
 | **EdgionConfigDataRefManager** | Gateway and plugin resources (clear-before-add during parse) | EdgionConfigData handler (requeue dependents on apply/delete) |
 | **ProxyProtocolListenerPolicyManager** | Gateway (atomic whole-Gateway contribution replacement) | Gateway handler (requeue only peers affected by a net physical-listener declaration change) |
-| **GatewayRouteIndex** | Route family / EdgionTls (write on on_change) | GatewayHandler (look up associated Routes on on_change), BackendTLSPolicy (read in resolve_ancestor_gateways) |
+| **GatewayRouteIndex** | Route family / EdgionTls / EdgionAcme (write on reconcile) | GatewayHandler (requeue route and attachment-proof consumers), BackendTLSPolicy (read in resolve_ancestor_gateways) |
 | **RouteDelegationIndex** (`route_delegation_index`) | HTTPRoute (register delegation edges during parse: named children + wildcard namespaces, transitive) | HTTPRoute (on_change/on_delete: `parents_of()` requeues delegating parents; update_status: child-side `Accepted` for `kind: HTTPRoute` parentRefs) |
 | **RouteDelegationIndex** (`grpc_route_delegation_index`, second instance, same type, disjoint `"ns/name"` keys) | GRPCRoute (register delegation edges during parse: named children + wildcard namespaces, transitive) | GRPCRoute (on_change/on_delete: `parents_of()` requeues delegating parents; update_status: child-side `Accepted` for `kind: GRPCRoute` parentRefs) |
 | **BackendTLSPolicyTargetManager** | BackendTLSPolicy (register targetRef during parse) | BackendTLSPolicy (conflict detection in update_status) |

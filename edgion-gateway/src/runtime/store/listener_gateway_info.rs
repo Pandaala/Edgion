@@ -24,7 +24,9 @@ use arc_swap::ArcSwap;
 use edgion_common::dns::resolver_select::candidate_from_annotations;
 use edgion_resources::constants::annotations::edgion as annotations;
 use edgion_resources::listener_key::{resolve_listener_addr, ListenerKey};
+use edgion_resources::resources::edgion_tls::GatewayAttachmentProof;
 use edgion_resources::resources::gateway::AllowedRoutes;
+use edgion_resources::resources::gateway::{gateway_attachment_proof, gateway_listener_is_explicitly_ineligible};
 use edgion_resources::Gateway;
 use kube::ResourceExt;
 use std::collections::HashMap;
@@ -174,6 +176,10 @@ impl GatewayListeners {
 #[derive(Clone, Debug)]
 pub struct ListenerEntry {
     pub info: Arc<GatewayInfo>,
+    /// Proof for the projected Gateway generation that produced this listener.
+    /// `None` is used by non-authoritative synthetic indices and cannot
+    /// authorize ACME challenge serving.
+    pub gateway_proof: Option<GatewayAttachmentProof>,
     /// Listener hostname constraint (None = catch-all)
     pub hostname: Option<String>,
     /// AllowedRoutes from the Listener spec (for kind/namespace filtering)
@@ -289,10 +295,7 @@ impl ListenerGatewayInfoStore {
             let dns_resolver_candidate = gateway_annotations.and_then(candidate_from_annotations);
 
             for listener in listeners {
-                if is_listener_conflicted(gateway, &listener.name) {
-                    continue;
-                }
-                if is_listener_not_programmed(gateway, &listener.name) {
+                if gateway_listener_is_explicitly_ineligible(gateway, &listener.name) {
                     continue;
                 }
 
@@ -312,6 +315,7 @@ impl ListenerGatewayInfoStore {
                 let gateway_key = gi.gateway_key().to_owned();
                 let entry = ListenerEntry {
                     info: Arc::clone(&gi),
+                    gateway_proof: Some(gateway_attachment_proof(gateway)),
                     hostname: listener.hostname.clone(),
                     allowed_routes: listener.allowed_routes.clone(),
                 };
@@ -430,46 +434,12 @@ pub fn format_gateway_key(namespace: &str, name: &str) -> String {
     }
 }
 
-/// Check if a Listener is marked as Conflicted in Gateway status.
-///
-/// Returns true if the Listener has a Conflicted condition with status "True".
-/// This is set by the Controller when port conflicts are detected.
 pub(crate) fn is_listener_conflicted(gateway: &Gateway, listener_name: &str) -> bool {
-    gateway
-        .status
-        .as_ref()
-        .and_then(|s| s.listeners.as_ref())
-        .and_then(|listeners| listeners.iter().find(|ls| ls.name == listener_name))
-        .map(|ls| {
-            ls.conditions
-                .iter()
-                .any(|c| c.type_ == "Conflicted" && c.status == "True")
-        })
-        .unwrap_or(false)
+    edgion_resources::resources::gateway::gateway_listener_is_conflicted(gateway, listener_name)
 }
 
-/// Check if a Listener is explicitly marked as not programmed in Gateway status.
-///
-/// Returns `true` when the Listener has `Programmed=False` **or** `Accepted=False`.
-/// This prevents the data plane from registering TLS and route entries for listeners
-/// that the Controller has determined cannot be correctly configured (e.g. invalid CA
-/// cert reference, unresolvable Secret, unsupported TLS mode).
-///
-/// Returns `false` (allow-through) when:
-/// - Gateway has no status yet (initial creation — avoids startup race with Controller)
-/// - Listener name not found in status (partial update — safe side is allow)
 pub(crate) fn is_listener_not_programmed(gateway: &Gateway, listener_name: &str) -> bool {
-    gateway
-        .status
-        .as_ref()
-        .and_then(|s| s.listeners.as_ref())
-        .and_then(|listeners| listeners.iter().find(|ls| ls.name == listener_name))
-        .map(|ls| {
-            ls.conditions
-                .iter()
-                .any(|c| (c.type_ == "Programmed" || c.type_ == "Accepted") && c.status == "False")
-        })
-        .unwrap_or(false)
+    edgion_resources::resources::gateway::gateway_listener_is_not_programmed(gateway, listener_name)
 }
 
 static GLOBAL_LISTENER_GATEWAY_INFO_STORE: LazyLock<ListenerGatewayInfoStore> =
@@ -673,7 +643,7 @@ mod tests {
             },
             status: None,
         };
-        assert!(!is_listener_not_programmed(&gw, "https"));
+        assert!(!gateway_listener_is_explicitly_ineligible(&gw, "https"));
     }
 
     #[test]
@@ -685,13 +655,13 @@ mod tests {
                 make_condition("Programmed", "False"),
             ],
         );
-        assert!(is_listener_not_programmed(&gw, "https"));
+        assert!(gateway_listener_is_explicitly_ineligible(&gw, "https"));
     }
 
     #[test]
     fn test_not_programmed_when_accepted_false() {
         let gw = make_gateway("https", vec![make_condition("Accepted", "False")]);
-        assert!(is_listener_not_programmed(&gw, "https"));
+        assert!(gateway_listener_is_explicitly_ineligible(&gw, "https"));
     }
 
     #[test]
@@ -700,14 +670,14 @@ mod tests {
             "https",
             vec![make_condition("Accepted", "True"), make_condition("Programmed", "True")],
         );
-        assert!(!is_listener_not_programmed(&gw, "https"));
+        assert!(!gateway_listener_is_explicitly_ineligible(&gw, "https"));
     }
 
     #[test]
     fn test_not_programmed_false_when_listener_missing_from_status() {
         let gw = make_gateway("https", vec![make_condition("Programmed", "False")]);
         // Asking about a different listener → safe to allow through
-        assert!(!is_listener_not_programmed(&gw, "http"));
+        assert!(!gateway_listener_is_explicitly_ineligible(&gw, "http"));
     }
 
     #[test]
@@ -764,6 +734,28 @@ mod tests {
         assert!(Arc::ptr_eq(&flat[0], &indexed.info));
         assert_eq!(flat[0].gateway_key(), "default/test-gw");
         assert_eq!(flat[0].gateway_key().as_ptr(), indexed.info.gateway_key().as_ptr());
+    }
+
+    #[test]
+    fn index_carries_the_gateway_attachment_proof_from_the_same_snapshot() {
+        let store = ListenerGatewayInfoStore::new();
+        let mut gateway = make_gateway(
+            "https",
+            vec![make_condition("Accepted", "True"), make_condition("Programmed", "True")],
+        );
+        let proof = GatewayAttachmentProof {
+            instance: "controller-a".to_string(),
+            generation: 7,
+            epoch: "epoch-a".to_string(),
+            attachment_digest: "a".repeat(64),
+        };
+        gateway.spec.resolved_attachment_proof = Some(proof.clone());
+        store.rebuild(&[gateway]);
+
+        let key = ListenerKey::new("0.0.0.0:443".parse().unwrap(), "HTTPS");
+        let index = store.get_index(&key);
+        let entry = index.get("default/test-gw", "https").unwrap();
+        assert_eq!(entry.gateway_proof.as_ref(), Some(&proof));
     }
 
     #[test]

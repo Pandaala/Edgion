@@ -20,7 +20,10 @@ EdgionAcme is Edgion's custom-extension resource that implements automatic certi
 
 ### Spec / Status responsibility split
 
-`EdgionAcmeSpec` carries only **operator input**: `server` / `email` / `privateKeySecretRef` / `domains` / `keyType` / `challenge` / `renewal` / `externalAccountBinding` / `storage` / `autoEdgionTls`. **No controller-managed fields**.
+`EdgionAcmeSpec` carries operator input plus one internal transport field,
+`resolvedListenerAttachments`. The latter is Controller-owned,
+`#[schemars(skip)]`, absent from the CRD, cleared before every reconcile, and
+serialized only so the Gateway can enforce serving ownership.
 
 `EdgionAcmeStatus` is the controller's observation channel: in addition to lifecycle fields (`phase`, `certificateSerial`, `certificateNotAfter`, `lastRenewalTime`, `lastFailureReason`, etc.), there is `activeChallenges` — the list of HTTP-01 challenge tokens, written by `AcmeService` via the dedicated fieldManager `edgion-acme-challenges` through the `/status` subresource SSA. The Gateway reads via the `EdgionAcme.active_challenges()` helper (pointing at `status.activeChallenges`) to serve `/.well-known/acme-challenge/<token>`.
 
@@ -36,16 +39,17 @@ EdgionAcme is Edgion's custom-extension resource that implements automatic certi
 
 Resolved Secret bytes are **not** written back to the in-memory `EdgionAcme` — `AcmeService` re-fetches via the K8s API during issuance/renewal (`get_or_create_acme_account`). Handler-side resolve is used only for the `ResolvedRefs` condition + `SecretRefManager` registration (so Secret changes trigger requeue).
 
-1. **Clear stale references**: clear records for this EdgionAcme in SecretRefManager
-2. **Resolve ACME account Secret** (`spec.privateKeySecretRef`, required):
+1. **Clear stale state**: clear the derived attachment plus previous Secret, cross-namespace, and Gateway dependency edges
+2. **Resolve `challenge.gatewayRef`**: require a Controller-published Gateway, any required `ReferenceGrant`, and one or more selected `HTTP` listeners; `sectionName` and `port` must both match when both are present
+3. **Resolve ACME account Secret** (`spec.privateKeySecretRef`, required):
    - Goes through the credential pipeline (`resource_processor::credential::pipeline::resolve_secret` + `AcmeAccountResolver`)
    - The Secret is allowed to be `Opaque` type, with the required key `accountCredentials` (JSON, i.e., `instant_acme::AccountCredentials`)
    - If the Secret does not yet exist (first-time install / waiting for `AcmeService` write-back), `ResolvedRefs=Unknown/NeedsRegistration` is recorded; once `AcmeService` generates the account it writes the Secret and triggers requeue
-3. **Notify ACME Service**: call `notify_resource_changed()` to notify the background ACME Service of a resource change, triggering the certificate issuance/renewal flow
+4. **Notify ACME Service**: notify only after the Gateway attachment is resolved and the account result is not a hard error
 
 ### on_delete
 
-Clear SecretRefManager references.
+Clear SecretRefManager, CrossNsRefManager, and GatewayRouteIndex references.
 
 ### update_status
 
@@ -86,4 +90,6 @@ ACME certificate issuance is handled by an independent background Service:
 | EdgionAcme → Secret | Secret | `spec.privateKeySecretRef` + `AcmeAccountResolver` | ACME account private key (`accountCredentials`), written by `AcmeService` on first registration; protected by `Zeroizing<String>` |
 | EdgionAcme → Secret | Secret | create/update (SSA) | Issued certificate (`tls.crt` / `tls.key` / `ca.crt`) is written into `storage.secretName` |
 | EdgionAcme ← SecretRefManager | Secret | cascading requeue | Reprocess on changes to the account Secret |
+| EdgionAcme → Gateway | Gateway | `GatewayRouteIndex` + resolved attachment proof | Reprocess on listener, ownership, publication-proof, or deletion changes |
+| EdgionAcme → ReferenceGrant | ReferenceGrant | `CrossNsRefManager` | Required for a cross-namespace `gatewayRef`; changes re-resolve the attachment |
 | EdgionAcme → Gateway/EdgionTls | indirect | via the certificate Secret | The issued certificate Secret is referenced by Gateway/EdgionTls |
