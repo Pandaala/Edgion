@@ -53,7 +53,7 @@ Recommended K8s mode:
 
 ### 4.1 `edgion-tests/k8s/conf` is now the K8s test baseline
 
-K8s integration tests now use `edgion-tests/k8s/conf` as the sole configuration source and remain mostly isomorphic to the shared suites of `edgion-tests/integration/conf`. Note that a small class of **runtime-managed Secret templates** in the K8s directory keep `data: {}` empty in the file itself; the actual content is generated under `edgion-tests/k8s/generated/secrets/` during the prepare phase before being applied.
+K8s integration tests now use `edgion-tests/k8s/conf` as the sole configuration source and remain mostly isomorphic to the shared suites of `edgion-tests/integration/conf`. Note that a small class of **runtime-managed Secret templates** in the K8s directory keep `data: {}` empty in the file itself; the actual content is generated under `tmp/k8s_integration/<run-id>/generated/secrets/` during the prepare phase before being applied.
 
 Constraints to keep in mind:
 
@@ -171,11 +171,12 @@ Corresponding script:
 Cleanup is ownership-scoped rather than an unconditional pre-run step. A
 successful default run collects diagnostics and then removes the resources it
 created. A healthy harness-owned environment preserved with `--keep-alive` can
-be reused when its recorded inputs still match. A manual `cleanup.sh` is needed
-only when an interrupted run leaves residue, the clean-boundary check reports a
-conflict, or the operator explicitly wants a fresh environment. The runner must
-never pre-delete arbitrary objects merely because they exist in the currently
-selected context.
+be reused when its recorded inputs still match. An interrupted run can be
+cleaned only with its `owned-cluster-keys.tsv` and exact kubectl context; cleanup
+never derives ownership from the fixture tree. The runner holds a cluster Lease
+for its complete lifecycle and must never pre-delete arbitrary objects merely
+because they exist in the selected context. CRDs, installation namespaces/RBAC,
+and local images remain outside run cleanup.
 
 ## 8. Quick index of affected suites (code scan)
 

@@ -26,7 +26,7 @@ awk '
 ' "${MAIN_RUNNER}" > "${READINESS_FUNCTION_FILE}"
 awk '
   /^should_run_prepare\(\) \{/ { emit = 1 }
-  /^print_cluster_and_image_context$/ { emit = 0 }
+  /^preflight_kubernetes_cluster$/ { emit = 0 }
   emit { print }
 ' "${MAIN_RUNNER}" > "${DECISION_FUNCTION_FILE}"
 grep -Fq 'verify_prepared_runtime_readiness()' "${READINESS_FUNCTION_FILE}" \

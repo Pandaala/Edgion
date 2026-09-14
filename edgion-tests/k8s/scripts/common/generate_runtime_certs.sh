@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
-OUTPUT_DIR="${1:-${OUTPUT_DIR:-$PROJECT_ROOT/edgion-tests/k8s/generated}}"
+OUTPUT_DIR="${1:-}"
+if [[ -z "${OUTPUT_DIR}" ]]; then
+  echo "usage: $0 <run-specific-output-directory>" >&2
+  exit 1
+fi
 SECRETS_DIR="${OUTPUT_DIR}/secrets"
 CERTS_DIR="${OUTPUT_DIR}/certs"
 

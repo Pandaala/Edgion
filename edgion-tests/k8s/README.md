@@ -87,7 +87,7 @@ Two-phase behavior (default):
 
 1. Prepare phase:
    - validate no Endpoint/EndpointSlice
-   - generate runtime TLS/mTLS/backend CA secrets under `edgion-tests/k8s/generated/` (gitignored)
+   - generate runtime TLS/mTLS/backend CA secrets under the current run directory
    - deploy workloads (optional)
    - strict apply all resources in `edgion-tests/k8s/conf` (any non-conflict error exits)
    - restart gateway and wait ready
@@ -129,19 +129,34 @@ Run test_client directly:
 Clean test environment:
 
 ```bash
-./edgion-tests/k8s/scripts/cleanup.sh
-./edgion-tests/k8s/scripts/cleanup.sh --with-images
+./edgion-tests/k8s/scripts/cleanup.sh \
+  --ownership-file tmp/k8s_integration/<run-id>/owned-cluster-keys.tsv \
+  --expected-context <exact-kubectl-context>
 ```
 
 Manual cleanup is not required before every run. A normal owned run starts
 from a clean boundary and automatically removes its resources after collecting
 diagnostics. A healthy harness-owned environment preserved with `--keep-alive`
-can also be reused when its input state still matches. Run `cleanup.sh` when an
-interrupted run leaves residue, the runner reports an ownership conflict, or
-you explicitly want a fresh environment. The runner intentionally refuses to
-pre-delete resources because the selected context may be a shared cluster.
-CRDs are installation-scoped shared infrastructure and are never deleted by
-the integration cleanup script.
+can also be reused when its input state still matches. For an interrupted run,
+invoke `cleanup.sh` with that run's recorded ownership file and exact kubectl
+context. Cleanup refuses to infer ownership from the fixture tree. The runner
+intentionally refuses to pre-delete resources because the selected context may
+be a shared cluster.
+
+The runner holds an atomic Kubernetes Lease for its complete lifecycle, so only
+one fixed-name integration topology may use a cluster at a time. CRDs,
+`edgion-system`, `dragonfly-system`, Controller cluster RBAC, and local Docker
+images are installation- or host-scoped and are never deleted by integration
+cleanup.
+
+The Lease is fail-closed and is never stolen automatically. After confirming
+that no integration runner is active, an administrator can inspect or remove a
+stale Lease explicitly:
+
+```bash
+kubectl --context <exact-kubectl-context> -n default get lease edgion-k8s-integration -o yaml
+kubectl --context <exact-kubectl-context> -n default delete lease edgion-k8s-integration
+```
 
 ## Notes
 
@@ -154,4 +169,5 @@ the integration cleanup script.
 - `run_k8s_integration.sh` applies configs directly from `edgion-tests/k8s/conf`
   (no runtime conversion from `edgion-tests/integration/conf`).
 - TLS-related Secrets are not committed as runtime outputs; they are generated
-  before each prepare run into `edgion-tests/k8s/generated/` and ignored by git.
+  under `tmp/k8s_integration/<run-id>/generated/` and cleanup removes only that
+  run-specific directory.

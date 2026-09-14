@@ -26,12 +26,12 @@ RUN_UNKNOWN_CONFIG_FIELDS_GATE="$COMMON_SCRIPT_DIR/run_unknown_config_fields_gat
 RUN_REQUEUE_DEAD_LOOP_GATE="$COMMON_SCRIPT_DIR/run_requeue_dead_loop_gate.sh"
 RUN_CACHE_RESIDUE_GATE="$COMMON_SCRIPT_DIR/run_cache_residue_gate.sh"
 CLEANUP_SCRIPT="$SCRIPT_DIR/cleanup.sh"
+CLUSTER_LEASE_SCRIPT="$COMMON_SCRIPT_DIR/cluster_lease.sh"
+OWNERSHIP_INVENTORY_SCRIPT="$COMMON_SCRIPT_DIR/write_cleanup_inventory.sh"
 GENERATE_CERTS_SCRIPT="$COMMON_SCRIPT_DIR/generate_runtime_certs.sh"
 CREDENTIAL_SOURCE_OAUTH2_SCRIPT="$COMMON_SCRIPT_DIR/test_credential_source_oauth2.sh"
 CREDENTIAL_SOURCE_OAUTH2_MEMORY_SCRIPT="$COMMON_SCRIPT_DIR/test_credential_source_oauth2_memory.sh"
 LOCAL_IMAGE_PREPARE_SCRIPT="$ORBSTACK_SCRIPT_DIR/prepare_local_images.sh"
-GENERATED_DIR="${GENERATED_DIR:-$PROJECT_ROOT/edgion-tests/k8s/generated}"
-GENERATED_SECRET_DIR="${GENERATED_DIR}/secrets"
 PORTS_CONFIG="${PORTS_CONFIG:-$PROJECT_ROOT/edgion-tests/integration/conf/ports.json}"
 IMAGE_CONFIG_FILE="${IMAGE_CONFIG_FILE:-$SCRIPT_DIR/conf.env}"
 STATE_NAMESPACE="${STATE_NAMESPACE:-edgion-system}"
@@ -44,13 +44,19 @@ GATEWAY_SYNC_READY_TIMEOUT_SECONDS="${EDGION_K8S_GATEWAY_SYNC_READY_TIMEOUT_SECO
 K8S_REPORT_ROOT="${K8S_REPORT_ROOT:-${PROJECT_ROOT}/tmp/k8s_integration}"
 K8S_RUN_ID="${K8S_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)-$$}"
 K8S_RUN_DIR="${K8S_REPORT_ROOT}/${K8S_RUN_ID}"
+GENERATED_DIR="${K8S_RUN_DIR}/generated"
+GENERATED_SECRET_DIR="${GENERATED_DIR}/secrets"
 K8S_RUN_STATUS_FILE="${K8S_RUN_DIR}/status"
 K8S_RUN_LOG="${K8S_RUN_DIR}/run.log"
 RUN_OWNERSHIP_FILE="${K8S_RUN_DIR}/owned-cluster-keys.tsv"
 K8S_RUN_FINALIZED=false
 CURRENT_ROUND="round-1"
 RUN_OWNS_CLUSTER=false
+RUN_HOLDS_CLUSTER_LEASE=false
 REPREPARE_EXISTING=false
+K8S_ACTIVE_CONTEXT=""
+K8S_LEASE_NAMESPACE="${EDGION_K8S_LEASE_NAMESPACE:-default}"
+K8S_LEASE_NAME="${EDGION_K8S_LEASE_NAME:-edgion-k8s-integration}"
 _PF_PIDS=()
 
 collect_k8s_diagnostics() {
@@ -92,50 +98,7 @@ collect_k8s_diagnostics() {
 }
 
 write_run_ownership_inventory() {
-  python3 - "${CONF_ROOT}" "${K8S_DEPLOY_ROOT}" <<'PY'
-import pathlib
-import sys
-
-import yaml
-
-cluster_kinds = {
-    "ClusterRole",
-    "ClusterRoleBinding",
-    "EdgionGatewayConfig",
-    "GatewayClass",
-}
-keys = set()
-for raw_root in sys.argv[1:]:
-    root = pathlib.Path(raw_root)
-    if not root.exists():
-        continue
-    for path in sorted(set(root.rglob("*.yaml")) | set(root.rglob("*.yml"))):
-        if path.name.endswith(".template.yaml"):
-            continue
-        try:
-            documents = list(yaml.safe_load_all(path.read_text()))
-        except yaml.YAMLError as error:
-            raise SystemExit(f"invalid ownership-inventory YAML {path}: {error}") from error
-        for document in documents:
-            if not isinstance(document, dict):
-                continue
-            api_version = document.get("apiVersion")
-            kind = document.get("kind")
-            metadata = document.get("metadata") or {}
-            name = metadata.get("name")
-            namespace = metadata.get("namespace")
-            group = api_version.split("/", 1)[0] if isinstance(api_version, str) and "/" in api_version else ""
-            locator = f"{kind}.{group}" if group else kind
-            if namespace:
-                keys.add(("namespace", "Namespace", "Namespace", namespace))
-            if kind == "Namespace" and name:
-                keys.add(("namespace", "Namespace", "Namespace", name))
-            elif kind in cluster_kinds and name:
-                keys.add(("cluster", kind, locator, name))
-
-for key in sorted(keys):
-    print("\t".join(key))
-PY
+  "${OWNERSHIP_INVENTORY_SCRIPT}" "${CONF_ROOT}" "${K8S_DEPLOY_ROOT}"
 }
 
 assert_clean_run_boundary() {
@@ -144,14 +107,14 @@ assert_clean_run_boundary() {
   while IFS=$'\t' read -r scope kind locator name; do
     [[ -n "${name}" ]] || continue
     if [[ "${scope}" == "namespace" ]]; then
-      if ! output="$(kubectl get namespace "${name}" --ignore-not-found -o name 2>&1)"; then
+      if ! output="$(kubectl --context "${K8S_ACTIVE_CONTEXT}" get namespace "${name}" --ignore-not-found -o name 2>&1)"; then
         echo "Run ownership probe failed for namespace/${name}: ${output}" >&2
         return 1
       elif [[ -n "${output}" ]]; then
         echo "Run ownership conflict: namespace/${name} already exists" >&2
         conflicts=$((conflicts + 1))
       fi
-    elif ! output="$(kubectl get "${locator}" "${name}" --ignore-not-found -o name 2>&1)"; then
+    elif ! output="$(kubectl --context "${K8S_ACTIVE_CONTEXT}" get "${locator}" "${name}" --ignore-not-found -o name 2>&1)"; then
       echo "Run ownership probe failed for ${kind}/${name}: ${output}" >&2
       return 1
     elif [[ -n "${output}" ]]; then
@@ -161,7 +124,7 @@ assert_clean_run_boundary() {
   done < "${RUN_OWNERSHIP_FILE}"
 
   if [[ "${conflicts}" -ne 0 ]]; then
-    echo "Default prepare requires a clean integration boundary. Run cleanup.sh first or use --keep-alive for an explicitly preserved developer cluster." >&2
+    echo "Default prepare requires a clean integration boundary. Clean the recorded prior run with its ownership file, or use --keep-alive for an explicitly preserved developer cluster." >&2
     return 1
   fi
   RUN_OWNS_CLUSTER=true
@@ -173,7 +136,7 @@ verify_run_cleanup() {
   while IFS=$'\t' read -r scope kind locator name; do
     [[ -n "${name}" ]] || continue
     if [[ "${scope}" == "namespace" ]]; then
-      output="$(kubectl get namespace "${name}" --ignore-not-found -o name 2>&1)" && rc=0 || rc=$?
+      output="$(kubectl --context "${K8S_ACTIVE_CONTEXT}" get namespace "${name}" --ignore-not-found -o name 2>&1)" && rc=0 || rc=$?
       if [[ "${rc}" -ne 0 ]]; then
         echo "Cleanup verification failed for namespace/${name}: ${output}" >&2
         residue=$((residue + 1))
@@ -182,7 +145,7 @@ verify_run_cleanup() {
         residue=$((residue + 1))
       fi
     else
-      output="$(kubectl get "${locator}" "${name}" --ignore-not-found -o name 2>&1)" && rc=0 || rc=$?
+      output="$(kubectl --context "${K8S_ACTIVE_CONTEXT}" get "${locator}" "${name}" --ignore-not-found -o name 2>&1)" && rc=0 || rc=$?
       if [[ "${rc}" -ne 0 ]]; then
         echo "Cleanup verification failed for ${kind}/${name}: ${output}" >&2
         residue=$((residue + 1))
@@ -206,11 +169,19 @@ finish_k8s_run() {
   collect_k8s_diagnostics
   if [[ "${RUN_OWNS_CLUSTER}" == "true" && "${KEEP_ALIVE:-false}" != "true" ]]; then
     echo "Cleaning resources owned by K8s integration run ${K8S_RUN_ID}..."
-    if ! "${CLEANUP_SCRIPT}" --ownership-file "${RUN_OWNERSHIP_FILE}" > "${K8S_RUN_DIR}/cleanup.log" 2>&1; then
+    if ! "${CLEANUP_SCRIPT}" --ownership-file "${RUN_OWNERSHIP_FILE}" \
+      --expected-context "${K8S_ACTIVE_CONTEXT}" > "${K8S_RUN_DIR}/cleanup.log" 2>&1; then
       echo "Run-owned cleanup failed; see ${K8S_RUN_DIR}/cleanup.log"
       exit_code=1
     elif ! verify_run_cleanup > "${K8S_RUN_DIR}/cleanup-verify.log" 2>&1; then
       echo "Run-owned cleanup left residue; see ${K8S_RUN_DIR}/cleanup-verify.log"
+      exit_code=1
+    fi
+  fi
+  if [[ "${RUN_HOLDS_CLUSTER_LEASE}" == "true" ]]; then
+    if ! release_k8s_integration_lease "${K8S_ACTIVE_CONTEXT}" "${K8S_LEASE_NAMESPACE}" \
+      "${K8S_LEASE_NAME}" "${K8S_RUN_ID}"; then
+      echo "Failed to release the Kubernetes integration cluster lease." >&2
       exit_code=1
     fi
   fi
@@ -518,8 +489,12 @@ if ! [[ "${GATEWAY_SYNC_READY_TIMEOUT_SECONDS}" =~ ^[1-9][0-9]*$ ]]; then
   echo "invalid EDGION_K8S_GATEWAY_SYNC_READY_TIMEOUT_SECONDS: ${GATEWAY_SYNC_READY_TIMEOUT_SECONDS}"
   exit 1
 fi
+if ! [[ "${K8S_RUN_ID}" =~ ^[A-Za-z0-9]([A-Za-z0-9_.-]*[A-Za-z0-9])?$ ]]; then
+  echo "invalid K8S_RUN_ID: ${K8S_RUN_ID}" >&2
+  exit 1
+fi
 
-for required in "$VALIDATE_SCRIPT" "$FIXTURE_OWNERSHIP_VALIDATOR" "$DEPLOY_SCRIPT" "$APPLY_ALL_SCRIPT" "$RUN_CLIENT_SCRIPT" "$RUN_CLIENT_BATCH_SCRIPT" "$BATCH_RESULTS_VALIDATOR" "$ENDPOINT_INVENTORY" "$TEST_CLIENT_PEER_IDENTITY" "$RUN_DYNAMIC_SCRIPT" "$RUN_ISOLATED_JOBS_SCRIPT" "$RUN_PROXY_PROTOCOL_JOBS_SCRIPT" "$RUN_METRICS_LABEL_GATE" "$RUN_UNKNOWN_CONFIG_FIELDS_GATE" "$RUN_REQUEUE_DEAD_LOOP_GATE" "$RUN_CACHE_RESIDUE_GATE" "$GENERATE_CERTS_SCRIPT" "$CREDENTIAL_SOURCE_OAUTH2_SCRIPT" "$CREDENTIAL_SOURCE_OAUTH2_MEMORY_SCRIPT" "$CLEANUP_SCRIPT"; do
+for required in "$VALIDATE_SCRIPT" "$FIXTURE_OWNERSHIP_VALIDATOR" "$DEPLOY_SCRIPT" "$APPLY_ALL_SCRIPT" "$RUN_CLIENT_SCRIPT" "$RUN_CLIENT_BATCH_SCRIPT" "$BATCH_RESULTS_VALIDATOR" "$ENDPOINT_INVENTORY" "$TEST_CLIENT_PEER_IDENTITY" "$RUN_DYNAMIC_SCRIPT" "$RUN_ISOLATED_JOBS_SCRIPT" "$RUN_PROXY_PROTOCOL_JOBS_SCRIPT" "$RUN_METRICS_LABEL_GATE" "$RUN_UNKNOWN_CONFIG_FIELDS_GATE" "$RUN_REQUEUE_DEAD_LOOP_GATE" "$RUN_CACHE_RESIDUE_GATE" "$GENERATE_CERTS_SCRIPT" "$CREDENTIAL_SOURCE_OAUTH2_SCRIPT" "$CREDENTIAL_SOURCE_OAUTH2_MEMORY_SCRIPT" "$CLEANUP_SCRIPT" "$CLUSTER_LEASE_SCRIPT" "$OWNERSHIP_INVENTORY_SCRIPT"; do
   if [[ ! -x "$required" ]]; then
     echo "required script not found or not executable: $required"
     exit 1
@@ -543,6 +518,8 @@ fi
 source "${BATCH_RESULTS_VALIDATOR}"
 # shellcheck source=common/endpoint_inventory.sh
 source "${ENDPOINT_INVENTORY}"
+# shellcheck source=common/cluster_lease.sh
+source "${CLUSTER_LEASE_SCRIPT}"
 
 if ! command -v kubectl >/dev/null 2>&1; then
   echo "kubectl not found"
@@ -638,6 +615,7 @@ preflight_kubernetes_cluster() {
     return 1
   fi
 
+  K8S_ACTIVE_CONTEXT="${context}"
   echo "Kubernetes preflight passed: context=${context} ready_nodes=${ready_count}/${node_count} architectures=${architectures}"
   if [[ "${non_ready_count}" -gt 0 ]]; then
     echo "[WARN] Kubernetes context ${context} also has ${non_ready_count} non-Ready Node(s)"
@@ -2821,6 +2799,14 @@ should_run_prepare() {
 }
 
 preflight_kubernetes_cluster
+printf 'kubectl_context=%s\nlease_namespace=%s\nlease_name=%s\n' \
+  "${K8S_ACTIVE_CONTEXT}" "${K8S_LEASE_NAMESPACE}" "${K8S_LEASE_NAME}" \
+  >> "${K8S_RUN_DIR}/metadata"
+if ! acquire_k8s_integration_lease "${K8S_ACTIVE_CONTEXT}" "${K8S_LEASE_NAMESPACE}" \
+  "${K8S_LEASE_NAME}" "${K8S_RUN_ID}"; then
+  exit 1
+fi
+RUN_HOLDS_CLUSTER_LEASE=true
 print_cluster_and_image_context
 if [[ "${FILTERED_MODE}" == "false" && "${PREPARE_ONLY}" == "false" && -z "${ISOLATED_JOB_IMAGE}" ]]; then
   echo "EDGION_ISOLATED_JOB_IMAGE or ISOLATED_JOB_IMAGE in --image-config is required for an unfiltered test run"
