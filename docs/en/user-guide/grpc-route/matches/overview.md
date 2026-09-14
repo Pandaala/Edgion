@@ -51,6 +51,9 @@ are invalid. For regex, an absent/empty field is unconstrained only when the
 other field is non-empty. Invalid method names or patterns invalidate the whole
 rule, not valid sibling rules; Controller status reports `PartiallyInvalid`, or
 `Accepted=False / UnsupportedValue` when all effective rules are invalid.
+Exact service-name validation follows the Gateway API CEL character set, including
+its Unicode simple case-fold equivalents. Runtime Exact matching remains literal
+and case-sensitive.
 
 ## Combining conditions (AND within one match)
 

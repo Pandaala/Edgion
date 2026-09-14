@@ -391,9 +391,9 @@ mod tests {
 
     #[test]
     fn compact_backend_state_stays_within_hot_path_budget() {
-        assert_eq!(std::mem::size_of::<LogicalBackendHandle>(), 16);
-        assert_eq!(std::mem::size_of::<SelectedServiceBackend>(), 32);
-        assert_eq!(std::mem::size_of::<Option<SelectedHttpBackend>>(), 32);
+        assert_eq!(std::mem::size_of::<LogicalBackendHandle>(), 24);
+        assert_eq!(std::mem::size_of::<SelectedServiceBackend>(), 40);
+        assert_eq!(std::mem::size_of::<Option<SelectedHttpBackend>>(), 40);
     }
 
     #[test]

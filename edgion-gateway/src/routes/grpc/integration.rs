@@ -27,7 +27,8 @@ pub fn is_grpc_protocol(ctx: &EdgionHttpContext) -> bool {
 
 /// Try to match a gRPC route against the global gRPC route table.
 ///
-/// Returns `Ok(true)` on a match, `Ok(false)` to fall back to HTTP routing, or `Err` on error.
+/// Returns `Ok(true)` on a match, `Ok(false)` when no gRPC route matched, or `Err` on error.
+/// The request-entry caller decides whether an unmatched request may continue to HTTP routing.
 #[inline]
 pub async fn try_match_grpc_route(
     grpc_routes: &Arc<crate::routes::grpc::DomainGrpcRouteRules>,

@@ -7,7 +7,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fmt;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use super::common::{ParentReference, RefDenied};
 use super::http_route::{
@@ -244,15 +244,8 @@ impl GRPCRouteMatch {
             return Err("gRPC service and method must not exceed 1024 characters");
         }
         if matcher.match_type.as_ref() != Some(&GRPCMethodMatchType::RegularExpression) {
-            // Mirror the vendored Gateway API Exact CEL name constraints,
-            // including the optional leading dot on a service name.
-            if service.is_some_and(|value| {
-                !value
-                    .strip_prefix('.')
-                    .unwrap_or(value)
-                    .split('.')
-                    .all(valid_grpc_identifier)
-            }) {
+            // Mirror the vendored Gateway API Exact CEL name constraints.
+            if service.is_some_and(|value| !valid_exact_grpc_service(value)) {
                 return Err("gRPC Exact service must be a valid service name");
             }
             if method.is_some_and(|value| !valid_grpc_identifier(value)) {
@@ -277,6 +270,14 @@ impl GRPCRouteMatch {
             method: compile(method)?,
         })
     }
+}
+
+fn valid_exact_grpc_service(value: &str) -> bool {
+    static PATTERN: LazyLock<regex::Regex> = LazyLock::new(|| {
+        regex::Regex::new(r"(?i)^\.?[a-z_][a-z_0-9]*(\.[a-z_][a-z_0-9]*)*$")
+            .expect("the vendored Gateway API Exact service pattern is statically valid")
+    });
+    PATTERN.is_match(value)
 }
 
 fn valid_grpc_identifier(value: &str) -> bool {
@@ -792,6 +793,26 @@ mod tests {
         let method = method.unwrap();
         assert!(method.is_match("GetItem"));
         assert!(!method.is_match("DeleteItem"));
+    }
+
+    #[test]
+    fn exact_service_validation_matches_the_vendored_cel_case_fold_set() {
+        for service in ["pkg.ſervice", "pkg.Kervice"] {
+            let matcher: GRPCRouteMatch = serde_json::from_value(serde_json::json!({
+                "method": {"service": service}
+            }))
+            .unwrap();
+            assert!(matches!(matcher.compile_method(), Ok(CompiledGrpcMethodMatch::Exact)));
+        }
+
+        let rule: GRPCRouteRule = serde_json::from_value(serde_json::json!({
+            "matches": [
+                {"method": {"service": "pkg.Kervice"}},
+                {"method": {"service": "pkg.Service"}}
+            ]
+        }))
+        .unwrap();
+        assert!(rule.method_match_error().is_none());
     }
 
     #[test]

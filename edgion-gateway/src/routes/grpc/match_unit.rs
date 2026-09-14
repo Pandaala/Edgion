@@ -642,9 +642,9 @@ mod backend_handle_tests {
 
     #[test]
     fn grpc_backend_handles_stay_within_hot_path_budget() {
-        assert_eq!(std::mem::size_of::<GrpcBackendHandle>(), 16);
-        assert_eq!(std::mem::size_of::<SelectedGrpcBackend>(), 32);
-        assert_eq!(std::mem::size_of::<Option<SelectedGrpcBackend>>(), 32);
+        assert_eq!(std::mem::size_of::<GrpcBackendHandle>(), 24);
+        assert_eq!(std::mem::size_of::<SelectedGrpcBackend>(), 40);
+        assert_eq!(std::mem::size_of::<Option<SelectedGrpcBackend>>(), 40);
     }
 
     #[test]

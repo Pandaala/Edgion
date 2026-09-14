@@ -70,6 +70,9 @@ method predicate drops its whole rule before rule runtimes are built, including
 status-less/stale Controller input. Valid sibling rules survive.
 
 Explicit empty method matchers and empty/invalid Exact names are rejected.
+Exact service validation mirrors the vendored CEL Unicode simple case-fold set;
+Exact method validation remains ASCII, and runtime Exact matching remains
+literal and case-sensitive.
 For regex, an absent/empty field is unconstrained only when the other is
 non-empty. Failure of either supplied pattern rejects the predicate. Compilation
 is bounded and happens at configuration load time, never on the request path.
@@ -98,7 +101,18 @@ Called inside `pg_request_filter`, attempts to match a gRPC route:
 1. Parse the gRPC path into service / method and store in `ctx.request_info`.
 2. Call `DomainGrpcRouteRules::match_route` to perform matching.
 3. On success: set `ctx.grpc_route_unit` and `ctx.gateway_info`, mark `ctx.is_grpc_route_matched = true`.
-4. On failure: return `Ok(false)` and fall back to HTTP route matching.
+4. On failure: return `Ok(false)` to the request-entry caller; this helper does
+   not decide whether HTTP route matching runs next.
+
+`pg_request_filter` owns the fallback policy. After earlier request-entry gates
+succeed, an unmatched native gRPC request terminates with HTTP 200 and
+`grpc-status: 12` (`UNIMPLEMENTED`) when `has_routes()` reports candidates in the
+current Listener's published gRPC route table. HTTPRoute matching continues when
+that table has no candidates, or for unmatched gRPC-Web requests. A native gRPC
+request rejected by an earlier gate does not reach this route decision; for
+example, a disabled HTTP/2 frontend returns status 13. The request-entry tests
+cover these branches directly; helper-level matcher tests do not establish the
+top-level fallback policy.
 
 ### handle_grpc_upstream
 

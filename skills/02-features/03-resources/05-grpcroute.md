@@ -102,7 +102,7 @@ Matching logic:
 - Only `service` specified → match all methods of that service.
 - Only `method` specified → match that method across all services (Edgion's implementation-specific support).
 - Omit the outer method matcher → no service/method constraint. An explicit `method: {}` is invalid, not catch-all.
-- Exact fields must be non-empty valid names. Regex fields may be absent/empty if the other field is non-empty; invalid patterns invalidate the entire rule, retaining valid sibling rules.
+- Exact fields must be non-empty valid names. Service validation follows the vendored CEL Unicode simple case-fold set, while method validation remains ASCII and runtime Exact matching remains literal and case-sensitive. Regex fields may be absent/empty if the other field is non-empty; invalid patterns invalidate the entire rule, retaining valid sibling rules.
 - Priority is matching hostname specificity, then descending service and method character counts (pattern lengths for regex), then header count, oldest creation time, namespace/name, and first rule. Match index breaks remaining ties. Exact is not a separate priority tier.
 
 ### GRPCHeaderMatch

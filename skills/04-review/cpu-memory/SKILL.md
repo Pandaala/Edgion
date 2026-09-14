@@ -14,6 +14,7 @@ before applying a decision to current code.
 - [AccessLogEntry::from_context Per-Request request_uri String Alloc (include_raw_uri=true) is Not Worth Fixing](intentional-design/access-log-request-uri-include-raw-uri-alloc.md)
 - [`AdminState::cache_get_resource` Full-List + Linear-Scan is Not a Performance Issue](intentional-design/admin-state-cache-get-resource-full-list-scan.md)
 - [Async response-body hook no-work gate requires production profiling](intentional-design/async-response-body-hook-profile-before-gate.md)
+- [Backend generation handles retain the immutable slice layout](intentional-design/backend-generation-arc-slice-handle-layout.md)
 - [conf_sync `CompressEvent` Per-Key `Vec<ResourceChange>` — DESIGN-TRADEOFF (won't-fix)](intentional-design/conf-sync-compress-event-vec-per-key.md)
 - [Configuration Struct Field Ordering Causing Padding Waste](intentional-design/config-struct-field-ordering-padding-waste.md)
 - [Control-Plane Status-Write Counter Handle Pre-Caching is Not Worth It](intentional-design/control-plane-status-write-counter-pre-caching.md)

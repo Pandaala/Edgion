@@ -732,6 +732,16 @@ mod tests {
     }
 
     #[test]
+    fn exact_service_accepted_by_cel_remains_case_sensitive_at_runtime() {
+        let engine = GrpcMatchEngine::new(vec![make_route(Some("pkg.Kervice"), None, None, "kelvin")]);
+        assert_eq!(
+            candidate_names(&engine, "pkg.Kervice", "Get", "example.com"),
+            ["default/kelvin"]
+        );
+        assert!(candidate_names(&engine, "pkg.kervice", "Get", "example.com").is_empty());
+    }
+
+    #[test]
     fn regex_method_only_uses_pattern_length_and_checks_the_predicate() {
         let engine = GrpcMatchEngine::new(vec![
             make_route(None, Some("Get"), None, "exact"),

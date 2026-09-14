@@ -15,6 +15,9 @@ one field, or leave it empty, only when the other is non-empty. Either invalid
 pattern invalidates the entire predicate and rule, never becoming Exact/catch-all.
 Valid sibling rules remain usable. Delegation still rejects regex children and
 inherits the parent service only for omitted matchers or valid method-only ones.
+Exact service validation reproduces the vendored CEL Unicode simple case-fold
+character set. Exact method validation remains ASCII, and runtime Exact matching
+remains literal and case-sensitive.
 
 Matching hostname specificity precedes service length, method length, header
 count, creation time, namespace/name, and rule order. Only a declared Route
@@ -23,8 +26,13 @@ narrow eligibility but must not promote wildcard/hostless Route priority.
 Pattern character counts apply to regex;
 Exact is not an additional priority tier. Match index resolves remaining ties.
 Every candidate must pass the full predicate, with no-match continuing through
-remaining candidates and broader matching hostname groups. gRPC-first/HTTP
-fallback for overlapping hostnames is unchanged.
+remaining candidates and broader matching hostname groups. This candidate
+continuation is separate from protocol fallback. After earlier request-entry
+gates succeed, unmatched native gRPC terminates with status 12 when
+`has_routes()` reports candidates in the current Listener's published gRPC route
+table. HTTPRoute matching remains available when that table has no candidates
+and for gRPC-Web; an earlier rejection such as the native-gRPC HTTP/2 frontend
+gate terminates before route matching.
 
 ## Rationale and evidence
 
@@ -35,8 +43,10 @@ claims that every Gateway API implementation must support them. The pinned
 contract defines the precedence chain and per-rule invalidity behavior.
 
 - `edgion-resources/src/resources/grpc_route.rs`: `compile_method` owns the
-  bounded compilation policy; `method_match_error` exposes it to rule validation.
-  No new serialized fields or CRD schema changes are needed.
+  bounded compilation policy; its static Exact service regex mirrors the vendored
+  CEL instead of narrowing service identifiers to ASCII. `method_match_error`
+  exposes the result to rule validation. No new serialized fields or CRD schema
+  changes are needed.
 - Controller `handlers/grpc_route.rs` classifies invalid rules and reports
   `PartiallyInvalid`, or `Accepted=False / UnsupportedValue` for all-invalid
   effective rules. Method errors do not use route-wide advisory validation.
@@ -53,8 +63,9 @@ contract defines the precedence chain and per-rule invalidity behavior.
   preserve the frozen hostname tree, including full-list and Gateway rebuilds.
 - `match_unit.rs::deep_match` remains responsible for headers and attachment.
   Only no-match continues inside the engine; predicate errors propagate to its
-  caller. `integration.rs::try_match_grpc_route` retains HTTP
-  fallback. ArcSwap generation replacement retains in-flight snapshots.
+  caller. `integration.rs::try_match_grpc_route` returns the match result, while
+  `pg_request_filter` owns the protocol fallback/termination decision. ArcSwap
+  generation replacement retains in-flight snapshots.
 
 ## Alternatives and limits
 
@@ -88,7 +99,7 @@ Clippy exited 0 with existing repository warnings. Final
 SSA-force, metrics-inventory, and Pingora-source guards passed.
 Added tests cover shared JSON/YAML defaults and
 validation, Controller status/delegation/publication, all precedence dimensions,
-actual Pingora Session header fallback, gRPC-to-HTTP fallback, and full/partial
+actual Pingora Session header fallback, candidate continuation, and full/partial
 snapshot replacement and deletion. The 1,000-Exact-route test counts
 visited candidates; it is not a throughput benchmark. Allocation counters cover
 Exact selection, hostname fallback, and regex selection after warming its existing
@@ -97,7 +108,23 @@ Existing `edgion-tests/**`
 are frozen. No live Kubernetes/etcd admission or HTTP/2 wire test is claimed.
 The full agent-doc guard has seven pre-existing broken links outside this repair;
 the 13 changed/new documents pass the same guard functions when scoped to the diff.
-Source tasks remain open while the repository-wide closure gate is blocked.
+At the time of those historical results, source tasks remained open because that
+repository-wide closure gate was blocked.
+
+Fresh focused correction evidence: `cargo test -p edgion-resources --lib
+grpc_route` passed 11 tests, including both non-ASCII simple-fold equivalents and
+a valid ASCII sibling branch. `cargo test -p edgion-gateway --lib
+routes::grpc::match_engine` passed 24 tests, including literal, case-sensitive
+Exact selection for a CEL-accepted service. These focused tests do not constitute
+live Kubernetes admission or HTTP/2 wire verification. Current closure verification
+also ran `cargo test -p edgion-gateway --lib routes::grpc` (64 passed). Separately,
+`cargo test -p edgion-gateway --lib request_entry_tests` passed the request-entry
+tests that distinguish native gRPC status 12, an empty gRPC route table's HTTP
+fallback, and gRPC-Web HTTP fallback. The in-memory sessions do not establish H2
+negotiation or frame behavior. Workspace format, all-target check, all-target
+Clippy (with one existing `edgion-tests` warning), the full agent-doc validator,
+English-only check, and the SSA-force, metrics-inventory, and Pingora-source
+guards also passed.
 
 Re-evaluate on Gateway API version changes, delegation policy changes, new
 matching dimensions, or changes to the shared hostname matcher, input normalization,
@@ -106,7 +133,16 @@ helpers are outside this contract and remain unchanged.
 
 ## Resolution references
 
+- `grpc-route-matching-plan`: umbrella implementation plan for the canonical
+  method matcher, ranked candidate engine, shared hostname index, and their
+  cross-layer regression coverage.
 - `grpc-route-method-only-match-policy`: confirmed correctness defect; repair
   supports the already documented method-only contract and rejects invalid matchers.
 - `grpc-route-complete-precedence-and-hostname-ordering`: confirmed correctness
   defect; companion repair applies the full precedence chain across candidate indexes.
+- `grpc-route-matching-review-corrections` issue 3: confirmed correctness defect;
+  the shared Exact service validator now accepts the vendored CEL character set
+  without changing runtime Exact comparison.
+- `Astra-doc-01`: corrected the over-broad helper-level HTTP fallback claim;
+  request-entry policy remains conditional on protocol and whether the current
+  Listener's published gRPC route table contains candidates.

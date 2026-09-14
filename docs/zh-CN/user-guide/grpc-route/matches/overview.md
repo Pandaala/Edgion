@@ -50,6 +50,8 @@ spec:
 缺失或为空的字段才表示不限制。无效的方法名称或正则表达式会使整条 rule 无效，
 但保留其他有效 rule；Controller 状态会报告 `PartiallyInvalid`，全部有效规则候选
 均无效时则报告 `Accepted=False / UnsupportedValue`。
+Exact service 名称的配置校验遵循 Gateway API CEL 字符集合，包括 Unicode 简单
+大小写折叠的等价字符；运行时 Exact 匹配仍按原始字符串区分大小写。
 
 ## 条件组合（同一 match 内为 AND）
 
