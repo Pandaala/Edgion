@@ -460,6 +460,41 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn duplicate_headers_compile_rank_and_match_the_same_canonical_vector() {
+        let route = matching_route(
+            "duplicate-headers",
+            "api.example.com",
+            json!({"headers": [
+                {"name": "X-Mode", "type": "RegularExpression", "value": "^one$"},
+                {"name": "x-mode", "type": "RegularExpression", "value": "["},
+                {"name": "X-Region", "value": "west"},
+                {"name": "x-region", "value": "ignored"}
+            ]}),
+        );
+        let units = parse_route_to_units("default/duplicate-headers", &route);
+        assert_eq!(units.len(), 1);
+        let unit = &units[0];
+        assert_eq!(unit.specificity.header_count, 2);
+        assert_eq!(unit.matched_info.compiled_header_regexes.len(), 2);
+        assert!(unit.matched_info.compiled_header_regexes[0].is_some());
+        assert!(unit.matched_info.compiled_header_regexes[1].is_none());
+
+        let engine = GrpcMatchEngine::new(units);
+        let index = matching_index();
+        for (headers, expected) in [
+            ("x-mode: one\r\nx-region: west\r\n", true),
+            ("x-mode: two\r\nx-region: west\r\n", false),
+            ("x-mode: one\r\nx-region: east\r\n", false),
+        ] {
+            let (session, ctx) = matching_session("/svc.User/Get", "api.example.com", headers).await;
+            assert_eq!(
+                engine.match_route(&session, &ctx, &index, "api.example.com").is_ok(),
+                expected
+            );
+        }
+    }
+
     #[test]
     fn invalid_method_withdraws_whole_rule_even_without_controller_status() {
         for bad in [

@@ -1458,6 +1458,40 @@ mod tests {
         assert_eq!(headers.len(), 1);
     }
 
+    #[test]
+    fn duplicate_headers_are_canonical_before_delegation_merge() {
+        let parent = parent_with_rules(serde_json::json!([{
+            "matches": [{
+                "method": {"service": "svc.Billing"},
+                "headers": [
+                    {"name": "X-Tenant", "value": "b"},
+                    {"name": "x-tenant", "value": "ignored"}
+                ]
+            }],
+            "backendRefs": [{
+                "group": "gateway.networking.k8s.io", "kind": "GRPCRoute",
+                "name": "child", "namespace": "billing"
+            }]
+        }]));
+        let child = route(
+            "billing",
+            "child",
+            serde_json::json!({"rules": [{
+                "matches": [{
+                    "method": {"service": "svc.Billing"},
+                    "headers": [{"name": "x-tenant", "value": "b"}]
+                }],
+                "backendRefs": [{"name": "svc", "port": 80}]
+            }]}),
+        );
+
+        let outcome = flatten_route(&parent, &FakeLookup::new(vec![child]));
+        let rules = outcome.resolved_rules.as_ref().unwrap();
+        let headers = rules[0].matches.as_ref().unwrap()[0].headers.as_ref().unwrap();
+        assert_eq!(headers.len(), 1);
+        assert_eq!((headers[0].name.as_str(), headers[0].value.as_str()), ("x-tenant", "b"));
+    }
+
     // =====================================================================
     // Filter inheritance
     // =====================================================================

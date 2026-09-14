@@ -329,6 +329,28 @@ mod tests {
         }
     }
 
+    #[test]
+    fn grpc_header_validation_ignores_only_later_equivalent_names() {
+        for invalid in [
+            serde_json::json!({"name": "x-mode", "type": "RegularExpression", "value": "["}),
+            serde_json::json!({"name": "x-mode", "type": "Unknown", "value": "two"}),
+        ] {
+            for invalid_first in [false, true] {
+                let mut headers = vec![serde_json::json!({"name": "X-Mode", "value": "one"}), invalid.clone()];
+                if invalid_first {
+                    headers.reverse();
+                }
+                let route = serde_json::from_value(serde_json::json!({
+                    "apiVersion": "gateway.networking.k8s.io/v1", "kind": "GRPCRoute",
+                    "metadata": {"name": "header-validation", "namespace": "default"},
+                    "spec": {"rules": [{"matches": [{"headers": headers}]}]}
+                }))
+                .unwrap();
+                assert_eq!(validate_grpc_route_if_enabled(&route).is_empty(), !invalid_first);
+            }
+        }
+    }
+
     /// Build a ReferenceGrant with a single From and a single To entry.
     // Keeping the complete From/To tuple visible makes authorization fixtures auditable.
     #[allow(clippy::too_many_arguments)]

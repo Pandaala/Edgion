@@ -5,6 +5,7 @@
 use kube::CustomResource;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::fmt;
 use std::sync::Arc;
 
@@ -188,9 +189,27 @@ pub struct GRPCRouteMatch {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub method: Option<GRPCMethodMatch>,
 
-    /// Headers specifies gRPC request header matchers
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Header matchers, retaining only the first ASCII-case-equivalent name.
+    /// Normalize at decode before Controller validation/delegation and Gateway
+    /// regex compilation, predicate evaluation, and specificity counting.
+    #[serde(
+        default,
+        deserialize_with = "deserialize_header_matches",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub headers: Option<Vec<GRPCHeaderMatch>>,
+}
+
+fn deserialize_header_matches<'de, D>(deserializer: D) -> Result<Option<Vec<GRPCHeaderMatch>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let mut headers = Option::<Vec<GRPCHeaderMatch>>::deserialize(deserializer)?;
+    if let Some(headers) = headers.as_mut().filter(|headers| headers.len() > 1) {
+        let mut seen = HashSet::with_capacity(headers.len());
+        headers.retain(|header| seen.insert(header.name.to_ascii_lowercase()));
+    }
+    Ok(headers)
 }
 
 /// Validated method predicates compiled once when building a route snapshot.
@@ -773,6 +792,44 @@ mod tests {
         let method = method.unwrap();
         assert!(method.is_match("GetItem"));
         assert!(!method.is_match("DeleteItem"));
+    }
+
+    #[test]
+    fn header_matches_retain_the_first_ascii_case_equivalent_name() {
+        let matcher: GRPCRouteMatch = serde_json::from_value(serde_json::json!({
+            "headers": [
+                {"name": "X-Mode", "type": "RegularExpression", "value": "^one$"},
+                {"name": "x-mode", "value": "ignored"},
+                {"name": "X-Region", "value": "west"},
+                {"name": "x-region", "type": "RegularExpression", "value": "ignored"},
+                {"name": "X-Final", "value": "yes"}
+            ]
+        }))
+        .unwrap();
+
+        let headers = matcher.headers.as_ref().unwrap();
+        assert_eq!(headers.len(), 3);
+        assert_eq!(
+            (
+                headers[0].name.as_str(),
+                headers[0].match_type.as_deref(),
+                headers[0].value.as_str()
+            ),
+            ("X-Mode", Some("RegularExpression"), "^one$")
+        );
+        assert_eq!(
+            (headers[1].name.as_str(), headers[1].value.as_str()),
+            ("X-Region", "west")
+        );
+        assert_eq!(
+            (headers[2].name.as_str(), headers[2].value.as_str()),
+            ("X-Final", "yes")
+        );
+
+        let absent: GRPCRouteMatch = serde_json::from_str("{}").unwrap();
+        assert!(absent.headers.is_none());
+        let empty: GRPCRouteMatch = serde_json::from_str(r#"{"headers":[]}"#).unwrap();
+        assert!(empty.headers.as_ref().is_some_and(Vec::is_empty));
     }
 
     #[test]
