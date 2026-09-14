@@ -72,3 +72,13 @@ spec:
           set:
             - {name: X-Capture-Short, value: "$short"}
             - {name: X-Capture-Customer-Identifier, value: "$customerIdentifier"}
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata: {name: named-sentinel, namespace: edgion-test}
+spec:
+  parentRefs: [{name: named-parameter-precedence-gateway}]
+  hostnames: ["named-parameter-precedence.example.com"]
+  rules:
+    - matches: [{path: {type: Exact, value: "/named-sentinel"}}]
+      backendRefs: [{name: named-precedence-30001, port: 30001}]

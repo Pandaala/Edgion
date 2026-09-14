@@ -19,22 +19,68 @@ impl TestSuite for NamedParameterSuite {
 
     fn test_cases(&self) -> Vec<TestCase> {
         let generation = self.0;
-        vec![
-            TestCase::new(
+        let backend_cases = [
+            (
                 "static_over_named_parameter",
-                "A static path outranks a matching named-parameter path",
-                move |ctx: TestContext| {
+                "A static Exact path outranks a matching named-parameter Exact path",
+                "/named-rank/fixed",
+                false,
+            ),
+            (
+                "exact_over_prefix",
+                "A named-parameter Exact path outranks a more static matching Prefix path",
+                "/named-exact/a/b",
+                false,
+            ),
+            (
+                "aggregate_static_constraints",
+                "Aggregate static character constraints outrank parameter spelling",
+                "/named-aggregate/long/a",
+                false,
+            ),
+            (
+                "escaped_colon_literal",
+                "An escaped colon literal outranks a named-parameter segment",
+                "/named-colon/:literal",
+                false,
+            ),
+            (
+                "multi_parameter_overlap",
+                "Static segments outrank an overlapping path with more parameters",
+                "/named-multi/a/b/c",
+                false,
+            ),
+            (
+                "non_path_precedence",
+                "Method precedence wins after equal named-path specificity",
+                "/named-nonpath/value",
+                false,
+            ),
+            (
+                "live_static_constraint_update",
+                "A live static-constraint change rebuilds the winning route",
+                "/named-live/a/b/c",
+                true,
+            ),
+        ];
+        let mut cases: Vec<_> = backend_cases
+            .into_iter()
+            .map(|(name, description, path, follows_generation)| {
+                TestCase::new(name, description, move |ctx: TestContext| {
                     Box::pin(async move {
                         let start = Instant::now();
-                        let result = check_backend(&ctx, "/named-rank/fixed", generation.map(|_| 30001)).await;
+                        let expected_port = generation.map(|(port, _)| if follows_generation { port } else { 30001 });
+                        let result = check_backend(&ctx, path, expected_port).await;
                         match result {
                             Ok(()) => TestResult::passed(start.elapsed()),
                             Err(error) => TestResult::failed(start.elapsed(), error.to_string()),
                         }
                     })
-                },
-            )
-            .with_timeout(Duration::from_secs(15)),
+                })
+                .with_timeout(Duration::from_secs(15))
+            })
+            .collect();
+        cases.push(
             TestCase::new(
                 "equal_specificity_capture_generation",
                 "Equal path keys use route precedence and expose only current capture names",
@@ -50,7 +96,8 @@ impl TestSuite for NamedParameterSuite {
                 },
             )
             .with_timeout(Duration::from_secs(15)),
-        ]
+        );
+        cases
     }
 }
 
@@ -59,6 +106,7 @@ async fn response_body(ctx: &TestContext, path: &str) -> Result<(u16, String)> {
         .http_client
         .get(format!("{}{path}", ctx.http_url()))
         .header("host", "named-parameter-precedence.example.com")
+        .header("x-precedence", "one")
         .timeout(Duration::from_secs(3))
         .send()
         .await?;
@@ -144,23 +192,10 @@ static PHASES: &[PhaseSuite] = &[
     },
 ];
 
-async fn cleanup(ctx: &ScenarioCtx) -> Result<()> {
+async fn delete_resources(ctx: &ScenarioCtx, resources: &[(&str, &str)]) -> Result<()> {
     let client = crate::dynamic::apply::build_client(&ctx.controller_url)?;
-    let resources = [
-        ("HTTPRoute", "named-static-z-winner"),
-        ("HTTPRoute", "named-static-a-loser"),
-        ("HTTPRoute", "named-equal-a-winner"),
-        ("HTTPRoute", "named-equal-z-loser"),
-        ("EdgionPlugins", "named-capture-observer"),
-        ("EndpointSlice", "named-precedence-30001"),
-        ("EndpointSlice", "named-precedence-30002"),
-        ("EndpointSlice", "named-precedence-30003"),
-        ("Service", "named-precedence-30001"),
-        ("Service", "named-precedence-30002"),
-        ("Service", "named-precedence-30003"),
-    ];
     let mut failures = Vec::new();
-    for (kind, name) in resources {
+    for &(kind, name) in resources {
         match client.delete(kind, Some("edgion-test"), name).await {
             Ok(response) if response.status().is_success() || response.status().as_u16() == 404 => {}
             Ok(response) => failures.push(format!("{kind}/{name}: HTTP {}", response.status())),
@@ -169,6 +204,48 @@ async fn cleanup(ctx: &ScenarioCtx) -> Result<()> {
     }
     ensure!(failures.is_empty(), "cleanup failed: {}", failures.join("; "));
     Ok(())
+}
+
+async fn cleanup_routes(ctx: &ScenarioCtx) -> Result<()> {
+    delete_resources(
+        ctx,
+        &[
+            ("HTTPRoute", "named-static-z-winner"),
+            ("HTTPRoute", "named-static-a-loser"),
+            ("HTTPRoute", "named-equal-a-winner"),
+            ("HTTPRoute", "named-equal-z-loser"),
+            ("HTTPRoute", "named-exact-z-winner"),
+            ("HTTPRoute", "named-prefix-a-loser"),
+            ("HTTPRoute", "named-aggregate-z-winner"),
+            ("HTTPRoute", "named-aggregate-a-loser"),
+            ("HTTPRoute", "named-colon-z-winner"),
+            ("HTTPRoute", "named-colon-a-loser"),
+            ("HTTPRoute", "named-multi-z-winner"),
+            ("HTTPRoute", "named-multi-a-loser"),
+            ("HTTPRoute", "named-nonpath-z-winner"),
+            ("HTTPRoute", "named-nonpath-a-loser"),
+            ("HTTPRoute", "named-live-z-winner"),
+            ("HTTPRoute", "named-live-a-loser"),
+        ],
+    )
+    .await
+}
+
+async fn cleanup_supporting_resources(ctx: &ScenarioCtx) -> Result<()> {
+    delete_resources(
+        ctx,
+        &[
+            ("HTTPRoute", "named-sentinel"),
+            ("EdgionPlugins", "named-capture-observer"),
+            ("EndpointSlice", "named-precedence-30001"),
+            ("EndpointSlice", "named-precedence-30002"),
+            ("EndpointSlice", "named-precedence-30003"),
+            ("Service", "named-precedence-30001"),
+            ("Service", "named-precedence-30002"),
+            ("Service", "named-precedence-30003"),
+        ],
+    )
+    .await
 }
 
 async fn cleanup_gateway(ctx: &ScenarioCtx) -> Result<()> {
@@ -187,7 +264,7 @@ async fn cleanup_gateway(ctx: &ScenarioCtx) -> Result<()> {
 fn run(ctx: ScenarioCtx) -> ScenarioRunFuture {
     Box::pin(async move {
         let result = async {
-            cleanup(&ctx).await?;
+            cleanup_routes(&ctx).await?;
             ctx.apply_dir("bootstrap/").await?;
             ctx.wait_phase(SCENARIO, "absent", Duration::from_secs(20)).await?;
             ctx.apply_dir("initial/").await?;
@@ -199,8 +276,9 @@ fn run(ctx: ScenarioCtx) -> ScenarioRunFuture {
         }
         .await;
         let cleanup = async {
-            cleanup(&ctx).await?;
+            cleanup_routes(&ctx).await?;
             ctx.wait_phase(SCENARIO, "absent", Duration::from_secs(20)).await?;
+            cleanup_supporting_resources(&ctx).await?;
             cleanup_gateway(&ctx).await
         }
         .await;

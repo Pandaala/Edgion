@@ -125,27 +125,52 @@ of HTTP traffic, control-plane synchronization, or live hot reload.
 
 The follow-up `http-route-named-parameter-precedence-integration` added the
 `HttpRouteNamedParameterPrecedence` dynamic scenario. In the real FileSystem
-Controller -> Gateway -> test-server topology it verifies that a static Exact
-route beats a matching named-parameter Exact route, then exercises
-initial -> updated -> initial publication for equal path-specificity routes.
-The winning backend changes from 30001 to 30002 and back to 30001 while the
-observable capture changes from `short=value` to
-`customerIdentifier=value` and back; the inactive capture remains unresolved.
-Cleanup also verifies that removing the routes returns both requests to 404.
+Controller -> Gateway -> test-server topology it exercises initial -> updated ->
+initial publication and verifies eight externally visible request outcomes in
+each generation:
+
+- static Exact over named-parameter Exact;
+- named-parameter Exact over a more static overlapping Prefix;
+- aggregate static-character and multi-parameter specificity;
+- escaped-colon literal handling;
+- method precedence after equal named-path specificity;
+- a live static-constraint change that moves the winning backend from 30001 to
+  30002 and back to 30001;
+- short/long parameter renaming without changing the path key; and
+- ProxyRewrite visibility of the current capture name while the inactive name
+  remains unresolved.
+
+Every generation uses `wait_phase`; there is no fixed sleep. A bootstrap sentinel
+route keeps the Gateway's plugin publication scope available while the scenario
+deletes every tested route and requires all eight paths to return 404 before the
+initial generation and again during final cleanup. The scenario then deletes the
+sentinel, plugin, EndpointSlices, Services, and Gateway. Its dedicated Gateway
+listener must be present when the Gateway process starts. For a focused local run, preload
+`base,HTTPRoute/Basic,HTTPRoute/NamedParameterPrecedence` with
+`start_all_with_conf.sh`, then invoke the dynamic scenario. Selecting
+`HTTPRoute/NamedParameterPrecedence` as an ordinary static suite is invalid
+because it has no static suite registration.
 
 Fresh verification for that integration follow-up on 2026-09-14:
 
 - `cargo test -p edgion-tests --bin test_client dynamic --no-fail-fast`: passed
   (3 tests).
 - `cargo test -p edgion-tests --test conf_corpus_unknown_fields`: passed.
-- Standard integration startup and `HTTPRoute/Basic` baseline: passed.
+- `start_all_with_conf.sh --suites
+  base,HTTPRoute/Basic,HTTPRoute/NamedParameterPrecedence`: passed, including
+  Controller/Gateway resource convergence.
 - `target/debug/test_client -g --dynamic-scenario
-  HttpRouteNamedParameterPrecedence`: passed against the live local stack.
+  HttpRouteNamedParameterPrecedence`: passed against that live local stack with
+  all eight cases in all three generations.
 
 The Kubernetes integration path was not run and this scenario is not registered
 in the Kubernetes dynamic inventory or fixture tree. Fresh cross-process evidence
-currently covers only the FileSystem configuration backend. The full workspace
-test suite was not run during the original repair.
+currently covers only the FileSystem configuration backend. This cross-process
+scenario uses ASCII-only fixtures. Raw-Unicode semantics have only in-process
+coverage; File/etcd can carry that extension input, while the Kubernetes Gateway
+API structural schema may reject it before Edgion sees it and was not tested here.
+The full workspace test suite was not run
+during the original repair or this integration follow-up.
 
 Agent-doc validation initially found an unrelated pre-existing broken reference
 to the UDP shutdown wire-coverage task. The then-deferred task was restored from

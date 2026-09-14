@@ -20,6 +20,130 @@ spec:
 ---
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
+metadata: {name: named-exact-z-winner, namespace: edgion-test}
+spec:
+  parentRefs: [{name: named-parameter-precedence-gateway}]
+  hostnames: ["named-parameter-precedence.example.com"]
+  rules:
+    - matches: [{path: {type: Exact, value: "/named-exact/:x/:y"}}]
+      backendRefs: [{name: named-precedence-30001, port: 30001}]
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata: {name: named-prefix-a-loser, namespace: edgion-test}
+spec:
+  parentRefs: [{name: named-parameter-precedence-gateway}]
+  hostnames: ["named-parameter-precedence.example.com"]
+  rules:
+    - matches: [{path: {type: PathPrefix, value: "/named-exact/a"}}]
+      backendRefs: [{name: named-precedence-30003, port: 30003}]
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata: {name: named-aggregate-z-winner, namespace: edgion-test}
+spec:
+  parentRefs: [{name: named-parameter-precedence-gateway}]
+  hostnames: ["named-parameter-precedence.example.com"]
+  rules:
+    - matches: [{path: {type: Exact, value: "/named-aggregate/long/:x"}}]
+      backendRefs: [{name: named-precedence-30001, port: 30001}]
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata: {name: named-aggregate-a-loser, namespace: edgion-test}
+spec:
+  parentRefs: [{name: named-parameter-precedence-gateway}]
+  hostnames: ["named-parameter-precedence.example.com"]
+  rules:
+    - matches: [{path: {type: Exact, value: "/named-aggregate/:veryLongParameterIdentifier/a"}}]
+      backendRefs: [{name: named-precedence-30003, port: 30003}]
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata: {name: named-colon-z-winner, namespace: edgion-test}
+spec:
+  parentRefs: [{name: named-parameter-precedence-gateway}]
+  hostnames: ["named-parameter-precedence.example.com"]
+  rules:
+    - matches: [{path: {type: Exact, value: "/named-colon/::literal"}}]
+      backendRefs: [{name: named-precedence-30001, port: 30001}]
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata: {name: named-colon-a-loser, namespace: edgion-test}
+spec:
+  parentRefs: [{name: named-parameter-precedence-gateway}]
+  hostnames: ["named-parameter-precedence.example.com"]
+  rules:
+    - matches: [{path: {type: Exact, value: "/named-colon/:veryLongParameterIdentifier"}}]
+      backendRefs: [{name: named-precedence-30003, port: 30003}]
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata: {name: named-multi-z-winner, namespace: edgion-test}
+spec:
+  parentRefs: [{name: named-parameter-precedence-gateway}]
+  hostnames: ["named-parameter-precedence.example.com"]
+  rules:
+    - matches: [{path: {type: Exact, value: "/named-multi/a/:x/:y"}}]
+      backendRefs: [{name: named-precedence-30001, port: 30001}]
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata: {name: named-multi-a-loser, namespace: edgion-test}
+spec:
+  parentRefs: [{name: named-parameter-precedence-gateway}]
+  hostnames: ["named-parameter-precedence.example.com"]
+  rules:
+    - matches: [{path: {type: Exact, value: "/named-multi/:customerIdentifier/:orderIdentifier/:itemIdentifier"}}]
+      backendRefs: [{name: named-precedence-30003, port: 30003}]
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata: {name: named-nonpath-z-winner, namespace: edgion-test}
+spec:
+  parentRefs: [{name: named-parameter-precedence-gateway}]
+  hostnames: ["named-parameter-precedence.example.com"]
+  rules:
+    - matches:
+        - path: {type: Exact, value: "/named-nonpath/:short"}
+          method: GET
+      backendRefs: [{name: named-precedence-30001, port: 30001}]
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata: {name: named-nonpath-a-loser, namespace: edgion-test}
+spec:
+  parentRefs: [{name: named-parameter-precedence-gateway}]
+  hostnames: ["named-parameter-precedence.example.com"]
+  rules:
+    - matches:
+        - path: {type: Exact, value: "/named-nonpath/:customerIdentifier"}
+          headers: [{type: Exact, name: X-Precedence, value: one}]
+      backendRefs: [{name: named-precedence-30003, port: 30003}]
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata: {name: named-live-z-winner, namespace: edgion-test}
+spec:
+  parentRefs: [{name: named-parameter-precedence-gateway}]
+  hostnames: ["named-parameter-precedence.example.com"]
+  rules:
+    - matches: [{path: {type: Exact, value: "/named-live/:x/b/c"}}]
+      backendRefs: [{name: named-precedence-30001, port: 30001}]
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata: {name: named-live-a-loser, namespace: edgion-test}
+spec:
+  parentRefs: [{name: named-parameter-precedence-gateway}]
+  hostnames: ["named-parameter-precedence.example.com"]
+  rules:
+    - matches: [{path: {type: Exact, value: "/named-live/a/:x/:y"}}]
+      backendRefs: [{name: named-precedence-30003, port: 30003}]
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
 metadata: {name: named-equal-a-winner, namespace: edgion-test}
 spec:
   parentRefs: [{name: named-parameter-precedence-gateway}]
