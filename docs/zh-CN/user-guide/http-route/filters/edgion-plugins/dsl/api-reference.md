@@ -1092,6 +1092,8 @@ if ct != nil and to_lower(ct) == "application/json" {
 
 **返回值**：去除首尾空白后的字符串
 
+返回的字符串受 `maxStringLen` 限制，长度按 UTF-8 字节数计算。结果恰好达到上限时成功；超过上限时产生类型化字符串限制错误，并按配置的 `errorPolicy` 处理。
+
 **示例**：
 ```
 let key = req.header("X-Api-Key")

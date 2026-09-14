@@ -427,6 +427,70 @@ fn test_trim_empty() {
 }
 
 #[test]
+fn test_trim_accepts_result_at_exact_string_limit() {
+    let source = r#"req.set_header("X-Trimmed", trim(" abcde "))"#;
+    let limits = VmLimits {
+        max_string_len: 5,
+        ..VmLimits::default()
+    };
+    let mut session = MockPluginSession::new();
+    session
+        .expect_set_request_header()
+        .withf(|name, value| name == "X-Trimmed" && value == "abcde")
+        .times(1)
+        .returning(|_, _| Ok(()));
+
+    assert_eq!(run_with_limits(source, session, limits), good_next());
+}
+
+#[test]
+fn test_trim_rejects_trimmed_result_above_string_limit() {
+    let limits = VmLimits {
+        max_string_len: 5,
+        ..VmLimits::default()
+    };
+    let error = run_expect_runtime_err_with_limits(r#"trim(" abcdef ")"#, MockPluginSession::new(), limits);
+
+    assert!(matches!(error, RuntimeError::StringTooLong { len: 6, limit: 5 }));
+}
+
+#[test]
+fn test_trim_rejects_unchanged_result_above_string_limit() {
+    let limits = VmLimits {
+        max_string_len: 5,
+        ..VmLimits::default()
+    };
+    let error = run_expect_runtime_err_with_limits(r#"trim("abcdef")"#, MockPluginSession::new(), limits);
+
+    assert!(matches!(error, RuntimeError::StringTooLong { len: 6, limit: 5 }));
+}
+
+#[test]
+fn test_trim_counts_multibyte_output_in_utf8_bytes() {
+    let exact_limits = VmLimits {
+        max_string_len: 4,
+        ..VmLimits::default()
+    };
+    let mut session = MockPluginSession::new();
+    session
+        .expect_set_request_header()
+        .withf(|name, value| name == "X-Trimmed" && value == "éé")
+        .times(1)
+        .returning(|_, _| Ok(()));
+    assert_eq!(
+        run_with_limits(r#"req.set_header("X-Trimmed", trim(" éé "))"#, session, exact_limits),
+        good_next()
+    );
+
+    let over_limits = VmLimits {
+        max_string_len: 3,
+        ..VmLimits::default()
+    };
+    let error = run_expect_runtime_err_with_limits(r#"trim(" éé ")"#, MockPluginSession::new(), over_limits);
+    assert!(matches!(error, RuntimeError::StringTooLong { len: 4, limit: 3 }));
+}
+
+#[test]
 fn test_split_basic() {
     let source = r#"
         let parts = split("a,b,c", ",")

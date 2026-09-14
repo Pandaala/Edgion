@@ -1111,6 +1111,10 @@ Removes leading and trailing ASCII whitespace characters (spaces, tabs, newlines
 
 **Return value**: String with leading and trailing whitespace removed
 
+The returned string is subject to `maxStringLen`, measured in UTF-8 bytes. A
+result exactly at the limit succeeds; a larger result raises the typed string
+limit error and follows the configured `errorPolicy`.
+
 **Example**:
 ```
 let key = req.header("X-Api-Key")

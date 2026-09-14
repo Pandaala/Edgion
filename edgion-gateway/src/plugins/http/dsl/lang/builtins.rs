@@ -1045,6 +1045,7 @@ impl Vm {
             BuiltinId::Trim => {
                 let s = state.pop()?.runtime_string()?;
                 let trimmed = s.trim();
+                check_string_len(trimmed, self.limits.max_string_len)?;
                 if trimmed.len() == s.len() {
                     Ok(Value::Str(s.into()))
                 } else {
