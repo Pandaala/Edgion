@@ -517,7 +517,14 @@ impl EdgionGatewayCli {
             "FIPS status resolved"
         );
 
-        // 4d. Outbound egress: install the gateway-local defaults (block_private,
+        // 4d. Outbound HTTP transport limits must be installed before any
+        // canonical reqwest client can be constructed.
+        edgion_common::link_sys_core::http_client::configure_outbound_http2_max_header_list_size(
+            config.gateway.outbound_http2_max_header_list_size,
+        )
+        .map_err(|error| anyhow!("Invalid outbound HTTP configuration: {error}"))?;
+
+        // 4e. Outbound egress: install the gateway-local defaults (block_private,
         // DNS cache TTL) that `EgressResolver` falls back to when a resource does
         // not set `target.blockPrivate` / an explicit TTL. Must run before any
         // `ManagedOutboundClient` can be built.
@@ -534,7 +541,7 @@ impl EdgionGatewayCli {
             Duration::from_millis(outbound_egress_dns_cache_ttl_ms),
         );
 
-        // 4e. Wasm OCI artifacts are retained only in bounded process memory.
+        // 4f. Wasm OCI artifacts are retained only in bounded process memory.
         {
             use crate::plugins::http::wasm::oci::cache::{configure_oci_memory_cache, OciMemoryCacheConfig};
             configure_oci_memory_cache(OciMemoryCacheConfig {

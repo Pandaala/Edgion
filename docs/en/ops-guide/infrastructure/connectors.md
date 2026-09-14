@@ -581,24 +581,26 @@ metric, but the loopback/link-local rejection there goes through the shared back
 or alert built on this counter sees full coverage for a hostname target but is blind to
 loopback/link-local rejections when `target.url` is an IP literal.
 
-**Gateway-local default.** When a webhook does not set `target.blockPrivate` explicitly, the effective
-value comes from the gateway's own configuration:
+**Gateway-local outbound settings.** When a webhook does not set `target.blockPrivate` explicitly,
+the effective value comes from the gateway's own configuration. The same configuration block also
+owns the process-wide HTTP/2 response-header limit for Gateway-initiated reqwest calls:
 
 | Setting | Type | Default | Description |
 |---------|------|---------|-------------|
 | `outbound_egress_block_private` (gateway config file) / `EDGION_OUTBOUND_BLOCK_PRIVATE` (env) | Boolean | `false` | Gateway-wide default for guarded outbound targets. A webhook's `target.blockPrivate` may override it; Redis may not. Truthy values: `1`, `true`, `yes`, `on` (case-insensitive). |
 | `outbound_egress_dns_cache_ttl_ms` (gateway config file) / `EDGION_OUTBOUND_DNS_CACHE_TTL_MS` (env) | Integer (ms) | `5000` | How long guarded outbound DNS results, including Redis results, are cached after classification before being re-resolved. An unparseable env value is ignored (a WARN is logged) and the configured value is kept. |
+| `outbound_http2_max_header_list_size` (gateway config file) | Integer (bytes) | `16384` | Decoded HTTP/2 response-header-list limit shared by Gateway-initiated reqwest calls. Accepts `16384..=65536` and requires a Gateway restart. It does not affect client-to-Gateway traffic or Pingora route upstreams. |
 
 **Precedence: the resource field wins.** An explicit `target.blockPrivate` on a webhook always
 overrides the gateway-local default — a cluster administrator who wants the stricter posture
 everywhere flips `outbound_egress_block_private`; an individual webhook that needs to reach an internal
 `10.x` artifact repository can still opt out with `target.blockPrivate: false`, and vice versa.
 
-**No command-line flag, on purpose.** Both settings are config-file / environment-variable only —
-there is no `--outbound-egress-block-private` CLI flag. The gateway's config-merge logic only carries
+**No command-line flag, on purpose.** These settings are config-file-only unless an environment
+variable is listed in the table; there is no corresponding CLI flag. The gateway's config-merge logic only carries
 a small, fixed set of fields from the CLI into a file-loaded configuration, and `--config-file`
 defaults to a real path in the common deployment, so a flag here would silently have no effect in
-that path. Set these via the gateway config file or the `EDGION_*` environment variables instead.
+that path. Set them through the gateway config file or the listed `EDGION_*` environment variables.
 
 **This is defense-in-depth, not the primary control.** `target.blockPrivate` and
 `outbound_egress_block_private` narrow what an already-privileged LinkSys/EdgionPlugins write can reach;

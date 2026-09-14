@@ -29,6 +29,7 @@ before applying a decision to current code.
 
 ## Regression guards
 
+- [Canonical outbound clients bound decoded HTTP/2 response headers](regression-guards/outbound-http2-response-header-list-bound.md)
 - [Adaptive telemetry reconciliation is route-contribution incremental](regression-guards/adaptive-telemetry-reconcile-is-incremental.md)
 - [AI runtime stores must report cache residue](regression-guards/ai-runtime-stores-must-report-residue.md)
 - [`edgion-cli` Outbound Client Idle Pool Disabled — FIXED (EDG-CLI-002)](regression-guards/cli-http-client-idle-pool-disabled.md)

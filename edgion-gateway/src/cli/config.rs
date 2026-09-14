@@ -265,6 +265,12 @@ pub struct GatewayConfig {
     #[serde(default = "default_outbound_egress_dns_cache_ttl_ms")]
     pub outbound_egress_dns_cache_ttl_ms: u64,
 
+    /// Maximum decoded HTTP/2 response-header-list size, in bytes, for every
+    /// canonical reqwest client in this Gateway process. Restart-only.
+    #[arg(skip)]
+    #[serde(default = "default_outbound_http2_max_header_list_size")]
+    pub outbound_http2_max_header_list_size: u32,
+
     /// Seconds since last use before an OCI memory-cache entry expires (default 24h).
     /// Zero is clamped to one second at startup.
     #[arg(skip)]
@@ -309,6 +315,10 @@ fn default_outbound_egress_dns_cache_ttl_ms() -> u64 {
     5_000
 }
 
+fn default_outbound_http2_max_header_list_size() -> u32 {
+    edgion_common::link_sys_core::http_client::DEFAULT_OUTBOUND_HTTP2_MAX_HEADER_LIST_SIZE
+}
+
 fn default_wasm_oci_cache_ttl_secs() -> u64 {
     86_400
 }
@@ -340,6 +350,7 @@ impl Default for GatewayConfig {
             fips_policy: None,
             outbound_egress_block_private: false,
             outbound_egress_dns_cache_ttl_ms: default_outbound_egress_dns_cache_ttl_ms(),
+            outbound_http2_max_header_list_size: default_outbound_http2_max_header_list_size(),
             wasm_oci_cache_ttl_secs: default_wasm_oci_cache_ttl_secs(),
             wasm_oci_cache_purge_interval_secs: default_wasm_oci_cache_purge_interval_secs(),
             wasm_oci_cache_max_bytes: default_wasm_oci_cache_max_bytes(),
@@ -1519,15 +1530,19 @@ genai_tokens:
             "private ranges must be allowed by default, matching classify_backend_addr"
         );
         assert_eq!(cfg.outbound_egress_dns_cache_ttl_ms, 5_000);
+        assert_eq!(cfg.outbound_http2_max_header_list_size, 16 * 1024);
     }
 
     #[test]
     fn outbound_egress_parses_from_yaml() {
-        let cfg: GatewayConfig =
-            serde_yaml::from_str("outbound_egress_block_private: true\noutbound_egress_dns_cache_ttl_ms: 30000\n")
-                .unwrap();
+        let cfg: GatewayConfig = serde_yaml::from_str(
+            "outbound_egress_block_private: true\noutbound_egress_dns_cache_ttl_ms: 30000\n\
+             outbound_http2_max_header_list_size: 65536\n",
+        )
+        .unwrap();
         assert!(cfg.outbound_egress_block_private);
         assert_eq!(cfg.outbound_egress_dns_cache_ttl_ms, 30_000);
+        assert_eq!(cfg.outbound_http2_max_header_list_size, 64 * 1024);
     }
 
     #[test]

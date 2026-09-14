@@ -4,12 +4,48 @@
 //! call site assembles its client the same way. `redirect::none` is the default
 //! because a missing redirect policy is an SSRF surface.
 
+use std::sync::OnceLock;
 use std::time::Duration;
 
 use edgion_resources::resources::common::TlsConfig;
 use reqwest::{Client, ClientBuilder};
 
 use super::tls::apply_resolved_outbound_tls;
+
+/// Default decoded HTTP/2 response-header-list limit for canonical outbound clients.
+pub const DEFAULT_OUTBOUND_HTTP2_MAX_HEADER_LIST_SIZE: u32 = 16 * 1024;
+
+/// Largest decoded HTTP/2 response-header-list limit accepted from process configuration.
+pub const MAX_OUTBOUND_HTTP2_MAX_HEADER_LIST_SIZE: u32 = 64 * 1024;
+
+static OUTBOUND_HTTP2_MAX_HEADER_LIST_SIZE: OnceLock<u32> = OnceLock::new();
+
+/// Install the process-wide decoded HTTP/2 response-header-list limit.
+///
+/// Call this once during process startup, before constructing any canonical
+/// outbound client. Processes that do not configure an override use the
+/// explicit 16 KiB default rather than inheriting reqwest's mutable default.
+pub fn configure_outbound_http2_max_header_list_size(size: u32) -> anyhow::Result<()> {
+    validate_outbound_http2_max_header_list_size(size)?;
+    OUTBOUND_HTTP2_MAX_HEADER_LIST_SIZE
+        .set(size)
+        .map_err(|_| anyhow::anyhow!("outbound HTTP/2 response header list size was already initialized"))
+}
+
+fn validate_outbound_http2_max_header_list_size(size: u32) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        (DEFAULT_OUTBOUND_HTTP2_MAX_HEADER_LIST_SIZE..=MAX_OUTBOUND_HTTP2_MAX_HEADER_LIST_SIZE).contains(&size),
+        "outbound HTTP/2 response header list size must be between {} and {} bytes, got {}",
+        DEFAULT_OUTBOUND_HTTP2_MAX_HEADER_LIST_SIZE,
+        MAX_OUTBOUND_HTTP2_MAX_HEADER_LIST_SIZE,
+        size
+    );
+    Ok(())
+}
+
+fn outbound_http2_max_header_list_size() -> u32 {
+    *OUTBOUND_HTTP2_MAX_HEADER_LIST_SIZE.get_or_init(|| DEFAULT_OUTBOUND_HTTP2_MAX_HEADER_LIST_SIZE)
+}
 
 /// Redirect policy for an outbound client.
 #[derive(Default)]
@@ -67,7 +103,8 @@ pub struct OutboundClientConfig {
 /// Mirrors the existing `apply_*(builder) -> builder` idiom in [`super::tls`], so
 /// callers that need extra builder customization (e.g. `default_headers`) can
 /// chain onto the returned builder before `build()`.
-pub fn apply_outbound_policy(mut builder: ClientBuilder, cfg: OutboundClientConfig) -> anyhow::Result<ClientBuilder> {
+pub fn apply_outbound_policy(builder: ClientBuilder, cfg: OutboundClientConfig) -> anyhow::Result<ClientBuilder> {
+    let mut builder = builder;
     anyhow::ensure!(
         cfg.tls.is_none() || cfg.preconfigured_tls.is_none(),
         "OutboundClient: tls and preconfigured_tls are mutually exclusive"
@@ -84,6 +121,7 @@ pub fn apply_outbound_policy(mut builder: ClientBuilder, cfg: OutboundClientConf
     if let Some(d) = cfg.total_timeout {
         builder = builder.timeout(d);
     }
+    builder = builder.http2_max_header_list_size(outbound_http2_max_header_list_size());
     builder = match cfg.redirect {
         OutboundRedirect::Deny => builder.redirect(reqwest::redirect::Policy::none()),
         OutboundRedirect::Limit(n) => builder.redirect(reqwest::redirect::Policy::limited(n)),
@@ -142,6 +180,14 @@ mod tests {
     #[test]
     fn build_default_client_succeeds() {
         assert!(build_outbound_client(OutboundClientConfig::default()).is_ok());
+    }
+
+    #[test]
+    fn configured_http2_response_header_list_size_is_bounded() {
+        assert!(validate_outbound_http2_max_header_list_size(DEFAULT_OUTBOUND_HTTP2_MAX_HEADER_LIST_SIZE - 1).is_err());
+        assert!(validate_outbound_http2_max_header_list_size(DEFAULT_OUTBOUND_HTTP2_MAX_HEADER_LIST_SIZE).is_ok());
+        assert!(validate_outbound_http2_max_header_list_size(MAX_OUTBOUND_HTTP2_MAX_HEADER_LIST_SIZE).is_ok());
+        assert!(validate_outbound_http2_max_header_list_size(MAX_OUTBOUND_HTTP2_MAX_HEADER_LIST_SIZE + 1).is_err());
     }
 
     #[test]

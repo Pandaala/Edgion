@@ -154,8 +154,9 @@ End-to-end closure verification on 2026-09-14:
   `cargo clippy --workspace --all-targets` passed; clippy retained existing
   warnings. Format, SSA-force, metrics-inventory, and Pingora-source checks also
   passed. Global agent-doc validation failed only on two unrelated missing task
-  links in the listener-recreation and gRPC header-matching knowledge pages, so
-  the pending task remains until that repository-wide gate is repaired.
+  links in the listener-recreation and gRPC header-matching knowledge pages.
+  The user explicitly scoped closure to this issue and directed that those
+  unrelated task failures not block it.
 - The independent final review found and prompted fixes for dynamic-delta
   preloading, unconditional scenario cleanup, and response-body read-error
   handling. After correction and fresh affected-suite runs, the reviewer
@@ -175,4 +176,5 @@ generation publication, or integration topology changes.
   subject to the verification gate above.
 - `dsl-terminate-explicit-response-integration`: added live HTTP/native-gRPC
   source and bytecode coverage plus a three-generation hot-reload scenario on
-  2026-09-14.
+  2026-09-14. Closed after the user explicitly waived the unrelated global
+  documentation-link failures as a closure blocker.

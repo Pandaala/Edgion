@@ -44,17 +44,24 @@ is a bug" rule also gets a line there.
   internal connect or total timeout because RequestMirror owns the outer
   `connect_timeout + write_timeout` deadline. Both deny redirects and disable
   proxy-environment pickup.
+- **HTTP/2 response headers**: the factory always sets an explicit 16 KiB
+  decoded response-header-list limit instead of inheriting reqwest's mutable
+  default. A Gateway process may raise the process-wide value up to 64 KiB via
+  `gateway.outbound_http2_max_header_list_size`; Controller and CLI processes
+  retain 16 KiB. The value is restart-only and must be installed before the
+  first canonical client is constructed.
 - **Rule**: every outbound `reqwest::Client` MUST be built through the
   factory. A bare `reqwest::Client::builder()` outside `#[cfg(test)]` code is
   a bug.
-- **Verified consumers** (2026-09-04): the default and RequestMirror singletons,
-  `ManagedOutboundClient`, both DSL `http.call` clients, wasm guest callouts
-  and OCI pulls, openid_connect (both ordinary and SAN-pinning factory paths),
-  request_mirror,
-  the elasticsearch link_sys provider, health-check probes,
-  all_endpoint_status, and the CLI admin-API client
-  (`edgion-cli/src/cli/client.rs` `build_cli_client` +
-  `edgion-cli/src/cli/commands/login.rs` `probe_status`).
+- **Verified consumers** (2026-09-14): Common HttpDns; Controller OAuth2
+  credential acquisition; the Gateway default and RequestMirror singletons,
+  `ManagedOutboundClient`, all four DSL `http.call` singleton variants, Wasm
+  guest callouts, URL module loads and OCI pulls, openid_connect ordinary and
+  SAN-pinning paths, GeoIP updates, encrypted and ordinary active health
+  checks, all_endpoint_status, and the Elasticsearch LinkSys provider; plus
+  the CLI admin client and login status probe. The two custom-builder consumers
+  (ordinary health probes and Elasticsearch) call `apply_outbound_policy`;
+  every other listed reqwest construction calls `build_outbound_client`.
 - **Operator-CLI caveat**: `edgion-cli` is the one consumer that sets
   `disable_proxy: false`. Rule 3's proxy-env disable exists to stop a *server*
   from being steered through an attacker-influenced proxy; the CLI runs as the

@@ -83,3 +83,6 @@ hickory-resolver.workspace = true
 
 [build-dependencies]
 tonic-build.workspace = true
+
+[dev-dependencies]
+h2.workspace = true

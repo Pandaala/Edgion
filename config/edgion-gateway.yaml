@@ -51,6 +51,10 @@ gateway:
   # bottom of this file); http:// only under an explicit `skip_tls: true`.
   server_addrs: ["https://127.0.0.1:12151"]
 
+  # Decoded HTTP/2 response-header-list limit for Gateway-initiated reqwest calls.
+  # Valid range: 16384..=65536 bytes. Changes require a Gateway restart.
+  # outbound_http2_max_header_list_size: 16384
+
   # Admin HTTP server listen address (optional).
   # The Gateway Admin API listens on this address; default is 127.0.0.1:12001
   # (loopback only). Set it to 0.0.0.0 to expose the admin/readiness port over the

@@ -1610,6 +1610,7 @@ dependencies = [
  "edgion-algo",
  "edgion-resources",
  "etcd-client",
+ "h2",
  "hickory-resolver 0.26.1",
  "http",
  "httpdate",

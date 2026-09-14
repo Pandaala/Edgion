@@ -541,16 +541,17 @@ URL 目标按主机名寻址，因此——与通过 Kubernetes EndpointSlice �
 
 被拒绝的地址会导致该次调用连接失败（WebhookKeyGet 不写入值，与其他任何 webhook 失败一样）。拒绝会使 `edgion_outbound_egress_blocked_total{reason="private"|"loopback"|"link_local"}` 计数器递增，但这仅在**主机名**路径上成立（`EgressResolver`，会记录全部三种 reason）。在 **IP 字面量**路径上，只有 `reason="private"` 会被记录：`dial_url` 的 `blockPrivate` 检查会记录该指标，但那条路径上的回环/链路本地拒绝要经过早于该指标就已存在的共享后端守卫（`validate_endpoint_backend_addr`），并不会写入该指标。因此，基于该计数器搭建的看板或告警，对主机名目标能获得完整覆盖，但当 `target.url` 是 IP 字面量时，对回环/链路本地拒绝是"看不见"的。
 
-**网关本地默认值。** 当 webhook 未显式设置 `target.blockPrivate` 时，生效值来自网关自身的配置：
+**网关本地出站设置。** 当 webhook 未显式设置 `target.blockPrivate` 时，生效值来自网关自身的配置。同一配置块还管理 Gateway 主动发起的 reqwest 调用所共用的 HTTP/2 响应头上限：
 
 | 配置项 | 类型 | 默认值 | 说明 |
 |--------|------|--------|------|
 | `outbound_egress_block_private`（网关配置文件）/ `EDGION_OUTBOUND_BLOCK_PRIVATE`（环境变量） | Boolean | `false` | 受保护出站目标的网关级默认值。Webhook 可用 `target.blockPrivate` 覆盖；Redis 不可覆盖。真值：`1`、`true`、`yes`、`on`（大小写不敏感）。 |
 | `outbound_egress_dns_cache_ttl_ms`（网关配置文件）/ `EDGION_OUTBOUND_DNS_CACHE_TTL_MS`（环境变量） | Integer（毫秒） | `5000` | 受保护出站 DNS 结果（包括 Redis）在分类后、重新解析前的缓存时长。环境变量值无法解析时会被忽略（记录 WARN）并保留已配置的值。 |
+| `outbound_http2_max_header_list_size`（网关配置文件） | Integer（字节） | `16384` | Gateway 主动发起的 reqwest 调用共用的 HTTP/2 解码响应头列表上限。有效范围为 `16384..=65536`，修改后需要重启 Gateway；不影响客户端到 Gateway 的流量或 Pingora 路由 upstream。 |
 
 **优先级：资源字段优先于网关默认值。** webhook 上显式设置的 `target.blockPrivate` 总是覆盖网关本地默认值——希望全局采用更严格策略的集群管理员可以打开 `outbound_egress_block_private`；需要访问内部 `10.x` 制品库的个别 webhook 仍可用 `target.blockPrivate: false` 单独放行，反之亦然。
 
-**没有命令行开关，是有意的。** 这两个配置项只能通过配置文件或环境变量设置——没有 `--outbound-egress-block-private` 命令行开关。网关的配置合并逻辑只会把一小组固定字段从命令行带入基于文件加载的配置中，而 `--config-file` 在常见部署路径下默认指向一个真实文件，因此该路径下的命令行开关会被静默忽略。请改用网关配置文件或 `EDGION_*` 环境变量设置。
+**没有命令行开关，是有意的。** 除非上表列出了环境变量，否则这些配置项仅能通过配置文件设置；没有对应的命令行开关。网关的配置合并逻辑只会把一小组固定字段从命令行带入基于文件加载的配置中，而 `--config-file` 在常见部署路径下默认指向一个真实文件，因此该路径下的命令行开关会被静默忽略。请改用网关配置文件或上表列出的 `EDGION_*` 环境变量。
 
 **这是纵深防御，而非主要控制手段。** `target.blockPrivate` 与 `outbound_egress_block_private` 收窄的是一次已经具备特权（LinkSys/EdgionPlugins 写权限）的写操作所能触达的范围，而不能替代网络层隔离。主要的出站流量控制手段仍然是作用于 Gateway Pod 的 Kubernetes `NetworkPolicy`，限制其可触达的外部 IP/端口范围——之所以还需要代码层防护，是因为 URL 目标允许运营者按主机名指定任意外部主机，而这是 `NetworkPolicy` 在配置编写时无法评估的。
 
