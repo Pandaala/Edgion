@@ -17,6 +17,7 @@ before applying a decision to current code.
 - [LinkSys health metric: free-function emit + per-link label — NOT-AN-ISSUE](intentional-design/health-metric-free-function-and-cardinality.md)
 - [`DataSender::healthy()` intentional non-flips & disk-probe tradeoffs — DESIGN-TRADEOFF](intentional-design/healthy-semantics-intentional-non-flips.md)
 - [Kafka `healthy` flag uses `Ordering::Relaxed` — NOT-AN-ISSUE](intentional-design/kafka-health-flag-relaxed-ordering.md)
+- [Kafka broker dialing remains SDK-owned without in-process egress classification](intentional-design/kafka-broker-dialing-sdk-owned.md)
 - [LinkSys store.rs dispatch functions — Extract-Function / Dedup — DESIGN-TRADEOFF](intentional-design/link-sys-dispatch-extract-function.md)
 - [LinkSys webhook `webhook_call` Ok-arm — Extract-Function — DESIGN-TRADEOFF](intentional-design/webhook-call-extract-function.md)
 

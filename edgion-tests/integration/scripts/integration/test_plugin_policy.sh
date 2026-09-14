@@ -3,7 +3,7 @@
 # The canonical full runner discovers PluginPolicyDynamic through test_client.
 # This focused entry point never starts or restarts Controller/Gateway processes.
 # After final cleanup, prepare a fresh shared topology before running it again;
-# see tasks/todo/http-listener-recreation-stale-route-manager.md.
+# see skills/04-review/listeners/intentional-design/gateway-recreation-requires-restart.md.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
