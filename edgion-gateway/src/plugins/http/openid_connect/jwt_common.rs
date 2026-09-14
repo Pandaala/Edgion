@@ -1,11 +1,11 @@
 //! JWT/JWKS helpers for the gateway OpenID Connect plugin.
 
-use jsonwebtoken::errors::ErrorKind;
+use super::error::{AuthFailure, OidcVerifyError};
 use jsonwebtoken::jwk::{AlgorithmParameters, EllipticCurve, Jwk, JwkSet};
 use jsonwebtoken::{Algorithm, Header};
 use std::str::FromStr;
 
-pub type VerifyResult<T> = Result<T, (u16, String)>;
+pub(super) type VerifyResult<T> = Result<T, OidcVerifyError>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum JwkSelectError {
@@ -28,7 +28,7 @@ pub fn resolve_algorithm_policy(
     allowed_signing_algs: Option<&[String]>,
 ) -> VerifyResult<(Option<Algorithm>, Vec<Algorithm>)> {
     let expected = if let Some(configured) = token_signing_alg {
-        Some(Algorithm::from_str(configured).map_err(|_| (401, format!("Invalid tokenSigningAlg: {}", configured)))?)
+        Some(Algorithm::from_str(configured).map_err(|_| OidcVerifyError::Auth(AuthFailure::InvalidAlgorithm))?)
     } else {
         None
     };
@@ -36,8 +36,7 @@ pub fn resolve_algorithm_policy(
     let allowed = if let Some(configured) = allowed_signing_algs {
         let mut out = Vec::with_capacity(configured.len());
         for alg in configured {
-            let parsed =
-                Algorithm::from_str(alg).map_err(|_| (401, format!("Invalid allowedSigningAlgs entry: {}", alg)))?;
+            let parsed = Algorithm::from_str(alg).map_err(|_| OidcVerifyError::Auth(AuthFailure::InvalidAlgorithm))?;
             out.push(parsed);
         }
         out
@@ -46,15 +45,12 @@ pub fn resolve_algorithm_policy(
     };
 
     if allowed.is_empty() {
-        return Err((401, "allowedSigningAlgs cannot be empty".to_string()));
+        return Err(OidcVerifyError::Auth(AuthFailure::InvalidAlgorithm));
     }
 
     if let Some(exp) = expected {
         if !allowed.contains(&exp) {
-            return Err((
-                401,
-                "tokenSigningAlg must be included in allowedSigningAlgs".to_string(),
-            ));
+            return Err(OidcVerifyError::Auth(AuthFailure::InvalidAlgorithm));
         }
     }
 
@@ -68,33 +64,15 @@ pub fn validate_token_alg(
 ) -> VerifyResult<()> {
     if let Some(expected) = expected_alg {
         if token_alg != expected {
-            return Err((
-                401,
-                format!("Invalid token algorithm: expected {:?}, got {:?}", expected, token_alg),
-            ));
+            return Err(OidcVerifyError::Auth(AuthFailure::InvalidAlgorithm));
         }
     }
 
     if !allowed_algs.contains(&token_alg) {
-        return Err((401, format!("Token algorithm {:?} is not allowed", token_alg)));
+        return Err(OidcVerifyError::Auth(AuthFailure::InvalidAlgorithm));
     }
 
     Ok(())
-}
-
-pub fn map_jwt_decode_error(err: jsonwebtoken::errors::Error) -> (u16, String) {
-    match err.kind() {
-        ErrorKind::InvalidToken | ErrorKind::Base64(_) | ErrorKind::Json(_) | ErrorKind::Utf8(_) => {
-            (401, "Invalid token format".to_string())
-        }
-        ErrorKind::ExpiredSignature => (401, "Token expired".to_string()),
-        ErrorKind::InvalidIssuer => (401, "Invalid token issuer".to_string()),
-        ErrorKind::InvalidAudience => (401, "Invalid token audience".to_string()),
-        ErrorKind::ImmatureSignature => (401, "Token not yet valid".to_string()),
-        ErrorKind::InvalidSignature => (401, "Invalid token signature".to_string()),
-        ErrorKind::InvalidAlgorithm => (401, "Invalid token algorithm".to_string()),
-        _ => (401, "Invalid token".to_string()),
-    }
 }
 
 pub fn jwk_matches_alg(jwk: &Jwk, alg: Algorithm) -> bool {
@@ -144,7 +122,8 @@ pub fn select_jwk<'a>(header: &Header, jwks: &'a JwkSet, alg: Algorithm) -> Resu
 
 #[cfg(test)]
 mod tests {
-    use super::{jwk_matches_alg, map_jwt_decode_error, resolve_algorithm_policy, select_jwk, JwkSelectError};
+    use super::super::error::{map_jwt_decode_error_typed, OidcVerifyError};
+    use super::{jwk_matches_alg, resolve_algorithm_policy, select_jwk, JwkSelectError};
     use jsonwebtoken::errors::ErrorKind;
     use jsonwebtoken::jwk::{
         AlgorithmParameters, CommonParameters, EllipticCurve, EllipticCurveKeyParameters, Jwk, JwkSet, RSAKeyParameters,
@@ -204,6 +183,6 @@ mod tests {
     #[test]
     fn test_map_jwt_decode_error_format() {
         let err = jsonwebtoken::errors::Error::from(ErrorKind::InvalidToken);
-        assert_eq!(map_jwt_decode_error(err), (401, "Invalid token format".to_string()));
+        assert_eq!(map_jwt_decode_error_typed(err), OidcVerifyError::InvalidFormat);
     }
 }

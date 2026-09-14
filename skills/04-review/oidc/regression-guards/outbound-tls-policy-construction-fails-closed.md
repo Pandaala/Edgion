@@ -43,8 +43,9 @@ authorization for construction-time fallback.
    coverage.
 3. Verify global mTLS-only defaults survive aggregation and conflicting
    identities produce a deterministic fail-closed state.
-4. Keep error detail in cold-path diagnostics; plugin construction returns a
-   stable operator-safe error.
+4. Keep OIDC constructor diagnostics and returned errors static and operator-safe;
+   do not format TLS dependency errors or endpoint URLs even on the cold path.
+   See [dependency error projection](dependency-error-projection.md).
 5. Tests that mutate the process-wide outbound TLS default must use the shared
    RAII test guard, which installs a clean default and restores the previous
    value on normal return or unwind.

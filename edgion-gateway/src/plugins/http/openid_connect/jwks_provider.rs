@@ -25,9 +25,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::{Mutex, RwLock};
 
-use crate::observe::metrics::registry::record_outbound_tls_san_mismatch;
-use crate::plugins::http::common::http_util::fetch_json_limited;
-use crate::tls::validation::outbound_san_mismatch_reason;
+use super::error::{read_oidc_json, OidcDependencyError, OidcDependencyFailure, OidcOperation};
 
 /// Trait every discovery-doc shape must implement so the provider can read
 /// the two universally-required fields. Extended fields (e.g. `token_endpoint`)
@@ -40,41 +38,11 @@ pub trait DiscoveryDoc: DeserializeOwned + Send + Sync + 'static {
 /// Caller-supplied post-fetch validator for enforcing config-conditional
 /// required endpoints (e.g. `token_endpoint` when `verification_mode != JwksOnly`).
 /// Default is no-op.
-pub type DiscoveryValidator<D> = Arc<dyn Fn(&D) -> Result<(), String> + Send + Sync>;
+pub type DiscoveryValidator<D> = Arc<dyn Fn(&D) -> Result<(), OidcDependencyFailure> + Send + Sync>;
 
 #[cfg(test)]
 pub fn no_op_validator<D: DiscoveryDoc>() -> DiscoveryValidator<D> {
     Arc::new(|_| Ok(()))
-}
-
-/// Error type for the discovery / JWKS fetch paths.
-///
-/// `TlsSanMismatch` is produced **only** by the discovery fetch. The JWKS fetch
-/// returns `Other` because `get_jwks` serves a stale cache on error, so the
-/// variant would be discarded on exactly the paths that could act on it.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum JwksProviderError {
-    TlsSanMismatch { reason: String },
-    Other(String),
-}
-
-impl std::fmt::Display for JwksProviderError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            JwksProviderError::TlsSanMismatch { reason } => {
-                write!(f, "outbound TLS SAN mismatch: {}", reason)
-            }
-            JwksProviderError::Other(msg) => f.write_str(msg),
-        }
-    }
-}
-
-impl std::error::Error for JwksProviderError {}
-
-impl From<String> for JwksProviderError {
-    fn from(msg: String) -> Self {
-        JwksProviderError::Other(msg)
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -101,7 +69,7 @@ pub(crate) const DISCOVERY_FAILURE_BACKOFF: Duration = Duration::from_secs(5);
 #[derive(Clone)]
 struct DiscoveryFailure {
     until: Instant,
-    error: JwksProviderError,
+    error: OidcDependencyError,
 }
 
 /// Minimal discovery doc test fixture — only the two universal fields.
@@ -148,11 +116,11 @@ pub struct JwksLookup {
 impl JwksState {
     fn publish_fetch_result(
         &mut self,
-        fetch_result: Result<JwkSet, String>,
+        fetch_result: Result<JwkSet, OidcDependencyError>,
         completed_at: Instant,
         ttl: Duration,
         min_refresh: Duration,
-    ) -> Result<JwksLookup, JwksProviderError> {
+    ) -> Result<JwksLookup, OidcDependencyError> {
         self.last_refresh_at = Some(completed_at);
 
         match fetch_result {
@@ -181,7 +149,7 @@ impl JwksState {
                 }
                 None => {
                     self.expires_at = None;
-                    Err(JwksProviderError::Other(err))
+                    Err(err)
                 }
             },
         }
@@ -225,7 +193,7 @@ impl<D: DiscoveryDoc> JwksProvider<D> {
     /// a failed validator does NOT poison the cache. Transport, HTTP, parse, and
     /// validator failures share a short backoff so concurrent cold callers do
     /// not turn one provider outage into one timeout per waiter.
-    pub async fn get_or_fetch_discovery(&self) -> Result<Arc<D>, JwksProviderError> {
+    pub async fn get_or_fetch_discovery(&self) -> Result<Arc<D>, OidcDependencyError> {
         if let Some(doc) = self.discovery_doc.read().await.as_ref() {
             return Ok(doc.clone());
         }
@@ -250,28 +218,28 @@ impl<D: DiscoveryDoc> JwksProvider<D> {
         }
     }
 
-    async fn discovery_backoff_error(&self) -> Option<JwksProviderError> {
+    async fn discovery_backoff_error(&self) -> Option<OidcDependencyError> {
         let failure = self.discovery_failure.read().await;
         failure.as_ref().and_then(|failure| {
             if Instant::now() < failure.until {
-                Some(failure.error.clone())
+                Some(failure.error)
             } else {
                 None
             }
         })
     }
 
-    async fn record_discovery_failure(&self, error: JwksProviderError) -> JwksProviderError {
+    async fn record_discovery_failure(&self, error: OidcDependencyError) -> OidcDependencyError {
         *self.discovery_failure.write().await = Some(DiscoveryFailure {
             until: Instant::now() + self.config.discovery_failure_backoff,
-            error: error.clone(),
+            error,
         });
         error
     }
 
-    async fn fetch_and_validate_discovery(&self) -> Result<Arc<D>, JwksProviderError> {
+    async fn fetch_and_validate_discovery(&self) -> Result<Arc<D>, OidcDependencyError> {
         super::plugin::admit_oidc_outbound_url(&self.config.discovery_url)
-            .map_err(|error| JwksProviderError::Other(error.to_string()))?;
+            .map_err(|failure| OidcDependencyError::new(OidcOperation::Discovery, failure))?;
 
         let resp = self
             .client
@@ -279,35 +247,33 @@ impl<D: DiscoveryDoc> JwksProvider<D> {
             .timeout(self.config.request_timeout)
             .send()
             .await
-            .map_err(|e| match outbound_san_mismatch_reason(&e) {
-                Some(reason) => {
-                    record_outbound_tls_san_mismatch(self.config.component_label);
-                    JwksProviderError::TlsSanMismatch { reason }
-                }
-                None => JwksProviderError::Other(format!("Failed to fetch discovery document: {}", e)),
+            .map_err(|error| {
+                OidcDependencyError::transport(OidcOperation::Discovery, &error, self.config.component_label)
             })?;
         if !resp.status().is_success() {
-            return Err(JwksProviderError::Other(format!(
-                "Discovery endpoint returned status {}",
-                resp.status()
-            )));
+            return Err(OidcDependencyError::new(
+                OidcOperation::Discovery,
+                OidcDependencyFailure::HttpStatus,
+            ));
         }
-        let doc: D = fetch_json_limited(resp, self.config.discovery_max_response_bytes, "OIDC discovery")
+        let doc: D = read_oidc_json(resp, self.config.discovery_max_response_bytes)
             .await
-            .map_err(JwksProviderError::Other)?;
+            .map_err(|failure| OidcDependencyError::new(OidcOperation::Discovery, failure))?;
 
         if doc.issuer().is_empty() {
-            return Err(JwksProviderError::Other(
-                "Discovery document missing issuer".to_string(),
+            return Err(OidcDependencyError::new(
+                OidcOperation::Discovery,
+                OidcDependencyFailure::InvalidDocument,
             ));
         }
         if doc.jwks_uri().is_empty() {
-            return Err(JwksProviderError::Other(
-                "Discovery document missing jwks_uri".to_string(),
+            return Err(OidcDependencyError::new(
+                OidcOperation::Discovery,
+                OidcDependencyFailure::InvalidDocument,
             ));
         }
         // Caller-supplied config-aware validation runs before caching.
-        (self.validator)(&doc).map_err(JwksProviderError::Other)?;
+        (self.validator)(&doc).map_err(|failure| OidcDependencyError::new(OidcOperation::Discovery, failure))?;
         Ok(Arc::new(doc))
     }
 
@@ -317,7 +283,7 @@ impl<D: DiscoveryDoc> JwksProvider<D> {
     ///
     /// `force_refresh=true` skips the TTL fast-path (used on JWT `kid` miss);
     /// `jwks_min_refresh_interval` still gates back-to-back refreshes.
-    pub async fn get_jwks(&self, force_refresh: bool) -> Result<JwksLookup, JwksProviderError> {
+    pub async fn get_jwks(&self, force_refresh: bool) -> Result<JwksLookup, OidcDependencyError> {
         let now = Instant::now();
         let min_refresh = self.config.jwks_min_refresh_interval;
         let ttl = self.config.jwks_cache_ttl;
@@ -362,33 +328,40 @@ impl<D: DiscoveryDoc> JwksProvider<D> {
                 }
             } else if !Self::can_refresh(state.last_refresh_at, now, min_refresh) {
                 // No cached set AND blocked by min_refresh: caller should retry later.
-                return Err(JwksProviderError::Other(
-                    "JWKS refresh blocked by minimum refresh interval".to_string(),
+                return Err(OidcDependencyError::new(
+                    OidcOperation::Jwks,
+                    OidcDependencyFailure::RefreshThrottled,
                 ));
             }
         }
 
         let discovery = self.get_or_fetch_discovery().await?;
-        let fetch_result: Result<JwkSet, String> = async {
-            super::plugin::admit_oidc_outbound_url(discovery.jwks_uri())?;
+        let fetch_result: Result<JwkSet, OidcDependencyError> = async {
+            super::plugin::admit_oidc_outbound_url(discovery.jwks_uri())
+                .map_err(|failure| OidcDependencyError::new(OidcOperation::Jwks, failure))?;
             let resp = self
                 .client
                 .get(discovery.jwks_uri())
                 .timeout(self.config.request_timeout)
                 .send()
                 .await
-                .map_err(|e| {
-                    if outbound_san_mismatch_reason(&e).is_some() {
-                        record_outbound_tls_san_mismatch(self.config.component_label);
-                    }
-                    format!("JWKS request failed: {}", e)
+                .map_err(|error| {
+                    OidcDependencyError::transport(OidcOperation::Jwks, &error, self.config.component_label)
                 })?;
             if !resp.status().is_success() {
-                return Err(format!("JWKS request failed with status {}", resp.status()));
+                return Err(OidcDependencyError::new(
+                    OidcOperation::Jwks,
+                    OidcDependencyFailure::HttpStatus,
+                ));
             }
-            let jwks: JwkSet = fetch_json_limited(resp, self.config.jwks_max_response_bytes, "JWKS").await?;
+            let jwks: JwkSet = read_oidc_json(resp, self.config.jwks_max_response_bytes)
+                .await
+                .map_err(|failure| OidcDependencyError::new(OidcOperation::Jwks, failure))?;
             if jwks.keys.is_empty() {
-                return Err("JWKS endpoint returned empty keys".to_string());
+                return Err(OidcDependencyError::new(
+                    OidcOperation::Jwks,
+                    OidcDependencyFailure::InvalidDocument,
+                ));
             }
             Ok(jwks)
         }
@@ -429,6 +402,35 @@ impl<D: DiscoveryDoc> JwksProvider<D> {
 mod tests {
     use super::*;
 
+    #[tokio::test]
+    async fn discovery_backoff_replays_static_san_failure_without_counting_again() {
+        use crate::observe::metrics::registry::names;
+        use metrics_util::debugging::DebuggingRecorder;
+
+        let mut config = wm_config("https://private-provider.example", 60_000, 0, 2_000);
+        config.discovery_failure_backoff = Duration::from_secs(5);
+        let provider = build_provider(config);
+        let failure = OidcDependencyError::new(OidcOperation::Discovery, OidcDependencyFailure::TlsSanMismatch);
+        provider.record_discovery_failure(failure).await;
+
+        let recorder = DebuggingRecorder::new();
+        let snapshotter = recorder.snapshotter();
+        {
+            let _guard = metrics::set_default_local_recorder(&recorder);
+            for _ in 0..3 {
+                let replay = provider.get_or_fetch_discovery().await.unwrap_err();
+                assert_eq!(replay, failure);
+                assert_eq!(replay.to_string(), "discovery san mismatch");
+                assert!(!format!("{replay:?}").contains("private-provider"));
+            }
+        }
+        assert!(snapshotter
+            .snapshot()
+            .into_vec()
+            .iter()
+            .all(|(key, _, _, _)| key.key().name() != names::OUTBOUND_TLS_SAN_MISMATCH_TOTAL));
+    }
+
     #[test]
     fn jwks_publication_deadlines_start_at_completion() {
         let started_at = Instant::now();
@@ -456,7 +458,10 @@ mod tests {
         };
         let fallback = stale
             .publish_fetch_result(
-                Err("synthetic fetch failure".to_string()),
+                Err(OidcDependencyError::new(
+                    OidcOperation::Jwks,
+                    OidcDependencyFailure::Transport,
+                )),
                 completed_at,
                 ttl,
                 min_refresh,
@@ -473,14 +478,14 @@ mod tests {
     }
 
     #[test]
-    fn provider_error_display_renders_inner_message() {
-        assert_eq!(JwksProviderError::Other("boom".to_string()).to_string(), "boom");
+    fn provider_error_display_is_static() {
         assert_eq!(
-            JwksProviderError::TlsSanMismatch {
-                reason: "no match".to_string()
-            }
-            .to_string(),
-            "outbound TLS SAN mismatch: no match"
+            OidcDependencyError::new(OidcOperation::Discovery, OidcDependencyFailure::Transport).to_string(),
+            "discovery transport fail"
+        );
+        assert_eq!(
+            OidcDependencyError::new(OidcOperation::Discovery, OidcDependencyFailure::TlsSanMismatch).to_string(),
+            "discovery san mismatch"
         );
     }
 
@@ -738,14 +743,14 @@ mod tests {
         let cfg = test_config(&idp.addr, 60_000, 0);
         let client = Arc::new(Client::builder().build().unwrap());
         let validator: DiscoveryValidator<LeanDiscoveryDocument> =
-            Arc::new(|_| Err("synthetic validation failure".into()));
+            Arc::new(|_| Err(OidcDependencyFailure::InvalidDocument));
         let p = JwksProvider::new(cfg, client, validator);
         let err = p
             .get_or_fetch_discovery()
             .await
             .expect_err("validator should reject")
             .to_string();
-        assert!(err.contains("synthetic"), "got: {}", err);
+        assert!(err == "discovery document invalid", "got: {}", err);
         assert!(
             p.cached_discovery().await.is_none(),
             "cache must remain empty after validator failure"
@@ -911,7 +916,10 @@ mod tests {
             .await;
         let p = build_provider(wm_config(&server.uri(), 60_000, 0, 2_000));
         let err = p.get_jwks(false).await.expect_err("empty keys must error").to_string();
-        assert!(err.contains("empty keys"), "expected 'empty keys' message, got: {err}");
+        assert!(
+            err == "jwks document invalid",
+            "expected 'empty keys' message, got: {err}"
+        );
     }
 
     #[tokio::test]
@@ -1030,10 +1038,7 @@ mod tests {
             .expect_err("discovery malformed JSON must error")
             .to_string();
         let lc = err.to_lowercase();
-        assert!(
-            lc.contains("parse") || lc.contains("oidc discovery"),
-            "expected parse error, got: {err}"
-        );
+        assert!(lc == "discovery response json fail", "expected parse error, got: {err}");
     }
 
     #[tokio::test]
@@ -1056,7 +1061,7 @@ mod tests {
             .expect_err("missing jwks_uri must error")
             .to_string();
         assert!(
-            err.contains("jwks_uri"),
+            err == "discovery document invalid",
             "expected 'jwks_uri' in error message, got: {err}"
         );
     }
@@ -1079,7 +1084,10 @@ mod tests {
             .await
             .expect_err("missing issuer must error")
             .to_string();
-        assert!(err.contains("issuer"), "expected 'issuer' in error message, got: {err}");
+        assert!(
+            err == "discovery document invalid",
+            "expected 'issuer' in error message, got: {err}"
+        );
     }
 
     #[tokio::test]
@@ -1101,10 +1109,7 @@ mod tests {
             .await
             .expect_err("unreachable discovery must error")
             .to_string();
-        assert!(
-            err.contains("Failed to fetch discovery document"),
-            "expected fetch failure, got: {err}"
-        );
+        assert!(err == "discovery transport fail", "expected fetch failure, got: {err}");
     }
 
     #[tokio::test]

@@ -18,9 +18,11 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use super::error::{map_jwt_decode_error_typed, OidcVerifyError};
+use super::error::{
+    map_jwt_decode_error_typed, AuthFailure, OidcDependencyError, OidcDependencyFailure, OidcOperation, OidcVerifyError,
+};
 use super::jwks_provider::{
-    DiscoveryDoc, DiscoveryValidator, JwksProvider, JwksProviderConfig, JwksProviderError, DISCOVERY_FAILURE_BACKOFF,
+    DiscoveryDoc, DiscoveryValidator, JwksProvider, JwksProviderConfig, DISCOVERY_FAILURE_BACKOFF,
 };
 use super::jwt_common::{resolve_algorithm_policy, select_jwk, validate_token_alg, JwkSelectError};
 use super::refresh_flight_registry::RefreshFlightRegistry;
@@ -37,7 +39,6 @@ use crate::plugins::http::common::outbound::client::extract_ip_literal;
 use crate::plugins::http::common::outbound::egress::{
     default_block_private, egress_dns_cache_ttl, filter_resolved_addrs, EgressPolicy, EgressResolver,
 };
-use crate::plugins::runtime::log::la;
 use crate::plugins::runtime::{DyeOutcome, PluginLog, PluginSession, RequestFilter};
 use crate::tls::validation::build_verified_outbound_tls;
 use edgion_algo::cache::ShardedLruCache;
@@ -56,8 +57,6 @@ type OidcResult<T> = Result<T, OidcError>;
 type VerifyResult<T> = Result<T, OidcVerifyError>;
 
 const PLUGIN_NAME: &str = "OpenidConnect";
-const CREDENTIAL_FAILURE_BODY: &str = "Unauthorized";
-const BAD_GATEWAY_BODY: &str = "Bad Gateway";
 
 fn oidc_egress_resolver() -> EgressResolver {
     EgressResolver::new(
@@ -72,8 +71,8 @@ fn oidc_egress_resolver() -> EgressResolver {
 /// Admit an OIDC outbound URL. Hostname targets stay on `EgressResolver`.
 /// IP literals never reach that resolver (reqwest dials them directly), so they
 /// are classified here with the same policy. The URL is not rewritten.
-pub(super) fn admit_oidc_outbound_url(url: &str) -> Result<(), &'static str> {
-    let literal = extract_ip_literal(url).map_err(|_| "invalid outbound URL")?;
+pub(super) fn admit_oidc_outbound_url(url: &str) -> Result<(), OidcDependencyFailure> {
+    let literal = extract_ip_literal(url).map_err(|_| OidcDependencyFailure::InvalidEndpoint)?;
     let Some(addr) = literal else {
         return Ok(());
     };
@@ -85,7 +84,7 @@ pub(super) fn admit_oidc_outbound_url(url: &str) -> Result<(), &'static str> {
         false,
     );
     if admitted.is_empty() {
-        Err("egress policy blocked destination")
+        Err(OidcDependencyFailure::DestinationRejected)
     } else {
         Ok(())
     }
@@ -164,13 +163,13 @@ fn build_discovery_validator(config: &OpenidConnectConfig) -> DiscoveryValidator
                 .filter(|v| !v.is_empty())
                 .is_none()
         {
-            return Err("authorization_endpoint required when unauthAction=Auth".into());
+            return Err(OidcDependencyFailure::MissingEndpoint);
         }
         if needs_token_endpoint && doc.token_endpoint.as_deref().filter(|v| !v.is_empty()).is_none() {
-            return Err("token_endpoint required for the configured verification/refresh mode".into());
+            return Err(OidcDependencyFailure::MissingEndpoint);
         }
         if needs_userinfo && doc.userinfo_endpoint.as_deref().filter(|v| !v.is_empty()).is_none() {
-            return Err("userinfo_endpoint required when set_userinfo_header=true".into());
+            return Err(OidcDependencyFailure::MissingEndpoint);
         }
         // introspection_endpoint can be overridden at the plugin config layer
         // (`config.introspection_endpoint`), so we do not enforce it at fetch time.
@@ -302,11 +301,7 @@ impl OpenidConnect {
         let path_cfg = edgion_resources::path_normalization::get_path_normalization_config();
         let normalized_logout_path = normalize_config_path(&config.logout_path, path_cfg);
         if normalized_logout_path != config.logout_path {
-            tracing::info!(
-                "openid_connect: config path normalized: {:?} -> {:?}",
-                config.logout_path,
-                normalized_logout_path
-            );
+            tracing::info!("openid_connect: logout path normalized");
             config.logout_path = normalized_logout_path;
         }
         let configured_callback = config
@@ -358,29 +353,26 @@ impl OpenidConnect {
                     true,
                     "OpenidConnect",
                 )
-                .map_err(|error| {
+                .map_err(|_| {
                     tracing::warn!(
                         component = "openid_connect",
-                        error = ?error,
                         "outbound TLS resolution failed; OIDC plugin construction rejected"
                     );
                     "openid_connect outbound TLS resolution failed".to_string()
                 })?;
                 let rustls_config =
-                    build_verified_outbound_tls(&resolved, san_policy, "OpenidConnect").map_err(|error| {
+                    build_verified_outbound_tls(&resolved, san_policy, "OpenidConnect").map_err(|_| {
                         tracing::warn!(
                             component = "openid_connect",
-                            error = %error,
                             "SAN-pinning TLS config build failed; OIDC plugin construction rejected"
                         );
                         "openid_connect SAN-pinning TLS config build failed".to_string()
                     })?;
                 let mut transport = oidc_outbound_client_config(config.timeout, None, dns_resolver);
                 transport.preconfigured_tls = Some(rustls_config);
-                let client = build_outbound_client(transport).map_err(|error| {
+                let client = build_outbound_client(transport).map_err(|_| {
                     tracing::warn!(
                         component = "openid_connect",
-                        error = %error,
                         "SAN-pinning HTTP client build failed; OIDC plugin construction rejected"
                     );
                     "openid_connect SAN-pinning HTTP client build failed".to_string()
@@ -392,10 +384,9 @@ impl OpenidConnect {
                     Some(tls_for_client),
                     dns_resolver,
                 ))
-                .map_err(|error| {
+                .map_err(|_| {
                     tracing::warn!(
                         component = "openid_connect",
-                        error = %error,
                         "outbound HTTP client build failed; OIDC plugin construction rejected"
                     );
                     "openid_connect outbound HTTP client build failed".to_string()
@@ -434,11 +425,7 @@ impl OpenidConnect {
         // worst-case task fan-out under repeated reconstruction.
         #[cfg(not(test))]
         if config_valid {
-            spawn_discovery_prewarm(
-                Arc::downgrade(&jwks_provider),
-                plugin_namespace.clone(),
-                config.discovery.clone(),
-            );
+            spawn_discovery_prewarm(Arc::downgrade(&jwks_provider));
         }
 
         Ok(Self {
@@ -469,30 +456,21 @@ impl OpenidConnect {
 /// request-path lazy fetch therefore logs nothing — the prewarm-exhausted warn
 /// below already told the operator the cache was left cold.
 #[cfg(not(test))]
-fn spawn_discovery_prewarm(
-    jwks_provider: std::sync::Weak<JwksProvider<DiscoveryDocument>>,
-    plugin_namespace: String,
-    discovery_url: String,
-) {
+fn spawn_discovery_prewarm(jwks_provider: std::sync::Weak<JwksProvider<DiscoveryDocument>>) {
     if tokio::runtime::Handle::try_current().is_err() {
         return;
     }
     tokio::spawn(async move {
         // Cumulative wall time after each delay: 1, 3, 7, 15, 31, 63, 123, 183, 243, 303 s.
         const RETRY_DELAYS_SECS: [u64; 10] = [1, 2, 4, 8, 16, 32, 60, 60, 60, 60];
-        let log_loaded = |doc: &DiscoveryDocument| {
-            tracing::info!(
-                component = "openid_connect",
-                issuer = %doc.issuer,
-                jwks_uri = %doc.jwks_uri,
-                "OIDC discovery document loaded"
-            );
+        let log_loaded = || {
+            tracing::info!(component = "openid_connect", "OIDC discovery document loaded");
         };
         let Some(provider) = jwks_provider.upgrade() else {
             return;
         };
-        if let Ok(doc) = provider.get_or_fetch_discovery().await {
-            log_loaded(&doc);
+        if provider.get_or_fetch_discovery().await.is_ok() {
+            log_loaded();
             return;
         }
         // Release the strong ref before sleeping so the plugin Arc can drop
@@ -503,8 +481,8 @@ fn spawn_discovery_prewarm(
             let Some(provider) = jwks_provider.upgrade() else {
                 return;
             };
-            if let Ok(doc) = provider.get_or_fetch_discovery().await {
-                log_loaded(&doc);
+            if provider.get_or_fetch_discovery().await.is_ok() {
+                log_loaded();
                 return;
             }
         }
@@ -513,8 +491,6 @@ fn spawn_discovery_prewarm(
         // first real request still triggers a lazy fetch via get_or_fetch_discovery.
         tracing::warn!(
             component = "openid_connect",
-            plugin_namespace = %plugin_namespace,
-            discovery_url = %discovery_url,
             "OIDC discovery prewarm exhausted retries; cache remains cold until first request \
              triggers lazy fetch. If outbound TLS SAN pinning is configured, check the \
              edgion_gateway_outbound_tls_san_mismatch_total counter and the access log for \
@@ -550,3 +526,11 @@ mod tests;
 #[cfg(test)]
 #[path = "auth_response_caps_integration.rs"]
 mod auth_response_caps_integration;
+
+#[cfg(test)]
+#[path = "dependency_error_tests.rs"]
+mod dependency_error_tests;
+
+#[cfg(test)]
+#[path = "dependency_error_integration.rs"]
+mod dependency_error_integration;

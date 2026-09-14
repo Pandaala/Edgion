@@ -1,39 +1,14 @@
-use super::super::error::AuthResponseFailure;
+use super::super::error::read_oidc_json;
 use super::*;
-use crate::plugins::http::common::outbound::call::stream_body_capped;
-
 const AUTH_RESPONSE_MAX_BYTES: usize = 1024 * 1024;
 
-/// Token exchange, refresh, and introspection are bounded independent exchanges.
-/// Never deserialize a truncated response or retain provider error text.
-pub(super) async fn read_auth_response<T: serde::de::DeserializeOwned>(response: reqwest::Response) -> VerifyResult<T> {
-    if response
-        .content_length()
-        .is_some_and(|length| length > AUTH_RESPONSE_MAX_BYTES as u64)
-    {
-        return Err(OidcVerifyError::AuthResponse(AuthResponseFailure::TooLarge));
-    }
-    let (body, truncated) = stream_body_capped(response, AUTH_RESPONSE_MAX_BYTES)
+pub(super) async fn read_auth_response<T: serde::de::DeserializeOwned>(
+    response: reqwest::Response,
+    operation: OidcOperation,
+) -> VerifyResult<T> {
+    read_oidc_json(response, AUTH_RESPONSE_MAX_BYTES)
         .await
-        .map_err(|_| OidcVerifyError::AuthResponse(AuthResponseFailure::Read))?;
-    if truncated {
-        return Err(OidcVerifyError::AuthResponse(AuthResponseFailure::TooLarge));
-    }
-    serde_json::from_slice(&body).map_err(|_| OidcVerifyError::AuthResponse(AuthResponseFailure::Json))
-}
-
-/// Record an outbound TLS SAN-pinning rejection on an OIDC outbound call.
-///
-/// The `edgion_gateway_outbound_tls_san_mismatch_total{plugin="openid_connect"}` counter is
-/// the only channel here. Every caller sits on the request hot path, which forbids `tracing::*`
-/// at any level (log-safety Iron rule 3), and none of them can reach the `PluginLog`; threading a
-/// typed error up to a `PluginLog`-owning frame would cost a signature cascade across the five
-/// outbound call paths. A SAN mismatch is a configuration error that fails every request
-/// identically, so the counter is the intended alerting signal.
-pub(super) fn note_oidc_san_mismatch(err: &reqwest::Error) {
-    if crate::tls::validation::outbound_san_mismatch_reason(err).is_some() {
-        crate::observe::metrics::registry::record_outbound_tls_san_mismatch("openid_connect");
-    }
+        .map_err(|failure| OidcVerifyError::dependency(operation, failure))
 }
 
 impl OpenidConnect {
@@ -154,10 +129,10 @@ impl OpenidConnect {
                 .token_endpoint
                 .as_deref()
                 .filter(|v| !v.is_empty())
-                .ok_or(OidcVerifyError::Other {
-                    status: 502,
-                    message: "OIDC discovery document missing token_endpoint".to_string(),
-                })?;
+                .ok_or(OidcVerifyError::dependency(
+                    OidcOperation::TokenExchange,
+                    OidcDependencyFailure::MissingEndpoint,
+                ))?;
         let mut params: Vec<(&str, String)> = vec![
             ("grant_type", "authorization_code".to_string()),
             ("code", code.to_string()),
@@ -168,7 +143,7 @@ impl OpenidConnect {
             params.push(("code_verifier", verifier.to_string()));
         }
 
-        Self::admit_idp_url(token_endpoint)?;
+        Self::admit_idp_url(token_endpoint, OidcOperation::TokenExchange)?;
         let client = self.http_client();
         let base_request = client
             .post(token_endpoint)
@@ -188,20 +163,17 @@ impl OpenidConnect {
             }
         };
 
-        let resp = request.send().await.map_err(|e| {
-            note_oidc_san_mismatch(&e);
-            OidcVerifyError::Other {
-                status: 502,
-                message: "Bad Gateway".to_string(),
-            }
-        })?;
+        let resp = request
+            .send()
+            .await
+            .map_err(|error| OidcDependencyError::transport(OidcOperation::TokenExchange, &error, "openid_connect"))?;
         if !resp.status().is_success() {
-            return Err(OidcVerifyError::Other {
-                status: 502,
-                message: format!("Token exchange request failed with status {}", resp.status()),
-            });
+            return Err(OidcVerifyError::dependency(
+                OidcOperation::TokenExchange,
+                OidcDependencyFailure::HttpStatus,
+            ));
         }
-        read_auth_response(resp).await
+        read_auth_response(resp, OidcOperation::TokenExchange).await
     }
 
     pub(super) async fn revoke_token(
@@ -209,8 +181,8 @@ impl OpenidConnect {
         endpoint: &str,
         token: &str,
         token_type_hint: Option<&str>,
-    ) -> OidcResult<()> {
-        super::admit_oidc_outbound_url(endpoint).map_err(|error| -> OidcError { error.into() })?;
+    ) -> VerifyResult<()> {
+        Self::admit_idp_url(endpoint, OidcOperation::Revocation)?;
         let client = self.http_client();
         let base_request = client
             .post(endpoint)
@@ -218,7 +190,7 @@ impl OpenidConnect {
             .header("Accept", "application/json");
 
         let request = {
-            let client_secret = self.client_secret().ok_or(CREDENTIAL_FAILURE_BODY)?;
+            let client_secret = self.client_secret().ok_or_else(Self::credential_failure)?;
             match self.config.token_endpoint_auth_method {
                 EndpointAuthMethod::ClientSecretBasic => {
                     let mut form: Vec<(&str, String)> = vec![("token", token.to_string())];
@@ -243,14 +215,24 @@ impl OpenidConnect {
             }
         };
 
-        let resp = request.send().await.inspect_err(note_oidc_san_mismatch)?;
+        let resp = request
+            .send()
+            .await
+            .map_err(|error| OidcDependencyError::transport(OidcOperation::Revocation, &error, "openid_connect"))?;
         if !resp.status().is_success() {
-            return Err(format!("Revocation request failed with status {}", resp.status()).into());
+            return Err(OidcVerifyError::dependency(
+                OidcOperation::Revocation,
+                OidcDependencyFailure::HttpStatus,
+            ));
         }
         Ok(())
     }
 
-    pub(super) async fn maybe_revoke_tokens_on_logout(&self, session_cookie: Option<OidcSessionCookie>) {
+    pub(super) async fn maybe_revoke_tokens_on_logout(
+        &self,
+        session_cookie: Option<OidcSessionCookie>,
+        plugin_log: &mut PluginLog,
+    ) {
         if !self.config.revoke_tokens_on_logout {
             return;
         }
@@ -277,16 +259,22 @@ impl OpenidConnect {
             return;
         };
 
+        let mut failure = None;
         if let Some(token) = refresh_token {
-            let _ = self
+            failure = self
                 .revoke_token(revocation_endpoint, token, Some("refresh_token"))
-                .await;
+                .await
+                .err();
         }
-
         if let Some(token) = access_token {
-            let _ = self
+            let access_failure = self
                 .revoke_token(revocation_endpoint, token, Some("access_token"))
-                .await;
+                .await
+                .err();
+            failure = failure.or(access_failure);
+        }
+        if let Some(error) = failure {
+            plugin_log.push_err(error.response_log_tag_or("revocation credential unavailable"));
         }
     }
 
@@ -300,17 +288,17 @@ impl OpenidConnect {
                 .token_endpoint
                 .as_deref()
                 .filter(|v| !v.is_empty())
-                .ok_or(OidcVerifyError::Other {
-                    status: 502,
-                    message: "OIDC discovery document missing token_endpoint".to_string(),
-                })?;
+                .ok_or(OidcVerifyError::dependency(
+                    OidcOperation::Refresh,
+                    OidcDependencyFailure::MissingEndpoint,
+                ))?;
         let mut params: Vec<(&str, String)> = vec![
             ("grant_type", "refresh_token".to_string()),
             ("refresh_token", refresh_token.to_string()),
             ("client_id", self.config.client_id.clone()),
         ];
 
-        Self::admit_idp_url(token_endpoint)?;
+        Self::admit_idp_url(token_endpoint, OidcOperation::Refresh)?;
         let client = self.http_client();
         let base_request = client
             .post(token_endpoint)
@@ -330,20 +318,17 @@ impl OpenidConnect {
             }
         };
 
-        let resp = request.send().await.map_err(|e| {
-            note_oidc_san_mismatch(&e);
-            OidcVerifyError::Other {
-                status: 502,
-                message: "Bad Gateway".to_string(),
-            }
-        })?;
+        let resp = request
+            .send()
+            .await
+            .map_err(|error| OidcDependencyError::transport(OidcOperation::Refresh, &error, "openid_connect"))?;
         if !resp.status().is_success() {
-            return Err(OidcVerifyError::Other {
-                status: 502,
-                message: format!("Token refresh request failed with status {}", resp.status()),
-            });
+            return Err(OidcVerifyError::dependency(
+                OidcOperation::Refresh,
+                OidcDependencyFailure::HttpStatus,
+            ));
         }
-        read_auth_response(resp).await
+        read_auth_response(resp, OidcOperation::Refresh).await
     }
 
     pub(super) fn should_persist_id_token(&self, discovery: &DiscoveryDocument) -> bool {
@@ -357,17 +342,11 @@ impl OpenidConnect {
         if session_cookie.session_ref.is_empty() {
             session_cookie.session_ref = Self::generate_session_ref();
         }
-        let refresh_token = session_cookie.refresh_token.as_deref().ok_or(OidcVerifyError::Other {
-            status: 401,
-            message: "Missing refresh token".to_string(),
-        })?;
-        let discovery = self
-            .get_or_fetch_discovery()
-            .await
-            .map_err(|_| OidcVerifyError::Other {
-                status: 502,
-                message: "Bad Gateway".to_string(),
-            })?;
+        let refresh_token = session_cookie
+            .refresh_token
+            .as_deref()
+            .ok_or(OidcVerifyError::Auth(AuthFailure::MissingRefreshToken))?;
+        let discovery = self.get_or_fetch_discovery().await.map_err(OidcVerifyError::from)?;
         let token_response = self.refresh_access_token(&discovery, refresh_token).await?;
 
         let now = Self::now_unix_secs();
@@ -441,8 +420,10 @@ mod response_tests {
     async fn known_oversize_body_is_rejected() {
         let response = http::Response::new(vec![b'x'; AUTH_RESPONSE_MAX_BYTES + 1]).into();
         assert_eq!(
-            read_auth_response::<Value>(response).await.unwrap_err(),
-            OidcVerifyError::AuthResponse(AuthResponseFailure::TooLarge)
+            read_auth_response::<Value>(response, OidcOperation::TokenExchange)
+                .await
+                .unwrap_err(),
+            OidcVerifyError::dependency(OidcOperation::TokenExchange, OidcDependencyFailure::ResponseTooLarge)
         );
     }
 
@@ -450,7 +431,9 @@ mod response_tests {
     async fn exact_limit_stream_preserves_token_fields() {
         let body = padded_json(AUTH_RESPONSE_MAX_BYTES);
         let parts = body.chunks(8192).map(|part| Ok(Bytes::copy_from_slice(part))).collect();
-        let token: TokenEndpointResponse = read_auth_response(streamed(parts)).await.unwrap();
+        let token: TokenEndpointResponse = read_auth_response(streamed(parts), OidcOperation::TokenExchange)
+            .await
+            .unwrap();
         assert_eq!(token.access_token, "fixture-token");
     }
 
@@ -467,8 +450,10 @@ mod response_tests {
         ));
         let response = http::Response::new(reqwest::Body::wrap_stream(parts)).into();
         assert_eq!(
-            read_auth_response::<TokenEndpointResponse>(response).await.unwrap_err(),
-            OidcVerifyError::AuthResponse(AuthResponseFailure::TooLarge)
+            read_auth_response::<TokenEndpointResponse>(response, OidcOperation::TokenExchange)
+                .await
+                .unwrap_err(),
+            OidcVerifyError::dependency(OidcOperation::TokenExchange, OidcDependencyFailure::ResponseTooLarge)
         );
     }
 
@@ -478,10 +463,15 @@ mod response_tests {
             Ok(Bytes::from_static(br#"{"access_token":"fixture-token"}"#)),
             Err(io::Error::other("private-provider-detail")),
         ]);
-        let error = read_auth_response::<TokenEndpointResponse>(response).await.unwrap_err();
-        assert_eq!(error, OidcVerifyError::AuthResponse(AuthResponseFailure::Read));
+        let error = read_auth_response::<TokenEndpointResponse>(response, OidcOperation::TokenExchange)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            error,
+            OidcVerifyError::dependency(OidcOperation::TokenExchange, OidcDependencyFailure::ResponseRead)
+        );
         assert_eq!(error.user_message(), "Bad Gateway");
-        assert_eq!(error.log_tag(), "auth response read fail");
+        assert_eq!(error.log_tag(), "exchange response read fail");
     }
 
     #[tokio::test]
@@ -490,21 +480,27 @@ mod response_tests {
             b"{private-provider-detail".as_slice(),
             br#"{"access_token":{"private":"credential"}}"#,
         ] {
-            let error = read_auth_response::<TokenEndpointResponse>(http::Response::new(body.to_vec()).into())
-                .await
-                .unwrap_err();
-            assert_eq!(error, OidcVerifyError::AuthResponse(AuthResponseFailure::Json));
+            let error = read_auth_response::<TokenEndpointResponse>(
+                http::Response::new(body.to_vec()).into(),
+                OidcOperation::TokenExchange,
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(
+                error,
+                OidcVerifyError::dependency(OidcOperation::TokenExchange, OidcDependencyFailure::ResponseJson)
+            );
             assert_eq!(error.user_message(), "Bad Gateway");
-            assert_eq!(error.log_tag(), "auth response json fail");
+            assert_eq!(error.log_tag(), "exchange response json fail");
         }
     }
 
     #[test]
     fn response_errors_keep_wire_and_contextual_log_contracts() {
         for error in [
-            OidcVerifyError::AuthResponse(AuthResponseFailure::TooLarge),
-            OidcVerifyError::AuthResponse(AuthResponseFailure::Read),
-            OidcVerifyError::AuthResponse(AuthResponseFailure::Json),
+            OidcVerifyError::dependency(OidcOperation::TokenExchange, OidcDependencyFailure::ResponseTooLarge),
+            OidcVerifyError::dependency(OidcOperation::TokenExchange, OidcDependencyFailure::ResponseRead),
+            OidcVerifyError::dependency(OidcOperation::TokenExchange, OidcDependencyFailure::ResponseJson),
         ] {
             assert_eq!(error.http_status(), 502);
             assert_eq!(error.user_message(), "Bad Gateway");

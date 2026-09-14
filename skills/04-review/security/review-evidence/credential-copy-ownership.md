@@ -197,6 +197,9 @@ are not unresolved implementation commitments.
 The body-boundedness defect deferred by this audit is corrected separately in the
 [OIDC authentication response cap guard](../../oidc/regression-guards/authentication-response-byte-caps.md).
 That correction does not establish credential erasure or full public-error redaction.
+Public-error projection is covered separately by the
+[OIDC dependency error guard](../../oidc/regression-guards/dependency-error-projection.md);
+neither correction proves erasure of third-party allocations or deployed history.
 Re-evaluate on new auth consumers, changed stores/serialization/retry tasks, new
 Debug implementations, typed header conversions, or dependency behavior changes.
 

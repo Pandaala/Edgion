@@ -73,8 +73,10 @@ Re-open this decision only if:
   with an expiry state machine
 - A production incident shows request cancellation of the mutex holder
   dropping enough in-flight fetches to matter after the 5-second gate
-- D0058's public-error redaction requires the stored failure object to change
-  shape
+- The stored failure classification changes again. D0058's
+  [dependency error projection](dependency-error-projection.md) triggered this
+  review: the cached error becomes data-free while the 5-second deadline and
+  recovery policy remain unchanged.
 
 ## Reference Cases
 

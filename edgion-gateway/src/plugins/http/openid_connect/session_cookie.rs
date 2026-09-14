@@ -76,10 +76,7 @@ impl OpenidConnect {
     }
 
     pub(super) fn credential_failure() -> OidcVerifyError {
-        OidcVerifyError::Other {
-            status: 401,
-            message: CREDENTIAL_FAILURE_BODY.to_string(),
-        }
+        OidcVerifyError::Auth(AuthFailure::Credentials)
     }
 
     pub(super) fn encode_signed_cookie_payload<T: Serialize>(value: &T, cipher: &Aes256Gcm) -> Result<String, ()> {
@@ -98,37 +95,23 @@ impl OpenidConnect {
         value: &str,
         cipher: &Aes256Gcm,
     ) -> VerifyResult<T> {
-        let (nonce_b64, encrypted_b64) = value.split_once('.').ok_or(OidcVerifyError::Other {
-            status: 401,
-            message: "Malformed OIDC cookie payload".to_string(),
-        })?;
-        let nonce = URL_SAFE_NO_PAD.decode(nonce_b64).map_err(|_| OidcVerifyError::Other {
-            status: 401,
-            message: "Malformed OIDC cookie payload".to_string(),
-        })?;
+        let (nonce_b64, encrypted_b64) = value
+            .split_once('.')
+            .ok_or(OidcVerifyError::Auth(AuthFailure::MalformedCookie))?;
+        let nonce = URL_SAFE_NO_PAD
+            .decode(nonce_b64)
+            .map_err(|_| OidcVerifyError::Auth(AuthFailure::MalformedCookie))?;
         if nonce.len() != 12 {
-            return Err(OidcVerifyError::Other {
-                status: 401,
-                message: "Malformed OIDC cookie payload".to_string(),
-            });
+            return Err(OidcVerifyError::Auth(AuthFailure::MalformedCookie));
         }
         let encrypted = URL_SAFE_NO_PAD
             .decode(encrypted_b64)
-            .map_err(|_| OidcVerifyError::Other {
-                status: 401,
-                message: "Malformed OIDC cookie payload".to_string(),
-            })?;
+            .map_err(|_| OidcVerifyError::Auth(AuthFailure::MalformedCookie))?;
         let nonce = Nonce::from_slice(&nonce);
         let payload = cipher
             .decrypt(nonce, encrypted.as_ref())
-            .map_err(|_| OidcVerifyError::Other {
-                status: 401,
-                message: "Invalid OIDC cookie signature".to_string(),
-            })?;
-        serde_json::from_slice::<T>(&payload).map_err(|_| OidcVerifyError::Other {
-            status: 401,
-            message: "Malformed OIDC cookie payload".to_string(),
-        })
+            .map_err(|_| OidcVerifyError::Auth(AuthFailure::InvalidCookieSignature))?;
+        serde_json::from_slice::<T>(&payload).map_err(|_| OidcVerifyError::Auth(AuthFailure::MalformedCookie))
     }
 
     pub(super) fn session_cookie_name(&self) -> &str {

@@ -20,7 +20,7 @@ impl RequestFilter for OpenidConnect {
             };
             let id_token_hint = session_cookie.as_mut().and_then(|v| v.id_token.take());
             let session_ref = session_cookie.as_ref().map(|v| v.session_ref.clone());
-            self.maybe_revoke_tokens_on_logout(session_cookie).await;
+            self.maybe_revoke_tokens_on_logout(session_cookie, plugin_log).await;
             if let Some(session_ref) = session_ref.as_deref() {
                 self.remove_cached_access_token(session_ref).await;
             }
@@ -115,7 +115,7 @@ impl RequestFilter for OpenidConnect {
                     } else {
                         match self.verify_token(session, &token).await {
                             Ok(claims) => {
-                                let userinfo_json = self.fetch_userinfo_json(&token).await;
+                                let userinfo_json = self.fetch_userinfo_json(&token, plugin_log).await;
                                 self.apply_upstream_headers(
                                     session,
                                     &token,
@@ -140,7 +140,8 @@ impl RequestFilter for OpenidConnect {
                                         Ok(new_token) => match self.verify_token(session, &new_token).await {
                                             Ok(claims) => {
                                                 self.maybe_set_session_cookie_header(session, &session_cookie).await;
-                                                let userinfo_json = self.fetch_userinfo_json(&new_token).await;
+                                                let userinfo_json =
+                                                    self.fetch_userinfo_json(&new_token, plugin_log).await;
                                                 self.apply_upstream_headers(
                                                     session,
                                                     &new_token,
@@ -160,7 +161,8 @@ impl RequestFilter for OpenidConnect {
                                             if Self::is_refresh_wait_timeout(&refresh_err) {
                                                 match self.verify_jwt_token_allow_expired(session, &token).await {
                                                     Ok(claims) if self.is_expired_within_leeway(&claims) => {
-                                                        let userinfo_json = self.fetch_userinfo_json(&token).await;
+                                                        let userinfo_json =
+                                                            self.fetch_userinfo_json(&token, plugin_log).await;
                                                         self.apply_upstream_headers(
                                                             session,
                                                             &token,
@@ -191,8 +193,7 @@ impl RequestFilter for OpenidConnect {
                 Ok(None) => {}
                 Err(err) => {
                     if err.http_status() == 502 {
-                        let _ = self.send_plain_error(session, 502, &err.user_message()).await;
-                        return PluginRunningResult::ErrTerminateRequest;
+                        return Self::dependency_response();
                     }
                 }
             }
@@ -216,15 +217,11 @@ impl RequestFilter for OpenidConnect {
                     let discovery = match self.get_or_fetch_discovery().await {
                         Ok(d) => d,
                         Err(e) => {
-                            if let JwksProviderError::TlsSanMismatch { ref reason } = e {
+                            if e.failure == OidcDependencyFailure::TlsSanMismatch {
                                 session.record_error(edgion_resources::EdgionErrorCode::OutboundTlsSanMismatch);
-                                plugin_log.push_err("outbound tls san mismatch");
-                                plugin_log.push_fmt("san {}", la![reason.as_str()]);
-                            } else {
-                                plugin_log.push_fmt("discovery fetch fail {}", la![e.to_string().as_str()]);
                             }
-                            let _ = self.send_plain_error(session, 502, "Bad Gateway").await;
-                            return PluginRunningResult::ErrTerminateRequest;
+                            plugin_log.push_err(e.log_tag());
+                            return Self::dependency_response();
                         }
                     };
 
@@ -234,7 +231,8 @@ impl RequestFilter for OpenidConnect {
                             let _ = self.send_redirect_with_cookies(session, &location, &cookies).await;
                         }
                         Err(err) => {
-                            self.send_oidc_error(session, &err).await;
+                            plugin_log.push_err(err.log_tag());
+                            return self.send_oidc_error(session, &err).await;
                         }
                     }
                     return PluginRunningResult::ErrTerminateRequest;
@@ -245,7 +243,7 @@ impl RequestFilter for OpenidConnect {
         let token = token.unwrap_or_default();
         match self.verify_token(session, &token).await {
             Ok(claims) => {
-                let userinfo_json = self.fetch_userinfo_json(&token).await;
+                let userinfo_json = self.fetch_userinfo_json(&token, plugin_log).await;
                 self.apply_upstream_headers(session, &token, None, userinfo_json.as_deref(), &claims);
                 // Skip credential hiding when access_token_in_authorization_header is true:
                 // apply_upstream_headers already wrote a fresh "Bearer <token>" into
@@ -268,13 +266,13 @@ impl RequestFilter for OpenidConnect {
                 }
                 match status {
                     403 => {
-                        let _ = self.send_forbidden(session, &message).await;
+                        let _ = self.send_forbidden(session, message).await;
                     }
                     502 => {
-                        let _ = self.send_plain_error(session, 502, &message).await;
+                        return Self::dependency_response();
                     }
                     _ => {
-                        let _ = self.send_unauthorized(session, &message).await;
+                        let _ = self.send_unauthorized(session, message).await;
                     }
                 }
                 PluginRunningResult::ErrTerminateRequest

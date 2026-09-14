@@ -1,5 +1,5 @@
+use super::super::error::read_oidc_json;
 use super::*;
-use crate::plugins::http::common::http_util::fetch_json_limited;
 
 impl OpenidConnect {
     pub(super) fn is_header_value_safe(value: &str) -> bool {
@@ -90,42 +90,50 @@ impl OpenidConnect {
         }
     }
 
-    pub(super) async fn fetch_userinfo_json(&self, access_token: &str) -> Option<String> {
+    pub(super) async fn fetch_userinfo_json(&self, access_token: &str, plugin_log: &mut PluginLog) -> Option<String> {
         if !self.config.set_userinfo_header {
             return None;
         }
-        let Ok(discovery) = self.get_or_fetch_discovery().await else {
-            return None;
-        };
-        let userinfo_endpoint = discovery.userinfo_endpoint.as_deref().filter(|v| !v.is_empty())?;
-
-        if super::admit_oidc_outbound_url(userinfo_endpoint).is_err() {
-            return None;
+        match self.fetch_userinfo(access_token).await {
+            Ok(value) => Some(value),
+            Err(error) => {
+                plugin_log.push_err(error.log_tag());
+                None
+            }
         }
-        let client = self.http_client();
-        let resp = match client
-            .get(userinfo_endpoint)
+    }
+
+    async fn fetch_userinfo(&self, access_token: &str) -> VerifyResult<String> {
+        let discovery = self.get_or_fetch_discovery().await?;
+        let endpoint =
+            discovery
+                .userinfo_endpoint
+                .as_deref()
+                .filter(|v| !v.is_empty())
+                .ok_or(OidcVerifyError::dependency(
+                    OidcOperation::Userinfo,
+                    OidcDependencyFailure::MissingEndpoint,
+                ))?;
+        Self::admit_idp_url(endpoint, OidcOperation::Userinfo)?;
+        let response = self
+            .http_client()
+            .get(endpoint)
             .timeout(Duration::from_secs(self.config.timeout))
             .bearer_auth(access_token)
             .header("Accept", "application/json")
             .send()
             .await
-        {
-            Ok(v) => v,
-            Err(e) => {
-                super::token_exchange::note_oidc_san_mismatch(&e);
-                return None;
-            }
-        };
-        if !resp.status().is_success() {
-            return None;
+            .map_err(|error| OidcDependencyError::transport(OidcOperation::Userinfo, &error, "openid_connect"))?;
+        if !response.status().is_success() {
+            return Err(OidcVerifyError::dependency(
+                OidcOperation::Userinfo,
+                OidcDependencyFailure::HttpStatus,
+            ));
         }
-
-        let value: Value =
-            match fetch_json_limited(resp, self.config.userinfo_max_response_bytes, "OIDC userinfo").await {
-                Ok(v) => v,
-                Err(_) => return None,
-            };
-        serde_json::to_string(&value).ok()
+        let value: Value = read_oidc_json(response, self.config.userinfo_max_response_bytes)
+            .await
+            .map_err(|failure| OidcVerifyError::dependency(OidcOperation::Userinfo, failure))?;
+        serde_json::to_string(&value)
+            .map_err(|_| OidcVerifyError::dependency(OidcOperation::Userinfo, OidcDependencyFailure::InvalidDocument))
     }
 }

@@ -9,7 +9,7 @@ knowledge_type: regression-guards
 ## Conclusion and scope
 
 The Gateway OIDC plugin bounds token exchange, refresh, and introspection bodies
-to 1 MiB, including JSON whitespace. `read_auth_response` checks the known body
+to 1 MiB, including JSON whitespace. `read_oidc_json` checks the known body
 length before reading, delegates accumulation to the existing
 `common::outbound::call::stream_body_capped`, rejects its truncation flag, and
 only then deserializes. Exactly 1 MiB is accepted. There is no plugin-local
@@ -17,14 +17,14 @@ buffering loop or new operator field.
 
 `TokenEndpointResponse` retains the access/ID/refresh token fields and expiry;
 introspection still validates `active`, issuer, audience, expiry, and scopes
-before caching claims. `AuthResponseFailure::{TooLarge, Read, Json}` carries no
-provider data. `OidcVerifyError::AuthResponse` maps to static PluginLog tags and
+before caching claims. `OidcDependencyFailure::{ResponseTooLarge, ResponseRead,
+ResponseJson}` carries no provider data. `OidcVerifyError::Dependency` maps to static PluginLog tags and
 502 / `Bad Gateway` when the caller emits an upstream failure. Existing session
 refresh fallbacks and `unauthAction` remain unchanged; a failed preemptive refresh
 does not invalidate an otherwise valid existing token.
 In Auto mode, failed introspection following an invalid JWT keeps the original
 401 / `Invalid token format` result. `InvalidFormatAfterIntrospection` retains
-only the bounded response-failure reason for the caller's PluginLog.
+only the bounded dependency classification for the caller's PluginLog.
 
 ## Rationale and evidence
 
@@ -40,27 +40,28 @@ without introducing a resource schema knob.
 
 | Consumer | Body handling |
 |---|---|
-| Authorization-code exchange, refresh | `token_exchange.rs`: `read_auth_response`, fixed 1 MiB |
+| Authorization-code exchange, refresh | `token_exchange.rs`: `read_auth_response` delegates to `read_oidc_json`, fixed 1 MiB |
 | Introspection | `token_verify.rs`: same reader, fixed 1 MiB, before claims checks/cache |
-| Discovery | `jwks_provider.rs`: `fetch_json_limited`, `discovery_max_response_bytes` |
-| JWKS | `jwks_provider.rs`: `fetch_json_limited`, `jwks_max_response_bytes` |
-| Userinfo | `userinfo.rs`: `fetch_json_limited`, `userinfo_max_response_bytes` |
+| Discovery | `jwks_provider.rs`: `read_oidc_json`, `discovery_max_response_bytes` |
+| JWKS | `jwks_provider.rs`: `read_oidc_json`, `jwks_max_response_bytes` |
+| Userinfo | `userinfo.rs`: `read_oidc_json`, `userinfo_max_response_bytes` |
 | Revocation | `token_exchange.rs`: status only, response body dropped |
 | Authorization and end-session | Browser redirect construction; no Gateway HTTP response body read |
 | Non-success HTTP responses | Rejected by status before aggregation |
 
 ## Alternatives and limits
 
-The existing bounded JSON helper returns formatted transport/parser errors;
-the authentication reader instead composes the canonical capped body helper with
+The shared `fetch_json_limited` helper returns formatted transport/parser errors;
+the OIDC reader instead composes the canonical capped body helper with
 typed error classification. It does not introduce a second buffering mechanism.
 No endpoint admission, TLS, redirects, timeout, client authentication, SAN metric,
 cache, singleflight, or revocation policy changes are involved.
 
 The cap bounds retained body bytes, not all process memory: the incoming chunk,
 allocator capacity, and parsed JSON representation also consume memory.
-Do not describe this as full OIDC public-error redaction; other dependency and
-status error paths require separate redaction work.
+The cap correction alone did not establish full OIDC public-error redaction.
+The later [dependency projection correction](dependency-error-projection.md)
+covers other dependency and status paths and generalizes the same capped reader.
 
 ## Verification and re-evaluation
 
@@ -70,7 +71,7 @@ They call all three real endpoint methods, each with Content-Length and chunked
 framing. Their fixture is explicitly ignored in ordinary unit runs and does not
 modify the existing integration harness or tests.
 
-On 2026-09-09, post-fix verification passed:
+Historical verification on 2026-09-09 (not a fresh check of the later error-model change):
 
 - `cargo test -p edgion-gateway --lib auth_response_caps_integration -- --ignored`:
   8 network integration tests, including header-only early rejection and the

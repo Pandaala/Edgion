@@ -5,14 +5,11 @@ impl OpenidConnect {
         self.client.clone()
     }
 
-    pub(super) fn admit_idp_url(url: &str) -> Result<(), OidcVerifyError> {
-        super::admit_oidc_outbound_url(url).map_err(|_| OidcVerifyError::Other {
-            status: 502,
-            message: BAD_GATEWAY_BODY.to_string(),
-        })
+    pub(super) fn admit_idp_url(url: &str, operation: OidcOperation) -> Result<(), OidcVerifyError> {
+        super::admit_oidc_outbound_url(url).map_err(|failure| OidcVerifyError::dependency(operation, failure))
     }
 
-    pub(super) async fn get_or_fetch_discovery(&self) -> Result<Arc<DiscoveryDocument>, JwksProviderError> {
+    pub(super) async fn get_or_fetch_discovery(&self) -> Result<Arc<DiscoveryDocument>, OidcDependencyError> {
         self.jwks_provider.get_or_fetch_discovery().await
     }
 
@@ -29,12 +26,12 @@ impl OpenidConnect {
     ///   fail-CLOSE: `jwks-unreachable`. Recorded here, well before the error
     ///   propagates up through `verify_jwt_token_internal` → `verify_token` →
     ///   `run_request`'s match on `OidcVerifyError`, which is the only place
-    ///   that turns it into a self-written response.
+    ///   that projects it into a fixed runtime response.
     pub(super) async fn get_or_fetch_jwks(
         &self,
         session: &mut dyn PluginSession,
         force_refresh: bool,
-    ) -> Result<Arc<JwkSet>, JwksProviderError> {
+    ) -> Result<Arc<JwkSet>, OidcDependencyError> {
         match self.jwks_provider.get_jwks(force_refresh).await {
             Ok(lookup) => {
                 if lookup.served_stale {

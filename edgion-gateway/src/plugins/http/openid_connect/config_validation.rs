@@ -42,16 +42,10 @@ impl OpenidConnect {
             return Ok(configured.to_string());
         }
         if !configured.starts_with('/') {
-            return Err(OidcVerifyError::Other {
-                status: 401,
-                message: "Invalid redirectUri".to_string(),
-            });
+            return Err(OidcVerifyError::Auth(AuthFailure::InvalidRedirect));
         }
 
-        let host = Self::request_host(session).ok_or(OidcVerifyError::Other {
-            status: 401,
-            message: "Missing host header for redirect".to_string(),
-        })?;
+        let host = Self::request_host(session).ok_or(OidcVerifyError::Auth(AuthFailure::MissingRedirectHost))?;
         let scheme = Self::request_scheme(session);
         Ok(format!("{}://{}{}", scheme, host, configured))
     }
@@ -107,10 +101,7 @@ impl OpenidConnect {
 
         for required in required_scopes {
             if !available.contains(required.as_str()) {
-                return Err(OidcVerifyError::Other {
-                    status: 403,
-                    message: "Insufficient scope".to_string(),
-                });
+                return Err(OidcVerifyError::Auth(AuthFailure::InsufficientScope));
             }
         }
 
@@ -158,10 +149,7 @@ impl OpenidConnect {
 
         if let Some(nbf) = claims.get("nbf").and_then(|v| v.as_u64()) {
             if now.saturating_add(leeway) < nbf {
-                return Err(OidcVerifyError::Other {
-                    status: 401,
-                    message: "Token not yet valid".to_string(),
-                });
+                return Err(OidcVerifyError::Auth(AuthFailure::NotYetValid));
             }
         }
 
@@ -174,18 +162,12 @@ impl OpenidConnect {
             None => default_issuer.is_none_or(|expected| claims.get("iss").and_then(|v| v.as_str()) == Some(expected)),
         };
         if !issuer_matches {
-            return Err(OidcVerifyError::Other {
-                status: 401,
-                message: "Invalid token issuer".to_string(),
-            });
+            return Err(OidcVerifyError::Auth(AuthFailure::InvalidIssuer));
         }
 
         if let Some(ref audiences) = self.config.audiences {
             if !audiences.is_empty() && !Self::claims_audience_matches(claims.get("aud"), audiences) {
-                return Err(OidcVerifyError::Other {
-                    status: 401,
-                    message: "Invalid token audience".to_string(),
-                });
+                return Err(OidcVerifyError::Auth(AuthFailure::InvalidAudience));
             }
         }
 

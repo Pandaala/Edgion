@@ -40,7 +40,9 @@ Other backends—LinkSys providers (Redis, etcd, Elasticsearch, Kafka), ext_proc
 > OIDC side — only for the discovery fetch reached from the interactive login redirect and the
 > callback handler. Every other OIDC outbound call (token exchange, refresh, revoke, introspection,
 > userinfo, and the discovery fetch reached from any of them) records the
-> `edgion_gateway_outbound_tls_san_mismatch_total` counter and stamps no per-request status. A SAN
+> `edgion_gateway_outbound_tls_san_mismatch_total` counter and stamps no per-request status.
+> OIDC additionally carries static operation/failure categories to PluginLog diagnostics;
+> these omit endpoint URLs and raw SAN reasons and do not change best-effort fallback. A SAN
 > mismatch is a configuration error that fails every request identically, so the counter is the
 > intended alerting signal on all paths.
 

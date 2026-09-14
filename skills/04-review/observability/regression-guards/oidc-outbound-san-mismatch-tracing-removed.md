@@ -1,6 +1,6 @@
 ---
 name: oidc-outbound-san-mismatch-tracing-removed
-description: Use when reviewing OIDC outbound TLS SAN-pinning findings that report (or propose re-adding) a `tracing::warn!` in `note_oidc_san_mismatch` / the `handle_callback` discovery arm; covers the Iron-rule-3 removal and why the counter is the only channel on the five PluginLog-less outbound call paths.
+description: Review the prohibition on OIDC request-path SAN tracing, handshake-owned metrics, and data-free access-log diagnostics; preserves historical EDG-GW-001 evidence.
 status: fixed
 finding_id: EDG-GW-001
 closed: 2026-07-26
@@ -10,6 +10,22 @@ knowledge_type: regression-guards
 # OIDC outbound SAN-mismatch hot-path `tracing::warn!` removed — FIXED
 
 ## Conclusion
+
+Request-path SAN failures must not emit `tracing` at any level. The dependency
+redaction correction now carries data-free operation/failure classifications to
+PluginLog-owning callers, including best-effort userinfo and revocation. It
+supersedes the historical metric-only scope and signature-cascade rejection below.
+Raw SAN reasons and formatted discovery errors are no longer permitted in logs.
+The existing SAN mismatch metric remains owned by actual transport failure
+classification: replaying a cached error does not count another handshake.
+See [OIDC dependency error projection](../../oidc/regression-guards/dependency-error-projection.md).
+
+## Historical EDG-GW-001 evidence (2026-07-26)
+
+The following records the original narrow tracing removal and its then-current
+API limitations, not a prohibition on the later authorized typed-error work.
+Historical scanner coverage and source signatures must be rechecked against the
+current tree; the no-request-tracing rule remains authoritative.
 
 `note_oidc_san_mismatch` (`edgion-gateway/src/plugins/http/openid_connect/token_exchange.rs`) and
 the `handle_callback` discovery-error arm (`callback.rs`) emitted `tracing::warn!` on the request

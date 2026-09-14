@@ -61,7 +61,7 @@ impl OpenidConnect {
         &self,
         session: &mut dyn PluginSession,
         status: u16,
-        body: &str,
+        body: &'static str,
     ) -> OidcResult<()> {
         let mut resp = ResponseHeader::build(status, None)?;
         resp.insert_header("Content-Type", "text/plain")?;
@@ -73,17 +73,26 @@ impl OpenidConnect {
         Ok(())
     }
 
-    /// Dispatch an `OidcVerifyError` to the matching error response: an upstream-side
-    /// failure (`http_status() == 502`) becomes a plain 502, anything else a 401.
-    /// This centralizes the 502-vs-401 decision so it cannot drift between the
-    /// callback and request-filter error paths. The caller still owns logging and
-    /// the `PluginRunningResult` it returns.
-    pub(super) async fn send_oidc_error(&self, session: &mut dyn PluginSession, err: &OidcVerifyError) {
+    /// Fixed dependency replies belong to the runtime; dynamic Bearer challenges
+    /// are written here. Callback authentication errors retain their 401 projection.
+    pub(super) async fn send_oidc_error(
+        &self,
+        session: &mut dyn PluginSession,
+        err: &OidcVerifyError,
+    ) -> PluginRunningResult {
         if err.http_status() == 502 {
-            let _ = self.send_plain_error(session, 502, &err.user_message()).await;
+            Self::dependency_response()
         } else {
             self.apply_auth_failure_delay().await;
-            let _ = self.send_unauthorized(session, &err.user_message()).await;
+            let _ = self.send_unauthorized(session, err.user_message()).await;
+            PluginRunningResult::ErrTerminateRequest
+        }
+    }
+
+    pub(super) fn dependency_response() -> PluginRunningResult {
+        PluginRunningResult::ErrResponse {
+            status: 502,
+            body: Some(Bytes::from_static(b"502 Bad Gateway")),
         }
     }
 
@@ -117,14 +126,13 @@ impl OpenidConnect {
             .authorization_endpoint
             .as_deref()
             .filter(|v| !v.is_empty())
-            .ok_or(OidcVerifyError::Other {
-                status: 502,
-                message: "OIDC discovery document missing authorization_endpoint".to_string(),
-            })?;
+            .ok_or(OidcVerifyError::dependency(
+                OidcOperation::Authorization,
+                OidcDependencyFailure::MissingEndpoint,
+            ))?;
 
-        let mut auth_url = Url::parse(authorization_endpoint).map_err(|e| OidcVerifyError::Other {
-            status: 502,
-            message: format!("Invalid authorization endpoint URL: {}", e),
+        let mut auth_url = Url::parse(authorization_endpoint).map_err(|_| {
+            OidcVerifyError::dependency(OidcOperation::Authorization, OidcDependencyFailure::InvalidEndpoint)
         })?;
 
         let redirect_uri = self.resolve_redirect_uri(session)?;
@@ -180,11 +188,8 @@ impl OpenidConnect {
             created_at: Self::now_unix_secs(),
         };
         let cipher = self.session_cipher().ok_or_else(Self::credential_failure)?;
-        let cookie_value =
-            Self::encode_signed_cookie_payload(&cookie_payload, cipher).map_err(|_| OidcVerifyError::Other {
-                status: 502,
-                message: BAD_GATEWAY_BODY.to_string(),
-            })?;
+        let cookie_value = Self::encode_signed_cookie_payload(&cookie_payload, cipher)
+            .map_err(|_| OidcVerifyError::SessionEncoding)?;
         let cookie_suffix = self.build_cookie_attr_suffix(session, 300, self.callback_path());
         let cookie = format!("{}={}{}", Self::state_cookie_name(), cookie_value, cookie_suffix);
 
@@ -201,8 +206,7 @@ impl OpenidConnect {
         if self.session_cipher().is_none() {
             plugin_log.push_err("session credential unavailable");
             let err = Self::credential_failure();
-            self.send_oidc_error(session, &err).await;
-            return PluginRunningResult::ErrTerminateRequest;
+            return self.send_oidc_error(session, &err).await;
         }
 
         let Some(raw_state_cookie) = session.get_cookie(Self::state_cookie_name()) else {
@@ -218,8 +222,7 @@ impl OpenidConnect {
         let state_cookie: AuthorizationStateCookie = match decoded_state {
             Ok(v) => v,
             Err(err) => {
-                self.send_oidc_error(session, &err).await;
-                return PluginRunningResult::ErrTerminateRequest;
+                return self.send_oidc_error(session, &err).await;
             }
         };
 
@@ -238,21 +241,18 @@ impl OpenidConnect {
         let discovery = match self.get_or_fetch_discovery().await {
             Ok(d) => d,
             Err(e) => {
-                if let JwksProviderError::TlsSanMismatch { ref reason } = e {
+                if e.failure == OidcDependencyFailure::TlsSanMismatch {
                     session.record_error(edgion_resources::EdgionErrorCode::OutboundTlsSanMismatch);
-                    plugin_log.push_err("outbound tls san mismatch");
-                    plugin_log.push_fmt("san {}", la![reason.as_str()]);
                 }
-                let _ = self.send_plain_error(session, 502, "Bad Gateway").await;
-                return PluginRunningResult::ErrTerminateRequest;
+                plugin_log.push_err(e.log_tag());
+                return Self::dependency_response();
             }
         };
 
         let redirect_uri = match self.resolve_redirect_uri(session) {
             Ok(v) => v,
             Err(err) => {
-                self.send_oidc_error(session, &err).await;
-                return PluginRunningResult::ErrTerminateRequest;
+                return self.send_oidc_error(session, &err).await;
             }
         };
 
@@ -263,8 +263,7 @@ impl OpenidConnect {
             Ok(v) => v,
             Err(err) => {
                 plugin_log.push_err(err.response_log_tag_or("token exchange fail"));
-                self.send_oidc_error(session, &err).await;
-                return PluginRunningResult::ErrTerminateRequest;
+                return self.send_oidc_error(session, &err).await;
             }
         };
 
@@ -285,8 +284,7 @@ impl OpenidConnect {
             };
             if let Err(err) = self.validate_id_token_nonce(session, id_token, expected_nonce).await {
                 plugin_log.push_err(err.log_tag());
-                self.send_oidc_error(session, &err).await;
-                return PluginRunningResult::ErrTerminateRequest;
+                return self.send_oidc_error(session, &err).await;
             }
         }
 
@@ -294,8 +292,7 @@ impl OpenidConnect {
             Ok(v) => v,
             Err(err) => {
                 plugin_log.push_err(err.log_tag());
-                self.send_oidc_error(session, &err).await;
-                return PluginRunningResult::ErrTerminateRequest;
+                return self.send_oidc_error(session, &err).await;
             }
         };
 
@@ -332,13 +329,11 @@ impl OpenidConnect {
             Ok(v) => v,
             Err(()) if self.session_cipher().is_none() => {
                 let err = Self::credential_failure();
-                self.send_oidc_error(session, &err).await;
-                return PluginRunningResult::ErrTerminateRequest;
+                return self.send_oidc_error(session, &err).await;
             }
             Err(()) => {
                 plugin_log.push_err("session encode fail");
-                let _ = self.send_plain_error(session, 502, BAD_GATEWAY_BODY).await;
-                return PluginRunningResult::ErrTerminateRequest;
+                return Self::dependency_response();
             }
         };
 

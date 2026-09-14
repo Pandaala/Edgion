@@ -260,13 +260,25 @@ client-authenticated IdP endpoint do. The access log records only a fixed failur
 category and does not include Secret identity or content.
 
 IdP transport, response-decoding, and request-time TLS failures are independent
-dependency failures and are not governed by this credential-401 contract. Their
-wire response follows the endpoint-specific error mapping; inspect the access-log
-failure category rather than relying on one uniform status or body. Declared TLS
-CA and mTLS material is consumed by the generation's canonical outbound client;
+dependency failures and are not governed by this credential-401 contract.
+When these failures terminate authentication, the HTTP response is the fixed
+`502 Bad Gateway`, without `WWW-Authenticate` or `authFailureDelayMs`. Responses
+and access logs omit IdP URLs, provider HTTP statuses, response bodies, and parser
+error text. Use the static access-log failure category to identify the operation
+and cause, then inspect the IdP for details. Declared TLS CA and mTLS material is
+consumed by the generation's canonical outbound client;
 unresolved or malformed declared material follows the construction-time
 fail-closed behavior described above, never these authentication-credential
 fallback rules.
+
+This error-response policy preserves authentication fallbacks: Auto mode keeps
+the original 401 when introspection fails after an invalid JWT format; session
+refresh failures still follow existing-token verification and `unauthAction`.
+JWKS can still serve a stale cached set, userinfo can fall back to verified
+claims, and failed revocation does not prevent local logout. Insufficient scope
+on a Bearer request still returns 403 with the `insufficient_scope` challenge.
+On gRPC routes, the Gateway's standard response adapter maps dependency 502
+rejections to `INTERNAL` with the fixed `grpc-message` `502 Bad Gateway`.
 
 ## Outbound egress
 
@@ -286,7 +298,7 @@ Every OpenID Connect outbound call — configured discovery and discovered JWKS,
 - `401 Unauthorized - Missing bearer token`
   - `bearerOnly=true` and the request does not carry `Authorization: Bearer ...`
 - IdP dependency failure
-  - Transport, response-decoding, and outbound TLS failures use endpoint-specific status/body mappings; inspect the access-log failure category
+  - Dependency failures that terminate the request return the fixed `502 Bad Gateway`; inspect the access-log operation and static failure category, and the existing outbound TLS SAN mismatch metric for SAN verification failures
 - `Session cookie exceeds configured size limit`
   - Reduce claims/header pass-through, or reduce the data stored in the session
 

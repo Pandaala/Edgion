@@ -1028,7 +1028,10 @@ async fn test_logout_end_session_includes_id_token_hint_when_available() {
     let result = plugin.run_request(&mut session, &mut log).await;
     assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
     assert!(plugin.access_token_cache.get("session-ref").is_none());
-    assert_eq!(plugin_log_entries(&log), vec!["logout handled"]);
+    assert_eq!(
+        plugin_log_entries(&log),
+        vec!["err: revocation credential unavailable", "logout handled"]
+    );
 }
 
 #[tokio::test]
@@ -1403,7 +1406,7 @@ async fn test_run_request_cache_miss_waits_only_one_singleflight_timeout() {
     assert_eq!(result, PluginRunningResult::GoodNext);
     assert_eq!(
         plugin_log_entries(&log),
-        vec!["err: token refresh fail", "err: session no token", "no token; pass"]
+        vec!["err: refresh wait timeout", "err: session no token", "no token; pass"]
     );
     assert!(cookies.lock().is_none());
 }
@@ -1607,7 +1610,7 @@ async fn session_refresh_timeout_dye_reaches_jwks_without_bearer_jwks_or_nonce()
             assert_eq!(result, PluginRunningResult::GoodNext);
             assert_eq!(
                 plugin_log_entries(&log),
-                vec!["err: token refresh fail", "no token; pass"]
+                vec!["err: refresh wait timeout", "no token; pass"]
             );
             assert!(cookies.lock().is_none());
         }
@@ -1704,16 +1707,13 @@ fn test_should_auto_fallback_to_introspection() {
         &super::OidcVerifyError::InvalidFormat
     ));
     assert!(!OpenidConnect::should_auto_fallback_to_introspection(
-        &super::OidcVerifyError::Other {
-            status: 401,
-            message: "Invalid token signature".to_string()
-        }
+        &super::OidcVerifyError::Auth(super::AuthFailure::InvalidSignature)
     ));
     assert!(!OpenidConnect::should_auto_fallback_to_introspection(
-        &super::OidcVerifyError::Other {
-            status: 502,
-            message: "Invalid token format".to_string()
-        }
+        &super::OidcVerifyError::dependency(
+            super::OidcOperation::Introspection,
+            super::OidcDependencyFailure::Transport
+        )
     ));
 }
 
@@ -1723,10 +1723,10 @@ fn test_is_refresh_wait_timeout() {
         &super::OidcVerifyError::RefreshSingleflightTimeout
     ));
     assert!(!OpenidConnect::is_refresh_wait_timeout(
-        &super::OidcVerifyError::Other {
-            status: 502,
-            message: "other".to_string()
-        }
+        &super::OidcVerifyError::dependency(
+            super::OidcOperation::Introspection,
+            super::OidcDependencyFailure::Transport
+        )
     ));
 }
 
@@ -1775,10 +1775,7 @@ fn test_validate_claims_from_value_returns_expired_when_exp_passed() {
 
 #[test]
 fn test_validate_claims_from_value_preserves_issuer_tristate() {
-    let invalid_issuer = || super::OidcVerifyError::Other {
-        status: 401,
-        message: "Invalid token issuer".to_string(),
-    };
+    let invalid_issuer = || super::OidcVerifyError::Auth(super::AuthFailure::InvalidIssuer);
 
     let mut configured = base_config();
     configured.issuers = Some(vec!["https://configured.example.com".to_string()]);
@@ -1856,10 +1853,7 @@ fn test_validate_required_scopes_ignores_non_strings_and_reports_missing_scope()
     let mut cfg = base_config();
     cfg.required_scopes = Some(vec!["api:read".to_string(), "api:write".to_string()]);
     let plugin = OpenidConnect::new(&cfg, "default".to_string());
-    let insufficient_scope = || super::OidcVerifyError::Other {
-        status: 403,
-        message: "Insufficient scope".to_string(),
-    };
+    let insufficient_scope = || super::OidcVerifyError::Auth(super::AuthFailure::InsufficientScope);
 
     for claims in [
         json!({"scope": 7, "scp": ["api:read", "api:read", false, null]}),
@@ -1883,10 +1877,7 @@ fn test_validate_required_scopes_only_applies_to_bearer_only_mode() {
     let plugin_bearer = OpenidConnect::new(&cfg_bearer, "default".to_string());
     assert_eq!(
         plugin_bearer.validate_required_scopes(&json!({})),
-        Err(super::OidcVerifyError::Other {
-            status: 403,
-            message: "Insufficient scope".to_string()
-        })
+        Err(super::OidcVerifyError::Auth(super::AuthFailure::InsufficientScope))
     );
 }
 
@@ -2366,7 +2357,12 @@ async fn test_fetch_userinfo_json_returns_none_without_userinfo_endpoint() {
         })
         .await;
 
-    assert_eq!(plugin.fetch_userinfo_json("access-token").await, None);
+    assert_eq!(
+        plugin
+            .fetch_userinfo_json("access-token", &mut PluginLog::new("OpenidConnect"))
+            .await,
+        None
+    );
 }
 
 #[test]
@@ -2727,7 +2723,7 @@ async fn oidc_egress_allows_loopback_in_unit_tests() {
 fn oidc_admit_blocks_link_local_ip_literal_url() {
     let err = super::admit_oidc_outbound_url("http://169.254.169.254/latest/meta-data/")
         .expect_err("link-local IP literal must be classified before reqwest dials");
-    assert_eq!(err, "egress policy blocked destination");
+    assert_eq!(err, super::OidcDependencyFailure::DestinationRejected);
 }
 
 #[test]
@@ -2757,7 +2753,7 @@ async fn oidc_discovery_fetch_rejects_link_local_ip_literal() {
         .get_or_fetch_discovery()
         .await
         .expect_err("link-local discovery URL must fail closed before dial");
-    assert_eq!(err.to_string(), "egress policy blocked destination");
+    assert_eq!(err.to_string(), "discovery destination denied");
 }
 
 // -----------------------------------------------------------------------

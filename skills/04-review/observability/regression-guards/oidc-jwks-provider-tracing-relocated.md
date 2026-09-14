@@ -11,6 +11,19 @@ knowledge_type: regression-guards
 
 ## Conclusion
 
+The request-reachable provider remains free of tracing. Only the background
+prewarm caller logs discovery success, with a static message and component label:
+issuer, JWKS URI, discovery URL, and raw dependency errors are not logged.
+Discovery failures now have a 5-second backoff and data-free error classifications;
+see [dependency error projection](../../oidc/regression-guards/dependency-error-projection.md)
+and [discovery failure backoff](../../oidc/regression-guards/discovery-failure-backoff.md).
+
+## Historical relocation evidence (2026-07-26)
+
+The original payloads and scanner behavior below describe the July change, not
+current authorization to log endpoint values or a claim that discovery lacks
+backoff. The cold/hot ownership rationale remains applicable.
+
 `edgion-gateway/src/plugins/http/openid_connect/jwks_provider.rs` held five `tracing::*` sites
 inside `get_or_fetch_discovery` / `get_jwks`, both request-path reachable via lazy fetch. All five
 are gone from the provider:

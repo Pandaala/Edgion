@@ -39,7 +39,9 @@ Phase 2 在 Phase 1 schema 对齐的基础上，通过**启用 OIDC 和 LDAP 插
 > **范围说明。** `OutboundTlsSanMismatch` 会出现在 LDAP bind 的访问日志中；OIDC 一侧只有交互式登录
 > 跳转和 callback 处理这两个入口触发的 discovery 请求会写入该状态。其余所有 OIDC 出站调用
 > （token-exchange、refresh、revoke、introspection、userinfo，以及从这些路径触发的 discovery 请求）
-> 只记录 `edgion_gateway_outbound_tls_san_mismatch_total` 计数器，不写入单次请求的状态。
+> 记录 `edgion_gateway_outbound_tls_san_mismatch_total` 计数器，不写入单次请求的状态。
+> OIDC 还会通过 PluginLog 记录静态的操作与失败类别，不包含端点 URL 或原始 SAN 原因，
+> 也不改变原有的尽力执行与回退行为。
 > SAN 不匹配属于配置错误，会使每个请求以相同方式失败，因此该计数器是所有路径上的预期告警信号。
 
 ## 操作员操作必需

@@ -217,10 +217,10 @@ async fn auto_introspection_keeps_401_and_response_diagnostic() {
         .unwrap_err();
     assert_eq!(error.http_status(), 401);
     assert_eq!(error.user_message(), "Invalid token format");
-    assert_eq!(error.log_tag(), "auth response too large");
+    assert_eq!(error.log_tag(), "introspect response too large");
     assert_eq!(
         error.response_log_tag_or("token verify fail"),
-        "auth response too large"
+        "introspect response too large"
     );
 }
 
@@ -262,11 +262,11 @@ async fn declared_oversize_is_rejected_before_body_arrives() {
         .send()
         .await
         .unwrap();
-    let result = super::token_exchange::read_auth_response::<Value>(response).await;
+    let result = super::token_exchange::read_auth_response::<Value>(response, OidcOperation::TokenExchange).await;
     let _ = release.send(());
     server.await.unwrap();
     assert_eq!(
         result.unwrap_err(),
-        OidcVerifyError::AuthResponse(super::super::error::AuthResponseFailure::TooLarge)
+        OidcVerifyError::dependency(OidcOperation::TokenExchange, OidcDependencyFailure::ResponseTooLarge)
     );
 }

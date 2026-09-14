@@ -247,9 +247,19 @@ session secret 少于 32 字节，才会在 `authFailureDelayMs` 延迟后返回
 端点时才需要。访问日志只记录固定失败分类，不包含 Secret 身份或内容。
 
 IdP 传输、响应解码和请求期间的 TLS 失败属于独立的依赖故障，不受上述凭据 401 契约约束。
-其 wire 响应遵循各端点自己的错误映射；应检查访问日志中的失败分类，而不是依赖统一的状态码
-或响应体。已声明的 TLS CA 和 mTLS 材料由该 generation 的规范 outbound client 消费；
+当这些故障需要终止认证请求时，HTTP 响应为固定的 `502 Bad Gateway`，不附加
+`WWW-Authenticate`，也不执行 `authFailureDelayMs`。响应和访问日志均不包含 IdP
+URL、提供方 HTTP 状态、响应正文或解析器错误文本。请通过访问日志中的静态失败分类
+定位失败操作及原因，并在 IdP 侧检查具体故障。已声明的 TLS CA 和 mTLS 材料由该
+generation 的规范 outbound client 消费；
 未解析或格式错误的声明材料遵循前述构造期 fail-close 行为，不会走上述认证凭据回退逻辑。
+
+该错误响应策略不改变认证回退规则：Auto 模式下，JWT 格式无效后 introspection 仍失败，
+保持原来的 401；会话刷新失败仍按旧 token 的验证结果与 `unauthAction` 处理。JWKS
+已有旧缓存时仍可降级使用，userinfo 失败仍可回退到已验证 claims，撤销失败仍继续完成
+本地注销。Bearer 请求权限不足仍返回带 `insufficient_scope` challenge 的 403。
+在 gRPC 路由上，网关的标准响应适配器会将依赖故障的 502 映射为 `INTERNAL`，
+并使用固定的 `grpc-message` 文案 `502 Bad Gateway`。
 
 ## 出站流量策略
 
@@ -269,7 +279,7 @@ IdP 传输、响应解码和请求期间的 TLS 失败属于独立的依赖故�
 - `401 Unauthorized - Missing bearer token`
   - `bearerOnly=true` 且请求未带 `Authorization: Bearer ...`
 - IdP 依赖故障
-  - 传输、响应解码和 outbound TLS 失败使用各端点自己的状态码及响应体映射；请检查访问日志中的失败分类
+  - 需要终止请求的依赖故障返回固定的 `502 Bad Gateway`；请检查访问日志中的失败操作及静态原因分类，SAN 校验失败还可查看既有出站 TLS SAN mismatch 指标
 - `Session cookie exceeds configured size limit`
   - 减少 claims/header 透传，或调低 session 内数据量
 

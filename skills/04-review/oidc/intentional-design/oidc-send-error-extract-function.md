@@ -1,6 +1,6 @@
 ---
 name: oidc-send-error-extract-function
-description: Use when reviewing openid_connect "handle_callback repeats the 502-vs-401 error dispatch N times / extract a send_oidc_error helper / collapse the if http_status()==502 {plain} else {unauth} blocks" findings (F-010). The leaf helper is already extracted; the request_filter_impl.rs:187 fall-through site must NOT be folded into it.
+description: Review OIDC shared error response projection without collapsing session authentication fall-through; includes the historical F-010 extraction rationale.
 knowledge_type: intentional-design
 ---
 
@@ -10,6 +10,24 @@ knowledge_type: intentional-design
 **Linked issue**: plugins-http F-010 (extract-function / readability) — closed, fixed.
 
 ## Conclusion
+
+The shared response projection remains useful, but the dependency-redaction
+correction supersedes F-010's original helper signature and its restriction on
+returning `PluginRunningResult`. Fixed dependency replies now return `ErrResponse`;
+dynamic authentication replies use the canonical auth writer and terminate even
+when delivery fails. Safe diagnostic projection may be shared without moving the
+caller's authentication/fallback decisions into the helper.
+
+The session refresh/verification arm must still fall through to `unauthAction`
+for authentication failures. Callback scope failures retain 401 while ordinary
+Bearer scope failures retain 403. See
+[dependency error projection](../regression-guards/dependency-error-projection.md).
+
+## Historical F-010 decision (2026-05-26)
+
+The descriptions and line numbers below record the original extraction, not the
+current error API. In particular, the old prohibition on returning the runtime
+result is superseded; the prohibition on collapsing distinct fall-through is not.
 
 The repeated `if err.http_status() == 502 { send_plain_error(502) } else { send_unauthorized() }`
 dispatch in the OIDC plugin is now centralized in

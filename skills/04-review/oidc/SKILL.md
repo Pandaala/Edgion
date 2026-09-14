@@ -20,6 +20,7 @@ before applying a decision to current code.
 
 ## Regression guards
 
+- [OIDC dependency error projection](regression-guards/dependency-error-projection.md)
 - [OIDC authentication response byte caps](regression-guards/authentication-response-byte-caps.md)
 
 - [OpenID Connect Dial-time Egress Policy — FIXED](regression-guards/dial-time-egress-policy.md)

@@ -10,23 +10,17 @@ impl OpenidConnect {
         _session: &mut dyn PluginSession,
         token: &str,
     ) -> VerifyResult<Value> {
-        let discovery = self
-            .get_or_fetch_discovery()
-            .await
-            .map_err(|_| OidcVerifyError::Other {
-                status: 502,
-                message: "Bad Gateway".to_string(),
-            })?;
+        let discovery = self.get_or_fetch_discovery().await.map_err(OidcVerifyError::from)?;
         let endpoint = self
             .config
             .introspection_endpoint
             .clone()
             .filter(|v| !v.is_empty())
             .or_else(|| discovery.introspection_endpoint.clone().filter(|v| !v.is_empty()))
-            .ok_or(OidcVerifyError::Other {
-                status: 502,
-                message: "OIDC introspection endpoint is not configured".to_string(),
-            })?;
+            .ok_or(OidcVerifyError::dependency(
+                OidcOperation::Introspection,
+                OidcDependencyFailure::MissingEndpoint,
+            ))?;
 
         if let Some(cached_claims) = self.get_cached_introspection_claims(token).await {
             self.validate_claims_from_value(&cached_claims, Some(discovery.issuer.as_str()))?;
@@ -34,7 +28,7 @@ impl OpenidConnect {
             return Ok(cached_claims);
         }
 
-        Self::admit_idp_url(&endpoint)?;
+        Self::admit_idp_url(&endpoint, OidcOperation::Introspection)?;
         let client = self.http_client();
         let base_request = client
             .post(&endpoint)
@@ -55,26 +49,20 @@ impl OpenidConnect {
             }
         };
 
-        let resp = request.send().await.map_err(|e| {
-            super::token_exchange::note_oidc_san_mismatch(&e);
-            OidcVerifyError::Other {
-                status: 502,
-                message: "Bad Gateway".to_string(),
-            }
-        })?;
+        let resp = request
+            .send()
+            .await
+            .map_err(|error| OidcDependencyError::transport(OidcOperation::Introspection, &error, "openid_connect"))?;
         if !resp.status().is_success() {
-            return Err(OidcVerifyError::Other {
-                status: 502,
-                message: format!("Introspection request failed with status {}", resp.status()),
-            });
+            return Err(OidcVerifyError::dependency(
+                OidcOperation::Introspection,
+                OidcDependencyFailure::HttpStatus,
+            ));
         }
 
-        let claims: Value = super::token_exchange::read_auth_response(resp).await?;
+        let claims: Value = super::token_exchange::read_auth_response(resp, OidcOperation::Introspection).await?;
         if !claims.get("active").and_then(|v| v.as_bool()).unwrap_or(false) {
-            return Err(OidcVerifyError::Other {
-                status: 401,
-                message: "Inactive token".to_string(),
-            });
+            return Err(OidcVerifyError::Auth(AuthFailure::InactiveToken));
         }
 
         self.validate_claims_from_value(&claims, Some(discovery.issuer.as_str()))?;
@@ -97,22 +85,17 @@ impl OpenidConnect {
         let (expected_alg, allowed_algs) = resolve_algorithm_policy(
             self.config.token_signing_alg.as_deref(),
             self.config.allowed_signing_algs.as_deref(),
-        )
-        .map_err(|(status, message)| OidcVerifyError::Other { status, message })?;
-        validate_token_alg(token_alg, expected_alg, &allowed_algs)
-            .map_err(|(status, message)| OidcVerifyError::Other { status, message })?;
+        )?;
+        validate_token_alg(token_alg, expected_alg, &allowed_algs)?;
 
         let build_decoding_key = |jwk: &jsonwebtoken::jwk::Jwk| {
-            DecodingKey::from_jwk(jwk).map_err(|e| OidcVerifyError::Other {
-                status: 401,
-                message: format!("Failed to build decoding key: {}", e),
-            })
+            DecodingKey::from_jwk(jwk).map_err(|_| OidcVerifyError::Auth(AuthFailure::InvalidKey))
         };
         let decoding_key = {
             let jwks = self
                 .get_or_fetch_jwks(session, false)
                 .await
-                .map_err(|e| OidcVerifyError::JwksFetch(e.to_string()))?;
+                .map_err(OidcVerifyError::from)?;
 
             match select_jwk(&header, &jwks, token_alg) {
                 Ok(jwk) => build_decoding_key(jwk)?,
@@ -121,28 +104,17 @@ impl OpenidConnect {
                     let refreshed_jwks = self
                         .get_or_fetch_jwks(session, true)
                         .await
-                        .map_err(|e| OidcVerifyError::JwksFetch(format!("refresh on kid miss: {}", e)))?;
-                    let jwk = select_jwk(&header, &refreshed_jwks, token_alg).map_err(|_| OidcVerifyError::Other {
-                        status: 401,
-                        message: "No matching JWK found for token kid".to_string(),
-                    })?;
+                        .map_err(OidcVerifyError::from)?;
+                    let jwk = select_jwk(&header, &refreshed_jwks, token_alg)
+                        .map_err(|_| OidcVerifyError::Auth(AuthFailure::MissingKey))?;
                     build_decoding_key(jwk)?
                 }
                 Err(JwkSelectError::NoSuitableKey) => {
-                    return Err(OidcVerifyError::Other {
-                        status: 401,
-                        message: "No suitable JWK for token algorithm".to_string(),
-                    });
+                    return Err(OidcVerifyError::Auth(AuthFailure::NoSuitableKey));
                 }
             }
         };
-        let discovery = self
-            .get_or_fetch_discovery()
-            .await
-            .map_err(|_| OidcVerifyError::Other {
-                status: 502,
-                message: "Bad Gateway".to_string(),
-            })?;
+        let discovery = self.get_or_fetch_discovery().await.map_err(OidcVerifyError::from)?;
 
         let mut validation = Validation::new(token_alg);
         validation.leeway = self.config.clock_skew_seconds;
@@ -285,10 +257,7 @@ impl OpenidConnect {
             .await?;
         let actual_nonce = claims.get("nonce").and_then(|v| v.as_str());
         if actual_nonce != Some(expected_nonce) {
-            return Err(OidcVerifyError::Other {
-                status: 401,
-                message: "Invalid ID token nonce".to_string(),
-            });
+            return Err(OidcVerifyError::Auth(AuthFailure::InvalidNonce));
         }
         Ok(())
     }
