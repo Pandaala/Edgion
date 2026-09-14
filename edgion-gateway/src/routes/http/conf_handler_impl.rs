@@ -25,6 +25,20 @@ type RouteRulesPair = (Vec<Arc<HttpRouteRuleUnit>>, Vec<Arc<HttpRouteRuleUnit>>)
 /// Domain -> (normal_routes, regex_routes) mapping
 type DomainRouteRulesMap = HashMap<DomainStr, RouteRulesPair>;
 
+fn canonicalize_unchanged_routes(
+    current: &dashmap::DashMap<String, Arc<HTTPRoute>>,
+    incoming: &mut HashMap<String, Arc<HTTPRoute>>,
+) {
+    for (key, route) in incoming {
+        if let Some(old) = current
+            .get(key)
+            .filter(|old| crate::plugins::publication::same_source(old.value(), route))
+        {
+            *route = Arc::clone(old.value());
+        }
+    }
+}
+
 fn hostname_table_or_fail_closed(
     result: Result<RadixHostnameMatcher<RouteRules>, impl Display>,
     catch_all_routes: Option<Arc<RouteRules>>,
@@ -107,12 +121,20 @@ impl ConfHandler<HTTPRoute> for GlobalHttpRouteManagers {
         let start_time = Instant::now();
         tracing::info!(component = "http_route_manager", cnt = data.len(), "full set start");
 
+        let mut canonical = data.clone();
+
         {
             let _guard = self.lock_rebuild();
 
+            // A conf-sync replay may deserialize an unchanged Route into a new
+            // Arc. Keep the canonical source identity shared by the route table
+            // and policy publisher so the replay does not create a false
+            // cross-generation admission window.
+            canonicalize_unchanged_routes(&self.route_cache, &mut canonical);
+
             // Step 1: Replace route cache with shared Arcs (no deep clone).
             self.route_cache.clear();
-            for (key, route) in data {
+            for (key, route) in &canonical {
                 self.route_cache.insert(key.clone(), route.clone()); // Arc clone
             }
 
@@ -128,7 +150,8 @@ impl ConfHandler<HTTPRoute> for GlobalHttpRouteManagers {
         );
         crate::plugins::publication::global_publisher().replace_routes(
             crate::plugins::publication::inputs::RouteKind::Http,
-            data.iter()
+            canonical
+                .iter()
                 .map(|(key, route)| {
                     (
                         key.clone(),
@@ -148,16 +171,6 @@ impl ConfHandler<HTTPRoute> for GlobalHttpRouteManagers {
         update: HashMap<String, Arc<HTTPRoute>>,
         remove: HashSet<String>,
     ) {
-        let policy_inputs = add
-            .iter()
-            .chain(update.iter())
-            .map(|(key, route)| {
-                (
-                    key.clone(),
-                    crate::plugins::publication::inputs::RouteInput::from_http(Arc::clone(route)),
-                )
-            })
-            .collect();
         let policy_removed = remove.clone();
         // Serialize against a concurrent Gateway-driven rebuild_all (see rebuild_lock).
         // Covers the affected-set computation, route_cache mutation, and rebuild as one
@@ -175,6 +188,8 @@ impl ConfHandler<HTTPRoute> for GlobalHttpRouteManagers {
 
         {
             let _guard = self.lock_rebuild();
+            canonicalize_unchanged_routes(&self.route_cache, &mut add_or_update);
+
             // Compute affected listeners BEFORE updating cache.
             let mut affected_listeners: HashSet<ListenerKey> = HashSet::new();
             let mut changes = HttpRouteChanges::default();
@@ -225,6 +240,15 @@ impl ConfHandler<HTTPRoute> for GlobalHttpRouteManagers {
             ms = Instant::now().saturating_duration_since(start_time).as_millis(),
             "partial update done"
         );
+        let policy_inputs = add_or_update
+            .iter()
+            .map(|(key, route)| {
+                (
+                    key.clone(),
+                    crate::plugins::publication::inputs::RouteInput::from_http(Arc::clone(route)),
+                )
+            })
+            .collect();
         crate::plugins::publication::global_publisher().update_routes(
             crate::plugins::publication::inputs::RouteKind::Http,
             policy_inputs,
@@ -2324,6 +2348,43 @@ mod tests {
         assert!(
             std::sync::Arc::ptr_eq(cached.value(), &route),
             "route_cache must store the same Arc (zero-copy), not a deep clone"
+        );
+    }
+
+    #[test]
+    fn unchanged_conf_sync_replay_keeps_route_generation_identity() {
+        let route_key = "test-canonical-replay/route1";
+        let original = Arc::new(build_route_with_lb_policy(
+            "test-canonical-replay",
+            "route1",
+            "svc1",
+            "TestExtensionKindA",
+            "header.x-id",
+        ));
+        let current = dashmap::DashMap::new();
+        current.insert(route_key.to_string(), Arc::clone(&original));
+
+        let replayed = Arc::new((*original).clone());
+        assert!(!Arc::ptr_eq(&original, &replayed));
+        let mut incoming = HashMap::from([(route_key.to_string(), replayed)]);
+
+        canonicalize_unchanged_routes(&current, &mut incoming);
+
+        assert!(
+            Arc::ptr_eq(&original, &incoming[route_key]),
+            "an unchanged replay must not manufacture a new policy-admission generation"
+        );
+
+        let mut changed = (*original).clone();
+        changed.spec.hostnames = Some(vec!["changed.example.com".to_string()]);
+        let changed = Arc::new(changed);
+        let mut incoming = HashMap::from([(route_key.to_string(), Arc::clone(&changed))]);
+
+        canonicalize_unchanged_routes(&current, &mut incoming);
+
+        assert!(
+            Arc::ptr_eq(&changed, &incoming[route_key]),
+            "a semantic Route change must keep its new generation"
         );
     }
 

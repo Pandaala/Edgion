@@ -76,7 +76,7 @@ struct ScopePlan {
     routes: Vec<Arc<HTTPRoute>>,
 }
 
-fn same_source<T: Serialize>(left: &Arc<T>, right: &Arc<T>) -> bool {
+pub(crate) fn same_source<T: Serialize>(left: &Arc<T>, right: &Arc<T>) -> bool {
     Arc::ptr_eq(left, right)
         || matches!((serde_json::to_value(left.as_ref()), serde_json::to_value(right.as_ref())), (Ok(a), Ok(b)) if a == b)
 }
