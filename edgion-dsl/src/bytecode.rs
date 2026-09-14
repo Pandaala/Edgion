@@ -343,7 +343,7 @@ pub struct JsonSelectEntry {
 pub enum Constant {
     Str(String),
     Int(i64),
-    /// Pre-compiled regex (stored as source pattern, re-compiled on deserialization)
+    /// Regex source pattern, compiled during validation and VM construction.
     Regex(String),
     /// Boolean `.matches()` regex accepted by the incremental DFA engine.
     StreamingRegex(String),

@@ -16,7 +16,7 @@ before applying a decision to current code.
 ## Regression guards
 
 - [Typed ConfigData policy fields use advisory unknown-field handling](regression-guards/configdata-typed-policy-unknown-fields-are-advisory.md)
-- [DSL Bytecode Deserialize Safety — OPEN / IN-PROGRESS](regression-guards/dsl-bytecode-deserialize-safety.md)
+- [DSL bytecode decode and post-decode validation boundaries](regression-guards/dsl-bytecode-deserialize-safety.md)
 - [LinkSys auth resolved Secrets must be cleared before resolution](regression-guards/linksys-auth-resolved-secret-clear-before-resolve.md)
 - [Plugin auth resolved credentials must be rebuilt by the Controller](regression-guards/plugin-auth-resolved-credentials-clear-before-resolve.md)
 - [Runtime-ignored fields may still have advisory diagnostics](regression-guards/runtime-ignore-does-not-mean-no-unknown-field-diagnostic.md)

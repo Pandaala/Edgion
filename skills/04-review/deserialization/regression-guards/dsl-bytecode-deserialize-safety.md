@@ -1,64 +1,112 @@
 ---
 name: dsl-bytecode-deserialize-safety
-description: Use when reviewing the DSL bytecode load path (CompiledScript::deserialize_base64); covers required size limits, recursion depth, base64 pre-validation, Constant::Regex ReDoS risk, and missing fuzz infrastructure.
+description: Use when reviewing CompiledScript::deserialize_base64, its size and serde_json depth bounds, post-decode validation, regex compilation, and robustness-test coverage.
 knowledge_type: regression-guards
 ---
 
-# DSL Bytecode Deserialize Safety — OPEN / IN-PROGRESS
+# DSL bytecode decode and post-decode validation boundaries
 
-**Status**: Open — fuzz infrastructure not yet in place; size-limit checks present but regex recompilation risk unmitigated.
-**Source TODO**: `tasks/todo/dsl-vm-rhai-research/issues/issue-19-deserialize-base64-fuzz.md`
-**Priority**: P2
+## Conclusion and scope
 
-## Conclusion
+`CompiledScript::deserialize_base64` is the lower-trust bytecode decode boundary
+shared by Controller-side validation and Gateway-side construction. It rejects an
+oversized encoded payload before base64 allocation, rejects decoded data above
+256 KiB, parses JSON with the locked serde_json recursion limit, and rejects an
+unsupported bytecode version. A successfully decoded value is not ready for
+execution: `resolve_script` passes operator-supplied bytecode through
+`Validator::validate`, and the Gateway builds a `Vm` only from that validated
+script.
 
-`CompiledScript::deserialize_base64` (`edgion-dsl/src/bytecode.rs:276-307`) is an external trust boundary: bytecode is delivered via K8s CR / gRPC and may be attacker-controlled. The path has partial length guards but lacks fuzz coverage and does not bound `Constant::Regex` recompilation, leaving ReDoS / pathological-compile risk open.
+`Constant::Regex` and `Constant::StreamingRegex` deserialize as source strings.
+Serde does not compile either regex representation. Regex compilation happens in
+the compiler for source input, in the Validator for decoded bytecode, and in
+`Vm::new` when constructing execution caches. The string-regex paths use explicit
+1 MiB `size_limit` and `dfa_size_limit` values; the streaming-regex VM cache uses
+a 1 MiB dense-DFA limit.
 
-Fix suggestions of the form "serde will handle malformed input gracefully" are **not accepted** — serde-json has a documented CVE surface and does not bound recursion depth by default.
+These controls are defense in depth for operator-controlled configuration. They
+do not prove that arbitrary input is safe against every parser, allocator, or
+future bytecode-format bug.
 
-## Core Rationale
+## Rationale and evidence
 
-**1. Trust boundary**
+The current direct-bytecode path is:
 
-Bytecode can be supplied directly in `DslConfig`; inline source is also accepted and remains serializable through config sync. Both Controller validation and Gateway construction resolve and statically validate the selected representation; the Controller is not the sole compilation trust boundary. See [the current DSL data flow](../../../01-architecture/02-gateway/dsl-engine.md#1-data-flow). Any actor with `kubectl apply` rights or access to the control plane gRPC channel can supply a crafted base64 payload. The existing length bounds (`bytecode.rs:279-296`) guard against trivially oversized input, but do not prevent:
+1. `edgion-dsl/src/script.rs::resolve_script` selects `DslConfig.bytecode` when
+   present.
+2. `edgion-dsl/src/bytecode.rs::CompiledScript::deserialize_base64` checks the
+   encoded length, decodes base64, checks the 256 KiB decoded limit, calls
+   `serde_json::from_slice`, and checks `BYTECODE_VERSION`.
+3. `resolve_script` calls `Validator::validate` before returning the artifact.
+4. `edgion-gateway/src/plugins/http/dsl/lang/vm.rs::Vm::new` builds the immutable
+   execution caches before the plugin serves requests.
 
-- Deeply nested or wide JSON that exhausts the serde-json recursion budget.
-- A `Constant::Regex` variant whose `pattern` field triggers a ReDoS during `Regex::new(...)` called inside the serde `Deserialize` impl at deserialization time.
-- A base64 string that decodes to syntactically valid JSON with a pathological structure.
+`Constant` and `CompiledScript` derive `Deserialize`; `Constant::Regex(String)`
+has no custom deserializer. The bounded string-regex compilation sites are:
 
-**2. `Constant::Regex` recompilation**
+- `edgion-dsl/src/compiler/emit.rs::Compiler::add_regex_const`;
+- `edgion-dsl/src/validator.rs::Validator::validate`;
+- `edgion-gateway/src/plugins/http/dsl/lang/vm.rs::Vm::new`.
 
-The `Constant` enum contains a `Regex` variant. When serde deserializes this variant it calls `Regex::new(pattern)` (or equivalent) on the embedded pattern string. A malicious pattern can trigger catastrophic backtracking (ReDoS) or consume unbounded memory during NFA/DFA construction. The fix requires wrapping the regex construction inside the `Deserialize` impl with `regex::RegexBuilder` size limits (`size_limit`, `dfa_size_limit`).
+The complete regex-size rationale and all three regression sites are maintained
+in [the DSL DFA-size guard](../../dsl/regression-guards/dfa-size-limit.md).
 
-**3. Fuzz infrastructure gap**
+`Cargo.lock` currently pins serde_json 1.0.151. That version initializes
+`Deserializer::remaining_depth` to 128 and enforces it unless the
+`unbounded_depth` feature's `disable_recursion_limit` API is explicitly invoked.
+The DSL loader uses `serde_json::from_slice` and does not disable the limit.
+This is a version-specific dependency behavior, not an Edgion-owned stable API
+guarantee; dependency upgrades must revalidate it.
 
-As of the investigation date the repository has no `cargo-fuzz` targets (only boringssl C harnesses). The Rhai reference implementation has `fuzz/fuzz_targets/fuzz_serde.rs` at the same level. Without a fuzz harness, latent panics in the serde-json + regex path remain undetected.
+## Historical correction and coverage limits
 
-## Required Checks
+Earlier versions of this page incorrectly claimed that deserializing
+`Constant::Regex` compiled the pattern, that the decode path therefore performed
+an unbounded regex build, and that serde_json had unlimited recursion by default.
+Those claims conflated serde decoding with the later Validator and VM phases and
+are not true for the current code and locked dependency.
 
-| Check | Required action | Current status |
-|-------|----------------|----------------|
-| Base64 length bound | Reject payloads above a documented maximum before `from_slice` | Partial — `bytecode.rs:279-296` has guards; exact limits need verification |
-| JSON recursion depth | Pre-validate or use a depth-limited deserializer | Not present |
-| `Constant::Regex` size limits | Add `RegexBuilder::size_limit` + `dfa_size_limit` in the deserialize impl | Not present |
-| Fuzz target | `cargo-fuzz` target exercising `deserialize_base64` with arbitrary input | Not present — see issue-19 for implementation plan |
-| Error path | Ensure all `serde_json::from_slice` call sites use `?` not `.unwrap()` | Verify at bytecode.rs:299 |
+`edgion-gateway/src/plugins/http/dsl/tests/property_bytecode.rs` provides
+property-based robustness coverage:
 
-## Fix Suggestions Not Accepted
+- 256 generated byte arrays of 0..2048 bytes are base64-encoded and passed to
+  `deserialize_base64`; returning either `Ok` or `Err` is permitted, but a panic
+  is not;
+- compiler-produced scripts are checked for serialization fixed points;
+- generated valid source is checked through decode and `Vm::new`, including one
+  fixed regex pattern;
+- source-map lookup is checked against an expanded oracle.
 
-- "serde-json automatically handles malformed input" — serde-json returns `Err` for syntactic errors but does not bound recursion depth or execution time.
-- "the length check is sufficient" — length-bounded valid JSON can still be deeply nested or contain ReDoS-triggering regex patterns.
+This is not coverage-guided fuzzing. The DSL bytecode boundary has no maintained
+fuzz target, evolving corpus, sanitizer-backed fuzz run, or claim that
+pathological regex or JSON inputs have been exhaustively explored. Fuzzing for
+other components does not cover this loader. The removed issue-19 task was
+replaced by the property tests; it is historical provenance, not an active
+implementation plan or current verification result.
 
-## Re-evaluation Triggers
+## Verification and re-evaluation
 
-Re-open or escalate if:
+When reviewing this boundary, verify all of the following against the current
+tree rather than relying on historical line numbers:
 
-- A fuzzer (once infrastructure is in place) finds a panic or OOM in `deserialize_base64`.
-- A new `Constant` variant is added that contains a compiled object (regex, pattern, etc.) and derives `Deserialize` without `Deserialize`-time bounds.
-- An additional submission path expands exposure beyond the existing source-or-bytecode configuration flow.
+- both encoded and decoded byte-size checks precede JSON use;
+- JSON errors and unsupported versions return `Err` without `unwrap`;
+- direct bytecode passes through `Validator::validate` before use;
+- Validator and VM regex construction retain their explicit size limits;
+- the locked serde_json version still has a default recursion limit and no DSL
+  call site disables it;
+- property tests are described as property tests, not fuzz coverage.
 
-## Reference Cases
+Re-evaluate this page if the bytecode shape gains recursive or compiled-object
+fields, serde_json is upgraded or configured with unbounded depth, a decode caller
+bypasses `resolve_script` validation, a new lower-trust submission path is added,
+or fuzzing/property tests expose a panic or excessive resource use.
 
-- `tasks/todo/dsl-vm-rhai-research/issues/issue-19-deserialize-base64-fuzz.md` — full implementation plan for the fuzz target; acceptance criteria and CI integration steps
-- `edgion-dsl/src/bytecode.rs:276-307` — target function and existing length bounds
-- Rhai reference: `fuzz/fuzz_targets/fuzz_serde.rs` — same-shape fuzz target in Rhai upstream
+## Resolution references
+
+- `correct-dsl-bytecode-deserialization-safety-knowledge` — documentation
+  correction: separated serde decode from bounded post-decode regex compilation,
+  recorded the serde_json 1.0.151 depth behavior, and distinguished proptest from
+  fuzz infrastructure.
+- `939565dd` — revalidated the source-or-bytecode transport and trust-boundary
+  description; it did not correct the independent resource-safety statements.
