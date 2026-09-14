@@ -34,9 +34,20 @@ log_warning() {
 # =============================================================================
 # Stopprocess
 # =============================================================================
+shutdown_wait_seconds() {
+    local service_name=$1
+
+    if [ "${EDGION_COVERAGE:-0}" = "1" ] && [ "$service_name" = "edgion-gateway" ]; then
+        echo 60
+    else
+        echo 5
+    fi
+}
+
 force_kill() {
     local pattern=$1
     local service_name=$2
+    local wait_seconds=$3
 
     if ! pgrep -f "$pattern" > /dev/null 2>&1; then
         return
@@ -47,9 +58,11 @@ force_kill() {
     pkill -TERM -f "$pattern" 2>/dev/null || true
     log_info "Stop $service_name (SIGTERM)"
 
-    # Wait up to 5s for graceful exit; escalate to SIGKILL if still alive.
+    # Coverage needs the Gateway to pass Pingora's normal shutdown window and
+    # flush its LLVM profile. Every path remains bounded, and ordinary runs keep
+    # the short teardown window.
     local waited=0
-    while [ $waited -lt 5 ] && pgrep -f "$pattern" > /dev/null 2>&1; do
+    while [ "$waited" -lt "$wait_seconds" ] && pgrep -f "$pattern" > /dev/null 2>&1; do
         sleep 1
         waited=$((waited + 1))
     done
@@ -154,14 +167,16 @@ main() {
     # Anchor the match on the built binary path (target/{debug,llvm-cov-target/debug}/<bin>)
     # so an in-flight `cargo test -p edgion-gateway` / `rustc ... edgion-gateway/src` is not
     # matched and SIGKILLed. The second arg stays the friendly name for log output.
-    force_kill "debug/edgion-gateway" "edgion-gateway"
-    force_kill "debug/edgion-controller" "edgion-controller"
-    force_kill "debug/test_server" "test_server"
+    force_kill "debug/edgion-gateway" "edgion-gateway" "$(shutdown_wait_seconds "edgion-gateway")"
+    force_kill "debug/edgion-controller" "edgion-controller" "$(shutdown_wait_seconds "edgion-controller")"
+    force_kill "debug/test_server" "test_server" "$(shutdown_wait_seconds "test_server")"
     # Anchored fallback covers startup failures before .current is published.
     # It cannot match go build/compiler commands or an unrelated similarly
     # named process because the absolute executable path starts the command.
-    force_kill "^${PROJECT_ROOT}/target/debug/ext_proc_external_processor([[:space:]]|$)" "external ExtProc fixture"
-    force_kill "^${PROJECT_ROOT}/target/llvm-cov-target/debug/ext_proc_external_processor([[:space:]]|$)" "external ExtProc fixture (coverage)"
+    force_kill "^${PROJECT_ROOT}/target/debug/ext_proc_external_processor([[:space:]]|$)" \
+        "external ExtProc fixture" "$(shutdown_wait_seconds "external ExtProc fixture")"
+    force_kill "^${PROJECT_ROOT}/target/llvm-cov-target/debug/ext_proc_external_processor([[:space:]]|$)" \
+        "external ExtProc fixture (coverage)" "$(shutdown_wait_seconds "external ExtProc fixture (coverage)")"
     
     # Waitprocess
     sleep 1

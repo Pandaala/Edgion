@@ -40,6 +40,28 @@ The other six standalone jobs passed in the preceding aggregate run. The main
 job remained blocked by missing host loopback aliases; these results do not
 establish a successful full main sweep.
 
+## Coverage teardown must preserve the Gateway profile
+
+The ordinary integration cleanup keeps a five-second TERM-to-KILL window, but
+coverage mode gives only the Gateway a bounded 60-second window. The instrumented
+Gateway otherwise reaches Pingora's default 30-second grace period and is killed
+before normal process exit can flush its LLVM raw profile. Controller, test-server,
+and non-coverage teardown deadlines remain unchanged. Do not change production
+shutdown defaults or broaden process matching to accommodate the test harness.
+
+`integration-coverage-teardown-grace` reproduced the boundary on macOS arm64 on
+2026-09-14. With the old five-second cleanup, Gateway PID 35212 was escalated to
+KILL and produced zero matching profiles. Allowing the same instrumented binary
+to exit normally took about 35 seconds and produced one mergeable 1,710,832-byte
+profile. After the fix, two consecutive real main-runner executions of
+`HTTPRoute/Match` completed successfully: Gateway PIDs 52436 and 54404 each
+produced one 1,710,832-byte profile, and both profiles merged successfully with
+`llvm-profdata merge -sparse`. The focused regression command is
+`bash cicd/checks/tests/integration_coverage_teardown_test.sh`; it checks the
+coverage-only deadline selection and distinguishes a completed exit hook from a
+child killed before that hook completes. Re-evaluate if Pingora's default shutdown
+window, the coverage profile runtime, or integration process ownership changes.
+
 ## Evidence boundary: back-to-back local runs
 
 `integration-suite-back-to-back-run-collapse` recorded a historical macOS
@@ -74,3 +96,4 @@ fail closed on an actual startup, readiness, or listener-contract failure.
 - `integration-suite-back-to-back-run-collapse` — closed as stale/incorrectly
   attributed on 2026-09-10; no runtime or runner change.
 - `edgionplugins-resource-sweep-config-list-drift` — full-suite follow-up: OTLP shutdown delivery assertions.
+- `integration-coverage-teardown-grace` — coverage-only Gateway shutdown window.
