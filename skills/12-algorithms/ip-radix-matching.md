@@ -82,4 +82,3 @@ cost, lookup percentiles, and retained bytes.
 - `edgion-algo/src/matcher/radix_ip/`
 - `edgion-resources/src/matcher/ip_cidr_helpers.rs`
 - [Cross-cutting unification points](../01-architecture/00-common/05-unification-points.md)
-- `tasks/pending/unify-ip-radix-v4-v6-core.md`

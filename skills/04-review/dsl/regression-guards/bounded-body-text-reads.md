@@ -72,8 +72,8 @@ Focused tests cover the standard lossy decoder at every split and range,
 memory/spill/mutation segments, exact/zero/overflow limits, capacity targets,
 raw scan preflight, early-stop charges/refunds, live aliases, frozen readers,
 late-read/mutation boundaries, and output-limit versus body-failure policies.
-Fresh commands and independent final-review results are recorded in
-`tasks/todo/dsl-body-capability-runtime/02-implementation.md`.
+The owning storage, DSL runtime, and bytecode regression tests preserve this
+coverage after the completed implementation task was archived.
 
 Re-evaluate when scanner accounting, range slicing, decoder carry, capacity
 growth, VM error policy, body lifetime, or upload cancellation changes. Keep
@@ -81,7 +81,6 @@ the 24-byte `Value` invariant and the single canonical request-body cache.
 
 ## Resolution references
 
-- `bound-dsl-body-reads-before-allocation` — implementation task:
-  `tasks/todo/dsl-body-capability-runtime/dsl-body-capability-runtime.md`.
+- `bound-dsl-body-reads-before-allocation` — completed implementation issue.
 - Canonical architecture: `skills/01-architecture/02-gateway/dsl-engine.md`
   and `dsl-engine-security-model.md`.

@@ -109,10 +109,9 @@ rejection, environment auth suppression, stalled-body cancellation, current-thre
 SDK workers and cancellation of a retirement waiter. That spike is design evidence,
 not a substitute for tests of the repository implementation.
 
-Repository verification is recorded in
-`tasks/todo/otlp-linksys-provider/02-implementation.md`: nine actual transport
-tests, the final isolated dynamic run, focused unit/schema tests, repository
-checks and independent review rounds passed on 2026-09-12. Treat these as
+Repository verification included nine actual transport tests, the final isolated
+dynamic run, focused unit/schema tests, repository checks and independent review
+rounds on 2026-09-12. Treat these as
 historical evidence when re-evaluating a later change. Resource/output, shared readiness and
 Controller handler tests exercise schema/redaction/dependencies; the actual
 production transport target is `edgion-gateway/tests/otlp_transport.rs`, and the

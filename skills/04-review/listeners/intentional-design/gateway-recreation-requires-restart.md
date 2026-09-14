@@ -72,11 +72,10 @@ rerun for this documentation-only decision. Historical integration failures are
 preserved in the related routing knowledge; no failed recovery test is relabeled
 as passing.
 
-The two `BothAbsentParentRef` recovery tests conflate Controller dependency
-requeue with unsupported live Gateway recreation. Their replacement coverage
-and exact fixture authorization remain tracked in the
-[test-alignment task](../../../../tasks/todo/gateway-recreation-test-expectations.md).
-No existing test assertions are changed by this closure.
+The two `BothAbsentParentRef` recovery tests now exercise Controller dependency
+requeue by renaming a Listener without changing its physical key. They verify
+the refreshed Controller/Gateway projections and preserve live traffic without
+claiming support for Gateway deletion and recreation.
 
 Documentation verification on 2026-09-13 passed scoped local-link and whitespace
 checks, `cargo fmt --all`, `cargo check --workspace --all-targets`,
