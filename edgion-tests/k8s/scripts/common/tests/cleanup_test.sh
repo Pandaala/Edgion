@@ -20,6 +20,11 @@ trap cleanup EXIT
 mkdir -p "${FAKE_BIN_DIR}" "${DEPLOY_ROOT}" "${CONF_ROOT}" "$(dirname "${UNOWNED_SENTINEL}")"
 printf 'apiVersion: v1\nkind: Namespace\nmetadata:\n  name: edgion-test\n' > "${DEPLOY_ROOT}/namespace.yaml"
 cat > "${CONF_ROOT}/owned.yaml" <<'EOF'
+apiVersion: edgion.io/v1
+kind: EdgionGatewayConfig
+metadata:
+  name: example-gateway
+---
 apiVersion: gateway.networking.k8s.io/v1
 kind: GatewayClass
 metadata:
@@ -37,6 +42,7 @@ metadata:
 EOF
 printf 'unowned\n' > "${UNOWNED_SENTINEL}"
 cat > "${OWNERSHIP_FILE}" <<'EOF'
+cluster	EdgionGatewayConfig	EdgionGatewayConfig.edgion.io	example-gateway
 cluster	GatewayClass	GatewayClass.gateway.networking.k8s.io	public-gateway
 cluster	ClusterRole	ClusterRole.rbac.authorization.k8s.io	edgion-controller
 namespace	Namespace	Namespace	app
@@ -53,9 +59,10 @@ fi
 if [[ "${FAKE_KUBECTL_MODE:-}" == "get-failure" && "${1:-}" == "get" ]]; then
   exit 1
 fi
-if [[ "${FAKE_KUBECTL_MODE:-}" == "first-crd-failure" \
-  && "$*" == *"delete -f "*"/edgion-crd/"* ]]; then
-  exit 1
+if [[ "${FAKE_KUBECTL_MODE:-}" == "retained-egc" \
+  && "${1:-}" == "get" && "${2:-}" == "EdgionGatewayConfig.edgion.io" ]]; then
+  printf '%s\n' 'edgiongatewayconfig.edgion.io/example-gateway'
+  exit 0
 fi
 exit 0
 EOF
@@ -67,11 +74,19 @@ export K8S_DEPLOY_ROOT="${DEPLOY_ROOT}"
 export CONF_ROOT
 export GENERATED_DIR="${TEST_TMP_DIR}/generated"
 
+help_output="$("${K8S_SCRIPT_DIR}/cleanup.sh" --help)"
+if grep -Fq -- '--with-crds' <<< "${help_output}" \
+  || ! grep -Fq 'CRDs are installation-scoped and are never deleted' <<< "${help_output}"; then
+  echo "cleanup help did not preserve the CRD ownership boundary" >&2
+  exit 1
+fi
+
 "${K8S_SCRIPT_DIR}/cleanup.sh" --ownership-file "${OWNERSHIP_FILE}" \
   --skip-generated-artifacts --ns-timeout 1 >/dev/null
 
 grep -Fq 'delete GatewayClass.gateway.networking.k8s.io public-gateway --ignore-not-found=true --wait=false' "${CALL_LOG}"
 grep -Fq 'delete ClusterRole.rbac.authorization.k8s.io edgion-controller --ignore-not-found=true --wait=false' "${CALL_LOG}"
+grep -Fq 'delete EdgionGatewayConfig.edgion.io example-gateway --ignore-not-found=true --wait=false' "${CALL_LOG}"
 namespace_delete="$(grep '^delete namespace ' "${CALL_LOG}")"
 if [[ " ${namespace_delete} " != *' app '* || " ${namespace_delete} " != *' edgion-test '* ]]; then
   echo "namespace deletion was not batched or missed owned namespaces: ${namespace_delete}" >&2
@@ -88,6 +103,20 @@ if grep -Eq '(^| )-f( |$)|(^| )-k( |$)' "${CALL_LOG}"; then
 fi
 if [[ ! -f "${UNOWNED_SENTINEL}" ]]; then
   echo "environment override escaped the generated-artifact boundary" >&2
+  exit 1
+fi
+
+: > "${CALL_LOG}"
+if FAKE_KUBECTL_MODE=retained-egc "${K8S_SCRIPT_DIR}/cleanup.sh" \
+  --ownership-file "${OWNERSHIP_FILE}" --skip-generated-artifacts \
+  --ns-timeout 0 >/dev/null 2>&1; then
+  echo "a retained cluster-scoped custom resource passed cleanup verification" >&2
+  exit 1
+fi
+
+if "${K8S_SCRIPT_DIR}/cleanup.sh" --ownership-file "${OWNERSHIP_FILE}" \
+  --skip-generated-artifacts --with-crds --ns-timeout 0 >/dev/null 2>&1; then
+  echo "removed --with-crds option was still accepted" >&2
   exit 1
 fi
 
@@ -124,11 +153,4 @@ if FAKE_KUBECTL_MODE=get-failure "${K8S_SCRIPT_DIR}/cleanup.sh" \
   echo "namespace verification API failure was swallowed" >&2
   exit 1
 fi
-if FAKE_KUBECTL_MODE=first-crd-failure "${K8S_SCRIPT_DIR}/cleanup.sh" \
-  --ownership-file "${TEST_TMP_DIR}/namespace-only.tsv" \
-  --skip-generated-artifacts --with-crds --ns-timeout 0 >/dev/null 2>&1; then
-  echo "first CRD delete failure was swallowed" >&2
-  exit 1
-fi
-
 echo "cleanup_test.sh: PASS"

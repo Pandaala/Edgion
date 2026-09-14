@@ -4,11 +4,9 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 K8S_DEPLOY_ROOT="${K8S_DEPLOY_ROOT:-$PROJECT_ROOT/edgion-tests/k8s/kubernetes}"
-CRD_ROOT="${CRD_ROOT:-$PROJECT_ROOT/config/crd}"
 CONF_ROOT="${CONF_ROOT:-$PROJECT_ROOT/edgion-tests/k8s/conf}"
 GENERATED_DIR="$PROJECT_ROOT/edgion-tests/k8s/generated"
 
-WITH_CRDS=false
 WITH_IMAGES=false
 SKIP_GENERATED_ARTIFACTS=false
 OWNERSHIP_FILE=""
@@ -42,7 +40,6 @@ show_help() {
 Usage: $0 [options]
 
 Options:
-  --with-crds                    Also delete CRDs from ${CRD_ROOT}
   --with-images                  Also clean old local test images
   --skip-generated-artifacts    Preserve generated test artifacts
   --ownership-file <path>       Use the run's exact namespace/cluster ownership inventory
@@ -52,18 +49,16 @@ Options:
 Behavior:
   1) Delete exact cluster-scoped objects from the ownership inventory
   2) Delete all integration namespaces in one bounded operation
-  3) Wait for namespaces to be fully deleted
-  4) Optional: delete CRDs from config/crd
+  3) Wait for cluster-scoped objects to be fully deleted
+  4) Wait for namespaces to be fully deleted
   5) Optional: clean old Edgion test images
+
+CRDs are installation-scoped and are never deleted by this integration cleanup.
 EOF_HELP
 }
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --with-crds)
-      WITH_CRDS=true
-      shift
-      ;;
     --with-images)
       WITH_IMAGES=true
       shift
@@ -259,19 +254,6 @@ delete_integration_namespaces() {
     fi
   fi
 
-  if [[ "${WITH_CRDS}" == "true" ]]; then
-    echo "[cleanup] delete CRDs from ${CRD_ROOT}"
-    if ! kubectl delete -f "${CRD_ROOT}/edgion-crd/" --ignore-not-found=true >/dev/null; then
-      echo "failed to delete Edgion CRDs" >&2
-      failed=1
-    fi
-    if ! kubectl delete -f "${CRD_ROOT}/gateway-api/" --ignore-not-found=true >/dev/null; then
-      echo "failed to delete Gateway API CRDs" >&2
-      failed=1
-    fi
-  else
-    echo "[cleanup] skip CRD deletion (use --with-crds to enable)"
-  fi
   return "${failed}"
 }
 

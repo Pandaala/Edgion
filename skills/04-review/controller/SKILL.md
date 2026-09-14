@@ -9,6 +9,10 @@ Read [routing and classification](../knowledge-routing.md) before adding or movi
 Search these pages by behavior, symbol, or finding ID; revalidate historical evidence
 before applying a decision to current code.
 
+## Intentional design
+
+- [Non-Kubernetes runtime events start after initialization](intentional-design/non-kubernetes-pre-init-runtime-events-unsupported.md)
+
 ## Regression guards
 
 - [BackendTLSPolicy canonical API ingress](regression-guards/backend-tls-policy-canonical-api-ingress.md)

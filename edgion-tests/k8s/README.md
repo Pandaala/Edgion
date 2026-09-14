@@ -131,7 +131,6 @@ Clean test environment:
 ```bash
 ./edgion-tests/k8s/scripts/cleanup.sh
 ./edgion-tests/k8s/scripts/cleanup.sh --with-images
-./edgion-tests/k8s/scripts/cleanup.sh --with-crds --with-images
 ```
 
 Manual cleanup is not required before every run. A normal owned run starts
@@ -141,6 +140,8 @@ can also be reused when its input state still matches. Run `cleanup.sh` when an
 interrupted run leaves residue, the runner reports an ownership conflict, or
 you explicitly want a fresh environment. The runner intentionally refuses to
 pre-delete resources because the selected context may be a shared cluster.
+CRDs are installation-scoped shared infrastructure and are never deleted by
+the integration cleanup script.
 
 ## Notes
 
