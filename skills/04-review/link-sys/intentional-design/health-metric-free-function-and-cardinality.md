@@ -29,6 +29,13 @@ gauge only ever `set` on a flip also stays absent from `/metrics` until the firs
 "no cold zero-noise" benefit the `OnceLock` policy exists to provide for the struct handles. Adding
 struct fields would be inconsistent and buy nothing.
 
+Redis has one bounded exception to flip-only gauge writes: its one-second aggregate
+connection-state probe refreshes `edgion_link_sys_health` on every sample. Same-key
+runtime generations can overlap briefly before the retiring probe is stopped; the
+active generation must therefore reassert its current value even without a local
+state transition. This remains a cold, provider-count-bounded path. Redis flip
+counters and transition logs are still emitted only on a winning CAS transition.
+
 **2. The `link` label requires a validated provider identity.**
 
 One series per configured LinkSys provider — the same bounded shape as the existing `service`
@@ -68,6 +75,8 @@ Re-open only if:
 
 - A future caller emits one of these metrics on a per-request (hot) path — then reassess handle
   registration and label cost.
+- The Redis runtime store gains generation-aware metric ownership — then remove its
+  periodic gauge refresh and return to flip-only writes.
 - A label is added whose value is operator/user-controlled or otherwise unbounded.
 
 ## Reference Cases

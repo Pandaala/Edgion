@@ -9,16 +9,20 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::Result;
 use fred::clients::Pool;
-use fred::interfaces::{ClientLike, EventInterface};
+use fred::interfaces::ClientLike;
 use fred::types::Resolve;
+use tokio::sync::watch;
+use tokio::task::JoinHandle;
 
 use async_trait::async_trait;
 
 use crate::link_sys::credential::CredentialState;
 use crate::link_sys::lifecycle::LinkSysLifecycle;
+use crate::link_sys::runtime::health_probe::{spawn_health_probe, ProbeConfig};
 use edgion_resources::credentials::materials::BasicAuthMaterial;
 use edgion_resources::resources::link_sys::redis::RedisClientConfig;
 
@@ -41,8 +45,20 @@ pub struct RedisLinkClient {
     pool: Pool,
     /// Human-readable name ("namespace/name")
     name: String,
-    /// Atomic health flag, updated by connection event listener
+    /// Atomic aggregate health flag, updated by the connection-state probe.
     healthy: Arc<AtomicBool>,
+    /// Shutdown signal for the aggregate connection-state probe.
+    probe_shutdown: parking_lot::Mutex<Option<watch::Sender<bool>>>,
+    /// Aggregate connection-state probe task.
+    probe_handle: parking_lot::Mutex<Option<JoinHandle<()>>>,
+}
+
+fn pool_has_connected_member(pool: &Pool) -> bool {
+    any_connected(pool.clients().iter().map(ClientLike::is_connected))
+}
+
+fn any_connected(states: impl IntoIterator<Item = bool>) -> bool {
+    states.into_iter().any(|connected| connected)
 }
 
 impl RedisLinkClient {
@@ -63,14 +79,15 @@ impl RedisLinkClient {
             pool,
             name: name.to_string(),
             healthy: Arc::new(AtomicBool::new(false)),
+            probe_shutdown: parking_lot::Mutex::new(None),
+            probe_handle: parking_lot::Mutex::new(None),
         })
     }
 
     /// Initialize connection. Must be called after `from_config()`.
     ///
-    /// Sets up event listeners on each client in the pool for health tracking,
-    /// then connects all pool clients to Redis.
-    /// On success, the client is marked healthy and ready for use.
+    /// Connects all pool clients to Redis, records aggregate health, and starts
+    /// the background connection-state probe.
     pub async fn init(&self) -> Result<()> {
         self.init_with_resolver(redis_egress_resolver()).await
     }
@@ -87,49 +104,47 @@ impl RedisLinkClient {
         // Sentinel, or Cluster topology dial.
         self.pool.set_resolver(resolver).await;
 
-        // Set up connection event listeners on each client in the pool.
-        // Pool does not implement EventInterface directly — we must iterate
-        // over individual clients.
-        for client in self.pool.clients() {
-            let health = self.healthy.clone();
-            let name = self.name.clone();
-
-            // on_reconnect fires on initial connect AND every reconnect
-            client.on_reconnect(move |server| {
-                let name = name.clone();
-                let health = health.clone();
-                async move {
-                    tracing::info!(redis = %name, server = %server, "Redis (re)connected");
-                    health.store(true, Ordering::Relaxed);
-                    Ok(())
-                }
-            });
-
-            let health_err = self.healthy.clone();
-            let name_err = self.name.clone();
-            client.on_error(move |(error, server)| {
-                let name = name_err.clone();
-                let health = health_err.clone();
-                async move {
-                    tracing::warn!(
-                        redis = %name,
-                        server = ?server,
-                        error = %error,
-                        "Redis connection error"
-                    );
-                    health.store(false, Ordering::Relaxed);
-                    Ok(())
-                }
-            });
-        }
-
         // Connect all pool clients to Redis
         self.pool
             .init()
             .await
             .map_err(|e| anyhow::anyhow!("Redis [{}] init failed: {:?}", self.name, e))?;
 
-        self.healthy.store(true, Ordering::Relaxed);
+        let connected = pool_has_connected_member(&self.pool);
+        self.healthy.store(connected, Ordering::Relaxed);
+        crate::observe::metrics::registry::record_link_sys_health(&self.name, connected);
+
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        let probe_pool = self.pool.clone();
+        let probe_name = self.name.clone();
+        let probe_handle = spawn_health_probe(
+            ProbeConfig {
+                name: self.name.clone(),
+                system_type: "redis",
+                base_interval: Duration::from_secs(1),
+                max_backoff: Duration::from_secs(1),
+                probe_timeout: Duration::from_secs(1),
+                upgrade_only: false,
+            },
+            self.healthy.clone(),
+            shutdown_rx,
+            move || {
+                let pool = probe_pool.clone();
+                let name = probe_name.clone();
+                async move {
+                    let connected = pool_has_connected_member(&pool);
+                    // A retiring same-name generation can briefly race this
+                    // writer before its probe is stopped. Refresh the current
+                    // observation so the active generation self-heals the
+                    // shared gauge without duplicating flip logs/counters.
+                    crate::observe::metrics::registry::record_link_sys_health(&name, connected);
+                    connected
+                }
+            },
+        );
+        *self.probe_shutdown.lock() = Some(shutdown_tx);
+        *self.probe_handle.lock() = Some(probe_handle);
+
         tracing::info!(redis = %self.name, "Redis client initialized successfully");
         Ok(())
     }
@@ -149,12 +164,21 @@ impl RedisLinkClient {
     /// Graceful shutdown — disconnect all pool connections.
     pub async fn shutdown(&self) -> Result<()> {
         tracing::info!(redis = %self.name, "Redis client shutting down");
-        self.pool
+        if let Some(shutdown_tx) = self.probe_shutdown.lock().take() {
+            let _ = shutdown_tx.send(true);
+        }
+        let probe_handle = self.probe_handle.lock().take();
+        if let Some(probe_handle) = probe_handle {
+            let _ = probe_handle.await;
+        }
+
+        let quit_result = self
+            .pool
             .quit()
             .await
-            .map_err(|e| anyhow::anyhow!("Redis [{}] shutdown error: {:?}", self.name, e))?;
+            .map_err(|e| anyhow::anyhow!("Redis [{}] shutdown error: {:?}", self.name, e));
         self.healthy.store(false, Ordering::Relaxed);
-        Ok(())
+        quit_result
     }
 
     /// Access the underlying fred Pool for advanced operations.
@@ -187,6 +211,29 @@ mod tests {
     use edgion_resources::resources::link_sys::redis::RedisPool;
 
     use super::*;
+
+    #[test]
+    fn aggregate_health_uses_any_connected_semantics() {
+        assert!(!any_connected([false, false, false]));
+        assert!(any_connected([false, true, false]));
+        assert!(any_connected([true, true, true]));
+    }
+
+    #[test]
+    fn uninitialized_pool_has_no_connected_member() {
+        let config = RedisClientConfig {
+            endpoints: vec!["redis://127.0.0.1:6379".to_string()],
+            auth: None,
+            db: None,
+            timeout: None,
+            pool: Some(RedisPool { size: Some(2) }),
+            topology: None,
+            tls: None,
+        };
+        let client = RedisLinkClient::from_config("test/redis", &config, &CredentialState::NotRequired).unwrap();
+
+        assert!(!pool_has_connected_member(client.pool()));
+    }
 
     #[tokio::test]
     async fn init_installs_egress_resolver_before_fred_connects() {
