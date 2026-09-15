@@ -356,6 +356,10 @@ impl RateLimitRedisConfig {
             return Some(format!("Invalid reject_status: {}", self.reject_status));
         }
 
+        if let Some(error) = self.header_names.as_ref().and_then(LimitHeaderNames::validation_error) {
+            return Some(error);
+        }
+
         if self.key_prefix.is_empty() {
             return Some("key_prefix cannot be empty".to_string());
         }

@@ -206,6 +206,13 @@ Customize rate limit response header names. Only explicitly configured fields ap
 | `reset` | String | none | Window reset time header name (default: `X-RateLimit-Reset`). Only emitted on rejection (429) responses — the Redis Lua scripts do not return a window-reset timestamp for allowed requests |
 | `retryIn` | String | none | Human-readable retry time (e.g., `"1.5s"`) |
 
+Each configured name must be a valid HTTP header field name of at most 256 bytes.
+Names must be unique case-insensitively and cannot use HTTP framing or hop-by-hop
+fields such as `Content-Length`, `Transfer-Encoding`, `Connection`, `TE`, or
+`Upgrade`. An empty string is treated as omitted. Invalid `headerNames` are
+reported as `Accepted=False`, and the Gateway seals the affected plugin chain
+fail-closed.
+
 ---
 
 ## Common Configuration Scenarios

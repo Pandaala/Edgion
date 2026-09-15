@@ -113,6 +113,12 @@ key:
 | `reset` | 窗口重置时间戳 | `X-RateLimit-Reset` |
 | `retryIn` | 重试等待时间（人类可读） | 无 |
 
+每个已配置名称都必须是最长 256 字节的合法 HTTP 响应头字段名。名称按大小写不敏感
+比较时必须唯一，并且不能使用 `Content-Length`、`Transfer-Encoding`、`Connection`、
+`TE`、`Upgrade` 等 HTTP 帧控制或逐跳字段。空字符串按未配置处理。无效的
+`headerNames` 会被报告为 `Accepted=False`，Gateway 会将受影响的插件链封闭为
+fail-closed。
+
 ### 响应头
 
 当请求被放行时，响应中会包含以下头（`showLimitHeaders: true` 时）：

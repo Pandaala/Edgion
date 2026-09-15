@@ -35,14 +35,11 @@ pub const HEADER_NAME_PATTERN: &str = r"^[A-Za-z0-9!#$%&'*+\-.^_`|~]+$";
 /// Maximum header name length.
 pub const HEADER_NAME_MAX_LEN: u32 = 256;
 
-/// Default upstream header carrying the final resolved remote IP.
-pub const DEFAULT_REMOTE_IP_HEADER: &str = "X-Real-IP";
-
-/// Header names that the Gateway owns for HTTP framing, connection control, or
-/// the separately managed forwarding chain. Comparisons are case-insensitive.
-pub const RESERVED_REMOTE_IP_HEADER_NAMES: [&str; 11] = [
-    "host",
-    "content-length",
+/// Canonical static hop-by-hop header names from RFC 9110 section 7.6.1.
+///
+/// The per-message names nominated by `Connection` cannot be known during
+/// configuration validation and must be handled by the forwarding path.
+pub const HTTP_HOP_BY_HOP_HEADER_NAMES: &[&str] = &[
     "connection",
     "keep-alive",
     "proxy-authenticate",
@@ -51,8 +48,13 @@ pub const RESERVED_REMOTE_IP_HEADER_NAMES: [&str; 11] = [
     "trailer",
     "transfer-encoding",
     "upgrade",
-    "x-forwarded-for",
 ];
+
+/// Default upstream header carrying the final resolved remote IP.
+pub const DEFAULT_REMOTE_IP_HEADER: &str = "X-Real-IP";
+
+/// Additional names reserved only for the configured RemoteIp write target.
+const REMOTE_IP_ONLY_RESERVED_HEADER_NAMES: [&str; 3] = ["host", "content-length", "x-forwarded-for"];
 
 /// Kubernetes label-value charset used by Edgion named-group references
 /// (KeyAuth `secretGroups[].name`, JwtAuth `issuerGroups[].name`, ...).
@@ -82,6 +84,18 @@ pub fn is_valid_header_token(name: &str) -> bool {
         })
 }
 
+/// Whether `name` is a canonical static hop-by-hop header name.
+pub fn is_http_hop_by_hop_header_name(name: &str) -> bool {
+    HTTP_HOP_BY_HOP_HEADER_NAMES
+        .iter()
+        .any(|candidate| name.eq_ignore_ascii_case(candidate))
+}
+
+/// Whether `name` is owned by HTTP message framing or hop-by-hop handling.
+pub fn is_http_framing_or_hop_by_hop_header_name(name: &str) -> bool {
+    name.eq_ignore_ascii_case("content-length") || is_http_hop_by_hop_header_name(name)
+}
+
 /// Validate an operator-configured upstream header that carries `RemoteIp`.
 ///
 /// The scalar remote-IP value must never overwrite framing, hop-by-hop, or the
@@ -90,9 +104,10 @@ pub fn validate_remote_ip_header_name(name: &str) -> Result<(), String> {
     if name.len() > HEADER_NAME_MAX_LEN as usize || !is_valid_header_token(name) {
         return Err("forwardedHeaders.remoteIpHeader must be a valid HTTP header name".to_string());
     }
-    if RESERVED_REMOTE_IP_HEADER_NAMES
-        .iter()
-        .any(|reserved| name.eq_ignore_ascii_case(reserved))
+    if is_http_hop_by_hop_header_name(name)
+        || REMOTE_IP_ONLY_RESERVED_HEADER_NAMES
+            .iter()
+            .any(|reserved| name.eq_ignore_ascii_case(reserved))
     {
         return Err(format!("forwardedHeaders.remoteIpHeader '{name}' is reserved"));
     }
@@ -175,12 +190,26 @@ mod tests {
         assert!(validate_remote_ip_header_name("X-Edgion-Remote-IP").is_ok());
         assert!(validate_remote_ip_header_name("bad header").is_err());
         assert!(validate_remote_ip_header_name(&"x".repeat(HEADER_NAME_MAX_LEN as usize + 1)).is_err());
-        for reserved in RESERVED_REMOTE_IP_HEADER_NAMES {
+        for reserved in HTTP_HOP_BY_HOP_HEADER_NAMES
+            .iter()
+            .copied()
+            .chain(REMOTE_IP_ONLY_RESERVED_HEADER_NAMES)
+        {
             assert!(
                 validate_remote_ip_header_name(reserved).is_err(),
                 "{reserved} must be reserved"
             );
         }
+    }
+
+    #[test]
+    fn framing_and_hop_by_hop_header_detection_is_case_insensitive() {
+        assert!(is_http_framing_or_hop_by_hop_header_name("Content-Length"));
+        for name in HTTP_HOP_BY_HOP_HEADER_NAMES {
+            assert!(is_http_hop_by_hop_header_name(name), "{name}");
+            assert!(is_http_framing_or_hop_by_hop_header_name(&name.to_ascii_uppercase()));
+        }
+        assert!(!is_http_framing_or_hop_by_hop_header_name("x-rate-limit-limit"));
     }
 
     #[test]

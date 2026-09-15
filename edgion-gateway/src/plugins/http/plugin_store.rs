@@ -843,8 +843,9 @@ mod compile_plugins_tests {
     };
     use edgion_resources::resources::edgion_plugins::plugin_configs::DslConfig;
     use edgion_resources::resources::edgion_plugins::{
-        BodyRequirement, DyeOutcome, DyeRule, DyeSuite, EdgionPlugin, EdgionPluginsSpec, RequestFilterEntry,
-        UpstreamResponseFilterEntry, WafConfig, WafMode,
+        BodyRequirement, DyeOutcome, DyeRule, DyeSuite, EdgionPlugin, EdgionPluginsSpec, LimitHeaderNames,
+        RateLimitLocalConfig, RateLimitRedisConfig, RequestFilterEntry, UpstreamResponseFilterEntry, WafConfig,
+        WafMode,
     };
     use edgion_resources::resources::http_route::{HTTPHeader, HTTPHeaderFilter};
     use edgion_resources::resources::plugin_policy::PluginPolicyAction;
@@ -2565,6 +2566,33 @@ mod compile_plugins_tests {
                 ..Default::default()
             })
         }
+        fn rate_limit_local_with_invalid_header() -> EdgionPlugin {
+            EdgionPlugin::RateLimitLocal(RateLimitLocalConfig {
+                header_names: Some(LimitHeaderNames {
+                    limit: Some("content-length".to_string()),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            })
+        }
+        fn rate_limit_redis_with_invalid_header() -> EdgionPlugin {
+            use edgion_resources::resources::edgion_plugins::{RateLimitAlgorithm, RateLimitPolicy};
+
+            EdgionPlugin::RateLimitRedis(RateLimitRedisConfig {
+                redis_ref: "default/shared-redis".to_string(),
+                policies: vec![RateLimitPolicy {
+                    rate: 100,
+                    interval: "1s".to_string(),
+                    algorithm: RateLimitAlgorithm::default(),
+                    interval_duration: None,
+                }],
+                header_names: Some(LimitHeaderNames {
+                    remaining: Some("transfer-encoding".to_string()),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            })
+        }
         fn request_body_buffer() -> EdgionPlugin {
             EdgionPlugin::RequestBodyBuffer(Default::default())
         }
@@ -2957,6 +2985,20 @@ mod compile_plugins_tests {
                     Some(vec![RequestFilterEntry::new(dsl(
                         "let r = redis.get(\"mylink\", \"k\")",
                     ))]),
+                    None,
+                ),
+            ),
+            (
+                "rate_limit_local_invalid_response_header",
+                mk(
+                    Some(vec![RequestFilterEntry::new(rate_limit_local_with_invalid_header())]),
+                    None,
+                ),
+            ),
+            (
+                "rate_limit_redis_invalid_response_header",
+                mk(
+                    Some(vec![RequestFilterEntry::new(rate_limit_redis_with_invalid_header())]),
                     None,
                 ),
             ),

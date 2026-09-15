@@ -19,6 +19,7 @@ use crate::common::KeyGet;
 use crate::duration::parse_duration;
 use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize};
+use std::collections::HashSet;
 use std::time::Duration;
 use tracing;
 
@@ -126,6 +127,37 @@ pub struct LimitHeaderNames {
 }
 
 impl LimitHeaderNames {
+    /// Validate configured response header names at the shared resource boundary.
+    pub fn validation_error(&self) -> Option<String> {
+        let mut normalized_names = HashSet::with_capacity(4);
+        for (field, name) in [
+            ("limit", self.limit_header()),
+            ("remaining", self.remaining_header()),
+            ("reset", self.reset_header()),
+            ("retryIn", self.retry_in_header()),
+        ] {
+            let Some(name) = name else {
+                continue;
+            };
+            if name.len() > crate::gwapi_types::HEADER_NAME_MAX_LEN as usize
+                || !crate::gwapi_types::is_valid_header_token(name)
+            {
+                return Some(format!(
+                    "headerNames.{field} must be a valid HTTP header name of at most 256 bytes"
+                ));
+            }
+            if crate::gwapi_types::is_http_framing_or_hop_by_hop_header_name(name) {
+                return Some(format!(
+                    "headerNames.{field} must not use an HTTP framing or hop-by-hop header name"
+                ));
+            }
+            if !normalized_names.insert(name.to_ascii_lowercase()) {
+                return Some("headerNames must not contain case-insensitive duplicate names".to_string());
+            }
+        }
+        None
+    }
+
     /// Get the limit header name (if configured)
     pub fn limit_header(&self) -> Option<&str> {
         self.limit.as_deref().filter(|s| !s.is_empty())
@@ -489,6 +521,10 @@ impl RateLimitLocalConfig {
             return Some(format!("Invalid reject_status: {}", self.reject_status));
         }
 
+        if let Some(error) = self.header_names.as_ref().and_then(LimitHeaderNames::validation_error) {
+            return Some(error);
+        }
+
         // Validate keys: check if name is required but empty for each key
         for (i, key) in self.key.iter().enumerate() {
             if let Some(name) = key.name() {
@@ -697,6 +733,93 @@ mod tests {
         assert_eq!(headers.remaining, None);
         assert_eq!(headers.reset, None);
         assert_eq!(headers.retry_in, None);
+    }
+
+    #[test]
+    fn limit_header_names_validate_custom_names_and_omissions() {
+        let headers = LimitHeaderNames {
+            limit: Some("X-Limit".to_string()),
+            remaining: Some("x".repeat(crate::gwapi_types::HEADER_NAME_MAX_LEN as usize)),
+            reset: None,
+            retry_in: Some("X-Retry-In".to_string()),
+        };
+        assert_eq!(headers.validation_error(), None);
+
+        let omitted: LimitHeaderNames = serde_json::from_str(r#"{"limit":"","remaining":null}"#).unwrap();
+        assert_eq!(omitted.validation_error(), None);
+    }
+
+    #[test]
+    fn limit_header_names_reject_invalid_and_oversized_names() {
+        for name in [
+            "bad header".to_string(),
+            "héader".to_string(),
+            "x".repeat(crate::gwapi_types::HEADER_NAME_MAX_LEN as usize + 1),
+        ] {
+            let headers = LimitHeaderNames {
+                limit: Some(name),
+                ..Default::default()
+            };
+            assert_eq!(
+                headers.validation_error().as_deref(),
+                Some("headerNames.limit must be a valid HTTP header name of at most 256 bytes")
+            );
+        }
+    }
+
+    #[test]
+    fn limit_header_names_reject_duplicates_case_insensitively() {
+        let headers = LimitHeaderNames {
+            limit: Some("X-Quota".to_string()),
+            remaining: Some("x-quota".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(
+            headers.validation_error().as_deref(),
+            Some("headerNames must not contain case-insensitive duplicate names")
+        );
+    }
+
+    #[test]
+    fn limit_header_names_reject_framing_and_hop_by_hop_names() {
+        for name in
+            std::iter::once("content-length").chain(crate::gwapi_types::HTTP_HOP_BY_HOP_HEADER_NAMES.iter().copied())
+        {
+            let headers = LimitHeaderNames {
+                reset: Some(name.to_ascii_uppercase()),
+                ..Default::default()
+            };
+            assert_eq!(
+                headers.validation_error().as_deref(),
+                Some("headerNames.reset must not use an HTTP framing or hop-by-hop header name"),
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn both_rate_limit_configs_apply_shared_header_name_validation() {
+        let header_names = Some(LimitHeaderNames {
+            limit: Some("transfer-encoding".to_string()),
+            ..Default::default()
+        });
+        let local = RateLimitLocalConfig {
+            header_names: header_names.clone(),
+            ..Default::default()
+        };
+        let redis = super::super::rate_limit_redis::RateLimitRedisConfig {
+            redis_ref: "default/shared-redis".to_string(),
+            policies: vec![super::super::rate_limit_redis::RateLimitPolicy {
+                rate: 100,
+                interval: "1s".to_string(),
+                algorithm: super::super::rate_limit_redis::RateLimitAlgorithm::default(),
+                interval_duration: None,
+            }],
+            header_names,
+            ..Default::default()
+        };
+        assert_eq!(local.validation_error(), redis.validation_error());
+        assert!(local.validation_error().is_some());
     }
 
     #[test]

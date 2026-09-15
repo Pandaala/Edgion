@@ -18,6 +18,7 @@ before applying a decision to current code.
 
 ## Regression guards
 
+- [Rate-limit response header names are validated at the resource boundary](regression-guards/response-header-name-validation.md)
 - [Local allowance and Redis overflow admission](regression-guards/local-allowance-redis-overflow.md)
 
 - [Local connection admission and configuration transitions](regression-guards/local-connection-admission-transitions.md)

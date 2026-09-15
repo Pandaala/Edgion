@@ -134,16 +134,7 @@ pub fn build_webhook_client(
 /// The dynamic part of §7.6.1 — header names additionally nominated by the
 /// `Connection:` header value of the current message — is handled by
 /// [`connection_listed_hop_by_hop`] and [`is_hop_by_hop_or_listed`].
-pub const HOP_BY_HOP_HEADERS: &[&str] = &[
-    "connection",
-    "keep-alive",
-    "proxy-authenticate",
-    "proxy-authorization",
-    "te",
-    "trailer",
-    "transfer-encoding",
-    "upgrade",
-];
+pub use edgion_resources::gwapi_types::HTTP_HOP_BY_HOP_HEADER_NAMES as HOP_BY_HOP_HEADERS;
 
 /// Check whether `name` is one of the canonical hop-by-hop headers
 /// (case-insensitive).
@@ -153,8 +144,7 @@ pub const HOP_BY_HOP_HEADERS: &[&str] = &[
 /// (RFC 9110 §7.6.1), use [`is_hop_by_hop_or_listed`] together with
 /// [`connection_listed_hop_by_hop`].
 pub fn is_hop_by_hop(name: &str) -> bool {
-    let lower = name.to_ascii_lowercase();
-    HOP_BY_HOP_HEADERS.contains(&lower.as_str())
+    edgion_resources::gwapi_types::is_http_hop_by_hop_header_name(name)
 }
 
 /// Parse the value of the request's `Connection:` header into a deduplicated
@@ -189,7 +179,7 @@ pub fn connection_listed_hop_by_hop(connection_value: &str) -> Vec<String> {
 /// [`connection_listed_hop_by_hop`] for the originating request.
 pub fn is_hop_by_hop_or_listed(name: &str, dynamic_listed: &[String]) -> bool {
     let lower = name.to_ascii_lowercase();
-    HOP_BY_HOP_HEADERS.contains(&lower.as_str()) || dynamic_listed.iter().any(|s| s == &lower)
+    is_hop_by_hop(name) || dynamic_listed.iter().any(|s| s == &lower)
 }
 
 #[cfg(test)]

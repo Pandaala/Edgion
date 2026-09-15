@@ -124,6 +124,13 @@ When configured, **only explicitly specified headers** are shown; unspecified on
 | `reset` | Window reset timestamp | `X-RateLimit-Reset` |
 | `retryIn` | Retry wait time (human-readable) | none |
 
+Each configured name must be a valid HTTP header field name of at most 256 bytes.
+Names must be unique case-insensitively and cannot use HTTP framing or hop-by-hop
+fields such as `Content-Length`, `Transfer-Encoding`, `Connection`, `TE`, or
+`Upgrade`. An empty string is treated as omitted. Invalid `headerNames` are
+reported as `Accepted=False`, and the Gateway seals the affected plugin chain
+fail-closed.
+
 ### Response Headers
 
 When a request is allowed, the response includes these headers (`showLimitHeaders: true`):
