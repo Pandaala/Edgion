@@ -1,3 +1,4 @@
+use super::content_type::response_is_identity_encoded;
 use crate::EdgionHttpContext;
 use pingora_core::{Error, ErrorType, Result};
 use pingora_http::ResponseHeader;
@@ -32,10 +33,7 @@ pub(crate) fn response_head_commit_plan(
         .ai_state()
         .and_then(|state| state.final_response_eligibility)
         .is_some_and(|eligibility| eligibility.allows_sse());
-    let identity_encoding = response
-        .headers
-        .get(http::header::CONTENT_ENCODING)
-        .is_none_or(|value| value.as_bytes().eq_ignore_ascii_case(b"identity"));
+    let identity_encoding = response_is_identity_encoded(&response.headers);
     if !final_eligible || !identity_encoding || !(200..300).contains(&response.status.as_u16()) {
         if let Some((_, owner)) = ctx.ai_state().and_then(|state| state.attached_guardrail.as_ref()) {
             owner.publish_head(

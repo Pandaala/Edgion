@@ -32,3 +32,4 @@ before applying a decision to current code.
 - [BODY-001 — Request-Body Retry Framing Metadata — FIXED](regression-guards/request-body-retry-framing-metadata.md)
 - [Request-Body Storage I/O Has a Separate Bounded Lane](regression-guards/request-body-storage-io-deadline.md)
 - [A response-stage denial is decided from the RESPONSE, and a refused reply still terminates — FIXED](regression-guards/response-stage-denial-must-terminate.md)
+- [Identity response encoding classification is shared across semantic consumers](regression-guards/identity-content-encoding-classification.md)

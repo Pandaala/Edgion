@@ -7,6 +7,7 @@
 //! path from drifting apart.
 
 use crate::ctx::ResponseStreamKind;
+use http::header::CONTENT_ENCODING;
 
 /// SSE media type, optionally followed by parameters such as
 /// `; charset=utf-8`.
@@ -44,6 +45,33 @@ pub fn classify_response_stream_kind(resp: &pingora_http::ResponseHeader) -> Res
 #[inline]
 pub(crate) fn is_sse_content_type(content_type: &str) -> bool {
     matches_media_type(content_type, EVENT_STREAM_MEDIA_TYPE)
+}
+
+/// Returns `true` when the response has no content coding or every coding is
+/// `identity`. All repeated field lines and comma-delimited list members are
+/// classified without allocating owned header values. Empty list members are
+/// ignored per RFC 9110 section 5.6.1.2, but a present field must contain at
+/// least one effective coding.
+#[inline]
+pub(crate) fn response_is_identity_encoded(headers: &http::HeaderMap) -> bool {
+    let mut values = headers.get_all(CONTENT_ENCODING).iter().peekable();
+    if values.peek().is_none() {
+        return true;
+    }
+
+    let mut saw_coding = false;
+    for value in values {
+        let Ok(value) = value.to_str() else {
+            return false;
+        };
+        for coding in value.split(',').map(str::trim).filter(|coding| !coding.is_empty()) {
+            saw_coding = true;
+            if !coding.eq_ignore_ascii_case("identity") {
+                return false;
+            }
+        }
+    }
+    saw_coding
 }
 
 /// Match one exact media type case-insensitively, allowing optional whitespace
@@ -88,6 +116,45 @@ fn starts_with_ignore_ascii_case(haystack: &str, prefix: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use http::HeaderValue;
+
+    fn content_encoding_headers(values: &[&[u8]]) -> http::HeaderMap {
+        let mut headers = http::HeaderMap::new();
+        for value in values {
+            headers.append(CONTENT_ENCODING, HeaderValue::from_bytes(value).unwrap());
+        }
+        headers
+    }
+
+    #[test]
+    fn identity_encoding_classifies_every_field_and_list_member() {
+        for accepted in [
+            &[][..],
+            &[b"identity".as_slice()][..],
+            &[b" IDENTITY \t".as_slice()][..],
+            &[b"identity".as_slice(), b"Identity".as_slice()][..],
+            &[b"identity, IDENTITY".as_slice()][..],
+            &[b"identity, identity".as_slice(), b"IDENTITY".as_slice()][..],
+            &[b"identity,".as_slice()][..],
+            &[b", identity, , IDENTITY,".as_slice()][..],
+            &[b",".as_slice(), b"identity".as_slice(), b", ,".as_slice()][..],
+        ] {
+            assert!(response_is_identity_encoded(&content_encoding_headers(accepted)));
+        }
+
+        for rejected in [
+            &[b"gzip".as_slice()][..],
+            &[b"identity".as_slice(), b"gzip".as_slice()][..],
+            &[b"gzip".as_slice(), b"identity".as_slice()][..],
+            &[b"identity, gzip".as_slice()][..],
+            &[b"gzip, identity".as_slice()][..],
+            &[b"".as_slice()][..],
+            &[b", ,".as_slice()][..],
+            &[&[0xff][..]][..],
+        ] {
+            assert!(!response_is_identity_encoded(&content_encoding_headers(rejected)));
+        }
+    }
 
     #[test]
     fn native_grpc_matches_various_casings_and_params() {

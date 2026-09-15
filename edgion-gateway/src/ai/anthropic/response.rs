@@ -17,6 +17,7 @@ use crate::ai::usage::{terminate_over_quota, AiUsageShared};
 use crate::ctx::ResponseStreamKind;
 use crate::plugins::runtime::traits::streaming_response_processor::StreamingResponseProcessor;
 use crate::plugins::runtime::PluginSession;
+use crate::routes::http::proxy_http::content_type::response_is_identity_encoded;
 use crate::sse::{SseDecoder, SseEventRef};
 
 const MAX_BODY_BYTES: usize = 1024 * 1024;
@@ -947,13 +948,7 @@ fn clear_provider_headers(response: &mut ResponseHeader) {
 }
 
 fn identity_encoding(response: &ResponseHeader) -> bool {
-    response.headers.get_all("content-encoding").iter().all(|value| {
-        value.to_str().ok().is_some_and(|value| {
-            value
-                .split(',')
-                .all(|part| part.trim().eq_ignore_ascii_case("identity"))
-        })
-    })
+    response_is_identity_encoded(&response.headers)
 }
 
 fn matches_media_type(response: &ResponseHeader, type_: &str, subtype: &str) -> bool {
