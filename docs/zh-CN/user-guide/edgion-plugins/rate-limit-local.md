@@ -18,7 +18,7 @@ RateLimitLocal 插件提供高性能的请求速率限制功能，基于 Pingora
 - **多维度限流键** - 支持 Client IP、Header、Path 及组合键
 - **集群限流** - Cluster 模式自动按 Gateway 实例数均分全局配额
 - **自定义响应头** - 支持标准 `X-RateLimit-*` 和自定义 Header 名称
-- **失败开放** - 配置错误或 key 缺失时默认放行请求
+- **key 缺失策略** - 默认使用 `onKeyMiss: Allow` 放行；无效配置会被报告为 `Accepted=False`，Gateway 将受影响的插件链封闭为 fail-closed
 
 ## 配置说明
 
@@ -477,7 +477,7 @@ flowchart TD
 3. **scope 和 skewTolerance 验证**：`skewTolerance` 超出 1.0~2.0 范围会被自动截断；Cluster scope 要求 `rate >= 2`
 4. **插件实例独立**：不同的 RateLimitLocal 插件实例有各自独立的 CMS 状态，互不影响
 5. **实时生效**：更新 EdgionPlugins 资源后，配置自动热重载
-6. **失败开放**：配置验证失败时，请求会被放行（fail-open），错误信息记录在插件日志中
+6. **配置校验失败**：无效配置会被报告为 `Accepted=False`，Gateway 将受影响的插件链封闭为 fail-closed；只有限流 key 缺失时才默认通过 `onKeyMiss: Allow` 放行请求
 
 ## 常见问题
 

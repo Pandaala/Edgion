@@ -18,7 +18,7 @@ This plugin is suitable for API rate limiting, brute-force attack prevention, an
 - **Multi-dimensional rate limiting keys** - Supports Client IP, Header, Path, and composite keys
 - **Cluster rate limiting** - Cluster mode automatically distributes global quota across Gateway instances
 - **Custom response headers** - Supports standard `X-RateLimit-*` and custom header names
-- **Fail-open** - Defaults to allowing requests on configuration errors or missing keys
+- **Missing-key policy** - Defaults to `onKeyMiss: Allow`; invalid configuration is reported as `Accepted=False` and sealed fail-closed by the Gateway
 
 ## Configuration
 
@@ -489,7 +489,7 @@ Queries use the current active slot's count as the estimate.
 3. **scope and skewTolerance validation**: `skewTolerance` outside the 1.0~2.0 range is automatically clamped; Cluster scope requires `rate >= 2`
 4. **Independent plugin instances**: Different RateLimitLocal plugin instances have separate CMS states and do not affect each other
 5. **Real-time updates**: After updating the EdgionPlugins resource, configuration is automatically hot-reloaded
-6. **Fail-open**: On configuration validation failure, requests are allowed through (fail-open), with error information logged
+6. **Validation failure**: Invalid configuration is reported as `Accepted=False`; the Gateway seals the affected plugin chain fail-closed. Only a missing rate-limit key defaults to allowing the request through `onKeyMiss: Allow`
 
 ## FAQ
 
