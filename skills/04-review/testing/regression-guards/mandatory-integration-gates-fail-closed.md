@@ -28,12 +28,23 @@ suite and log path; remaining suites are attempted, then the aggregate failure
 aborts startup before Gateway tests run. Log sink failures are also fatal.
 
 The original `edgionplugins-resource-sweep-config-list-drift` task described
-missing fixture inventories and historical HTTP 404 failures. Current static
-inspection finds directory coverage for all 50 unique resource-sweep items;
-`PluginCondition/AllConditions` is covered recursively by its parent. This does
-not establish that every historical failure, including `DslGrpcError`, is fixed.
-Keep execution registration evidence in the
+missing fixture inventories and historical HTTP 404 failures. The corrected
+resource sweep has directory coverage for every executed item and rejects
+explicit preload entries that do not name a real fixture directory.
+`PluginCondition/AllConditions` is covered recursively by its parent, and the
+logical `DslGrpcError` execution item is covered by `EdgionPlugins/Dsl` rather
+than a nonexistent same-named directory. Keep execution registration evidence in the
 [suite-registration guard](integration-suite-registrations-must-be-checked-per-sweep.md).
+
+Live verification on 2026-09-15 loaded the complete EdgionPlugins inventory;
+every executed plugin suite passed, including the historically failing suites
+and `DslGrpcError`; the metrics-label, unknown-field, and requeue final gates
+also passed. The report recorded 64 PASS entries, one SKIP, and one final
+cache-residue failure caused by a distinct Wasm
+delayed-eviction issue, tracked by
+`wasm-shared-data-eviction-grace-exceeds-residue-timeout`; that result does not
+invalidate configuration-submission or suite behavior evidence. A focused
+`DslGrpcError` run subsequently passed its ordinary cache-residue gate as well.
 
 Verification: `bash cicd/checks/tests/integration_config_load_test.sh` passes
 success, loader exit 7 with a successful log sink, log sink exit 9 with a

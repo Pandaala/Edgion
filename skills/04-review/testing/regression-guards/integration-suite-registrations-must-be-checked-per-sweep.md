@@ -49,13 +49,30 @@ names or recursive parent directories. Substring matching is insufficient:
 `EdgionPlugins/DslBody` does not load `EdgionPlugins/Dsl`, while
 `EdgionPlugins/PluginCondition` does cover its `AllConditions` child. The
 `suite_preload_requires_exact_directory_or_recursive_parent` regression captures
-these boundaries. This guard checks static directory coverage, not successful
-YAML submission or runtime behavior; see the
+these boundaries.
+
+The inverse must also hold: every explicit `EdgionPlugins/*` preload entry must
+name a real fixture directory. A logical runner item may reuse a parent fixture
+directory instead of owning a same-named directory. In particular,
+`EdgionPlugins_DslGrpcError` is an execution item backed by
+`EdgionPlugins/Dsl`; adding a synthetic `EdgionPlugins/DslGrpcError` preload
+causes `load_conf.sh` to reject the nonexistent directory. The resource-wide
+guard therefore checks both missing coverage and nonexistent explicit preload
+entries.
+
+These guards check static directory coverage, not successful YAML submission or
+runtime behavior; see the
 [configuration failure gate](mandatory-integration-gates-fail-closed.md).
 
-Current verification: the `test_client` unit-test binary passed all 22 tests,
-including resource preload coverage and exact/recursive directory matching.
-This is static runner validation, not a completed live integration sweep.
+Current verification (2026-09-15): the `test_client` unit-test binary passed all
+22 tests, including resource preload coverage, explicit preload existence, and
+exact/recursive directory matching. A live `-r EdgionPlugins` sweep loaded the
+inventory, and every executed plugin suite passed; the metrics-label,
+unknown-field, and requeue final gates also passed. Its report recorded 64 PASS
+entries, one SKIP, and one separate cache-residue
+failure, which is tracked by
+`wasm-shared-data-eviction-grace-exceeds-residue-timeout`. A focused
+`-r EdgionPlugins -i DslGrpcError` run also passed with the ordinary residue gate.
 
 ## Re-evaluation Triggers
 
@@ -72,4 +89,4 @@ changes fixture selection and recursive directory loading semantics.
 ## Resolution references
 
 - `integration-suite-registration-guard` — 2026-08-30.
-- `edgionplugins-resource-sweep-config-list-drift` — exact fixture directory coverage.
+- `edgionplugins-resource-sweep-config-list-drift` — bidirectional fixture preload coverage.

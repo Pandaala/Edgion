@@ -741,17 +741,30 @@ mod capability_tests {
         let load_start = load
             .find(r#"if [ "$G_RESOURCE" = "EdgionPlugins" ]; then"#)
             .expect("automatic suite selection must contain EdgionPlugins");
-        let load = &load[load_start..];
-        let load_start = load
+        let resource_selection = &load[load_start..];
+        let load_start = resource_selection
             .find(r#"if [ -z "$G_ITEM" ]; then"#)
             .expect("EdgionPlugins selection must contain a resource-wide branch");
-        let load = &load[load_start..];
+        let shared_load = &resource_selection[..load_start];
+        let load = &resource_selection[load_start..];
         let load_end = load
             .find("\n            else")
             .expect("resource-wide EdgionPlugins selection must have an item-specific branch");
         let load = &load[..load_end];
 
         let fixture_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("integration/conf/EdgionPlugins");
+        let mut nonexistent_preloads: Vec<_> = edgion_plugin_preloads(shared_load)
+            .chain(edgion_plugin_preloads(load))
+            .filter(|entry| !fixture_root.join(entry).is_dir())
+            .collect();
+        nonexistent_preloads.sort_unstable();
+        nonexistent_preloads.dedup();
+        assert!(
+            nonexistent_preloads.is_empty(),
+            "EdgionPlugins resource-wide preload entries must name real fixture directories: \
+             {nonexistent_preloads:?}"
+        );
+
         let mut checked = 0usize;
         let mut missing = Vec::new();
         for line in plugins
@@ -784,15 +797,26 @@ mod capability_tests {
         );
     }
 
-    fn suite_is_preloaded(load: &str, suite: &str) -> bool {
+    fn edgion_plugin_preloads(load: &str) -> impl Iterator<Item = &str> {
         load.split([',', '"', '\n'])
-            .filter(|entry| entry.starts_with("EdgionPlugins/"))
-            .any(|entry| suite == entry || suite.strip_prefix(entry).is_some_and(|suffix| suffix.starts_with('/')))
+            .map(str::trim)
+            .filter_map(|entry| entry.strip_prefix("EdgionPlugins/"))
+    }
+
+    fn suite_is_preloaded(load: &str, suite: &str) -> bool {
+        edgion_plugin_preloads(load)
+            .map(|entry| format!("EdgionPlugins/{entry}"))
+            .any(|entry| {
+                suite == entry
+                    || suite
+                        .strip_prefix(entry.as_str())
+                        .is_some_and(|suffix| suffix.starts_with('/'))
+            })
     }
 
     #[test]
     fn suite_preload_requires_exact_directory_or_recursive_parent() {
-        let load = r#"suites="${base_suites},EdgionPlugins/DslBody,EdgionPlugins/PluginCondition""#;
+        let load = r#"suites="${base_suites}, EdgionPlugins/DslBody,EdgionPlugins/PluginCondition""#;
         assert!(suite_is_preloaded(load, "EdgionPlugins/DslBody"));
         assert!(suite_is_preloaded(load, "EdgionPlugins/PluginCondition/AllConditions"));
         assert!(!suite_is_preloaded(load, "EdgionPlugins/Dsl"));
