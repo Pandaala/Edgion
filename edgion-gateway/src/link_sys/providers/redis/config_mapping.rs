@@ -4,14 +4,16 @@
 //! with fred's native configuration structs. The mapping follows the Library-First
 //! principle: we use fred's API directly without inventing our own abstractions.
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use fred::types::config::{Config, ReconnectPolicy, ServerConfig, TcpConfig};
 use fred::types::Builder;
 
 use crate::link_sys::credential::CredentialState;
 use edgion_resources::credentials::materials::BasicAuthMaterial;
 use edgion_resources::resources::common::TlsConfig;
-use edgion_resources::resources::link_sys::redis::{RedisClientConfig, RedisTopologyMode, REDIS_DEFAULT_POOL_SIZE};
+use edgion_resources::resources::link_sys::redis::{
+    RedisClientConfig, RedisTopologyMode, RedisTransport, REDIS_DEFAULT_POOL_SIZE,
+};
 
 // ============================================================================
 // Config mapping (CRD → fred Config)
@@ -60,42 +62,33 @@ pub fn build_fred_config(crd: &RedisClientConfig, auth: &CredentialState<BasicAu
 
 /// Map CRD topology to fred `ServerConfig`.
 fn build_server_config(crd: &RedisClientConfig) -> Result<ServerConfig> {
-    let endpoints = &crd.endpoints;
-    if endpoints.is_empty() {
-        anyhow::bail!("Redis endpoints list is empty");
-    }
+    let endpoints = crd
+        .parsed_active_endpoints()
+        .map_err(|errors| anyhow::anyhow!(errors.join("; ")))?;
+    let hosts = endpoints
+        .into_iter()
+        .map(|endpoint| (endpoint.host, endpoint.port))
+        .collect::<Vec<_>>();
 
     match crd.topology.as_ref().map(|t| &t.mode) {
         // Cluster mode
-        Some(RedisTopologyMode::Cluster) => {
-            let hosts: Vec<(String, u16)> = endpoints.iter().filter_map(|ep| parse_redis_url(ep).ok()).collect();
-            if hosts.is_empty() {
-                anyhow::bail!("No valid cluster endpoints could be parsed");
-            }
-            Ok(ServerConfig::new_clustered(hosts))
-        }
+        Some(RedisTopologyMode::Cluster) => Ok(ServerConfig::new_clustered(hosts)),
         // Sentinel mode
         Some(RedisTopologyMode::Sentinel) => {
             let sentinel = crd
                 .topology
                 .as_ref()
                 .and_then(|t| t.sentinel.as_ref())
-                .context("Sentinel mode requires sentinel config")?;
-
-            let hosts: Vec<(String, u16)> = sentinel
-                .sentinels
-                .iter()
-                .filter_map(|s| parse_redis_url(s).ok())
-                .collect();
-            if hosts.is_empty() {
-                anyhow::bail!("No valid sentinel endpoints could be parsed");
-            }
+                .ok_or_else(|| anyhow::anyhow!("Redis sentinel mode requires topology.sentinel"))?;
 
             Ok(ServerConfig::new_sentinel(hosts, &sentinel.master_name))
         }
         // Standalone (default)
         _ => {
-            let (host, port) = parse_redis_url(&endpoints[0])?;
+            let (host, port) = hosts
+                .into_iter()
+                .next()
+                .ok_or_else(|| anyhow::anyhow!("Redis standalone mode requires exactly one endpoint"))?;
             Ok(ServerConfig::new_centralized(host, port))
         }
     }
@@ -207,84 +200,18 @@ pub fn build_fred_pool(crd: &RedisClientConfig, config: Config) -> Result<(Build
 // URL / address parsing helpers
 // ============================================================================
 
-/// Return the endpoints used by the selected topology.
-///
-/// Sentinel uses its dedicated endpoint list, cluster uses every top-level
-/// endpoint, and standalone uses only its first top-level endpoint. This keeps
-/// URL parsing and transport selection aligned with [`build_server_config`].
-fn active_endpoints(crd: &RedisClientConfig) -> impl Iterator<Item = &str> {
-    let endpoints = match crd.topology.as_ref().map(|topology| &topology.mode) {
-        Some(RedisTopologyMode::Cluster) => crd.endpoints.as_slice(),
-        Some(RedisTopologyMode::Sentinel) => crd
-            .topology
-            .as_ref()
-            .and_then(|topology| topology.sentinel.as_ref())
-            .map(|sentinel| sentinel.sentinels.as_slice())
-            .unwrap_or_default(),
-        _ => crd.endpoints.get(..1).unwrap_or_default(),
-    };
-
-    endpoints.iter().map(String::as_str)
-}
-
 /// Determine whether endpoint schemes require implicit TLS.
 ///
 /// fred applies one TLS connector to the whole client configuration, so a
 /// topology cannot safely combine secure and plaintext active endpoints unless
 /// the operator explicitly enables TLS for the complete topology.
 fn implicit_tls_required(crd: &RedisClientConfig) -> Result<bool> {
-    let mut has_secure = false;
-    let mut has_plaintext = false;
-
-    for endpoint in active_endpoints(crd) {
-        if endpoint.starts_with("rediss://") {
-            has_secure = true;
-        } else {
-            has_plaintext = true;
-        }
-    }
-
-    if has_secure && has_plaintext {
-        anyhow::bail!(
-            "Redis active endpoints cannot mix TLS and plaintext transports; use consistent schemes or set tls.enabled=true"
-        );
-    }
-
-    Ok(has_secure)
-}
-
-/// Parse "redis://host:port", "rediss://host:port", or "host:port" into (host, port).
-pub(crate) fn parse_redis_url(url: &str) -> Result<(String, u16)> {
-    // Strip redis:// or rediss:// prefix
-    let stripped = url
-        .strip_prefix("rediss://")
-        .or_else(|| url.strip_prefix("redis://"))
-        .unwrap_or(url);
-
-    parse_host_port(stripped)
-}
-
-/// Parse "host:port" into (host, port). Defaults to port 6379 if not specified.
-pub(crate) fn parse_host_port(addr: &str) -> Result<(String, u16)> {
-    // Handle IPv6 addresses like [::1]:6379
-    if let Some(bracket_end) = addr.find(']') {
-        let host = &addr[..=bracket_end];
-        let rest = &addr[bracket_end + 1..];
-        if let Some(port_str) = rest.strip_prefix(':') {
-            let port: u16 = port_str.parse().context("invalid port in address")?;
-            return Ok((host.to_string(), port));
-        }
-        return Ok((host.to_string(), 6379));
-    }
-
-    // Regular host:port
-    match addr.rsplit_once(':') {
-        Some((host, port_str)) => {
-            let port: u16 = port_str.parse().context("invalid port in address")?;
-            Ok((host.to_string(), port))
-        }
-        None => Ok((addr.to_string(), 6379)),
-    }
+    let endpoints = crd
+        .parsed_active_endpoints()
+        .map_err(|errors| anyhow::anyhow!(errors.join("; ")))?;
+    Ok(endpoints
+        .first()
+        .is_some_and(|endpoint| endpoint.transport == RedisTransport::Tls))
 }
 
 // ============================================================================
@@ -349,34 +276,6 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_redis_url_standard() {
-        let (host, port) = parse_redis_url("redis://127.0.0.1:6379").unwrap();
-        assert_eq!(host, "127.0.0.1");
-        assert_eq!(port, 6379);
-    }
-
-    #[test]
-    fn test_parse_redis_url_without_scheme() {
-        let (host, port) = parse_redis_url("127.0.0.1:6379").unwrap();
-        assert_eq!(host, "127.0.0.1");
-        assert_eq!(port, 6379);
-    }
-
-    #[test]
-    fn test_parse_redis_url_default_port() {
-        let (host, port) = parse_redis_url("redis://myhost").unwrap();
-        assert_eq!(host, "myhost");
-        assert_eq!(port, 6379);
-    }
-
-    #[test]
-    fn test_parse_redis_url_with_tls() {
-        let (host, port) = parse_redis_url("rediss://secure.redis.com:6380").unwrap();
-        assert_eq!(host, "secure.redis.com");
-        assert_eq!(port, 6380);
-    }
-
-    #[test]
     fn test_build_server_config_standalone() {
         let crd = minimal_config(vec!["redis://127.0.0.1:6379".to_string()]);
         let config = build_fred_config(&crd, &no_auth()).unwrap();
@@ -399,9 +298,29 @@ mod tests {
     }
 
     #[test]
+    fn cluster_rejects_the_complete_config_when_one_endpoint_is_invalid() {
+        let crd = RedisClientConfig {
+            endpoints: vec![
+                "redis://10.0.0.1:7000".to_string(),
+                "redis://user:password@10.0.0.2:7001".to_string(),
+            ],
+            topology: Some(RedisTopology {
+                mode: RedisTopologyMode::Cluster,
+                sentinel: None,
+                cluster: None,
+            }),
+            ..minimal_config(vec![])
+        };
+
+        let error = build_fred_config(&crd, &no_auth()).unwrap_err().to_string();
+        assert!(error.contains("Redis endpoints[1] is invalid"));
+        assert!(!error.contains("password"));
+    }
+
+    #[test]
     fn test_build_server_config_sentinel() {
         let crd = RedisClientConfig {
-            endpoints: vec!["redis://sentinel-1:26379".to_string()],
+            endpoints: Vec::new(),
             topology: Some(RedisTopology {
                 mode: RedisTopologyMode::Sentinel,
                 sentinel: Some(RedisSentinel {
@@ -420,7 +339,7 @@ mod tests {
     fn sentinel_endpoints_accept_redis_schemes() {
         assert_outbound_tls_in_subprocess("sentinel_endpoints_accept_redis_schemes", || {
             let crd = RedisClientConfig {
-                endpoints: vec!["redis://unused:6379".to_string()],
+                endpoints: Vec::new(),
                 topology: Some(RedisTopology {
                     mode: RedisTopologyMode::Sentinel,
                     sentinel: Some(RedisSentinel {
@@ -633,15 +552,16 @@ mod tests {
     }
 
     #[test]
-    fn standalone_ignores_later_rediss_endpoint() {
-        assert_outbound_tls_in_subprocess("standalone_ignores_later_rediss_endpoint", || {
-            let crd = minimal_config(vec![
-                "redis://redis.example.com:6379".to_string(),
-                "rediss://unused.example.com:6380".to_string(),
-            ]);
+    fn standalone_rejects_extra_endpoints() {
+        let crd = minimal_config(vec![
+            "redis://redis.example.com:6379".to_string(),
+            "rediss://unused.example.com:6380".to_string(),
+        ]);
 
-            assert!(!uses_tls(&crd).unwrap());
-        });
+        let error = build_fred_config(&crd, &no_auth()).unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("Redis standalone mode requires exactly one endpoint"));
     }
 
     #[test]
@@ -694,18 +614,17 @@ mod tests {
             ..minimal_config(vec![])
         };
 
-        let config = build_fred_config(&crd, &no_auth()).unwrap();
-        let err = build_fred_pool(&crd, config).unwrap_err();
+        let err = build_fred_config(&crd, &no_auth()).unwrap_err();
         assert_eq!(
             err.to_string(),
-            "Redis active endpoints cannot mix TLS and plaintext transports; use consistent schemes or set tls.enabled=true"
+            "Redis active endpoints cannot mix TLS and plaintext transports unless tls.enabled=true"
         );
     }
 
     #[test]
     fn mixed_sentinel_endpoint_transports_are_rejected_without_explicit_tls() {
         let crd = RedisClientConfig {
-            endpoints: vec!["redis://unused:6379".to_string()],
+            endpoints: Vec::new(),
             topology: Some(RedisTopology {
                 mode: RedisTopologyMode::Sentinel,
                 sentinel: Some(RedisSentinel {
@@ -720,11 +639,10 @@ mod tests {
             ..minimal_config(vec![])
         };
 
-        let config = build_fred_config(&crd, &no_auth()).unwrap();
-        let err = build_fred_pool(&crd, config).unwrap_err();
+        let err = build_fred_config(&crd, &no_auth()).unwrap_err();
         assert_eq!(
             err.to_string(),
-            "Redis active endpoints cannot mix TLS and plaintext transports; use consistent schemes or set tls.enabled=true"
+            "Redis active endpoints cannot mix TLS and plaintext transports unless tls.enabled=true"
         );
     }
 

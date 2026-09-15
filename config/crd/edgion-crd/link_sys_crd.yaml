@@ -31,7 +31,7 @@ spec:
                     # Common fields for all system types
                     endpoints:
                       type: array
-                      description: "Server endpoints"
+                      description: "Provider server endpoints; Redis uses exactly one for standalone, one or more for cluster, and none for sentinel"
                       items:
                         type: string
                     # Redis/Etcd/OTLP auth - simple secretRef (required when auth is present)
@@ -187,6 +187,7 @@ spec:
                               type: string
                             sentinels:
                               type: array
+                              description: "One or more Redis Sentinel endpoints"
                               items:
                                 type: string
                         cluster:

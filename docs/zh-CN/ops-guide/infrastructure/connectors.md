@@ -161,7 +161,7 @@ spec:
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `endpoints` | Array\<String\> | **必填** | Redis 端点，至少一个。示例：`"redis://redis:6379"` 或 `"rediss://..."` 表示 TLS。 |
+| `endpoints` | Array\<String\> | 取决于拓扑 | Redis 端点：standalone 必须恰好一个，cluster 至少一个，sentinel 必须省略或为空。 |
 | `db` | Integer | none | 数据库索引（0–255）；Redis 服务端必须提供所选数据库。 |
 | `auth` | Object | none | 认证配置。存在时 `auth.secretRef` 必填。Secret 需提供 `password`；`username` 可选（Redis 6+ ACL）。 |
 | `tls` | Object | none | TLS 配置；详见 [TLS](#tls)。 |
@@ -193,6 +193,16 @@ Redis duration 使用 Gateway API 格式，例如 `500ms`、`3s` 或 `10s`。连
 块时，状态报告 `Accepted=False/Invalid`。Cluster 模式仅在覆盖 `maxRedirects` 时需要
 `cluster` 块。
 
+每个活动端点必须采用 `host`、`host:port`、`[IPv6]`、`[IPv6]:port`、
+`redis://host[:port]` 或 `rediss://host[:port]` 之一，默认端口为 6379。
+用户信息、非根路径、查询、fragment、未知 scheme、空 host 和端口 0 均会被拒绝。
+解析采用全有或全无语义：任意 seed 无效都会拒绝整个资源，不会静默缩减拓扑。
+验证错误只报告字段和列表索引，不回显输入值。
+
+未设置 `tls.enabled: true` 时，所有活动端点必须选择同一种传输：`rediss://`
+表示 TLS，`redis://` 和无 scheme 形式表示明文。显式 TLS 作用于整个 Fred 客户端，
+因此允许 endpoint 采用混合拼写。
+
 ### DNS 与出站流量策略
 
 Redis 端点由 Gateway 在 Fred 建立连接时解析，而不是由 Controller 预先解析，也不会在每条
@@ -218,8 +228,6 @@ metadata:
 spec:
   type: redis
   config:
-    endpoints:
-      - "redis://sentinel-1:26379"
     auth:
       secretRef:
         name: redis-auth
@@ -1290,7 +1298,7 @@ spec:
 
 ### Q1：为什么我的 LinkSys 报告 `Accepted=False/Invalid`？
 
-**A**：结构或后端特定校验失败。常见原因：`endpoints` 列表为空、`topology.mode=sentinel` 但缺少 `sentinel` 块（或 `mode=cluster` 但缺少 `cluster` 块）、webhook 的 `target` Service 引用缺少/为零的 `port` 或不支持的 `kind`（仅允许 `Service`、`ServiceClusterIp`、`ServiceEndpointSlice`、留空）、webhook 的 `request` 存在冲突字段（同一名称同时出现在 `origin` 和 `custom`、列表内重复名称、或同时声明 `headers.origin[name: Cookie]` 和 `cookies.*` 列表）。状态 `message` 字段列出了具体错误。
+**A**：结构或后端特定校验失败。常见原因包括 Redis endpoint 语法、基数或传输模式无效，`topology.mode=sentinel` 但缺少有效的 `sentinel` 块，Etcd/Elasticsearch endpoint 为空，webhook 的 `target` Service 引用缺少/为零的 `port` 或使用不支持的 `kind`，以及 webhook 请求字段互相冲突。状态 `message` 会列出具体错误，但不会回显 Redis endpoint 输入。
 
 ### Q2：凭据看起来正确，但 `ResolvedRefs` 为 `False`。为什么？
 

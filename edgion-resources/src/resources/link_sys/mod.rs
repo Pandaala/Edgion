@@ -172,17 +172,7 @@ impl LinkSys {
         let mut errors = Vec::new();
         match &self.spec.config {
             SystemConfig::Redis(redis_config) => {
-                if redis_config.endpoints.is_empty() {
-                    errors.push("Redis configuration has no endpoints".to_string());
-                }
                 errors.extend(redis_config.validation_errors());
-
-                // Topology consistency
-                if let Some(topology) = &redis_config.topology {
-                    if topology.mode == redis::RedisTopologyMode::Sentinel && topology.sentinel.is_none() {
-                        errors.push("Sentinel mode specified but sentinel config is missing".to_string());
-                    }
-                }
             }
             SystemConfig::Etcd(etcd_config) => {
                 if etcd_config.endpoints.is_empty() {

@@ -1,4 +1,5 @@
 //! Disabled TLS references must not block fresh Redis clients or replacement generations.
+//! Invalid endpoint generations must report `Accepted=False` and retain the last-known-good client.
 //! Uses the shared Redis service on port 16379; never starts another topology.
 
 use crate::dynamic::scenario::{PhaseSuite, Scenario, ScenarioRunFuture};
@@ -19,6 +20,7 @@ enum Phase {
     Absent,
     Initial,
     Updated,
+    InvalidEndpoint,
     Blocked,
     Recovered,
 }
@@ -58,6 +60,9 @@ fn initial() -> Box<dyn TestSuite> {
 fn updated() -> Box<dyn TestSuite> {
     Box::new(TlsSuite(Phase::Updated))
 }
+fn invalid_endpoint() -> Box<dyn TestSuite> {
+    Box::new(TlsSuite(Phase::InvalidEndpoint))
+}
 fn blocked() -> Box<dyn TestSuite> {
     Box::new(TlsSuite(Phase::Blocked))
 }
@@ -77,6 +82,10 @@ static PHASES: &[PhaseSuite] = &[
     PhaseSuite {
         name: "updated",
         factory: updated,
+    },
+    PhaseSuite {
+        name: "invalid_endpoint",
+        factory: invalid_endpoint,
     },
     PhaseSuite {
         name: "blocked",
@@ -221,6 +230,7 @@ async fn check(ctx: &TestContext, phase: Phase) -> Result<()> {
         }
         return Ok(());
     }
+    let invalid_endpoint = phase == Phase::InvalidEndpoint;
     let enabled = phase == Phase::Blocked;
     let configured_db = usize::from(phase == Phase::Updated);
     for gateway in [false, true] {
@@ -230,12 +240,16 @@ async fn check(ctx: &TestContext, phase: Phase) -> Result<()> {
             config["db"] == configured_db && config["tls"]["enabled"] == enabled,
             "stale LinkSys configuration"
         );
+        ensure!(
+            config["endpoints"].as_array().map(Vec::len) == Some(if invalid_endpoint { 2 } else { 1 }),
+            "stale Redis endpoints"
+        );
         if !gateway {
             let conditions = resource["status"]["conditions"]
                 .as_array()
                 .context("missing status conditions")?;
             for (kind, expected) in [
-                ("Accepted", "True"),
+                ("Accepted", if invalid_endpoint { "False" } else { "True" }),
                 ("ResolvedRefs", if enabled { "False" } else { "True" }),
             ] {
                 let condition = conditions
@@ -243,14 +257,36 @@ async fn check(ctx: &TestContext, phase: Phase) -> Result<()> {
                     .find(|condition| condition["type"] == kind)
                     .context("missing condition")?;
                 ensure!(condition["status"] == expected, "unexpected {kind}: {condition}");
+                if kind == "Accepted" && invalid_endpoint {
+                    ensure!(
+                        condition["reason"] == "Invalid",
+                        "unexpected Accepted reason: {condition}"
+                    );
+                    let message = condition["message"].as_str().context("missing Accepted message")?;
+                    ensure!(
+                        message.contains("endpoints[1] is invalid"),
+                        "missing endpoint index: {condition}"
+                    );
+                    ensure!(
+                        !message.contains("not-a-port"),
+                        "endpoint input leaked into status: {condition}"
+                    );
+                }
                 if let Some(generation) = resource["metadata"]["generation"].as_i64() {
                     ensure!(condition["observedGeneration"] == generation, "stale {kind} generation");
                 }
             }
         }
     }
-    // The unresolved enabled generation requests DB 0, but must retain DB 1.
-    check_database(ctx, usize::from(matches!(phase, Phase::Updated | Phase::Blocked))).await
+    // Invalid and unresolved generations request DB 0, but must retain DB 1.
+    check_database(
+        ctx,
+        usize::from(matches!(
+            phase,
+            Phase::Updated | Phase::InvalidEndpoint | Phase::Blocked
+        )),
+    )
+    .await
 }
 
 async fn cleanup(ctx: &ScenarioCtx) -> Result<()> {
@@ -289,6 +325,8 @@ fn run(ctx: ScenarioCtx) -> ScenarioRunFuture {
             ctx.wait_phase(SCENARIO, "initial", TIMEOUT).await?;
             ctx.apply_dir("updates/disabled-db-1.yaml").await?;
             ctx.wait_phase(SCENARIO, "updated", TIMEOUT).await?;
+            ctx.apply_dir("updates/invalid-endpoint-db-0.yaml").await?;
+            ctx.wait_phase(SCENARIO, "invalid_endpoint", TIMEOUT).await?;
             ctx.apply_dir("updates/enabled-db-0.yaml").await?;
             ctx.wait_phase(SCENARIO, "blocked", TIMEOUT).await?;
             ctx.apply_dir("initial/03_LinkSys.yaml").await?;

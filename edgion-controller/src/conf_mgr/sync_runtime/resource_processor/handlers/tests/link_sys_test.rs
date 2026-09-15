@@ -901,12 +901,16 @@ fn test_update_status_sets_accepted_true() {
 }
 
 #[test]
-fn test_update_status_sets_accepted_false_on_validation_errors() {
+fn redis_endpoint_validation_sets_accepted_false_without_echoing_input() {
     let (ctx, _runtime) = make_ctx(HashMap::new());
     let handler = LinkSysHandler::new();
     let mut ls = make_redis_link_sys("default", "my-redis", "redis-creds", None);
+    let SystemConfig::Redis(redis) = &mut ls.spec.config else {
+        panic!("expected Redis");
+    };
+    redis.endpoints = vec!["redis://user:secret@cache:6379".to_string()];
 
-    let errors = vec!["Redis configuration has no endpoints".to_string()];
+    let errors = handler.preparse(&mut ls, &ctx);
     handler.update_status(&mut ls, &ctx, &errors);
 
     let status = ls.status.expect("status should be set");
@@ -917,7 +921,8 @@ fn test_update_status_sets_accepted_false_on_validation_errors() {
         .expect("Accepted condition should exist");
     assert_eq!(accepted.status, "False");
     assert_eq!(accepted.reason, "Invalid");
-    assert!(accepted.message.contains("no endpoints"));
+    assert!(accepted.message.contains("endpoints[0] is invalid"));
+    assert!(!accepted.message.contains("secret"));
 }
 
 #[tokio::test]

@@ -113,8 +113,6 @@ does not disable the secure scheme. This also applies to `credentialSource` TLS.
 spec:
   type: redis
   config:
-    endpoints:                    # Required, at least one
-      - "redis://redis:6379"
     db: 0                         # 0-255; the server must expose the database
     auth:                         # Optional; secretRef is required when present
       secretRef:
@@ -137,6 +135,9 @@ spec:
 ```
 
 - When `topology.mode=sentinel`, `sentinel` is required; otherwise the resource is `Accepted=False/Invalid`. Cluster mode uses Fred defaults when its optional `cluster` block is absent.
+- Endpoint forms are `host`, `host:port`, `[IPv6]`, `[IPv6]:port`, `redis://host[:port]`, and `rediss://host[:port]`; the default port is 6379. User information, non-root paths, queries, fragments, unknown schemes, and port 0 are rejected without echoing the submitted value in status or logs.
+- Standalone mode requires exactly one top-level `endpoints` item. Cluster mode requires one or more top-level items. Sentinel mode requires top-level `endpoints` to be absent/empty and uses one or more `topology.sentinel.sentinels` items instead. Inactive topology subobjects are rejected.
+- Every active endpoint is parsed all-or-nothing. Without `tls.enabled=true`, the active list cannot mix `rediss://` with plaintext `redis://`/scheme-less entries. Explicit TLS applies to the complete Fred topology and permits mixed spelling.
 - `pool.size` is a fixed eager connection count in the range 1-64 (default 8).
 - `timeout.connect` and `timeout.command` use GEP-2257 durations. Their defaults are `5s`; the maxima are `10s` and `30s`, respectively.
 - Cluster `maxRedirects` defaults to 5 and accepts 0-64. The `cluster` block is optional when the default is sufficient.
@@ -478,7 +479,7 @@ status:
 
 **`Accepted`**:
 - `True/Accepted` — structure + `validate_config()` both passed.
-- `False/Invalid` — has validation errors (empty endpoints, missing Sentinel/Cluster sub-config, invalid Webhook URI, etc.); `message` concatenates the errors.
+- `False/Invalid` — has validation errors (invalid Redis endpoint syntax/cardinality/transport, missing Sentinel config, empty Etcd/Elasticsearch endpoints, invalid Webhook URI, etc.); `message` concatenates the errors.
 - `False/UnsupportedConfigurationCenter` — `credentialSource` uses `persist: true` outside Kubernetes.
 - `False/UnsupportedHaMode` — `credentialSource` uses `persist: false` when the Controller topology does not have a single publisher, currently Kubernetes `ha_mode: all-serve`.
 

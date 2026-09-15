@@ -166,7 +166,7 @@ spec:
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `endpoints` | Array\<String\> | **Required** | Redis endpoints; at least one. Example: `"redis://redis:6379"` or `"rediss://..."` for TLS. |
+| `endpoints` | Array\<String\> | topology-dependent | Redis endpoints: exactly one in standalone mode, at least one in cluster mode, and omitted/empty in sentinel mode. |
 | `db` | Integer | none | Database index (0–255). The Redis server must expose the selected database. |
 | `auth` | Object | none | Authentication. When present, `auth.secretRef` is required. The Secret must provide `password`; `username` is optional (Redis 6+ ACL). |
 | `tls` | Object | none | TLS configuration; see [TLS](#tls). |
@@ -201,6 +201,18 @@ When `topology` is omitted, the connector runs in standalone mode. When
 `Accepted=False/Invalid`. Cluster mode needs a `cluster` block only when
 overriding `maxRedirects`.
 
+Every active endpoint must use one of `host`, `host:port`, `[IPv6]`,
+`[IPv6]:port`, `redis://host[:port]`, or `rediss://host[:port]`. The default
+port is 6379. User information, non-root paths, queries, fragments, unknown
+schemes, empty hosts, and port 0 are rejected. Parsing is all-or-nothing; one
+invalid seed rejects the resource instead of silently reducing the topology.
+Validation errors identify the field and list index without echoing the input.
+
+Without `tls.enabled: true`, every active endpoint must select the same
+transport: `rediss://` is TLS, while `redis://` and scheme-less forms are
+plaintext. Explicit TLS applies to the complete Fred client and therefore
+permits mixed endpoint spelling.
+
 ### DNS and egress policy
 
 Redis endpoints are resolved by the Gateway when Fred opens a connection, not by the Controller and
@@ -228,8 +240,6 @@ metadata:
 spec:
   type: redis
   config:
-    endpoints:
-      - "redis://sentinel-1:26379"
     auth:
       secretRef:
         name: redis-auth
@@ -1359,7 +1369,7 @@ spec:
 
 ### Q1: Why does my LinkSys report `Accepted=False/Invalid`?
 
-**A**: The structure or per-backend validation failed. Common causes: an empty `endpoints` list, `topology.mode=sentinel` without a `sentinel` block (or `mode=cluster` without `cluster`), a webhook `target` Service reference with a missing/zero `port` or an unsupported `kind` (only `Service`, `ServiceClusterIp`, `ServiceEndpointSlice`, empty are allowed), or a webhook `request` with conflicting fields (the same name in both `origin` and `custom`, a duplicate name within a list, or both `headers.origin[name: Cookie]` and a `cookies.*` list). The status `message` concatenates the specific errors.
+**A**: The structure or per-backend validation failed. Common causes include a Redis endpoint with invalid syntax/cardinality or mixed transport schemes, `topology.mode=sentinel` without a valid `sentinel` block, empty Etcd/Elasticsearch endpoints, a webhook `target` Service reference with a missing/zero `port` or unsupported `kind`, and conflicting webhook request fields. The status `message` concatenates specific errors but does not echo Redis endpoint input.
 
 ### Q2: My credentials look correct, but `ResolvedRefs` is `False`. Why?
 

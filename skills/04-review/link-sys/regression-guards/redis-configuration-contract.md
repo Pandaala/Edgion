@@ -21,6 +21,18 @@ the typed schema. The supported contract is:
   default 5 seconds.
 - `topology.cluster.maxRedirects`: integer from 0 through 64; when absent,
   Fred's default of 5 applies. The `cluster` subobject is optional.
+- Redis endpoint syntax is authority-only: `host`, `host:port`, bracketed IPv6,
+  and the same forms under `redis://` or `rediss://`. The default port is 6379;
+  user information, non-root paths, queries, fragments, unknown schemes, empty
+  hosts, and port 0 are rejected.
+- Standalone has exactly one top-level endpoint. Cluster has one or more
+  top-level endpoints. Sentinel has no top-level endpoints and instead requires
+  a non-empty `topology.sentinel.sentinels` list plus a non-empty `masterName`.
+  Inactive topology subobjects are rejected.
+- Every active endpoint parses successfully or the complete configuration is
+  rejected. Without explicit `tls.enabled=true`, the active list cannot mix
+  TLS and plaintext schemes. Validation errors name only the field/index and
+  never echo the submitted endpoint.
 
 Redis has a fixed infinite connection-recovery policy so a published client can
 recover after an outage. Ordinary commands have one execution attempt and are
@@ -60,12 +72,18 @@ Resource tests cover accepted limits, rejected values, defaults, Controller
 validation propagation, advisory reporting of removed fields, and the committed
 CRD preservation markers that let removed nested keys reach strict ingest.
 Gateway tests cover the Fred mapping for timeouts, single-attempt commands,
-redirect limits, pool defaults, and rejected oversized pools. Re-evaluate this
-contract when upgrading Fred, changing Redis client publication or reconnect
-behavior, or adding a Redis operator-facing setting.
+redirect limits, pool defaults, rejected oversized pools, all-or-nothing
+endpoint parsing, topology cardinality, and transport selection. Controller and
+dynamic integration regressions cover `Accepted=False/Invalid` and retention of
+the last-known-good client for an invalid hot-update generation. Re-evaluate
+this contract when upgrading Fred, changing Redis client publication or
+reconnect behavior, or adding a Redis operator-facing setting.
 
 ## Resolution references
 
 - `redis-configuration-contract` — fixed by removing ineffective fields and
   aligning the remaining schema, validation, Fred mapping, documentation, and
   tests.
+- `D0013` / `redis-endpoint-contract` — fixed by moving topology, syntax, and
+  transport validation into the shared Redis resource contract and removing
+  Gateway-side lossy parsing.

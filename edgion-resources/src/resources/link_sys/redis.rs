@@ -3,6 +3,7 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
+use url::{Host, Url};
 
 use crate::duration::parse_duration;
 use crate::resources::common::{SecretSlot, TlsConfig};
@@ -14,12 +15,29 @@ pub const REDIS_MAX_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 pub const REDIS_DEFAULT_COMMAND_TIMEOUT: Duration = Duration::from_secs(5);
 pub const REDIS_MAX_COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
 pub const REDIS_MAX_REDIRECTS: u32 = 64;
+const REDIS_DEFAULT_PORT: u16 = 6379;
+
+/// Validated Redis transport selected by an endpoint scheme.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RedisTransport {
+    Plaintext,
+    Tls,
+}
+
+/// Parsed active endpoint shared by Controller validation and Gateway mapping.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ParsedRedisEndpoint {
+    pub host: String,
+    pub port: u16,
+    pub transport: RedisTransport,
+}
 
 /// Redis client configuration
 #[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct RedisClientConfig {
-    /// Redis server endpoints (e.g., "redis://127.0.0.1:6379")
+    /// Standalone or Cluster Redis endpoints. Sentinel uses its nested list.
+    #[serde(default)]
     pub endpoints: Vec<String>,
 
     /// Authentication configuration
@@ -50,6 +68,10 @@ pub struct RedisClientConfig {
 impl RedisClientConfig {
     pub fn validation_errors(&self) -> Vec<String> {
         let mut errors = Vec::new();
+
+        if let Err(endpoint_errors) = self.parsed_active_endpoints() {
+            errors.extend(endpoint_errors);
+        }
 
         if !(0..=255).contains(&self.db.unwrap_or_default()) {
             errors.push("Redis db must be between 0 and 255".to_string());
@@ -92,6 +114,91 @@ impl RedisClientConfig {
         errors
     }
 
+    /// Validate the selected topology and parse every active endpoint.
+    ///
+    /// Errors identify only the field and list index. The original value is
+    /// deliberately omitted because an operator can accidentally place
+    /// credentials in an endpoint URL and validation errors reach status and
+    /// logs.
+    pub fn parsed_active_endpoints(&self) -> Result<Vec<ParsedRedisEndpoint>, Vec<String>> {
+        let mut errors = Vec::new();
+        let (field, endpoints) = match self.topology.as_ref() {
+            None => {
+                validate_standalone_shape(self, &mut errors);
+                ("endpoints", self.endpoints.as_slice())
+            }
+            Some(topology) => match &topology.mode {
+                RedisTopologyMode::Standalone => {
+                    validate_standalone_shape(self, &mut errors);
+                    ("endpoints", self.endpoints.as_slice())
+                }
+                RedisTopologyMode::Cluster => {
+                    if self.endpoints.is_empty() {
+                        errors.push("Redis cluster mode requires at least one endpoint".to_string());
+                    }
+                    if topology.sentinel.is_some() {
+                        errors.push("Redis cluster mode must not configure topology.sentinel".to_string());
+                    }
+                    ("endpoints", self.endpoints.as_slice())
+                }
+                RedisTopologyMode::Sentinel => {
+                    if !self.endpoints.is_empty() {
+                        errors.push("Redis sentinel mode must not configure top-level endpoints".to_string());
+                    }
+                    if topology.cluster.is_some() {
+                        errors.push("Redis sentinel mode must not configure topology.cluster".to_string());
+                    }
+                    match topology.sentinel.as_ref() {
+                        Some(sentinel) => {
+                            if sentinel.master_name.trim().is_empty() {
+                                errors.push("Redis topology.sentinel.masterName must not be empty".to_string());
+                            }
+                            if sentinel.sentinels.is_empty() {
+                                errors.push(
+                                    "Redis sentinel mode requires at least one topology.sentinel.sentinels endpoint"
+                                        .to_string(),
+                                );
+                            }
+                            ("topology.sentinel.sentinels", sentinel.sentinels.as_slice())
+                        }
+                        None => {
+                            errors.push("Redis sentinel mode requires topology.sentinel".to_string());
+                            ("topology.sentinel.sentinels", &[] as &[String])
+                        }
+                    }
+                }
+            },
+        };
+
+        let mut parsed = Vec::with_capacity(endpoints.len());
+        for (index, endpoint) in endpoints.iter().enumerate() {
+            match parse_redis_endpoint(endpoint) {
+                Ok(endpoint) => parsed.push(endpoint),
+                Err(reason) => errors.push(format!("Redis {field}[{index}] is invalid: {reason}")),
+            }
+        }
+
+        let explicit_tls = self.tls.as_ref().is_some_and(|tls| tls.enabled);
+        if !explicit_tls {
+            let has_plaintext = parsed
+                .iter()
+                .any(|endpoint| endpoint.transport == RedisTransport::Plaintext);
+            let has_tls = parsed.iter().any(|endpoint| endpoint.transport == RedisTransport::Tls);
+            if has_plaintext && has_tls {
+                errors.push(
+                    "Redis active endpoints cannot mix TLS and plaintext transports unless tls.enabled=true"
+                        .to_string(),
+                );
+            }
+        }
+
+        if errors.is_empty() {
+            Ok(parsed)
+        } else {
+            Err(errors)
+        }
+    }
+
     pub fn connect_timeout(&self) -> Result<Duration, String> {
         resolve_timeout(
             self.timeout.as_ref().and_then(|timeout| timeout.connect.as_deref()),
@@ -109,6 +216,75 @@ impl RedisClientConfig {
             "timeout.command",
         )
     }
+}
+
+fn validate_standalone_shape(config: &RedisClientConfig, errors: &mut Vec<String>) {
+    if config.endpoints.len() != 1 {
+        errors.push("Redis standalone mode requires exactly one endpoint".to_string());
+    }
+    if let Some(topology) = &config.topology {
+        if topology.sentinel.is_some() {
+            errors.push("Redis standalone mode must not configure topology.sentinel".to_string());
+        }
+        if topology.cluster.is_some() {
+            errors.push("Redis standalone mode must not configure topology.cluster".to_string());
+        }
+    }
+}
+
+fn parse_redis_endpoint(value: &str) -> Result<ParsedRedisEndpoint, &'static str> {
+    if value.is_empty() || value.trim() != value {
+        return Err("must not be empty or contain surrounding whitespace");
+    }
+
+    let (transport, authority) = if let Some(rest) = value.strip_prefix("redis://") {
+        (RedisTransport::Plaintext, rest)
+    } else if let Some(rest) = value.strip_prefix("rediss://") {
+        (RedisTransport::Tls, rest)
+    } else if value.contains("://") {
+        return Err("scheme must be redis or rediss");
+    } else {
+        (RedisTransport::Plaintext, value)
+    };
+    let authority_end = authority.find(['/', '?', '#']).unwrap_or(authority.len());
+    let host_and_port = &authority[..authority_end];
+    if host_and_port.ends_with(':') {
+        return Err("port must be between 1 and 65535");
+    }
+    let suffix = &authority[authority_end..];
+    if suffix.starts_with('/') {
+        let path_end = suffix.find(['?', '#']).unwrap_or(suffix.len());
+        if &suffix[..path_end] != "/" {
+            return Err("paths are not supported");
+        }
+    }
+    let url = Url::parse(&format!("redis://{authority}")).map_err(|_| "must contain a valid host and optional port")?;
+
+    if !url.username().is_empty() || url.password().is_some() {
+        return Err("user information is not supported");
+    }
+    if !matches!(url.path(), "" | "/") {
+        return Err("paths are not supported");
+    }
+    if url.query().is_some() {
+        return Err("queries are not supported");
+    }
+    if url.fragment().is_some() {
+        return Err("fragments are not supported");
+    }
+
+    let host = match url.host() {
+        Some(Host::Domain(host)) if !host.is_empty() => host.to_string(),
+        Some(Host::Ipv4(host)) => host.to_string(),
+        Some(Host::Ipv6(host)) => host.to_string(),
+        _ => return Err("host must not be empty"),
+    };
+    let port = url.port().unwrap_or(REDIS_DEFAULT_PORT);
+    if port == 0 {
+        return Err("port must be between 1 and 65535");
+    }
+
+    Ok(ParsedRedisEndpoint { host, port, transport })
 }
 
 fn validate_timeout(value: Option<&str>, maximum: Duration, field: &str, errors: &mut Vec<String>) {
@@ -283,6 +459,167 @@ mod tests {
         assert!(errors.contains("timeout.connect must be greater than zero"));
         assert!(errors.contains("timeout.command must not exceed 30000ms"));
         assert!(errors.contains("maxRedirects must not exceed 64"));
+    }
+
+    #[test]
+    fn redis_endpoint_contract_accepts_supported_authority_forms() {
+        for (raw, host, port, transport) in [
+            ("cache", "cache", 6379, RedisTransport::Plaintext),
+            ("cache:6380", "cache", 6380, RedisTransport::Plaintext),
+            ("redis://cache:6381", "cache", 6381, RedisTransport::Plaintext),
+            ("rediss://cache", "cache", 6379, RedisTransport::Tls),
+            ("[2001:db8::1]:6382", "2001:db8::1", 6382, RedisTransport::Plaintext),
+        ] {
+            let config = RedisClientConfig {
+                endpoints: vec![raw.to_string()],
+                ..minimal_config()
+            };
+            let parsed = config.parsed_active_endpoints().unwrap();
+            assert_eq!(
+                parsed,
+                vec![ParsedRedisEndpoint {
+                    host: host.to_string(),
+                    port,
+                    transport,
+                }]
+            );
+        }
+    }
+
+    #[test]
+    fn redis_endpoint_contract_rejects_unsupported_components_without_echoing_values() {
+        for raw in [
+            "",
+            " redis://cache:6379",
+            "http://cache:6379",
+            "redis://user:secret@cache:6379",
+            "redis://cache:6379/0",
+            "redis://cache/%2e%2e",
+            "redis://cache:6379?db=0",
+            "redis://cache:6379#fragment",
+            "redis://cache:0",
+            "redis://cache:",
+            "cache:",
+        ] {
+            let config = RedisClientConfig {
+                endpoints: vec![raw.to_string()],
+                ..minimal_config()
+            };
+            let errors = config.validation_errors().join("; ");
+            assert!(errors.contains("Redis endpoints[0] is invalid"), "{raw}: {errors}");
+            if !raw.is_empty() {
+                assert!(
+                    !errors.contains(raw),
+                    "validation must not echo endpoint input: {errors}"
+                );
+            }
+            assert!(
+                !errors.contains("secret"),
+                "validation must not echo accidental credentials: {errors}"
+            );
+        }
+    }
+
+    #[test]
+    fn redis_endpoint_contract_enforces_topology_cardinality_and_active_fields() {
+        let standalone = RedisClientConfig {
+            endpoints: vec!["redis://one:6379".into(), "redis://two:6379".into()],
+            ..minimal_config()
+        };
+        assert!(standalone
+            .validation_errors()
+            .join("; ")
+            .contains("standalone mode requires exactly one endpoint"));
+
+        let cluster = RedisClientConfig {
+            endpoints: Vec::new(),
+            topology: Some(RedisTopology {
+                mode: RedisTopologyMode::Cluster,
+                sentinel: None,
+                cluster: None,
+            }),
+            ..minimal_config()
+        };
+        assert!(cluster
+            .validation_errors()
+            .join("; ")
+            .contains("cluster mode requires at least one endpoint"));
+
+        let sentinel = RedisClientConfig {
+            endpoints: Vec::new(),
+            topology: Some(RedisTopology {
+                mode: RedisTopologyMode::Sentinel,
+                sentinel: Some(RedisSentinel {
+                    master_name: "mymaster".into(),
+                    sentinels: vec!["redis://sentinel-1:26379".into(), "sentinel-2:26379".into()],
+                }),
+                cluster: None,
+            }),
+            ..minimal_config()
+        };
+        assert_eq!(sentinel.parsed_active_endpoints().unwrap().len(), 2);
+
+        let sentinel_with_unused_top_level = RedisClientConfig {
+            endpoints: vec!["redis://unused:6379".into()],
+            ..sentinel
+        };
+        assert!(sentinel_with_unused_top_level
+            .validation_errors()
+            .join("; ")
+            .contains("sentinel mode must not configure top-level endpoints"));
+
+        let invalid_sentinel = RedisClientConfig {
+            endpoints: Vec::new(),
+            topology: Some(RedisTopology {
+                mode: RedisTopologyMode::Sentinel,
+                sentinel: Some(RedisSentinel {
+                    master_name: " ".into(),
+                    sentinels: Vec::new(),
+                }),
+                cluster: Some(RedisCluster { max_redirects: None }),
+            }),
+            ..minimal_config()
+        };
+        let errors = invalid_sentinel.validation_errors().join("; ");
+        assert!(errors.contains("must not configure topology.cluster"));
+        assert!(errors.contains("masterName must not be empty"));
+        assert!(errors.contains("requires at least one topology.sentinel.sentinels endpoint"));
+
+        let standalone_with_inactive_config = RedisClientConfig {
+            topology: Some(RedisTopology {
+                mode: RedisTopologyMode::Standalone,
+                sentinel: None,
+                cluster: Some(RedisCluster { max_redirects: None }),
+            }),
+            ..minimal_config()
+        };
+        assert!(standalone_with_inactive_config
+            .validation_errors()
+            .join("; ")
+            .contains("standalone mode must not configure topology.cluster"));
+    }
+
+    #[test]
+    fn redis_endpoint_contract_enforces_one_active_transport_without_explicit_tls() {
+        let mut config = RedisClientConfig {
+            endpoints: vec!["redis://one:6379".into(), "rediss://two:6380".into()],
+            topology: Some(RedisTopology {
+                mode: RedisTopologyMode::Cluster,
+                sentinel: None,
+                cluster: None,
+            }),
+            ..minimal_config()
+        };
+        assert!(config
+            .validation_errors()
+            .join("; ")
+            .contains("cannot mix TLS and plaintext transports"));
+
+        config.tls = Some(TlsConfig {
+            enabled: true,
+            ..Default::default()
+        });
+        assert!(config.validation_errors().is_empty());
     }
 
     #[test]
