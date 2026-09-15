@@ -500,171 +500,184 @@ pub struct StageLogs {
 mod tests {
     use super::*;
     use edgion_resources::sensitive::SENSITIVE_MODE;
-    use parking_lot::{Mutex, MutexGuard};
     use std::sync::atomic::Ordering;
 
-    static MODE_LOCK: Mutex<()> = Mutex::new(());
+    fn assert_sensitive_test_in_subprocess(test_name: &str, assertion: impl FnOnce()) {
+        const CHILD_ENV: &str = "EDGION_PLUGIN_LOG_SENSITIVE_CHILD";
+        const TEST_MODULE: &str = "plugins::runtime::log::tests";
+        crate::test_subprocess::assert_in_subprocess(TEST_MODULE, test_name, CHILD_ENV, test_name, assertion);
+    }
 
-    struct ModeGuard<'a> {
-        prev: u8,
-        // Held purely for RAII: serializes tests that mutate SENSITIVE_MODE.
-        _lock: MutexGuard<'a, ()>,
-    }
-    impl Drop for ModeGuard<'_> {
-        fn drop(&mut self) {
-            SENSITIVE_MODE.store(self.prev, Ordering::SeqCst);
-        }
-    }
-    fn set_mode(mode: u8) -> ModeGuard<'static> {
-        let guard = MODE_LOCK.lock();
-        let prev = SENSITIVE_MODE.swap(mode, Ordering::SeqCst);
-        ModeGuard { prev, _lock: guard }
+    fn assert_sensitive_mode_test(test_name: &str, mode: u8, assertion: impl FnOnce()) {
+        assert_sensitive_test_in_subprocess(test_name, || {
+            SENSITIVE_MODE.store(mode, Ordering::SeqCst);
+            assertion();
+        });
     }
 
     #[test]
     fn formatted_entries_respect_exact_rendered_limit_and_atomic_rejection() {
-        for mode in [0, 1, 2] {
-            let _g = set_mode(mode);
-            let value = if mode == 1 {
-                "x".repeat(1024 * 1024)
-            } else {
-                "é".to_string()
-            };
-            let rendered = match mode {
-                0 => "é",
-                1 => "***",
-                _ => "<E>é</E>",
-            };
-            for size in [512, 513] {
-                let template = format!("{}{{}}", "a".repeat(size - rendered.len()));
-                let mut log = PluginLog::new("bounded");
-                assert_eq!(log.push_fmt(&template, &[sensitive(&value)]), size == 512);
-                let json = serde_json::to_value(&log).unwrap();
-                if size == 512 {
-                    assert_eq!(
-                        json["log"],
-                        serde_json::json!([format!("{}{rendered}", "a".repeat(size - rendered.len()))])
-                    );
-                    assert!(json.get("log_full").is_none());
-                } else {
-                    assert_eq!(json["log"], serde_json::json!([]));
-                    assert_eq!(json["log_full"], true);
-                    assert!(log.log.is_some() && log.ulog.is_some());
-                    assert!(log.push_fmt("later {}", &[LogArg::Plain("entry")]));
-                    assert_eq!(log.log.as_ref().unwrap().entries().count(), 0);
-                    assert_eq!(
-                        log.ulog.as_ref().unwrap().entries().collect::<Vec<_>>(),
-                        ["later entry"]
-                    );
+        assert_sensitive_test_in_subprocess(
+            "formatted_entries_respect_exact_rendered_limit_and_atomic_rejection",
+            || {
+                for mode in [0, 1, 2] {
+                    SENSITIVE_MODE.store(mode, Ordering::SeqCst);
+                    let value = if mode == 1 {
+                        "x".repeat(1024 * 1024)
+                    } else {
+                        "é".to_string()
+                    };
+                    let rendered = match mode {
+                        0 => "é",
+                        1 => "***",
+                        _ => "<E>é</E>",
+                    };
+                    for size in [512, 513] {
+                        let template = format!("{}{{}}", "a".repeat(size - rendered.len()));
+                        let mut log = PluginLog::new("bounded");
+                        assert_eq!(log.push_fmt(&template, &[sensitive(&value)]), size == 512);
+                        let json = serde_json::to_value(&log).unwrap();
+                        if size == 512 {
+                            assert_eq!(
+                                json["log"],
+                                serde_json::json!([format!("{}{rendered}", "a".repeat(size - rendered.len()))])
+                            );
+                            assert!(json.get("log_full").is_none());
+                        } else {
+                            assert_eq!(json["log"], serde_json::json!([]));
+                            assert_eq!(json["log_full"], true);
+                            assert!(log.log.is_some() && log.ulog.is_some());
+                            assert!(log.push_fmt("later {}", &[LogArg::Plain("entry")]));
+                            assert_eq!(log.log.as_ref().unwrap().entries().count(), 0);
+                            assert_eq!(
+                                log.ulog.as_ref().unwrap().entries().collect::<Vec<_>>(),
+                                ["later entry"]
+                            );
+                        }
+                        assert!(json.get("ulog").is_none());
+                    }
                 }
-                assert!(json.get("ulog").is_none());
-            }
-        }
+            },
+        );
     }
 
     #[test]
     fn formatted_scratch_stops_before_large_appends_and_preserves_template_semantics() {
-        let huge = "x".repeat(1024 * 1024);
-        for mode in [0, 1, 2] {
-            let _g = set_mode(mode);
-            for (template, args) in [
-                (huge.as_str(), vec![]),
-                ("prefix{}", vec![LogArg::Plain(&huge)]),
-                ("prefix{}", vec![sensitive(&huge)]),
-            ] {
-                let mut scratch: SmallVec<[u8; 128]> = SmallVec::new();
-                let accepted = format_into(&mut scratch, template, &args);
-                assert_eq!(
-                    accepted,
-                    mode == 1 && matches!(args.first(), Some(LogArg::Sensitive(_)))
-                );
-                assert!(scratch.len() <= ULOG_MAX_BUFFER);
-                assert!(!scratch.spilled(), "oversized slices must be rejected before copying");
-            }
-            let mut log = PluginLog::new("syntax");
-            assert!(log.push_fmt("a{}b{}c", &[LogArg::Plain("é")]));
-            assert!(log.push_fmt("{}", &[LogArg::Plain("first"), sensitive(&huge)]));
-            assert_eq!(log.log.unwrap().entries().collect::<Vec<_>>(), ["aébc", "first"]);
-        }
+        assert_sensitive_test_in_subprocess(
+            "formatted_scratch_stops_before_large_appends_and_preserves_template_semantics",
+            || {
+                let huge = "x".repeat(1024 * 1024);
+                for mode in [0, 1, 2] {
+                    SENSITIVE_MODE.store(mode, Ordering::SeqCst);
+                    for (template, args) in [
+                        (huge.as_str(), vec![]),
+                        ("prefix{}", vec![LogArg::Plain(&huge)]),
+                        ("prefix{}", vec![sensitive(&huge)]),
+                    ] {
+                        let mut scratch: SmallVec<[u8; 128]> = SmallVec::new();
+                        let accepted = format_into(&mut scratch, template, &args);
+                        assert_eq!(
+                            accepted,
+                            mode == 1 && matches!(args.first(), Some(LogArg::Sensitive(_)))
+                        );
+                        assert!(scratch.len() <= ULOG_MAX_BUFFER);
+                        assert!(!scratch.spilled(), "oversized slices must be rejected before copying");
+                    }
+                    let mut log = PluginLog::new("syntax");
+                    assert!(log.push_fmt("a{}b{}c", &[LogArg::Plain("é")]));
+                    assert!(log.push_fmt("{}", &[LogArg::Plain("first"), sensitive(&huge)]));
+                    assert_eq!(log.log.unwrap().entries().collect::<Vec<_>>(), ["aébc", "first"]);
+                }
+            },
+        );
     }
 
     #[test]
     fn test_push_fmt_plain_args_never_masked() {
-        let _g = set_mode(1); // Replace mode
-        let mut log = PluginLog::new("test");
-        log.push_fmt("key {} set", la!["my-key"]);
-        assert!(log.contains("key my-key set"));
+        assert_sensitive_mode_test("test_push_fmt_plain_args_never_masked", 1, || {
+            let mut log = PluginLog::new("test");
+            log.push_fmt("key {} set", la!["my-key"]);
+            assert!(log.contains("key my-key set"));
+        });
     }
 
     #[test]
     fn test_push_fmt_sensitive_arg_replaced() {
-        let _g = set_mode(1); // Replace mode
-        let mut log = PluginLog::new("test");
-        log.push_fmt("user {} from {}", la!["admin", sensitive("1.2.3.4")]);
-        assert!(log.contains("user admin from ***"));
-        assert!(!log.contains("1.2.3.4"));
+        assert_sensitive_mode_test("test_push_fmt_sensitive_arg_replaced", 1, || {
+            let mut log = PluginLog::new("test");
+            log.push_fmt("user {} from {}", la!["admin", sensitive("1.2.3.4")]);
+            assert!(log.contains("user admin from ***"));
+            assert!(!log.contains("1.2.3.4"));
+        });
     }
 
     #[test]
     fn test_push_fmt_sensitive_arg_wrapped() {
-        let _g = set_mode(2); // Wrap mode
-        let mut log = PluginLog::new("test");
-        log.push_fmt("user {} from {}", la!["admin", sensitive("1.2.3.4")]);
-        assert!(log.contains("user admin from <E>1.2.3.4</E>"));
+        assert_sensitive_mode_test("test_push_fmt_sensitive_arg_wrapped", 2, || {
+            let mut log = PluginLog::new("test");
+            log.push_fmt("user {} from {}", la!["admin", sensitive("1.2.3.4")]);
+            assert!(log.contains("user admin from <E>1.2.3.4</E>"));
+        });
     }
 
     #[test]
     fn test_push_fmt_off_mode_writes_plain() {
-        let _g = set_mode(0); // Off mode
-        let mut log = PluginLog::new("test");
-        log.push_fmt("user {} from {}", la!["admin", sensitive("1.2.3.4")]);
-        assert!(log.contains("user admin from 1.2.3.4"));
+        assert_sensitive_mode_test("test_push_fmt_off_mode_writes_plain", 0, || {
+            let mut log = PluginLog::new("test");
+            log.push_fmt("user {} from {}", la!["admin", sensitive("1.2.3.4")]);
+            assert!(log.contains("user admin from 1.2.3.4"));
+        });
     }
 
     #[test]
     fn test_push_fmt_no_placeholders() {
-        let _g = set_mode(1);
-        let mut log = PluginLog::new("test");
-        log.push_fmt("static message; ", la![]);
-        assert!(log.contains("static message; "));
+        assert_sensitive_mode_test("test_push_fmt_no_placeholders", 1, || {
+            let mut log = PluginLog::new("test");
+            log.push_fmt("static message; ", la![]);
+            assert!(log.contains("static message; "));
+        });
     }
 
     #[test]
     fn test_push_sensitive_off_writes_plain() {
-        let _g = set_mode(0);
-        let mut log = PluginLog::new("test");
-        log.push_sensitive("hello world");
-        assert!(log.contains("hello world"));
+        assert_sensitive_mode_test("test_push_sensitive_off_writes_plain", 0, || {
+            let mut log = PluginLog::new("test");
+            log.push_sensitive("hello world");
+            assert!(log.contains("hello world"));
+        });
     }
 
     #[test]
     fn test_push_sensitive_replace_writes_stars() {
-        let _g = set_mode(1);
-        let mut log = PluginLog::new("test");
-        log.push_sensitive("secret-token-value");
-        assert!(log.contains("***"));
-        assert!(!log.contains("secret-token-value"));
+        assert_sensitive_mode_test("test_push_sensitive_replace_writes_stars", 1, || {
+            let mut log = PluginLog::new("test");
+            log.push_sensitive("secret-token-value");
+            assert!(log.contains("***"));
+            assert!(!log.contains("secret-token-value"));
+        });
     }
 
     #[test]
     fn test_push_sensitive_wrap_wraps_value() {
-        let _g = set_mode(2);
-        let mut log = PluginLog::new("test");
-        log.push_sensitive("user@example.com");
-        assert!(log.contains("<E>user@example.com</E>"));
+        assert_sensitive_mode_test("test_push_sensitive_wrap_wraps_value", 2, || {
+            let mut log = PluginLog::new("test");
+            log.push_sensitive("user@example.com");
+            assert!(log.contains("<E>user@example.com</E>"));
+        });
     }
 
     #[test]
     fn test_push_sensitive_truncates_at_utf8_boundary() {
-        let _g = set_mode(0);
-        // 63 ASCII bytes + 2-byte 'é' (bytes 63-64) + "trail"
-        let mut s = "a".repeat(63);
-        s.push('é');
-        s.push_str("trail");
-        assert!(s.len() > 64);
-        let mut log = PluginLog::new("test");
-        log.push_sensitive(&s);
-        assert!(!log.contains("trail"));
+        assert_sensitive_mode_test("test_push_sensitive_truncates_at_utf8_boundary", 0, || {
+            // 63 ASCII bytes + 2-byte 'é' (bytes 63-64) + "trail"
+            let mut s = "a".repeat(63);
+            s.push('é');
+            s.push_str("trail");
+            assert!(s.len() > 64);
+            let mut log = PluginLog::new("test");
+            log.push_sensitive(&s);
+            assert!(!log.contains("trail"));
+        });
     }
 
     #[test]

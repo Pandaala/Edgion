@@ -22,6 +22,7 @@ before applying a decision to current code.
 
 ## Regression guards
 
+- [Sensitive-mode tests use exact subprocess isolation](regression-guards/sensitive-mode-test-subprocess-isolation.md)
 - [Kubernetes preflight accepts kubectl Node collections](regression-guards/kubernetes-preflight-node-collection.md)
 - [Adaptive telemetry reconciliation needs destructive-set coverage](regression-guards/ai-adaptive-reconcile-needs-destructive-set-coverage.md)
 - [AI streaming client disconnect needs wire coverage](regression-guards/ai-stream-client-disconnect-needs-wire-coverage.md)

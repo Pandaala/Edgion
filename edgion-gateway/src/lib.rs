@@ -185,3 +185,6 @@ pub mod request_trace_id;
 
 #[cfg(test)]
 mod request_id_tests;
+
+#[cfg(test)]
+mod test_subprocess;

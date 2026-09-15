@@ -262,27 +262,17 @@ mod sensitive_log_tests {
 
     pub(super) fn assert_log_modes(test_name: &str, listener: impl Fn(&TlsContext) -> Value) {
         const CHILD: &str = "EDGION_TLS_ADDRESS_LOG_CHILD";
-        const MODE: &str = "EDGION_TLS_ADDRESS_LOG_MODE";
-        let test_name = test_name.strip_prefix("edgion_gateway::").unwrap();
-        if std::env::var(CHILD).as_deref() != Ok(test_name) {
-            for mode in ["off", "replace", "wrap"] {
-                let output = std::process::Command::new(std::env::current_exe().unwrap())
-                    .args(["--exact", test_name, "--nocapture"])
-                    .env(CHILD, test_name)
-                    .env(MODE, mode)
-                    .output()
-                    .expect("isolated TLS log test must start");
-                assert!(
-                    output.status.success(),
-                    "{mode}: {}\n{}",
-                    String::from_utf8_lossy(&output.stdout),
-                    String::from_utf8_lossy(&output.stderr)
-                );
-                assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed"));
-            }
-            return;
+        let exact_test_name = test_name.strip_prefix("edgion_gateway::").unwrap();
+        let (test_module, test_name) = exact_test_name.rsplit_once("::").unwrap();
+        for mode in ["off", "replace", "wrap"] {
+            crate::test_subprocess::assert_in_subprocess(test_module, test_name, CHILD, mode, || {
+                assert_log_mode(mode, &listener);
+            });
         }
-        let mode = match std::env::var(MODE).unwrap().as_str() {
+    }
+
+    fn assert_log_mode(mode: &str, listener: &impl Fn(&TlsContext) -> Value) {
+        let mode = match mode {
             "off" => SensitiveMode::Off,
             "replace" => SensitiveMode::Replace,
             "wrap" => SensitiveMode::Wrap,

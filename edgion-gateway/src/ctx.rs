@@ -4329,25 +4329,15 @@ mod route_meta_tests {
 mod sensitive_tests {
     use super::*;
     use edgion_resources::sensitive::SENSITIVE_MODE;
-    use parking_lot::Mutex;
     use std::sync::atomic::Ordering;
 
-    static MODE_LOCK: Mutex<()> = Mutex::new(());
-
-    struct ModeGuard<'a> {
-        prev: u8,
-        // Held purely for RAII: serializes tests that mutate SENSITIVE_MODE.
-        _lock: parking_lot::MutexGuard<'a, ()>,
-    }
-    impl Drop for ModeGuard<'_> {
-        fn drop(&mut self) {
-            SENSITIVE_MODE.store(self.prev, Ordering::SeqCst);
-        }
-    }
-    fn set_mode(mode: u8) -> ModeGuard<'static> {
-        let guard = MODE_LOCK.lock();
-        let prev = SENSITIVE_MODE.swap(mode, Ordering::SeqCst);
-        ModeGuard { prev, _lock: guard }
+    fn assert_sensitive_mode_test(test_name: &str, mode: u8, assertion: impl FnOnce()) {
+        const CHILD_ENV: &str = "EDGION_CTX_SENSITIVE_CHILD";
+        const TEST_MODULE: &str = "ctx::sensitive_tests";
+        crate::test_subprocess::assert_in_subprocess(TEST_MODULE, test_name, CHILD_ENV, test_name, || {
+            SENSITIVE_MODE.store(mode, Ordering::SeqCst);
+            assertion();
+        });
     }
 
     #[test]
@@ -4359,75 +4349,79 @@ mod sensitive_tests {
 
     #[test]
     fn test_client_cert_info_wrap_mode() {
-        let _g = set_mode(2);
-        let cert = ClientCertInfo {
-            subject: "CN=alice@example.com".to_string(),
-            sans: vec!["alice@example.com".to_string()],
-            cn: Some("alice@example.com".to_string()),
-            fingerprint: "abc123".to_string(),
-        };
-        let json = serde_json::to_string(&cert).unwrap();
-        assert!(
-            json.contains("<E>CN=alice@example.com</E>"),
-            "subject not wrapped: {}",
-            json
-        );
-        assert!(json.contains("<E>alice@example.com</E>"), "sans not wrapped: {}", json);
-        assert!(json.contains("abc123"), "fingerprint should not be wrapped: {}", json);
+        assert_sensitive_mode_test("test_client_cert_info_wrap_mode", 2, || {
+            let cert = ClientCertInfo {
+                subject: "CN=alice@example.com".to_string(),
+                sans: vec!["alice@example.com".to_string()],
+                cn: Some("alice@example.com".to_string()),
+                fingerprint: "abc123".to_string(),
+            };
+            let json = serde_json::to_string(&cert).unwrap();
+            assert!(
+                json.contains("<E>CN=alice@example.com</E>"),
+                "subject not wrapped: {}",
+                json
+            );
+            assert!(json.contains("<E>alice@example.com</E>"), "sans not wrapped: {}", json);
+            assert!(json.contains("abc123"), "fingerprint should not be wrapped: {}", json);
+        });
     }
 
     #[test]
     fn test_client_cert_info_off_mode() {
-        let _g = set_mode(0);
-        let cert = ClientCertInfo {
-            subject: "CN=alice@example.com".to_string(),
-            sans: vec![],
-            cn: None,
-            fingerprint: "abc123".to_string(),
-        };
-        let json = serde_json::to_string(&cert).unwrap();
-        assert!(
-            json.contains("CN=alice@example.com"),
-            "subject should be plain in off mode: {}",
-            json
-        );
+        assert_sensitive_mode_test("test_client_cert_info_off_mode", 0, || {
+            let cert = ClientCertInfo {
+                subject: "CN=alice@example.com".to_string(),
+                sans: vec![],
+                cn: None,
+                fingerprint: "abc123".to_string(),
+            };
+            let json = serde_json::to_string(&cert).unwrap();
+            assert!(
+                json.contains("CN=alice@example.com"),
+                "subject should be plain in off mode: {}",
+                json
+            );
+        });
     }
 
     #[test]
     fn test_request_info_wrap_mode() {
-        let _g = set_mode(2);
-        let mut ri = RequestInfo {
-            direct_peer_ip: "127.0.0.1".to_string(),
-            remote_ip: "10.0.0.1".to_string(),
-            entry_raw_path: "/api/users/alice".to_string(),
-            normalized_current_path: "/api/users/alice".to_string(),
-            x_forwarded_for: Some("203.0.113.5, 10.0.0.1".to_string()),
-            ..Default::default()
-        };
-        ri.install_tls_info(None, Some("example.com".to_string()), None, None, None);
-        let json = serde_json::to_string(&ri).unwrap();
-        assert!(json.contains("<E>127.0.0.1</E>"), "direct_peer_ip: {}", json);
-        assert!(json.contains("<E>10.0.0.1</E>"), "remote_ip: {}", json);
-        assert!(json.contains("<E>/api/users/alice</E>"), "path: {}", json);
-        assert!(json.contains("<E>203.0.113.5, 10.0.0.1</E>"), "xff: {}", json);
-        assert!(json.contains("<E>example.com</E>"), "sni: {}", json);
+        assert_sensitive_mode_test("test_request_info_wrap_mode", 2, || {
+            let mut ri = RequestInfo {
+                direct_peer_ip: "127.0.0.1".to_string(),
+                remote_ip: "10.0.0.1".to_string(),
+                entry_raw_path: "/api/users/alice".to_string(),
+                normalized_current_path: "/api/users/alice".to_string(),
+                x_forwarded_for: Some("203.0.113.5, 10.0.0.1".to_string()),
+                ..Default::default()
+            };
+            ri.install_tls_info(None, Some("example.com".to_string()), None, None, None);
+            let json = serde_json::to_string(&ri).unwrap();
+            assert!(json.contains("<E>127.0.0.1</E>"), "direct_peer_ip: {}", json);
+            assert!(json.contains("<E>10.0.0.1</E>"), "remote_ip: {}", json);
+            assert!(json.contains("<E>/api/users/alice</E>"), "path: {}", json);
+            assert!(json.contains("<E>203.0.113.5, 10.0.0.1</E>"), "xff: {}", json);
+            assert!(json.contains("<E>example.com</E>"), "sni: {}", json);
+        });
     }
 
     #[test]
     fn test_request_info_replace_mode() {
-        let _g = set_mode(1);
-        let ri = RequestInfo {
-            direct_peer_ip: "127.0.0.1".to_string(),
-            remote_ip: "10.0.0.1".to_string(),
-            entry_raw_path: "/api/users/alice".to_string(),
-            normalized_current_path: "/api/users/alice".to_string(),
-            ..Default::default()
-        };
-        let json = serde_json::to_string(&ri).unwrap();
-        assert!(!json.contains("127.0.0.1"), "direct_peer_ip leaked: {}", json);
-        assert!(!json.contains("10.0.0.1"), "remote_ip leaked: {}", json);
-        assert!(!json.contains("/api/users/alice"), "path leaked: {}", json);
-        assert!(json.contains("***"), "replace_with not found: {}", json);
+        assert_sensitive_mode_test("test_request_info_replace_mode", 1, || {
+            let ri = RequestInfo {
+                direct_peer_ip: "127.0.0.1".to_string(),
+                remote_ip: "10.0.0.1".to_string(),
+                entry_raw_path: "/api/users/alice".to_string(),
+                normalized_current_path: "/api/users/alice".to_string(),
+                ..Default::default()
+            };
+            let json = serde_json::to_string(&ri).unwrap();
+            assert!(!json.contains("127.0.0.1"), "direct_peer_ip leaked: {}", json);
+            assert!(!json.contains("10.0.0.1"), "remote_ip leaked: {}", json);
+            assert!(!json.contains("/api/users/alice"), "path leaked: {}", json);
+            assert!(json.contains("***"), "replace_with not found: {}", json);
+        });
     }
 
     #[test]

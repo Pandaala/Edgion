@@ -260,28 +260,7 @@ mod tests {
     fn assert_sensitive_log_in_subprocess(test_name: &str, assertion: impl FnOnce()) {
         const CHILD_ENV: &str = "EDGION_REDIRECT_SENSITIVE_LOG_CHILD";
         const TEST_MODULE: &str = "routes::http::redirect_http::tests";
-
-        if std::env::var(CHILD_ENV).as_deref() == Ok(test_name) {
-            // Only this exact test runs in the child, isolating process-global
-            // masking state from all other Gateway tests.
-            assertion();
-            return;
-        }
-
-        let exact_test_name = format!("{TEST_MODULE}::{test_name}");
-        let output = std::process::Command::new(
-            std::env::current_exe().expect("the Rust test harness must have a current executable"),
-        )
-        .args(["--exact", exact_test_name.as_str(), "--nocapture"])
-        .env(CHILD_ENV, test_name)
-        .output()
-        .expect("the isolated redirect sensitive-log test process must start");
-        assert!(
-            output.status.success(),
-            "isolated redirect sensitive-log test failed:\nstdout: {}\nstderr: {}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
+        crate::test_subprocess::assert_in_subprocess(TEST_MODULE, test_name, CHILD_ENV, test_name, assertion);
     }
 
     fn redirect_log_json(error: Option<String>) -> serde_json::Value {

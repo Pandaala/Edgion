@@ -181,55 +181,38 @@ mod tests {
         const TEST_NAME: &str = "trusted_peer_updates_remote_ip_with_one_read_per_input";
         const TEST_MODULE: &str = "plugins::http::real_ip::plugin::tests";
 
-        if std::env::var(CHILD_ENV).as_deref() != Ok(TEST_NAME) {
-            let exact_test_name = format!("{TEST_MODULE}::{TEST_NAME}");
-            let output = std::process::Command::new(
-                std::env::current_exe().expect("the Rust test harness must have a current executable"),
-            )
-            .args(["--exact", exact_test_name.as_str(), "--nocapture"])
-            .env(CHILD_ENV, TEST_NAME)
-            .output()
-            .expect("the isolated RealIp masked-log test process must start");
-            assert!(
-                output.status.success(),
-                "isolated RealIp masked-log test failed:\nstdout: {}\nstderr: {}",
-                String::from_utf8_lossy(&output.stdout),
-                String::from_utf8_lossy(&output.stderr)
+        crate::test_subprocess::assert_in_subprocess_async(TEST_MODULE, TEST_NAME, CHILD_ENV, TEST_NAME, || async {
+            edgion_resources::sensitive::SENSITIVE_MODE.store(1, std::sync::atomic::Ordering::SeqCst);
+
+            let plugin = RealIp::create(&create_test_config());
+            let mut session = MockPluginSession::new();
+            setup_header_mocks(&mut session, &[("x-forwarded-for", "203.0.113.1, 192.168.1.1")]);
+            session
+                .expect_downstream_peer_ip()
+                .times(1)
+                .return_const("192.168.1.254".to_string());
+            session
+                .expect_remote_ip()
+                .times(1)
+                .return_const("192.168.1.254".to_string());
+            session
+                .expect_set_remote_ip()
+                .with(eq("203.0.113.1"))
+                .times(1)
+                .returning(|_| Ok(()));
+            let mut log = PluginLog::new(plugin.name());
+
+            assert_eq!(
+                plugin.run_request(&mut session, &mut log).await,
+                PluginRunningResult::GoodNext
             );
-            return;
-        }
-
-        // This child runs only the exact test selected above, so changing the
-        // process-global mode cannot race another lib test.
-        edgion_resources::sensitive::SENSITIVE_MODE.store(1, std::sync::atomic::Ordering::SeqCst);
-
-        let plugin = RealIp::create(&create_test_config());
-        let mut session = MockPluginSession::new();
-        setup_header_mocks(&mut session, &[("x-forwarded-for", "203.0.113.1, 192.168.1.1")]);
-        session
-            .expect_downstream_peer_ip()
-            .times(1)
-            .return_const("192.168.1.254".to_string());
-        session
-            .expect_remote_ip()
-            .times(1)
-            .return_const("192.168.1.254".to_string());
-        session
-            .expect_set_remote_ip()
-            .with(eq("203.0.113.1"))
-            .times(1)
-            .returning(|_| Ok(()));
-        let mut log = PluginLog::new(plugin.name());
-
-        assert_eq!(
-            plugin.run_request(&mut session, &mut log).await,
-            PluginRunningResult::GoodNext
-        );
-        let entries = serde_json::to_value(&log).unwrap()["log"].as_array().unwrap().clone();
-        assert_eq!(entries[0], json!("header xff"));
-        assert_eq!(entries[1], json!("trusted proxy:match"));
-        assert!(entries[2].as_str().unwrap().starts_with("ip updated: "));
-        assert!(!serde_json::to_string(&log).unwrap().contains("203.0.113.1"));
+            let entries = serde_json::to_value(&log).unwrap()["log"].as_array().unwrap().clone();
+            assert_eq!(entries[0], json!("header xff"));
+            assert_eq!(entries[1], json!("trusted proxy:match"));
+            assert!(entries[2].as_str().unwrap().starts_with("ip updated: "));
+            assert!(!serde_json::to_string(&log).unwrap().contains("203.0.113.1"));
+        })
+        .await;
     }
 
     #[tokio::test]

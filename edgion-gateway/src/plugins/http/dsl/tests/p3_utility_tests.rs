@@ -6,30 +6,8 @@ use std::sync::atomic::Ordering;
 
 fn assert_sensitive_test_in_subprocess(test_name: &str, assertion: impl FnOnce()) {
     const CHILD_ENV: &str = "EDGION_DSL_P3_SENSITIVE_CHILD";
-    const COMPLETION_PREFIX: &str = "EDGION_DSL_P3_SENSITIVE_COMPLETE:";
     const TEST_MODULE: &str = "plugins::http::dsl::tests::p3_utility_tests";
-
-    if std::env::var(CHILD_ENV).as_deref() == Ok(test_name) {
-        assertion();
-        println!("{COMPLETION_PREFIX}{test_name}");
-        return;
-    }
-
-    let exact_test_name = format!("{TEST_MODULE}::{test_name}");
-    let output = std::process::Command::new(
-        std::env::current_exe().expect("the Rust test harness must have a current executable"),
-    )
-    .args(["--exact", exact_test_name.as_str(), "--nocapture"])
-    .env(CHILD_ENV, test_name)
-    .output()
-    .expect("the isolated DSL sensitive-mode test process must start");
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let completion_marker = format!("{COMPLETION_PREFIX}{test_name}");
-    assert!(
-        output.status.success() && stdout.contains(&completion_marker),
-        "isolated DSL sensitive-mode test failed or did not complete:\nstdout: {stdout}\nstderr: {stderr}"
-    );
+    crate::test_subprocess::assert_in_subprocess(TEST_MODULE, test_name, CHILD_ENV, test_name, assertion);
 }
 
 #[test]

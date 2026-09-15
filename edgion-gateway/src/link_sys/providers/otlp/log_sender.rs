@@ -133,29 +133,10 @@ mod tests {
     fn assert_sensitive_path_in_subprocess(test_name: &str, mode: SensitiveMode, expected: &str) {
         const CHILD_ENV: &str = "EDGION_OTLP_SENSITIVE_PATH_CHILD";
         const TEST_MODULE: &str = "link_sys::providers::otlp::log_sender::tests";
-
-        if std::env::var(CHILD_ENV).as_deref() == Ok(test_name) {
-            // This process runs only the exact test selected below, so changing
-            // the process-global mode cannot race another lib test.
+        crate::test_subprocess::assert_in_subprocess(TEST_MODULE, test_name, CHILD_ENV, test_name, || {
             SENSITIVE_MODE.store(mode as u8, Ordering::SeqCst);
             assert_eq!(render_sensitive_path("/customers/alice"), expected);
-            return;
-        }
-
-        let exact_test_name = format!("{TEST_MODULE}::{test_name}");
-        let output = std::process::Command::new(
-            std::env::current_exe().expect("the Rust test harness must have a current executable"),
-        )
-        .args(["--exact", exact_test_name.as_str(), "--nocapture"])
-        .env(CHILD_ENV, test_name)
-        .output()
-        .expect("the isolated OTLP sensitive-path test process must start");
-        assert!(
-            output.status.success(),
-            "isolated OTLP sensitive-path test failed:\nstdout: {}\nstderr: {}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
+        });
     }
 
     #[test]

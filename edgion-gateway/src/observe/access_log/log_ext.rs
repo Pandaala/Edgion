@@ -276,25 +276,12 @@ fn resolve_field(field: &AccessLogExternField, session: &Session, ctx: &EdgionHt
 mod tests {
     use super::*;
     use edgion_resources::sensitive::SENSITIVE_MODE;
-    use parking_lot::{Mutex, MutexGuard};
     use std::sync::atomic::Ordering;
 
-    // Serialize every test that mutates the global mode.
-    static MODE_LOCK: Mutex<()> = Mutex::new(());
-
-    struct ModeGuard<'a> {
-        prev: u8,
-        _lock: MutexGuard<'a, ()>,
-    }
-    impl Drop for ModeGuard<'_> {
-        fn drop(&mut self) {
-            SENSITIVE_MODE.store(self.prev, Ordering::SeqCst);
-        }
-    }
-    fn set_mode(mode: u8) -> ModeGuard<'static> {
-        let lock = MODE_LOCK.lock();
-        let prev = SENSITIVE_MODE.swap(mode, Ordering::SeqCst);
-        ModeGuard { prev, _lock: lock }
+    fn assert_sensitive_test_in_subprocess(test_name: &str, assertion: impl FnOnce()) {
+        const CHILD_ENV: &str = "EDGION_LOG_EXT_SENSITIVE_CHILD";
+        const TEST_MODULE: &str = "observe::access_log::log_ext::tests";
+        crate::test_subprocess::assert_in_subprocess(TEST_MODULE, test_name, CHILD_ENV, test_name, assertion);
     }
 
     fn json_of(ext: &LogExt) -> String {
@@ -308,12 +295,14 @@ mod tests {
 
     #[test]
     fn non_sensitive_value_is_clear_in_every_mode() {
-        for mode in [0u8, 1, 2] {
-            let _g = set_mode(mode);
-            let mut ext = LogExt::default();
-            ext.insert("tenant", "acme", false);
-            assert_eq!(json_of(&ext), r#"{"tenant":"acme"}"#, "mode {mode}");
-        }
+        assert_sensitive_test_in_subprocess("non_sensitive_value_is_clear_in_every_mode", || {
+            for mode in [0u8, 1, 2] {
+                SENSITIVE_MODE.store(mode, Ordering::SeqCst);
+                let mut ext = LogExt::default();
+                ext.insert("tenant", "acme", false);
+                assert_eq!(json_of(&ext), r#"{"tenant":"acme"}"#, "mode {mode}");
+            }
+        });
     }
 
     #[test]
@@ -324,22 +313,23 @@ mod tests {
         // (`serialize_entry` = key + value) inside the sensitive-value closure,
         // exactly the reentrancy shape the doc comment on `Serialize for LogExt`
         // warns about. Exercise it here so that shape stays covered.
-        let cases = [
-            (0u8, r#"{"session":"abc"}"#),
-            (1, r#"{"session":"***"}"#),
-            (2, r#"{"session":"<E>abc</E>"}"#),
-        ];
-        for (mode, expected) in cases {
-            let _g = set_mode(mode);
-            let mut ext = LogExt::default();
-            ext.insert("session", "abc", true);
-            assert_eq!(json_of(&ext), expected, "mode {mode}");
-        }
+        assert_sensitive_test_in_subprocess("sensitive_value_renders_per_mode", || {
+            let cases = [
+                (0u8, r#"{"session":"abc"}"#),
+                (1, r#"{"session":"***"}"#),
+                (2, r#"{"session":"<E>abc</E>"}"#),
+            ];
+            for (mode, expected) in cases {
+                SENSITIVE_MODE.store(mode, Ordering::SeqCst);
+                let mut ext = LogExt::default();
+                ext.insert("session", "abc", true);
+                assert_eq!(json_of(&ext), expected, "mode {mode}");
+            }
+        });
     }
 
     #[test]
     fn later_insert_overwrites_in_place_preserving_order() {
-        let _g = set_mode(0);
         let mut ext = LogExt::default();
         ext.insert("a", "1", false);
         ext.insert("b", "2", false);
@@ -351,16 +341,17 @@ mod tests {
 
     #[test]
     fn overwrite_also_replaces_the_sensitive_flag() {
-        let _g = set_mode(1);
-        let mut ext = LogExt::default();
-        ext.insert("k", "clear", false);
-        ext.insert("k", "secret", true);
-        assert_eq!(json_of(&ext), r#"{"k":"***"}"#);
+        assert_sensitive_test_in_subprocess("overwrite_also_replaces_the_sensitive_flag", || {
+            SENSITIVE_MODE.store(1, Ordering::SeqCst);
+            let mut ext = LogExt::default();
+            ext.insert("k", "clear", false);
+            ext.insert("k", "secret", true);
+            assert_eq!(json_of(&ext), r#"{"k":"***"}"#);
+        });
     }
 
     #[test]
     fn value_is_truncated_to_the_cap() {
-        let _g = set_mode(0);
         let mut ext = LogExt::default();
         let long = "v".repeat(LOG_LABEL_MAX_VALUE_LEN + 50);
         ext.insert("k", &long, false);
@@ -372,7 +363,6 @@ mod tests {
 
     #[test]
     fn owned_insert_reuses_the_resolved_value_allocation() {
-        let _g = set_mode(0);
         let mut ext = LogExt::default();
         let value = String::from("resolved");
         let value_ptr = value.as_ptr();
@@ -385,7 +375,6 @@ mod tests {
 
     #[test]
     fn owned_insert_does_not_retain_oversized_capacity() {
-        let _g = set_mode(0);
         let mut ext = LogExt::default();
         let mut value = String::with_capacity(LOG_LABEL_MAX_VALUE_LEN * 16);
         value.push_str(&"v".repeat(LOG_LABEL_MAX_VALUE_LEN + 1));
@@ -399,7 +388,6 @@ mod tests {
 
     #[test]
     fn truncation_never_splits_a_utf8_char() {
-        let _g = set_mode(0);
         let mut ext = LogExt::default();
         // '€' is 3 bytes, so with an even cap (256) the boundary genuinely
         // straddles a char and the decrement branch actually runs. A 2-byte
@@ -413,7 +401,6 @@ mod tests {
 
     #[test]
     fn over_cap_fields_are_dropped() {
-        let _g = set_mode(0);
         let mut ext = LogExt::default();
         for i in 0..(LOG_LABEL_MAX_COUNT + 5) {
             ext.insert(&format!("k{i}"), "v", false);
@@ -423,7 +410,6 @@ mod tests {
 
     #[test]
     fn over_cap_still_allows_overwriting_an_existing_key() {
-        let _g = set_mode(0);
         let mut ext = LogExt::default();
         for i in 0..LOG_LABEL_MAX_COUNT {
             ext.insert(&format!("k{i}"), "v", false);
@@ -438,7 +424,6 @@ mod tests {
 
     #[test]
     fn attacker_controlled_value_cannot_break_out_of_the_json() {
-        let _g = set_mode(0);
         let mut ext = LogExt::default();
         // A header value the client fully controls. serde must escape it; a
         // hand-written `"k":"v"` byte buffer would let this forge entry fields.
@@ -451,7 +436,6 @@ mod tests {
 
     #[test]
     fn backslash_and_control_chars_are_escaped() {
-        let _g = set_mode(0);
         let mut ext = LogExt::default();
         ext.insert("k", "a\\b\"c\nd", false);
         let json = json_of(&ext);

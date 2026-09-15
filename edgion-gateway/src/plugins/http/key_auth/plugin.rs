@@ -513,64 +513,47 @@ mod tests {
         const TEST_NAME: &str = "valid_key_forwards_metadata_then_hides_credential_and_masks_username";
         const TEST_MODULE: &str = "plugins::http::key_auth::plugin::tests";
 
-        if std::env::var(CHILD_ENV).as_deref() != Ok(TEST_NAME) {
-            let exact_test_name = format!("{TEST_MODULE}::{TEST_NAME}");
-            let output = std::process::Command::new(
-                std::env::current_exe().expect("the Rust test harness must have a current executable"),
-            )
-            .args(["--exact", exact_test_name.as_str(), "--nocapture"])
-            .env(CHILD_ENV, TEST_NAME)
-            .output()
-            .expect("the isolated KeyAuth masked-log test process must start");
-            assert!(
-                output.status.success(),
-                "isolated KeyAuth masked-log test failed:\nstdout: {}\nstderr: {}",
-                String::from_utf8_lossy(&output.stdout),
-                String::from_utf8_lossy(&output.stderr)
+        crate::test_subprocess::assert_in_subprocess_async(TEST_MODULE, TEST_NAME, CHILD_ENV, TEST_NAME, || async {
+            SENSITIVE_MODE.store(1, Ordering::SeqCst);
+
+            let mut config = create_test_config();
+            config.hide_credentials = true;
+            config.resolved_keys = Some(HashMap::from([(
+                "valid-api-key".to_string(),
+                metadata_with_group("partner-a", Some("private-user")),
+            )]));
+            let auth = KeyAuth::from_config(&config);
+            let mut sequence = Sequence::new();
+            let mut session = MockPluginSession::new();
+            session.expect_key_get().returning(|source| match source {
+                KeyGet::Header { .. } => Some("valid-api-key".to_string()),
+                _ => None,
+            });
+            session
+                .expect_set_request_header_value()
+                .withf(|name, value| name == "X-Consumer-Username" && value == "private-user" && value.is_sensitive())
+                .times(1)
+                .in_sequence(&mut sequence)
+                .returning(|_, _| Ok(()));
+            session
+                .expect_remove_request_header()
+                .withf(|name| name == "X-API-Key")
+                .times(1)
+                .in_sequence(&mut sequence)
+                .returning(|_| Ok(()));
+            let mut log = PluginLog::new(PLUGIN_NAME);
+
+            assert_eq!(
+                auth.run_request(&mut session, &mut log).await,
+                PluginRunningResult::GoodNext
             );
-            return;
-        }
-
-        // This child runs only the exact test selected above, so changing the
-        // process-global mode cannot race another lib test.
-        SENSITIVE_MODE.store(1, Ordering::SeqCst);
-
-        let mut config = create_test_config();
-        config.hide_credentials = true;
-        config.resolved_keys = Some(HashMap::from([(
-            "valid-api-key".to_string(),
-            metadata_with_group("partner-a", Some("private-user")),
-        )]));
-        let auth = KeyAuth::from_config(&config);
-        let mut sequence = Sequence::new();
-        let mut session = MockPluginSession::new();
-        session.expect_key_get().returning(|source| match source {
-            KeyGet::Header { .. } => Some("valid-api-key".to_string()),
-            _ => None,
-        });
-        session
-            .expect_set_request_header_value()
-            .withf(|name, value| name == "X-Consumer-Username" && value == "private-user" && value.is_sensitive())
-            .times(1)
-            .in_sequence(&mut sequence)
-            .returning(|_, _| Ok(()));
-        session
-            .expect_remove_request_header()
-            .withf(|name| name == "X-API-Key")
-            .times(1)
-            .in_sequence(&mut sequence)
-            .returning(|_| Ok(()));
-        let mut log = PluginLog::new(PLUGIN_NAME);
-
-        assert_eq!(
-            auth.run_request(&mut session, &mut log).await,
-            PluginRunningResult::GoodNext
-        );
-        assert!(log.contains("key header"));
-        assert!(log.contains("OK group=partner-a user ***"));
-        let serialized = serde_json::to_string(&log).unwrap();
-        assert!(!serialized.contains("valid-api-key"));
-        assert!(!serialized.contains("private-user"));
+            assert!(log.contains("key header"));
+            assert!(log.contains("OK group=partner-a user ***"));
+            let serialized = serde_json::to_string(&log).unwrap();
+            assert!(!serialized.contains("valid-api-key"));
+            assert!(!serialized.contains("private-user"));
+        })
+        .await;
     }
 
     #[tokio::test]
