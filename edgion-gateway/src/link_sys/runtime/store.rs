@@ -382,6 +382,22 @@ impl<C> ProviderRuntimeStore<C> {
     }
 }
 
+fn retain_persistent_runners(
+    apply_lock: &Mutex<()>,
+    present: &HashSet<String>,
+    list: impl FnOnce() -> Vec<String>,
+    mut delete_locked: impl FnMut(&str),
+    retain_pending: impl FnOnce(&HashSet<String>),
+) {
+    let _guard = apply_lock.lock();
+    for key in list() {
+        if !present.contains(&key) {
+            delete_locked(&key);
+        }
+    }
+    retain_pending(present);
+}
+
 // ============================================================
 // LinkSys instance cap (process-global, aggregated from EGC)
 // ============================================================
@@ -558,13 +574,13 @@ fn delete_redis_runner_locked(key: &str) {
 }
 
 fn retain_redis_runners(present: &HashSet<String>) {
-    for key in REDIS_RUNTIME.list() {
-        if !present.contains(&key) {
-            delete_redis_runner(&key);
-        }
-    }
-    let _guard = REDIS_APPLY_LOCK.lock();
-    REDIS_PENDING.lock().retain(|k, _| present.contains(k));
+    retain_persistent_runners(
+        &REDIS_APPLY_LOCK,
+        present,
+        || REDIS_RUNTIME.list(),
+        delete_redis_runner_locked,
+        |present| REDIS_PENDING.lock().retain(|k, _| present.contains(k)),
+    );
 }
 
 #[cfg(test)]
@@ -721,13 +737,13 @@ fn delete_etcd_runner_locked(key: &str) {
 }
 
 fn retain_etcd_runners(present: &HashSet<String>) {
-    for key in ETCD_RUNTIME.list() {
-        if !present.contains(&key) {
-            delete_etcd_runner(&key);
-        }
-    }
-    let _guard = ETCD_APPLY_LOCK.lock();
-    ETCD_PENDING.lock().retain(|k, _| present.contains(k));
+    retain_persistent_runners(
+        &ETCD_APPLY_LOCK,
+        present,
+        || ETCD_RUNTIME.list(),
+        delete_etcd_runner_locked,
+        |present| ETCD_PENDING.lock().retain(|k, _| present.contains(k)),
+    );
 }
 
 #[cfg(test)]
@@ -883,13 +899,13 @@ fn delete_es_runner_locked(key: &str) {
 }
 
 fn retain_es_runners(present: &HashSet<String>) {
-    for key in ES_RUNTIME.list() {
-        if !present.contains(&key) {
-            delete_es_runner(&key);
-        }
-    }
-    let _guard = ES_APPLY_LOCK.lock();
-    ES_PENDING.lock().retain(|k, _| present.contains(k));
+    retain_persistent_runners(
+        &ES_APPLY_LOCK,
+        present,
+        || ES_RUNTIME.list(),
+        delete_es_runner_locked,
+        |present| ES_PENDING.lock().retain(|k, _| present.contains(k)),
+    );
 }
 
 #[cfg(test)]
@@ -1035,13 +1051,13 @@ fn delete_kafka_runner_locked(key: &str) {
 }
 
 fn retain_kafka_runners(present: &HashSet<String>) {
-    for key in KAFKA_RUNTIME.list() {
-        if !present.contains(&key) {
-            delete_kafka_runner(&key);
-        }
-    }
-    let _guard = KAFKA_APPLY_LOCK.lock();
-    KAFKA_PENDING.lock().retain(|k, _| present.contains(k));
+    retain_persistent_runners(
+        &KAFKA_APPLY_LOCK,
+        present,
+        || KAFKA_RUNTIME.list(),
+        delete_kafka_runner_locked,
+        |present| KAFKA_PENDING.lock().retain(|k, _| present.contains(k)),
+    );
 }
 
 #[cfg(test)]
@@ -1188,13 +1204,13 @@ fn delete_otlp_runner_locked(key: &str) {
 }
 
 fn retain_otlp_runners(present: &HashSet<String>) {
-    for key in OTLP_RUNTIME.list() {
-        if !present.contains(&key) {
-            delete_otlp_runner(&key);
-        }
-    }
-    let _guard = OTLP_APPLY_LOCK.lock();
-    OTLP_PENDING.lock().retain(|key, _| present.contains(key));
+    retain_persistent_runners(
+        &OTLP_APPLY_LOCK,
+        present,
+        || OTLP_RUNTIME.list(),
+        delete_otlp_runner_locked,
+        |present| OTLP_PENDING.lock().retain(|key, _| present.contains(key)),
+    );
 }
 
 #[cfg(test)]
@@ -1636,6 +1652,43 @@ mod tests {
     use std::sync::atomic::AtomicUsize;
 
     type DispatchTaskSlot = Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>;
+
+    #[test]
+    fn full_set_retain_holds_apply_lock_through_runtime_and_pending_cleanup() {
+        let apply_lock = Mutex::new(());
+        let present = HashSet::from(["ns/kept".to_string()]);
+        let mut deleted = Vec::new();
+        let mut pending = HashSet::from(["ns/kept".to_string(), "ns/omitted".to_string()]);
+
+        retain_persistent_runners(
+            &apply_lock,
+            &present,
+            || {
+                assert!(
+                    apply_lock.try_lock().is_none(),
+                    "runtime enumeration must hold the apply lock"
+                );
+                vec!["ns/omitted".to_string(), "ns/kept".to_string()]
+            },
+            |key| {
+                assert!(
+                    apply_lock.try_lock().is_none(),
+                    "runtime deletion must hold the apply lock"
+                );
+                deleted.push(key.to_string());
+            },
+            |present| {
+                assert!(
+                    apply_lock.try_lock().is_none(),
+                    "pending pruning must hold the apply lock"
+                );
+                pending.retain(|key| present.contains(key));
+            },
+        );
+
+        assert_eq!(deleted, ["ns/omitted"]);
+        assert_eq!(pending, present);
+    }
 
     fn next_dispatch_sequence() -> u64 {
         reserve_dispatch_sequence(&NEXT_LINK_SYS_DISPATCH_SEQUENCE)

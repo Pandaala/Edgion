@@ -23,6 +23,7 @@ before applying a decision to current code.
 
 ## Regression guards
 
+- [Full-set retain serializes with delete join replay](regression-guards/full-set-retain-serializes-join-replay.md)
 - [A superseded LinkSys publication keeps the runner alive](regression-guards/persistent-runner-publish-supersession.md)
 - [Kafka producer state has per-client aggregate bounds](regression-guards/kafka-aggregate-queue-bounds.md)
 - [Redis configuration fields have one validated runtime meaning](regression-guards/redis-configuration-contract.md)
