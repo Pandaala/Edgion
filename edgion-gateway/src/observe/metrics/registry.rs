@@ -727,9 +727,9 @@ pub fn record_cb_rejection(service_key: &str) {
 
 /// Set the link-sys provider health gauge: 1.0 = healthy, 0.0 = unhealthy.
 ///
-/// Called on a healthy<->unhealthy transition and once at init() to establish a
-/// `=1` baseline. Cold-path free-function `gauge!` registration keeps the
-/// series absent from `/metrics` until first emit. `link` cardinality = provider count.
+/// Called when `/metrics` samples the published LinkSys clients. A client that
+/// has not been published cannot write the shared series. `link` cardinality
+/// is bounded by the configured provider count.
 pub fn record_link_sys_health(name: &str, healthy: bool) {
     gauge!(names::LINK_SYS_HEALTH, "link" => name.to_string()).set(if healthy { 1.0 } else { 0.0 });
 }

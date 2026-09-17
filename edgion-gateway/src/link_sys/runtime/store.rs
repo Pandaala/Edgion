@@ -28,7 +28,7 @@ use crate::link_sys::providers::webhook::{
     fingerprint_webhook, get_webhook_manager, WebhookLinkClient, WebhookManager,
 };
 use crate::link_sys::runtime::apply::RuntimeFingerprint;
-use crate::link_sys::runtime::runner::PersistentRunner;
+use crate::link_sys::runtime::runner::{ApplyOwner, PersistentRunner};
 use crate::link_sys::LinkSysHealth;
 use crate::observe::metrics::registry::record_link_sys_health;
 
@@ -380,6 +380,119 @@ impl<C> ProviderRuntimeStore<C> {
         let old = self.map.swap(Arc::new(new_map));
         (*old).clone()
     }
+}
+
+fn record_current_health<O: ApplyOwner>(
+    store: &ProviderRuntimeStore<PersistentRunner<O>>,
+    healthy: impl Fn(&O::Client) -> bool,
+) {
+    for (name, runner) in store.map.load().iter() {
+        if let Some(client) = runner.current() {
+            record_link_sys_health(name, healthy(&client));
+        }
+    }
+}
+
+#[cfg(test)]
+mod published_health_tests {
+    use super::*;
+    use crate::link_sys::runtime::apply::{ConnectionCoverage, RuntimeFingerprint};
+    use metrics_util::debugging::{DebugValue, DebuggingRecorder};
+
+    struct HealthOwner;
+
+    struct HealthClient {
+        healthy: AtomicBool,
+    }
+
+    #[async_trait::async_trait]
+    impl ApplyOwner for HealthOwner {
+        type Client = HealthClient;
+
+        fn fingerprint(_: &LinkSys) -> anyhow::Result<RuntimeFingerprint> {
+            unreachable!()
+        }
+
+        fn fingerprint_live(_: &Self::Client) -> RuntimeFingerprint {
+            unreachable!()
+        }
+
+        fn coverage(_: &Self::Client) -> ConnectionCoverage {
+            unreachable!()
+        }
+
+        fn build(_: &str, _: &LinkSys) -> anyhow::Result<Arc<Self::Client>> {
+            unreachable!()
+        }
+
+        async fn init(_: &Self::Client) -> anyhow::Result<()> {
+            unreachable!()
+        }
+
+        async fn shutdown(_: Arc<Self::Client>) {}
+
+        fn mark_retired(_: &Self::Client) {}
+
+        fn label() -> &'static str {
+            "health-test"
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn old_probe_result_cannot_overwrite_published_health_gauge() {
+        let name = "test/link".to_string();
+        let store = ProviderRuntimeStore::new();
+        let old_client = Arc::new(HealthClient {
+            healthy: AtomicBool::new(true),
+        });
+        let old = PersistentRunner::<HealthOwner>::spawn_with_published(name.clone(), old_client.clone());
+        store.insert(name.clone(), old.clone());
+
+        let new = PersistentRunner::<HealthOwner>::spawn_with_published(
+            name.clone(),
+            Arc::new(HealthClient {
+                healthy: AtomicBool::new(true),
+            }),
+        );
+        store.insert(name.clone(), new.clone());
+
+        let recorder = DebuggingRecorder::new();
+        let snapshotter = recorder.snapshotter();
+        metrics::with_local_recorder(&recorder, || {
+            record_current_health(&store, |client| client.healthy.load(Ordering::Relaxed));
+            assert!(crate::link_sys::runtime::health_probe::apply_health_result(
+                &old_client.healthy,
+                &name,
+                "test",
+                &AtomicU64::new(0),
+                false,
+                false,
+            ));
+        });
+        let snapshot = snapshotter.snapshot().into_vec();
+        assert!(snapshot.iter().any(|(key, _, _, value)| {
+            key.key().name() == crate::observe::metrics::registry::names::LINK_SYS_HEALTH
+                && key
+                    .key()
+                    .labels()
+                    .any(|label| label.key() == "link" && label.value() == name)
+                && matches!(value, DebugValue::Gauge(level) if *level == 1.0)
+        }));
+
+        old.begin_delete();
+        new.begin_delete();
+        old.await_join().await;
+        new.await_join().await;
+    }
+}
+
+/// Sample the same published clients returned to Gateway data-plane callers.
+/// Retired and unpublished generations never supply this gauge's value.
+pub(crate) fn record_published_link_sys_health() {
+    record_current_health(&REDIS_RUNTIME, RedisLinkClient::healthy);
+    record_current_health(&ES_RUNTIME, EsLinkClient::healthy);
+    record_current_health(&KAFKA_RUNTIME, KafkaLinkClient::healthy);
+    record_current_health(&OTLP_RUNTIME, OtlpLinkClient::healthy);
 }
 
 fn retain_persistent_runners(
@@ -1183,7 +1296,6 @@ fn delete_otlp_runner_locked(key: &str) {
         return;
     };
     runner.begin_delete();
-    record_link_sys_health(key, false);
     OTLP_DELETING.lock().insert(key.to_string());
     let deleted_key = key.to_string();
     let mut cleanup = OTLP_CLEANUP.lock();

@@ -1422,7 +1422,7 @@ loopback、link-local 和 unspecified 地址，也包括 IPv4-mapped IPv6。未�
 第二个输出。
 
 `edgion_link_sys_health{link="observability/collector"}` 及其状态切换计数器使用
-LinkSys key。健康仅表示 TCP 可达，不表示认证成功、每次重连的 TLS 握手成功或
+LinkSys key。Gauge 在每次指标采集时读取已发布的客户端。健康仅表示 TCP 可达，不表示认证成功、每次重连的 TLS 握手成功或
 日志已交付；端到端验证应检查 Collector 收到的记录。可能暴露 endpoint 或证书细节
 的 SDK 传输日志即使在 `RUST_LOG=trace` 下也会被抑制。
 

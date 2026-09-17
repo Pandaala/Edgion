@@ -36,12 +36,11 @@ current client states at a nominal one-second healthy cadence; request-side
 `healthy()` remains one lock-free atomic read. `mark_retired` sets the retired flag
 and signals the probe watch without aborting the task; shutdown then joins the probe
 before quitting the pool, preventing an in-flight result from restoring health after
-the terminal false state. A retired probe must not write `edgion_link_sys_health`.
-Shutdown itself does not write the shared health gauge. During a same-key replacement,
-live probes of the published generation still refresh the gauge from the current
-observation so the active generation can self-heal after overlap. Flip counters and
-logs remain CAS-transition-only. A deletion can therefore leave the already accepted
-stale per-link series.
+the terminal false state. Probes do not write `edgion_link_sys_health`.
+The `/metrics` handler samples the published client's aggregate `healthy()` flag
+on each scrape, so a retired generation's late result cannot overwrite the
+replacement's shared gauge. Flip counters and logs remain CAS-transition-only.
+A deletion can leave the accepted stale per-link series.
 `RedisClientConfig.pool.size`, Fred pool construction, command retry semantics, and
 active admin `PING` health checks are unchanged.
 

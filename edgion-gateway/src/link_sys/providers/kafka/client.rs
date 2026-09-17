@@ -154,7 +154,6 @@ fn emit_kafka_health(retired: &AtomicBool, name: &str, ok: bool) {
     if retired.load(Ordering::Relaxed) {
         return;
     }
-    crate::observe::metrics::registry::record_link_sys_health(name, ok);
     crate::observe::metrics::registry::record_link_sys_health_flip(name, ok);
 }
 
@@ -455,11 +454,6 @@ impl KafkaLinkClient {
             Err(e) => {
                 tracing::error!(kafka = %name, %topic, "PartitionClient init failed: {}", e);
                 healthy.store(false, Ordering::Relaxed);
-                // Keep the gauge in sync with the flag: the task exits below and would
-                // otherwise leave the gauge stuck at the init() baseline of 1.
-                if !retired.load(Ordering::Relaxed) {
-                    crate::observe::metrics::registry::record_link_sys_health(&name, false);
-                }
                 // The task exits here, closing its channel; `try_produce`'s
                 // self-heal evicts the dead entry so the next produce respawns.
                 // Broker-level recovery is owned by the background probe.
@@ -523,7 +517,6 @@ impl KafkaLinkClient {
         let client = Self::build_kafka_client(&self.config.brokers, &self.auth, &self.config).await?;
         self.inner_client.store(Some(Arc::new(client)));
         self.healthy.store(true, Ordering::Relaxed);
-        crate::observe::metrics::registry::record_link_sys_health(&self.name, true);
 
         // Background health probe: broker liveness via list_topics; after N consecutive
         // failures, rebuild inner_client from config so the per-produce timeout in
@@ -561,7 +554,7 @@ impl KafkaLinkClient {
                     async move {
                         if retired.load(Ordering::Relaxed) {
                             // Echo the current flag so apply_health_result is a no-op
-                            // and cannot overwrite a successor generation's gauge.
+                            // and cannot emit a retired transition event.
                             return healthy.load(Ordering::Relaxed);
                         }
                         // Pre-increment BEFORE any await so a driver-timeout cancellation at the

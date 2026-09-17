@@ -13,30 +13,32 @@ knowledge_type: intentional-design
 
 `record_link_sys_health(name, healthy)` (gauge `edgion_link_sys_health`) and
 `record_link_sys_health_flip(name, to_healthy)` (counter `edgion_link_sys_health_flips_total`) in
-`edgion-gateway/src/observe/metrics/registry.rs` are emitted via free-function `gauge!`/`counter!`
-with a per-provider `link` label (and a fixed `direction` label on the counter). This is correct.
+`edgion-gateway/src/observe/metrics/registry.rs` use free-function `gauge!`/`counter!`
+with a per-provider `link` label (and a fixed `direction` label on the counter).
+The gauge is sampled from the published runtime client immediately before each
+`/metrics` render; probe and operation tasks update their own health flags but
+do not write the shared gauge. This prevents a retired generation's late result
+from leaving the replacement's gauge at the old value (ISSUE-006).
 Suggestions to register them as `OnceLock` handles on `GatewayMetrics`, or to drop the `link` label
 over cardinality fears, are **not accepted**.
 
 ## Core Rationale
 
-**1. Free-function `gauge!`/`counter!` is the established precedent for flip/event metrics.**
+**1. Free-function `gauge!`/`counter!` fits the bounded metrics paths.**
 
-`record_cb_ejection`/`record_cb_recovery` and the existing
-`record_link_sys_es_bulk_channel_full` all use the free-function form. These fire on state changes
-or rare events, not per-request, so the macro's internal handle lookup is not a hot-path cost. A
-gauge only ever `set` on a flip also stays absent from `/metrics` until the first emit — the same
-"no cold zero-noise" benefit the `OnceLock` policy exists to provide for the struct handles. Adding
-struct fields would be inconsistent and buy nothing.
+`record_cb_ejection`/`record_cb_recovery` and
+`record_link_sys_es_bulk_channel_full` also use the free-function form. LinkSys
+flip counters fire on state changes; the gauge is refreshed once per published
+provider per scrape. Neither is per-request, so handle lookup is outside the
+data-plane hot path. The first scrape registers a published provider's series.
+Adding `GatewayMetrics` struct fields would not improve request-path cost.
 
-Redis has one bounded exception to flip-only gauge writes: its one-second aggregate
-connection-state probe refreshes `edgion_link_sys_health` on every sample of a
-**live** generation. A retired probe must not write the shared gauge; retirement
-signals the probe watch and shutdown joins the task. Same-key runtime generations
-can overlap briefly before the retiring probe observes that signal; the active
-generation must therefore reassert its current value even without a local state
-transition. This remains a cold, provider-count-bounded path. Redis flip counters
-and transition logs are still emitted only on a winning CAS transition.
+The `/metrics` handler calls `record_published_link_sys_health` before rendering.
+That function reads each provider runner's `current` handle, as data-plane
+callers do, and samples its `healthy()` value. An unpublished candidate and a
+retired old client cannot directly write the gauge. A scrape racing a handle
+swap may sample either published generation; the next scrape samples the then
+current handle. Redis flip counters and transition logs remain CAS-gated.
 
 **2. The `link` label requires a validated provider identity.**
 
@@ -48,15 +50,22 @@ constructing senders or health identities. The former inline OTLP endpoint label
 violated this precondition (D0023); dedicated LinkSys ownership removes that path.
 The series domain is configured, validated provider keys, not arbitrary URIs.
 
-**3. Stale series on provider deletion is a known, accepted, pre-existing behavior.**
+**3. Stale series on provider deletion is a known, accepted behavior.**
 
 A deleted provider can leave `edgion_link_sys_health{link="..."}` at its last value
 until configured idle eviction removes the series. With idle eviction disabled,
 it can remain for the process lifetime. The shared production recorder supports
 idle eviction for all metric kinds; the earlier blanket non-expiration claim was
-incorrect. This acceptance is specific to LinkSys;
-it does not justify stale current-state metrics in other mechanisms.
-Bounded by providers-ever-seen; not a regression introduced by this change.
+incorrect. This acceptance is specific to LinkSys; it does not justify stale
+current-state metrics in other mechanisms. The series count is bounded by
+providers ever seen.
+
+Redis, Elasticsearch, and Kafka could already leave the last value on deletion.
+Before ISSUE-006, OTLP instead explicitly set its gauge to `0` when its runner
+was deleted. Removing that direct write makes a deleted healthy OTLP client
+retain its last `1` until eviction or process exit. This is an observable change
+of the scrape-time ownership fix, not historical OTLP behavior. A newly
+published client with the same key replaces the sampled value on its next scrape.
 
 The former LB gauge was incorrectly listed here as a cold-path precedent: its
 writer ran during request selection. It has been replaced by a cached event
@@ -64,12 +73,13 @@ Counter; see [Service degrade observability](../../lb/regression-guards/degrade-
 
 ## Fix Suggestions Not Accepted
 
-- "Register these as `OnceLock<Gauge>`/`OnceLock<Counter>` on `GatewayMetrics`" — inconsistent with
-  the flip/event-metric precedent; no hot-path benefit since they fire only on transitions.
+- "Register these as `OnceLock<Gauge>`/`OnceLock<Counter>` on `GatewayMetrics`" — no
+  data-plane hot-path benefit for a scrape-time gauge and transition counter.
 - "Drop the `link` label to avoid cardinality blowup" — cardinality is bounded by provider count;
   dropping it makes per-provider health undiagnosable.
-- "Expire the stale series on provider deletion" — out of scope, pre-existing registry behavior
-  shared by all per-key gauges; not specific to this metric.
+- "Expire the stale series on provider deletion" — out of scope for the
+  scrape-time ownership correction; idle eviction remains the shared recorder's
+  mechanism for removing abandoned per-key series.
 
 ## Re-evaluation Triggers
 
@@ -77,11 +87,14 @@ Re-open only if:
 
 - A future caller emits one of these metrics on a per-request (hot) path — then reassess handle
   registration and label cost.
-- The Redis runtime store gains generation-aware metric ownership — then remove its
-  periodic gauge refresh and return to flip-only writes.
+- The metric exporter gains a direct observable-gauge API or published-client
+  sampling becomes too expensive at the configured provider cap — revisit the
+  scrape-time update mechanism while preserving published-generation ownership.
 - A label is added whose value is operator/user-controlled or otherwise unbounded.
 
 ## Reference Cases
 
 - 2026-06-16 Kafka health-recovery fix (spec `docs/superpowers/specs/2026-06-15-kafka-health-recovery-design.md`).
 - Precedent: `edgion-gateway/src/observe/metrics/registry.rs` (`record_cb_ejection`, `record_cb_recovery`, `record_link_sys_es_bulk_channel_full`).
+- `ISSUE-006` — corrected late retired-generation gauge writes by sampling the
+  published client at scrape time; see `runtime/store.rs::record_published_link_sys_health`.

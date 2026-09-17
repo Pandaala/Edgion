@@ -40,9 +40,10 @@ pub fn init_metrics_exporter(cfg: &MetricsConfig) -> Result<(), String> {
     })
 }
 
-/// Preserve live Service metric handles before the shared exporter can evict
-/// idle series. The synchronous section contains no await or data-plane lock.
+/// Sample published LinkSys health and preserve live Service metric handles
+/// before the shared exporter renders them. The synchronous section has no await.
 async fn metrics_handler() -> Response {
+    crate::link_sys::runtime::store::record_published_link_sys_health();
     crate::observe::metrics::GatewayMetrics::with_live_lb_degrade_counters(|| {
         super::registry::with_live_wasm_shared_data_gauges(render_metrics)
     })

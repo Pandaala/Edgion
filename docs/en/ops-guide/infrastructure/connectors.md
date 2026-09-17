@@ -1504,7 +1504,8 @@ worker. A replacement already retiring is joined before the active pipeline. Thi
 delivery, without durable replay or retry to a second sink after a send failure.
 
 `edgion_link_sys_health{link="observability/collector"}` and its flip counter use
-the LinkSys key. Health describes TCP reachability, not authentication, successful
+the LinkSys key. The gauge samples the published client at each metrics scrape.
+Health describes TCP reachability, not authentication, successful
 TLS negotiation on every reconnect, or delivery acknowledgment. Inspect collector
 records to verify end-to-end delivery. SDK transport diagnostics that can reveal
 endpoints or certificate details remain suppressed even with `RUST_LOG=trace`.

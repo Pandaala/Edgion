@@ -47,7 +47,7 @@ pub struct RedisLinkClient {
     pool_size: usize,
     /// Apply fingerprint captured at construction (D19: last-applied after publish).
     fingerprint: RuntimeFingerprint,
-    /// Set before handover retire so the probe stops writing the shared gauge.
+    /// Set before handover retire so the probe stops updating this generation.
     retired: Arc<AtomicBool>,
     /// Makes [`Self::shutdown`] idempotent when delete races handover/replace.
     shutdown_started: AtomicBool,
@@ -157,11 +157,9 @@ impl RedisLinkClient {
 
         let connected = pool_has_connected_member(&self.pool);
         self.healthy.store(connected, Ordering::Relaxed);
-        crate::observe::metrics::registry::record_link_sys_health(&self.name, connected);
 
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
         let probe_pool = self.pool.clone();
-        let probe_name = self.name.clone();
         let probe_retired = self.retired.clone();
         let probe_handle = spawn_health_probe(
             ProbeConfig {
@@ -176,7 +174,6 @@ impl RedisLinkClient {
             shutdown_rx,
             move || {
                 let pool = probe_pool.clone();
-                let name = probe_name.clone();
                 let retired = probe_retired.clone();
                 async move {
                     if retired.load(Ordering::Relaxed) {
@@ -186,11 +183,6 @@ impl RedisLinkClient {
                     if retired.load(Ordering::Relaxed) {
                         return false;
                     }
-                    // A retiring same-name generation can briefly race this
-                    // writer before its probe is stopped. Refresh the current
-                    // observation so the active generation self-heals the
-                    // shared gauge without duplicating flip logs/counters.
-                    crate::observe::metrics::registry::record_link_sys_health(&name, connected);
                     connected
                 }
             },

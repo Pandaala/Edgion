@@ -59,7 +59,7 @@ pub struct EsLinkClient {
     probe_handle: parking_lot::Mutex<Option<JoinHandle<()>>>,
     /// Apply fingerprint captured at construction (D19).
     fingerprint: RuntimeFingerprint,
-    /// Set before handover retire so the probe stops writing the shared gauge.
+    /// Set before handover retire so background tasks stop updating this generation.
     retired: Arc<AtomicBool>,
     shutdown_started: AtomicBool,
 }
@@ -149,9 +149,6 @@ impl EsLinkClient {
         }
 
         self.healthy.store(health.is_ok(), Ordering::Relaxed);
-        // Emit the baseline health gauge so the series appears even if the
-        // provider is healthy from startup and never flips (matches Kafka init).
-        crate::observe::metrics::registry::record_link_sys_health(&self.name, health.is_ok());
 
         // Spawn background bulk ingest task. Channel capacity is operator-tunable
         // via `bulk.channelSize` (defaults to 10k, ceiling 100k); see EsBulkConfig.

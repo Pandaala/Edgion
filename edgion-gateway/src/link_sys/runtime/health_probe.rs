@@ -3,7 +3,7 @@
 //! Provides a generic `run_probe_loop` that periodically runs a provider-supplied
 //! liveness closure and drives the provider's `healthy` flag via CAS, plus the
 //! `apply_health_result` helper reused by the ES bulk path so every `healthy`
-//! writer flips through the same win-gated emission (metric + rate-limited log).
+//! writer flips through the same win-gated emission (flip counter + rate-limited log).
 //!
 //! Constants mirror the etcd monitor (`edgion-common/.../etcd/client.rs:160-242`).
 
@@ -17,7 +17,7 @@ use rand::Rng;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
-use crate::observe::metrics::registry::{record_link_sys_health, record_link_sys_health_flip};
+use crate::observe::metrics::registry::record_link_sys_health_flip;
 
 /// Canonical LinkSys flip-log rate-limit window.
 const FLIP_LOG_WINDOW_MS: u64 = 5_000;
@@ -75,7 +75,7 @@ pub(crate) fn flip_log_allowed(last: &AtomicU64) -> bool {
     flip_log_allowed_at(last, now_ms, FLIP_LOG_WINDOW_MS)
 }
 
-/// Apply one probe/operation result to `healthy` via CAS, emitting the gauge +
+/// Apply one probe/operation result to `healthy` via CAS, emitting the
 /// flip counter + a rate-limited log ONLY on a winning transition. `upgrade_only`
 /// suppresses the true->false direction (the data path owns downgrade). Returns
 /// true iff a flip was emitted. This is the single coordination point that keeps
@@ -93,7 +93,6 @@ pub(crate) fn apply_health_result(
             .compare_exchange(false, true, Ordering::Relaxed, Ordering::Relaxed)
             .is_ok()
         {
-            record_link_sys_health(name, true);
             record_link_sys_health_flip(name, true);
             if flip_log_allowed(last_flip_log) {
                 tracing::info!(link = %name, system = %system_type, "link-sys recovered");
@@ -105,7 +104,6 @@ pub(crate) fn apply_health_result(
             .compare_exchange(true, false, Ordering::Relaxed, Ordering::Relaxed)
             .is_ok()
     {
-        record_link_sys_health(name, false);
         record_link_sys_health_flip(name, false);
         if flip_log_allowed(last_flip_log) {
             tracing::warn!(link = %name, system = %system_type, "link-sys degraded");
@@ -159,8 +157,8 @@ pub(crate) async fn run_probe_loop<F, Fut>(
             result = tokio::time::timeout(cfg.probe_timeout, probe_fn()) => matches!(result, Ok(true)),
         };
 
-        // A shutdown that lands after the probe future resolves must not write
-        // the shared gauge for a generation that is already unpublished.
+        // A shutdown that lands after the probe future resolves must not
+        // update a retired generation's health state or flip counter.
         if *shutdown_rx.borrow() {
             return;
         }
@@ -196,8 +194,8 @@ pub(crate) async fn run_probe_loop<F, Fut>(
 }
 
 /// Spawn `run_probe_loop` as a detached task. Returns the handle; ES, Kafka, and
-/// OTLP `abort()` it from `mark_retired` so a retired generation cannot write the
-/// shared health gauge after handover. The shutdown watch remains a best-effort
+/// OTLP `abort()` it from `mark_retired` so a retired generation stops probing
+/// after handover. The shutdown watch remains a best-effort
 /// clean loop exit when abort races the next select.
 pub(crate) fn spawn_health_probe<F, Fut>(
     cfg: ProbeConfig,
