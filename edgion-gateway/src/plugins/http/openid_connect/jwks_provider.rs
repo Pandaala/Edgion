@@ -17,6 +17,8 @@
 //! variant (including 5 optional endpoints).
 
 use jsonwebtoken::jwk::JwkSet;
+#[cfg(test)]
+use parking_lot::Mutex as ScriptMutex;
 use reqwest::Client;
 use serde::de::DeserializeOwned;
 #[cfg(test)]
@@ -156,6 +158,180 @@ impl JwksState {
     }
 }
 
+/// In-memory IdP HTTP script for unit tests. Compiled only under `cfg(test)`;
+/// production builds keep the canonical reqwest client with no extra field or
+/// branch on the request path.
+#[cfg(test)]
+pub struct ScriptedHttp {
+    inner: ScriptMutex<std::collections::HashMap<String, ScriptedRoute>>,
+}
+
+#[cfg(test)]
+pub const TEST_IDP_ORIGIN: &str = "http://oidc.test";
+#[cfg(test)]
+pub const DISCOVERY_PATH: &str = "/.well-known/openid-configuration";
+#[cfg(test)]
+pub const JWKS_PATH: &str = "/jwks";
+
+#[cfg(test)]
+#[derive(Clone)]
+enum ScriptedEvent {
+    Http { status: u16, body: Vec<u8> },
+    Timeout,
+    Transport,
+}
+
+#[cfg(test)]
+struct LiveJwks {
+    fail: Arc<std::sync::atomic::AtomicBool>,
+    keys: Arc<std::sync::atomic::AtomicUsize>,
+    hits: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+#[cfg(test)]
+#[derive(Default)]
+struct ScriptedRoute {
+    queue: std::collections::VecDeque<ScriptedEvent>,
+    repeat: Option<ScriptedEvent>,
+    live_jwks: Option<LiveJwks>,
+    hits: usize,
+}
+
+#[cfg(test)]
+impl ScriptedHttp {
+    pub fn new() -> Arc<Self> {
+        Arc::new(Self {
+            inner: ScriptMutex::new(std::collections::HashMap::new()),
+        })
+    }
+
+    pub fn origin() -> &'static str {
+        TEST_IDP_ORIGIN
+    }
+
+    pub fn jwks_url() -> String {
+        format!("{TEST_IDP_ORIGIN}{JWKS_PATH}")
+    }
+
+    pub fn enqueue_http(&self, path: &str, status: u16, body: impl Into<Vec<u8>>) {
+        self.push(
+            path,
+            ScriptedEvent::Http {
+                status,
+                body: body.into(),
+            },
+            false,
+        );
+    }
+
+    pub fn enqueue_http_repeat(&self, path: &str, status: u16, body: impl Into<Vec<u8>>) {
+        self.push(
+            path,
+            ScriptedEvent::Http {
+                status,
+                body: body.into(),
+            },
+            true,
+        );
+    }
+
+    pub fn enqueue_timeout(&self, path: &str) {
+        self.push(path, ScriptedEvent::Timeout, false);
+    }
+
+    pub fn enqueue_transport(&self, path: &str) {
+        self.push(path, ScriptedEvent::Transport, false);
+    }
+
+    pub fn mount_ok_discovery(&self) {
+        let body = serde_json::json!({
+            "issuer": TEST_IDP_ORIGIN,
+            "jwks_uri": Self::jwks_url(),
+        })
+        .to_string()
+        .into_bytes();
+        self.enqueue_http_repeat(DISCOVERY_PATH, 200, body);
+    }
+
+    pub fn mount_live_jwks(
+        &self,
+        fail: Arc<std::sync::atomic::AtomicBool>,
+        keys: Arc<std::sync::atomic::AtomicUsize>,
+        hits: Arc<std::sync::atomic::AtomicUsize>,
+    ) {
+        let mut routes = self.inner.lock();
+        let route = routes.entry(JWKS_PATH.to_string()).or_default();
+        route.live_jwks = Some(LiveJwks { fail, keys, hits });
+    }
+
+    pub fn hits(&self, path: &str) -> usize {
+        self.inner.lock().get(path).map(|route| route.hits).unwrap_or(0)
+    }
+
+    fn push(&self, path: &str, event: ScriptedEvent, repeat: bool) {
+        let mut routes = self.inner.lock();
+        let route = routes.entry(path.to_string()).or_default();
+        if repeat {
+            route.repeat = Some(event);
+        } else {
+            route.queue.push_back(event);
+        }
+    }
+
+    fn route_key(url: &str) -> &'static str {
+        if url.contains(DISCOVERY_PATH) {
+            DISCOVERY_PATH
+        } else if url.contains(JWKS_PATH) {
+            JWKS_PATH
+        } else {
+            panic!("OIDC unit test scripted HTTP has no route for {url}");
+        }
+    }
+
+    fn exchange(&self, url: &str, operation: OidcOperation) -> Result<reqwest::Response, OidcDependencyError> {
+        let path = Self::route_key(url);
+        let event = {
+            let mut routes = self.inner.lock();
+            let route = routes.entry(path.to_string()).or_default();
+            route.hits += 1;
+            if let Some(live) = &route.live_jwks {
+                live.hits.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                if live.fail.load(std::sync::atomic::Ordering::SeqCst) {
+                    ScriptedEvent::Http {
+                        status: 503,
+                        body: Vec::new(),
+                    }
+                } else {
+                    let n = live.keys.load(std::sync::atomic::Ordering::SeqCst);
+                    let keys = (0..n)
+                        .map(|i| format!(r#"{{"kty":"oct","kid":"k{i}","k":"AAAAAA","alg":"HS256"}}"#))
+                        .collect::<Vec<_>>()
+                        .join(",");
+                    ScriptedEvent::Http {
+                        status: 200,
+                        body: format!(r#"{{"keys":[{keys}]}}"#).into_bytes(),
+                    }
+                }
+            } else if let Some(event) = route.queue.pop_front() {
+                event
+            } else if let Some(event) = route.repeat.clone() {
+                event
+            } else {
+                panic!("OIDC unit test scripted HTTP exhausted for {path} ({url})");
+            }
+        };
+        match event {
+            ScriptedEvent::Http { status, body } => Ok(http::Response::builder()
+                .status(status)
+                .body(body)
+                .unwrap_or_else(|_| panic!("scripted OIDC HTTP status {status} must be valid"))
+                .into()),
+            ScriptedEvent::Timeout => Err(OidcDependencyError::new(operation, OidcDependencyFailure::Timeout)),
+            ScriptedEvent::Transport => Err(OidcDependencyError::new(operation, OidcDependencyFailure::Transport)),
+        }
+    }
+}
+
 pub struct JwksProvider<D: DiscoveryDoc> {
     config: JwksProviderConfig,
     client: Arc<Client>,
@@ -165,6 +341,8 @@ pub struct JwksProvider<D: DiscoveryDoc> {
     discovery_failure: RwLock<Option<DiscoveryFailure>>,
     jwks_state: RwLock<JwksState>,
     jwks_refresh: Mutex<()>,
+    #[cfg(test)]
+    scripted_http: ScriptMutex<Option<Arc<ScriptedHttp>>>,
 }
 
 impl<D: DiscoveryDoc> JwksProvider<D> {
@@ -180,7 +358,29 @@ impl<D: DiscoveryDoc> JwksProvider<D> {
             discovery_failure: RwLock::new(None),
             jwks_state: RwLock::new(JwksState::default()),
             jwks_refresh: Mutex::new(()),
+            #[cfg(test)]
+            scripted_http: ScriptMutex::new(None),
         })
+    }
+
+    async fn outbound_get(
+        &self,
+        url: &str,
+        operation: OidcOperation,
+    ) -> Result<reqwest::Response, OidcDependencyError> {
+        #[cfg(test)]
+        {
+            let script = self.scripted_http.lock().clone();
+            if let Some(script) = script {
+                return script.exchange(url, operation);
+            }
+        }
+        self.client
+            .get(url)
+            .timeout(self.config.request_timeout)
+            .send()
+            .await
+            .map_err(|error| OidcDependencyError::transport(operation, &error, self.config.component_label))
     }
 
     /// Read-only cached discovery (no fetch). Used by gateway logout path which
@@ -242,14 +442,8 @@ impl<D: DiscoveryDoc> JwksProvider<D> {
             .map_err(|failure| OidcDependencyError::new(OidcOperation::Discovery, failure))?;
 
         let resp = self
-            .client
-            .get(&self.config.discovery_url)
-            .timeout(self.config.request_timeout)
-            .send()
-            .await
-            .map_err(|error| {
-                OidcDependencyError::transport(OidcOperation::Discovery, &error, self.config.component_label)
-            })?;
+            .outbound_get(&self.config.discovery_url, OidcOperation::Discovery)
+            .await?;
         if !resp.status().is_success() {
             return Err(OidcDependencyError::new(
                 OidcOperation::Discovery,
@@ -339,15 +533,7 @@ impl<D: DiscoveryDoc> JwksProvider<D> {
         let fetch_result: Result<JwkSet, OidcDependencyError> = async {
             super::plugin::admit_oidc_outbound_url(discovery.jwks_uri())
                 .map_err(|failure| OidcDependencyError::new(OidcOperation::Jwks, failure))?;
-            let resp = self
-                .client
-                .get(discovery.jwks_uri())
-                .timeout(self.config.request_timeout)
-                .send()
-                .await
-                .map_err(|error| {
-                    OidcDependencyError::transport(OidcOperation::Jwks, &error, self.config.component_label)
-                })?;
+            let resp = self.outbound_get(discovery.jwks_uri(), OidcOperation::Jwks).await?;
             if !resp.status().is_success() {
                 return Err(OidcDependencyError::new(
                     OidcOperation::Jwks,
@@ -395,6 +581,12 @@ impl<D: DiscoveryDoc> JwksProvider<D> {
             expires_at: Some(Instant::now()),
             last_refresh_at: None,
         };
+    }
+
+    /// Install an in-memory HTTP script. Unit tests must not dial.
+    #[cfg(test)]
+    pub fn install_scripted_http(&self, script: Arc<ScriptedHttp>) {
+        *self.scripted_http.lock() = Some(script);
     }
 }
 
@@ -502,120 +694,97 @@ mod tests {
     }
 
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    use tokio::net::TcpListener;
 
-    struct MockIdp {
-        addr: String,
+    struct ScriptedIdp {
+        origin: &'static str,
+        script: Arc<ScriptedHttp>,
         jwks_should_fail: Arc<AtomicBool>,
         jwks_keys_count: Arc<AtomicUsize>,
         jwks_request_count: Arc<AtomicUsize>,
     }
 
-    async fn spawn_mock_idp() -> MockIdp {
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let local_addr = listener.local_addr().unwrap();
-        let addr = format!("http://{}", local_addr);
+    fn scripted_idp() -> ScriptedIdp {
         let jwks_should_fail = Arc::new(AtomicBool::new(false));
         let jwks_keys_count = Arc::new(AtomicUsize::new(1));
         let jwks_request_count = Arc::new(AtomicUsize::new(0));
-        let fail_clone = jwks_should_fail.clone();
-        let count_clone = jwks_keys_count.clone();
-        let request_count_clone = jwks_request_count.clone();
-        let addr_for_loop = addr.clone();
-        tokio::spawn(async move {
-            loop {
-                let Ok((mut sock, _)) = listener.accept().await else {
-                    return;
-                };
-                let fail = fail_clone.clone();
-                let count = count_clone.clone();
-                let request_count = request_count_clone.clone();
-                let addr_owned = addr_for_loop.clone();
-                tokio::spawn(async move {
-                    let mut req = [0u8; 1024];
-                    let n = sock.read(&mut req).await.unwrap_or(0);
-                    let req_str = String::from_utf8_lossy(&req[..n]).to_string();
-                    // This mock serves exactly one request per connection and then
-                    // shuts the socket down, so every response must advertise
-                    // `Connection: close`. Without it the HTTP/1.1 default (keep-alive)
-                    // would let the reqwest pool reuse a socket the server has already
-                    // closed, surfacing intermittent "error sending request" failures
-                    // under parallel test load.
-                    if req_str.contains("/.well-known/openid-configuration") {
-                        let body = format!(r#"{{"issuer":"{0}","jwks_uri":"{0}/jwks"}}"#, addr_owned);
-                        let resp = format!(
-                            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{}",
-                            body.len(),
-                            body
-                        );
-                        let _ = sock.write_all(resp.as_bytes()).await;
-                    } else if req_str.contains("/jwks") {
-                        request_count.fetch_add(1, Ordering::SeqCst);
-                        if fail.load(Ordering::SeqCst) {
-                            let _ = sock
-                                .write_all(
-                                    b"HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\nContent-Length: 0\r\n\r\n",
-                                )
-                                .await;
-                        } else {
-                            let n = count.load(Ordering::SeqCst);
-                            let keys = (0..n)
-                                .map(|i| format!(r#"{{"kty":"oct","kid":"k{}","k":"AAAAAA","alg":"HS256"}}"#, i))
-                                .collect::<Vec<_>>()
-                                .join(",");
-                            let body = format!(r#"{{"keys":[{}]}}"#, keys);
-                            let resp = format!(
-                                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{}",
-                                body.len(),
-                                body
-                            );
-                            let _ = sock.write_all(resp.as_bytes()).await;
-                        }
-                    }
-                    let _ = sock.shutdown().await;
-                });
-            }
-        });
-        MockIdp {
-            addr,
+        let script = ScriptedHttp::new();
+        script.mount_ok_discovery();
+        script.mount_live_jwks(
+            jwks_should_fail.clone(),
+            jwks_keys_count.clone(),
+            jwks_request_count.clone(),
+        );
+        ScriptedIdp {
+            origin: ScriptedHttp::origin(),
+            script,
             jwks_should_fail,
             jwks_keys_count,
             jwks_request_count,
         }
     }
 
-    fn test_config(addr: &str, ttl_ms: u64, min_refresh_ms: u64) -> JwksProviderConfig {
+    fn unused_client() -> Arc<Client> {
+        Arc::new(Client::new())
+    }
+
+    fn test_config(origin: &str, ttl_ms: u64, min_refresh_ms: u64) -> JwksProviderConfig {
+        wm_config(origin, ttl_ms, min_refresh_ms, 2_000)
+    }
+
+    fn test_provider(idp: &ScriptedIdp, ttl_ms: u64, min_refresh_ms: u64) -> Arc<JwksProvider<LeanDiscoveryDocument>> {
+        let provider = JwksProvider::new(
+            test_config(idp.origin, ttl_ms, min_refresh_ms),
+            unused_client(),
+            no_op_validator(),
+        );
+        provider.install_scripted_http(idp.script.clone());
+        provider
+    }
+
+    fn wm_config(origin: &str, ttl_ms: u64, min_refresh_ms: u64, timeout_ms: u64) -> JwksProviderConfig {
         JwksProviderConfig {
-            discovery_url: format!("{}/.well-known/openid-configuration", addr),
+            discovery_url: format!("{origin}{DISCOVERY_PATH}"),
             jwks_cache_ttl: Duration::from_millis(ttl_ms),
             jwks_min_refresh_interval: Duration::from_millis(min_refresh_ms),
             discovery_max_response_bytes: 65_536,
             jwks_max_response_bytes: 1_048_576,
-            request_timeout: Duration::from_secs(2),
+            request_timeout: Duration::from_millis(timeout_ms),
             discovery_failure_backoff: Duration::from_millis(200),
             component_label: "test",
         }
     }
 
-    fn test_provider(cfg: JwksProviderConfig) -> Arc<JwksProvider<LeanDiscoveryDocument>> {
-        let client = Arc::new(Client::builder().build().unwrap());
-        JwksProvider::new(cfg, client, no_op_validator())
+    fn build_provider(cfg: JwksProviderConfig) -> Arc<JwksProvider<LeanDiscoveryDocument>> {
+        JwksProvider::new(cfg, unused_client(), no_op_validator())
+    }
+
+    fn build_scripted(cfg: JwksProviderConfig, script: Arc<ScriptedHttp>) -> Arc<JwksProvider<LeanDiscoveryDocument>> {
+        let provider = build_provider(cfg);
+        provider.install_scripted_http(script);
+        provider
+    }
+
+    fn oct_jwks(kids: &[(&str, &str)]) -> Vec<u8> {
+        let keys: Vec<serde_json::Value> = kids
+            .iter()
+            .map(|(kid, k)| serde_json::json!({"kty":"oct","kid": kid, "k": k, "alg":"HS256"}))
+            .collect();
+        serde_json::json!({"keys": keys}).to_string().into_bytes()
     }
 
     #[tokio::test]
     async fn discovery_cache_returns_one_immutable_snapshot() {
-        let idp = spawn_mock_idp().await;
-        let p = test_provider(test_config(&idp.addr, 60_000, 100));
+        let idp = scripted_idp();
+        let p = test_provider(&idp, 60_000, 100);
 
         let fetched = p.get_or_fetch_discovery().await.unwrap();
         let cached_fetch = p.get_or_fetch_discovery().await.unwrap();
         let cached_read = p.cached_discovery().await.unwrap();
         assert!(Arc::ptr_eq(&fetched, &cached_fetch));
         assert!(Arc::ptr_eq(&fetched, &cached_read));
-        assert_eq!(fetched.issuer(), idp.addr);
+        assert_eq!(fetched.issuer(), idp.origin);
 
-        let seeded = test_provider(test_config(&idp.addr, 60_000, 100));
+        let seeded = test_provider(&idp, 60_000, 100);
         seeded
             .seed_discovery(LeanDiscoveryDocument {
                 issuer: "https://seeded.example.com".to_string(),
@@ -630,8 +799,8 @@ mod tests {
 
     #[tokio::test]
     async fn fast_path_returns_cached_within_ttl() {
-        let idp = spawn_mock_idp().await;
-        let p = test_provider(test_config(&idp.addr, 60_000, 100));
+        let idp = scripted_idp();
+        let p = test_provider(&idp, 60_000, 100);
         let a = p.get_jwks(false).await.unwrap();
         let b = p.get_jwks(false).await.unwrap();
         assert_eq!(a.set.keys.len(), b.set.keys.len());
@@ -646,8 +815,8 @@ mod tests {
     /// `fail-open:jwks-stale-cache` dye outcome.
     #[tokio::test]
     async fn stale_fallback_returns_cached_on_fetch_error() {
-        let idp = spawn_mock_idp().await;
-        let p = test_provider(test_config(&idp.addr, 50, 0));
+        let idp = scripted_idp();
+        let p = test_provider(&idp, 50, 0);
         let fresh = p.get_jwks(false).await.unwrap();
         assert!(!fresh.served_stale, "initial fresh fetch must not be flagged stale");
         idp.jwks_should_fail.store(true, Ordering::SeqCst);
@@ -663,9 +832,9 @@ mod tests {
 
     #[tokio::test]
     async fn no_cache_no_fallback_returns_error() {
-        let idp = spawn_mock_idp().await;
+        let idp = scripted_idp();
         idp.jwks_should_fail.store(true, Ordering::SeqCst);
-        let p = test_provider(test_config(&idp.addr, 60_000, 0));
+        let p = test_provider(&idp, 60_000, 0);
         let err = p
             .get_jwks(false)
             .await
@@ -676,8 +845,8 @@ mod tests {
 
     #[tokio::test]
     async fn force_refresh_blocked_by_min_interval_returns_cached() {
-        let idp = spawn_mock_idp().await;
-        let p = test_provider(test_config(&idp.addr, 60_000, 60_000));
+        let idp = scripted_idp();
+        let p = test_provider(&idp, 60_000, 60_000);
         let initial = p.get_jwks(false).await.unwrap();
         idp.jwks_keys_count.store(5, Ordering::SeqCst);
         let still_old = p.get_jwks(true).await.unwrap();
@@ -691,8 +860,8 @@ mod tests {
 
     #[tokio::test]
     async fn singleflight_concurrent_callers_share_one_fetch() {
-        let idp = spawn_mock_idp().await;
-        let p = test_provider(test_config(&idp.addr, 60_000, 0));
+        let idp = scripted_idp();
+        let p = test_provider(&idp, 60_000, 0);
         let mut handles = vec![];
         for _ in 0..20 {
             let pc = p.clone();
@@ -713,8 +882,8 @@ mod tests {
         // During a prolonged outage with a cached set, we must not hammer the JWKS
         // endpoint on every request. Subsequent calls within min_refresh_interval after
         // a failed refresh should hit the fast path.
-        let idp = spawn_mock_idp().await;
-        let p = test_provider(test_config(&idp.addr, 30, 5_000)); // 30ms TTL, 5s min_refresh
+        let idp = scripted_idp();
+        let p = test_provider(&idp, 30, 5_000); // 30ms TTL, 5s min_refresh
         let fresh = p.get_jwks(false).await.unwrap(); // populate cache (1 request)
         idp.jwks_should_fail.store(true, Ordering::SeqCst);
         tokio::time::sleep(Duration::from_millis(50)).await; // expire TTL
@@ -739,12 +908,12 @@ mod tests {
 
     #[tokio::test]
     async fn validator_rejection_does_not_cache() {
-        let idp = spawn_mock_idp().await;
-        let cfg = test_config(&idp.addr, 60_000, 0);
-        let client = Arc::new(Client::builder().build().unwrap());
+        let idp = scripted_idp();
+        let cfg = test_config(idp.origin, 60_000, 0);
         let validator: DiscoveryValidator<LeanDiscoveryDocument> =
             Arc::new(|_| Err(OidcDependencyFailure::InvalidDocument));
-        let p = JwksProvider::new(cfg, client, validator);
+        let p = JwksProvider::new(cfg, unused_client(), validator);
+        p.install_scripted_http(idp.script.clone());
         let err = p
             .get_or_fetch_discovery()
             .await
@@ -757,86 +926,26 @@ mod tests {
         );
     }
 
-    // ---------------------------------------------------------------------
-    // Exception-path tests using wiremock for fine-grained server control.
-    // ---------------------------------------------------------------------
-
-    use wiremock::matchers::{method, path};
-    use wiremock::{Mock, MockServer, ResponseTemplate};
-
-    /// Build a config pointing at a wiremock server with a custom request timeout.
-    fn wm_config(addr: &str, ttl_ms: u64, min_refresh_ms: u64, timeout_ms: u64) -> JwksProviderConfig {
-        JwksProviderConfig {
-            discovery_url: format!("{}/.well-known/openid-configuration", addr),
-            jwks_cache_ttl: Duration::from_millis(ttl_ms),
-            jwks_min_refresh_interval: Duration::from_millis(min_refresh_ms),
-            discovery_max_response_bytes: 65_536,
-            jwks_max_response_bytes: 1_048_576,
-            request_timeout: Duration::from_millis(timeout_ms),
-            discovery_failure_backoff: Duration::from_millis(200),
-            component_label: "test",
-        }
-    }
-
-    /// Mount a happy-path discovery endpoint pointing jwks_uri at the same server.
-    async fn mount_ok_discovery(server: &MockServer) {
-        let body = serde_json::json!({
-            "issuer": server.uri(),
-            "jwks_uri": format!("{}/jwks", server.uri()),
-        });
-        Mock::given(method("GET"))
-            .and(path("/.well-known/openid-configuration"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(body))
-            .mount(server)
-            .await;
-    }
-
-    fn build_provider(cfg: JwksProviderConfig) -> Arc<JwksProvider<LeanDiscoveryDocument>> {
-        let client = Arc::new(Client::builder().build().unwrap());
-        JwksProvider::new(cfg, client, no_op_validator())
-    }
-
     #[tokio::test]
     async fn test_jwks_fetch_timeout_returns_error_when_no_cache() {
-        // Discovery is fast, JWKS is slow → request-level timeout fires.
-        let server = MockServer::start().await;
-        mount_ok_discovery(&server).await;
-        let body = serde_json::json!({
-            "keys": [{"kty":"oct","kid":"k0","k":"AAAAAA","alg":"HS256"}],
-        });
-        Mock::given(method("GET"))
-            .and(path("/jwks"))
-            .respond_with(
-                ResponseTemplate::new(200)
-                    .set_body_json(body)
-                    .set_delay(Duration::from_millis(500)),
-            )
-            .mount(&server)
-            .await;
-        let p = build_provider(wm_config(&server.uri(), 60_000, 0, 100));
+        let script = ScriptedHttp::new();
+        script.mount_ok_discovery();
+        script.enqueue_timeout(JWKS_PATH);
+        let p = build_scripted(wm_config(ScriptedHttp::origin(), 60_000, 0, 100), script);
         let err = p
             .get_jwks(false)
             .await
             .expect_err("timeout must error with empty cache")
             .to_string();
-        let lc = err.to_lowercase();
-        assert!(
-            lc.contains("timeout") || lc.contains("timed out") || lc.contains("jwks request failed"),
-            "expected timeout-shaped error, got: {err}"
-        );
+        assert_eq!(err, "jwks timeout");
     }
 
     #[tokio::test]
     async fn test_jwks_fetch_5xx_returns_error_when_no_cache() {
-        // 5xx with no cache → hard fail (stale-while-revalidate has nothing to serve).
-        let server = MockServer::start().await;
-        mount_ok_discovery(&server).await;
-        Mock::given(method("GET"))
-            .and(path("/jwks"))
-            .respond_with(ResponseTemplate::new(500))
-            .mount(&server)
-            .await;
-        let p = build_provider(wm_config(&server.uri(), 60_000, 0, 2_000));
+        let script = ScriptedHttp::new();
+        script.mount_ok_discovery();
+        script.enqueue_http_repeat(JWKS_PATH, 500, Vec::new());
+        let p = build_scripted(wm_config(ScriptedHttp::origin(), 60_000, 0, 2_000), script);
         let err = p
             .get_jwks(false)
             .await
@@ -850,26 +959,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_jwks_fetch_5xx_falls_back_to_cache() {
-        // First fetch succeeds (populates cache), second fetch sees 5xx → stale fallback.
-        let server = MockServer::start().await;
-        mount_ok_discovery(&server).await;
-        let body_ok = serde_json::json!({
-            "keys": [{"kty":"oct","kid":"k0","k":"AAAAAA","alg":"HS256"}],
-        });
-        // Two scoped responders: first OK (limit 1), then 5xx for everything after.
-        Mock::given(method("GET"))
-            .and(path("/jwks"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(body_ok))
-            .up_to_n_times(1)
-            .mount(&server)
-            .await;
-        Mock::given(method("GET"))
-            .and(path("/jwks"))
-            .respond_with(ResponseTemplate::new(503))
-            .mount(&server)
-            .await;
-        // ttl very short so the 2nd call triggers a refetch.
-        let p = build_provider(wm_config(&server.uri(), 30, 0, 2_000));
+        let script = ScriptedHttp::new();
+        script.mount_ok_discovery();
+        script.enqueue_http(JWKS_PATH, 200, oct_jwks(&[("k0", "AAAAAA")]));
+        script.enqueue_http_repeat(JWKS_PATH, 503, Vec::new());
+        let p = build_scripted(wm_config(ScriptedHttp::origin(), 30, 0, 2_000), script);
         let first = p.get_jwks(false).await.expect("initial fetch ok");
         assert_eq!(first.set.keys.len(), 1);
         assert!(!first.served_stale);
@@ -884,14 +978,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_jwks_malformed_json_returns_parse_error() {
-        let server = MockServer::start().await;
-        mount_ok_discovery(&server).await;
-        Mock::given(method("GET"))
-            .and(path("/jwks"))
-            .respond_with(ResponseTemplate::new(200).set_body_string("{not-valid-json"))
-            .mount(&server)
-            .await;
-        let p = build_provider(wm_config(&server.uri(), 60_000, 0, 2_000));
+        let script = ScriptedHttp::new();
+        script.mount_ok_discovery();
+        script.enqueue_http_repeat(JWKS_PATH, 200, b"{not-valid-json".to_vec());
+        let p = build_scripted(wm_config(ScriptedHttp::origin(), 60_000, 0, 2_000), script);
         let err = p
             .get_jwks(false)
             .await
@@ -906,15 +996,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_jwks_empty_keys_returns_error() {
-        // Provider explicitly rejects empty keys list ("JWKS endpoint returned empty keys").
-        let server = MockServer::start().await;
-        mount_ok_discovery(&server).await;
-        Mock::given(method("GET"))
-            .and(path("/jwks"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"keys": []})))
-            .mount(&server)
-            .await;
-        let p = build_provider(wm_config(&server.uri(), 60_000, 0, 2_000));
+        let script = ScriptedHttp::new();
+        script.mount_ok_discovery();
+        script.enqueue_http_repeat(JWKS_PATH, 200, serde_json::json!({"keys": []}).to_string().into_bytes());
+        let p = build_scripted(wm_config(ScriptedHttp::origin(), 60_000, 0, 2_000), script);
         let err = p.get_jwks(false).await.expect_err("empty keys must error").to_string();
         assert!(
             err == "jwks document invalid",
@@ -924,13 +1009,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_discovery_5xx_returns_error() {
-        let server = MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path("/.well-known/openid-configuration"))
-            .respond_with(ResponseTemplate::new(503))
-            .mount(&server)
-            .await;
-        let p = build_provider(wm_config(&server.uri(), 60_000, 0, 2_000));
+        let script = ScriptedHttp::new();
+        script.enqueue_http_repeat(DISCOVERY_PATH, 503, Vec::new());
+        let p = build_scripted(wm_config(ScriptedHttp::origin(), 60_000, 0, 2_000), script);
         let err = p
             .get_or_fetch_discovery()
             .await
@@ -948,20 +1029,16 @@ mod tests {
 
     #[tokio::test]
     async fn test_discovery_failure_backoff_reuses_error_without_refetch() {
-        let server = MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path("/.well-known/openid-configuration"))
-            .respond_with(ResponseTemplate::new(503))
-            .expect(1)
-            .mount(&server)
-            .await;
-        let p = build_provider(wm_config(&server.uri(), 60_000, 0, 2_000));
+        let script = ScriptedHttp::new();
+        script.enqueue_http(DISCOVERY_PATH, 503, Vec::new());
+        let p = build_scripted(wm_config(ScriptedHttp::origin(), 60_000, 0, 2_000), script.clone());
         let first = p.get_or_fetch_discovery().await.expect_err("discovery 5xx must error");
         let second = p
             .get_or_fetch_discovery()
             .await
             .expect_err("backoff must reuse the failed outcome");
         assert_eq!(first, second);
+        assert_eq!(script.hits(DISCOVERY_PATH), 1);
         assert!(
             p.cached_discovery().await.is_none(),
             "failure backoff must not publish a discovery snapshot"
@@ -970,17 +1047,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_discovery_recovers_after_failure_backoff() {
-        let server = MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path("/.well-known/openid-configuration"))
-            .respond_with(ResponseTemplate::new(503))
-            .up_to_n_times(1)
-            .mount(&server)
-            .await;
-        mount_ok_discovery(&server).await;
-        let mut cfg = wm_config(&server.uri(), 60_000, 0, 2_000);
+        let script = ScriptedHttp::new();
+        script.enqueue_http(DISCOVERY_PATH, 503, Vec::new());
+        script.mount_ok_discovery();
+        let mut cfg = wm_config(ScriptedHttp::origin(), 60_000, 0, 2_000);
         cfg.discovery_failure_backoff = Duration::from_millis(50);
-        let p = build_provider(cfg);
+        let p = build_scripted(cfg, script);
         p.get_or_fetch_discovery()
             .await
             .expect_err("first discovery attempt must fail");
@@ -995,16 +1067,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_discovery_concurrent_failures_one_fetch_then_backoff() {
-        let server = MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path("/.well-known/openid-configuration"))
-            .respond_with(ResponseTemplate::new(503).set_delay(Duration::from_millis(40)))
-            .expect(1)
-            .mount(&server)
-            .await;
-        let mut cfg = wm_config(&server.uri(), 60_000, 0, 2_000);
+        let script = ScriptedHttp::new();
+        script.enqueue_http(DISCOVERY_PATH, 503, Vec::new());
+        let mut cfg = wm_config(ScriptedHttp::origin(), 60_000, 0, 2_000);
         cfg.discovery_failure_backoff = Duration::from_secs(2);
-        let p = build_provider(cfg);
+        let p = build_scripted(cfg, script.clone());
         let mut handles = Vec::new();
         for _ in 0..16 {
             let provider = p.clone();
@@ -1021,40 +1088,33 @@ mod tests {
                 .await
                 .expect_err("callers inside the backoff window must not contact the provider");
         }
+        assert_eq!(script.hits(DISCOVERY_PATH), 1);
     }
 
     #[tokio::test]
     async fn test_discovery_malformed_json_returns_error() {
-        let server = MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path("/.well-known/openid-configuration"))
-            .respond_with(ResponseTemplate::new(200).set_body_string("not-json"))
-            .mount(&server)
-            .await;
-        let p = build_provider(wm_config(&server.uri(), 60_000, 0, 2_000));
+        let script = ScriptedHttp::new();
+        script.enqueue_http_repeat(DISCOVERY_PATH, 200, b"not-json".to_vec());
+        let p = build_scripted(wm_config(ScriptedHttp::origin(), 60_000, 0, 2_000), script);
         let err = p
             .get_or_fetch_discovery()
             .await
             .expect_err("discovery malformed JSON must error")
             .to_string();
-        let lc = err.to_lowercase();
-        assert!(lc == "discovery response json fail", "expected parse error, got: {err}");
+        assert_eq!(err, "discovery response json fail");
     }
 
     #[tokio::test]
     async fn test_discovery_missing_jwks_uri_returns_error() {
-        let server = MockServer::start().await;
-        // Valid JSON but jwks_uri is empty.
+        let script = ScriptedHttp::new();
         let body = serde_json::json!({
-            "issuer": server.uri(),
+            "issuer": ScriptedHttp::origin(),
             "jwks_uri": "",
-        });
-        Mock::given(method("GET"))
-            .and(path("/.well-known/openid-configuration"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(body))
-            .mount(&server)
-            .await;
-        let p = build_provider(wm_config(&server.uri(), 60_000, 0, 2_000));
+        })
+        .to_string()
+        .into_bytes();
+        script.enqueue_http_repeat(DISCOVERY_PATH, 200, body);
+        let p = build_scripted(wm_config(ScriptedHttp::origin(), 60_000, 0, 2_000), script);
         let err = p
             .get_or_fetch_discovery()
             .await
@@ -1068,17 +1128,15 @@ mod tests {
 
     #[tokio::test]
     async fn test_discovery_missing_issuer_returns_error() {
-        let server = MockServer::start().await;
+        let script = ScriptedHttp::new();
         let body = serde_json::json!({
             "issuer": "",
-            "jwks_uri": format!("{}/jwks", server.uri()),
-        });
-        Mock::given(method("GET"))
-            .and(path("/.well-known/openid-configuration"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(body))
-            .mount(&server)
-            .await;
-        let p = build_provider(wm_config(&server.uri(), 60_000, 0, 2_000));
+            "jwks_uri": ScriptedHttp::jwks_url(),
+        })
+        .to_string()
+        .into_bytes();
+        script.enqueue_http_repeat(DISCOVERY_PATH, 200, body);
+        let p = build_scripted(wm_config(ScriptedHttp::origin(), 60_000, 0, 2_000), script);
         let err = p
             .get_or_fetch_discovery()
             .await
@@ -1092,18 +1150,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_discovery_unreachable_returns_error() {
-        // Port 1 is reserved/unused — connection should fail fast.
-        let cfg = JwksProviderConfig {
-            discovery_url: "http://127.0.0.1:1/.well-known/openid-configuration".to_string(),
-            jwks_cache_ttl: Duration::from_secs(60),
-            jwks_min_refresh_interval: Duration::from_millis(0),
-            discovery_max_response_bytes: 65_536,
-            jwks_max_response_bytes: 1_048_576,
-            request_timeout: Duration::from_millis(500),
-            discovery_failure_backoff: Duration::from_millis(200),
-            component_label: "test",
-        };
-        let p = build_provider(cfg);
+        let script = ScriptedHttp::new();
+        script.enqueue_transport(DISCOVERY_PATH);
+        let p = build_scripted(wm_config(ScriptedHttp::origin(), 60_000, 0, 500), script);
         let err = p
             .get_or_fetch_discovery()
             .await
@@ -1114,29 +1163,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_jwks_kid_rotation_force_refresh_loads_new_keys() {
-        // Simulate a kid rotation: initial JWKS has kid=k_old; after rotation only k_new.
-        // Caller observes kid miss on k_old → invokes get_jwks(force_refresh=true) and gets k_new.
-        let server = MockServer::start().await;
-        mount_ok_discovery(&server).await;
-        let body_old = serde_json::json!({
-            "keys": [{"kty":"oct","kid":"k_old","k":"AAAAAA","alg":"HS256"}],
-        });
-        let body_new = serde_json::json!({
-            "keys": [{"kty":"oct","kid":"k_new","k":"BBBBBB","alg":"HS256"}],
-        });
-        Mock::given(method("GET"))
-            .and(path("/jwks"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(body_old))
-            .up_to_n_times(1)
-            .mount(&server)
-            .await;
-        Mock::given(method("GET"))
-            .and(path("/jwks"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(body_new))
-            .mount(&server)
-            .await;
-        // min_refresh=0 so force_refresh is not throttled.
-        let p = build_provider(wm_config(&server.uri(), 60_000, 0, 2_000));
+        let script = ScriptedHttp::new();
+        script.mount_ok_discovery();
+        script.enqueue_http(JWKS_PATH, 200, oct_jwks(&[("k_old", "AAAAAA")]));
+        script.enqueue_http_repeat(JWKS_PATH, 200, oct_jwks(&[("k_new", "BBBBBB")]));
+        let p = build_scripted(wm_config(ScriptedHttp::origin(), 60_000, 0, 2_000), script);
         let first = p.get_jwks(false).await.expect("initial fetch ok");
         assert_eq!(first.set.keys.len(), 1);
         let kid_first = first.set.keys[0].common.key_id.as_deref();
@@ -1147,7 +1178,6 @@ mod tests {
         assert!(!Arc::ptr_eq(&first.set, &rotated.set));
         let kid_rot = rotated.set.keys[0].common.key_id.as_deref();
         assert_eq!(kid_rot, Some("k_new"), "force_refresh should pick up rotated kid");
-        // Old kid no longer present in the returned set.
         assert!(
             !rotated
                 .set

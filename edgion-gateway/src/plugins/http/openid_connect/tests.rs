@@ -2772,34 +2772,26 @@ async fn oidc_discovery_fetch_rejects_link_local_ip_literal() {
 
 #[tokio::test]
 async fn test_get_or_fetch_jwks_stale_serve_records_fail_open() {
-    use wiremock::matchers::{method, path};
-    use wiremock::{Mock, MockServer, ResponseTemplate};
+    use super::super::jwks_provider::{ScriptedHttp, JWKS_PATH};
 
-    let server = MockServer::start().await;
+    let script = ScriptedHttp::new();
     let jwks_ok = serde_json::json!({
         "keys": [{"kty":"oct","kid":"k0","k":"AAAAAA","alg":"HS256"}],
-    });
-    // First fetch succeeds (populates the cache); every fetch after that 503s.
-    Mock::given(method("GET"))
-        .and(path("/jwks"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(jwks_ok))
-        .up_to_n_times(1)
-        .mount(&server)
-        .await;
-    Mock::given(method("GET"))
-        .and(path("/jwks"))
-        .respond_with(ResponseTemplate::new(503))
-        .mount(&server)
-        .await;
+    })
+    .to_string()
+    .into_bytes();
+    script.enqueue_http(JWKS_PATH, 200, jwks_ok);
+    script.enqueue_http_repeat(JWKS_PATH, 503, Vec::new());
 
     let mut cfg = base_config();
     cfg.jwks_min_refresh_interval = 0; // force_refresh must not be throttled
     let plugin = OpenidConnect::new(&cfg, "default".to_string());
+    plugin.jwks_provider.install_scripted_http(script);
     plugin
         .jwks_provider
         .seed_discovery(DiscoveryDocument {
-            issuer: server.uri(),
-            jwks_uri: format!("{}/jwks", server.uri()),
+            issuer: ScriptedHttp::origin().to_string(),
+            jwks_uri: ScriptedHttp::jwks_url(),
             authorization_endpoint: None,
             token_endpoint: None,
             introspection_endpoint: None,
@@ -2839,22 +2831,18 @@ async fn test_get_or_fetch_jwks_stale_serve_records_fail_open() {
 
 #[tokio::test]
 async fn test_get_or_fetch_jwks_unreachable_no_cache_records_fail_close() {
-    use wiremock::matchers::{method, path};
-    use wiremock::{Mock, MockServer, ResponseTemplate};
+    use super::super::jwks_provider::{ScriptedHttp, JWKS_PATH};
 
-    let server = MockServer::start().await;
-    Mock::given(method("GET"))
-        .and(path("/jwks"))
-        .respond_with(ResponseTemplate::new(503))
-        .mount(&server)
-        .await;
+    let script = ScriptedHttp::new();
+    script.enqueue_http_repeat(JWKS_PATH, 503, Vec::new());
 
     let plugin = OpenidConnect::new(&base_config(), "default".to_string());
+    plugin.jwks_provider.install_scripted_http(script);
     plugin
         .jwks_provider
         .seed_discovery(DiscoveryDocument {
-            issuer: server.uri(),
-            jwks_uri: format!("{}/jwks", server.uri()),
+            issuer: ScriptedHttp::origin().to_string(),
+            jwks_uri: ScriptedHttp::jwks_url(),
             authorization_endpoint: None,
             token_endpoint: None,
             introspection_endpoint: None,

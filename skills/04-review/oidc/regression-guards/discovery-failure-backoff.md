@@ -62,8 +62,10 @@ accepted for JWKS and recorded as the proportionate alternative to
   outage or validator failure
 - **A second prewarm implementation** — `spawn_discovery_prewarm` already
   retries for about five minutes on the background task
-- **Changing frozen OpenID Connect integration tests** — provider-local
-  Tokio fixtures cover backoff, reuse, and recovery
+- **Changing frozen OpenID Connect integration tests** — in-memory scripted
+  HTTP fixtures cover backoff, reuse, and recovery without sockets. See
+  [JWKS unit tests isolate the outbound GET](jwks-unit-tests-without-network.md)
+  for the exact unit-test versus ignored local-IdP coverage split.
 
 ## Re-evaluation Triggers
 
