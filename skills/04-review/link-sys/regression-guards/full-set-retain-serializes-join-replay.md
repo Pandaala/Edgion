@@ -1,11 +1,11 @@
 ---
 name: full-set-retain-serializes-join-replay
-description: Use when reviewing LinkSys full-set omission, pending recreation, and delete join replay for persistent providers.
+description: Use when reviewing LinkSys full-set omission, kind changes, pending recreation, and delete join replay for persistent providers.
 knowledge_type: regression-guards
 finding_id: ISSUE-002
 ---
 
-# Full-set retain serializes with delete join replay
+# Full-set retain precedes apply and serializes with delete join replay
 
 ## Conclusion and scope
 
@@ -16,6 +16,11 @@ pending recreation after that provider's retain step. Each provider's
 pending pruning. The `ProviderRuntimeStore.map` holds runners keyed by
 `namespace/name`; the provider's `PENDING` map holds a `LinkSys` resource and
 forced-rebuild flag while an earlier runner is joining.
+
+For a full-set that changes a key from one persistent provider kind to another,
+all five providers' retain steps must finish before any provider applies the
+incoming resource. This removes the old kind's callable runner before the new
+kind can start. It does not require the old runner's shutdown join to finish.
 
 ## Rationale and evidence
 
@@ -36,6 +41,14 @@ and keeps it through deletion and pending pruning. Their deletion callbacks
 call the existing `delete_*_runner_locked` helpers to avoid reacquiring the
 same lock.
 
+ISSUE-005 identified a separate ordering gap in the same full-set dispatch:
+the input loop applied new persistent kinds before the provider retain steps.
+A Redis-to-Kafka change could therefore start Kafka while the old Redis client
+remained available through its typed getter. `dispatch_full_set_with` now
+collects the five present-key sets, retains each provider, and only then applies
+the input resources. This follows the LinkSys D7 kind-change contract in
+`tasks/todo/linksys-runtime-apply-lifecycle/10-decisions.md`.
+
 ## Alternatives and limits
 
 An `ArcSwap` runtime map makes individual updates atomic but does not make
@@ -43,6 +56,10 @@ enumeration and pending pruning one operation. This guard applies to the five
 persistent providers; Webhook uses a separate publication path. The unit test
 checks lock coverage and omitted-key cleanup in the shared helper. It does not
 exercise live provider connections or every scheduler ordering.
+The kind-change test blocks Kafka apply admission and checks that the old Redis
+runner and getter are already empty. It covers persistent-provider ordering,
+not the separate Webhook publication transaction or stronger cross-provider
+shutdown fencing.
 
 ## Verification and re-evaluation
 
@@ -50,8 +67,13 @@ exercise live provider connections or every scheduler ordering.
 passed on 2026-09-17. Re-evaluate if a provider stops using the shared retain
 helper, moves join replay outside its `APPLY_LOCK`, or changes the full-set
 omission contract.
+`cargo test -p edgion-gateway --lib dispatch_full_set_removes_old_kind_before_applying_new_kind`
+passed on 2026-09-17. Re-evaluate the kind-change ordering if full-set dispatch
+applies a provider before all persistent retain steps complete.
 
 ## Resolution references
 
 - `ISSUE-002` — corrected the full-set omission versus delete join replay race
   on 2026-09-17.
+- `ISSUE-005` — corrected full-set persistent kind-change ordering on
+  2026-09-17.

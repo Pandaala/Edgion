@@ -1397,6 +1397,34 @@ async fn dispatch_full_set_with(
 
     for (key, ls) in data {
         match &ls.spec.config {
+            edgion_resources::resources::link_sys::SystemConfig::Redis(_) => {
+                present_redis.insert(key.clone());
+            }
+            edgion_resources::resources::link_sys::SystemConfig::Etcd(_) => {
+                present_etcd.insert(key.clone());
+            }
+            edgion_resources::resources::link_sys::SystemConfig::Elasticsearch(_) => {
+                present_es.insert(key.clone());
+            }
+            edgion_resources::resources::link_sys::SystemConfig::Kafka(_) => {
+                present_kafka.insert(key.clone());
+            }
+            edgion_resources::resources::link_sys::SystemConfig::Otlp(_) => {
+                present_otlp.insert(key.clone());
+            }
+            _ => {}
+        }
+    }
+
+    // Remove runners for omitted or changed kinds before any new kind can apply.
+    retain_redis_runners(&present_redis);
+    retain_etcd_runners(&present_etcd);
+    retain_es_runners(&present_es);
+    retain_kafka_runners(&present_kafka);
+    retain_otlp_runners(&present_otlp);
+
+    for (key, ls) in data {
+        match &ls.spec.config {
             edgion_resources::resources::link_sys::SystemConfig::Webhook(config) => {
                 // Gate on credential readiness: a webhook whose `auth.secretRef`
                 // is configured but whose Secret is not yet injected (Pending) or
@@ -1451,19 +1479,15 @@ async fn dispatch_full_set_with(
                 }
             }
             edgion_resources::resources::link_sys::SystemConfig::Redis(_) => {
-                present_redis.insert(key.clone());
                 apply_redis(key, ls, forced);
             }
             edgion_resources::resources::link_sys::SystemConfig::Etcd(_) => {
-                present_etcd.insert(key.clone());
                 apply_etcd(key, ls, forced);
             }
             edgion_resources::resources::link_sys::SystemConfig::Elasticsearch(_) => {
-                present_es.insert(key.clone());
                 apply_es(key, ls, forced);
             }
             edgion_resources::resources::link_sys::SystemConfig::Kafka(_) => {
-                present_kafka.insert(key.clone());
                 apply_kafka(key, ls, forced);
             }
             // DNS resolver, not a runtime link client — nothing to register in the link store.
@@ -1472,17 +1496,10 @@ async fn dispatch_full_set_with(
             // only the resolved plugin credential and never contacts the issuer.
             edgion_resources::resources::link_sys::SystemConfig::CredentialSource(_) => {}
             edgion_resources::resources::link_sys::SystemConfig::Otlp(_) => {
-                present_otlp.insert(key.clone());
                 apply_otlp(key, ls, forced);
             }
         }
     }
-
-    retain_redis_runners(&present_redis);
-    retain_etcd_runners(&present_etcd);
-    retain_es_runners(&present_es);
-    retain_kafka_runners(&present_kafka);
-    retain_otlp_runners(&present_otlp);
 
     let prepared_webhooks = new_webhook_map
         .iter()
@@ -2496,6 +2513,53 @@ mod tests {
         );
 
         delete_redis_and_wait(&key).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn dispatch_full_set_removes_old_kind_before_applying_new_kind() {
+        let _guard = I5_DISPATCH_LOCK.lock().await;
+        let key = "i5-ns/full-set-redis-to-kafka".to_string();
+        let redis = create_redis_linksys("i5-ns", "full-set-redis-to-kafka", InjectedSecret::Valid);
+        seed_published_redis(key.clone(), RedisLinkClient::from_linksys(&key, &redis).unwrap());
+        assert!(get_redis_client(&key).is_some());
+
+        // Hold the new provider's admission lock to observe the old provider
+        // before Kafka can accept its apply, regardless of worker scheduling.
+        let (lock_held_tx, lock_held_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let kafka_blocker = tokio::task::spawn_blocking(move || {
+            let _guard = KAFKA_APPLY_LOCK.lock();
+            lock_held_tx.send(()).expect("test waits for Kafka lock");
+            release_rx.recv().expect("test releases Kafka lock");
+        });
+        lock_held_rx.await.expect("Kafka admission lock is held");
+        let kafka = create_kafka_linksys("i5-ns", "full-set-redis-to-kafka");
+        let dispatch = tokio::spawn(async move {
+            dispatch_full_set(next_dispatch_sequence(), &HashMap::from([(key, kafka)]), false).await;
+        });
+        let key = "i5-ns/full-set-redis-to-kafka";
+        let removed_before_kafka = tokio::time::timeout(tokio::time::Duration::from_secs(2), async {
+            while REDIS_RUNTIME.get(key).is_some() {
+                tokio::time::sleep(tokio::time::Duration::from_millis(1)).await;
+            }
+        })
+        .await
+        .is_ok();
+        let old_client_removed = get_redis_client(key).is_none();
+        release_tx.send(()).expect("Kafka blocker remains alive");
+        kafka_blocker.await.expect("Kafka blocker completes");
+        dispatch.await.expect("full-set dispatch completes");
+        assert!(
+            removed_before_kafka,
+            "old Redis runner must be removed before Kafka apply"
+        );
+        assert!(
+            old_client_removed,
+            "old Redis client must be unavailable before Kafka apply"
+        );
+
+        delete_redis_and_wait(key).await;
+        delete_kafka_and_wait(key).await;
     }
 
     #[tokio::test]
