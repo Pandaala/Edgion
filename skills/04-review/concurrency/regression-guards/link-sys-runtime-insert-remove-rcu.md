@@ -20,7 +20,9 @@ knowledge_type: regression-guards
 As of F-007 (2026-05-25) the four per-provider `*_runtime_insert` / `*_runtime_remove` helpers
 were consolidated into a single generic `ProviderRuntimeStore<C>` newtype in
 `edgion-gateway/src/link_sys/runtime/store.rs`; every provider static (`REDIS_RUNTIME`,
-`ETCD_RUNTIME`, `ES_RUNTIME`, `WEBHOOK_RUNTIME`) is now a `ProviderRuntimeStore<Client>`. Its
+`ETCD_RUNTIME`, `ES_RUNTIME`, `KAFKA_RUNTIME`, `WEBHOOK_RUNTIME`) is a
+`ProviderRuntimeStore<_>`. Redis, Etcd, Elasticsearch, and Kafka store `PersistentRunner`
+values; Webhook stores the published client. Its
 `insert` / `remove` methods perform the map mutation through `ArcSwap::rcu`, which retries the
 load-clone-modify closure on CAS contention. The mutation is therefore atomic against concurrent
 dispatch tasks — the previous unguarded `load → clone → insert/remove → store` could lose an
@@ -31,7 +33,7 @@ update.
 - **`ProviderRuntimeStore::remove`**: a `self.map.load().contains_key(key)` fast path returns `None` without cloning when
   the key is clearly absent; otherwise `let old = self.map.rcu(|current| { let mut m = (**current).clone(); m.remove(key); m }); old.get(key).cloned()`.
   `rcu` returns the map as it was immediately before the successful swap, so `old.get(key)` is
-  exactly the client this call removed (needed by `spawn_shutdown_if_present`).
+  exactly the client this call removed.
 
 `ProviderRuntimeStore::replace_all` was **not** changed in spirit — it is a single `ArcSwap::swap`, already atomic.
 

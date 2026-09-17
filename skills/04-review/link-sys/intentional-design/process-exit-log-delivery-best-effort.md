@@ -65,7 +65,7 @@ or lifecycle framework is requested by this decision.
 
 This acceptance concerns process exit only. It does not accept stale-generation
 delivery or health publication after LinkSys replacement/removal; the separate
-[Kafka generation task](../../../../tasks/todo/kafka-producer-generation-shutdown.md)
+[LinkSys runtime apply lifecycle](../../../../tasks/todo/linksys-runtime-apply-lifecycle/linksys-runtime-apply-lifecycle.md)
 remains open. Existing provider cleanup and cancellation contracts remain in
 force. The four grandfathered plugin failure-policy shapes are unrelated to
 sender shutdown; their count is not evidence against a lifecycle change.

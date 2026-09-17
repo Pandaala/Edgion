@@ -43,7 +43,7 @@ closes or the client shuts down; `maxTopics` bounds that retained state without
 adding idle eviction to the hot path.
 
 Producer tasks from a replaced client generation are a separate lifecycle
-concern tracked by `tasks/todo/kafka-producer-generation-shutdown.md`. Each such
+concern tracked by `tasks/todo/linksys-runtime-apply-lifecycle/`. Each such
 client generation owns an independent bounded budget.
 
 ## Verification and re-evaluation

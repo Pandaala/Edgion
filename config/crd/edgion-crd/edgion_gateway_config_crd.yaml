@@ -392,6 +392,13 @@ spec:
                       description: "Global hard cap for webhook response body size in bytes (default 16384)"
                       format: int64
                       default: 16384
+                    maxInstancesPerKind:
+                      type: integer
+                      description: "Max live plus draining LinkSys instances per provider kind (default 200). New keys are refused when the cap is reached; updates and deletes always proceed."
+                      format: int64
+                      default: 200
+                      minimum: 1
+                      maximum: 10000
                 outboundTls:
                   type: object
                   description: "Cluster-wide default for plugin / LinkSys outbound TLS"

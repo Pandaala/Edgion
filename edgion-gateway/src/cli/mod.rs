@@ -784,9 +784,9 @@ impl EdgionGatewayCli {
 #[cfg(test)]
 mod otlp_startup_tests {
     use super::OtlpStartupGuard;
-    use crate::link_sys::runtime::store::{
-        get_global_link_sys_store, get_otlp_client, otlp_client_count, otlp_retiring_client_count,
-    };
+    use crate::link_sys::providers::otlp::OtlpApply;
+    use crate::link_sys::runtime::runner::ApplyOwner;
+    use crate::link_sys::runtime::store::{otlp_client_count, otlp_retiring_client_count, seed_published_otlp};
 
     #[test]
     fn startup_error_drains_active_otlp_before_runtime_drop() {
@@ -817,12 +817,10 @@ mod otlp_startup_tests {
                 "spec": {"type": "otlp", "config": {"endpoint": "http://collector.example.test:4317"}}
             }))
             .unwrap();
-            get_global_link_sys_store().update(
-                [("startup-test/collector".to_owned(), resource)].into(),
-                &Default::default(),
-            );
-            let client = get_otlp_client("startup-test/collector").unwrap();
+            let key = "startup-test/collector".to_string();
+            let client = OtlpApply::build(&key, &resource).unwrap();
             client.publish_lazy_test_pipeline().unwrap();
+            seed_published_otlp(key, client.clone());
             client
         });
         assert_eq!(otlp_client_count(), 1);

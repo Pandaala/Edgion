@@ -400,21 +400,18 @@ assert_contains "Error mentions 'not found'" "$RESP" "not found"
 
 # ── 8b. Outbound TLS verify=false is always rejected for Redis ──────────────
 # fred's rustls connector always verifies; the outbound-TLS resolver rejects
-# verify=false unconditionally (provider_can_disable=false). The reject happens
-# at connector construction, so the CRD still syncs but NO runtime client is
-# registered. Fixture: conf/LinkSys/Redis/02_LinkSys_default_redis-tls-reject.yaml
+# verify=false unconditionally (provider_can_disable=false). Construction
+# fails before any dial. The CRD still syncs. D10 keeps an unpublished
+# runner (list may contain the key) while get/ping stay not found.
+# Fixture: conf/LinkSys/Redis/02_LinkSys_default_redis-tls-reject.yaml
 log_info "─── 8b. TLS verify=false reject ───"
 REJECT_CLIENT="default_redis-tls-reject"
 
 RESP=$(gw_api GET "/configclient/LinkSys?namespace=default&name=redis-tls-reject")
 assert_json_success "redis-tls-reject CRD synced to Gateway (controller admission is lenient)" "$RESP"
 
-RESP=$(gw_api GET "/api/v1/testing/link-sys/redis/clients")
-assert_json_success "Redis clients endpoint reachable (reject check)" "$RESP"
-assert_not_contains "redis-tls-reject client NOT registered (verify=false refused)" "$RESP" "default/redis-tls-reject"
-
 RESP=$(gw_api GET "/api/v1/testing/link-sys/redis/${REJECT_CLIENT}/ping")
-assert_json_failure "PING redis-tls-reject fails (client was never built)" "$RESP"
+assert_json_failure "PING redis-tls-reject fails (client was never published)" "$RESP"
 assert_contains "redis-tls-reject ping error mentions 'not found'" "$RESP" "not found"
 
 # ── 8c. Successful Redis TLS and mTLS handshakes ───────────────────────────

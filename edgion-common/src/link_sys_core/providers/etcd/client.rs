@@ -1,6 +1,8 @@
 //! EtcdLinkClient — runtime Etcd client wrapper.
 //!
-//! Built from LinkSys CRD config, managed by LinkSysStore (ConfHandler-driven).
+//! Built from LinkSys CRD config. Gateway LinkSys owns construct / init / retire
+//! through the persistent runner; Controller conf-center still calls
+//! `from_config` + `init` directly.
 //! Wraps `etcd_client::Client` with:
 //! - Auto-reconnect via background health monitor (etcd-client has no built-in reconnect)
 //! - Health tracking via AtomicBool
@@ -9,7 +11,7 @@
 //! Unlike fred (Redis), etcd-client uses gRPC multiplexing — a single connection
 //! handles multiple concurrent streams, so no connection pool is needed.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -18,10 +20,7 @@ use rand::Rng;
 use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
 
-use async_trait::async_trait;
-
 use crate::link_sys_core::credential::CredentialState;
-use crate::link_sys_core::lifecycle::LinkSysLifecycle;
 use edgion_resources::credentials::materials::BasicAuthMaterial;
 use edgion_resources::resources::link_sys::etcd::EtcdClientConfig;
 
@@ -29,10 +28,8 @@ use super::config_mapping::{build_connect_options, default_connect_options, heal
 
 /// Runtime Etcd client wrapper.
 ///
-/// Lifecycle is managed by `LinkSysStore` via the `ConfHandler` pattern:
-/// - CRD created → `from_config()` + `init()` → stored in global store
-/// - CRD updated → new client built, old client shut down in background
-/// - CRD deleted → `shutdown()` called, removed from store
+/// One published generation for Gateway LinkSys, or the Controller conf-center
+/// client when constructed without apply metadata.
 pub struct EtcdLinkClient {
     /// etcd client (wrapped in RwLock for reconnect swaps)
     client: Arc<RwLock<Option<etcd_client::Client>>>,
@@ -53,6 +50,18 @@ pub struct EtcdLinkClient {
     /// Handle to the spawned health-monitor task (populated by `init()`),
     /// aborted in `shutdown()` so the task is deterministically terminated.
     monitor_handle: parking_lot::Mutex<Option<JoinHandle<()>>>,
+    /// Apply fingerprint hashes captured by the Gateway runner (D19).
+    fp_rebuild: [u8; 32],
+    fp_secret: [u8; 32],
+    fp_rv: Option<String>,
+    /// Set before handover retire so the monitor stops mutating shared health.
+    retired: Arc<AtomicBool>,
+    shutdown_started: AtomicBool,
+    /// How many configured endpoints recently accepted a bounded probe.
+    endpoint_live: Arc<AtomicUsize>,
+    /// Gateway runner only: sample per-endpoint reachability. Controller
+    /// construction leaves this false so conf-center init is unchanged (D12).
+    sample_endpoint_coverage: bool,
 }
 
 impl std::fmt::Debug for EtcdLinkClient {
@@ -109,7 +118,50 @@ impl EtcdLinkClient {
             namespace: config.namespace.clone(),
             shutdown_tx,
             monitor_handle: parking_lot::Mutex::new(None),
+            fp_rebuild: [0; 32],
+            fp_secret: [0; 32],
+            fp_rv: None,
+            retired: Arc::new(AtomicBool::new(false)),
+            shutdown_started: AtomicBool::new(false),
+            endpoint_live: Arc::new(AtomicUsize::new(0)),
+            sample_endpoint_coverage: false,
         })
+    }
+
+    /// Attach Gateway apply fingerprint and enable per-endpoint coverage.
+    /// Controller construction must not call this (D12).
+    pub fn with_gateway_apply_meta(
+        mut self,
+        rebuild: [u8; 32],
+        secret: [u8; 32],
+        resource_version: Option<String>,
+    ) -> Self {
+        self.fp_rebuild = rebuild;
+        self.fp_secret = secret;
+        self.fp_rv = resource_version;
+        self.sample_endpoint_coverage = true;
+        self
+    }
+
+    pub fn apply_fingerprint_parts(&self) -> ([u8; 32], [u8; 32], Option<String>) {
+        (self.fp_rebuild, self.fp_secret, self.fp_rv.clone())
+    }
+
+    pub fn endpoint_coverage(&self) -> (usize, usize) {
+        (self.endpoint_live.load(Ordering::Relaxed), self.endpoints.len())
+    }
+
+    pub fn mark_retired(&self) {
+        self.retired.store(true, Ordering::Relaxed);
+        let _ = self.shutdown_tx.send(true);
+        if let Some(handle) = self.monitor_handle.lock().take() {
+            handle.abort();
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn samples_endpoint_coverage(&self) -> bool {
+        self.sample_endpoint_coverage
     }
 
     /// Rebuild a `CredentialState` from the stored material.
@@ -144,11 +196,17 @@ impl EtcdLinkClient {
             *guard = Some(client);
         }
         self.healthy.store(true, Ordering::Relaxed);
-        tracing::info!(
-            etcd = %self.name,
-            endpoints = ?self.endpoints,
-            "Etcd client initialized successfully"
-        );
+        if self.sample_endpoint_coverage {
+            let live = sample_endpoint_live(
+                &self.endpoints,
+                &self.config,
+                &self.auth_state(),
+                health_probe_timeout(&self.config),
+            )
+            .await;
+            self.endpoint_live.store(live, Ordering::Relaxed);
+        }
+        tracing::info!(etcd = %self.name, "Etcd client initialized successfully");
 
         // Start background health monitor + reconnect task
         self.start_health_monitor();
@@ -164,6 +222,9 @@ impl EtcdLinkClient {
         let endpoints = self.endpoints.clone();
         let name = self.name.clone();
         let healthy = self.healthy.clone();
+        let retired = self.retired.clone();
+        let endpoint_live = self.endpoint_live.clone();
+        let sample_endpoint_coverage = self.sample_endpoint_coverage;
         let mut shutdown_rx = self.shutdown_tx.subscribe();
 
         let handle = tokio::spawn(async move {
@@ -175,12 +236,18 @@ impl EtcdLinkClient {
             let probe_timeout = health_probe_timeout(&config);
 
             loop {
+                if retired.load(Ordering::Relaxed) {
+                    return;
+                }
                 tokio::select! {
                     _ = tokio::time::sleep(check_interval) => {}
                     _ = shutdown_rx.changed() => {
                         tracing::info!(etcd = %name, "Etcd health monitor shutting down");
                         return;
                     }
+                }
+                if retired.load(Ordering::Relaxed) {
+                    return;
                 }
 
                 // Try a simple status call as health check. Clone the client
@@ -197,6 +264,19 @@ impl EtcdLinkClient {
                         None => false,
                     }
                 };
+
+                if retired.load(Ordering::Relaxed) {
+                    return;
+                }
+
+                if sample_endpoint_coverage {
+                    let live = sample_endpoint_live(&endpoints, &config, &auth_state, probe_timeout).await;
+                    endpoint_live.store(live, Ordering::Relaxed);
+                }
+
+                if retired.load(Ordering::Relaxed) {
+                    return;
+                }
 
                 if is_healthy {
                     if !healthy.load(Ordering::Relaxed) {
@@ -218,6 +298,9 @@ impl EtcdLinkClient {
                     let connect_options = options.unwrap_or_else(default_connect_options);
                     match etcd_client::Client::connect(&endpoints, Some(connect_options)).await {
                         Ok(new_client) => {
+                            if retired.load(Ordering::Relaxed) {
+                                return;
+                            }
                             let mut guard = client.write().await;
                             *guard = Some(new_client);
                             healthy.store(true, Ordering::Relaxed);
@@ -310,7 +393,11 @@ impl EtcdLinkClient {
 
     /// Graceful shutdown — signal health monitor to stop and clear the client.
     pub async fn shutdown(&self) -> Result<()> {
+        if self.shutdown_started.swap(true, Ordering::AcqRel) {
+            return Ok(());
+        }
         tracing::info!(etcd = %self.name, "Etcd client shutting down");
+        self.mark_retired();
         // Cooperative exit for the common case: a task parked at the select
         // sleep wakes on the watch change and logs its own shutdown line.
         let _ = self.shutdown_tx.send(true);
@@ -325,19 +412,37 @@ impl EtcdLinkClient {
         let mut guard = self.client.write().await;
         *guard = None;
         self.healthy.store(false, Ordering::Relaxed);
+        self.endpoint_live.store(0, Ordering::Relaxed);
         Ok(())
     }
 }
 
-#[async_trait]
-impl LinkSysLifecycle for EtcdLinkClient {
-    async fn init(&self) -> anyhow::Result<()> {
-        EtcdLinkClient::init(self).await
+async fn sample_endpoint_live(
+    endpoints: &[String],
+    config: &EtcdClientConfig,
+    auth_state: &CredentialState<BasicAuthMaterial>,
+    probe_timeout: Duration,
+) -> usize {
+    let mut live = 0;
+    for endpoint in endpoints {
+        let options = build_connect_options(config, auth_state)
+            .ok()
+            .flatten()
+            .unwrap_or_else(default_connect_options);
+        let reachable = match tokio::time::timeout(
+            probe_timeout,
+            etcd_client::Client::connect(std::slice::from_ref(endpoint), Some(options)),
+        )
+        .await
+        {
+            Ok(Ok(mut client)) => matches!(tokio::time::timeout(probe_timeout, client.status()).await, Ok(Ok(_))),
+            _ => false,
+        };
+        if reachable {
+            live += 1;
+        }
     }
-
-    async fn shutdown(&self) -> anyhow::Result<()> {
-        EtcdLinkClient::shutdown(self).await
-    }
+    live
 }
 
 // ============================================================================
@@ -417,5 +522,31 @@ mod tests {
         let result = EtcdLinkClient::from_config("default/etcd-test", &config, &CredentialState::Pending);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("non-buildable"));
+    }
+
+    #[test]
+    fn controller_construction_does_not_enable_endpoint_coverage_sampling() {
+        let client = EtcdLinkClient::from_config("default/etcd-test", &minimal_config(), &no_auth()).unwrap();
+        assert!(!client.samples_endpoint_coverage());
+        assert_eq!(client.endpoint_coverage(), (0, 1));
+        let (rebuild, secret, rv) = client.apply_fingerprint_parts();
+        assert_eq!(rebuild, [0; 32]);
+        assert_eq!(secret, [0; 32]);
+        assert!(rv.is_none());
+    }
+
+    #[test]
+    fn gateway_apply_meta_attaches_fingerprint_and_enables_sampling() {
+        let rebuild = [7u8; 32];
+        let secret = [9u8; 32];
+        let client = EtcdLinkClient::from_config("default/etcd-gw", &minimal_config(), &no_auth())
+            .unwrap()
+            .with_gateway_apply_meta(rebuild, secret, Some("11".to_string()));
+        assert!(client.samples_endpoint_coverage());
+        assert_eq!(
+            client.apply_fingerprint_parts(),
+            (rebuild, secret, Some("11".to_string()))
+        );
+        assert_eq!(client.endpoint_coverage(), (0, 1));
     }
 }

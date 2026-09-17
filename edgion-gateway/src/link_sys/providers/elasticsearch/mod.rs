@@ -27,12 +27,14 @@
 //! }
 //! ```
 
+pub(crate) mod apply;
 pub mod bulk;
 pub mod client;
 pub mod config_mapping;
 pub mod log_sender;
 pub mod ops;
 
+pub(crate) use apply::EsApply;
 pub use client::EsLinkClient;
 pub use config_mapping::EsBulkConfig;
 pub use log_sender::EsLogSender;

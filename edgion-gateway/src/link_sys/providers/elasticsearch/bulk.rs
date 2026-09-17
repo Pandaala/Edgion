@@ -4,7 +4,7 @@
 //! batches them, and sends to ES via the `_bulk` API.
 //! Handles retries with exponential backoff.
 
-use std::sync::atomic::{AtomicBool, AtomicU64};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
 use reqwest::Client;
@@ -12,6 +12,13 @@ use tokio::sync::{mpsc, watch};
 
 use super::config_mapping::EsBulkConfig;
 use crate::link_sys::runtime::health_probe::apply_health_result;
+
+fn apply_published_health(healthy: &AtomicBool, last_flip_log: &AtomicU64, name: &str, ok: bool, retired: &AtomicBool) {
+    if retired.load(Ordering::Relaxed) {
+        return;
+    }
+    apply_health_result(healthy, name, "elasticsearch", last_flip_log, ok, false);
+}
 
 // ============================================================================
 // Bulk API response types
@@ -94,6 +101,7 @@ pub async fn bulk_ingest_loop(
     name: String,
     mut rx: mpsc::Receiver<String>,
     mut shutdown: watch::Receiver<bool>,
+    retired: Arc<AtomicBool>,
 ) {
     let mut buffer: Vec<String> = Vec::with_capacity(config.batch_size);
     let mut endpoint_idx: usize = 0;
@@ -115,7 +123,7 @@ pub async fn bulk_ingest_loop(
                             let endpoint = &endpoints[endpoint_idx % endpoints.len().max(1)];
                             endpoint_idx = endpoint_idx.wrapping_add(1);
                             flush_batch(
-                                &client, endpoint, &config, &healthy, &last_flip_log, &name, batch, &shutdown,
+                                &client, endpoint, &config, &healthy, &last_flip_log, &name, batch, &shutdown, &retired,
                             ).await;
                         }
                     }
@@ -125,7 +133,7 @@ pub async fn bulk_ingest_loop(
                             let batch = std::mem::take(&mut buffer);
                             let endpoint = &endpoints[endpoint_idx % endpoints.len().max(1)];
                             flush_batch(
-                                &client, endpoint, &config, &healthy, &last_flip_log, &name, batch, &shutdown,
+                                &client, endpoint, &config, &healthy, &last_flip_log, &name, batch, &shutdown, &retired,
                             ).await;
                         }
                         tracing::info!("ES [{}] bulk ingest loop exiting (channel closed)", name);
@@ -143,7 +151,7 @@ pub async fn bulk_ingest_loop(
                     let endpoint = &endpoints[endpoint_idx % endpoints.len().max(1)];
                     endpoint_idx = endpoint_idx.wrapping_add(1);
                     flush_batch(
-                        &client, endpoint, &config, &healthy, &last_flip_log, &name, batch, &shutdown,
+                        &client, endpoint, &config, &healthy, &last_flip_log, &name, batch, &shutdown, &retired,
                     ).await;
                 }
             }
@@ -154,7 +162,7 @@ pub async fn bulk_ingest_loop(
                         let batch = std::mem::take(&mut buffer);
                         let endpoint = &endpoints[endpoint_idx % endpoints.len().max(1)];
                         flush_batch(
-                            &client, endpoint, &config, &healthy, &last_flip_log, &name, batch, &shutdown,
+                            &client, endpoint, &config, &healthy, &last_flip_log, &name, batch, &shutdown, &retired,
                         ).await;
                     }
                     tracing::info!("ES [{}] bulk ingest loop exiting (shutdown)", name);
@@ -185,6 +193,7 @@ async fn flush_batch(
     name: &str,
     docs: Vec<String>,
     shutdown: &watch::Receiver<bool>,
+    retired: &AtomicBool,
 ) {
     let index_name = config.current_index_name();
     let bulk_url = format!("{}/_bulk", endpoint);
@@ -220,6 +229,7 @@ async fn flush_batch(
             last_flip_log,
             name,
             shutdown,
+            retired,
         )
         .await;
     }
@@ -304,6 +314,7 @@ async fn send_bulk_request(
     last_flip_log: &AtomicU64,
     name: &str,
     shutdown: &watch::Receiver<bool>,
+    retired: &AtomicBool,
 ) {
     let mut pending_docs = docs.to_vec();
     let mut retries = 0u32;
@@ -330,7 +341,7 @@ async fn send_bulk_request(
                                         tracing::warn!("ES [{}] bulk response correlation error: {}", name, reason);
                                         // The server-side outcome is ambiguous. Do not retry the
                                         // whole request and risk duplicating successful documents.
-                                        apply_health_result(healthy, name, "elasticsearch", last_flip_log, true, false);
+                                        apply_published_health(healthy, last_flip_log, name, true, retired);
                                         return;
                                     }
                                 };
@@ -344,7 +355,7 @@ async fn send_bulk_request(
                                     retryable_count
                                 );
                                 if retryable_count == 0 {
-                                    apply_health_result(healthy, name, "elasticsearch", last_flip_log, true, false);
+                                    apply_published_health(healthy, last_flip_log, name, true, retired);
                                     return;
                                 }
                                 pending_docs = summary
@@ -358,20 +369,20 @@ async fn send_bulk_request(
                                     name,
                                     pending_docs.len()
                                 );
-                                apply_health_result(healthy, name, "elasticsearch", last_flip_log, true, false);
+                                apply_published_health(healthy, last_flip_log, name, true, retired);
                                 return;
                             }
                         }
                         Err(e) => {
                             tracing::warn!("ES [{}] bulk response parse error: {:?}", name, e);
                             // Treat as success if HTTP status was 200 — items likely indexed
-                            apply_health_result(healthy, name, "elasticsearch", last_flip_log, true, false);
+                            apply_published_health(healthy, last_flip_log, name, true, retired);
                             return;
                         }
                     }
                 } else if status.is_server_error() {
                     tracing::warn!("ES [{}] bulk: server error {}", name, status);
-                    apply_health_result(healthy, name, "elasticsearch", last_flip_log, false, false);
+                    apply_published_health(healthy, last_flip_log, name, false, retired);
                     // Fall through to retry
                 } else {
                     // 4xx: client error, don't retry
@@ -381,7 +392,7 @@ async fn send_bulk_request(
             }
             Err(e) => {
                 tracing::warn!("ES [{}] bulk: network error: {:?}", name, e);
-                apply_health_result(healthy, name, "elasticsearch", last_flip_log, false, false);
+                apply_published_health(healthy, last_flip_log, name, false, retired);
                 // Fall through to retry
             }
         }
@@ -395,7 +406,7 @@ async fn send_bulk_request(
                 config.max_retries,
                 pending_docs.len()
             );
-            apply_health_result(healthy, name, "elasticsearch", last_flip_log, false, false);
+            apply_published_health(healthy, last_flip_log, name, false, retired);
             return;
         }
 
@@ -677,6 +688,7 @@ mod tests {
             &last_flip,
             "test",
             &shutdown_rx,
+            &AtomicBool::new(false),
         )
         .await;
 
@@ -723,6 +735,7 @@ mod tests {
             &last_flip,
             "test",
             &shutdown_rx,
+            &AtomicBool::new(false),
         )
         .await;
 
@@ -769,6 +782,7 @@ mod tests {
         // Port 1 is unreachable: the first request fails fast, after which the
         // shutdown check must return before the 5s backoff sleep.
         let last_flip = std::sync::atomic::AtomicU64::new(0);
+        let retired = AtomicBool::new(false);
         let fut = send_bulk_request(
             &client,
             "http://127.0.0.1:1/_bulk",
@@ -779,6 +793,7 @@ mod tests {
             &last_flip,
             "test",
             &shutdown_rx,
+            &retired,
         );
         tokio::time::timeout(std::time::Duration::from_secs(2), fut)
             .await

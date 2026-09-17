@@ -720,8 +720,14 @@ pub struct PluginReference {
 // LinkSys Global Configuration
 // ============================================
 
+/// Default `linkSys.maxInstancesPerKind` when the field is omitted.
+pub const LINK_SYS_DEFAULT_MAX_INSTANCES_PER_KIND: usize = 200;
+
+/// Inclusive upper bound for `linkSys.maxInstancesPerKind`.
+pub const LINK_SYS_MAX_INSTANCES_PER_KIND_LIMIT: usize = 10_000;
+
 /// Global configuration for LinkSys providers
-#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema, Default)]
+#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct LinkSysGlobalConfig {
     /// Global hard cap for webhook response body size (bytes).
@@ -729,10 +735,30 @@ pub struct LinkSysGlobalConfig {
     /// Default: 16384 (16KB)
     #[serde(default = "default_webhook_max_response_bytes")]
     pub webhook_max_response_bytes: usize,
+
+    /// Max live+draining persistent LinkSys instances per provider kind.
+    /// New keys are refused when the cap is reached; updates and deletes
+    /// always proceed. Default: 200.
+    #[schemars(range(min = 1, max = 10_000))]
+    #[serde(default = "default_max_instances_per_kind")]
+    pub max_instances_per_kind: usize,
+}
+
+impl Default for LinkSysGlobalConfig {
+    fn default() -> Self {
+        Self {
+            webhook_max_response_bytes: default_webhook_max_response_bytes(),
+            max_instances_per_kind: default_max_instances_per_kind(),
+        }
+    }
 }
 
 fn default_webhook_max_response_bytes() -> usize {
     16384
+}
+
+fn default_max_instances_per_kind() -> usize {
+    LINK_SYS_DEFAULT_MAX_INSTANCES_PER_KIND
 }
 
 // ============================================
@@ -877,6 +903,22 @@ impl EdgionGatewayConfigSpec {
     /// suitable for an `Accepted=False/reason=Invalid` condition.
     pub fn validate_forwarded_headers(&self) -> Vec<String> {
         self.forwarded_headers.validate().err().into_iter().collect()
+    }
+
+    /// Validate `spec.linkSys` at ingest. Returns error strings suitable for an
+    /// `Accepted=False/reason=Invalid` condition (empty = OK).
+    pub fn validate_link_sys(&self) -> Vec<String> {
+        let Some(link_sys) = &self.link_sys else {
+            return Vec::new();
+        };
+        if (1..=LINK_SYS_MAX_INSTANCES_PER_KIND_LIMIT).contains(&link_sys.max_instances_per_kind) {
+            Vec::new()
+        } else {
+            vec![format!(
+                "linkSys.maxInstancesPerKind must be between 1 and {LINK_SYS_MAX_INSTANCES_PER_KIND_LIMIT}, got {}",
+                link_sys.max_instances_per_kind
+            )]
+        }
     }
 
     /// Validate `spec.dnsResolver` at ingest. Returns error strings suitable for
@@ -1262,6 +1304,36 @@ mod tests {
             errs.iter().any(|e| e.contains("mutually exclusive")),
             "both linkSysRef and servers set must be rejected, got: {errs:?}"
         );
+    }
+
+    #[test]
+    fn link_sys_max_instances_defaults_and_validates() {
+        let omitted: EdgionGatewayConfigSpec = serde_json::from_value(serde_json::json!({
+            "linkSys": {"webhookMaxResponseBytes": 16384}
+        }))
+        .unwrap();
+        assert_eq!(
+            omitted.link_sys.as_ref().unwrap().max_instances_per_kind,
+            LINK_SYS_DEFAULT_MAX_INSTANCES_PER_KIND
+        );
+        assert!(omitted.validate_link_sys().is_empty());
+
+        let valid: EdgionGatewayConfigSpec = serde_json::from_value(serde_json::json!({
+            "linkSys": {"maxInstancesPerKind": 50}
+        }))
+        .unwrap();
+        assert_eq!(valid.link_sys.as_ref().unwrap().max_instances_per_kind, 50);
+        assert!(valid.validate_link_sys().is_empty());
+
+        for value in [0_usize, LINK_SYS_MAX_INSTANCES_PER_KIND_LIMIT + 1] {
+            let invalid: EdgionGatewayConfigSpec = serde_json::from_value(serde_json::json!({
+                "linkSys": {"maxInstancesPerKind": value}
+            }))
+            .unwrap();
+            let errs = invalid.validate_link_sys();
+            assert_eq!(errs.len(), 1, "{value} must be rejected, got: {errs:?}");
+            assert!(errs[0].contains("maxInstancesPerKind"), "{errs:?}");
+        }
     }
 
     #[test]

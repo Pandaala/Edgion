@@ -20,21 +20,18 @@ use reqwest::Client;
 use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
 
-use async_trait::async_trait;
-
 use crate::link_sys::credential::{CredentialState, ResolvedCredential};
-use crate::link_sys::lifecycle::LinkSysLifecycle;
+use crate::link_sys::runtime::apply::{ConnectionCoverage, RuntimeFingerprint};
 use edgion_resources::resources::link_sys::elasticsearch::ElasticsearchClientConfig;
+use edgion_resources::resources::link_sys::{LinkSys, SystemConfig};
 
 use super::bulk::bulk_ingest_loop;
 use super::config_mapping::{build_es_client, EsBulkConfig};
 
 /// Runtime Elasticsearch client wrapper.
 ///
-/// Lifecycle is managed by `LinkSysStore` via the `ConfHandler` pattern:
-/// - CRD created → `from_config()` + `init()` → stored in global store
-/// - CRD updated → new client built, old client shut down in background
-/// - CRD deleted → `shutdown()` called, removed from store
+/// One published generation. The runner may hold a second retiring Arc during
+/// Handover; callers always go through `get_es_client`.
 pub struct EsLinkClient {
     /// reqwest HTTP client (with internal pool and auth headers)
     client: Client,
@@ -60,6 +57,11 @@ pub struct EsLinkClient {
     last_flip_log_ms: Arc<AtomicU64>,
     /// Handle to the background health probe; aborted in `shutdown()`.
     probe_handle: parking_lot::Mutex<Option<JoinHandle<()>>>,
+    /// Apply fingerprint captured at construction (D19).
+    fingerprint: RuntimeFingerprint,
+    /// Set before handover retire so the probe stops writing the shared gauge.
+    retired: Arc<AtomicBool>,
+    shutdown_started: AtomicBool,
 }
 
 impl EsLinkClient {
@@ -88,7 +90,43 @@ impl EsLinkClient {
             bulk_task: parking_lot::Mutex::new(None),
             last_flip_log_ms: Arc::new(AtomicU64::new(0)),
             probe_handle: parking_lot::Mutex::new(None),
+            fingerprint: RuntimeFingerprint::unspecified(),
+            retired: Arc::new(AtomicBool::new(false)),
+            shutdown_started: AtomicBool::new(false),
         })
+    }
+
+    /// Build from a resolved Elasticsearch LinkSys, including the apply fingerprint.
+    pub(crate) fn from_linksys(name: &str, ls: &LinkSys) -> Result<Arc<Self>> {
+        let SystemConfig::Elasticsearch(config) = &ls.spec.config else {
+            anyhow::bail!("Elasticsearch from_linksys called with a non-Elasticsearch LinkSys");
+        };
+        let auth = crate::link_sys::credential::resolved_state(ls);
+        let fingerprint = super::apply::fingerprint_es(ls)?;
+        let mut client = Self::from_config(name, config, &auth)?;
+        client.fingerprint = fingerprint;
+        Ok(Arc::new(client))
+    }
+
+    pub(crate) fn runtime_fingerprint(&self) -> &RuntimeFingerprint {
+        &self.fingerprint
+    }
+
+    pub(crate) fn connection_coverage(&self) -> ConnectionCoverage {
+        // reqwest does not expose pool membership. Generation health is the
+        // coverage signal: a healthy cluster is treated as fully covered so a
+        // rebuild hands over; an unhealthy generation is ReplaceNow.
+        ConnectionCoverage {
+            live: if self.healthy() { self.endpoints.len() } else { 0 },
+            configured: self.endpoints.len().max(1),
+        }
+    }
+
+    pub(crate) fn mark_retired(&self) {
+        self.retired.store(true, Ordering::Relaxed);
+        if let Some(handle) = self.probe_handle.lock().take() {
+            handle.abort();
+        }
     }
 
     /// Initialize connection. Verifies connectivity via cluster health API,
@@ -126,6 +164,7 @@ impl EsLinkClient {
         let healthy = self.healthy.clone();
         let last_flip_log = self.last_flip_log_ms.clone();
         let name = self.name.clone();
+        let retired = self.retired.clone();
 
         let handle = tokio::spawn(async move {
             bulk_ingest_loop(
@@ -137,6 +176,7 @@ impl EsLinkClient {
                 name,
                 rx,
                 shutdown_rx,
+                retired,
             )
             .await;
         });
@@ -162,11 +202,16 @@ impl EsLinkClient {
                 let client = self.client.clone();
                 let endpoints = self.endpoints.clone();
                 let probe_idx = Arc::new(AtomicUsize::new(0));
+                let retired = self.retired.clone();
                 move || {
                     let client = client.clone();
                     let endpoints = endpoints.clone();
                     let probe_idx = probe_idx.clone();
+                    let retired = retired.clone();
                     async move {
+                        if retired.load(Ordering::Relaxed) {
+                            return false;
+                        }
                         let i = probe_idx.fetch_add(1, Ordering::Relaxed) % endpoints.len();
                         super::ops::probe_cluster_health(&client, &endpoints[i]).await
                     }
@@ -256,7 +301,11 @@ impl EsLinkClient {
 
     /// Graceful shutdown: signal background task and drop sender, then await drain.
     pub async fn shutdown(&self) -> Result<()> {
+        if self.shutdown_started.swap(true, Ordering::AcqRel) {
+            return Ok(());
+        }
         tracing::info!("ES [{}] shutting down", self.name);
+        self.mark_retired();
 
         // Signal shutdown to background task
         if let Some(shutdown) = self.shutdown_tx.lock().take() {
@@ -321,17 +370,6 @@ impl std::fmt::Debug for EsLinkClient {
             .field("endpoints", &self.endpoints)
             .field("healthy", &self.healthy.load(Ordering::Relaxed))
             .finish()
-    }
-}
-
-#[async_trait]
-impl LinkSysLifecycle for EsLinkClient {
-    async fn init(&self) -> anyhow::Result<()> {
-        EsLinkClient::init(self).await
-    }
-
-    async fn shutdown(&self) -> anyhow::Result<()> {
-        EsLinkClient::shutdown(self).await
     }
 }
 

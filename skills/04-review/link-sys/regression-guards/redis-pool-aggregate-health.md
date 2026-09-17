@@ -33,15 +33,15 @@ member event.
 `RedisLinkClient` now starts the canonical `health_probe` driver after Fred
 initialization. Its provider closure derives `any_connected` directly from Fred's
 current client states at a nominal one-second healthy cadence; request-side
-`healthy()` remains one lock-free atomic read. Shutdown stops and joins the probe
+`healthy()` remains one lock-free atomic read. `mark_retired` sets the retired flag
+and signals the probe watch without aborting the task; shutdown then joins the probe
 before quitting the pool, preventing an in-flight result from restoring health after
-the terminal false state. Shutdown does not write the shared health gauge. During a
-same-key replacement, the old and new probes can briefly overlap before retirement is
-scheduled, so every low-frequency Redis probe refreshes the gauge from its current
-observation. Once the old probe stops, the active generation reasserts the correct
-value on its next sample even when its local boolean did not transition. Flip counters
-and logs remain CAS-transition-only. A deletion can therefore leave the already
-accepted stale per-link series.
+the terminal false state. A retired probe must not write `edgion_link_sys_health`.
+Shutdown itself does not write the shared health gauge. During a same-key replacement,
+live probes of the published generation still refresh the gauge from the current
+observation so the active generation can self-heal after overlap. Flip counters and
+logs remain CAS-transition-only. A deletion can therefore leave the already accepted
+stale per-link series.
 `RedisClientConfig.pool.size`, Fred pool construction, command retry semantics, and
 active admin `PING` health checks are unchanged.
 

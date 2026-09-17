@@ -1,18 +1,14 @@
-//! One OTLP owner per LinkSys key, with last-known-good publication and joined cleanup.
+//! One OTLP exporter generation owned by the shared persistent runner.
 
 use std::future::{poll_fn, Future};
-use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Weak};
-use std::task::{Context, Poll, Waker};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
 use arc_swap::ArcSwapOption;
 use edgion_common::dns::ResolverSpec;
 use edgion_resources::output::LinkSysRef;
-use edgion_resources::resources::link_sys::otlp::OtlpClientConfig;
-use futures::future::{BoxFuture, Shared};
-use futures::FutureExt;
+use edgion_resources::resources::link_sys::{LinkSys, SystemConfig};
 use opentelemetry_sdk::error::{OTelSdkError, OTelSdkResult};
 use opentelemetry_sdk::logs::{BatchConfigBuilder, BatchLogProcessor, LogBatch, LogExporter, SdkLoggerProvider};
 use parking_lot::Mutex;
@@ -22,14 +18,14 @@ use tokio_util::sync::CancellationToken;
 
 use super::log_sender::emit_record;
 use super::transport::PreparedTransport;
-use crate::link_sys::runtime::health_probe::{spawn_health_probe, ProbeConfig};
+use crate::link_sys::runtime::apply::{ConnectionCoverage, RuntimeFingerprint};
+use crate::link_sys::runtime::health_probe::{apply_health_result, spawn_health_probe, ProbeConfig};
 use crate::link_sys::LogMeta;
-use crate::observe::metrics::registry::record_link_sys_health;
 
 type CleanupResult = Result<(), &'static str>;
 
 /// The SDK's standard batch thread does not enter a Tokio runtime. Enter the
-/// captured runtime for each poll, and bound the ENTIRE RPC including trailers.
+/// captured runtime for each poll, and bound the entire RPC including trailers.
 struct BoundedExporter {
     inner: Option<opentelemetry_otlp::LogExporter>,
     runtime: tokio::runtime::Handle,
@@ -53,8 +49,12 @@ impl LogExporter for BoundedExporter {
             tokio::select! {
                 biased;
                 _ = self.cancellation.cancelled() => Err(OTelSdkError::AlreadyShutdown),
-                _ = tokio::time::sleep(self.timeout) => Err(OTelSdkError::InternalFailure("export_timeout".into())),
-                result = inner.export(batch) => result.map_err(|_| OTelSdkError::InternalFailure("export_failed".into())),
+                _ = tokio::time::sleep(self.timeout) => {
+                    Err(OTelSdkError::InternalFailure("export_timeout".into()))
+                }
+                result = inner.export(batch) => {
+                    result.map_err(|_| OTelSdkError::InternalFailure("export_failed".into()))
+                }
             }
         });
         poll_fn(|context| {
@@ -73,8 +73,6 @@ impl LogExporter for BoundedExporter {
 
 impl Drop for BoundedExporter {
     fn drop(&mut self) {
-        // Tonic exporter shutdown is a no-op. Drop its channel before signalling
-        // completion; a timeout/SDK shutdown return alone does not prove release.
         drop(self.inner.take());
         if let Some(dropped) = self.dropped.take() {
             let _ = dropped.send(());
@@ -83,7 +81,6 @@ impl Drop for BoundedExporter {
 }
 
 struct Pipeline {
-    transport: Arc<PreparedTransport>,
     provider: SdkLoggerProvider,
     cancellation: CancellationToken,
     dropped: Mutex<Option<oneshot::Receiver<()>>>,
@@ -108,7 +105,6 @@ impl Pipeline {
         let processor = BatchLogProcessor::builder(exporter).with_batch_config(batch).build();
         let provider = SdkLoggerProvider::builder().with_log_processor(processor).build();
         Arc::new(Self {
-            transport,
             provider,
             cancellation,
             dropped: Mutex::new(Some(dropped)),
@@ -116,8 +112,7 @@ impl Pipeline {
     }
 }
 
-/// Start cleanup synchronously and retain the returned task BEFORE any caller
-/// awaits. Its drain timer survives cancellation of a probe or removal waiter.
+/// Start cleanup synchronously and retain the task before any caller awaits.
 fn retire(pipeline: Arc<Pipeline>) -> JoinHandle<CleanupResult> {
     let cancellation = pipeline.cancellation.clone();
     let dropped = pipeline.dropped.lock().take();
@@ -134,8 +129,6 @@ fn retire(pipeline: Arc<Pipeline>) -> JoinHandle<CleanupResult> {
                 worker.await
             }
         };
-        // Also stop any export after an unexpected SDK shutdown error. Dropping
-        // its provider closes the control queue; the worker then drops exporter.
         cancellation.cancel();
         let released = match dropped {
             Some(dropped) => dropped.await.map_err(|_| "shutdown_failed"),
@@ -145,305 +138,181 @@ fn retire(pipeline: Arc<Pipeline>) -> JoinHandle<CleanupResult> {
     })
 }
 
-#[derive(Default)]
-struct State {
-    revision: u64,
-    desired: Option<(u64, Arc<PreparedTransport>)>,
-    stopped: bool,
-    retiring: Option<JoinHandle<CleanupResult>>,
-    cleanup_failed: bool,
-}
-
-#[derive(Default)]
-struct ShutdownState {
-    task: Option<Shared<BoxFuture<'static, CleanupResult>>>,
-}
-
-/// A validated key owns exactly one probe and one active SDK pipeline. Readers
-/// borrow the active immutable generation without taking a blocking lock.
+/// One prepared and eventually published OTLP generation.
 pub struct OtlpLinkClient {
     key: String,
-    weak: Weak<Self>,
-    resolver: ResolverSpec,
-    active: ArcSwapOption<Pipeline>,
-    state: Mutex<State>,
+    transport: Arc<PreparedTransport>,
+    pipeline: ArcSwapOption<Pipeline>,
+    fingerprint: RuntimeFingerprint,
     healthy: Arc<AtomicBool>,
-    stopped: AtomicBool,
-    shutdown_tx: watch::Sender<bool>,
+    last_flip_log_ms: AtomicU64,
+    retired: Arc<AtomicBool>,
+    shutdown_started: AtomicBool,
+    probe_shutdown: Mutex<Option<watch::Sender<bool>>>,
     probe: Mutex<Option<JoinHandle<()>>>,
-    shutdown: Mutex<ShutdownState>,
 }
 
 impl OtlpLinkClient {
-    pub fn new(key: String) -> Result<Arc<Self>, &'static str> {
-        Self::new_inner(key, true, ResolverSpec::System)
+    pub fn from_linksys(key: &str, resource: &LinkSys) -> anyhow::Result<Arc<Self>> {
+        Self::from_linksys_inner(key, resource, ResolverSpec::System)
     }
 
-    /// Integration-only DNS selection; production construction always uses System.
     #[cfg(feature = "test-util")]
-    pub fn new_with_resolver(key: String, resolver: ResolverSpec) -> Result<Arc<Self>, &'static str> {
-        Self::new_inner(key, true, resolver)
+    pub fn from_linksys_with_resolver(
+        key: &str,
+        resource: &LinkSys,
+        resolver: ResolverSpec,
+    ) -> anyhow::Result<Arc<Self>> {
+        Self::from_linksys_inner(key, resource, resolver)
     }
 
-    fn new_inner(key: String, start_probe: bool, resolver: ResolverSpec) -> Result<Arc<Self>, &'static str> {
-        let (namespace, name) = key.split_once('/').ok_or("invalid_config")?;
+    fn from_linksys_inner(key: &str, resource: &LinkSys, resolver: ResolverSpec) -> anyhow::Result<Arc<Self>> {
+        let (namespace, name) = key.split_once('/').ok_or_else(|| anyhow::anyhow!("invalid_config"))?;
         LinkSysRef {
             namespace: namespace.to_owned(),
             name: name.to_owned(),
         }
         .validate()
-        .map_err(|_| "invalid_config")?;
-        let (shutdown_tx, shutdown_rx) = watch::channel(false);
-        let client = Arc::new_cyclic(|weak| Self {
-            key,
-            weak: weak.clone(),
-            resolver,
-            active: ArcSwapOption::empty(),
-            state: Mutex::new(State::default()),
-            healthy: Arc::new(AtomicBool::new(false)),
-            stopped: AtomicBool::new(false),
-            shutdown_tx,
-            probe: Mutex::new(None),
-            shutdown: Mutex::new(ShutdownState::default()),
-        });
-        record_link_sys_health(&client.key, false);
-        let weak = client.weak.clone();
-        if start_probe {
-            *client.probe.lock() = Some(spawn_health_probe(
-                ProbeConfig {
-                    name: client.key.clone(),
-                    system_type: "otlp",
-                    base_interval: Duration::from_secs(10),
-                    max_backoff: Duration::from_secs(30),
-                    probe_timeout: Duration::from_secs(8),
-                    upgrade_only: false,
-                },
-                client.healthy.clone(),
-                shutdown_rx,
-                move || {
-                    let weak = weak.clone();
-                    async move {
-                        match weak.upgrade() {
-                            Some(client) => client.probe_once().await,
-                            None => false,
-                        }
-                    }
-                },
-            ));
+        .map_err(|_| anyhow::anyhow!("invalid_config"))?;
+        if resource.key_name_str() != key || !resource.validate_config().is_empty() {
+            anyhow::bail!("invalid_config");
         }
-        Ok(client)
+        let SystemConfig::Otlp(config) = &resource.spec.config else {
+            anyhow::bail!("OTLP from_linksys called with a non-OTLP LinkSys");
+        };
+        let transport = PreparedTransport::prepare(config, resolver).map_err(anyhow::Error::msg)?;
+        let fingerprint = super::apply::fingerprint_otlp(resource)?;
+        Ok(Arc::new(Self {
+            key: key.to_string(),
+            transport,
+            pipeline: ArcSwapOption::empty(),
+            fingerprint,
+            healthy: Arc::new(AtomicBool::new(false)),
+            last_flip_log_ms: AtomicU64::new(0),
+            retired: Arc::new(AtomicBool::new(false)),
+            shutdown_started: AtomicBool::new(false),
+            probe_shutdown: Mutex::new(None),
+            probe: Mutex::new(None),
+        }))
     }
 
-    /// Invalidation occurs before preparation, so a failed newer update cannot
-    /// leave an older pending candidate that later replaces the active pipeline.
-    pub fn update(&self, config: &OtlpClientConfig) -> CleanupResult {
-        let revision = {
-            let mut state = self.state.lock();
-            if state.stopped {
-                return Err("stopped");
-            }
-            state.desired = None;
-            state.revision = state.revision.checked_add(1).ok_or("invalid_config")?;
-            state.revision
-        };
-        let prepared = PreparedTransport::prepare(config, self.resolver.clone())?;
-        let mut state = self.state.lock();
-        if state.stopped {
-            return Err("stopped");
+    pub(crate) fn runtime_fingerprint(&self) -> &RuntimeFingerprint {
+        &self.fingerprint
+    }
+
+    pub(crate) fn connection_coverage(&self) -> ConnectionCoverage {
+        ConnectionCoverage {
+            configured: 1,
+            live: usize::from(
+                self.pipeline.load().is_some() && !self.retired.load(Ordering::Relaxed) && self.healthy(),
+            ),
         }
-        if state.revision == revision {
-            state.desired = Some((revision, prepared));
+    }
+
+    pub(crate) fn mark_retired(&self) {
+        self.retired.store(true, Ordering::Relaxed);
+        if let Some(shutdown) = self.probe_shutdown.lock().take() {
+            let _ = shutdown.send(true);
         }
+        if let Some(probe) = self.probe.lock().take() {
+            probe.abort();
+        }
+    }
+
+    pub async fn init(&self) -> anyhow::Result<()> {
+        if self.shutdown_started.load(Ordering::Acquire) || self.retired.load(Ordering::Relaxed) {
+            anyhow::bail!("stopped");
+        }
+        let exporter = self.transport.prepare_exporter().await.map_err(anyhow::Error::msg)?;
+        if self.shutdown_started.load(Ordering::Acquire) || self.retired.load(Ordering::Relaxed) {
+            anyhow::bail!("stopped");
+        }
+        self.pipeline
+            .store(Some(Pipeline::build(self.transport.clone(), exporter)));
+        apply_health_result(&self.healthy, &self.key, "otlp", &self.last_flip_log_ms, true, false);
+
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        let transport = self.transport.clone();
+        let retired = self.retired.clone();
+        let probe = spawn_health_probe(
+            ProbeConfig {
+                name: self.key.clone(),
+                system_type: "otlp",
+                base_interval: Duration::from_secs(10),
+                max_backoff: Duration::from_secs(30),
+                probe_timeout: Duration::from_secs(8),
+                upgrade_only: false,
+            },
+            self.healthy.clone(),
+            shutdown_rx,
+            move || {
+                let transport = transport.clone();
+                let retired = retired.clone();
+                async move {
+                    if retired.load(Ordering::Relaxed) {
+                        return false;
+                    }
+                    transport.probe().await
+                }
+            },
+        );
+        *self.probe_shutdown.lock() = Some(shutdown_tx);
+        *self.probe.lock() = Some(probe);
         Ok(())
     }
 
-    pub fn invalidate_pending(&self) {
-        let mut state = self.state.lock();
-        state.desired = None;
-        state.revision = state.revision.saturating_add(1);
+    pub fn healthy(&self) -> bool {
+        !self.retired.load(Ordering::Relaxed)
+            && !self.shutdown_started.load(Ordering::Acquire)
+            && self.healthy.load(Ordering::Relaxed)
     }
 
-    pub fn healthy(&self) -> bool {
-        !self.stopped.load(Ordering::Acquire) && self.healthy.load(Ordering::Relaxed)
+    pub fn name(&self) -> &str {
+        &self.key
     }
 
     pub fn send_with_meta(&self, data: String, meta: &LogMeta<'_>) -> anyhow::Result<()> {
-        if self.stopped.load(Ordering::Acquire) {
+        if !self.healthy() {
             anyhow::bail!("otlp_unavailable");
         }
-        let active = self.active.load();
-        let pipeline = active.as_ref().ok_or_else(|| anyhow::anyhow!("otlp_unavailable"))?;
+        let pipeline = self.pipeline.load();
+        let pipeline = pipeline.as_ref().ok_or_else(|| anyhow::anyhow!("otlp_unavailable"))?;
         emit_record(&pipeline.provider, data, meta);
         Ok(())
     }
 
-    /// Reap only a finished retirement without awaiting inside the cancellable
-    /// probe. Publication remains blocked while any retirement is outstanding.
-    fn reap_retirement(state: &mut State) {
-        let Some(task) = &mut state.retiring else {
-            return;
+    pub async fn shutdown(&self) -> CleanupResult {
+        if self.shutdown_started.swap(true, Ordering::AcqRel) {
+            return Ok(());
+        }
+        self.mark_retired();
+        self.healthy.store(false, Ordering::Relaxed);
+        let Some(pipeline) = self.pipeline.swap(None) else {
+            return Ok(());
         };
-        let mut context = Context::from_waker(Waker::noop());
-        if let Poll::Ready(result) = Pin::new(task).poll(&mut context) {
-            state.cleanup_failed |= !matches!(result, Ok(Ok(())));
-            state.retiring = None;
-        }
+        retire(pipeline).await.map_err(|_| "shutdown_failed")?
     }
 
-    async fn probe_once(&self) -> bool {
-        let desired = {
-            let mut state = self.state.lock();
-            if state.stopped {
-                return false;
-            }
-            Self::reap_retirement(&mut state);
-            if state.retiring.is_none() {
-                state.desired.clone()
-            } else {
-                None
-            }
-        };
-        if let Some((revision, prepared)) = desired {
-            if let Ok(exporter) = prepared.prepare_exporter().await {
-                if self.publish(revision, prepared, exporter) {
-                    return true;
-                }
-            }
-        }
-        // A failed pending connection gets its own 3s deadline. It cannot
-        // consume the independent 3s old-generation liveness decision.
-        let active = self.active.load_full();
-        match active {
-            Some(active) => active.transport.probe().await,
-            None => false,
-        }
-    }
-
-    fn publish(
-        &self,
-        revision: u64,
-        prepared: Arc<PreparedTransport>,
-        exporter: opentelemetry_otlp::LogExporter,
-    ) -> bool {
-        let mut state = self.state.lock();
-        if state.stopped
-            || state.retiring.is_some()
-            || state.desired.as_ref().is_none_or(|(current, _)| *current != revision)
-        {
-            return false;
-        }
-        let pipeline = Pipeline::build(prepared, exporter);
-        let old = self.active.swap(Some(pipeline));
-        state.desired = None;
-        if let Some(old) = old {
-            state.retiring = Some(retire(old));
-        }
-        true
-    }
-
-    /// All callers join the same owned cleanup task. Cancelling a waiter leaves
-    /// its JoinHandle in the owner, preserving cleanup and subsequent joins.
-    /// Publish through the real SDK pipeline without dialing or enqueueing data.
-    /// Unit callers use a current-thread runtime and call this before yielding.
+    /// Build a real SDK pipeline without dialing for runtime-store tests.
     #[cfg(test)]
     pub(crate) fn publish_lazy_test_pipeline(&self) -> CleanupResult {
-        let (revision, prepared) = self.state.lock().desired.clone().ok_or("invalid_config")?;
         let channel = tonic014::transport::Endpoint::from_static("http://example.test:4317").connect_lazy();
-        let exporter = prepared.exporter(channel)?;
-        if self.publish(revision, prepared, exporter) {
-            Ok(())
-        } else {
-            Err("invalid_config")
-        }
-    }
-
-    /// Register stopped state and owned cleanup synchronously in source-event
-    /// order. The caller may then remove the runtime entry and await shutdown.
-    pub fn begin_shutdown(&self) -> CleanupResult {
-        let mut shutdown = self.shutdown.lock();
-        if shutdown.task.is_none() {
-            let owner = self.weak.upgrade().ok_or("stopped")?;
-            {
-                let mut state = self.state.lock();
-                state.stopped = true;
-                state.desired = None;
-            }
-            self.stopped.store(true, Ordering::Release);
-            self.shutdown_tx.send_replace(true);
-            let task = tokio::spawn(async move { owner.finish_shutdown().await });
-            // Shared retains the JoinHandle and wakes EVERY concurrent waiter.
-            // Cancelling one waiter cannot detach or steal cleanup.
-            shutdown.task = Some(
-                task.map(|result| result.unwrap_or(Err("shutdown_failed")))
-                    .boxed()
-                    .shared(),
-            );
-        }
+        let exporter = self.transport.exporter(channel)?;
+        self.pipeline
+            .store(Some(Pipeline::build(self.transport.clone(), exporter)));
+        self.healthy.store(true, Ordering::Relaxed);
         Ok(())
-    }
-
-    pub async fn shutdown(&self) -> CleanupResult {
-        self.begin_shutdown()?;
-        let task = self.shutdown.lock().task.as_ref().cloned().ok_or("shutdown_failed")?;
-        task.await
-    }
-
-    async fn finish_shutdown(&self) -> CleanupResult {
-        poll_fn(|context| {
-            let mut probe = self.probe.lock();
-            let Some(task) = &mut *probe else {
-                return Poll::Ready(());
-            };
-            match Pin::new(task).poll(context) {
-                Poll::Ready(_) => {
-                    *probe = None;
-                    Poll::Ready(())
-                }
-                Poll::Pending => Poll::Pending,
-            }
-        })
-        .await;
-        // Reset only after the driver has exited; an in-flight successful
-        // result cannot restore health after this terminal transition.
-        self.healthy.store(false, Ordering::Relaxed);
-        record_link_sys_health(&self.key, false);
-        self.join_retirement().await;
-        {
-            let mut state = self.state.lock();
-            if let Some(active) = self.active.swap(None) {
-                state.retiring = Some(retire(active));
-            }
-        }
-        self.join_retirement().await;
-        if self.state.lock().cleanup_failed {
-            Err("shutdown_failed")
-        } else {
-            Ok(())
-        }
-    }
-
-    async fn join_retirement(&self) {
-        poll_fn(|context| {
-            let mut state = self.state.lock();
-            let Some(task) = &mut state.retiring else {
-                return Poll::Ready(());
-            };
-            match Pin::new(task).poll(context) {
-                Poll::Ready(result) => {
-                    state.cleanup_failed |= !matches!(result, Ok(Ok(())));
-                    state.retiring = None;
-                    Poll::Ready(())
-                }
-                Poll::Pending => Poll::Pending,
-            }
-        })
-        .await;
     }
 }
 
 impl Drop for OtlpLinkClient {
     fn drop(&mut self) {
-        self.shutdown_tx.send_replace(true);
+        if let Some(shutdown) = self.probe_shutdown.lock().take() {
+            let _ = shutdown.send(true);
+        }
+        if let Some(probe) = self.probe.lock().take() {
+            probe.abort();
+        }
     }
 }
 
@@ -451,108 +320,52 @@ impl Drop for OtlpLinkClient {
 mod tests {
     use super::*;
 
-    fn config(endpoint: &str) -> OtlpClientConfig {
-        OtlpClientConfig {
-            endpoint: endpoint.into(),
-            timeout_ms: 1000,
-            auth: None,
-            tls: None,
-        }
-    }
-    fn desired(client: &OtlpLinkClient) -> (u64, Arc<PreparedTransport>) {
-        client.state.lock().desired.clone().unwrap()
-    }
-    fn exporter() -> opentelemetry_otlp::LogExporter {
-        // The channel is lazy; these tests never enqueue an export or dial.
-        let channel = tonic014::transport::Endpoint::from_static("http://example.test:4317").connect_lazy();
-        let prepared = PreparedTransport::prepare(&config("http://example.test:4317"), ResolverSpec::System).unwrap();
-        prepared.exporter(channel).unwrap()
-    }
-    fn publish(client: &OtlpLinkClient) {
-        let (revision, prepared) = desired(client);
-        assert!(client.publish(revision, prepared, exporter()));
+    fn resource(name: &str, endpoint: &str) -> LinkSys {
+        serde_json::from_value(serde_json::json!({
+            "apiVersion": "edgion.io/v1",
+            "kind": "LinkSys",
+            "metadata": {"namespace": "test", "name": name},
+            "spec": {"type": "otlp", "config": {"endpoint": endpoint}}
+        }))
+        .expect("OTLP fixture")
     }
 
-    #[tokio::test]
-    async fn invalid_keys_never_start_an_owner() {
+    #[test]
+    fn invalid_keys_never_build_a_generation() {
+        let resource = resource("otlp", "http://example.test:4317");
         for key in ["", "raw", "/name", "namespace/", "namespace/a/b", "Bad/name"] {
-            assert!(matches!(
-                OtlpLinkClient::new_inner(key.into(), false, ResolverSpec::System),
-                Err("invalid_config")
-            ));
+            assert!(OtlpLinkClient::from_linksys_inner(key, &resource, ResolverSpec::System,).is_err());
         }
     }
 
     #[tokio::test]
-    async fn failed_update_clears_pending_and_preserves_active() {
-        let client = OtlpLinkClient::new_inner("test/otlp".into(), false, ResolverSpec::System).unwrap();
-        client.update(&config("http://example.test:4317")).unwrap();
-        publish(&client);
-        let active = client.active.load_full().unwrap();
-        client.update(&config("http://new.example.test:4317")).unwrap();
-        let (old_revision, old_prepared) = desired(&client);
+    async fn lazy_pipeline_has_single_live_coverage_and_shutdown_clears_it() {
+        let resource = resource("otlp", "http://example.test:4317");
+        let client = OtlpLinkClient::from_linksys_inner("test/otlp", &resource, ResolverSpec::System).unwrap();
         assert_eq!(
-            client.update(&config("http://user:secret@example.test")),
-            Err("invalid_config")
+            client.connection_coverage(),
+            ConnectionCoverage { configured: 1, live: 0 }
         );
-        assert!(client.state.lock().desired.is_none());
-        assert!(!client.publish(old_revision, old_prepared, exporter()));
-        assert!(Arc::ptr_eq(&active, client.active.load_full().as_ref().unwrap()));
-        drop(active);
+        client.publish_lazy_test_pipeline().unwrap();
+        assert_eq!(
+            client.connection_coverage(),
+            ConnectionCoverage { configured: 1, live: 1 }
+        );
         client.shutdown().await.unwrap();
-        assert!(client.active.load().is_none());
-        client.shutdown().await.unwrap();
+        assert_eq!(client.connection_coverage().live, 0);
+        assert!(client.pipeline.load().is_none());
     }
 
     #[tokio::test]
-    async fn only_current_generation_publishes_and_retirement_gates_next() {
-        let client = OtlpLinkClient::new_inner("test/otlp".into(), false, ResolverSpec::System).unwrap();
-        client.update(&config("http://old.example.test:4317")).unwrap();
-        let (revision, prepared) = desired(&client);
-        client.update(&config("http://new.example.test:4317")).unwrap();
-        assert!(!client.publish(revision, prepared, exporter()));
-        publish(&client);
-        client.update(&config("http://next.example.test:4317")).unwrap();
-        publish(&client);
-        assert!(client.state.lock().retiring.is_some());
-        client.update(&config("http://latest.example.test:4317")).unwrap();
-        let (revision, prepared) = desired(&client);
-        assert!(!client.publish(revision, prepared.clone(), exporter()));
-        client.join_retirement().await;
-        assert!(client.publish(revision, prepared, exporter()));
-        client.shutdown().await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn shutdown_invalidates_preparation_and_prevents_updates() {
-        let client = OtlpLinkClient::new_inner("test/otlp".into(), false, ResolverSpec::System).unwrap();
-        client.update(&config("http://example.test:4317")).unwrap();
-        let (revision, prepared) = desired(&client);
-        client.shutdown().await.unwrap();
-        assert!(!client.publish(revision, prepared, exporter()));
-        assert_eq!(client.update(&config("http://example.test:4317")), Err("stopped"));
+    async fn retired_generation_stops_serving_and_health_writes() {
+        let resource = resource("retired", "http://example.test:4317");
+        let client = OtlpLinkClient::from_linksys_inner("test/retired", &resource, ResolverSpec::System).unwrap();
+        client.publish_lazy_test_pipeline().unwrap();
+        client.mark_retired();
         assert!(!client.healthy());
-    }
-    #[tokio::test]
-    async fn concurrent_shutdown_waiters_all_complete_after_cancellation() {
-        let client = OtlpLinkClient::new_inner("test/otlp".into(), false, ResolverSpec::System).unwrap();
-        client.update(&config("http://example.test:4317")).unwrap();
-        publish(&client);
-        let mut waiters = Vec::new();
-        for _ in 0..8 {
-            let client = client.clone();
-            waiters.push(tokio::spawn(async move { client.shutdown().await }));
-        }
-        waiters.pop().unwrap().abort();
-        for waiter in waiters {
-            tokio::time::timeout(Duration::from_secs(2), waiter)
-                .await
-                .unwrap()
-                .unwrap()
-                .unwrap();
-        }
+        assert!(client
+            .send_with_meta("record".to_string(), &LogMeta::default())
+            .is_err());
         client.shutdown().await.unwrap();
-        assert!(!client.healthy());
-        assert!(client.active.load().is_none());
     }
 }

@@ -17,7 +17,7 @@ description: LinkSys external system integration — CRD connector variants, run
 | Redis | `providers/redis/` | `RedisLinkClient` | standalone / sentinel / cluster (fred) | Data read/write, distributed rate limiting support |
 | Webhook | `providers/webhook/` | WebhookManager | HTTP | External service calls, WebhookKeyGet resolution |
 | Kafka | `providers/kafka/` | `KafkaLinkClient` | Kafka producer | Persistent runtime client and log delivery |
-| OTLP | `providers/otlp/` | `OtlpLinkClient` | OTLP/gRPC over HTTP/HTTPS | Shared log export, staged replacement, safe egress |
+| OTLP | `providers/otlp/` | `OtlpLinkClient` | OTLP/gRPC over HTTP/HTTPS | Persistent runner, shared log export, safe egress |
 | HttpDns | resource + DNS resolver service | resolver configuration | HTTP DNS | DNS-resolution configuration; not a LinkSys runtime-client store |
 
 `LocalFileWriter` is a logging-only DataSender. OTLP is a dedicated LinkSys
@@ -27,7 +27,8 @@ provider; its key-only OtlpLogSender never owns an exporter or probe.
 
 ```
 providers/elasticsearch/
-├── client.rs          # EsLinkClient (connection management, health check)
+├── apply.rs           # EsApply fingerprint / coverage / build for the runner
+├── client.rs          # EsLinkClient (published small handle)
 ├── bulk.rs            # Bulk API batch operations
 ├── log_sender.rs      # key-only DataSender<String> adapter
 ├── config_mapping.rs  # configuration mapping
@@ -39,7 +40,8 @@ providers/elasticsearch/
 
 ```
 providers/redis/
-├── client.rs          # RedisLinkClient (fred client wrapper)
+├── apply.rs           # RedisApply fingerprint / coverage / build for the runner
+├── client.rs          # RedisLinkClient (published small handle)
 ├── config_mapping.rs  # configuration mapping (standalone / sentinel / cluster)
 ├── ops.rs             # Redis operation wrappers
 └── mod.rs
@@ -52,9 +54,13 @@ Three deployment modes are supported:
 
 ### Etcd
 
-> Unlike the other providers, Etcd lives in `edgion-common/src/link_sys_core/providers/etcd/` (re-exported by the gateway), so it can also be used by the controller.
+> Unlike the other providers, Etcd lives in `edgion-common/src/link_sys_core/providers/etcd/` (re-exported by the gateway), so it can also be used by the controller. Gateway apply metadata and per-endpoint coverage sampling are opt-in (`with_gateway_apply_meta`); Controller construction leaves them off (D12).
 
 ```
+edgion-gateway/src/link_sys/providers/etcd/
+├── apply.rs           # EtcdApply fingerprint / coverage / build for the runner
+└── mod.rs             # re-exports the shared client + EtcdApply
+
 edgion-common/src/link_sys_core/providers/etcd/
 ├── client.rs          # EtcdLinkClient (etcd-client wrapper, background health monitor)
 ├── config_mapping.rs  # configuration mapping
@@ -119,12 +125,12 @@ Each provider that requires a persistent connection has its own ArcSwap runtime 
 
 | Provider | Global store | Accessor |
 |----------|--------------|----------|
-| Redis | `REDIS_RUNTIME: ArcSwap<HashMap<String, Arc<RedisLinkClient>>>` | `get_redis_client(name)` |
-| Etcd | `ETCD_RUNTIME: ArcSwap<HashMap<String, Arc<EtcdLinkClient>>>` | `get_etcd_client(name)` |
-| Elasticsearch | `ES_RUNTIME: ArcSwap<HashMap<String, Arc<EsLinkClient>>>` | `get_es_client(name)` |
-| Kafka | `KAFKA_RUNTIME` provider store | `get_kafka_client(name)` |
+| Redis | `REDIS_RUNTIME` persistent runners; `get_redis_client` is the published handle | `get_redis_client(name)` |
+| Etcd | `ETCD_RUNTIME` persistent runners; `get_etcd_client` is the published handle | `get_etcd_client(name)` |
+| Elasticsearch | `ES_RUNTIME` persistent runners; `get_es_client` is the published handle | `get_es_client(name)` |
+| Kafka | `KAFKA_RUNTIME` persistent runners; `get_kafka_client` is the published handle | `get_kafka_client(name)` |
 | OTLP | `OTLP_RUNTIME` provider store | `get_otlp_client(name)` |
-| Webhook | `WebhookManager` (managed internally) | via `get_webhook_manager()` |
+| Webhook | `WebhookManager` plus `WEBHOOK_RUNTIME` bookkeeping; equal-fingerprint relists skip prepare | via `get_webhook_manager()` |
 
 Key format: `"namespace/name"`.
 
@@ -138,6 +144,13 @@ ordered Webhook manager have specialized publication boundaries):
 4. Initialize the connection in the background via `tokio::spawn`.
 5. Shut down the old client in the background via `tokio::spawn`.
 6. On deletion, attempt removal from every provider's store (because the delete event does not carry type information).
+
+Redis, Etcd, Elasticsearch, and Kafka are not on that insert-before-init path. Dispatch
+posts desired to a per-key persistent runner; `get_redis_client` /
+`get_etcd_client` / `get_es_client` / `get_kafka_client` stay `None` until the first successful
+publish (D14). Relist does not `replace_all` the runner map. Webhook keeps its
+ordered prepare/commit publication; an equal runtime fingerprint skips prepare
+and reuses the committed registration.
 
 ## DataSender
 
@@ -216,27 +229,27 @@ edgion-common/src/link_sys_core/       # core framework + Etcd provider (re-expo
 
 ## OTLP generations and teardown
 
-One stable OtlpLinkClient per validated namespace/name owns desired prepared
-transport and an ArcSwap active pipeline. A valid update invalidates any older
-candidate, prepares immutable auth/TLS/endpoint state, then lets the single
-canonical probe connect and complete an empty OTLP Export. Publication checks the same revision under the short
-configuration lock. Invalid, unresolved and unreachable replacements keep the
-active generation. Full and partial desired-state dispatch run inside the synchronous source-event
-critical section so unrelated async task reordering cannot discard an OTLP delta.
-Generic full/partial/rebuild tasks also reserve predecessor order inside that
-section, then await earlier dispatch completion before entering the Webhook
-mutation guard. A foreign-provider-to-OTLP transition therefore removes its old
-typed registrations before a later unrelated delta or same-key recreation.
-Type change/removal shuts down the owner. The process shutdown fence prevents late
-conf-sync events from restarting drained owners. Store stats include otlp_clients.
+OTLP uses the shared per-key `PersistentRunner`, the same lifecycle shell as
+Redis, Etcd, Elasticsearch, and Kafka. Each `OtlpLinkClient` is one immutable
+generation containing prepared transport, fingerprint, exporter pipeline, probe,
+and health state. The runner builds and retries a candidate until its bounded
+empty OTLP Export succeeds, then publishes that same exporter. A stale candidate
+whose desired fingerprint changed is shut down without publication. Equal
+fingerprints reuse the published generation; changed healthy generations use
+handover, while a generation with zero live coverage is replaced immediately.
 
-The probe gives pending preparation and active TCP checking independent 3s budgets
-inside an 8s driver deadline. A failed pending connection cannot consume the old
-connection's health check. A successful empty Export through the candidate exporter permits publication;
+Full, partial, and rebuild dispatch post OTLP desired state from the same ordered
+generic task as the other persistent providers. Kind changes delete foreign
+runners before applying OTLP, and removal immediately unpublishes before joining
+runner cleanup. Unresolved credentials or TLS material do not create a runner;
+during deletion they also drop any deferred recreation. Store list/count reports
+runner keys, including connecting unpublished keys, while `get_otlp_client`
+returns `None` until first publication.
+
+A successful empty Export through the candidate exporter permits publication;
 its complete response shares the 3s preparation budget. Native channel readiness
-alone can precede mTLS rejection. The same exporter enters the published pipeline,
-and failed/stale candidates never start a batch worker. Subsequent health remains
-connection-level TCP evidence only.
+alone can precede mTLS rejection. Subsequent health remains connection-level TCP
+evidence only.
 One resource serves every async log type through the existing scope/record format.
 
 Native tonic014 uses the exact original URI and shared outbound TLS results;
@@ -244,13 +257,13 @@ its custom connector resolves/classifies every actual dial. An SDK decorator
 bounds the complete export future and polls it with captured runtime context
 because the batch processor runs on a std thread. Retained cleanup tasks drain
 for 5s, cancel remaining export futures, and await worker join and exporter/channel
-release. Only one retiring pipeline is allowed, and cancellation of a shutdown
-waiter must not detach cleanup. Read the [OTLP regression boundary](../../04-review/link-sys/regression-guards/otlp-provider-ownership-and-egress.md)
+release. The runner waits 10 seconds before retiring a handed-over generation and
+joins retirement during deletion. Read the [OTLP regression boundary](../../04-review/link-sys/regression-guards/otlp-provider-ownership-and-egress.md)
 before changing this lifecycle.
 
-Removed keys retain a per-key tombstone until their SDK/probe teardown joins.
-Rapid delete/recreate only changes the latest source snapshot during this period;
-no second owner starts. Cleanup replays the latest key under the source lock,
-unless process shutdown has fenced publication. Retiring stats count tombstones
-even while the process drain owns cleanup tasks. A startup guard drains exporters
-on errors after resource watches begin, before the startup runtime can drop.
+Removed keys retain a deleting entry until runner and SDK/probe teardown join.
+Rapid delete/recreate stores only the latest pending desired state, and the
+per-kind instance cap counts live runners plus deleting joiners. The once-shared
+process shutdown fence cancels all OTLP runners and joins deletion and handover
+cleanup before Tokio IO is dropped. A startup guard invokes the same fence on
+errors after resource watches begin.

@@ -781,11 +781,17 @@ fn get_redis_client_by_name(
     // URL path uses underscore as separator: "default_redis-main" → "default/redis-main"
     let key = name.replacen('_', "/", 1);
     crate::link_sys::get_redis_client(&key).ok_or_else(|| {
-        Json(ApiResponse::err_body(format!(
-            "Redis client '{}' not found. Available: {:?}",
-            key,
-            crate::link_sys::runtime::store::list_redis_clients()
-        )))
+        if crate::link_sys::runtime::store::redis_runner_exists(&key) {
+            Json(ApiResponse::err_body(format!(
+                "Redis client '{key}' not found (registered, not yet connected)"
+            )))
+        } else {
+            Json(ApiResponse::err_body(format!(
+                "Redis client '{}' not found. Available: {:?}",
+                key,
+                crate::link_sys::runtime::store::list_redis_clients()
+            )))
+        }
     })
 }
 
@@ -1071,11 +1077,17 @@ fn get_etcd_client_by_name(
 ) -> Result<std::sync::Arc<crate::link_sys::providers::etcd::EtcdLinkClient>, Json<ApiResponse<serde_json::Value>>> {
     let key = name.replacen('_', "/", 1);
     crate::link_sys::get_etcd_client(&key).ok_or_else(|| {
-        Json(ApiResponse::err_body(format!(
-            "Etcd client '{}' not found. Available: {:?}",
-            key,
-            crate::link_sys::runtime::store::list_etcd_clients()
-        )))
+        if crate::link_sys::runtime::store::etcd_runner_exists(&key) {
+            Json(ApiResponse::err_body(format!(
+                "Etcd client '{key}' not found (registered, not yet connected)"
+            )))
+        } else {
+            Json(ApiResponse::err_body(format!(
+                "Etcd client '{}' not found. Available: {:?}",
+                key,
+                crate::link_sys::runtime::store::list_etcd_clients()
+            )))
+        }
     })
 }
 
@@ -1343,11 +1355,17 @@ fn get_es_client_by_name(
 {
     let key = name.replacen('_', "/", 1);
     crate::link_sys::get_es_client(&key).ok_or_else(|| {
-        Json(ApiResponse::err_body(format!(
-            "ES client '{}' not found. Available: {:?}",
-            key,
-            crate::link_sys::runtime::store::list_es_clients()
-        )))
+        if crate::link_sys::runtime::store::es_runner_exists(&key) {
+            Json(ApiResponse::err_body(format!(
+                "ES client '{key}' not found (registered, not yet connected)"
+            )))
+        } else {
+            Json(ApiResponse::err_body(format!(
+                "ES client '{}' not found. Available: {:?}",
+                key,
+                crate::link_sys::runtime::store::list_es_clients()
+            )))
+        }
     })
 }
 

@@ -16,6 +16,7 @@ use edgion_resources::resources::backend_tls_policy::BackendTLSPolicyCACertifica
 use edgion_resources::resources::common::outbound_tls::OutboundTlsValidation;
 use edgion_resources::resources::common::{SecretObjectReference, SecretSlot, TlsConfig};
 use edgion_resources::resources::link_sys::otlp::{OtlpAuth, OtlpClientConfig};
+use edgion_resources::resources::link_sys::LinkSys;
 use k8s_openapi::{api::core::v1::Secret, ByteString};
 use rustls::pki_types::{pem::PemObject, CertificateDer, PrivateKeyDer};
 use tokio::net::{TcpListener, UdpSocket};
@@ -217,6 +218,27 @@ fn config(endpoint: String, timeout_ms: u64) -> OtlpClientConfig {
         tls: None,
     }
 }
+fn otlp_resource(key: &str, config: OtlpClientConfig) -> LinkSys {
+    let (namespace, name) = key.split_once('/').expect("test key");
+    let mut resource: LinkSys = serde_json::from_value(serde_json::json!({
+        "apiVersion": "edgion.io/v1",
+        "kind": "LinkSys",
+        "metadata": {"namespace": namespace, "name": name},
+        "spec": {"type": "otlp", "config": {"endpoint": "http://placeholder.test:4317"}}
+    }))
+    .expect("OTLP resource");
+    let edgion_resources::resources::link_sys::SystemConfig::Otlp(current) = &mut resource.spec.config else {
+        panic!("OTLP resource");
+    };
+    *current = config;
+    resource
+}
+fn build_client(key: &str, config: OtlpClientConfig) -> Arc<OtlpLinkClient> {
+    OtlpLinkClient::from_linksys(key, &otlp_resource(key, config)).expect("OTLP generation")
+}
+fn build_client_with_resolver(key: &str, config: OtlpClientConfig, resolver: ResolverSpec) -> Arc<OtlpLinkClient> {
+    OtlpLinkClient::from_linksys_with_resolver(key, &otlp_resource(key, config), resolver).expect("OTLP generation")
+}
 fn emit(client: &OtlpLinkClient, count: usize) {
     for _ in 0..count {
         client
@@ -339,9 +361,8 @@ async fn live_tls_and_auth_delivery() {
                     }),
                 },
             });
-            let client = OtlpLinkClient::new("transport/live".into()).unwrap();
-            client.update(&cfg).unwrap();
-            wait_until(|| client.healthy()).await;
+            let client = build_client("transport/live", cfg);
+            client.init().await.unwrap();
             emit(&client, 1);
             client.shutdown().await.unwrap();
             assert_eq!(collector.observations.records.load(Ordering::SeqCst), 1);
@@ -380,8 +401,8 @@ async fn tls_rejects_untrusted_wrong_hostname_and_missing_identity() {
         if override_ca {
             cfg.tls = Some(client_tls(&ca, identity.then_some((cert.as_str(), key.as_str()))));
         }
-        let client = OtlpLinkClient::new("transport/rejected".into()).unwrap();
-        client.update(&cfg).unwrap();
+        let client = build_client("transport/rejected", cfg);
+        assert!(client.init().await.is_err());
         wait_until(|| collector.observations.tls_failures.load(Ordering::SeqCst) > 0).await;
         assert!(!client.healthy());
         client.shutdown().await.unwrap();
@@ -395,11 +416,11 @@ async fn entire_export_timeout_after_headers() {
     edgion_common::test_mode::init_integration_testing_mode(true);
     for mode in [Mode::StallHeaders, Mode::StallBody] {
         let collector = Collector::start(Ipv4Addr::LOCALHOST, Mode::Success, None).await;
-        let client = OtlpLinkClient::new("transport/stalled".into()).unwrap();
-        client
-            .update(&config(format!("http://{}", collector.address), 200))
-            .unwrap();
-        wait_until(|| client.healthy()).await;
+        let client = build_client(
+            "transport/stalled",
+            config(format!("http://{}", collector.address), 200),
+        );
+        client.init().await.unwrap();
         collector.set_mode(mode);
         emit(&client, 512);
         wait_until(|| collector.observations.resets.load(Ordering::SeqCst) > 0).await;
@@ -414,11 +435,11 @@ async fn retirement_cancellation_survives_aborted_waiter() {
     edgion_common::test_mode::init_integration_testing_mode(true);
     for mode in [Mode::StallHeaders, Mode::StallBody] {
         let collector = Collector::start(Ipv4Addr::LOCALHOST, Mode::Success, None).await;
-        let client = OtlpLinkClient::new("transport/cancel".into()).unwrap();
-        client
-            .update(&config(format!("http://{}", collector.address), 300000))
-            .unwrap();
-        wait_until(|| client.healthy()).await;
+        let client = build_client(
+            "transport/cancel",
+            config(format!("http://{}", collector.address), 300000),
+        );
+        client.init().await.unwrap();
         collector.set_mode(mode);
         let before = collector.observations.requests.load(Ordering::SeqCst);
         emit(&client, 512);
@@ -536,9 +557,8 @@ async fn production_dns_case() {
         format!("http://collector.example.test:{}", collector.address.port()),
         500,
     );
-    let client = OtlpLinkClient::new_with_resolver("transport/dns".into(), dns.resolver()).unwrap();
-    client.update(&cfg).unwrap();
-    wait_until(|| client.healthy()).await;
+    let client = build_client_with_resolver("transport/dns", cfg.clone(), dns.resolver());
+    client.init().await.unwrap();
     emit(&client, 512);
     wait_until(|| collector.observations.records.load(Ordering::SeqCst) == 512).await;
     assert!(collector.observations.metadata.lock().iter().all(Option::is_none));
@@ -562,8 +582,8 @@ async fn production_dns_case() {
         *dns.answers.lock() = vec![answer.parse().unwrap()];
         let queries = dns.queries.load(Ordering::SeqCst);
         let accepts = collector.observations.accepts.load(Ordering::SeqCst);
-        let client = OtlpLinkClient::new_with_resolver("transport/blocked".into(), dns.resolver()).unwrap();
-        client.update(&cfg).unwrap();
+        let client = build_client_with_resolver("transport/blocked", cfg.clone(), dns.resolver());
+        assert!(client.init().await.is_err());
         wait_until(|| dns.queries.load(Ordering::SeqCst) > queries).await;
         client.shutdown().await.unwrap();
         assert!(!client.healthy());
@@ -575,8 +595,8 @@ async fn production_dns_case() {
         configure_egress_defaults(true, Duration::from_secs(5));
         let queries = dns.queries.load(Ordering::SeqCst);
         let accepts = collector.observations.accepts.load(Ordering::SeqCst);
-        let client = OtlpLinkClient::new_with_resolver("transport/private".into(), dns.resolver()).unwrap();
-        client.update(&cfg).unwrap();
+        let client = build_client_with_resolver("transport/private", cfg.clone(), dns.resolver());
+        assert!(client.init().await.is_err());
         wait_until(|| dns.queries.load(Ordering::SeqCst) > queries).await;
         client.shutdown().await.unwrap();
         assert!(!client.healthy());
@@ -642,15 +662,16 @@ async fn rejected_candidate_auth_and_mtls_preserve_old_delivery() {
             }),
         },
     });
-    let client = OtlpLinkClient::new("transport/retain".into()).unwrap();
-    client.update(&good).unwrap();
-    wait_until(|| client.healthy()).await;
+    let client = build_client("transport/retain", good.clone());
+    client.init().await.unwrap();
     let mut delivered = 0;
     for wrong_identity in [None, Some((wrong_cert.as_str(), wrong_key.as_str()))] {
         let before = collector.observations.tls_failures.load(Ordering::SeqCst);
         let mut candidate = good.clone();
         candidate.tls = Some(client_tls(&ca, wrong_identity));
-        client.update(&candidate).unwrap();
+        let candidate = build_client("transport/retain-candidate", candidate);
+        assert!(candidate.init().await.is_err());
+        candidate.shutdown().await.unwrap();
         wait_until(|| collector.observations.tls_failures.load(Ordering::SeqCst) > before).await;
         assert!(client.healthy());
         emit(&client, 512);
@@ -671,7 +692,9 @@ async fn rejected_candidate_auth_and_mtls_preserve_old_delivery() {
         .as_mut()
         .unwrap()
         .insert("bearerToken".into(), ByteString(b"wrong-token".to_vec()));
-    client.update(&candidate).unwrap();
+    let candidate = build_client("transport/retain-auth-candidate", candidate);
+    assert!(candidate.init().await.is_err());
+    candidate.shutdown().await.unwrap();
     wait_until(|| collector.observations.requests.load(Ordering::SeqCst) > before).await;
     assert!(client.healthy());
     emit(&client, 512);
@@ -686,10 +709,11 @@ async fn rejected_candidate_auth_and_mtls_preserve_old_delivery() {
 async fn stalled_preflight_is_unpublished_and_shutdown_cancels_it() {
     edgion_common::test_mode::init_integration_testing_mode(true);
     let collector = Collector::start(Ipv4Addr::LOCALHOST, Mode::StallBody, None).await;
-    let client = OtlpLinkClient::new("transport/pending".into()).unwrap();
-    client
-        .update(&config(format!("http://{}", collector.address), 300000))
-        .unwrap();
+    let client = build_client(
+        "transport/pending",
+        config(format!("http://{}", collector.address), 300000),
+    );
+    assert!(client.init().await.is_err());
     wait_until(|| collector.observations.requests.load(Ordering::SeqCst) > 0).await;
     assert!(!client.healthy());
     assert!(client
@@ -733,7 +757,7 @@ async fn same_key_lifecycle_case() {
     emit(&old, 512);
     wait_until(|| old_collector.observations.requests.load(Ordering::SeqCst) > before).await;
     store.update(HashMap::new(), &HashSet::from([key.clone()]));
-    assert!(get_otlp_client(&key).is_none());
+    wait_until(|| get_otlp_client(&key).is_none()).await;
     assert_eq!(otlp_client_count(), 0);
     assert_eq!(otlp_retiring_client_count(), 1);
     for index in 0..32 {
@@ -778,7 +802,7 @@ async fn same_key_lifecycle_case() {
     }))
     .unwrap();
     store.update(HashMap::from([(key.clone(), other)]), &HashSet::new());
-    wait_until(|| otlp_retiring_client_count() == 0).await;
+    wait_until(|| otlp_retiring_client_count() == 0 && get_otlp_client(&key).is_none()).await;
     assert!(get_otlp_client(&key).is_none());
     assert_eq!(intermediate.observations.accepts.load(Ordering::SeqCst), 0);
 
@@ -859,8 +883,8 @@ async fn hostile_transport_logging_case() {
     cfg.tls = Some(client_tls(&ca, None));
     // Exercise ordinary production construction and its System resolver. Custom
     // DNS selection exists only in the separate policy test's test-util seam.
-    let client = OtlpLinkClient::new("transport/private-tls".into()).unwrap();
-    client.update(&cfg).unwrap();
+    let client = build_client("transport/private-tls", cfg);
+    assert!(client.init().await.is_err());
     wait_until(|| collector.observations.tls_failures.load(Ordering::SeqCst) > 0).await;
     assert!(!client.healthy());
     assert_eq!(collector.observations.requests.load(Ordering::SeqCst), 0);
@@ -885,9 +909,8 @@ async fn hostile_transport_logging_case() {
                 }),
             },
         });
-        let client = OtlpLinkClient::new("transport/private-status".into()).unwrap();
-        client.update(&cfg).unwrap();
-        wait_until(|| client.healthy()).await;
+        let client = build_client("transport/private-status", cfg);
+        client.init().await.unwrap();
         collector.set_mode(mode);
         emit(&client, 512);
         wait_until(|| collector.observations.hostile_responses.load(Ordering::SeqCst) == 1).await;

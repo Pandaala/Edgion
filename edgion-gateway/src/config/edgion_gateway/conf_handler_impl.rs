@@ -1,4 +1,5 @@
 use crate::link_sys::providers::webhook::manager::configure_webhook_global_max;
+use crate::link_sys::runtime::store::configure_link_sys_max_instances_per_kind;
 use crate::request_body::ResolvedRequestBodyConfig;
 use arc_swap::ArcSwap;
 use edgion_common::conf_sync::traits::{arc_map_to_owned, ConfHandler};
@@ -219,6 +220,14 @@ impl Default for EdgionGatewayConfigHandler {
 /// default (`default_webhook_max_response_bytes`).
 const DEFAULT_WEBHOOK_MAX_RESPONSE_BYTES: usize = 16384;
 
+/// Default LinkSys instance cap when no `EdgionGatewayConfig` sets `link_sys`.
+/// Must mirror `LINK_SYS_MAX_INSTANCES_PER_KIND`'s initial value (`store.rs`)
+/// and the schema default (`LINK_SYS_DEFAULT_MAX_INSTANCES_PER_KIND`).
+const DEFAULT_LINK_SYS_MAX_INSTANCES_PER_KIND: usize = 200;
+
+/// Inclusive upper bound mirrored from `LINK_SYS_MAX_INSTANCES_PER_KIND_LIMIT`.
+const LINK_SYS_MAX_INSTANCES_PER_KIND_LIMIT: usize = 10_000;
+
 /// Default LB degrade threshold when no `EdgionGatewayConfig` sets `load_balancing`.
 /// Must mirror `GLOBAL_DEFAULT`'s initial value (`degrade_threshold.rs`): 0 =
 /// degrade mode disabled (opt-in).
@@ -234,8 +243,11 @@ const DEFAULT_LB_DEGRADE_THRESHOLD: u8 = 0;
 /// across all configs with an order-independent rule and fall back to the schema
 /// default when no config sets the field:
 ///   - webhook response cap: `min` — the strictest cap wins.
+///   - LinkSys instances per kind: `min` — the strictest cap wins.
 ///   - LB degrade threshold:   `max` — degrade mode engages as early as any config asks.
 fn recompute_global_config(store: &HashMap<String, EdgionGatewayConfig>) -> bool {
+    #[cfg(test)]
+    let _cap = crate::link_sys::runtime::store::LINK_SYS_CAP_TEST_LOCK.lock();
     let webhook_max = store
         .values()
         .filter_map(|config| config.spec.link_sys.as_ref())
@@ -243,6 +255,15 @@ fn recompute_global_config(store: &HashMap<String, EdgionGatewayConfig>) -> bool
         .min()
         .unwrap_or(DEFAULT_WEBHOOK_MAX_RESPONSE_BYTES);
     configure_webhook_global_max(webhook_max);
+
+    let max_instances = store
+        .values()
+        .filter_map(|config| config.spec.link_sys.as_ref())
+        .map(|link_sys| link_sys.max_instances_per_kind)
+        .filter(|&n| (1..=LINK_SYS_MAX_INSTANCES_PER_KIND_LIMIT).contains(&n))
+        .min()
+        .unwrap_or(DEFAULT_LINK_SYS_MAX_INSTANCES_PER_KIND);
+    configure_link_sys_max_instances_per_kind(max_instances);
 
     // Drop out-of-range thresholds before aggregating so one invalid config
     // (`> 100`) cannot poison the `max` and silently disable degrade mode for every
@@ -888,6 +909,7 @@ mod tests {
         let spec = EdgionGatewayConfigSpec {
             link_sys: Some(LinkSysGlobalConfig {
                 webhook_max_response_bytes: 65536,
+                ..Default::default()
             }),
             ..Default::default()
         };
@@ -915,6 +937,7 @@ mod tests {
         let mut config = make_config(name);
         config.spec.link_sys = Some(LinkSysGlobalConfig {
             webhook_max_response_bytes: max_bytes,
+            ..Default::default()
         });
         config
     }
@@ -1005,6 +1028,70 @@ mod tests {
         remove.insert("cfg".to_string());
         handler.partial_update(HashMap::new(), HashMap::new(), remove);
         assert_eq!(get_webhook_global_max(), 16384, "delete must reset cap to default");
+    }
+
+    fn make_config_with_link_sys_instances(name: &str, max_instances: usize) -> EdgionGatewayConfig {
+        use edgion_resources::resources::edgion_gateway_config::LinkSysGlobalConfig;
+        let mut config = make_config(name);
+        config.spec.link_sys = Some(LinkSysGlobalConfig {
+            max_instances_per_kind: max_instances,
+            ..Default::default()
+        });
+        config
+    }
+
+    #[test]
+    fn full_set_link_sys_instance_cap_aggregates_min_deterministically() {
+        use crate::link_sys::runtime::store::{
+            configure_link_sys_max_instances_per_kind, get_link_sys_max_instances_per_kind, LINK_SYS_CAP_TEST_LOCK,
+        };
+        let _g = TEST_MUTEX.lock();
+        let _cap = LINK_SYS_CAP_TEST_LOCK.lock();
+        clear_store();
+        configure_link_sys_max_instances_per_kind(200);
+
+        let mut data = HashMap::new();
+        data.insert("a".to_string(), Arc::new(make_config_with_link_sys_instances("a", 500)));
+        data.insert("b".to_string(), Arc::new(make_config_with_link_sys_instances("b", 50)));
+
+        let handler = EdgionGatewayConfigHandler;
+        handler.full_set(&data);
+        assert_eq!(
+            get_link_sys_max_instances_per_kind(),
+            50,
+            "min instance cap must win over hash order"
+        );
+
+        configure_link_sys_max_instances_per_kind(200);
+    }
+
+    #[test]
+    fn remove_last_link_sys_config_resets_instance_cap_to_default() {
+        use crate::link_sys::runtime::store::{
+            configure_link_sys_max_instances_per_kind, get_link_sys_max_instances_per_kind, LINK_SYS_CAP_TEST_LOCK,
+        };
+        let _g = TEST_MUTEX.lock();
+        let _cap = LINK_SYS_CAP_TEST_LOCK.lock();
+        clear_store();
+        configure_link_sys_max_instances_per_kind(200);
+        let handler = EdgionGatewayConfigHandler;
+
+        let mut add = HashMap::new();
+        add.insert(
+            "cfg".to_string(),
+            Arc::new(make_config_with_link_sys_instances("cfg", 50)),
+        );
+        handler.partial_update(add, HashMap::new(), std::collections::HashSet::new());
+        assert_eq!(get_link_sys_max_instances_per_kind(), 50);
+
+        let mut remove = std::collections::HashSet::new();
+        remove.insert("cfg".to_string());
+        handler.partial_update(HashMap::new(), HashMap::new(), remove);
+        assert_eq!(
+            get_link_sys_max_instances_per_kind(),
+            200,
+            "delete must reset instance cap to default"
+        );
     }
 
     #[test]

@@ -30,11 +30,13 @@ gauge only ever `set` on a flip also stays absent from `/metrics` until the firs
 struct fields would be inconsistent and buy nothing.
 
 Redis has one bounded exception to flip-only gauge writes: its one-second aggregate
-connection-state probe refreshes `edgion_link_sys_health` on every sample. Same-key
-runtime generations can overlap briefly before the retiring probe is stopped; the
-active generation must therefore reassert its current value even without a local
-state transition. This remains a cold, provider-count-bounded path. Redis flip
-counters and transition logs are still emitted only on a winning CAS transition.
+connection-state probe refreshes `edgion_link_sys_health` on every sample of a
+**live** generation. A retired probe must not write the shared gauge; retirement
+signals the probe watch and shutdown joins the task. Same-key runtime generations
+can overlap briefly before the retiring probe observes that signal; the active
+generation must therefore reassert its current value even without a local state
+transition. This remains a cold, provider-count-bounded path. Redis flip counters
+and transition logs are still emitted only on a winning CAS transition.
 
 **2. The `link` label requires a validated provider identity.**
 

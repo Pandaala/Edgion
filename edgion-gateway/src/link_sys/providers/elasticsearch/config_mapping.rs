@@ -92,7 +92,7 @@ pub fn build_es_client(
 
 /// Compute the (max-idle-per-host, idle-timeout) pool values from the CRD,
 /// applying the same clamps/defaults as before.
-fn es_pool(crd: &ElasticsearchClientConfig) -> (usize, Duration) {
+pub(crate) fn es_pool(crd: &ElasticsearchClientConfig) -> (usize, Duration) {
     let idle_per_host = crd
         .pool
         .as_ref()
@@ -109,7 +109,7 @@ fn es_pool(crd: &ElasticsearchClientConfig) -> (usize, Duration) {
 
 /// Compute the (connect, request) timeout values from the CRD, applying the same
 /// clamps/defaults as before.
-fn es_timeouts(crd: &ElasticsearchClientConfig) -> (Duration, Duration) {
+pub(crate) fn es_timeouts(crd: &ElasticsearchClientConfig) -> (Duration, Duration) {
     let connect = crd
         .timeout
         .as_ref()

@@ -6,18 +6,16 @@ knowledge_type: intentional-design
 
 # LinkSys store.rs dispatch functions — Extract-Function / Dedup — DESIGN-TRADEOFF
 
-**Audit date**: 2026-05-25 (re-confirmed 2026-06-09; re-evaluated 2026-09-14 after Kafka runtime and specialized Webhook/OTLP publication landed)
-**Linked issues**: link-sys F-013 (extract-function), link-sys F-008 (duplicate provider match arms) — both closed, not further refactored. A merged follow-up todo (`link-sys-dispatch-dedup-followup.md`) was re-evaluated with a skeptical design pass on 2026-06-09 and deleted: verdict unchanged (NO-GO-FOR-NOW).
-
-## Conclusion
+**Audit date**: 2026-05-25 (re-confirmed 2026-06-09; re-evaluated 2026-09-17 after Kafka joined the persistent runner)
 
 The one concrete, low-risk extraction these findings asked for — a shared
 credential-readiness prelude helper — is **already implemented** as
 `credential_readiness<M>(ls, auth_fn) -> (ready, tls_ok, auth)`
-(`edgion-gateway/src/link_sys/runtime/store.rs`), called from the Redis, Etcd,
-Elasticsearch, and Kafka arms across both dispatch functions. Alongside it, `register_for_full_set`,
-`swap_and_shutdown_olds`, `spawn_and_swap_partial`, `carry_over_if_not_ready`,
-`preserve_if_not_ready`, and `spawn_shutdown_if_present` are already extracted.
+(`edgion-gateway/src/link_sys/runtime/store.rs`), called from Redis/Etcd/Elasticsearch/Kafka
+`apply_*`. Webhook still uses `preserve_if_not_ready`. The former generic
+lifecycle helpers (`register_for_full_set`, `swap_and_shutdown_olds`,
+`spawn_and_swap_partial`, `carry_over_if_not_ready`, `spawn_shutdown_if_present`)
+were removed when Kafka moved onto the persistent runner.
 
 The remaining suggestions — per-provider `dispatch_full_set_<provider>`
 functions (F-013 #2) and collapsing both `match &ls.spec.config` blocks into a
@@ -31,11 +29,11 @@ enum / `for_each_provider` closure" are not accepted.
 
 **1. The two functions have genuinely different control flow, not just a swapped lifecycle helper**
 
-`dispatch_full_set`: snapshots all four runtime maps up front, carries over the
-*old snapshot's* Arc for not-ready resources, accumulates into four fresh maps,
-and after a **single** pass over `data` replaces each of the four provider maps
-atomically in sequence, then starts background shutdown of evicted old Arcs
-gated by `SHUTDOWN_ON_REPLACE`. The four stores are not one joint transaction.
+`dispatch_full_set`: snapshots the Webhook runtime map up front, carries over the
+*old snapshot's* Arc for not-ready Webhook resources, accumulates into a fresh
+Webhook map, and after a **single** pass over `data` replaces the Webhook map
+atomically. Redis/Etcd/Elasticsearch/Kafka post desired state to per-key
+persistent runners in the same pass and `retain_*` keys that disappeared.
 
 `dispatch_partial_update`: preserves in place against the **live** runtime,
 swaps **per item**, and runs a separate uniform remove loop.
@@ -69,13 +67,13 @@ readability gain. Same disposition class as
 
 - "Extract `dispatch_full_set_<provider>` per provider to drop the provider maps" — the locals are structural to single-pass-then-publish; extraction would force repeated passes over `data` or an accumulator struct, neither of which is a net improvement.
 - "Unify both dispatch functions behind a `LifecycleAction` enum / `dispatch_one` / `for_each_provider` closure (F-008)" — the two functions' carry-over/swap semantics genuinely differ; collapsing trades real regression risk for marginal readability.
-- "Adding another generic provider requires editing both dispatch functions and the remove loop" — known trade-off, not a defect; the four generic lifecycle arms are short and the `credential_readiness` prelude is already deduplicated. Webhook and OTLP intentionally use separate publication models.
+- "Adding another generic provider requires editing both dispatch functions and the remove loop" — known trade-off, not a defect. Redis/Etcd/Elasticsearch/Kafka use persistent runners; Webhook and OTLP intentionally use separate publication models.
 
 ## Re-evaluation Triggers
 
 Re-open only if:
 
-- Another provider is implemented on the **generic** lifecycle and materially increases the repeated readiness/build/swap/remove branches. Kafka already triggered the earlier re-evaluation condition and is now fully wired; the September 2026 re-evaluation retained the current shape because Webhook needs ordered prepare/commit publication, OTLP owns staged generations, HttpDns is resolver-consumed, and CredentialSource is Controller-only. Those variants are not evidence that the generic branches should be collapsed.
+- Another provider is implemented on the **generic** lifecycle and materially increases the repeated readiness/build/swap/remove branches. Kafka and OTLP use the persistent runner; Webhook still needs ordered prepare/commit publication, HttpDns is resolver-consumed, and CredentialSource is Controller-only. Those variants are not evidence that the remaining Webhook branch should be collapsed.
 - The `full_set` carry-over-from-snapshot and `partial_update` preserve-in-place semantics genuinely converge, so a single dispatch path no longer has to encode two flows.
 - A real bug is traced to a provider arm being added/changed in one function but not the other.
 

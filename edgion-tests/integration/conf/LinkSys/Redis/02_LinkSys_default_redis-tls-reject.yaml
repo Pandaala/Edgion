@@ -3,10 +3,10 @@
 # fred's rustls connector always verifies the server certificate; it exposes no
 # skip-verify API. The outbound-TLS resolver therefore rejects `verify: false`
 # for Redis unconditionally (provider_can_disable=false) — independent of any
-# environment. The Gateway logs "from_config failed" and never registers the
-# client, so:
+# environment. The Gateway logs "from_config failed" and keeps an unpublished
+# runner (D10: the key may appear under /api/v1/testing/link-sys/redis/clients
+# while get/ping stay not found). The CRD still syncs:
 #   - the LinkSys CRD still syncs to the Gateway (controller admission is lenient)
-#   - NO runtime client appears under /api/v1/testing/link-sys/redis/clients
 #   - a ping against default_redis-tls-reject returns a "not found" failure
 #
 # The endpoint is intentionally bogus (no TLS Redis is served); the reject

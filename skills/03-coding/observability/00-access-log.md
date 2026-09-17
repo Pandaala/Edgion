@@ -715,8 +715,9 @@ Spec: `docs/superpowers/specs/2026-06-16-plugin-log-tokens-design.md`.
 
 ## OTLP connection and identity boundary
 
-OTLP senders retain only a validated LinkSys key. Shared OtlpLinkClient owns all
-connections, credentials, TLS, exporter/batch state and health. Keep record
+OTLP senders retain only a validated LinkSys key. The shared persistent runner
+publishes a small OtlpLinkClient generation that owns its connection,
+credentials, TLS, exporter/batch state, and health. Keep record
 projection (LogMeta, severity, trace ID, body and sensitive url.path) unchanged
 when touching transport. Do not add per-request tracing or export acknowledgments
 to the first-healthy sender contract. Health labels use bounded namespace/name,

@@ -24,9 +24,11 @@ Fix suggestions of the form "queue-full must mark the sink unhealthy", "OTLP hea
 **2. OTLP endpoint health is probe-driven; export success remains unacknowledged.**
 
 `OtlpLogSender` delegates to its shared `OtlpLinkClient`; SDK emit remains
-fire-and-forget. The owner's admitted transport probe and shared health driver
-update its `Arc<AtomicBool>` using TCP reachability. A pending replacement must
-not overwrite active health before that replacement is ready. A successful connect does not prove TLS negotiation or OTLP export success. Startup traffic can be shed until the probe observes recovery; integration delivery assertions must establish readiness before counting a required batch.
+fire-and-forget. Each published persistent-runner generation owns an admitted
+transport probe and health driver that update its `Arc<AtomicBool>` using TCP
+reachability. A pending replacement cannot overwrite active health before its
+empty Export succeeds and the runner publishes it. A successful TCP probe alone
+does not prove TLS negotiation or OTLP export success.
 
 Historical scope: task 04 only exposed the health handle and temporarily left health true after init. The subsequent task-05 probe implementation supersedes that bridge-state description. The 2026-09-10 full integration run observed `link-sys recovered` after the collector started, and exposed the stale assumption in `run_otlp_test.sh`; this is not new acceptance of permanent healthy=true behavior.
 
@@ -42,7 +44,7 @@ Historical scope: task 04 only exposed the health handle and temporarily left he
 ## Fix Suggestions Not Accepted
 
 - "`send` should mark unhealthy when the queue is full" — flapping under load, violates I5; saturation handling is task 06.
-- "OTLP `healthy` is frozen `true`, drive it from `emit`" — `emit` is fire-and-forget; no local signal exists. Driven by the shared owner's canonical probe; a thin sender does not own a health handle.
+- "OTLP `healthy` is frozen `true`, drive it from `emit`" — `emit` is fire-and-forget; no local signal exists. Driven by the published generation's canonical probe; a thin sender does not own a health handle.
 - "Lower/raise the 90% default" or "never shed the last sink" — operator-tunable (`0` disables); shedding-before-failure is the point.
 - "Add disk hysteresis now" — premature; transitions are already gated to true edges, default 30s cadence.
 - "Make `current_size` exact across failed-then-recovered flushes" — unbounded bookkeeping for a ≤8 KB drift vs a 100 MB rotation size.

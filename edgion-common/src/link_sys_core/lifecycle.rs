@@ -6,10 +6,12 @@
 //!   `SHUTDOWN_ON_REPLACE = true`
 //! - **remove** — always calls `shutdown` regardless of `SHUTDOWN_ON_REPLACE`
 //!
-//! Redis, Etcd, Elasticsearch, and Kafka use this interface and shut down
-//! replaced instances. Gateway Webhook publication deliberately does not
-//! implement this trait: it prepares candidates and commits them through the
-//! sequence-checked `WebhookManager` before updating runtime bookkeeping.
+//! Redis, Etcd, Elasticsearch, and Kafka use the persistent runner (`ApplyOwner`)
+//! instead of these generic dispatch helpers. No current provider implements
+//! this trait. Gateway Webhook publication
+//! deliberately does not implement this trait: it prepares candidates and
+//! commits them through the sequence-checked `WebhookManager` before updating
+//! runtime bookkeeping.
 
 use anyhow::Result;
 use async_trait::async_trait;

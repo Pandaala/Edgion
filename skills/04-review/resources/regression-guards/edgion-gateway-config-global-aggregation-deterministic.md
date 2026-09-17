@@ -17,6 +17,7 @@ resource during the store iteration. Both globals are now recomputed from the
 reset-to-default when no instance carries the field:
 
 - `linkSys.webhookMaxResponseBytes` → `min` (strictest cap wins), default `16384`.
+- `linkSys.maxInstancesPerKind` → `min` (strictest cap wins), default `200`.
 - `loadBalancing.degradeThreshold` → `max` (panic engages as early as any asks), default `0`.
 
 Re-reports of the form "per-resource apply is order-dependent" / "delete never
@@ -40,7 +41,8 @@ the store key and never recomputed, so a relaxed cap lingered until process rest
 `recompute_global_config(&store)` (in
 `edgion-gateway/src/config/edgion_gateway/conf_handler_impl.rs`) iterates all
 instances, aggregates deterministically, and calls `configure_webhook_global_max`
-/ `configure_lb_degrade_default` once. It is invoked at the end of `full_set` and at
+/ `configure_link_sys_max_instances_per_kind` / `configure_lb_degrade_default`
+once. It is invoked at the end of `full_set` and at
 the end of `partial_update` (after add/update/remove are all applied), so the
 delete path restores the default automatically. The aggregate rule matches each
 field's safety direction: caps tighten (`min`), degrade mode is conservative (`max`).
@@ -48,7 +50,9 @@ field's safety direction: caps tighten (`min`), degrade mode is conservative (`m
 **3. Default constants are pinned to the atomics' initial values.**
 
 `DEFAULT_WEBHOOK_MAX_RESPONSE_BYTES = 16384` mirrors `WEBHOOK_GLOBAL_MAX`'s init
-and the schema `default_webhook_max_response_bytes`; `DEFAULT_LB_DEGRADE_THRESHOLD =
+and the schema `default_webhook_max_response_bytes`; `DEFAULT_LINK_SYS_MAX_INSTANCES_PER_KIND
+= 200` mirrors `LINK_SYS_MAX_INSTANCES_PER_KIND`'s init and the schema
+`LINK_SYS_DEFAULT_MAX_INSTANCES_PER_KIND`; `DEFAULT_LB_DEGRADE_THRESHOLD =
 0` mirrors `GLOBAL_DEFAULT` (panic disabled / opt-in). A comment on each constant
 records the cross-file invariant.
 

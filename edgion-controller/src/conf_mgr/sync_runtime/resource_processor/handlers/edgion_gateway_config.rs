@@ -51,6 +51,7 @@ impl ProcessorHandler<EdgionGatewayConfig> for EdgionGatewayConfigHandler {
         // dnsResolver `linkSysRef` and `servers` are mutually exclusive (the
         // structural CRD cannot express `oneOf`, so it is enforced here).
         errors.extend(egc.spec.validate_dns_resolver());
+        errors.extend(egc.spec.validate_link_sys());
         errors.extend(egc.spec.validate_request_body());
         errors.extend(egc.spec.validate_forwarded_headers());
         errors.extend(egc.spec.validate_real_ip());

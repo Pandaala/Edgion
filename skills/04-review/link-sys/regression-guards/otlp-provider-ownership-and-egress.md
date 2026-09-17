@@ -33,10 +33,10 @@ URI secrets observable. A key-only sender cannot recreate a transport or probe.
   Secret-only map. Authorization metadata is marked sensitive. SDK internal logs
   are disabled and shared mandatory filtering suppresses tonic::transport/rustls/h2
   diagnostics even under RUST_LOG=trace.
-- A stable owner publishes active generations only after a bounded candidate empty
-  OTLP Export succeeds and the revision is still current. Invalid/unresolved/unreachable updates keep
-  old service. Independent pending and active-probe deadlines prevent a candidate
-  timeout from incorrectly marking the active connection unhealthy.
+- The shared per-key persistent runner publishes an immutable OTLP generation
+  only after its bounded empty Export succeeds and desired fingerprint is still
+  current. Invalid, unresolved, or unreachable replacements keep old service.
+  Candidate initialization and active health probing remain generation-local.
 - Endpoint timeout covers headers only. The narrow SDK exporter decorator must
   bound the whole future and poll with captured runtime context on the SDK std
   thread. Retirement cancellation terminates stalled-body futures and queued exports.
@@ -44,14 +44,14 @@ URI secrets observable. A key-only sender cannot recreate a transport or probe.
   keep its cancellation timer owned by that task, join the SDK thread, and signal
   exporter/channel release only after dropping the inner exporter. Limit retirement
   to one generation; cancelled/concurrent shutdown waiters cannot orphan cleanup.
-- Full/partial desired updates execute in the synchronous source-event critical
-  section before generic async dispatch: a later unrelated delta cannot suppress
-  an earlier OTLP key. Type changes, removals and process shutdown use the same
-  owner lifecycle. OTLP store stats/counts participate in residue detection.
+- Full/partial desired updates execute in the same ordered generic dispatch task
+  as Redis. A later unrelated delta cannot suppress an earlier OTLP key. Type
+  changes, removals, and process shutdown use the persistent-runner lifecycle.
+  OTLP store stats/counts report runner keys and participate in residue detection.
 
 ## Source-order and reference-identity regressions
 
-OTLP-REVIEW-001 exposed a gap outside the OTLP owner: a resource changed from a
+OTLP-REVIEW-001 exposed a gap outside the former OTLP owner: a resource changed from a
 foreign provider to OTLP could keep its old typed client if an unrelated later
 delta reached the global Webhook sequence fence first. All three production
 source callbacks now reserve generic async admission through `spawn_ordered_dispatch`
@@ -76,8 +76,8 @@ still independently validates before activation; the original defect was wrong
 Secret resolution/transport, not a ReferenceGrant bypass or credential egress.
 
 Regression tests in `runtime/store.rs` force successor polling before gated
-OTLP full/partial dispatch, check all foreign typed maps and the callable Webhook
-registry, and verify later same-key recreation and predecessor panic. Provider
+generic full/partial OTLP dispatch, check all foreign typed maps and the callable
+Webhook registry, and verify later same-key recreation and predecessor panic. Provider
 constructors remain uninitialized, so these tests open no network connections.
 Controller handler tests cover invalid group/kind for auth, CA, and mTLS with
 same-name Secrets and permissive grants, stale-material cleanup, valid sibling
@@ -127,9 +127,9 @@ The product still excludes OTLP/HTTP, tracing/metric export and durable replay.
 
 Round 1 lifecycle review found startup-error drain and rapid remove/recreate
 retirement gaps. An armed startup guard now covers all errors after watches start.
-Per-key removal tombstones prevent overlapping new owners until cleanup joins,
-then replay only the latest authoritative source under the source-event fence.
-Retiring counts remain accurate while process shutdown owns the cleanup JoinSet.
+The persistent runner and per-key deleting state prevent overlapping generations
+until cleanup joins, then apply only the latest deferred desired state. Retiring
+counts remain accurate while process shutdown owns the cleanup JoinSet.
 Fresh regression evidence is recorded in the task implementation report.
 
 LinkSys auth.secretRef declares all four operator fields (name, namespace, group,

@@ -1,6 +1,7 @@
 //! RedisLinkClient — runtime Redis client wrapper.
 //!
-//! Built from LinkSys CRD config, managed by LinkSysStore (ConfHandler-driven).
+//! Built from LinkSys CRD config. The persistent Redis runner owns construct /
+//! init / retire; this type is the published small handle.
 //! Wraps a `fred::clients::Pool` which internally manages:
 //! - Connection pool (round-robin, configurable size)
 //! - Automatic reconnection (exponential backoff)
@@ -18,13 +19,12 @@ use fred::types::Resolve;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
-use async_trait::async_trait;
-
 use crate::link_sys::credential::CredentialState;
-use crate::link_sys::lifecycle::LinkSysLifecycle;
+use crate::link_sys::runtime::apply::{ConnectionCoverage, RuntimeFingerprint};
 use crate::link_sys::runtime::health_probe::{spawn_health_probe, ProbeConfig};
 use edgion_resources::credentials::materials::BasicAuthMaterial;
 use edgion_resources::resources::link_sys::redis::RedisClientConfig;
+use edgion_resources::resources::link_sys::{LinkSys, SystemConfig};
 
 use super::config_mapping::{build_fred_config, build_fred_pool};
 use super::resolver::redis_egress_resolver;
@@ -36,15 +36,21 @@ use super::resolver::redis_egress_resolver_for_test;
 /// This struct wraps a `fred::clients::Pool` (not a single `Client`) to support
 /// concurrent access with internal round-robin connection pooling.
 ///
-/// Lifecycle is managed by `LinkSysStore` via the `ConfHandler` pattern:
-/// - CRD created → `from_config()` + `init()` → stored in global store
-/// - CRD updated → new client built, old client shut down in background
-/// - CRD deleted → `shutdown()` called, removed from store
+/// One published generation. The runner may hold a second retiring Arc during
+/// Handover; callers always go through `get_redis_client`.
 pub struct RedisLinkClient {
     /// fred connection pool (round-robin across connections)
     pool: Pool,
     /// Human-readable name ("namespace/name")
     name: String,
+    /// Configured Fred pool member count (`pool.size`, default 8).
+    pool_size: usize,
+    /// Apply fingerprint captured at construction (D19: last-applied after publish).
+    fingerprint: RuntimeFingerprint,
+    /// Set before handover retire so the probe stops writing the shared gauge.
+    retired: Arc<AtomicBool>,
+    /// Makes [`Self::shutdown`] idempotent when delete races handover/replace.
+    shutdown_started: AtomicBool,
     /// Atomic aggregate health flag, updated by the connection-state probe.
     healthy: Arc<AtomicBool>,
     /// Shutdown signal for the aggregate connection-state probe.
@@ -78,10 +84,49 @@ impl RedisLinkClient {
         Ok(Self {
             pool,
             name: name.to_string(),
+            pool_size,
+            fingerprint: RuntimeFingerprint::unspecified(),
+            retired: Arc::new(AtomicBool::new(false)),
+            shutdown_started: AtomicBool::new(false),
             healthy: Arc::new(AtomicBool::new(false)),
             probe_shutdown: parking_lot::Mutex::new(None),
             probe_handle: parking_lot::Mutex::new(None),
         })
+    }
+
+    /// Build from a resolved Redis LinkSys, including the apply fingerprint.
+    pub(crate) fn from_linksys(name: &str, ls: &LinkSys) -> Result<Arc<Self>> {
+        let SystemConfig::Redis(config) = &ls.spec.config else {
+            anyhow::bail!("Redis from_linksys called with a non-Redis LinkSys");
+        };
+        let auth = crate::link_sys::credential::basic_state(ls);
+        let fingerprint = super::apply::fingerprint_redis(ls)?;
+        let mut client = Self::from_config(name, config, &auth)?;
+        client.fingerprint = fingerprint;
+        Ok(Arc::new(client))
+    }
+
+    pub(crate) fn runtime_fingerprint(&self) -> &RuntimeFingerprint {
+        &self.fingerprint
+    }
+
+    pub(crate) fn connection_coverage(&self) -> ConnectionCoverage {
+        ConnectionCoverage {
+            live: self
+                .pool
+                .clients()
+                .iter()
+                .filter(|client| client.is_connected())
+                .count(),
+            configured: self.pool_size,
+        }
+    }
+
+    pub(crate) fn mark_retired(&self) {
+        self.retired.store(true, Ordering::Relaxed);
+        if let Some(shutdown_tx) = self.probe_shutdown.lock().as_ref() {
+            let _ = shutdown_tx.send(true);
+        }
     }
 
     /// Initialize connection. Must be called after `from_config()`.
@@ -117,6 +162,7 @@ impl RedisLinkClient {
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
         let probe_pool = self.pool.clone();
         let probe_name = self.name.clone();
+        let probe_retired = self.retired.clone();
         let probe_handle = spawn_health_probe(
             ProbeConfig {
                 name: self.name.clone(),
@@ -131,8 +177,15 @@ impl RedisLinkClient {
             move || {
                 let pool = probe_pool.clone();
                 let name = probe_name.clone();
+                let retired = probe_retired.clone();
                 async move {
+                    if retired.load(Ordering::Relaxed) {
+                        return false;
+                    }
                     let connected = pool_has_connected_member(&pool);
+                    if retired.load(Ordering::Relaxed) {
+                        return false;
+                    }
                     // A retiring same-name generation can briefly race this
                     // writer before its probe is stopped. Refresh the current
                     // observation so the active generation self-heals the
@@ -163,10 +216,11 @@ impl RedisLinkClient {
 
     /// Graceful shutdown — disconnect all pool connections.
     pub async fn shutdown(&self) -> Result<()> {
-        tracing::info!(redis = %self.name, "Redis client shutting down");
-        if let Some(shutdown_tx) = self.probe_shutdown.lock().take() {
-            let _ = shutdown_tx.send(true);
+        if self.shutdown_started.swap(true, Ordering::AcqRel) {
+            return Ok(());
         }
+        tracing::info!(redis = %self.name, "Redis client shutting down");
+        self.mark_retired();
         let probe_handle = self.probe_handle.lock().take();
         if let Some(probe_handle) = probe_handle {
             let _ = probe_handle.await;
@@ -189,19 +243,6 @@ impl RedisLinkClient {
     pub fn pool(&self) -> &Pool {
         &self.pool
     }
-}
-
-#[async_trait]
-impl LinkSysLifecycle for RedisLinkClient {
-    async fn init(&self) -> anyhow::Result<()> {
-        RedisLinkClient::init(self).await
-    }
-
-    async fn shutdown(&self) -> anyhow::Result<()> {
-        RedisLinkClient::shutdown(self).await
-    }
-
-    // SHUTDOWN_ON_REPLACE uses the trait default value (true)
 }
 
 #[cfg(test)]
@@ -233,6 +274,9 @@ mod tests {
         let client = RedisLinkClient::from_config("test/redis", &config, &CredentialState::NotRequired).unwrap();
 
         assert!(!pool_has_connected_member(client.pool()));
+        let coverage = client.connection_coverage();
+        assert_eq!(coverage.configured, 2);
+        assert_eq!(coverage.live, 0);
     }
 
     #[tokio::test]

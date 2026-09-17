@@ -7,7 +7,6 @@ use std::time::Duration;
 
 use anyhow::Result;
 use arc_swap::ArcSwapOption;
-use async_trait::async_trait;
 use chrono::Utc;
 use dashmap::DashMap;
 use rskafka::client::partition::UnknownTopicHandling;
@@ -18,13 +17,14 @@ use rskafka::record::Record;
 use tokio::sync::mpsc;
 
 use crate::link_sys::credential::{CredentialState, ResolvedCredential};
-use crate::link_sys::lifecycle::LinkSysLifecycle;
+use crate::link_sys::runtime::apply::{ConnectionCoverage, RuntimeFingerprint};
 use crate::link_sys::runtime::health_probe::flip_log_allowed;
 use edgion_resources::resources::common::TlsConfig;
 use edgion_resources::resources::link_sys::kafka::{
     KafkaClientConfig, DEFAULT_KAFKA_CHANNEL_SIZE, DEFAULT_KAFKA_LINGER_MS, DEFAULT_KAFKA_MAX_PENDING_BYTES,
     DEFAULT_KAFKA_MAX_PENDING_RECORDS, DEFAULT_KAFKA_MAX_TOPICS,
 };
+use edgion_resources::resources::link_sys::{LinkSys, SystemConfig};
 
 const MAX_BATCH_SIZE: usize = 1_000_000;
 /// Consecutive probe failures before the probe rebuilds `inner_client` from the
@@ -149,6 +149,14 @@ struct TopicEntry {
 /// any other shared state. A stale failure CAS can spuriously flip an
 /// already-recovered flag back to unhealthy; this is acceptable because the flag is
 /// corrected on the next successful produce.
+fn emit_kafka_health(retired: &AtomicBool, name: &str, ok: bool) {
+    if retired.load(Ordering::Relaxed) {
+        return;
+    }
+    crate::observe::metrics::registry::record_link_sys_health(name, ok);
+    crate::observe::metrics::registry::record_link_sys_health_flip(name, ok);
+}
+
 fn record_produce_result(healthy: &AtomicBool, ok: bool) -> bool {
     if ok {
         healthy
@@ -198,6 +206,9 @@ pub struct KafkaLinkClient {
     shutdown_tx: parking_lot::Mutex<Option<tokio::sync::watch::Sender<bool>>>,
     /// Background health probe handle; aborted in shutdown so a probe flip can't race the healthy=false write.
     probe_handle: parking_lot::Mutex<Option<tokio::task::JoinHandle<()>>>,
+    fingerprint: RuntimeFingerprint,
+    retired: Arc<AtomicBool>,
+    shutdown_started: AtomicBool,
 }
 
 impl KafkaLinkClient {
@@ -247,7 +258,47 @@ impl KafkaLinkClient {
             last_flip_log_ms: Arc::new(AtomicU64::new(0)),
             shutdown_tx: parking_lot::Mutex::new(None),
             probe_handle: parking_lot::Mutex::new(None),
+            fingerprint: RuntimeFingerprint::unspecified(),
+            retired: Arc::new(AtomicBool::new(false)),
+            shutdown_started: AtomicBool::new(false),
         })
+    }
+
+    /// Build from a resolved Kafka LinkSys, including the apply fingerprint.
+    pub(crate) fn from_linksys(name: &str, ls: &LinkSys) -> Result<Arc<Self>> {
+        let SystemConfig::Kafka(config) = &ls.spec.config else {
+            anyhow::bail!("Kafka from_linksys called with a non-Kafka LinkSys");
+        };
+        let auth = crate::link_sys::credential::resolved_state(ls);
+        let fingerprint = super::apply::fingerprint_kafka(ls)?;
+        let mut client = Self::from_config(name, config, &auth)?;
+        client.fingerprint = fingerprint;
+        Ok(Arc::new(client))
+    }
+
+    pub(crate) fn runtime_fingerprint(&self) -> &RuntimeFingerprint {
+        &self.fingerprint
+    }
+
+    pub(crate) fn connection_coverage(&self) -> ConnectionCoverage {
+        let configured = self.config.brokers.len().max(1);
+        let live = if self.inner_client.load_full().is_some() && self.healthy() {
+            self.config.brokers.len()
+        } else {
+            0
+        };
+        ConnectionCoverage { live, configured }
+    }
+
+    pub(crate) fn mark_retired(&self) {
+        self.retired.store(true, Ordering::Relaxed);
+        if let Some(handle) = self.probe_handle.lock().take() {
+            handle.abort();
+        }
+    }
+
+    pub fn name(&self) -> &str {
+        &self.name
     }
 
     /// Build a connected rskafka client from brokers + resolved auth. Shared by
@@ -291,8 +342,11 @@ impl KafkaLinkClient {
         self.healthy.load(Ordering::Relaxed)
     }
 
-    /// Non-blocking send to Kafka topic. Returns Err if not initialized or channel full.
+    /// Non-blocking send to Kafka topic. Returns Err if not initialized, retired, or channel full.
     pub fn try_produce(&self, topic: &str, data: String) -> Result<()> {
+        if self.retired.load(Ordering::Relaxed) {
+            anyhow::bail!("Kafka [{}] retired", self.name);
+        }
         let client = self.inner_client.load_full();
         if client.is_none() {
             anyhow::bail!("Kafka [{}] not initialized", self.name);
@@ -327,8 +381,19 @@ impl KafkaLinkClient {
                 let name = self.name.clone();
                 let healthy = Arc::clone(&self.healthy);
                 let last_flip_log_ms = Arc::clone(&self.last_flip_log_ms);
+                let retired = Arc::clone(&self.retired);
                 tokio::spawn(async move {
-                    Self::run_producer_task(client, topic_owned, rx, linger_ms, name, healthy, last_flip_log_ms).await;
+                    Self::run_producer_task(
+                        client,
+                        topic_owned,
+                        rx,
+                        linger_ms,
+                        name,
+                        healthy,
+                        last_flip_log_ms,
+                        retired,
+                    )
+                    .await;
                 });
                 entry.insert(TopicEntry {
                     sender: tx.clone(),
@@ -368,6 +433,7 @@ impl KafkaLinkClient {
         name: String,
         healthy: Arc<AtomicBool>,
         last_flip_log_ms: Arc<AtomicU64>,
+        retired: Arc<AtomicBool>,
     ) {
         let Some(client) = client else {
             tracing::error!(kafka = %name, %topic, "producer task started with no client");
@@ -383,7 +449,9 @@ impl KafkaLinkClient {
                 healthy.store(false, Ordering::Relaxed);
                 // Keep the gauge in sync with the flag: the task exits below and would
                 // otherwise leave the gauge stuck at the init() baseline of 1.
-                crate::observe::metrics::registry::record_link_sys_health(&name, false);
+                if !retired.load(Ordering::Relaxed) {
+                    crate::observe::metrics::registry::record_link_sys_health(&name, false);
+                }
                 // The task exits here, closing its channel; `try_produce`'s
                 // self-heal evicts the dead entry so the next produce respawns.
                 // Broker-level recovery is owned by the background probe.
@@ -407,8 +475,7 @@ impl KafkaLinkClient {
             match result {
                 Ok(Ok(_)) => {
                     if record_produce_result(&healthy, true) {
-                        crate::observe::metrics::registry::record_link_sys_health(&name, true);
-                        crate::observe::metrics::registry::record_link_sys_health_flip(&name, true);
+                        emit_kafka_health(&retired, &name, true);
                         if flip_log_allowed(&last_flip_log_ms) {
                             tracing::info!(kafka = %name, %topic, "Kafka recovered: produce succeeded");
                         }
@@ -416,8 +483,7 @@ impl KafkaLinkClient {
                 }
                 Ok(Err(e)) => {
                     if record_produce_result(&healthy, false) {
-                        crate::observe::metrics::registry::record_link_sys_health(&name, false);
-                        crate::observe::metrics::registry::record_link_sys_health_flip(&name, false);
+                        emit_kafka_health(&retired, &name, false);
                         if flip_log_allowed(&last_flip_log_ms) {
                             tracing::warn!(kafka = %name, %topic, "Kafka degraded: produce failed: {}", e);
                         }
@@ -430,8 +496,7 @@ impl KafkaLinkClient {
                     // The in-flight record and any messages still buffered in rx are lost
                     // when the task exits (degraded behavior, acceptable for a fire-and-forget sink).
                     if record_produce_result(&healthy, false) {
-                        crate::observe::metrics::registry::record_link_sys_health(&name, false);
-                        crate::observe::metrics::registry::record_link_sys_health_flip(&name, false);
+                        emit_kafka_health(&retired, &name, false);
                     }
                     tracing::warn!(
                         kafka = %name, %topic,
@@ -445,9 +510,8 @@ impl KafkaLinkClient {
     }
 }
 
-#[async_trait]
-impl LinkSysLifecycle for KafkaLinkClient {
-    async fn init(&self) -> Result<()> {
+impl KafkaLinkClient {
+    pub async fn init(&self) -> Result<()> {
         let client = Self::build_kafka_client(&self.config.brokers, &self.auth, &self.config).await?;
         self.inner_client.store(Some(Arc::new(client)));
         self.healthy.store(true, Ordering::Relaxed);
@@ -475,6 +539,8 @@ impl LinkSysLifecycle for KafkaLinkClient {
                 let config = self.config.clone();
                 let name = self.name.clone();
                 let fail_count = Arc::new(AtomicU32::new(0));
+                let retired = Arc::clone(&self.retired);
+                let healthy = Arc::clone(&self.healthy);
                 move || {
                     let inner = Arc::clone(&inner);
                     let brokers = brokers.clone();
@@ -482,7 +548,14 @@ impl LinkSysLifecycle for KafkaLinkClient {
                     let config = config.clone();
                     let name = name.clone();
                     let fail_count = Arc::clone(&fail_count);
+                    let retired = Arc::clone(&retired);
+                    let healthy = Arc::clone(&healthy);
                     async move {
+                        if retired.load(Ordering::Relaxed) {
+                            // Echo the current flag so apply_health_result is a no-op
+                            // and cannot overwrite a successor generation's gauge.
+                            return healthy.load(Ordering::Relaxed);
+                        }
                         // Pre-increment BEFORE any await so a driver-timeout cancellation at the
                         // list_topics().await below still counts as a failure: rskafka's metadata
                         // call can hang indefinitely on dead brokers, and the driver cancels the
@@ -527,7 +600,11 @@ impl LinkSysLifecycle for KafkaLinkClient {
         Ok(())
     }
 
-    async fn shutdown(&self) -> Result<()> {
+    pub async fn shutdown(&self) -> Result<()> {
+        if self.shutdown_started.swap(true, Ordering::AcqRel) {
+            return Ok(());
+        }
+        self.mark_retired();
         if let Some(tx) = self.shutdown_tx.lock().take() {
             let _ = tx.send(true);
         }
@@ -588,6 +665,28 @@ mod tests {
         assert_eq!(client.queue_budget.max_records, DEFAULT_KAFKA_MAX_PENDING_RECORDS);
         assert_eq!(client.queue_budget.max_bytes, DEFAULT_KAFKA_MAX_PENDING_BYTES);
         assert_eq!(client.linger_ms, DEFAULT_KAFKA_LINGER_MS);
+    }
+
+    #[test]
+    fn try_produce_rejects_retired_generation() {
+        let config = KafkaClientConfig {
+            brokers: vec!["broker1:9092".to_string()],
+            sasl: None,
+            tls: None,
+            channel_size: None,
+            max_topics: None,
+            max_pending_records: None,
+            max_pending_bytes: None,
+            linger_ms: None,
+        };
+        let client = KafkaLinkClient::from_config("default/kafka-main", &config, &CredentialState::NotRequired)
+            .expect("valid kafka config");
+        client.mark_retired();
+        let error = client
+            .try_produce("logs", "payload".to_string())
+            .err()
+            .expect("retired generation must not accept produce");
+        assert!(error.to_string().contains("retired"));
     }
 
     #[test]

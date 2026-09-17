@@ -4,22 +4,28 @@
 //! generic `LinkSysLifecycle` trait. A Webhook candidate must be fully built
 //! before publication, then committed through the manager's sequence-checked
 //! mutation guard before the runtime bookkeeping map is updated. Keeping this
-//! type outside `LinkSysLifecycle` makes accidental use of the generic spawned
-//! init/shutdown helpers a compile-time error.
+//! type outside `LinkSysLifecycle` keeps Webhook off the persistent-runner
+//! `ApplyOwner` path used by Redis, Etcd, Elasticsearch, Kafka, and OTLP.
 
 use crate::link_sys::providers::webhook::manager::PreparedWebhookEntry;
+use crate::link_sys::runtime::apply::RuntimeFingerprint;
 
 pub struct WebhookLinkClient {
     prepared: PreparedWebhookEntry,
+    fingerprint: RuntimeFingerprint,
 }
 
 impl WebhookLinkClient {
-    pub(crate) fn from_prepared(prepared: PreparedWebhookEntry) -> Self {
-        Self { prepared }
+    pub(crate) fn from_prepared(prepared: PreparedWebhookEntry, fingerprint: RuntimeFingerprint) -> Self {
+        Self { prepared, fingerprint }
     }
 
     pub(crate) fn prepared_entry(&self) -> PreparedWebhookEntry {
         self.prepared.clone()
+    }
+
+    pub(crate) fn runtime_fingerprint(&self) -> &RuntimeFingerprint {
+        &self.fingerprint
     }
 }
 
@@ -27,6 +33,7 @@ impl WebhookLinkClient {
 mod tests {
     use super::*;
     use crate::link_sys::providers::webhook::manager::WebhookManager;
+    use crate::link_sys::runtime::apply::RuntimeFingerprint;
     use edgion_resources::resources::link_sys::webhook::{
         ExternalHttpConnection, WebhookServiceConfig, WebhookServiceRef, WebhookTarget,
     };
@@ -57,7 +64,7 @@ mod tests {
         let prepared = mutation
             .prepare("ns/wh", config(), None)
             .expect("valid webhook prepares");
-        let client = WebhookLinkClient::from_prepared(prepared);
+        let client = WebhookLinkClient::from_prepared(prepared, RuntimeFingerprint::unspecified());
 
         let first = client.prepared_entry();
         let second = client.prepared_entry();

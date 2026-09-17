@@ -825,10 +825,11 @@ match &config.output {
 ## Shared OTLP ownership
 
 `OtlpLogSender` retains a validated LinkSys key and resolves `OtlpLinkClient` on each
-send. The owner publishes immutable active generations while retaining working
-service through failed updates. A single canonical health loop prepares pending
-connections and probes active TCP reachability. Native tonic 0.14 uses the shared
-DNS/egress/TLS mechanisms; workspace tonic 0.12 consumers remain separate.
+send. The shared per-key persistent runner publishes an immutable generation after
+a bounded empty Export succeeds, and keeps serving the previous generation through
+failed replacements. Each published generation owns its probe and health flag.
+Native tonic 0.14 uses the shared DNS/egress/TLS mechanisms; workspace tonic 0.12
+consumers remain separate.
 
 The SDK exporter decorator bounds the entire unary export, including response body,
 and supports retirement cancellation. A retained cleanup task shuts down and joins

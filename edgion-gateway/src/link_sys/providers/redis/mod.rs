@@ -9,7 +9,7 @@
 //! # Usage
 //!
 //! ```ignore
-//! use crate::link_sys::providers::redis::get_redis_client;
+//! use crate::link_sys::get_redis_client;
 //!
 //! if let Some(client) = get_redis_client("default/redis-main") {
 //!     let val = client.get("my-key").await?;
@@ -17,11 +17,13 @@
 //! }
 //! ```
 
+pub(crate) mod apply;
 pub mod client;
 pub mod config_mapping;
 pub mod ops;
 mod resolver;
 
 // Re-export key types for convenient access
+pub(crate) use apply::RedisApply;
 pub use client::RedisLinkClient;
 pub use ops::{LockOptions, RedisLockGuard};

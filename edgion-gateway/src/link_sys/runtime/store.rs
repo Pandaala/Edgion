@@ -4,28 +4,33 @@
 //! configuration changes to the appropriate sub-module managers.
 //! Follows the same ArcSwap pattern as PluginStore.
 //!
-//! Redis runtime clients are stored in a separate ArcSwap store for typed access:
-//! callers use `get_redis_client("namespace/name")` to obtain a ready-to-use client.
+//! Redis, Etcd, Elasticsearch, Kafka, and OTLP persistent runners live in
+//! their provider runtime stores.
+//! Callers use `get_*_client("namespace/name")` for the published small handle (D14).
 
 use arc_swap::ArcSwap;
 use futures::future::{BoxFuture, Shared};
 use futures::FutureExt;
 use parking_lot::Mutex;
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, LazyLock};
 
 use edgion_resources::resources::link_sys::LinkSys;
 
 use crate::link_sys::credential;
-use crate::link_sys::lifecycle::LinkSysLifecycle;
-use crate::link_sys::providers::elasticsearch::EsLinkClient;
-use crate::link_sys::providers::etcd::EtcdLinkClient;
-use crate::link_sys::providers::kafka::KafkaLinkClient;
-use crate::link_sys::providers::otlp::OtlpLinkClient;
-use crate::link_sys::providers::redis::RedisLinkClient;
-use crate::link_sys::providers::webhook::{get_webhook_manager, WebhookLinkClient, WebhookManager};
+use crate::link_sys::providers::elasticsearch::{EsApply, EsLinkClient};
+use crate::link_sys::providers::etcd::{EtcdApply, EtcdLinkClient};
+use crate::link_sys::providers::kafka::{KafkaApply, KafkaLinkClient};
+use crate::link_sys::providers::otlp::{OtlpApply, OtlpLinkClient};
+use crate::link_sys::providers::redis::{RedisApply, RedisLinkClient};
+use crate::link_sys::providers::webhook::{
+    fingerprint_webhook, get_webhook_manager, WebhookLinkClient, WebhookManager,
+};
+use crate::link_sys::runtime::apply::RuntimeFingerprint;
+use crate::link_sys::runtime::runner::PersistentRunner;
 use crate::link_sys::LinkSysHealth;
+use crate::observe::metrics::registry::record_link_sys_health;
 
 // ============================================================
 // Type aliases
@@ -124,9 +129,8 @@ impl LinkSysStore {
                 &LINK_SYS_SOURCE_EVENT_LOCK,
                 |sequence, dispatch_data| {
                     if let Ok(handle) = tokio::runtime::Handle::try_current() {
-                        dispatch_otlp_full(&dispatch_data);
                         spawn_ordered_dispatch(&handle, &LINK_SYS_DISPATCH_TAIL, async move {
-                            dispatch_full_set(sequence, &dispatch_data).await;
+                            dispatch_full_set(sequence, &dispatch_data, false).await;
                         });
                     } else {
                         // Reachable only outside a tokio runtime (currently: the four sync
@@ -156,7 +160,6 @@ impl LinkSysStore {
                 &LINK_SYS_SOURCE_EVENT_LOCK,
                 |sequence, dispatch_data, remove_set| {
                     if let Ok(handle) = tokio::runtime::Handle::try_current() {
-                        dispatch_otlp_partial(&dispatch_data, &remove_set);
                         spawn_ordered_dispatch(&handle, &LINK_SYS_DISPATCH_TAIL, async move {
                             dispatch_partial_update(sequence, &dispatch_data, &remove_set).await;
                         });
@@ -186,9 +189,8 @@ impl LinkSysStore {
                 &LINK_SYS_SOURCE_EVENT_LOCK,
                 |sequence, dispatch_data| {
                     if let Ok(handle) = tokio::runtime::Handle::try_current() {
-                        dispatch_otlp_full(&dispatch_data);
                         spawn_ordered_dispatch(&handle, &LINK_SYS_DISPATCH_TAIL, async move {
-                            dispatch_full_set(sequence, &dispatch_data).await;
+                            dispatch_full_set(sequence, &dispatch_data, true).await;
                         });
                     } else {
                         tracing::error!(
@@ -381,273 +383,853 @@ impl<C> ProviderRuntimeStore<C> {
 }
 
 // ============================================================
+// LinkSys instance cap (process-global, aggregated from EGC)
+// ============================================================
+
+/// Default `linkSys.maxInstancesPerKind`. Must mirror the schema default and
+/// `DEFAULT_LINK_SYS_MAX_INSTANCES_PER_KIND` in `conf_handler_impl.rs`.
+const DEFAULT_LINK_SYS_MAX_INSTANCES_PER_KIND: usize = 200;
+
+/// Inclusive upper bound. Must mirror `LINK_SYS_MAX_INSTANCES_PER_KIND_LIMIT`
+/// in resources / conf_handler.
+const LINK_SYS_MAX_INSTANCES_PER_KIND_LIMIT: usize = 10_000;
+
+static LINK_SYS_MAX_INSTANCES_PER_KIND: AtomicUsize = AtomicUsize::new(DEFAULT_LINK_SYS_MAX_INSTANCES_PER_KIND);
+
+/// Read the current per-kind instance cap.
+pub(crate) fn get_link_sys_max_instances_per_kind() -> usize {
+    LINK_SYS_MAX_INSTANCES_PER_KIND.load(Ordering::Relaxed)
+}
+
+/// Set the per-kind instance cap (called when EdgionGatewayConfig is updated).
+pub(crate) fn configure_link_sys_max_instances_per_kind(n: usize) {
+    let n = n.clamp(1, LINK_SYS_MAX_INSTANCES_PER_KIND_LIMIT);
+    LINK_SYS_MAX_INSTANCES_PER_KIND.store(n, Ordering::Relaxed);
+    tracing::info!(cap = n, "LinkSys max instances per kind updated");
+}
+
+// ============================================================
 // Redis runtime store
 // ============================================================
 
-/// Global runtime store for Redis clients, keyed by "namespace/name".
-static REDIS_RUNTIME: LazyLock<ProviderRuntimeStore<RedisLinkClient>> = LazyLock::new(ProviderRuntimeStore::new);
+/// Global runtime store for Redis persistent runners, keyed by "namespace/name".
+static REDIS_RUNTIME: LazyLock<ProviderRuntimeStore<PersistentRunner<RedisApply>>> =
+    LazyLock::new(ProviderRuntimeStore::new);
+static REDIS_DELETING: LazyLock<Mutex<HashSet<String>>> = LazyLock::new(|| Mutex::new(HashSet::new()));
+type RedisPendingApply = HashMap<String, (Arc<LinkSys>, bool)>;
+static REDIS_PENDING: LazyLock<Mutex<RedisPendingApply>> = LazyLock::new(|| Mutex::new(HashMap::new()));
+static REDIS_APPLY_LOCK: Mutex<()> = Mutex::new(());
 
 /// Get a Redis client by LinkSys name ("namespace/name").
 ///
-/// This is the primary API for plugins and other callers.
-/// Returns None if the LinkSys resource doesn't exist or isn't a Redis type.
+/// Returns None until the runner has successfully published a generation (D14).
 pub fn get_redis_client(name: &str) -> Option<Arc<RedisLinkClient>> {
-    REDIS_RUNTIME.get(name)
+    REDIS_RUNTIME.get(name).and_then(|runner| runner.current())
 }
 
-/// List all registered Redis client names.
+/// List all registered Redis runner keys (including connecting, unpublished keys).
 pub fn list_redis_clients() -> Vec<String> {
     REDIS_RUNTIME.list()
 }
 
-/// Number of Redis link clients currently in the runtime.
+/// Number of Redis runners currently in the runtime (D10: runner keys, not published clients).
 pub fn redis_client_count() -> usize {
     REDIS_RUNTIME.count()
 }
 
-/// Health check all registered Redis clients.
+/// True when a runner is registered for this key, including connecting / unpublished.
+pub fn redis_runner_exists(name: &str) -> bool {
+    REDIS_RUNTIME.get(name).is_some()
+}
+
+/// Health check all published Redis clients. Connecting runners with an empty
+/// small-handle slot are skipped (D10).
 pub async fn health_check_all_redis() -> Vec<LinkSysHealth> {
-    let clients = REDIS_RUNTIME.values();
+    let clients: Vec<_> = REDIS_RUNTIME
+        .values()
+        .into_iter()
+        .filter_map(|runner| runner.current())
+        .collect();
     futures::future::join_all(clients.into_iter().map(|c| async move { c.health_status().await })).await
+}
+
+fn apply_redis(key: &str, ls: &LinkSys, forced: bool) {
+    let _guard = REDIS_APPLY_LOCK.lock();
+    apply_redis_locked(key, ls, forced);
+}
+
+fn apply_redis_locked(key: &str, ls: &LinkSys, forced: bool) {
+    let (ready, tls_ok, auth) = credential_readiness(ls, credential::basic_state);
+    if !ready {
+        if REDIS_DELETING.lock().contains(key) {
+            REDIS_PENDING.lock().remove(key);
+            tracing::info!(
+                key,
+                label = "Redis",
+                auth_kind = auth.kind(),
+                tls_ready = tls_ok,
+                existing = false,
+                "LinkSys not ready; dropping deferred Redis apply"
+            );
+            return;
+        }
+        if let Some(runner) = REDIS_RUNTIME.get(key) {
+            tracing::info!(
+                key,
+                label = "Redis",
+                auth_kind = auth.kind(),
+                tls_ready = tls_ok,
+                existing = true,
+                "LinkSys not ready; keeping existing client"
+            );
+            runner.post_not_ready();
+        } else {
+            tracing::info!(
+                key,
+                label = "Redis",
+                auth_kind = auth.kind(),
+                tls_ready = tls_ok,
+                existing = false,
+                "LinkSys not ready; skipping client build"
+            );
+        }
+        return;
+    }
+    if REDIS_DELETING.lock().contains(key) {
+        REDIS_PENDING
+            .lock()
+            .insert(key.to_string(), (Arc::new(ls.clone()), forced));
+        tracing::info!(
+            key,
+            label = "Redis",
+            "deferring Redis apply until previous runner finishes joining"
+        );
+        return;
+    }
+    let runner = match REDIS_RUNTIME.get(key) {
+        Some(runner) => runner,
+        None => {
+            // Live runners plus draining joiners. Join replay and dispatch
+            // share REDIS_APPLY_LOCK so check-then-insert is atomic.
+            let in_flight = REDIS_RUNTIME.count() + REDIS_DELETING.lock().len();
+            let cap = get_link_sys_max_instances_per_kind();
+            if in_flight >= cap {
+                tracing::warn!(
+                    key,
+                    label = "Redis",
+                    current = in_flight,
+                    cap,
+                    "LinkSys instance cap reached; refusing new Redis runner"
+                );
+                return;
+            }
+            let runner = PersistentRunner::<RedisApply>::spawn(key.to_string());
+            REDIS_RUNTIME.insert(key.to_string(), runner.clone());
+            runner
+        }
+    };
+    runner.post_ready(Arc::new(ls.clone()), forced);
+}
+
+fn delete_redis_runner(key: &str) {
+    let _guard = REDIS_APPLY_LOCK.lock();
+    delete_redis_runner_locked(key);
+}
+
+fn delete_redis_runner_locked(key: &str) {
+    REDIS_PENDING.lock().remove(key);
+    let Some(runner) = REDIS_RUNTIME.remove(key) else {
+        return;
+    };
+    runner.begin_delete();
+    REDIS_DELETING.lock().insert(key.to_string());
+    let deleted_key = key.to_string();
+    tokio::spawn(async move {
+        runner.await_join().await;
+        let _guard = REDIS_APPLY_LOCK.lock();
+        REDIS_DELETING.lock().remove(&deleted_key);
+        let pending = REDIS_PENDING.lock().remove(&deleted_key);
+        if let Some((ls, forced)) = pending {
+            if REDIS_RUNTIME.get(&deleted_key).is_none() {
+                apply_redis_locked(&deleted_key, &ls, forced);
+            }
+        }
+    });
+}
+
+fn retain_redis_runners(present: &HashSet<String>) {
+    for key in REDIS_RUNTIME.list() {
+        if !present.contains(&key) {
+            delete_redis_runner(&key);
+        }
+    }
+    let _guard = REDIS_APPLY_LOCK.lock();
+    REDIS_PENDING.lock().retain(|k, _| present.contains(k));
+}
+
+#[cfg(test)]
+fn seed_published_redis(key: String, client: Arc<RedisLinkClient>) {
+    let runner = PersistentRunner::<RedisApply>::spawn_with_published(key.clone(), client);
+    REDIS_RUNTIME.insert(key, runner);
 }
 
 // ============================================================
 // Etcd runtime store
 // ============================================================
 
-/// Global runtime store for Etcd clients, keyed by "namespace/name".
-static ETCD_RUNTIME: LazyLock<ProviderRuntimeStore<EtcdLinkClient>> = LazyLock::new(ProviderRuntimeStore::new);
+/// Global runtime store for Etcd persistent runners, keyed by "namespace/name".
+static ETCD_RUNTIME: LazyLock<ProviderRuntimeStore<PersistentRunner<EtcdApply>>> =
+    LazyLock::new(ProviderRuntimeStore::new);
+static ETCD_DELETING: LazyLock<Mutex<HashSet<String>>> = LazyLock::new(|| Mutex::new(HashSet::new()));
+type EtcdPendingApply = HashMap<String, (Arc<LinkSys>, bool)>;
+static ETCD_PENDING: LazyLock<Mutex<EtcdPendingApply>> = LazyLock::new(|| Mutex::new(HashMap::new()));
+static ETCD_APPLY_LOCK: Mutex<()> = Mutex::new(());
 
 /// Get an Etcd client by LinkSys name ("namespace/name").
 ///
-/// This is the primary API for plugins and other callers.
-/// Returns None if the LinkSys resource doesn't exist or isn't an Etcd type.
+/// Returns None until the runner has successfully published a generation (D14).
 pub fn get_etcd_client(name: &str) -> Option<Arc<EtcdLinkClient>> {
-    ETCD_RUNTIME.get(name)
+    ETCD_RUNTIME.get(name).and_then(|runner| runner.current())
 }
 
-/// List all registered Etcd client names.
+/// List all registered Etcd runner keys (including connecting, unpublished keys).
 pub fn list_etcd_clients() -> Vec<String> {
     ETCD_RUNTIME.list()
 }
 
-/// Number of Etcd link clients currently in the runtime.
+/// Number of Etcd runners currently in the runtime (D10: runner keys, not published clients).
 pub fn etcd_client_count() -> usize {
     ETCD_RUNTIME.count()
 }
 
-/// Health check all registered Etcd clients.
+/// True when a runner is registered for this key, including connecting / unpublished.
+pub fn etcd_runner_exists(name: &str) -> bool {
+    ETCD_RUNTIME.get(name).is_some()
+}
+
+/// Health check all published Etcd clients. Connecting runners with an empty
+/// small-handle slot are skipped (D10).
 pub async fn health_check_all_etcd() -> Vec<LinkSysHealth> {
-    let clients = ETCD_RUNTIME.values();
+    let clients: Vec<_> = ETCD_RUNTIME
+        .values()
+        .into_iter()
+        .filter_map(|runner| runner.current())
+        .collect();
     futures::future::join_all(clients.into_iter().map(|c| async move { c.health_status().await })).await
+}
+
+fn apply_etcd(key: &str, ls: &LinkSys, forced: bool) {
+    let _guard = ETCD_APPLY_LOCK.lock();
+    apply_etcd_locked(key, ls, forced);
+}
+
+fn apply_etcd_locked(key: &str, ls: &LinkSys, forced: bool) {
+    let (ready, tls_ok, auth) = credential_readiness(ls, credential::basic_state);
+    if !ready {
+        if ETCD_DELETING.lock().contains(key) {
+            ETCD_PENDING.lock().remove(key);
+            tracing::info!(
+                key,
+                label = "Etcd",
+                auth_kind = auth.kind(),
+                tls_ready = tls_ok,
+                existing = false,
+                "LinkSys not ready; dropping deferred Etcd apply"
+            );
+            return;
+        }
+        if let Some(runner) = ETCD_RUNTIME.get(key) {
+            tracing::info!(
+                key,
+                label = "Etcd",
+                auth_kind = auth.kind(),
+                tls_ready = tls_ok,
+                existing = true,
+                "LinkSys not ready; keeping existing client"
+            );
+            runner.post_not_ready();
+        } else {
+            tracing::info!(
+                key,
+                label = "Etcd",
+                auth_kind = auth.kind(),
+                tls_ready = tls_ok,
+                existing = false,
+                "LinkSys not ready; skipping client build"
+            );
+        }
+        return;
+    }
+    if ETCD_DELETING.lock().contains(key) {
+        ETCD_PENDING
+            .lock()
+            .insert(key.to_string(), (Arc::new(ls.clone()), forced));
+        tracing::info!(
+            key,
+            label = "Etcd",
+            "deferring Etcd apply until previous runner finishes joining"
+        );
+        return;
+    }
+    let runner = match ETCD_RUNTIME.get(key) {
+        Some(runner) => runner,
+        None => {
+            let in_flight = ETCD_RUNTIME.count() + ETCD_DELETING.lock().len();
+            let cap = get_link_sys_max_instances_per_kind();
+            if in_flight >= cap {
+                tracing::warn!(
+                    key,
+                    label = "Etcd",
+                    current = in_flight,
+                    cap,
+                    "LinkSys instance cap reached; refusing new Etcd runner"
+                );
+                return;
+            }
+            let runner = PersistentRunner::<EtcdApply>::spawn(key.to_string());
+            ETCD_RUNTIME.insert(key.to_string(), runner.clone());
+            runner
+        }
+    };
+    runner.post_ready(Arc::new(ls.clone()), forced);
+}
+
+fn delete_etcd_runner(key: &str) {
+    let _guard = ETCD_APPLY_LOCK.lock();
+    delete_etcd_runner_locked(key);
+}
+
+fn delete_etcd_runner_locked(key: &str) {
+    ETCD_PENDING.lock().remove(key);
+    let Some(runner) = ETCD_RUNTIME.remove(key) else {
+        return;
+    };
+    runner.begin_delete();
+    ETCD_DELETING.lock().insert(key.to_string());
+    let deleted_key = key.to_string();
+    tokio::spawn(async move {
+        runner.await_join().await;
+        let _guard = ETCD_APPLY_LOCK.lock();
+        ETCD_DELETING.lock().remove(&deleted_key);
+        let pending = ETCD_PENDING.lock().remove(&deleted_key);
+        if let Some((ls, forced)) = pending {
+            if ETCD_RUNTIME.get(&deleted_key).is_none() {
+                apply_etcd_locked(&deleted_key, &ls, forced);
+            }
+        }
+    });
+}
+
+fn retain_etcd_runners(present: &HashSet<String>) {
+    for key in ETCD_RUNTIME.list() {
+        if !present.contains(&key) {
+            delete_etcd_runner(&key);
+        }
+    }
+    let _guard = ETCD_APPLY_LOCK.lock();
+    ETCD_PENDING.lock().retain(|k, _| present.contains(k));
+}
+
+#[cfg(test)]
+fn seed_published_etcd(key: String, client: Arc<EtcdLinkClient>) {
+    let runner = PersistentRunner::<EtcdApply>::spawn_with_published(key.clone(), client);
+    ETCD_RUNTIME.insert(key, runner);
 }
 
 // ============================================================
 // Elasticsearch runtime store
 // ============================================================
 
-/// Global runtime store for Elasticsearch clients, keyed by "namespace/name".
-static ES_RUNTIME: LazyLock<ProviderRuntimeStore<EsLinkClient>> = LazyLock::new(ProviderRuntimeStore::new);
+/// Global runtime store for Elasticsearch persistent runners, keyed by "namespace/name".
+static ES_RUNTIME: LazyLock<ProviderRuntimeStore<PersistentRunner<EsApply>>> = LazyLock::new(ProviderRuntimeStore::new);
+static ES_DELETING: LazyLock<Mutex<HashSet<String>>> = LazyLock::new(|| Mutex::new(HashSet::new()));
+type EsPendingApply = HashMap<String, (Arc<LinkSys>, bool)>;
+static ES_PENDING: LazyLock<Mutex<EsPendingApply>> = LazyLock::new(|| Mutex::new(HashMap::new()));
+static ES_APPLY_LOCK: Mutex<()> = Mutex::new(());
 
 /// Get an Elasticsearch client by LinkSys name ("namespace/name").
 ///
-/// This is the primary API for DataSender and other callers.
-/// Returns None if the LinkSys resource doesn't exist or isn't an Elasticsearch type.
+/// Returns None until the runner has successfully published a generation (D14).
 pub fn get_es_client(name: &str) -> Option<Arc<EsLinkClient>> {
-    ES_RUNTIME.get(name)
+    ES_RUNTIME.get(name).and_then(|runner| runner.current())
 }
 
-/// List all registered Elasticsearch client names.
+/// List all registered Elasticsearch runner keys (including connecting, unpublished keys).
 pub fn list_es_clients() -> Vec<String> {
     ES_RUNTIME.list()
 }
 
-/// Number of Elasticsearch link clients currently in the runtime.
+/// Number of Elasticsearch runners currently in the runtime (D10: runner keys, not published clients).
 pub fn es_client_count() -> usize {
     ES_RUNTIME.count()
 }
 
-/// Health check all registered Elasticsearch clients.
+/// True when a runner is registered for this key, including connecting / unpublished.
+pub fn es_runner_exists(name: &str) -> bool {
+    ES_RUNTIME.get(name).is_some()
+}
+
+/// Health check all published Elasticsearch clients. Connecting runners with an empty
+/// small-handle slot are skipped (D10).
 pub async fn health_check_all_es() -> Vec<LinkSysHealth> {
-    let clients = ES_RUNTIME.values();
+    let clients: Vec<_> = ES_RUNTIME
+        .values()
+        .into_iter()
+        .filter_map(|runner| runner.current())
+        .collect();
     futures::future::join_all(clients.into_iter().map(|c| async move { c.health_status().await })).await
+}
+
+fn apply_es(key: &str, ls: &LinkSys, forced: bool) {
+    let _guard = ES_APPLY_LOCK.lock();
+    apply_es_locked(key, ls, forced);
+}
+
+fn apply_es_locked(key: &str, ls: &LinkSys, forced: bool) {
+    let (ready, tls_ok, auth) = credential_readiness(ls, credential::resolved_state);
+    if !ready {
+        if ES_DELETING.lock().contains(key) {
+            ES_PENDING.lock().remove(key);
+            tracing::info!(
+                key,
+                label = "Elasticsearch",
+                auth_kind = auth.kind(),
+                tls_ready = tls_ok,
+                existing = false,
+                "LinkSys not ready; dropping deferred Elasticsearch apply"
+            );
+            return;
+        }
+        if let Some(runner) = ES_RUNTIME.get(key) {
+            tracing::info!(
+                key,
+                label = "Elasticsearch",
+                auth_kind = auth.kind(),
+                tls_ready = tls_ok,
+                existing = true,
+                "LinkSys not ready; keeping existing client"
+            );
+            runner.post_not_ready();
+        } else {
+            tracing::info!(
+                key,
+                label = "Elasticsearch",
+                auth_kind = auth.kind(),
+                tls_ready = tls_ok,
+                existing = false,
+                "LinkSys not ready; skipping client build"
+            );
+        }
+        return;
+    }
+    if ES_DELETING.lock().contains(key) {
+        ES_PENDING
+            .lock()
+            .insert(key.to_string(), (Arc::new(ls.clone()), forced));
+        tracing::info!(
+            key,
+            label = "Elasticsearch",
+            "deferring Elasticsearch apply until previous runner finishes joining"
+        );
+        return;
+    }
+    let runner = match ES_RUNTIME.get(key) {
+        Some(runner) => runner,
+        None => {
+            let in_flight = ES_RUNTIME.count() + ES_DELETING.lock().len();
+            let cap = get_link_sys_max_instances_per_kind();
+            if in_flight >= cap {
+                tracing::warn!(
+                    key,
+                    label = "Elasticsearch",
+                    current = in_flight,
+                    cap,
+                    "LinkSys instance cap reached; refusing new Elasticsearch runner"
+                );
+                return;
+            }
+            let runner = PersistentRunner::<EsApply>::spawn(key.to_string());
+            ES_RUNTIME.insert(key.to_string(), runner.clone());
+            runner
+        }
+    };
+    runner.post_ready(Arc::new(ls.clone()), forced);
+}
+
+fn delete_es_runner(key: &str) {
+    let _guard = ES_APPLY_LOCK.lock();
+    delete_es_runner_locked(key);
+}
+
+fn delete_es_runner_locked(key: &str) {
+    ES_PENDING.lock().remove(key);
+    let Some(runner) = ES_RUNTIME.remove(key) else {
+        return;
+    };
+    runner.begin_delete();
+    ES_DELETING.lock().insert(key.to_string());
+    let deleted_key = key.to_string();
+    tokio::spawn(async move {
+        runner.await_join().await;
+        let _guard = ES_APPLY_LOCK.lock();
+        ES_DELETING.lock().remove(&deleted_key);
+        let pending = ES_PENDING.lock().remove(&deleted_key);
+        if let Some((ls, forced)) = pending {
+            if ES_RUNTIME.get(&deleted_key).is_none() {
+                apply_es_locked(&deleted_key, &ls, forced);
+            }
+        }
+    });
+}
+
+fn retain_es_runners(present: &HashSet<String>) {
+    for key in ES_RUNTIME.list() {
+        if !present.contains(&key) {
+            delete_es_runner(&key);
+        }
+    }
+    let _guard = ES_APPLY_LOCK.lock();
+    ES_PENDING.lock().retain(|k, _| present.contains(k));
+}
+
+#[cfg(test)]
+fn seed_published_es(key: String, client: Arc<EsLinkClient>) {
+    let runner = PersistentRunner::<EsApply>::spawn_with_published(key.clone(), client);
+    ES_RUNTIME.insert(key, runner);
 }
 
 // ============================================================
 // Kafka runtime store
 // ============================================================
 
-/// Global runtime store for Kafka clients, keyed by "namespace/name".
-static KAFKA_RUNTIME: LazyLock<ProviderRuntimeStore<KafkaLinkClient>> = LazyLock::new(ProviderRuntimeStore::new);
+/// Global runtime store for Kafka persistent runners, keyed by "namespace/name".
+static KAFKA_RUNTIME: LazyLock<ProviderRuntimeStore<PersistentRunner<KafkaApply>>> =
+    LazyLock::new(ProviderRuntimeStore::new);
+static KAFKA_DELETING: LazyLock<Mutex<HashSet<String>>> = LazyLock::new(|| Mutex::new(HashSet::new()));
+type KafkaPendingApply = HashMap<String, (Arc<LinkSys>, bool)>;
+static KAFKA_PENDING: LazyLock<Mutex<KafkaPendingApply>> = LazyLock::new(|| Mutex::new(HashMap::new()));
+static KAFKA_APPLY_LOCK: Mutex<()> = Mutex::new(());
 
 /// Get a Kafka client by LinkSys name ("namespace/name").
 ///
-/// This is the primary API for DataSender and other callers.
-/// Returns None if the LinkSys resource doesn't exist or isn't a Kafka type.
+/// Returns None until the runner has successfully published a generation (D14).
 pub fn get_kafka_client(name: &str) -> Option<Arc<KafkaLinkClient>> {
-    KAFKA_RUNTIME.get(name)
+    KAFKA_RUNTIME.get(name).and_then(|runner| runner.current())
 }
 
-// OTLP keeps one stable owner per key. Connection generations are prepared and
-// published inside that owner, so a failed update cannot evict working service.
-static OTLP_RUNTIME: LazyLock<ProviderRuntimeStore<OtlpLinkClient>> = LazyLock::new(ProviderRuntimeStore::new);
-static OTLP_CLEANUP: LazyLock<Mutex<tokio::task::JoinSet<()>>> =
-    LazyLock::new(|| Mutex::new(tokio::task::JoinSet::new()));
-// A removed key cannot create another owner until its entire previous owner
-// has joined. Desired recreations remain in the authoritative source snapshot.
-static OTLP_RETIRING_KEYS: LazyLock<Mutex<HashSet<String>>> = LazyLock::new(|| Mutex::new(HashSet::new()));
-static OTLP_SHUTDOWN: Mutex<Option<Shared<BoxFuture<'static, ()>>>> = Mutex::new(None);
-static OTLP_STOPPING: AtomicBool = AtomicBool::new(false);
-
-pub fn get_otlp_client(name: &str) -> Option<Arc<OtlpLinkClient>> {
-    OTLP_RUNTIME.get(name)
+/// List all registered Kafka runner keys (including connecting, unpublished keys).
+pub fn list_kafka_clients() -> Vec<String> {
+    KAFKA_RUNTIME.list()
 }
 
-pub fn list_otlp_clients() -> Vec<String> {
-    OTLP_RUNTIME.list()
+/// Number of Kafka runners currently in the runtime (D10: runner keys, not published clients).
+pub fn kafka_client_count() -> usize {
+    KAFKA_RUNTIME.count()
 }
 
-pub fn otlp_client_count() -> usize {
-    OTLP_RUNTIME.count()
+/// True when a runner is registered for this key, including connecting / unpublished.
+pub fn kafka_runner_exists(name: &str) -> bool {
+    KAFKA_RUNTIME.get(name).is_some()
 }
 
-fn configure_otlp(key: &str, resource: &LinkSys) {
-    if OTLP_STOPPING.load(Ordering::Acquire) || OTLP_RETIRING_KEYS.lock().contains(key) {
+fn apply_kafka(key: &str, ls: &LinkSys, forced: bool) {
+    let _guard = KAFKA_APPLY_LOCK.lock();
+    apply_kafka_locked(key, ls, forced);
+}
+
+fn apply_kafka_locked(key: &str, ls: &LinkSys, forced: bool) {
+    let (ready, tls_ok, auth) = credential_readiness(ls, credential::resolved_state);
+    if !ready {
+        if KAFKA_DELETING.lock().contains(key) {
+            KAFKA_PENDING.lock().remove(key);
+            tracing::info!(
+                key,
+                label = "Kafka",
+                auth_kind = auth.kind(),
+                tls_ready = tls_ok,
+                existing = false,
+                "LinkSys not ready; dropping deferred Kafka apply"
+            );
+            return;
+        }
+        if let Some(runner) = KAFKA_RUNTIME.get(key) {
+            tracing::info!(
+                key,
+                label = "Kafka",
+                auth_kind = auth.kind(),
+                tls_ready = tls_ok,
+                existing = true,
+                "LinkSys not ready; keeping existing client"
+            );
+            runner.post_not_ready();
+        } else {
+            tracing::info!(
+                key,
+                label = "Kafka",
+                auth_kind = auth.kind(),
+                tls_ready = tls_ok,
+                existing = false,
+                "LinkSys not ready; skipping client build"
+            );
+        }
         return;
     }
-    let edgion_resources::resources::link_sys::SystemConfig::Otlp(config) = &resource.spec.config else {
+    if KAFKA_DELETING.lock().contains(key) {
+        KAFKA_PENDING
+            .lock()
+            .insert(key.to_string(), (Arc::new(ls.clone()), forced));
+        tracing::info!(
+            key,
+            label = "Kafka",
+            "deferring Kafka apply until previous runner finishes joining"
+        );
         return;
-    };
-    // FS/process inputs do not inherit Kubernetes API name validation. Never
-    // put the raw key in a diagnostic until the client has validated it.
-    let client = match OTLP_RUNTIME.get(key) {
-        Some(client) => client,
-        None => match OtlpLinkClient::new(key.to_owned()) {
-            Ok(client) => {
-                OTLP_RUNTIME.insert(key.to_owned(), client.clone());
-                client
-            }
-            Err(_) => {
-                tracing::warn!(system = "otlp", reason = "invalid_config", "OTLP provider rejected");
+    }
+    let runner = match KAFKA_RUNTIME.get(key) {
+        Some(runner) => runner,
+        None => {
+            let in_flight = KAFKA_RUNTIME.count() + KAFKA_DELETING.lock().len();
+            let cap = get_link_sys_max_instances_per_kind();
+            if in_flight >= cap {
+                tracing::warn!(
+                    key,
+                    label = "Kafka",
+                    current = in_flight,
+                    cap,
+                    "LinkSys instance cap reached; refusing new Kafka runner"
+                );
                 return;
             }
-        },
+            let runner = PersistentRunner::<KafkaApply>::spawn(key.to_string());
+            KAFKA_RUNTIME.insert(key.to_string(), runner.clone());
+            runner
+        }
     };
-    if resource.key_name_str() != key || !resource.validate_config().is_empty() {
-        client.invalidate_pending();
-        tracing::warn!(
-            link = key,
-            system = "otlp",
-            reason = "invalid_config",
-            "OTLP update rejected"
-        );
-        return;
-    }
-    if let Err(reason) = client.update(config) {
-        tracing::warn!(
-            link = key,
-            system = "otlp",
-            reason,
-            "OTLP update retained last-known-good generation"
-        );
-    }
+    runner.post_ready(Arc::new(ls.clone()), forced);
 }
 
-/// Called under LINK_SYS_SOURCE_EVENT_LOCK, before source dispatch can reorder.
-fn remove_otlp(key: &str) {
-    let Some(client) = OTLP_RUNTIME.get(key) else {
+fn delete_kafka_runner(key: &str) {
+    let _guard = KAFKA_APPLY_LOCK.lock();
+    delete_kafka_runner_locked(key);
+}
+
+fn delete_kafka_runner_locked(key: &str) {
+    KAFKA_PENDING.lock().remove(key);
+    let Some(runner) = KAFKA_RUNTIME.remove(key) else {
         return;
     };
-    if let Err(reason) = client.begin_shutdown() {
-        tracing::warn!(link = key, system = "otlp", reason, "OTLP shutdown registration failed");
-    }
-    OTLP_RETIRING_KEYS.lock().insert(key.to_owned());
-    OTLP_RUNTIME.remove(key);
-    let key = key.to_owned();
-    OTLP_CLEANUP.lock().spawn(async move {
-        if let Err(reason) = client.shutdown().await {
-            tracing::warn!(link = key, system = "otlp", reason, "OTLP shutdown failed");
-        }
-        let _source = LINK_SYS_SOURCE_EVENT_LOCK.lock();
-        OTLP_RETIRING_KEYS.lock().remove(&key);
-        if !OTLP_STOPPING.load(Ordering::Acquire) {
-            if let Some(resource) = get_global_link_sys_store().get(&key) {
-                configure_otlp(&key, &resource);
+    runner.begin_delete();
+    KAFKA_DELETING.lock().insert(key.to_string());
+    let deleted_key = key.to_string();
+    tokio::spawn(async move {
+        runner.await_join().await;
+        let _guard = KAFKA_APPLY_LOCK.lock();
+        KAFKA_DELETING.lock().remove(&deleted_key);
+        let pending = KAFKA_PENDING.lock().remove(&deleted_key);
+        if let Some((ls, forced)) = pending {
+            if KAFKA_RUNTIME.get(&deleted_key).is_none() {
+                apply_kafka_locked(&deleted_key, &ls, forced);
             }
         }
     });
 }
 
-/// Includes removed owners whose actual probe/SDK cleanup has not joined yet.
-pub fn otlp_retiring_client_count() -> usize {
+fn retain_kafka_runners(present: &HashSet<String>) {
+    for key in KAFKA_RUNTIME.list() {
+        if !present.contains(&key) {
+            delete_kafka_runner(&key);
+        }
+    }
+    let _guard = KAFKA_APPLY_LOCK.lock();
+    KAFKA_PENDING.lock().retain(|k, _| present.contains(k));
+}
+
+#[cfg(test)]
+fn seed_published_kafka(key: String, client: Arc<KafkaLinkClient>) {
+    let runner = PersistentRunner::<KafkaApply>::spawn_with_published(key.clone(), client);
+    KAFKA_RUNTIME.insert(key, runner);
+}
+
+/// Global runtime store for OTLP persistent runners, keyed by "namespace/name".
+static OTLP_RUNTIME: LazyLock<ProviderRuntimeStore<PersistentRunner<OtlpApply>>> =
+    LazyLock::new(ProviderRuntimeStore::new);
+static OTLP_CLEANUP: LazyLock<Mutex<tokio::task::JoinSet<()>>> =
+    LazyLock::new(|| Mutex::new(tokio::task::JoinSet::new()));
+static OTLP_DELETING: LazyLock<Mutex<HashSet<String>>> = LazyLock::new(|| Mutex::new(HashSet::new()));
+type OtlpPendingApply = HashMap<String, (Arc<LinkSys>, bool)>;
+static OTLP_PENDING: LazyLock<Mutex<OtlpPendingApply>> = LazyLock::new(|| Mutex::new(HashMap::new()));
+static OTLP_APPLY_LOCK: Mutex<()> = Mutex::new(());
+static OTLP_SHUTDOWN: Mutex<Option<Shared<BoxFuture<'static, ()>>>> = Mutex::new(None);
+static OTLP_STOPPING: AtomicBool = AtomicBool::new(false);
+
+/// Returns None until the runner publishes an exporter after an empty Export.
+pub fn get_otlp_client(name: &str) -> Option<Arc<OtlpLinkClient>> {
+    OTLP_RUNTIME.get(name).and_then(|runner| runner.current())
+}
+
+/// List registered runner keys, including connecting and unpublished runners.
+pub fn list_otlp_clients() -> Vec<String> {
+    OTLP_RUNTIME.list()
+}
+
+/// Number of live runner keys, not the number of published exporters.
+pub fn otlp_client_count() -> usize {
+    OTLP_RUNTIME.count()
+}
+
+fn apply_otlp(key: &str, resource: &LinkSys, forced: bool) {
+    let _guard = OTLP_APPLY_LOCK.lock();
+    apply_otlp_locked(key, resource, forced);
+}
+
+fn apply_otlp_locked(key: &str, resource: &LinkSys, forced: bool) {
+    if OTLP_STOPPING.load(Ordering::Acquire) {
+        return;
+    }
+    let (ready, tls_ok, auth) = credential_readiness(resource, credential::resolved_state);
+    if !ready {
+        if OTLP_DELETING.lock().contains(key) {
+            OTLP_PENDING.lock().remove(key);
+            tracing::info!(
+                key,
+                label = "OTLP",
+                auth_kind = auth.kind(),
+                tls_ready = tls_ok,
+                existing = false,
+                "LinkSys not ready; dropping deferred OTLP apply"
+            );
+            return;
+        }
+        if let Some(runner) = OTLP_RUNTIME.get(key) {
+            tracing::info!(
+                key,
+                label = "OTLP",
+                auth_kind = auth.kind(),
+                tls_ready = tls_ok,
+                existing = true,
+                "LinkSys not ready; keeping existing client"
+            );
+            runner.post_not_ready();
+        } else {
+            tracing::info!(
+                key,
+                label = "OTLP",
+                auth_kind = auth.kind(),
+                tls_ready = tls_ok,
+                existing = false,
+                "LinkSys not ready; skipping client build"
+            );
+        }
+        return;
+    }
+    if OTLP_DELETING.lock().contains(key) {
+        OTLP_PENDING
+            .lock()
+            .insert(key.to_string(), (Arc::new(resource.clone()), forced));
+        tracing::info!(
+            key,
+            label = "OTLP",
+            "deferring OTLP apply until previous runner finishes joining"
+        );
+        return;
+    }
+    let runner = match OTLP_RUNTIME.get(key) {
+        Some(runner) => runner,
+        None => {
+            let in_flight = OTLP_RUNTIME.count() + OTLP_DELETING.lock().len();
+            let cap = get_link_sys_max_instances_per_kind();
+            if in_flight >= cap {
+                tracing::warn!(
+                    key,
+                    label = "OTLP",
+                    current = in_flight,
+                    cap,
+                    "LinkSys instance cap reached; refusing new OTLP runner"
+                );
+                return;
+            }
+            let runner = PersistentRunner::<OtlpApply>::spawn(key.to_string());
+            OTLP_RUNTIME.insert(key.to_string(), runner.clone());
+            runner
+        }
+    };
+    runner.post_ready(Arc::new(resource.clone()), forced);
+}
+
+fn delete_otlp_runner(key: &str) {
+    let _guard = OTLP_APPLY_LOCK.lock();
+    delete_otlp_runner_locked(key);
+}
+
+fn delete_otlp_runner_locked(key: &str) {
+    OTLP_PENDING.lock().remove(key);
+    let Some(runner) = OTLP_RUNTIME.remove(key) else {
+        return;
+    };
+    runner.begin_delete();
+    record_link_sys_health(key, false);
+    OTLP_DELETING.lock().insert(key.to_string());
+    let deleted_key = key.to_string();
     let mut cleanup = OTLP_CLEANUP.lock();
+    reap_finished_otlp_cleanup(&mut cleanup);
+    cleanup.spawn(async move {
+        runner.await_join().await;
+        let _guard = OTLP_APPLY_LOCK.lock();
+        OTLP_DELETING.lock().remove(&deleted_key);
+        let pending = OTLP_PENDING.lock().remove(&deleted_key);
+        if !OTLP_STOPPING.load(Ordering::Acquire) {
+            if let Some((resource, forced)) = pending {
+                if OTLP_RUNTIME.get(&deleted_key).is_none() {
+                    apply_otlp_locked(&deleted_key, &resource, forced);
+                }
+            }
+        }
+    });
+}
+
+fn retain_otlp_runners(present: &HashSet<String>) {
+    for key in OTLP_RUNTIME.list() {
+        if !present.contains(&key) {
+            delete_otlp_runner(&key);
+        }
+    }
+    let _guard = OTLP_APPLY_LOCK.lock();
+    OTLP_PENDING.lock().retain(|key, _| present.contains(key));
+}
+
+#[cfg(test)]
+pub(crate) fn seed_published_otlp(key: String, client: Arc<OtlpLinkClient>) {
+    let runner = PersistentRunner::<OtlpApply>::spawn_with_published(key.clone(), client);
+    OTLP_RUNTIME.insert(key, runner);
+}
+
+fn reap_finished_otlp_cleanup(cleanup: &mut tokio::task::JoinSet<()>) {
     while let Some(result) = cleanup.try_join_next() {
         if result.is_err() {
             tracing::warn!(system = "otlp", reason = "shutdown_failed", "OTLP cleanup task failed");
         }
     }
+}
+
+/// Includes removed runners whose probe and SDK cleanup have not joined yet.
+pub fn otlp_retiring_client_count() -> usize {
+    let mut cleanup = OTLP_CLEANUP.lock();
+    reap_finished_otlp_cleanup(&mut cleanup);
     drop(cleanup);
-    OTLP_RETIRING_KEYS.lock().len()
+    OTLP_DELETING.lock().len()
 }
 
-// These synchronous desired-state transitions run inside the existing source
-// event critical section. Generic dispatch follows the same source order, while
-// OTLP desired state and cancellation are visible before any async task polls.
-fn dispatch_otlp_full(data: &HashMap<String, LinkSys>) {
-    if OTLP_STOPPING.load(Ordering::Acquire) {
-        return;
-    }
-    let mut present = HashSet::new();
-    for (key, resource) in data {
-        if matches!(
-            resource.spec.config,
-            edgion_resources::resources::link_sys::SystemConfig::Otlp(_)
-        ) {
-            present.insert(key.as_str());
-            configure_otlp(key, resource);
-        }
-    }
-    for key in OTLP_RUNTIME.list() {
-        if !present.contains(key.as_str()) {
-            remove_otlp(&key);
-        }
-    }
-    otlp_retiring_client_count();
-}
-
-fn dispatch_otlp_partial(data: &HashMap<String, LinkSys>, remove: &HashSet<String>) {
-    if OTLP_STOPPING.load(Ordering::Acquire) {
-        return;
-    }
-    // Match source-map semantics: removal first, add/update wins an overlapping key.
-    for key in remove {
-        remove_otlp(key);
-    }
-    for (key, resource) in data {
-        if matches!(
-            resource.spec.config,
-            edgion_resources::resources::link_sys::SystemConfig::Otlp(_)
-        ) {
-            configure_otlp(key, resource);
-        } else {
-            remove_otlp(key);
-        }
-    }
-    otlp_retiring_client_count();
-}
-
-/// Fence source events and retain the entire drain task, including when a caller
-/// stops awaiting it. Runtime shutdown must await this before dropping Tokio IO.
+/// Cancel all OTLP runners and join cleanup before Tokio IO is dropped.
 pub async fn shutdown_otlp_clients() {
     let completion = {
         let mut shutdown = OTLP_SHUTDOWN.lock();
         shutdown
             .get_or_insert_with(|| {
                 let mut cleanup = {
-                    let _source = LINK_SYS_SOURCE_EVENT_LOCK.lock();
+                    let _guard = OTLP_APPLY_LOCK.lock();
                     OTLP_STOPPING.store(true, Ordering::Release);
                     for key in OTLP_RUNTIME.list() {
-                        remove_otlp(&key);
+                        delete_otlp_runner_locked(&key);
                     }
                     std::mem::replace(&mut *OTLP_CLEANUP.lock(), tokio::task::JoinSet::new())
                 };
@@ -717,21 +1299,17 @@ fn webhook_secrets_ready(config: &edgion_resources::resources::link_sys::webhook
     config.unresolved_secret_refs().is_empty()
 }
 
-/// Helper shared by the remove / disable paths: if there is an old client,
-/// spawn its shutdown.
-///
-/// Note: this helper always calls `shutdown` and ignores `SHUTDOWN_ON_REPLACE`.
-/// That const only controls the *replace* case (the old Arc on update); it
-/// does not affect a real removal. Webhook uses its ordered specialized path
-/// instead of this generic lifecycle helper.
-fn spawn_shutdown_if_present<C: LinkSysLifecycle>(client: Option<Arc<C>>, label: &'static str) {
-    if let Some(c) = client {
-        tokio::spawn(async move {
-            if let Err(e) = c.shutdown().await {
-                tracing::warn!(label, error = %e, "shutdown failed");
-            }
-        });
+fn webhook_fingerprint_or_unspecified(ls: &LinkSys) -> RuntimeFingerprint {
+    fingerprint_webhook(ls).unwrap_or_else(|_| RuntimeFingerprint::unspecified())
+}
+
+fn webhook_can_reuse(existing: &WebhookLinkClient, ls: &LinkSys, forced: bool) -> bool {
+    if forced {
+        return false;
     }
+    let incoming = webhook_fingerprint_or_unspecified(ls);
+    let live = existing.runtime_fingerprint();
+    live.equal_runtime(&incoming) || live.rv_skip_allows_reuse(&incoming)
 }
 
 /// `dispatch_partial_update` case: when not ready, keep the current state
@@ -761,149 +1339,13 @@ fn preserve_if_not_ready<C>(
     true
 }
 
-/// Build a new client and swap it into the store; init the new client in
-/// the background and (if applicable) shut down the old client in the
-/// background. Used by `dispatch_partial_update`.
-///
-/// Everything inside is dispatched via `tokio::spawn` and the function
-/// itself does not await, so it is a synchronous `fn`. Callers must invoke
-/// it from a tokio runtime context.
-///
-/// **Key invariant**: reading `old` (`runtime.get(key)`) is read-only;
-/// afterwards `runtime.insert` performs a single atomic `ArcSwap` swap of the
-/// new map (where that key already points to the new client). This way
-/// `get_*_client(key)` always sees either the old or the new client —
-/// **there is never a window where it is None**. If we instead did `remove`
-/// followed by `insert`, the intermediate store would temporarily drop the key.
-fn spawn_and_swap_partial<C, F>(key: &str, label: &'static str, build: F, runtime: &ProviderRuntimeStore<C>)
-where
-    C: LinkSysLifecycle,
-    F: FnOnce() -> anyhow::Result<C>,
-{
-    match build() {
-        Err(e) => tracing::error!(key, label, error = %e, "from_config failed"),
-        Ok(client) => {
-            let client = Arc::new(client);
-            let old = runtime.get(key);
-            runtime.insert(key.to_string(), client.clone());
-
-            // New client: always init in the background
-            let c = client.clone();
-            let k = key.to_string();
-            tokio::spawn(async move {
-                if let Err(e) = c.init().await {
-                    tracing::error!(label, key = %k, error = %e, "init failed");
-                }
-            });
-
-            // Old client: shut down only when the provider declares SHUTDOWN_ON_REPLACE
-            if let Some(old_client) = old {
-                if C::SHUTDOWN_ON_REPLACE {
-                    tokio::spawn(async move {
-                        if let Err(e) = old_client.shutdown().await {
-                            tracing::warn!(label, error = %e, "shutdown old client failed");
-                        }
-                    });
-                }
-                // Otherwise the Arc is dropped and the refcount is reclaimed naturally; manager state is maintained by the new init's upsert
-            }
-        }
-    }
-}
-
-/// `dispatch_full_set` case: when not ready, carry the old Arc over into new_map.
-/// Returns `true` to indicate handled; the caller should `continue`.
-#[allow(clippy::too_many_arguments)]
-fn carry_over_if_not_ready<C>(
-    key: &str,
-    label: &'static str,
-    auth_kind: &str,
-    tls_ok: bool,
-    ready: bool,
-    old_snapshot: &HashMap<String, Arc<C>>,
-    new_map: &mut HashMap<String, Arc<C>>,
-    preserved: &mut HashSet<String>,
-) -> bool {
-    if ready {
-        return false;
-    }
-    if let Some(existing) = old_snapshot.get(key) {
-        tracing::info!(
-            key,
-            label,
-            auth_kind,
-            tls_ready = tls_ok,
-            "LinkSys not ready; keeping existing client"
-        );
-        new_map.insert(key.to_string(), existing.clone());
-        preserved.insert(key.to_string());
-    } else {
-        tracing::info!(
-            key,
-            label,
-            auth_kind,
-            tls_ready = tls_ok,
-            "LinkSys not ready; skipping client build"
-        );
-    }
-    true
-}
-
-/// `dispatch_full_set` case: add the new client to new_map and init in the background.
-/// If construction fails, nothing is added (which matches "removed from the map" semantics).
-fn register_for_full_set<C: LinkSysLifecycle>(
-    key: &str,
-    label: &'static str,
-    build: impl FnOnce() -> anyhow::Result<C>,
-    new_map: &mut HashMap<String, Arc<C>>,
-) {
-    match build() {
-        Err(e) => tracing::error!(key, label, error = %e, "from_config failed"),
-        Ok(client) => {
-            let client = Arc::new(client);
-            new_map.insert(key.to_string(), client.clone());
-            let k = key.to_string();
-            tokio::spawn(async move {
-                if let Err(e) = client.init().await {
-                    tracing::error!(label, key = %k, error = %e, "init failed");
-                }
-            });
-        }
-    }
-}
-
-/// At the end of `dispatch_full_set`, atomically swap each provider's store;
-/// for evicted old Arcs (when the provider declares SHUTDOWN_ON_REPLACE),
-/// shut them down concurrently in the background.
-fn swap_and_shutdown_olds<C: LinkSysLifecycle>(
-    label: &'static str,
-    new_map: HashMap<String, Arc<C>>,
-    preserved: HashSet<String>,
-    runtime: &ProviderRuntimeStore<C>,
-) {
-    let old = runtime.replace_all(new_map);
-    if !C::SHUTDOWN_ON_REPLACE || old.is_empty() {
-        return;
-    }
-    tokio::spawn(async move {
-        for (k, client) in old {
-            if preserved.contains(&k) {
-                continue; // carry-over Arc is the same one in new_map; do not shut down
-            }
-            if let Err(e) = client.shutdown().await {
-                tracing::warn!(label, key = %k, error = %e, "shutdown old client failed");
-            }
-        }
-    });
-}
-
 // ============================================================
 // Dispatch to sub-module managers
 // ============================================================
 
 /// Dispatch a full set of LinkSys resources to sub-module managers.
-async fn dispatch_full_set(sequence: u64, data: &HashMap<String, LinkSys>) {
-    dispatch_full_set_with(sequence, data, get_webhook_manager(), &WEBHOOK_RUNTIME).await;
+async fn dispatch_full_set(sequence: u64, data: &HashMap<String, LinkSys>, forced: bool) {
+    dispatch_full_set_with(sequence, data, get_webhook_manager(), &WEBHOOK_RUNTIME, forced).await;
 }
 
 async fn dispatch_full_set_with(
@@ -911,6 +1353,7 @@ async fn dispatch_full_set_with(
     data: &HashMap<String, LinkSys>,
     webhook_manager: &WebhookManager,
     webhook_runtime: &ProviderRuntimeStore<WebhookLinkClient>,
+    forced: bool,
 ) {
     let webhook_mutation = match webhook_manager.begin_mutation(sequence).await {
         Ok(mutation) => mutation,
@@ -927,21 +1370,14 @@ async fn dispatch_full_set_with(
     // Snapshot current runtime maps so that we can carry over clients for
     // resources whose credentials are not yet resolved.
     let old_webhook_snapshot = webhook_runtime.load_full();
-    let old_redis_snapshot = REDIS_RUNTIME.load_full();
-    let old_etcd_snapshot = ETCD_RUNTIME.load_full();
-    let old_es_snapshot = ES_RUNTIME.load_full();
-    let old_kafka_snapshot = KAFKA_RUNTIME.load_full();
 
     let mut new_webhook_map: HashMap<String, Arc<WebhookLinkClient>> = HashMap::new();
-    let mut new_redis_map: HashMap<String, Arc<RedisLinkClient>> = HashMap::new();
-    let mut new_etcd_map: HashMap<String, Arc<EtcdLinkClient>> = HashMap::new();
-    let mut new_es_map: HashMap<String, Arc<EsLinkClient>> = HashMap::new();
-    let mut new_kafka_map: HashMap<String, Arc<KafkaLinkClient>> = HashMap::new();
 
-    let mut preserved_redis_keys: HashSet<String> = HashSet::new();
-    let mut preserved_etcd_keys: HashSet<String> = HashSet::new();
-    let mut preserved_es_keys: HashSet<String> = HashSet::new();
-    let mut preserved_kafka_keys: HashSet<String> = HashSet::new();
+    let mut present_redis: HashSet<String> = HashSet::new();
+    let mut present_etcd: HashSet<String> = HashSet::new();
+    let mut present_es: HashSet<String> = HashSet::new();
+    let mut present_kafka: HashSet<String> = HashSet::new();
+    let mut present_otlp: HashSet<String> = HashSet::new();
 
     for (key, ls) in data {
         match &ls.spec.config {
@@ -974,9 +1410,21 @@ async fn dispatch_full_set_with(
                     }
                     continue;
                 }
+                if let Some(existing) = old_webhook_snapshot.get(key) {
+                    if webhook_can_reuse(existing, ls, forced) {
+                        new_webhook_map.insert(key.clone(), existing.clone());
+                        continue;
+                    }
+                }
                 match webhook_mutation.prepare(key, config.clone(), ls.metadata.namespace.as_deref()) {
                     Ok(prepared) => {
-                        new_webhook_map.insert(key.clone(), Arc::new(WebhookLinkClient::from_prepared(prepared)));
+                        new_webhook_map.insert(
+                            key.clone(),
+                            Arc::new(WebhookLinkClient::from_prepared(
+                                prepared,
+                                webhook_fingerprint_or_unspecified(ls),
+                            )),
+                        );
                     }
                     Err(e) => {
                         tracing::error!(key, label = "Webhook", error = %e, "prepare failed");
@@ -986,99 +1434,39 @@ async fn dispatch_full_set_with(
                     }
                 }
             }
-            edgion_resources::resources::link_sys::SystemConfig::Redis(redis_config) => {
-                let (ready, tls_ok, auth) = credential_readiness(ls, credential::basic_state);
-                if carry_over_if_not_ready(
-                    key,
-                    "Redis",
-                    auth.kind(),
-                    tls_ok,
-                    ready,
-                    &*old_redis_snapshot,
-                    &mut new_redis_map,
-                    &mut preserved_redis_keys,
-                ) {
-                    continue;
-                }
-                register_for_full_set(
-                    key,
-                    "Redis",
-                    || RedisLinkClient::from_config(key, redis_config, &auth),
-                    &mut new_redis_map,
-                );
+            edgion_resources::resources::link_sys::SystemConfig::Redis(_) => {
+                present_redis.insert(key.clone());
+                apply_redis(key, ls, forced);
             }
-            edgion_resources::resources::link_sys::SystemConfig::Etcd(etcd_config) => {
-                let (ready, tls_ok, auth) = credential_readiness(ls, credential::basic_state);
-                if carry_over_if_not_ready(
-                    key,
-                    "Etcd",
-                    auth.kind(),
-                    tls_ok,
-                    ready,
-                    &*old_etcd_snapshot,
-                    &mut new_etcd_map,
-                    &mut preserved_etcd_keys,
-                ) {
-                    continue;
-                }
-                register_for_full_set(
-                    key,
-                    "Etcd",
-                    || EtcdLinkClient::from_config(key, etcd_config, &auth),
-                    &mut new_etcd_map,
-                );
+            edgion_resources::resources::link_sys::SystemConfig::Etcd(_) => {
+                present_etcd.insert(key.clone());
+                apply_etcd(key, ls, forced);
             }
-            edgion_resources::resources::link_sys::SystemConfig::Elasticsearch(es_config) => {
-                let (ready, tls_ok, auth) = credential_readiness(ls, credential::resolved_state);
-                if carry_over_if_not_ready(
-                    key,
-                    "Elasticsearch",
-                    auth.kind(),
-                    tls_ok,
-                    ready,
-                    &*old_es_snapshot,
-                    &mut new_es_map,
-                    &mut preserved_es_keys,
-                ) {
-                    continue;
-                }
-                register_for_full_set(
-                    key,
-                    "Elasticsearch",
-                    || EsLinkClient::from_config(key, es_config, &auth),
-                    &mut new_es_map,
-                );
+            edgion_resources::resources::link_sys::SystemConfig::Elasticsearch(_) => {
+                present_es.insert(key.clone());
+                apply_es(key, ls, forced);
             }
-            edgion_resources::resources::link_sys::SystemConfig::Kafka(kafka_config) => {
-                let (ready, tls_ok, auth) = credential_readiness(ls, credential::resolved_state);
-                if carry_over_if_not_ready(
-                    key,
-                    "Kafka",
-                    auth.kind(),
-                    tls_ok,
-                    ready,
-                    &*old_kafka_snapshot,
-                    &mut new_kafka_map,
-                    &mut preserved_kafka_keys,
-                ) {
-                    continue;
-                }
-                register_for_full_set(
-                    key,
-                    "Kafka",
-                    || KafkaLinkClient::from_config(key, kafka_config, &auth),
-                    &mut new_kafka_map,
-                );
+            edgion_resources::resources::link_sys::SystemConfig::Kafka(_) => {
+                present_kafka.insert(key.clone());
+                apply_kafka(key, ls, forced);
             }
             // DNS resolver, not a runtime link client — nothing to register in the link store.
             edgion_resources::resources::link_sys::SystemConfig::HttpDns(_) => {}
             // Controller-only credential acquisition metadata. The Gateway receives
             // only the resolved plugin credential and never contacts the issuer.
             edgion_resources::resources::link_sys::SystemConfig::CredentialSource(_) => {}
-            // OTLP desired state was applied synchronously at source entry.
-            edgion_resources::resources::link_sys::SystemConfig::Otlp(_) => {}
+            edgion_resources::resources::link_sys::SystemConfig::Otlp(_) => {
+                present_otlp.insert(key.clone());
+                apply_otlp(key, ls, forced);
+            }
         }
     }
+
+    retain_redis_runners(&present_redis);
+    retain_etcd_runners(&present_etcd);
+    retain_es_runners(&present_es);
+    retain_kafka_runners(&present_kafka);
+    retain_otlp_runners(&present_otlp);
 
     let prepared_webhooks = new_webhook_map
         .iter()
@@ -1089,12 +1477,6 @@ async fn dispatch_full_set_with(
         return;
     }
     webhook_runtime.replace_all(new_webhook_map);
-
-    // Atomic swap + background shutdown of evicted old Arcs, gated by SHUTDOWN_ON_REPLACE
-    swap_and_shutdown_olds("Redis", new_redis_map, preserved_redis_keys, &REDIS_RUNTIME);
-    swap_and_shutdown_olds("Etcd", new_etcd_map, preserved_etcd_keys, &ETCD_RUNTIME);
-    swap_and_shutdown_olds("Elasticsearch", new_es_map, preserved_es_keys, &ES_RUNTIME);
-    swap_and_shutdown_olds("Kafka", new_kafka_map, preserved_kafka_keys, &KAFKA_RUNTIME);
 }
 
 /// Dispatch incremental changes to sub-module managers.
@@ -1121,8 +1503,39 @@ async fn dispatch_partial_update_with(
         }
     };
 
-    // Handle add/update
+    // Handle add/update. Kind change is Delete(old persistent kind) + Create
+    // in the same dispatch (D7).
     for (key, ls) in add_or_update {
+        if !matches!(
+            &ls.spec.config,
+            edgion_resources::resources::link_sys::SystemConfig::Redis(_)
+        ) {
+            delete_redis_runner(key);
+        }
+        if !matches!(
+            &ls.spec.config,
+            edgion_resources::resources::link_sys::SystemConfig::Etcd(_)
+        ) {
+            delete_etcd_runner(key);
+        }
+        if !matches!(
+            &ls.spec.config,
+            edgion_resources::resources::link_sys::SystemConfig::Elasticsearch(_)
+        ) {
+            delete_es_runner(key);
+        }
+        if !matches!(
+            &ls.spec.config,
+            edgion_resources::resources::link_sys::SystemConfig::Kafka(_)
+        ) {
+            delete_kafka_runner(key);
+        }
+        if !matches!(
+            &ls.spec.config,
+            edgion_resources::resources::link_sys::SystemConfig::Otlp(_)
+        ) {
+            delete_otlp_runner(key);
+        }
         match &ls.spec.config {
             edgion_resources::resources::link_sys::SystemConfig::Webhook(config) => {
                 // Gate on credential readiness so a webhook whose secretRef is
@@ -1136,10 +1549,18 @@ async fn dispatch_partial_update_with(
                 if preserve_if_not_ready(key, "Webhook", auth.kind(), tls_ok, ready, webhook_runtime) {
                     continue;
                 }
+                if let Some(existing) = webhook_runtime.get(key) {
+                    if webhook_can_reuse(&existing, ls, false) {
+                        continue;
+                    }
+                }
                 match webhook_mutation.prepare(key, config.clone(), ls.metadata.namespace.as_deref()) {
                     Err(e) => tracing::error!(key, label = "Webhook", error = %e, "prepare failed"),
                     Ok(prepared) => {
-                        let client = Arc::new(WebhookLinkClient::from_prepared(prepared));
+                        let client = Arc::new(WebhookLinkClient::from_prepared(
+                            prepared,
+                            webhook_fingerprint_or_unspecified(ls),
+                        ));
                         if let Err(e) = webhook_mutation.commit_one(key, client.prepared_entry()).await {
                             tracing::error!(key, label = "Webhook", error = %e, "commit failed");
                         } else {
@@ -1148,55 +1569,18 @@ async fn dispatch_partial_update_with(
                     }
                 }
             }
-            edgion_resources::resources::link_sys::SystemConfig::Redis(redis_config) => {
-                let (ready, tls_ok, auth) = credential_readiness(ls, credential::basic_state);
-                if preserve_if_not_ready(key, "Redis", auth.kind(), tls_ok, ready, &REDIS_RUNTIME) {
-                    continue;
-                }
-                spawn_and_swap_partial(
-                    key,
-                    "Redis",
-                    || RedisLinkClient::from_config(key, redis_config, &auth),
-                    &REDIS_RUNTIME,
-                );
+            edgion_resources::resources::link_sys::SystemConfig::Redis(_) => {
+                apply_redis(key, ls, false);
             }
-            edgion_resources::resources::link_sys::SystemConfig::Etcd(etcd_config) => {
-                let (ready, tls_ok, auth) = credential_readiness(ls, credential::basic_state);
-                if preserve_if_not_ready(key, "Etcd", auth.kind(), tls_ok, ready, &ETCD_RUNTIME) {
-                    continue;
-                }
-                spawn_and_swap_partial(
-                    key,
-                    "Etcd",
-                    || EtcdLinkClient::from_config(key, etcd_config, &auth),
-                    &ETCD_RUNTIME,
-                );
+            edgion_resources::resources::link_sys::SystemConfig::Etcd(_) => {
+                apply_etcd(key, ls, false);
             }
-            edgion_resources::resources::link_sys::SystemConfig::Elasticsearch(es_config) => {
-                let (ready, tls_ok, auth) = credential_readiness(ls, credential::resolved_state);
-                if preserve_if_not_ready(key, "Elasticsearch", auth.kind(), tls_ok, ready, &ES_RUNTIME) {
-                    continue;
-                }
-                spawn_and_swap_partial(
-                    key,
-                    "Elasticsearch",
-                    || EsLinkClient::from_config(key, es_config, &auth),
-                    &ES_RUNTIME,
-                );
+            edgion_resources::resources::link_sys::SystemConfig::Elasticsearch(_) => {
+                apply_es(key, ls, false);
             }
-            edgion_resources::resources::link_sys::SystemConfig::Kafka(kafka_config) => {
-                let (ready, tls_ok, auth) = credential_readiness(ls, credential::resolved_state);
-                if preserve_if_not_ready(key, "Kafka", auth.kind(), tls_ok, ready, &KAFKA_RUNTIME) {
-                    continue;
-                }
-                spawn_and_swap_partial(
-                    key,
-                    "Kafka",
-                    || KafkaLinkClient::from_config(key, kafka_config, &auth),
-                    &KAFKA_RUNTIME,
-                );
+            edgion_resources::resources::link_sys::SystemConfig::Kafka(_) => {
+                apply_kafka(key, ls, false);
             }
-            // DNS resolver, not a runtime link client — nothing to register in the link store.
             edgion_resources::resources::link_sys::SystemConfig::HttpDns(_) => {}
             // Controller-only credential acquisition metadata.
             edgion_resources::resources::link_sys::SystemConfig::CredentialSource(_) => {}
@@ -1205,10 +1589,7 @@ async fn dispatch_partial_update_with(
                 // provider callable under the same key.
                 webhook_mutation.commit_remove(key).await;
                 webhook_runtime.remove(key);
-                spawn_shutdown_if_present(REDIS_RUNTIME.remove(key), "Redis");
-                spawn_shutdown_if_present(ETCD_RUNTIME.remove(key), "Etcd");
-                spawn_shutdown_if_present(ES_RUNTIME.remove(key), "Elasticsearch");
-                spawn_shutdown_if_present(KAFKA_RUNTIME.remove(key), "Kafka");
+                apply_otlp(key, ls, false);
             }
         }
     }
@@ -1217,10 +1598,11 @@ async fn dispatch_partial_update_with(
     for key in remove {
         webhook_mutation.commit_remove(key).await;
         webhook_runtime.remove(key);
-        spawn_shutdown_if_present(REDIS_RUNTIME.remove(key), "Redis");
-        spawn_shutdown_if_present(ETCD_RUNTIME.remove(key), "Etcd");
-        spawn_shutdown_if_present(ES_RUNTIME.remove(key), "Elasticsearch");
-        spawn_shutdown_if_present(KAFKA_RUNTIME.remove(key), "Kafka");
+        delete_redis_runner(key);
+        delete_etcd_runner(key);
+        delete_es_runner(key);
+        delete_kafka_runner(key);
+        delete_otlp_runner(key);
     }
 }
 
@@ -1241,6 +1623,12 @@ pub fn get_global_link_sys_store() -> Arc<LinkSysStore> {
 
 #[cfg(test)]
 pub(crate) static I5_DISPATCH_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+/// Serializes tests that mutate `LINK_SYS_MAX_INSTANCES_PER_KIND` with
+/// `recompute_global_config`, which writes the same atomic. Reentrant so a
+/// test can hold it across `full_set` / `partial_update`.
+#[cfg(test)]
+pub(crate) static LINK_SYS_CAP_TEST_LOCK: parking_lot::ReentrantMutex<()> = parking_lot::ReentrantMutex::new(());
 
 #[cfg(test)]
 mod tests {
@@ -1325,7 +1713,7 @@ mod tests {
                 if let Some(gate) = gate {
                     gate.await.expect("dispatch gate sender remains alive");
                 }
-                dispatch_full_set_with(sequence, &data, &manager, &runtime).await;
+                dispatch_full_set_with(sequence, &data, &manager, &runtime, false).await;
             });
             *slot.lock() = Some(task);
         }
@@ -1654,7 +2042,10 @@ mod tests {
                         let prepared = mutation
                             .prepare(key, config.clone(), resource.metadata.namespace.as_deref())
                             .expect("older webhook prepares");
-                        let client = Arc::new(WebhookLinkClient::from_prepared(prepared));
+                        let client = Arc::new(WebhookLinkClient::from_prepared(
+                            prepared,
+                            webhook_fingerprint_or_unspecified(resource),
+                        ));
                         mutation
                             .commit_one(key, client.prepared_entry())
                             .await
@@ -1742,23 +2133,23 @@ mod tests {
                 let etcd = serde_json::from_value(serde_json::json!({"endpoints": ["http://127.0.0.1:2379"]})).unwrap();
                 let es = serde_json::from_value(serde_json::json!({"endpoints": ["http://127.0.0.1:9200"]})).unwrap();
                 let kafka = serde_json::from_value(serde_json::json!({"brokers": ["127.0.0.1:9092"]})).unwrap();
-                REDIS_RUNTIME.insert(
+                seed_published_redis(
                     key.clone(),
                     Arc::new(
                         RedisLinkClient::from_config(&key, &redis, &credential::CredentialState::NotRequired).unwrap(),
                     ),
                 );
-                ETCD_RUNTIME.insert(
+                seed_published_etcd(
                     key.clone(),
                     Arc::new(
                         EtcdLinkClient::from_config(&key, &etcd, &credential::CredentialState::NotRequired).unwrap(),
                     ),
                 );
-                ES_RUNTIME.insert(
+                seed_published_es(
                     key.clone(),
                     Arc::new(EsLinkClient::from_config(&key, &es, &credential::CredentialState::NotRequired).unwrap()),
                 );
-                KAFKA_RUNTIME.insert(
+                seed_published_kafka(
                     key.clone(),
                     Arc::new(
                         KafkaLinkClient::from_config(&key, &kafka, &credential::CredentialState::NotRequired).unwrap(),
@@ -1776,15 +2167,10 @@ mod tests {
                 let earlier_manager = manager.clone();
                 let earlier_webhooks = webhooks.clone();
                 let enqueue = |sequence, data: Arc<LinkSysMap>| {
-                    if full {
-                        dispatch_otlp_full(&data);
-                    } else {
-                        dispatch_otlp_partial(&data, &HashSet::new());
-                    }
                     spawn_ordered_dispatch(&tokio::runtime::Handle::current(), &tail, async move {
                         gate.await.unwrap();
                         if full {
-                            dispatch_full_set_with(sequence, &data, &earlier_manager, &earlier_webhooks).await;
+                            dispatch_full_set_with(sequence, &data, &earlier_manager, &earlier_webhooks, false).await;
                         } else {
                             dispatch_partial_update_with(
                                 sequence,
@@ -1809,7 +2195,10 @@ mod tests {
                         })
                         .unwrap();
                 }
-                let owner = get_otlp_client(&key).unwrap();
+                assert!(
+                    OTLP_RUNTIME.get(&key).is_none(),
+                    "OTLP apply must wait for the ordered generic dispatch"
+                );
                 let unrelated = HashMap::from([(
                     "ordered/unrelated".to_owned(),
                     create_test_webhook_linksys("ordered", "unrelated"),
@@ -1831,17 +2220,18 @@ mod tests {
                 assert!(webhooks.get(&key).is_none());
                 assert!(manager.get(&key).await.is_none());
                 assert!(manager.get("ordered/unrelated").await.is_some());
-                assert!(Arc::ptr_eq(&owner, &get_otlp_client(&key).unwrap()));
+                assert!(
+                    OTLP_RUNTIME.get(&key).is_none(),
+                    "unresolved OTLP auth must not create a runner"
+                );
 
                 // A later recreation must survive the earlier type cleanup.
                 let recreated = HashMap::from([(
                     key.clone(),
                     create_test_webhook_linksys_with_port("ordered", "transition", 8181),
                 )]);
-                dispatch_otlp_partial(&recreated, &HashSet::new());
                 dispatch_partial_update_with(4, &recreated, &HashSet::new(), &manager, &webhooks).await;
                 assert_callable_webhook_port(&manager, &webhooks, &key, 8181).await;
-                owner.shutdown().await.unwrap();
             }
         });
     }
@@ -1951,7 +2341,7 @@ mod tests {
         let mut data = HashMap::new();
         data.insert(key.clone(), ls);
 
-        dispatch_full_set(next_dispatch_sequence(), &data).await;
+        dispatch_full_set(next_dispatch_sequence(), &data, false).await;
 
         assert!(
             get_redis_client(&key).is_none(),
@@ -1959,7 +2349,7 @@ mod tests {
         );
     }
 
-    /// When a previously-built client exists and a subsequent full-set carries
+    /// When a previously-published client exists and a subsequent full-set carries
     /// the same resource with pending credentials (Secret temporarily gone),
     /// the existing client is preserved rather than torn down.
     #[tokio::test]
@@ -1967,18 +2357,14 @@ mod tests {
         let _guard = I5_DISPATCH_LOCK.lock().await;
         let key = "i5-ns/preserve-full-set".to_string();
 
-        // Seed with a ready LinkSys so a client is inserted.
         let ready = create_redis_linksys("i5-ns", "preserve-full-set", InjectedSecret::Valid);
-        let mut data = HashMap::new();
-        data.insert(key.clone(), ready);
-        dispatch_full_set(next_dispatch_sequence(), &data).await;
-        let first = get_redis_client(&key).expect("client should be built when ready");
+        seed_published_redis(key.clone(), RedisLinkClient::from_linksys(&key, &ready).unwrap());
+        let first = get_redis_client(&key).expect("seeded client should be published");
 
-        // Second full-set for the same key but with pending credentials.
         let pending = create_redis_linksys("i5-ns", "preserve-full-set", InjectedSecret::Missing);
         let mut data = HashMap::new();
         data.insert(key.clone(), pending);
-        dispatch_full_set(next_dispatch_sequence(), &data).await;
+        dispatch_full_set(next_dispatch_sequence(), &data, false).await;
 
         let second = get_redis_client(&key).expect("client should be preserved on pending update");
         assert!(
@@ -1986,8 +2372,7 @@ mod tests {
             "the preserved client must be the same Arc instance"
         );
 
-        // Cleanup so the global store doesn't carry state into other tests.
-        let _ = REDIS_RUNTIME.remove(&key);
+        delete_redis_and_wait(&key).await;
     }
 
     /// Partial-update dispatch must not build a client on an add with pending
@@ -2015,14 +2400,10 @@ mod tests {
         let _guard = I5_DISPATCH_LOCK.lock().await;
         let key = "i5-ns/preserve-partial".to_string();
 
-        // Seed
         let ready = create_redis_linksys("i5-ns", "preserve-partial", InjectedSecret::Valid);
-        let mut add = HashMap::new();
-        add.insert(key.clone(), ready);
-        dispatch_partial_update(next_dispatch_sequence(), &add, &HashSet::new()).await;
-        let first = get_redis_client(&key).expect("client should be built when ready");
+        seed_published_redis(key.clone(), RedisLinkClient::from_linksys(&key, &ready).unwrap());
+        let first = get_redis_client(&key).expect("seeded client should be published");
 
-        // Pending update
         let pending = create_redis_linksys("i5-ns", "preserve-partial", InjectedSecret::Missing);
         let mut add = HashMap::new();
         add.insert(key.clone(), pending);
@@ -2034,7 +2415,974 @@ mod tests {
             "the preserved client must be the same Arc instance"
         );
 
-        let _ = REDIS_RUNTIME.remove(&key);
+        delete_redis_and_wait(&key).await;
+    }
+
+    #[tokio::test]
+    async fn dispatch_full_set_relist_reuses_runner_and_published_client() {
+        let _guard = I5_DISPATCH_LOCK.lock().await;
+        let key = "i5-ns/relist-reuse".to_string();
+        let ready = create_redis_linksys("i5-ns", "relist-reuse", InjectedSecret::Valid);
+        seed_published_redis(key.clone(), RedisLinkClient::from_linksys(&key, &ready).unwrap());
+        let runner_first = REDIS_RUNTIME.get(&key).expect("seeded runner");
+        let client_first = get_redis_client(&key).expect("seeded client");
+
+        let mut data = HashMap::new();
+        data.insert(key.clone(), ready);
+        dispatch_full_set(next_dispatch_sequence(), &data, false).await;
+
+        let runner_second = REDIS_RUNTIME.get(&key).expect("relist keeps runner");
+        assert!(
+            Arc::ptr_eq(&runner_first, &runner_second),
+            "full-set relist must not spawn a second runner"
+        );
+        let client_second = get_redis_client(&key).expect("relist keeps published client");
+        assert!(
+            Arc::ptr_eq(&client_first, &client_second),
+            "equal fingerprint relist must Reuse the small handle"
+        );
+
+        delete_redis_and_wait(&key).await;
+    }
+
+    #[tokio::test]
+    async fn apply_redis_replays_last_write_after_deleting_window() {
+        let _guard = I5_DISPATCH_LOCK.lock().await;
+        let key = "i5-ns/pending-replay".to_string();
+        let ls = create_redis_linksys("i5-ns", "pending-replay", InjectedSecret::Valid);
+        REDIS_DELETING.lock().insert(key.clone());
+        apply_redis(&key, &ls, false);
+        assert!(
+            REDIS_RUNTIME.get(&key).is_none(),
+            "deleting window must not spawn a second runner"
+        );
+        let pending = REDIS_PENDING.lock().remove(&key);
+        REDIS_DELETING.lock().remove(&key);
+        let (pending_ls, forced) = pending.expect("last write during delete must be retained");
+        if REDIS_RUNTIME.get(&key).is_none() {
+            apply_redis(&key, &pending_ls, forced);
+        }
+        assert!(
+            REDIS_RUNTIME.get(&key).is_some(),
+            "join-complete replay must spawn the deferred Redis runner"
+        );
+        delete_redis_and_wait(&key).await;
+    }
+
+    #[tokio::test]
+    async fn delete_redis_runner_drops_pending_so_kind_change_cannot_resurrect() {
+        let _guard = I5_DISPATCH_LOCK.lock().await;
+        let key = "i5-ns/pending-kind-change".to_string();
+        let ls = create_redis_linksys("i5-ns", "pending-kind-change", InjectedSecret::Valid);
+        REDIS_DELETING.lock().insert(key.clone());
+        apply_redis(&key, &ls, false);
+        assert!(REDIS_PENDING.lock().contains_key(&key));
+        REDIS_DELETING.lock().remove(&key);
+        delete_redis_and_wait(&key).await;
+        assert!(
+            REDIS_PENDING.lock().get(&key).is_none(),
+            "kind-change delete must drop a deferred Redis apply"
+        );
+        assert!(REDIS_RUNTIME.get(&key).is_none());
+    }
+
+    #[tokio::test]
+    async fn apply_redis_not_ready_during_delete_drops_pending() {
+        let _guard = I5_DISPATCH_LOCK.lock().await;
+        let key = "i5-ns/pending-not-ready".to_string();
+        let ready = create_redis_linksys("i5-ns", "pending-not-ready", InjectedSecret::Valid);
+        let pending = create_redis_linksys("i5-ns", "pending-not-ready", InjectedSecret::Missing);
+        REDIS_DELETING.lock().insert(key.clone());
+        apply_redis(&key, &ready, false);
+        assert!(REDIS_PENDING.lock().contains_key(&key));
+        apply_redis(&key, &pending, false);
+        assert!(
+            REDIS_PENDING.lock().get(&key).is_none(),
+            "NotReady during delete must drop a deferred Redis apply"
+        );
+        REDIS_DELETING.lock().remove(&key);
+    }
+
+    #[tokio::test]
+    async fn apply_redis_spawn_lists_unpublished_runner() {
+        let _guard = I5_DISPATCH_LOCK.lock().await;
+        let key = "i5-ns/spawn-unpublished".to_string();
+        let ls = create_redis_linksys("i5-ns", "spawn-unpublished", InjectedSecret::Valid);
+        let mut add = HashMap::new();
+        add.insert(key.clone(), ls.clone());
+        dispatch_partial_update(next_dispatch_sequence(), &add, &HashSet::new()).await;
+
+        let runner_first = REDIS_RUNTIME.get(&key).expect("ready dispatch spawns a runner");
+        assert!(
+            get_redis_client(&key).is_none(),
+            "get stays None until the first successful init"
+        );
+        assert!(
+            list_redis_clients().iter().any(|listed| listed == &key),
+            "D10: list includes connecting runner keys"
+        );
+
+        dispatch_partial_update(next_dispatch_sequence(), &add, &HashSet::new()).await;
+        let runner_second = REDIS_RUNTIME.get(&key).expect("relist keeps runner");
+        assert!(
+            Arc::ptr_eq(&runner_first, &runner_second),
+            "second ready dispatch must not spawn a second runner"
+        );
+
+        delete_redis_and_wait(&key).await;
+    }
+
+    async fn wait_deleting_idle(deleting: &parking_lot::Mutex<HashSet<String>>, key: &str) {
+        let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(2);
+        while deleting.lock().contains(key) {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "delete join did not finish for {key}"
+            );
+            tokio::time::sleep(tokio::time::Duration::from_millis(5)).await;
+        }
+    }
+
+    async fn delete_redis_and_wait(key: &str) {
+        delete_redis_runner(key);
+        wait_deleting_idle(&REDIS_DELETING, key).await;
+    }
+
+    async fn delete_etcd_and_wait(key: &str) {
+        delete_etcd_runner(key);
+        wait_deleting_idle(&ETCD_DELETING, key).await;
+    }
+
+    async fn delete_es_and_wait(key: &str) {
+        delete_es_runner(key);
+        wait_deleting_idle(&ES_DELETING, key).await;
+    }
+
+    async fn delete_kafka_and_wait(key: &str) {
+        delete_kafka_runner(key);
+        wait_deleting_idle(&KAFKA_DELETING, key).await;
+    }
+
+    async fn delete_otlp_and_wait(key: &str) {
+        delete_otlp_runner(key);
+        wait_deleting_idle(&OTLP_DELETING, key).await;
+        otlp_retiring_client_count();
+    }
+
+    struct InstanceCapReset(usize);
+    impl Drop for InstanceCapReset {
+        fn drop(&mut self) {
+            configure_link_sys_max_instances_per_kind(self.0);
+        }
+    }
+
+    #[tokio::test]
+    async fn apply_redis_refuses_new_key_at_instance_cap() {
+        let _cap = LINK_SYS_CAP_TEST_LOCK.lock();
+        let _guard = I5_DISPATCH_LOCK.lock().await;
+        let _reset = InstanceCapReset(get_link_sys_max_instances_per_kind());
+        configure_link_sys_max_instances_per_kind(1);
+
+        let live = "i5-ns/cap-live".to_string();
+        let extra = "i5-ns/cap-extra".to_string();
+        let live_ls = create_redis_linksys("i5-ns", "cap-live", InjectedSecret::Valid);
+        let extra_ls = create_redis_linksys("i5-ns", "cap-extra", InjectedSecret::Valid);
+
+        apply_redis(&live, &live_ls, false);
+        assert!(REDIS_RUNTIME.get(&live).is_some(), "first key must spawn");
+
+        apply_redis(&extra, &extra_ls, false);
+        assert!(
+            REDIS_RUNTIME.get(&extra).is_none(),
+            "new key must be refused at the instance cap"
+        );
+
+        apply_redis(&live, &live_ls, false);
+        assert!(
+            REDIS_RUNTIME.get(&live).is_some(),
+            "existing key updates must not be blocked by the cap"
+        );
+
+        delete_redis_and_wait(&live).await;
+        delete_redis_and_wait(&extra).await;
+    }
+
+    #[tokio::test]
+    async fn apply_redis_counts_deleting_joiners_against_instance_cap() {
+        let _cap = LINK_SYS_CAP_TEST_LOCK.lock();
+        let _guard = I5_DISPATCH_LOCK.lock().await;
+        let _reset = InstanceCapReset(get_link_sys_max_instances_per_kind());
+        configure_link_sys_max_instances_per_kind(1);
+
+        let extra = "i5-ns/cap-deleting-extra".to_string();
+        let extra_ls = create_redis_linksys("i5-ns", "cap-deleting-extra", InjectedSecret::Valid);
+        REDIS_DELETING
+            .lock()
+            .insert("i5-ns/cap-deleting-placeholder".to_string());
+        apply_redis(&extra, &extra_ls, false);
+        assert!(
+            REDIS_RUNTIME.get(&extra).is_none(),
+            "draining joiners must count toward the instance cap"
+        );
+        REDIS_DELETING.lock().remove("i5-ns/cap-deleting-placeholder");
+        delete_redis_and_wait(&extra).await;
+    }
+
+    fn create_etcd_linksys(namespace: &str, name: &str, inject: InjectedSecret) -> LinkSys {
+        use edgion_resources::resources::common::{SecretObjectReference, SecretSlot};
+        use edgion_resources::resources::link_sys::etcd::{EtcdAuth, EtcdClientConfig};
+        use edgion_resources::resources::link_sys::{LinkSysSpec, SystemConfig};
+        use k8s_openapi::api::core::v1::Secret;
+        use k8s_openapi::ByteString;
+        use std::collections::BTreeMap;
+
+        let secret = match inject {
+            InjectedSecret::Missing => None,
+            InjectedSecret::Valid => {
+                let mut data = BTreeMap::new();
+                data.insert("password".to_string(), ByteString(b"pw".to_vec()));
+                Some(Secret {
+                    data: Some(data),
+                    ..Default::default()
+                })
+            }
+            InjectedSecret::MalformedForInvalid => {
+                let mut data = BTreeMap::new();
+                data.insert("not-password".to_string(), ByteString(b"garbage".to_vec()));
+                Some(Secret {
+                    data: Some(data),
+                    ..Default::default()
+                })
+            }
+        };
+
+        LinkSys {
+            metadata: kube::core::ObjectMeta {
+                namespace: Some(namespace.to_string()),
+                name: Some(name.to_string()),
+                ..Default::default()
+            },
+            spec: LinkSysSpec {
+                unknown_fields: Vec::new(),
+                config: SystemConfig::Etcd(EtcdClientConfig {
+                    endpoints: vec!["http://127.0.0.1:2379".to_string()],
+                    auth: Some(EtcdAuth {
+                        slot: SecretSlot {
+                            secret_ref: SecretObjectReference {
+                                group: None,
+                                kind: None,
+                                name: "creds".to_string(),
+                                namespace: None,
+                            },
+                            secret,
+                        },
+                    }),
+                    tls: None,
+                    timeout: None,
+                    keep_alive: None,
+                    namespace: None,
+                    auto_sync_interval: None,
+                    max_call_send_size: None,
+                    max_call_recv_size: None,
+                    user_agent: None,
+                    reject_old_cluster: None,
+                    observability: None,
+                }),
+            },
+            status: None,
+        }
+    }
+
+    fn seed_etcd_from_ls(key: String, ls: &LinkSys) {
+        use crate::link_sys::runtime::runner::ApplyOwner;
+        seed_published_etcd(key.clone(), EtcdApply::build(&key, ls).expect("etcd seed"));
+    }
+
+    #[tokio::test]
+    async fn dispatch_full_set_preserves_existing_etcd_client_on_pending_update() {
+        let _guard = I5_DISPATCH_LOCK.lock().await;
+        let key = "i5-ns/etcd-preserve-full-set".to_string();
+
+        let ready = create_etcd_linksys("i5-ns", "etcd-preserve-full-set", InjectedSecret::Valid);
+        seed_etcd_from_ls(key.clone(), &ready);
+        let first = get_etcd_client(&key).expect("seeded etcd client should be published");
+
+        let pending = create_etcd_linksys("i5-ns", "etcd-preserve-full-set", InjectedSecret::Missing);
+        let mut data = HashMap::new();
+        data.insert(key.clone(), pending);
+        dispatch_full_set(next_dispatch_sequence(), &data, false).await;
+
+        let second = get_etcd_client(&key).expect("etcd client should be preserved on pending update");
+        assert!(
+            Arc::ptr_eq(&first, &second),
+            "the preserved etcd client must be the same Arc instance"
+        );
+
+        delete_etcd_and_wait(&key).await;
+    }
+
+    #[tokio::test]
+    async fn dispatch_full_set_relist_reuses_etcd_runner_and_published_client() {
+        let _guard = I5_DISPATCH_LOCK.lock().await;
+        let key = "i5-ns/etcd-relist-reuse".to_string();
+        let ready = create_etcd_linksys("i5-ns", "etcd-relist-reuse", InjectedSecret::Valid);
+        seed_etcd_from_ls(key.clone(), &ready);
+        let runner_first = ETCD_RUNTIME.get(&key).expect("seeded etcd runner");
+        let client_first = get_etcd_client(&key).expect("seeded etcd client");
+
+        let mut data = HashMap::new();
+        data.insert(key.clone(), ready);
+        dispatch_full_set(next_dispatch_sequence(), &data, false).await;
+
+        let runner_second = ETCD_RUNTIME.get(&key).expect("relist keeps etcd runner");
+        assert!(
+            Arc::ptr_eq(&runner_first, &runner_second),
+            "full-set relist must not spawn a second etcd runner"
+        );
+        let client_second = get_etcd_client(&key).expect("relist keeps published etcd client");
+        assert!(
+            Arc::ptr_eq(&client_first, &client_second),
+            "equal fingerprint relist must Reuse the etcd small handle"
+        );
+
+        delete_etcd_and_wait(&key).await;
+    }
+
+    #[tokio::test]
+    async fn apply_etcd_replays_last_write_after_deleting_window() {
+        let _guard = I5_DISPATCH_LOCK.lock().await;
+        let key = "i5-ns/etcd-pending-replay".to_string();
+        let ls = create_etcd_linksys("i5-ns", "etcd-pending-replay", InjectedSecret::Valid);
+        ETCD_DELETING.lock().insert(key.clone());
+        apply_etcd(&key, &ls, false);
+        assert!(
+            ETCD_RUNTIME.get(&key).is_none(),
+            "deleting window must not spawn a second etcd runner"
+        );
+        let pending = ETCD_PENDING.lock().remove(&key);
+        ETCD_DELETING.lock().remove(&key);
+        let (pending_ls, forced) = pending.expect("last write during delete must be retained");
+        if ETCD_RUNTIME.get(&key).is_none() {
+            apply_etcd(&key, &pending_ls, forced);
+        }
+        assert!(
+            ETCD_RUNTIME.get(&key).is_some(),
+            "join-complete replay must spawn the deferred Etcd runner"
+        );
+        delete_etcd_and_wait(&key).await;
+    }
+
+    #[tokio::test]
+    async fn delete_etcd_runner_drops_pending_so_kind_change_cannot_resurrect() {
+        let _guard = I5_DISPATCH_LOCK.lock().await;
+        let key = "i5-ns/etcd-pending-kind-change".to_string();
+        let ls = create_etcd_linksys("i5-ns", "etcd-pending-kind-change", InjectedSecret::Valid);
+        ETCD_DELETING.lock().insert(key.clone());
+        apply_etcd(&key, &ls, false);
+        assert!(ETCD_PENDING.lock().contains_key(&key));
+        ETCD_DELETING.lock().remove(&key);
+        delete_etcd_and_wait(&key).await;
+        assert!(
+            ETCD_PENDING.lock().get(&key).is_none(),
+            "kind-change delete must drop a deferred Etcd apply"
+        );
+        assert!(ETCD_RUNTIME.get(&key).is_none());
+    }
+
+    #[tokio::test]
+    async fn apply_etcd_not_ready_during_delete_drops_pending() {
+        let _guard = I5_DISPATCH_LOCK.lock().await;
+        let key = "i5-ns/etcd-pending-not-ready".to_string();
+        let ready = create_etcd_linksys("i5-ns", "etcd-pending-not-ready", InjectedSecret::Valid);
+        let pending = create_etcd_linksys("i5-ns", "etcd-pending-not-ready", InjectedSecret::Missing);
+        ETCD_DELETING.lock().insert(key.clone());
+        apply_etcd(&key, &ready, false);
+        assert!(ETCD_PENDING.lock().contains_key(&key));
+        apply_etcd(&key, &pending, false);
+        assert!(
+            ETCD_PENDING.lock().get(&key).is_none(),
+            "NotReady during delete must drop a deferred Etcd apply"
+        );
+        ETCD_DELETING.lock().remove(&key);
+    }
+
+    #[tokio::test]
+    async fn apply_etcd_spawn_lists_unpublished_runner() {
+        let _guard = I5_DISPATCH_LOCK.lock().await;
+        let key = "i5-ns/etcd-spawn-unpublished".to_string();
+        let ls = create_etcd_linksys("i5-ns", "etcd-spawn-unpublished", InjectedSecret::Valid);
+        let mut add = HashMap::new();
+        add.insert(key.clone(), ls.clone());
+        dispatch_partial_update(next_dispatch_sequence(), &add, &HashSet::new()).await;
+
+        let runner_first = ETCD_RUNTIME.get(&key).expect("ready dispatch spawns an etcd runner");
+        assert!(
+            get_etcd_client(&key).is_none(),
+            "get stays None until the first successful etcd init"
+        );
+        assert!(
+            list_etcd_clients().iter().any(|listed| listed == &key),
+            "D10: list includes connecting etcd runner keys"
+        );
+        assert!(etcd_runner_exists(&key));
+
+        dispatch_partial_update(next_dispatch_sequence(), &add, &HashSet::new()).await;
+        let runner_second = ETCD_RUNTIME.get(&key).expect("relist keeps etcd runner");
+        assert!(
+            Arc::ptr_eq(&runner_first, &runner_second),
+            "second ready dispatch must not spawn a second etcd runner"
+        );
+
+        delete_etcd_and_wait(&key).await;
+    }
+
+    #[tokio::test]
+    async fn apply_etcd_refuses_new_key_at_instance_cap() {
+        let _cap = LINK_SYS_CAP_TEST_LOCK.lock();
+        let _guard = I5_DISPATCH_LOCK.lock().await;
+        let _reset = InstanceCapReset(get_link_sys_max_instances_per_kind());
+        configure_link_sys_max_instances_per_kind(1);
+
+        let live = "i5-ns/etcd-cap-live".to_string();
+        let extra = "i5-ns/etcd-cap-extra".to_string();
+        let live_ls = create_etcd_linksys("i5-ns", "etcd-cap-live", InjectedSecret::Valid);
+        let extra_ls = create_etcd_linksys("i5-ns", "etcd-cap-extra", InjectedSecret::Valid);
+
+        apply_etcd(&live, &live_ls, false);
+        assert!(ETCD_RUNTIME.get(&live).is_some(), "first etcd key must spawn");
+
+        apply_etcd(&extra, &extra_ls, false);
+        assert!(
+            ETCD_RUNTIME.get(&extra).is_none(),
+            "new etcd key must be refused at the instance cap"
+        );
+
+        apply_etcd(&live, &live_ls, false);
+        assert!(
+            ETCD_RUNTIME.get(&live).is_some(),
+            "existing etcd key updates must not be blocked by the cap"
+        );
+
+        delete_etcd_runner(&live);
+        delete_etcd_runner(&extra);
+    }
+
+    #[tokio::test]
+    async fn apply_etcd_counts_deleting_joiners_against_instance_cap() {
+        let _cap = LINK_SYS_CAP_TEST_LOCK.lock();
+        let _guard = I5_DISPATCH_LOCK.lock().await;
+        let _reset = InstanceCapReset(get_link_sys_max_instances_per_kind());
+        configure_link_sys_max_instances_per_kind(1);
+
+        let extra = "i5-ns/etcd-cap-deleting-extra".to_string();
+        let extra_ls = create_etcd_linksys("i5-ns", "etcd-cap-deleting-extra", InjectedSecret::Valid);
+        ETCD_DELETING
+            .lock()
+            .insert("i5-ns/etcd-cap-deleting-placeholder".to_string());
+        apply_etcd(&extra, &extra_ls, false);
+        assert!(
+            ETCD_RUNTIME.get(&extra).is_none(),
+            "draining etcd joiners must count toward the instance cap"
+        );
+        ETCD_DELETING.lock().remove("i5-ns/etcd-cap-deleting-placeholder");
+        delete_etcd_and_wait(&extra).await;
+    }
+
+    fn create_es_linksys(namespace: &str, name: &str, inject: InjectedSecret) -> LinkSys {
+        use edgion_resources::resources::common::{SecretObjectReference, SecretSlot};
+        use edgion_resources::resources::link_sys::elasticsearch::{ElasticsearchAuth, ElasticsearchClientConfig};
+        use edgion_resources::resources::link_sys::{LinkSysSpec, SystemConfig};
+        use k8s_openapi::api::core::v1::Secret;
+        use k8s_openapi::ByteString;
+        use std::collections::BTreeMap;
+
+        let secret = match inject {
+            InjectedSecret::Missing => None,
+            InjectedSecret::Valid => {
+                let mut data = BTreeMap::new();
+                data.insert("password".to_string(), ByteString(b"pw".to_vec()));
+                Some(Secret {
+                    data: Some(data),
+                    ..Default::default()
+                })
+            }
+            InjectedSecret::MalformedForInvalid => {
+                let mut data = BTreeMap::new();
+                data.insert("not-password".to_string(), ByteString(b"garbage".to_vec()));
+                Some(Secret {
+                    data: Some(data),
+                    ..Default::default()
+                })
+            }
+        };
+
+        LinkSys {
+            metadata: kube::core::ObjectMeta {
+                namespace: Some(namespace.to_string()),
+                name: Some(name.to_string()),
+                ..Default::default()
+            },
+            spec: LinkSysSpec {
+                unknown_fields: Vec::new(),
+                config: SystemConfig::Elasticsearch(ElasticsearchClientConfig {
+                    endpoints: vec!["http://127.0.0.1:9200".to_string()],
+                    auth: Some(ElasticsearchAuth::Basic {
+                        slot: SecretSlot {
+                            secret_ref: SecretObjectReference {
+                                group: None,
+                                kind: None,
+                                name: "creds".to_string(),
+                                namespace: None,
+                            },
+                            secret,
+                        },
+                    }),
+                    tls: None,
+                    timeout: None,
+                    pool: None,
+                    bulk: None,
+                    index: None,
+                }),
+            },
+            status: None,
+        }
+    }
+
+    fn seed_es_from_ls(key: String, ls: &LinkSys) {
+        use crate::link_sys::runtime::runner::ApplyOwner;
+        seed_published_es(key.clone(), EsApply::build(&key, ls).expect("es seed"));
+    }
+
+    #[tokio::test]
+    async fn dispatch_full_set_relist_reuses_es_runner_and_published_client() {
+        let _guard = I5_DISPATCH_LOCK.lock().await;
+        let key = "i5-ns/es-relist-reuse".to_string();
+        let ready = create_es_linksys("i5-ns", "es-relist-reuse", InjectedSecret::Valid);
+        seed_es_from_ls(key.clone(), &ready);
+        let runner_first = ES_RUNTIME.get(&key).expect("seeded es runner");
+        let client_first = get_es_client(&key).expect("seeded es client");
+
+        let mut data = HashMap::new();
+        data.insert(key.clone(), ready);
+        dispatch_full_set(next_dispatch_sequence(), &data, false).await;
+
+        let runner_second = ES_RUNTIME.get(&key).expect("relist keeps es runner");
+        assert!(
+            Arc::ptr_eq(&runner_first, &runner_second),
+            "full-set relist must not spawn a second es runner"
+        );
+        let client_second = get_es_client(&key).expect("relist keeps published es client");
+        assert!(
+            Arc::ptr_eq(&client_first, &client_second),
+            "equal fingerprint relist must Reuse the es small handle"
+        );
+
+        delete_es_and_wait(&key).await;
+    }
+
+    #[tokio::test]
+    async fn apply_es_spawn_lists_unpublished_runner() {
+        let _guard = I5_DISPATCH_LOCK.lock().await;
+        let key = "i5-ns/es-spawn-unpublished".to_string();
+        let ls = create_es_linksys("i5-ns", "es-spawn-unpublished", InjectedSecret::Valid);
+        let mut add = HashMap::new();
+        add.insert(key.clone(), ls.clone());
+        dispatch_partial_update(next_dispatch_sequence(), &add, &HashSet::new()).await;
+
+        let runner_first = ES_RUNTIME.get(&key).expect("ready dispatch spawns an es runner");
+        assert!(
+            get_es_client(&key).is_none(),
+            "get stays None until the first successful es init"
+        );
+        assert!(es_runner_exists(&key));
+
+        dispatch_partial_update(next_dispatch_sequence(), &add, &HashSet::new()).await;
+        let runner_second = ES_RUNTIME.get(&key).expect("relist keeps es runner");
+        assert!(
+            Arc::ptr_eq(&runner_first, &runner_second),
+            "second ready dispatch must not spawn a second es runner"
+        );
+
+        delete_es_and_wait(&key).await;
+    }
+
+    #[tokio::test]
+    async fn apply_es_refuses_new_key_at_instance_cap() {
+        let _cap = LINK_SYS_CAP_TEST_LOCK.lock();
+        let _guard = I5_DISPATCH_LOCK.lock().await;
+        let _reset = InstanceCapReset(get_link_sys_max_instances_per_kind());
+        configure_link_sys_max_instances_per_kind(1);
+
+        let live = "i5-ns/es-cap-live".to_string();
+        let extra = "i5-ns/es-cap-extra".to_string();
+        let live_ls = create_es_linksys("i5-ns", "es-cap-live", InjectedSecret::Valid);
+        let extra_ls = create_es_linksys("i5-ns", "es-cap-extra", InjectedSecret::Valid);
+
+        apply_es(&live, &live_ls, false);
+        assert!(ES_RUNTIME.get(&live).is_some(), "first es key must spawn");
+
+        apply_es(&extra, &extra_ls, false);
+        assert!(
+            ES_RUNTIME.get(&extra).is_none(),
+            "new es key must be refused at the instance cap"
+        );
+
+        apply_es(&live, &live_ls, false);
+        assert!(
+            ES_RUNTIME.get(&live).is_some(),
+            "existing es key updates must not be blocked by the cap"
+        );
+
+        delete_es_and_wait(&live).await;
+        delete_es_and_wait(&extra).await;
+    }
+
+    fn create_kafka_linksys(namespace: &str, name: &str) -> LinkSys {
+        use edgion_resources::resources::link_sys::kafka::KafkaClientConfig;
+        use edgion_resources::resources::link_sys::{LinkSysSpec, SystemConfig};
+
+        LinkSys {
+            metadata: kube::core::ObjectMeta {
+                namespace: Some(namespace.to_string()),
+                name: Some(name.to_string()),
+                ..Default::default()
+            },
+            spec: LinkSysSpec {
+                unknown_fields: Vec::new(),
+                config: SystemConfig::Kafka(KafkaClientConfig {
+                    brokers: vec!["127.0.0.1:9092".to_string()],
+                    sasl: None,
+                    tls: None,
+                    channel_size: None,
+                    max_topics: None,
+                    max_pending_records: None,
+                    max_pending_bytes: None,
+                    linger_ms: None,
+                }),
+            },
+            status: None,
+        }
+    }
+
+    fn create_kafka_linksys_sasl(namespace: &str, name: &str, inject: InjectedSecret) -> LinkSys {
+        use edgion_resources::resources::common::{SecretObjectReference, SecretSlot};
+        use edgion_resources::resources::link_sys::kafka::{KafkaClientConfig, KafkaSaslConfig};
+        use edgion_resources::resources::link_sys::{LinkSysSpec, SystemConfig};
+        use k8s_openapi::api::core::v1::Secret;
+        use k8s_openapi::ByteString;
+        use std::collections::BTreeMap;
+
+        let secret = match inject {
+            InjectedSecret::Missing => None,
+            InjectedSecret::Valid => {
+                let mut data = BTreeMap::new();
+                data.insert("password".to_string(), ByteString(b"pw".to_vec()));
+                Some(Secret {
+                    data: Some(data),
+                    ..Default::default()
+                })
+            }
+            InjectedSecret::MalformedForInvalid => {
+                let mut data = BTreeMap::new();
+                data.insert("not-password".to_string(), ByteString(b"garbage".to_vec()));
+                Some(Secret {
+                    data: Some(data),
+                    ..Default::default()
+                })
+            }
+        };
+
+        LinkSys {
+            metadata: kube::core::ObjectMeta {
+                namespace: Some(namespace.to_string()),
+                name: Some(name.to_string()),
+                ..Default::default()
+            },
+            spec: LinkSysSpec {
+                unknown_fields: Vec::new(),
+                config: SystemConfig::Kafka(KafkaClientConfig {
+                    brokers: vec!["127.0.0.1:9092".to_string()],
+                    sasl: Some(KafkaSaslConfig {
+                        username: "alice".to_string(),
+                        password: SecretSlot {
+                            secret_ref: SecretObjectReference {
+                                group: None,
+                                kind: None,
+                                name: "creds".to_string(),
+                                namespace: None,
+                            },
+                            secret,
+                        },
+                    }),
+                    tls: None,
+                    channel_size: None,
+                    max_topics: None,
+                    max_pending_records: None,
+                    max_pending_bytes: None,
+                    linger_ms: None,
+                }),
+            },
+            status: None,
+        }
+    }
+
+    fn seed_kafka_from_ls(key: String, ls: &LinkSys) {
+        use crate::link_sys::runtime::runner::ApplyOwner;
+        seed_published_kafka(key.clone(), KafkaApply::build(&key, ls).expect("kafka seed"));
+    }
+
+    #[tokio::test]
+    async fn dispatch_full_set_relist_reuses_kafka_runner_and_published_client() {
+        let _guard = I5_DISPATCH_LOCK.lock().await;
+        let key = "i5-ns/kafka-relist-reuse".to_string();
+        let ready = create_kafka_linksys("i5-ns", "kafka-relist-reuse");
+        seed_kafka_from_ls(key.clone(), &ready);
+        let runner_first = KAFKA_RUNTIME.get(&key).expect("seeded kafka runner");
+        let client_first = get_kafka_client(&key).expect("seeded kafka client");
+
+        let mut data = HashMap::new();
+        data.insert(key.clone(), ready);
+        dispatch_full_set(next_dispatch_sequence(), &data, false).await;
+
+        let runner_second = KAFKA_RUNTIME.get(&key).expect("relist keeps kafka runner");
+        assert!(
+            Arc::ptr_eq(&runner_first, &runner_second),
+            "full-set relist must not spawn a second kafka runner"
+        );
+        let client_second = get_kafka_client(&key).expect("relist keeps published kafka client");
+        assert!(
+            Arc::ptr_eq(&client_first, &client_second),
+            "equal fingerprint relist must Reuse the kafka small handle"
+        );
+
+        delete_kafka_and_wait(&key).await;
+    }
+
+    #[tokio::test]
+    async fn apply_kafka_spawn_lists_unpublished_runner() {
+        let _guard = I5_DISPATCH_LOCK.lock().await;
+        let key = "i5-ns/kafka-spawn-unpublished".to_string();
+        let ls = create_kafka_linksys("i5-ns", "kafka-spawn-unpublished");
+        let mut add = HashMap::new();
+        add.insert(key.clone(), ls.clone());
+        dispatch_partial_update(next_dispatch_sequence(), &add, &HashSet::new()).await;
+
+        let runner_first = KAFKA_RUNTIME.get(&key).expect("ready dispatch spawns a kafka runner");
+        assert!(
+            get_kafka_client(&key).is_none(),
+            "get stays None until the first successful kafka init"
+        );
+        assert!(
+            list_kafka_clients().iter().any(|listed| listed == &key),
+            "D10: list includes connecting kafka runner keys"
+        );
+        assert!(kafka_runner_exists(&key));
+
+        dispatch_partial_update(next_dispatch_sequence(), &add, &HashSet::new()).await;
+        let runner_second = KAFKA_RUNTIME.get(&key).expect("relist keeps kafka runner");
+        assert!(
+            Arc::ptr_eq(&runner_first, &runner_second),
+            "second ready dispatch must not spawn a second kafka runner"
+        );
+
+        delete_kafka_and_wait(&key).await;
+    }
+
+    #[tokio::test]
+    async fn apply_kafka_refuses_new_key_at_instance_cap() {
+        let _cap = LINK_SYS_CAP_TEST_LOCK.lock();
+        let _guard = I5_DISPATCH_LOCK.lock().await;
+        let _reset = InstanceCapReset(get_link_sys_max_instances_per_kind());
+        configure_link_sys_max_instances_per_kind(1);
+
+        let live = "i5-ns/kafka-cap-live".to_string();
+        let extra = "i5-ns/kafka-cap-extra".to_string();
+        let live_ls = create_kafka_linksys("i5-ns", "kafka-cap-live");
+        let extra_ls = create_kafka_linksys("i5-ns", "kafka-cap-extra");
+
+        apply_kafka(&live, &live_ls, false);
+        assert!(KAFKA_RUNTIME.get(&live).is_some(), "first kafka key must spawn");
+
+        apply_kafka(&extra, &extra_ls, false);
+        assert!(
+            KAFKA_RUNTIME.get(&extra).is_none(),
+            "new kafka key must be refused at the instance cap"
+        );
+
+        apply_kafka(&live, &live_ls, false);
+        assert!(
+            KAFKA_RUNTIME.get(&live).is_some(),
+            "existing kafka key updates must not be blocked by the cap"
+        );
+
+        delete_kafka_and_wait(&live).await;
+        delete_kafka_and_wait(&extra).await;
+    }
+
+    #[tokio::test]
+    async fn apply_kafka_not_ready_during_delete_drops_pending() {
+        let _guard = I5_DISPATCH_LOCK.lock().await;
+        let key = "i5-ns/kafka-pending-not-ready".to_string();
+        let ready = create_kafka_linksys_sasl("i5-ns", "kafka-pending-not-ready", InjectedSecret::Valid);
+        let pending = create_kafka_linksys_sasl("i5-ns", "kafka-pending-not-ready", InjectedSecret::Missing);
+        KAFKA_DELETING.lock().insert(key.clone());
+        apply_kafka(&key, &ready, false);
+        assert!(KAFKA_PENDING.lock().contains_key(&key));
+        apply_kafka(&key, &pending, false);
+        assert!(
+            KAFKA_PENDING.lock().get(&key).is_none(),
+            "NotReady during delete must drop a deferred Kafka apply"
+        );
+        KAFKA_DELETING.lock().remove(&key);
+    }
+
+    #[tokio::test]
+    async fn retain_kafka_runners_drops_pending_for_absent_deleting_key() {
+        let _guard = I5_DISPATCH_LOCK.lock().await;
+        let key = "i5-ns/kafka-retain-pending".to_string();
+        let ls = create_kafka_linksys("i5-ns", "kafka-retain-pending");
+        KAFKA_DELETING.lock().insert(key.clone());
+        apply_kafka(&key, &ls, false);
+        assert!(KAFKA_PENDING.lock().contains_key(&key));
+        retain_kafka_runners(&HashSet::new());
+        assert!(
+            KAFKA_PENDING.lock().get(&key).is_none(),
+            "full-set retain must drop a deferred Kafka apply when the key is absent"
+        );
+        KAFKA_DELETING.lock().remove(&key);
+    }
+
+    fn create_otlp_linksys(namespace: &str, name: &str, auth: InjectedSecret) -> LinkSys {
+        use edgion_resources::resources::common::{SecretObjectReference, SecretSlot};
+        use edgion_resources::resources::link_sys::otlp::{OtlpAuth, OtlpClientConfig};
+        use edgion_resources::resources::link_sys::{LinkSysSpec, SystemConfig};
+        use k8s_openapi::api::core::v1::Secret;
+        use k8s_openapi::ByteString;
+        use std::collections::BTreeMap;
+
+        let secret = match auth {
+            InjectedSecret::Missing => None,
+            InjectedSecret::Valid => Some(Secret {
+                data: Some(BTreeMap::from([(
+                    "bearerToken".to_string(),
+                    ByteString(b"token".to_vec()),
+                )])),
+                ..Default::default()
+            }),
+            InjectedSecret::MalformedForInvalid => Some(Secret {
+                data: Some(BTreeMap::from([("wrong".to_string(), ByteString(b"value".to_vec()))])),
+                ..Default::default()
+            }),
+        };
+
+        LinkSys {
+            metadata: kube::core::ObjectMeta {
+                namespace: Some(namespace.to_string()),
+                name: Some(name.to_string()),
+                ..Default::default()
+            },
+            spec: LinkSysSpec {
+                unknown_fields: Vec::new(),
+                config: SystemConfig::Otlp(OtlpClientConfig {
+                    endpoint: "http://192.0.2.1:4317".to_string(),
+                    timeout_ms: 10_000,
+                    auth: Some(OtlpAuth {
+                        slot: SecretSlot {
+                            secret_ref: SecretObjectReference {
+                                group: None,
+                                kind: None,
+                                name: "auth".to_string(),
+                                namespace: None,
+                            },
+                            secret,
+                        },
+                    }),
+                    tls: None,
+                }),
+            },
+            status: None,
+        }
+    }
+
+    fn seed_otlp_from_ls(key: String, ls: &LinkSys) {
+        use crate::link_sys::runtime::runner::ApplyOwner;
+
+        let client = OtlpApply::build(&key, ls).expect("OTLP seed");
+        client.publish_lazy_test_pipeline().expect("OTLP lazy pipeline");
+        seed_published_otlp(key, client);
+    }
+
+    #[tokio::test]
+    async fn dispatch_full_set_relist_reuses_otlp_runner_and_published_client() {
+        let _guard = I5_DISPATCH_LOCK.lock().await;
+        let key = "i5-ns/otlp-relist-reuse".to_string();
+        let ready = create_otlp_linksys("i5-ns", "otlp-relist-reuse", InjectedSecret::Valid);
+        seed_otlp_from_ls(key.clone(), &ready);
+        let runner_first = OTLP_RUNTIME.get(&key).expect("seeded OTLP runner");
+        let client_first = get_otlp_client(&key).expect("seeded OTLP client");
+
+        dispatch_full_set(next_dispatch_sequence(), &HashMap::from([(key.clone(), ready)]), false).await;
+
+        let runner_second = OTLP_RUNTIME.get(&key).expect("relist keeps OTLP runner");
+        assert!(Arc::ptr_eq(&runner_first, &runner_second));
+        let client_second = get_otlp_client(&key).expect("relist keeps OTLP client");
+        assert!(
+            Arc::ptr_eq(&client_first, &client_second),
+            "equal fingerprint relist must reuse the OTLP exporter"
+        );
+        delete_otlp_and_wait(&key).await;
+    }
+
+    #[tokio::test]
+    async fn apply_otlp_lists_unpublished_runner_and_get_stays_none() {
+        let _guard = I5_DISPATCH_LOCK.lock().await;
+        let key = "i5-ns/otlp-unpublished".to_string();
+        let ready = create_otlp_linksys("i5-ns", "otlp-unpublished", InjectedSecret::Valid);
+        apply_otlp(&key, &ready, false);
+
+        assert!(OTLP_RUNTIME.get(&key).is_some());
+        assert!(list_otlp_clients().iter().any(|listed| listed == &key));
+        assert!(
+            get_otlp_client(&key).is_none(),
+            "D14: get stays None until empty Export succeeds"
+        );
+        delete_otlp_and_wait(&key).await;
+    }
+
+    #[tokio::test]
+    async fn apply_otlp_counts_deleting_joiners_toward_instance_cap() {
+        let _cap = LINK_SYS_CAP_TEST_LOCK.lock();
+        let _guard = I5_DISPATCH_LOCK.lock().await;
+        let _reset = InstanceCapReset(get_link_sys_max_instances_per_kind());
+        configure_link_sys_max_instances_per_kind(1);
+        let deleting = "i5-ns/otlp-cap-deleting".to_string();
+        let extra = "i5-ns/otlp-cap-extra".to_string();
+        OTLP_DELETING.lock().insert(deleting.clone());
+
+        let ready = create_otlp_linksys("i5-ns", "otlp-cap-extra", InjectedSecret::Valid);
+        apply_otlp(&extra, &ready, false);
+        assert!(
+            OTLP_RUNTIME.get(&extra).is_none(),
+            "deleting OTLP joiners must consume instance capacity"
+        );
+        OTLP_DELETING.lock().remove(&deleting);
+    }
+
+    #[tokio::test]
+    async fn apply_otlp_not_ready_during_delete_drops_pending() {
+        let _guard = I5_DISPATCH_LOCK.lock().await;
+        let key = "i5-ns/otlp-pending-not-ready".to_string();
+        let ready = create_otlp_linksys("i5-ns", "otlp-pending-not-ready", InjectedSecret::Valid);
+        let pending = create_otlp_linksys("i5-ns", "otlp-pending-not-ready", InjectedSecret::Missing);
+        OTLP_DELETING.lock().insert(key.clone());
+        apply_otlp(&key, &ready, false);
+        assert!(OTLP_PENDING.lock().contains_key(&key));
+        apply_otlp(&key, &pending, false);
+        assert!(
+            OTLP_PENDING.lock().get(&key).is_none(),
+            "NotReady during delete must drop a deferred OTLP apply"
+        );
+        OTLP_DELETING.lock().remove(&key);
     }
 
     /// An `Invalid` credential state must also block client builds, symmetric
@@ -2049,7 +3397,7 @@ mod tests {
         let mut data = HashMap::new();
         data.insert(key.clone(), ls);
 
-        dispatch_full_set(next_dispatch_sequence(), &data).await;
+        dispatch_full_set(next_dispatch_sequence(), &data, false).await;
 
         assert!(
             get_redis_client(&key).is_none(),
@@ -2103,6 +3451,34 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn dispatch_full_set_relist_reuses_webhook_registration() {
+        let _guard = I5_DISPATCH_LOCK.lock().await;
+        let key = "i5-ns/webhook-relist-reuse".to_string();
+        let ls = create_test_webhook_linksys("i5-ns", "webhook-relist-reuse");
+        let mut data = HashMap::new();
+        data.insert(key.clone(), ls);
+        dispatch_full_set(next_dispatch_sequence(), &data, false).await;
+
+        let first = WEBHOOK_RUNTIME.get(&key).expect("first webhook publish");
+        let first_entry = first.prepared_entry();
+        dispatch_full_set(next_dispatch_sequence(), &data, false).await;
+        let second = WEBHOOK_RUNTIME.get(&key).expect("relist webhook");
+        assert!(
+            Arc::ptr_eq(&first, &second),
+            "equal fingerprint relist must keep the webhook runtime Arc"
+        );
+        let second_entry = second.prepared_entry();
+        assert!(
+            Arc::ptr_eq(first_entry.registration(), second_entry.registration()),
+            "equal fingerprint relist must not prepare a new webhook registration"
+        );
+
+        let mut remove = HashSet::new();
+        remove.insert(key);
+        dispatch_partial_update(next_dispatch_sequence(), &HashMap::new(), &remove).await;
+    }
+
+    #[tokio::test]
     async fn dispatch_partial_update_replace_webhook_keeps_runtime_arc_swap() {
         use edgion_resources::resources::link_sys::webhook::WebhookServiceConfig;
         use edgion_resources::resources::link_sys::{LinkSysSpec, SystemConfig};
@@ -2116,7 +3492,7 @@ mod tests {
         // Use a unique key to also avoid interference with other tests' add/remove paths.
         let key = "t13-ns/wh-arc-swap".to_string();
 
-        let make_ls = || {
+        let make_ls = |port: i32| {
             use edgion_resources::resources::link_sys::webhook::{
                 ExternalHttpConnection, WebhookServiceRef, WebhookTarget,
             };
@@ -2135,7 +3511,7 @@ mod tests {
                                     kind: None,
                                     name: Some("webhook-svc".to_string()),
                                     namespace: Some("t13-ns".to_string()),
-                                    port: Some(8080),
+                                    port: Some(port),
                                     ..Default::default()
                                 },
                                 ..Default::default()
@@ -2151,7 +3527,7 @@ mod tests {
 
         // Add
         let mut add = HashMap::new();
-        add.insert(key.clone(), make_ls());
+        add.insert(key.clone(), make_ls(8080));
         dispatch_partial_update(next_dispatch_sequence(), &add, &HashSet::new()).await;
         // The prepared commit publishes the manager before atomically updating
         // WEBHOOK_RUNTIME, so the Arc is visible when dispatch returns.
@@ -2166,10 +3542,10 @@ mod tests {
             "runtime bookkeeping and callable manager must publish the same client"
         );
 
-        // Update (different config) — a new Arc should replace the old one.
-        // Webhook replacement is manager-atomic and does not use generic shutdown.
+        // Update (different port) — a new Arc should replace the old one.
+        // Equal-fingerprint relists skip prepare; a rebuild still prepare/commits.
         let mut update = HashMap::new();
-        update.insert(key.clone(), make_ls());
+        update.insert(key.clone(), make_ls(8081));
         dispatch_partial_update(next_dispatch_sequence(), &update, &HashSet::new()).await;
         let arc2 = WEBHOOK_RUNTIME.get(&key);
         assert!(arc2.is_some(), "after update, WEBHOOK_RUNTIME must still hold a client");
@@ -2215,118 +3591,9 @@ mod runtime_stats_tests {
     }
 
     #[test]
-    fn empty_otlp_owner_store_reports_no_residue() {
-        let store: ProviderRuntimeStore<OtlpLinkClient> = ProviderRuntimeStore::new();
+    fn empty_otlp_runner_store_reports_no_residue() {
+        let store: ProviderRuntimeStore<PersistentRunner<OtlpApply>> = ProviderRuntimeStore::new();
         assert_eq!(store.count(), 0);
         assert!(store.list().is_empty());
-    }
-
-    fn pending_otlp(name: &str) -> LinkSys {
-        serde_json::from_value(serde_json::json!({
-            "apiVersion": "edgion.io/v1", "kind": "LinkSys",
-            "metadata": {"namespace": "otlp-store-test", "name": name},
-            "spec": {"type": "otlp", "config": {
-                "endpoint": "https://collector.example.test:4317",
-                "auth": {"secretRef": {"name": "missing-auth"}}
-            }}
-        }))
-        .unwrap()
-    }
-
-    #[test]
-    fn otlp_full_partial_invalid_type_change_and_remove_keep_owner_scope() {
-        let _guard = I5_DISPATCH_LOCK.blocking_lock();
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
-        runtime.block_on(async {
-            let store = get_global_link_sys_store();
-            let first_key = "otlp-store-test/first".to_owned();
-            let second_key = "otlp-store-test/second".to_owned();
-            let initial = HashMap::from([
-                (first_key.clone(), pending_otlp("first")),
-                (second_key.clone(), pending_otlp("second")),
-            ]);
-            store.replace_all(initial.clone());
-            let first = get_otlp_client(&first_key).unwrap();
-            let second = get_otlp_client(&second_key).unwrap();
-            assert!(!first.healthy());
-            assert!(!second.healthy());
-
-            let mut invalid = pending_otlp("first");
-            let edgion_resources::resources::link_sys::SystemConfig::Otlp(config) = &mut invalid.spec.config else {
-                panic!("test fixture is OTLP");
-            };
-            config.endpoint = "http://private-sentinel@collector".into();
-            store.update(HashMap::from([(first_key.clone(), invalid)]), &HashSet::new());
-            assert!(Arc::ptr_eq(&first, &get_otlp_client(&first_key).unwrap()));
-            assert!(Arc::ptr_eq(&second, &get_otlp_client(&second_key).unwrap()));
-
-            // Full-set absence removes only that owner; pending credentials retain
-            // the other owner without ever opening a socket in this unit test.
-            store.replace_all(HashMap::from([(first_key.clone(), pending_otlp("first"))]));
-            assert!(get_otlp_client(&second_key).is_none());
-            assert!(Arc::ptr_eq(&first, &get_otlp_client(&first_key).unwrap()));
-
-            let other: LinkSys = serde_json::from_value(serde_json::json!({
-                "apiVersion": "edgion.io/v1", "kind": "LinkSys",
-                "metadata": {"namespace": "otlp-store-test", "name": "first"},
-                "spec": {"type": "httpdns", "config": {"urlTemplate": "https://dns.example.test/{domain}"}}
-            }))
-            .unwrap();
-            store.update(HashMap::from([(first_key.clone(), other)]), &HashSet::new());
-            assert!(get_otlp_client(&first_key).is_none());
-            assert!(!first.healthy());
-            store.update(initial, &HashSet::new());
-            store.update(HashMap::new(), &HashSet::from([first_key.clone(), second_key.clone()]));
-            assert!(get_otlp_client(&first_key).is_none());
-            assert!(get_otlp_client(&second_key).is_none());
-            tokio::time::timeout(std::time::Duration::from_secs(2), async {
-                while otlp_retiring_client_count() != 0 {
-                    tokio::task::yield_now().await;
-                }
-            })
-            .await
-            .expect("removed owners must finish cleanup");
-        });
-    }
-
-    #[test]
-    fn otlp_source_entries_precede_ordered_unrelated_async_dispatch() {
-        let _guard = I5_DISPATCH_LOCK.blocking_lock();
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
-        runtime.block_on(async {
-            let store = get_global_link_sys_store();
-            let first_key = "otlp-store-test/source-first".to_owned();
-            let second_key = "otlp-store-test/source-second".to_owned();
-            let first = HashMap::from([(first_key.clone(), pending_otlp("source-first"))]);
-            let second = HashMap::from([(second_key.clone(), pending_otlp("source-second"))]);
-            store.update(first.clone(), &HashSet::new());
-            store.update(second.clone(), &HashSet::new());
-            // No async task has been polled yet on this current-thread runtime.
-            // Both desired-state entries must already exist at source publication.
-            let first_owner = get_otlp_client(&first_key).expect("earlier key is configured synchronously");
-            let second_owner = get_otlp_client(&second_key).expect("unrelated later key is configured synchronously");
-            let tail = LINK_SYS_DISPATCH_TAIL.lock().take().unwrap();
-            tail.await.unwrap();
-            assert!(Arc::ptr_eq(&first_owner, &get_otlp_client(&first_key).unwrap()));
-            assert!(Arc::ptr_eq(&second_owner, &get_otlp_client(&second_key).unwrap()));
-            store.rebuild_clients();
-            assert!(Arc::ptr_eq(&first_owner, &get_otlp_client(&first_key).unwrap()));
-            store.update(HashMap::new(), &HashSet::from([first_key.clone(), second_key.clone()]));
-            assert!(get_otlp_client(&first_key).is_none());
-            assert!(!first_owner.healthy());
-            tokio::time::timeout(std::time::Duration::from_secs(2), async {
-                while otlp_retiring_client_count() != 0 {
-                    tokio::task::yield_now().await;
-                }
-            })
-            .await
-            .expect("removed owners must finish cleanup");
-        });
     }
 }

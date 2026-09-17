@@ -8,11 +8,10 @@ knowledge_type: regression-guards
 
 ## Conclusion and scope
 
-`LinkSysLifecycle` is the shared contract for providers using the generic
-LinkSys dispatch helpers. Redis, Etcd, Elasticsearch, and Kafka currently use
-it. `WebhookLinkClient` deliberately does not implement the trait; Gateway
-Webhook publication is owned by `WebhookManager` and its ordered mutation
-guard.
+`LinkSysLifecycle` is a leftover trait in `edgion-common`. Redis, Etcd, Elasticsearch,
+and Kafka use the persistent runner (`ApplyOwner`) instead. `WebhookLinkClient`
+deliberately does not implement the trait; Gateway Webhook publication is
+owned by `WebhookManager` and its ordered mutation guard.
 
 ## Rationale and evidence
 
@@ -41,12 +40,8 @@ equivalent.
 
 Re-evaluate this boundary if Webhook publication is redesigned or the generic
 dispatch contract gains an ordered transactional publication mechanism. The
-2026-09-12 documentation correction was checked against all current
-`LinkSysLifecycle` implementations and both Webhook dispatch paths. Independent
-review found no issue. `cargo fmt --all`, `cargo check --workspace --all-targets`,
-`cargo clippy --workspace --all-targets`, and the agent-document, SSA-force,
-metrics-inventory, and Pingora-source guards passed; Clippy reported only
-pre-existing warnings outside this documentation-only change.
+2026-09-17 Kafka runner migration was checked against remaining
+`LinkSysLifecycle` implementors (none) and both Webhook dispatch paths.
 
 ## Resolution references
 

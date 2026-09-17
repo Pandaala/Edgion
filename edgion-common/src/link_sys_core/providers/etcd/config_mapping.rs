@@ -19,8 +19,8 @@ use edgion_resources::resources::link_sys::etcd::EtcdClientConfig;
 // Safety ceilings for connection configuration
 // ============================================================================
 
-const MAX_DIAL_TIMEOUT_MS: u64 = 30_000;
-const MAX_REQUEST_TIMEOUT_MS: u64 = 60_000;
+pub const MAX_DIAL_TIMEOUT_MS: u64 = 30_000;
+pub const MAX_REQUEST_TIMEOUT_MS: u64 = 60_000;
 const DEFAULT_DIAL_TIMEOUT_MS: u64 = 5_000;
 
 // ============================================================================

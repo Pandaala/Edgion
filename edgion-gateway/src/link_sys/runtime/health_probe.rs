@@ -159,6 +159,12 @@ pub(crate) async fn run_probe_loop<F, Fut>(
             result = tokio::time::timeout(cfg.probe_timeout, probe_fn()) => matches!(result, Ok(true)),
         };
 
+        // A shutdown that lands after the probe future resolves must not write
+        // the shared gauge for a generation that is already unpublished.
+        if *shutdown_rx.borrow() {
+            return;
+        }
+
         apply_health_result(
             &healthy,
             &cfg.name,
@@ -189,9 +195,10 @@ pub(crate) async fn run_probe_loop<F, Fut>(
     }
 }
 
-/// Spawn `run_probe_loop` as a detached task. Returns the handle; ES/Kafka store
-/// and `abort()` it on shutdown. OTLP retains and joins the handle after
-/// signalling the shutdown watch, including during an in-flight probe.
+/// Spawn `run_probe_loop` as a detached task. Returns the handle; ES, Kafka, and
+/// OTLP `abort()` it from `mark_retired` so a retired generation cannot write the
+/// shared health gauge after handover. The shutdown watch remains a best-effort
+/// clean loop exit when abort races the next select.
 pub(crate) fn spawn_health_probe<F, Fut>(
     cfg: ProbeConfig,
     healthy: Arc<AtomicBool>,

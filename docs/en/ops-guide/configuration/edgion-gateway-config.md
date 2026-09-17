@@ -97,6 +97,7 @@ spec:
 
   linkSys:
     webhookMaxResponseBytes: 16384   # Hard cap for LinkSys webhook response body (16 KiB)
+    maxInstancesPerKind: 200         # Max live+draining instances per provider kind
 ```
 
 > Note: URI path normalization (`%2F` rejection, invalid percent-encoding rejection, etc.) is **not** part of EdgionGatewayConfig — it is configured in the Gateway YAML `path_normalization` section. See [Gateway Configuration](./gateway-config.md).
@@ -291,10 +292,11 @@ listener.
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `webhookMaxResponseBytes` | `Integer` | `16384` | Hard upper bound (bytes) for a LinkSys webhook response body. Each call's response is clamped to `min(per-resource maxResponseBytes, this value)`. Raise both values together when an external API legitimately returns a larger payload |
+| `maxInstancesPerKind` | `Integer` | `200` | Max live plus draining persistent LinkSys instances per provider kind (1–10000). New keys are refused at the cap; updates to existing keys and deletes always proceed. Lowering the cap does not evict live instances |
 
 Changes to `linkSys` take effect immediately through EdgionGatewayConfig partial-update — no Gateway restart required.
 
-Because EdgionGatewayConfig is cluster-scoped, multiple instances may coexist. The Gateway derives a single process-global value deterministically across all instances rather than letting whichever was applied last win: `webhookMaxResponseBytes` uses the **strictest** (`min`) value. When the last instance carrying `linkSys` is deleted, the global resets to the default (`16384`). The same deterministic aggregation applies to `loadBalancing.degradeThreshold`, which uses the **highest** (`max`) value across instances and resets to `0` (degrade mode disabled) when none is configured.
+Because EdgionGatewayConfig is cluster-scoped, multiple instances may coexist. The Gateway derives a single process-global value deterministically across all instances rather than letting whichever was applied last win: `webhookMaxResponseBytes` and `maxInstancesPerKind` both use the **strictest** (`min`) value. When the last instance carrying `linkSys` is deleted, those globals reset to the defaults (`16384` / `200`). The same deterministic aggregation applies to `loadBalancing.degradeThreshold`, which uses the **highest** (`max`) value across instances and resets to `0` (degrade mode disabled) when none is configured.
 
 ### spec.loadBalancing
 

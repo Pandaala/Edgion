@@ -121,8 +121,8 @@ Key points:
 
 ### 3. Kafka and HttpDns
 
-Kafka is fully wired through its provider, `KAFKA_RUNTIME`, full/partial LinkSys dispatch, and
-`get_kafka_client`. HttpDns is a `SystemConfig` variant consumed by the DNS resolver path; it is
+Kafka is fully wired through its provider, `KAFKA_RUNTIME` persistent runners, full/partial
+LinkSys dispatch, and `get_kafka_client` (published handle; D14). HttpDns is a `SystemConfig` variant consumed by the DNS resolver path; it is
 intentionally not inserted into a generic LinkSys runtime-client store.
 
 ## The real ConfHandler bridging pattern
@@ -134,10 +134,10 @@ The bridging for LinkSys is now fixed:
 3. `create_link_sys_handler()` returns the global `LinkSysStore`.
 4. `ConfHandler<LinkSys>::full_set()` / `partial_update()` first runs `validate_config()`.
 5. Then calls `LinkSysStore.replace_all()` / `update()`.
-6. `runtime/store.rs` applies OTLP desired state at source publication, then
-   ordered `dispatch_full_set()` / `dispatch_partial_update()` handles Redis /
-   Etcd / Elasticsearch / Kafka and the specialized Webhook transaction.
-   HttpDns is consumed by DNS resolution, and CredentialSource is Controller-only.
+6. `runtime/store.rs` ordered `dispatch_full_set()` / `dispatch_partial_update()`
+   apply Redis / Etcd / Elasticsearch / Kafka / OTLP persistent runners and the
+   specialized Webhook transaction. HttpDns is consumed by DNS resolution, and
+   CredentialSource is Controller-only.
 
 So if you are changing gateway-side runtime behavior, focus on:
 
@@ -194,7 +194,10 @@ This is the easiest place to forget. At minimum, add:
 - The typed runtime store's insert / remove / replace-all logic.
 - The cleanup logic for old clients / old tasks on deletion.
 
-If the system supports hot reload, prefer the existing pattern of "swap in the new instance first, then init or shut down the old one in the background".
+If the system supports hot reload, Redis, Etcd, Elasticsearch, and Kafka post desired
+state to a per-key persistent runner (the published handle stays unset until the
+first successful init). Webhook skip-prepares when the runtime fingerprint is
+unchanged (no new `ManagedOutboundClient`).
 
 ### 4. Add admin testing endpoints only when tests need them
 

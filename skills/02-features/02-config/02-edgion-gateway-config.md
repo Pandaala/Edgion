@@ -132,6 +132,7 @@ spec:
   # ─── LinkSys global configuration ───
   linkSys:
     webhookMaxResponseBytes: 16384          # usize, hard upper bound for webhook response body (default 16 KiB)
+    maxInstancesPerKind: 200                # usize, max live+draining instances per provider kind (default 200)
 
   # ─── Cluster-wide outbound TLS defaults for plugins and LinkSys ───
   outboundTls:
@@ -255,6 +256,7 @@ expiry is a gateway-local storage failure, not a downstream read timeout.
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `webhookMaxResponseBytes` | `usize` | `16384` | Hard upper bound for the LinkSys webhook response body (bytes). All webhook call response sizes are clamped to `min(per-resource maxResponseBytes, this value)`. When larger responses are needed (e.g., a plugin calling an external API that returns a sizable JSON), increase both values together. |
+| `maxInstancesPerKind` | `usize` | `200` | Max live plus draining persistent LinkSys instances per provider kind (range 1–10000). A new key is refused when the cap is already reached; updates to existing keys and deletes always proceed. Lowering the cap does not evict live instances. |
 
 > Modifications take effect immediately via `EdgionGatewayConfig` partial-update; no Gateway restart is required.
 
