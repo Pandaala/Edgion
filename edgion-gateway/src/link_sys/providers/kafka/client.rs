@@ -135,6 +135,7 @@ struct QueuedRecord {
 
 struct TopicEntry {
     sender: mpsc::Sender<QueuedRecord>,
+    producer_handle: tokio::task::JoinHandle<()>,
     _reservation: TopicReservation,
 }
 
@@ -197,6 +198,8 @@ pub struct KafkaLinkClient {
     linger_ms: u64,
     inner_client: Arc<ArcSwapOption<rskafka::client::Client>>,
     topics: DashMap<String, TopicEntry>,
+    /// Serializes new producer registration with retirement without locking existing-topic sends.
+    producer_admission: parking_lot::Mutex<()>,
     topic_budget: Arc<TopicBudget>,
     queue_budget: Arc<QueueBudget>,
     healthy: Arc<AtomicBool>,
@@ -252,6 +255,7 @@ impl KafkaLinkClient {
             linger_ms,
             inner_client: Arc::new(ArcSwapOption::empty()),
             topics: DashMap::new(),
+            producer_admission: parking_lot::Mutex::new(()),
             topic_budget: TopicBudget::new(max_topics),
             queue_budget: QueueBudget::new(max_pending_records, max_pending_bytes),
             healthy: Arc::new(AtomicBool::new(false)),
@@ -291,6 +295,7 @@ impl KafkaLinkClient {
     }
 
     pub(crate) fn mark_retired(&self) {
+        let _admission = self.producer_admission.lock();
         self.retired.store(true, Ordering::Relaxed);
         if let Some(handle) = self.probe_handle.lock().take() {
             handle.abort();
@@ -368,6 +373,10 @@ impl KafkaLinkClient {
         let sender = match self.topics.entry(topic.to_string()) {
             dashmap::mapref::entry::Entry::Occupied(entry) => entry.get().sender.clone(),
             dashmap::mapref::entry::Entry::Vacant(entry) => {
+                let _admission = self.producer_admission.lock();
+                if self.retired.load(Ordering::Relaxed) {
+                    anyhow::bail!("Kafka [{}] retired", self.name);
+                }
                 let topic_reservation = self.topic_budget.try_reserve().ok_or_else(|| {
                     anyhow::anyhow!(
                         "Kafka [{}] topic limit ({}) reached",
@@ -382,7 +391,7 @@ impl KafkaLinkClient {
                 let healthy = Arc::clone(&self.healthy);
                 let last_flip_log_ms = Arc::clone(&self.last_flip_log_ms);
                 let retired = Arc::clone(&self.retired);
-                tokio::spawn(async move {
+                let producer_handle = tokio::spawn(async move {
                     Self::run_producer_task(
                         client,
                         topic_owned,
@@ -397,6 +406,7 @@ impl KafkaLinkClient {
                 });
                 entry.insert(TopicEntry {
                     sender: tx.clone(),
+                    producer_handle,
                     _reservation: topic_reservation,
                 });
                 tx
@@ -408,16 +418,14 @@ impl KafkaLinkClient {
         match sender.try_send(record) {
             Ok(()) => Ok(()),
             Err(mpsc::error::TrySendError::Closed(_record)) => {
-                // The producer task exited (PartitionClient init failure, or a
-                // PRODUCE_TIMEOUT wedge). Evict the dead entry by value so a
-                // concurrent healthy respawn is never removed; the next produce
-                // re-spawns on the current (possibly rebuilt) inner_client.
-                self.topics.remove_if(topic, |_, entry| entry.sender.is_closed());
-                anyhow::bail!(
-                    "Kafka [{}] topic {}: producer task closed; evicted for respawn",
-                    self.name,
-                    topic
-                )
+                // The producer receiver closed (PartitionClient init failure, or a
+                // PRODUCE_TIMEOUT wedge). Evict only after task completion so
+                // shutdown retains a handle for any task still finishing.
+                // The next produce can respawn on the current inner_client.
+                self.topics.remove_if(topic, |_, entry| {
+                    entry.sender.is_closed() && entry.producer_handle.is_finished()
+                });
+                anyhow::bail!("Kafka [{}] topic {}: producer task closed", self.name, topic)
             }
             Err(mpsc::error::TrySendError::Full(_record)) => {
                 anyhow::bail!("Kafka [{}] topic {}: per-topic channel is full", self.name, topic)
@@ -611,7 +619,17 @@ impl KafkaLinkClient {
         if let Some(handle) = self.probe_handle.lock().take() {
             handle.abort();
         }
-        self.topics.clear();
+        let topic_keys: Vec<_> = self.topics.iter().map(|entry| entry.key().clone()).collect();
+        let mut producer_handles = Vec::with_capacity(topic_keys.len());
+        for topic in topic_keys {
+            if let Some((_, entry)) = self.topics.remove(&topic) {
+                entry.producer_handle.abort();
+                producer_handles.push(entry.producer_handle);
+            }
+        }
+        for handle in producer_handles {
+            let _ = handle.await;
+        }
         self.inner_client.store(None);
         self.healthy.store(false, Ordering::Relaxed);
         Ok(())
@@ -687,6 +705,58 @@ mod tests {
             .err()
             .expect("retired generation must not accept produce");
         assert!(error.to_string().contains("retired"));
+    }
+
+    #[tokio::test]
+    async fn shutdown_waits_for_pending_producer_tasks_to_terminate() {
+        struct NotifyOnDrop(Option<tokio::sync::oneshot::Sender<()>>);
+
+        impl Drop for NotifyOnDrop {
+            fn drop(&mut self) {
+                if let Some(tx) = self.0.take() {
+                    let _ = tx.send(());
+                }
+            }
+        }
+
+        let config = KafkaClientConfig {
+            brokers: vec!["broker1:9092".to_string()],
+            sasl: None,
+            tls: None,
+            channel_size: None,
+            max_topics: None,
+            max_pending_records: None,
+            max_pending_bytes: None,
+            linger_ms: None,
+        };
+        let client = KafkaLinkClient::from_config("default/kafka-main", &config, &CredentialState::NotRequired)
+            .expect("valid kafka config");
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (stopped_tx, stopped_rx) = tokio::sync::oneshot::channel();
+        let producer_handle = tokio::spawn(async move {
+            let _on_drop = NotifyOnDrop(Some(stopped_tx));
+            let _ = started_tx.send(());
+            std::future::pending::<()>().await;
+        });
+        started_rx.await.expect("producer started");
+        let (sender, _receiver) = mpsc::channel(1);
+        let reservation = client.topic_budget.try_reserve().expect("topic slot");
+        client.topics.insert(
+            "logs".to_string(),
+            TopicEntry {
+                sender,
+                producer_handle,
+                _reservation: reservation,
+            },
+        );
+
+        tokio::time::timeout(Duration::from_secs(1), client.shutdown())
+            .await
+            .expect("shutdown must terminate the pending producer")
+            .expect("shutdown succeeds");
+        stopped_rx.await.expect("producer was dropped before shutdown returned");
+        assert!(client.topics.is_empty());
+        assert_eq!(client.topic_budget.topics.load(Ordering::Acquire), 0);
     }
 
     #[test]
