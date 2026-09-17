@@ -23,6 +23,7 @@ before applying a decision to current code.
 
 ## Regression guards
 
+- [A superseded LinkSys publication keeps the runner alive](regression-guards/persistent-runner-publish-supersession.md)
 - [Kafka producer state has per-client aggregate bounds](regression-guards/kafka-aggregate-queue-bounds.md)
 - [Redis configuration fields have one validated runtime meaning](regression-guards/redis-configuration-contract.md)
 - [Redis DNS and egress policy is enforced at every Fred dial](regression-guards/redis-dial-time-egress-policy.md)

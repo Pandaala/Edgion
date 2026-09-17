@@ -59,11 +59,15 @@ pub struct PersistentRunner<O: ApplyOwner> {
     desired: watch::Sender<Desired>,
     current: ArcSwap<Option<Arc<O::Client>>>,
     shutdown: CancellationToken,
+    /// Serializes publication with delete; desired's watch guard serializes posts with publication.
+    publication: Mutex<()>,
     join: Mutex<Option<JoinHandle<()>>>,
-    /// Generations unpublished by delete/lost-publish races; the loop must quit all of them.
+    /// Generations unpublished by delete; the loop must quit all of them.
     orphan: Mutex<Vec<Arc<O::Client>>>,
     /// Retiring generation task. Delete joins it before the runner exits.
     retire: Mutex<Option<RetireTask>>,
+    #[cfg(test)]
+    publish_entry: Mutex<Option<Box<dyn FnOnce() + Send>>>,
 }
 
 struct RetireTask {
@@ -83,9 +87,12 @@ impl<O: ApplyOwner> PersistentRunner<O> {
             desired: tx,
             current: ArcSwap::from_pointee(None),
             shutdown: shutdown.clone(),
+            publication: Mutex::new(()),
             join: Mutex::new(None),
             orphan: Mutex::new(Vec::new()),
             retire: Mutex::new(None),
+            #[cfg(test)]
+            publish_entry: Mutex::new(None),
         });
         let loop_runner = Arc::clone(&runner);
         let join = tokio::spawn(run_loop::<O>(loop_runner, rx, shutdown));
@@ -118,8 +125,11 @@ impl<O: ApplyOwner> PersistentRunner<O> {
     /// Unpublish immediately and cancel the loop. The loop shuts down inners.
     pub fn begin_delete(&self) {
         tracing::info!(key = %self.key(), label = O::label(), "deleting LinkSys runner");
-        self.shutdown.cancel();
-        self.unpublish_into_orphan();
+        {
+            let _publication = self.publication.lock();
+            self.shutdown.cancel();
+            self.unpublish_into_orphan();
+        }
         self.abort_retire();
     }
 
@@ -353,10 +363,12 @@ async fn connect_generation<O: ApplyOwner>(
                     O::shutdown(client).await;
                     return LoopExit::Aborted;
                 }
-                if !publish::<O>(runner, client, start_gen) {
-                    return LoopExit::Shutdown;
+                let outcome = publish::<O>(runner, &client, start_gen);
+                if !matches!(outcome, LoopExit::Continue) {
+                    O::mark_retired(&client);
+                    O::shutdown(client).await;
                 }
-                return LoopExit::Continue;
+                return outcome;
             }
             Err(e) => {
                 tracing::warn!(
@@ -390,29 +402,37 @@ async fn wait_backoff(
     }
 }
 
-/// Returns false if the runner was cancelled and the generation must not stay published.
-fn publish<O: ApplyOwner>(runner: &PersistentRunner<O>, client: Arc<O::Client>, start_gen: u64) -> bool {
-    if runner.shutdown.is_cancelled() || runner.desired.borrow().gen != start_gen {
-        push_orphan(runner, client);
-        return false;
+fn publish<O: ApplyOwner>(runner: &PersistentRunner<O>, client: &Arc<O::Client>, start_gen: u64) -> LoopExit {
+    #[cfg(test)]
+    if let Some(hook) = runner.publish_entry.lock().take() {
+        hook();
     }
+    publish_with_hooks(runner, client, start_gen, || {}, || {})
+}
+
+fn publish_with_hooks<O: ApplyOwner>(
+    runner: &PersistentRunner<O>,
+    client: &Arc<O::Client>,
+    start_gen: u64,
+    before_swap: impl FnOnce(),
+    after_swap: impl FnOnce(),
+) -> LoopExit {
+    let _publication = runner.publication.lock();
+    let desired = runner.desired.borrow();
+    if runner.shutdown.is_cancelled() {
+        return LoopExit::Shutdown;
+    }
+    if desired.gen != start_gen {
+        return LoopExit::Aborted;
+    }
+    before_swap();
     let previous = runner.current.swap(Arc::new(Some(client.clone())));
-    if runner.shutdown.is_cancelled() || runner.desired.borrow().gen != start_gen {
-        let loaded = runner.current.load_full();
-        if loaded.as_ref().as_ref().is_some_and(|c| Arc::ptr_eq(c, &client)) {
-            runner.current.store(Arc::new(None));
-        }
-        push_orphan(runner, client);
-        if let Some(old) = (*previous).clone() {
-            push_orphan(runner, old);
-        }
-        return false;
-    }
+    after_swap();
     if let Some(old) = (*previous).clone() {
         O::mark_retired(&old);
         start_retire::<O>(runner, old);
     }
-    true
+    LoopExit::Continue
 }
 
 fn push_orphan<O: ApplyOwner>(runner: &PersistentRunner<O>, client: Arc<O::Client>) {
@@ -469,6 +489,7 @@ async fn finish_delete<O: ApplyOwner>(runner: &PersistentRunner<O>) {
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::mpsc;
     use std::time::Duration;
 
     use edgion_resources::resources::link_sys::LinkSys;
@@ -660,6 +681,111 @@ mod tests {
         assert!(runner.current().is_some());
         runner.begin_delete();
         runner.await_join().await;
+    }
+
+    #[tokio::test]
+    async fn superseded_at_publish_keeps_old_client_and_runner() {
+        let first_ls = redis_ls("stale-publish", "redis://up:6379", "1");
+        let first = FakeOwner::build("runner/stale-publish", &first_ls).unwrap();
+        let runner =
+            PersistentRunner::<FakeOwner>::spawn_with_published("runner/stale-publish".to_string(), first.clone());
+        let supersede = runner.clone();
+        *runner.publish_entry.lock() = Some(Box::new(move || supersede.post_not_ready()));
+
+        runner.post_ready(Arc::new(redis_ls("stale-publish", "redis://up2:6379", "2")), false);
+        wait_until(|| matches!(runner.desired.borrow().state, DesiredState::NotReady)).await;
+        assert!(Arc::ptr_eq(&runner.current().unwrap(), &first));
+        assert_eq!(first.shutdowns.load(Ordering::Relaxed), 0);
+        assert!(!first.retired.load(Ordering::Relaxed));
+        assert!(!runner.join.lock().as_ref().unwrap().is_finished());
+
+        runner.post_ready(Arc::new(redis_ls("stale-publish", "redis://up3:6379", "3")), false);
+        wait_until(|| runner.current().is_some_and(|client| !Arc::ptr_eq(&client, &first))).await;
+        runner.begin_delete();
+        runner.await_join().await;
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn desired_post_during_swap_keeps_published_client_and_runner() {
+        let first_ls = redis_ls("swap-post", "redis://up:6379", "1");
+        let first = FakeOwner::build("runner/swap-post", &first_ls).unwrap();
+        let runner = PersistentRunner::<FakeOwner>::spawn_with_published("runner/swap-post".to_string(), first);
+        let next_ls = redis_ls("swap-post", "redis://up2:6379", "2");
+        let next = FakeOwner::build("runner/swap-post", &next_ls).unwrap();
+        runner.post_ready(Arc::new(next_ls), false);
+        let start_gen = runner.desired.borrow().gen;
+        let (started_tx, started_rx) = mpsc::channel();
+        let (done_tx, done_rx) = mpsc::channel();
+        let posting_runner = runner.clone();
+        let mut post = None;
+
+        let outcome = publish_with_hooks(
+            &runner,
+            &next,
+            start_gen,
+            || {},
+            || {
+                post = Some(std::thread::spawn(move || {
+                    started_tx.send(()).unwrap();
+                    posting_runner.post_not_ready();
+                    done_tx.send(()).unwrap();
+                }));
+                started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+                assert!(matches!(
+                    done_rx.recv_timeout(Duration::from_millis(30)),
+                    Err(mpsc::RecvTimeoutError::Timeout)
+                ));
+            },
+        );
+        assert!(matches!(outcome, LoopExit::Continue));
+        post.unwrap().join().unwrap();
+        assert!(Arc::ptr_eq(&runner.current().unwrap(), &next));
+        assert!(!next.retired.load(Ordering::Relaxed));
+        tokio::task::yield_now().await;
+        assert!(Arc::ptr_eq(&runner.current().unwrap(), &next));
+        assert!(!runner.join.lock().as_ref().unwrap().is_finished());
+
+        runner.post_ready(Arc::new(redis_ls("swap-post", "redis://up3:6379", "3")), false);
+        wait_until(|| runner.current().is_some_and(|client| !Arc::ptr_eq(&client, &next))).await;
+        runner.begin_delete();
+        runner.await_join().await;
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn delete_during_swap_unpublishes_the_new_client() {
+        let runner = PersistentRunner::<FakeOwner>::spawn("runner/swap-delete".to_string());
+        let link = redis_ls("swap-delete", "redis://up:6379", "1");
+        let client = FakeOwner::build("runner/swap-delete", &link).unwrap();
+        runner.post_ready(Arc::new(link), false);
+        let start_gen = runner.desired.borrow().gen;
+        let (started_tx, started_rx) = mpsc::channel();
+        let (done_tx, done_rx) = mpsc::channel();
+        let deleting_runner = runner.clone();
+        let mut delete = None;
+
+        let outcome = publish_with_hooks(
+            &runner,
+            &client,
+            start_gen,
+            || {},
+            || {
+                delete = Some(std::thread::spawn(move || {
+                    started_tx.send(()).unwrap();
+                    deleting_runner.begin_delete();
+                    done_tx.send(()).unwrap();
+                }));
+                started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+                assert!(matches!(
+                    done_rx.recv_timeout(Duration::from_millis(30)),
+                    Err(mpsc::RecvTimeoutError::Timeout)
+                ));
+            },
+        );
+        assert!(matches!(outcome, LoopExit::Continue));
+        delete.unwrap().join().unwrap();
+        assert!(runner.current().is_none());
+        runner.await_join().await;
+        assert_eq!(client.shutdowns.load(Ordering::Relaxed), 1);
     }
 
     #[tokio::test]
