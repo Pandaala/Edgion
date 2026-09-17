@@ -1319,7 +1319,7 @@ spec:
 
 ### Q5：轮换 Secret 后，现有连接会怎样？
 
-**A**：连接器会透明地重建。当引用的 Secret 发生变化时，Controller 重新计算凭据，将新规格推送给 Gateway，Gateway 在旧连接优雅排空的同时重建客户端。
+**A**：Controller 会重新处理 LinkSys 资源，并将解析后的配置发送给 Gateway。如果连接器实际使用的凭据及其他运行时材料没有变化，现有客户端会继续复用；如果发生变化，Gateway 会启动替换流程。对于 Redis、Etcd、Elasticsearch、Kafka 和 OTLP，旧客户端仍有存活连接时，会保留旧客户端，直到新客户端成功初始化并发布，然后再将旧客户端退出；没有存活连接时，会先退出旧客户端，再尝试构建新客户端。Webhook 使用单独的替换流程。旧客户端退出时，不保证队列中的 Kafka 或 Elasticsearch 记录全部送达。
 
 ### Q6：凭据解析失败后，Edgion 会降级为匿名连接吗？
 

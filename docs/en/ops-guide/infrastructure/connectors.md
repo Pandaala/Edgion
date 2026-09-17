@@ -1390,7 +1390,7 @@ spec:
 
 ### Q5: What happens to active connections when I rotate a Secret?
 
-**A**: The connector rebuilds transparently. When a referenced Secret changes, the Controller recomputes the credentials, pushes the new spec to the Gateway, and the Gateway rebuilds the client while old connections drain gracefully.
+**A**: The Controller reprocesses the LinkSys resource and sends the resolved configuration to the Gateway. If the credentials and other runtime material used by the connector are unchanged, the current client is reused. If they change, the Gateway starts a replacement. For Redis, Etcd, Elasticsearch, Kafka, and OTLP, a client with live connections remains available until a new client initializes and publishes successfully; the old client is then retired. A client without live connections is retired before the Gateway attempts to build its replacement. Webhook uses a separate replacement path. Retirement does not guarantee that queued Kafka or Elasticsearch records are delivered.
 
 ### Q6: Does Edgion fall back to an anonymous connection if credentials fail to resolve?
 

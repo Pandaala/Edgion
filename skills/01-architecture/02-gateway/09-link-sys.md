@@ -121,7 +121,8 @@ Global singleton: `get_global_link_sys_store()`.
 
 ### Runtime client store
 
-Each provider that requires a persistent connection has its own ArcSwap runtime store:
+The five persistent providers store per-key runners; their getters expose only
+published clients. Webhook has separate manager publication and runtime bookkeeping:
 
 | Provider | Global store | Accessor |
 |----------|--------------|----------|
@@ -129,28 +130,30 @@ Each provider that requires a persistent connection has its own ArcSwap runtime 
 | Etcd | `ETCD_RUNTIME` persistent runners; `get_etcd_client` is the published handle | `get_etcd_client(name)` |
 | Elasticsearch | `ES_RUNTIME` persistent runners; `get_es_client` is the published handle | `get_es_client(name)` |
 | Kafka | `KAFKA_RUNTIME` persistent runners; `get_kafka_client` is the published handle | `get_kafka_client(name)` |
-| OTLP | `OTLP_RUNTIME` provider store | `get_otlp_client(name)` |
+| OTLP | `OTLP_RUNTIME` persistent runners; `get_otlp_client` is the published exporter | `get_otlp_client(name)` |
 | Webhook | `WebhookManager` plus `WEBHOOK_RUNTIME` bookkeeping; equal-fingerprint relists skip prepare | via `get_webhook_manager()` |
 
 Key format: `"namespace/name"`.
 
 ### Client lifecycle
 
-Generic provider processing flow during full_set / partial_update (OTLP and the
-ordered Webhook manager have specialized publication boundaries):
-1. Dispatch to the corresponding provider based on the `SystemConfig` type.
-2. Create a new client instance.
-3. Insert into the runtime store first (ensures `get_*_client()` returns the new client immediately).
-4. Initialize the connection in the background via `tokio::spawn`.
-5. Shut down the old client in the background via `tokio::spawn`.
-6. On deletion, attempt removal from every provider's store (because the delete event does not carry type information).
+During full-set and partial updates, ordered dispatch selects the provider from
+`SystemConfig`. Redis, Etcd, Elasticsearch, Kafka, and OTLP post desired state
+to a per-key `PersistentRunner`. The runner builds and initializes a candidate,
+then publishes it only if that desired generation is still current. All five
+`get_*_client` accessors return `None` before the first successful publication;
+an existing published generation remains available during a handover when its
+apply plan permits it. Relists reuse runners rather than replacing their maps.
+Full-set dispatch removes runners for keys absent from each persistent provider;
+partial updates remove the previous provider's runner on a kind change and
+remove deleted keys from every provider.
 
-Redis, Etcd, Elasticsearch, and Kafka are not on that insert-before-init path. Dispatch
-posts desired to a per-key persistent runner; `get_redis_client` /
-`get_etcd_client` / `get_es_client` / `get_kafka_client` stay `None` until the first successful
-publish (D14). Relist does not `replace_all` the runner map. Webhook keeps its
-ordered prepare/commit publication; an equal runtime fingerprint skips prepare
-and reuses the committed registration.
+Webhook instead prepares a registration through its ordered mutation guard and
+commits it before updating `WEBHOOK_RUNTIME` bookkeeping. An equal runtime
+fingerprint reuses the committed registration. `LinkSysStore::replace_all`
+replaces the resource snapshot, while the Webhook full-set path replaces only
+its own bookkeeping map after commit; neither operation replaces a persistent
+runner map.
 
 ## DataSender
 
@@ -221,7 +224,7 @@ edgion-gateway/src/link_sys/
 edgion-common/src/link_sys_core/       # core framework + Etcd provider (re-exported by the gateway)
 ├── credential.rs             # materialise credentials from the embedded Secret in LinkSys.spec.*Auth
 ├── health.rs                 # LinkSysHealth status DTO shared by all providers
-├── lifecycle.rs              # unified provider lifecycle (init/shutdown, dispatch)
+├── lifecycle.rs              # legacy lifecycle trait (unused by Gateway dispatch)
 ├── tls.rs                    # unified TLS material resolution for provider connections
 ├── mod.rs
 └── providers/etcd/           # Etcd v3 client (KV / lease / lock + background health monitor)

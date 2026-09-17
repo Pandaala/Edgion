@@ -6,75 +6,72 @@ knowledge_type: intentional-design
 
 # LinkSys store.rs dispatch functions — Extract-Function / Dedup — DESIGN-TRADEOFF
 
-**Audit date**: 2026-05-25 (re-confirmed 2026-06-09; re-evaluated 2026-09-17 after Kafka joined the persistent runner)
+**Audit date**: 2026-05-25 (re-confirmed 2026-06-09; current dispatch re-evaluated 2026-09-17)
 
-The one concrete, low-risk extraction these findings asked for — a shared
-credential-readiness prelude helper — is **already implemented** as
-`credential_readiness<M>(ls, auth_fn) -> (ready, tls_ok, auth)`
-(`edgion-gateway/src/link_sys/runtime/store.rs`), called from Redis/Etcd/Elasticsearch/Kafka
-`apply_*`. Webhook still uses `preserve_if_not_ready`. The former generic
-lifecycle helpers (`register_for_full_set`, `swap_and_shutdown_olds`,
-`spawn_and_swap_partial`, `carry_over_if_not_ready`, `spawn_shutdown_if_present`)
-were removed when Kafka moved onto the persistent runner.
+The historical F-013/F-008 proposal was to extract provider-specific dispatch
+functions or collapse full-set and partial dispatch behind a generic
+`LifecycleAction`. The generic client-swap helpers and their per-provider new
+maps were removed when the persistent runner was introduced. They are historical
+context, not current reasons to keep the functions separate.
 
-The remaining suggestions — per-provider `dispatch_full_set_<provider>`
-functions (F-013 #2) and collapsing both `match &ls.spec.config` blocks into a
-single generic `dispatch_one` + `LifecycleAction` enum (F-013 #3 / F-008) — are
-**not accepted**. Fix suggestions of the form "extract one function per provider
-to remove the eight `new_*_map` / `preserved_*_keys` locals" or "unify
-`dispatch_full_set` and `dispatch_partial_update` behind a `LifecycleAction`
-enum / `for_each_provider` closure" are not accepted.
+The current `credential_readiness<M>(ls, auth_fn)` helper supplies the common
+readiness gate to the persistent-provider `apply_*` paths. Redis, Etcd,
+Elasticsearch, Kafka, and OTLP use per-key `PersistentRunner` ownership;
+Webhook alone uses ordered prepare/commit and runtime bookkeeping. The two
+dispatch functions remain separate because their current input and cleanup
+semantics differ, not because they need distinct generic swap helpers.
 
 ## Core Rationale
 
 **1. The two functions have genuinely different control flow, not just a swapped lifecycle helper**
 
 `dispatch_full_set`: snapshots the Webhook runtime map up front, carries over the
-*old snapshot's* Arc for not-ready Webhook resources, accumulates into a fresh
-Webhook map, and after a **single** pass over `data` replaces the Webhook map
-atomically. Redis/Etcd/Elasticsearch/Kafka post desired state to per-key
-persistent runners in the same pass and `retain_*` keys that disappeared.
+old Arc for not-ready Webhook resources, accumulates a new Webhook bookkeeping
+map, and commits the complete Webhook manager registration before replacing
+that map. It first retains only the runner keys present for each persistent
+provider, then posts desired state to Redis, Etcd, Elasticsearch, Kafka, and
+OTLP runners while processing the resources.
 
-`dispatch_partial_update`: preserves in place against the **live** runtime,
-swaps **per item**, and runs a separate uniform remove loop.
+`dispatch_partial_update`: deletes foreign persistent runners when a key changes
+provider, applies each changed resource, commits Webhook registrations per item,
+and then removes deleted keys from every provider. A not-ready Webhook update
+keeps the existing live registration.
 
-Carry-over-from-snapshot vs preserve-in-place, swap-all-at-end vs swap-per-item,
-and the SHUTDOWN_ON_REPLACE-gated bulk eviction are real semantic differences.
-A `LifecycleAction` enum would have to re-encode both flows behind branches,
-re-introducing the divergence it claims to remove while adding indirection — and
-the swap/carry-over semantics are exactly the kind of thing a mechanical
-collapse silently regresses.
+The full-set present-key retention and Webhook full commit differ from partial
+kind-change deletion and Webhook per-item commits. A shared wrapper would need
+to represent those branches explicitly. Keeping separate functions makes the
+ordering visible, at the cost of repeated provider match arms.
 
-**2. The provider maps are inherent to "single pass + per-store atomic replacement at the end"**
+**2. The remaining full-set map belongs to Webhook bookkeeping**
 
-`new_*_map` / `preserved_*_keys` exist because one loop interleaves four generic
-providers plus Webhook preparation, and publication happens *after* the loop.
-Per-provider extraction can't remove them without either iterating `data` repeatedly (changes pass count
-and operation ordering) or building a generic accumulator struct (more machinery
-than the locals it replaces). What's left is a form-only refactor.
+`new_webhook_map` holds prepared or preserved Webhook clients until the manager's
+full commit succeeds. Persistent runner maps are long-lived and are not
+`replace_all` targets. Extracting a provider arm would still need to preserve
+the full-set retention phase and the Webhook commit boundary; there is no
+current collection of generic client maps to eliminate.
 
 **3. Readability-only, off the data-plane hot path**
 
 Both functions run on LinkSys config sync / hot reload (ConfHandler), not on the
-per-request data path. There is no correctness risk — the repeated arms compile
-identically. The cost (restructuring two working, tested functions that touch
-config sync) and regression risk are out of proportion to a marginal
-readability gain. Same disposition class as
+per-request data path. Repeated arms can drift, but no current defect follows
+from their duplication alone. A broad collapse of the ordering and cleanup
+paths has regression risk without a demonstrated functional benefit. Same
+disposition class as
 [plugin-runtime-god-match.md](../../plugin-runtime/intentional-design/plugin-runtime-god-match.md) and
 [style-consolidation-thresholds.md](../../review-method/intentional-design/style-consolidation-thresholds.md).
 
 ## Fix Suggestions Not Accepted
 
-- "Extract `dispatch_full_set_<provider>` per provider to drop the provider maps" — the locals are structural to single-pass-then-publish; extraction would force repeated passes over `data` or an accumulator struct, neither of which is a net improvement.
-- "Unify both dispatch functions behind a `LifecycleAction` enum / `dispatch_one` / `for_each_provider` closure (F-008)" — the two functions' carry-over/swap semantics genuinely differ; collapsing trades real regression risk for marginal readability.
-- "Adding another generic provider requires editing both dispatch functions and the remove loop" — known trade-off, not a defect. Redis/Etcd/Elasticsearch/Kafka use persistent runners; Webhook and OTLP intentionally use separate publication models.
+- "Extract each provider arm to remove generic new maps" — those maps no longer exist. Review any proposed extraction against the current retention and commit ordering.
+- "Unify both dispatch functions behind a `LifecycleAction` enum / `dispatch_one` / `for_each_provider` closure (F-008)" — the full-set and partial paths still perform different cleanup and Webhook commits; no current bug justifies encoding both in one dispatcher.
+- "Adding another provider requires editing both dispatch functions and the remove loop" — this maintenance cost remains, but is not by itself evidence of a runtime defect. All five persistent providers use runners; Webhook has its own publication boundary.
 
 ## Re-evaluation Triggers
 
 Re-open only if:
 
-- Another provider is implemented on the **generic** lifecycle and materially increases the repeated readiness/build/swap/remove branches. Kafka and OTLP use the persistent runner; Webhook still needs ordered prepare/commit publication, HttpDns is resolver-consumed, and CredentialSource is Controller-only. Those variants are not evidence that the remaining Webhook branch should be collapsed.
-- The `full_set` carry-over-from-snapshot and `partial_update` preserve-in-place semantics genuinely converge, so a single dispatch path no longer has to encode two flows.
+- A new provider introduces substantial repeated dispatch logic that cannot be factored without obscuring retention or publication ordering.
+- Full-set and partial cleanup and Webhook publication semantics genuinely converge.
 - A real bug is traced to a provider arm being added/changed in one function but not the other.
 
 ## Reference Cases
@@ -87,3 +84,4 @@ Re-open only if:
 
 - `link-sys-F013` — 2026-05-25 (⚠️ accepted tradeoff).
 - `refresh-link-sys-documentation-set` — 2026-09-14 (documentation refreshed after the Kafka trigger fired; tradeoff retained).
+- `ISSUE-008` — 2026-09-17 (current lifecycle guidance and obsolete generic-map rationale corrected; no runtime behavior changed).

@@ -191,12 +191,15 @@ This is the easiest place to forget. At minimum, add:
 
 - The `dispatch_full_set()` branch.
 - The `dispatch_partial_update()` branch.
-- The typed runtime store's insert / remove / replace-all logic.
+- For a persistent provider, per-key runner admission, desired-state posting,
+  getter publication, kind-change cleanup, and full-set retention.
+- For a Webhook-style provider, ordered prepare/commit and runtime bookkeeping.
 - The cleanup logic for old clients / old tasks on deletion.
 
-If the system supports hot reload, Redis, Etcd, Elasticsearch, and Kafka post desired
-state to a per-key persistent runner (the published handle stays unset until the
-first successful init). Webhook skip-prepares when the runtime fingerprint is
+Redis, Etcd, Elasticsearch, Kafka, and OTLP post desired state to a per-key
+persistent runner. Their getters stay empty until the first successful publish;
+full-set relists retain the runner map rather than replacing it. Webhook uses
+ordered prepare/commit and skips prepare when the runtime fingerprint is
 unchanged (no new `ManagedOutboundClient`).
 
 ### 4. Add admin testing endpoints only when tests need them

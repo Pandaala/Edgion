@@ -23,6 +23,7 @@ before applying a decision to current code.
 
 ## Regression guards
 
+- [LinkSys hot reload reuses equal material and does not promise queue drain](regression-guards/link-sys-hot-reload-reuse-and-retirement.md)
 - [A LinkSys forced rebuild survives ordinary replay](regression-guards/forced-rebuild-survives-ordinary-replay.md)
 - [Full-set retain precedes apply and serializes with delete join replay](regression-guards/full-set-retain-serializes-join-replay.md)
 - [A superseded LinkSys publication keeps the runner alive](regression-guards/persistent-runner-publish-supersession.md)
