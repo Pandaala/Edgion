@@ -24,12 +24,14 @@ use super::apply::{
 #[derive(Clone)]
 pub struct Desired {
     pub gen: u64,
+    /// Latest forced post; ordinary replays must not erase it before publication.
+    pub force_gen: u64,
     pub state: DesiredState,
 }
 
 #[derive(Clone)]
 pub enum DesiredState {
-    Ready { link: Arc<LinkSys>, forced: bool },
+    Ready { link: Arc<LinkSys> },
     NotReady,
 }
 
@@ -79,6 +81,7 @@ impl<O: ApplyOwner> PersistentRunner<O> {
     pub fn spawn(key: String) -> Arc<Self> {
         let (tx, rx) = watch::channel(Desired {
             gen: 0,
+            force_gen: 0,
             state: DesiredState::NotReady,
         });
         let shutdown = CancellationToken::new();
@@ -111,7 +114,10 @@ impl<O: ApplyOwner> PersistentRunner<O> {
     pub fn post_ready(&self, link: Arc<LinkSys>, forced: bool) {
         self.desired.send_modify(|desired| {
             desired.gen = desired.gen.saturating_add(1);
-            desired.state = DesiredState::Ready { link, forced };
+            if forced {
+                desired.force_gen = desired.gen;
+            }
+            desired.state = DesiredState::Ready { link };
         });
     }
 
@@ -197,6 +203,8 @@ async fn run_loop<O: ApplyOwner>(
     shutdown: CancellationToken,
 ) {
     let mut backoff = ConnectBackoff::new();
+    // A force is fulfilled only after a generation built for it is published.
+    let mut fulfilled_force_gen = 0;
     loop {
         if shutdown.is_cancelled() {
             finish_delete::<O>(&runner).await;
@@ -212,8 +220,9 @@ async fn run_loop<O: ApplyOwner>(
                     return;
                 }
             }
-            DesiredState::Ready { link, forced } => {
+            DesiredState::Ready { link } => {
                 let start_gen = snapshot.gen;
+                let forced = snapshot.force_gen > fulfilled_force_gen;
                 let incoming_fp = match O::fingerprint(&link) {
                     Ok(fp) => fp,
                     Err(e) => {
@@ -260,6 +269,7 @@ async fn run_loop<O: ApplyOwner>(
 
                 match connect_generation::<O>(&runner, &mut rx, &shutdown, &link, start_gen, &mut backoff).await {
                     LoopExit::Continue => {
+                        fulfilled_force_gen = snapshot.force_gen;
                         backoff.reset();
                         if wait_change_or_shutdown(&mut rx, &shutdown).await {
                             finish_delete::<O>(&runner).await;
@@ -626,6 +636,38 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(30)).await;
         let second = runner.current().unwrap();
         assert!(Arc::ptr_eq(&first, &second));
+        runner.begin_delete();
+        runner.await_join().await;
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn equal_replay_coalesced_with_forced_post_still_rebuilds() {
+        let link = redis_ls("coalesced-force", "redis://up:6379", "1");
+        let first = FakeOwner::build("runner/coalesced-force", &link).unwrap();
+        let runner =
+            PersistentRunner::<FakeOwner>::spawn_with_published("runner/coalesced-force".to_string(), first.clone());
+
+        runner.post_ready(Arc::new(link.clone()), true);
+        runner.post_ready(Arc::new(link), false);
+        wait_until(|| runner.current().is_some_and(|client| !Arc::ptr_eq(&client, &first))).await;
+
+        runner.begin_delete();
+        runner.await_join().await;
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn equal_replay_superseding_forced_candidate_still_rebuilds() {
+        let link = redis_ls("superseded-force", "redis://up:6379", "1");
+        let first = FakeOwner::build("runner/superseded-force", &link).unwrap();
+        let runner =
+            PersistentRunner::<FakeOwner>::spawn_with_published("runner/superseded-force".to_string(), first.clone());
+        let replay = runner.clone();
+        let replay_link = link.clone();
+        *runner.publish_entry.lock() = Some(Box::new(move || replay.post_ready(Arc::new(replay_link), false)));
+
+        runner.post_ready(Arc::new(link), true);
+        wait_until(|| runner.current().is_some_and(|client| !Arc::ptr_eq(&client, &first))).await;
+
         runner.begin_delete();
         runner.await_join().await;
     }
