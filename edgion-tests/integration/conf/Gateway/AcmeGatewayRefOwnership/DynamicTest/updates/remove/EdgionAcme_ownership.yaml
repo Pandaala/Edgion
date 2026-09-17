@@ -12,10 +12,14 @@ spec:
   challenge:
     type: http-01
     gatewayRef:
-      name: acme-ownership-b
+      name: acme-ownership-missing
       sectionName: http
       port: 31411
   storage:
     secretName: acme-gatewayref-certificate
 status:
-  activeChallenges: []
+  activeChallenges:
+    - domain: acme-ownership.example.com
+      token: ownership-token
+      keyAuthorization: ownership-token.authorization
+      expireAt: 4102444800

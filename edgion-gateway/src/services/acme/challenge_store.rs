@@ -777,16 +777,61 @@ mod tests {
 
         assert!(store.lookup("token-old", "a.com").is_some());
 
-        // Update "ns/a" with new token
-        let mut upsert = HashMap::new();
-        upsert.insert(
+        let mut replacement = HashMap::new();
+        replacement.insert(
             "ns/a".to_string(),
             make_acme(vec![challenge("a.com", "token-new", "auth-new", ft)]),
         );
-        store.partial_update(&upsert, &HashSet::new());
-
+        store.partial_update(&replacement, &HashSet::new());
         assert!(store.lookup("token-old", "a.com").is_none());
-        assert!(store.lookup("token-new", "a.com").is_some());
+        assert_eq!(
+            store.lookup("token-new", "a.com"),
+            Some(Bytes::from_static(b"auth-new"))
+        );
+    }
+
+    #[test]
+    fn partial_update_drops_token_when_attachments_or_challenges_are_revoked() {
+        let store = AcmeChallengeStore::new();
+        let listener_key = test_listener_key();
+        let index = test_gateway_index(Some(test_proof()));
+        let ft = future_time();
+        let key = "default/acme".to_string();
+        let serving = make_acme(vec![challenge(
+            "example.com",
+            "ownership-token",
+            "ownership-token.authorization",
+            ft,
+        )]);
+        store.partial_update(&HashMap::from([(key.clone(), serving.clone())]), &HashSet::new());
+        assert_eq!(
+            store.lookup_for_listener(&listener_key, &index, "ownership-token", "example.com", "example.com",),
+            Some(Bytes::from_static(b"ownership-token.authorization"))
+        );
+
+        let mut without_attachments = serving.clone();
+        without_attachments.spec.resolved_listener_attachments = None;
+        store.partial_update(&HashMap::from([(key.clone(), without_attachments)]), &HashSet::new());
+        assert!(store
+            .lookup_for_listener(&listener_key, &index, "ownership-token", "example.com", "example.com",)
+            .is_none());
+
+        store.partial_update(&HashMap::from([(key.clone(), serving.clone())]), &HashSet::new());
+        assert!(store
+            .lookup_for_listener(&listener_key, &index, "ownership-token", "example.com", "example.com",)
+            .is_some());
+
+        let mut without_challenges = serving;
+        without_challenges
+            .status
+            .as_mut()
+            .expect("make_acme writes status")
+            .active_challenges
+            .clear();
+        store.partial_update(&HashMap::from([(key, without_challenges)]), &HashSet::new());
+        assert!(store
+            .lookup_for_listener(&listener_key, &index, "ownership-token", "example.com", "example.com",)
+            .is_none());
     }
 
     #[test]

@@ -7,10 +7,13 @@ use crate::conf_mgr::ControllerRuntime;
 use edgion_resources::prelude_resources::Gateway;
 use edgion_resources::resources::common::ParentReference;
 use edgion_resources::resources::common::SecretObjectReference;
-use edgion_resources::resources::edgion_acme::{AcmeChallenge, AcmeStorageConfig};
-use edgion_resources::resources::edgion_tls::GatewayAttachmentProof;
+use edgion_resources::resources::edgion_acme::{
+    AcmeChallenge, AcmeStorageConfig, ActiveHttpChallenge, EdgionAcmeStatus,
+};
+use edgion_resources::resources::edgion_tls::{GatewayAttachmentProof, ResolvedListenerAttachment};
 use edgion_resources::resources::gateway::{GatewaySpec, GatewayStatus, Listener, ListenerStatus};
 use edgion_resources::resources::{ReferenceGrant, ReferenceGrantFrom, ReferenceGrantSpec, ReferenceGrantTo};
+use edgion_resources::ListenerKey;
 use k8s_openapi::api::core::v1::Secret;
 use k8s_openapi::ByteString;
 use kube::api::ObjectMeta;
@@ -722,4 +725,53 @@ async fn test_validate_rejects_wildcards() {
         errors,
         ["EdgionAcme: built-in HTTP-01 does not support wildcard domains; use an externally issued TLS Secret"]
     );
+}
+
+#[tokio::test]
+async fn parse_unresolvable_gateway_ref_clears_stale_attachments_and_keeps_active_challenges() {
+    let _acme_guard = crate::services::acme::service::ACME_TEST_MUTEX.lock().await;
+    let (key, secret) = make_secret("default", "account", &[("accountCredentials", br#"{"ok":true}"#)]);
+    let (ctx, _runtime) = make_ctx(HashMap::from([(key, secret)]));
+    let mut acme = make_acme("default", "ownership", "account");
+    let AcmeChallenge::Http01 { gateway_ref } = &mut acme.spec.challenge;
+    gateway_ref.name = "missing".to_string();
+    acme.spec.resolved_listener_attachments = Some(vec![ResolvedListenerAttachment {
+        gateway_namespace: "default".to_string(),
+        gateway_name: "gw".to_string(),
+        listener_name: "http".to_string(),
+        listener_key: ListenerKey("0.0.0.0:80/HTTP".to_string()),
+        gateway_proof: GatewayAttachmentProof {
+            instance: "test-instance".to_string(),
+            generation: 1,
+            epoch: "1".to_string(),
+            attachment_digest: "a".repeat(64),
+        },
+    }]);
+    acme.status = Some(EdgionAcmeStatus {
+        active_challenges: vec![ActiveHttpChallenge {
+            domain: "example.com".to_string(),
+            token: "ownership-token".to_string(),
+            key_authorization: "ownership-token.authorization".to_string(),
+            expire_at: 4102444800,
+        }],
+        ..Default::default()
+    });
+
+    let parsed = match EdgionAcmeHandler::new().parse(acme, &ctx).await {
+        ProcessResult::Continue(parsed) => parsed,
+        ProcessResult::Skip { reason } => panic!("unexpected skip: {reason}"),
+    };
+    assert!(parsed.spec.resolved_listener_attachments.is_none());
+    assert_eq!(parsed.active_challenges().len(), 1);
+    assert_eq!(parsed.active_challenges()[0].token, "ownership-token");
+    let resolved = parsed
+        .status
+        .as_ref()
+        .expect("status must exist")
+        .conditions
+        .iter()
+        .find(|condition| condition.type_ == condition_types::RESOLVED_REFS)
+        .expect("ResolvedRefs must exist");
+    assert_eq!(resolved.status, "False");
+    assert_eq!(resolved.reason, condition_reasons::NO_MATCHING_PARENT);
 }

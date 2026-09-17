@@ -57,6 +57,9 @@ fn run(ctx: ScenarioCtx) -> Pin<Box<dyn std::future::Future<Output = Result<()>>
         ctx.wait_phase(scenario, "selected-b", Duration::from_secs(15)).await?;
         ctx.apply_dir("updates/remove").await?;
         ctx.wait_phase(scenario, "removed", Duration::from_secs(15)).await?;
+        // Admin PUT preserves status, so expiry cannot be injected in-place.
+        // Delete then create so the expired challenge is the object's first status.
+        ctx.delete_resources("delete/edgionacme.txt").await?;
         ctx.apply_dir("updates/expire").await?;
         ctx.wait_phase(scenario, "expired", Duration::from_secs(15)).await?;
         Ok(())

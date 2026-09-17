@@ -41,8 +41,11 @@ store tests alone could not prove Controller-to-conf-sync-to-listener ownership
 across two Gateway identities. D0026 now combines Controller resolver and
 service-gate tests, Gateway ownership tests, and a shared-topology dynamic
 scenario with real config apply, conf-sync, and HTTP requests: selected A
-serves, non-selected B falls through, retargeting to B reverses the result, and
-challenge removal or expiry makes both fall through.
+serves, non-selected B falls through, retargeting to B reverses the result, an
+unresolvable `gatewayRef` stops both listeners while leftover challenges
+remain, and recreating the object with a past `expireAt` keeps both at 404.
+Admin PUT cannot clear `status.activeChallenges`; do not treat a status-only
+apply YAML as removal or expiry.
 
 **3. Guessing serving-attachment shape is not a test substitute.**
 
