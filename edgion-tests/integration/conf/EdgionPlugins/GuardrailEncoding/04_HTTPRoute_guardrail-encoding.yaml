@@ -1,0 +1,43 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: guardrail-encoding-fail-open
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: ai-gateway
+  hostnames:
+    - guardrail-encoding-fail-open.example.com
+  rules:
+    - filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: guardrail-encoding-fail-open
+      backendRefs:
+        - group: edgion.io
+          kind: EdgionBackend
+          name: fixture-provider
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: guardrail-encoding-fail-close
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: ai-gateway
+  hostnames:
+    - guardrail-encoding-fail-close.example.com
+  rules:
+    - filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: guardrail-encoding-fail-close
+      backendRefs:
+        - group: edgion.io
+          kind: EdgionBackend
+          name: fixture-provider

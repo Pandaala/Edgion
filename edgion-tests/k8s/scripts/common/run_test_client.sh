@@ -230,7 +230,7 @@ if [[ "${RESOURCE}" == "EdgionBackend" ]]; then
     --expected-count "${TEST_SERVER_EXPECTED_REPLICAS}" --timeout-secs 30 --output ips)"
 elif [[ -z "${TEST_SERVER_ENDPOINT_IPS}" ]]; then
   case "${RESOURCE}/${ITEM}" in
-    EdgionPlugins/RequestMirror|EdgionPlugins/CredentialInjector|EdgionPlugins/RequestBodyBuffer|EdgionPlugins/BodyPlugins|EdgionPlugins/Guardrail|Gateway/TLS/BackendTLS)
+    EdgionPlugins/RequestMirror|EdgionPlugins/CredentialInjector|EdgionPlugins/RequestBodyBuffer|EdgionPlugins/BodyPlugins|EdgionPlugins/Guardrail|EdgionPlugins/GuardrailEncoding|Gateway/TLS/BackendTLS)
       TEST_SERVER_ENDPOINT_IPS="$("${ENDPOINT_INVENTORY}" --namespace edgion-test \
         --service edgion-test-server --port 30001 --timeout-secs 30 --output ips)"
       ;;

@@ -123,6 +123,9 @@ with `/ai/{*path}`. They retain no request content and add no process or port.
 The AI provider modes `guardrail_split` and `guardrail_two_windows` emit,
 respectively, one split canonical semantic event and two complete canonical
 semantic events with explicit choice indices for call-count assertions.
+`guardrail_encoded` reuses the `guardrail_split` body and adds repeated
+`Content-Encoding` fields `identity` then `gzip` for Guardrail failure-policy
+wiring tests.
 
 The response exposes only fixed fixture identifiers and booleans for model,
 path, Host, usage-option, and credential checks. It never echoes an incoming or

@@ -1853,6 +1853,7 @@ run_all_tests() {
                     fi
                     run_test "EdgionPlugins_AiGuard" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i AiGuard" || test_failed=true
                     run_test "EdgionPlugins_Guardrail" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i Guardrail" || test_failed=true
+                    run_test "EdgionPlugins_GuardrailEncoding" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i GuardrailEncoding" || test_failed=true
                     run_test "EdgionPlugins_OpenidConnect" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i OpenidConnect" || test_failed=true
                     run_test "EdgionPlugins_BandwidthLimit" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i BandwidthLimit" || test_failed=true
                     run_test "EdgionPlugins_DirectEndpoint" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i DirectEndpoint" || test_failed=true
@@ -2130,6 +2131,7 @@ run_all_tests() {
         fi
         run_test "EdgionPlugins_AiGuard" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i AiGuard" || test_failed=true
         run_test "EdgionPlugins_Guardrail" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i Guardrail" || test_failed=true
+        run_test "EdgionPlugins_GuardrailEncoding" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i GuardrailEncoding" || test_failed=true
         run_test "EdgionPlugins_OpenidConnect" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i OpenidConnect" || test_failed=true
         run_test "EdgionPlugins_BandwidthLimit" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i BandwidthLimit" || test_failed=true
         run_test "EdgionPlugins_DirectEndpoint" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i DirectEndpoint" || test_failed=true
@@ -2358,7 +2360,7 @@ main() {
                 # must be present or the suite either cannot connect or falls
                 # through to an unrelated GRPCRoute.
                 base_suites="${base_suites},GRPCRoute/Basic,LinkSys/Redis"
-                suites="${base_suites},EdgionBackend/SingleProvider,EdgionPlugins/DebugAccessLog,EdgionPlugins/Csrf,EdgionPlugins/PluginCondition,EdgionPlugins/CtxSet,EdgionPlugins/BasicAuth,EdgionPlugins/JwtAuth,EdgionPlugins/JweDecrypt,EdgionPlugins/HmacAuth,EdgionPlugins/HeaderCertAuth,EdgionPlugins/KeyAuth,EdgionPlugins/CredentialInjector,EdgionPlugins/ProxyRewrite,EdgionPlugins/RateLimitLocal,EdgionPlugins/RateLimitRedis,EdgionPlugins/RealIp,EdgionPlugins/RequestMirror,EdgionPlugins/ResponseRewrite,EdgionPlugins/RequestRestriction,EdgionPlugins/RequestAccessPolicy,EdgionPlugins/Canary,EdgionPlugins/IpRestriction,EdgionPlugins/IpRestrictionPartialGood,EdgionPlugins/PathNormalization,EdgionPlugins/PathNormalization/ForwardView,EdgionPlugins/FaultInjection,EdgionPlugins/ForwardAuth,EdgionPlugins/ExtProc,EdgionPlugins/AiGuard,EdgionPlugins/Guardrail,EdgionPlugins/OpenidConnect,EdgionPlugins/BandwidthLimit,EdgionPlugins/DirectEndpoint,EdgionPlugins/DynamicInternalUpstream,EdgionPlugins/DynamicExternalUpstream,EdgionPlugins/RegionRoute,EdgionPlugins/GlobalConnectionIpRestriction,EdgionPlugins/EdgionConfigDataStatus,EdgionPlugins/ResolvedRefs,EdgionPlugins/WebhookKeyGet,EdgionPlugins/Cors,EdgionPlugins/Dsl,EdgionPlugins/DslBody,EdgionPlugins/BodyPlugins,EdgionPlugins/JsonSchemaValidation,EdgionPlugins/AllEndpointStatus,EdgionPlugins/Wasm,EdgionPlugins/RequestId,EdgionPlugins/AccessLogExtern,EdgionPlugins/MatchedRouteMeta,EdgionPlugins/IpRestrictionRefs,EdgionPlugins/PluginValidationStatus,EdgionPlugins/GlobalPluginsSnapshot,EdgionPlugins/EdgionConfigDataManaged,EdgionPlugins/PathNormalization/PreserveParam,EdgionPlugins/GeoRestriction"
+                suites="${base_suites},EdgionBackend/SingleProvider,EdgionPlugins/DebugAccessLog,EdgionPlugins/Csrf,EdgionPlugins/PluginCondition,EdgionPlugins/CtxSet,EdgionPlugins/BasicAuth,EdgionPlugins/JwtAuth,EdgionPlugins/JweDecrypt,EdgionPlugins/HmacAuth,EdgionPlugins/HeaderCertAuth,EdgionPlugins/KeyAuth,EdgionPlugins/CredentialInjector,EdgionPlugins/ProxyRewrite,EdgionPlugins/RateLimitLocal,EdgionPlugins/RateLimitRedis,EdgionPlugins/RealIp,EdgionPlugins/RequestMirror,EdgionPlugins/ResponseRewrite,EdgionPlugins/RequestRestriction,EdgionPlugins/RequestAccessPolicy,EdgionPlugins/Canary,EdgionPlugins/IpRestriction,EdgionPlugins/IpRestrictionPartialGood,EdgionPlugins/PathNormalization,EdgionPlugins/PathNormalization/ForwardView,EdgionPlugins/FaultInjection,EdgionPlugins/ForwardAuth,EdgionPlugins/ExtProc,EdgionPlugins/AiGuard,EdgionPlugins/Guardrail,EdgionPlugins/GuardrailEncoding,EdgionPlugins/OpenidConnect,EdgionPlugins/BandwidthLimit,EdgionPlugins/DirectEndpoint,EdgionPlugins/DynamicInternalUpstream,EdgionPlugins/DynamicExternalUpstream,EdgionPlugins/RegionRoute,EdgionPlugins/GlobalConnectionIpRestriction,EdgionPlugins/EdgionConfigDataStatus,EdgionPlugins/ResolvedRefs,EdgionPlugins/WebhookKeyGet,EdgionPlugins/Cors,EdgionPlugins/Dsl,EdgionPlugins/DslBody,EdgionPlugins/BodyPlugins,EdgionPlugins/JsonSchemaValidation,EdgionPlugins/AllEndpointStatus,EdgionPlugins/Wasm,EdgionPlugins/RequestId,EdgionPlugins/AccessLogExtern,EdgionPlugins/MatchedRouteMeta,EdgionPlugins/IpRestrictionRefs,EdgionPlugins/PluginValidationStatus,EdgionPlugins/GlobalPluginsSnapshot,EdgionPlugins/EdgionConfigDataManaged,EdgionPlugins/PathNormalization/PreserveParam,EdgionPlugins/GeoRestriction"
                 if $FULL_TEST; then
                     suites="${suites},EdgionPlugins/LdapAuth,EdgionPlugins/LdapAuthTls"
                 fi
@@ -2382,6 +2384,8 @@ main() {
                     suites="${base_suites},EdgionBackend/SingleProvider,EdgionPlugins/AiGuard"
                 elif [ "${G_RESOURCE}/${G_ITEM}" = "EdgionPlugins/Guardrail" ]; then
                     suites="${base_suites},EdgionBackend/SingleProvider,EdgionPlugins/Guardrail"
+                elif [ "${G_RESOURCE}/${G_ITEM}" = "EdgionPlugins/GuardrailEncoding" ]; then
+                    suites="${base_suites},EdgionBackend/SingleProvider,EdgionPlugins/GuardrailEncoding"
                 else
                     suites="${suites},${G_RESOURCE}/${G_ITEM}"
                 fi

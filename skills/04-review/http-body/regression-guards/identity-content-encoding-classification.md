@@ -64,9 +64,12 @@ absent and single identity values, repeated identity fields, comma-combined
 identity values, case and optional whitespace, mixed identity/gzip orderings,
 ignored empty members, all-empty field sets, and a non-UTF-8 value.
 
-Wire-level coverage of both Guardrail failure policies remains tracked in
-`tasks/todo/guardrail-content-encoding-failure-policy-integration.md`; no
-existing frozen integration test was edited for this correction.
+The focused HTTP suite `EdgionPlugins/GuardrailEncoding` covers both Guardrail
+failure policies on the wire. It sends repeated `Content-Encoding` fields
+`identity` then `gzip` on canonical AI SSE, asserts fail-open passthrough and
+fail-close `503`, requires zero decision-service calls, and checks the one
+aggregate `reason=response-not-applicable` summary. The existing
+`EdgionPlugins/Guardrail` suite was left unchanged.
 
 Re-evaluate if HTTP field-list parsing policy changes, Pingora begins decoding
 upstream response bodies before these consumers, `PluginSession` response-map
@@ -77,3 +80,5 @@ identity-coded representation.
 
 - `D0105` / `unify-response-content-encoding-classification` — P2 bugfix,
   corrected in 2026-09.
+- `D0105 follow-up` / `guardrail-content-encoding-failure-policy-integration` —
+  wire-level fail-open/fail-close coverage added in 2026-09.

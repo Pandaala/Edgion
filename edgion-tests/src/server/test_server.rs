@@ -1960,14 +1960,20 @@ async fn ai_provider_handler(
     }
 
     let observation = serde_json::to_string(&observation).unwrap();
+    let mock_mode = query.mock_mode.as_deref();
+    // Repeated identity then gzip is the D0105 wire shape: the first field is
+    // valid, but the field set is not identity-coded. The body stays the
+    // uncompressed Guardrail SSE fixture so fail-open can prove passthrough.
+    let mixed_identity_gzip = mock_mode == Some("guardrail_encoded");
     let mode = if path.starts_with("resilience-stream/") {
         "resilience_abort"
     } else {
-        match query.mock_mode.as_deref().unwrap_or("paced") {
+        match mock_mode.unwrap_or("paced") {
             // The force-sse marker only changes admission (`streaming` above);
             // the wire fixture itself is the same `quota_terminate` plan a
             // normal streaming request would get.
             "quota_terminate_force_sse" => "quota_terminate",
+            "guardrail_encoded" => "guardrail_split",
             other => other,
         }
     };
@@ -2025,6 +2031,11 @@ async fn ai_provider_handler(
         .header("cache-control", "no-cache");
     if let Some(full_length) = full_length {
         builder = builder.header("content-length", full_length.to_string());
+    }
+    if mixed_identity_gzip {
+        builder = builder
+            .header("content-encoding", "identity")
+            .header("content-encoding", "gzip");
     }
     builder
         .body(Body::from_stream(tokio_stream::wrappers::ReceiverStream::new(rx)))

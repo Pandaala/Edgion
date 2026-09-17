@@ -2601,6 +2601,7 @@ run_all_selected_suites() {
     "EdgionPlugins/GeoRestriction|EdgionPlugins|GeoRestriction"
     "EdgionPlugins/GlobalPluginsSnapshot|EdgionPlugins|GlobalPluginsSnapshot"
     "EdgionPlugins/Guardrail|EdgionPlugins|Guardrail"
+    "EdgionPlugins/GuardrailEncoding|EdgionPlugins|GuardrailEncoding"
     "EdgionPlugins/AllEndpointStatus|EdgionPlugins|AllEndpointStatus"
     "EdgionBackendTrafficPolicy/RetryBudget|EdgionBackendTrafficPolicy|RetryBudget"
     "EdgionBackendTrafficPolicy/ConnectTimeout|EdgionBackendTrafficPolicy|ConnectTimeout"
