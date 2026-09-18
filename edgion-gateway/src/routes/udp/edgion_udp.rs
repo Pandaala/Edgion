@@ -91,6 +91,15 @@ fn upstream_bind_addr(upstream: std::net::SocketAddr) -> std::net::SocketAddr {
     }
 }
 
+/// True when `src` is the session's pinned upstream: canonical IP and port both match.
+///
+/// IPv4-mapped IPv6 (`::ffff:a.b.c.d`) collapses to native IPv4 so a family-matched
+/// IPv4 pin still accepts a mapped source. Wrong IP and wrong port fail independently.
+/// Unpinned datagrams must not be forwarded, counted, or used to refresh idle time.
+fn is_pinned_upstream_source(src: std::net::SocketAddr, pinned: std::net::SocketAddr) -> bool {
+    src.ip().to_canonical() == pinned.ip().to_canonical() && src.port() == pinned.port()
+}
+
 /// Client session information with statistics
 struct ClientSession {
     session_permit: Mutex<Option<OwnedSemaphorePermit>>,
@@ -495,7 +504,10 @@ impl EdgionUdpProxy {
                 _ = cancel.cancelled() => break,
                 result = tokio::time::timeout(Duration::from_secs(1), session.upstream_socket.recv_from(&mut buf)) => {
                     match result {
-                        Ok(Ok((len, _))) => {
+                        Ok(Ok((len, src))) => {
+                            if !is_pinned_upstream_source(src, session.upstream_addr) {
+                                continue;
+                            }
                             let send_result = tokio::select! {
                                 biased;
                                 _ = cancel.cancelled() => break,
@@ -636,7 +648,7 @@ impl EdgionUdpProxy {
 mod tests {
     use super::*;
     use crate::routes::udp::UdpPortRouteManager;
-    use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+    use std::net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV6};
 
     fn make_test_listener_key(port: u16) -> ListenerKey {
         ListenerKey::new(SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), port), "UDP")
@@ -678,6 +690,62 @@ mod tests {
     #[test]
     fn test_session_timeout_constant() {
         assert_eq!(SESSION_TIMEOUT, Duration::from_secs(60));
+    }
+
+    fn pinned_v4() -> SocketAddr {
+        "192.0.2.10:53".parse().unwrap()
+    }
+
+    fn mapped_v4(ip: Ipv4Addr, port: u16) -> SocketAddr {
+        SocketAddr::V6(SocketAddrV6::new(ip.to_ipv6_mapped(), port, 0, 0))
+    }
+
+    #[test]
+    fn pinned_upstream_source_accepts_exact_ip_and_port() {
+        assert!(is_pinned_upstream_source(pinned_v4(), pinned_v4()));
+    }
+
+    #[test]
+    fn pinned_upstream_source_rejects_wrong_port() {
+        let src: SocketAddr = "192.0.2.10:54".parse().unwrap();
+        assert!(!is_pinned_upstream_source(src, pinned_v4()));
+    }
+
+    #[test]
+    fn pinned_upstream_source_rejects_wrong_ip() {
+        let src: SocketAddr = "192.0.2.11:53".parse().unwrap();
+        assert!(!is_pinned_upstream_source(src, pinned_v4()));
+    }
+
+    #[test]
+    fn pinned_upstream_source_accepts_ipv4_mapped_ipv6_same_host_and_port() {
+        let src = mapped_v4(Ipv4Addr::new(192, 0, 2, 10), 53);
+        assert!(is_pinned_upstream_source(src, pinned_v4()));
+        assert!(is_pinned_upstream_source(pinned_v4(), src));
+    }
+
+    #[test]
+    fn pinned_upstream_source_rejects_ipv4_mapped_wrong_port_and_wrong_ip() {
+        let wrong_port = mapped_v4(Ipv4Addr::new(192, 0, 2, 10), 54);
+        let wrong_ip = mapped_v4(Ipv4Addr::new(192, 0, 2, 11), 53);
+        assert!(!is_pinned_upstream_source(wrong_port, pinned_v4()));
+        assert!(!is_pinned_upstream_source(wrong_ip, pinned_v4()));
+    }
+
+    #[test]
+    fn pinned_upstream_source_rejects_native_ipv6_mismatch() {
+        let pinned: SocketAddr = "[2001:db8::10]:53".parse().unwrap();
+        let wrong_ip: SocketAddr = "[2001:db8::11]:53".parse().unwrap();
+        let wrong_port: SocketAddr = "[2001:db8::10]:54".parse().unwrap();
+        assert!(is_pinned_upstream_source(pinned, pinned));
+        assert!(!is_pinned_upstream_source(wrong_ip, pinned));
+        assert!(!is_pinned_upstream_source(wrong_port, pinned));
+    }
+
+    #[test]
+    fn pinned_upstream_source_does_not_treat_ipv4_compatible_as_mapped() {
+        let compatible: SocketAddr = "[::192.0.2.10]:53".parse().unwrap();
+        assert!(!is_pinned_upstream_source(compatible, pinned_v4()));
     }
 
     #[tokio::test]
