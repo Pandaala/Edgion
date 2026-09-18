@@ -1,5 +1,5 @@
 {
-  "current_max": 31977,
+  "current_max": 31980,
   "suites": {
     "PluginPolicy": {
       "udp": 58338,
@@ -414,6 +414,13 @@
     },
     "TLSRoute/DeniedBackendRef": {
       "tls": 31956
+    },
+    "TCPRoute/L4TimeoutHotReload": {
+      "tcp": 31978,
+      "tls": 31979
+    },
+    "TCPRoute/L4TimeoutHotReload/Passthrough": {
+      "tls": 31980
     }
   }
 }

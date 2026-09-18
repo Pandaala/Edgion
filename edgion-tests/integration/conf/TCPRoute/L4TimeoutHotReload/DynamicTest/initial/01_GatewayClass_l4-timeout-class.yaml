@@ -1,0 +1,11 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: l4-timeout-class
+spec:
+  controllerName: edgion.io/gateway-controller
+  description: "L4 timeout hot-reload scenario (private EdgionGatewayConfig)"
+  parametersRef:
+    group: edgion.io
+    kind: EdgionGatewayConfig
+    name: l4-timeout-egc

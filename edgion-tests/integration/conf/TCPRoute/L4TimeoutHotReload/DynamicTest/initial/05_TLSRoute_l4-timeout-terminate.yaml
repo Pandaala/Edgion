@@ -1,0 +1,17 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: TLSRoute
+metadata:
+  name: l4-timeout-terminate
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: l4-timeout-gw
+      namespace: edgion-test
+      sectionName: terminate
+  hostnames:
+    - "l4-timeout.sandbox.example.com"
+  rules:
+    - backendRefs:
+        - name: test-tcp
+          port: 30010
+          weight: 100

@@ -1,0 +1,9 @@
+# Dedicated EGC for L4 timeout hot-reload. A private GatewayClass keeps this
+# idle window off the shared example-gateway 2s baseline used by other L4 suites.
+apiVersion: edgion.io/v1alpha1
+kind: EdgionGatewayConfig
+metadata:
+  name: l4-timeout-egc
+spec:
+  tcpTimeout:
+    idleTimeout: 30s

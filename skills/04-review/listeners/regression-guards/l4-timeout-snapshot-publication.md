@@ -71,14 +71,40 @@ sets, missing/default behavior, a real EGC named `default`, independent configs,
 mixed invalid and zero fields, connection-copy stability, and release of an old
 parent snapshot. The targeted command
 `cargo test -p edgion-gateway l4_timeout_ --lib` passed all three selected tests.
-No new transport integration scenario was added, so wire timing remains covered
-by the existing connect and relay suites rather than a fresh hot-update test.
+
+The dynamic scenario `L4TimeoutHotReload`
+(`edgion-tests/src/client/dynamic/scenarios/l4_timeout_hot_reload.rs`) is the
+wire-level hot-update guard. It uses a dedicated GatewayClass and
+`EdgionGatewayConfig` named `l4-timeout-egc` so the shared `example-gateway`
+`idleTimeout: 2s` baseline is unchanged. After a generous idle timeout is
+published, it completes a backend exchange on live TCP, TLS-terminate, and TLS
+passthrough connections, updates only `spec.tcpTimeout.idleTimeout` to `1s`,
+and waits for two observable signals: Gateway `configclient` showing the new
+string, then a disposable TCP probe whose idle close matches the new generation.
+`configclient` is ClientCache receipt and can precede `CacheData::BATCH_DEBOUNCE`
+(100ms) plus ConfHandler publication; the probe is what proves
+`ResolvedL4Timeouts` was published. New
+connections on all three paths must then close inside the short window, while
+the pre-update connections remain usable. Fixed sleeps are used only for the
+idle interval itself. The scenario would fail against the former startup-frozen
+timeout behavior. Kubernetes execution is not part of this guard; local/K8s
+dynamic inventory parity remains a separate tracked task.
+
+`connectTimeout` is published and captured through the same resolved snapshot.
+This scenario does not add connect-timeout wire coverage: holding upstream
+connection establishment open without OS or network black-hole timing is not
+deterministic across Linux CI and macOS. Resolver, publication, and
+connection-copy unit tests remain the accepted connect-timeout coverage
+boundary.
 
 Re-evaluate when connection acceptance ownership moves, the physical listener's
 EGC reference becomes dynamically retargetable, another L4 proxy is introduced,
-or a timeout must change an already established connection.
+a timeout must change an already established connection, or a deterministic
+cross-platform connect-timeout fixture becomes available.
 
 ## Resolution references
 
 - `pre-resolve-l4-listener-timeouts` — corrected the startup-frozen policy and
-  per-connection string parsing by publishing resolved dynamic snapshots.
+  per-connection string parsing by publishing resolved dynamic snapshots; later
+  closed the remaining transport hot-reload integration gap as
+  `L4TimeoutHotReload`.

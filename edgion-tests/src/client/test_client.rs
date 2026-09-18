@@ -70,6 +70,7 @@ const EXPECTED_DYNAMIC_SCENARIO_IDS: &[&str] = &[
     "TlsLastKnownGood",
     "WafDynamic",
     "AcmeGatewayRefOwnership",
+    "L4TimeoutHotReload",
 ];
 
 fn capability_entry_applies(kind: &str, entry_id: &str, id: &str) -> bool {
@@ -1545,6 +1546,7 @@ fn dynamic_port_contract(id: &str) -> Result<Option<(&'static str, port_config::
         "DnsResolutionFlap" => Some(("HTTPRoute/Backend/DnsResolutionFlap", PortKind::Http)),
         "TlsRouteAttachments" => Some(("TLSRoute/Attachments", PortKind::Tls)),
         "TcpEspReload" => Some(("TCPRoute/StreamPlugins/Dynamic", PortKind::Tcp)),
+        "L4TimeoutHotReload" => Some(("TCPRoute/L4TimeoutHotReload", PortKind::Tcp)),
         "TlsRoutePluginsReload" => Some(("TLSRoute/StreamPlugins", PortKind::Tls)),
         "TlsLastKnownGood" => Some(("EdgionTls/LastKnownGood", PortKind::Https)),
         "AcmeGatewayRefOwnership" => Some(("Gateway/AcmeGatewayRefOwnership", PortKind::Http)),
