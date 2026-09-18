@@ -1193,40 +1193,57 @@ probe_redis_ready() {
     return 1
 }
 
+# Prove the live Redis TLS/mTLS server presents a certificate the current run
+# will trust. Host certificate files are the only identity source: a docker
+# exec against container-local /certs can succeed for a healthy leftover
+# container even after make-test-certs.sh replaced the host material that
+# Gateway Secrets and SSL_CERT_FILE will load.
+probe_redis_tls_identity() {
+    local host=$1 port=$2 require_client_cert=$3
+    local certs_dir="${REDIS_COMPOSE_DIR:-${PROJECT_ROOT}/edgion-tests/integration/conf/Services/redis}/certs"
+    local ca="${certs_dir}/ca.crt"
+    local output
+    local openssl_args
+
+    [ -f "$ca" ] || return 1
+    openssl_args=(
+        s_client
+        -connect "${host}:${port}"
+        -CAfile "$ca"
+        -verify_return_error
+    )
+    if [ "$require_client_cert" = "true" ]; then
+        [ -f "${certs_dir}/client.crt" ] && [ -f "${certs_dir}/client.key" ] || return 1
+        openssl_args+=(-cert "${certs_dir}/client.crt" -key "${certs_dir}/client.key")
+    fi
+
+    # LibreSSL can still exit 0 with -verify_return_error when the chain does
+    # not verify. The Verify return code line is the fail-closed identity gate.
+    output=$(printf 'Q\n' | openssl "${openssl_args[@]}" 2>&1) || return 1
+    printf '%s\n' "$output" | grep -F -q 'Verify return code: 0 (ok)'
+}
+
 probe_redis_tls_ready() {
     local host=$1 port=$2 password=$3 require_client_cert=$4
-    local certs_dir="${PROJECT_ROOT}/edgion-tests/integration/conf/Services/redis/certs"
+    local certs_dir="${REDIS_COMPOSE_DIR:-${PROJECT_ROOT}/edgion-tests/integration/conf/Services/redis}/certs"
     local tls_args=(--tls --cacert "${certs_dir}/ca.crt")
-    local container_name="$REDIS_TLS_CONTAINER_NAME"
-    local container_port=6380
 
+    probe_redis_tls_identity "$host" "$port" "$require_client_cert" || return 1
+
+    if ! command -v redis-cli >/dev/null 2>&1; then
+        return 0
+    fi
     if [ "$require_client_cert" = "true" ]; then
         tls_args+=(--cert "${certs_dir}/client.crt" --key "${certs_dir}/client.key")
-        container_name="$REDIS_MTLS_CONTAINER_NAME"
-        container_port=6381
+    fi
+    if redis-cli "${tls_args[@]}" -h "$host" -p "$port" -a "$password" \
+        --no-auth-warning ping 2>/dev/null | grep -q '^PONG$'; then
+        return 0
     fi
 
-    if command -v redis-cli >/dev/null 2>&1; then
-        if redis-cli "${tls_args[@]}" -h "$host" -p "$port" -a "$password" \
-            --no-auth-warning ping 2>/dev/null | grep -q '^PONG$'; then
-            return 0
-        fi
-    fi
-
-    if command -v docker >/dev/null 2>&1 \
-        && docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "$container_name"; then
-        local container_args=(--tls --cacert /certs/ca.crt)
-        if [ "$require_client_cert" = "true" ]; then
-            container_args+=(--cert /certs/client.crt --key /certs/client.key)
-        fi
-        if docker exec "$container_name" redis-cli "${container_args[@]}" \
-            -p "$container_port" -a "$password" --no-auth-warning ping 2>/dev/null \
-            | grep -q '^PONG$'; then
-            return 0
-        fi
-    fi
-
-    return 1
+    # Identity already matched the current host material. A host redis-cli
+    # without TLS support must not force a recreate.
+    return 0
 }
 
 print_redis_install_hints() {
@@ -1245,7 +1262,7 @@ LinkSys Redis suite).
 Recommended (any platform with Docker):
   cd ${REDIS_COMPOSE_DIR}
   docker compose up -d
-  # the runner will detect and reuse it on the next invocation
+  # the runner reuses it only when the live server still matches the current certificates
 
 Manual install:
   macOS (Homebrew):
@@ -1334,19 +1351,38 @@ start_redis_service_if_needed() {
     fi
 
     local services=()
-    $plaintext_ready || services+=(redis)
-    $tls_ready || services+=(redis-tls)
-    $mtls_ready || services+=(redis-mtls)
+    local plaintext_services=()
+    local tls_services=()
+    $plaintext_ready || plaintext_services+=(redis)
+    $tls_ready || tls_services+=(redis-tls)
+    $mtls_ready || tls_services+=(redis-mtls)
+    [ ${#plaintext_services[@]} -eq 0 ] || services+=("${plaintext_services[@]}")
+    [ ${#tls_services[@]} -eq 0 ] || services+=("${tls_services[@]}")
 
     local compose_output=""
     REDIS_STARTED_SERVICES=("${services[@]}")
     REDIS_SERVICE_STARTED=true
-    compose_output=$(docker compose -f "${REDIS_COMPOSE_FILE}" up -d "${services[@]}" 2>&1) || {
-        log_error "Failed to start Redis via docker compose"
-        echo "$compose_output"
-        print_redis_install_hints
-        return 1
-    }
+    # Redis loads TLS files at process start. `up -d` leaves a healthy leftover
+    # container running with the previous in-memory certificates, so identity
+    # mismatches must recreate the TLS/mTLS services.
+    if [ ${#plaintext_services[@]} -gt 0 ]; then
+        compose_output=$(docker compose -f "${REDIS_COMPOSE_FILE}" up -d \
+            "${plaintext_services[@]}" 2>&1) || {
+            log_error "Failed to start Redis via docker compose"
+            echo "$compose_output"
+            print_redis_install_hints
+            return 1
+        }
+    fi
+    if [ ${#tls_services[@]} -gt 0 ]; then
+        compose_output=$(docker compose -f "${REDIS_COMPOSE_FILE}" up -d --force-recreate \
+            "${tls_services[@]}" 2>&1) || {
+            log_error "Failed to start Redis TLS via docker compose"
+            echo "$compose_output"
+            print_redis_install_hints
+            return 1
+        }
+    fi
 
     local elapsed=0
     local timeout=30

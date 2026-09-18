@@ -41,4 +41,5 @@ before applying a decision to current code.
 - [Integration suite registrations must be checked per sweep — FIXED](regression-guards/integration-suite-registrations-must-be-checked-per-sweep.md)
 - [Mandatory integration gates fail closed](regression-guards/mandatory-integration-gates-fail-closed.md)
 - [Request restriction resolved conditions coverage](regression-guards/request-restriction-resolved-conditions-coverage.md)
+- [Redis TLS container reuse follows current-run certificate identity](regression-guards/redis-tls-container-reuse-certificate-identity.md)
 - [Resource diff must fail on incomplete reads](regression-guards/resource-diff-must-fail-on-incomplete-reads.md)

@@ -104,7 +104,9 @@ Fresh verification on 2026-09-11:
   LinkSys assertions, including the three new handshakes, plus resource convergence,
   unknown-field, requeue-loop, and cache-residue checks. Its first service probe
   exposed and drove correction of missing container-side TLS ports before the
-  successful rerun.
+  successful rerun. Container reuse across later work directories is a separate
+  runner invariant: see
+  [Redis TLS container reuse](../../testing/regression-guards/redis-tls-container-reuse-certificate-identity.md).
 - `cargo fmt --all` and `cargo fmt --all -- --check`,
   `cargo check --workspace --all-targets`, and
   `cargo clippy --workspace --all-targets`: passed. Clippy retains existing repository

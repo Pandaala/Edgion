@@ -34,6 +34,7 @@ before applying a decision to current code.
 - [Redis pool health is aggregate and connection logs are transition-only](regression-guards/redis-pool-aggregate-health.md)
 - [ResolvedTarget Has No Webhook Compatibility Alias — FIXED](regression-guards/resolved-target-has-no-webhook-compatibility-alias.md)
 - [LinkSys outbound TLS enablement and shared loading](regression-guards/shared-outbound-tls-loading.md)
+  (RedisTls handshake coverage; container reuse identity is owned by testing)
 - [OTLP provider ownership and safe transport](regression-guards/otlp-provider-ownership-and-egress.md)
 - [Webhook publication stays outside the generic LinkSys lifecycle](regression-guards/webhook-publication-outside-generic-lifecycle.md)
 
