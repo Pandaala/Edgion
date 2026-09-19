@@ -40,8 +40,8 @@ MAX_CH_BACKEND_WEIGHT)` before re-reporting.
 
 `RoundRobinSelector::build` expanded each backend with `for _ in 0..b.weight.max(1) { weighted.push(..) }`
 and `ConsistentHashRing::build` passed `b.weight.max(1) as u32` straight to `Bucket::new`.
-The backend *count* was bounded (RR truncates to `u16::MAX`; the ring excludes non-Inet
-addrs), but the *per-backend weight* was not. lb-F005 capped the sibling `WeightedRoundRobin`
+The RR backend *count* was bounded by `u16::MAX`, but CH only excluded non-Inet addresses
+and had no count cap; the *per-backend weight* was also unbounded. lb-F005 capped the sibling `WeightedRoundRobin`
 (`backend_selector/weighted_selector.rs`) — a **different** selector. The selector actually
 used by the data-plane `RrCore` / `ChCore` (`compiled_selector.rs`) is this `RoundRobinSelector`
 / `ConsistentHashRing` pair, so the lb-F005 fix did **not** extend here.

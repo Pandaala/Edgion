@@ -14,6 +14,38 @@ use std::collections::HashMap;
 /// Mirrors the WeightedRoundRobin weight cap.
 const MAX_CH_BACKEND_WEIGHT: usize = 1 << 10;
 
+/// Keep consistent-hash construction within the same backend-count boundary as
+/// round robin. The original backend indices remain stable for health lookups.
+const MAX_CH_BACKENDS: usize = u16::MAX as usize;
+
+fn prepare_ring(backends: &[Backend]) -> (Vec<Bucket>, HashMap<std::net::SocketAddr, usize>) {
+    let prepared: Vec<_> = backends
+        .iter()
+        .enumerate()
+        .filter_map(|(original_index, backend)| {
+            let SocketAddr::Inet(addr) = backend.addr else {
+                return None;
+            };
+            Some((
+                original_index,
+                addr,
+                backend.weight.clamp(1, MAX_CH_BACKEND_WEIGHT) as u32,
+            ))
+        })
+        .take(MAX_CH_BACKENDS)
+        .collect();
+
+    let buckets = prepared
+        .iter()
+        .map(|&(_, addr, weight)| Bucket::new(addr, weight))
+        .collect();
+    let addr_to_idx = prepared
+        .into_iter()
+        .map(|(original_index, addr, _)| (addr, original_index))
+        .collect();
+    (buckets, addr_to_idx)
+}
+
 /// Consistent hash ring wrapping `pingora_ketama::Continuum`.
 ///
 /// Built from a backend list; walks the ring clockwise for fallback.
@@ -25,30 +57,9 @@ pub struct ConsistentHashRing {
 
 impl ConsistentHashRing {
     pub fn build(backends: &[Backend]) -> Self {
-        let buckets: Vec<_> = backends
-            .iter()
-            .filter_map(|b| {
-                if let SocketAddr::Inet(addr) = b.addr {
-                    Some(Bucket::new(addr, b.weight.clamp(1, MAX_CH_BACKEND_WEIGHT) as u32))
-                } else {
-                    None
-                }
-            })
-            .collect();
-
+        let (buckets, addr_to_idx) = prepare_ring(backends);
         let ring = Continuum::new(&buckets);
         let backends_vec: Vec<Backend> = backends.to_vec();
-        let addr_to_idx: HashMap<_, _> = backends_vec
-            .iter()
-            .enumerate()
-            .filter_map(|(i, b)| {
-                if let SocketAddr::Inet(addr) = b.addr {
-                    Some((addr, i))
-                } else {
-                    None
-                }
-            })
-            .collect();
 
         ConsistentHashRing {
             ring,
@@ -375,6 +386,40 @@ mod tests {
             let picked = ring.select(key.as_bytes(), 16, |_| true).expect("healthy");
             assert!(matches!(picked.addr, PSocketAddr::Inet(_)));
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn preparation_caps_inet_backends_and_preserves_original_indices() {
+        use std::os::unix::net::SocketAddr as StdUnixSockAddr;
+        use std::path::Path;
+
+        let unix_addr = StdUnixSockAddr::from_pathname(Path::new("/tmp/edgion-ch-cap-ut.sock")).unwrap();
+        let mut backends = vec![Backend {
+            addr: PSocketAddr::Unix(unix_addr),
+            weight: 1,
+            ext: Default::default(),
+        }];
+        backends.extend((1..=(MAX_CH_BACKENDS as u32 + 1)).map(make_backend));
+
+        let (buckets, addr_to_idx) = prepare_ring(&backends);
+        let PSocketAddr::Inet(first_addr) = backends[1].addr else {
+            unreachable!("test backend must be Inet");
+        };
+        let PSocketAddr::Inet(last_addr) = backends[MAX_CH_BACKENDS].addr else {
+            unreachable!("test backend must be Inet");
+        };
+        let PSocketAddr::Inet(excluded_addr) = backends[MAX_CH_BACKENDS + 1].addr else {
+            unreachable!("test backend must be Inet");
+        };
+
+        assert_eq!(buckets.len(), MAX_CH_BACKENDS);
+        assert_eq!(addr_to_idx.len(), MAX_CH_BACKENDS);
+        assert_eq!(buckets.first(), Some(&Bucket::new(first_addr, 1)));
+        assert_eq!(buckets.last(), Some(&Bucket::new(last_addr, 1)));
+        assert_eq!(addr_to_idx.get(&first_addr), Some(&1));
+        assert_eq!(addr_to_idx.get(&last_addr), Some(&MAX_CH_BACKENDS));
+        assert!(!addr_to_idx.contains_key(&excluded_addr));
     }
 
     #[test]

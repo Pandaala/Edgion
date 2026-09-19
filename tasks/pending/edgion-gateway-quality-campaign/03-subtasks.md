@@ -32,7 +32,7 @@ The first section preserves the exact residual order supplied by `task/optimizat
 | edgion-gateway | `edgion-gateway/src/lb/mod.rs` | src/lb | examined-no-change | B0024 | LB facade exposes one coherent acyclic tree of canonical selectors, counters, attempts, sampling, draining, and strategies | d414b7c88acc697862fa073057cf7e549e5fbbf0 |
 | edgion-gateway | `edgion-gateway/src/lb/runtime_state/mod.rs` | src/lb | examined-no-change | B0025 | Affinity publication and exact-generation draining remain bounded, generation-safe, collision-resistant, and self-healing | 86f8a5cd88b435fdababa28956e88807a2adf24e |
 | edgion-gateway | `edgion-gateway/src/lb/sample.rs` | src/lb | changed | B0026 | Retry-code normalization now bounds response-hot-path membership scans to the 200-code HTTP error domain | d72e23a1a97474c6586f80dd06897c1964b6fbcd |
-| edgion-gateway | `edgion-gateway/src/lb/selection/consistent_hash.rs` | src/lb | pending | — | Residual manifest order | a0b4d49b298149422c7e46150a0ca027ad5321f7 |
+| edgion-gateway | `edgion-gateway/src/lb/selection/consistent_hash.rs` | src/lb | changed | B0027 | Ketama ring inputs and address indices now share the RR-aligned 65,535-Inet-backend bound, preventing `u16` node aliasing | 29ec67ff9abe66be71f80a06156816a413893ff5 |
 | edgion-gateway | `edgion-gateway/src/lb/selection/mod.rs` | src/lb | pending | — | Residual manifest order | a0b4d49b298149422c7e46150a0ca027ad5321f7 |
 | edgion-gateway | `edgion-gateway/src/lb/selection/p2c.rs` | src/lb | pending | — | Residual manifest order | a0b4d49b298149422c7e46150a0ca027ad5321f7 |
 | edgion-gateway | `edgion-gateway/src/lb/selection/round_robin.rs` | src/lb | pending | — | Residual manifest order | a0b4d49b298149422c7e46150a0ca027ad5321f7 |
