@@ -289,23 +289,26 @@ impl HTTPRoute {
                 });
 
                 let codes = retry.codes.as_ref().map(|codes| {
-                    codes
-                        .iter()
-                        .filter_map(|&c| {
-                            // Retry status codes are restricted to 400..=599 to match
-                            // the upstream Gateway API HTTPRouteRetry CRD validation.
-                            // Informational (1xx) and success/redirect (2xx/3xx) codes
-                            // are never a meaningful retry trigger and a 1xx code here
-                            // would otherwise let retry-on-status misfire on an h1
-                            // informational header.
-                            if (400..=599).contains(&c) {
-                                Some(c as u16)
-                            } else {
-                                tracing::warn!(code = c, "Invalid HTTP status code in retry.codes, ignoring");
-                                None
+                    let mut seen = [false; 200];
+                    let mut parsed = Vec::with_capacity(codes.len().min(seen.len()));
+                    for &code in codes {
+                        // Retry status codes are restricted to 400..=599 to match
+                        // the upstream Gateway API HTTPRouteRetry CRD validation.
+                        // Informational (1xx) and success/redirect (2xx/3xx) codes
+                        // are never a meaningful retry trigger and a 1xx code here
+                        // would otherwise let retry-on-status misfire on an h1
+                        // informational header.
+                        if (400..=599).contains(&code) {
+                            let index = (code - 400) as usize;
+                            if !seen[index] {
+                                seen[index] = true;
+                                parsed.push(code as u16);
                             }
-                        })
-                        .collect::<Vec<u16>>()
+                        } else {
+                            tracing::warn!(code, "Invalid HTTP status code in retry.codes, ignoring");
+                        }
+                    }
+                    parsed
                 });
 
                 if attempts.is_some() || backoff.is_some() || codes.is_some() {
@@ -905,5 +908,36 @@ mod tests {
             .as_ref()
             .expect("parsed_retry should be set");
         assert_eq!(parsed.codes.as_deref(), Some([].as_slice()));
+    }
+
+    #[test]
+    fn parse_retry_codes_deduplicate_in_first_seen_order_and_stay_bounded() {
+        let mut codes = vec![503, 400, 503, 599, 400, 418, 418];
+        for _ in 0..4 {
+            codes.extend((400..=599).rev());
+        }
+        let mut expected = vec![503u16, 400, 599, 418];
+        expected.extend(
+            (400u16..=599)
+                .rev()
+                .filter(|code| !matches!(*code, 400 | 418 | 503 | 599)),
+        );
+
+        let mut route = make_route_with_retry_codes(codes);
+        route.parse_retry();
+        let parsed = route.spec.rules.as_ref().unwrap()[0]
+            .parsed_retry
+            .as_ref()
+            .expect("parsed_retry should be set")
+            .codes
+            .as_ref()
+            .expect("explicit retry.codes should remain present");
+
+        assert_eq!(parsed, &expected, "valid codes must keep first-seen order");
+        assert_eq!(
+            parsed.len(),
+            200,
+            "the runtime vector cannot exceed the valid code domain"
+        );
     }
 }
