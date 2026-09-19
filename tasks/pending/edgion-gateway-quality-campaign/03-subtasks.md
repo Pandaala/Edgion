@@ -7,8 +7,8 @@ The first section preserves the exact residual order supplied by `task/optimizat
 | edgion-gateway | `edgion-gateway/Cargo.toml` | package | changed | B0001 | Unused dependency/feature surface removed and governing build documentation corrected; absorbed by external commit `28de28f50` | 28de28f50d37149f83b4174c2be429217e9ca93f |
 | edgion-gateway | `edgion-gateway/benches/lru_expiration.rs` | benches | removed | — | Deleted by commit `5a25d32e880c89cfa9af4f28008d1bf34bb7574c` | a0b4d49b298149422c7e46150a0ca027ad5321f7 |
 | edgion-gateway | `edgion-gateway/build.rs` | package | changed | B0002 | Added early allocator conflict diagnostic without changing valid feature semantics | 8a32f09f074e3280dd9b500810481c62a72613b6 |
-| edgion-gateway | `edgion-gateway/src/api/admin_auth.rs` | src/api | analysis-ready | B0003 | Add required Bearer challenge while preserving the Admin auth boundary | 8a32f09f074e3280dd9b500810481c62a72613b6 |
-| edgion-gateway | `edgion-gateway/src/api/mod.rs` | src/api | analysis-ready | B0003 | Router/auth boundary analyzed with `admin_auth.rs`; production behavior remains unchanged | 8a32f09f074e3280dd9b500810481c62a72613b6 |
+| edgion-gateway | `edgion-gateway/src/api/admin_auth.rs` | src/api | changed | B0003 | Added RFC 6750-compliant static Bearer realm and middleware regression coverage | 48643849b5102abb4a4c54524aeb7bd66b4d9bdd |
+| edgion-gateway | `edgion-gateway/src/api/mod.rs` | src/api | examined-no-change | B0003 | Merged-router middleware ordering already protects all Admin routes; no edit required | 48643849b5102abb4a4c54524aeb7bd66b4d9bdd |
 | edgion-gateway | `edgion-gateway/src/backends/discovery/coordinator.rs` | src/backends | pending | — | Residual manifest order | a0b4d49b298149422c7e46150a0ca027ad5321f7 |
 | edgion-gateway | `edgion-gateway/src/backends/degrade_threshold.rs` | src/backends | pending | — | Residual manifest order | a0b4d49b298149422c7e46150a0ca027ad5321f7 |
 | edgion-gateway | `edgion-gateway/src/backends/policy/backend_traffic/store.rs` | src/backends | pending | — | Residual manifest order | a0b4d49b298149422c7e46150a0ca027ad5321f7 |

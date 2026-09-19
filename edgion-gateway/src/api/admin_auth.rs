@@ -1,6 +1,6 @@
 //! Gateway admin API authentication: a single shared bearer token, checked with
 //! a constant-time digest comparison. See
-//! `docs/superpowers/specs/2026-06-08-gateway-admin-auth-design.md`.
+//! `skills/04-review/admin-api/regression-guards/gateway-admin-bearer-boundary.md`.
 //!
 //! The trust unit is one operator + one gateway pod. There is no login, no JWT,
 //! no cookie, no user model. The token is resolved once at startup and stored
@@ -128,13 +128,20 @@ pub(super) async fn admin_auth_middleware(
 
     match evaluate(state.digest(), auth_header) {
         AdminAuthOutcome::Proceed => next.run(request).await,
-        AdminAuthOutcome::Unauthorized => (
-            StatusCode::UNAUTHORIZED,
-            Json(super::ApiResponse::<()>::err_body(
-                "Unauthorized: a valid bearer token is required".to_string(),
-            )),
-        )
-            .into_response(),
+        AdminAuthOutcome::Unauthorized => {
+            let mut resp = (
+                StatusCode::UNAUTHORIZED,
+                Json(super::ApiResponse::<()>::err_body(
+                    "Unauthorized: a valid bearer token is required".to_string(),
+                )),
+            )
+                .into_response();
+            resp.headers_mut().insert(
+                header::WWW_AUTHENTICATE,
+                HeaderValue::from_static(r#"Bearer realm="edgion-gateway-admin""#),
+            );
+            resp
+        }
         AdminAuthOutcome::Unconfigured => {
             let mut resp = (
                 StatusCode::SERVICE_UNAVAILABLE,
@@ -153,6 +160,43 @@ pub(super) async fn admin_auth_middleware(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::{
+        body::{to_bytes, Body},
+        http::{HeaderMap, Request},
+        middleware::from_fn_with_state,
+        routing::get,
+        Router,
+    };
+    use tower::ServiceExt;
+
+    const CONFIGURED_TOKEN: &str = "configured-admin-token-0123456789abcdef";
+
+    struct TestResponse {
+        status: StatusCode,
+        headers: HeaderMap,
+        body: String,
+    }
+
+    fn middleware_router(state: AdminAuthState) -> Router {
+        Router::new()
+            .route("/admin", get(|| async { "handler reached" }))
+            .layer(from_fn_with_state(state, admin_auth_middleware))
+    }
+
+    async fn send_request(state: AdminAuthState, auth_header: Option<&str>) -> TestResponse {
+        let mut request = Request::builder().uri("/admin");
+        if let Some(value) = auth_header {
+            request = request.header(header::AUTHORIZATION, value);
+        }
+        let response = middleware_router(state)
+            .oneshot(request.body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        let status = response.status();
+        let headers = response.headers().clone();
+        let body = String::from_utf8(to_bytes(response.into_body(), 4096).await.unwrap().to_vec()).unwrap();
+        TestResponse { status, headers, body }
+    }
 
     fn digest_of(s: &str) -> [u8; 32] {
         use sha2::{Digest, Sha256};
@@ -216,5 +260,58 @@ mod tests {
     fn from_token_stores_digest_of_trimmed_value() {
         let st = AdminAuthState::from_token(Some("  padded-token-aaaaaaaaaaaaaaaaaaaaa  ".into()));
         assert_eq!(st.token_digest, Some(digest_of("padded-token-aaaaaaaaaaaaaaaaaaaaa")));
+    }
+
+    #[tokio::test]
+    async fn rejected_credentials_share_bearer_challenge_without_echoing_tokens() {
+        let state = AdminAuthState::from_token(Some(CONFIGURED_TOKEN.to_string()));
+        let missing = send_request(state.clone(), None).await;
+        assert_eq!(missing.status, StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            missing.headers.get(header::WWW_AUTHENTICATE).unwrap(),
+            r#"Bearer realm="edgion-gateway-admin""#
+        );
+
+        let malformed_token = "submitted-malformed-token-that-must-not-leak";
+        let malformed = send_request(state.clone(), Some(&format!("BearerMalformed {malformed_token}"))).await;
+        assert_eq!(malformed.status, StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            malformed.headers.get(header::WWW_AUTHENTICATE).unwrap(),
+            r#"Bearer realm="edgion-gateway-admin""#
+        );
+        assert!(!malformed.body.contains(malformed_token));
+
+        let wrong_token = "submitted-wrong-token-that-must-not-leak";
+        let wrong = send_request(state, Some(&format!("Bearer {wrong_token}"))).await;
+        assert_eq!(wrong.status, StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            wrong.headers.get(header::WWW_AUTHENTICATE).unwrap(),
+            r#"Bearer realm="edgion-gateway-admin""#
+        );
+        assert!(!wrong.body.contains(wrong_token));
+
+        assert_eq!(missing.body, malformed.body);
+        assert_eq!(malformed.body, wrong.body);
+    }
+
+    #[tokio::test]
+    async fn correct_token_reaches_handler() {
+        let response = send_request(
+            AdminAuthState::from_token(Some(CONFIGURED_TOKEN.to_string())),
+            Some(&format!("Bearer {CONFIGURED_TOKEN}")),
+        )
+        .await;
+        assert_eq!(response.status, StatusCode::OK);
+        assert_eq!(response.body, "handler reached");
+    }
+
+    #[tokio::test]
+    async fn unconfigured_returns_retryable_503_without_challenge_or_token_echo() {
+        let submitted = "submitted-token-while-server-is-unconfigured";
+        let response = send_request(AdminAuthState::from_token(None), Some(&format!("Bearer {submitted}"))).await;
+        assert_eq!(response.status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(response.headers.get(header::RETRY_AFTER).unwrap(), "10");
+        assert!(!response.headers.contains_key(header::WWW_AUTHENTICATE));
+        assert!(!response.body.contains(submitted));
     }
 }

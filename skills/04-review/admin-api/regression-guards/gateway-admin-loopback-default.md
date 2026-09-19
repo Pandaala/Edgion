@@ -15,7 +15,8 @@ knowledge_type: regression-guards
 `admin_listen` exposed its admin API to every network interface — and the admin router still mounts
 secret-bearing introspection endpoints. The default is now `127.0.0.1:12001` (loopback), matching
 Envoy's admin-interface security model (bind localhost, access control via network topology). This is the
-network-layer half of the defense-in-depth pair with `fr-grt-01` (serialization scrub). Re-reports
+network-exposure layer of the defense in depth formed with the Admin bearer
+boundary and `fr-grt-01` serialization scrub. Re-reports
 proposing to revert the default to `0.0.0.0`, or claiming the loopback default breaks K8s readiness,
 are not accepted — see below.
 
@@ -41,14 +42,14 @@ are not accepted — see below.
   no bearing on kubelet probing at all. The loopback admin default only changes behavior for deployments
   that reach the admin port from a non-loopback address; those must opt in explicitly (documented escape
   hatch: `kubectl port-forward pod/<name> 12001:12001`, not the Service).
-- "Add a full Bearer/mTLS/IP-allowlist auth middleware instead." — Out of scope for this change and
-  deferred; the data plane has no token-distribution channel today. Tracked in
-  `tasks/todo/gateway-admin-api-harden.md` ("explicit won't-do / won't-accept") and `tasks/todo/admin-api-https-and-access-control.md`.
+- "Bearer authentication makes the loopback default unnecessary." — Not
+  accepted. Authentication, loopback-by-default exposure, dedicated public
+  probes, and response redaction protect independent surfaces and remain
+  defense in depth.
 
 ## Re-evaluation Triggers
 
-- A token-distribution mechanism lands on the data plane (then auth middleware becomes viable, and the
-  bind default is no longer the only control).
+- The Admin API's authentication or probe-port boundary changes materially.
 - The sensitive `/configclient` endpoints are scrubbed of secrets (harden Task 3, generic field-level
   redaction), at which point the admin surface no longer leaks secret bytes even if mis-bound (but the
   loopback default + probe-port separation should still stand as defense in depth). Note: harden Task 1
@@ -57,5 +58,6 @@ are not accepted — see below.
 ## Reference Cases
 
 - `tasks/todo/gateway-admin-api-harden.md` — Task 2 (this change); Task 1 / Task 3 are complementary.
+- `skills/04-review/admin-api/regression-guards/gateway-admin-bearer-boundary.md` — the bearer-authentication layer.
 - `skills/04-review/tls/regression-guards/fr-grt-01-admin-api-secret-scrub.md` — the serialization-scrub half of the
   same defense-in-depth pair.

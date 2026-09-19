@@ -23,6 +23,7 @@ before applying a decision to current code.
 
 ## Regression guards
 
+- [Gateway Admin Bearer Authentication Boundary](regression-guards/gateway-admin-bearer-boundary.md)
 - [gateway-admin-harden Task 2 — Gateway admin API defaults to loopback bind](regression-guards/gateway-admin-loopback-default.md)
 - [Controller Admin API update_namespaced / update_cluster Trusts Body metadata.name](regression-guards/update-namespaced-reject-body-name-mismatch.md)
 
