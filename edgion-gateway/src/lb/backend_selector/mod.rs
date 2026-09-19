@@ -32,6 +32,20 @@ mod tests {
     }
 
     #[test]
+    fn selector_rejects_more_items_than_weights() {
+        let s: BackendSelector<&'static str> = BackendSelector::new();
+        s.init(vec!["a", "b"], vec![Some(1)]);
+        assert_eq!(s.select().unwrap_err(), ERR_WRR_BUILD_FAILED);
+    }
+
+    #[test]
+    fn selector_rejects_more_weights_than_items() {
+        let s: BackendSelector<&'static str> = BackendSelector::new();
+        s.init(vec!["a"], vec![Some(1), Some(2)]);
+        assert_eq!(s.select().unwrap_err(), ERR_WRR_BUILD_FAILED);
+    }
+
+    #[test]
     fn selector_init_partial_weights_is_inconsistent_error() {
         // Mixed Some/None weights: the selector must reject the configuration.
         let s: BackendSelector<&'static str> = BackendSelector::new();

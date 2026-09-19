@@ -73,6 +73,10 @@ impl<T: Clone> BackendSelector<T> {
 
     /// Create selector state from items and weights.
     fn create_state(items: Vec<T>, weights: Vec<Option<i32>>) -> SelectorState<T> {
+        if items.len() != weights.len() {
+            return SelectorState::Error(ERR_WRR_BUILD_FAILED);
+        }
+
         if items.is_empty() {
             return SelectorState::Error(ERR_NO_BACKEND_REFS);
         }
