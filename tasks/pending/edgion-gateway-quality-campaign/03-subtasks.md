@@ -25,7 +25,7 @@ The first section preserves the exact residual order supplied by `task/optimizat
 | edgion-gateway | `edgion-gateway/src/lb/backend_selector/weighted_selector.rs` | src/lb | changed | B0017 | Widen WRR normalization arithmetic so extreme public weights cannot panic or wrap before bounded scaling | 336b7fca858dfc082c67341e18bdc2608973d03f |
 | edgion-gateway | `edgion-gateway/src/lb/compiled_selector.rs` | src/lb | examined-no-change | B0018 | Eager immutable selector compilation and joint section publication are sound; stale lazy-build review guidance was superseded | ff372c88299b2992588b5f9665c2aeca40b72c34 |
 | edgion-gateway | `edgion-gateway/src/lb/backend.rs` | src/lb | changed | B0019 | Gate shared connection decrements on exact-wrapper ownership so stale generations cannot steal live replacement counts | 46d0b33fafb1de4080506d2450a2b6de05c5e776 |
-| edgion-gateway | `edgion-gateway/src/lb/ewma/score.rs` | src/lb | pending | — | Residual manifest order | a0b4d49b298149422c7e46150a0ca027ad5321f7 |
+| edgion-gateway | `edgion-gateway/src/lb/ewma/score.rs` | src/lb | changed | B0020 | Keep packed EWMA write anchors monotonic across out-of-order concurrent response observations | 40c18a076b635ff23c31fbda291d21d970275bf5 |
 | edgion-gateway | `edgion-gateway/src/lb/ewma/mod.rs` | src/lb | pending | — | Residual manifest order | a0b4d49b298149422c7e46150a0ca027ad5321f7 |
 | edgion-gateway | `edgion-gateway/src/lb/leastconn/cleaner.rs` | src/lb | pending | — | Residual manifest order | a0b4d49b298149422c7e46150a0ca027ad5321f7 |
 | edgion-gateway | `edgion-gateway/src/lb/leastconn/mod.rs` | src/lb | pending | — | Residual manifest order | a0b4d49b298149422c7e46150a0ca027ad5321f7 |

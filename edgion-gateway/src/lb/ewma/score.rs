@@ -105,6 +105,15 @@ fn unpack(raw: u64) -> (u32, u32) {
     ((raw >> 32) as u32, raw as u32)
 }
 
+/// Keep write timestamps monotonic while the process clock remains before its
+/// documented u32 wrap boundary. A stale sample has zero elapsed time and
+/// cannot move the packed decay anchor backwards.
+#[inline]
+fn anchor_and_elapsed(now_units: u32, stored_ts: u32) -> (u32, u32) {
+    let anchor = now_units.max(stored_ts);
+    (anchor, anchor - stored_ts)
+}
+
 /// Decay factor `2^(-elapsed / half_life)` in Q16, plus the whole-half-life
 /// shift to apply afterwards. Returns `None` once the value is fully relaxed.
 ///
@@ -208,7 +217,7 @@ impl PeakEwmaScore {
         let mut cur = self.packed.load(Ordering::Relaxed);
         loop {
             let (ts, rtt) = unpack(cur);
-            let elapsed = now_units.saturating_sub(ts);
+            let (anchor, elapsed) = anchor_and_elapsed(now_units, ts);
             // Invariant 2: both the decayed read and the value to store are
             // recomputed from the value observed on THIS iteration. Hoisting
             // either above the loop can stomp a concurrent higher peak.
@@ -227,11 +236,11 @@ impl PeakEwmaScore {
                     None => sample_us,
                 }
             };
-            // Invariant 1: anchor on the truncated `now`. Truncation errors
-            // then telescope instead of compounding per write.
+            // Invariant 1: anchor on the monotonic truncated timestamp.
+            // Truncation errors then telescope instead of compounding per write.
             match self
                 .packed
-                .compare_exchange_weak(cur, pack(now_units, next), Ordering::Relaxed, Ordering::Relaxed)
+                .compare_exchange_weak(cur, pack(anchor, next), Ordering::Relaxed, Ordering::Relaxed)
             {
                 Ok(_) => return,
                 Err(actual) => cur = actual,
@@ -266,15 +275,14 @@ impl PeakEwmaScore {
         let mut cur = self.packed.load(Ordering::Relaxed);
         loop {
             let (ts, rtt) = unpack(cur);
-            if penalty_us <= decay_to_default(rtt, now_units.saturating_sub(ts)) {
+            let (anchor, elapsed) = anchor_and_elapsed(now_units, ts);
+            if penalty_us <= decay_to_default(rtt, elapsed) {
                 return false;
             }
-            match self.packed.compare_exchange_weak(
-                cur,
-                pack(now_units, penalty_us),
-                Ordering::Relaxed,
-                Ordering::Relaxed,
-            ) {
+            match self
+                .packed
+                .compare_exchange_weak(cur, pack(anchor, penalty_us), Ordering::Relaxed, Ordering::Relaxed)
+            {
                 Ok(_) => return true,
                 Err(actual) => cur = actual,
             }
@@ -285,6 +293,11 @@ impl PeakEwmaScore {
     #[cfg(test)]
     fn stored(&self) -> u32 {
         unpack(self.packed.load(Ordering::Relaxed)).1
+    }
+
+    #[cfg(test)]
+    fn stored_state(&self) -> (u32, u32) {
+        unpack(self.packed.load(Ordering::Relaxed))
     }
 }
 
@@ -630,34 +643,50 @@ mod tests {
     }
 
     #[test]
-    fn out_of_order_timestamps_do_not_panic_or_corrupt() {
+    fn stale_observe_keeps_anchor_and_latest_peak() {
         let s = PeakEwmaScore::new(0);
         s.observe(200_000, 100);
-        s.observe(5_000, 99);
-        let v = s.read(100);
-        assert!(
-            v <= 200_000,
-            "a backwards timestamp must not inflate the score, got {v}"
+        s.observe(400_000, 99);
+        assert_eq!(
+            s.stored_state(),
+            (100, 400_000),
+            "a stale higher sample must win without moving the anchor backwards"
         );
 
-        // A peak-only store DOES move the anchor backwards when its own
-        // timestamp is older than the stored one. That is deliberate and
-        // fail-safe: subsequent reads then see a LARGER elapsed and decay
-        // harder, i.e. toward neutral. Assert the direction rather than
-        // leaving it unexamined — the previous form here was a short-circuiting
-        // tautology that could not fail.
+        s.observe(5_000, 98);
+        assert_eq!(
+            s.stored_state(),
+            (100, 400_000),
+            "a stale faster sample has zero weight and must preserve the latest peak"
+        );
+    }
+
+    #[test]
+    fn stale_peak_only_keeps_anchor_and_peak_dominance() {
         let s = PeakEwmaScore::new(0);
         s.observe(100_000, 100);
-        let before_backwards = s.read(200);
         assert!(
             s.observe_peak_only(400_000, 50),
-            "400 ms is a strict peak over the decayed 100 ms"
+            "a stale strict peak must still be stored"
         );
-        assert_eq!(s.read(50), 400_000, "the peak is stored at its own timestamp");
-        let after = s.read(200);
+        assert_eq!(s.stored_state(), (100, 400_000));
+
         assert!(
-            after < 400_000 && after > before_backwards,
-            "a backwards anchor must decay harder, not freeze: {before_backwards} -> {after}"
+            !s.observe_peak_only(400_000, 49),
+            "an equal stale penalty is not a strict peak"
+        );
+        assert_eq!(s.stored_state(), (100, 400_000));
+        assert!(
+            !s.observe_peak_only(300_000, 48),
+            "a lower stale penalty must be skipped"
+        );
+        assert_eq!(s.stored_state(), (100, 400_000));
+
+        assert!(s.observe_peak_only(500_000, 47));
+        assert_eq!(
+            s.stored_state(),
+            (100, 500_000),
+            "the latest strict peak must win without regressing the anchor"
         );
     }
 

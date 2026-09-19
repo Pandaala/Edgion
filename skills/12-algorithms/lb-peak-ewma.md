@@ -294,9 +294,11 @@ directly assertable in tests.
 ### Update — peak-immediate, alpha deleted
 
 ```text
-eff    = read(now)
+anchor = max(now, stored_ts)             # pre-wrap monotonic write anchor
+elapsed = anchor - stored_ts
+eff    = decay(stored, elapsed)
 stored = if sample > eff { sample } else { eff * d + sample * (1 - d) }
-ts     = now
+ts     = anchor
 ```
 
 The smoothing weight **is** the decay factor, exactly as in Tower and in linkerd's `Ewma::add`.
@@ -352,16 +354,20 @@ That is correct — no measurement exists — and outlier detection owns that fa
 
 These are correctness requirements, not style notes. Each has a failure mode that is silent.
 
-1. **Anchor on the truncated timestamp.** Store `floor(now / 16ms)` and compute elapsed from
-   the stored truncated value. Truncation errors then telescope —
+1. **Anchor on the truncated timestamp without moving it backwards.** Derive
+   `anchor = max(now_units, stored_ts)` inside the write CAS loop, compute elapsed as
+   `anchor - stored_ts`, and store `anchor`. Under the pre-wrap clock contract, an out-of-order
+   sample therefore has zero elapsed time but can still replace the value when it is a new peak.
+   It must never regress the decay reference point. Truncation errors then telescope —
    `Σ(floor(t_i) − floor(t_{i−1})) = floor(t_n) − floor(t_0)` — so total drift is bounded by one
    quantization unit regardless of write count. Storing true-`now` while computing elapsed from
    a truncated anchor compounds the error per write, and a high-QPS write storm will pin the
    score. This is what makes repeated penalty writes idempotent in
    [lb-overload-penalty.md](lb-overload-penalty.md).
-2. **Recompute inside the CAS loop.** Both the decayed read and the value to be stored must be
-   derived from the value observed on each retry, never hoisted above the loop — otherwise a
-   concurrent higher peak is stomped. `PeakEwmaScore::observe` is the reference shape.
+2. **Recompute inside the CAS loop.** The anchor, elapsed time, decayed read, and value to be
+   stored must all be derived from the packed value observed on each retry, never hoisted above
+   the loop — otherwise a concurrent newer anchor or higher peak is stomped.
+   `PeakEwmaScore::observe` is the reference shape.
 3. **Widen the Q16 intermediate, and compute on the magnitude.** `|stored − default| * 65536`
    reaches ~2.8e14 and needs a 64-bit intermediate. Compute on the unsigned magnitude and
    reapply the sign afterwards: `>>` on a *negative* i64 floors toward negative infinity, which
@@ -476,12 +482,12 @@ Accepted failure modes, each with its operational symptom.
    `faster_sample_at_zero_elapsed_is_ignored`.
 2. **`ts_units` wraps after ~2.2 years of process uptime, and the failure is silent.** `to_units`
    casts `millis / 16` to u32. Past the wrap, `now_units` restarts near zero while stored
-   timestamps are near `u32::MAX`, so `now_units.saturating_sub(ts)` yields 0 for every backend:
-   decay stops, faster samples carry zero weight, and each score freezes at its last peak until
-   that backend's next `observe` re-anchors it — permanently for one that receives no further
-   samples. **Operational symptom**: after multi-year uptime the LB permanently avoids backends
-   that once spiked, with green health checks and nothing in the logs. Mitigation today is
-   process lifetime; a real fix is wrapping arithmetic with a signed elapsed computation.
+   timestamps are near `u32::MAX`. Reads see zero elapsed through `saturating_sub`; writes preserve
+   the larger stored timestamp through `anchor = max(now_units, stored_ts)`. Decay therefore stops,
+   faster samples carry zero weight, and even a new peak cannot advance the anchor until the u32
+   clock catches up again. **Operational symptom**: after multi-year uptime the LB permanently
+   avoids backends that once spiked, with green health checks and nothing in the logs. Mitigation
+   today is process lifetime; a real fix is wrapping arithmetic with a signed elapsed computation.
 3. **A persistently fast-failing endpoint converges to neutral, not to bad.** Its peak-only
    writes are always skipped and time-decay pulls it to `DEFAULT_RTT_US`, while fast failures
    release their connection slot immediately so `conn` stays near zero. Its score is therefore
