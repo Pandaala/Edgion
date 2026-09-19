@@ -62,11 +62,11 @@ pub enum OutboundCallError {
     /// The request timed out before a response was received.
     Timeout,
     /// A connection-level or request-build failure (includes SSRF rejection).
-    Connect(String),
+    Connect,
     /// The upstream response body exceeded the configured size cap.
     ResponseTooLarge,
     /// All retry attempts were exhausted after transport failures.
-    Exhausted(String),
+    Exhausted,
     /// The request's composed upstream authority failed to render or validate
     /// (see `AuthorityError`). The call is aborted rather than falling back to
     /// the IP-based base URL, which would silently reach the wrong vhost.
@@ -79,9 +79,9 @@ impl std::fmt::Display for OutboundCallError {
             Self::Unhealthy => write!(f, "outbound target is unhealthy"),
             Self::RateLimited => write!(f, "outbound rate limit exceeded"),
             Self::Timeout => write!(f, "outbound request timed out"),
-            Self::Connect(msg) => write!(f, "outbound connection error: {msg}"),
+            Self::Connect => write!(f, "outbound connection error"),
             Self::ResponseTooLarge => write!(f, "outbound response body exceeded size cap"),
-            Self::Exhausted(msg) => write!(f, "outbound retries exhausted: {msg}"),
+            Self::Exhausted => write!(f, "outbound retries exhausted"),
             Self::AuthorityRejected => write!(f, "outbound request rejected: invalid upstream authority"),
         }
     }
@@ -165,9 +165,7 @@ pub async fn outbound_call_with_body(
     // ── 3. Resolve base URL (with SSRF guard) and build the outbound request ─
     //    The request is built once, moved into a sole attempt, or cloned for
     //    each attempt when retries are configured.
-    let base = client
-        .dial_url()
-        .map_err(|e| OutboundCallError::Connect(e.to_string()))?;
+    let base = client.dial_url().map_err(|_| OutboundCallError::Connect)?;
 
     // Dynamic upstream authority: for a Service anchor carrying an
     // `upstreamAuthority` policy, swap the IP-based host for the composed
@@ -229,13 +227,13 @@ pub async fn outbound_call_with_body(
                 if let Some(body) = body_override {
                     *req.body_mut() = Some(body.into());
                 }
-                sync_outbound_body_framing(&mut req).map_err(OutboundCallError::Connect)?;
+                sync_outbound_body_framing(&mut req).map_err(|_| OutboundCallError::Connect)?;
                 req
             }
             // Build failure (missing required origin field, invalid URL/method) is a
             // request-construction error, not a backend failure, so we do not record
             // a passive health result.
-            Err(e) => return Err(OutboundCallError::Connect(e)),
+            Err(_) => return Err(OutboundCallError::Connect),
         },
     );
 
@@ -243,7 +241,6 @@ pub async fn outbound_call_with_body(
     let max_attempts = 1 + client.retry.as_ref().map_or(0, |r| r.max_retries);
     let max_bytes = client.max_response_bytes.min(global_max_bytes);
 
-    let mut last_error = String::new();
     // Set by the `Retry-After` handling below when a response carries a
     // within-cap `Retry-After` value; consumed (and cleared) by the
     // top-of-loop sleep on the next iteration so the header's delay is used
@@ -261,9 +258,7 @@ pub async fn outbound_call_with_body(
         }
 
         let Some(req) = request_for_attempt(&mut template_req, max_attempts) else {
-            return Err(OutboundCallError::Connect(
-                "outbound request is not cloneable".to_string(),
-            ));
+            return Err(OutboundCallError::Connect);
         };
 
         let exec = tokio::time::timeout(effective_timeout, client.http_client.execute(req)).await;
@@ -277,7 +272,6 @@ pub async fn outbound_call_with_body(
                 // built outside `from_parts` (e.g. constructed directly in tests).
                 let retry_on_timeout = client.retry.as_ref().and_then(|r| r.retry_on_timeout).unwrap_or(false);
                 let should_retry = client.retry.is_some() && retry_on_timeout;
-                last_error = "request timed out".to_string();
                 if !should_retry || attempt + 1 >= max_attempts {
                     record_passive_result(&client.health, &client.passive_health_check, false);
                     return Err(OutboundCallError::Timeout);
@@ -293,13 +287,12 @@ pub async fn outbound_call_with_body(
                 let should_retry = client.retry.as_ref().is_some_and(|r| {
                     (retry_on_timeout && e.is_timeout()) || (r.retry_on_connect_error && e.is_connect())
                 });
-                last_error = e.to_string();
                 if !should_retry || attempt + 1 >= max_attempts {
                     record_passive_result(&client.health, &client.passive_health_check, false);
                     let err = if e.is_timeout() {
                         OutboundCallError::Timeout
                     } else {
-                        OutboundCallError::Connect(e.to_string())
+                        OutboundCallError::Connect
                     };
                     return Err(err);
                 }
@@ -344,7 +337,6 @@ pub async fn outbound_call_with_body(
                 // ResponseTooLarge (`max_response_bytes` commonly defaults far below a
                 // typical error page, e.g. 1024 bytes).
                 if status_retry && attempt + 1 < max_attempts {
-                    last_error = format!("status {status}");
                     // A retried attempt is NOT terminal: do not record passive health here.
                     continue;
                 }
@@ -365,12 +357,9 @@ pub async fn outbound_call_with_body(
                     }
                 }
                 let resp_headers = resp.headers().clone();
-                let (body, truncated) = match stream_body_capped(resp, max_bytes).await {
-                    Ok(v) => v,
-                    Err(e) => {
-                        record_passive_result(&client.health, &client.passive_health_check, false);
-                        return Err(OutboundCallError::Connect(e.to_string()));
-                    }
+                let Ok((body, truncated)) = stream_body_capped(resp, max_bytes).await else {
+                    record_passive_result(&client.health, &client.passive_health_check, false);
+                    return Err(OutboundCallError::Connect);
                 };
                 if truncated {
                     // Same deliberate FAILURE-recording rationale as the content-length
@@ -395,7 +384,6 @@ pub async fn outbound_call_with_body(
                     && outcome == SuccessOutcome::BodyFail;
 
                 if body_retry && attempt + 1 < max_attempts {
-                    last_error = format!("status {status}");
                     // A retried attempt is NOT terminal: do not record passive health here.
                     continue;
                 }
@@ -430,7 +418,7 @@ pub async fn outbound_call_with_body(
     // change that broke the invariant should degrade to a safe error response
     // instead of panicking a worker.
     record_passive_result(&client.health, &client.passive_health_check, false);
-    Err(OutboundCallError::Exhausted(last_error))
+    Err(OutboundCallError::Exhausted)
 }
 
 // ============================================================
@@ -685,6 +673,45 @@ mod tests {
         }
         assert_eq!(response.body.as_ref(), b"private-body");
         assert_eq!(response.headers["x-private-token"], "private-token");
+    }
+
+    #[test]
+    fn outbound_call_error_debug_and_display_are_static_and_detail_free() {
+        const CREDENTIAL_MARKER: &str = "credential-marker-must-not-escape";
+        let cases = [
+            (
+                OutboundCallError::Unhealthy,
+                "Unhealthy",
+                "outbound target is unhealthy",
+            ),
+            (
+                OutboundCallError::RateLimited,
+                "RateLimited",
+                "outbound rate limit exceeded",
+            ),
+            (OutboundCallError::Timeout, "Timeout", "outbound request timed out"),
+            (OutboundCallError::Connect, "Connect", "outbound connection error"),
+            (
+                OutboundCallError::ResponseTooLarge,
+                "ResponseTooLarge",
+                "outbound response body exceeded size cap",
+            ),
+            (OutboundCallError::Exhausted, "Exhausted", "outbound retries exhausted"),
+            (
+                OutboundCallError::AuthorityRejected,
+                "AuthorityRejected",
+                "outbound request rejected: invalid upstream authority",
+            ),
+        ];
+
+        for (error, expected_debug, expected_display) in cases {
+            let debug = format!("{error:?}");
+            let display = error.to_string();
+            assert_eq!(debug, expected_debug);
+            assert_eq!(display, expected_display);
+            assert!(!debug.contains(CREDENTIAL_MARKER));
+            assert!(!display.contains(CREDENTIAL_MARKER));
+        }
     }
     use std::time::Duration;
 
