@@ -19,6 +19,7 @@ before applying a decision to current code.
 - [Rustls Gateway Backend — FUTURE PRODUCT SCOPE](intentional-design/rustls-gateway-backend-unsupported.md)
 - [Rustls Upstream Custom CA and mTLS — UNSUPPORTED](intentional-design/rustls-upstream-ca-mtls-unsupported.md)
 - [Rustls Upstream Additional SAN Enforcement — UNSUPPORTED](intentional-design/rustls-upstream-san-unsupported.md)
+- [TLS setup writes remain transport-bounded](intentional-design/tls-setup-writes-remain-transport-bounded.md)
 - [`EdgionTls.min_tls_version` Allowing `TLS1_0` / `TLS1_1`: Deliberate Opt-In, Not Rejected](intentional-design/tls-version-operator-choice.md)
 
 ## Compatibility constraints
