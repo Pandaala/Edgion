@@ -127,8 +127,9 @@ impl LbBackend {
     /// the `take()` discipline on the ledger.
     #[inline]
     pub fn dec_conn(&self) {
-        decrement_saturating(&self.counters.conn_count);
-        decrement_saturating(&self.owned_conn_count);
+        if decrement_saturating(&self.owned_conn_count) {
+            decrement_saturating(&self.counters.conn_count);
+        }
     }
 
     /// Read the current in-flight connection count.
@@ -229,14 +230,15 @@ impl LbBackend {
 }
 
 #[inline]
-fn decrement_saturating(counter: &AtomicUsize) {
+fn decrement_saturating(counter: &AtomicUsize) -> bool {
     let mut current = counter.load(Ordering::Relaxed);
     while current > 0 {
         match counter.compare_exchange_weak(current, current - 1, Ordering::Relaxed, Ordering::Relaxed) {
-            Ok(_) => break,
+            Ok(_) => return true,
             Err(actual) => current = actual,
         }
     }
+    false
 }
 
 impl Deref for LbBackend {
@@ -268,5 +270,41 @@ mod tests {
         let b = LbBackend::new(Backend::new("127.0.0.1:1").unwrap());
         b.release_cb_permit(); // stays 0, no wraparound
         assert_eq!(b.cb_inflight(), 0);
+    }
+
+    #[test]
+    fn stale_wrapper_cannot_decrement_replacement_connection() {
+        let counters = Arc::new(BackendRuntimeCounters::default());
+        let old = LbBackend {
+            inner: Backend::new("127.0.0.1:1").unwrap(),
+            counters: Arc::clone(&counters),
+            owned_conn_count: AtomicUsize::new(0),
+            runtime_identity: None,
+            runtime_membership_identity: None,
+        };
+        let replacement = LbBackend {
+            inner: Backend::new("127.0.0.1:1").unwrap(),
+            counters,
+            owned_conn_count: AtomicUsize::new(0),
+            runtime_identity: None,
+            runtime_membership_identity: None,
+        };
+
+        replacement.inc_conn();
+        assert_eq!(replacement.conn(), 1);
+        assert_eq!(replacement.owned_conn(), 1);
+        assert_eq!(old.owned_conn(), 0);
+
+        old.dec_conn();
+        assert_eq!(replacement.conn(), 1);
+        assert_eq!(replacement.owned_conn(), 1);
+
+        replacement.dec_conn();
+        assert_eq!(replacement.conn(), 0);
+        assert_eq!(replacement.owned_conn(), 0);
+
+        replacement.dec_conn();
+        assert_eq!(replacement.conn(), 0);
+        assert_eq!(replacement.owned_conn(), 0);
     }
 }
