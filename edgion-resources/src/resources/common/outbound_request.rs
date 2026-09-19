@@ -74,6 +74,28 @@ impl OutboundRequestSpec {
         if self.args.forward_all || self.cookies.forward_all {
             return Some("forwardAll is only supported on headers; remove it from args/cookies".to_string());
         }
+        let invalid_header = self
+            .headers
+            .origin
+            .iter()
+            .enumerate()
+            .map(|(index, field)| ("origin", index, field.name.as_str()))
+            .chain(
+                self.headers
+                    .custom
+                    .iter()
+                    .enumerate()
+                    .map(|(index, field)| ("custom", index, field.name.as_str())),
+            )
+            .find(|(_, _, name)| {
+                name.len() > crate::gwapi_types::HEADER_NAME_MAX_LEN as usize
+                    || !crate::gwapi_types::is_valid_header_token(name)
+            });
+        if let Some((category, index, _)) = invalid_header {
+            return Some(format!(
+                "request.headers.{category}[{index}].name must be a valid HTTP header name"
+            ));
+        }
         let explicit_framing_header = self
             .headers
             .origin
@@ -347,6 +369,71 @@ pub enum BodySpec {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn spec_with_explicit_header(name: String, custom: bool) -> OutboundRequestSpec {
+        let mut headers = ListFields::default();
+        if custom {
+            headers.custom.push(CustomField {
+                name,
+                source: CustomSource::Value("value".to_string()),
+            });
+        } else {
+            headers.origin.push(OriginField {
+                name,
+                presence: PresencePolicy::SkipIfMissing,
+            });
+        }
+        OutboundRequestSpec {
+            headers,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn explicit_header_names_reject_invalid_tokens_without_echoing_values() {
+        let invalid_names = [
+            "x bad".to_string(),
+            String::new(),
+            "x\rbad".to_string(),
+            "x-é".to_string(),
+            "x".repeat(crate::gwapi_types::HEADER_NAME_MAX_LEN as usize + 1),
+        ];
+
+        for custom in [false, true] {
+            let category = if custom { "custom" } else { "origin" };
+            for name in &invalid_names {
+                let err = spec_with_explicit_header(name.clone(), custom)
+                    .validation_error()
+                    .expect("invalid header name must be rejected");
+                assert_eq!(
+                    err,
+                    format!("request.headers.{category}[0].name must be a valid HTTP header name")
+                );
+                if !name.is_empty() {
+                    assert!(!err.contains(name), "validation error must not echo the header name");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn explicit_header_names_accept_token_punctuation_and_exact_maximum() {
+        let valid_names = [
+            "X!#$%&'*+-.^_`|~09AZaz".to_string(),
+            "x".repeat(crate::gwapi_types::HEADER_NAME_MAX_LEN as usize),
+        ];
+
+        for custom in [false, true] {
+            for name in &valid_names {
+                assert!(
+                    spec_with_explicit_header(name.clone(), custom)
+                        .validation_error()
+                        .is_none(),
+                    "valid header name was rejected"
+                );
+            }
+        }
+    }
 
     #[test]
     fn list_fields_forward_all_defaults_false() {

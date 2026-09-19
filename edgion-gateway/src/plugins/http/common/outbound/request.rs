@@ -180,6 +180,9 @@ impl CompiledRequest {
     ///
     /// Returns `Err` if any template string fails to parse.
     pub fn from_spec(spec: &OutboundRequestSpec) -> Result<Self, String> {
+        if let Some(error) = spec.validation_error() {
+            return Err(error);
+        }
         let path = spec
             .path
             .as_ref()
@@ -715,10 +718,36 @@ mod tests {
     use edgion_resources::resources::common::outbound_request::ListFields;
 
     #[test]
+    fn from_spec_rejects_malformed_explicit_header_name() {
+        use edgion_resources::resources::common::outbound_request::{CustomField, CustomSource};
+
+        let marker = "private malformed header";
+        let spec = OutboundRequestSpec {
+            headers: ListFields {
+                custom: vec![CustomField {
+                    name: marker.to_string(),
+                    source: CustomSource::Value("value".to_string()),
+                }],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let error = CompiledRequest::from_spec(&spec).expect_err("malformed header name must fail compilation");
+        assert_eq!(error, "request.headers.custom[0].name must be a valid HTTP header name");
+        assert!(!error.contains(marker));
+    }
+
+    #[test]
     fn presence_policies_cover_missing_and_present_fields() {
         use edgion_resources::resources::common::outbound_request::{MethodSpec, OriginField, PathSpec};
         for kind in [FieldKind::Header, FieldKind::Query, FieldKind::Cookie] {
-            for forward_all in [false, true] {
+            let forward_all_values: &[bool] = if matches!(kind, FieldKind::Header) {
+                &[false, true]
+            } else {
+                &[false]
+            };
+            for &forward_all in forward_all_values {
                 for presence in [
                     PresencePolicy::SkipIfMissing,
                     PresencePolicy::WarnIfMissing,
