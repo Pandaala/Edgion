@@ -44,4 +44,4 @@
 
 - Ledger/changelog updated: yes.
 - Deferred issue: D0006 tracks the wider cluster-synced process-configuration ownership question.
-- Commit: pending automatic commit.
+- Commit: `b3274df3ab8529485b7df151aad9f93791895e95`.

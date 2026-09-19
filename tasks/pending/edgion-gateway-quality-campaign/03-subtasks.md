@@ -17,7 +17,7 @@ The first section preserves the exact residual order supplied by `task/optimizat
 | edgion-gateway | `edgion-gateway/src/cli/config.rs` | src/cli | changed | B0009 | Canonical `includeRawUri` is documented and enforced; misspelled access-log option keys now fail configuration loading | c6cbf549cdd07c85901001e334f8600ea59e7846 |
 | edgion-gateway | `edgion-gateway/src/cli/mod.rs` | src/cli | changed | B0010 | Startup checkpoints now run after logging initialization and FIPS failures preserve structured-log flushing | 6f93c8c92882031b2d5d288811580071f28f45d7 |
 | edgion-gateway | `edgion-gateway/src/cli/pingora.rs` | src/cli | changed | B0011 | Normalize documented zero worker count to the nonzero platform default before Pingora runtime construction | 637278a6b9d3a5b92c5f71aefda22286870fddbc |
-| edgion-gateway | `edgion-gateway/src/config/edgion_gateway/conf_handler_impl.rs` | src/config | pending | — | Residual manifest order | a0b4d49b298149422c7e46150a0ca027ad5321f7 |
+| edgion-gateway | `edgion-gateway/src/config/edgion_gateway/conf_handler_impl.rs` | src/config | changed | B0012 | Pre-resolve the effective EGC DNS candidate and cache TTL into one immutable snapshot generation | b3274df3ab8529485b7df151aad9f93791895e95 |
 | edgion-gateway | `edgion-gateway/src/ctx.rs` | src/ctx.rs | pending | — | Residual manifest order | a0b4d49b298149422c7e46150a0ca027ad5321f7 |
 | edgion-gateway | `edgion-gateway/src/lb/attempt.rs` | src/lb | pending | — | Residual manifest order | a0b4d49b298149422c7e46150a0ca027ad5321f7 |
 | edgion-gateway | `edgion-gateway/src/lb/backend_selector/mod.rs` | src/lb | pending | — | Residual manifest order | a0b4d49b298149422c7e46150a0ca027ad5321f7 |

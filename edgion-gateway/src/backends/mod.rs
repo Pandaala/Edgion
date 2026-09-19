@@ -45,11 +45,10 @@ use crate::runtime::{GatewayInfo, ServerHeaderOpts};
 use crate::EdgionHttpContext;
 use crate::{end_response_500, end_response_503};
 use edgion_common::dns::resolver_select::{
-    candidate_from_annotations, candidate_from_egc_default, resolve_effective_spec, LinkSysKey,
+    candidate_from_annotations, resolve_effective_spec, LinkSysKey, ResolverCandidate,
 };
 use edgion_common::dns::{resolve, ResolverSpec};
 use edgion_resources::constants::annotations::edgion as edgion_annotations;
-use edgion_resources::duration::parse_duration;
 use edgion_resources::resources::lb_policy::ParsedLBPolicy;
 use edgion_resources::resources::link_sys::HttpDnsResolverConfig;
 use edgion_resources::EdgionErrorCode;
@@ -362,18 +361,21 @@ pub(crate) async fn try_get_peer(
                     )
                 }
                 ExternalNamePath::SelfResolve { cache } => {
-                    // Read the EGC data-plane default once (clones only the winning
-                    // DnsResolverConfig), and derive both the resolver layer and the
-                    // cache TTL from it.
+                    // Read the pre-resolved EGC data-plane default once. The Arc
+                    // pins a single candidate/TTL generation for this request.
                     let egc_default = crate::config::get_egc_dns_resolver_default();
                     let cache_ttl = egc_default
                         .as_ref()
-                        .and_then(|dr| parse_duration(&dr.cache_ttl).ok())
+                        .map(|resolved| resolved.cache_ttl())
                         .unwrap_or(DEFAULT_DNS_CACHE_TTL);
 
                     // Compute the effective resolver from the data-plane precedence
                     // (Service annotation → Gateway annotation → EGC default → system).
-                    let spec = compute_external_name_resolver(svc_annotations, ctx, egc_default.as_ref());
+                    let spec = compute_external_name_resolver(
+                        svc_annotations,
+                        ctx,
+                        egc_default.as_ref().and_then(|resolved| resolved.candidate()),
+                    );
 
                     let ips = resolve_external_ips(&external_name, &spec, &service_key, cache, cache_ttl)
                         .await
@@ -456,19 +458,19 @@ pub(crate) async fn try_get_peer(
 /// EGC default → system. httpdns refs are resolved against the gateway's LinkSys
 /// store; a dangling ref fails safe to the system resolver.
 ///
-/// `egc_default` is the EGC data-plane default, read once by the caller so this
-/// stays free of the store access.
+/// `egc_candidate` is the precomputed EGC data-plane default, read once by the
+/// caller so this stays free of the store access and config parsing.
 fn compute_external_name_resolver(
     svc_annotations: Option<&std::collections::BTreeMap<String, String>>,
     ctx: &EdgionHttpContext,
-    egc_default: Option<&edgion_resources::resources::edgion_gateway_config::DnsResolverConfig>,
+    egc_candidate: Option<&ResolverCandidate>,
 ) -> ResolverSpec {
     let service_layer = svc_annotations.and_then(candidate_from_annotations);
     let gateway_layer = ctx
         .gateway_info
         .as_deref()
         .and_then(|info| info.dns_resolver_candidate.clone());
-    let egc_layer = egc_default.and_then(candidate_from_egc_default);
+    let egc_layer = egc_candidate.cloned();
 
     resolve_effective_spec(&[service_layer, gateway_layer, egc_layer], |key: &LinkSysKey| {
         httpdns_config_for_ref(key)
@@ -483,7 +485,7 @@ pub(crate) fn compute_routed_external_resolver(ctx: &EdgionHttpContext) -> Resol
         .as_deref()
         .and_then(|info| info.dns_resolver_candidate.clone());
     let egc_default = crate::config::get_egc_dns_resolver_default();
-    let egc_layer = egc_default.as_ref().and_then(candidate_from_egc_default);
+    let egc_layer = egc_default.as_ref().and_then(|resolved| resolved.candidate()).cloned();
     resolve_effective_spec(&[gateway_layer, egc_layer], |key: &LinkSysKey| {
         httpdns_config_for_ref(key)
     })

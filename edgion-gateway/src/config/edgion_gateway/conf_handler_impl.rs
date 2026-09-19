@@ -3,6 +3,8 @@ use crate::link_sys::runtime::store::configure_link_sys_max_instances_per_kind;
 use crate::request_body::ResolvedRequestBodyConfig;
 use arc_swap::ArcSwap;
 use edgion_common::conf_sync::traits::{arc_map_to_owned, ConfHandler};
+use edgion_common::dns::resolver_select::{candidate_from_egc_default, ResolverCandidate};
+use edgion_resources::duration::parse_duration;
 use edgion_resources::prelude_resources::EdgionGatewayConfig;
 use edgion_resources::resources::edgion_gateway_config::{
     resolve_tcp_connect_timeout, resolve_tcp_idle_timeout, DnsResolverConfig,
@@ -42,12 +44,40 @@ impl Default for ResolvedL4Timeouts {
     }
 }
 
+/// Request-path-ready data-plane DNS default resolved from an EdgionGatewayConfig.
+///
+/// The canonical resolver candidate and cache TTL are derived while publishing
+/// the immutable configuration snapshot. Consumers only clone the containing
+/// `Arc`; httpdns LinkSys references remain resolved against the live store.
+#[derive(Debug)]
+pub struct ResolvedDnsResolverDefault {
+    candidate: Option<ResolverCandidate>,
+    cache_ttl: Duration,
+}
+
+impl ResolvedDnsResolverDefault {
+    fn resolve(config: &DnsResolverConfig) -> Self {
+        Self {
+            candidate: candidate_from_egc_default(config),
+            cache_ttl: parse_duration(&config.cache_ttl).unwrap_or(crate::backends::DEFAULT_DNS_CACHE_TTL),
+        }
+    }
+
+    pub fn candidate(&self) -> Option<&ResolverCandidate> {
+        self.candidate.as_ref()
+    }
+
+    pub fn cache_ttl(&self) -> Duration {
+        self.cache_ttl
+    }
+}
+
 struct EdgionGatewayConfigSnapshot {
     configs: HashMap<String, EdgionGatewayConfig>,
     request_body_configs: HashMap<String, ResolvedRequestBodyConfig>,
     l4_timeouts: HashMap<String, ResolvedL4Timeouts>,
     remote_ip_headers: HashMap<String, http::HeaderName>,
-    dns_resolver_default: Option<DnsResolverConfig>,
+    dns_resolver_default: Option<Arc<ResolvedDnsResolverDefault>>,
 }
 
 impl EdgionGatewayConfigSnapshot {
@@ -56,7 +86,9 @@ impl EdgionGatewayConfigSnapshot {
             .iter()
             .filter(|(_, config)| config.spec.dns_resolver.is_some())
             .min_by(|a, b| a.0.cmp(b.0))
-            .and_then(|(_, config)| config.spec.dns_resolver.clone());
+            .and_then(|(_, config)| config.spec.dns_resolver.as_ref())
+            .map(ResolvedDnsResolverDefault::resolve)
+            .map(Arc::new);
         let request_body_configs = configs
             .values()
             .map(|config| {
@@ -193,10 +225,10 @@ pub fn get_remote_ip_header(config_name: Option<&str>) -> http::HeaderName {
 /// The data-plane default DNS resolver (`spec.dnsResolver`) from the effectively
 /// singular EGC store, if any EGC declares one.
 ///
-/// Cheap hot-path accessor: it clones only the winning `DnsResolverConfig`, not
-/// the whole store, and picks deterministically by name (lowest key wins) so the
-/// choice is stable across restarts when more than one EGC sets a default.
-pub fn get_egc_dns_resolver_default() -> Option<DnsResolverConfig> {
+/// Cheap hot-path accessor: it clones only the pre-resolved `Arc`, not the whole
+/// store, and picks deterministically by name (lowest key wins) so the choice is
+/// stable across restarts when more than one EGC sets a default.
+pub fn get_egc_dns_resolver_default() -> Option<Arc<ResolvedDnsResolverDefault>> {
     EDGION_GATEWAY_CONFIG_STORE.load().dns_resolver_default.clone()
 }
 
@@ -844,11 +876,11 @@ mod tests {
         ]));
 
         let in_flight = get_egc_dns_resolver_default().expect("lowest store key must win");
-        assert_eq!(in_flight.cache_ttl, "10s");
         assert_eq!(
-            in_flight.servers.as_deref(),
-            Some(["192.0.2.1:53".to_string()].as_slice())
+            in_flight.candidate().cloned(),
+            Some(ResolverCandidate::Servers(vec!["192.0.2.1:53".to_string()]))
         );
+        assert_eq!(in_flight.cache_ttl(), Duration::from_secs(10));
 
         let without_dns = make_config("metadata-second");
         handler.partial_update(
@@ -856,15 +888,58 @@ mod tests {
             HashMap::from([("a".to_string(), Arc::new(without_dns))]),
             HashSet::new(),
         );
+        let next = get_egc_dns_resolver_default().expect("remaining resolver must become the winner");
+        assert_eq!(
+            next.candidate().cloned(),
+            Some(ResolverCandidate::Servers(vec!["192.0.2.2:53".to_string()]))
+        );
+        assert_eq!(next.cache_ttl(), Duration::from_secs(20));
+        assert!(!Arc::ptr_eq(&in_flight, &next));
+        assert_eq!(
+            in_flight.candidate().cloned(),
+            Some(ResolverCandidate::Servers(vec!["192.0.2.1:53".to_string()])),
+            "a loaded Arc must pin its candidate generation"
+        );
+        assert_eq!(
+            in_flight.cache_ttl(),
+            Duration::from_secs(10),
+            "a loaded Arc must pin its TTL generation"
+        );
+
+        let mut invalid_system = make_config("metadata-first");
+        invalid_system.spec.dns_resolver = Some(DnsResolverConfig {
+            link_sys_ref: None,
+            servers: None,
+            cache_ttl: "invalid".to_string(),
+        });
+        handler.partial_update(
+            HashMap::new(),
+            HashMap::from([("b".to_string(), Arc::new(invalid_system))]),
+            HashSet::new(),
+        );
+        let invalid = get_egc_dns_resolver_default().expect("configured system resolver remains represented");
+        assert_eq!(invalid.candidate(), None);
+        assert_eq!(invalid.cache_ttl(), crate::backends::DEFAULT_DNS_CACHE_TTL);
+
+        let mut zero_ttl = make_config("metadata-first");
+        zero_ttl.spec.dns_resolver = Some(DnsResolverConfig {
+            link_sys_ref: None,
+            servers: Some(vec!["192.0.2.3:53".to_string()]),
+            cache_ttl: "0s".to_string(),
+        });
+        handler.partial_update(
+            HashMap::new(),
+            HashMap::from([("b".to_string(), Arc::new(zero_ttl))]),
+            HashSet::new(),
+        );
         assert_eq!(
             get_egc_dns_resolver_default()
-                .expect("remaining resolver must become the winner")
-                .cache_ttl,
-            "20s"
+                .expect("zero TTL is a valid configured generation")
+                .cache_ttl(),
+            Duration::ZERO
         );
-        assert_eq!(in_flight.cache_ttl, "10s", "loaded snapshots remain independent");
 
-        handler.full_set(&HashMap::new());
+        handler.partial_update(HashMap::new(), HashMap::new(), HashSet::from(["b".to_string()]));
         assert!(get_egc_dns_resolver_default().is_none());
     }
 
