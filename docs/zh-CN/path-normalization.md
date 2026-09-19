@@ -56,12 +56,12 @@ spec:
 
 ```yaml
 access_log_options:
-  include_raw_uri: true
+  includeRawUri: true
 ```
 
 启用后 access log JSON 多一个字段 `request_uri`，值为客户端入口完整 raw URI（raw path + raw query）。详见 [Access Log](ops-guide/observability/access-log.md)。
 
-**注意**：`access_log_sensitive.mode` 默认值为 `replace`，因此 `request_uri` 与 `path` 一样，在未修改该模式的情况下会渲染为 `***`。仅开启 `include_raw_uri` 不再能得到可读的原始入口视图；详见 [access_log_sensitive](ops-guide/configuration/gateway-config.md#access_log_sensitive)。
+**注意**：`access_log_sensitive.mode` 默认值为 `replace`，因此 `request_uri` 与 `path` 一样，在未修改该模式的情况下会渲染为 `***`。仅开启 `includeRawUri` 不再能得到可读的原始入口视图；详见 [access_log_sensitive](ops-guide/configuration/gateway-config.md#access_log_sensitive)。
 
 ---
 

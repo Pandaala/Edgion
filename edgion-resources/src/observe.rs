@@ -53,7 +53,7 @@ impl LogConfig {
 ///
 /// Sits alongside the `access_log` section in YAML (e.g. `access_log_options`).
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", default)]
+#[serde(rename_all = "camelCase", default, deny_unknown_fields)]
 pub struct AccessLogOptions {
     /// When `true`, the access log entry includes a `request_uri` field carrying
     /// the entry-time raw path + raw query (the original URI the client sent).
@@ -107,5 +107,12 @@ mod tests {
             Some(StringOutput::LocalFile(ref f)) => assert_eq!(f.path, "logs/es_fallback.log"),
             other => panic!("expected LocalFile fallback, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn access_log_options_accepts_only_the_canonical_camel_case_key() {
+        let options: AccessLogOptions = serde_json::from_str(r#"{"includeRawUri":true}"#).unwrap();
+        assert!(options.include_raw_uri);
+        assert!(serde_json::from_str::<AccessLogOptions>(r#"{"include_raw_uri":true}"#).is_err());
     }
 }

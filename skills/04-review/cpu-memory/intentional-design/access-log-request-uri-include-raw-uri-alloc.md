@@ -1,6 +1,6 @@
 ---
 name: access-log-request-uri-include-raw-uri-alloc
-description: Use when reviewing findings that flag the per-request String allocation in AccessLogEntry::from_context for the request_uri field (under include_raw_uri=true) and propose precomputing entry_raw_uri in RequestInfo / borrowing it as Option<&'a str>.
+description: Use when reviewing findings that flag the per-request String allocation in AccessLogEntry::from_context for the request_uri field (when AccessLogOptions::include_raw_uri is true, configured as includeRawUri) and propose precomputing entry_raw_uri in RequestInfo / borrowing it as Option<&'a str>.
 knowledge_type: intentional-design
 ---
 
@@ -8,10 +8,10 @@ knowledge_type: intentional-design
 > entry [access-log-json-serialization-per-request.md](../review-evidence/access-log-json-serialization-per-request.md)
 > that closes the same category for the entry-level `to_json()` allocation.
 
-# AccessLogEntry::from_context Per-Request request_uri String Alloc (include_raw_uri=true) is Not Worth Fixing
+# AccessLogEntry::from_context Per-Request request_uri String Alloc (`AccessLogOptions::include_raw_uri`) is Not Worth Fixing
 
 **False-positive scenario**: `edgion-gateway/src/observe/access_log/entry.rs:75-81` —
-when `[access_log_options] include_raw_uri = true`, `AccessLogEntry::from_context`
+when `access_log_options.includeRawUri: true`, `AccessLogEntry::from_context`
 calls `ctx.request_uri()`, which delegates to `compose_uri()` in
 `edgion-gateway/src/ctx.rs:1088-1133` and always returns a freshly allocated `String`
 (`format!("{}?{}", path, q)` or `path.to_string()`). Every other field on
@@ -34,10 +34,10 @@ heap-allocating field that "breaks the zero-copy invariant" and propose adding
 
 2. **The proposed fix does not actually save an allocation.** Composing
    `entry_raw_uri` eagerly in `pg_request_filter` still produces one owned
-   `String` per request when `include_raw_uri=true` — just at a different
+   `String` per request when `includeRawUri=true` — just at a different
    point in the lifecycle. Net per-request alloc count: unchanged. If the
    precompute is made unconditional (to keep the field simple), it becomes
-   a regression for `include_raw_uri=false` deployments.
+   a regression for `includeRawUri=false` deployments.
 
 3. **The DSL/plugin path cannot benefit.** `request_uri()` has a second
    caller at `edgion-gateway/src/plugins/runtime/session_adapter.rs:259-261`
@@ -58,7 +58,7 @@ heap-allocating field that "breaks the zero-copy invariant" and propose adding
 **Verdict**: not a performance issue. Same category as
 [access-log-json-serialization-per-request.md](../review-evidence/access-log-json-serialization-per-request.md)
 and [oidc-jwt-claims-json-serialization-opt-in.md](../review-evidence/oidc-jwt-claims-json-serialization-opt-in.md):
-once the opt-in feature (`include_raw_uri = true`) is enabled, an owned URI
+once the opt-in feature (`includeRawUri = true`) is enabled, an owned URI
 String is part of the feature contract; the marginal allocation is dominated
 by the unavoidable per-entry `to_json()` String. Any future finding that
 flags "AccessLogEntry per-request URI alloc / RequestInfo should cache

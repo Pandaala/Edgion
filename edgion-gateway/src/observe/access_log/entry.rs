@@ -155,7 +155,7 @@ pub struct AccessLogEntry<'a> {
     pub request_info: &'a RequestInfo,
 
     /// Entry-time raw URI (raw path + raw query). Populated only when
-    /// `[access_log_options] include_raw_uri = true`. Carries the exact URI
+    /// `access_log_options.includeRawUri: true`. Carries the exact URI
     /// the client sent, before any path normalization.
     #[serde(
         skip_serializing_if = "Option::is_none",

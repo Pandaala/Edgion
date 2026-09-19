@@ -87,7 +87,7 @@ pub struct EdgionGatewayConfig {
     ///
     /// YAML example:
     ///   access_log_options:
-    ///     include_raw_uri: true
+    ///     includeRawUri: true
     #[arg(skip)]
     #[serde(default)]
     pub access_log_options: edgion_resources::observe::AccessLogOptions,
@@ -1298,6 +1298,15 @@ mod tests {
         assert_eq!(resolved.max_concurrent, 17);
         assert_eq!(resolved.max_buffered_bytes, 8 * 1024 * 1024);
         assert!(serde_yaml::from_str::<EdgionGatewayConfig>("request_mirror:\n  max_concurent: 17\n").is_err());
+    }
+
+    #[test]
+    fn access_log_options_use_the_canonical_key_in_root_gateway_yaml() {
+        let canonical: EdgionGatewayConfig =
+            serde_yaml::from_str("access_log_options:\n  includeRawUri: true\n").unwrap();
+        assert!(canonical.access_log_options.include_raw_uri);
+
+        assert!(serde_yaml::from_str::<EdgionGatewayConfig>("access_log_options:\n  include_raw_uri: true\n").is_err());
     }
 
     #[test]

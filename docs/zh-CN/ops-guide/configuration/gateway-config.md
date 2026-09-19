@@ -331,7 +331,7 @@ TLS 代理日志（全局及各 listener）会脱敏后端 `upstream_info.addr`�
 - **plugin log**：13 个插件中 46 处通过 `sensitive(...)` 标注的参数（real_ip 的 IP、basic/key/ldap/jwt/hmac 的用户名、direct_endpoint 的地址、region_route 的 key/region/host、proxy_rewrite 的 method 等）；DSL 脚本里 `log_warn(value)` / `log_error(value)` 的用户参数
 - **ssl.log**：mTLS 白名单校验失败时错误信息里的客户端证书字段
 
-**默认切换为 `replace` 的原因。** 由于 `ext` 渲染复用同一个开关，`mode=replace` 默认值是让 `AccessLogExtern` "默认脱敏" 成立的唯一因素。**不存在既保留可读 `path`、又对 `ext` 中的 cookie 脱敏的配置**：`off` 会让白名单失效（一切都明文，包括 `ext`）；`wrap` 会把原始值写进网关本地日志文件/stdout（用 `<E>...</E>` 标记以便下游 ES/ClickHouse 管道剥离，但网关自己的本地文件已经是明文）。这是刻意的单开关设计，不是疏漏——需要可读 path 时请在这两种权衡里二选一。同时注意 `access_log_options.include_raw_uri` 的交互：`replace` 默认下 `request_uri` 本身也会渲染为 `***`，仅开启该开关不再能得到可读的原始视图。
+**默认切换为 `replace` 的原因。** 由于 `ext` 渲染复用同一个开关，`mode=replace` 默认值是让 `AccessLogExtern` "默认脱敏" 成立的唯一因素。**不存在既保留可读 `path`、又对 `ext` 中的 cookie 脱敏的配置**：`off` 会让白名单失效（一切都明文，包括 `ext`）；`wrap` 会把原始值写进网关本地日志文件/stdout（用 `<E>...</E>` 标记以便下游 ES/ClickHouse 管道剥离，但网关自己的本地文件已经是明文）。这是刻意的单开关设计，不是疏漏——需要可读 path 时请在这两种权衡里二选一。同时注意 `access_log_options.includeRawUri` 的交互：`replace` 默认下 `request_uri` 本身也会渲染为 `***`，仅开启该开关不再能得到可读的原始视图。
 
 **注意**：Wrap 模式自定义前后缀时，建议总长度（`wrap_prefix.len() + wrap_suffix.len()`）不超过 36 字节，否则会压缩 plugin log 单条目可写长度。
 

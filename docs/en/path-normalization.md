@@ -56,12 +56,12 @@ To audit the client's original full URI, enable the gateway-side YAML option:
 
 ```yaml
 access_log_options:
-  include_raw_uri: true
+  includeRawUri: true
 ```
 
 This adds a `request_uri` field to access log JSON, containing the client entry full raw URI (raw path + raw query). See [Access Log](ops-guide/observability/access-log.md).
 
-**Note**: `access_log_sensitive.mode` defaults to `replace`, so `request_uri` (like `path`) renders as `***` unless the mode is changed. Enabling `include_raw_uri` alone no longer yields a readable raw-entry view; see [access_log_sensitive](ops-guide/configuration/gateway-config.md#access_log_sensitive).
+**Note**: `access_log_sensitive.mode` defaults to `replace`, so `request_uri` (like `path`) renders as `***` unless the mode is changed. Enabling `includeRawUri` alone no longer yields a readable raw-entry view; see [access_log_sensitive](ops-guide/configuration/gateway-config.md#access_log_sensitive).
 
 ---
 

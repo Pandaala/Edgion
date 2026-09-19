@@ -114,7 +114,7 @@ access_log:
       #   check_interval_secs: 30
 
 access_log_options:
-  include_raw_uri: false                  # Include the pre-normalization URI field
+  includeRawUri: false                    # Include the pre-normalization URI field
 
 ssl_log:
   enabled: true
@@ -488,7 +488,7 @@ Controls the redaction behavior of fields marked as sensitive in access log, ssl
 - Plugin log: 46 `sensitive()`-marked parameter sites across 13 plugins (real_ip's IP, basic/key/ldap/jwt/hmac usernames, direct_endpoint's address, region_route's keys/regions/hosts, proxy_rewrite's method); user parameters of DSL `log_warn` / `log_error`.
 - ssl.log: client certificate fields in mTLS allowlist validation failure errors.
 
-**Why the default flipped to `replace`.** Because `ext` rendering follows this same switch, `mode=replace` by default is the only thing making `AccessLogExtern` "masked by default" true. **There is no configuration that gives readable `path` + masked `ext` cookie**: `off` makes the whitelist inert (everything clear, including `ext`); `wrap` puts the raw value into the local log file/stdout (tagged `<E>...</E>` so a downstream ES/ClickHouse pipeline can drop it, but the gateway's own file already has it in clear). This is a deliberate one-switch design, not an oversight — pick one of the two trade-offs. Note the interaction with `access_log_options.include_raw_uri`: under the `replace` default, `request_uri` itself renders `***`, so enabling that toggle alone no longer yields a readable raw-entry view.
+**Why the default flipped to `replace`.** Because `ext` rendering follows this same switch, `mode=replace` by default is the only thing making `AccessLogExtern` "masked by default" true. **There is no configuration that gives readable `path` + masked `ext` cookie**: `off` makes the whitelist inert (everything clear, including `ext`); `wrap` puts the raw value into the local log file/stdout (tagged `<E>...</E>` so a downstream ES/ClickHouse pipeline can drop it, but the gateway's own file already has it in clear). This is a deliberate one-switch design, not an oversight — pick one of the two trade-offs. Note the interaction with `access_log_options.includeRawUri`: under the `replace` default, `request_uri` itself renders `***`, so enabling that toggle alone no longer yields a readable raw-entry view.
 
 **Implementation details**:
 - A global `AtomicU8` controls the mode, written once by `init_sensitive` at startup; immutable at runtime.

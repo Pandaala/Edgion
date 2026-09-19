@@ -209,7 +209,7 @@ Nested one level deep under the top-level `request_info` object (see [Top-level 
 | `grpc_method` | String | gRPC method name (gRPC requests only) |
 | `sni` | String | TLS Server Name Indication (TLS connections only) |
 | `tls_id` | String | TLS connection/session identifier (TLS connections only) |
-| `request_uri` | String | Raw client-entry URI; emitted **only** when `access_log_options.include_raw_uri: true` |
+| `request_uri` | String | Raw client-entry URI; emitted **only** when `access_log_options.includeRawUri: true` |
 
 ### `match_info` fields
 
@@ -526,7 +526,7 @@ Both fields declared by the `audit-fields` resource [above](#it-is-a-declaration
 
 ### Raw request URI
 
-By default the log records the normalized `path`. To also capture the exact URI as the client sent it (before normalization / rewrites), enable `include_raw_uri` under the top-level `access_log_options` section:
+By default the log records the normalized `path`. To also capture the exact URI as the client sent it (before normalization / rewrites), enable `includeRawUri` under the top-level `access_log_options` section:
 
 ```yaml
 access_log:
@@ -536,7 +536,7 @@ access_log:
       path: logs/edgion_access.log
 
 access_log_options:
-  include_raw_uri: true
+  includeRawUri: true
 ```
 
 The raw URI then appears as the `request_uri` field. This is useful when debugging path rewrites or URL-encoding issues, but it increases line size, so enable it only while investigating.
@@ -583,7 +583,7 @@ access_log:
       path: logs/edgion_access.log
 
 access_log_options:
-  include_raw_uri: true
+  includeRawUri: true
 ```
 
 ## Log examples

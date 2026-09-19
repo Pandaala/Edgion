@@ -209,7 +209,7 @@ Authorization: Bearer <admin-token>
 | `grpc_method` | String | gRPC 方法名（仅 gRPC 请求） |
 | `sni` | String | TLS 服务器名指示（仅 TLS 连接） |
 | `tls_id` | String | TLS 连接/会话标识符（仅 TLS 连接） |
-| `request_uri` | String | 客户端入口原始 URI；**仅当** `access_log_options.include_raw_uri: true` 时输出 |
+| `request_uri` | String | 客户端入口原始 URI；**仅当** `access_log_options.includeRawUri: true` 时输出 |
 
 ### `match_info` 字段
 
@@ -448,7 +448,7 @@ spec:
 
 ### 原始请求 URI
 
-默认情况下日志记录规范化后的 `path`。要同时捕获客户端发送的原始 URI（规范化/重写之前），在顶层 `access_log_options` 段启用 `include_raw_uri`：
+默认情况下日志记录规范化后的 `path`。要同时捕获客户端发送的原始 URI（规范化/重写之前），在顶层 `access_log_options` 段启用 `includeRawUri`：
 
 ```yaml
 access_log:
@@ -458,7 +458,7 @@ access_log:
       path: logs/edgion_access.log
 
 access_log_options:
-  include_raw_uri: true
+  includeRawUri: true
 ```
 
 原始 URI 随后出现在 `request_uri` 字段中。调试路径重写或 URL 编码问题时有用，但会增加每行大小，因此仅在排查时启用。
@@ -505,7 +505,7 @@ access_log:
       path: logs/edgion_access.log
 
 access_log_options:
-  include_raw_uri: true
+  includeRawUri: true
 ```
 
 ## 日志示例
