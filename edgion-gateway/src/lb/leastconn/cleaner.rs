@@ -45,7 +45,6 @@ impl BackendCleaner {
                     if count == 0 {
                         tracing::info!(
                             service_key = %service_key,
-                            backend = %addr_str,
                             "Backend fully drained, removing state"
                         );
                         runtime_state::finish_draining(&key);

@@ -102,18 +102,25 @@ knowledge_type: review-evidence
 
 ---
 
-## BackendCleaner Lacking Graceful Shutdown is Not a Real Issue
+## BackendCleaner Graceful-Shutdown Finding Is Historical
 
-**False-positive scenario**: `BackendCleaner::stop()` only sets a flag without waiting for the task to exit; `start()` discards the JoinHandle, making graceful shutdown await impossible. There is shutdown-ordering race and missing panic isolation.
+**Historical scenario**: an older `BackendCleaner::stop()` only set a flag without waiting for the
+task to exit, while `start()` discarded the `JoinHandle`. At that time there was no production
+`stop()` caller, so the cleaner was treated as process-lifetime state and the proposed independent
+shutdown protocol had no operational value.
 
-**Reality**:
+That evidence must not be applied to current code. The lifecycle has since changed:
 
-1. **`stop()` is never called**: No callers in the entire repo. The cleaner lives for the process lifetime; on process exit the runtime drop naturally terminates the task.
-2. **Shutdown is managed by Pingora**: Graceful shutdown goes through Pingora Server's grace_period + graceful_shutdown_timeout, draining in-flight requests. The cleaner cleans in-memory statistics state, which disappears automatically on process exit; no explicit cleanup needed.
-3. **Concurrency safety is guaranteed by DashMap**: Concurrency between cleaner and endpoint discovery does not corrupt data; at most one extra/missing cleanup, auto-corrected next cycle.
-4. **Discarding JoinHandle is a standard pattern**: Fire-and-forget background tasks that share the process lifetime; not retaining the handle is common practice.
+1. `BackendCleaner` retains its task in `handle: Option<JoinHandle<()>>`.
+2. `stop()` cancels the token, takes and awaits the handle, then installs a fresh token so a later
+   `start()` can run normally.
+3. Gateway auxiliary-service startup retains the cleaner in its shutdown task and calls
+   `cleaner.stop().await` after the production shutdown signal fires.
+4. Unit tests cover clean start/stop, duplicate-start protection, and restart after stop.
 
-**Verdict**: The cleaner is a process-level background task; no need for graceful shutdown semantics independent of the process; no fix needed.
+**Current verdict**: the old "no handle / no caller / no explicit shutdown" claim is superseded by
+the implemented lifecycle. Re-review current cancellation, await, reset, and production shutdown
+wiring directly; do not close a new finding using the historical process-lifetime rationale.
 
 ---
 

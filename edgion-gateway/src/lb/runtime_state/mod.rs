@@ -6,7 +6,7 @@
 //!
 //! Metric atomics (the packed Peak-EWMA `score`, `conn_count`) live on `LbBackend` itself.
 //! `DRAINING_BACKENDS` holds the live `Arc<LbBackend>` so `BackendCleaner`
-//! can poll `backend.conn()` without a side counter.
+//! can poll `backend.owned_conn()` without a side counter.
 
 use crate::backends::discovery::ServiceSectionKey;
 use dashmap::DashMap;
@@ -213,7 +213,7 @@ fn backend_key(service_key: &str, addr: &SocketAddr, backend: &LbBackend) -> Str
 }
 
 /// Register a backend as draining. Call when a backend is removed from EP/EPS
-/// but still has in-flight connections. The cleaner polls `backend.conn()` and
+/// but still has in-flight connections. The cleaner polls `backend.owned_conn()` and
 /// removes it once it reaches zero.
 pub fn begin_draining(service_key: &str, addr: &SocketAddr, backend: Arc<LbBackend>) {
     let key = backend_key(service_key, addr, &backend);
@@ -254,7 +254,7 @@ pub fn all_draining_backends() -> Vec<(String, Arc<LbBackend>)> {
 ///
 /// Accepted because DRAINING_BACKENDS is self-healing runtime lifecycle
 /// state — `BackendCleaner` (see `lb/leastconn/cleaner.rs`) removes any
-/// backend whose `conn()` reaches zero. The orphan is bounded by connection
+/// backend whose `owned_conn()` reaches zero. The orphan is bounded by connection
 /// lifetime, not a permanent residue. See
 /// `docs/superpowers/specs/2026-06-09-gateway-cross-kind-derived-state-race-audit-design.md`
 /// for the full audit.
