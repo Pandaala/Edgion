@@ -35,7 +35,7 @@ The first section preserves the exact residual order supplied by `task/optimizat
 | edgion-gateway | `edgion-gateway/src/lb/selection/consistent_hash.rs` | src/lb | changed | B0027 | Ketama ring inputs and address indices now share the RR-aligned 65,535-Inet-backend bound, preventing `u16` node aliasing | 29ec67ff9abe66be71f80a06156816a413893ff5 |
 | edgion-gateway | `edgion-gateway/src/lb/selection/mod.rs` | src/lb | examined-no-change | B0028 | Facade exposes the three canonical strategy owners with coherent dependencies and independently owned numeric limits | be90cfc13133c6b8cd9fd00dca298936e38b5280 |
 | edgion-gateway | `edgion-gateway/src/lb/selection/p2c.rs` | src/lb | changed | B0029 | Distinct P2C pairs now use exactly one second-candidate draw through a uniform excluded-index bijection | d08e968b00a38706873d28e8b15861ac0090dda6 |
-| edgion-gateway | `edgion-gateway/src/lb/selection/round_robin.rs` | src/lb | pending | — | Residual manifest order | a0b4d49b298149422c7e46150a0ca027ad5321f7 |
+| edgion-gateway | `edgion-gateway/src/lb/selection/round_robin.rs` | src/lb | changed | B0030 | RR normalization is overflow-safe and weighted health fallback advances from the actual selected backend | 8497cfe2c5046b745cedc239dff1ad24d70c9ee6 |
 | edgion-gateway | `edgion-gateway/src/lib.rs` | src/lib.rs | pending | — | Residual manifest order | a0b4d49b298149422c7e46150a0ca027ad5321f7 |
 | edgion-gateway | `edgion-gateway/src/link_sys/providers/otlp/log_sender.rs` | src/link_sys | pending | — | Residual manifest order | a0b4d49b298149422c7e46150a0ca027ad5321f7 |
 | edgion-gateway | `edgion-gateway/src/link_sys/providers/webhook/manager.rs` | src/link_sys | pending | — | Residual manifest order | a0b4d49b298149422c7e46150a0ca027ad5321f7 |

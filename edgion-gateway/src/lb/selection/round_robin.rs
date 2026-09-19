@@ -46,10 +46,11 @@ fn normalize_rr_weights(mut weights: Vec<usize>) -> Vec<usize> {
         }
     }
 
-    let total: usize = weights.iter().sum();
-    if total > MAX_RR_WEIGHTED_LEN {
+    let total: u128 = weights.iter().map(|&weight| weight as u128).sum();
+    if total > MAX_RR_WEIGHTED_LEN as u128 {
         for w in weights.iter_mut() {
-            *w = ((*w as u128 * MAX_RR_WEIGHTED_LEN as u128) / total as u128).max(1) as usize;
+            let scaled = ((*w as u128 * MAX_RR_WEIGHTED_LEN as u128) / total).max(1);
+            *w = scaled.min(MAX_RR_WEIGHTED_LEN as u128) as usize;
         }
     }
 
@@ -121,8 +122,8 @@ impl RoundRobinSelector {
             return Some(self.backends[idx].clone());
         }
 
-        // Fallback: walk unique backends starting from weighted position
-        let offset = start % blen;
+        // Fallback: walk unique backends starting from the actual weighted pick.
+        let offset = idx;
         for step in 1..max_iterations.min(blen) {
             let i = (offset + step) % blen;
             if health_filter(&self.backends[i]) {
@@ -288,6 +289,40 @@ mod tests {
     }
 
     #[test]
+    fn weighted_fallback_starts_after_actual_primary() {
+        use std::cell::Cell;
+
+        let backends = vec![
+            make_backend_weighted(1, 3),
+            make_backend_weighted(2, 1),
+            make_backend_weighted(3, 1),
+        ];
+        let selector = RoundRobinSelector::build(&backends);
+
+        // Advance to cursor 2. Its weighted primary is still backend 0, while
+        // cursor % backend_count is 2. Anchoring fallback to the raw cursor
+        // would recheck backend 0 and miss healthy backend 1 within two tries.
+        for _ in 0..2 {
+            selector.select(1, |_| true).expect("warm-up pick must succeed");
+        }
+
+        let primary = backends[0].addr.clone();
+        let healthy = backends[1].addr.clone();
+        let primary_checks = Cell::new(0usize);
+        let picked = selector
+            .select(2, |backend| {
+                if backend.addr == primary {
+                    primary_checks.set(primary_checks.get() + 1);
+                }
+                backend.addr == healthy
+            })
+            .expect("fallback must reach the next backend after the weighted primary");
+
+        assert_eq!(picked.addr, healthy);
+        assert_eq!(primary_checks.get(), 1, "fallback must not recheck the primary");
+    }
+
+    #[test]
     fn max_iterations_caps_fallback_search() {
         // With max_iterations = 1 the fallback loop body never runs (the
         // condition is `1..max_iterations.min(blen)` which is empty), so the
@@ -341,6 +376,15 @@ mod tests {
             2,
             "equal weights must round-robin one-each regardless of magnitude"
         );
+    }
+
+    #[test]
+    fn extreme_coprime_weights_stay_bounded_without_overflow() {
+        let normalized = normalize_rr_weights(vec![usize::MAX, usize::MAX - 1]);
+
+        assert_eq!(normalized.len(), 2);
+        assert!(normalized.iter().all(|&weight| weight > 0));
+        assert!(normalized.iter().sum::<usize>() <= MAX_RR_WEIGHTED_LEN);
     }
 
     #[test]

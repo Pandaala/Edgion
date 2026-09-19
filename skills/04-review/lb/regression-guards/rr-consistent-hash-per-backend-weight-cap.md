@@ -20,8 +20,8 @@ allocation:
 - `RoundRobinSelector::build` (`edgion-gateway/src/lb/selection/round_robin.rs`) runs
   `normalize_rr_weights` on the per-backend weights (each `.max(1)`) before expanding them into
   the `weighted: Box<[u16]>` index array. The helper (1) reduces by GCD (lossless, collapses
-  `[100, 100]` → `[1, 1]`) then (2) if the total still exceeds `MAX_RR_WEIGHTED_LEN = 1 << 20`,
-  scales every weight down proportionally with `.max(1)` so no backend drops out. The expanded
+  `[100, 100]` → `[1, 1]`) and accumulates the post-GCD total in `u128`; then (2) if that total
+  exceeds `MAX_RR_WEIGHTED_LEN = 1 << 20`, scales in `u128` with `.max(1)` so no backend drops out. The expanded
   array is therefore bounded to ~`MAX_RR_WEIGHTED_LEN + backend_count` entries (~2 MiB worst
   case) instead of O(sum of weights).
 - `ConsistentHashRing::build` (`edgion-gateway/src/lb/selection/consistent_hash.rs`) clamps each
