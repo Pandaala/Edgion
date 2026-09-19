@@ -45,6 +45,31 @@ impl AiCredentialOutlierBackendHandle {
         })
     }
 
+    /// Build a config-free fallback generation without mutating the previous
+    /// generation. Retained aliases share their cooldown state so an
+    /// equivalent credential survives a backend snapshot update, while an old
+    /// snapshot keeps its original alias view.
+    fn fallback_successor(
+        aliases: HashSet<String>,
+        previous: Option<&Arc<AiCredentialOutlierBackendHandle>>,
+    ) -> Arc<Self> {
+        let credentials = aliases
+            .iter()
+            .map(|alias| {
+                let state = previous
+                    .and_then(|handle| handle.credential(alias))
+                    .unwrap_or_else(|| PassiveEjectionState::new(None));
+                (alias.clone(), state)
+            })
+            .collect();
+        Arc::new(Self {
+            config: None,
+            credentials,
+            aliases: parking_lot::RwLock::new(aliases),
+            eject_lock: Mutex::new(()),
+        })
+    }
+
     fn reconcile_aliases(&self, aliases: HashSet<String>) {
         self.credentials.retain(|alias, _| aliases.contains(alias));
         for alias in &aliases {
@@ -153,7 +178,16 @@ impl AiCredentialOutlierHandle {
 /// Runtime credential ejection store. It emits no metrics and performs no
 /// tracing on request-path operations.
 pub struct AiCredentialOutlierStore {
-    backends: DashMap<PolicyTargetKey, Arc<AiCredentialOutlierBackendHandle>>,
+    backends: DashMap<PolicyTargetKey, AiCredentialOutlierEntry>,
+}
+
+/// The single mutable entry for one typed AI backend target. The config-free
+/// backend fallback and the effective EBTP generation are separate roles so
+/// their independently ordered snapshot publications cannot alias.
+struct AiCredentialOutlierEntry {
+    aliases: HashSet<String>,
+    fallback: Option<Arc<AiCredentialOutlierBackendHandle>>,
+    effective: Option<Arc<AiCredentialOutlierBackendHandle>>,
 }
 
 impl Default for AiCredentialOutlierStore {
@@ -179,9 +213,8 @@ impl AiCredentialOutlierStore {
         self.backends.iter().map(|entry| entry.key().to_string()).collect()
     }
 
-    /// Publish the effective outlier config and current usable credential aliases.
-    /// Equivalent config updates preserve cooldown/ejection state; a real config
-    /// change resets it, matching the existing Service outlier store.
+    /// Test convenience for constructing both independently published roles.
+    #[cfg(test)]
     pub fn configure_backend(
         &self,
         target: PolicyTargetKey,
@@ -191,25 +224,22 @@ impl AiCredentialOutlierStore {
         if target.target_kind != PolicyTargetKind::EdgionBackend {
             return false;
         }
-        let aliases: HashSet<_> = aliases.into_iter().collect();
-        match self.backends.entry(target) {
-            dashmap::mapref::entry::Entry::Occupied(mut occupied) => {
-                if occupied.get().config == config {
-                    occupied.get().reconcile_aliases(aliases);
-                } else {
-                    occupied.insert(AiCredentialOutlierBackendHandle::new(config, aliases));
-                }
+        if self.set_credentials(target.clone(), aliases).is_none() {
+            return false;
+        }
+        match config {
+            Some(config) => {
+                self.publish_effective_policy(target, Some(config));
             }
-            dashmap::mapref::entry::Entry::Vacant(vacant) => {
-                vacant.insert(AiCredentialOutlierBackendHandle::new(config, aliases));
-            }
+            None => self.clear_effective_policy(&target),
         }
         true
     }
 
-    /// Update only the policy half of the state. Credential aliases already
-    /// published by EdgionBackend sync are retained.
-    pub fn publish_policy(
+    /// Publish the effective EBTP generation. Policy presence is distinct from
+    /// its optional passive-ejection config, so `None` still materializes an
+    /// effective generation for provider cooldowns.
+    pub(crate) fn publish_effective_policy(
         &self,
         target: PolicyTargetKey,
         config: Option<OutlierDetectionResolved>,
@@ -219,58 +249,124 @@ impl AiCredentialOutlierStore {
         }
         let handle = match self.backends.entry(target) {
             dashmap::mapref::entry::Entry::Occupied(mut occupied) => {
-                if occupied.get().config != config {
-                    let aliases = occupied.get().aliases.read().clone();
-                    occupied.insert(AiCredentialOutlierBackendHandle::new(config, aliases));
+                let entry = occupied.get_mut();
+                if entry.effective.as_ref().is_none_or(|handle| handle.config != config) {
+                    entry.effective = Some(AiCredentialOutlierBackendHandle::new(config, entry.aliases.clone()));
                 }
-                Arc::clone(occupied.get())
+                Arc::clone(entry.effective.as_ref().expect("effective generation"))
             }
             dashmap::mapref::entry::Entry::Vacant(vacant) => {
-                // An absent policy for a target that has never published
-                // credentials creates nothing usable: cooldowns and ejections
-                // are recorded per credential alias, so a generation with no
-                // aliases can never be captured. Inserting one here left an
-                // entry per target for the process lifetime.
-                config.as_ref()?;
-                Arc::clone(&vacant.insert(AiCredentialOutlierBackendHandle::new(config, HashSet::new())))
+                let effective = AiCredentialOutlierBackendHandle::new(config, HashSet::new());
+                vacant.insert(AiCredentialOutlierEntry {
+                    aliases: HashSet::new(),
+                    fallback: None,
+                    effective: Some(Arc::clone(&effective)),
+                });
+                effective
             }
         };
         Some(handle)
     }
 
-    pub fn set_policy(&self, target: PolicyTargetKey, config: Option<OutlierDetectionResolved>) -> bool {
-        self.publish_policy(target, config).is_some()
+    /// Remove only the effective-policy role. A live backend fallback remains
+    /// available, while a policy-only entry is removed entirely.
+    pub(crate) fn clear_effective_policy(&self, target: &PolicyTargetKey) {
+        let dashmap::mapref::entry::Entry::Occupied(mut occupied) = self.backends.entry(target.clone()) else {
+            return;
+        };
+        occupied.get_mut().effective = None;
+        if occupied.get().fallback.is_none() {
+            occupied.remove();
+        }
     }
 
-    /// Update only the credential half of the state. Effective EBTP config
-    /// already published by policy sync is retained.
-    pub fn set_credentials(&self, target: PolicyTargetKey, aliases: impl IntoIterator<Item = String>) -> bool {
+    /// Publish the credential role and return the exact config-free fallback
+    /// generation to embed in the immutable backend snapshot.
+    pub(crate) fn set_credentials(
+        &self,
+        target: PolicyTargetKey,
+        aliases: impl IntoIterator<Item = String>,
+    ) -> Option<Arc<AiCredentialOutlierBackendHandle>> {
         if target.target_kind != PolicyTargetKind::EdgionBackend {
-            return false;
+            return None;
         }
         let aliases: HashSet<_> = aliases.into_iter().collect();
-        match self.backends.entry(target) {
-            dashmap::mapref::entry::Entry::Occupied(occupied) => occupied.get().reconcile_aliases(aliases),
-            dashmap::mapref::entry::Entry::Vacant(vacant) => {
-                vacant.insert(AiCredentialOutlierBackendHandle::new(None, aliases));
+        let fallback = match self.backends.entry(target) {
+            dashmap::mapref::entry::Entry::Occupied(mut occupied) => {
+                let entry = occupied.get_mut();
+                if entry.aliases != aliases || entry.fallback.is_none() {
+                    entry.fallback = Some(AiCredentialOutlierBackendHandle::fallback_successor(
+                        aliases.clone(),
+                        entry.fallback.as_ref(),
+                    ));
+                }
+                entry.aliases = aliases.clone();
+                if let Some(effective) = entry.effective.as_ref() {
+                    effective.reconcile_aliases(aliases);
+                }
+                Arc::clone(entry.fallback.as_ref().expect("fallback generation"))
             }
+            dashmap::mapref::entry::Entry::Vacant(vacant) => {
+                let fallback = AiCredentialOutlierBackendHandle::new(None, aliases.clone());
+                vacant.insert(AiCredentialOutlierEntry {
+                    aliases,
+                    fallback: Some(Arc::clone(&fallback)),
+                    effective: None,
+                });
+                fallback
+            }
+        };
+        Some(fallback)
+    }
+
+    /// Remove only the backend credential role. Effective policy ownership is
+    /// retained with an empty live alias set until EBTP publication clears it.
+    pub(crate) fn remove_credentials(&self, target: &PolicyTargetKey) {
+        let dashmap::mapref::entry::Entry::Occupied(mut occupied) = self.backends.entry(target.clone()) else {
+            return;
+        };
+        let entry = occupied.get_mut();
+        entry.aliases.clear();
+        entry.fallback = None;
+        if let Some(effective) = entry.effective.as_ref() {
+            effective.reconcile_aliases(HashSet::new());
         }
-        true
+        if entry.effective.is_none() {
+            occupied.remove();
+        }
     }
 
-    pub fn remove_backend(&self, target: &PolicyTargetKey) {
-        self.backends.remove(target);
-    }
-
-    /// Current globally discoverable policy generation. Request planning may
-    /// use this only when no effective EBTP snapshot exists for the target.
+    #[cfg(test)]
     pub fn current_handle(&self, target: &PolicyTargetKey) -> Option<Arc<AiCredentialOutlierBackendHandle>> {
-        self.backends.get(target).map(|entry| Arc::clone(entry.value()))
+        self.backends
+            .get(target)
+            .and_then(|entry| entry.effective.as_ref().or(entry.fallback.as_ref()).cloned())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn fallback_handle_for_test(
+        &self,
+        target: &PolicyTargetKey,
+    ) -> Option<Arc<AiCredentialOutlierBackendHandle>> {
+        self.backends.get(target).and_then(|entry| entry.fallback.clone())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn effective_handle_for_test(
+        &self,
+        target: &PolicyTargetKey,
+    ) -> Option<Arc<AiCredentialOutlierBackendHandle>> {
+        self.backends.get(target).and_then(|entry| entry.effective.clone())
     }
 
     /// Check normal admission or acquire the sole half-open probe lease.
+    #[cfg(test)]
     pub fn admit(&self, target: &PolicyTargetKey, alias: &str) -> EjectionAdmission {
-        let Some(backend) = self.backends.get(target).map(|entry| Arc::clone(entry.value())) else {
+        let Some(backend) = self
+            .backends
+            .get(target)
+            .and_then(|entry| entry.effective.as_ref().or(entry.fallback.as_ref()).cloned())
+        else {
             return EjectionAdmission::Rejected;
         };
         let Some(credential) = backend.capture(alias) else {
@@ -279,8 +375,13 @@ impl AiCredentialOutlierStore {
         credential.admit()
     }
 
+    #[cfg(test)]
     pub fn record_failure(&self, target: &PolicyTargetKey, alias: &str, class: FailureClass) -> FailureTransition {
-        let Some(backend) = self.backends.get(target).map(|entry| Arc::clone(entry.value())) else {
+        let Some(backend) = self
+            .backends
+            .get(target)
+            .and_then(|entry| entry.effective.as_ref().or(entry.fallback.as_ref()).cloned())
+        else {
             return FailureTransition::None;
         };
         let Some(credential) = backend.capture(alias) else {
@@ -289,8 +390,13 @@ impl AiCredentialOutlierStore {
         credential.record_failure(class)
     }
 
+    #[cfg(test)]
     pub fn record_success(&self, target: &PolicyTargetKey, alias: &str) {
-        let Some(backend) = self.backends.get(target).map(|entry| Arc::clone(entry.value())) else {
+        let Some(backend) = self
+            .backends
+            .get(target)
+            .and_then(|entry| entry.effective.as_ref().or(entry.fallback.as_ref()).cloned())
+        else {
             return;
         };
         if let Some(credential) = backend.capture(alias) {
@@ -300,6 +406,7 @@ impl AiCredentialOutlierStore {
 
     /// Parse and install a Retry-After cooldown. Valid positive hints are
     /// clamped to `1s..min(policy.maxEjectionTime or 5m, 5m)`.
+    #[cfg(test)]
     pub fn apply_retry_after(
         &self,
         target: &PolicyTargetKey,
@@ -307,7 +414,10 @@ impl AiCredentialOutlierStore {
         value: &str,
         now: SystemTime,
     ) -> Option<Duration> {
-        let backend = self.backends.get(target).map(|entry| Arc::clone(entry.value()))?;
+        let backend = self
+            .backends
+            .get(target)
+            .and_then(|entry| entry.effective.as_ref().or(entry.fallback.as_ref()).cloned())?;
         backend.capture(alias)?.apply_retry_after(value, now)
     }
 
@@ -315,6 +425,7 @@ impl AiCredentialOutlierStore {
     fn state(&self, target: &PolicyTargetKey, alias: &str) -> Arc<PassiveEjectionState> {
         self.backends
             .get(target)
+            .and_then(|entry| entry.effective.as_ref().or(entry.fallback.as_ref()).cloned())
             .and_then(|backend| backend.credential(alias))
             .expect("configured credential")
     }
@@ -354,7 +465,7 @@ mod tests {
         assert_eq!(store.count(), 1);
         assert_eq!(store.keys(), vec![target.to_string()]);
 
-        store.remove_backend(&target);
+        store.remove_credentials(&target);
         assert_eq!(store.count(), 0);
         assert!(store.keys().is_empty());
     }
@@ -538,7 +649,7 @@ mod tests {
         let store = AiCredentialOutlierStore::new();
         let target = target("svc");
         store.set_credentials(target.clone(), ["key".to_string()]);
-        store.set_policy(target.clone(), Some(config(10, 100)));
+        store.publish_effective_policy(target.clone(), Some(config(10, 100)));
         assert_eq!(
             store.record_failure(&target, "key", FailureClass::Gateway),
             FailureTransition::Opened
@@ -546,7 +657,7 @@ mod tests {
 
         // Equivalent updates from either independently-ordered conf-sync stream
         // retain live state.
-        store.set_policy(target.clone(), Some(config(10, 100)));
+        store.publish_effective_policy(target.clone(), Some(config(10, 100)));
         store.set_credentials(target.clone(), ["key".to_string()]);
         assert!(matches!(store.admit(&target, "key"), EjectionAdmission::Rejected));
     }
@@ -558,18 +669,18 @@ mod tests {
         store.set_credentials(target.clone(), ["key".to_string()]);
 
         let first = store
-            .publish_policy(target.clone(), Some(config(10, 100)))
+            .publish_effective_policy(target.clone(), Some(config(10, 100)))
             .expect("AI target");
         let first_credential = first.capture("key").expect("first credential");
         first_credential.apply_retry_after("5", SystemTime::UNIX_EPOCH);
 
         let equivalent = store
-            .publish_policy(target.clone(), Some(config(10, 100)))
+            .publish_effective_policy(target.clone(), Some(config(10, 100)))
             .expect("AI target");
         assert!(Arc::ptr_eq(&first, &equivalent));
 
         let second = store
-            .publish_policy(target.clone(), Some(config(20, 100)))
+            .publish_effective_policy(target.clone(), Some(config(20, 100)))
             .expect("AI target");
         assert!(!Arc::ptr_eq(&first, &second));
         let second_credential = second.capture("key").expect("second credential");
@@ -584,7 +695,9 @@ mod tests {
         second_credential.apply_retry_after("5", SystemTime::UNIX_EPOCH);
         assert!(matches!(second_credential.admit(), EjectionAdmission::Rejected));
 
-        store.remove_backend(&target);
+        store.remove_credentials(&target);
+        assert!(store.current_handle(&target).is_some());
+        store.clear_effective_policy(&target);
         assert!(store.current_handle(&target).is_none());
         assert!(matches!(first_credential.admit(), EjectionAdmission::Rejected));
     }
@@ -594,7 +707,7 @@ mod tests {
         let store = AiCredentialOutlierStore::new();
         let target = target("svc");
         store.set_credentials(target.clone(), ["key".to_string()]);
-        let default_generation = store.current_handle(&target).expect("default generation");
+        let default_generation = store.fallback_handle_for_test(&target).expect("default generation");
         let credential = default_generation.capture("key").expect("credential");
         assert_eq!(
             credential.apply_retry_after("999", SystemTime::UNIX_EPOCH),
@@ -604,36 +717,76 @@ mod tests {
     }
 
     #[test]
-    fn absent_policy_for_an_unknown_target_creates_nothing() {
-        // Publishing "no policy" for a target that never had credentials used
-        // to insert an entry that no request could ever capture from, so every
-        // such target leaked one for the process lifetime.
+    fn clearing_policy_for_an_unknown_target_creates_nothing() {
         let store = AiCredentialOutlierStore::new();
         let target = PolicyTargetKey {
             target_kind: PolicyTargetKind::EdgionBackend,
             namespace: "default".to_string(),
             name: "ghost".to_string(),
         };
-        assert!(store.publish_policy(target.clone(), None).is_none());
+        store.clear_effective_policy(&target);
         assert_eq!(store.count(), 0, "leaked: {:?}", store.keys());
         assert!(store.current_handle(&target).is_none());
     }
 
     #[test]
-    fn absent_policy_still_keeps_a_live_credential_generation() {
-        // The documented reason the no-policy generation exists: a backend with
-        // credentials but no EBTP still needs somewhere to record Retry-After
-        // cooldowns. That must survive.
+    fn effective_policy_without_outlier_config_is_distinct_from_fallback() {
         let store = AiCredentialOutlierStore::new();
         let target = PolicyTargetKey {
             target_kind: PolicyTargetKind::EdgionBackend,
             namespace: "default".to_string(),
             name: "live".to_string(),
         };
-        store.set_credentials(target.clone(), ["primary".to_string()]);
-        assert!(store.publish_policy(target.clone(), None).is_some());
+        let effective = store
+            .publish_effective_policy(target.clone(), None)
+            .expect("effective generation");
+        assert!(effective.capture("primary").is_none());
+        let fallback = store
+            .set_credentials(target.clone(), ["primary".to_string()])
+            .expect("fallback generation");
         assert_eq!(store.count(), 1);
-        let handle = store.current_handle(&target).expect("default generation");
-        assert!(handle.capture("primary").is_some());
+        assert!(!Arc::ptr_eq(&fallback, &effective));
+        assert!(fallback.capture("primary").is_some());
+        assert!(effective.capture("primary").is_some());
+    }
+
+    #[test]
+    fn fallback_alias_changes_are_copy_on_write_and_share_retained_state() {
+        let store = AiCredentialOutlierStore::new();
+        let target = target("copy-on-write");
+        let first = store
+            .set_credentials(target.clone(), ["primary".to_string()])
+            .expect("first fallback");
+        let equivalent = store
+            .set_credentials(target.clone(), ["primary".to_string()])
+            .expect("equivalent fallback");
+        assert!(Arc::ptr_eq(&first, &equivalent));
+        let primary = first.capture("primary").expect("primary credential");
+        primary.apply_retry_after("30", SystemTime::UNIX_EPOCH);
+        let effective = store
+            .publish_effective_policy(target.clone(), Some(config(10, 100)))
+            .expect("effective generation");
+
+        let second = store
+            .set_credentials(target.clone(), ["primary".to_string(), "secondary".to_string()])
+            .expect("second fallback");
+        assert!(!Arc::ptr_eq(&first, &second));
+        assert!(first.capture("secondary").is_none());
+        assert!(second.capture("secondary").is_some());
+        assert!(effective.capture("secondary").is_some());
+        assert!(matches!(
+            second.capture("primary").expect("retained primary").admit(),
+            EjectionAdmission::Rejected
+        ));
+
+        store.remove_credentials(&target);
+        assert!(store.fallback_handle_for_test(&target).is_none());
+        assert!(store
+            .effective_handle_for_test(&target)
+            .is_some_and(|handle| handle.capture("primary").is_none()));
+        assert!(first.capture("primary").is_some());
+        assert!(second.capture("secondary").is_some());
+        store.clear_effective_policy(&target);
+        assert_eq!(store.count(), 0);
     }
 }

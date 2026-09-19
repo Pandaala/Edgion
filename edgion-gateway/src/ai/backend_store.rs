@@ -20,6 +20,7 @@ use edgion_resources::resources::edgion_plugins::OnRedisFailure;
 use url::{Host, Url};
 
 type RuntimeMap = HashMap<String, Arc<RuntimeAiBackend>>;
+type CredentialOutlierMap = HashMap<PolicyTargetKey, Arc<super::AiCredentialOutlierBackendHandle>>;
 
 static GLOBAL_EDGION_BACKEND_STORE: LazyLock<Arc<EdgionBackendStore>> = LazyLock::new(|| {
     Arc::new(EdgionBackendStore::with_credential_outlier_store(
@@ -156,7 +157,10 @@ impl fmt::Debug for RuntimeAiBackend {
 struct Snapshot {
     generation: u64,
     backends: RuntimeMap,
-    credential_outliers: Arc<super::AiCredentialOutlierStore>,
+    /// Immutable config-free fallback projection for this exact backend
+    /// generation. The mutable credential store remains the single cold-path
+    /// owner; request planning never consults it directly.
+    credential_outliers: CredentialOutlierMap,
 }
 
 /// Request-stable AI-only view of the unified EdgionBackend snapshot.
@@ -187,7 +191,7 @@ impl AiBackendSnapshot {
         &self,
         target: &PolicyTargetKey,
     ) -> Option<Arc<super::AiCredentialOutlierBackendHandle>> {
-        self.inner.credential_outliers.current_handle(target)
+        self.inner.credential_outliers.get(target).cloned()
     }
 }
 
@@ -222,7 +226,7 @@ impl EdgionBackendStore {
             snapshot: ArcSwap::from_pointee(Snapshot {
                 generation: 0,
                 backends: HashMap::new(),
-                credential_outliers: Arc::clone(&credential_outliers),
+                credential_outliers: HashMap::new(),
             }),
             credential_outliers,
         }
@@ -240,28 +244,38 @@ impl EdgionBackendStore {
         })
     }
 
-    /// Mirror the backend's credential pool into the outlier store.
-    ///
-    /// `None` means the backend is no longer activatable — removed, or an
-    /// update that failed to compile. The entry is dropped rather than emptied:
-    /// it is only reachable through a live backend, so an emptied one is
-    /// unreachable state that accumulates for the process lifetime. Requests
-    /// already holding a captured generation keep it alive through their own
-    /// `Arc`, which is what preserves in-flight ejection state.
-    fn publish_credentials(&self, key: &str, backend: Option<&RuntimeAiBackend>) {
-        let Some(target) = Self::target_key(key) else {
-            return;
-        };
+    /// Publish one backend's credential role and return the config-free
+    /// fallback Arc for the next immutable backend snapshot.
+    fn publish_credentials(
+        &self,
+        key: &str,
+        backend: Option<&RuntimeAiBackend>,
+    ) -> Option<(PolicyTargetKey, Arc<super::AiCredentialOutlierBackendHandle>)> {
+        let target = Self::target_key(key)?;
         let Some(backend) = backend else {
-            self.credential_outliers.remove_backend(&target);
-            return;
+            self.credential_outliers.remove_credentials(&target);
+            return None;
         };
         let aliases = backend
             .credential_pool
             .credentials
             .iter()
             .map(|credential| credential.name.clone());
-        self.credential_outliers.set_credentials(target, aliases);
+        let fallback = self.credential_outliers.set_credentials(target.clone(), aliases)?;
+        Some((target, fallback))
+    }
+
+    /// Reconcile the one mutable credential entry per target, then derive the
+    /// immutable fallback projection published with `next`.
+    fn build_credential_outlier_projection(&self, current: &RuntimeMap, next: &RuntimeMap) -> CredentialOutlierMap {
+        for key in current.keys() {
+            if !next.contains_key(key) {
+                self.publish_credentials(key, None);
+            }
+        }
+        next.iter()
+            .filter_map(|(key, backend)| self.publish_credentials(key, Some(backend)))
+            .collect()
     }
 
     /// One lock-free snapshot load plus one hash-table lookup.
@@ -305,21 +319,14 @@ impl EdgionBackendStore {
             return;
         }
         let adaptive_targets = changed_ai_backend_targets(&current.backends, &backends);
-        for key in current.backends.keys() {
-            if !backends.contains_key(key) {
-                self.publish_credentials(key, None);
-            }
-        }
-        for (key, backend) in &backends {
-            self.publish_credentials(key, Some(backend));
-        }
+        let credential_outliers = self.build_credential_outlier_projection(&current.backends, &backends);
         self.snapshot.store(Arc::new(Snapshot {
             generation: current
                 .generation
                 .checked_add(1)
                 .expect("EdgionBackend snapshot generation overflow"),
             backends,
-            credential_outliers: Arc::clone(&self.credential_outliers),
+            credential_outliers,
         }));
         if std::ptr::eq(self, GLOBAL_EDGION_BACKEND_STORE.as_ref()) {
             let adaptive_store = super::get_adaptive_telemetry_store();
@@ -351,21 +358,14 @@ impl EdgionBackendStore {
             return;
         }
         let adaptive_targets = changed_ai_backend_targets(&current.backends, &backends);
-        for key in current.backends.keys() {
-            if !backends.contains_key(key) {
-                self.publish_credentials(key, None);
-            }
-        }
-        for (key, backend) in &backends {
-            self.publish_credentials(key, Some(backend));
-        }
+        let credential_outliers = self.build_credential_outlier_projection(&current.backends, &backends);
         self.snapshot.store(Arc::new(Snapshot {
             generation: current
                 .generation
                 .checked_add(1)
                 .expect("EdgionBackend snapshot generation overflow"),
             backends,
-            credential_outliers: Arc::clone(&self.credential_outliers),
+            credential_outliers,
         }));
         if std::ptr::eq(self, GLOBAL_EDGION_BACKEND_STORE.as_ref()) {
             let adaptive_store = super::get_adaptive_telemetry_store();
@@ -1124,25 +1124,75 @@ mod tests {
             resource("provider", "https://ai.example.com", Some(b"key")),
         )]));
         let target = AiBackendStore::target_key(key).unwrap();
-        let generation = store
-            .credential_outliers
-            .current_handle(&target)
+        let old_snapshot = store.snapshot();
+        let generation = old_snapshot
+            .credential_outlier_handle(&target)
             .expect("default generation");
         let captured = generation.capture("primary").expect("published credential");
 
         store.full_set(&HashMap::new());
-        assert!(store.get_by_key(key).is_none());
-        // No new capture is possible: the generation is gone entirely rather
-        // than lingering with an empty alias set, which is what kept these
-        // entries accumulating for the process lifetime.
-        assert!(store.credential_outliers.current_handle(&target).is_none());
-        // The contract this test exists for: a request that already captured a
-        // generation keeps it alive through its own Arc and still sees the
-        // ejection state.
+        let removed_snapshot = store.snapshot();
+        assert!(removed_snapshot.get_by_key(key).is_none());
+        assert!(removed_snapshot.credential_outlier_handle(&target).is_none());
+        assert!(Arc::ptr_eq(
+            &generation,
+            &old_snapshot
+                .credential_outlier_handle(&target)
+                .expect("old snapshot fallback")
+        ));
         assert!(matches!(
             captured.admit(),
             crate::backends::outlier_detection::EjectionAdmission::Closed
         ));
+    }
+
+    #[test]
+    fn backend_snapshots_keep_copy_on_write_fallback_alias_views() {
+        let store = AiBackendStore::new();
+        let key = "default/provider";
+        let target = AiBackendStore::target_key(key).unwrap();
+        store.full_set(&HashMap::from([(
+            key.to_string(),
+            resource("provider", "https://ai.example.com", Some(b"key")),
+        )]));
+        let first_snapshot = store.snapshot();
+        let first = first_snapshot
+            .credential_outlier_handle(&target)
+            .expect("first fallback");
+        let first_primary = first.capture("primary").expect("primary credential");
+        first_primary.apply_retry_after("30", std::time::SystemTime::UNIX_EPOCH);
+
+        let mut updated = resource("provider", "https://ai.example.com/v2", Some(b"key"));
+        {
+            let ai = &mut Arc::get_mut(&mut updated).unwrap().spec.ai;
+            let mut credential = ai.credential_pool.credentials[0].clone();
+            credential.name = "secondary".to_string();
+            ai.credential_pool.credentials.push(credential);
+        }
+        store.full_set(&HashMap::from([(key.to_string(), updated)]));
+
+        let second_snapshot = store.snapshot();
+        let second = second_snapshot
+            .credential_outlier_handle(&target)
+            .expect("second fallback");
+        assert!(!Arc::ptr_eq(&first, &second));
+        assert!(first.capture("secondary").is_none());
+        assert!(second.capture("secondary").is_some());
+        assert!(matches!(
+            second.capture("primary").expect("retained primary").admit(),
+            crate::backends::outlier_detection::EjectionAdmission::Rejected
+        ));
+
+        store.full_set(&HashMap::new());
+        assert!(store.snapshot().credential_outlier_handle(&target).is_none());
+        assert!(first_snapshot
+            .credential_outlier_handle(&target)
+            .is_some_and(|handle| Arc::ptr_eq(&handle, &first)));
+        assert!(second_snapshot
+            .credential_outlier_handle(&target)
+            .is_some_and(|handle| Arc::ptr_eq(&handle, &second)));
+        assert!(first.capture("primary").is_some());
+        assert!(second.capture("secondary").is_some());
     }
 
     #[test]

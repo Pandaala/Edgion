@@ -462,7 +462,8 @@ impl BackendTrafficPolicyStore {
                 Some(old) if old.outlier_detection == normalized_outlier && old.ai_credential_outlier.is_some() => {
                     old.ai_credential_outlier.clone()
                 }
-                _ => get_ai_credential_outlier_store().publish_policy(target.clone(), normalized_outlier.clone()),
+                _ => get_ai_credential_outlier_store()
+                    .publish_effective_policy(target.clone(), normalized_outlier.clone()),
             }
         } else {
             None
@@ -529,8 +530,9 @@ impl BackendTrafficPolicyStore {
                     }
                 }
                 PolicyTargetKind::EdgionBackend => {
-                    let config = next.effective.get(target).and_then(|e| e.outlier_detection.clone());
-                    get_ai_credential_outlier_store().publish_policy(target.clone(), config);
+                    if !next.effective.contains_key(target) {
+                        get_ai_credential_outlier_store().clear_effective_policy(target);
+                    }
                 }
             }
         }
@@ -1385,6 +1387,7 @@ mod tests {
 
     #[test]
     fn equivalent_ai_update_keeps_retry_handle_and_field_update_is_atomic() {
+        let _guard = GLOBAL_STORE_TEST_LOCK.lock();
         let store = BackendTrafficPolicyStore::new();
         let target = PolicyTargetKey {
             target_kind: PolicyTargetKind::EdgionBackend,
@@ -1459,13 +1462,9 @@ mod tests {
 
         store.full_set_policies(HashMap::new());
         assert!(store.get_effective(&target).is_none());
-        let default_generation = get_ai_credential_outlier_store()
-            .current_handle(&target)
-            .expect("default no-policy generation");
-        assert!(!Arc::ptr_eq(
-            fourth.ai_credential_outlier.as_ref().unwrap(),
-            &default_generation
-        ));
+        assert!(get_ai_credential_outlier_store()
+            .effective_handle_for_test(&target)
+            .is_none());
         assert_eq!(first.connect_timeout, Some(std::time::Duration::from_millis(250)));
     }
 
@@ -1904,6 +1903,7 @@ mod tests {
 
     #[test]
     fn ai_outlier_handle_materialized_before_store() {
+        let _guard = GLOBAL_STORE_TEST_LOCK.lock();
         let store = BackendTrafficPolicyStore::new();
         let target = PolicyTargetKey {
             target_kind: PolicyTargetKind::EdgionBackend,
@@ -1917,41 +1917,50 @@ mod tests {
         let snap = store.get_effective(&target).expect("effective");
         let handle = snap.ai_credential_outlier.as_ref().expect("handle on snapshot");
         let published = get_ai_credential_outlier_store()
-            .current_handle(&target)
+            .effective_handle_for_test(&target)
             .expect("handle in outlier store");
         assert!(Arc::ptr_eq(handle, &published));
         store.full_set_policies(HashMap::new());
     }
 
     #[test]
-    fn ai_publish_policy_runs_after_arcswap() {
-        let store = BackendTrafficPolicyStore::new();
+    fn ai_policy_publication_gaps_never_alias_the_backend_fallback() {
+        let _guard = GLOBAL_STORE_TEST_LOCK.lock();
         let target = PolicyTargetKey {
             target_kind: PolicyTargetKind::EdgionBackend,
             namespace: "after".to_string(),
             name: "models".to_string(),
         };
-        store.full_set_policies(HashMap::from([(
-            "after/policy".to_string(),
-            ai_policy("after", "policy", "models", 20, "250ms"),
-        )]));
-        let first = store
-            .get_effective(&target)
-            .and_then(|snap| snap.ai_credential_outlier.clone())
-            .expect("handle materialized on the stored snapshot");
-        store.full_set_policies(HashMap::from([(
-            "after/policy".to_string(),
-            ai_policy("after", "policy", "models", 20, "250ms"),
-        )]));
-        let second = store
-            .get_effective(&target)
-            .and_then(|snap| snap.ai_credential_outlier.clone())
-            .expect("equivalent publish keeps the handle");
-        let published = get_ai_credential_outlier_store()
-            .current_handle(&target)
-            .expect("post-store publish_policy is idempotent");
-        assert!(Arc::ptr_eq(&first, &second));
-        assert!(Arc::ptr_eq(&first, &published));
-        store.full_set_policies(HashMap::new());
+        let outliers = get_ai_credential_outlier_store();
+        outliers.clear_effective_policy(&target);
+        outliers.remove_credentials(&target);
+        let fallback = outliers
+            .set_credentials(target.clone(), ["primary".to_string()])
+            .expect("config-free fallback");
+
+        // `build_effective` deliberately materializes the effective role before
+        // its containing ArcSwap generation is stored. The live backend
+        // fallback must remain a different generation during that add gap.
+        let policy = ai_policy("after", "policy", "models", 20, "250ms");
+        let candidate = BackendTrafficPolicyStore::build_effective(&target, "after/policy", policy.as_ref(), None);
+        let effective = candidate.ai_credential_outlier.as_ref().expect("effective generation");
+        assert!(!Arc::ptr_eq(&fallback, effective));
+        assert!(outliers
+            .fallback_handle_for_test(&target)
+            .is_some_and(|published| Arc::ptr_eq(&fallback, &published)));
+
+        // During removal, the ArcSwap without an effective policy is visible
+        // before cold cleanup clears this role. Fallback selection is still
+        // stable both before and after that cleanup.
+        assert!(outliers.effective_handle_for_test(&target).is_some());
+        outliers.clear_effective_policy(&target);
+        assert!(outliers.effective_handle_for_test(&target).is_none());
+        assert!(outliers
+            .fallback_handle_for_test(&target)
+            .is_some_and(|published| Arc::ptr_eq(&fallback, &published)));
+        assert!(effective.capture("primary").is_some());
+
+        outliers.remove_credentials(&target);
+        assert!(!outliers.keys().contains(&target.to_string()));
     }
 }
