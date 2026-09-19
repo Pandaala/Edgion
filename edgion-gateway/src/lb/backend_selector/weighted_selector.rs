@@ -51,10 +51,11 @@ fn normalize_weights(mut weights: Vec<usize>) -> Vec<usize> {
         }
     }
 
-    let total: usize = weights.iter().sum();
-    if total > MAX_SMOOTH_SEQUENCE_LEN {
+    let total: u128 = weights.iter().map(|&weight| weight as u128).sum();
+    if total > MAX_SMOOTH_SEQUENCE_LEN as u128 {
         for w in weights.iter_mut().filter(|w| **w > 0) {
-            *w = ((*w as u128 * MAX_SMOOTH_SEQUENCE_LEN as u128) / total as u128).max(1) as usize;
+            let scaled = ((*w as u128 * MAX_SMOOTH_SEQUENCE_LEN as u128) / total).max(1);
+            *w = scaled.min(MAX_SMOOTH_SEQUENCE_LEN as u128) as usize;
         }
     }
 
@@ -143,8 +144,7 @@ impl<T> WeightedRoundRobin<T> {
             return Err(WrrError::TooManyItems);
         }
 
-        let total_weight: usize = weights.iter().sum();
-        if total_weight == 0 {
+        if weights.iter().all(|&weight| weight == 0) {
             return Err(WrrError::ZeroTotalWeight);
         }
 
@@ -325,6 +325,32 @@ mod tests {
             wrr.sequence_len() <= MAX_SMOOTH_SEQUENCE_LEN + 2,
             "sequence must stay bounded, got {}",
             wrr.sequence_len()
+        );
+    }
+
+    #[test]
+    fn new_handles_near_usize_max_weights_without_overflow() {
+        let wrr = WeightedRoundRobin::new(vec!["a", "b"], vec![usize::MAX, usize::MAX - 1])
+            .expect("near-maximum weights must normalize safely");
+        assert!(
+            wrr.sequence_len() <= MAX_SMOOTH_SEQUENCE_LEN + 2,
+            "sequence must stay bounded, got {}",
+            wrr.sequence_len()
+        );
+
+        let mut a = 0usize;
+        let mut b = 0usize;
+        for _ in 0..wrr.sequence_len() {
+            match *wrr.select() {
+                "a" => a += 1,
+                "b" => b += 1,
+                _ => unreachable!(),
+            }
+        }
+        assert!(a > 0 && b > 0, "both backends must remain represented");
+        assert!(
+            a.abs_diff(b) <= 1,
+            "near-equal weights must remain distributed: {a}:{b}"
         );
     }
 

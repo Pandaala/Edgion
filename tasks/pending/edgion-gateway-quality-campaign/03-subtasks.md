@@ -22,7 +22,7 @@ The first section preserves the exact residual order supplied by `task/optimizat
 | edgion-gateway | `edgion-gateway/src/lb/attempt.rs` | src/lb | examined-no-change | B0014 | Attempt guards already pin exact backend generations and balance load once across connect, retry, terminal, and cancellation paths | b350cc6f4cd320f947b2db7fccc64bc51c91cece |
 | edgion-gateway | `edgion-gateway/src/lb/backend_selector/mod.rs` | src/lb | examined-no-change | B0015 | Selector facade and production construction paths already enforce aligned, initialized, generation-pinned bounded WRR behavior | 7cfb8d02ec602d2e98c52e103aa51e6361cfeda9 |
 | edgion-gateway | `edgion-gateway/src/lb/backend_selector/selector.rs` | src/lb | changed | B0016 | Reject mismatched item and weight vectors before selector construction can silently truncate them | a319965796db76673abed452b0bc1a9b73ef6131 |
-| edgion-gateway | `edgion-gateway/src/lb/backend_selector/weighted_selector.rs` | src/lb | pending | — | Residual manifest order | a0b4d49b298149422c7e46150a0ca027ad5321f7 |
+| edgion-gateway | `edgion-gateway/src/lb/backend_selector/weighted_selector.rs` | src/lb | changed | B0017 | Widen WRR normalization arithmetic so extreme public weights cannot panic or wrap before bounded scaling | 336b7fca858dfc082c67341e18bdc2608973d03f |
 | edgion-gateway | `edgion-gateway/src/lb/compiled_selector.rs` | src/lb | pending | — | Residual manifest order | a0b4d49b298149422c7e46150a0ca027ad5321f7 |
 | edgion-gateway | `edgion-gateway/src/lb/backend.rs` | src/lb | pending | — | Residual manifest order | a0b4d49b298149422c7e46150a0ca027ad5321f7 |
 | edgion-gateway | `edgion-gateway/src/lb/ewma/score.rs` | src/lb | pending | — | Residual manifest order | a0b4d49b298149422c7e46150a0ca027ad5321f7 |
