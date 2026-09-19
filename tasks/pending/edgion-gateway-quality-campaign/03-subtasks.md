@@ -16,7 +16,7 @@ The first section preserves the exact residual order supplied by `task/optimizat
 | edgion-gateway | `edgion-gateway/src/backends/tests/backend_tls_pool_test.rs` | src/backends | examined-no-change | B0008 | BoringSSL pool-isolation coverage already exercises the meaningful identity and rotation boundaries with a strong collision negative control | 50c6fe928374d73435582d8f68109df7413a5eff |
 | edgion-gateway | `edgion-gateway/src/cli/config.rs` | src/cli | changed | B0009 | Canonical `includeRawUri` is documented and enforced; misspelled access-log option keys now fail configuration loading | c6cbf549cdd07c85901001e334f8600ea59e7846 |
 | edgion-gateway | `edgion-gateway/src/cli/mod.rs` | src/cli | changed | B0010 | Startup checkpoints now run after logging initialization and FIPS failures preserve structured-log flushing | 6f93c8c92882031b2d5d288811580071f28f45d7 |
-| edgion-gateway | `edgion-gateway/src/cli/pingora.rs` | src/cli | pending | — | Residual manifest order | a0b4d49b298149422c7e46150a0ca027ad5321f7 |
+| edgion-gateway | `edgion-gateway/src/cli/pingora.rs` | src/cli | changed | B0011 | Normalize documented zero worker count to the nonzero platform default before Pingora runtime construction | 637278a6b9d3a5b92c5f71aefda22286870fddbc |
 | edgion-gateway | `edgion-gateway/src/config/edgion_gateway/conf_handler_impl.rs` | src/config | pending | — | Residual manifest order | a0b4d49b298149422c7e46150a0ca027ad5321f7 |
 | edgion-gateway | `edgion-gateway/src/ctx.rs` | src/ctx.rs | pending | — | Residual manifest order | a0b4d49b298149422c7e46150a0ca027ad5321f7 |
 | edgion-gateway | `edgion-gateway/src/lb/attempt.rs` | src/lb | pending | — | Residual manifest order | a0b4d49b298149422c7e46150a0ca027ad5321f7 |

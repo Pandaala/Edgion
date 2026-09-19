@@ -7,3 +7,4 @@
 | D0003 | ready-for-separate-task | `tasks/todo/update-gateway-admin-auth-integration-comment-path.md` | B0003 |
 | D0004 | ready-for-separate-task | `tasks/todo/remove-stale-gateway-admin-redaction-design-link.md` | B0003 |
 | D0005 | ready-for-separate-task | `tasks/todo/strict-gateway-process-config-unknown-fields.md` | B0009 |
+| D0006 | ready-for-separate-task | `tasks/todo/define-gatewayclass-process-config-ownership.md` | B0011 |

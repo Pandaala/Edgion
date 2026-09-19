@@ -19,6 +19,7 @@ fn create_server_conf(config: &EdgionGatewayConfig) -> ServerConf {
     let threads = config
         .server
         .threads
+        .filter(|threads| *threads != 0)
         .unwrap_or_else(|| std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1));
 
     let work_stealing = config.server.work_stealing.unwrap_or(true);
@@ -52,6 +53,30 @@ fn create_server_conf(config: &EdgionGatewayConfig) -> ServerConf {
     );
 
     conf
+}
+
+#[cfg(test)]
+mod server_conf_tests {
+    use super::*;
+
+    #[test]
+    fn omitted_and_zero_threads_use_the_same_nonzero_platform_default() {
+        let omitted = create_server_conf(&EdgionGatewayConfig::default());
+        let mut zero = EdgionGatewayConfig::default();
+        zero.server.threads = Some(0);
+        let zero = create_server_conf(&zero);
+
+        assert_eq!(omitted.threads, zero.threads);
+        assert!(omitted.threads >= 1);
+    }
+
+    #[test]
+    fn positive_thread_count_is_preserved() {
+        let mut config = EdgionGatewayConfig::default();
+        config.server.threads = Some(7);
+
+        assert_eq!(create_server_conf(&config).threads, 7);
+    }
 }
 
 /// Create and configure the Pingora server with listeners.
