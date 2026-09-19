@@ -305,7 +305,7 @@ pub(crate) fn resolved_endpoint_for_addr(
     let backend = Arc::clone(&slot.backend);
     let ready = slot.ready;
     let slot_proof = slot.proof;
-    let eligible = runtime_eligible(&active, &backend, true);
+    let eligible = slot.ready && runtime_eligible(&active, &backend, true);
     let serving_port = NonZeroU16::new(target.port())?;
     Some((
         ResolvedServiceEndpoint {
@@ -376,6 +376,17 @@ mod tests {
         slice_ports: Vec<(&str, i32)>,
         address: &str,
     ) -> PublishedService {
+        publish_service_with_ready(namespace, name, ports, slice_ports, address, true)
+    }
+
+    fn publish_service_with_ready(
+        namespace: &str,
+        name: &str,
+        ports: Vec<ServicePort>,
+        slice_ports: Vec<(&str, i32)>,
+        address: &str,
+        ready: bool,
+    ) -> PublishedService {
         let service_key = format!("{namespace}/{name}");
         let slice_key = format!("{namespace}/{name}-slice");
         let coordinator = get_service_discovery_coordinator();
@@ -414,7 +425,7 @@ mod tests {
                     endpoints: vec![Endpoint {
                         addresses: vec![address.to_string()],
                         conditions: Some(EndpointConditions {
-                            ready: Some(true),
+                            ready: Some(ready),
                             ..Default::default()
                         }),
                         ..Default::default()
@@ -1068,5 +1079,55 @@ mod tests {
             resolved_endpoint_for_addr(&published.service_key, &section_number(80), http_addr).unwrap();
         assert!(eligible);
         assert_eq!(endpoint.serving_port.get(), 8080);
+    }
+
+    #[test]
+    fn sticky_address_recognizes_unready_slot_but_marks_it_ineligible() {
+        let unready = publish_service_with_ready(
+            "sel-sticky-ready",
+            "unready",
+            vec![service_port("http", 80, IntOrString::Int(8080), None)],
+            vec![("http", 8080)],
+            "10.8.0.6",
+            false,
+        );
+        assert!(select_service_endpoint(
+            &unready.service_key,
+            section_number(80),
+            &None,
+            ServiceDegradePolicy::Live,
+            None,
+            "",
+            None,
+        )
+        .is_err());
+        let unready_addr: StdSocketAddr = "10.8.0.6:8080".parse().unwrap();
+        let (endpoint, eligible) =
+            resolved_endpoint_for_addr(&unready.service_key, &section_number(80), unready_addr).unwrap();
+        assert!(!endpoint.ready);
+        assert!(!eligible);
+
+        let ready = publish_service(
+            "sel-sticky-ready",
+            "ready",
+            vec![service_port("http", 80, IntOrString::Int(8080), None)],
+            vec![("http", 8080)],
+            "10.8.0.7",
+        );
+        assert!(select_service_endpoint(
+            &ready.service_key,
+            section_number(80),
+            &None,
+            ServiceDegradePolicy::Live,
+            None,
+            "",
+            None,
+        )
+        .is_ok());
+        let ready_addr: StdSocketAddr = "10.8.0.7:8080".parse().unwrap();
+        let (endpoint, eligible) =
+            resolved_endpoint_for_addr(&ready.service_key, &section_number(80), ready_addr).unwrap();
+        assert!(endpoint.ready);
+        assert!(eligible);
     }
 }
