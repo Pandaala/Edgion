@@ -484,12 +484,54 @@ mod published_health_tests {
         old.await_join().await;
         new.await_join().await;
     }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn published_etcd_client_is_sampled_without_network_init() {
+        let _guard = I5_DISPATCH_LOCK.lock().await;
+        let name = "published-health/etcd-without-init".to_string();
+        let config = serde_json::from_value(serde_json::json!({
+            "endpoints": ["http://127.0.0.1:2379"]
+        }))
+        .expect("test Etcd config must deserialize");
+        let client = Arc::new(
+            EtcdLinkClient::from_config(&name, &config, &credential::CredentialState::NotRequired)
+                .expect("Etcd construction must not connect"),
+        );
+        seed_published_etcd(name.clone(), client);
+
+        let recorder = DebuggingRecorder::new();
+        let snapshotter = recorder.snapshotter();
+        metrics::with_local_recorder(&recorder, record_published_link_sys_health);
+        let snapshot = snapshotter.snapshot().into_vec();
+
+        let runner = ETCD_RUNTIME.remove(&name).expect("test Etcd runner must be registered");
+        runner.begin_delete();
+        runner.await_join().await;
+
+        let matching: Vec<_> = snapshot
+            .iter()
+            .filter(|(key, _, _, _)| {
+                key.key().name() == crate::observe::metrics::registry::names::LINK_SYS_HEALTH
+                    && key
+                        .key()
+                        .labels()
+                        .any(|label| label.key() == "link" && label.value() == name)
+            })
+            .collect();
+        assert_eq!(
+            matching.len(),
+            1,
+            "Etcd must publish one health gauge for its unique key"
+        );
+        assert!(matches!(matching[0].3, DebugValue::Gauge(level) if level == 0.0));
+    }
 }
 
 /// Sample the same published clients returned to Gateway data-plane callers.
 /// Retired and unpublished generations never supply this gauge's value.
 pub(crate) fn record_published_link_sys_health() {
     record_current_health(&REDIS_RUNTIME, RedisLinkClient::healthy);
+    record_current_health(&ETCD_RUNTIME, EtcdLinkClient::healthy);
     record_current_health(&ES_RUNTIME, EsLinkClient::healthy);
     record_current_health(&KAFKA_RUNTIME, KafkaLinkClient::healthy);
     record_current_health(&OTLP_RUNTIME, OtlpLinkClient::healthy);
