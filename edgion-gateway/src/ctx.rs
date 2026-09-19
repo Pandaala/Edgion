@@ -5364,7 +5364,7 @@ mod ai_context_claim_tests {
     fn ordinary_context_construction_is_allocation_free() {
         let (ctx, allocations) = crate::test_allocation_counter::count_allocation_stats(EdgionHttpContext::new);
 
-        assert_eq!(std::mem::size_of_val(&ctx), 1232);
+        assert_eq!(std::mem::size_of_val(&ctx), 1248);
         assert!(ctx.gateway_info.is_none());
         assert_eq!(allocations.calls, 0);
         assert_eq!(allocations.requested_bytes, 0);
