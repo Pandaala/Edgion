@@ -20,7 +20,7 @@ The first section preserves the exact residual order supplied by `task/optimizat
 | edgion-gateway | `edgion-gateway/src/config/edgion_gateway/conf_handler_impl.rs` | src/config | changed | B0012 | Pre-resolve the effective EGC DNS candidate and cache TTL into one immutable snapshot generation | b3274df3ab8529485b7df151aad9f93791895e95 |
 | edgion-gateway | `edgion-gateway/src/ctx.rs` | src/ctx.rs | changed | B0013 | Updated the 64-bit context layout regression to the accepted slice-backed generation-handle size | 936032962e3e46e90a0cdf9936f5cd415ab804db |
 | edgion-gateway | `edgion-gateway/src/lb/attempt.rs` | src/lb | examined-no-change | B0014 | Attempt guards already pin exact backend generations and balance load once across connect, retry, terminal, and cancellation paths | b350cc6f4cd320f947b2db7fccc64bc51c91cece |
-| edgion-gateway | `edgion-gateway/src/lb/backend_selector/mod.rs` | src/lb | pending | — | Residual manifest order | a0b4d49b298149422c7e46150a0ca027ad5321f7 |
+| edgion-gateway | `edgion-gateway/src/lb/backend_selector/mod.rs` | src/lb | examined-no-change | B0015 | Selector facade and production construction paths already enforce aligned, initialized, generation-pinned bounded WRR behavior | 7cfb8d02ec602d2e98c52e103aa51e6361cfeda9 |
 | edgion-gateway | `edgion-gateway/src/lb/backend_selector/selector.rs` | src/lb | pending | — | Residual manifest order | a0b4d49b298149422c7e46150a0ca027ad5321f7 |
 | edgion-gateway | `edgion-gateway/src/lb/backend_selector/weighted_selector.rs` | src/lb | pending | — | Residual manifest order | a0b4d49b298149422c7e46150a0ca027ad5321f7 |
 | edgion-gateway | `edgion-gateway/src/lb/compiled_selector.rs` | src/lb | pending | — | Residual manifest order | a0b4d49b298149422c7e46150a0ca027ad5321f7 |
