@@ -220,7 +220,6 @@ pub fn begin_draining(service_key: &str, addr: &SocketAddr, backend: Arc<LbBacke
     DRAINING_BACKENDS.insert(key, backend);
     tracing::info!(
         service_key = %service_key,
-        backend = %addr,
         "Backend marked as draining"
     );
 }
