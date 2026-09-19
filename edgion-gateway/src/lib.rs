@@ -115,6 +115,11 @@ pub fn allocator_name() -> &'static str {
         "jemalloc"
     }
 
+    #[cfg(all(feature = "allocator-jemalloc", target_env = "msvc"))]
+    {
+        "system (default)"
+    }
+
     #[cfg(feature = "allocator-mimalloc")]
     {
         "mimalloc"
