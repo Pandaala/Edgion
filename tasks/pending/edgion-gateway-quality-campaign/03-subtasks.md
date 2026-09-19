@@ -30,7 +30,7 @@ The first section preserves the exact residual order supplied by `task/optimizat
 | edgion-gateway | `edgion-gateway/src/lb/leastconn/cleaner.rs` | src/lb | changed | B0022 | Removed backend topology from the drain-completion INFO event and aligned drain/shutdown knowledge with current ownership | 4ad1de05c0a548e16c61c47c7289b836e2fc3975 |
 | edgion-gateway | `edgion-gateway/src/lb/leastconn/mod.rs` | src/lb | examined-no-change | B0023 | LeastConn facade, canonical P2C selection, cleaner ownership, shared scoring, and generation-owned draining remain coherent | 5b40da9b2114cb676492f9c6d2a2cecd48a27f74 |
 | edgion-gateway | `edgion-gateway/src/lb/mod.rs` | src/lb | examined-no-change | B0024 | LB facade exposes one coherent acyclic tree of canonical selectors, counters, attempts, sampling, draining, and strategies | d414b7c88acc697862fa073057cf7e549e5fbbf0 |
-| edgion-gateway | `edgion-gateway/src/lb/runtime_state/mod.rs` | src/lb | pending | — | Residual manifest order | a0b4d49b298149422c7e46150a0ca027ad5321f7 |
+| edgion-gateway | `edgion-gateway/src/lb/runtime_state/mod.rs` | src/lb | examined-no-change | B0025 | Affinity publication and exact-generation draining remain bounded, generation-safe, collision-resistant, and self-healing | 86f8a5cd88b435fdababa28956e88807a2adf24e |
 | edgion-gateway | `edgion-gateway/src/lb/sample.rs` | src/lb | pending | — | Residual manifest order | a0b4d49b298149422c7e46150a0ca027ad5321f7 |
 | edgion-gateway | `edgion-gateway/src/lb/selection/consistent_hash.rs` | src/lb | pending | — | Residual manifest order | a0b4d49b298149422c7e46150a0ca027ad5321f7 |
 | edgion-gateway | `edgion-gateway/src/lb/selection/mod.rs` | src/lb | pending | — | Residual manifest order | a0b4d49b298149422c7e46150a0ca027ad5321f7 |
