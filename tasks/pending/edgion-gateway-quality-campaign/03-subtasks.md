@@ -37,7 +37,7 @@ The first section preserves the exact residual order supplied by `task/optimizat
 | edgion-gateway | `edgion-gateway/src/lb/selection/p2c.rs` | src/lb | changed | B0029 | Distinct P2C pairs now use exactly one second-candidate draw through a uniform excluded-index bijection | d08e968b00a38706873d28e8b15861ac0090dda6 |
 | edgion-gateway | `edgion-gateway/src/lb/selection/round_robin.rs` | src/lb | changed | B0030 | RR normalization is overflow-safe and weighted health fallback advances from the actual selected backend | 8497cfe2c5046b745cedc239dff1ad24d70c9ee6 |
 | edgion-gateway | `edgion-gateway/src/lib.rs` | src/lib.rs | changed | B0031 | Gateway and Controller allocator reporting now truthfully names the existing MSVC system fallback | 962cc4061bb6713ada1d5ddb8f7abfe2caf88001 |
-| edgion-gateway | `edgion-gateway/src/link_sys/providers/otlp/log_sender.rs` | src/link_sys | pending | — | Residual manifest order | a0b4d49b298149422c7e46150a0ca027ad5321f7 |
+| edgion-gateway | `edgion-gateway/src/link_sys/providers/otlp/log_sender.rs` | src/link_sys | examined-no-change | B0032 | Key-only sender preserves canonical generation/transport ownership; stale shutdown knowledge was corrected | 63a48dc1eb0fe06f91a45dc640052317acf628c2 |
 | edgion-gateway | `edgion-gateway/src/link_sys/providers/webhook/manager.rs` | src/link_sys | pending | — | Residual manifest order | a0b4d49b298149422c7e46150a0ca027ad5321f7 |
 | edgion-gateway | `edgion-gateway/src/link_sys/runtime/data_sender.rs` | src/link_sys | pending | — | Residual manifest order | a0b4d49b298149422c7e46150a0ca027ad5321f7 |
 | edgion-gateway | `edgion-gateway/src/link_sys/runtime/store.rs` | src/link_sys | pending | — | Residual manifest order | a0b4d49b298149422c7e46150a0ca027ad5321f7 |
