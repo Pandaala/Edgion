@@ -1,6 +1,6 @@
 ---
 name: ep-slice-no-port-fail-closed
-description: get_backends_for_service now fails closed (returns no backends → 500) when no EndpointSlice declares a usable port, instead of the old silent unwrap_or(8080). Reject re-reports of the 8080 magic-default misdirection; also reject the issue's suggested tracing::warn! inside get_backends_for_service (data-plane hot path, Iron rule 3).
+description: EndpointSlices that do not declare the requested Service port produce an empty eagerly compiled Service section instead of the historical silent unwrap_or(8080); use when reviewing no-port fail-close behavior and its current discovery-generation error mapping.
 knowledge_type: regression-guards
 ---
 
@@ -11,20 +11,31 @@ knowledge_type: regression-guards
 
 ## Conclusion
 
-`get_backends_for_service` (`edgion-gateway/src/backends/discovery/endpoint_slice/ep_slice_store.rs`)
-now **fails closed** when no EndpointSlice for the service declares a usable port: the
-`.find_map(...).unwrap_or(8080)` was replaced with a `let Some(port) = .find_map(...) else { return Vec::new(); }`.
-With no backends built, every caller's existing empty-list handling takes over and the data-plane
-selector returns `BackendEndpointSliceNotFoundByRoundRobinDefault` → **500**, which the access log
-records. The operator now sees a clear failure instead of traffic silently landing on a guessed
-port 8080 (which often still accepts the connection, making the misconfiguration invisible).
+The Gateway still **fails closed** when no EndpointSlice declares the requested Service port, but
+the active implementation is no longer `get_backends_for_service` or lazy selector hydration.
+`discovery/coordinator.rs::build_section` skips each slice that has no matching port. If none match,
+it publishes a resolved section with empty `all_slots` and `ready_slots`, plus
+`CompiledSelectors::build(empty)`, as part of the joint immutable discovery generation. No address
+or fallback port is fabricated.
 
-Re-reports of the form "`get_backends_for_service` falls back to port 8080 without warning",
-"baked-in 8080 magic constant misdirects traffic", or "no log when no port is found" are
-**not accepted** — verify the current `get_backends_for_service` returns `Vec::new()` on the
-no-port branch before re-reporting.
+On a request, `selector.rs::select_service_endpoint` captures the available Service projection and
+runtime snapshot from one published generation, resolves the requested section, selects from its
+already-compiled policy selector, and fails when that selector is empty. The verified mappings are:
 
-## What was wrong (before the fix)
+- an existing empty section using default round-robin returns
+  `BackendEndpointSliceNotFoundByRoundRobin`;
+- an absent Service projection returns `BackendEndpointSliceNotFoundByRoundRobinDefault`;
+- an invalid or missing requested section returns `BackendPortResolutionFailed`.
+
+The resulting diagnostic is owned by the normal request failure/access-log path. This preserves
+fail-close behavior without sending traffic to a guessed port.
+
+Re-reports of the form "the Gateway still falls back to port 8080" or "a no-port slice is dialed
+using a magic default" are **not accepted** unless current `build_section` again fabricates a port.
+
+## What was wrong before the fix
+
+The retired EndpointSlice store used this fallback:
 
 ```rust
 let port = slices
@@ -33,45 +44,45 @@ let port = slices
     .unwrap_or(8080);
 ```
 
-When every EndpointSlice for a service had `ports: None`, an empty ports list, or `port: None`
-(a portless / misconfigured Service that still receives routed traffic), the LB built backends
-with the magic constant 8080. The connection attempt succeeds at the socket layer but lands on
-the wrong port — connection refused or a wrong-application response — with **no signal** that a
-fallback occurred. `port_resolver::resolve_target_port_key` is not a safety net: it returns early
-when `br_port` is `None`, only *adjusts* an already-built address, and depends on the Service
-object being present in the store (not guaranteed under partial sync / restart / headless shapes).
+When every EndpointSlice for a service had `ports: None`, an empty ports list, or `port: None`, the
+LB built backends with the magic constant 8080. A connection could fail or reach the wrong
+application, while the configuration error itself remained hidden. This snippet and its
+`get_backends_for_service` call chain are historical evidence of the defect, not current behavior.
 
-## Why the fix is correct
+## Why the current design is correct
 
-Returning an empty backend list is the fail-closed direction: there is no correct port to use, so
-the gateway refuses to serve (500) rather than fabricate one. All four callers already handle the
-empty case correctly — data-plane `selector.rs::hydrate_cell_if_empty` (→ 500), control-plane
-`conf_handler_common.rs::update_*_lbs` (`replace_backends(empty)` clears stale entries),
-`preload.rs` (skips), and `health/check/manager.rs` (no backends to probe). No signature change.
+Publishing an empty resolved section is the fail-closed direction: there is no correct serving
+socket to place in `all_slots`, so all eager selectors are built empty. The section remains in the
+same immutable generation as its Service identity and runtime membership, preventing either a
+guessed address or a mixed-generation selector. Request processing performs no provider callback,
+hydration, or selector rebuild.
 
-## Fix Suggestions Not Accepted
+## Fix suggestions not accepted
 
-- **The issue's literal suggestion — "emit a `tracing::warn!` inside `get_backends_for_service`
-  naming the service key" — is not accepted.** That function is reached on the data-plane request
-  path via `selector.rs::hydrate_cell_if_empty` → `compiled_selector.rs::hydrate_if_empty`, which
-  **re-invokes the provider on every request while the cell is empty**. Since the fix makes the
-  cell stay empty for a no-port service, a warn there would re-fire per request (≈ once per QPS) —
-  exactly the "log explosion" that Iron rule 3 (`skills/03-coding/01-log-safety.md`) forbids on the
-  hot path. Observability is delivered through the access log's 500 status instead (project rule:
-  data plane logs only via access log / metrics, never `tracing::`).
-- "Keep 8080 as a configurable default" — there is no correct universal default; a portless
-  Service is a misconfiguration that should surface, not be papered over.
+- **Emit a `tracing::warn!` naming the service key on request failure.** The suggested historical
+  function is retired, and adding a new request-path `tracing::` event would violate binary-owned
+  logging, canonical access-log ownership of request failures, and observability restraint. The
+  selector returns the established `EdgionErrorCode`; normal access-log diagnostics carry the
+  request outcome without a parallel log channel.
+- **Keep 8080 as a configurable implicit default.** There is no correct universal default. Any
+  future default target port must come from an explicit operator-set field rather than a baked-in
+  fallback.
 
-## Re-evaluation Triggers
+## Re-evaluation triggers
 
 Re-open only if:
 
-- `get_backends_for_service` reverts to `unwrap_or(<any port>)` or otherwise fabricates a port.
-- A future requirement genuinely needs a default target port; that must come from an explicit,
-  operator-set field, not a baked-in constant, and must not add `tracing::` to this function.
+- `build_section` starts fabricating a port or admits a slice that does not match the requested
+  Service section.
+- A future requirement introduces an explicit default target-port policy; it must preserve schema,
+  publication, and observability boundaries rather than reviving an implicit constant.
 
-## Reference Cases
+## Reference cases
 
-- backends-F013 (review finding, 2026-05-24)
-- Iron rule 3 (`skills/03-coding/01-log-safety.md`) — why the suggested `tracing::warn!` was placed
-  off this path (access log carries the 500 instead).
+- backends-F013 (review finding, 2026-05-24).
+- `edgion-gateway/src/backends/discovery/coordinator.rs` — `build_section` and joint section
+  publication.
+- `edgion-gateway/src/backends/selector.rs` — `load_active_projection`,
+  `select_service_endpoint`, and current error mapping.
+- `skills/03-coding/observability/00-access-log.md` and `skills/03-coding/01-log-safety.md` —
+  canonical request diagnostics and observability restraint.

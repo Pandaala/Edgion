@@ -77,9 +77,9 @@ Re-open this decision only if:
 ## Reference Cases
 
 - link-sys-F011 (review finding, `tasks/link/`, 2026-05-25).
-- [lb-F010](../../lb/intentional-design/build-lock-single-mutex-intentional.md) — sibling concurrency
-  accepted-tradeoff: a coarse lock kept intentionally because the finer-grained "fix" is heavier
-  and riskier than the cold-path benefit.
+- [lb-F010](../../lb/superseded/build-lock-single-mutex-intentional.md) — historical, superseded
+  sibling: the former coarse-lock tradeoff was valid for its retired lazy selector model; it is
+  not current precedent for the webhook decision.
 - [link-sys-runtime-insert-remove-rcu.md](../regression-guards/link-sys-runtime-insert-remove-rcu.md) — the sibling
   `store.rs` stores that DO use `ArcSwap`, and why they can (single `Arc<Client>` per key, no
   coupled `JoinHandle`).

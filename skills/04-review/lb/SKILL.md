@@ -11,7 +11,6 @@ before applying a decision to current code.
 
 ## Intentional design
 
-- [lb-F010 — single `build_lock` covering all four policy slots is intentional — DESIGN-TRADEOFF](intentional-design/build-lock-single-mutex-intentional.md)
 - [lb-F011 — CRC32 session-affinity token is a stickiness hint, not a security boundary — DOCUMENTED](intentional-design/crc32-session-affinity-not-a-security-boundary.md)
 - [P2C choice count stays fixed at two — DESIGN-TRADEOFF](intentional-design/p2c-choice-count-fixed-at-two.md)
 
@@ -33,5 +32,6 @@ before applying a decision to current code.
 
 ## Superseded decisions
 
+- [lb-F010 — historical single `build_lock` tradeoff](superseded/build-lock-single-mutex-intentional.md)
 - [PolicyStore::remove_by_route Unconditional Clone in retain Closure](superseded/policy-store-remove-by-route-no-clone.md)
 - [LbBackend::update_ewma u64 Overflow](superseded/update-ewma-u128-intermediate.md)
