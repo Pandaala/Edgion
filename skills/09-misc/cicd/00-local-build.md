@@ -15,7 +15,7 @@ Use this skill to answer:
 
 - Gateway default features are `allocator-jemalloc` + `boringssl`; the Gateway
   always builds against the Edgion Pingora fork
-- The Edgion Pingora dependencies follow the `edgion_v3` branch, while the
+- The Edgion Pingora dependencies follow the `edgion_v4` branch, while the
   committed `Cargo.lock` pins the exact commit. Use `--locked` when reproducing
   CI or release builds.
 - proto generation is owned by member build scripts (notably `edgion-common/build.rs`), so a working `protoc` is required locally

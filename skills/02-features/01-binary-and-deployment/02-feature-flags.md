@@ -18,7 +18,6 @@ individual binary crates, so feature-selecting commands must name a package with
 | `boringssl` | Yes | No | No | Default and only supported Gateway TLS backend; mutually exclusive with `rustls` |
 | `rustls` | Dormant | No | No | Unsupported future-development seam; not a build, release, or runtime contract |
 | `fips` | Yes | No | No | Opt-in image build; implies `boringssl`, uses Boring 5's bundled FIPS module source by default |
-| `legacy_route_tests` | Yes | No | No | Non-default legacy test surface |
 
 Allocator selection and `#[global_allocator]` live in each binary entry point,
 not in a workspace-root library. Only the Gateway selects a TLS backend.
@@ -55,7 +54,7 @@ The Controller no longer links Pingora. TLS-backend selection is Gateway-local.
 
 The seven direct fork dependencies (`pingora-core`, `pingora-http`,
 `pingora-proxy`, `pingora-limits`, `pingora-load-balancing`, `pingora-ketama`,
-and `TinyUFO`) all track the fork's `edgion_v3` branch (`Pandaala/pingora`).
+and `TinyUFO`) all track the fork's `edgion_v4` branch (`Pandaala/pingora`).
 They must move as one source family; never pin or advance only one package.
 
 Reproducibility comes from the committed `Cargo.lock`, which records the exact

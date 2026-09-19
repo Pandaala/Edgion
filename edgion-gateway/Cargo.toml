@@ -40,12 +40,9 @@ rustls = [
 ]
 
 # BoringSSL FIPS-mode build. Opt-in image build only (NOT a default). The
-# canonical script builds Boring v5's bundled module source on amd64; its arm64
-# source build currently fails the upstream integrity self-test.
+# canonical amd64/arm64 builders compile Boring v5's bundled module source;
+# arm64 applies the pinned upstream integrity-relocation fix.
 fips = ["boringssl", "boring/fips"]
-
-# Legacy route tests using deprecated ZtraceHttpRoute (disabled by default)
-legacy_route_tests = []
 
 [dependencies]
 # Runtime-independent matching and data-structure algorithms.
@@ -159,7 +156,6 @@ metrics-util.workspace = true
 clap.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
-tracing-appender.workspace = true
 opentelemetry.workspace      = true
 opentelemetry_sdk.workspace  = true
 opentelemetry-otlp.workspace = true
@@ -174,7 +170,6 @@ httpdate.workspace = true
 # Form-body percent-encoding for outbound request bodies (BodySpec::Form).
 url = { workspace = true }
 
-rusqlite.workspace = true
 md-5.workspace = true
 cookie.workspace = true
 instant-acme.workspace = true
@@ -200,15 +195,10 @@ rustix = { version = "1.1", features = ["fs"] }
 
 [dev-dependencies]
 edgion-common = { workspace = true, features = ["test-util"] }
-tempfile.workspace = true
 wat.workspace = true
 h2.workspace = true
-tokio-tungstenite.workspace = true
 mockall.workspace = true
-colored.workspace = true
-console.workspace = true
 expect-test.workspace = true
-proxy-header.workspace = true
 wiremock.workspace = true
 proptest.workspace = true
 

@@ -71,7 +71,6 @@ See [cicd/02-github-workflow.md](cicd/02-github-workflow.md) for the full job br
 | `rustls` | Dormant future Gateway backend seam; unsupported | |
 | `allocator-mimalloc` | Use the mimalloc memory allocator | |
 | `allocator-system` | Use the system default allocator | |
-| `legacy_route_tests` | Enable legacy route tests | |
 | `fips` | Gateway opt-in FIPS BoringSSL image build and isolated verification | |
 
 > ⚠️ `boringssl` and `rustls` are mutually exclusive. BoringSSL is the only
