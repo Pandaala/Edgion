@@ -15,6 +15,14 @@ use crate::lb::backend::LbBackend;
 use rand::Rng;
 use std::sync::Arc;
 
+fn skip_excluded_index(raw: usize, excluded: usize) -> usize {
+    if raw >= excluded {
+        raw + 1
+    } else {
+        raw
+    }
+}
+
 /// Pick a backend via P2C.
 ///
 /// * `backends` — current snapshot list. Empty list returns `None`.
@@ -50,11 +58,8 @@ where
         let j = if n == 2 {
             1 - i
         } else {
-            let mut j = rng.random_range(0..n);
-            while j == i {
-                j = rng.random_range(0..n);
-            }
-            j
+            let raw = rng.random_range(0..n - 1);
+            skip_excluded_index(raw, i)
         };
         let a = &backends[i];
         let b = &backends[j];
@@ -118,6 +123,20 @@ mod tests {
         assert_eq!(picked.unwrap().inner().addr, healthy_addr);
     }
 
+    #[test]
+    fn skip_mapping_covers_every_non_excluded_index_exactly_once() {
+        for n in [3usize, 4, 7, 32, 257] {
+            for excluded in 0..n {
+                let mapped: Vec<_> = (0..n - 1).map(|raw| skip_excluded_index(raw, excluded)).collect();
+                let expected: Vec<_> = (0..n).filter(|&index| index != excluded).collect();
+
+                assert!(mapped.iter().all(|&index| index < n));
+                assert!(mapped.iter().all(|&index| index != excluded));
+                assert_eq!(mapped, expected);
+            }
+        }
+    }
+
     /// P2C distribution sanity check: with uniform metrics, no backend should
     /// be picked dramatically more or less than its fair share. This is a
     /// regression check for the "two-different-indices" sampling, not a
@@ -137,6 +156,7 @@ mod tests {
         let expected = trials / n;
         let lower = expected * 60 / 100; // 60% of fair share
         let upper = expected * 160 / 100; // 160% of fair share
+        assert_eq!(counts.len(), n, "every backend must receive at least one pick");
         for (addr, count) in &counts {
             assert!(
                 *count >= lower && *count <= upper,
