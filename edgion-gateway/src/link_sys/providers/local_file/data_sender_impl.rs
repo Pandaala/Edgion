@@ -29,14 +29,16 @@ fn compute_healthy(consecutive_flush_errors: u64, disk_ok: bool) -> bool {
     consecutive_flush_errors < UNHEALTHY_FLUSH_ERROR_THRESHOLD && disk_ok
 }
 
-/// Increment the dropped-log counter for the given log type.
-fn record_drop(log_type: LogType) {
-    match log_type {
-        LogType::Access => global_metrics().access_log_dropped(),
-        LogType::Ssl => global_metrics().ssl_log_dropped(),
-        LogType::Tcp => global_metrics().tcp_log_dropped(),
-        LogType::Tls => global_metrics().tls_log_dropped(),
-        LogType::Udp => global_metrics().udp_log_dropped(),
+impl LogType {
+    /// Increment the canonical dropped-log counter for this log type.
+    pub(crate) fn record_drop(self) {
+        match self {
+            LogType::Access => global_metrics().access_log_dropped(),
+            LogType::Ssl => global_metrics().ssl_log_dropped(),
+            LogType::Tcp => global_metrics().tcp_log_dropped(),
+            LogType::Tls => global_metrics().tls_log_dropped(),
+            LogType::Udp => global_metrics().udp_log_dropped(),
+        }
     }
 }
 
@@ -144,7 +146,7 @@ impl<W: Write> BatchSink<W> {
                     tracing::error!(error = %e, "Failed to buffer log line for local file");
                     self.buffer_error_logged = true;
                 }
-                record_drop(self.log_type);
+                self.log_type.record_drop();
             }
         }
     }
@@ -177,7 +179,7 @@ impl<W: Write> BatchSink<W> {
                 // still land these lines. The drop count is therefore
                 // best-effort-pessimistic, not exact.
                 for _ in 0..self.pending_lines {
-                    record_drop(self.log_type);
+                    self.log_type.record_drop();
                 }
                 false
             }
@@ -491,7 +493,7 @@ impl DataSender<String> for LocalFileWriter {
                     // Count any entries already queued before the open failed so
                     // the loss is observable.
                     while rx.try_recv().is_ok() {
-                        record_drop(log_type);
+                        log_type.record_drop();
                     }
                     return;
                 }
@@ -633,13 +635,13 @@ impl DataSender<String> for LocalFileWriter {
                 Err(std::sync::mpsc::TrySendError::Full(_)) => {
                     // Queue saturation is backpressure, NOT a health fault:
                     // count the drop but keep the sink healthy.
-                    record_drop(self.log_type);
+                    self.log_type.record_drop();
                 }
                 Err(std::sync::mpsc::TrySendError::Disconnected(_)) => {
                     // Writer thread has exited (panic / shutdown); it cannot
                     // recover, so report unhealthy for first-healthy fallback.
                     self.healthy.store(false, Ordering::Relaxed);
-                    record_drop(self.log_type);
+                    self.log_type.record_drop();
                 }
             }
         }

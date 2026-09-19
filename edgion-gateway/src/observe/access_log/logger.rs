@@ -1,16 +1,23 @@
 //! Access logger with pluggable data senders
 
-use crate::link_sys::{DataSender, LogMeta};
-use crate::observe::metrics::global_metrics;
+use crate::link_sys::{DataSender, LogMeta, LogType};
 
 /// Access logger that dispatches log entries to registered senders
 pub struct AccessLogger {
     senders: Vec<Box<dyn DataSender<String>>>,
+    log_type: LogType,
 }
 
 impl AccessLogger {
     pub fn new() -> Self {
-        Self { senders: Vec::new() }
+        Self::new_with_log_type(LogType::Access)
+    }
+
+    pub(crate) fn new_with_log_type(log_type: LogType) -> Self {
+        Self {
+            senders: Vec::new(),
+            log_type,
+        }
     }
 
     /// Register a data sender
@@ -36,17 +43,17 @@ impl AccessLogger {
     ///
     /// Routes to the first healthy sender only (Tier-1). If that sender's
     /// `send` fails (e.g. ES bulk channel momentarily full), the entry is
-    /// dropped and `edgion_access_log_dropped_total` is incremented (I4) —
+    /// dropped and the configured log type's dropped counter is incremented —
     /// the logger does NOT fall through to the next sender on a send error
     /// (that would be tier-2 send-fallback, intentionally out of scope).
     ///
     /// When all senders report unhealthy (e.g., writer task died, sender init
-    /// failed), the entry is dropped and `edgion_access_log_dropped_total` is
-    /// incremented so operators have a signal for sustained log loss.
+    /// failed), the entry is dropped and the configured log type's dropped
+    /// counter is incremented so operators have a signal for sustained loss.
     ///
-    /// A logger with zero senders is the "access logging disabled" no-op
-    /// installed by `init_access_logger` and silently drops without touching
-    /// the dropped metric — disabled is an operator choice, not a fault.
+    /// A logger with zero senders is a disabled no-op and silently drops
+    /// without touching the metric — disabled is an operator choice, not a
+    /// fault.
     pub async fn send(&self, data: String) {
         if self.senders.is_empty() {
             return;
@@ -54,19 +61,19 @@ impl AccessLogger {
         for sender in &self.senders {
             if sender.healthy() {
                 if sender.send(data).await.is_err() {
-                    global_metrics().access_log_dropped();
+                    self.log_type.record_drop();
                 }
                 return;
             }
         }
-        global_metrics().access_log_dropped();
+        self.log_type.record_drop();
     }
 
     /// Send log with pre-serialization metadata to the first healthy sender.
     ///
     /// Routes to the first healthy sender only (Tier-1). If that sender's
     /// `send_with_meta` fails, the entry is dropped and
-    /// `edgion_access_log_dropped_total` is incremented (I4) — the logger
+    /// the configured log type's dropped counter is incremented — the logger
     /// does NOT fall through to the next sender on a send error.
     ///
     /// Falls back to `send` for senders that do not override `send_with_meta`
@@ -78,12 +85,12 @@ impl AccessLogger {
         for sender in &self.senders {
             if sender.healthy() {
                 if sender.send_with_meta(data, meta).await.is_err() {
-                    global_metrics().access_log_dropped();
+                    self.log_type.record_drop();
                 }
                 return;
             }
         }
-        global_metrics().access_log_dropped();
+        self.log_type.record_drop();
     }
 }
 
@@ -170,6 +177,110 @@ mod tests {
             fail: Arc::clone(&fail),
         };
         (sender, received, fail)
+    }
+
+    fn assert_counter(rendered: &str, name: &str, value: u64) {
+        let expected = format!("{name} {value}");
+        assert!(
+            rendered.lines().any(|line| line == expected),
+            "expected {expected:?} in metrics:\n{rendered}"
+        );
+    }
+
+    fn assert_counter_absent(rendered: &str, name: &str) {
+        assert!(!rendered.contains(name), "unexpected {name} in metrics:\n{rendered}");
+    }
+
+    #[test]
+    fn drop_metrics_follow_logger_type_and_failure_path() {
+        const CHILD_ENV: &str = "EDGION_TYPED_LOG_DROP_METRICS_TEST_CHILD";
+        const TEST_MODULE: &str = "observe::access_log::logger::tests";
+        const TEST_NAME: &str = "drop_metrics_follow_logger_type_and_failure_path";
+
+        crate::test_subprocess::assert_in_subprocess(TEST_MODULE, TEST_NAME, CHILD_ENV, TEST_NAME, || {
+            let recorder = metrics_exporter_prometheus::PrometheusBuilder::new().build_recorder();
+            let handle = recorder.handle();
+            metrics::with_local_recorder(&recorder, || {
+                tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("test runtime must build")
+                    .block_on(async {
+                        let (sender, _, _) = fake("tcp-unhealthy", false);
+                        let mut tcp = AccessLogger::new_with_log_type(LogType::Tcp);
+                        tcp.register(Box::new(sender));
+                        tcp.send("tcp".into()).await;
+                        let rendered = handle.render();
+                        assert_counter(&rendered, "edgion_tcp_log_dropped_total", 1);
+                        assert_counter_absent(&rendered, "edgion_access_log_dropped_total");
+                        assert_counter_absent(&rendered, "edgion_tls_log_dropped_total");
+                        assert_counter_absent(&rendered, "edgion_udp_log_dropped_total");
+
+                        let (sender, _, _) = fake("tls-unhealthy", false);
+                        let mut tls = AccessLogger::new_with_log_type(LogType::Tls);
+                        tls.register(Box::new(sender));
+                        tls.send_with_meta("tls".into(), &LogMeta::default()).await;
+                        let rendered = handle.render();
+                        assert_counter(&rendered, "edgion_tls_log_dropped_total", 1);
+                        assert_counter(&rendered, "edgion_tcp_log_dropped_total", 1);
+                        assert_counter_absent(&rendered, "edgion_access_log_dropped_total");
+                        assert_counter_absent(&rendered, "edgion_udp_log_dropped_total");
+
+                        let (sender, _, _) = fake("udp-unhealthy", false);
+                        let mut udp = AccessLogger::new_with_log_type(LogType::Udp);
+                        udp.register(Box::new(sender));
+                        udp.send("udp".into()).await;
+                        let rendered = handle.render();
+                        assert_counter(&rendered, "edgion_udp_log_dropped_total", 1);
+                        assert_counter(&rendered, "edgion_tcp_log_dropped_total", 1);
+                        assert_counter(&rendered, "edgion_tls_log_dropped_total", 1);
+                        assert_counter_absent(&rendered, "edgion_access_log_dropped_total");
+
+                        let (remote, _, remote_fail) = fake("remote", true);
+                        let (fallback, fallback_received, _) = fake("fallback", true);
+                        remote_fail.store(true, Ordering::Relaxed);
+                        let mut remote_logger = AccessLogger::new_with_log_type(LogType::Tcp);
+                        remote_logger.register(Box::new(remote));
+                        remote_logger.register(Box::new(fallback));
+                        remote_logger.send("remote".into()).await;
+                        assert_eq!(fallback_received.load(Ordering::Relaxed), 0);
+                        assert_counter(&handle.render(), "edgion_tcp_log_dropped_total", 2);
+                        assert_counter(&handle.render(), "edgion_tls_log_dropped_total", 1);
+                        assert_counter(&handle.render(), "edgion_udp_log_dropped_total", 1);
+
+                        let (remote, _, remote_fail) = fake("remote-meta", true);
+                        remote_fail.store(true, Ordering::Relaxed);
+                        let mut remote_meta = AccessLogger::new_with_log_type(LogType::Tls);
+                        remote_meta.register(Box::new(remote));
+                        remote_meta
+                            .send_with_meta("remote-meta".into(), &LogMeta::default())
+                            .await;
+                        assert_counter(&handle.render(), "edgion_tls_log_dropped_total", 2);
+                        assert_counter(&handle.render(), "edgion_tcp_log_dropped_total", 2);
+                        assert_counter(&handle.render(), "edgion_udp_log_dropped_total", 1);
+
+                        let (sender, _, _) = fake("access-unhealthy", false);
+                        let mut access = AccessLogger::new();
+                        access.register(Box::new(sender));
+                        access.send("access".into()).await;
+                        assert_counter(&handle.render(), "edgion_access_log_dropped_total", 1);
+                        assert_counter(&handle.render(), "edgion_tcp_log_dropped_total", 2);
+                        assert_counter(&handle.render(), "edgion_tls_log_dropped_total", 2);
+                        assert_counter(&handle.render(), "edgion_udp_log_dropped_total", 1);
+
+                        let (sender, _, _) = fake("default-access-unhealthy", false);
+                        let mut default_access = AccessLogger::default();
+                        default_access.register(Box::new(sender));
+                        default_access.send("default-access".into()).await;
+                        assert_counter(&handle.render(), "edgion_access_log_dropped_total", 2);
+
+                        let zero_sender = AccessLogger::new_with_log_type(LogType::Udp);
+                        zero_sender.send_with_meta("disabled".into(), &LogMeta::default()).await;
+                        assert_counter(&handle.render(), "edgion_udp_log_dropped_total", 1);
+                        assert_counter_absent(&handle.render(), "edgion_ssl_log_dropped_total");
+                    });
+            });
+        });
     }
 
     #[tokio::test]

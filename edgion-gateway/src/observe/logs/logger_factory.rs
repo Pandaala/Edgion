@@ -84,7 +84,7 @@ pub async fn create_async_logger(config: &LogConfig, log_type: LogType) -> Resul
         return Ok(None);
     };
 
-    let mut logger = AccessLogger::new();
+    let mut logger = AccessLogger::new_with_log_type(log_type);
     logger.register(primary);
 
     // Optional fallback sender (first-healthy standby). A disabled fallback
@@ -152,6 +152,55 @@ mod tests {
     // `use super::*` brings in the gateway `LogType` that `create_async_logger` takes.
     use super::*;
     use edgion_resources::LinkSysRef;
+
+    fn assert_counter(rendered: &str, name: &str, value: u64) {
+        let expected = format!("{name} {value}");
+        assert!(
+            rendered.lines().any(|line| line == expected),
+            "expected {expected:?} in metrics:\n{rendered}"
+        );
+    }
+
+    #[test]
+    fn async_logger_propagates_log_type_to_drop_metric() {
+        const CHILD_ENV: &str = "EDGION_LOGGER_FACTORY_TYPED_DROP_TEST_CHILD";
+        const TEST_MODULE: &str = "observe::logs::logger_factory::tests";
+        const TEST_NAME: &str = "async_logger_propagates_log_type_to_drop_metric";
+
+        crate::test_subprocess::assert_in_subprocess(TEST_MODULE, TEST_NAME, CHILD_ENV, TEST_NAME, || {
+            let recorder = metrics_exporter_prometheus::PrometheusBuilder::new().build_recorder();
+            let handle = recorder.handle();
+            metrics::with_local_recorder(&recorder, || {
+                tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("test runtime must build")
+                    .block_on(async {
+                        let config = LogConfig {
+                            enabled: true,
+                            output: StringOutput::Otlp {
+                                link_sys_ref: LinkSysRef {
+                                    namespace: "factory-typed-drop".into(),
+                                    name: "missing-collector".into(),
+                                },
+                            },
+                            fallback: None,
+                        };
+                        let logger = create_async_logger(&config, LogType::Udp)
+                            .await
+                            .expect("logger construction must succeed")
+                            .expect("enabled output must produce a logger");
+                        logger.send("dropped".into()).await;
+
+                        let rendered = handle.render();
+                        assert_counter(&rendered, "edgion_udp_log_dropped_total", 1);
+                        assert!(!rendered.contains("edgion_access_log_dropped_total"));
+                        assert!(!rendered.contains("edgion_tcp_log_dropped_total"));
+                        assert!(!rendered.contains("edgion_tls_log_dropped_total"));
+                    });
+            });
+        });
+    }
 
     #[tokio::test]
     async fn missing_otlp_primary_starts_with_first_healthy_fallback() {

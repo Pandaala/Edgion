@@ -59,9 +59,10 @@ are checked in registration order and each entry is sent to the first sender
 whose live `healthy()` signal is true.
 
 - An error from the selected sender does not fall through to the next sender.
-  The entry is dropped and `edgion_access_log_dropped_total` is incremented.
-- If every configured sender is unhealthy, the entry is dropped and the same
-  metric is incremented.
+  The entry is dropped and the configured log type's corresponding
+  `edgion_{access,tcp,tls,udp}_log_dropped_total` counter is incremented.
+- If every configured sender is unhealthy, the entry is dropped and that same
+  typed counter is incremented.
 - A zero-sender logger represents logging disabled by the operator and does not
   increment the dropped metric.
 
