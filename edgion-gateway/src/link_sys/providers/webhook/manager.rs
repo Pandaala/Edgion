@@ -318,10 +318,15 @@ mod tests {
 
     #[test]
     fn configure_global_max_changes_value() {
-        configure_webhook_global_max(65536);
-        assert_eq!(get_webhook_global_max(), 65536);
-        // reset to default for other tests
-        configure_webhook_global_max(16384);
+        const CHILD_ENV: &str = "EDGION_WEBHOOK_GLOBAL_MAX_TEST_CHILD";
+        const TEST_MODULE: &str = "link_sys::providers::webhook::manager::tests";
+        const TEST_NAME: &str = "configure_global_max_changes_value";
+
+        crate::test_subprocess::assert_in_subprocess(TEST_MODULE, TEST_NAME, CHILD_ENV, TEST_NAME, || {
+            configure_webhook_global_max(65536);
+            assert_eq!(get_webhook_global_max(), 65536);
+            configure_webhook_global_max(16384);
+        });
     }
 
     #[test]
