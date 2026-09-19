@@ -109,8 +109,7 @@ impl DegradeThresholdStore {
                 self.services.remove(service_key);
             }
         }
-        crate::backends::discovery::get_service_discovery_coordinator()
-            .set_degrade_threshold(service_key, resolve_degrade_threshold(service_key));
+        crate::backends::discovery::get_service_discovery_coordinator().refresh_degrade_threshold(service_key);
     }
 
     fn get_override(&self, service_key: &str) -> Option<u8> {

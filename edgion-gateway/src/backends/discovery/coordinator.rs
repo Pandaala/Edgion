@@ -651,9 +651,12 @@ impl ServiceDiscoveryCoordinator {
         }
     }
 
-    pub(crate) fn set_degrade_threshold(&self, service_key: &str, degrade_threshold: u8) {
-        let _coordinator_guard = self.state.lock();
-        let generation = self.load_generation();
+    fn refresh_degrade_threshold_locked(
+        &self,
+        generation: &ServiceSelectorGeneration,
+        service_key: &str,
+        resolve: impl FnOnce() -> u8,
+    ) {
         let Some(service) = generation.available(service_key) else {
             return;
         };
@@ -662,6 +665,7 @@ impl ServiceDiscoveryCoordinator {
         if active.membership_identity != Some(service.membership_identity) {
             return;
         }
+        let degrade_threshold = resolve();
         Self::publish_policy_snapshot(
             service_key,
             &cell,
@@ -672,13 +676,31 @@ impl ServiceDiscoveryCoordinator {
         );
     }
 
+    fn refresh_degrade_threshold_with(&self, service_key: &str, resolve: impl FnOnce() -> u8) {
+        let _coordinator_guard = self.state.lock();
+        let generation = self.load_generation();
+        self.refresh_degrade_threshold_locked(&generation, service_key, resolve);
+    }
+
+    pub(crate) fn refresh_degrade_threshold(&self, service_key: &str) {
+        self.refresh_degrade_threshold_with(service_key, || {
+            crate::backends::degrade_threshold::resolve_degrade_threshold(service_key)
+        });
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_degrade_threshold(&self, service_key: &str, degrade_threshold: u8) {
+        self.refresh_degrade_threshold_with(service_key, || degrade_threshold);
+    }
+
     pub(crate) fn refresh_all_degrade_thresholds(&self) {
-        let keys: Vec<String> = self.load_generation().services.keys().cloned().collect();
+        let _coordinator_guard = self.state.lock();
+        let generation = self.load_generation();
+        let keys: Vec<String> = generation.services.keys().cloned().collect();
         for key in keys {
-            self.set_degrade_threshold(
-                &key,
-                crate::backends::degrade_threshold::resolve_degrade_threshold(&key),
-            );
+            self.refresh_degrade_threshold_locked(&generation, &key, || {
+                crate::backends::degrade_threshold::resolve_degrade_threshold(&key)
+            });
         }
     }
 
@@ -1993,6 +2015,36 @@ mod tests {
 
     fn health_policy(generation: u64) -> Arc<HealthPolicyIdentity> {
         Arc::new(HealthPolicyIdentity { generation })
+    }
+
+    #[test]
+    fn degrade_threshold_resolver_runs_under_coordinator_lock() {
+        let coordinator = Arc::new(ServiceDiscoveryCoordinator::new());
+        publish_base(&coordinator);
+        let service = coordinator
+            .load_generation()
+            .available("default/backend")
+            .cloned()
+            .expect("base service must be available");
+        let before = service.runtime_cell.active.load_full();
+
+        let lock_probe = Arc::clone(&coordinator);
+        coordinator.refresh_degrade_threshold_with("default/backend", move || {
+            assert!(
+                lock_probe.state.try_lock().is_none(),
+                "degrade threshold must resolve after acquiring coordinator state"
+            );
+            73
+        });
+
+        let after = service.runtime_cell.active.load_full();
+        assert_eq!(after.degrade_threshold, 73);
+        assert_eq!(after.membership_identity, before.membership_identity);
+        assert!(Arc::ptr_eq(&after.entries, &before.entries));
+        assert_eq!(after.health_policy_present, before.health_policy_present);
+        assert_eq!(after.outlier_policy_present, before.outlier_policy_present);
+        assert!(before.degrade_selections.is_none());
+        assert!(after.degrade_selections.is_none());
     }
 
     #[test]
