@@ -54,4 +54,4 @@
 ## Handoff
 
 - Ledger/changelog updated: yes.
-- Commit: source/support changes absorbed by external commit `28de28f50d37149f83b4174c2be429217e9ca93f`; campaign records committed separately.
+- Commit: source/support changes absorbed by external commit `28de28f50d37149f83b4174c2be429217e9ca93f`; initial campaign records committed in `8a32f09f074e3280dd9b500810481c62a72613b6`.
