@@ -361,14 +361,14 @@ impl EdgionGatewayCli {
         wd.validate()
             .map_err(|e| anyhow!("Work directory validation failed: {}", e))?;
 
-        tracing::info!(
-            work_dir = %wd.base().display(),
-            "Work directory initialized"
-        );
-
         // 4. Initialize logging (at outermost level, keep WorkerGuard alive)
         let log_config = config.to_log_config();
         let _log_guard = runtime.block_on(init_logging(log_config))?;
+        tracing::info!(
+            component = "startup",
+            work_dir = %wd.base().display(),
+            "Work directory initialized"
+        );
 
         // Logging is live from here on. Run the serving body and, on failure,
         // record the error through structured logging while `_log_guard` is
@@ -461,10 +461,7 @@ impl EdgionGatewayCli {
         let require_fips = config.gateway.require_fips
             || config::require_fips_env_enabled(std::env::var(config::REQUIRE_FIPS_ENV).ok().as_deref());
 
-        if let Err(msg) = config::check_fips_requirement(require_fips, fips_available) {
-            tracing::error!(target: "startup", "{msg}");
-            std::process::exit(1);
-        }
+        config::check_fips_requirement(require_fips, fips_available).map_err(anyhow::Error::msg)?;
 
         // Posture guardrail: a FIPS node running a binary without BoringSSL
         // FIPS mode. WARN rather than exit, because `fips_enabled=1` is a
