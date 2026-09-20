@@ -14,7 +14,6 @@ use std::time::Instant;
 
 use crate::ctx::NormalizedHostname;
 use crate::observe::AccessLogger;
-use edgion_resources::resources::edgion_gateway_config::EdgionGatewayConfig;
 
 #[derive(Serialize)]
 struct RedirectRequestInfo<'a> {
@@ -50,6 +49,7 @@ pub struct RedirectContext {
     pub path: String,
     pub status: u16,
     pub redirect_url: String,
+    pub reject_duplicate_host: bool,
 }
 
 /// HTTP to HTTPS redirect proxy
@@ -66,23 +66,18 @@ pub struct EdgionHttpRedirectProxy {
     pub https_port: u16,
     /// Access logger for recording redirect events
     pub access_logger: Arc<AccessLogger>,
-    /// Carries `SecurityProtectConfig.reject_duplicate_host` so the redirect
-    /// listener applies the same RFC 9110 §7.2 host smuggling defense as the
-    /// main proxy path.
-    pub edgion_gateway_config: Arc<EdgionGatewayConfig>,
+    /// EGC name used to load the request-scoped duplicate-Host policy.
+    /// `None` selects the built-in safe default.
+    pub http_request_config_name: Option<String>,
 }
 
 impl EdgionHttpRedirectProxy {
     /// Create a new HTTP to HTTPS redirect handler
-    pub fn new(
-        https_port: u16,
-        access_logger: Arc<AccessLogger>,
-        edgion_gateway_config: Arc<EdgionGatewayConfig>,
-    ) -> Self {
+    pub fn new(https_port: u16, access_logger: Arc<AccessLogger>, http_request_config_name: Option<String>) -> Self {
         Self {
             https_port,
             access_logger,
-            edgion_gateway_config,
+            http_request_config_name,
         }
     }
 
@@ -122,6 +117,7 @@ impl ProxyHttp for EdgionHttpRedirectProxy {
     type CTX = RedirectContext;
 
     fn new_ctx(&self) -> Self::CTX {
+        let request_config = crate::config::get_resolved_http_request_config(self.http_request_config_name.as_deref());
         RedirectContext {
             start_time: Instant::now(),
             direct_peer_ip: String::new(),
@@ -130,6 +126,7 @@ impl ProxyHttp for EdgionHttpRedirectProxy {
             path: String::new(),
             status: 0,
             redirect_url: String::new(),
+            reject_duplicate_host: request_config.reject_duplicate_host,
         }
     }
 
@@ -163,14 +160,7 @@ impl ProxyHttp for EdgionHttpRedirectProxy {
         // cannot smuggle a Host through the HTTP→HTTPS redirect listener (which
         // would otherwise echo the attacker-controlled first Host into the 301
         // `Location:` URL).
-        let reject_duplicate_host = self
-            .edgion_gateway_config
-            .spec
-            .security_protect
-            .as_ref()
-            .map(|s| s.reject_duplicate_host)
-            .unwrap_or(true);
-        if reject_duplicate_host && req_header.headers.get_all("host").iter().count() > 1 {
+        if ctx.reject_duplicate_host && req_header.headers.get_all("host").iter().count() > 1 {
             ctx.status = 400;
             let mut resp = ResponseHeader::build(StatusCode::BAD_REQUEST, Some(2))?;
             resp.insert_header("Content-Length", "0")?;
@@ -252,8 +242,10 @@ impl ProxyHttp for EdgionHttpRedirectProxy {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use edgion_resources::resources::edgion_gateway_config::EdgionGatewayConfigSpec;
+    use crate::backends::degrade_threshold::GLOBAL_STORE_TEST_LOCK;
     use edgion_resources::sensitive::{SensitiveMode, SENSITIVE_MODE};
+    use edgion_resources::EdgionGatewayConfig;
+    use std::collections::{HashMap, HashSet};
     use std::sync::atomic::Ordering;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -285,22 +277,18 @@ mod tests {
         Arc::new(AccessLogger::new())
     }
 
-    fn test_gateway_config() -> Arc<EdgionGatewayConfig> {
-        Arc::new(EdgionGatewayConfig::new("test", EdgionGatewayConfigSpec::default()))
-    }
-
     #[test]
     fn test_redirect_creation() {
-        let redirect = EdgionHttpRedirectProxy::new(443, test_access_logger(), test_gateway_config());
+        let redirect = EdgionHttpRedirectProxy::new(443, test_access_logger(), None);
         assert_eq!(redirect.https_port, 443);
 
-        let redirect = EdgionHttpRedirectProxy::new(8443, test_access_logger(), test_gateway_config());
+        let redirect = EdgionHttpRedirectProxy::new(8443, test_access_logger(), None);
         assert_eq!(redirect.https_port, 8443);
     }
 
     #[test]
     fn test_build_redirect_url_default_port() {
-        let redirect = EdgionHttpRedirectProxy::new(443, test_access_logger(), test_gateway_config());
+        let redirect = EdgionHttpRedirectProxy::new(443, test_access_logger(), None);
 
         // Simple path
         assert_eq!(
@@ -323,7 +311,7 @@ mod tests {
 
     #[test]
     fn test_build_redirect_url_custom_port() {
-        let redirect = EdgionHttpRedirectProxy::new(8443, test_access_logger(), test_gateway_config());
+        let redirect = EdgionHttpRedirectProxy::new(8443, test_access_logger(), None);
 
         // Simple path
         assert_eq!(
@@ -346,7 +334,7 @@ mod tests {
 
     #[test]
     fn test_build_redirect_url_special_cases() {
-        let redirect = EdgionHttpRedirectProxy::new(443, test_access_logger(), test_gateway_config());
+        let redirect = EdgionHttpRedirectProxy::new(443, test_access_logger(), None);
 
         // IPv4 address
         assert_eq!(
@@ -399,7 +387,7 @@ mod tests {
 
     #[test]
     fn test_new_ctx() {
-        let redirect = EdgionHttpRedirectProxy::new(443, test_access_logger(), test_gateway_config());
+        let redirect = EdgionHttpRedirectProxy::new(443, test_access_logger(), None);
         let _ctx = redirect.new_ctx(); // Should not panic
     }
 
@@ -447,7 +435,7 @@ mod tests {
                 ("Host: :8080\r\n", 400),
             ] {
                 for client_close in [false, true] {
-                    let redirect = EdgionHttpRedirectProxy::new(443, test_access_logger(), test_gateway_config());
+                    let redirect = EdgionHttpRedirectProxy::new(443, test_access_logger(), None);
                     let (mut client, server) = tokio::io::duplex(4096);
                     let connection = if client_close { "Connection: close\r\n" } else { "" };
                     client
@@ -504,8 +492,95 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn redirect_duplicate_host_gate_uses_the_request_pinned_egc_generation() {
+        let (redirect, mut pinned_true, mut updated_false) = {
+            let _guard = GLOBAL_STORE_TEST_LOCK.lock();
+            let handler = crate::config::edgion_gateway::create_edgion_gateway_config_handler();
+            let config = |reject_duplicate_host| {
+                serde_json::from_value::<EdgionGatewayConfig>(serde_json::json!({
+                    "apiVersion": "edgion.io/v1",
+                    "kind": "EdgionGatewayConfig",
+                    "metadata": {"name": "redirect-duplicate-host-policy"},
+                    "spec": {"securityProtect": {"rejectDuplicateHost": reject_duplicate_host}}
+                }))
+                .unwrap()
+            };
+            handler.full_set(&HashMap::from([(
+                "redirect-duplicate-host-policy".to_string(),
+                Arc::new(config(true)),
+            )]));
+            let redirect = EdgionHttpRedirectProxy::new(
+                443,
+                test_access_logger(),
+                Some("redirect-duplicate-host-policy".to_string()),
+            );
+            let pinned_true = redirect.new_ctx();
+
+            handler.partial_update(
+                HashMap::new(),
+                HashMap::from([("redirect-duplicate-host-policy".to_string(), Arc::new(config(false)))]),
+                HashSet::new(),
+            );
+            let updated_false = redirect.new_ctx();
+            assert!(pinned_true.reject_duplicate_host);
+            assert!(!updated_false.reject_duplicate_host);
+
+            handler.partial_update(
+                HashMap::new(),
+                HashMap::new(),
+                HashSet::from(["redirect-duplicate-host-policy".to_string()]),
+            );
+            assert!(redirect.new_ctx().reject_duplicate_host);
+            assert!(
+                EdgionHttpRedirectProxy::new(443, test_access_logger(), Some("missing".to_string()))
+                    .new_ctx()
+                    .reject_duplicate_host
+            );
+            assert!(
+                EdgionHttpRedirectProxy::new(443, test_access_logger(), None)
+                    .new_ctx()
+                    .reject_duplicate_host
+            );
+            handler.full_set(&HashMap::new());
+            (redirect, pinned_true, updated_false)
+        };
+
+        let request =
+            b"GET /path?query=1 HTTP/1.1\r\nHost: first.test\r\nHost: second.test\r\nConnection: close\r\n\r\n";
+
+        let (mut rejected_client, rejected_server) = tokio::io::duplex(4096);
+        rejected_client.write_all(request).await.unwrap();
+        let mut rejected_session = Session::new_h1(Box::new(rejected_server));
+        assert!(rejected_session.read_request().await.unwrap());
+        assert!(redirect
+            .request_filter(&mut rejected_session, &mut pinned_true)
+            .await
+            .unwrap());
+        assert_eq!(pinned_true.status, 400);
+        drop(rejected_session);
+        let mut rejected_wire = String::new();
+        rejected_client.read_to_string(&mut rejected_wire).await.unwrap();
+        assert!(rejected_wire.starts_with("HTTP/1.1 400"));
+
+        let (mut allowed_client, allowed_server) = tokio::io::duplex(4096);
+        allowed_client.write_all(request).await.unwrap();
+        let mut allowed_session = Session::new_h1(Box::new(allowed_server));
+        assert!(allowed_session.read_request().await.unwrap());
+        assert!(redirect
+            .request_filter(&mut allowed_session, &mut updated_false)
+            .await
+            .unwrap());
+        assert_eq!(updated_false.status, 301);
+        drop(allowed_session);
+        let mut allowed_wire = String::new();
+        allowed_client.read_to_string(&mut allowed_wire).await.unwrap();
+        assert!(allowed_wire.starts_with("HTTP/1.1 301"));
+        assert!(allowed_wire.contains("\r\nLocation: https://first.test/path?query=1\r\n"));
+    }
+
+    #[tokio::test]
     async fn redirect_wire_preserves_query_percent_encoding_ipv6_port_and_client_requested_close() {
-        let redirect = EdgionHttpRedirectProxy::new(8443, test_access_logger(), test_gateway_config());
+        let redirect = EdgionHttpRedirectProxy::new(8443, test_access_logger(), None);
         let (mut client, server) = tokio::io::duplex(4096);
         // Pingora derives the response Connection header from session keepalive;
         // exercise the client-requested close branch without changing that policy.

@@ -2605,6 +2605,10 @@ pub struct EdgionHttpContext {
     /// snapshot as the request-body and forwarded-identity policies.
     pub(crate) preflight_policy: ResolvedPreflightPolicy,
 
+    /// Whether duplicate HTTP/1.1 Host field lines are rejected. Captured from
+    /// the same immutable EGC snapshot as the other request-scoped policies.
+    pub(crate) reject_duplicate_host: bool,
+
     /// Full request-body cache and mutation framing state. Its read-only view
     /// stays available through the final upstream-response header plugin chain
     /// and is then released before streaming the response.
@@ -3583,6 +3587,7 @@ impl EdgionHttpContext {
             request_body_config: crate::request_body::ResolvedRequestBodyConfig::default(),
             remote_ip_header: http::HeaderName::from_static("x-real-ip"),
             preflight_policy: ResolvedPreflightPolicy::default(),
+            reject_duplicate_host: true,
             request_body: RequestBodyState::default(),
             request_body_plugins: None,
             ai_state: None,

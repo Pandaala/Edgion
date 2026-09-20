@@ -163,7 +163,7 @@ pub fn add_http_listener(
         let redirect_handler = EdgionHttpRedirectProxy::new(
             https_port,
             context.access_logger.clone(),
-            context.edgion_gateway_config.clone(),
+            context.edgion_gateway_config_name.clone(),
         );
         let mut http_service = http_proxy_service(&context.server_conf, redirect_handler);
         apply_connection_filter(&mut http_service, context);

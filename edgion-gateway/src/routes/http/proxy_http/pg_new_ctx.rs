@@ -18,6 +18,7 @@ pub fn new_ctx(edgion_http: &EdgionHttpProxy) -> EdgionHttpContext {
     ctx.request_body_config = request_config.request_body;
     ctx.remote_ip_header = request_config.remote_ip_header;
     ctx.preflight_policy = request_config.preflight_policy;
+    ctx.reject_duplicate_host = request_config.reject_duplicate_host;
     global_metrics().ctx_created();
     ctx
 }
@@ -53,9 +54,11 @@ mod tests {
         }
     }
 
-    fn config(name: &str, mode: PreflightMode, status_code: u16) -> EdgionGatewayConfig {
+    fn config(name: &str, mode: PreflightMode, status_code: u16, reject_duplicate_host: bool) -> EdgionGatewayConfig {
         let mut config = EdgionGatewayConfig::new(name, Default::default());
         config.spec.preflight_policy = Some(PreflightPolicy { mode, status_code });
+        config.spec.security_protect =
+            Some(serde_json::from_value(serde_json::json!({"rejectDuplicateHost": reject_duplicate_host})).unwrap());
         config
     }
 
@@ -65,7 +68,7 @@ mod tests {
         let handler = crate::config::edgion_gateway::create_edgion_gateway_config_handler();
         handler.full_set(&HashMap::from([(
             "policy".to_string(),
-            Arc::new(config("policy", PreflightMode::AllOptions, 299)),
+            Arc::new(config("policy", PreflightMode::AllOptions, 299, false)),
         )]));
         let mut proxy = proxy(Some("policy"));
 
@@ -77,12 +80,13 @@ mod tests {
                 status_code: 299,
             }
         );
+        assert!(!in_flight.reject_duplicate_host);
 
         handler.partial_update(
             HashMap::new(),
             HashMap::from([(
                 "policy".to_string(),
-                Arc::new(config("policy", PreflightMode::CorsStandard, 205)),
+                Arc::new(config("policy", PreflightMode::CorsStandard, 205, true)),
             )]),
             HashSet::new(),
         );
@@ -94,6 +98,7 @@ mod tests {
                 status_code: 205,
             }
         );
+        assert!(updated.reject_duplicate_host);
         assert_eq!(
             in_flight.preflight_policy,
             ResolvedPreflightPolicy {
@@ -101,13 +106,17 @@ mod tests {
                 status_code: 299,
             }
         );
+        assert!(!in_flight.reject_duplicate_host);
 
         handler.partial_update(HashMap::new(), HashMap::new(), HashSet::from(["policy".to_string()]));
         assert_eq!(new_ctx(&proxy).preflight_policy, ResolvedPreflightPolicy::default());
+        assert!(new_ctx(&proxy).reject_duplicate_host);
         proxy.http_request_config_name = Some("missing".to_string());
         assert_eq!(new_ctx(&proxy).preflight_policy, ResolvedPreflightPolicy::default());
+        assert!(new_ctx(&proxy).reject_duplicate_host);
         proxy.http_request_config_name = None;
         assert_eq!(new_ctx(&proxy).preflight_policy, ResolvedPreflightPolicy::default());
+        assert!(new_ctx(&proxy).reject_duplicate_host);
 
         handler.full_set(&HashMap::new());
     }

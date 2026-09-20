@@ -22,15 +22,16 @@ Suggestions of the form "accept and pick the first/last Host", "downgrade to `tr
 
 ## Code shape today
 
-- `pg_request_filter.rs::build_request_metadata` — generates `x_trace_id` first (so the rejection's access-log entry is correlatable with `tls.log`), then counts `req_header.headers.get_all("host")` before path/ACME/hostname extraction; `>1` ⇒ `record_error(EdgionErrorCode::DuplicateHostHeader) + end_response_400`.
-- `redirect_http.rs::EdgionHttpRedirectProxy::request_filter` — same gate at the top of the HTTP→HTTPS redirect listener; prevents an attacker from echoing a smuggled Host into the 301 `Location:` URL.
+- `conf_handler_impl.rs::ResolvedHttpRequestConfig` — resolves the switch into the immutable EGC request snapshot with a safe `true` fallback for an absent, missing, or deleted configuration.
+- `pg_new_ctx.rs` + `pg_request_filter.rs::build_request_metadata` — each ordinary HTTP request captures the switch with the request-body, RemoteIp-header, and preflight policies from one publication generation. The filter generates `x_trace_id` first (so the rejection's access-log entry is correlatable with `tls.log`), then counts `req_header.headers.get_all("host")` before path/ACME/hostname extraction; `>1` ⇒ `record_error(EdgionErrorCode::DuplicateHostHeader) + end_response_400`.
+- `redirect_http.rs::EdgionHttpRedirectProxy::{new_ctx,request_filter}` — the redirect listener retains only the referenced EGC name; each new context captures the current switch, and the request filter applies the same gate before it can echo a Host into the 301 `Location:` URL.
 - `edgion_gateway_config.rs::SecurityProtectConfig.reject_duplicate_host: bool` — default `true` (`default_reject_duplicate_host`).
 - `diagnostic.rs::EdgionErrorCode::DuplicateHostHeader` — stable string code emitted with intrinsic `kind: "error"`; HTTP 400 is selected explicitly by the response path.
 - Integration: `edgion-tests/src/client/suites/http_route/filters/security.rs` — `test_duplicate_host_headers` (same-case `Host:` × 2) and `test_duplicate_host_headers_mixed_case` (`Host:` + `host:`); both raw TCP, both assert HTTP/1.1 400.
 
 ### Test coverage gaps (intentional)
 
-- **Opt-out path** (`rejectDuplicateHost: false` → duplicates accepted): not covered as a wire test because it requires a separate suite with its own `EdgionGatewayConfig` YAML (the shared `HTTPRoute/Filters/Security` suite cannot toggle the flag mid-run). The unit-level `unwrap_or(true)` default path is exercised by the existing positive cases.
+- **Cross-process hot reload**: update/delete behavior is covered at the snapshot, ordinary-consumer, and redirect wire-unit boundaries. The frozen integration suite does not yet update the EGC while both listener types are serving.
 - **gRPC-over-h1 → `grpc-status=3`**: `end_response_400` is verified by code inspection to call `send_grpc_error_three_frame(..., 400)` (maps to `INVALID_ARGUMENT`), but raw-TCP wire assertions for HTTP/1.1 trailers are too brittle to add here — pingora's `write_response_trailers` is designed for HTTP/2 framing. An h2-native scenario would be more reliable if real test coverage of this path is needed.
 
 ## Known limitation
@@ -40,7 +41,7 @@ Suggestions of the form "accept and pick the first/last Host", "downgrade to `tr
 ## Why this shape
 
 1. **RFC 9110 §7.2 MUST + Envoy parity.** Envoy reaches the same 400 via inline-header coalescing into `:authority` + `authorityIsValid` (comma rejection) — no runtime override. Edgion arrives at the same observable outcome via an explicit per-header count.
-2. **Default-on, opt-out via config.** Mirrors `requireSniHostMatch` in the same struct: safe out of the box, operator escape hatch for migration.
+2. **Default-on, opt-out via config.** Mirrors `requireSniHostMatch` in the same struct: safe out of the box, operator escape hatch for migration. EGC updates affect newly created ordinary and redirect request contexts without rebinding listeners; in-flight requests retain their captured generation. Deletion, a missing reference, and no reference all restore `true`.
 3. **HTTP/2 / gRPC-over-h2 untouched.** h2 stores authority in `:authority`; `get_all("host")` is normally empty there so the branch is a no-op.
 4. **Hot-path zero cost on legitimate traffic.** Single `count() > 1` check before any allocating work.
 

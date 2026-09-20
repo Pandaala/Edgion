@@ -55,6 +55,7 @@ pub(crate) struct ResolvedHttpRequestConfig {
     pub(crate) request_body: ResolvedRequestBodyConfig,
     pub(crate) remote_ip_header: http::HeaderName,
     pub(crate) preflight_policy: ResolvedPreflightPolicy,
+    pub(crate) reject_duplicate_host: bool,
 }
 
 impl ResolvedHttpRequestConfig {
@@ -80,6 +81,12 @@ impl ResolvedHttpRequestConfig {
             request_body: ResolvedRequestBodyConfig::resolve(&config.spec.request_body),
             remote_ip_header,
             preflight_policy: ResolvedPreflightPolicy::resolve(config.spec.preflight_policy.as_ref()),
+            reject_duplicate_host: config
+                .spec
+                .security_protect
+                .as_ref()
+                .map(|security| security.reject_duplicate_host)
+                .unwrap_or(true),
         }
     }
 }
@@ -90,6 +97,7 @@ impl Default for ResolvedHttpRequestConfig {
             request_body: ResolvedRequestBodyConfig::default(),
             remote_ip_header: default_remote_ip_header(),
             preflight_policy: ResolvedPreflightPolicy::default(),
+            reject_duplicate_host: true,
         }
     }
 }
@@ -687,6 +695,8 @@ mod tests {
             mode: PreflightMode::AllOptions,
             status_code: 299,
         });
+        initial.spec.security_protect =
+            Some(serde_json::from_value(serde_json::json!({"rejectDuplicateHost": false})).unwrap());
         let mut add = HashMap::new();
         add.insert("http-request-policy".to_string(), Arc::new(initial));
         handler.partial_update(add, HashMap::new(), HashSet::new());
@@ -707,6 +717,7 @@ mod tests {
                 status_code: 299,
             }
         );
+        assert!(!in_flight.reject_duplicate_host);
 
         let mut updated = make_config("http-request-policy");
         updated.spec.forwarded_headers.remote_ip_header = "X-Updated-Remote-IP".to_string();
@@ -717,6 +728,8 @@ mod tests {
             mode: PreflightMode::CorsStandard,
             status_code: 205,
         });
+        updated.spec.security_protect =
+            Some(serde_json::from_value(serde_json::json!({"rejectDuplicateHost": true})).unwrap());
         let mut update = HashMap::new();
         update.insert("http-request-policy".to_string(), Arc::new(updated));
         handler.partial_update(HashMap::new(), update, HashSet::new());
@@ -734,6 +747,7 @@ mod tests {
                 status_code: 205,
             }
         );
+        assert!(next.reject_duplicate_host);
         assert_eq!(in_flight.remote_ip_header, "x-initial-remote-ip");
         assert!(!in_flight.request_body.enabled);
         assert_eq!(in_flight.request_body.memory_buffer_bytes, 256 * 1024);
@@ -749,6 +763,7 @@ mod tests {
                 status_code: 299,
             }
         );
+        assert!(!in_flight.reject_duplicate_host);
 
         handler.partial_update(
             HashMap::new(),
@@ -759,6 +774,7 @@ mod tests {
         assert_eq!(get_resolved_http_request_config(Some("http-request-policy")), default);
         assert_eq!(get_resolved_http_request_config(Some("missing")), default);
         assert_eq!(get_resolved_http_request_config(None), default);
+        assert!(default.reject_duplicate_host);
     }
 
     #[test]

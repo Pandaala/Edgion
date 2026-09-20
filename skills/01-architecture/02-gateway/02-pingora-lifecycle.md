@@ -9,10 +9,16 @@ description: Pingora ProxyHttp lifecycle callbacks — 8-phase processing chain,
 
 Before Phase 1, `new_ctx` performs one lock-free lookup in the immutable
 `EdgionGatewayConfig` snapshot selected by the listener's GatewayClass. It copies
-the resolved request-body limits, upstream RemoteIp header, and global preflight
-mode/status into the request context. Those values come from one publication
-generation and remain pinned for the request; an EGC hot update affects only
-contexts created afterward and does not require rebuilding the listener.
+the resolved request-body limits, upstream RemoteIp header, global preflight
+mode/status, and duplicate-Host rejection policy into the request context. Those
+values come from one publication generation and remain pinned for the request;
+an EGC hot update affects only contexts created afterward and does not require
+rebuilding the listener.
+
+The dedicated HTTP-to-HTTPS redirect proxy uses the same request boundary for
+its duplicate-Host policy. Its listener retains the referenced EGC name, and
+each redirect context performs one snapshot lookup in `new_ctx`; missing,
+deleted, or unnamed configurations use the safe reject-by-default policy.
 
 ## ProxyHttp 8-phase callback chain
 
