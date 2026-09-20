@@ -44,7 +44,7 @@
 ## Handoff
 
 - Ledger/changelog updated: yes.
-- Commit: pending; it will be backfilled by the next batch.
+- Commit: `f7b281cfe40536ddcfaf8085a465d3b97cfaf4b6`.
 
 ## Protected paths
 
