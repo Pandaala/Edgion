@@ -20,7 +20,32 @@ pub mod config;
 mod pingora;
 
 use crate::conf_sync::init_global_config_client;
-use config::EdgionGatewayConfig;
+use config::{EdgionGatewayConfig, MAX_UNKNOWN_CONFIG_FIELDS};
+
+fn report_unknown_config_fields<'a>(
+    config_file: &str,
+    field_paths: impl IntoIterator<Item = &'a str>,
+    truncated: bool,
+) {
+    for field_path in field_paths {
+        tracing::warn!(
+            component = "config",
+            config_file,
+            field_path,
+            action = "ignored",
+            "Gateway process configuration contains an unknown field"
+        );
+    }
+    if truncated {
+        tracing::warn!(
+            component = "config",
+            config_file,
+            reported_fields = MAX_UNKNOWN_CONFIG_FIELDS,
+            action = "ignored",
+            "Additional unknown Gateway process configuration fields were omitted from diagnostics"
+        );
+    }
+}
 
 #[derive(Parser, Debug)]
 #[command(
@@ -344,7 +369,8 @@ impl EdgionGatewayCli {
         let runtime = tokio::runtime::Runtime::new()?;
 
         // 1. Load configuration (synchronous)
-        let config = EdgionGatewayConfig::load(self.config.clone())?;
+        let loaded_config = EdgionGatewayConfig::load(self.config.clone())?;
+        let config = loaded_config.config;
 
         // 2. Determine work_dir (priority: CLI > ENV > Config > Default)
         let work_dir_path = self
@@ -364,6 +390,11 @@ impl EdgionGatewayCli {
         // 4. Initialize logging (at outermost level, keep WorkerGuard alive)
         let log_config = config.to_log_config();
         let _log_guard = runtime.block_on(init_logging(log_config))?;
+        report_unknown_config_fields(
+            self.config.config_file.as_deref().unwrap_or("<none>"),
+            loaded_config.unknown_fields.paths(),
+            loaded_config.unknown_fields.is_truncated(),
+        );
         tracing::info!(
             component = "startup",
             work_dir = %wd.base().display(),
@@ -775,6 +806,88 @@ impl EdgionGatewayCli {
 
         tracing::info!(component = "gateway", "Gateway shutdown complete");
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod config_warning_tests {
+    use super::{config::EdgionGatewayConfig, report_unknown_config_fields};
+    use std::io::{self, Write};
+    use std::sync::Arc;
+    use tracing_subscriber::fmt::MakeWriter;
+
+    #[derive(Clone, Default)]
+    struct TestWriter(Arc<parking_lot::Mutex<Vec<u8>>>);
+
+    struct TestWriterGuard<'a>(parking_lot::MutexGuard<'a, Vec<u8>>);
+
+    impl Write for TestWriterGuard<'_> {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.0.write(buf)
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            self.0.flush()
+        }
+    }
+
+    impl<'a> MakeWriter<'a> for TestWriter {
+        type Writer = TestWriterGuard<'a>;
+
+        fn make_writer(&'a self) -> Self::Writer {
+            TestWriterGuard(self.0.lock())
+        }
+    }
+
+    #[test]
+    fn unknown_process_config_warning_is_structured_and_value_free() {
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        file.write_all(b"future_section:\n  nested_secret_value: secret-value-must-not-appear\n")
+            .unwrap();
+        let loaded = EdgionGatewayConfig::load(EdgionGatewayConfig {
+            config_file: Some(file.path().to_string_lossy().into_owned()),
+            ..Default::default()
+        })
+        .unwrap();
+        let writer = TestWriter::default();
+        let subscriber = tracing_subscriber::fmt()
+            .without_time()
+            .with_ansi(false)
+            .with_writer(writer.clone())
+            .finish();
+
+        tracing::subscriber::with_default(subscriber, || {
+            report_unknown_config_fields(
+                "config/test-gateway.yaml",
+                loaded.unknown_fields.paths(),
+                loaded.unknown_fields.is_truncated(),
+            );
+        });
+
+        let output = String::from_utf8(writer.0.lock().clone()).unwrap();
+        assert!(output.contains("future_section"), "{output}");
+        assert!(output.contains("config/test-gateway.yaml"), "{output}");
+        assert!(output.contains("action=\"ignored\""), "{output}");
+        assert!(!output.contains("secret-value-must-not-appear"), "{output}");
+        assert!(!output.contains("nested_secret_value"), "{output}");
+    }
+
+    #[test]
+    fn truncated_unknown_process_config_warning_reports_the_cap() {
+        let writer = TestWriter::default();
+        let subscriber = tracing_subscriber::fmt()
+            .without_time()
+            .with_ansi(false)
+            .with_writer(writer.clone())
+            .finish();
+
+        tracing::subscriber::with_default(subscriber, || {
+            report_unknown_config_fields("config/test-gateway.yaml", std::iter::empty(), true);
+        });
+
+        let output = String::from_utf8(writer.0.lock().clone()).unwrap();
+        assert!(output.contains("reported_fields=32"), "{output}");
+        assert!(output.contains("action=\"ignored\""), "{output}");
     }
 }
 

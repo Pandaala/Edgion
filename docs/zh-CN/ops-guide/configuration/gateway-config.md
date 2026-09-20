@@ -13,10 +13,14 @@ gateway:
   server_addrs: ["http://127.0.0.1:12151"]  # 必填：Controller gRPC 地址
   admin_listen: "127.0.0.1:12001"        # Admin API 监听地址（默认：127.0.0.1:12001，仅 loopback）
   # probe_listen: "0.0.0.0:12000"        # 存活/就绪探针端口（默认：0.0.0.0:12000）；绑定 0.0.0.0 以便 kubelet 可通过 Pod IP 访问
-  # geoip:                               # 必须嵌套在 gateway: 下 —— 写在顶层的 geoip: 会被静默丢弃，
-  #                                       # 且没有任何报错。见 docs/zh-CN/ops-guide/gateway/geoip.md
+  # geoip:                               # 必须嵌套在 gateway: 下 —— 写在顶层的 geoip: 会被忽略，
+  #                                       # 并产生启动 WARN。见 docs/zh-CN/ops-guide/gateway/geoip.md
   #   db_path: /var/lib/edgion/geoip/db.mmdb
   #   update_url: https://mirror.internal/geo.mmdb
+
+# 为便于平滑发布，进程 YAML 中的普通未知字段会被忽略，但 Gateway 会输出包含完整字段路径及
+# action="ignored" 的启动 WARN。已有的严格子结构（包括 geoip、path_normalization、
+# request_mirror 和 access_log_options）仍会拒绝未知字段并中止启动。
 
 # ─── gRPC 通道安全（必填）─────────────────────────────────────────
 # 省略此段会导致 Gateway 拒绝启动。必须从下面三个选项中选择其一，
@@ -72,11 +76,11 @@ access_log:
   output:
     localFile:
       path: logs/edgion_access.log
-      # queue_size: 80000                  # 默认 cpu_cores × 10000
+      # queueSize: 80000                   # 默认 cpu_cores × 10000
       # rotation:
       #   strategy: daily                  # daily | hourly | never | { Size: 104857600 }
-      #   max_files: 7
-      #   check_interval_secs: 30
+      #   maxFiles: 7
+      #   checkIntervalSecs: 30
 
 ssl_log:
   enabled: true
@@ -260,10 +264,10 @@ leader-only 部署要求节点是能够提供服务的 leader，all-serve 部署
 |------|------|--------|------|
 | `enabled` | `Boolean` | — | 是否启用此类日志 |
 | `output.localFile.path` | `String` | — | 日志文件路径（相对 work_dir），与 `logging.log_dir` 无关 |
-| `output.localFile.queue_size` | `Integer` | CPU 核心数 × 10000 | 写入队列大小 |
+| `output.localFile.queueSize` | `Integer` | CPU 核心数 × 10000 | 写入队列大小 |
 | `output.localFile.rotation.strategy` | `Enum` | — | 轮转策略（见下表） |
-| `output.localFile.rotation.max_files` | `Integer` | — | 保留的轮转文件数，`0` 表示无限 |
-| `output.localFile.rotation.check_interval_secs` | `Integer` | `30` | 时间型策略（`daily` / `hourly`）的检查间隔秒数。`Size` 策略在每批写入后检查，不受此字段影响。 |
+| `output.localFile.rotation.maxFiles` | `Integer` | — | 保留的轮转文件数，`0` 表示无限 |
+| `output.localFile.rotation.checkIntervalSecs` | `Integer` | `30` | 时间型策略（`daily` / `hourly`）的检查间隔秒数。`Size` 策略在每批写入后检查，不受此字段影响。 |
 
 **`rotation.strategy` 可选值：**
 
@@ -355,8 +359,8 @@ access_log:
       path: logs/edgion_access.log
       rotation:
         strategy: daily
-        max_files: 30
-        check_interval_secs: 30
+        maxFiles: 30
+        checkIntervalSecs: 30
 ```
 
 ### 集群限流配置

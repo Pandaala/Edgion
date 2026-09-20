@@ -11,6 +11,7 @@ before applying a decision to current code.
 
 ## Intentional design
 
+- [Gateway process-config unknown fields are advisory outside strict subtrees](intentional-design/gateway-process-config-unknown-fields-advisory.md)
 - [Plugin config `Regex::new` without DFA size_limit — ACCEPTED-TRADEOFF (not fixed)](intentional-design/plugin-config-regex-dfa-size-limit.md)
 
 ## Regression guards

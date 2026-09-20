@@ -106,11 +106,11 @@ access_log:
   output:
     localFile:
       path: logs/edgion_access.log
-      # queue_size: 80000                  # Default: cpu_cores * 10000
+      # queueSize: 80000                   # Default: cpu_cores * 10000
       # rotation:
       #   strategy: daily                  # daily | hourly | never | { Size: 104857600 }
-      #   max_files: 7
-      #   check_interval_secs: 30
+      #   maxFiles: 7
+      #   checkIntervalSecs: 30
 
 access_log_options:
   includeRawUri: false                    # Include the pre-normalization URI field
@@ -409,11 +409,11 @@ LogConfig:
   output:
     localFile:                     # The only output type currently
       path: String                 # Log file path (relative to work_dir)
-      queue_size: usize?           # Write queue size (default: cpu_cores × 10000)
+      queueSize: usize?            # Write queue size (default: cpu_cores × 10000)
       rotation:                    # Rotation configuration (optional)
         strategy: RotationStrategy # daily | hourly | never | { Size: u64 }
-        max_files: usize           # Number of files to retain (0 = unlimited)
-        check_interval_secs: u64   # Rotation check interval (default 30s)
+        maxFiles: usize            # Number of files to retain (0 = unlimited)
+        checkIntervalSecs: u64     # Rotation check interval (default 30s)
 ```
 
 **RotationStrategy values**:
@@ -570,10 +570,11 @@ sizing (`max_db_bytes` + 2× current database size), absent-dimension rule-miss 
 `failOpen` semantics, `RemoteIp` spoofability, ...): `docs/en/ops-guide/gateway/geoip.md`.
 
 **Must be nested under `gateway:`.** `GatewayConfig` uses `#[command(flatten)]` for the CLI but
-NOT `#[serde(flatten)]` for YAML, so a top-level `geoip:` key is silently dropped by the outer
-struct — no error, `GeoIpConfig` left at its empty defaults. `GeoIpConfig`'s own
-`deny_unknown_fields` only catches a typo *inside* the block (e.g. `dbPath`), not this
-one-level-up mistake.
+NOT `#[serde(flatten)]` for YAML, so a top-level `geoip:` key is ignored by the outer struct and
+leaves `GeoIpConfig` at its empty defaults. The Gateway continues starting but emits a structured
+startup WARN with `field_path="geoip"` and `action="ignored"`; it never logs the value or raw
+YAML. `GeoIpConfig`'s own `deny_unknown_fields` remains stricter and rejects a typo *inside* the
+block (for example `dbPath`).
 
 There is no master-switch field: an unset `db_path` means no database (geo lookups report
 `Unavailable`), and there is no admin endpoint to introspect the loaded state — use

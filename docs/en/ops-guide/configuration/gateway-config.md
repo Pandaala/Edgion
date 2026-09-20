@@ -14,9 +14,14 @@ gateway:
   admin_listen: "127.0.0.1:12001"        # Admin API listen address (default: 127.0.0.1:12001, loopback-only)
   # probe_listen: "0.0.0.0:12000"        # Liveness/readiness probe port (default: 0.0.0.0:12000); binds 0.0.0.0 so kubelet can reach the pod IP
   # geoip:                               # MUST be nested under `gateway:` — a top-level `geoip:` key is
-  #                                       # silently dropped, with no error. See docs/en/ops-guide/gateway/geoip.md
+  #                                       # ignored with a startup WARN. See docs/en/ops-guide/gateway/geoip.md
   #   db_path: /var/lib/edgion/geoip/db.mmdb
   #   update_url: https://mirror.internal/geo.mmdb
+
+# Unknown fields in this process YAML are ignored for rollout compatibility, but the Gateway
+# emits a startup WARN with the full field path and action="ignored". Existing strict subtrees
+# (including geoip, path_normalization, request_mirror, and access_log_options) still reject
+# unknown fields and abort startup.
 
 # ─── gRPC channel security (REQUIRED) ─────────────────────────────
 # Omitting this section makes the Gateway REFUSE TO START. Pick exactly one of the
@@ -73,11 +78,11 @@ access_log:
   output:
     localFile:
       path: logs/edgion_access.log
-      # queue_size: 80000                  # Default: cpu_cores × 10000
+      # queueSize: 80000                   # Default: cpu_cores × 10000
       # rotation:
       #   strategy: daily                  # daily | hourly | never | { Size: 104857600 }
-      #   max_files: 7
-      #   check_interval_secs: 30
+      #   maxFiles: 7
+      #   checkIntervalSecs: 30
 
 ssl_log:
   enabled: true
@@ -326,10 +331,10 @@ All business log types (`access_log`, `ssl_log`, `tcp_log`, `tls_log`, `udp_log`
 |-----------|------|---------|-------------|
 | `enabled` | `Boolean` | — | Whether to enable this log type |
 | `output.localFile.path` | `String` | — | Log file path (relative to work_dir); independent of `logging.log_dir` |
-| `output.localFile.queue_size` | `Integer` | CPU cores × 10000 | Write queue size |
+| `output.localFile.queueSize` | `Integer` | CPU cores × 10000 | Write queue size |
 | `output.localFile.rotation.strategy` | `Enum` | — | Rotation strategy (see table below) |
-| `output.localFile.rotation.max_files` | `Integer` | — | Number of rotated files to retain; `0` means unlimited |
-| `output.localFile.rotation.check_interval_secs` | `Integer` | `30` | Check interval in seconds for the time-based strategies (`daily` / `hourly`). The `Size` strategy is checked after every write batch and is not affected by this field. |
+| `output.localFile.rotation.maxFiles` | `Integer` | — | Number of rotated files to retain; `0` means unlimited |
+| `output.localFile.rotation.checkIntervalSecs` | `Integer` | `30` | Check interval in seconds for the time-based strategies (`daily` / `hourly`). The `Size` strategy is checked after every write batch and is not affected by this field. |
 
 **`rotation.strategy` values:**
 
@@ -435,8 +440,8 @@ access_log:
       path: logs/edgion_access.log
       rotation:
         strategy: daily
-        max_files: 30
-        check_interval_secs: 30
+        maxFiles: 30
+        checkIntervalSecs: 30
 ```
 
 ### Cluster Rate Limiting Configuration

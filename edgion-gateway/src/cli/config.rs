@@ -9,7 +9,65 @@ use edgion_resources::resources::edgion_plugins::{
 };
 use edgion_resources::LogConfig;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeSet;
 use std::path::PathBuf;
+
+pub(crate) const MAX_UNKNOWN_CONFIG_FIELDS: usize = 32;
+
+/// Unknown Gateway process-config fields collected during YAML deserialization.
+///
+/// The paths are bounded because configuration is operator-controlled but still
+/// reaches the startup log. Values and raw YAML are never retained or logged.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(crate) struct UnknownConfigFields {
+    paths: BTreeSet<String>,
+    truncated: bool,
+}
+
+impl UnknownConfigFields {
+    fn record(&mut self, path: &str) {
+        let path = normalize_unknown_field_path(path);
+        if self.paths.contains(&path) {
+            return;
+        }
+        if self.paths.len() < MAX_UNKNOWN_CONFIG_FIELDS {
+            self.paths.insert(path);
+        } else {
+            self.truncated = true;
+        }
+    }
+
+    pub(crate) fn paths(&self) -> impl Iterator<Item = &str> {
+        self.paths.iter().map(String::as_str)
+    }
+
+    pub(crate) fn is_truncated(&self) -> bool {
+        self.truncated
+    }
+}
+
+fn normalize_unknown_field_path(path: &str) -> String {
+    let mut normalized = String::new();
+    for segment in path.split('.').filter(|segment| !segment.is_empty() && *segment != "?") {
+        if segment.bytes().all(|byte| byte.is_ascii_digit()) {
+            normalized.push('[');
+            normalized.push_str(segment);
+            normalized.push(']');
+        } else {
+            if !normalized.is_empty() {
+                normalized.push('.');
+            }
+            normalized.push_str(segment);
+        }
+    }
+    normalized
+}
+
+/// Result of loading local Gateway process configuration.
+pub(crate) struct LoadedGatewayConfig {
+    pub(crate) config: EdgionGatewayConfig,
+    pub(crate) unknown_fields: UnknownConfigFields,
+}
 
 /// Default admin API listen address. Binds loopback by default so the admin API
 /// (which serves secret-bearing `/configclient` introspection) is not exposed to the
@@ -1058,25 +1116,24 @@ pub fn get_refresh_singleflight_max_registered_keys() -> usize {
 impl EdgionGatewayConfig {
     /// Load configuration from YAML file if config_file is specified,
     /// then merge with CLI arguments (CLI takes precedence)
-    pub fn load(cli_config: Self) -> Result<Self> {
+    pub(crate) fn load(cli_config: Self) -> Result<LoadedGatewayConfig> {
         // Load from file if specified
-        let mut file_config = if let Some(ref config_path) = cli_config.config_file {
+        let (mut file_config, unknown_fields) = if let Some(ref config_path) = cli_config.config_file {
             let content =
                 std::fs::read_to_string(config_path).context(format!("Failed to read config file: {}", config_path))?;
 
-            {
-                let de = serde_yaml::Deserializer::from_str(&content);
-                serde_yaml::with::singleton_map_recursive::deserialize(de)
-                    .context(format!("Failed to parse config file: {}", config_path))?
-            }
+            deserialize_process_config(&content).context(format!("Failed to parse config file: {}", config_path))?
         } else {
-            EdgionGatewayConfig::default()
+            (EdgionGatewayConfig::default(), UnknownConfigFields::default())
         };
 
         // Merge: CLI args override file config
         Self::merge(&mut file_config, &cli_config);
 
-        Ok(file_config)
+        Ok(LoadedGatewayConfig {
+            config: file_config,
+            unknown_fields,
+        })
     }
 
     /// Merge CLI config into file config (CLI takes precedence)
@@ -1188,6 +1245,26 @@ impl EdgionGatewayConfig {
     }
 }
 
+fn deserialize_process_config(
+    content: &str,
+) -> std::result::Result<(EdgionGatewayConfig, UnknownConfigFields), serde_yaml::Error> {
+    struct ProcessConfigInput(EdgionGatewayConfig);
+
+    impl<'de> Deserialize<'de> for ProcessConfigInput {
+        fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+        where
+            D: serde::Deserializer<'de>,
+        {
+            serde_yaml::with::singleton_map_recursive::deserialize(deserializer).map(Self)
+        }
+    }
+
+    let de = serde_yaml::Deserializer::from_str(content);
+    let mut unknown_fields = UnknownConfigFields::default();
+    let ProcessConfigInput(config) = serde_ignored::deserialize(de, |path| unknown_fields.record(&path.to_string()))?;
+    Ok((config, unknown_fields))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1195,6 +1272,161 @@ mod tests {
         get_gateway_instance_count, set_gateway_instance_count, DEFAULT_ESTIMATOR_SLOTS_K,
         DEFAULT_MAX_ESTIMATOR_SLOTS_K,
     };
+
+    fn unknown_paths(yaml: &str) -> UnknownConfigFields {
+        deserialize_process_config(yaml).unwrap().1
+    }
+
+    #[test]
+    fn clean_process_config_has_no_unknown_fields() {
+        let yaml = r#"
+gateway:
+  server_addrs: ["http://127.0.0.1:12151"]
+metrics:
+  request_duration:
+    enabled: true
+    idle_timeout_secs: 30
+  backend_requests:
+    labels:
+      gateway: true
+access_log:
+  enabled: true
+  output:
+    localFile:
+      path: logs/access.log
+      queueSize: 1024
+      rotation:
+        strategy: daily
+        maxFiles: 7
+  fallback:
+    localFile:
+      path: logs/fallback.log
+conf_sync_security:
+  active: insecure
+  certs:
+    - name: insecure
+      skip_tls: true
+  rotation:
+    policy: lifetime
+auth_cache:
+  default_capacity: 128
+  default_shards: 2
+"#;
+
+        let (config, unknown) = deserialize_process_config(yaml).unwrap();
+        assert!(unknown.paths().next().is_none());
+        assert!(!unknown.is_truncated());
+        assert_eq!(config.lru_cache.default_capacity, 128);
+        assert_eq!(config.lru_cache.default_shards, 2);
+    }
+
+    #[test]
+    fn shipped_gateway_process_config_has_no_unknown_fields() {
+        let (_, unknown) = deserialize_process_config(include_str!("../../../config/edgion-gateway.yaml")).unwrap();
+        assert_eq!(unknown.paths().collect::<Vec<_>>(), Vec::<&str>::new());
+        assert!(!unknown.is_truncated());
+    }
+
+    #[test]
+    fn process_config_collects_root_and_nested_unknown_field_paths() {
+        let yaml = r#"
+geoip:
+  db_path: /var/lib/edgion/geo.mmdb
+metrics:
+  request_duration:
+    idle_timeout_sec: 30
+access_log:
+  output:
+    localFile:
+      queue_size: 1024
+      rotation:
+        max_files: 7
+  fallback:
+    localFile:
+      fallback_typo: true
+conf_sync_security:
+  certs:
+    - name: insecure
+      skip_tls: true
+      cert_typo: ignored
+  rotation:
+    lifetime_ratio_typo: 0.4
+future_section:
+  nested_secret_value: must-not-be-reported
+"#;
+
+        let (config, unknown) = deserialize_process_config(yaml).unwrap();
+        assert_eq!(config.metrics.request_duration.idle_timeout_secs, 600);
+        assert!(matches!(
+            config.access_log.output,
+            edgion_resources::StringOutput::LocalFile(_)
+        ));
+        assert_eq!(
+            unknown.paths().collect::<Vec<_>>(),
+            vec![
+                "access_log.fallback.localFile.fallback_typo",
+                "access_log.output.localFile.queue_size",
+                "access_log.output.localFile.rotation.max_files",
+                "conf_sync_security.certs[0].cert_typo",
+                "conf_sync_security.rotation.lifetime_ratio_typo",
+                "future_section",
+                "geoip",
+                "metrics.request_duration.idle_timeout_sec",
+            ]
+        );
+        assert!(!unknown.is_truncated());
+    }
+
+    #[test]
+    fn process_config_unknown_field_diagnostics_are_bounded() {
+        let yaml = (0..MAX_UNKNOWN_CONFIG_FIELDS + 5)
+            .map(|index| format!("unknown_{index:02}: true\n"))
+            .collect::<String>();
+        let unknown = unknown_paths(&yaml);
+        assert_eq!(unknown.paths().count(), MAX_UNKNOWN_CONFIG_FIELDS);
+        assert!(unknown.is_truncated());
+    }
+
+    #[test]
+    fn process_config_keeps_strict_substructures_strict() {
+        for yaml in [
+            "request_mirror:\n  max_concurent: 12\n",
+            "access_log_options:\n  include_raw_uri: true\n",
+            "path_normalization:\n  reject_escape_slashes: true\n",
+            "gateway:\n  geoip:\n    dbPath: /tmp/geo.mmdb\n",
+            "access_log:\n  output:\n    unknownSink: {}\n",
+        ] {
+            assert!(deserialize_process_config(yaml).is_err(), "must remain strict: {yaml}");
+        }
+    }
+
+    #[test]
+    fn process_config_without_a_file_has_no_unknown_diagnostics() {
+        let loaded = EdgionGatewayConfig::load(EdgionGatewayConfig::default()).unwrap();
+        assert!(loaded.unknown_fields.paths().next().is_none());
+        assert!(!loaded.unknown_fields.is_truncated());
+    }
+
+    #[test]
+    fn process_config_load_preserves_cli_precedence_and_unknown_diagnostics() {
+        use std::io::Write;
+
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        file.write_all(b"gateway:\n  admin_listen: 127.0.0.1:12002\nroot_typo: ignored\n")
+            .unwrap();
+        let cli = EdgionGatewayConfig {
+            config_file: Some(file.path().to_string_lossy().into_owned()),
+            gateway: GatewayConfig {
+                admin_listen: Some("127.0.0.1:12003".to_string()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let loaded = EdgionGatewayConfig::load(cli).unwrap();
+        assert_eq!(loaded.config.gateway.admin_listen.as_deref(), Some("127.0.0.1:12003"));
+        assert_eq!(loaded.unknown_fields.paths().collect::<Vec<_>>(), vec!["root_typo"]);
+    }
 
     /// The gateway instance count is a PROCESS-GLOBAL, and `cargo test` runs the tests in
     /// this binary on parallel threads. Without serialization, `set_and_get` writing 5 can

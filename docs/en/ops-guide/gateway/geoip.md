@@ -47,15 +47,14 @@ gateway:
 ### 🚨 The single most common way to get this wrong
 
 `GatewayConfig` is embedded in the root config struct with `#[command(flatten)]` for the CLI,
-but **not** `#[serde(flatten)]` for YAML. That means a `geoip:` block written at the **document
-root** — one level too high — deserializes cleanly, is silently dropped by the outer struct, and
-leaves `GeoIpConfig` at its empty defaults (no `db_path`, no `update_url`). There is **no error,
-no warning, no startup log line**. This is not the kind of mistake `deny_unknown_fields` catches,
-because `deny_unknown_fields` is on `GeoIpConfig` itself — the unrecognized key is dropped one
-level above it, on the field that owns `geoip`, before `GeoIpConfig`'s own deserializer ever runs.
+but **not** `#[serde(flatten)]` for YAML. A `geoip:` block written at the **document root** — one
+level too high — is therefore ignored by the outer struct and leaves `GeoIpConfig` at its empty
+defaults (no `db_path`, no `update_url`). The Gateway continues starting for rollout
+compatibility, but emits a structured startup WARN naming `field_path="geoip"` and
+`action="ignored"`. The warning never includes the field value or raw YAML.
 
 ```yaml
-# WRONG — silently produces an empty GeoIpConfig; no error at startup
+# WRONG — produces an empty GeoIpConfig and a startup WARN for field_path="geoip"
 geoip:
   db_path: /var/lib/edgion/geoip/db.mmdb
 
@@ -66,17 +65,17 @@ gateway:
 ```
 
 This exact mistake cost real debugging time during implementation — it was first mistaken for a
-conf_sync propagation race, because everything else about the deployment looked correct and the
-gateway started up cleanly. If geo rules appear to have no effect and `edgion_geoip_db_loaded`
-stays `0` while your YAML clearly sets a `db_path`, check indentation first.
+conf_sync propagation race. If geo rules appear to have no effect and
+`edgion_geoip_db_loaded` stays `0` while your YAML clearly sets a `db_path`, inspect startup WARNs
+and check indentation first.
 
 ### Field reference
 
 All `geoip` keys are **snake_case** (matching the rest of `GatewayConfig`, unlike the CRD-facing
 resources which are camelCase). The struct carries `#[serde(deny_unknown_fields)]`, so a
 camelCase typo *inside* the `geoip` block (`dbPath` instead of `db_path`) is a hard config-load
-error, not a silent default — this is the one layer where the guard actually catches a typo. The
-trap above is one level higher, where no `deny_unknown_fields` exists to catch it.
+error, not an advisory warning. The outer process-config detector does not weaken this strict
+subtree.
 
 | Field | Type | Default | Description |
 |---|---|---|---|
@@ -598,7 +597,7 @@ state produces an unconditional request.
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
-| `edgion_geoip_db_loaded` stays `0` even though your YAML clearly sets `geoip.db_path` | `geoip:` is at the document root instead of nested under `gateway:` | Move it under `gateway:` — see [the top-level nesting trap](#-the-single-most-common-way-to-get-this-wrong) |
+| Startup WARN reports `field_path="geoip"` and `action="ignored"`; `edgion_geoip_db_loaded` stays `0` | `geoip:` is at the document root instead of nested under `gateway:` | Move it under `gateway:` — see [the top-level nesting trap](#-the-single-most-common-way-to-get-this-wrong) |
 | Config load fails with an unknown-field error mentioning a `geoip` sub-key | A camelCase typo inside the `geoip` block (e.g. `dbPath`) | Use snake_case — `db_path`, `update_url`, etc. |
 | `edgion_geoip_db_loaded` stays `0` after a fresh deploy | Normal at first start — no bundled database, and the updater hasn't completed its first cycle yet | Wait for the first successful cycle, or check `edgion_geoip_update_failed_total{reason}` for a stuck failure |
 | Gateway process dies with no panic log, mid-request, shortly after a database file was touched externally | Something wrote `db_path` in place instead of rename-swapping it — SIGBUS | Stop whatever wrote in place; only the built-in updater or a same-filesystem temp-file-plus-rename writer are supported |
