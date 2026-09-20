@@ -122,7 +122,7 @@ HTTPRoute's ConfHandler implements route compilation and registration:
    - `RadixRouteMatchEngine`: path-prefix matching based on a Radix Tree
    - `RegexRoutesEngine`: regex path matching
 5. **Request handling flow**: `port → domain match → path match → header/query deep match → selected rule → execute plugin chain → proxy_http`
-6. **LB policy sync**: when routes change, the corresponding load-balancing policy is synced
+6. **Post-rebuild publication**: after the route cache and listener snapshots are updated, publish HTTPRoute inputs to the canonical plugin publisher for route-generation admission and update adaptive AI route contributions for the process-global manager. Backend traffic and load-balancing policy are owned independently by typed `EdgionBackendTrafficPolicy` through `BackendTrafficPolicyStore`; HTTPRoute does not synchronize or clean up those policies.
 
 HTTP Route deltas replace touched hostname contents while retaining untouched
 path engines. The shared hostname tree is reused whenever final keys agree,

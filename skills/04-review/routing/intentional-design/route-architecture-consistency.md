@@ -64,7 +64,7 @@ types to ensure architectural alignment.
 | **`full_set`** | Clear → insert all → `rebuild_all_listener_managers` | Same as TCP | Same as TCP | Clear → insert all → `rebuild_all_listener_managers` | Clear → insert all → `rebuild_all_listener_managers` |
 | **`partial_update`** | Compute affected listeners → update cache → `rebuild_affected_listener_managers` | Same as TCP | Same as TCP | Compute affected listeners → update cache → `rebuild_affected_listener_managers` | Same as HTTP |
 | **`initialize_route`** | BackendSelector, stream plugins, annotations | BackendSelector | BackendSelector, proxy protocol, upstream TLS, stream plugins, retries | N/A (parsing in `build_domain_route_rules_from_routes`) | N/A (parsing in `parse_route_to_units`) |
-| **LB policy sync** | No | No | No | Yes (`sync_lb_policies_for_routes`) | No |
+| **Post-rebuild publication** | No | No | No | Plugin admission + adaptive AI contributions | Plugin admission |
 
 ### Stats
 
@@ -172,7 +172,7 @@ These differences exist by design and do not need unification:
 3. **HTTP and gRPC share one proxy** — `EdgionHttpProxy` retains separate HTTP and gRPC per-listener manager handles; the three L4 proxies each retain their own family-specific handle
 4. **TLS has dual logging (global + per-listener)** — historical compatibility
 5. **gRPC has `route_units_cache` with `Mutex`** — needed because gRPC pre-parses routes into `GrpcRouteRuleUnit` units; HTTP parses inline during route table build
-6. **HTTP has LB policy sync** — `sync_lb_policies_for_routes` / `cleanup_lb_policies_for_routes`; other protocols handle LB at `initialize_route` time or via `BackendSelector`
+6. **HTTP has adaptive AI contribution publication** in addition to the plugin-admission publication shared with gRPC. Backend traffic and load-balancing policy are independently owned by typed `EdgionBackendTrafficPolicy` through `BackendTrafficPolicyStore`; no route family owns an LB-policy synchronization lifecycle.
 7. **~~HTTP/gRPC have 3-tier port fallback~~** — removed; all protocols now skip routes without `resolved_listeners` (skip+warn)
 
 ---

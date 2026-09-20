@@ -88,7 +88,14 @@ knowledge_type: review-evidence
 
 ---
 
-## PolicyStore remove_by_route Clone is Not a Performance Issue
+## Historical: Removed Route-Owned PolicyStore Cleanup
+
+> **Superseded.** HTTPRoute no longer owns or synchronizes load-balancing
+> policies. The former `PolicyStore`, `remove_by_route`, and
+> `batch_remove_routes` path was removed. Typed `EdgionBackendTrafficPolicy`
+> now owns backend traffic and load-balancing policy through
+> `BackendTrafficPolicyStore`. The text below is retained only as evidence for
+> reviews of older revisions and must not be applied to current code.
 
 **False-positive scenario**: `remove_by_route` calls `clone()` on each `ServiceLbPolicy` inside the `DashMap::retain` callback and writes back, introducing deep-copy overhead proportional to store size. `batch_remove_routes` performs full table scans repeatedly per route.
 
@@ -142,7 +149,12 @@ wiring directly; do not close a new finding using the historical process-lifetim
 
 ---
 
-## ServiceLbPolicy::add_route_ref "Dedup-Push" is Intentional Design
+## Historical: Removed ServiceLbPolicy Route-Reference Union
+
+> **Superseded.** The route-reference union and `ServiceLbPolicy::add_route_ref`
+> belonged to the removed route-owned LB policy mechanism. Current policy
+> arbitration is performed by `BackendTrafficPolicyStore` from typed
+> `EdgionBackendTrafficPolicy` resources. The text below is historical only.
 
 **False-positive scenario**: `policy_store.rs`'s `add_route_ref` (formerly `merge`) does "skip if exists, else push" on new policies; inconsistent with "last-write-wins"; when multiple routes reference the same service, old policies are not overwritten.
 
@@ -164,7 +176,7 @@ wiring directly; do not close a new finding using the historical process-lifetim
 
 1. **Configuration sync is eventually consistent by nature**: Controller→Gateway uses gRPC list/watch; the server side is already version-driven for events; the client cache may at any moment be slightly ahead/behind other caches; all reader paths "downgrade if not found" or "wait for next rebuild".
 2. **Readiness has a barrier already**: `required_cache_names` + `is_ready()` blocks business traffic during startup until critical caches are all in place (see `config_client.rs:40-42`); short-term inconsistency during runtime incremental updates is tolerated by readers.
-3. **Order constraints are enforced inside submodules**: Within a single ConfHandler (e.g., HTTPRoute), updates are explicitly ordered as "sync LB → mutate cache → rebuild" (see comments at the top of `gateway/routes/http/conf_handler_impl.rs` and corresponding tests); cross-cache ordering does not need to be documented at the ConfigClient layer.
+3. **Order constraints are enforced inside submodules**: The current HTTPRoute ConfHandler implementation performs route-cache mutation → listener-snapshot rebuild → plugin-admission publication → adaptive-contribution update. Its focused regression tests verify cache and rebuilt-route post-conditions plus Arc/generation identity; they do not directly assert the inter-step sequence. Cross-cache ordering does not need to be documented at the ConfigClient layer.
 4. **Strong transactions cost too much**: Introducing cross-cache write locks/version barriers in the data plane would serialize every config sync; not worth it.
 
 **Verdict**: Cross-cache eventual consistency + strong ordering inside submodules + readiness barrier is a tradeoff design; no transaction or global ordering documentation needs to be added at the ConfigClient layer.

@@ -128,7 +128,7 @@ impl ConfHandler<HTTPRoute> for GlobalHttpRouteManagers {
 
             // A conf-sync replay may deserialize an unchanged Route into a new
             // Arc. Keep the canonical source identity shared by the route table
-            // and policy publisher so the replay does not create a false
+            // and plugin publisher so the replay does not create a false
             // cross-generation admission window.
             canonicalize_unchanged_routes(&self.route_cache, &mut canonical);
 
@@ -1780,23 +1780,20 @@ mod tests {
     }
 
     // ====================================================================
-    // ConfHandler ordering regression tests
+    // ConfHandler cache regression tests
     //
-    // These pin the post-conditions of full_set / partial_update so that the
-    // ordering invariant documented at the top of the impl block (sync LB →
-    // mutate cache → rebuild) cannot be silently broken by a refactor.
-    //
-    // The global POLICY_STORE is shared across tests; each scenario uses a
-    // distinct namespace and cleans up its own service entries to stay
-    // isolation-safe under `cargo test`'s default parallelism.
+    // These pin full_set / partial_update cache replacement, Arc sharing, and
+    // unchanged-replay generation identity. The cache-before-listener-rebuild
+    // sequence is an implementation contract documented at the impl block;
+    // these tests do not directly assert that inter-step ordering.
     // ====================================================================
 
-    fn build_route_with_lb_policy(
+    fn build_route_with_extension_ref(
         namespace: &str,
         name: &str,
         service: &str,
-        kind: &str,
-        policy_name: &str,
+        extension_kind: &str,
+        extension_name: &str,
     ) -> HTTPRoute {
         let json = serde_json::json!({
             "apiVersion": "gateway.networking.k8s.io/v1",
@@ -1812,7 +1809,11 @@ mod tests {
                         "kind": "Service",
                         "filters": [{
                             "type": "ExtensionRef",
-                            "extensionRef": { "group": "edgion.io", "kind": kind, "name": policy_name }
+                            "extensionRef": {
+                                "group": "edgion.io",
+                                "kind": extension_kind,
+                                "name": extension_name
+                            }
                         }]
                     }]
                 }]
@@ -2279,14 +2280,14 @@ mod tests {
         let route_key = "test-fs-ord/route1";
         let stale_key = "test-fs-ord/stale";
 
-        let stale = build_route_with_lb_policy("test-fs-ord", "stale", "svc1", "TestExtensionKindB", "default");
+        let stale = build_route_with_extension_ref("test-fs-ord", "stale", "svc1", "TestExtensionKindB", "default");
         mgr.route_cache
             .insert(stale_key.to_string(), std::sync::Arc::new(stale));
 
         let mut data = HashMap::new();
         data.insert(
             route_key.to_string(),
-            Arc::new(build_route_with_lb_policy(
+            Arc::new(build_route_with_extension_ref(
                 "test-fs-ord",
                 "route1",
                 "svc1",
@@ -2314,7 +2315,7 @@ mod tests {
         let mut add = HashMap::new();
         add.insert(
             route_key.to_string(),
-            Arc::new(build_route_with_lb_policy(
+            Arc::new(build_route_with_extension_ref(
                 "test-pu-rt",
                 "route1",
                 "svc",
@@ -2324,9 +2325,9 @@ mod tests {
         );
         mgr.partial_update(add, HashMap::new(), HashSet::new());
 
-        // Same policy, different hostname — pure route metadata change.
+        // Same ExtensionRef, different hostname — pure route metadata change.
         let mut updated_route =
-            build_route_with_lb_policy("test-pu-rt", "route1", "svc", "TestExtensionKindA", "header.x-id");
+            build_route_with_extension_ref("test-pu-rt", "route1", "svc", "TestExtensionKindA", "header.x-id");
         updated_route.spec.hostnames = Some(vec!["other.example.com".to_string()]);
         let mut update = HashMap::new();
         update.insert(route_key.to_string(), Arc::new(updated_route));
@@ -2350,7 +2351,7 @@ mod tests {
         let mut init = HashMap::new();
         init.insert(
             route_a.to_string(),
-            Arc::new(build_route_with_lb_policy(
+            Arc::new(build_route_with_extension_ref(
                 "test-pu-mix",
                 "route-a",
                 "svc-a",
@@ -2360,7 +2361,7 @@ mod tests {
         );
         init.insert(
             route_b.to_string(),
-            Arc::new(build_route_with_lb_policy(
+            Arc::new(build_route_with_extension_ref(
                 "test-pu-mix",
                 "route-b",
                 "svc-b",
@@ -2373,7 +2374,7 @@ mod tests {
         let mut add = HashMap::new();
         add.insert(
             route_c.to_string(),
-            Arc::new(build_route_with_lb_policy(
+            Arc::new(build_route_with_extension_ref(
                 "test-pu-mix",
                 "route-c",
                 "svc-c",
@@ -2384,7 +2385,7 @@ mod tests {
         let mut update = HashMap::new();
         update.insert(
             route_a.to_string(),
-            Arc::new(build_route_with_lb_policy(
+            Arc::new(build_route_with_extension_ref(
                 "test-pu-mix",
                 "route-a",
                 "svc-a",
@@ -2405,7 +2406,7 @@ mod tests {
     fn test_full_set_shares_arc_no_deep_clone() {
         let mgr = GlobalHttpRouteManagers::new();
         let route_key = "test-arc-share/route1";
-        let route = std::sync::Arc::new(build_route_with_lb_policy(
+        let route = std::sync::Arc::new(build_route_with_extension_ref(
             "test-arc-share",
             "route1",
             "svc1",
@@ -2427,7 +2428,7 @@ mod tests {
     #[test]
     fn unchanged_conf_sync_replay_keeps_route_generation_identity() {
         let route_key = "test-canonical-replay/route1";
-        let original = Arc::new(build_route_with_lb_policy(
+        let original = Arc::new(build_route_with_extension_ref(
             "test-canonical-replay",
             "route1",
             "svc1",
@@ -2465,7 +2466,7 @@ mod tests {
     fn test_built_unit_carries_route_arc() {
         let _mgr = GlobalHttpRouteManagers::new();
         let route_key = "test-unit-route/route1";
-        let route = std::sync::Arc::new(build_route_with_lb_policy(
+        let route = std::sync::Arc::new(build_route_with_extension_ref(
             "test-unit-route",
             "route1",
             "svc1",
@@ -2476,7 +2477,7 @@ mod tests {
         data.insert(route_key.to_string(), route.clone());
 
         let table = build_domain_route_rules_from_routes(&data, &DomainRouteRules::new());
-        // build_route_with_lb_policy declares the test.example.com hostname group.
+        // build_route_with_extension_ref declares the test.example.com hostname group.
         let rules = table
             .hosts
             .get(&RadixHostnamePattern::parse("test.example.com").unwrap())

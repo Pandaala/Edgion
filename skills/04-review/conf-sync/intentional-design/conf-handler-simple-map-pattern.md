@@ -48,21 +48,23 @@ The `partial_update` bodies in `routes/{http,tcp,tls,udp,grpc}/conf_handler_impl
 do **not** match the simple add/update/remove → store-insert pattern. They run a
 multi-step pipeline (verified by reading `routes/http/conf_handler_impl.rs`):
 
-1. `arc_map_into_owned(add).extend(arc_map_into_owned(update))` into a single
-   `add_or_update_owned` map (no separate add vs update arms).
-2. `sync_lb_policies_for_routes(...)` then `cleanup_lb_policies_for_routes(...)`.
-3. Compute affected `ListenerKey` set from both new routes and the cached old
+1. Merge the incoming `Arc<HTTPRoute>` add/update maps and canonicalize
+   semantically unchanged resources to the existing cache `Arc`.
+2. Compute the affected `ListenerKey` set from both new routes and the cached old
    routes via `resolved_listeners_for_route`.
-4. `self.route_cache.insert(...)` / `.remove(...)` (`DashMap`, not
+3. `self.route_cache.insert(...)` / `.remove(...)` (`DashMap`, not
    `RwLock<HashMap>`).
-5. `rebuild_affected_listener_managers(&affected_listeners)`.
+4. Rebuild only affected listener managers from the updated cache while holding
+   the rebuild lock.
+5. After the listener snapshot is complete, publish the HTTPRoute delta for
+   plugin admission and update adaptive AI route contributions.
 
 This is the documented "route ConfHandler" pattern (see
 `route-architecture-consistency.md` in this directory): `Compute affected
 listeners → update cache → rebuild_affected_listener_managers`. It is a different
 algorithm, not a stylistic clone of the simple-map pattern. Plugins, backends,
-and services handlers are likewise more complex (LB policy sync, listener
-recompute, runtime swaps).
+and services handlers are likewise more complex (publication, policy
+arbitration, listener recompute, runtime swaps).
 
 ## Why the extraction is declined
 
