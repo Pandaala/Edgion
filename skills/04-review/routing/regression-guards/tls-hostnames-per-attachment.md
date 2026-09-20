@@ -79,7 +79,8 @@ The Route hostname migration addresses short names, multi-label wildcards and
 same-attachment candidate eligibility, including the historical
 `tlsroute-specific-listener-candidate-shadowing` case. It does not establish
 cross-kind atomicity or complete Gateway API conformance. Existing protocol
-acceptance parity was recorded under `route-listener-protocol-acceptance-parity`
+acceptance parity is maintained by the
+[Route/Listener protocol compatibility guard](route-listener-protocol-acceptance-parity.md)
 and remains a separate concern. Certificate selection and SAN identity matching
 are unchanged, not consumers of the Route matcher. Physical TLS listener
 manager recreation, recorded under `tls-listener-recreation-stale-route-manager`,

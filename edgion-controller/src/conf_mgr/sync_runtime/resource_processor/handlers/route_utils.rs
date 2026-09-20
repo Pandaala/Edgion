@@ -315,8 +315,9 @@ pub fn collect_ref_denied_errors(
 /// Non-route resources (e.g. EdgionTls for TLS config) bypass this check entirely.
 const GATEWAY_API_ROUTE_KINDS: &[&str] = &["HTTPRoute", "GRPCRoute", "TLSRoute", "TCPRoute", "UDPRoute"];
 
+const GATEWAY_API_GROUP: &str = "gateway.networking.k8s.io";
+
 /// Protocol default route kinds per Gateway API spec.
-/// Mirrors `get_supported_kinds_for_protocol()` in gateway.rs — keep in sync.
 pub(super) fn protocol_default_route_kinds(protocol: &str) -> &'static [&'static str] {
     match protocol.to_uppercase().as_str() {
         "HTTP" | "HTTPS" => &["HTTPRoute", "GRPCRoute"],
@@ -325,6 +326,15 @@ pub(super) fn protocol_default_route_kinds(protocol: &str) -> &'static [&'static
         "UDP" => &["UDPRoute"],
         _ => &[],
     }
+}
+
+/// Return whether a Route group/kind is compatible with a Listener protocol.
+///
+/// This is the canonical compatibility decision for Listener `supportedKinds`,
+/// Route acceptance, and attachment projection. `allowedRoutes.kinds` may
+/// narrow this set, but it cannot make an incompatible kind valid.
+pub(super) fn protocol_supports_route_kind(protocol: &str, group: &str, route_kind: &str) -> bool {
+    group == GATEWAY_API_GROUP && protocol_default_route_kinds(protocol).contains(&route_kind)
 }
 
 /// Check if a listener supports the given route kind based on allowedRoutes.kinds
@@ -337,6 +347,10 @@ fn listener_supports_route_kind(listener: &edgion_resources::resources::gateway:
         return true;
     }
 
+    if !protocol_supports_route_kind(&listener.protocol, GATEWAY_API_GROUP, route_kind) {
+        return false;
+    }
+
     let kinds = listener
         .allowed_routes
         .as_ref()
@@ -345,10 +359,10 @@ fn listener_supports_route_kind(listener: &edgion_resources::resources::gateway:
 
     match kinds {
         Some(allowed_kinds) => allowed_kinds.iter().any(|rgk| {
-            let group = rgk.group.as_deref().unwrap_or("gateway.networking.k8s.io");
-            group == "gateway.networking.k8s.io" && rgk.kind == route_kind
+            let group = rgk.group.as_deref().unwrap_or(GATEWAY_API_GROUP);
+            group == GATEWAY_API_GROUP && rgk.kind == route_kind
         }),
-        None => protocol_default_route_kinds(&listener.protocol).contains(&route_kind),
+        None => true,
     }
 }
 
@@ -952,6 +966,109 @@ mod tests {
         let filtered = resolve_tls_listener_hostnames(&all, "apps", &hosts, &runtime);
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered[0].listener_name, "tls");
+    }
+
+    #[tokio::test]
+    async fn explicit_route_kind_cannot_override_listener_protocol() {
+        use crate::conf_mgr::sync_runtime::resource_processor::handlers::GatewayHandler;
+        use crate::conf_mgr::sync_runtime::resource_processor::{LocalRawStore, ResourceProcessor};
+
+        let runtime = Arc::new(ControllerRuntime::default());
+        let processor = Arc::new(ResourceProcessor::<Gateway>::new(
+            "Gateway",
+            16,
+            Arc::new(GatewayHandler::new(None, None)),
+            runtime.clone(),
+        ));
+        let raw = Arc::new(LocalRawStore::new());
+        processor.set_raw_store(raw.clone());
+        runtime.processor_registry.register(processor);
+
+        let gateway = |tls_protocol: &str| {
+            Arc::new(
+                serde_json::from_value::<Gateway>(serde_json::json!({
+                    "metadata": {"namespace": "apps", "name": "gateway"},
+                    "spec": {"gatewayClassName": "test", "listeners": [
+                        {
+                            "name": "incompatible", "port": 8080, "protocol": "HTTP",
+                            "allowedRoutes": {"kinds": [{"kind": "TLSRoute"}]}
+                        },
+                        {
+                            "name": "compatible", "port": 8443, "protocol": tls_protocol,
+                            "allowedRoutes": {"kinds": [{"kind": "TLSRoute"}]}
+                        }
+                    ]}
+                }))
+                .unwrap(),
+            )
+        };
+        let parent: ParentReference = serde_json::from_value(serde_json::json!({"name": "gateway"})).unwrap();
+
+        raw.upsert("apps/gateway".into(), gateway("TLS"));
+        let accepted = validate_parent_ref_accepted("apps", &parent, None, "TLSRoute", &runtime);
+        assert!(accepted.errors.is_empty());
+        assert_eq!(accepted.matched_listeners, ["compatible"]);
+        assert!(update_tracker_accepted_only(
+            ResourceKind::TLSRoute,
+            "apps",
+            "route",
+            Some(&vec![parent.clone()]),
+            None,
+            &runtime,
+        ));
+        assert_eq!(
+            runtime
+                .attached_route_tracker
+                .count_for_listener("apps/gateway", "incompatible"),
+            0
+        );
+        assert_eq!(
+            runtime
+                .attached_route_tracker
+                .count_for_listener("apps/gateway", "compatible"),
+            1
+        );
+
+        raw.upsert("apps/gateway".into(), gateway("HTTP"));
+        let rejected = validate_parent_ref_accepted("apps", &parent, None, "TLSRoute", &runtime);
+        assert_eq!(rejected.errors.len(), 1);
+        assert_eq!(rejected.errors[0].reason(), "NotAllowedByListeners");
+        assert!(update_tracker_accepted_only(
+            ResourceKind::TLSRoute,
+            "apps",
+            "route",
+            Some(&vec![parent.clone()]),
+            None,
+            &runtime,
+        ));
+        assert_eq!(
+            runtime
+                .attached_route_tracker
+                .count_for_listener("apps/gateway", "incompatible"),
+            0
+        );
+        assert_eq!(
+            runtime
+                .attached_route_tracker
+                .count_for_listener("apps/gateway", "compatible"),
+            0
+        );
+
+        raw.upsert("apps/gateway".into(), gateway("TLS"));
+        assert!(update_tracker_accepted_only(
+            ResourceKind::TLSRoute,
+            "apps",
+            "route",
+            Some(&vec![parent]),
+            None,
+            &runtime,
+        ));
+        assert_eq!(
+            runtime
+                .attached_route_tracker
+                .count_for_listener("apps/gateway", "compatible"),
+            1
+        );
     }
 
     #[tokio::test]

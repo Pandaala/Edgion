@@ -2452,10 +2452,8 @@ fn compute_supported_kinds(listener: &GatewayListener) -> (Vec<RouteGroupKind>, 
 
     for requested in requested_kinds {
         let requested_group = requested.group.as_deref().unwrap_or("gateway.networking.k8s.io");
-        let is_valid_for_protocol = protocol_kinds.iter().any(|protocol_kind| {
-            let protocol_group = protocol_kind.group.as_deref().unwrap_or("gateway.networking.k8s.io");
-            protocol_group == requested_group && protocol_kind.kind == requested.kind
-        });
+        let is_valid_for_protocol =
+            super::route_utils::protocol_supports_route_kind(&listener.protocol, requested_group, &requested.kind);
 
         if is_valid_for_protocol {
             supported.push(requested.clone());
@@ -2473,31 +2471,13 @@ fn compute_supported_kinds(listener: &GatewayListener) -> (Vec<RouteGroupKind>, 
 
 /// Get supported route kinds for a protocol
 fn get_supported_kinds_for_protocol(protocol: &str) -> Vec<RouteGroupKind> {
-    match protocol.to_uppercase().as_str() {
-        "HTTP" | "HTTPS" => vec![
-            RouteGroupKind {
-                group: Some("gateway.networking.k8s.io".to_string()),
-                kind: "HTTPRoute".to_string(),
-            },
-            RouteGroupKind {
-                group: Some("gateway.networking.k8s.io".to_string()),
-                kind: "GRPCRoute".to_string(),
-            },
-        ],
-        "TCP" => vec![RouteGroupKind {
+    super::route_utils::protocol_default_route_kinds(protocol)
+        .iter()
+        .map(|kind| RouteGroupKind {
             group: Some("gateway.networking.k8s.io".to_string()),
-            kind: "TCPRoute".to_string(),
-        }],
-        "UDP" => vec![RouteGroupKind {
-            group: Some("gateway.networking.k8s.io".to_string()),
-            kind: "UDPRoute".to_string(),
-        }],
-        "TLS" => vec![RouteGroupKind {
-            group: Some("gateway.networking.k8s.io".to_string()),
-            kind: "TLSRoute".to_string(),
-        }],
-        _ => vec![],
-    }
+            kind: (*kind).to_string(),
+        })
+        .collect()
 }
 
 /// Resolve a Gateway-level StreamPlugins annotation to its store key.
@@ -2614,10 +2594,10 @@ mod route_refresh_tests;
 #[cfg(test)]
 mod tests {
     use super::{
-        build_gateway_attachment_proof, gateway_service_lookup_candidates, has_all_ca_refs_invalid,
-        resolve_gateway_stream_plugin_ref, resolve_inbound_proxy_protocol, validate_gateway_dns_resolver_ref,
-        validate_gateway_plugin_ref, validate_gateway_stream_plugin_ref, validate_listener_resolved_refs,
-        GatewayHandler,
+        build_gateway_attachment_proof, compute_supported_kinds, gateway_service_lookup_candidates,
+        has_all_ca_refs_invalid, resolve_gateway_stream_plugin_ref, resolve_inbound_proxy_protocol,
+        validate_gateway_dns_resolver_ref, validate_gateway_plugin_ref, validate_gateway_stream_plugin_ref,
+        validate_listener_resolved_refs, GatewayHandler,
     };
     use crate::conf_mgr::sync_runtime::resource_processor::{
         frontend_ca_ref::{FrontendCaSourceKey, FrontendCaSourceKind},
@@ -2633,7 +2613,7 @@ mod tests {
         FrontendCASourceKind, FrontendMatcherEligibility, FrontendTLSValidation, FrontendValidationMode,
         GatewayBackendTLS, GatewayFrontendTLS, GatewayFrontendTLSDefault, GatewayFrontendTLSPerPort, GatewaySpec,
         GatewaySpecTLS, GatewayTLSConfig, GatewayTlsMode, Listener as GatewayListener, ResolvedFrontendCAReference,
-        ResolvedServingCertificateReference, RouteNamespaces, ServingCertificateSourceIdentity,
+        ResolvedServingCertificateReference, RouteGroupKind, RouteNamespaces, ServingCertificateSourceIdentity,
     };
     use edgion_resources::resources::proxy_protocol::{
         CanonicalProxyProtocolTrustPolicy, ProxyProtocolConfigErrorCode, ProxyProtocolPolicySourceKind,
@@ -2661,6 +2641,40 @@ mod tests {
             },
             status: None,
         }
+    }
+
+    #[test]
+    fn supported_kinds_intersect_explicit_kinds_with_listener_protocol() {
+        let listener = GatewayListener {
+            name: "http".to_string(),
+            hostname: None,
+            port: 80,
+            protocol: "HTTP".to_string(),
+            tls: None,
+            allowed_routes: Some(AllowedRoutes {
+                namespaces: None,
+                kinds: Some(vec![
+                    RouteGroupKind {
+                        group: None,
+                        kind: "HTTPRoute".to_string(),
+                    },
+                    RouteGroupKind {
+                        group: None,
+                        kind: "TLSRoute".to_string(),
+                    },
+                ]),
+            }),
+        };
+
+        let (supported, errors) = compute_supported_kinds(&listener);
+        assert_eq!(supported.len(), 1);
+        assert_eq!(supported[0].kind, "HTTPRoute");
+        assert_eq!(errors.len(), 1);
+        assert!(matches!(
+            &errors[0],
+            super::GatewayResolvedRefsError::InvalidRouteKind { kind, protocol, .. }
+                if kind == "TLSRoute" && protocol == "HTTP"
+        ));
     }
 
     fn proxy_protocol_test_context(runtime: Arc<ControllerRuntime>) -> HandlerContext {
