@@ -42,7 +42,8 @@ process-wide refresh request. Keeping the request until successful publication
 also covers failed build/init and temporary `NotReady` without changing the
 provider fingerprint or the published client lookup. A real delete ends the
 runner and its pending request. This guard does not cover the separate Webhook
-transaction or pending recreation in provider delete joiners.
+preparation path. The former pending-recreation delete joiners have been removed;
+new objects admitted after capacity recovery use the current process-wide settings.
 
 ## Verification and re-evaluation
 

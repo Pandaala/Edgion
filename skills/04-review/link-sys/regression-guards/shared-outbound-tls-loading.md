@@ -40,8 +40,8 @@ from their manager config and credential-input revision list.
   HTTP providers use `build_outbound_client` and `apply_resolved_outbound_tls`;
   active TLS policy continues through `resolve_outbound_tls`, as required by
   [the unification rules](../../../00-design-rules.md#d-cross-cutting-unification--one-canonical-implementation-per-mechanism).
-- `edgion-gateway/src/link_sys/providers/webhook/manager.rs`:
-  `WebhookMutationGuard::prepare` removes inactive TLS before passing the connection
+- `edgion-gateway/src/link_sys/providers/webhook/client.rs`:
+  `WebhookLinkClient::prepare` removes inactive TLS before passing the connection
   to `ManagedOutboundClient`. That engine uses TLS block presence for Service target
   scheme and HTTP client construction; passing a disabled block would still select
   HTTPS or fail on unresolved references. URL targets retain their explicit scheme.
@@ -62,9 +62,9 @@ plugin-client contracts.
 Do not remove readiness checks for enabled blocks or conflate TLS enablement with
 authentication readiness. Do not disable URL-implied TLS to make a resource ready.
 This correction does not redesign full/partial client replacement or change the
-global `OutboundTlsConfig` (which has no enable switch). Webhook uses its own
-manager publication path, and HttpDns has no generic runtime store; the ordinary
-Redis/Etcd/Elasticsearch/Kafka store consequences do not apply identically to them.
+global `OutboundTlsConfig` (which has no enable switch). Webhook prepares a managed
+client before publication in the unified typed runtime table, rather than using
+the persistent-provider runner. HttpDns has no runtime client in that table.
 Plugin-local TLS admission and resolution paths are outside this LinkSys fix.
 
 The historical `g9a-007` resolution unified reqwest CA/mTLS loading. Its old symbols
@@ -73,7 +73,8 @@ current call chain, and did not establish disabled-block readiness behavior.
 
 ## Verification and re-evaluation
 
-Fresh verification on 2026-09-11:
+Historical verification on 2026-09-11 (old manager test paths below predate the
+provider-owned runtime refactor; current preparation tests live in client.rs):
 
 - `cargo test -p edgion-common --lib link_sys_core::credential::tests`: 34 passed,
   including all seven provider arms with disabled/enabled/unresolved references.

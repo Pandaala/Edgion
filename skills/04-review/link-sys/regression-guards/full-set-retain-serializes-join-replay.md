@@ -5,9 +5,23 @@ knowledge_type: regression-guards
 finding_id: ISSUE-002
 ---
 
-# Full-set retain precedes apply and serializes with delete join replay
+# Full-set omission cannot resurrect removed LinkSys resources
 
 ## Conclusion and scope
+
+The unified-table refactor replaces the per-provider apply locks and pending
+recreation maps described below. Full-set omission now removes the current typed
+entry and signals its provider to stop. Cleanup never mutates the registry or
+replays creation, so there is no delete-join replay to serialize. A type change
+removes the old current entry before admitting the new provider, without waiting
+for old cleanup. See [simple removal](../intentional-design/provider-owned-runtime-and-simple-removal.md).
+
+The remaining sections document historical fixes and tests of the removed
+implementation, not requirements to retain its locks or pending maps. Preserve
+the behavioral regression boundary: an omitted key cannot reappear from stale
+cleanup, and unrelated ordered deltas must not be lost.
+
+## Historical implementation and evidence
 
 For Redis, Etcd, Elasticsearch, Kafka, and OTLP, a LinkSys key omitted from an
 authoritative full-set must have neither a mapped persistent runner nor a

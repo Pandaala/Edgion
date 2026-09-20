@@ -155,13 +155,19 @@ impl std::fmt::Debug for ManagedOutboundClient {
 
 impl Drop for ManagedOutboundClient {
     fn drop(&mut self) {
-        if let Some(handle) = self.health_task.take() {
-            handle.abort();
-        }
+        self.stop_health_check();
     }
 }
 
 impl ManagedOutboundClient {
+    /// Stop background probes without interrupting callers holding this client.
+    /// Repeated calls are harmless; task completion does not gate replacement.
+    pub(crate) fn stop_health_check(&self) {
+        if let Some(handle) = &self.health_task {
+            handle.abort();
+        }
+    }
+
     // ============================================================
     // from_parts — primary constructor
     // ============================================================

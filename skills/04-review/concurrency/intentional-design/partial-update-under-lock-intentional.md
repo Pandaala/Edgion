@@ -110,9 +110,8 @@ Re-open this decision only if:
 - [lock-around-atomic-metrics.md](lock-around-atomic-metrics.md) — sibling concurrency rule:
   the hot-path-vs-control-plane decision framework used to decide whether to split
   inside-lock / outside-lock work.
-- [webhook-manager-rwlock-intentional.md](webhook-manager-rwlock-intentional.md)
-  — sibling accepted-tradeoff: a coarse lock kept intentionally because the fine-grained "fix"
-  is structurally heavier than the cold-path benefit.
+- [Former WebhookManager lock decision](../superseded/webhook-manager-rwlock-intentional.md)
+  — historical comparison only; its independent registry has been removed.
 - `edgion-gateway/src/conf_sync/cache_client/cache_data.rs` — `CacheData<T>`,
   `process_compressed_events`, `ConfHandlerData`.
 - `edgion-gateway/src/conf_sync/cache_client/event_dispatch.rs:332-351` — the watch ingestion

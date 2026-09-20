@@ -1,10 +1,29 @@
 ---
 name: webhook-dispatch-credential-gate
-description: Read when reviewing LinkSys Webhook dispatch findings about dispatch_full_set/dispatch_partial_update hardcoding ready=true (auth_kind="NotRequired") / no credential gate at dispatch / inject_auth silently sending an unauthenticated request when the auth.secretRef Secret is Pending/Invalid.
+description: Current Webhook publication gates unresolved request-template Secrets and enabled TLS; the removed WebhookAuth dispatch gate is historical evidence only.
 knowledge_type: regression-guards
 ---
 
 # LinkSys Webhook dispatch credential gate (link-sys-F003)
+
+## Current conclusion
+
+Both full and partial updates use the Webhook branch of `apply_entry` in
+`runtime/store.rs`. Before preparation it checks `webhook_secrets_ready`, backed
+by `WebhookServiceConfig::unresolved_secret_refs`. Enabled TLS is resolved during
+`WebhookLinkClient::prepare` through the canonical outbound client builder;
+disabled TLS is filtered before that call. Missing template Secret material or
+a preparation error prevents new publication. Same-type updates retain the old prepared client; type changes
+remove the old provider first and may temporarily have no current client.
+`webhook_with_unresolved_secret_ref_is_not_ready` covers the request-template gate.
+
+`credential::resolved_state` returns `NotRequired` for Webhook. It is not the
+current authentication gate. The legacy `auth` JSON placeholder is accepted but
+ignored, so the old `auth.secretRef` fail-closed assertion below does not describe
+current behavior. See the [superseded authentication decision](../../webhook-key/superseded/webhook-auth-hmac-fail-closed-upsert-guard.md).
+Do not treat historical symbols or rejection statements as current evidence.
+
+## Historical WebhookAuth resolution (inactive)
 
 **Status / verdict**: fixed (link-sys-F003, 2026-05-25). Supersedes link-sys-FB04.
 

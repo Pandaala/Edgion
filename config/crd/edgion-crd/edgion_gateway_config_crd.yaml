@@ -371,7 +371,7 @@ spec:
                       default: 16384
                     maxInstancesPerKind:
                       type: integer
-                      description: "Max live plus draining LinkSys instances per provider kind (default 200). New keys are refused when the cap is reached; updates and deletes always proceed."
+                      description: "Max current registered persistent LinkSys instances per provider kind (default 200). Pending keys are retried after removal or a cap increase; updates and deletes proceed without waiting for old cleanup."
                       format: int64
                       default: 200
                       minimum: 1

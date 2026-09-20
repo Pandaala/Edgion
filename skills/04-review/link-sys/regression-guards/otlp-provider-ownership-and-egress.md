@@ -35,7 +35,7 @@ URI secrets observable. A key-only sender cannot recreate a transport or probe.
   diagnostics even under RUST_LOG=trace.
 - The shared per-key persistent runner publishes an immutable OTLP generation
   only after its bounded empty Export succeeds and desired fingerprint is still
-  current. Invalid, unresolved, or unreachable replacements keep old service.
+  current. Invalid, unresolved, or unreachable same-type replacements keep old service.
   Candidate initialization and active health probing remain generation-local.
 - Endpoint timeout covers headers only. The narrow SDK exporter decorator must
   bound the whole future and poll with captured runtime context on the SDK std
@@ -56,8 +56,8 @@ foreign provider to OTLP could keep its old typed client if an unrelated later
 delta reached the global Webhook sequence fence first. All three production
 source callbacks now reserve generic async admission through `spawn_ordered_dispatch`
 inside the source-event lock. Each task awaits its predecessor before entering
-the existing Webhook mutation guard. This orders old full/partial publications,
-type-change cleanup, and subsequent recreation without modifying typed getters
+unified registry mutation (historically the Webhook mutation guard). This orders
+full/partial publications, type-change cleanup, and subsequent recreation
 or rebuilding the full resource set for a delta. The private tail retains one
 handle; pending tasks still scale with outstanding source events, as before.
 Predecessor failure releases successors with a fixed diagnostic. No public task
@@ -125,12 +125,14 @@ exporter shutdown, logging filters, resolver behavior, Secret/TLS policy, probe
 deadlines, source dispatch ordering, or the number/ownership of log consumers.
 The product still excludes OTLP/HTTP, tracing/metric export and durable replay.
 
-Round 1 lifecycle review found startup-error drain and rapid remove/recreate
-retirement gaps. An armed startup guard now covers all errors after watches start.
-The persistent runner and per-key deleting state prevent overlapping generations
-until cleanup joins, then apply only the latest deferred desired state. Retiring
-counts remain accurate while process shutdown owns the cleanup JoinSet.
-Fresh regression evidence is recorded in the task implementation report.
+Historical Round 1 lifecycle review found startup-error drain and rapid
+remove/recreate retirement gaps. The armed startup guard remains. The later
+user-approved [simple-removal contract](../intentional-design/provider-owned-runtime-and-simple-removal.md)
+removes per-key deleting and deferred desired state: cancellation does not block
+new registration, and brief retirement overlap is accepted. The OTLP cleanup
+JoinSet remains solely for process-exit SDK retirement and its retiring count;
+cleanup never mutates the runtime registry. Fresh verification is recorded in
+the active task; the older no-overlap guarantee is superseded.
 
 LinkSys auth.secretRef declares all four operator fields (name, namespace, group,
 kind) in the structural CRD subtree so Kubernetes cannot prune unsupported group

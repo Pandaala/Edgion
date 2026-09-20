@@ -89,8 +89,8 @@ Re-open only if:
   (holds no lock across awaits, unlike this etcd monitor).
 - `providers/webhook/manager.rs` `health_task` — sibling abort-only monitor handle (same policy).
 - `providers/elasticsearch/client.rs` `bulk_task` — sibling that additionally awaits to drain.
-- [link-sys-F011](../intentional-design/webhook-manager-rwlock-intentional.md) — related webhook
-  runtime/JoinHandle coupling decision.
+- [link-sys-F011](../superseded/webhook-manager-rwlock-intentional.md) — superseded
+  Webhook runtime/JoinHandle coupling decision; not a current registry constraint.
 - backends-F002 — sibling "spawned task handle management on a config-sync–driven store" fix.
 
 ## Resolution references

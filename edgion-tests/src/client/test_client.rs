@@ -28,6 +28,7 @@ const EXPECTED_DYNAMIC_SCENARIO_IDS: &[&str] = &[
     "ExtProcTlsPolicyRecovery",
     "PluginPolicyDynamic",
     "LinkSysDisabledTls",
+    "LinkSysProviderReplacement",
     "DelegationParentRefGatewayCollisionHttp",
     "DelegationParentRefGatewayCollisionGrpc",
     "RequestMirrorReferenceGrant",
@@ -1508,6 +1509,7 @@ fn dynamic_port_contract(id: &str) -> Result<Option<(&'static str, port_config::
             Some(("EdgionBackend/SingleProvider", PortKind::Http))
         }
         "AllEndpointStatusTls"
+        | "LinkSysProviderReplacement"
         | "EncryptedActiveHealthChecks"
         | "ExtProcTlsPolicyRecovery"
         | "RequestMirrorReferenceGrant"

@@ -4,7 +4,7 @@ Use this for tasks such as:
 
 - Adding or extending an external system connection capability in `LinkSys`.
 - Adjusting runtime wiring for Redis / Etcd / Elasticsearch / Kafka / OTLP / Webhook / HttpDns.
-- Troubleshooting "the LinkSys YAML has synced but the gateway-side runtime client / webhook manager has not updated".
+- Troubleshooting "the LinkSys YAML has synced but the gateway-side runtime client has not updated".
 
 ## Read these real entry points first
 
@@ -50,14 +50,14 @@ The current main pipeline:
 3. The Controller's `LinkSysHandler` mainly handles standard status updates, with no complex dependency resolution.
 4. The gateway `ConfigClient` has a dedicated `ClientCache<LinkSys>`.
 5. That cache registers `create_link_sys_handler()`.
-6. `LinkSysStore.full_set()` / `partial_update()` dispatches resources to each runtime manager.
+6. `LinkSysStore.replace_all()` / `update()` dispatches resources into the unified runtime table.
 7. Callers ultimately get the runtime client through typed APIs, e.g.:
    - `get_redis_client("namespace/name")`
    - `get_etcd_client("namespace/name")`
    - `get_es_client("namespace/name")`
    - `get_kafka_client("namespace/name")`
    - `get_otlp_client("namespace/name")`
-   - `get_webhook_manager().get("namespace/name")`
+   - `get_webhook_call_handle("namespace/name")`
 
 In short:
 
@@ -99,8 +99,8 @@ Do not reintroduce the removed consumer-owned `WebhookCallRequest`, `forwardHead
 
 Webhook-specific module layout:
 
-- `providers/webhook/manager.rs`: sequence-checked prepare/commit publication and call-handle lookup.
-- `providers/webhook/client.rs`: prepared-entry bookkeeping for LinkSys store transitions.
+- `providers/webhook/manager.rs`: stateless current-client lookup and call handles.
+- `providers/webhook/client.rs`: provider-owned preparation, fingerprint, and retirement.
 - `providers/webhook/runtime.rs`: shared sliding-window rate limiter.
 - `providers/webhook/resolver.rs`: `resolve_webhook_key` consumer adapter used by `WebhookKeyGet`.
 
@@ -111,9 +111,8 @@ bounded calls, and retries are owned by the shared engine under
 Key points:
 
 - The key remains `namespace/name`.
-- `dispatch_full_set_with()` / `dispatch_partial_update_with()` acquire the
-  manager mutation guard, prepare a complete `ManagedOutboundClient`, commit the
-  manager change, and only then update `WEBHOOK_RUNTIME` bookkeeping.
+- Ordered LinkSys dispatch prepares a complete `ManagedOutboundClient` before
+  publishing it in the unified runtime table. There is no secondary Webhook map.
 - The target is either a flat Service reference or an origin-only URL; request shape and presence policy are resource-owned.
 - Consumers must use the resolver/call APIs instead of building arbitrary outbound requests.
 - Full architecture: [09-link-sys.md](09-link-sys.md#webhook) and
@@ -121,7 +120,7 @@ Key points:
 
 ### 3. Kafka and HttpDns
 
-Kafka is fully wired through its provider, `KAFKA_RUNTIME` persistent runners, full/partial
+Kafka is fully wired through its provider, unified-table persistent runners, full/partial
 LinkSys dispatch, and `get_kafka_client` (published handle; D14). HttpDns is a `SystemConfig` variant consumed by the DNS resolver path; it is
 intentionally not inserted into a generic LinkSys runtime-client store.
 
@@ -136,7 +135,7 @@ The bridging for LinkSys is now fixed:
 5. Then calls `LinkSysStore.replace_all()` / `update()`.
 6. `runtime/store.rs` ordered `dispatch_full_set()` / `dispatch_partial_update()`
    apply Redis / Etcd / Elasticsearch / Kafka / OTLP persistent runners and the
-   specialized Webhook transaction. HttpDns is consumed by DNS resolution, and
+   prepared Webhook object. HttpDns is consumed by DNS resolution, and
    CredentialSource is Controller-only.
 
 So if you are changing gateway-side runtime behavior, focus on:
@@ -191,15 +190,17 @@ This is the easiest place to forget. At minimum, add:
 
 - The `dispatch_full_set()` branch.
 - The `dispatch_partial_update()` branch.
-- For a persistent provider, per-key runner admission, desired-state posting,
-  getter publication, kind-change cleanup, and full-set retention.
-- For a Webhook-style provider, ordered prepare/commit and runtime bookkeeping.
-- The cleanup logic for old clients / old tasks on deletion.
+- Add one typed variant to the unified runtime table, with provider-owned update,
+  current-client lookup, and a nonblocking retirement signal.
+- For a persistent provider, reuse runner admission, desired-state posting, and
+  publication. For a Webhook-style provider, prepare before same-type replacement.
+- Deletion removes current lookup and signals stop; it does not await every old
+  task or Arc. Never let cleanup mutate the table or recreate a removed key.
 
 Redis, Etcd, Elasticsearch, Kafka, and OTLP post desired state to a per-key
 persistent runner. Their getters stay empty until the first successful publish;
-full-set relists retain the runner map rather than replacing it. Webhook uses
-ordered prepare/commit and skips prepare when the runtime fingerprint is
+full-set relists retain equal current entries. Webhook uses
+ordered preparation/publication and skips prepare when the runtime fingerprint is
 unchanged (no new `ManagedOutboundClient`).
 
 ### 4. Add admin testing endpoints only when tests need them
@@ -249,7 +250,7 @@ These resemble the `local_file` provider rather than a new `SystemConfig`.
 - Adding only a `SystemConfig` variant and forgetting `validate_config()` or the CRD.
 - The provider is finished but `runtime/store.rs` does not dispatch, so the YAML is synced but the runtime does not take effect.
 - Only handling full sync, forgetting the partial-update / remove paths.
-- Publishing Webhook bookkeeping before the sequence-checked manager commit.
+- Adding a second provider-specific runtime registry or publishing an unprepared Webhook client.
 - Treating LinkSys as "a new resource kind" and modifying controller framework code that should not be touched.
 - Writing the test compose and YAML but forgetting the gateway admin testing endpoint, making runtime-behavior assertions hard.
 

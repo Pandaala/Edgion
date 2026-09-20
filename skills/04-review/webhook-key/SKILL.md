@@ -13,6 +13,6 @@ before applying a decision to current code.
 
 - [WebhookKeyGet + LinkSys Resolver Has No Response Signature Verification: Relying on TLS is the Industry Pattern](intentional-design/response-signature-not-needed.md)
 
-## Regression guards
+## Superseded decisions
 
-- [LinkSys webhook-auth WebhookAuth::Hmac Silent No-op in inject_auth](regression-guards/webhook-auth-hmac-fail-closed-upsert-guard.md)
+- [Former WebhookAuth HMAC upsert rejection](superseded/webhook-auth-hmac-fail-closed-upsert-guard.md)

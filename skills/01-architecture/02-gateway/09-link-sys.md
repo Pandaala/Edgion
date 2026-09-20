@@ -15,7 +15,7 @@ description: LinkSys external system integration — CRD connector variants, run
 | Elasticsearch | `providers/elasticsearch/` | `EsLinkClient` | HTTP bulk API | Bulk indexing, data send |
 | Etcd | `providers/etcd/` | `EtcdLinkClient` | gRPC (v3 API) | KV read/write |
 | Redis | `providers/redis/` | `RedisLinkClient` | standalone / sentinel / cluster (fred) | Data read/write, distributed rate limiting support |
-| Webhook | `providers/webhook/` | WebhookManager | HTTP | External service calls, WebhookKeyGet resolution |
+| Webhook | `providers/webhook/` | WebhookLinkClient | HTTP | External service calls, WebhookKeyGet resolution |
 | Kafka | `providers/kafka/` | `KafkaLinkClient` | Kafka producer | Persistent runtime client and log delivery |
 | OTLP | `providers/otlp/` | `OtlpLinkClient` | OTLP/gRPC over HTTP/HTTPS | Persistent runner, shared log export, safe egress |
 | HttpDns | resource + DNS resolver service | resolver configuration | HTTP DNS | DNS-resolution configuration; not a LinkSys runtime-client store |
@@ -72,8 +72,8 @@ edgion-common/src/link_sys_core/providers/etcd/
 
 ```
 providers/webhook/
-├── manager.rs           # ordered prepare/commit publication + call-handle lookup
-├── client.rs            # prepared WebhookLinkClient bookkeeping wrapper
+├── manager.rs           # stateless current-client lookup + call handles
+├── client.rs            # provider-owned prepared Webhook client
 ├── resolver.rs          # resolve_webhook_key — WebhookKeyGet consumer entry, response extract
 ├── runtime.rs           # shared sliding-window rate limiter
 └── mod.rs
@@ -119,52 +119,50 @@ Operations:
 
 Global singleton: `get_global_link_sys_store()`.
 
-### Runtime client store
+### Current runtime ownership
 
-The five persistent providers store per-key runners; their getters expose only
-published clients. Webhook has separate manager publication and runtime bookkeeping:
+One runtime table maps `namespace/name` to a typed provider object. Redis,
+Etcd, Elasticsearch, Kafka, and OTLP entries own their existing
+`PersistentRunner`; Webhook entries own a prepared `WebhookLinkClient`.
+Typed `get_*_client` APIs select only the matching current entry, then obtain
+its published client. Webhook call-handle lookup uses the same table directly.
+HttpDns and CredentialSource remain configuration-only variants.
 
-| Provider | Global store | Accessor |
-|----------|--------------|----------|
-| Redis | `REDIS_RUNTIME` persistent runners; `get_redis_client` is the published handle | `get_redis_client(name)` |
-| Etcd | `ETCD_RUNTIME` persistent runners; `get_etcd_client` is the published handle | `get_etcd_client(name)` |
-| Elasticsearch | `ES_RUNTIME` persistent runners; `get_es_client` is the published handle | `get_es_client(name)` |
-| Kafka | `KAFKA_RUNTIME` persistent runners; `get_kafka_client` is the published handle | `get_kafka_client(name)` |
-| OTLP | `OTLP_RUNTIME` persistent runners; `get_otlp_client` is the published exporter | `get_otlp_client(name)` |
-| Webhook | `WebhookManager` plus `WEBHOOK_RUNTIME` bookkeeping; equal-fingerprint relists skip prepare | via `get_webhook_manager()` |
-
-Key format: `"namespace/name"`.
+The serialized source snapshot remains separate for configuration consumers.
+It is not a second authority for client publication. Counts, keys, health
+inspection, and request lookup derive from the unified runtime table.
 
 ### Client lifecycle
 
-During full-set and partial updates, ordered dispatch selects the provider from
-`SystemConfig`. Redis, Etcd, Elasticsearch, Kafka, and OTLP post desired state
-to a per-key `PersistentRunner`. The runner builds and initializes a candidate,
-then publishes it only if that desired generation is still current. All five
-`get_*_client` accessors return `None` before the first successful publication;
-an existing published generation remains available during a handover when its
-apply plan permits it. Relists reuse runners rather than replacing their maps.
-Full-set dispatch removes runners for keys absent from each persistent provider;
-partial updates remove the previous provider's runner on a kind change and
-remove deleted keys from every provider.
+Ordered full-set, partial-update, and rebuild dispatch share the same mutation
+path. Same-type updates delegate to the provider object. Persistent runners
+retain fingerprint reuse, connection retry/backoff, forced rebuild intent,
+generation fencing, and live-connection handover. Webhook prepares a complete
+managed outbound client before replacing a same-type entry; equal fingerprints
+reuse the current client.
 
-Each persistent client owns a shared `PublishedHealth` cell. Health reads stay
-lock-free, while writers serialize a level change with the runner's publication
-handover. A candidate may establish its initial level without emitting a flip.
-Publication treats that level as the baseline; only later transitions from the
-currently published generation increment
-`edgion_link_sys_health_flips_total`. Replacement atomically disables the old
-reporter before activating the new baseline, and deletion disables reporting
-before unpublishing. Duplicate observations and retired-generation updates do
-not increment the counter. Gateway clients inject the binary-owned metric
-reporter; Controller-created Etcd clients use the same health cell without one.
+Deletion removes the current entry and signals its background work to stop.
+It does not wait for asynchronous provider shutdown or every caller-held Arc.
+A type change is removal followed by creation: temporary unavailability and
+brief overlap with stopping old work are accepted. Cleanup never recreates a
+key or removes a newer entry. There are no per-provider deleting/pending maps,
+tombstones, or cross-type supervisors.
 
-Webhook instead prepares a registration through its ordered mutation guard and
-commits it before updating `WEBHOOK_RUNTIME` bookkeeping. An equal runtime
-fingerprint reuses the committed registration. `LinkSysStore::replace_all`
-replaces the resource snapshot, while the Webhook full-set path replaces only
-its own bookkeeping map after commit; neither operation replaces a persistent
-runner map.
+The per-kind capacity limit counts current registered objects. Desired resources
+that cannot yet be admitted remain in the source configuration; removal or cap
+increase retries admission from the ordered snapshot. Unresolved credentials
+never degrade to anonymous access.
+
+Each persistent client owns a `PublishedHealth` cell. Publication disables the
+old reporter and establishes the new generation's baseline; retired observations
+do not increment health-transition counters. Gateway clients inject the
+binary-owned reporter, while Controller-created Etcd clients do not.
+
+Webhook removal/replacement explicitly stops its managed health task even if
+an older request retains a call handle. Calls already holding a client are not
+subject to a new blanket revocation policy. Retirement does not promise delivery
+of queued records.
+
 
 ## DataSender
 
@@ -195,8 +193,8 @@ pub trait DataSender<T>: Send + Sync where T: Send + 'static {
 `ConfHandler<LinkSys>` connects the configuration sync system with LinkSysStore:
 
 ```rust
-impl ConfHandler<LinkSys> for Arc<LinkSysStore> {
-    fn full_set(&self, data: &HashMap<String, LinkSys>) { ... }
+impl ConfHandler<LinkSys> for LinkSysStore {
+    fn full_set(&self, data: &HashMap<String, Arc<LinkSys>>) { ... }
     fn partial_update(&self, add, update, remove) { ... }
 }
 ```
@@ -213,7 +211,7 @@ impl ConfHandler<LinkSys> for Arc<LinkSysStore> {
 
 ## Directory layout
 
-After the crate split, the LinkSys **core** (credential / health / lifecycle / TLS) and the **Etcd provider** live in `edgion-common/src/link_sys_core/`; the gateway re-exports them via `edgion-gateway/src/link_sys/mod.rs` (`pub use edgion_common::link_sys_core::{credential, health, lifecycle, tls, LinkSysHealth}`). The gateway crate itself holds the sink/connector providers and the runtime framework. Placement rule: backend-agnostic core logic (or a provider the controller also needs) goes in the common `link_sys_core`; data-plane runtime providers and stores go in `gateway::link_sys`.
+After the crate split, the LinkSys **core** (credential / health / TLS) and the **Etcd provider** live in `edgion-common/src/link_sys_core/`; the gateway re-exports them via `edgion-gateway/src/link_sys/mod.rs` (`pub use edgion_common::link_sys_core::{credential, health, tls, LinkSysHealth}`). The gateway crate itself holds the sink/connector providers and the runtime framework. Placement rule: backend-agnostic core logic (or a provider the controller also needs) goes in the common `link_sys_core`; data-plane runtime providers and stores go in `gateway::link_sys`.
 
 ```
 edgion-gateway/src/link_sys/
@@ -227,7 +225,7 @@ edgion-gateway/src/link_sys/
 │   ├── local_file/           # local-file writes + rotation
 │   └── mod.rs
 └── runtime/                  # runtime framework
-    ├── store.rs              # LinkSysStore + per-provider runtime stores
+    ├── store.rs              # LinkSysStore + unified typed runtime table
     ├── data_sender.rs        # DataSender trait definition
     ├── conf_handler.rs       # ConfHandler<LinkSys> implementation
     └── mod.rs
@@ -235,7 +233,6 @@ edgion-gateway/src/link_sys/
 edgion-common/src/link_sys_core/       # core framework + Etcd provider (re-exported by the gateway)
 ├── credential.rs             # materialise credentials from the embedded Secret in LinkSys.spec.*Auth
 ├── health.rs                 # Shared health DTO and publication-aware health cell
-├── lifecycle.rs              # legacy lifecycle trait (unused by Gateway dispatch)
 ├── tls.rs                    # unified TLS material resolution for provider connections
 ├── mod.rs
 └── providers/etcd/           # Etcd v3 client (KV / lease / lock + background health monitor)
@@ -254,10 +251,10 @@ handover, while a generation with zero live coverage is replaced immediately.
 
 Full, partial, and rebuild dispatch post OTLP desired state from the same ordered
 generic task as the other persistent providers. Kind changes delete foreign
-runners before applying OTLP, and removal immediately unpublishes before joining
-runner cleanup. Unresolved credentials or TLS material do not create a runner;
-during deletion they also drop any deferred recreation. Store list/count reports
-runner keys, including connecting unpublished keys, while `get_otlp_client`
+runners before applying OTLP. Removal immediately unpublishes and signals runner
+cleanup without waiting for it. Unresolved credentials or TLS material do not
+create a runner. No deferred recreation state exists. Store list/count reports
+current runner keys, including connecting unpublished keys, while `get_otlp_client`
 returns `None` until first publication.
 
 A successful empty Export through the candidate exporter permits publication;
@@ -275,9 +272,8 @@ release. The runner waits 10 seconds before retiring a handed-over generation an
 joins retirement during deletion. Read the [OTLP regression boundary](../../04-review/link-sys/regression-guards/otlp-provider-ownership-and-egress.md)
 before changing this lifecycle.
 
-Removed keys retain a deleting entry until runner and SDK/probe teardown join.
-Rapid delete/recreate stores only the latest pending desired state, and the
-per-kind instance cap counts live runners plus deleting joiners. The once-shared
-process shutdown fence cancels all OTLP runners and joins deletion and handover
-cleanup before Tokio IO is dropped. A startup guard invokes the same fence on
-errors after resource watches begin.
+Removed entries signal runner cancellation without blocking admission of a new
+same-key entry. OTLP retains its provider-specific process-exit cleanup so the SDK
+can retire while Tokio IO remains available, including startup failure after
+resource watches begin. This is not a cross-provider deletion barrier or a
+lossless-log-delivery guarantee.

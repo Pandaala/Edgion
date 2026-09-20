@@ -1,10 +1,24 @@
 ---
 name: webhook-auth-hmac-fail-closed-upsert-guard
-description: Use when reviewing LinkSys webhook-auth WebhookAuth::Hmac silent-no-op-in-inject_auth findings — WebhookManager::upsert now rejects Hmac fail-closed; full HMAC signing intentionally not implemented.
-knowledge_type: regression-guards
+description: Historical HMAC upsert rejection for the removed WebhookAuth model, not evidence of current authentication enforcement.
+knowledge_type: superseded
 ---
 
 # LinkSys webhook-auth WebhookAuth::Hmac Silent No-op in inject_auth
+
+## Current conclusion
+
+The manager upsert guard no longer exists, and the legacy WebhookAuth enum is no
+longer the type of WebhookServiceConfig.auth. Current Webhook requests use
+declarative request fields, including Secret-backed
+header templates. `WebhookServiceConfig.auth` is still an accepted-but-ignored
+JSON placeholder; this predates the unified runtime refactor and does not provide
+HMAC signing or fail-closed rejection. Do not use the historical verdict to
+suppress findings against current behavior. Removing ignored legacy fields is
+separate schema-cleanup debt, not a runtime ownership fix. See the current
+[Webhook contract](../../../01-architecture/03-controller-gateway-link/webhook.md#migration-operator-facing).
+
+## Historical resolution (inactive)
 
 **Status / verdict**: fixed (link-sys-F005, 2026-05-25)
 

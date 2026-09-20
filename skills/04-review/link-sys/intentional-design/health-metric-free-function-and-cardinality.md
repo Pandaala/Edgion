@@ -24,8 +24,8 @@ The counter is emitted through a Gateway-owned reporter attached to the shared
 runner together with the current-client swap, so only a real transition of the
 published generation is counted.
 The scrape covers all five persistent-runner providers: Redis, Etcd,
-Elasticsearch, Kafka, and OTLP. Webhook publication and health remain separately
-owned by `WebhookManager` and the shared outbound client; Webhook is not a
+Elasticsearch, Kafka, and OTLP. Webhook publication uses the unified runtime table;
+its managed outbound client owns health state. Webhook is not a
 persistent-runner gauge source.
 Suggestions to register them as `OnceLock` handles on `GatewayMetrics`, or to drop the `link` label
 over cardinality fears, are **not accepted**.

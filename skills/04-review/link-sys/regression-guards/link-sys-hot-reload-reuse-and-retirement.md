@@ -15,9 +15,10 @@ and OTLP, an ordinary update whose consumed runtime material is unchanged
 reuses the published client generation. A material change starts a replacement:
 the runner retires a generation with no live connections before attempting a
 new one, or keeps a generation with live connections until a new one initializes
-and publishes successfully, then retires the old one. Webhook has a separate ordered
-publication path and skips preparation for an equal runtime fingerprint. Delete
-unpublishes and shuts down the client. Neither retirement nor deletion promises
+and publishes successfully, then retires the old one. Webhook prepares before
+publication in the unified table and skips equal-fingerprint preparation. Delete
+unpublishes and signals asynchronous shutdown; it does not await every old handle.
+Changing provider type may temporarily leave no client. Neither retirement nor deletion promises
 delivery of queued Kafka or Elasticsearch records.
 
 ## Rationale and evidence
@@ -31,7 +32,7 @@ Secret fingerprints, returning `Reuse` for an equal ordinary update and
 only after successful initialization, then schedules retirement; a failed
 build or initialization need not publish a replacement. Delete unpublishes and
 shuts down. The Webhook
-store and manager perform their own ordered publication. Kafka shutdown aborts
+provider prepares before unified-table publication. Kafka shutdown aborts
 and joins producer tasks; it does not flush their queued records. The accepted
 runtime lifecycle specification in
 `tasks/todo/linksys-runtime-apply-lifecycle/00-spec.md` explicitly excludes a

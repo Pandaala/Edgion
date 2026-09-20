@@ -29,6 +29,7 @@ pub mod grpc_route_delegation_dynamic;
 pub mod json_schema_validation;
 pub mod l4_timeout_hot_reload;
 pub mod link_sys_disabled_tls;
+pub mod link_sys_provider_replacement;
 pub mod observed_gen_high_freq;
 pub mod rate_limit_local_dynamic;
 pub mod rate_limit_local_overflow;

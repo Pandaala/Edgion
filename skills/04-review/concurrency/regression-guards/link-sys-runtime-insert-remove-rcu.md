@@ -1,10 +1,33 @@
 ---
 name: link-sys-runtime-insert-remove-rcu
-description: LinkSys runtime-store insert/remove go through the generic ProviderRuntimeStore::{insert,remove}, which uses ArcSwap::rcu, so the load-clone-modify-store is atomic under concurrent dispatch tasks. Reject re-reports claiming the non-atomic read-modify-write loses a concurrent insert/remove update.
+description: LinkSys runtime mutations remain serialized; current unified-registry locking replaces the historical per-provider ArcSwap RCU mechanism.
 knowledge_type: regression-guards
 ---
 
-# link-sys F-001 (runtime store) — `ProviderRuntimeStore::{insert,remove}` are atomic via `ArcSwap::rcu`
+# LinkSys runtime mutation preserves concurrent updates
+
+## Current conclusion
+
+The unified `RuntimeRegistry` in `runtime/store.rs` holds its mutation mutex
+across sequence validation, map cloning, side-effect replacement, and publication.
+Source events reserve and enqueue ordered dispatch while holding the source-event
+lock. Reads load the ArcSwap without taking the mutation mutex. Both full and
+partial updates obey this order; an older full set cannot overtake a later delta.
+The source snapshot also retains capacity-denied intent for ordered retry.
+
+This preserves the original no-lost-update invariant without the deleted
+`ProviderRuntimeStore` or its RCU helpers. See
+[provider-owned runtime](../../link-sys/intentional-design/provider-owned-runtime-and-simple-removal.md).
+Relevant current tests include
+`ordered_dispatch_preserves_unrelated_deltas_and_captured_snapshot` and
+`stale_full_or_partial_dispatch_cannot_replace_newer_current`. These are
+deterministic ownership/ordering tests, not live SDK integration evidence.
+
+## Historical RCU implementation (inactive)
+
+All implementation claims, rejection rules, and scope notes below describe the
+removed per-provider registries. They do not reject the current write-only mutex
+or authorize an older full set to overwrite a newer delta.
 
 **Status:** ✅ fixed · 2026-05-25
 **Severity:** Medium (BadLogic) — non-atomic RMW on the process-global runtime maps could silently lose a concurrent insert/remove
