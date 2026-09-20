@@ -36,9 +36,9 @@ Resume the file-by-file quality campaign for the remaining `edgion-gateway` path
 - Campaign status: `in-progress`
 - Ordered crate phases: `edgion-gateway` (active); later crates are not authorized by this residual run.
 - Completed crates: none recorded in this campaign.
-- Active serial batch: none; B0054 passed current-HEAD analysis, independent no-change review, and all commit gates and is ready to commit.
-- Analysis queue: B0055 (`pg_early_request_filter.rs`) is `analysis-ready` at `7edf2384b` and cannot enter the serial lane before B0054 commits.
-- Current coverage counts: 582 ledger rows; 504 imported `excluded-with-reason`, 21 `pending`, 1 `analysis-ready`, 1 `deferred`, 32 `changed`, 22 `examined-no-change`, and 1 `removed`.
+- Active serial batch: none; B0055 passed plan review, implementation, independent code review, and all commit gates and is ready to commit.
+- Analysis queue: none; the next file will be selected only after B0055 commits.
+- Current coverage counts: 582 ledger rows; 504 imported `excluded-with-reason`, 21 `pending`, 1 `deferred`, 33 `changed`, 22 `examined-no-change`, and 1 `removed`.
 - Frozen integration baseline: 3,442 paths captured in `integration-freeze.tsv`.
 - Resolved external gate: `RUSTSEC-2026-0285` was remediated by locking
   `rustls 0.23.45`; the remediation run passed full `cargo deny check` on

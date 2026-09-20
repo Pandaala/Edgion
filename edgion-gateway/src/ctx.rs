@@ -2589,8 +2589,8 @@ pub struct EdgionHttpContext {
 
     // --- Request-body policy, buffering, and streaming ---
     /// Resolved GatewayClass request-body policy.
-    /// Parsed when the listener is built; the request hot path only copies and
-    /// reads these numeric values.
+    /// Loaded from the current immutable EGC snapshot when the request context
+    /// is created; later request processing only reads these numeric values.
     pub request_body_config: crate::request_body::ResolvedRequestBodyConfig,
 
     /// Validated upstream header carrying the final RemoteIp. Captured from the

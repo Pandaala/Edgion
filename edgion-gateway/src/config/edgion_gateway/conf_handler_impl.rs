@@ -44,6 +44,56 @@ impl Default for ResolvedL4Timeouts {
     }
 }
 
+/// Request-scoped HTTP configuration resolved from one EdgionGatewayConfig generation.
+///
+/// A new request clones this value from the current immutable configuration
+/// snapshot. Both fields therefore come from the same publication epoch, while
+/// in-flight requests retain their captured values across hot reloads.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ResolvedHttpRequestConfig {
+    pub(crate) request_body: ResolvedRequestBodyConfig,
+    pub(crate) remote_ip_header: http::HeaderName,
+}
+
+impl ResolvedHttpRequestConfig {
+    fn resolve(config: &EdgionGatewayConfig) -> Self {
+        let errors = config.spec.validate_forwarded_headers();
+        let remote_ip_header = if errors.is_empty() {
+            config
+                .spec
+                .forwarded_headers
+                .remote_ip_header
+                .parse::<http::HeaderName>()
+                .unwrap_or_else(|_| default_remote_ip_header())
+        } else {
+            tracing::error!(
+                config = %config.name_any(),
+                errors = ?errors,
+                "Ignoring invalid forwardedHeaders configuration received by the gateway"
+            );
+            default_remote_ip_header()
+        };
+
+        Self {
+            request_body: ResolvedRequestBodyConfig::resolve(&config.spec.request_body),
+            remote_ip_header,
+        }
+    }
+}
+
+impl Default for ResolvedHttpRequestConfig {
+    fn default() -> Self {
+        Self {
+            request_body: ResolvedRequestBodyConfig::default(),
+            remote_ip_header: default_remote_ip_header(),
+        }
+    }
+}
+
+fn default_remote_ip_header() -> http::HeaderName {
+    http::HeaderName::from_static("x-real-ip")
+}
+
 /// Request-path-ready data-plane DNS default resolved from an EdgionGatewayConfig.
 ///
 /// The canonical resolver candidate and cache TTL are derived while publishing
@@ -74,9 +124,8 @@ impl ResolvedDnsResolverDefault {
 
 struct EdgionGatewayConfigSnapshot {
     configs: HashMap<String, EdgionGatewayConfig>,
-    request_body_configs: HashMap<String, ResolvedRequestBodyConfig>,
+    http_request_configs: HashMap<String, ResolvedHttpRequestConfig>,
     l4_timeouts: HashMap<String, ResolvedL4Timeouts>,
-    remote_ip_headers: HashMap<String, http::HeaderName>,
     dns_resolver_default: Option<Arc<ResolvedDnsResolverDefault>>,
 }
 
@@ -89,45 +138,18 @@ impl EdgionGatewayConfigSnapshot {
             .and_then(|(_, config)| config.spec.dns_resolver.as_ref())
             .map(ResolvedDnsResolverDefault::resolve)
             .map(Arc::new);
-        let request_body_configs = configs
+        let http_request_configs = configs
             .values()
-            .map(|config| {
-                (
-                    config.name_any(),
-                    ResolvedRequestBodyConfig::resolve(&config.spec.request_body),
-                )
-            })
+            .map(|config| (config.name_any(), ResolvedHttpRequestConfig::resolve(config)))
             .collect();
         let l4_timeouts = configs
             .values()
             .map(|config| (config.name_any(), ResolvedL4Timeouts::resolve(config)))
             .collect();
-        let remote_ip_headers = configs
-            .values()
-            .filter_map(|config| {
-                let errors = config.spec.validate_forwarded_headers();
-                if !errors.is_empty() {
-                    tracing::error!(
-                        config = %config.name_any(),
-                        errors = ?errors,
-                        "Ignoring invalid forwardedHeaders configuration received by the gateway"
-                    );
-                    return None;
-                }
-                config
-                    .spec
-                    .forwarded_headers
-                    .remote_ip_header
-                    .parse::<http::HeaderName>()
-                    .ok()
-                    .map(|header| (config.name_any(), header))
-            })
-            .collect();
         Self {
             configs,
-            request_body_configs,
+            http_request_configs,
             l4_timeouts,
-            remote_ip_headers,
             dns_resolver_default,
         }
     }
@@ -139,9 +161,10 @@ impl EdgionGatewayConfigSnapshot {
 
 /// Global EdgionGatewayConfig store and its request-path-ready derived policy.
 ///
-/// Both views are published in one immutable snapshot so an EGC update cannot
-/// expose a new resource paired with an old request-body policy. Human-readable
-/// body sizes are parsed while constructing the snapshot, never per request.
+/// All views are published in one immutable snapshot so an EGC update cannot
+/// expose values from different generations to one lookup. Human-readable body
+/// sizes and the upstream RemoteIp header are resolved while constructing the
+/// snapshot, never per request.
 static EDGION_GATEWAY_CONFIG_STORE: std::sync::LazyLock<ArcSwap<EdgionGatewayConfigSnapshot>> =
     std::sync::LazyLock::new(|| ArcSwap::from_pointee(EdgionGatewayConfigSnapshot::empty()));
 
@@ -176,17 +199,17 @@ pub fn list_edgion_gateway_configs() -> Vec<EdgionGatewayConfig> {
     items
 }
 
-/// Load the request-body policy referenced by a listener's GatewayClass.
+/// Load the HTTP request configuration referenced by a listener's GatewayClass.
 ///
 /// `None`, a missing EGC, and a deleted EGC all resolve to the built-in safe
 /// default. The hot path performs one ArcSwap load, one bounded map lookup, and
-/// copies the compact resolved value.
+/// a shallow clone of the compact resolved value.
 #[inline]
-pub fn get_resolved_request_body_config(config_name: Option<&str>) -> ResolvedRequestBodyConfig {
+pub(crate) fn get_resolved_http_request_config(config_name: Option<&str>) -> ResolvedHttpRequestConfig {
     let snapshot = EDGION_GATEWAY_CONFIG_STORE.load();
     config_name
-        .and_then(|name| snapshot.request_body_configs.get(name))
-        .copied()
+        .and_then(|name| snapshot.http_request_configs.get(name))
+        .cloned()
         .unwrap_or_default()
 }
 
@@ -203,23 +226,6 @@ pub fn get_resolved_l4_timeouts(config_name: Option<&str>) -> ResolvedL4Timeouts
         .and_then(|name| snapshot.l4_timeouts.get(name))
         .copied()
         .unwrap_or_default()
-}
-
-/// Load the validated header that carries RemoteIp to an HTTP upstream.
-///
-/// The resource and its parsed request-path value are published atomically, so
-/// partial EGC updates take effect without rebuilding existing listeners. A
-/// missing, deleted, or invalid configuration fails safely to the nginx-style
-/// default instead of forwarding through an operator-controlled reserved name.
-#[inline]
-pub fn get_remote_ip_header(config_name: Option<&str>) -> http::HeaderName {
-    static DEFAULT: std::sync::LazyLock<http::HeaderName> =
-        std::sync::LazyLock::new(|| http::HeaderName::from_static("x-real-ip"));
-    let snapshot = EDGION_GATEWAY_CONFIG_STORE.load();
-    config_name
-        .and_then(|name| snapshot.remote_ip_headers.get(name))
-        .cloned()
-        .unwrap_or_else(|| DEFAULT.clone())
 }
 
 /// The data-plane default DNS resolver (`spec.dnsResolver`) from the effectively
@@ -583,39 +589,34 @@ mod tests {
     }
 
     #[test]
-    fn remote_ip_header_snapshot_updates_and_rejects_reserved_names() {
+    fn invalid_remote_ip_header_preserves_valid_body_policy() {
         let _g = TEST_MUTEX.lock();
         clear_store();
         let handler = EdgionGatewayConfigHandler::new();
 
-        let mut initial = make_config("foo");
-        initial.spec.forwarded_headers.remote_ip_header = "X-Initial-Remote-IP".to_string();
-        handler.partial_update(
-            HashMap::from([("foo".to_string(), Arc::new(initial))]),
-            HashMap::new(),
-            HashSet::new(),
-        );
-        let in_flight_header = get_remote_ip_header(Some("foo"));
-        assert_eq!(in_flight_header, "x-initial-remote-ip");
-
-        let mut updated = make_config("foo");
-        updated.spec.forwarded_headers.remote_ip_header = "X-Updated-Remote-IP".to_string();
-        handler.partial_update(
-            HashMap::new(),
-            HashMap::from([("foo".to_string(), Arc::new(updated))]),
-            HashSet::new(),
-        );
-        assert_eq!(get_remote_ip_header(Some("foo")), "x-updated-remote-ip");
-        assert_eq!(in_flight_header, "x-initial-remote-ip");
-
         let mut invalid = make_config("foo");
         invalid.spec.forwarded_headers.remote_ip_header = "Host".to_string();
+        invalid.spec.request_body.enabled = false;
+        invalid.spec.request_body.max_memory_buffer_size = Some("384KiB".to_string());
+        invalid.spec.request_body.max_body_size = Some("3MiB".to_string());
+        invalid.spec.request_body.storage_operation_timeout = "3s".to_string();
         handler.partial_update(
-            HashMap::new(),
             HashMap::from([("foo".to_string(), Arc::new(invalid))]),
+            HashMap::new(),
             HashSet::new(),
         );
-        assert_eq!(get_remote_ip_header(Some("foo")), "x-real-ip");
+
+        let resolved = get_resolved_http_request_config(Some("foo"));
+        assert_eq!(resolved.remote_ip_header, "x-real-ip");
+        assert_eq!(
+            resolved.request_body,
+            ResolvedRequestBodyConfig {
+                enabled: false,
+                memory_buffer_bytes: 384 * 1024,
+                max_body_size_bytes: 3 * 1024 * 1024,
+                storage_operation_timeout: Duration::from_secs(3),
+            }
+        );
     }
 
     #[test]
@@ -666,69 +667,94 @@ mod tests {
     }
 
     #[test]
-    fn request_body_policy_updates_and_deletion_restores_defaults() {
+    fn http_request_config_updates_joint_pair_and_pins_in_flight_value() {
         let _g = TEST_MUTEX.lock();
         clear_store();
         let handler = EdgionGatewayConfigHandler::new();
 
-        let mut initial = make_config("body-policy");
+        let mut initial = make_config("http-request-policy");
+        initial.spec.forwarded_headers.remote_ip_header = "X-Initial-Remote-IP".to_string();
         initial.spec.request_body.enabled = false;
         initial.spec.request_body.max_memory_buffer_size = Some("256KiB".to_string());
         initial.spec.request_body.max_body_size = Some("1MiB".to_string());
         initial.spec.request_body.storage_operation_timeout = "750ms".to_string();
         let mut add = HashMap::new();
-        add.insert("body-policy".to_string(), Arc::new(initial));
+        add.insert("http-request-policy".to_string(), Arc::new(initial));
         handler.partial_update(add, HashMap::new(), HashSet::new());
 
-        let resolved = get_resolved_request_body_config(Some("body-policy"));
-        assert!(!resolved.enabled);
-        assert_eq!(resolved.memory_buffer_bytes, 256 * 1024);
-        assert_eq!(resolved.max_body_size_bytes, 1024 * 1024);
+        let in_flight = get_resolved_http_request_config(Some("http-request-policy"));
+        assert_eq!(in_flight.remote_ip_header, "x-initial-remote-ip");
+        assert!(!in_flight.request_body.enabled);
+        assert_eq!(in_flight.request_body.memory_buffer_bytes, 256 * 1024);
+        assert_eq!(in_flight.request_body.max_body_size_bytes, 1024 * 1024);
         assert_eq!(
-            resolved.storage_operation_timeout,
+            in_flight.request_body.storage_operation_timeout,
             std::time::Duration::from_millis(750)
         );
 
-        let mut updated = make_config("body-policy");
+        let mut updated = make_config("http-request-policy");
+        updated.spec.forwarded_headers.remote_ip_header = "X-Updated-Remote-IP".to_string();
         updated.spec.request_body.max_memory_buffer_size = Some("512KiB".to_string());
         updated.spec.request_body.max_body_size = Some("2MiB".to_string());
         updated.spec.request_body.storage_operation_timeout = "2s".to_string();
         let mut update = HashMap::new();
-        update.insert("body-policy".to_string(), Arc::new(updated));
+        update.insert("http-request-policy".to_string(), Arc::new(updated));
         handler.partial_update(HashMap::new(), update, HashSet::new());
 
-        let resolved = get_resolved_request_body_config(Some("body-policy"));
-        assert_eq!(resolved.memory_buffer_bytes, 512 * 1024);
-        assert_eq!(resolved.max_body_size_bytes, 2 * 1024 * 1024);
-        assert_eq!(resolved.storage_operation_timeout, std::time::Duration::from_secs(2));
+        let next = get_resolved_http_request_config(Some("http-request-policy"));
+        assert_eq!(next.remote_ip_header, "x-updated-remote-ip");
+        assert!(next.request_body.enabled);
+        assert_eq!(next.request_body.memory_buffer_bytes, 512 * 1024);
+        assert_eq!(next.request_body.max_body_size_bytes, 2 * 1024 * 1024);
+        assert_eq!(next.request_body.storage_operation_timeout, Duration::from_secs(2));
+        assert_eq!(in_flight.remote_ip_header, "x-initial-remote-ip");
+        assert!(!in_flight.request_body.enabled);
+        assert_eq!(in_flight.request_body.memory_buffer_bytes, 256 * 1024);
+        assert_eq!(in_flight.request_body.max_body_size_bytes, 1024 * 1024);
+        assert_eq!(
+            in_flight.request_body.storage_operation_timeout,
+            Duration::from_millis(750)
+        );
 
         handler.partial_update(
             HashMap::new(),
             HashMap::new(),
-            HashSet::from(["body-policy".to_string()]),
+            HashSet::from(["http-request-policy".to_string()]),
         );
-        assert_eq!(
-            get_resolved_request_body_config(Some("body-policy")),
-            ResolvedRequestBodyConfig::default()
-        );
+        let default = ResolvedHttpRequestConfig::default();
+        assert_eq!(get_resolved_http_request_config(Some("http-request-policy")), default);
+        assert_eq!(get_resolved_http_request_config(Some("missing")), default);
+        assert_eq!(get_resolved_http_request_config(None), default);
     }
 
     #[test]
-    fn request_body_policy_snapshot_falls_back_for_invalid_synced_sizes() {
+    fn invalid_body_fields_preserve_valid_remote_ip_header() {
         let _g = TEST_MUTEX.lock();
         clear_store();
         let handler = EdgionGatewayConfigHandler::new();
 
         let mut config = make_config("invalid-body-policy");
+        config.spec.forwarded_headers.remote_ip_header = "X-Valid-Remote-IP".to_string();
+        config.spec.request_body.enabled = false;
+        config.spec.request_body.default_memory_buffer_size = "384KiB".to_string();
         config.spec.request_body.max_memory_buffer_size = Some("invalid".to_string());
+        config.spec.request_body.default_max_body_size = "3MiB".to_string();
         config.spec.request_body.max_body_size = Some("0".to_string());
+        config.spec.request_body.storage_operation_timeout = "invalid".to_string();
         let mut data = HashMap::new();
         data.insert("invalid-body-policy".to_string(), Arc::new(config));
         handler.full_set(&data);
 
+        let resolved = get_resolved_http_request_config(Some("invalid-body-policy"));
+        assert_eq!(resolved.remote_ip_header, "x-valid-remote-ip");
         assert_eq!(
-            get_resolved_request_body_config(Some("invalid-body-policy")),
-            ResolvedRequestBodyConfig::default()
+            resolved.request_body,
+            ResolvedRequestBodyConfig {
+                enabled: false,
+                memory_buffer_bytes: 384 * 1024,
+                max_body_size_bytes: 3 * 1024 * 1024,
+                storage_operation_timeout: ResolvedRequestBodyConfig::default().storage_operation_timeout,
+            }
         );
     }
 
