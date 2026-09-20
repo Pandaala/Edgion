@@ -1,4 +1,5 @@
 use super::EdgionHttpProxy;
+use crate::ai::dispatch::AiPeerPredispatchFailure;
 use crate::EdgionHttpContext;
 use edgion_resources::EdgionErrorCode;
 use pingora_core::prelude::HttpPeer;
@@ -86,6 +87,22 @@ fn connect_retry_continuation(is_ai: bool, relay_allows_retry: bool) -> ConnectR
     }
 }
 
+fn finish_ai_connect_failure(ctx: &mut EdgionHttpContext, continuation: ConnectRetryContinuation, error: &mut Error) {
+    match continuation {
+        ConnectRetryContinuation::SettleAiOnly => {
+            if let Some(state) = ctx.ai_state_mut() {
+                state.attempt_runtime.finish_predispatch();
+            }
+        }
+        ConnectRetryContinuation::SettleAiAndSelectSuccessor => {
+            if AiPeerPredispatchFailure::Endpoint.finish(ctx) {
+                error.set_retry(true);
+            }
+        }
+        ConnectRetryContinuation::Stop | ConnectRetryContinuation::EvaluateOrdinaryBudget => {}
+    }
+}
+
 #[inline]
 pub fn fail_to_connect(
     edgion_http: &EdgionHttpProxy,
@@ -160,21 +177,11 @@ pub fn fail_to_connect(
         continuation,
         ConnectRetryContinuation::SettleAiOnly | ConnectRetryContinuation::SettleAiAndSelectSuccessor
     ) {
-        // Settle the failed current predispatch attempt even when the relay
-        // forbids a successor; this releases its reservation promptly.
-        if let Some(state) = ctx.ai_state_mut() {
-            state.attempt_runtime.finish_predispatch();
-        }
-        // Only the successor-selection side effects are retry-owned.
-        if continuation == ConnectRetryContinuation::SettleAiOnly {
-            return e;
-        }
-        // The typed predispatch hook consumes no scheduler dispatch slot,
-        // failure-ledger entry, or retry-budget numerator. The bounded Redis
-        // release is drained before the next selection or at final logging.
-        if crate::ai::dispatch::handle_ai_predispatch_failure(ctx, true) {
-            e.set_retry(true);
-        }
+        // A relay veto releases only the current reservation. When a retry is
+        // structurally possible, the typed endpoint failure owns both that
+        // release and service-wide scheduler advancement. Neither path consumes
+        // a dispatch slot, failure-ledger entry, or retry-budget numerator.
+        finish_ai_connect_failure(ctx, continuation, &mut e);
         return e;
     }
 
@@ -213,11 +220,15 @@ pub fn fail_to_connect(
 #[cfg(test)]
 mod tests {
     use super::{
-        connect_retry_continuation, finish_expired_connect_deadline, select_expired_connect_deadline,
-        ConnectRetryContinuation::*, ExpiredConnectDeadline,
+        connect_retry_continuation, finish_ai_connect_failure, finish_expired_connect_deadline,
+        select_expired_connect_deadline, ConnectRetryContinuation::*, ExpiredConnectDeadline,
     };
+    use crate::ai::attempt::{AttemptScheduler, BackendCredentials, NextStep, SchedulerError};
+    use crate::ai::{AiAttemptPlan, AiBackendStore, ReadyAiAttemptPlan};
     use crate::observe::RequestDiagnostic;
     use crate::{BackendContext, EdgionHttpContext, UpstreamInfo};
+    use bytes::Bytes;
+    use edgion_resources::resources::edgion_plugins::AiBackendSelection;
     use edgion_resources::EdgionErrorCode;
     use pingora_core::{Error, ErrorSource, ErrorType};
     use std::time::Instant;
@@ -256,6 +267,47 @@ mod tests {
         ctx
     }
 
+    fn ctx_with_selected_ai_target() -> EdgionHttpContext {
+        let failed_service_weights = [1, 1];
+        let successor_service_weights = [1];
+        let mut scheduler = AttemptScheduler::new(
+            &[
+                BackendCredentials {
+                    weights: &failed_service_weights,
+                },
+                BackendCredentials {
+                    weights: &successor_service_weights,
+                },
+            ],
+            0,
+        )
+        .unwrap();
+        scheduler.select_backend(0).unwrap();
+        scheduler.select_credential(u16::MAX, 0).unwrap();
+
+        let plan = ReadyAiAttemptPlan {
+            canonical_openai_body: Bytes::from_static(br#"{"model":"logical"}"#),
+            canonical_path: "/v1/chat/completions".to_string(),
+            canonical_query: None,
+            logical_model: "logical".to_string(),
+            requested_streaming: false,
+            inject_usage_tracking: false,
+            input_chars: 19,
+            selection: AiBackendSelection::Weighted,
+            selection_sequence: 0,
+            candidates: Vec::new(),
+            scheduler,
+            retry_cap_initialized: true,
+            backend_snapshot: AiBackendStore::new().snapshot(),
+            quota: None,
+            quota_status: None,
+            terminate_on_over_limit: false,
+        };
+        let mut ctx = EdgionHttpContext::new();
+        ctx.restore_ai_attempt_plan(AiAttemptPlan::Ready(plan));
+        ctx
+    }
+
     fn assert_deadline_outcome(deadline: ExpiredConnectDeadline, expected_diagnostic: EdgionErrorCode) {
         let mut ctx = ctx_with_attempt();
         let mut original = Error::new_up(ErrorType::ConnectError);
@@ -289,6 +341,62 @@ mod tests {
     fn disabled_relay_settles_ai_without_selecting_a_successor() {
         assert_eq!(connect_retry_continuation(true, false), SettleAiOnly);
         assert_eq!(connect_retry_continuation(true, true), SettleAiAndSelectSuccessor);
+
+        let mut ctx = ctx_with_selected_ai_target();
+        let mut error = Error::new_up(ErrorType::ConnectError);
+        finish_ai_connect_failure(&mut ctx, SettleAiOnly, &mut error);
+
+        assert!(!error.retry());
+        let Some(AiAttemptPlan::Ready(ready)) = ctx.ai_state().and_then(|state| state.attempt_plan.as_ref()) else {
+            panic!("ready plan must remain installed");
+        };
+        assert_eq!(
+            ready.scheduler.next_step(),
+            NextStep::Dispatch(crate::ai::attempt::AttemptTarget {
+                backend: 0,
+                credential: 0,
+            })
+        );
+        assert_eq!(ready.scheduler.dispatch_count(), 0);
+        assert!(ready.scheduler.failures().is_empty());
+    }
+
+    #[test]
+    fn retryable_ai_connect_failure_skips_the_failed_service() {
+        let mut ctx = ctx_with_selected_ai_target();
+        let mut error = Error::new_up(ErrorType::ConnectError);
+
+        finish_ai_connect_failure(&mut ctx, SettleAiAndSelectSuccessor, &mut error);
+
+        assert!(error.retry());
+        let Some(AiAttemptPlan::Ready(ready)) = ctx.ai_state_mut().and_then(|state| state.attempt_plan.as_mut()) else {
+            panic!("ready plan must remain installed");
+        };
+        assert_eq!(
+            ready.scheduler.next_step(),
+            NextStep::PickBackend(crate::ai::attempt::PickBackend {
+                round: 0,
+                excluded_backends: 1,
+            }),
+            "the second credential must not be scanned after an endpoint failure"
+        );
+        assert_eq!(
+            ready.scheduler.select_backend(0),
+            Err(SchedulerError::BackendAlreadyExcluded)
+        );
+        assert!(ready.scheduler.select_backend(1).is_ok());
+        assert_eq!(ready.scheduler.dispatch_count(), 0);
+        assert!(ready.scheduler.failures().is_empty());
+    }
+
+    #[test]
+    fn ai_connect_failure_without_scheduler_advancement_is_not_retryable() {
+        let mut ctx = EdgionHttpContext::new();
+        let mut error = Error::new_up(ErrorType::ConnectError);
+
+        finish_ai_connect_failure(&mut ctx, SettleAiAndSelectSuccessor, &mut error);
+
+        assert!(!error.retry());
     }
 
     #[test]
