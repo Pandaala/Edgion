@@ -9,10 +9,11 @@
 //! see the config's `check_fields(is_stream: true)`).
 //!
 //! Unlike the HTTP side, stream lifecycles do not populate an HTTP access-log
-//! `geo` block, so **parse-only mode at L4 is a true no-op**: no GeoIP lookup is
-//! attempted, since nothing would consume the result. Rule mode performs at
-//! most one lookup (`ctx.direct_peer_ip`, the physical direct-peer address);
-//! CIDR-only rule sets perform zero lookups. Every deny is reported via
+//! `geo` block, so L4 configuration must include at least one allow or deny rule
+//! group; rule-less parse-only configuration is rejected because nothing would
+//! consume the resolved facts. Valid rule mode performs at most one lookup
+//! (`ctx.direct_peer_ip`, the physical direct-peer address); CIDR-only rule sets
+//! perform zero lookups. Every deny is reported via
 //! `edgion_geoip_denied_total{layer,reason}`. A listener Stage 1 denial is
 //! otherwise metric-only, including on TLS listeners. TCP/UDP route denials retain their
 //! canonical protocol logs, but those records contain neither GeoIP facts nor
