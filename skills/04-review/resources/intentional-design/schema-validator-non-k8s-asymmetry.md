@@ -57,8 +57,11 @@ Fields where OpenAPI catches but `serde` and `handler.validate` both miss — `f
 hostname`, numeric `minimum`/`maximum`, `pattern`, certain `enum` strings not modeled as
 Rust enums — can pass through and become **silent misconfiguration at runtime** (SNI
 never matches, defaults silently applied, etc.). The fix is **handler-side validation
-completeness**, not validator relocation. Findings of that shape should be routed to the
-relevant handler, not back to `SchemaValidator`.
+completeness**, not validator relocation. A handler may reuse a bounded generated
+contract extracted from the vendored CRD when constraints would otherwise be duplicated
+in Rust. RequestRedirect and URLRewrite use that pattern for selected OpenAPI, CEL, and
+default semantics. This does not turn the filesystem/etcd watcher into an admission
+pipeline: failures still flow through the existing handler/status lifecycle.
 
 ## When to re-evaluate
 

@@ -13,7 +13,7 @@ use std::sync::Arc;
 
 use super::common::{
     expected_resource_version, map_writer_error, parse_kind, parse_resource_and_update_version, unknown_field_warnings,
-    validate_resource,
+    validate_http_route_transforms, validate_resource,
 };
 use super::types::*;
 
@@ -140,6 +140,7 @@ pub async fn create_namespaced(
         edgion_resources::ResourceKind::HTTPRoute => {
             let route: HTTPRoute = parse_resource_and_update_version(&content, !is_k8s)?;
             validate_resource(state.schema_validator.as_ref(), kind, &route, is_k8s)?;
+            validate_http_route_transforms(&route)?;
             let json_content = serde_json::to_string(&route).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             writer
                 .create_one(kind.as_str(), Some(&ns), &name, json_content)
@@ -439,6 +440,7 @@ pub async fn update_namespaced(
         edgion_resources::ResourceKind::HTTPRoute => {
             let route: HTTPRoute = parse_resource_and_update_version(&content, !is_k8s)?;
             validate_resource(state.schema_validator.as_ref(), kind, &route, is_k8s)?;
+            validate_http_route_transforms(&route)?;
             let json_content = serde_json::to_string(&route).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             writer
                 .update_one_if_version(

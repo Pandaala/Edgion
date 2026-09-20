@@ -256,7 +256,25 @@ impl HttpRouteRuleUnit {
     /// fan-out) and share the resulting `Arc`s into every unit — some plugins
     /// (in-memory RateLimitLocal) own per-rule state, so the runtime must NOT be rebuilt
     /// per match-item/hostname.
-    pub fn compile_http_rule(rule: &HTTPRouteRule, namespace: &str) -> HttpRuleRuntime {
+    pub fn compile_http_rule(
+        rule: &HTTPRouteRule,
+        namespace: &str,
+    ) -> Result<HttpRuleRuntime, edgion_resources::RequestTransformViolation> {
+        let violations = edgion_resources::effective_request_transform_violations(rule).map_err(|_| {
+            edgion_resources::RequestTransformViolation {
+                path: String::new(),
+                message: "request transform validation contract is unavailable".to_string(),
+            }
+        })?;
+        if let Some(violation) = violations.into_iter().next() {
+            return Err(violation);
+        }
+        Ok(Self::compile_prevalidated_http_rule(rule, namespace))
+    }
+
+    /// Compile a rule immediately after its caller has applied the appropriate
+    /// authored or effective shared validation pass.
+    pub(super) fn compile_prevalidated_http_rule(rule: &HTTPRouteRule, namespace: &str) -> HttpRuleRuntime {
         // Route-level `edgion.io/mirror-*` annotation values, pre-parsed onto
         // the rule; defaults when no mirror annotation is present.
         let mirror_tuning = rule.parsed_mirror_tuning.clone().unwrap_or_default();
@@ -538,7 +556,7 @@ mod tests {
         }))
         .unwrap();
 
-        let runtime = HttpRouteRuleUnit::compile_http_rule(&rule, "route-ns");
+        let runtime = HttpRouteRuleUnit::compile_http_rule(&rule, "route-ns").unwrap();
 
         assert!(runtime.backends[0].plugin_runtime.rejects_invalid_config());
         assert!(!runtime.backends[1].plugin_runtime.rejects_invalid_config());
@@ -559,7 +577,7 @@ mod tests {
         }))
         .unwrap();
 
-        let runtime = HttpRouteRuleUnit::compile_http_rule(&rule, "route-ns");
+        let runtime = HttpRouteRuleUnit::compile_http_rule(&rule, "route-ns").unwrap();
         assert_eq!(runtime.backends.len(), 6);
         assert_eq!(
             runtime.backends.iter().map(|backend| backend.slot).collect::<Vec<_>>(),

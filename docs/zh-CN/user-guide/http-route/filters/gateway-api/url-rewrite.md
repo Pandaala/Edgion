@@ -106,6 +106,7 @@ spec:
 
 ## 注意事项
 
+- Edgion 使用从内置 Gateway API CRD 生成的契约校验此过滤器。Kubernetes 会在准入阶段拒绝非法值；文件系统和 etcd 输入则通过 HTTPRoute 状态报告相同范围内的 transform 约束。非法规则会被禁用，但合法的同级规则仍然生效。
 - `URLRewrite` 与 [RequestRedirect](./request-redirect.md) 在同一规则中**互斥**。同时声明两者的规则将被标记为 `PartiallyInvalid` 并被禁用，但 HTTPRoute 中其他有效规则继续生效。
 - 重写值按字面量处理；路径参数（`:name`）和模板变量不会展开。如需动态、变量驱动的重写，请使用 [ProxyRewrite 插件](../edgion-plugins/proxy-rewrite.md)。
 - `ReplacePrefixMatch` 仅在 `PathPrefix` 匹配时有意义；它精确地替换匹配的前缀片段。

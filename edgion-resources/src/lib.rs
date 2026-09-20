@@ -1,6 +1,7 @@
 pub mod auth_dto;
 pub mod common;
 pub mod constants;
+pub mod crd_contract;
 pub mod credentials;
 pub mod diagnostic;
 pub mod duration;

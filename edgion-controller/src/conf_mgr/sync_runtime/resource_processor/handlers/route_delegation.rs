@@ -17,7 +17,7 @@
 //! the target namespace; delegation is parent opt-in (children may reverse-lock
 //! via `parentRefs {kind: HTTPRoute}`); cycles and depth > 8 drop the edge.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use edgion_resources::resources::common::RefDenied;
@@ -227,7 +227,7 @@ pub fn flatten_route(parent: &HTTPRoute, lookup: &dyn DelegationLookup) -> Flatt
             // untouched (implicit backendRef namespace = parent ns is fine
             // because resolved_rules live on the parent).
             copied.name = rule.name.clone();
-            out_rules.push(copied);
+            push_effective_rule(&mut ctx, copied, &format!("parent rules[{idx}]"), &mut out_rules);
             continue;
         }
 
@@ -439,19 +439,14 @@ fn flatten_child_rules(
     let Some(rules) = &child.spec.rules else {
         return;
     };
-    let invalid_indices: HashSet<usize> = super::http_route::find_invalid_rule_details(child, child_ns)
+    let invalid_details: HashMap<usize, String> = super::http_route::find_invalid_rule_details(child, child_ns)
         .into_iter()
-        .map(|(i, _)| i)
         .collect();
 
     for (idx, rule) in rules.iter().enumerate() {
-        if invalid_indices.contains(&idx) {
+        if let Some(reason) = invalid_details.get(&idx) {
             ctx.issues.push(DelegationIssue::RuleDropped {
-                message: format!(
-                    "child '{child_key}' rules[{idx}] dropped: {}",
-                    rule.unsupported_cors_reason()
-                        .unwrap_or_else(|| "invalid rule (see child status)".to_string())
-                ),
+                message: format!("child '{child_key}' rules[{idx}] dropped: {reason}"),
             });
             continue;
         }
@@ -716,7 +711,29 @@ fn flatten_child_rules(
             }
         }
         collect_backend_tuples(ctx, child_ns, &flattened);
-        out_rules.push(flattened);
+        push_effective_rule(ctx, flattened, &format!("child '{child_key}' rules[{idx}]"), out_rules);
+    }
+}
+
+fn push_effective_rule(
+    ctx: &mut FlattenCtx<'_>,
+    rule: HTTPRouteRule,
+    source: &str,
+    out_rules: &mut Vec<HTTPRouteRule>,
+) {
+    match edgion_resources::effective_request_transform_violations(&rule) {
+        Ok(violations) => {
+            if let Some(violation) = violations.into_iter().next() {
+                ctx.issues.push(DelegationIssue::RuleDropped {
+                    message: format!("{source} dropped: {violation}"),
+                });
+            } else {
+                out_rules.push(rule);
+            }
+        }
+        Err(_) => ctx.issues.push(DelegationIssue::RuleDropped {
+            message: format!("{source} dropped: request transform validation contract is unavailable"),
+        }),
     }
 }
 
@@ -1157,6 +1174,35 @@ mod tests {
         let drops = dropped_messages(&outcome);
         assert_eq!(drops.len(), 2);
         assert!(drops[0].contains("rules[0]") && drops[1].contains("rules[1]"));
+    }
+
+    #[test]
+    fn inherited_prefix_transform_drops_only_child_with_non_prefix_match() {
+        let mut delegation = delegating_rule("/api", "infra", "child");
+        delegation["filters"] = serde_json::json!([{
+            "type": "URLRewrite",
+            "urlRewrite": {"path": {"type": "ReplacePrefixMatch", "replacePrefixMatch": "/v2"}}
+        }]);
+        let parent = parent_with_rules(serde_json::json!([delegation]));
+        let exact = serde_json::json!({
+            "matches": [{"path": {"type": "Exact", "value": "/api/exact"}}],
+            "backendRefs": [{"name": "exact", "port": 80}]
+        });
+        let child = route(
+            "infra",
+            "child",
+            serde_json::json!({"rules": [exact, service_rule("/api/healthy", "healthy")]}),
+        );
+
+        let outcome = flatten_route(&parent, &FakeLookup::new(vec![child]));
+
+        let rules = outcome.resolved_rules.as_ref().unwrap();
+        assert_eq!(rules.len(), 1);
+        assert_eq!(rules[0].backend_refs.as_ref().unwrap()[0].name, "healthy");
+        let drops = dropped_messages(&outcome);
+        assert_eq!(drops.len(), 1);
+        assert!(drops[0].contains("child 'infra/child' rules[0]"));
+        assert!(drops[0].contains("prefix request transforms require PathPrefix"));
     }
 
     #[test]

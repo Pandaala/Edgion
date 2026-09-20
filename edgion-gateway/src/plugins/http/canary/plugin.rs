@@ -241,7 +241,7 @@ mod tests {
             parsed_allow_non_idempotent_retry: None,
             parsed_mirror_tuning: None,
         });
-        let runtime = HttpRouteRuleUnit::compile_http_rule(&rule, "test-ns");
+        let runtime = HttpRouteRuleUnit::compile_http_rule(&rule, "test-ns").unwrap();
         let backend_finder = HttpRouteRuleUnit::build_backend_selector(&runtime.backends);
 
         HttpRouteRuleUnit {

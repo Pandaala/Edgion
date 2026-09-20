@@ -105,6 +105,10 @@ spec:
 
 ## Notes
 
+- Edgion validates this filter against a generated contract extracted from its bundled
+  Gateway API CRD. Kubernetes rejects invalid values during admission; filesystem and
+  etcd inputs report the same selected transform constraints through HTTPRoute status.
+  An invalid rule is disabled without disabling valid sibling rules.
 - A rule with `RequestRedirect` must omit `backendRefs`; the redirect is the terminal response.
 - `301` and `308` are permanent redirects; `302` and `307` are temporary. `303` directs the client to retrieve the target (normally with GET). Use `307` or `308` when the client must preserve the request method and body; `301` and `302` can turn a POST into a GET.
 - The `Location` header omits port `80` for HTTP and port `443` for HTTPS. Non-default ports are included.

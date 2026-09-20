@@ -3,14 +3,16 @@
 //! This filter redirects requests to another location.
 
 use async_trait::async_trait;
-use http::StatusCode;
 use pingora_http::ResponseHeader;
 
 use crate::plugins::runtime::log::{la, PluginLog};
 use crate::plugins::runtime::traits::{PluginSession, PluginSessionHeaderExt, RequestFilter};
 use crate::util::net::host_without_port;
 use edgion_resources::filters::PluginRunningResult;
-use edgion_resources::resources::HTTPRequestRedirectFilter;
+use edgion_resources::resources::{
+    HTTPRequestRedirectFilter, PreparedPathModifier, PreparedRedirectScheme, PreparedRequestRedirect,
+    RequestTransformViolation,
+};
 
 use super::path_modifier::replace_prefix_match;
 
@@ -22,12 +24,14 @@ fn default_port_for_scheme(scheme: &str) -> u16 {
 }
 
 pub struct RequestRedirectFilter {
-    config: HTTPRequestRedirectFilter,
+    config: PreparedRequestRedirect,
 }
 
 impl RequestRedirectFilter {
-    pub fn new(config: HTTPRequestRedirectFilter) -> Self {
-        Self { config }
+    pub fn try_new(config: &HTTPRequestRedirectFilter) -> Result<Self, RequestTransformViolation> {
+        Ok(Self {
+            config: config.prepare()?,
+        })
     }
 
     /// Build redirect Location header value from config and request.
@@ -49,18 +53,21 @@ impl RequestRedirectFilter {
         original_query: Option<&str>,
         matched_path: Option<&str>,
         listener_port: u16,
-    ) -> String {
-        let scheme = self.config.scheme.as_deref().unwrap_or(original_scheme);
+    ) -> Option<String> {
+        let scheme = self
+            .config
+            .scheme()
+            .map(PreparedRedirectScheme::as_str)
+            .unwrap_or(original_scheme);
         let hostname = self
             .config
-            .hostname
-            .as_deref()
+            .hostname()
             .or_else(|| original_host.map(host_without_port))
             .unwrap_or("localhost");
 
-        let final_port: u16 = if let Some(p) = self.config.port {
-            p as u16
-        } else if self.config.scheme.is_some() {
+        let final_port: u16 = if let Some(port) = self.config.port() {
+            port.get()
+        } else if self.config.scheme().is_some() {
             // Scheme changed without explicit port → use new scheme's default
             default_port_for_scheme(scheme)
         } else {
@@ -75,23 +82,19 @@ impl RequestRedirectFilter {
         };
 
         // Handle path modification
-        let path = if let Some(path_modifier) = &self.config.path {
-            if let Some(replace_full) = &path_modifier.replace_full_path {
-                replace_full.clone()
-            } else if let Some(replace_prefix) = &path_modifier.replace_prefix_match {
-                replace_prefix_match(original_path, matched_path.unwrap_or(original_path), replace_prefix)
-            } else {
-                original_path.to_string()
+        let path = match self.config.path() {
+            Some(PreparedPathModifier::ReplaceFullPath(replacement)) => replacement.clone(),
+            Some(PreparedPathModifier::ReplacePrefixMatch(replacement)) => {
+                replace_prefix_match(original_path, matched_path?, replacement)
             }
-        } else {
-            original_path.to_string()
+            None => original_path.to_string(),
         };
 
         let location = format!("{}://{}{}{}", scheme, hostname, port_str, path);
 
         match original_query {
-            Some(q) if !q.is_empty() => format!("{}?{}", location, q),
-            _ => location,
+            Some(q) if !q.is_empty() => Some(format!("{}?{}", location, q)),
+            _ => Some(location),
         }
     }
 }
@@ -135,24 +138,48 @@ impl RequestFilter for RequestRedirectFilter {
             )
         };
 
-        // Determine status code (default: 302 Found)
-        let status_code = self.config.status_code.unwrap_or(302) as u16;
-        let status = StatusCode::from_u16(status_code).unwrap_or(StatusCode::FOUND);
+        let Some(location) = location else {
+            plugin_log.push_err("redirect prefix context unavailable");
+            return PluginRunningResult::ErrResponse {
+                status: 500,
+                body: None,
+            };
+        };
+
+        let status = self.config.status_code();
 
         plugin_log.push_fmt("redirect {}", la![status.as_u16().to_string().as_str()]);
 
         let Ok(mut resp) = ResponseHeader::build(status, None) else {
-            return PluginRunningResult::ErrTerminateRequest;
+            plugin_log.push_err("redirect response build failed");
+            return PluginRunningResult::ErrResponse {
+                status: 500,
+                body: None,
+            };
         };
 
         if resp.insert_header("Location", &location).is_err() {
-            return PluginRunningResult::ErrTerminateRequest;
+            plugin_log.push_err("redirect location header failed");
+            return PluginRunningResult::ErrResponse {
+                status: 500,
+                body: None,
+            };
         }
 
-        let _ = resp.insert_header("Content-Length", "0");
+        if resp.insert_header("Content-Length", "0").is_err() {
+            plugin_log.push_err("redirect content length header failed");
+            return PluginRunningResult::ErrResponse {
+                status: 500,
+                body: None,
+            };
+        }
 
         if session.write_response_header(Box::new(resp), true).await.is_err() {
-            return PluginRunningResult::ErrTerminateRequest;
+            plugin_log.push_err("redirect response write failed");
+            return PluginRunningResult::ErrResponse {
+                status: 500,
+                body: None,
+            };
         }
 
         PluginRunningResult::ErrTerminateRequest
@@ -168,13 +195,14 @@ mod tests {
     use edgion_resources::resources::{HTTPPathModifier, HTTPPathModifierType};
 
     fn filter(scheme: Option<&str>, port: Option<i32>) -> RequestRedirectFilter {
-        RequestRedirectFilter::new(HTTPRequestRedirectFilter {
+        RequestRedirectFilter::try_new(&HTTPRequestRedirectFilter {
             scheme: scheme.map(|s| s.to_string()),
             hostname: None,
             path: None,
             port,
             status_code: None,
         })
+        .unwrap()
     }
 
     #[test]
@@ -189,7 +217,7 @@ mod tests {
                 None,
                 80
             ),
-            "https://example.com/login?returnTo=/dashboard"
+            Some("https://example.com/login?returnTo=/dashboard".to_string())
         );
     }
 
@@ -199,11 +227,11 @@ mod tests {
         // None query and empty query must both omit the '?'.
         assert_eq!(
             f.build_location("http", Some("example.com"), "/login", None, None, 80),
-            "https://example.com/login"
+            Some("https://example.com/login".to_string())
         );
         assert_eq!(
             f.build_location("http", Some("example.com"), "/login", Some(""), None, 80),
-            "https://example.com/login"
+            Some("https://example.com/login".to_string())
         );
     }
 
@@ -213,13 +241,13 @@ mod tests {
         // Query is appended after the port segment, producing a valid authority + path + query.
         assert_eq!(
             f.build_location("https", Some("example.com"), "/search", Some("q=hello"), None, 443),
-            "https://example.com:8443/search?q=hello"
+            Some("https://example.com:8443/search?q=hello".to_string())
         );
     }
 
     #[test]
     fn build_location_replaces_parameterized_prefix_by_path_elements() {
-        let f = RequestRedirectFilter::new(HTTPRequestRedirectFilter {
+        let f = RequestRedirectFilter::try_new(&HTTPRequestRedirectFilter {
             scheme: Some("https".to_string()),
             hostname: None,
             path: Some(HTTPPathModifier {
@@ -229,7 +257,8 @@ mod tests {
             }),
             port: None,
             status_code: None,
-        });
+        })
+        .unwrap();
 
         assert_eq!(
             f.build_location(
@@ -240,7 +269,7 @@ mod tests {
                 Some("/users/:id"),
                 80,
             ),
-            "https://example.com/v2/orders?view=full"
+            Some("https://example.com/v2/orders?view=full".to_string())
         );
     }
 
@@ -285,18 +314,53 @@ mod tests {
                 Ok(())
             });
 
-        let f = RequestRedirectFilter::new(HTTPRequestRedirectFilter {
+        let f = RequestRedirectFilter::try_new(&HTTPRequestRedirectFilter {
             scheme: configured_scheme.map(str::to_string),
             hostname: None,
             path: None,
             port: None,
             status_code,
-        });
+        })
+        .unwrap();
         let mut log = PluginLog::new("test");
         assert_eq!(
             f.run_request(&mut session, &mut log).await,
             PluginRunningResult::ErrTerminateRequest
         );
+    }
+
+    #[tokio::test]
+    async fn prefix_redirect_without_matched_prefix_fails_closed() {
+        let mut session = MockPluginSession::new();
+        setup_header_mocks(&mut session, &[("host", "example.com")]);
+        session.expect_downstream_is_tls().return_const(Some(true));
+        session.expect_get_path().return_const("/api/orders".to_string());
+        session.expect_get_query().return_const(None);
+        let mut ctx = EdgionHttpContext::new();
+        ctx.request_info.listener_port = 443;
+        session.expect_ctx().return_const(ctx);
+        session.expect_write_response_header().times(0);
+
+        let filter = RequestRedirectFilter::try_new(&HTTPRequestRedirectFilter {
+            scheme: None,
+            hostname: None,
+            path: Some(HTTPPathModifier {
+                modifier_type: HTTPPathModifierType::ReplacePrefixMatch,
+                replace_full_path: None,
+                replace_prefix_match: Some("/v2".to_string()),
+            }),
+            port: None,
+            status_code: None,
+        })
+        .unwrap();
+        let mut log = PluginLog::new("test");
+        assert!(matches!(
+            filter.run_request(&mut session, &mut log).await,
+            PluginRunningResult::ErrResponse {
+                status: 500,
+                body: None
+            }
+        ));
     }
 
     #[tokio::test]

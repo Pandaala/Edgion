@@ -548,6 +548,13 @@ impl PluginRuntime {
             self.invalid_plugins.record_non_retainable("HeaderModifier");
             return;
         }
+        if !matches!(
+            edgion_resources::request_transform_filter_list_violations(filters),
+            Ok(violations) if violations.is_empty()
+        ) {
+            self.invalid_plugins.record_non_retainable("RequestTransform");
+            return;
+        }
         for filter in filters {
             match filter.filter_type {
                 HTTPRouteFilterType::RequestHeaderModifier => {
@@ -568,12 +575,18 @@ impl PluginRuntime {
                 }
                 HTTPRouteFilterType::RequestRedirect => {
                     if let Some(config) = &filter.request_redirect {
-                        self.add_request_filter(Box::new(RequestRedirectFilter::new(config.clone())));
+                        match RequestRedirectFilter::try_new(config) {
+                            Ok(filter) => self.add_request_filter(Box::new(filter)),
+                            Err(_) => self.invalid_plugins.record_non_retainable("RequestRedirect"),
+                        }
                     }
                 }
                 HTTPRouteFilterType::URLRewrite => {
                     if let Some(config) = &filter.url_rewrite {
-                        self.add_request_filter(Box::new(URLRewriteFilter::new(config.clone())));
+                        match URLRewriteFilter::try_new(config) {
+                            Ok(filter) => self.add_request_filter(Box::new(filter)),
+                            Err(_) => self.invalid_plugins.record_non_retainable("URLRewrite"),
+                        }
                     }
                 }
                 HTTPRouteFilterType::RequestMirror => {
@@ -1709,10 +1722,16 @@ impl PluginRuntime {
                     .ok()
                     .map(|filter| Box::new(filter) as Box<dyn RequestFilter>),
             ),
-            EdgionPlugin::RequestRedirect(config) => {
-                CreateResult::Ok(Some(Box::new(RequestRedirectFilter::new(config.clone()))))
-            }
-            EdgionPlugin::UrlRewrite(config) => CreateResult::Ok(Some(Box::new(URLRewriteFilter::new(config.clone())))),
+            EdgionPlugin::RequestRedirect(config) => CreateResult::Ok(
+                RequestRedirectFilter::try_new(config)
+                    .ok()
+                    .map(|filter| Box::new(filter) as Box<dyn RequestFilter>),
+            ),
+            EdgionPlugin::UrlRewrite(config) => CreateResult::Ok(
+                URLRewriteFilter::try_new(config)
+                    .ok()
+                    .map(|filter| Box::new(filter) as Box<dyn RequestFilter>),
+            ),
             EdgionPlugin::RequestMirror(config) => CreateResult::Ok(Some(Box::new(RequestMirrorPlugin::new(
                 config.filter.clone(),
                 config.tuning.clone(),
@@ -3762,6 +3781,26 @@ mod tests {
         assert_eq!(runtime.request_plugins_count(), 2, "RejectFilter must be prepended");
         let first = runtime.request_plugins_iter().next().expect("reject filter");
         assert_eq!(first.name(), "RejectInvalidConfig");
+    }
+
+    #[test]
+    fn invalid_edgion_request_transform_is_skipped_and_sealed_fail_closed() {
+        let mut runtime = PluginRuntime::new();
+        let redirect = serde_json::from_value(serde_json::json!({"scheme": "ftp"})).unwrap();
+        let entries = [RequestFilterEntry::new(EdgionPlugin::RequestRedirect(redirect))];
+
+        let errors = runtime.add_from_request_filters(&entries, "default", "transforms");
+        assert!(errors
+            .iter()
+            .any(|error| error.contains("requestPlugins[0]") && error.contains("RequestRedirect")));
+        assert_eq!(runtime.request_plugins_count(), 0);
+
+        runtime.seal_fail_closed();
+        assert_eq!(runtime.request_plugins_count(), 1);
+        assert_eq!(
+            runtime.request_plugins_iter().next().map(|filter| filter.name()),
+            Some("RejectInvalidConfig")
+        );
     }
 
     #[test]

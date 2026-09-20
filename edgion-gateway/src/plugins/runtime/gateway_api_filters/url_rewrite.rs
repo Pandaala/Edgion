@@ -7,32 +7,30 @@ use async_trait::async_trait;
 use crate::plugins::runtime::log::PluginLog;
 use crate::plugins::runtime::traits::{PluginSession, RequestFilter};
 use edgion_resources::filters::PluginRunningResult;
-use edgion_resources::resources::{HTTPPathModifierType, HTTPURLRewriteFilter};
+use edgion_resources::resources::{
+    HTTPURLRewriteFilter, PreparedPathModifier, PreparedUrlRewrite, RequestTransformViolation,
+};
 
 use super::path_modifier::replace_prefix_match;
 
 pub struct URLRewriteFilter {
-    config: HTTPURLRewriteFilter,
+    config: PreparedUrlRewrite,
 }
 
 impl URLRewriteFilter {
-    pub fn new(config: HTTPURLRewriteFilter) -> Self {
-        Self { config }
+    pub fn try_new(config: &HTTPURLRewriteFilter) -> Result<Self, RequestTransformViolation> {
+        Ok(Self {
+            config: config.prepare()?,
+        })
     }
 
-    fn rewrite_path(&self, session: &mut dyn PluginSession, plugin_log: &mut PluginLog) {
-        let Some(path_modifier) = &self.config.path else {
-            return;
-        };
+    fn rewritten_uri(&self, session: &mut dyn PluginSession) -> Option<Result<String, ()>> {
+        let path_modifier = self.config.path()?;
 
-        let rewritten_path = match path_modifier.modifier_type {
-            HTTPPathModifierType::ReplaceFullPath => path_modifier
-                .replace_full_path
-                .clone()
-                .unwrap_or_else(|| session.get_path().to_string()),
-            HTTPPathModifierType::ReplacePrefixMatch => {
+        let rewritten_path = match path_modifier {
+            PreparedPathModifier::ReplaceFullPath(replacement) => replacement.clone(),
+            PreparedPathModifier::ReplacePrefixMatch(replacement) => {
                 let original_path = session.get_path();
-                let replacement = path_modifier.replace_prefix_match.as_deref().unwrap_or(original_path);
                 let matched_prefix = session
                     .ctx()
                     .route_unit
@@ -45,7 +43,10 @@ impl URLRewriteFilter {
                             None
                         }
                     });
-                replace_prefix_match(original_path, matched_prefix.unwrap_or(original_path), replacement)
+                let Some(matched_prefix) = matched_prefix else {
+                    return Some(Err(()));
+                };
+                replace_prefix_match(original_path, matched_prefix, replacement)
             }
         };
 
@@ -57,23 +58,7 @@ impl URLRewriteFilter {
             final_uri.push_str(&query);
         }
 
-        if let Err(_e) = session.set_upstream_uri(&final_uri) {
-            plugin_log.push_err("path rewrite fail");
-        } else {
-            plugin_log.push("path rewrite");
-        }
-    }
-
-    fn rewrite_hostname(&self, session: &mut dyn PluginSession, plugin_log: &mut PluginLog) {
-        let Some(hostname) = &self.config.hostname else {
-            return;
-        };
-
-        if let Err(_e) = session.set_upstream_host(hostname) {
-            plugin_log.push_err("host rewrite fail");
-        } else {
-            plugin_log.push("host rewrite");
-        }
+        Some(Ok(final_uri))
     }
 }
 
@@ -84,8 +69,37 @@ impl RequestFilter for URLRewriteFilter {
     }
 
     async fn run_request(&self, session: &mut dyn PluginSession, plugin_log: &mut PluginLog) -> PluginRunningResult {
-        self.rewrite_hostname(session, plugin_log);
-        self.rewrite_path(session, plugin_log);
+        let rewritten_uri = match self.rewritten_uri(session) {
+            Some(Ok(uri)) => Some(uri),
+            Some(Err(())) => {
+                plugin_log.push_err("path rewrite prefix context unavailable");
+                return PluginRunningResult::ErrResponse {
+                    status: 500,
+                    body: None,
+                };
+            }
+            None => None,
+        };
+        if let Some(uri) = rewritten_uri {
+            if session.set_upstream_uri(&uri).is_err() {
+                plugin_log.push_err("path rewrite failed");
+                return PluginRunningResult::ErrResponse {
+                    status: 500,
+                    body: None,
+                };
+            }
+            plugin_log.push("path rewrite");
+        }
+        if let Some(hostname) = self.config.hostname() {
+            if session.set_upstream_host(hostname).is_err() {
+                plugin_log.push_err("host rewrite failed");
+                return PluginRunningResult::ErrResponse {
+                    status: 500,
+                    body: None,
+                };
+            }
+            plugin_log.push("host rewrite");
+        }
         PluginRunningResult::GoodNext
     }
 }
@@ -94,18 +108,19 @@ impl RequestFilter for URLRewriteFilter {
 mod tests {
     use super::*;
     use crate::plugins::runtime::traits::session::MockPluginSession;
-    use edgion_resources::resources::HTTPPathModifier;
+    use edgion_resources::resources::{HTTPPathModifier, HTTPPathModifierType};
 
     #[tokio::test]
     async fn run_request_sets_exact_upstream_path_and_raw_query() {
-        let filter = URLRewriteFilter::new(HTTPURLRewriteFilter {
+        let filter = URLRewriteFilter::try_new(&HTTPURLRewriteFilter {
             hostname: None,
             path: Some(HTTPPathModifier {
                 modifier_type: HTTPPathModifierType::ReplaceFullPath,
                 replace_full_path: Some("/v2/orders".to_string()),
                 replace_prefix_match: None,
             }),
-        });
+        })
+        .unwrap();
         let mut session = MockPluginSession::new();
         session
             .expect_get_query()
@@ -120,5 +135,59 @@ mod tests {
             filter.run_request(&mut session, &mut log).await,
             PluginRunningResult::GoodNext
         );
+    }
+
+    #[tokio::test]
+    async fn upstream_uri_setter_failure_fails_closed() {
+        let filter = URLRewriteFilter::try_new(&HTTPURLRewriteFilter {
+            hostname: None,
+            path: Some(HTTPPathModifier {
+                modifier_type: HTTPPathModifierType::ReplaceFullPath,
+                replace_full_path: Some("/v2/orders".to_string()),
+                replace_prefix_match: None,
+            }),
+        })
+        .unwrap();
+        let mut session = MockPluginSession::new();
+        session.expect_get_query().return_const(None);
+        session
+            .expect_set_upstream_uri()
+            .times(1)
+            .returning(|_| Err(Box::new(std::io::Error::other("setter failed"))));
+
+        let mut log = PluginLog::new("test");
+        assert!(matches!(
+            filter.run_request(&mut session, &mut log).await,
+            PluginRunningResult::ErrResponse {
+                status: 500,
+                body: None
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn prefix_rewrite_without_matched_prefix_fails_closed() {
+        let filter = URLRewriteFilter::try_new(&HTTPURLRewriteFilter {
+            hostname: None,
+            path: Some(HTTPPathModifier {
+                modifier_type: HTTPPathModifierType::ReplacePrefixMatch,
+                replace_full_path: None,
+                replace_prefix_match: Some("/v2".to_string()),
+            }),
+        })
+        .unwrap();
+        let mut session = MockPluginSession::new();
+        session.expect_get_path().return_const("/api/orders".to_string());
+        session.expect_ctx().return_const(crate::ctx::EdgionHttpContext::new());
+        session.expect_set_upstream_uri().times(0);
+
+        let mut log = PluginLog::new("test");
+        assert!(matches!(
+            filter.run_request(&mut session, &mut log).await,
+            PluginRunningResult::ErrResponse {
+                status: 500,
+                body: None
+            }
+        ));
     }
 }

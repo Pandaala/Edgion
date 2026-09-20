@@ -20,15 +20,13 @@
 //! 4. the unknown-field walk on the raw document, via
 //!    [`unknown_field_warnings`] from the Admin write path (`api/common.rs`).
 //!
-//! `validationErrors` additionally carries `EdgionPlugins::validate_plugins()`
-//! output for that one kind — the same preparse business-rule check the
-//! conf_sync apply path runs before accepting the resource (minus the DSL VM
-//! init step, which cannot run without building the gateway plugin runtime).
-//! No side-effect-free equivalent exists yet for `EdgionStreamPlugins` or any
-//! other kind (its analogous check lives behind `ProcessorHandler::preparse`,
-//! which mutates plugin-policy state and needs a full `HandlerContext`) — for
-//! every other kind, `validationErrors` stays empty. This does not affect
-//! `unknownFieldCheck`, which only tracks the walk in step 4.
+//! `validationErrors` additionally carries side-effect-free shared business
+//! validation for `EdgionPlugins` and HTTPRoute request transforms. The plugin
+//! check matches the conf_sync preparse path except for DSL VM initialization,
+//! which requires the Gateway runtime. No equivalent exists yet for
+//! `EdgionStreamPlugins`; its check mutates plugin-policy state and requires a
+//! full `HandlerContext`. Other kinds leave `validationErrors` empty. This is
+//! independent of `unknownFieldCheck`, which only tracks the walk in step 4.
 //!
 //! Strictly read-only: no store is touched, no version is bumped.
 
@@ -128,15 +126,35 @@ pub async fn validate_kind(
         _ => ("unsupported", Vec::new()),
     };
 
-    // `validationErrors`: EdgionPlugins is the only kind with a side-effect-free
-    // business-rule check available outside the full apply handler (see the
-    // module doc comment for why EdgionStreamPlugins and other kinds are not
-    // included here).
-    let validation_errors: Vec<String> = if kind == ResourceKind::EdgionPlugins {
-        let plugins: EdgionPlugins = parse_resource_and_update_version(&content, false)?;
-        plugins.validate_plugins()
-    } else {
-        Vec::new()
+    // `validationErrors`: only kinds with side-effect-free shared business
+    // validation available outside the full apply handler are included here.
+    let validation_errors: Vec<String> = match kind {
+        ResourceKind::EdgionPlugins => {
+            let plugins: EdgionPlugins = parse_resource_and_update_version(&content, false)?;
+            plugins.validate_plugins()
+        }
+        ResourceKind::HTTPRoute => {
+            let route: HTTPRoute = parse_resource_and_update_version(&content, false)?;
+            route
+                .spec
+                .rules
+                .iter()
+                .flatten()
+                .enumerate()
+                .flat_map(
+                    |(index, rule)| match edgion_resources::authored_request_transform_violations(rule) {
+                        Ok(violations) => violations
+                            .into_iter()
+                            .map(|violation| format!("rules[{index}]: {violation}"))
+                            .collect::<Vec<_>>(),
+                        Err(_) => vec![format!(
+                            "rules[{index}]: request transform validation contract is unavailable"
+                        )],
+                    },
+                )
+                .collect()
+        }
+        _ => Vec::new(),
     };
 
     let ok = schema_errors.is_empty() && unknown_fields.is_empty() && validation_errors.is_empty();
@@ -210,6 +228,38 @@ mod tests {
         assert!(body.unknown_fields.is_empty());
         assert!(body.schema_errors.is_empty());
         assert!(body.validation_errors.is_empty());
+    }
+
+    #[tokio::test]
+    async fn http_route_transform_contract_is_reported_without_persistence() {
+        let (state, tmp) = make_state().await;
+        let body = Bytes::from(
+            r#"{
+                "apiVersion": "gateway.networking.k8s.io/v1",
+                "kind": "HTTPRoute",
+                "metadata": {"name": "invalid-transform", "namespace": "default"},
+                "spec": {"rules": [{"backendRefs": [{
+                    "name": "backend",
+                    "filters": [{"type": "URLRewrite", "urlRewrite": {
+                        "path": {"type": "ReplaceFullPath", "replacePrefixMatch": "/v2"}
+                    }}]
+                }]}]}
+            }"#,
+        );
+
+        let payload = validate_kind(State(state), Path("HTTPRoute".to_string()), body)
+            .await
+            .expect("HTTPRoute validation succeeds")
+            .0
+            .data
+            .expect("response data");
+
+        assert!(!payload.ok);
+        assert!(payload
+            .validation_errors
+            .iter()
+            .any(|error| error.contains("rules[0]") && error.contains("backendRefs/0/filters/0")));
+        assert!(std::fs::read_dir(tmp.path()).expect("read conf dir").next().is_none());
     }
 
     #[tokio::test]

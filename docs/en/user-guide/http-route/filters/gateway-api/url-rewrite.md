@@ -106,6 +106,10 @@ spec:
 
 ## Notes
 
+- Edgion validates this filter against a generated contract extracted from its bundled
+  Gateway API CRD. Kubernetes rejects invalid values during admission; filesystem and
+  etcd inputs report the same selected transform constraints through HTTPRoute status.
+  An invalid rule is disabled without disabling valid sibling rules.
 - `URLRewrite` and [RequestRedirect](./request-redirect.md) are mutually exclusive within the same rule. A rule that declares both is marked `PartiallyInvalid` and disabled, while the route's other rules keep working.
 - Rewrite values are literals; path parameters (`:name`) and template variables are not expanded. For dynamic, variable-driven rewrites use the [ProxyRewrite plugin](../edgion-plugins/proxy-rewrite.md).
 - `ReplacePrefixMatch` only makes sense with a `PathPrefix` match; it replaces exactly the matched prefix segment.

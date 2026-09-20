@@ -5,10 +5,10 @@
 | Ingress | Structural/schema validation | TypeMeta/version handling | Semantic validation and status |
 |---------|------------------------------|---------------------------|--------------------------------|
 | Kubernetes | API server applies the installed CRD's OpenAPI schema, pruning/defaulting rules, and CEL | Watchers use statically selected or probed GVKs; preflight checks served availability, not bundle compatibility | Controller handlers validate references and behavior, then patch native status |
-| Non-Kubernetes Admin write | Typed parse, serialize back to JSON, then `SchemaValidator` | BackendTLSPolicy has an explicit raw v1 guard; most kinds do not | Schema failure returns 400; accepted resources later enter the normal handler/status path |
-| Validation endpoint | Same typed-parse-before-schema sequence; always invokes the local schema validator | Same raw-version limitations | Returns schema errors; only EdgionPlugins currently exposes an additional side-effect-free business validation pass |
+| Non-Kubernetes Admin write | Typed parse, serialize back to JSON, then `SchemaValidator`; HTTPRoute additionally runs the shared generated request-transform contract | BackendTLSPolicy has an explicit raw v1 guard; most kinds do not | Schema or transform-contract failure returns 400; accepted resources later enter the normal handler/status path |
+| Validation endpoint | Same typed-parse-before-schema sequence; always invokes the local schema validator | Same raw-version limitations | Returns schema errors plus side-effect-free business validation for EdgionPlugins and HTTPRoute request transforms |
 | Filesystem and etcd direct write | Serde parse only; local CRD `SchemaValidator` is intentionally not run in watcher paths under the current accepted design | BackendTLSPolicy is guarded; TLSRoute may convert v1alpha3; most kinds discard submitted TypeMeta | Parse failures use error sidecars; parsed objects use handler validation/status |
-| Gateway conf-sync ingest | No CRD admission contract | Receives Controller-produced canonical serialized types | Plugin/route construction supplies defensive validation, with uneven coverage by filter type |
+| Gateway conf-sync ingest | No API-server admission; selected HTTPRoute request-transform constraints are rechecked from the embedded generated contract | Receives Controller-produced canonical serialized types | Invalid transform rules are not published; constructors consume prepared immutable transform state and fail closed if malformed state bypasses the Controller |
 
 The accepted rationale for not running the complete CRD validator in direct
 filesystem/etcd watchers is recorded in
@@ -51,20 +51,28 @@ unless bundle/channel policy is part of schema registration.
   server conversion when submitted to Kubernetes and do not have Edgion-owned
   non-Kubernetes adapters.
 
-## RequestRedirect and URLRewrite gap
+## RequestRedirect and URLRewrite scoped contract
 
-The current selected issue is narrower than the version redesign:
+RequestRedirect and URLRewrite use a generated, committed contract extracted
+from the vendored Gateway API v1.5 HTTPRoute CRDs. The generator selects their
+OpenAPI fragments, transform-referencing filter/list/rule CEL expressions, complete
+list-level schema, and defaults. It records the complete scoped CEL inventories,
+requires the executable Standard and Experimental contracts to be identical, and
+supports `--check` drift detection.
 
-- serde rejects malformed shapes and scalar types but accepts many invalid
-  values and cross-field combinations;
-- the Admin schema path sees only the typed re-serialized value;
-- filesystem/etcd handler validation does not cover all transform constraints;
-- `jsonschema` cannot execute filter-pairing and path-modifier CEL rules;
-- the Gateway constructors retain raw strings/numbers and apply request-time
-  fallbacks instead of consuming fully prepared immutable state.
+The shared resource layer compiles that contract once, applies it to authored
+rule/backend filter lists and EdgionPlugins configs, and prepares typed immutable
+Gateway state. Effective delegated rules receive a separate safety pass because
+flattening can legitimately change authored list cardinality while still needing
+valid prefix-match context. Filesystem and etcd still report failures through
+the normal handler/status lifecycle; they do not gain a pretend admission gate.
 
-That issue should add schema-aligned validation and canonical preparation for
-HTTPRoute v1 without first implementing the multi-version architecture.
+This is deliberately a selected semantic contract, not a claim that Edgion
+faithfully emulates every Kubernetes admission behavior. Typed deserialization
+still precedes this check outside Kubernetes, and the generic local
+`SchemaValidator` still does not execute arbitrary CRD CEL. Extend the generator's
+scoped extraction when another resource or field family needs the same model;
+do not copy CRD constraints into hand-written validators.
 
 ## Missing verification
 

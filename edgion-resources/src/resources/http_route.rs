@@ -339,7 +339,11 @@ pub struct HTTPRouteMatch {
     /// here to keep every backend on the same semantics. Without it a
     /// spec-valid header/method-only match compiles into a route unit with no
     /// radix-tree entry and becomes permanently unreachable.
-    #[serde(default = "default_path_prefix_root", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default = "default_path_prefix_root",
+        deserialize_with = "deserialize_path_match_or_default",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub path: Option<HTTPPathMatch>,
 
     /// Header matchers, retaining only the first ASCII-case-equivalent name.
@@ -375,17 +379,40 @@ where
 
 /// Gateway API structural default for an omitted `HTTPRouteMatch.path`.
 fn default_path_prefix_root() -> Option<HTTPPathMatch> {
-    Some(HTTPPathMatch {
-        match_type: Some("PathPrefix".to_string()),
-        value: Some("/".to_string()),
-    })
+    Some(super::request_transform::default_path_match())
+}
+
+fn deserialize_path_match_or_default<'de, D>(deserializer: D) -> Result<Option<HTTPPathMatch>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(Option::<HTTPPathMatch>::deserialize(deserializer)?.or_else(default_path_prefix_root))
+}
+
+fn deserialize_path_type_or_default<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(Option::<String>::deserialize(deserializer)?.or_else(super::request_transform::default_path_match_type))
+}
+
+fn deserialize_path_value_or_default<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(Option::<String>::deserialize(deserializer)?.or_else(super::request_transform::default_path_match_value))
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct HTTPPathMatch {
     /// Type specifies how to match against the path value
-    #[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "type",
+        default = "super::request_transform::default_path_match_type",
+        deserialize_with = "deserialize_path_type_or_default",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub match_type: Option<String>,
 
     /// Value of the HTTP path to match against.
@@ -406,7 +433,11 @@ pub struct HTTPPathMatch {
     ///
     /// `RegularExpression` paths do not participate in `:name` extraction;
     /// use regex capture groups (`$1`-`$9`) in `ProxyRewrite` for that case.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default = "super::request_transform::default_path_match_value",
+        deserialize_with = "deserialize_path_value_or_default",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub value: Option<String>,
 }
 

@@ -32,6 +32,12 @@ jobs:
       - name: Verify Pingora source policy
         run: python3 cicd/checks/check_pingora_source_policy.py
 
+      - name: Verify generated Gateway API transform contract
+        run: |
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y python3-yaml
+          python3 cicd/checks/test_generate_gateway_api_transform_contract.py
+          python3 cicd/checks/generate_gateway_api_transform_contract.py --check
+
       - name: Run cargo check
         run: cargo check --locked --workspace --all-targets
 

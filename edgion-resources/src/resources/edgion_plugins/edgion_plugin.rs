@@ -694,8 +694,8 @@ impl EdgionPlugin {
             EdgionPlugin::RequestHeaderModifier(c) | EdgionPlugin::ResponseHeaderModifier(c) => {
                 c.validate().err().map(str::to_owned)
             }
-            // These Gateway API filter variants have no shared validation yet.
-            EdgionPlugin::RequestRedirect(_) | EdgionPlugin::UrlRewrite(_) => None,
+            EdgionPlugin::RequestRedirect(config) => config.prepare().err().map(|error| error.to_string()),
+            EdgionPlugin::UrlRewrite(config) => config.prepare().err().map(|error| error.to_string()),
         }
     }
 }

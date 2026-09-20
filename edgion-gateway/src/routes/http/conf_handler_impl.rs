@@ -12,7 +12,7 @@ use crate::runtime::matching::route::ResolvedParentRef;
 use crate::MatchInfo;
 use edgion_algo::matcher::radix_hostname::{RadixHostnameChange, RadixHostnameMatcher, RadixHostnamePattern};
 use edgion_common::conf_sync::traits::ConfHandler;
-use edgion_resources::{HTTPPathMatch, HTTPRoute, HTTPRouteMatch, HTTPRouteRule, ListenerKey, ResourceMeta};
+use edgion_resources::{HTTPRoute, HTTPRouteMatch, HTTPRouteRule, ListenerKey, ResourceMeta};
 use regex::Regex;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Display;
@@ -471,10 +471,7 @@ fn append_route_to_domains(
     route_arc: &Arc<HTTPRoute>,
 ) {
     let default_matches = vec![HTTPRouteMatch {
-        path: Some(HTTPPathMatch {
-            match_type: Some("PathPrefix".to_string()),
-            value: Some("/".to_string()),
-        }),
+        path: Some(edgion_resources::default_path_match()),
         headers: None,
         query_params: None,
         method: None,
@@ -577,8 +574,16 @@ fn parse_http_routes_to_domain_rules(data: &HashMap<String, Arc<HTTPRoute>>) -> 
                     tracing::warn!(route = %resource_key, rule_id, %reason, "skipping invalid HTTPRoute rule");
                     return None;
                 }
+                let transform_violations = if route.spec.resolved_rules.is_some() {
+                    edgion_resources::effective_request_transform_violations(rule)
+                } else {
+                    edgion_resources::authored_request_transform_violations(rule)
+                };
+                if !matches!(transform_violations, Ok(violations) if violations.is_empty()) {
+                    return None;
+                }
                 // Share one runtime across every hostname and match of this rule.
-                let runtime = HttpRouteRuleUnit::compile_http_rule(rule, &validated.namespace);
+                let runtime = HttpRouteRuleUnit::compile_prevalidated_http_rule(rule, &validated.namespace);
                 let rule = Arc::new(rule.clone());
                 let metric_handles = Arc::new(crate::observe::metrics::route_handles::RouteMetricHandles::build(
                     &attached_gateways,
@@ -2187,6 +2192,41 @@ mod tests {
                 assert_eq!(domain_unit_paths(&domains, "cors.example"), ["/valid"]);
                 assert_eq!(domains["cors.example"].0[0].matched_info.rule_id, 1);
             }
+        }
+    }
+
+    #[test]
+    fn invalid_request_transform_is_dropped_without_hiding_valid_siblings() {
+        use serde_json::json;
+
+        for resolved in [false, true] {
+            let mut route = route_with_paths(
+                "transform-validation",
+                "route",
+                vec!["transform.example"],
+                "2026-09-20T00:00:00Z",
+                json!([
+                    {
+                        "matches": [{"path": {"value": "/invalid"}}],
+                        "filters": [{"type": "RequestRedirect", "requestRedirect": {"scheme": "ftp"}}]
+                    },
+                    {
+                        "matches": [{"path": {"value": "/valid"}}],
+                        "filters": [{"type": "URLRewrite", "urlRewrite": {"hostname": "backend.example"}}]
+                    }
+                ]),
+            );
+            if resolved {
+                route.spec.resolved_rules = route.spec.rules.take();
+            }
+            route.pre_parse();
+            let domains = parse_http_routes_to_domain_rules(&HashMap::from([(
+                "transform-validation/route".into(),
+                Arc::new(route),
+            )]));
+
+            assert_eq!(domain_unit_paths(&domains, "transform.example"), ["/valid"]);
+            assert_eq!(domains["transform.example"].0[0].matched_info.rule_id, 1);
         }
     }
 

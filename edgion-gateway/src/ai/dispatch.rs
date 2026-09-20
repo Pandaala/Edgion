@@ -1122,7 +1122,7 @@ mod tests {
             }]
         }))
         .unwrap();
-        let runtime = HttpRouteRuleUnit::compile_http_rule(&rule, "default");
+        let runtime = HttpRouteRuleUnit::compile_http_rule(&rule, "default").unwrap();
         let mut session = test_session().await;
         let mut ctx = EdgionHttpContext::new();
         assert!(matches!(

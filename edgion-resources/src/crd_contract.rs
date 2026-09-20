@@ -1,0 +1,632 @@
+//! Shared validation for selected, generated Kubernetes CRD contracts.
+//!
+//! Contracts are generated from vendored CRDs and embedded as compact JSON.
+//! Validation runs only while configuration is prepared; request processing
+//! never parses schemas or evaluates CEL.
+
+use cel::{to_value, Context, Program, Value as CelValue};
+use jsonschema::Validator;
+use serde::Deserialize;
+use serde_json::Value;
+use std::sync::LazyLock;
+
+const MAX_INPUT_BYTES: usize = 256 * 1024;
+const MAX_INPUT_DEPTH: usize = 64;
+const MAX_VIOLATIONS: usize = 32;
+const HTTP_ROUTE_TRANSFORM_CONTRACT_JSON: &str = include_str!("contracts/http_route_transform_v1_5.json");
+
+/// A stable validation failure that never embeds the submitted value.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CrdViolation {
+    pub instance_path: String,
+    pub schema_path: String,
+    pub message: String,
+}
+
+/// Failure to load or execute an embedded validation contract.
+#[derive(Debug, thiserror::Error)]
+pub enum CrdContractError {
+    #[error("embedded CRD contract is invalid")]
+    InvalidContract,
+    #[error("CRD validation input exceeds the configured bound")]
+    InputLimit,
+    #[error("embedded CEL validation could not be evaluated")]
+    CelEvaluation,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ContractSource {
+    group: String,
+    version: String,
+    kind: String,
+    channel: String,
+    gateway_api_version: String,
+    selected_sha256: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ContractDefaults {
+    matches: Value,
+    path: Value,
+    path_type: String,
+    path_value: String,
+    redirect_status_code: i32,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ContractFragments {
+    filter_list: Value,
+    request_redirect: Value,
+    url_rewrite: Value,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ContractRules {
+    filter: Vec<CelRuleSource>,
+    filter_list: Vec<CelRuleSource>,
+    rule: Vec<CelRuleSource>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct CelRuleSource {
+    message: String,
+    rule: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct ContractDocument {
+    source: ContractSource,
+    defaults: ContractDefaults,
+    fragments: ContractFragments,
+    rules: ContractRules,
+}
+
+#[derive(Clone, Debug)]
+enum InstanceStep {
+    Property(String),
+    Items,
+}
+
+struct CompiledCelRule {
+    program: Program,
+    message: String,
+    schema_path: String,
+}
+
+struct ScopedCelRules {
+    instance_steps: Vec<InstanceStep>,
+    rules: Vec<CompiledCelRule>,
+}
+
+struct CompiledFragment {
+    schema: Value,
+    validator: Validator,
+    cel_rules: Vec<ScopedCelRules>,
+}
+
+impl CompiledFragment {
+    fn compile(schema: Value, name: &str) -> Result<Self, CrdContractError> {
+        let validator = Validator::new(&schema).map_err(|_| CrdContractError::InvalidContract)?;
+        let mut cel_rules = Vec::new();
+        collect_scoped_cel(&schema, &mut Vec::new(), name, &mut cel_rules)?;
+        Ok(Self {
+            schema,
+            validator,
+            cel_rules,
+        })
+    }
+
+    fn validate(&self, input: &Value) -> Result<Vec<CrdViolation>, CrdContractError> {
+        check_input_bounds(input)?;
+        let mut normalized = input.clone();
+        prune_non_nullable_null_properties(&self.schema, &mut normalized);
+        apply_defaults(&self.schema, &mut normalized);
+
+        let mut violations = Vec::new();
+        for error in self.validator.iter_errors(&normalized).take(MAX_VIOLATIONS) {
+            violations.push(CrdViolation {
+                instance_path: error.instance_path().to_string(),
+                schema_path: error.schema_path().to_string(),
+                message: "value does not satisfy the vendored Gateway API schema".to_string(),
+            });
+        }
+        if !violations.is_empty() {
+            return Ok(violations);
+        }
+
+        evaluate_scoped_rules(&normalized, &self.cel_rules, &mut violations)?;
+        Ok(violations)
+    }
+}
+
+struct CompiledRuleSet {
+    rules: Vec<CompiledCelRule>,
+}
+
+impl CompiledRuleSet {
+    fn compile(sources: Vec<CelRuleSource>, schema_path: &str) -> Result<Self, CrdContractError> {
+        let rules = sources
+            .into_iter()
+            .enumerate()
+            .map(|(index, source)| {
+                Ok(CompiledCelRule {
+                    program: Program::compile(&source.rule).map_err(|_| CrdContractError::InvalidContract)?,
+                    message: source.message,
+                    schema_path: format!("{schema_path}/x-kubernetes-validations/{index}"),
+                })
+            })
+            .collect::<Result<Vec<_>, CrdContractError>>()?;
+        Ok(Self { rules })
+    }
+
+    fn validate(&self, input: &Value) -> Result<Vec<CrdViolation>, CrdContractError> {
+        check_input_bounds(input)?;
+        let mut violations = Vec::new();
+        evaluate_rules(input, "", &self.rules, &mut violations)?;
+        Ok(violations)
+    }
+}
+
+/// Generated defaults shared by validation and typed runtime preparation.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HttpRouteTransformDefaults {
+    pub matches: Value,
+    pub path: Value,
+    pub path_type: String,
+    pub path_value: String,
+    pub redirect_status_code: i32,
+}
+
+/// Compiled request-transform subset of the vendored HTTPRoute/v1 CRD.
+pub struct HttpRouteTransformContract {
+    request_redirect: CompiledFragment,
+    url_rewrite: CompiledFragment,
+    filter_list_bounds: CompiledFragment,
+    filter: CompiledRuleSet,
+    filter_list: CompiledRuleSet,
+    rule: CompiledRuleSet,
+    defaults: HttpRouteTransformDefaults,
+}
+
+impl HttpRouteTransformContract {
+    fn compile() -> Result<Self, CrdContractError> {
+        let document: ContractDocument =
+            serde_json::from_str(HTTP_ROUTE_TRANSFORM_CONTRACT_JSON).map_err(|_| CrdContractError::InvalidContract)?;
+        if document.source.group != "gateway.networking.k8s.io"
+            || document.source.version != "v1"
+            || document.source.kind != "HTTPRoute"
+            || document.source.channel != "standard"
+            || document.source.gateway_api_version != "v1.5.0"
+            || document.source.selected_sha256.len() != 64
+        {
+            return Err(CrdContractError::InvalidContract);
+        }
+        Ok(Self {
+            request_redirect: CompiledFragment::compile(
+                document.fragments.request_redirect,
+                "/fragments/requestRedirect",
+            )?,
+            url_rewrite: CompiledFragment::compile(document.fragments.url_rewrite, "/fragments/urlRewrite")?,
+            filter_list_bounds: CompiledFragment::compile(document.fragments.filter_list, "/fragments/filterList")?,
+            filter: CompiledRuleSet::compile(document.rules.filter, "/rules/filter")?,
+            filter_list: CompiledRuleSet::compile(document.rules.filter_list, "/rules/filterList")?,
+            rule: CompiledRuleSet::compile(document.rules.rule, "/rules/rule")?,
+            defaults: HttpRouteTransformDefaults {
+                matches: document.defaults.matches,
+                path: document.defaults.path,
+                path_type: document.defaults.path_type,
+                path_value: document.defaults.path_value,
+                redirect_status_code: document.defaults.redirect_status_code,
+            },
+        })
+    }
+
+    pub fn defaults(&self) -> &HttpRouteTransformDefaults {
+        &self.defaults
+    }
+
+    pub fn validate_request_redirect(&self, value: &Value) -> Result<Vec<CrdViolation>, CrdContractError> {
+        self.request_redirect.validate(value)
+    }
+
+    pub fn validate_url_rewrite(&self, value: &Value) -> Result<Vec<CrdViolation>, CrdContractError> {
+        self.url_rewrite.validate(value)
+    }
+
+    pub fn validate_filter(&self, value: &Value) -> Result<Vec<CrdViolation>, CrdContractError> {
+        self.filter.validate(value)
+    }
+
+    pub fn validate_filter_list(&self, value: &Value) -> Result<Vec<CrdViolation>, CrdContractError> {
+        self.filter_list.validate(value)
+    }
+
+    pub fn validate_filter_list_bounds(&self, value: &Value) -> Result<Vec<CrdViolation>, CrdContractError> {
+        self.filter_list_bounds.validate(value)
+    }
+
+    pub fn validate_rule(&self, value: &Value) -> Result<Vec<CrdViolation>, CrdContractError> {
+        self.rule.validate(value)
+    }
+}
+
+static HTTP_ROUTE_TRANSFORM_CONTRACT: LazyLock<Result<HttpRouteTransformContract, CrdContractError>> =
+    LazyLock::new(HttpRouteTransformContract::compile);
+
+pub fn http_route_transform_contract() -> Result<&'static HttpRouteTransformContract, CrdContractError> {
+    HTTP_ROUTE_TRANSFORM_CONTRACT
+        .as_ref()
+        .map_err(|_| CrdContractError::InvalidContract)
+}
+
+fn collect_scoped_cel(
+    schema: &Value,
+    steps: &mut Vec<InstanceStep>,
+    schema_path: &str,
+    output: &mut Vec<ScopedCelRules>,
+) -> Result<(), CrdContractError> {
+    if let Some(sources) = schema.get("x-kubernetes-validations").and_then(Value::as_array) {
+        let rules = sources
+            .iter()
+            .enumerate()
+            .map(|(index, source)| {
+                let message = source
+                    .get("message")
+                    .and_then(Value::as_str)
+                    .ok_or(CrdContractError::InvalidContract)?;
+                let rule = source
+                    .get("rule")
+                    .and_then(Value::as_str)
+                    .ok_or(CrdContractError::InvalidContract)?;
+                Ok(CompiledCelRule {
+                    program: Program::compile(rule).map_err(|_| CrdContractError::InvalidContract)?,
+                    message: message.to_string(),
+                    schema_path: format!("{schema_path}/x-kubernetes-validations/{index}"),
+                })
+            })
+            .collect::<Result<Vec<_>, CrdContractError>>()?;
+        output.push(ScopedCelRules {
+            instance_steps: steps.clone(),
+            rules,
+        });
+    }
+
+    if let Some(properties) = schema.get("properties").and_then(Value::as_object) {
+        for (name, child) in properties {
+            steps.push(InstanceStep::Property(name.clone()));
+            collect_scoped_cel(child, steps, &format!("{schema_path}/properties/{name}"), output)?;
+            steps.pop();
+        }
+    }
+    if let Some(items) = schema.get("items") {
+        steps.push(InstanceStep::Items);
+        collect_scoped_cel(items, steps, &format!("{schema_path}/items"), output)?;
+        steps.pop();
+    }
+    Ok(())
+}
+
+fn apply_defaults(schema: &Value, instance: &mut Value) {
+    if instance.is_null() {
+        return;
+    }
+    if let (Some(properties), Some(object)) = (
+        schema.get("properties").and_then(Value::as_object),
+        instance.as_object_mut(),
+    ) {
+        for (name, property_schema) in properties {
+            if !object.contains_key(name) {
+                if let Some(default) = property_schema.get("default") {
+                    object.insert(name.clone(), default.clone());
+                }
+            }
+            if let Some(value) = object.get_mut(name) {
+                apply_defaults(property_schema, value);
+            }
+        }
+    }
+    if let (Some(item_schema), Some(items)) = (schema.get("items"), instance.as_array_mut()) {
+        for item in items {
+            apply_defaults(item_schema, item);
+        }
+    }
+}
+
+/// Mirror Kubernetes structural-schema handling for object fields: a null
+/// value on a non-nullable property is pruned before defaults are applied.
+fn prune_non_nullable_null_properties(schema: &Value, instance: &mut Value) {
+    if let (Some(properties), Some(object)) = (
+        schema.get("properties").and_then(Value::as_object),
+        instance.as_object_mut(),
+    ) {
+        for (name, property_schema) in properties {
+            if object.get(name).is_some_and(Value::is_null) && !schema_allows_null(property_schema) {
+                object.remove(name);
+                continue;
+            }
+            if let Some(value) = object.get_mut(name) {
+                prune_non_nullable_null_properties(property_schema, value);
+            }
+        }
+    }
+    if let (Some(item_schema), Some(items)) = (schema.get("items"), instance.as_array_mut()) {
+        for item in items {
+            prune_non_nullable_null_properties(item_schema, item);
+        }
+    }
+}
+
+fn schema_allows_null(schema: &Value) -> bool {
+    schema.get("nullable").and_then(Value::as_bool) == Some(true)
+        || schema.get("type").is_some_and(|schema_type| match schema_type {
+            Value::String(value) => value == "null",
+            Value::Array(values) => values.iter().any(|value| value.as_str() == Some("null")),
+            _ => false,
+        })
+}
+
+fn evaluate_scoped_rules(
+    root: &Value,
+    scoped_rules: &[ScopedCelRules],
+    violations: &mut Vec<CrdViolation>,
+) -> Result<(), CrdContractError> {
+    for scoped in scoped_rules {
+        let mut values = vec![(root, String::new())];
+        for step in &scoped.instance_steps {
+            let mut next = Vec::new();
+            for (value, path) in values {
+                match step {
+                    InstanceStep::Property(name) => {
+                        if let Some(child) = value.get(name) {
+                            next.push((child, format!("{path}/{name}")));
+                        }
+                    }
+                    InstanceStep::Items => {
+                        if let Some(items) = value.as_array() {
+                            next.extend(
+                                items
+                                    .iter()
+                                    .enumerate()
+                                    .map(|(index, child)| (child, format!("{path}/{index}"))),
+                            );
+                        }
+                    }
+                }
+            }
+            values = next;
+        }
+        for (value, path) in values {
+            evaluate_rules(value, &path, &scoped.rules, violations)?;
+            if violations.len() >= MAX_VIOLATIONS {
+                return Ok(());
+            }
+        }
+    }
+    Ok(())
+}
+
+fn evaluate_rules(
+    value: &Value,
+    instance_path: &str,
+    rules: &[CompiledCelRule],
+    violations: &mut Vec<CrdViolation>,
+) -> Result<(), CrdContractError> {
+    let cel_value = to_value(value).map_err(|_| CrdContractError::CelEvaluation)?;
+    for rule in rules {
+        let mut context = Context::default();
+        context.add_variable_from_value("self", cel_value.clone());
+        match rule
+            .program
+            .execute(&context)
+            .map_err(|_| CrdContractError::CelEvaluation)?
+        {
+            CelValue::Bool(true) => {}
+            CelValue::Bool(false) => violations.push(CrdViolation {
+                instance_path: instance_path.to_string(),
+                schema_path: rule.schema_path.clone(),
+                message: rule.message.clone(),
+            }),
+            _ => return Err(CrdContractError::CelEvaluation),
+        }
+        if violations.len() >= MAX_VIOLATIONS {
+            break;
+        }
+    }
+    Ok(())
+}
+
+fn check_input_bounds(value: &Value) -> Result<(), CrdContractError> {
+    if serde_json::to_vec(value)
+        .map_err(|_| CrdContractError::InputLimit)?
+        .len()
+        > MAX_INPUT_BYTES
+        || value_depth(value) > MAX_INPUT_DEPTH
+    {
+        return Err(CrdContractError::InputLimit);
+    }
+    Ok(())
+}
+
+fn value_depth(value: &Value) -> usize {
+    match value {
+        Value::Array(values) => 1 + values.iter().map(value_depth).max().unwrap_or(0),
+        Value::Object(values) => 1 + values.values().map(value_depth).max().unwrap_or(0),
+        _ => 1,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn selected_contract_compiles_and_uses_crd_defaults() {
+        let contract = http_route_transform_contract().unwrap();
+        assert_eq!(contract.defaults().redirect_status_code, 302);
+        assert_eq!(contract.defaults().path_type, "PathPrefix");
+        assert_eq!(contract.defaults().path_value, "/");
+        assert_eq!(
+            contract.defaults().matches,
+            json!([{"path": {"type": "PathPrefix", "value": "/"}}])
+        );
+    }
+
+    #[test]
+    fn config_openapi_and_nested_cel_are_enforced() {
+        let contract = http_route_transform_contract().unwrap();
+        for invalid in [
+            json!({"scheme": "ftp"}),
+            json!({"hostname": ""}),
+            json!({"hostname": "Invalid.example"}),
+            json!({"port": 0}),
+            json!({"port": 65536}),
+            json!({"statusCode": 300}),
+            json!({"path": {}}),
+            json!({"path": {"type": "ReplaceFullPath"}}),
+            json!({"path": {"type": "ReplaceFullPath", "replacePrefixMatch": "/v2"}}),
+            json!({"path": {"type": "ReplacePrefixMatch", "replaceFullPath": "/v2"}}),
+            json!({"path": {"type": "ReplaceFullPath", "replaceFullPath": "x".repeat(1025)}}),
+        ] {
+            assert!(
+                !contract.validate_request_redirect(&invalid).unwrap().is_empty(),
+                "invalid RequestRedirect unexpectedly accepted: {invalid}"
+            );
+        }
+        for valid in [
+            json!({"port": 1}),
+            json!({"port": 65535}),
+            json!({"statusCode": 301}),
+            json!({"statusCode": 302}),
+            json!({"statusCode": 303}),
+            json!({"statusCode": 307}),
+            json!({"statusCode": 308}),
+            json!({"path": {"type": "ReplaceFullPath", "replaceFullPath": "x".repeat(1024)}}),
+            json!({"path": {"type": "ReplacePrefixMatch", "replacePrefixMatch": ""}}),
+        ] {
+            assert!(
+                contract.validate_request_redirect(&valid).unwrap().is_empty(),
+                "valid RequestRedirect unexpectedly rejected: {valid}"
+            );
+        }
+        assert!(contract.validate_request_redirect(&json!({})).unwrap().is_empty());
+    }
+
+    #[test]
+    fn filter_list_and_rule_cel_are_enforced() {
+        let contract = http_route_transform_contract().unwrap();
+        for invalid in [
+            json!({"type": "RequestRedirect"}),
+            json!({"type": "URLRewrite"}),
+            json!({"type": "RequestHeaderModifier", "requestRedirect": {}}),
+            json!({"type": "RequestHeaderModifier", "urlRewrite": {}}),
+        ] {
+            assert!(!contract.validate_filter(&invalid).unwrap().is_empty());
+        }
+        assert!(!contract
+            .validate_filter_list(&json!([{"type": "RequestRedirect"}, {"type": "URLRewrite"}]))
+            .unwrap()
+            .is_empty());
+        assert!(!contract
+            .validate_rule(&json!({
+                "matches": [{"path": {"type": "Exact", "value": "/x"}}],
+                "filters": [{"type": "URLRewrite", "urlRewrite": {"path": {
+                    "type": "ReplacePrefixMatch", "replacePrefixMatch": "/v2"
+                }}}]
+            }))
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn non_nullable_null_is_pruned_before_openapi_validation() {
+        let contract = http_route_transform_contract().unwrap();
+        let violations = contract.validate_url_rewrite(&json!({"path": null})).unwrap();
+        assert!(violations.is_empty());
+    }
+
+    #[test]
+    fn non_nullable_null_is_pruned_before_defaulting() {
+        let schema = json!({
+            "type": "object",
+            "properties": {"mode": {"type": "string", "default": "safe"}}
+        });
+        let mut instance = json!({"mode": null});
+
+        prune_non_nullable_null_properties(&schema, &mut instance);
+        apply_defaults(&schema, &mut instance);
+
+        assert_eq!(instance, json!({"mode": "safe"}));
+    }
+
+    #[test]
+    fn null_pruning_preserves_nullable_unknown_and_root_values() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "nullableFlag": {"type": "string", "nullable": true},
+                "unionFlag": {"type": ["string", "null"]}
+            }
+        });
+        let mut instance = json!({
+            "nullableFlag": null,
+            "unionFlag": null,
+            "unknown": null
+        });
+
+        prune_non_nullable_null_properties(&schema, &mut instance);
+
+        assert_eq!(
+            instance,
+            json!({"nullableFlag": null, "unionFlag": null, "unknown": null})
+        );
+
+        let mut root = Value::Null;
+        prune_non_nullable_null_properties(&schema, &mut root);
+        assert!(root.is_null());
+        assert!(!CompiledFragment::compile(schema, "/test")
+            .unwrap()
+            .validate(&root)
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn null_pruning_recurses_through_object_arrays() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {"mode": {"type": "string", "default": "safe"}}
+                    }
+                }
+            }
+        });
+        let mut instance = json!({"items": [{"mode": null}]});
+
+        prune_non_nullable_null_properties(&schema, &mut instance);
+        apply_defaults(&schema, &mut instance);
+
+        assert_eq!(instance, json!({"items": [{"mode": "safe"}]}));
+    }
+
+    #[test]
+    fn filter_list_openapi_bounds_are_enforced() {
+        let contract = http_route_transform_contract().unwrap();
+        assert!(contract
+            .validate_filter_list_bounds(&Value::Array(vec![json!({}); 16]))
+            .unwrap()
+            .is_empty());
+        assert!(!contract
+            .validate_filter_list_bounds(&Value::Array(vec![json!({}); 17]))
+            .unwrap()
+            .is_empty());
+    }
+}

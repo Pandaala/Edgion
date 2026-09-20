@@ -43,6 +43,21 @@ pub fn validate_resource<T: serde::Serialize>(
     Ok(())
 }
 
+/// Apply the shared Gateway API request-transform contract to authored rules.
+/// Admin writes reject the whole submitted document synchronously; the
+/// filesystem/etcd handler uses the same rule verdicts to retain valid
+/// siblings and report status asynchronously.
+pub fn validate_http_route_transforms(route: &edgion_resources::HTTPRoute) -> Result<(), StatusCode> {
+    for rule in route.spec.rules.iter().flatten() {
+        match edgion_resources::authored_request_transform_violations(rule) {
+            Ok(violations) if violations.is_empty() => {}
+            Ok(_) => return Err(StatusCode::BAD_REQUEST),
+            Err(_) => return Err(StatusCode::INTERNAL_SERVER_ERROR),
+        }
+    }
+    Ok(())
+}
+
 /// Map ConfWriterError to HTTP StatusCode.
 pub fn map_writer_error(e: ConfWriterError) -> StatusCode {
     match e {

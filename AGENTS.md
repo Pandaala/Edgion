@@ -231,6 +231,10 @@ When the user says "run check", "check the code", "format the code", "run CI", "
    all seven Edgion fork dependencies must share the development `edgion_v4` branch
    or one release tag, and the lockfile must resolve the complete fork family
    to one commit.
+8. **Gateway API transform contract**:
+   `python3 cicd/checks/generate_gateway_api_transform_contract.py --check` — the
+   committed RequestRedirect/URLRewrite OpenAPI, CEL, defaults, bounds, and scoped
+   rule inventory must match both vendored Gateway API CRD channels.
 
 > `--workspace` is intentional: `edgion-tests` is a workspace member excluded from `default-members`, so a bare `--all-targets` would skip it. `--workspace` brings it back into the fast check/clippy signal (matching what `cargo test --all` already compiles).
 

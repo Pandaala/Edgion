@@ -1036,20 +1036,6 @@ fn collect_ref_denied_list(route: &HTTPRoute) -> Vec<Option<&RefDenied>> {
     list
 }
 
-/// Check if a filter list contains both URLRewrite and RequestRedirect.
-///
-/// Per Gateway API spec, these two filters are mutually exclusive within a single rule.
-fn has_rewrite_redirect_conflict(
-    filters: Option<&Vec<edgion_resources::resources::http_route::HTTPRouteFilter>>,
-) -> bool {
-    let Some(filters) = filters else { return false };
-    let has_rewrite = filters.iter().any(|f| f.filter_type == HTTPRouteFilterType::URLRewrite);
-    let has_redirect = filters
-        .iter()
-        .any(|f| f.filter_type == HTTPRouteFilterType::RequestRedirect);
-    has_rewrite && has_redirect
-}
-
 /// Return `Some(reason)` for unsupported backendRef-scoped CORS, or a malformed
 /// rule-level `type: CORS` filter: either `cors:` config is absent, or
 /// `HTTPCORSFilter::validate()` rejects the configuration. Reason text is
@@ -1425,7 +1411,7 @@ fn backend_waf_ownership_errors(
 /// Find rules that are invalid, returning `(index, reason)` for each.
 ///
 /// A rule is invalid if:
-/// - It has conflicting URLRewrite + RequestRedirect filters (rule-level, per-backendRef, or cross-level)
+/// - Its request transforms violate the shared CRD-derived contract
 /// - It has backendRef-scoped CORS, or malformed rule-level CORS (missing `cors:` block or invalid origin)
 /// - It has malformed or repeated native header modifiers in a rule or backend filter list
 /// - It has invalid standard RequestMirror fields
@@ -1443,12 +1429,20 @@ pub(crate) fn find_invalid_rule_details(route: &HTTPRoute, _route_ns: &str) -> V
         return details;
     };
     for (idx, rule) in rules.iter().enumerate() {
+        match edgion_resources::authored_request_transform_violations(rule) {
+            Ok(violations) => {
+                if let Some(violation) = violations.into_iter().next() {
+                    details.push((idx, violation.to_string()));
+                    continue;
+                }
+            }
+            Err(_) => {
+                details.push((idx, "request transform validation contract is unavailable".to_string()));
+                continue;
+            }
+        }
         if let Some(reason) = rule.header_modifier_error() {
             details.push((idx, reason.to_string()));
-            continue;
-        }
-        if has_rewrite_redirect_conflict(rule.filters.as_ref()) {
-            details.push((idx, "filter conflict: URLRewrite + RequestRedirect".to_string()));
             continue;
         }
         if let Some(reason) = invalid_cors_reason(rule) {
@@ -1466,35 +1460,6 @@ pub(crate) fn find_invalid_rule_details(route: &HTTPRoute, _route_ns: &str) -> V
         if let Some(reason) = invalid_session_persistence_reason(rule) {
             details.push((idx, reason));
             continue;
-        }
-        if let Some(backend_refs) = &rule.backend_refs {
-            let backend_conflict = backend_refs.iter().any(|br| {
-                if has_rewrite_redirect_conflict(br.filters.as_ref()) {
-                    return true;
-                }
-                // Cross-level: rule filters + backend filters combined.
-                if let (Some(rule_filters), Some(br_filters)) = (rule.filters.as_ref(), br.filters.as_ref()) {
-                    let combined_has_rewrite = rule_filters
-                        .iter()
-                        .chain(br_filters.iter())
-                        .any(|f| f.filter_type == HTTPRouteFilterType::URLRewrite);
-                    let combined_has_redirect = rule_filters
-                        .iter()
-                        .chain(br_filters.iter())
-                        .any(|f| f.filter_type == HTTPRouteFilterType::RequestRedirect);
-                    if combined_has_rewrite && combined_has_redirect {
-                        return true;
-                    }
-                }
-                false
-            });
-            if backend_conflict {
-                details.push((
-                    idx,
-                    "filter conflict: URLRewrite + RequestRedirect on backendRef".to_string(),
-                ));
-                continue;
-            }
         }
     }
     details
@@ -3350,11 +3315,44 @@ spec:
         let route: HTTPRoute = serde_yaml::from_str(yaml).unwrap();
         let details = find_invalid_rule_details(&route, "default");
         assert_eq!(indices_only(details.clone()), vec![0]);
-        assert!(
-            details[0].1.contains("URLRewrite") && details[0].1.contains("RequestRedirect"),
-            "rewrite/redirect reason text must mention both filters; got: {}",
-            details[0].1
-        );
+        assert!(details[0].1.contains("httpRouteFilterRequestRedirect"));
+        assert!(details[0].1.contains("httpRouteFilterRequestRewrite"));
+    }
+
+    #[test]
+    fn request_transform_validation_preserves_valid_siblings() {
+        let route: HTTPRoute = serde_json::from_value(serde_json::json!({
+            "metadata": {"name": "transforms", "namespace": "default"},
+            "spec": {"parentRefs": [{"name": "gateway"}], "rules": [
+                {"filters": [{"type": "URLRewrite", "urlRewrite": {
+                    "path": {"type": "ReplaceFullPath", "replaceFullPath": "/v1"}
+                }}]},
+                {"matches": [{"path": {"type": "Exact", "value": "/api"}}],
+                 "filters": [{"type": "URLRewrite", "urlRewrite": {
+                    "path": {"type": "ReplacePrefixMatch", "replacePrefixMatch": "/v2"}
+                 }}]},
+                {"backendRefs": [{"name": "backend", "filters": [
+                    {"type": "RequestRedirect", "requestRedirect": {"scheme": "ftp"}}
+                ]}]},
+                {"filters": [{"type": "RequestRedirect", "requestRedirect": {
+                    "scheme": "https", "statusCode": 308
+                }}]}
+            ]}
+        }))
+        .unwrap();
+        let details = find_invalid_rule_details(&route, "default");
+        assert_eq!(indices_only(details.clone()), vec![1, 2]);
+        assert!(details[0].1.contains("PathPrefix"));
+
+        let mut route = route;
+        HttpRouteHandler::default().update_status(&mut route, &make_ctx(), &[]);
+        assert_eq!(route.spec.invalid_rule_indices.as_deref(), Some(&[1, 2][..]));
+        let conditions = &route.status.as_ref().unwrap().parents[0].conditions;
+        assert!(conditions.iter().any(|condition| {
+            condition.type_ == "PartiallyInvalid"
+                && condition.status == "True"
+                && condition.message.contains("2 of 4 rules active")
+        }));
     }
 
     #[test]
