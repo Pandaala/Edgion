@@ -34,6 +34,7 @@ before applying a decision to current code.
 - [Integration builds end before runtime](regression-guards/integration-builds-end-before-runtime.md)
 - [Integration LB metrics require scoped deltas](regression-guards/integration-lb-metrics-require-scoped-deltas.md)
 - [Integration orchestrators need owned deadlines](regression-guards/integration-orchestrators-need-owned-deadlines.md)
+- [OTLP integration discriminates masking and runtime health transitions](regression-guards/otlp-masking-and-runtime-health-integration.md)
 - [Integration port selection must fail closed](regression-guards/integration-port-selection-must-fail-closed.md)
 - [Integration README CLI must match the runner](regression-guards/integration-readme-cli-must-match-runner.md)
 - [Integration reports must cover the whole run](regression-guards/integration-report-must-cover-the-whole-run.md)

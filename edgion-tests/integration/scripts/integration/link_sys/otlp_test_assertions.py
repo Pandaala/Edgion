@@ -29,6 +29,8 @@ TOKEN_A = "otlp-integration-collector-a-token"
 TOKEN_B = "otlp-integration-collector-b-token"
 TOKEN_WRONG = "otlp-integration-rejected-token"
 SENTINEL = "otlp-invalid-endpoint-sensitive-marker"
+RAW_PATH = "/otlp-sensitive-customer-42"
+MASKED_PATH = "[otlp-path-redacted]"
 CLI = ROOT / "target/debug/edgion-cli"
 PORTS = {name: int(os.environ.get(f"OTLP_{name}_PORT", default)) for name, default in {
     "CONTROLLER_ADMIN": 22101, "CONTROLLER_PROBE": 22100, "CONTROLLER_GRPC": 22151,
@@ -87,10 +89,14 @@ def metrics():
     return fetch(f"http://127.0.0.1:{PORTS['GATEWAY_METRICS']}/metrics")
 
 
-def healthy(expected=True):
+def health_value():
     match = re.search(r'^edgion_link_sys_health\{[^\n]*link="' + re.escape(KEY)
                       + r'"[^\n]*\}\s+([01])(?:\.0)?\s*$', metrics(), re.MULTILINE)
-    return bool(match and int(match[1]) == int(expected))
+    return bool(int(match[1])) if match else None
+
+
+def healthy(expected=True):
+    return health_value() is expected
 
 
 def apply_file(path):
@@ -170,7 +176,7 @@ def found(which, trace):
 def request(trace):
     headers = {"Host": "otlp-gateway.edgion-test.example.com",
                "traceparent": f"00-{trace}-0123456789abcdef-00"}
-    url = f"http://127.0.0.1:{PORTS['PROXY']}/health"
+    url = f"http://127.0.0.1:{PORTS['PROXY']}{RAW_PATH}"
     with HTTP.open(urllib.request.Request(url, headers=headers), timeout=5) as response:
         assert response.status == 200
     return True
@@ -257,6 +263,9 @@ metrics:
   listen: '127.0.0.1:{PORTS['GATEWAY_METRICS']}'
 logging:
   log_dir: logs
+access_log_sensitive:
+  mode: replace
+  replace_with: "{MASKED_PATH}"
 access_log:
   enabled: true
   output:
@@ -320,18 +329,21 @@ def run():
     wait_phase("Gateway starts with collector absent", lambda: fetch(
         f"http://127.0.0.1:{PORTS['GATEWAY_PROBE']}/ready") is not None, 60)
     wait_phase("route and backend ready", lambda: request(uuid.uuid4().hex), 60)
-    wait_phase("one owner shared by access/TCP/TLS outputs", lambda: stats() == 1)
-    wait_phase("absent collector marks provider unhealthy", lambda: healthy(False))
+    wait_phase("one connecting owner shared by access/TCP/TLS outputs", lambda: stats() == 1)
+    wait_phase("unpublished collector has no health gauge", lambda: health_value() is None)
     fallback("collector absent")
     compose("up", "-d", "collector-a", "collector-b")
     for which in ["a", "b"]:
         wait_phase(f"collector {which} ready", lambda which=which: collector_ready(which), 60)
     trace, record = delivered("a", "collector recovery")
     attrs = {attribute["key"]: attribute["value"] for attribute in record["attributes"]}
-    assert body(record), "LogRecord body must contain access JSON"
+    access_body = body(record)
+    assert access_body, "LogRecord body must contain access JSON"
     assert attrs["http.request.method"]["stringValue"] == "GET"
     assert int(attrs["http.response.status_code"]["intValue"]) == 200
-    assert attrs["url.path"]["stringValue"], "masked path attribute must remain present"
+    assert access_body["request_info"]["path"] == MASKED_PATH
+    assert attrs["url.path"]["stringValue"] == MASKED_PATH
+    assert RAW_PATH not in json.dumps(record), "raw request path reached the OTLP record"
     assert record["severityNumber"] == 9
     assert int(record["timeUnixNano"]) > 0 and int(record["observedTimeUnixNano"]) > 0
     typed_trace = record["traceId"]
@@ -423,8 +435,21 @@ def run():
             fallback(phase)
         else:
             link(phase, endpoint("b"), "otlp-auth-b")
+            publication_trace = uuid.uuid4().hex
+            def readd_published():
+                request(publication_trace)
+                return found("b", publication_trace)
+            wait_phase("resource re-add publishes and delivers through the new generation",
+                       readd_published, 60)
             delivered("b", phase)
             assert stats() == 1
+
+    compose("stop", "collector-b")
+    wait_phase("running collector outage marks provider unhealthy", lambda: healthy(False), 60)
+    fallback("running collector outage")
+    compose("start", "collector-b")
+    wait_phase("restored collector B ready", lambda: collector_ready("b"), 60)
+    delivered("b", "running collector recovery")
 
     # All labels are validated keys. Credentials and invalid endpoint material
     # must not appear on system-log, health or admin config surfaces.
