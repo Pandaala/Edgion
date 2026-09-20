@@ -1,7 +1,7 @@
-# HTTPRoute with 3 rules:
-#   rule[0]: valid URLRewrite only → should proxy with rewritten path (200)
-#   rule[1]: URLRewrite + RequestRedirect conflict → should be skipped (404)
-#   rule[2]: valid RequestRedirect only → should redirect (302)
+# HTTPRoute with two valid sibling rules. The test client submits a separate
+# URLRewrite + RequestRedirect resource and verifies synchronous rejection.
+#   rule[0]: URLRewrite only → should proxy with rewritten path (200)
+#   rule[1]: RequestRedirect only → should redirect (302)
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
@@ -28,25 +28,7 @@ spec:
           namespace: edgion-test
           port: 30001
 
-    # rule[1]: INVALID — URLRewrite + RequestRedirect conflict
-    - matches:
-        - path:
-            type: Exact
-            value: /conflict
-      filters:
-        - type: URLRewrite
-          urlRewrite:
-            hostname: rewritten.example.com
-        - type: RequestRedirect
-          requestRedirect:
-            scheme: https
-            statusCode: 301
-      backendRefs:
-        - name: filter-conflict-backend
-          namespace: edgion-test
-          port: 30001
-
-    # rule[2]: valid — RequestRedirect only
+    # rule[1]: valid — RequestRedirect only
     - matches:
         - path:
             type: Exact
@@ -56,7 +38,3 @@ spec:
           requestRedirect:
             scheme: https
             statusCode: 302
-      backendRefs:
-        - name: filter-conflict-backend
-          namespace: edgion-test
-          port: 30001

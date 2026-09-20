@@ -21,7 +21,7 @@ GATEWAY_ADMIN_PORT="${GATEWAY_ADMIN_PORT:-admin-12001}"
 GATEWAY_ADDR="${GATEWAY_ADDR:-}"
 GATEWAY_ADMIN_TOKEN="${EDGION_GATEWAY_ADMIN_TOKEN:-integration-gateway-admin-token-0123456789}"
 INVENTORY_TIMEOUT_SECS="${INVENTORY_TIMEOUT_SECS:-30}"
-VALIDATOR_TIMEOUT_SECS="${VALIDATOR_TIMEOUT_SECS:-30}"
+VALIDATOR_TIMEOUT_SECS="${VALIDATOR_TIMEOUT_SECS:-75}"
 ROOT_CA_DESCRIPTION='Contains a CA bundle that can be used to verify the kube-apiserver when using internal endpoints such as the internal service IP or kubernetes.default.svc. No other usage is guaranteed across distributions of Kubernetes clusters.'
 
 usage() {
@@ -40,7 +40,7 @@ Options:
   --gateway-addr URL          Override the discovered Gateway Pod Admin URL
   --gateway-token TOKEN       Gateway test admin bearer token
   --inventory-timeout-secs N  EndpointSlice wait deadline (default: 30)
-  --validator-timeout-secs N  cache_residue poll deadline (default: 30)
+  --validator-timeout-secs N  cache_residue poll deadline (default: 75)
   -h, --help                  Show this help
 
 Runtime stdout protocol:

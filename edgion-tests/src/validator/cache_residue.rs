@@ -41,7 +41,9 @@ struct Args {
     #[arg(long, default_value_t = false)]
     no_wipe: bool,
 
-    #[arg(long, default_value = "30")]
+    /// Must exceed the longest intentional post-delete cache grace period.
+    /// Wasm module entries currently retain a 60-second anti-thrash grace.
+    #[arg(long, default_value = "75")]
     timeout_secs: u64,
 
     #[arg(long, default_value = "500")]

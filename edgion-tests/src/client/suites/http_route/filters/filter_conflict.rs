@@ -1,9 +1,7 @@
 // FilterConflict Test suite
 //
-// Tests that URLRewrite + RequestRedirect filter conflict is detected by Controller:
-// 1. rule[0]: URLRewrite only → should proxy successfully (200)
-// 2. rule[1]: URLRewrite + RequestRedirect conflict → rule skipped by Gateway (404)
-// 3. rule[2]: RequestRedirect only → should redirect (302)
+// Tests that URLRewrite + RequestRedirect conflicts are rejected by the Controller
+// while valid URLRewrite-only and RequestRedirect-only routes remain usable.
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use async_trait::async_trait;
@@ -47,38 +45,67 @@ impl FilterConflictTestSuite {
         )
     }
 
-    fn test_conflict_rule_skipped() -> TestCase {
+    fn test_conflict_resource_rejected() -> TestCase {
         TestCase::new(
-            "conflict_rule_skipped",
-            "Rule[1] with URLRewrite+RequestRedirect conflict should be skipped (404)",
+            "conflict_resource_rejected",
+            "A rule combining URLRewrite and RequestRedirect should be rejected at admission",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
 
-                    let request = ctx
+                    let resource = serde_json::json!({
+                        "apiVersion": "gateway.networking.k8s.io/v1",
+                        "kind": "HTTPRoute",
+                        "metadata": {
+                            "name": "filter-conflict-invalid",
+                            "namespace": "edgion-default"
+                        },
+                        "spec": {
+                            "parentRefs": [{
+                                "name": "filter-conflict-gateway",
+                                "namespace": "edgion-test"
+                            }],
+                            "hostnames": ["filter-conflict-invalid.example.com"],
+                            "rules": [{
+                                "matches": [{
+                                    "path": {"type": "Exact", "value": "/conflict"}
+                                }],
+                                "filters": [
+                                    {
+                                        "type": "URLRewrite",
+                                        "urlRewrite": {"hostname": "rewritten.example.com"}
+                                    },
+                                    {
+                                        "type": "RequestRedirect",
+                                        "requestRedirect": {"scheme": "https", "statusCode": 301}
+                                    }
+                                ]
+                            }]
+                        }
+                    });
+                    let mut request = ctx
                         .http_client
-                        .get(format!("{}/conflict", ctx.http_url()))
-                        .header("Host", "filter-conflict.example.com");
+                        .post(format!(
+                            "{}/api/v1/namespaced/HTTPRoute/edgion-default",
+                            ctx.admin_api_url()
+                        ))
+                        .json(&resource);
+                    if let Some(token) = &ctx.admin_token {
+                        request = request.bearer_auth(token);
+                    }
 
                     match request.send().await {
-                        Ok(response) => {
-                            let status = response.status().as_u16();
-                            if status == 404 {
-                                TestResult::passed_with_message(
-                                    start.elapsed(),
-                                    "Conflict rule skipped: 404 as expected".to_string(),
-                                )
-                            } else {
-                                TestResult::failed(
-                                    start.elapsed(),
-                                    format!(
-                                        "Expected 404 for conflicting rule, got {} (rule was not skipped)",
-                                        status
-                                    ),
-                                )
-                            }
+                        Ok(response) if response.status() == reqwest::StatusCode::BAD_REQUEST => {
+                            TestResult::passed_with_message(
+                                start.elapsed(),
+                                "Conflicting request-transform resource rejected with 400".to_string(),
+                            )
                         }
-                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                        Ok(response) => TestResult::failed(
+                            start.elapsed(),
+                            format!("Expected 400 for conflicting filters, got {}", response.status()),
+                        ),
+                        Err(error) => TestResult::failed(start.elapsed(), format!("Admission request failed: {error}")),
                     }
                 })
             },
@@ -186,7 +213,7 @@ impl TestSuite for FilterConflictTestSuite {
     fn test_cases(&self) -> Vec<TestCase> {
         vec![
             Self::test_rewrite_only_proxies(),
-            Self::test_conflict_rule_skipped(),
+            Self::test_conflict_resource_rejected(),
             Self::test_redirect_only_works(),
             Self::test_redirect_only_preserves_query(),
         ]

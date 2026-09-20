@@ -81,7 +81,7 @@ JSON
           '--gateway-addr http://10.0.0.20:12001' \
           '--controller-token integration-controller-admin-token-0123456789' \
           '--gateway-token integration-gateway-admin-token-0123456789' \
-          '--timeout-secs 30' \
+          '--timeout-secs 75' \
           '--ignore-controller-configmap app/kube-root-ca.crt' \
           '--ignore-controller-configmap app2/kube-root-ca.crt' \
           '--ignore-controller-conf-sync-secret edgion-system/edgion-conf-sync-ca' \

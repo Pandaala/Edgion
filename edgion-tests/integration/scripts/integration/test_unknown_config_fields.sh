@@ -198,6 +198,27 @@ if [[ "$READY" -ne 1 ]]; then
 fi
 log_success "Controller ready on port ${CONTROLLER_ADMIN_PORT}"
 
+# The health endpoint can become ready while the filesystem controller is
+# still completing its recursive init scan. Creating a fixture in the narrow
+# gap before runtime watches are registered can be missed by both phases.
+WATCH_READY=0
+for _ in $(seq 1 30); do
+    if grep -q "Starting runtime phase" "${LOG_DIR}/edgion-controller.log" 2>/dev/null; then
+        WATCH_READY=1
+        break
+    fi
+    if ! kill -0 "$CONTROLLER_PID" 2>/dev/null; then
+        log_error "Controller process exited before filesystem watches became ready"
+        exit 1
+    fi
+    sleep 1
+done
+if [[ "$WATCH_READY" -ne 1 ]]; then
+    log_error "Filesystem watches did not become ready in 30s"
+    exit 1
+fi
+log_success "Filesystem watches ready"
+
 # --- Diagnostics-endpoint helpers ---
 
 # Fetch and dump the diagnostics endpoint as "TOTAL=<n>" followed by
