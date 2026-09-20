@@ -3818,6 +3818,51 @@ mod tests {
     }
 
     #[test]
+    fn cors_token_validation_matches_resource_ingest_and_fail_closed_gate() {
+        use edgion_resources::resources::EdgionPlugins;
+
+        for field in ["allowMethods", "allowHeaders", "exposeHeaders"] {
+            for (value, enabled, invalid) in [
+                ("PROPFIND, custom-Method,", true, false),
+                ("X-Name: value", true, true),
+                ("X-Name: value", false, false),
+            ] {
+                let mut config = serde_json::json!({"allowOrigins": "https://example.com"});
+                config[field] = serde_json::json!(value);
+                let resource: EdgionPlugins = serde_json::from_value(serde_json::json!({
+                    "apiVersion": "edgion.io/v1",
+                    "kind": "EdgionPlugins",
+                    "metadata": {"name": "cors-validation", "namespace": "default"},
+                    "spec": {"requestPlugins": [{"type": "Cors", "enable": enabled, "config": config}]}
+                }))
+                .unwrap();
+                let ingest_errors = resource.validate_plugins();
+                let mut runtime = PluginRuntime::new();
+                let build_errors = runtime.add_from_request_filters(
+                    resource.spec.request_plugins.as_ref().unwrap(),
+                    "default",
+                    "cors-validation",
+                );
+                assert_eq!(ingest_errors, build_errors);
+                assert_eq!(!build_errors.is_empty(), invalid);
+                assert_eq!(runtime.cors_config_arc().is_some(), enabled && !invalid);
+                runtime.seal_fail_closed();
+                let expected = if invalid {
+                    Some("RejectInvalidConfig")
+                } else if enabled {
+                    Some("Cors")
+                } else {
+                    None
+                };
+                assert_eq!(
+                    runtime.request_plugins_iter().next().map(|filter| filter.name()),
+                    expected
+                );
+            }
+        }
+    }
+
+    #[test]
     fn seal_fail_closed_is_noop_when_all_plugins_valid() {
         let mut runtime = PluginRuntime::new();
         let entries = vec![RequestFilterEntry::new(EdgionPlugin::KeyAuth(KeyAuthConfig::default()))];

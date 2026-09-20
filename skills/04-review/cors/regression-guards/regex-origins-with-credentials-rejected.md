@@ -65,8 +65,8 @@ When a review/audit report contains patterns of the form:
 
 verify the fix is present before closing as re-report:
 
-- The `allow_credentials` block in both `CorsConfig::validate_and_init` and
-  `PluginValidation::validation_error` (`cors.rs`) rejects non-empty
+- The shared `allow_credentials` block in `PluginValidation::validation_error`
+  (`cors.rs`), also called by `CorsConfig::validate_and_init`, rejects non-empty
   `allow_origins_by_regex` and `timing_allow_origins_by_regex`.
 - `test_regex_origins_with_credentials_is_error` and
   `test_timing_regex_origins_with_credentials_is_error` still exist and assert both
