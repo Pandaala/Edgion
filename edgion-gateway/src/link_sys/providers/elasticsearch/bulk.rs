@@ -7,13 +7,20 @@
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
+use edgion_common::link_sys_core::PublishedHealth;
 use reqwest::Client;
 use tokio::sync::{mpsc, watch};
 
 use super::config_mapping::EsBulkConfig;
 use crate::link_sys::runtime::health_probe::apply_health_result;
 
-fn apply_published_health(healthy: &AtomicBool, last_flip_log: &AtomicU64, name: &str, ok: bool, retired: &AtomicBool) {
+fn apply_published_health(
+    healthy: &PublishedHealth,
+    last_flip_log: &AtomicU64,
+    name: &str,
+    ok: bool,
+    retired: &AtomicBool,
+) {
     if retired.load(Ordering::Relaxed) {
         return;
     }
@@ -96,7 +103,7 @@ pub async fn bulk_ingest_loop(
     client: Client,
     endpoints: Vec<String>,
     config: EsBulkConfig,
-    healthy: Arc<AtomicBool>,
+    healthy: Arc<PublishedHealth>,
     last_flip_log: Arc<AtomicU64>,
     name: String,
     mut rx: mpsc::Receiver<String>,
@@ -188,7 +195,7 @@ async fn flush_batch(
     client: &Client,
     endpoint: &str,
     config: &EsBulkConfig,
-    healthy: &Arc<AtomicBool>,
+    healthy: &Arc<PublishedHealth>,
     last_flip_log: &AtomicU64,
     name: &str,
     docs: Vec<String>,
@@ -310,7 +317,7 @@ async fn send_bulk_request(
     docs: &[&str],
     index_name: &str,
     config: &EsBulkConfig,
-    healthy: &Arc<AtomicBool>,
+    healthy: &Arc<PublishedHealth>,
     last_flip_log: &AtomicU64,
     name: &str,
     shutdown: &watch::Receiver<bool>,
@@ -675,7 +682,7 @@ mod tests {
             .await;
 
         let docs = [r#"{"message":"accepted"}"#, r#"{"message":"retry-me"}"#];
-        let healthy = Arc::new(AtomicBool::new(true));
+        let healthy = Arc::new(PublishedHealth::new(true));
         let last_flip = AtomicU64::new(0);
         let (_shutdown_tx, shutdown_rx) = watch::channel(false);
         send_bulk_request(
@@ -700,7 +707,7 @@ mod tests {
         assert!(first_body.contains("retry-me"));
         assert!(!retry_body.contains("accepted"));
         assert!(retry_body.contains("retry-me"));
-        assert!(healthy.load(std::sync::atomic::Ordering::Relaxed));
+        assert!(healthy.load());
     }
 
     #[tokio::test]
@@ -722,7 +729,7 @@ mod tests {
             .await;
 
         let docs = [r#"{"message":"retry-me"}"#];
-        let healthy = Arc::new(AtomicBool::new(true));
+        let healthy = Arc::new(PublishedHealth::new(true));
         let last_flip = AtomicU64::new(0);
         let (_shutdown_tx, shutdown_rx) = watch::channel(false);
         send_bulk_request(
@@ -739,7 +746,7 @@ mod tests {
         )
         .await;
 
-        assert!(!healthy.load(std::sync::atomic::Ordering::Relaxed));
+        assert!(!healthy.load());
     }
 
     #[tokio::test]
@@ -774,7 +781,7 @@ mod tests {
             .build()
             .unwrap();
         let config = test_bulk_config(10, std::time::Duration::from_secs(5));
-        let healthy = Arc::new(AtomicBool::new(true));
+        let healthy = Arc::new(PublishedHealth::new(true));
         // Shutdown is already signaled before the call.
         let (_tx, shutdown_rx) = watch::channel(true);
         let docs = [r#"{"message":"x"}"#];

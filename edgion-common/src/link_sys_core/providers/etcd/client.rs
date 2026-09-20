@@ -21,6 +21,7 @@ use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
 
 use crate::link_sys_core::credential::CredentialState;
+use crate::link_sys_core::{HealthTransitionReporter, PublishedHealth};
 use edgion_resources::credentials::materials::BasicAuthMaterial;
 use edgion_resources::resources::link_sys::etcd::EtcdClientConfig;
 
@@ -42,7 +43,7 @@ pub struct EtcdLinkClient {
     /// Human-readable name ("namespace/name")
     name: String,
     /// Atomic health flag
-    healthy: Arc<AtomicBool>,
+    healthy: Arc<PublishedHealth>,
     /// Namespace prefix (if configured)
     namespace: Option<String>,
     /// Shutdown signal sender
@@ -69,7 +70,7 @@ impl std::fmt::Debug for EtcdLinkClient {
         f.debug_struct("EtcdLinkClient")
             .field("name", &self.name)
             .field("endpoints", &self.endpoints)
-            .field("healthy", &self.healthy.load(Ordering::Relaxed))
+            .field("healthy", &self.healthy.load())
             .field("namespace", &self.namespace)
             .finish()
     }
@@ -114,7 +115,7 @@ impl EtcdLinkClient {
             auth_basic,
             endpoints: config.endpoints.clone(),
             name: name.to_string(),
-            healthy: Arc::new(AtomicBool::new(false)),
+            healthy: Arc::new(PublishedHealth::new(false)),
             namespace: config.namespace.clone(),
             shutdown_tx,
             monitor_handle: parking_lot::Mutex::new(None),
@@ -143,6 +144,13 @@ impl EtcdLinkClient {
         self
     }
 
+    /// Attach the owning binary's transition reporter before initialization.
+    /// Controller construction deliberately leaves this absent.
+    pub fn with_health_transition_reporter(mut self, reporter: HealthTransitionReporter) -> Self {
+        self.healthy = Arc::new(PublishedHealth::with_reporter(self.healthy.load(), reporter));
+        self
+    }
+
     pub fn apply_fingerprint_parts(&self) -> ([u8; 32], [u8; 32], Option<String>) {
         (self.fp_rebuild, self.fp_secret, self.fp_rv.clone())
     }
@@ -152,6 +160,7 @@ impl EtcdLinkClient {
     }
 
     pub fn mark_retired(&self) {
+        self.healthy.deactivate();
         self.retired.store(true, Ordering::Relaxed);
         let _ = self.shutdown_tx.send(true);
         if let Some(handle) = self.monitor_handle.lock().take() {
@@ -195,7 +204,7 @@ impl EtcdLinkClient {
             let mut guard = self.client.write().await;
             *guard = Some(client);
         }
-        self.healthy.store(true, Ordering::Relaxed);
+        self.healthy.update(true, false);
         if self.sample_endpoint_coverage {
             let live = sample_endpoint_live(
                 &self.endpoints,
@@ -279,14 +288,13 @@ impl EtcdLinkClient {
                 }
 
                 if is_healthy {
-                    if !healthy.load(Ordering::Relaxed) {
+                    if healthy.update(true, false) {
                         tracing::info!(etcd = %name, "Etcd connection recovered");
                     }
-                    healthy.store(true, Ordering::Relaxed);
                     check_interval = base_interval;
                     backoff = Duration::from_millis(500);
                 } else {
-                    healthy.store(false, Ordering::Relaxed);
+                    healthy.update(false, false);
                     tracing::warn!(
                         etcd = %name,
                         backoff_ms = backoff.as_millis(),
@@ -303,7 +311,7 @@ impl EtcdLinkClient {
                             }
                             let mut guard = client.write().await;
                             *guard = Some(new_client);
-                            healthy.store(true, Ordering::Relaxed);
+                            healthy.update(true, false);
                             tracing::info!(etcd = %name, "Etcd reconnected successfully");
                             check_interval = base_interval;
                             backoff = Duration::from_millis(500);
@@ -333,7 +341,11 @@ impl EtcdLinkClient {
     /// Check if the client is connected and healthy.
     #[inline]
     pub fn healthy(&self) -> bool {
-        self.healthy.load(Ordering::Relaxed)
+        self.healthy.load()
+    }
+
+    pub fn published_health(&self) -> &PublishedHealth {
+        &self.healthy
     }
 
     /// Get client name (namespace/name).
@@ -411,7 +423,7 @@ impl EtcdLinkClient {
         }
         let mut guard = self.client.write().await;
         *guard = None;
-        self.healthy.store(false, Ordering::Relaxed);
+        self.healthy.update(false, false);
         self.endpoint_live.store(0, Ordering::Relaxed);
         Ok(())
     }
@@ -451,6 +463,8 @@ async fn sample_endpoint_live(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::AtomicUsize;
+
     use super::*;
 
     fn minimal_config() -> EtcdClientConfig {
@@ -548,5 +562,36 @@ mod tests {
             (rebuild, secret, Some("11".to_string()))
         );
         assert_eq!(client.endpoint_coverage(), (0, 1));
+    }
+
+    #[test]
+    fn etcd_reports_only_published_health_transitions() {
+        let recovered = Arc::new(AtomicUsize::new(0));
+        let degraded = Arc::new(AtomicUsize::new(0));
+        let recovered_reporter = Arc::clone(&recovered);
+        let degraded_reporter = Arc::clone(&degraded);
+        let reporter: HealthTransitionReporter = Arc::new(move |healthy| {
+            if healthy {
+                recovered_reporter.fetch_add(1, Ordering::Relaxed);
+            } else {
+                degraded_reporter.fetch_add(1, Ordering::Relaxed);
+            }
+        });
+        let client = EtcdLinkClient::from_config("default/etcd-health", &minimal_config(), &no_auth())
+            .unwrap()
+            .with_health_transition_reporter(reporter);
+
+        assert!(client.published_health().update(true, false));
+        assert_eq!(recovered.load(Ordering::Relaxed), 0);
+        PublishedHealth::transition_publication(None, Some(client.published_health()), || {});
+        assert!(client.published_health().update(false, false));
+        assert!(!client.published_health().update(false, false));
+        assert!(client.published_health().update(true, false));
+        assert_eq!(degraded.load(Ordering::Relaxed), 1);
+        assert_eq!(recovered.load(Ordering::Relaxed), 1);
+
+        client.mark_retired();
+        assert!(client.published_health().update(false, false));
+        assert_eq!(degraded.load(Ordering::Relaxed), 1);
     }
 }

@@ -19,7 +19,9 @@
 - Dynamic sampling: B0035's published Redis/Etcd/Elasticsearch/Kafka/OTLP generations are sampled immediately before the unified render. Candidates and retired generations cannot overwrite gauges; Webhook remains separately owned and deletion's last value until idle eviction remains accepted.
 - Cardinality/redaction: labels are validated, configuration-bounded, or intentionally resource-scoped; no secret, body, token, address, or request identity enters this registry.
 - Rejected churn: the installer's theoretical concurrent first-call error has no production caller race because bootstrap is serial and later metrics-server initialization observes the stored handle.
-- Existing D0007 remains the separate Etcd sub-scrape flip-counter task.
+- At batch close, D0007 remained the separate Etcd sub-scrape flip-counter task;
+  it was subsequently resolved by
+  `skills/04-review/link-sys/regression-guards/published-generation-health-transition-ownership.md`.
 - Freshness revalidation: valid at `a4c0e2072`, including the committed Etcd gauge sampler.
 
 ## Implementation

@@ -148,6 +148,17 @@ Full-set dispatch removes runners for keys absent from each persistent provider;
 partial updates remove the previous provider's runner on a kind change and
 remove deleted keys from every provider.
 
+Each persistent client owns a shared `PublishedHealth` cell. Health reads stay
+lock-free, while writers serialize a level change with the runner's publication
+handover. A candidate may establish its initial level without emitting a flip.
+Publication treats that level as the baseline; only later transitions from the
+currently published generation increment
+`edgion_link_sys_health_flips_total`. Replacement atomically disables the old
+reporter before activating the new baseline, and deletion disables reporting
+before unpublishing. Duplicate observations and retired-generation updates do
+not increment the counter. Gateway clients inject the binary-owned metric
+reporter; Controller-created Etcd clients use the same health cell without one.
+
 Webhook instead prepares a registration through its ordered mutation guard and
 commits it before updating `WEBHOOK_RUNTIME` bookkeeping. An equal runtime
 fingerprint reuses the committed registration. `LinkSysStore::replace_all`
@@ -223,7 +234,7 @@ edgion-gateway/src/link_sys/
 
 edgion-common/src/link_sys_core/       # core framework + Etcd provider (re-exported by the gateway)
 ├── credential.rs             # materialise credentials from the embedded Secret in LinkSys.spec.*Auth
-├── health.rs                 # LinkSysHealth status DTO shared by all providers
+├── health.rs                 # Shared health DTO and publication-aware health cell
 ├── lifecycle.rs              # legacy lifecycle trait (unused by Gateway dispatch)
 ├── tls.rs                    # unified TLS material resolution for provider connections
 ├── mod.rs

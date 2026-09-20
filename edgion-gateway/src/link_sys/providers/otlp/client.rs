@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use arc_swap::ArcSwapOption;
 use edgion_common::dns::ResolverSpec;
+use edgion_common::link_sys_core::PublishedHealth;
 use edgion_resources::output::LinkSysRef;
 use edgion_resources::resources::link_sys::{LinkSys, SystemConfig};
 use opentelemetry_sdk::error::{OTelSdkError, OTelSdkResult};
@@ -19,7 +20,9 @@ use tokio_util::sync::CancellationToken;
 use super::log_sender::emit_record;
 use super::transport::PreparedTransport;
 use crate::link_sys::runtime::apply::{ConnectionCoverage, RuntimeFingerprint};
-use crate::link_sys::runtime::health_probe::{apply_health_result, spawn_health_probe, ProbeConfig};
+use crate::link_sys::runtime::health_probe::{
+    apply_health_result, new_published_health, spawn_health_probe, ProbeConfig,
+};
 use crate::link_sys::LogMeta;
 
 type CleanupResult = Result<(), &'static str>;
@@ -144,7 +147,7 @@ pub struct OtlpLinkClient {
     transport: Arc<PreparedTransport>,
     pipeline: ArcSwapOption<Pipeline>,
     fingerprint: RuntimeFingerprint,
-    healthy: Arc<AtomicBool>,
+    healthy: Arc<PublishedHealth>,
     last_flip_log_ms: AtomicU64,
     retired: Arc<AtomicBool>,
     shutdown_started: AtomicBool,
@@ -187,7 +190,7 @@ impl OtlpLinkClient {
             transport,
             pipeline: ArcSwapOption::empty(),
             fingerprint,
-            healthy: Arc::new(AtomicBool::new(false)),
+            healthy: new_published_health(key, false),
             last_flip_log_ms: AtomicU64::new(0),
             retired: Arc::new(AtomicBool::new(false)),
             shutdown_started: AtomicBool::new(false),
@@ -210,6 +213,7 @@ impl OtlpLinkClient {
     }
 
     pub(crate) fn mark_retired(&self) {
+        self.healthy.deactivate();
         self.retired.store(true, Ordering::Relaxed);
         if let Some(shutdown) = self.probe_shutdown.lock().take() {
             let _ = shutdown.send(true);
@@ -262,9 +266,11 @@ impl OtlpLinkClient {
     }
 
     pub fn healthy(&self) -> bool {
-        !self.retired.load(Ordering::Relaxed)
-            && !self.shutdown_started.load(Ordering::Acquire)
-            && self.healthy.load(Ordering::Relaxed)
+        !self.retired.load(Ordering::Relaxed) && !self.shutdown_started.load(Ordering::Acquire) && self.healthy.load()
+    }
+
+    pub(crate) fn published_health(&self) -> &PublishedHealth {
+        &self.healthy
     }
 
     pub fn name(&self) -> &str {
@@ -286,7 +292,7 @@ impl OtlpLinkClient {
             return Ok(());
         }
         self.mark_retired();
-        self.healthy.store(false, Ordering::Relaxed);
+        self.healthy.update(false, false);
         let Some(pipeline) = self.pipeline.swap(None) else {
             return Ok(());
         };
@@ -300,7 +306,7 @@ impl OtlpLinkClient {
         let exporter = self.transport.exporter(channel)?;
         self.pipeline
             .store(Some(Pipeline::build(self.transport.clone(), exporter)));
-        self.healthy.store(true, Ordering::Relaxed);
+        self.healthy.update(true, false);
         Ok(())
     }
 }

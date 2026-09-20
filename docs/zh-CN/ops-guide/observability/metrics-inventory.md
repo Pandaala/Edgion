@@ -43,7 +43,7 @@ EdgionBackend 保留独立的撤销策略。
 | edgion_config_event_parse_errors_total | Counter | gateway | kind | self | 按资源 kind 统计 Watch 解码失败；通用 Watch 首次失败计一次并重新 List，不再解码剩余事件 | - |
 | edgion_link_sys_es_bulk_channel_full_total | Counter | gateway | none | self | Elasticsearch producer→bulk-loop channel was full at submit time; raise `bulk.channelSize` | - |
 | edgion_link_sys_health | Gauge | gateway | link | self | 采集时读取已发布的 LinkSys 客户端健康状态：1 = 健康，0 = 不健康；已删除客户端的旧序列可能保留至空闲淘汰或进程退出 | - |
-| edgion_link_sys_health_flips_total | Counter | gateway | link, direction (recovered/degraded) | self | LinkSys provider health flip counter — exposes sub-scrape flapping the level gauge cannot | - |
+| edgion_link_sys_health_flips_total | Counter | gateway | link, direction (recovered/degraded) | self | 当前已发布的 Redis、Etcd、Elasticsearch、Kafka 和 OTLP LinkSys generation 的健康状态转换；候选初始化、发布或替换基线、删除、重复观测及已退役 generation 均不增加计数 | - |
 | edgion_ldap_auth_errors_total | Counter | gateway | kind (unreachable/timeout/bind_fail/tls_san_mismatch) | self | LDAP auth plugin error counter by failure kind | - |
 | edgion_gateway_outbound_tls_san_mismatch_total | Counter | gateway | plugin (ldap_auth/openid_connect) | self | Outbound TLS SAN-pinning rejection — signals a misconfigured `validation.subjectAltNames` or a rotated peer certificate | - |
 | edgion_webhook_resolve_errors_total | Counter | gateway | reason (not_found/unhealthy/rate_limited/status_error/call_failed/authority_rejected) | self | Webhook key-resolver per-resolve failure counter by reason | - |

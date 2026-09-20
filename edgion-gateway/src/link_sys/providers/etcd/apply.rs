@@ -11,6 +11,7 @@ use k8s_openapi::api::core::v1::Secret;
 
 use crate::link_sys::credential::{self, CredentialState};
 use crate::link_sys::runtime::apply::{ConnectionCoverage, FingerprintHasher, RuntimeFingerprint};
+use crate::link_sys::runtime::health_probe::health_transition_reporter;
 use crate::link_sys::runtime::runner::ApplyOwner;
 use edgion_common::link_sys_core::providers::etcd::config_mapping::{MAX_DIAL_TIMEOUT_MS, MAX_REQUEST_TIMEOUT_MS};
 
@@ -36,6 +37,10 @@ impl ApplyOwner for EtcdApply {
         ConnectionCoverage { live, configured }
     }
 
+    fn published_health(client: &Self::Client) -> Option<&edgion_common::link_sys_core::PublishedHealth> {
+        Some(client.published_health())
+    }
+
     fn build(key: &str, incoming: &LinkSys) -> anyhow::Result<Arc<Self::Client>> {
         let SystemConfig::Etcd(config) = &incoming.spec.config else {
             anyhow::bail!("Etcd build called with a non-Etcd LinkSys");
@@ -44,7 +49,9 @@ impl ApplyOwner for EtcdApply {
         let fingerprint = fingerprint_etcd(incoming)?;
         let (rebuild, secret, rv) = fingerprint.into_parts();
         Ok(Arc::new(
-            EtcdLinkClient::from_config(key, config, &auth)?.with_gateway_apply_meta(rebuild, secret, rv),
+            EtcdLinkClient::from_config(key, config, &auth)?
+                .with_gateway_apply_meta(rebuild, secret, rv)
+                .with_health_transition_reporter(health_transition_reporter(key)),
         ))
     }
 

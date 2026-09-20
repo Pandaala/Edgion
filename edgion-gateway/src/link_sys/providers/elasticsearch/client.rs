@@ -22,6 +22,8 @@ use tokio::task::JoinHandle;
 
 use crate::link_sys::credential::{CredentialState, ResolvedCredential};
 use crate::link_sys::runtime::apply::{ConnectionCoverage, RuntimeFingerprint};
+use crate::link_sys::runtime::health_probe::new_published_health;
+use edgion_common::link_sys_core::PublishedHealth;
 use edgion_resources::resources::link_sys::elasticsearch::ElasticsearchClientConfig;
 use edgion_resources::resources::link_sys::{LinkSys, SystemConfig};
 
@@ -43,7 +45,7 @@ pub struct EsLinkClient {
     name: String,
     /// Atomic health flag driven by the background probe (upgrade-only recovery)
     /// and the bulk path (both directions); also written at init().
-    healthy: Arc<AtomicBool>,
+    healthy: Arc<PublishedHealth>,
     /// Bulk ingest configuration
     bulk_config: EsBulkConfig,
     /// Channel sender for async bulk batching (populated after init)
@@ -83,7 +85,7 @@ impl EsLinkClient {
             endpoints: config.endpoints.clone(),
             endpoint_index: AtomicUsize::new(0),
             name: name.to_string(),
-            healthy: Arc::new(AtomicBool::new(false)),
+            healthy: new_published_health(name, false),
             bulk_config,
             bulk_sender: parking_lot::Mutex::new(None),
             shutdown_tx: parking_lot::Mutex::new(None),
@@ -123,6 +125,7 @@ impl EsLinkClient {
     }
 
     pub(crate) fn mark_retired(&self) {
+        self.healthy.deactivate();
         self.retired.store(true, Ordering::Relaxed);
         if let Some(handle) = self.probe_handle.lock().take() {
             handle.abort();
@@ -148,7 +151,7 @@ impl EsLinkClient {
             }
         }
 
-        self.healthy.store(health.is_ok(), Ordering::Relaxed);
+        self.healthy.update(health.is_ok(), false);
 
         // Spawn background bulk ingest task. Channel capacity is operator-tunable
         // via `bulk.channelSize` (defaults to 10k, ceiling 100k); see EsBulkConfig.
@@ -237,7 +240,11 @@ impl EsLinkClient {
     /// Check if the client is connected and healthy.
     #[inline]
     pub fn healthy(&self) -> bool {
-        self.healthy.load(Ordering::Relaxed)
+        self.healthy.load()
+    }
+
+    pub(crate) fn published_health(&self) -> &PublishedHealth {
+        &self.healthy
     }
 
     /// Get client name (namespace/name).
@@ -320,7 +327,7 @@ impl EsLinkClient {
             handle.abort();
         }
 
-        self.healthy.store(false, Ordering::Relaxed);
+        self.healthy.update(false, false);
 
         // Await the bulk task so buffered docs get flushed before we return.
         // Bound the wait so a hung HTTP flush cannot stall the caller indefinitely
@@ -365,7 +372,7 @@ impl std::fmt::Debug for EsLinkClient {
         f.debug_struct("EsLinkClient")
             .field("name", &self.name)
             .field("endpoints", &self.endpoints)
-            .field("healthy", &self.healthy.load(Ordering::Relaxed))
+            .field("healthy", &self.healthy.load())
             .finish()
     }
 }

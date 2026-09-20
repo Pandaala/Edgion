@@ -33,6 +33,10 @@ impl ApplyOwner for OtlpApply {
         client.connection_coverage()
     }
 
+    fn published_health(client: &Self::Client) -> Option<&edgion_common::link_sys_core::PublishedHealth> {
+        Some(client.published_health())
+    }
+
     fn build(key: &str, incoming: &LinkSys) -> anyhow::Result<Arc<Self::Client>> {
         OtlpLinkClient::from_linksys(key, incoming)
     }

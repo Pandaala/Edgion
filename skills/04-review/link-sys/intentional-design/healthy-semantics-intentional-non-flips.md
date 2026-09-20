@@ -25,9 +25,11 @@ Fix suggestions of the form "queue-full must mark the sink unhealthy", "OTLP hea
 
 `OtlpLogSender` delegates to its shared `OtlpLinkClient`; SDK emit remains
 fire-and-forget. Each published persistent-runner generation owns an admitted
-transport probe and health driver that update its `Arc<AtomicBool>` using TCP
-reachability. A pending replacement cannot overwrite active health before its
-empty Export succeeds and the runner publishes it. A successful TCP probe alone
+transport probe and health driver that update the shared publication-aware
+`PublishedHealth` cell using TCP reachability. A
+pending replacement may establish its own baseline but cannot emit a flip or
+overwrite active health before its empty Export succeeds and the runner publishes
+it. A successful TCP probe alone
 does not prove TLS negotiation or OTLP export success.
 
 Historical scope: task 04 only exposed the health handle and temporarily left health true after init. The subsequent task-05 probe implementation supersedes that bridge-state description. The 2026-09-10 full integration run observed `link-sys recovered` after the collector started, and exposed the stale assumption in `run_otlp_test.sh`; this is not new acceptance of permanent healthy=true behavior.

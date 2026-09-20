@@ -21,7 +21,8 @@ use tokio::task::JoinHandle;
 
 use crate::link_sys::credential::CredentialState;
 use crate::link_sys::runtime::apply::{ConnectionCoverage, RuntimeFingerprint};
-use crate::link_sys::runtime::health_probe::{spawn_health_probe, ProbeConfig};
+use crate::link_sys::runtime::health_probe::{new_published_health, spawn_health_probe, ProbeConfig};
+use edgion_common::link_sys_core::PublishedHealth;
 use edgion_resources::credentials::materials::BasicAuthMaterial;
 use edgion_resources::resources::link_sys::redis::RedisClientConfig;
 use edgion_resources::resources::link_sys::{LinkSys, SystemConfig};
@@ -52,7 +53,7 @@ pub struct RedisLinkClient {
     /// Makes [`Self::shutdown`] idempotent when delete races handover/replace.
     shutdown_started: AtomicBool,
     /// Atomic aggregate health flag, updated by the connection-state probe.
-    healthy: Arc<AtomicBool>,
+    healthy: Arc<PublishedHealth>,
     /// Shutdown signal for the aggregate connection-state probe.
     probe_shutdown: parking_lot::Mutex<Option<watch::Sender<bool>>>,
     /// Aggregate connection-state probe task.
@@ -88,7 +89,7 @@ impl RedisLinkClient {
             fingerprint: RuntimeFingerprint::unspecified(),
             retired: Arc::new(AtomicBool::new(false)),
             shutdown_started: AtomicBool::new(false),
-            healthy: Arc::new(AtomicBool::new(false)),
+            healthy: new_published_health(name, false),
             probe_shutdown: parking_lot::Mutex::new(None),
             probe_handle: parking_lot::Mutex::new(None),
         })
@@ -123,6 +124,7 @@ impl RedisLinkClient {
     }
 
     pub(crate) fn mark_retired(&self) {
+        self.healthy.deactivate();
         self.retired.store(true, Ordering::Relaxed);
         if let Some(shutdown_tx) = self.probe_shutdown.lock().as_ref() {
             let _ = shutdown_tx.send(true);
@@ -156,7 +158,7 @@ impl RedisLinkClient {
             .map_err(|e| anyhow::anyhow!("Redis [{}] init failed: {:?}", self.name, e))?;
 
         let connected = pool_has_connected_member(&self.pool);
-        self.healthy.store(connected, Ordering::Relaxed);
+        self.healthy.update(connected, false);
 
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
         let probe_pool = self.pool.clone();
@@ -197,7 +199,11 @@ impl RedisLinkClient {
     /// Check if the client is connected and healthy.
     #[inline]
     pub fn healthy(&self) -> bool {
-        self.healthy.load(Ordering::Relaxed)
+        self.healthy.load()
+    }
+
+    pub(crate) fn published_health(&self) -> &PublishedHealth {
+        &self.healthy
     }
 
     /// Get client name (namespace/name).
@@ -223,7 +229,7 @@ impl RedisLinkClient {
             .quit()
             .await
             .map_err(|e| anyhow::anyhow!("Redis [{}] shutdown error: {:?}", self.name, e));
-        self.healthy.store(false, Ordering::Relaxed);
+        self.healthy.update(false, false);
         quit_result
     }
 

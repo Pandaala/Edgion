@@ -397,12 +397,13 @@ fn record_current_health<O: ApplyOwner>(
 mod published_health_tests {
     use super::*;
     use crate::link_sys::runtime::apply::{ConnectionCoverage, RuntimeFingerprint};
+    use edgion_common::link_sys_core::PublishedHealth;
     use metrics_util::debugging::{DebugValue, DebuggingRecorder};
 
     struct HealthOwner;
 
     struct HealthClient {
-        healthy: AtomicBool,
+        healthy: Arc<PublishedHealth>,
     }
 
     #[async_trait::async_trait]
@@ -433,6 +434,10 @@ mod published_health_tests {
 
         fn mark_retired(_: &Self::Client) {}
 
+        fn published_health(client: &Self::Client) -> Option<&PublishedHealth> {
+            Some(client.healthy.as_ref())
+        }
+
         fn label() -> &'static str {
             "health-test"
         }
@@ -443,23 +448,21 @@ mod published_health_tests {
         let name = "test/link".to_string();
         let store = ProviderRuntimeStore::new();
         let old_client = Arc::new(HealthClient {
-            healthy: AtomicBool::new(true),
+            healthy: Arc::new(PublishedHealth::new(true)),
         });
         let old = PersistentRunner::<HealthOwner>::spawn_with_published(name.clone(), old_client.clone());
         store.insert(name.clone(), old.clone());
 
-        let new = PersistentRunner::<HealthOwner>::spawn_with_published(
-            name.clone(),
-            Arc::new(HealthClient {
-                healthy: AtomicBool::new(true),
-            }),
-        );
+        let new_client = Arc::new(HealthClient {
+            healthy: Arc::new(PublishedHealth::new(true)),
+        });
+        let new = PersistentRunner::<HealthOwner>::spawn_with_published(name.clone(), Arc::clone(&new_client));
         store.insert(name.clone(), new.clone());
 
         let recorder = DebuggingRecorder::new();
         let snapshotter = recorder.snapshotter();
         metrics::with_local_recorder(&recorder, || {
-            record_current_health(&store, |client| client.healthy.load(Ordering::Relaxed));
+            record_current_health(&store, |client| client.healthy.load());
             assert!(crate::link_sys::runtime::health_probe::apply_health_result(
                 &old_client.healthy,
                 &name,
@@ -478,7 +481,6 @@ mod published_health_tests {
                     .any(|label| label.key() == "link" && label.value() == name)
                 && matches!(value, DebugValue::Gauge(level) if *level == 1.0)
         }));
-
         old.begin_delete();
         new.begin_delete();
         old.await_join().await;

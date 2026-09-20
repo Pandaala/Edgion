@@ -7,7 +7,9 @@
 - Active anchor crate: `edgion-gateway`
 - File: `edgion-gateway/src/link_sys/runtime/store.rs`
 - Approved knowledge support: `skills/04-review/link-sys/intentional-design/health-metric-free-function-and-cardinality.md`
-- Approved deferred records: D0007, its index row, and `tasks/todo/add-etcd-linksys-health-flip-reporting.md`.
+- Approved deferred records included D0007 and its canonical task. D0007 was
+  subsequently resolved by the published-generation health transition guard in
+  `skills/04-review/link-sys/regression-guards/published-generation-health-transition-ownership.md`.
 - Forbidden files: every other source or knowledge file, every existing `edgion-tests/**` file, unrelated modules, and protected user work.
 - Pre-existing protected paths: `task/optimization-by-files.md`, `tasks/pingora-0.9.0/`, `tasks/todo/complete-k8s-dynamic-scenario-parity/`, and `waf-architecture-and-multi-pattern-matching.md`.
 - Exact commit allow-list: the source/knowledge/deferred paths above plus B0034/B0035 campaign ledger, batch, main, and changelog records.
@@ -34,7 +36,9 @@
 
 ## Deferred issues
 
-- D0007 records the Etcd sub-scrape flip-counter gap. Closing it requires a binary-owned transition seam because the shared Etcd client must not depend on Gateway metrics.
+- D0007 recorded the Etcd sub-scrape flip-counter gap. Its later resolution uses
+  a binary-owned transition seam because the shared Etcd client must not depend
+  on Gateway metrics.
 - The existing `tasks/todo/link-sys-cross-provider-partial-replacement.md` remains separate and was not modified.
 
 ## Verification

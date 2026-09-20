@@ -19,6 +19,10 @@ The gauge is sampled from the published runtime client immediately before each
 `/metrics` render; probe and operation tasks update their own health flags but
 do not write the shared gauge. This prevents a retired generation's late result
 from leaving the replacement's gauge at the old value (ISSUE-006).
+The counter is emitted through a Gateway-owned reporter attached to the shared
+`PublishedHealth` cell. Its publication bit is transferred by the persistent
+runner together with the current-client swap, so only a real transition of the
+published generation is counted.
 The scrape covers all five persistent-runner providers: Redis, Etcd,
 Elasticsearch, Kafka, and OTLP. Webhook publication and health remain separately
 owned by `WebhookManager` and the shared outbound client; Webhook is not a
@@ -42,13 +46,15 @@ The `/metrics` handler calls `record_published_link_sys_health` before rendering
 That function reads each provider runner's `current` handle, as data-plane
 callers do, and samples its `healthy()` value for Redis, Etcd, Elasticsearch,
 Kafka, and OTLP. An unpublished candidate and a retired old client cannot
-directly write the gauge. A scrape racing a handle swap may sample either
+directly write the gauge or the flip counter. A scrape racing a handle swap may sample either
 published generation; the next scrape samples the then current handle. Health
-flip counters remain provider-owned where implemented, and transition logs stay
-with each provider's health path; scrape-time sampling does not synthesize
-transitions. Etcd currently has this scrape-time gauge and transition logs but
-does not emit `edgion_link_sys_health_flips_total`; campaign deferred item D0007
-tracks that separate gap.
+flip reporters remain binary-owned, and transition logs stay with each
+provider's health path; scrape-time sampling does not synthesize transitions.
+The five persistent-runner providers share the same publication-aware state.
+Candidate initialization establishes a baseline without a counter event;
+replacement disables the old reporter and activates the new baseline around the
+ArcSwap mutation; deletion disables reporting before unpublication; duplicate
+observations and later retired-generation updates are ignored by the counter.
 
 **2. The `link` label requires a validated provider identity.**
 
@@ -110,7 +116,11 @@ Re-open only if:
 - Precedent: `edgion-gateway/src/observe/metrics/registry.rs` (`record_cb_ejection`, `record_cb_recovery`, `record_link_sys_es_bulk_channel_full`).
 - `ISSUE-006` — corrected late retired-generation gauge writes by sampling the
   published client at scrape time; see `runtime/store.rs::record_published_link_sys_health`.
+- `D0007` — added binary-owned Etcd flip reporting and generalized exact
+  published-generation transition ownership across all five persistent providers.
 - `runtime/store.rs::published_health_tests::published_etcd_client_is_sampled_without_network_init`
   — verifies Etcd's published generation is sampled without connecting.
+- [`Published generation owns LinkSys health transitions`](../regression-guards/published-generation-health-transition-ownership.md)
+  — lifecycle and exact-counting regression boundary.
 - [Webhook publication stays outside the generic lifecycle](../regression-guards/webhook-publication-outside-generic-lifecycle.md)
   — separate Webhook manager ownership.

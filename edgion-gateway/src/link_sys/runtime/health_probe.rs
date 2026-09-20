@@ -1,14 +1,13 @@
 //! Shared background health-probe driver for LinkSys data sinks (task 05).
 //!
 //! Provides a generic `run_probe_loop` that periodically runs a provider-supplied
-//! liveness closure and drives the provider's `healthy` flag via CAS, plus the
-//! `apply_health_result` helper reused by the ES bulk path so every `healthy`
-//! writer flips through the same win-gated emission (flip counter + rate-limited log).
+//! liveness closure and drives the provider's publication-aware health cell,
+//! plus the `apply_health_result` helper reused by provider operation paths.
 //!
 //! Constants mirror the etcd monitor (`edgion-common/.../etcd/client.rs:160-242`).
 
 use std::future::Future;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::sync::LazyLock;
 use std::time::{Duration, Instant};
@@ -16,6 +15,8 @@ use std::time::{Duration, Instant};
 use rand::Rng;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
+
+use edgion_common::link_sys_core::{HealthTransitionReporter, PublishedHealth};
 
 use crate::observe::metrics::registry::record_link_sys_health_flip;
 
@@ -75,42 +76,43 @@ pub(crate) fn flip_log_allowed(last: &AtomicU64) -> bool {
     flip_log_allowed_at(last, now_ms, FLIP_LOG_WINDOW_MS)
 }
 
-/// Apply one probe/operation result to `healthy` via CAS, emitting the
-/// flip counter + a rate-limited log ONLY on a winning transition. `upgrade_only`
-/// suppresses the true->false direction (the data path owns downgrade). Returns
-/// true iff a flip was emitted. This is the single coordination point that keeps
-/// the flip counter accurate when two writers share one flag.
+/// Build the binary-owned reporter injected into each Gateway generation.
+pub(crate) fn health_transition_reporter(name: &str) -> HealthTransitionReporter {
+    let name = name.to_string();
+    Arc::new(move |healthy| record_link_sys_health_flip(&name, healthy))
+}
+
+/// Build an unpublished Gateway health cell. The persistent runner activates it
+/// only when the owning generation becomes current.
+pub(crate) fn new_published_health(name: &str, initial: bool) -> Arc<PublishedHealth> {
+    Arc::new(PublishedHealth::with_reporter(
+        initial,
+        health_transition_reporter(name),
+    ))
+}
+
+/// Apply one probe/operation result through the canonical health cell, emitting
+/// a rate-limited log only on a real transition. The cell itself decides whether
+/// the binary-owned flip reporter is active for the current generation.
 pub(crate) fn apply_health_result(
-    healthy: &AtomicBool,
+    healthy: &PublishedHealth,
     name: &str,
     system_type: &str,
     last_flip_log: &AtomicU64,
     ok: bool,
     upgrade_only: bool,
 ) -> bool {
-    if ok {
-        if healthy
-            .compare_exchange(false, true, Ordering::Relaxed, Ordering::Relaxed)
-            .is_ok()
-        {
-            record_link_sys_health_flip(name, true);
-            if flip_log_allowed(last_flip_log) {
-                tracing::info!(link = %name, system = %system_type, "link-sys recovered");
-            }
-            return true;
-        }
-    } else if !upgrade_only
-        && healthy
-            .compare_exchange(true, false, Ordering::Relaxed, Ordering::Relaxed)
-            .is_ok()
-    {
-        record_link_sys_health_flip(name, false);
-        if flip_log_allowed(last_flip_log) {
+    if !healthy.update(ok, upgrade_only) {
+        return false;
+    }
+    if flip_log_allowed(last_flip_log) {
+        if ok {
+            tracing::info!(link = %name, system = %system_type, "link-sys recovered");
+        } else {
             tracing::warn!(link = %name, system = %system_type, "link-sys degraded");
         }
-        return true;
     }
-    false
+    true
 }
 
 /// Per-probe configuration. Intervals are hard-coded by callers (no CRD fields).
@@ -135,7 +137,7 @@ pub(crate) struct ProbeConfig {
 /// before the wait, `advance` only needs to cover the sleep — no cold-start window.
 pub(crate) async fn run_probe_loop<F, Fut>(
     cfg: ProbeConfig,
-    healthy: Arc<AtomicBool>,
+    healthy: Arc<PublishedHealth>,
     mut shutdown_rx: watch::Receiver<bool>,
     probe_fn: F,
 ) where
@@ -199,7 +201,7 @@ pub(crate) async fn run_probe_loop<F, Fut>(
 /// clean loop exit when abort races the next select.
 pub(crate) fn spawn_health_probe<F, Fut>(
     cfg: ProbeConfig,
-    healthy: Arc<AtomicBool>,
+    healthy: Arc<PublishedHealth>,
     shutdown_rx: watch::Receiver<bool>,
     probe_fn: F,
 ) -> JoinHandle<()>
@@ -277,19 +279,19 @@ mod tests {
 
     #[test]
     fn apply_result_flips_only_on_transition() {
-        let h = AtomicBool::new(false);
+        let h = PublishedHealth::new(false);
         let last = AtomicU64::new(0);
         assert!(apply_health_result(&h, "n", "test", &last, true, false)); // false->true
-        assert!(h.load(Ordering::Relaxed));
+        assert!(h.load());
         assert!(!apply_health_result(&h, "n", "test", &last, true, false)); // already true, no flip
         assert!(apply_health_result(&h, "n", "test", &last, false, false)); // true->false
-        assert!(!h.load(Ordering::Relaxed));
+        assert!(!h.load());
     }
 
     #[test]
     fn apply_result_single_winner_under_contention() {
         use std::sync::Arc;
-        let h = Arc::new(AtomicBool::new(false));
+        let h = Arc::new(PublishedHealth::new(false));
         let last = Arc::new(AtomicU64::new(0));
         let mut handles = Vec::new();
         for _ in 0..16 {
@@ -305,15 +307,15 @@ mod tests {
 
     #[test]
     fn apply_result_upgrade_only_never_downgrades() {
-        let h = AtomicBool::new(true);
+        let h = PublishedHealth::new(true);
         let last = AtomicU64::new(0);
         // upgrade_only: a failure must NOT flip the flag to false.
         assert!(!apply_health_result(&h, "n", "test", &last, false, true));
-        assert!(h.load(Ordering::Relaxed));
+        assert!(h.load());
         // but it can still recover a false flag.
-        h.store(false, Ordering::Relaxed);
+        h.update(false, false);
         assert!(apply_health_result(&h, "n", "test", &last, true, true));
-        assert!(h.load(Ordering::Relaxed));
+        assert!(h.load());
     }
 
     #[tokio::test(start_paused = true)]
@@ -331,7 +333,7 @@ mod tests {
             }
         };
 
-        let healthy = Arc::new(AtomicBool::new(false));
+        let healthy = Arc::new(PublishedHealth::new(false));
         let (sd_tx, sd_rx) = watch::channel(false);
         let cfg = ProbeConfig {
             name: "t".into(),
@@ -347,12 +349,12 @@ mod tests {
         // Advance past the first interval -> recover.
         tokio::time::advance(Duration::from_secs(11)).await;
         tokio::task::yield_now().await;
-        assert!(healthy.load(Ordering::Relaxed), "first probe should recover");
+        assert!(healthy.load(), "first probe should recover");
 
         // Next interval -> unhealthy.
         tokio::time::advance(Duration::from_secs(11)).await;
         tokio::task::yield_now().await;
-        assert!(!healthy.load(Ordering::Relaxed), "second probe should downgrade");
+        assert!(!healthy.load(), "second probe should downgrade");
 
         // Shutdown -> loop returns cleanly (no leak).
         sd_tx.send(true).unwrap();
@@ -363,7 +365,7 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn run_probe_loop_exits_when_sender_dropped() {
-        let healthy = Arc::new(AtomicBool::new(true));
+        let healthy = Arc::new(PublishedHealth::new(true));
         let (sd_tx, sd_rx) = watch::channel(false);
         let cfg = ProbeConfig {
             name: "t".into(),
@@ -382,7 +384,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn shutdown_interrupts_an_in_flight_probe() {
         let (tx, rx) = watch::channel(false);
-        let healthy = Arc::new(AtomicBool::new(false));
+        let healthy = Arc::new(PublishedHealth::new(false));
         let cfg = ProbeConfig {
             name: "test/otlp".into(),
             system_type: "otlp",

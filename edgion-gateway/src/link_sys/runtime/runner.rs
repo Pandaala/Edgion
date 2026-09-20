@@ -8,6 +8,7 @@ use std::time::Duration;
 
 use arc_swap::ArcSwap;
 use async_trait::async_trait;
+use edgion_common::link_sys_core::PublishedHealth;
 use edgion_resources::resources::link_sys::LinkSys;
 use parking_lot::Mutex;
 use tokio::sync::{oneshot, watch};
@@ -49,6 +50,9 @@ pub trait ApplyOwner: Send + Sync + 'static {
     fn fingerprint(incoming: &LinkSys) -> anyhow::Result<RuntimeFingerprint>;
     fn fingerprint_live(client: &Self::Client) -> RuntimeFingerprint;
     fn coverage(client: &Self::Client) -> ConnectionCoverage;
+    fn published_health(_client: &Self::Client) -> Option<&PublishedHealth> {
+        None
+    }
     fn build(key: &str, incoming: &LinkSys) -> anyhow::Result<Arc<Self::Client>>;
     async fn init(client: &Self::Client) -> anyhow::Result<()>;
     async fn shutdown(client: Arc<Self::Client>);
@@ -140,7 +144,13 @@ impl<O: ApplyOwner> PersistentRunner<O> {
     }
 
     fn unpublish_into_orphan(&self) {
-        if let Some(client) = (*self.current.swap(Arc::new(None))).clone() {
+        let Some(current) = (*self.current.load_full()).clone() else {
+            return;
+        };
+        let removed = PublishedHealth::transition_publication(O::published_health(&current), None, || {
+            self.current.swap(Arc::new(None))
+        });
+        if let Some(client) = (*removed).clone() {
             push_orphan(self, client);
         }
     }
@@ -164,7 +174,10 @@ impl<O: ApplyOwner> PersistentRunner<O> {
     #[cfg(test)]
     pub fn spawn_with_published(key: String, client: Arc<O::Client>) -> Arc<Self> {
         let runner = Self::spawn(key);
-        runner.current.store(Arc::new(Some(client)));
+        let published = Arc::clone(&client);
+        PublishedHealth::transition_publication(None, O::published_health(&client), || {
+            runner.current.store(Arc::new(Some(published)));
+        });
         runner
     }
 }
@@ -435,10 +448,15 @@ fn publish_with_hooks<O: ApplyOwner>(
     if desired.gen != start_gen {
         return LoopExit::Aborted;
     }
+    let previous = (*runner.current.load_full()).clone();
     before_swap();
-    let previous = runner.current.swap(Arc::new(Some(client.clone())));
+    let replaced = PublishedHealth::transition_publication(
+        previous.as_deref().and_then(O::published_health),
+        O::published_health(client),
+        || runner.current.swap(Arc::new(Some(client.clone()))),
+    );
     after_swap();
-    if let Some(old) = (*previous).clone() {
+    if let Some(old) = (*replaced).clone() {
         O::mark_retired(&old);
         start_retire::<O>(runner, old);
     }
@@ -451,9 +469,14 @@ fn push_orphan<O: ApplyOwner>(runner: &PersistentRunner<O>, client: Arc<O::Clien
 }
 
 async fn replace_now<O: ApplyOwner>(runner: &PersistentRunner<O>, live: Arc<O::Client>) {
-    let loaded = runner.current.load_full();
-    if loaded.as_ref().as_ref().is_some_and(|c| Arc::ptr_eq(c, &live)) {
-        runner.current.store(Arc::new(None));
+    {
+        let _publication = runner.publication.lock();
+        let loaded = runner.current.load_full();
+        if loaded.as_ref().as_ref().is_some_and(|c| Arc::ptr_eq(c, &live)) {
+            PublishedHealth::transition_publication(O::published_health(&live), None, || {
+                runner.current.store(Arc::new(None));
+            });
+        }
     }
     if runner.shutdown.is_cancelled() {
         push_orphan(runner, live);
@@ -514,6 +537,7 @@ mod tests {
     struct FakeClient {
         fingerprint: RuntimeFingerprint,
         live: usize,
+        healthy: Arc<PublishedHealth>,
         inits: Arc<AtomicUsize>,
         shutdowns: Arc<AtomicUsize>,
         retired: AtomicBool,
@@ -559,7 +583,11 @@ mod tests {
             }
         }
 
-        fn build(_key: &str, incoming: &LinkSys) -> anyhow::Result<Arc<Self::Client>> {
+        fn published_health(client: &Self::Client) -> Option<&PublishedHealth> {
+            Some(client.healthy.as_ref())
+        }
+
+        fn build(key: &str, incoming: &LinkSys) -> anyhow::Result<Arc<Self::Client>> {
             let endpoint = match &incoming.spec.config {
                 edgion_resources::resources::link_sys::SystemConfig::Redis(cfg) => {
                     cfg.endpoints.first().cloned().unwrap_or_default()
@@ -573,6 +601,7 @@ mod tests {
             Ok(Arc::new(FakeClient {
                 fingerprint: fp_for(incoming),
                 live: if endpoint.contains("down") { 0 } else { 1 },
+                healthy: crate::link_sys::runtime::health_probe::new_published_health(key, true),
                 inits: Arc::new(AtomicUsize::new(0)),
                 shutdowns: Arc::new(AtomicUsize::new(0)),
                 retired: AtomicBool::new(false),
@@ -594,6 +623,7 @@ mod tests {
         }
 
         fn mark_retired(client: &Self::Client) {
+            client.healthy.deactivate();
             client.retired.store(true, Ordering::Relaxed);
         }
 
@@ -721,6 +751,52 @@ mod tests {
         wait_until(|| runner.current().is_some_and(|c| !Arc::ptr_eq(&c, &first))).await;
         assert!(first.retired.load(Ordering::Relaxed));
         assert!(runner.current().is_some());
+        runner.begin_delete();
+        runner.await_join().await;
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn handover_reports_only_the_new_published_generation() {
+        use metrics_util::debugging::{DebugValue, DebuggingRecorder};
+
+        let key = "runner/health-handover";
+        let old_link = redis_ls("health-handover", "redis://up:6379", "1");
+        let old = FakeOwner::build(key, &old_link).unwrap();
+        let runner = PersistentRunner::<FakeOwner>::spawn_with_published(key.to_string(), Arc::clone(&old));
+        let next_link = redis_ls("health-handover", "redis://up2:6379", "2");
+        let next = FakeOwner::build(key, &next_link).unwrap();
+
+        let recorder = DebuggingRecorder::new();
+        let snapshotter = recorder.snapshotter();
+        metrics::with_local_recorder(&recorder, || {
+            assert!(matches!(
+                publish_with_hooks(&runner, &next, 0, || {}, || {}),
+                LoopExit::Continue
+            ));
+            assert!(old.healthy.update(false, false));
+            assert!(next.healthy.update(false, false));
+        });
+
+        let flips: Vec<_> = snapshotter
+            .snapshot()
+            .into_vec()
+            .into_iter()
+            .filter(|(metric, _, _, _)| {
+                metric.key().name() == crate::observe::metrics::registry::names::LINK_SYS_HEALTH_FLIPS_TOTAL
+                    && metric
+                        .key()
+                        .labels()
+                        .any(|label| label.key() == "link" && label.value() == key)
+            })
+            .collect();
+        assert_eq!(flips.len(), 1, "one degraded series must be present");
+        assert!(flips[0]
+            .0
+            .key()
+            .labels()
+            .any(|label| label.key() == "direction" && label.value() == "degraded"));
+        assert!(matches!(flips[0].3, DebugValue::Counter(value) if value == 1));
+
         runner.begin_delete();
         runner.await_join().await;
     }

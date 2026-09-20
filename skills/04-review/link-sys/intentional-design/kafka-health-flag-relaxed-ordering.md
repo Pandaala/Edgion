@@ -1,63 +1,70 @@
 ---
 name: kafka-health-flag-relaxed-ordering
-description: Use when reviewing Kafka/LinkSys health-flag findings; covers why `Ordering::Relaxed` on the advisory `healthy` AtomicBool is correct and must not be "upgraded".
+description: Use when reviewing Kafka/LinkSys health-level ordering; covers why lock-free relaxed reads remain correct inside the publication-aware health cell.
 status: accepted-tradeoff
 finding_id: link-sys-kafka-health-01
 closed: 2026-06-16
 knowledge_type: intentional-design
 ---
 
-# Kafka `healthy` flag uses `Ordering::Relaxed` — NOT-AN-ISSUE
+# LinkSys health level keeps relaxed atomic reads — NOT-AN-ISSUE
 
 ## Conclusion
 
-The `record_produce_result` fold and every read/write of `KafkaLinkClient.healthy: Arc<AtomicBool>`
-(`edgion-gateway/src/link_sys/providers/kafka/client.rs`) intentionally use `Ordering::Relaxed`.
-This is correct. Suggestions to "upgrade" the flag (or the `last_flip_log_ms` rate-limit timestamp)
-to `Acquire`/`Release`/`SeqCst` for safety are **not accepted**.
+`KafkaLinkClient` now uses the shared `PublishedHealth` cell. Its request-side
+level read and the cell's internal atomic level access intentionally use
+`Ordering::Relaxed`. Writers serialize level changes and publication ownership
+with the cell's mutex, while the persistent runner transfers that ownership
+around the current-client ArcSwap. Upgrading the atomic level or the
+`last_flip_log_ms` rate-limit timestamp to Acquire/Release/SeqCst is not useful
+without a new cross-field synchronization requirement.
 
-## Core Rationale
+## Core rationale
 
-**1. The flag is a standalone advisory hint, not a synchronization gate.**
+**1. The level is an advisory hint, not a synchronization gate.**
 
-`healthy` does not guard publication of any other shared data. The data path is independently
-synchronized: `try_produce` does its own `inner_client.load_full()` (`ArcSwapOption` carries its own
-ordering) and bails on `None`. `AccessLogger::send()` reads `healthy()` only to pick the first
-healthy sender — a routing hint. A stale-by-nanoseconds read at most mis-routes one access-log
-entry, which the fire-and-forget contract (I5) already tolerates (the entry may be dropped). There
-is no `healthy == true ⇒ inner_client visibly Some` invariant for an acquire/release pair to protect.
+`healthy` does not guard publication of any other shared data. The data path is
+independently synchronized: `try_produce` loads `inner_client` through its own
+ArcSwap and fails on `None`. `AccessLogger::send()` reads `healthy()` only to
+select the first healthy sender. There is no `healthy == true` implication that
+requires another field to become visible through an acquire/release pair.
 
-**2. `compare_exchange(Relaxed, Relaxed)` already gives single-winner semantics.**
+**2. The transition mutex gives single-winner semantics.**
 
-The multi-topic tasks share one flag; CAS guarantees exactly one task observes the transition and
-acts (emits metric + rate-limited log). Losers see the already-correct value and no-op. This is
-stronger than the etcd monitor's `load`-then-`store(true)` (which is only safe there because etcd
-has a single monitor task). No lost-update or wedged-state failure exists for a single bool.
+Kafka's topic tasks share one cell. `PublishedHealth::update` holds its short
+transition mutex while comparing and storing the level, so exactly one writer
+observes a change and invokes the published-generation reporter. Redis, Etcd,
+Elasticsearch, and OTLP use the same duplicate suppression. Atomic ordering does
+not establish that lifecycle ownership; the mutex and runner publication do.
 
-**3. A spurious stale-CAS flip is self-correcting.**
+**3. Concurrent external observations remain advisory.**
 
-A late failure CAS can flip an already-recovered flag back to unhealthy; the next successful produce
-corrects it. Documented inline; acceptable because the flag is advisory.
+A late failure observation can follow a recovery observation and become the
+latest level; the next successful operation or probe corrects it. The transition
+is real in observation order and is counted only if that generation is published.
+No atomic ordering mode can infer the chronology of external results.
 
-## Fix Suggestions Not Accepted
+## Fix suggestions not accepted
 
-- "Use `Acquire`/`Release` so the gateway sees a consistent client state" — there is no co-published
-  state; `inner_client` has its own sync. Adds cost, fixes nothing.
-- "Use `SeqCst` to be safe" — pure overhead; no cross-variable ordering requirement exists here.
-- "The rate-limit timestamp load/store is a TOCTOU race" — it is a best-effort log throttle, not a
-  correctness barrier; a one-off double-log under contention is acceptable and documented.
+- "Use Acquire/Release so the Gateway sees a consistent client state" — there is
+  no co-published state; `inner_client` has independent synchronization.
+- "Use SeqCst to be safe" — it adds ordering without defining a cross-variable
+  invariant.
+- "The rate-limit timestamp load/store is a TOCTOU race" — it is a best-effort
+  log throttle; a one-off double log is accepted and does not affect metrics.
 
-## Re-evaluation Triggers
+## Re-evaluation triggers
 
-Re-open only if:
+Re-open if a reader uses the health level to synchronize access to another field.
+That change must first define the new invariant and then select the required
+ordering. Also re-evaluate if health reads cease to be a request-path routing hint.
 
-- A future change makes another reader depend on a happens-before relationship between `healthy`
-  and `inner_client` (or any other field) — i.e., the flag stops being purely advisory.
-- Task 05's background probe shares the `healthy` flag across a respawn path AND relies on the flag
-  to publish freshly-rebuilt client state (then audit the ordering at that new write site).
+## Reference cases
 
-## Reference Cases
-
-- 2026-06-16 Kafka health-recovery fix (spec `docs/superpowers/specs/2026-06-15-kafka-health-recovery-design.md`).
-- Source: `edgion-gateway/src/link_sys/providers/kafka/client.rs` (`record_produce_result`, `flip_log_allowed_at`).
+- 2026-06-16 Kafka health-recovery fix (spec
+  `docs/superpowers/specs/2026-06-15-kafka-health-recovery-design.md`).
+- Source: `edgion-common/src/link_sys_core/health.rs` (`PublishedHealth`) and
+  `edgion-gateway/src/link_sys/providers/kafka/client.rs`.
+- D0007 publication-aware transition unification superseded the Kafka-local CAS
+  fold while retaining relaxed advisory reads.
 - Consumer: `edgion-gateway/src/observe/access_log/logger.rs` (first-healthy routing).

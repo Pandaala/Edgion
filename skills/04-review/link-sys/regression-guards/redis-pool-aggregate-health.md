@@ -39,7 +39,11 @@ before quitting the pool, preventing an in-flight result from restoring health a
 the terminal false state. Probes do not write `edgion_link_sys_health`.
 The `/metrics` handler samples the published client's aggregate `healthy()` flag
 on each scrape, so a retired generation's late result cannot overwrite the
-replacement's shared gauge. Flip counters and logs remain CAS-transition-only.
+replacement's shared gauge. Flip counters and logs remain transition-only.
+A shared `PublishedHealth` cell serializes aggregate transitions and publication;
+its atomic level remains a lock-free request-side read, while the short writer
+critical section prevents a candidate or retired generation from reporting a
+flip. Replacement activation establishes a baseline rather than a recovery.
 A deletion can leave the accepted stale per-link series.
 `RedisClientConfig.pool.size`, Fred pool construction, command retry semantics, and
 active admin `PING` health checks are unchanged.

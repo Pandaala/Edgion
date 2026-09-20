@@ -18,7 +18,8 @@ use tokio::sync::mpsc;
 
 use crate::link_sys::credential::{CredentialState, ResolvedCredential};
 use crate::link_sys::runtime::apply::{ConnectionCoverage, RuntimeFingerprint};
-use crate::link_sys::runtime::health_probe::flip_log_allowed;
+use crate::link_sys::runtime::health_probe::{flip_log_allowed, new_published_health};
+use edgion_common::link_sys_core::PublishedHealth;
 use edgion_resources::resources::common::TlsConfig;
 use edgion_resources::resources::link_sys::kafka::{
     KafkaClientConfig, DEFAULT_KAFKA_CHANNEL_SIZE, DEFAULT_KAFKA_LINGER_MS, DEFAULT_KAFKA_MAX_PENDING_BYTES,
@@ -139,36 +140,6 @@ struct TopicEntry {
     _reservation: TopicReservation,
 }
 
-/// Fold a single produce result into the shared `healthy` flag.
-///
-/// Returns `true` iff the flag actually flipped, so the caller emits metrics + a
-/// (rate-limited) log only on a real transition. `compare_exchange` means that when
-/// multiple per-topic tasks share one flag, only the task that wins a flip acts.
-/// `Relaxed` is sufficient: this is a single independent advisory flag with no
-/// happens-before relationship to `inner_client` (which carries its own sync via
-/// `ArcSwapOption`). The flag is read only as a routing hint and does not protect
-/// any other shared state. A stale failure CAS can spuriously flip an
-/// already-recovered flag back to unhealthy; this is acceptable because the flag is
-/// corrected on the next successful produce.
-fn emit_kafka_health(retired: &AtomicBool, name: &str, ok: bool) {
-    if retired.load(Ordering::Relaxed) {
-        return;
-    }
-    crate::observe::metrics::registry::record_link_sys_health_flip(name, ok);
-}
-
-fn record_produce_result(healthy: &AtomicBool, ok: bool) -> bool {
-    if ok {
-        healthy
-            .compare_exchange(false, true, Ordering::Relaxed, Ordering::Relaxed)
-            .is_ok()
-    } else {
-        healthy
-            .compare_exchange(true, false, Ordering::Relaxed, Ordering::Relaxed)
-            .is_ok()
-    }
-}
-
 /// Build the rustls `ClientConfig` for the rskafka TLS connector.
 ///
 /// Delegates custom-CA / client-mTLS / verify-gate resolution to the shared
@@ -201,7 +172,7 @@ pub struct KafkaLinkClient {
     producer_admission: parking_lot::Mutex<()>,
     topic_budget: Arc<TopicBudget>,
     queue_budget: Arc<QueueBudget>,
-    healthy: Arc<AtomicBool>,
+    healthy: Arc<PublishedHealth>,
     /// Monotonic-ms timestamp of the last emitted flip log; gate for log rate limiting.
     last_flip_log_ms: Arc<AtomicU64>,
     /// Probe shutdown signal (populated in init, fired in shutdown).
@@ -257,7 +228,7 @@ impl KafkaLinkClient {
             producer_admission: parking_lot::Mutex::new(()),
             topic_budget: TopicBudget::new(max_topics),
             queue_budget: QueueBudget::new(max_pending_records, max_pending_bytes),
-            healthy: Arc::new(AtomicBool::new(false)),
+            healthy: new_published_health(name, false),
             last_flip_log_ms: Arc::new(AtomicU64::new(0)),
             shutdown_tx: parking_lot::Mutex::new(None),
             probe_handle: parking_lot::Mutex::new(None),
@@ -295,6 +266,7 @@ impl KafkaLinkClient {
 
     pub(crate) fn mark_retired(&self) {
         let _admission = self.producer_admission.lock();
+        self.healthy.deactivate();
         self.retired.store(true, Ordering::Relaxed);
         if let Some(handle) = self.probe_handle.lock().take() {
             handle.abort();
@@ -303,6 +275,10 @@ impl KafkaLinkClient {
 
     pub fn name(&self) -> &str {
         &self.name
+    }
+
+    pub(crate) fn published_health(&self) -> &PublishedHealth {
+        &self.healthy
     }
 
     /// Build a connected rskafka client from brokers + resolved auth. Shared by
@@ -343,7 +319,7 @@ impl KafkaLinkClient {
     }
 
     pub fn healthy(&self) -> bool {
-        self.healthy.load(Ordering::Relaxed)
+        self.healthy.load()
     }
 
     /// Non-blocking send to Kafka topic. Returns Err if not initialized, retired, or channel full.
@@ -389,19 +365,8 @@ impl KafkaLinkClient {
                 let name = self.name.clone();
                 let healthy = Arc::clone(&self.healthy);
                 let last_flip_log_ms = Arc::clone(&self.last_flip_log_ms);
-                let retired = Arc::clone(&self.retired);
                 let producer_handle = tokio::spawn(async move {
-                    Self::run_producer_task(
-                        client,
-                        topic_owned,
-                        rx,
-                        linger_ms,
-                        name,
-                        healthy,
-                        last_flip_log_ms,
-                        retired,
-                    )
-                    .await;
+                    Self::run_producer_task(client, topic_owned, rx, linger_ms, name, healthy, last_flip_log_ms).await;
                 });
                 entry.insert(TopicEntry {
                     sender: tx.clone(),
@@ -438,9 +403,8 @@ impl KafkaLinkClient {
         mut rx: mpsc::Receiver<QueuedRecord>,
         linger_ms: u64,
         name: String,
-        healthy: Arc<AtomicBool>,
+        healthy: Arc<PublishedHealth>,
         last_flip_log_ms: Arc<AtomicU64>,
-        retired: Arc<AtomicBool>,
     ) {
         let Some(client) = client else {
             tracing::error!(kafka = %name, %topic, "producer task started with no client");
@@ -453,7 +417,7 @@ impl KafkaLinkClient {
             Ok(p) => Arc::new(p),
             Err(e) => {
                 tracing::error!(kafka = %name, %topic, "PartitionClient init failed: {}", e);
-                healthy.store(false, Ordering::Relaxed);
+                healthy.update(false, false);
                 // The task exits here, closing its channel; `try_produce`'s
                 // self-heal evicts the dead entry so the next produce respawns.
                 // Broker-level recovery is owned by the background probe.
@@ -476,19 +440,13 @@ impl KafkaLinkClient {
             drop(reservation);
             match result {
                 Ok(Ok(_)) => {
-                    if record_produce_result(&healthy, true) {
-                        emit_kafka_health(&retired, &name, true);
-                        if flip_log_allowed(&last_flip_log_ms) {
-                            tracing::info!(kafka = %name, %topic, "Kafka recovered: produce succeeded");
-                        }
+                    if healthy.update(true, false) && flip_log_allowed(&last_flip_log_ms) {
+                        tracing::info!(kafka = %name, %topic, "Kafka recovered: produce succeeded");
                     }
                 }
                 Ok(Err(e)) => {
-                    if record_produce_result(&healthy, false) {
-                        emit_kafka_health(&retired, &name, false);
-                        if flip_log_allowed(&last_flip_log_ms) {
-                            tracing::warn!(kafka = %name, %topic, "Kafka degraded: produce failed: {}", e);
-                        }
+                    if healthy.update(false, false) && flip_log_allowed(&last_flip_log_ms) {
+                        tracing::warn!(kafka = %name, %topic, "Kafka degraded: produce failed: {}", e);
                     }
                 }
                 Err(_elapsed) => {
@@ -497,9 +455,7 @@ impl KafkaLinkClient {
                     // inner_client (picks up a probe rebuild).
                     // The in-flight record and any messages still buffered in rx are lost
                     // when the task exits (degraded behavior, acceptable for a fire-and-forget sink).
-                    if record_produce_result(&healthy, false) {
-                        emit_kafka_health(&retired, &name, false);
-                    }
+                    healthy.update(false, false);
                     tracing::warn!(
                         kafka = %name, %topic,
                         "Kafka produce wedged > {}s; exiting producer task to force respawn",
@@ -516,7 +472,7 @@ impl KafkaLinkClient {
     pub async fn init(&self) -> Result<()> {
         let client = Self::build_kafka_client(&self.config.brokers, &self.auth, &self.config).await?;
         self.inner_client.store(Some(Arc::new(client)));
-        self.healthy.store(true, Ordering::Relaxed);
+        self.healthy.update(true, false);
 
         // Background health probe: broker liveness via list_topics; after N consecutive
         // failures, rebuild inner_client from config so the per-produce timeout in
@@ -555,7 +511,7 @@ impl KafkaLinkClient {
                         if retired.load(Ordering::Relaxed) {
                             // Echo the current flag so apply_health_result is a no-op
                             // and cannot emit a retired transition event.
-                            return healthy.load(Ordering::Relaxed);
+                            return healthy.load();
                         }
                         // Pre-increment BEFORE any await so a driver-timeout cancellation at the
                         // list_topics().await below still counts as a failure: rskafka's metadata
@@ -624,7 +580,7 @@ impl KafkaLinkClient {
             let _ = handle.await;
         }
         self.inner_client.store(None);
-        self.healthy.store(false, Ordering::Relaxed);
+        self.healthy.update(false, false);
         Ok(())
     }
 }
@@ -828,28 +784,28 @@ mod tests {
     }
 
     #[test]
-    fn record_produce_result_flips_only_on_change() {
-        let flag = AtomicBool::new(false);
+    fn producer_health_flips_only_on_change() {
+        let flag = PublishedHealth::new(false);
         // false -> success -> flips to true
-        assert!(record_produce_result(&flag, true));
-        assert!(flag.load(Ordering::Relaxed));
+        assert!(flag.update(true, false));
+        assert!(flag.load());
         // already true + success -> no flip
-        assert!(!record_produce_result(&flag, true));
+        assert!(!flag.update(true, false));
         // true -> failure -> flips to false
-        assert!(record_produce_result(&flag, false));
-        assert!(!flag.load(Ordering::Relaxed));
+        assert!(flag.update(false, false));
+        assert!(!flag.load());
         // already false + failure -> no flip
-        assert!(!record_produce_result(&flag, false));
+        assert!(!flag.update(false, false));
     }
 
     #[test]
-    fn record_produce_result_single_winner_under_contention() {
+    fn producer_health_single_winner_under_contention() {
         use std::sync::Arc;
-        let flag = Arc::new(AtomicBool::new(false));
+        let flag = Arc::new(PublishedHealth::new(false));
         let mut handles = Vec::new();
         for _ in 0..16 {
             let f = Arc::clone(&flag);
-            handles.push(std::thread::spawn(move || record_produce_result(&f, true)));
+            handles.push(std::thread::spawn(move || f.update(true, false)));
         }
         let winners = handles
             .into_iter()
@@ -857,7 +813,7 @@ mod tests {
             .filter(|&won| won)
             .count();
         assert_eq!(winners, 1, "exactly one task may win the false->true flip");
-        assert!(flag.load(Ordering::Relaxed));
+        assert!(flag.load());
     }
 }
 

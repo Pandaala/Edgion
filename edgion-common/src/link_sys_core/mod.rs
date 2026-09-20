@@ -22,4 +22,4 @@ pub mod outbound_tls;
 pub mod providers;
 pub mod tls;
 
-pub use health::LinkSysHealth;
+pub use health::{HealthTransitionReporter, LinkSysHealth, PublishedHealth};
