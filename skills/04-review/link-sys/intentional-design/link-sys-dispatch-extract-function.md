@@ -6,6 +6,19 @@ knowledge_type: intentional-design
 
 # LinkSys store.rs dispatch functions — Extract-Function / Dedup — DESIGN-TRADEOFF
 
+## Superseded implementation rationale
+
+The user-authorized unified runtime table supersedes the separate dispatch and
+Webhook-bookkeeping rationale below. Full and partial source events now share
+one registry mutation path, with one provider apply function; the extra Webhook
+publication table and per-provider pending/deleting state are removed. The
+re-evaluation triggers fired: publication semantics converged and a real
+cross-provider stale-WebHook defect was confirmed. See
+[provider-owned runtime](provider-owned-runtime-and-simple-removal.md).
+
+The rest of this page preserves historical accepted tradeoffs and evidence. It
+does not prohibit this authorized refactor or require restoring duplicate maps.
+
 **Audit date**: 2026-05-25 (re-confirmed 2026-06-09; current dispatch re-evaluated 2026-09-17)
 
 The historical F-013/F-008 proposal was to extract provider-specific dispatch

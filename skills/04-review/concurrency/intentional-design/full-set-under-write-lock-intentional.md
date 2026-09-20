@@ -101,9 +101,8 @@ Re-open this decision only if:
 ## Reference Cases
 
 - conf-sync F-001 (review finding, `tasks/conf/`, 2026-05-28).
-- [webhook-manager-rwlock-intentional.md](webhook-manager-rwlock-intentional.md) —
-  sibling concurrency accepted-tradeoff: a lock kept intentionally because the
-  finer-grained "fix" introduces more concurrency surface than the original cost.
+- [Former WebhookManager lock decision](../superseded/webhook-manager-rwlock-intentional.md)
+  — historical comparison only; its independent registry has been removed.
 - `edgion-gateway/src/conf_sync/cache_client/cache_data.rs` — `CacheData::reset`,
   `process_compressed_events`, `add_compress_event`.
 - `edgion-gateway/src/conf_sync/cache_client/event_dispatch.rs` — `apply_change`,

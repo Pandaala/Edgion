@@ -92,7 +92,7 @@ spec:
 
   linkSys:
     webhookMaxResponseBytes: 16384   # Hard cap for LinkSys webhook response body (16 KiB)
-    maxInstancesPerKind: 200         # Max live+draining instances per provider kind
+    maxInstancesPerKind: 200         # Max current registered instances per persistent provider kind
 ```
 
 > Note: URI path normalization (`%2F` rejection, invalid percent-encoding rejection, etc.) is **not** part of EdgionGatewayConfig — it is configured in the Gateway YAML `path_normalization` section. See [Gateway Configuration](./gateway-config.md).
@@ -286,7 +286,7 @@ listener.
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `webhookMaxResponseBytes` | `Integer` | `16384` | Hard upper bound (bytes) for a LinkSys webhook response body. Each call's response is clamped to `min(per-resource maxResponseBytes, this value)`. Raise both values together when an external API legitimately returns a larger payload |
-| `maxInstancesPerKind` | `Integer` | `200` | Max live plus draining persistent LinkSys instances per provider kind (1–10000). New keys are refused at the cap; updates to existing keys and deletes always proceed. Lowering the cap does not evict live instances |
+| `maxInstancesPerKind` | `Integer` | `200` | Max current registered persistent LinkSys instances per provider kind (1–10000). Unadmitted keys are retried after removal or a cap increase. Updates and deletes do not wait for old cleanup; retiring objects are not counted. Lowering the cap does not evict current instances |
 
 Changes to `linkSys` take effect immediately through EdgionGatewayConfig partial-update — no Gateway restart required.
 

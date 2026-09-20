@@ -16,6 +16,19 @@ A single `LinkSys` object describes exactly one connector. The top-level `spec.t
 
 `LinkSys` is a Namespaced resource with the short name `lsys`. `kubectl get linksys` shows the `Accepted` and `ResolvedRefs` conditions at a glance.
 
+### Updates and removal
+
+Ordinary same-type updates reuse unchanged connection material. Changing
+`spec.type` under the same namespace/name removes the old connector and starts
+the new type; calls may temporarily fail while it initializes. New lookups use
+only the current type. Deletion removes the connector from lookup and signals
+its background work to stop without waiting for every in-flight call or retained
+handle. Neither replacement nor deletion guarantees delivery of queued logs.
+
+`EdgionGatewayConfig.spec.linkSys.maxInstancesPerKind` limits current registered
+persistent connectors per type, not old objects still being released. A connector
+waiting for capacity is reconsidered when a slot is removed or the limit increases.
+
 ```text
                  reference by namespace/name
   ┌──────────────┐        ┌──────────────────┐        ┌────────────────┐
@@ -1494,7 +1507,7 @@ drop counter. A referenced connection failure does not prevent Gateway startup.
 Invalid namespace/name syntax fails process configuration. References use Kubernetes
 namespace/name syntax and bounds, including for a disabled output or fallback.
 
-Hot updates retain a working connection while the replacement is invalid,
+Same-type hot updates retain a working connection while the replacement is invalid,
 unresolved or fails its initial empty OTLP Export. This initial check includes
 collector authentication and TLS acceptance within a three-second deadline. A
 valid pending connection retries automatically.

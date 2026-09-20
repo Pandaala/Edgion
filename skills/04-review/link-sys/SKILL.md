@@ -11,6 +11,8 @@ before applying a decision to current code.
 
 ## Intentional design
 
+- [Provider-owned runtime and simple removal](intentional-design/provider-owned-runtime-and-simple-removal.md)
+
 - [Best-effort log delivery during Gateway process exit](intentional-design/process-exit-log-delivery-best-effort.md)
 - [Access-Log Fallback Sink + Manual Backfill — DESIGN-TRADEOFF (accepted)](intentional-design/access-log-fallback-backfill-tradeoffs.md)
 - [LinkSys core/runtime module split — `link_sys_core` (common) vs `link_sys` (gateway) — FIXED](intentional-design/core-runtime-module-split-naming.md)
@@ -26,7 +28,7 @@ before applying a decision to current code.
 - [Published generation owns LinkSys health transitions](regression-guards/published-generation-health-transition-ownership.md)
 - [LinkSys hot reload reuses equal material and does not promise queue drain](regression-guards/link-sys-hot-reload-reuse-and-retirement.md)
 - [A LinkSys forced rebuild survives ordinary replay](regression-guards/forced-rebuild-survives-ordinary-replay.md)
-- [Full-set retain precedes apply and serializes with delete join replay](regression-guards/full-set-retain-serializes-join-replay.md)
+- [Full-set omission cannot resurrect removed LinkSys resources](regression-guards/full-set-retain-serializes-join-replay.md)
 - [A superseded LinkSys publication keeps the runner alive](regression-guards/persistent-runner-publish-supersession.md)
 - [Kafka producer state has per-client aggregate bounds](regression-guards/kafka-aggregate-queue-bounds.md)
 - [Kafka producer tasks terminate before generation shutdown completes](regression-guards/kafka-producer-generation-shutdown.md)
@@ -37,7 +39,7 @@ before applying a decision to current code.
 - [LinkSys outbound TLS enablement and shared loading](regression-guards/shared-outbound-tls-loading.md)
   (RedisTls handshake coverage; container reuse identity is owned by testing)
 - [OTLP provider ownership and safe transport](regression-guards/otlp-provider-ownership-and-egress.md)
-- [Webhook publication stays outside the generic LinkSys lifecycle](regression-guards/webhook-publication-outside-generic-lifecycle.md)
+- [Webhook preparation precedes unified runtime publication](regression-guards/webhook-publication-outside-generic-lifecycle.md)
 
 ## Compatibility constraints
 

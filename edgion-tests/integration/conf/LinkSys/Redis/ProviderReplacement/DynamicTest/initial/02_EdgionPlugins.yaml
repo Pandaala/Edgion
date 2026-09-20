@@ -1,0 +1,42 @@
+# The consumer never changes during provider replacement. Both calls resolve
+# the same LinkSys key on each request; exactly one may eventually succeed.
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: linksys-provider-replacement
+  namespace: edgion-test
+spec:
+  requestPlugins:
+    - type: WebhookKeyGet
+      config:
+        vars:
+          - name: replacement_webhook
+            webhookRef: "edgion-test/linksys-provider-replacement"
+            extract:
+              source: body
+              path: "data.echo_headers.x-replacement-result"
+            default: "unavailable"
+    - type: Dsl
+      config:
+        name: "linksys-provider-replacement"
+        source: |
+          resp.set_header("X-Replacement-Webhook", ctx.get("replacement_webhook"))
+          resp.set_header("X-Replacement-Redis", "unavailable")
+          let marker = req.header("X-Replacement-Marker")
+          let key = "edgion:provider-replacement:" + marker
+          let set_r = redis.set("linksys-provider-replacement", key, marker, 60000)
+          if !set_r["ok"] {
+            return next()
+          }
+          let get_r = redis.get("linksys-provider-replacement", key)
+          let del_r = redis.del("linksys-provider-replacement", key)
+          if get_r["ok"] && del_r["ok"] && get_r["value"] == marker {
+            resp.set_header("X-Replacement-Redis", marker)
+          } else {
+            resp.set_header("X-Replacement-Redis", "roundtrip-failed")
+          }
+          return next()
+        linkSysRefs:
+          - namespace: edgion-test
+            name: linksys-provider-replacement
+        errorPolicy: deny

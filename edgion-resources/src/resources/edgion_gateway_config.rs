@@ -708,9 +708,9 @@ pub struct LinkSysGlobalConfig {
     #[serde(default = "default_webhook_max_response_bytes")]
     pub webhook_max_response_bytes: usize,
 
-    /// Max live+draining persistent LinkSys instances per provider kind.
-    /// New keys are refused when the cap is reached; updates and deletes
-    /// always proceed. Default: 200.
+    /// Max current registered persistent LinkSys instances per provider kind.
+    /// New keys wait for admission at the cap; removal or a cap increase retries
+    /// them. Updates and deletes proceed without waiting for old cleanup. Default: 200.
     #[schemars(range(min = 1, max = 10_000))]
     #[serde(default = "default_max_instances_per_kind")]
     pub max_instances_per_kind: usize,

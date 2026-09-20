@@ -11,7 +11,11 @@ knowledge_type: intentional-design
 **Note (2026-07-08)**: the legacy webhook `health.rs` module this describes was removed
 entirely as dead code (`spawn_active_health_check` had zero production callers — the
 production webhook path had moved to `resolver.rs` → `manager.rs::ManagedOutboundClient`).
-Kept for historical design-rationale context.
+Kept for historical design-rationale context. The current owner is
+`WebhookLinkClient::retire` / `Drop`, which calls
+`ManagedOutboundClient::stop_health_check`; the unified runtime table invokes
+retirement on replacement/removal even if a caller retains the managed client.
+The abort-only principle remains applicable, not the old manager layout below.
 
 ## Conclusion
 
@@ -98,7 +102,7 @@ Re-open this decision only if:
 - [link-sys-F012](../regression-guards/etcd-monitor-handle-not-aborted.md) — sibling etcd monitor; explains
   why the cooperative `shutdown_rx` is needed there (lock release) and cites this webhook task as the
   abort-only precedent.
-- [link-sys-F011](webhook-manager-rwlock-intentional.md) — related decision on the
+- [link-sys-F011](../superseded/webhook-manager-rwlock-intentional.md) — superseded decision on the
   `WebhookEntry { runtime, health_task }` coupling and why the `RwLock` registry stays.
 - Formerly `edgion-gateway`'s `link_sys/providers/webhook/health.rs` (removed 2026-07-08) — `spawn_active_health_check`.
 - `edgion-gateway/src/link_sys/providers/webhook/manager.rs` — `WebhookEntry`, `upsert` / `remove`

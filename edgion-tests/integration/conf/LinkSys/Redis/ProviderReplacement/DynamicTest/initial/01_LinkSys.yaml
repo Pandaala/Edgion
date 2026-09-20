@@ -1,0 +1,23 @@
+apiVersion: edgion.io/v1
+kind: LinkSys
+metadata:
+  name: linksys-provider-replacement
+  namespace: edgion-test
+spec:
+  type: webhook
+  config:
+    target:
+      url: "http://127.0.0.1:30001"
+    request:
+      path:
+        template: "/webhook/resolve"
+      method:
+        template: "GET"
+      headers:
+        custom:
+          - name: X-Replacement-Result
+            template: "v1-${header:X-Replacement-Marker}"
+    timeoutMs: 2000
+    success:
+      statusCodes: [200]
+    maxResponseBytes: 4096

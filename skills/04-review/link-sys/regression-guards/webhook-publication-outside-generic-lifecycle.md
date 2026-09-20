@@ -1,48 +1,48 @@
 ---
 name: webhook-publication-outside-generic-lifecycle
-description: Use when reviewing LinkSysLifecycle dispatch or Gateway Webhook publication and replacement.
+description: Use when reviewing Webhook preparation, unified runtime publication, and retirement.
 knowledge_type: regression-guards
 ---
 
-# Webhook Publication Stays Outside the Generic LinkSys Lifecycle
+# Webhook preparation precedes unified runtime publication
 
-## Conclusion and scope
+## Current boundary
 
-`LinkSysLifecycle` is a leftover trait in `edgion-common`. Redis, Etcd, Elasticsearch,
-and Kafka use the persistent runner (`ApplyOwner`) instead. `WebhookLinkClient`
-deliberately does not implement the trait; Gateway Webhook publication is
-owned by `WebhookManager` and its ordered mutation guard.
+Webhook does not use the persistent connection runner. Its owned
+WebhookLinkClient prepares the canonical ManagedOutboundClient before a same-type
+replacement becomes visible in the unified LinkSys runtime table. Equal
+fingerprints reuse the current object; failed preparation preserves an existing
+same-type client. Typed lookup cannot discover a stale independent Webhook
+registration after a type change.
 
-## Rationale and evidence
+Retirement explicitly stops the managed health task without waiting for the last
+external call handle. Caller-held handles are not forcibly revoked. See
+[provider-owned removal](../intentional-design/provider-owned-runtime-and-simple-removal.md).
 
-`dispatch_full_set_with` and `dispatch_partial_update_with` acquire a Webhook
-mutation guard with the incoming sequence, prepare each candidate, commit the
-manager mutation, and only then update `WEBHOOK_RUNTIME`. This preserves stale
-sequence rejection and prevents runtime bookkeeping from preceding publication.
-The generic lifecycle helpers instead initialize and shut down providers around
-runtime-store replacement and do not provide that publication transaction.
+## Historical mechanism
 
-The architecture contract is documented in
-`skills/01-architecture/02-gateway/09-link-sys.md`; the owning implementations
-are `edgion-gateway/src/link_sys/runtime/store.rs` and
-`edgion-gateway/src/link_sys/providers/webhook/manager.rs`.
+The earlier implementation used a sequence-checked WebhookManager mutation guard:
+prepare, commit the services map, then update WEBHOOK_RUNTIME bookkeeping.
+The unused LinkSysLifecycle trait could not provide that transaction. That was
+the basis of link-sys-lifecycle-webhook-doc (2026-09-12).
 
-## Alternatives and limits
+The unified-table refactor removes that trait, the services map, registration
+identity, mutation guard, and duplicate bookkeeping. Ordered source dispatch now
+owns ordering for all providers; the old manager-first/bookkeeping-second rule
+is no longer an implementation requirement. Its useful invariant survives:
+never publish an incompletely prepared client.
 
-`SHUTDOWN_ON_REPLACE = false` remains a valid generic trait capability for a
-provider whose `init` supplies complete replacement semantics. It must not be
-used to describe the current Webhook path. Moving Webhook onto the generic
-lifecycle would require preserving its sequence check, prepare-before-publish,
-manager commit, and bookkeeping ordering; a trait implementation alone is not
-equivalent.
+## Evidence and re-evaluation
 
-## Verification and re-evaluation
-
-Re-evaluate this boundary if Webhook publication is redesigned or the generic
-dispatch contract gains an ordered transactional publication mechanism. The
-2026-09-17 Kafka runner migration was checked against remaining
-`LinkSysLifecycle` implementors (none) and both Webhook dispatch paths.
+Owning sources are link_sys/runtime/store.rs, providers/webhook/client.rs,
+providers/webhook/manager.rs, and the canonical outbound engine under
+plugins/http/common/outbound/. Review source-event ordering, same-type failure
+preservation, kind changes, and full-set omission whenever publication changes.
+The active refactor task records fresh test results; historical verification of
+the removed manager does not verify the new table.
 
 ## Resolution references
 
-- `link-sys-lifecycle-webhook-doc`, documentation finding fixed on 2026-09-12.
+- link-sys-lifecycle-webhook-doc: historical documentation correction.
+- link-sys-cross-provider-partial-replacement: unified client authority removes
+  the independent stale Webhook registration.

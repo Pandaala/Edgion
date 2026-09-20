@@ -26,7 +26,6 @@ before applying a decision to current code.
 - [`ClientCache::start_watch` two remaining extraction phases deliberately deferred — DEFERRED-REFACTOR](intentional-design/start-watch-extract-fn-deferred.md)
 - [Watcher `send(...).await` end-to-end backpressure (no `send_timeout`) — DESIGN-TRADEOFF](intentional-design/watcher-send-await-backpressure-no-timeout.md)
 - [Webhook active health task is abort-only (no cooperative watch signal) — DESIGN-TRADEOFF](intentional-design/webhook-active-health-abort-only.md)
-- [WebhookManager keeps `RwLock` (not `ArcSwap`) on the read path — DESIGN-TRADEOFF](intentional-design/webhook-manager-rwlock-intentional.md)
 
 ## Regression guards
 
@@ -43,7 +42,7 @@ before applying a decision to current code.
 - [link-sys F-B02 — `should_halfopen_probe` admits exactly one probe per window via CAS](regression-guards/halfopen-probe-toctou-cas.md)
 - [Leader Lease Never Released on Shutdown — FIXED (best-effort release in the shutdown branch)](regression-guards/leader-lease-release-on-shutdown.md)
 - [Leader Pod Label Fire-and-Forget Desync — FIXED (tick-based resync)](regression-guards/leader-pod-label-tick-resync.md)
-- [link-sys F-001 (runtime store) — `ProviderRuntimeStore::{insert,remove}` are atomic via `ArcSwap::rcu`](regression-guards/link-sys-runtime-insert-remove-rcu.md)
+- [LinkSys runtime mutation preserves concurrent updates](regression-guards/link-sys-runtime-insert-remove-rcu.md)
 - [runtime F-013 — `ListenerGatewayInfoStore` publishes flat + index via a single `ArcSwap` snapshot](regression-guards/listener-gateway-info-dual-arcswap-merged-snapshot.md)
 - [LinkSys local-file LocalFileWriter Size-Rotation Timer-Gate Overshoot](regression-guards/local-file-per-batch-size-rotation.md)
 - [OnceLock init: keep `.set()` outside `debug_assert!`](regression-guards/oncelock-debug-assert-pitfall.md)
@@ -65,4 +64,5 @@ before applying a decision to current code.
 
 ## Superseded decisions
 
+- [Former WebhookManager RwLock decision](superseded/webhook-manager-rwlock-intentional.md)
 - [LinkSys webhook `extract_ready_ips` IPv6 bracketing (link-sys-F001, controller path)](superseded/webhook-extract-ready-ips-ipv6-brackets.md)

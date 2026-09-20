@@ -160,7 +160,7 @@ Publication and teardown invariants:
 `LinkSysStore` manages the provider client lifecycle:
 - LinkSys created → build the provider client
 - LinkSys updated → consult `config_mapping` to decide whether the client must be rebuilt (Redis params changed, endpoints changed, auth changed, or TLS changed → rebuild)
-- LinkSys deleted → gracefully close connections / return them to the pool
+- LinkSys deleted → remove current lookup and signal provider-owned cleanup without waiting for every task or external handle
 - `type: credentialSource` is a no-op in `LinkSysStore` (no runtime client). The
   Gateway never contacts the issuer; the active token arrives on EdgionPlugins
   `resolvedCredential`.
@@ -186,7 +186,7 @@ Constraints:
 
 ### TLS assembly
 
-The Webhook manager removes disabled `conn.tls` before calling
+The Webhook provider removes disabled `conn.tls` before calling
 `ManagedOutboundClient::from_parts`. The shared engine uses block presence to
 select the Service target's scheme and construct its HTTP client. This boundary
 keeps disabled LinkSys TLS inert for both business calls and active health checks,

@@ -33,9 +33,9 @@ description: Webhook LinkSys provider after the target-unification + request-tem
 ```
 Controller                                      Gateway
 1. Read WebhookServiceConfig                    5. Publish a sequenced LinkSys source event
-2. Validate target and request templates        6. Acquire the Webhook mutation guard
+2. Validate target and request templates        6. Process the ordered source event
 3. Resolve ${secretRef:...} values               7. Prepare ManagedOutboundClient
-4. Send the full struct over conf_sync    --->   8. Commit manager, then runtime bookkeeping
+4. Send the full struct over conf_sync    --->   8. Publish in the unified runtime table
                                                 9. outbound_call evaluates the compiled request
 ```
 
@@ -62,12 +62,12 @@ Controller                                      Gateway
 - The gateway receives the **full** `WebhookServiceConfig` struct (serde) — the standard LinkSys conf_sync path. The compiled request templates are re-derived gateway-side from the synced `request` block (no separate "compiled" wire format). Resolved secret values ride along in `spec.resolved_secrets` (a `ResolvedSecrets` newtype); admin `/configclient` output renders each entry as `"[redacted]"`.
 - The gateway compiles `CompiledRequest` once during ordered candidate preparation, **not** per call — keeping the request-time (RT) loop free of template parsing. `${secretRef:...}` substitution happens at call time from the `resolved_secrets` owned by the prepared `ManagedOutboundClient`.
 
-### Gateway side (ordered manager publication)
+### Gateway side (provider-owned preparation and unified publication)
 
-- `dispatch_full_set_with()` and `dispatch_partial_update_with()` (`link_sys/runtime/store.rs`) acquire `WebhookManager::begin_mutation(sequence)`. A stale sequence is rejected before publication.
-- `WebhookMutationGuard::prepare()` calls `ManagedOutboundClient::from_parts()` (`plugins/http/common/outbound/client.rs`) to resolve the target, build the HTTP client, compile the request, and initialize health/rate/retry state before anything becomes visible.
+- Ordered source dispatch in `link_sys/runtime/store.rs` applies updates to the single current runtime table; no Webhook-specific mutation registry exists.
+- `WebhookLinkClient::prepare()` calls `ManagedOutboundClient::from_parts()` (`plugins/http/common/outbound/client.rs`) to resolve the target, build the HTTP client, compile the request, and initialize health/rate/retry state before anything becomes visible.
 - `CompiledRequest::from_spec(spec)` (`plugins/http/common/outbound/request.rs`) compiles every `path`/`method`/`args`/`headers`/`cookies` `custom.template`, and the optional `request.body`, into `CompiledTemplate` values. `${secretRef:ns/name:key}` segments remain compiled tokens and are substituted at call time from the client-owned resolved map.
-- Publication commits the manager mutation first (`commit_one` or `commit_full`) and updates `WEBHOOK_RUNTIME` bookkeeping second. `WebhookLinkClient` deliberately does not implement the generic `LinkSysLifecycle` trait because that trait does not provide this ordered transaction.
+- Publication replaces the current typed Webhook entry only after preparation succeeds. Same-type preparation failure retains the current client. A type change removes the old type first and may temporarily leave no client. Removal signals health-task stop without waiting for caller-held handles to disappear. The unused generic lifecycle trait and duplicate Webhook bookkeeping are removed.
 - At call time, `resolve_webhook_key()` or `WebhookCallHandle::call()` delegates to the shared `outbound_call()`, which builds one bounded request and handles target selection, retry, health, rate limit, response-size enforcement, and diagnostics.
 
 ## Consumer API change
@@ -150,7 +150,9 @@ The single invariant carried over from the prior endpoint-decouple work, preserv
 - **`request.*` config change → ordered replacement → health reset.** Editing `request.headers` (or any other `request.*` / target field) prepares and commits a new `ManagedOutboundClient` with **fresh** health atomics (`healthy`, passive counters). This is intentional: an operator-initiated config change is not pod churn.
 - **EndpointSlice churn → health preserved.** EndpointSlice changes do **not** trigger LinkSys re-emit or replace the managed client. Endpoint resolution happens at call time from the current endpoint store, so the readiness set can change without disturbing aggregate webhook health.
 
-Tests: `manager.rs::upsert_resets_health_on_request_change` (a test-only helper exercises replacement) and `manager.rs::endpoint_churn_preserves_health_state`.
+Tests: `client.rs::replacement_has_fresh_health_and_carries_resolved_secrets`,
+`client.rs::endpoint_churn_preserves_health_state`, and
+`runtime/store.rs::webhook_relist_reuses_and_material_update_replaces_current_client`.
 
 ## Migration (operator-facing)
 
@@ -184,8 +186,8 @@ edgion-resources/src/resources/link_sys/webhook.rs   # WebhookServiceConfig, Web
 edgion-resources/src/resources/edgion_plugins/
     plugin_configs/webhook_key_get.rs                # WebhookKeyGetConfig / WebhookVar / WebhookExtract
 edgion-gateway/src/link_sys/providers/webhook/
-├── manager.rs          # sequence-checked prepare/commit publication + call handles
-├── client.rs           # prepared WebhookLinkClient bookkeeping wrapper
+├── manager.rs          # stateless current lookup, call handles, response cap
+├── client.rs           # prepared managed-client ownership and health-task stop
 ├── resolver.rs         # resolve_webhook_key() — consumer entry, response extract
 ├── runtime.rs          # shared sliding-window rate limiter
 └── mod.rs

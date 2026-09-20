@@ -479,9 +479,13 @@ struct ClientCachesStats {
 
 #[derive(Serialize)]
 struct LinkSysRuntimeStats {
+    count: usize,
+    keys: Vec<String>,
     redis_clients: usize,
     etcd_clients: usize,
     es_clients: usize,
+    kafka_clients: usize,
+    webhook_clients: usize,
     otlp_clients: usize,
     otlp_retiring_clients: usize,
 }
@@ -577,9 +581,13 @@ async fn store_stats(State(client): State<Arc<ConfigClient>>) -> Json<ApiRespons
     );
 
     let link_sys_runtime = LinkSysRuntimeStats {
+        count: crate::link_sys::runtime::store::runtime_client_count(),
+        keys: crate::link_sys::runtime::store::list_runtime_clients(),
         redis_clients: crate::link_sys::runtime::store::redis_client_count(),
         etcd_clients: crate::link_sys::runtime::store::etcd_client_count(),
         es_clients: crate::link_sys::runtime::store::es_client_count(),
+        kafka_clients: crate::link_sys::runtime::store::kafka_client_count(),
+        webhook_clients: crate::link_sys::runtime::store::webhook_client_count(),
         otlp_clients: crate::link_sys::runtime::store::otlp_client_count(),
         otlp_retiring_clients: crate::link_sys::runtime::store::otlp_retiring_client_count(),
     };
@@ -1987,9 +1995,13 @@ mod store_stats_tests {
             ai_credential_outlier_store: SimpleCountStats { count: 0 },
             adaptive_telemetry_store: SimpleCountStats { count: 0 },
             link_sys_runtime: LinkSysRuntimeStats {
+                count: 0,
+                keys: Vec::new(),
                 redis_clients: 0,
                 etcd_clients: 0,
                 es_clients: 0,
+                kafka_clients: 0,
+                webhook_clients: 0,
                 otlp_clients: 0,
                 otlp_retiring_clients: 0,
             },
@@ -2015,6 +2027,10 @@ mod store_stats_tests {
         assert_eq!(json["ai_credential_outlier_store"]["count"], 0);
         assert_eq!(json["adaptive_telemetry_store"]["count"], 0);
         assert_eq!(json["link_sys_runtime"]["otlp_clients"], 0);
+        assert_eq!(json["link_sys_runtime"]["count"], 0);
+        assert_eq!(json["link_sys_runtime"]["keys"], serde_json::json!([]));
+        assert_eq!(json["link_sys_runtime"]["kafka_clients"], 0);
+        assert_eq!(json["link_sys_runtime"]["webhook_clients"], 0);
         assert_eq!(json["link_sys_runtime"]["otlp_retiring_clients"], 0);
         assert!(json.get("plugin_store_v2").is_some());
         assert!(json.get("stream_plugin_store_v2").is_some());

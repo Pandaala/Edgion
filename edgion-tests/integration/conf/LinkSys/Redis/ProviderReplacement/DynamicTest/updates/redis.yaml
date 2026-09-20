@@ -1,0 +1,18 @@
+apiVersion: edgion.io/v1
+kind: LinkSys
+metadata:
+  name: linksys-provider-replacement
+  namespace: edgion-test
+spec:
+  type: redis
+  config:
+    endpoints:
+      - "redis://127.0.0.1:16379"
+    auth:
+      secretRef:
+        name: linksys-provider-replacement-auth
+    pool:
+      size: 1
+    timeout:
+      connect: 3s
+      command: 2s

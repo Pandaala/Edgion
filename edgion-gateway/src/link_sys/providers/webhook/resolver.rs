@@ -2,13 +2,14 @@
 //!
 //! This is the main entry point called by the WebhookKeyGet plugin.
 
+use crate::link_sys::runtime::store::get_webhook_client;
 use crate::observe::metrics::record_webhook_resolve_error;
 use crate::plugins::http::common::outbound::call::{outbound_call, OutboundCallError, OutboundResponse};
 use crate::plugins::http::common::outbound::request::OutboundRequestDiagnostics;
 use crate::plugins::runtime::PluginSession;
 use edgion_resources::common::WebhookExtract;
 
-use super::manager::{get_webhook_global_max, get_webhook_manager};
+use super::manager::get_webhook_global_max;
 
 /// Resolve a key value by calling an external webhook service.
 ///
@@ -28,7 +29,7 @@ pub async fn resolve_webhook_key(
     extract: &WebhookExtract,
     diagnostics: &mut OutboundRequestDiagnostics,
 ) -> Option<String> {
-    let Some(client) = get_webhook_manager().get(webhook_ref).await else {
+    let Some(client) = get_webhook_client(webhook_ref).map(|client| client.managed_client()) else {
         record_webhook_resolve_error("not_found");
         return None;
     };

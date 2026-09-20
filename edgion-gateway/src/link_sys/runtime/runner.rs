@@ -172,6 +172,14 @@ impl<O: ApplyOwner> PersistentRunner<O> {
     }
 
     #[cfg(test)]
+    pub(crate) fn desired_link_for_test(&self) -> Option<Arc<LinkSys>> {
+        match &self.desired.borrow().state {
+            DesiredState::Ready { link } => Some(Arc::clone(link)),
+            DesiredState::NotReady => None,
+        }
+    }
+
+    #[cfg(test)]
     pub fn spawn_with_published(key: String, client: Arc<O::Client>) -> Arc<Self> {
         let runner = Self::spawn(key);
         let published = Arc::clone(&client);
@@ -653,6 +661,31 @@ mod tests {
         assert!(runner.current().is_none());
         runner.await_join().await;
         assert!(runner.current().is_none());
+    }
+
+    #[tokio::test]
+    async fn removal_releases_idle_owner_without_awaiting_join() {
+        let runner = PersistentRunner::<FakeOwner>::spawn("runner/removed-idle".into());
+        let weak = Arc::downgrade(&runner);
+        tokio::task::yield_now().await;
+        runner.begin_delete();
+        drop(runner);
+        wait_until(|| weak.upgrade().is_none()).await;
+    }
+
+    #[tokio::test]
+    async fn removal_releases_owner_while_a_caller_retains_the_client() {
+        let link = redis_ls("removed-retained", "redis://up:6379", "1");
+        let client = FakeOwner::build("runner/removed-retained", &link).unwrap();
+        let runner =
+            PersistentRunner::<FakeOwner>::spawn_with_published("runner/removed-retained".into(), client.clone());
+        let weak = Arc::downgrade(&runner);
+        runner.begin_delete();
+        assert!(runner.current().is_none());
+        drop(runner);
+        wait_until(|| weak.upgrade().is_none()).await;
+        assert!(client.retired.load(Ordering::Relaxed));
+        assert_eq!(client.shutdowns.load(Ordering::Relaxed), 1);
     }
 
     #[tokio::test]

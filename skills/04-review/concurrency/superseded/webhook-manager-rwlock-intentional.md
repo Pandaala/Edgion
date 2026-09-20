@@ -1,10 +1,22 @@
 ---
 name: webhook-manager-rwlock-intentional
-description: Use when reviewing the LinkSys WebhookManager read path; explains why `WebhookManager::get` keeps a `tokio::sync::RwLock` instead of migrating to `ArcSwap` like the other runtime stores. Reject re-reports that the per-call `read().await` is an unnecessary hot-path overhead / pattern inconsistency.
-knowledge_type: intentional-design
+description: Historical WebhookManager RwLock decision, superseded by the unified provider-owned LinkSys runtime table.
+knowledge_type: superseded
 ---
 
-# WebhookManager keeps `RwLock` (not `ArcSwap`) on the read path — DESIGN-TRADEOFF
+# Former WebhookManager RwLock decision — superseded
+
+## Current conclusion
+
+The independent WebhookManager and its services lock no longer exist. The user
+authorized one typed LinkSys runtime table, with synchronous current-object
+lookup and provider-owned cancellation. See the
+[successor decision](../../link-sys/intentional-design/provider-owned-runtime-and-simple-removal.md).
+The old runtime/task coupling assumption no longer holds: WebhookLinkClient owns
+the managed client, including its health-task stop path. Do not use the historical
+rejections below to restore a second registry or an async lookup lock.
+
+## Historical decision (inactive)
 
 **Status:** ⚠️ accepted tradeoff · 2026-05-25
 **Severity:** Low (BadLogic — pattern inconsistency / non-measurable overhead)

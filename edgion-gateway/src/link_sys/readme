@@ -7,12 +7,12 @@ and the [current LinkSys feature schema](../../../skills/02-features/03-resource
 ## Ownership boundary
 
 `edgion-common/src/link_sys_core/` owns backend-independent credential, TLS,
-health, HTTP-client, and lifecycle primitives. It also owns the Etcd provider
+health, and HTTP-client primitives. It also owns the Etcd provider
 because the Controller and Gateway both need it. `edgion-gateway/src/link_sys/`
 owns the data-plane runtime store, Gateway-only providers, and logging sinks.
 
 `LinkSysStore` keeps the authoritative resource snapshot and dispatches full and
-partial configuration updates to the provider-specific runtime state.
+partial configuration updates to one typed runtime table keyed by namespace/name.
 
 | `SystemConfig` variant | Runtime owner | Runtime access or consumer path |
 |---|---|---|
@@ -21,20 +21,23 @@ partial configuration updates to the provider-specific runtime state.
 | `Elasticsearch` | Gateway `providers/elasticsearch` plus the typed runtime store | `get_es_client("namespace/name")` |
 | `Kafka` | Gateway `providers/kafka` plus the typed runtime store | `get_kafka_client("namespace/name")` |
 | `Otlp` | Gateway `providers/otlp` shared exporter, batch processor and probe | `get_otlp_client("namespace/name")` |
-| `Webhook` | Gateway `providers/webhook` with its specialized manager and runtime store | `get_webhook_call_handle` and `resolve_webhook_key` |
+| `Webhook` | Gateway `providers/webhook` prepared client in the unified table | `get_webhook_call_handle` and `resolve_webhook_key` |
 | `HttpDns` | Shared `edgion-common/src/dns` resolver core | Gateway backend resolution reads the config from `LinkSysStore`; there is no generic typed LinkSys client |
 | `CredentialSource` | Controller credential manager | No Gateway LinkSys client; resolved credentials arrive through the consuming plugin runtime |
 
 ### Webhook publication
 
-Webhook does not use the generic replace-and-shutdown lifecycle. `LinkSysStore`
-reserves a monotonically increasing dispatch sequence synchronously with source
-snapshot publication. `WebhookManager` rejects stale sequences and holds one
-mutation guard across preparation and commit. A full-set commit replaces the
-manager map atomically and retires displaced registrations before the matching
-Webhook runtime map is published. This ordered, specialized path prevents a
-delayed full or partial dispatch from restoring older endpoints, credentials,
-templates, or clients after newer configuration has been accepted.
+Webhook prepares a complete managed outbound client before publishing it in the
+same table as all other providers. `LinkSysStore` reserves source order before
+async dispatch; no separate Webhook manager or publication map exists. An equal
+fingerprint reuses the same object. Same-type preparation failure retains the
+current object; a type change removes the old provider before creating the new
+one and may temporarily leave no client.
+
+Deletion removes current lookup and signals provider-owned cancellation without
+waiting for every task or caller-held handle. Webhook explicitly stops its
+health task; persistent runners perform their existing asynchronous cleanup.
+Old cleanup never writes to the runtime table or recreates a removed key.
 
 ## Log outputs
 
@@ -49,8 +52,9 @@ Log output configuration is `StringOutput`, not a `SystemConfig` variant.
 
 Elasticsearch, Kafka and OTLP log outputs use LinkSys runtime clients.
 LocalFile owns its writer directly. OTLP configuration dispatch preserves source
-event order before async provider dispatch. Failed candidate preparation retains
-the active generation; removal and process shutdown join its owned cleanup.
+event order before async provider dispatch. Failed same-type candidate preparation
+retains the active generation. Removal signals cleanup without waiting; OTLP's
+existing process-exit path waits for its provider-specific SDK cleanup.
 
 ### Delivery and degradation
 
