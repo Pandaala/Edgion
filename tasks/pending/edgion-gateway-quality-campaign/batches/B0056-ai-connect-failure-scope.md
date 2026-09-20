@@ -59,7 +59,7 @@
 ## Handoff
 
 - Ledger/changelog and D0009/D0010 records updated: yes.
-- Commit: pending; it will be backfilled by the next batch.
+- Commit: `535af96d2f790c6596060cc1bcfef00998c0e076`.
 
 ## Protected paths
 

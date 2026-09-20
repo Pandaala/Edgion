@@ -50,6 +50,16 @@ deadlines tighten route budgets; there is no opt-out flag in this mechanism.
   binary-log cause. This produces gRPC `DEADLINE_EXCEEDED` instead of allowing a
   non-timeout connect error to map to another status. The route request deadline
   wins attribution when both it and `grpc-timeout` are expired.
+- When terminal upstream I/O ends with `ReadTimedout` or `WriteTimedout`,
+  `pg_fail_to_proxy.rs` uses the current attempt's captured
+  `PeerTimeoutSource` to attribute the outcome. `RequestDeadline` records
+  `RequestTimeoutExceeded`, `GrpcDeadline` records
+  `GrpcClientDeadlineExceeded`, and `BackendRequest` or no captured source
+  records neither deadline diagnostic. The attempt access-log entry retains
+  the static Pingora error kind, deduplicated only against that attempt's exact
+  existing kind. A real upstream HTTP 504, connect timeout, TLS-handshake
+  timeout, or downstream timeout never infers deadline ownership from its 504
+  status.
 - `pg_upstream_peer.rs` retry backoff sleep bounds the delay by `min(request_remaining, grpc_remaining)` and re-checks both deadlines after the sleep. Without this guard a tight `grpc-timeout` plus a coarse retry backoff (`grpc-timeout: 5S` + `retry.backoff: 10s` is the canonical case) would let the gateway sleep past the client's deadline and then open a fresh upstream connection nobody is waiting for.
 - `pg_upstream_request_filter.rs` writes `grpc-timeout: 1n` to the upstream when `grpc_remaining()` is exactly zero — the rare race between `upstream_peer` returning OK and Pingora invoking the filter (connect / TLS handshake) where the deadline decays to zero. Without this, the upstream would see the stale original client value (e.g. `5S`) and run the full duration the caller has already abandoned.
 - `edgion-tests/src/client/suites/grpc_route/basic/basic.rs::test_grpc_client_deadline_exceeded` — wire-level scenario: client sends `set_timeout(1ns)` and asserts `tonic::Code::DeadlineExceeded` arrives via the gateway.
@@ -81,6 +91,10 @@ required contract, and current call-chain evidence separately.
 2. **Operator timeout knob preserved.** Route-level `request_timeout` (Gateway API field) still acts as the upper bound; client `grpc-timeout` only tightens it further when shorter. No opt-out flag was added.
 3. **Hot-path overhead is bounded.** Parse only runs once per gRPC request (`grpc_client_deadline.is_none()` guard); `grpc_remaining()` is a single `Instant` arithmetic; the upstream header rewrite is a single `insert_header`.
 4. **No `tracing::*` on the data-plane hot path.** Diagnostic surfacing goes through `EdgionErrorCode::GrpcClientDeadlineExceeded` + the access log, never through `tracing` macros (see `skills/03-coding/01-log-safety.md`).
+5. **Terminal attribution remains typed.** The final 504 status alone never
+   proves which deadline fired. Only an upstream read/write timeout paired with
+   the current attempt's `PeerTimeoutSource` may add the canonical deadline
+   diagnostic; connect/TLS attribution remains owned by `pg_fail_to_connect`.
 
 ## Re-evaluation triggers
 

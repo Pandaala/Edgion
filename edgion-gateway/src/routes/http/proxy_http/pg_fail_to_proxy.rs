@@ -2,7 +2,7 @@ use super::EdgionHttpProxy;
 use crate::runtime::server::send_grpc_status_trailers_only;
 use crate::runtime::server::server_header::ServerHeaderOpts;
 use crate::send_grpc_trailers_only;
-use crate::{EdgionHttpContext, ResponseStageDenial};
+use crate::{EdgionHttpContext, PeerTimeoutSource, ResponseStageDenial};
 use edgion_resources::EdgionErrorCode;
 use pingora_core::{ConnectionClosed, Error, ErrorSource, ErrorType, HTTPStatus, ReadError, WriteError};
 use pingora_proxy::{FailToProxy, Session};
@@ -10,6 +10,12 @@ use pingora_proxy::{FailToProxy, Session};
 #[inline]
 fn is_downstream_read_timeout(e: &Error) -> bool {
     matches!(e.etype(), ErrorType::ReadTimedout) && matches!(e.esource(), ErrorSource::Downstream)
+}
+
+#[inline]
+fn is_terminal_upstream_io_timeout(e: &Error) -> bool {
+    matches!(e.etype(), ErrorType::ReadTimedout | ErrorType::WriteTimedout)
+        && matches!(e.esource(), ErrorSource::Upstream)
 }
 
 #[inline]
@@ -35,11 +41,17 @@ fn classify_proxy_status(e: &Error) -> u16 {
 }
 
 #[inline]
-fn proxy_error_diagnostic(e: &Error, code: u16) -> Option<EdgionErrorCode> {
+fn proxy_error_diagnostic(e: &Error, code: u16, timeout_source: Option<PeerTimeoutSource>) -> Option<EdgionErrorCode> {
     if is_downstream_read_timeout(e) {
         Some(EdgionErrorCode::BodyReadTimeout)
     } else if code == 499 && !matches!(e.etype(), HTTPStatus(_)) {
         Some(EdgionErrorCode::ClientClosed)
+    } else if is_terminal_upstream_io_timeout(e) {
+        match timeout_source {
+            Some(PeerTimeoutSource::RequestDeadline) => Some(EdgionErrorCode::RequestTimeoutExceeded),
+            Some(PeerTimeoutSource::GrpcDeadline) => Some(EdgionErrorCode::GrpcClientDeadlineExceeded),
+            Some(PeerTimeoutSource::BackendRequest) | None => None,
+        }
     } else {
         None
     }
@@ -47,7 +59,30 @@ fn proxy_error_diagnostic(e: &Error, code: u16) -> Option<EdgionErrorCode> {
 
 #[inline]
 fn should_append_proxy_error_to_upstream(e: &Error, code: u16) -> bool {
-    code != 504 && code != 499 && !is_downstream_read_timeout(e)
+    is_terminal_upstream_io_timeout(e) || (code != 504 && code != 499 && !is_downstream_read_timeout(e))
+}
+
+#[inline]
+fn append_proxy_error_to_upstream(errors: &mut Vec<String>, e: &Error, code: u16) {
+    if !should_append_proxy_error_to_upstream(e, code) {
+        return;
+    }
+
+    let kind = e.etype().as_str();
+    if is_terminal_upstream_io_timeout(e) && errors.iter().any(|existing| existing == kind) {
+        return;
+    }
+    errors.push(kind.to_string());
+}
+
+#[inline]
+fn record_proxy_error_attribution(ctx: &mut EdgionHttpContext, e: &Error, code: u16) {
+    if let Some(diagnostic) = proxy_error_diagnostic(e, code, ctx.peer_timeout_source) {
+        ctx.record_error(diagnostic);
+    }
+    if let Some(upstream) = ctx.get_current_upstream_mut() {
+        append_proxy_error_to_upstream(&mut upstream.err, e, code);
+    }
 }
 
 #[inline]
@@ -139,9 +174,7 @@ pub async fn fail_to_proxy(
 
     // A stalled request-body upload is a client timeout, not a disconnect.
     // Other downstream transport failures keep the ClientClosed diagnostic.
-    if let Some(diagnostic) = proxy_error_diagnostic(e, code) {
-        ctx.record_error(diagnostic);
-    }
+    record_proxy_error_attribution(ctx, e, code);
 
     // A gateway-internal error that surfaced while the captured request body
     // was being replayed to the upstream is a body-replay failure (buffer
@@ -164,9 +197,6 @@ pub async fn fail_to_proxy(
             // Preserve a real response status stamped by upstream_response_filter;
             // this code is only the gateway's final outcome for the request.
             upstream.status.get_or_insert(code);
-            if should_append_proxy_error_to_upstream(e, code) {
-                upstream.err.push(e.etype().as_str().to_string());
-            }
         }
     }
 
@@ -188,13 +218,14 @@ pub async fn fail_to_proxy(
 #[cfg(test)]
 mod tests {
     use super::{
-        can_reuse_downstream_after_proxy_error, classify_proxy_status, proxy_error_diagnostic,
-        select_proxy_outcome_status, should_append_proxy_error_to_upstream, write_proxy_error_reply,
+        append_proxy_error_to_upstream, can_reuse_downstream_after_proxy_error, classify_proxy_status,
+        proxy_error_diagnostic, record_proxy_error_attribution, select_proxy_outcome_status,
+        should_append_proxy_error_to_upstream, write_proxy_error_reply,
     };
     use crate::observe::RequestDiagnostic;
     use crate::routes::http::proxy_http::pg_upstream_response_filter::select_normalized_upstream_candidate;
     use crate::runtime::server::ServerHeaderOpts;
-    use crate::EdgionHttpContext;
+    use crate::{BackendContext, EdgionHttpContext, PeerTimeoutSource};
     use edgion_resources::EdgionErrorCode;
     use pingora_core::{ConnectionClosed, Error, ErrorType};
     use pingora_proxy::Session;
@@ -298,28 +329,129 @@ mod tests {
     fn downstream_read_timeout_has_client_timeout_diagnostic_without_attempt_error() {
         let timeout = Error::new_down(ErrorType::ReadTimedout);
         assert_eq!(
-            proxy_error_diagnostic(&timeout, 408),
+            proxy_error_diagnostic(&timeout, 408, None),
             Some(EdgionErrorCode::BodyReadTimeout)
         );
         assert!(!should_append_proxy_error_to_upstream(&timeout, 408));
 
         let disconnect = Error::new_down(ConnectionClosed);
         assert_eq!(
-            proxy_error_diagnostic(&disconnect, 499),
+            proxy_error_diagnostic(&disconnect, 499, None),
             Some(EdgionErrorCode::ClientClosed)
         );
         assert!(!should_append_proxy_error_to_upstream(&disconnect, 499));
 
         let ordinary = Error::new_up(ErrorType::ConnectError);
-        assert_eq!(proxy_error_diagnostic(&ordinary, 502), None);
+        assert_eq!(proxy_error_diagnostic(&ordinary, 502, None), None);
         assert!(should_append_proxy_error_to_upstream(&ordinary, 502));
 
         let mut ctx = EdgionHttpContext::new();
-        ctx.record_error(proxy_error_diagnostic(&timeout, 408).expect("timeout diagnostic"));
+        ctx.record_error(proxy_error_diagnostic(&timeout, 408, None).expect("timeout diagnostic"));
         assert_eq!(
             ctx.diagnostics.entries(),
             &[RequestDiagnostic::Error(EdgionErrorCode::BodyReadTimeout)]
         );
+    }
+
+    #[test]
+    fn terminal_upstream_io_timeout_diagnostic_requires_matching_deadline_source() {
+        for error_type in [ErrorType::ReadTimedout, ErrorType::WriteTimedout] {
+            let timeout = Error::new_up(error_type);
+            assert_eq!(
+                proxy_error_diagnostic(&timeout, 504, Some(PeerTimeoutSource::RequestDeadline)),
+                Some(EdgionErrorCode::RequestTimeoutExceeded)
+            );
+            assert_eq!(
+                proxy_error_diagnostic(&timeout, 504, Some(PeerTimeoutSource::GrpcDeadline)),
+                Some(EdgionErrorCode::GrpcClientDeadlineExceeded)
+            );
+            assert_eq!(
+                proxy_error_diagnostic(&timeout, 504, Some(PeerTimeoutSource::BackendRequest)),
+                None
+            );
+            assert_eq!(proxy_error_diagnostic(&timeout, 504, None), None);
+        }
+
+        for error_type in [
+            ErrorType::HTTPStatus(504),
+            ErrorType::ConnectTimedout,
+            ErrorType::TLSHandshakeTimedout,
+        ] {
+            let error = Error::new_up(error_type);
+            assert_eq!(
+                proxy_error_diagnostic(&error, 504, Some(PeerTimeoutSource::RequestDeadline)),
+                None
+            );
+            assert_eq!(
+                proxy_error_diagnostic(&error, 504, Some(PeerTimeoutSource::GrpcDeadline)),
+                None
+            );
+        }
+    }
+
+    #[test]
+    fn terminal_upstream_io_timeout_append_is_exactly_deduplicated() {
+        let read_timeout = Error::new_up(ErrorType::ReadTimedout);
+        let write_timeout = Error::new_up(ErrorType::WriteTimedout);
+        let mut errors = vec!["EarlierFailure".to_string(), "ReadTimedoutDetail".to_string()];
+
+        append_proxy_error_to_upstream(&mut errors, &read_timeout, 504);
+        assert_eq!(errors, ["EarlierFailure", "ReadTimedoutDetail", "ReadTimedout"]);
+
+        append_proxy_error_to_upstream(&mut errors, &read_timeout, 504);
+        assert_eq!(errors, ["EarlierFailure", "ReadTimedoutDetail", "ReadTimedout"]);
+
+        append_proxy_error_to_upstream(&mut errors, &write_timeout, 504);
+        assert_eq!(
+            errors,
+            ["EarlierFailure", "ReadTimedoutDetail", "ReadTimedout", "WriteTimedout",]
+        );
+    }
+
+    #[test]
+    fn attempt_error_append_preserves_non_timeout_and_exclusion_boundaries() {
+        let mut errors = Vec::new();
+        append_proxy_error_to_upstream(&mut errors, &Error::new_up(ErrorType::ConnectError), 502);
+        assert_eq!(errors, ["ConnectError"]);
+
+        for error in [
+            Error::new(ErrorType::HTTPStatus(504)),
+            Error::new_up(ErrorType::ConnectTimedout),
+            Error::new_up(ErrorType::TLSHandshakeTimedout),
+            Error::new_down(ErrorType::ReadTimedout),
+            Error::new_down(ErrorType::WriteTimedout),
+            Error::new_down(ConnectionClosed),
+        ] {
+            let code = classify_proxy_status(&error);
+            append_proxy_error_to_upstream(&mut errors, &error, code);
+        }
+        assert_eq!(errors, ["ConnectError"]);
+    }
+
+    #[test]
+    fn context_attribution_wires_deadline_diagnostic_and_current_attempt_error() {
+        let mut ctx = EdgionHttpContext::new();
+        ctx.backend_context = Some(BackendContext {
+            source: None,
+            rsc: None,
+            service_key: None,
+            service_kind: None,
+            upstreams: Vec::new(),
+            current_upstream_id: None,
+            backend_ref_idx: None,
+            effective_policy: None,
+        });
+        ctx.push_upstream(None, None);
+        ctx.peer_timeout_source = Some(PeerTimeoutSource::GrpcDeadline);
+
+        let timeout = Error::new_up(ErrorType::WriteTimedout);
+        record_proxy_error_attribution(&mut ctx, &timeout, classify_proxy_status(&timeout));
+
+        assert_eq!(
+            ctx.diagnostics.entries(),
+            &[RequestDiagnostic::Error(EdgionErrorCode::GrpcClientDeadlineExceeded)]
+        );
+        assert_eq!(ctx.get_current_upstream().unwrap().err, ["WriteTimedout"]);
     }
 
     #[test]
