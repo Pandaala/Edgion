@@ -43,16 +43,22 @@ owns both normal requests and preflights. The global OPTIONS preflight handler c
 cached `Arc<CorsConfig>` only to detect this ownership and delegate. `Cors::from_arc` still assumes
 an already-initialized config, but it is no longer a separate request-path construction site.
 
-**3. Failure is deny-safe, not fail-open**
+**3. Input rejection and matcher-construction failures are separate boundaries**
 
-CORS fails in the DENY direction: an uncompiled matcher rejects origins that should be allowed
-(no security regression — attackers cannot bypass CORS). On `validate_and_init` error both sites
-keep the uncompiled config (regex/cache origins skipped) and emit `tracing::warn!`. The constructor
-runs at plugin build (config-apply / hot-reload), off the request path, so `tracing` is permitted
-here — identical to `IpRestriction::create` and the stream constructors; it does not violate the
-data-plane no-tracing rule. In practice the error path is unreachable for an operator config
-because `validation_error()` (run before construction in `add_from_request_filters`) already
-rejects the same security cases (credentials + wildcard/regex) and regex syntax errors.
+For a freshly deserialized config, a missing compiled matcher cannot match an origin through
+that matcher. This is the deny-direction consequence covered by the historical constructor fix;
+it is not a proof that every initialization error disables the whole CORS configuration.
+On `validate_and_init` error both construction sites retain the config and emit `tracing::warn!`.
+Initialization may already have populated other fields before a later regex compilation fails;
+raw exact/wildcard matching is also independent of compiled fields.
+
+Construction runs at plugin build (config-apply / hot-reload), off the request path, so this
+tracing does not violate the data-plane no-tracing rule. The shared `validation_error()` rejects
+credential-policy violations, invalid method/header tokens, and individually invalid regexes
+before initialization. It does not prove that wrapped/merged runtime regex compilation succeeds.
+The former claim that all construction errors are unreachable for operator input was too broad.
+Full compilation parity remains in the [precomputation follow-up](../../../../tasks/todo/precompute-cors-response-headers.md);
+see [shared list validation](token-list-validation.md) for the bounded current correction.
 
 **4. Regression locked at the constructor→evaluator boundary**
 
@@ -79,8 +85,9 @@ Re-open only if:
 - A new `#[serde(skip)]` runtime field is added to `CorsConfig` and either construction site is not
   updated to populate it.
 - `validate_and_init` and `validation_error` diverge such that an operator-reachable config passes
-  preparse but fails matcher build at construction (would now correctly fall back deny-safe, but the
-  asymmetry should be reviewed).
+  preparse but fails matcher build at construction. Merged-regex parity is already tracked by the
+  linked follow-up; assess the remaining initialized and raw matching fields before describing
+  any construction fallback as deny-safe.
 
 ## Reference Cases
 

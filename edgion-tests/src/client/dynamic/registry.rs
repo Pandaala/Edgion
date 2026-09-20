@@ -5,6 +5,7 @@ use crate::dynamic::scenario::Scenario;
 /// All registered dynamic scenarios.
 pub fn all() -> Vec<&'static Scenario> {
     vec![
+        crate::dynamic::scenarios::cors_validation::SCENARIO,
         crate::dynamic::scenarios::acme_gatewayref_ownership::SCENARIO,
         crate::dynamic::scenarios::http_route_named_parameter_precedence::SCENARIO,
         crate::dynamic::scenarios::http_route_path_prefix_trailing_slash::SCENARIO,

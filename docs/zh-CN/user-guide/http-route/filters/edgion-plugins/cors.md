@@ -58,6 +58,21 @@ spec:
 | `allowCredentials` | Boolean | `false` | 是否允许携带凭据（Cookie、Authorization 头） |
 | `maxAge` | Integer | 无 | 预检请求缓存时长（秒）。未设置时不发送 `Access-Control-Max-Age` 头 |
 
+### 方法与头名列表校验
+
+`allowMethods`、`allowHeaders` 和 `exposeHeaders` 是以逗号分隔的 HTTP token 列表。
+支持自定义方法（例如 `PROPFIND`、`custom-Method`）、大小写混合名称、合法 token
+标点、重复名称、空列表和空列表项；列表项两侧可以有空格或 Tab。
+校验保留原有拼写及顺序，不额外限定方法名称或长度。
+非空项的名称内部包含空格／Tab、冒号、引号、非 ASCII 字符或 CR／LF 等控制字符时，
+会在插件构建前报错。例如应写 `GET, POST` 而不是 `GET POST`，写
+`X-Request-ID` 而不是 `X-Request-ID: value`。
+
+既有特殊值语义保持不变：`allowMethods: "**"` 展开为内置方法列表，
+`allowHeaders: "**"` 反射请求中的头名，`*` 按字面值输出。
+这些特殊处理要求配置值精确匹配；校验不会裁剪存储的字符串，也不会为名称增加模式匹配。
+原有凭据限制仍然适用。
+
 ### 高级参数
 
 | 参数 | 类型 | 默认值 | 说明 |
@@ -137,7 +152,7 @@ spec:
         # 匹配 https://<任意>.example.com，仅 HTTPS
         allowOrigins: "*.example.com"
         allowMethods: "GET,POST"
-        allowCredentials: true
+        allowCredentials: false
 ```
 
 ### 4. 公共 API，带预检缓存（无凭据）
@@ -216,7 +231,7 @@ spec:
 
 ### Q2：为什么通配符来源与凭据组合会失败？
 
-**A**：这是设计如此。当 `allowCredentials: true` 时，`allowOrigins`（以及 `allowMethods`、`allowHeaders`、`exposeHeaders`、`timingAllowOrigins`）不能使用 `*` 或 `**`，插件会在解析时拒绝此类配置。请改用显式来源或 `*.domain` 子域名通配符。
+**A**：这是设计如此。当 `allowCredentials: true` 时，`allowOrigins`（以及 `allowMethods`、`allowHeaders`、`exposeHeaders`、`timingAllowOrigins`）不能包含 `*`，非空的来源正则列表也会被拒绝。携带凭据时请改用显式来源；`*.domain` 同样包含通配符，需要关闭凭据模式。
 
 ### Q3：如何为本地开发允许 `http://` 来源？
 

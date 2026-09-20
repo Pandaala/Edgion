@@ -58,6 +58,24 @@ The defaults are security-first:
 | `allowCredentials` | Boolean | `false` | Whether to allow credentials (cookies, authorization headers) |
 | `maxAge` | Integer | none | Preflight cache duration in seconds. When unset, no `Access-Control-Max-Age` header is sent |
 
+### Method and header list validation
+
+`allowMethods`, `allowHeaders`, and `exposeHeaders` are comma-separated HTTP token
+lists. Custom methods (for example `PROPFIND` or `custom-Method`), mixed-case names,
+valid token punctuation, repeated names, empty lists, and empty list members are
+accepted. Spaces and tabs around list members are allowed. Validation preserves
+the configured spelling and order; it adds no method-name allowlist or length cap.
+Non-empty members containing spaces/tabs inside a name, colons, quotes, non-ASCII
+characters, or control characters such as CR/LF are rejected before plugin
+construction. For example, use `GET, POST` instead of `GET POST`, and `X-Request-ID`
+instead of `X-Request-ID: value`.
+
+The existing special values are unchanged: `allowMethods: "**"` expands to the
+built-in method list, `allowHeaders: "**"` reflects the requested header names,
+and `*` is emitted literally. These shortcuts require the exact configured value;
+validation does not trim the stored string or add pattern matching for names.
+Existing credential restrictions still apply.
+
 ### Advanced parameters
 
 | Parameter | Type | Default | Description |
@@ -137,7 +155,7 @@ spec:
         # Matches https://<any>.example.com over HTTPS only
         allowOrigins: "*.example.com"
         allowMethods: "GET,POST"
-        allowCredentials: true
+        allowCredentials: false
 ```
 
 ### 4. Public API with preflight caching (no credentials)
@@ -216,7 +234,7 @@ spec:
 
 ### Q2: Why does a wildcard origin with credentials fail to apply?
 
-**A**: This is by design. When `allowCredentials: true`, you cannot use `*` or `**` in `allowOrigins` (or in `allowMethods`, `allowHeaders`, `exposeHeaders`, `timingAllowOrigins`), and `allowOriginsByRegex` / `timingAllowOriginsByRegex` are likewise disallowed (a broad pattern such as `.*` would echo any origin back with credentials enabled). The plugin rejects such a config. Use explicit origins or a `*.domain` subdomain wildcard instead.
+**A**: This is by design. When `allowCredentials: true`, you cannot use `*` or `**` in `allowOrigins` (or in `allowMethods`, `allowHeaders`, `exposeHeaders`, `timingAllowOrigins`), and `allowOriginsByRegex` / `timingAllowOriginsByRegex` are likewise disallowed (a broad pattern such as `.*` would echo any origin back with credentials enabled). The plugin rejects such a config. Use explicit origins when credentials are enabled; `*.domain` also contains a wildcard and requires credentials to be disabled.
 
 ### Q3: How do I allow `http://` origins for local development?
 

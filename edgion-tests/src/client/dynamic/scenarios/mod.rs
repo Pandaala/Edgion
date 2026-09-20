@@ -11,6 +11,7 @@ pub mod body_dynamic;
 pub mod btlsp_ref_flap;
 pub mod canary_hot_swap;
 pub mod condition_refs_dynamic;
+pub mod cors_validation;
 pub mod credential_injector_dynamic;
 pub mod csrf_secret_rotation;
 pub mod delegation_parentref_gateway_collision;

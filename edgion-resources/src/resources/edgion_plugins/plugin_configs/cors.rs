@@ -1,5 +1,6 @@
 //! CORS plugin configuration
 
+use crate::gwapi_types::is_valid_header_token;
 use regex::Regex;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -126,50 +127,9 @@ impl CorsConfig {
 
     /// Validate configuration and initialize cached values
     pub fn validate_and_init(&mut self) -> Result<(), String> {
-        // Security check: credentials with wildcards
-        if self.allow_credentials {
-            if self.allow_origins.contains('*') {
-                return Err("Cannot use '*' or '**' in allow_origins when allow_credentials is true".to_string());
-            }
-            if self.allow_methods.contains('*') {
-                return Err("Cannot use '*' or '**' in allow_methods when allow_credentials is true".to_string());
-            }
-            if self.allow_headers.contains('*') {
-                return Err("Cannot use '*' or '**' in allow_headers when allow_credentials is true".to_string());
-            }
-            if self.expose_headers.contains('*') {
-                return Err("Cannot use '*' or '**' in expose_headers when allow_credentials is true".to_string());
-            }
-            if let Some(ref timing) = self.timing_allow_origins {
-                if timing.contains('*') {
-                    return Err(
-                        "Cannot use '*' or '**' in timing_allow_origins when allow_credentials is true".to_string(),
-                    );
-                }
-            }
-            // Regex allowlists cannot be reliably checked for wildcard width (e.g. ".*",
-            // "^https?://.*" match any origin). Since is_origin_allowed echoes any matched
-            // origin back as Access-Control-Allow-Origin while allow_credentials emits
-            // Access-Control-Allow-Credentials: true, a broad regex reproduces the exact
-            // ACAO:<origin> + ACAC:true combination this guard exists to prevent. Disallow
-            // regex allowlists with credentials entirely; operators who need both must use
-            // an explicit comma-separated allow_origins list.
-            if self.allow_origins_by_regex.as_ref().is_some_and(|v| !v.is_empty()) {
-                return Err("Cannot use allow_origins_by_regex when allow_credentials is true; \
-                     use an explicit comma-separated allow_origins list instead"
-                    .to_string());
-            }
-            if self
-                .timing_allow_origins_by_regex
-                .as_ref()
-                .is_some_and(|v| !v.is_empty())
-            {
-                return Err(
-                    "Cannot use timing_allow_origins_by_regex when allow_credentials is true; \
-                     use an explicit comma-separated timing_allow_origins list instead"
-                        .to_string(),
-                );
-            }
+        // Keep configuration checks shared with Controller/Gateway ingest.
+        if let Some(error) = self.validation_error() {
+            return Err(error);
         }
 
         // Parse comma-separated origins into HashMap and collect wildcard patterns
@@ -369,7 +329,7 @@ impl PluginValidation for CorsConfig {
                     );
                 }
             }
-            // See validate_and_init: a broad regex (".*", "^https?://.*") bypasses the
+            // A broad regex (".*", "^https?://.*") bypasses the
             // wildcard guard and reproduces the prohibited ACAO:<origin> + ACAC:true
             // response. Disallow regex allowlists with credentials in both validation paths.
             if self.allow_origins_by_regex.as_ref().is_some_and(|v| !v.is_empty()) {
@@ -389,6 +349,27 @@ impl PluginValidation for CorsConfig {
                      use an explicit comma-separated timing_allow_origins list instead"
                         .to_string(),
                 );
+            }
+        }
+
+        // Methods and field names share the HTTP token grammar. Check only non-empty
+        // list members after SP/HTAB trimming: empty lists/elements, extension methods,
+        // case, duplicates, and token punctuation are valid. Do not normalize the wire
+        // value or reinterpret the existing exact-match '*' / '**' shorthands.
+        for (field, value) in [
+            ("allowMethods", self.allow_methods.as_str()),
+            ("allowHeaders", self.allow_headers.as_str()),
+            ("exposeHeaders", self.expose_headers.as_str()),
+        ] {
+            for (index, item) in value.split(',').enumerate() {
+                let token = item.trim_matches([' ', '\t']);
+                if !token.is_empty() && !is_valid_header_token(token) {
+                    return Some(format!(
+                        "{} list item {} must be an HTTP token; separate names with commas",
+                        field,
+                        index + 1
+                    ));
+                }
             }
         }
 
@@ -664,6 +645,93 @@ mod tests {
     mod validation_trait_tests {
         use super::*;
         use crate::resources::edgion_plugins::PluginValidation;
+
+        #[test]
+        fn token_lists_preserve_valid_extension_tokens_and_formatting() {
+            // These are lists of tokens, not a fixed method/header enum. Empty members
+            // and OWS follow HTTP list parsing; validation must not rewrite the value.
+            let long_token = "X".repeat(300);
+            for value in [
+                "",
+                " \t",
+                ", ,\t,",
+                "GET,POST",
+                "PROPFIND,REPORT,custom-Method",
+                "Content-Type,X-Custom_Header",
+                "GET, GET,\tPOST ,",
+                "!#$%&'*+-.^_`|~0123456789AZaz",
+                "*",
+                "**",
+                "*,X-Custom",
+                long_token.as_str(),
+            ] {
+                for field in ["allowMethods", "allowHeaders", "exposeHeaders"] {
+                    let mut raw = serde_json::json!({"allowOrigins": "https://example.com"});
+                    raw[field] = serde_json::json!(value);
+                    let mut config: CorsConfig = serde_json::from_value(raw).unwrap();
+                    let before = serde_json::to_value(&config).unwrap();
+                    assert_eq!(config.validation_error(), None, "{field}={value:?}");
+                    config.validate_and_init().unwrap();
+                    assert_eq!(serde_json::to_value(&config).unwrap(), before);
+                }
+            }
+        }
+
+        #[test]
+        fn invalid_token_lists_fail_both_entry_points_before_initialization() {
+            for value in [
+                "GET POST",
+                "X-Name: value",
+                "X/Name",
+                "\"X-Name\"",
+                "X;Name",
+                "X=Name",
+                "X\tName",
+                "X\r\nName",
+                "X\n",
+                "X\0Name",
+                "X\x7fName",
+                "X-café",
+            ] {
+                for field in ["allowMethods", "allowHeaders", "exposeHeaders"] {
+                    let mut raw = serde_json::json!({"allowOrigins": "https://a.example,https://b.example"});
+                    raw[field] = serde_json::json!(format!("Valid, {value}"));
+                    let mut config: CorsConfig = serde_json::from_value(raw).unwrap();
+                    let error = config.validation_error().expect("invalid list must fail");
+                    assert_eq!(
+                        error,
+                        format!("{field} list item 2 must be an HTTP token; separate names with commas")
+                    );
+                    assert_eq!(config.validate_and_init(), Err(error));
+                    assert!(config.origins_cache.is_none());
+                }
+            }
+        }
+
+        #[test]
+        fn credentialed_lists_accept_extensions_but_preserve_wildcard_rejection() {
+            let mut config: CorsConfig = serde_json::from_value(serde_json::json!({
+                "allowOrigins": "https://example.com",
+                "allowCredentials": true,
+                "allowMethods": "PROPFIND, custom-Method",
+                "allowHeaders": "Authorization, X-Custom_Header",
+                "exposeHeaders": "X-Count, X-Count,"
+            }))
+            .unwrap();
+            assert_eq!(config.validation_error(), None);
+            config.validate_and_init().unwrap();
+
+            for field in ["allowMethods", "allowHeaders", "exposeHeaders"] {
+                for wildcard in ["*", "**", "X-*", "X, *"] {
+                    let mut raw = serde_json::to_value(&config).unwrap();
+                    raw[field] = serde_json::json!(wildcard);
+                    let mut invalid: CorsConfig = serde_json::from_value(raw).unwrap();
+                    let error = invalid.validation_error().unwrap();
+                    assert!(error.contains("allow_credentials"));
+                    assert_eq!(invalid.validate_and_init(), Err(error));
+                }
+            }
+        }
 
         #[test]
         fn test_default_config_returns_none() {
