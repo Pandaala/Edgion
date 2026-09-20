@@ -40,6 +40,8 @@ before applying a decision to current code.
 - [HTTPRoute Native ExternalAuth Construction Failures Must Seal Fail-Closed — FIXED](regression-guards/gw-plugin-runtime-01-httproute-external-auth-invalid-plugins-never-sealed.md)
 - [Stream plugin key normalization](regression-guards/stream-plugin-key-normalization.md)
 
+- [Scoped response-body filter dispatch](regression-guards/scoped-response-body-filter-dispatch.md)
+
 ## Superseded
 
 - [Historical per-reference HTTP generation boundary](superseded/request-plugin-reference-generation-boundary.md)

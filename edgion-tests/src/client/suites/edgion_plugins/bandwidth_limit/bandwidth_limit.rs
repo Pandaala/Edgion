@@ -198,6 +198,76 @@ impl BandwidthLimitTestSuite {
             },
         )
     }
+
+    /// Test 3: Selected BackendRef Scope
+    /// Verify that a BandwidthLimit reached through a selected BackendRef runs
+    /// in the response-body stage.
+    fn test_backend_ref_scope() -> TestCase {
+        TestCase::new(
+            "bandwidth_limit_backend_ref_scope",
+            "Verify that a selected BackendRef ExtensionRef limits response bandwidth",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let client = &ctx.http_client;
+                    let target_url = ctx.http_url() + "/test/bandwidth-limit/backend-scope";
+                    let payload_size = 100 * 1024;
+                    let payload = "c".repeat(payload_size);
+                    let test_start = Instant::now();
+
+                    let response = client
+                        .post(&target_url)
+                        .header("Host", "bandwidth-limit.example.com")
+                        .body(payload)
+                        .send()
+                        .await;
+
+                    let response = match response {
+                        Ok(response) => response,
+                        Err(error) => {
+                            return TestResult::failed(
+                                test_start.elapsed(),
+                                format!("BackendRef-scoped request failed: {error}"),
+                            );
+                        }
+                    };
+                    if !response.status().is_success() {
+                        return TestResult::failed(
+                            test_start.elapsed(),
+                            format!("BackendRef-scoped request failed with status: {}", response.status()),
+                        );
+                    }
+
+                    let body = response.bytes().await.unwrap_or_default();
+                    let duration = test_start.elapsed();
+                    if body.len() < payload_size {
+                        return TestResult::failed(
+                            duration,
+                            format!("BackendRef-scoped response too small: {} bytes", body.len()),
+                        );
+                    }
+                    if duration.as_secs_f64() < 0.9 {
+                        return TestResult::failed(
+                            duration,
+                            format!(
+                                "BackendRef-scoped bandwidth limit did not run: {:.2}s for {} bytes",
+                                duration.as_secs_f64(),
+                                body.len()
+                            ),
+                        );
+                    }
+
+                    TestResult::passed_with_message(
+                        duration,
+                        format!(
+                            "BackendRef-scoped limit downloaded {} bytes in {:.2}s",
+                            body.len(),
+                            duration.as_secs_f64()
+                        ),
+                    )
+                })
+            },
+        )
+    }
 }
 
 impl TestSuite for BandwidthLimitTestSuite {
@@ -206,6 +276,10 @@ impl TestSuite for BandwidthLimitTestSuite {
     }
 
     fn test_cases(&self) -> Vec<TestCase> {
-        vec![Self::test_functional_compliance(), Self::test_metrics_verification()]
+        vec![
+            Self::test_functional_compliance(),
+            Self::test_metrics_verification(),
+            Self::test_backend_ref_scope(),
+        ]
     }
 }
