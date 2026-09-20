@@ -30,6 +30,7 @@ fn tcp_route_with_backend(svc: &str) -> TCPRoute {
             ..Default::default()
         },
         spec: TCPRouteSpec {
+            resolved_status_controller: None,
             parent_refs: None,
             rules: Some(vec![TCPRouteRule {
                 backend_refs: Some(vec![TCPBackendRef {

@@ -237,6 +237,7 @@ mod tests {
                 ..Default::default()
             },
             spec: TLSRouteSpec {
+                resolved_status_controller: Some("edgion.io/gateway-controller".into()),
                 parent_refs: Some(vec![ParentReference {
                     group: Some("gateway.networking.k8s.io".to_string()),
                     kind: Some("Gateway".to_string()),

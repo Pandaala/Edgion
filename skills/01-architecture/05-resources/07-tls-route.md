@@ -9,6 +9,11 @@ description: TLSRoute resource — TLS SNI routing, passthrough/terminate modes,
 
 TLSRoute defines TLS-layer routing rules, supporting both TLS passthrough and terminate modes. Routing matches by SNI (Server Name Indication); each port maintains its own route table.
 
+The sole Controller API identity is `gateway.networking.k8s.io/v1` across
+preflight, watches, CRUD, and status. FileSystem, etcd, and Admin input reject
+missing, malformed, or alternate API versions before typed deserialization.
+See the [canonical ingress guard](../../04-review/controller/regression-guards/tls-route-canonical-api-ingress.md).
+
 ## Source code locations
 
 - Controller Handler: `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/tls_route.rs`

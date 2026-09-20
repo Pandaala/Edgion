@@ -16,7 +16,7 @@ Edgion implements the Kubernetes Gateway API v1.5.0 specification, supporting HT
 | **HTTPRoute** | gateway.networking.k8s.io/v1 | Standard | HTTP routing rules: hostname matching, path matching, header matching, request redirect/rewrite/mirror |
 | **GRPCRoute** | gateway.networking.k8s.io/v1 | Standard | gRPC routing rules: Service/Method matching, header matching |
 | **TCPRoute** | gateway.networking.k8s.io/v1alpha2 | Experimental | TCP layer-4 routing, forwarded by port to backends |
-| **TLSRoute** | gateway.networking.k8s.io/v1 | Standard; canonical v1 contract | TLS passthrough routing; [remaining version-policy discrepancy](../02-features/03-resources/07-tlsroute.md#unresolved-implementation-discrepancy) |
+| **TLSRoute** | gateway.networking.k8s.io/v1 | Standard; canonical v1 contract | TLS passthrough routing; [canonical input enforcement](../02-features/03-resources/07-tlsroute.md#canonical-input-enforcement) |
 | **UDPRoute** | gateway.networking.k8s.io/v1alpha2 | Experimental | UDP routing, forwarded by port |
 | **ReferenceGrant** | gateway.networking.k8s.io/v1 (v1beta1 compatible) | Standard | Cross-namespace reference authorization, used only on the Controller side (no_sync_kinds) |
 | **BackendTLSPolicy** | gateway.networking.k8s.io/v1 | Standard | Backend TLS policy, configures Gateway→Backend mTLS |
@@ -81,11 +81,9 @@ storage operations, status updates, and static input. The supported TLSRoute
 version is `gateway.networking.k8s.io/v1` only. An older version exposed by an
 installed CRD does not expand that support boundary.
 
-**Implementation debt:** the current TLSRoute path still probes v1alpha3 and
-can select its watch, storage, and status handling when v1 is unavailable;
-FileSystem input also still converts v1alpha3 to v1. The fallback must be removed
-atomically across those paths; removing only one branch would leave version
-ownership inconsistent.
+TLSRoute watches, storage and status use v1 without version fallback. Raw
+FileSystem, etcd and Admin input rejects missing or non-v1 versions before
+typed deserialization. See the [canonical ingress guard](../04-review/controller/regression-guards/tls-route-canonical-api-ingress.md).
 
 ## Extension Points
 

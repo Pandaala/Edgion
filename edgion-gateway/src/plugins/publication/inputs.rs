@@ -24,6 +24,7 @@ use crate::runtime::store::listener_gateway_info::{is_listener_conflicted, is_li
 
 #[derive(Clone, Debug)]
 pub(crate) struct GatewayListener {
+    pub port: i32,
     pub key: ListenerKey,
     pub name: String,
     pub hostname: Option<String>,
@@ -62,6 +63,7 @@ impl GatewayInput {
                 !is_listener_conflicted(gateway, &listener.name) && !is_listener_not_programmed(gateway, &listener.name)
             })
             .map(|listener| GatewayListener {
+                port: listener.port,
                 key: ListenerKey::new(
                     resolve_listener_addr(gateway.spec.addresses.as_ref(), listener.port),
                     &listener.protocol,
@@ -120,10 +122,12 @@ impl RouteInput {
         kind: RouteKind,
         parents: Option<&[ParentReference]>,
         status: Option<&[RouteParentStatus]>,
+        expected_controller: Option<&str>,
         listeners: Option<&[ListenerKey]>,
     ) -> Self {
         let namespace = metadata.namespace.as_deref().unwrap_or("default");
-        let accepted = filter_accepted_parent_refs(parents, status, Some(namespace)).unwrap_or_default();
+        let accepted =
+            filter_accepted_parent_refs(parents, status, Some(namespace), expected_controller).unwrap_or_default();
         Self {
             namespace: namespace.to_owned(),
             kind,
@@ -142,6 +146,7 @@ impl RouteInput {
             RouteKind::Http,
             route.spec.parent_refs.as_deref(),
             route.status.as_ref().map(|status| status.parents.as_slice()),
+            route.spec.resolved_status_controller.as_deref(),
             route.spec.resolved_listeners.as_deref(),
         );
         for (_, rule) in effective_http_rules(&route) {
@@ -166,6 +171,7 @@ impl RouteInput {
             RouteKind::Grpc,
             route.spec.parent_refs.as_deref(),
             route.status.as_ref().map(|status| status.parents.as_slice()),
+            route.spec.resolved_status_controller.as_deref(),
             route.spec.resolved_listeners.as_deref(),
         );
         let invalid = if route.spec.resolved_rules.is_some() {
@@ -202,6 +208,7 @@ impl RouteInput {
             RouteKind::Tcp,
             route.spec.parent_refs.as_deref(),
             route.status.as_ref().map(|status| status.parents.as_slice()),
+            route.spec.resolved_status_controller.as_deref(),
             route.spec.resolved_listeners.as_deref(),
         );
         input.stream_key = resolve_stream_plugin_store_key(&route.metadata);
@@ -215,6 +222,7 @@ impl RouteInput {
             RouteKind::Udp,
             route.spec.parent_refs.as_deref(),
             route.status.as_ref().map(|status| status.parents.as_slice()),
+            route.spec.resolved_status_controller.as_deref(),
             route.spec.resolved_listeners.as_deref(),
         );
         input.stream_key = resolve_stream_plugin_store_key(&route.metadata);
@@ -236,6 +244,7 @@ impl RouteInput {
             RouteKind::Tls,
             route.spec.parent_refs.as_deref(),
             route.status.as_ref().map(|status| status.parents.as_slice()),
+            route.spec.resolved_status_controller.as_deref(),
             Some(&listeners),
         );
         input.stream_key = resolve_stream_plugin_store_key(&route.metadata);
@@ -312,7 +321,7 @@ mod tests {
         json!({
             "apiVersion": "gateway.networking.k8s.io/v1", "kind": kind,
             "metadata": {"name": "route", "namespace": "apps"},
-            "spec": {"parentRefs": [{"name": "gateway", "sectionName": "web"}],
+            "spec": {"resolvedStatusController": "edgion.io/gateway-controller", "parentRefs": [{"name": "gateway", "sectionName": "web"}],
                 "resolvedListeners": ["0.0.0.0:8080/HTTP"], "rules": rules}
         })
     }

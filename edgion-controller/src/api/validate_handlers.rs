@@ -442,6 +442,33 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn tls_route_validation_rejects_invalid_source_versions() {
+        let (state, tmp) = make_state().await;
+        for version in [
+            None,
+            Some(serde_json::Value::Null),
+            Some(serde_json::json!(7)),
+            Some(serde_json::json!("gateway.networking.k8s.io/v1alpha3")),
+        ] {
+            let mut document = serde_json::json!({
+                "kind": "TLSRoute", "metadata": {"name": "tls-route", "namespace": "default"},
+                "spec": {"hostnames": ["example.com"]}
+            });
+            if let Some(value) = version {
+                document["apiVersion"] = value;
+            }
+            let result = validate_kind(
+                State(state.clone()),
+                Path("TLSRoute".to_string()),
+                Bytes::from(document.to_string()),
+            )
+            .await;
+            assert_eq!(result.err(), Some(StatusCode::BAD_REQUEST));
+        }
+        assert!(std::fs::read_dir(tmp.path()).unwrap().next().is_none());
+    }
+
+    #[tokio::test]
     async fn yaml_and_json_bodies_behave_identically() {
         let (state, _tmp) = make_state().await;
         let yaml_body = Bytes::from(

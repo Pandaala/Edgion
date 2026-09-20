@@ -16,7 +16,6 @@ use crate::conf_mgr::sync_runtime::resource_processor::{
 use edgion_resources::prelude_resources::EdgionTls;
 use edgion_resources::resources::common::SecretObjectReference;
 use edgion_resources::resources::edgion_tls::EdgionTlsStatus;
-use edgion_resources::resources::http_route::RouteParentStatus;
 use edgion_resources::ResourceKind;
 
 /// Returns `true` when `secret_ref` points at a different namespace than `owner_ns`,
@@ -492,29 +491,28 @@ impl ProcessorHandler<EdgionTls> for EdgionTlsHandler {
 
                 accepted_errors.extend(validation_accepted_errors.clone());
 
-                let parent_status = status.parents.iter_mut().find(|ps| {
-                    ps.parent_ref.name == parent_ref.name
-                        && ps.parent_ref.namespace == parent_ref.namespace
-                        && ps.parent_ref.section_name == parent_ref.section_name
-                });
-
-                if let Some(ps) = parent_status {
-                    set_parent_conditions_full(&mut ps.conditions, &accepted_errors, &resolved_refs_errors, generation);
-                } else {
-                    let mut conditions = Vec::new();
-                    set_parent_conditions_full(&mut conditions, &accepted_errors, &resolved_refs_errors, generation);
-
-                    status.parents.push(RouteParentStatus {
-                        parent_ref: parent_ref.clone(),
-                        controller_name: self.controller_name.clone(),
-                        conditions,
-                    });
-                }
+                let ps = super::route_utils::parent_status_for_update(
+                    &mut status.parents,
+                    parent_ref,
+                    resource_ns,
+                    &self.controller_name,
+                );
+                set_parent_conditions_full(&mut ps.conditions, &accepted_errors, &resolved_refs_errors, generation);
             }
 
-            super::route_utils::retain_current_parent_statuses(&mut status.parents, parent_refs);
+            super::route_utils::retain_current_parent_statuses(
+                &mut status.parents,
+                parent_refs,
+                resource_ns,
+                &self.controller_name,
+            );
         } else {
-            status.parents.clear();
+            super::route_utils::retain_current_parent_statuses(
+                &mut status.parents,
+                &[],
+                resource_ns,
+                &self.controller_name,
+            );
         }
     }
 }

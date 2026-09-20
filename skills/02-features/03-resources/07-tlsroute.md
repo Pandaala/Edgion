@@ -31,34 +31,16 @@ multi-version support contract. Historical guidance advertised v1alpha3
 fallback and automatic normalization; that described legacy implementation,
 not the required current policy.
 
-### Unresolved implementation discrepancy
+### Canonical input enforcement
 
-Source inspection for this documentation correction found the following
-remaining violations of the canonical-version contract. They require a
-separate coordinated code change; this page does not claim they are fixed:
+Controller preflight, its single TLSRoute watcher, CRUD, and status writes use
+v1. FileSystem, etcd, and Admin inputs validate the raw apiVersion before
+deserialization and reject missing, malformed, or alternate versions. There
+is no TLSRoute legacy type, converter, or fallback watcher.
 
-- `edgion-resources/src/resources/tls_route.rs` defines canonical `TLSRoute`
-  at `v1`, but still contains `TLSRouteAlpha3` and conversions in both directions.
-- Controller `conf_mgr/conf_center/kubernetes/version_detection.rs` probes
-  `v1` then `v1alpha3`, including preflight. `controller.rs` selects one of the
-  two typed watchers; this is single-active fallback, not simultaneous watches.
-- Kubernetes `storage.rs` independently probes the version for CRUD.
-  `resource_controller.rs` derives the status-patch version from its generic
-  resource type, while `handlers/tls_route.rs::TlsRouteAlpha3Handler` adapts
-  processing and status through the legacy type.
-- `conf_mgr/conf_center/common.rs::parse_resource_content` converts v1alpha3
-  TLSRoute input to v1. Both FileSystem and etcd resource controllers call this
-  parser. `validate_resource_api_version` currently enforces the canonical
-  boundary for BackendTLSPolicy only; it does not establish TLSRoute rejection.
-
-The existing FileSystem test `parse_tls_route_v1alpha3_into_canonical_v1` and
-resource conversion tests encode that observed legacy behavior. Their existence
-is not approval to retain it. This audit inspected source and parsed both
-committed CRDs; it did not execute tests or validate live cluster behavior.
-Re-evaluate this discrepancy when version detection, watchers, CRUD/status,
-resource types, or static-ingress validation changes. Removing only the prose
-or one fallback branch cannot establish the required atomic upgrade.
-The implementation must remain coordinated across every listed version boundary.
+See the [canonical ingress guard](../../04-review/controller/regression-guards/tls-route-canonical-api-ingress.md)
+for source and regression-test evidence. Upstream CRDs remain unmodified;
+their additional served versions do not expand Edgion's direct-input contract.
 
 ## Full Schema
 

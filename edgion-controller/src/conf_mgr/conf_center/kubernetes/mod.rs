@@ -50,10 +50,7 @@ pub use leader_election::{LeaderElection, LeaderFence, LeaderHandle};
 pub use namespace::NamespaceWatchMode;
 pub use resource_controller::ResourceController;
 pub use storage::KubernetesStorage;
-pub use version_detection::{
-    detect_reference_grant_version, detect_tls_route_version, probe_tls_route_version, ReferenceGrantVersion,
-    TLSRouteVersion,
-};
+pub use version_detection::{detect_reference_grant_version, ReferenceGrantVersion};
 
 // Re-export types from sync_runtime
 pub use crate::conf_mgr::sync_runtime::{

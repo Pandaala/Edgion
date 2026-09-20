@@ -5,7 +5,7 @@ use edgion_resources::constants::annotations::edgion::{
     TCP_KEEPALIVE_INTERVAL, TCP_KEEPALIVE_PROBES, TCP_KEEPALIVE_TIME,
 };
 use edgion_resources::resources::common::{ParentReference, RefDenied, TcpKeepaliveConfig};
-use edgion_resources::resources::http_route::{RouteParentStatus, GATEWAY_API_GROUP};
+use edgion_resources::resources::http_route::RouteParentStatus;
 use kube::api::ObjectMeta;
 use std::collections::BTreeMap;
 use std::time::Duration;
@@ -104,63 +104,53 @@ pub(crate) fn to_pingora_tcp_keepalive(config: &TcpKeepaliveConfig) -> pingora_c
     }
 }
 
-/// Check if a specific parentRef has Accepted=True in the route status.
+/// Check the stamped controller's acceptance for one canonical parent identity.
 ///
 /// Returns true when no matching status entry is found (optimistic: include
 /// until the controller explicitly rejects it, e.g. during the first sync
 /// before status is populated).
-fn is_parent_ref_accepted(pr: &ParentReference, status_parents: &[RouteParentStatus], route_ns: Option<&str>) -> bool {
-    if !is_gateway_parent_ref(pr) {
-        return false;
-    }
-
-    let pr_ns = pr.namespace.as_deref().or(route_ns).unwrap_or("default");
-
-    for sp in status_parents {
-        let sp_ns = sp.parent_ref.namespace.as_deref().or(route_ns).unwrap_or("default");
-        if normalized_parent_group(&sp.parent_ref) == normalized_parent_group(pr)
-            && normalized_parent_kind(&sp.parent_ref) == normalized_parent_kind(pr)
-            && sp_ns == pr_ns
-            && sp.parent_ref.name == pr.name
-            && sp.parent_ref.section_name == pr.section_name
-            && sp.parent_ref.port == pr.port
-        {
-            return sp
-                .conditions
-                .iter()
-                .any(|c| c.type_ == "Accepted" && c.status == "True");
-        }
-    }
-    true
-}
-
-#[inline]
-fn normalized_parent_group(pr: &ParentReference) -> &str {
-    pr.group.as_deref().unwrap_or(GATEWAY_API_GROUP)
-}
-
-#[inline]
-fn normalized_parent_kind(pr: &ParentReference) -> &str {
-    pr.kind.as_deref().unwrap_or("Gateway")
+fn is_parent_ref_accepted(
+    pr: &ParentReference,
+    status_parents: &[RouteParentStatus],
+    route_ns: Option<&str>,
+    expected_controller: &str,
+) -> bool {
+    let identity = pr.canonical_identity(route_ns);
+    let mut owned = status_parents.iter().filter(|status| {
+        let status_identity = status.canonical_identity(route_ns);
+        status_identity.parent == identity && status_identity.controller_name == expected_controller
+    });
+    let Some(status) = owned.next() else {
+        return true;
+    };
+    // A processed Controller generation deduplicates owned entries. Reject
+    // ambiguous snapshots independently of list order if that contract is broken.
+    owned.next().is_none()
+        && status
+            .conditions
+            .iter()
+            .any(|c| c.type_ == "Accepted" && c.status == "True")
 }
 
 #[inline]
 fn is_gateway_parent_ref(pr: &ParentReference) -> bool {
-    normalized_parent_group(pr) == GATEWAY_API_GROUP && normalized_parent_kind(pr) == "Gateway"
+    pr.canonical_identity(None).is_gateway()
 }
 
-/// Filter parentRefs to only those with Accepted=True status.
+/// Filter Gateway parentRefs using the processed generation's status owner.
 ///
-/// Routes whose parentRef is not accepted by any Gateway/Listener are excluded
-/// from compilation, keeping the route table clean and simplifying debugging.
+/// An existing owned status must be uniquely identified and Accepted=True.
 ///
 /// Returns None if no parentRefs survive (route should be skipped entirely).
-/// When status is not yet available, Gateway parentRefs are included optimistically.
+/// A nonempty Controller-owned transport stamp is required. With that stamp,
+/// missing owned status retains optimistic acceptance; foreign status is ignored.
 pub(crate) fn filter_accepted_parent_refs(
     parent_refs: Option<&[ParentReference]>,
     status_parents: Option<&[RouteParentStatus]>,
     route_ns: Option<&str>,
+    expected_controller: Option<&str>,
 ) -> Option<Vec<ParentReference>> {
+    let expected_controller = expected_controller.filter(|owner| !owner.is_empty())?;
     let parent_refs = parent_refs?;
     if parent_refs.is_empty() {
         return None;
@@ -171,7 +161,7 @@ pub(crate) fn filter_accepted_parent_refs(
         .filter(|pr| {
             is_gateway_parent_ref(pr)
                 && match status_parents {
-                    Some(sp) if !sp.is_empty() => is_parent_ref_accepted(pr, sp, route_ns),
+                    Some(sp) if !sp.is_empty() => is_parent_ref_accepted(pr, sp, route_ns, expected_controller),
                     _ => true,
                 }
         })
@@ -221,6 +211,7 @@ pub(crate) fn resolve_parent_refs(parent_refs: &[ParentReference], route_ns: &st
                 gateway_key: format_gateway_key(parent_ns, &pr.name),
                 parent_ns: parent_ns.to_string(),
                 section_name: pr.section_name.clone(),
+                port: pr.port,
             }
         })
         .collect()
@@ -406,6 +397,7 @@ pub fn resolve_tcp_keepalive(
 mod tests {
     use super::*;
     use edgion_resources::resources::common::Condition;
+    use edgion_resources::resources::http_route::GATEWAY_API_GROUP;
     use std::collections::BTreeMap;
 
     fn parent_ref(name: &str, namespace: Option<&str>) -> ParentReference {
@@ -435,6 +427,71 @@ mod tests {
     }
 
     #[test]
+    fn parent_acceptance_requires_transport_owner_and_ignores_foreign_status() {
+        let refs = vec![parent_ref("gw", None)];
+        let mut own = parent_status(refs[0].clone(), false);
+        own.controller_name = "example.net/custom-controller".into();
+        let foreign = parent_status(refs[0].clone(), true);
+        for owner in [None, Some("")] {
+            assert!(filter_accepted_parent_refs(Some(&refs), None, Some("apps"), owner).is_none());
+        }
+        for accepted in [false, true] {
+            own.conditions[0].status = if accepted { "True" } else { "False" }.into();
+            let mut foreign = foreign.clone();
+            foreign.conditions[0].status = if accepted { "False" } else { "True" }.into();
+            for statuses in [vec![own.clone(), foreign.clone()], vec![foreign, own.clone()]] {
+                assert_eq!(
+                    filter_accepted_parent_refs(Some(&refs), Some(&statuses), Some("apps"), Some(&own.controller_name))
+                        .is_some(),
+                    accepted
+                );
+            }
+        }
+        for statuses in [None, Some(vec![]), Some(vec![foreign])] {
+            assert_eq!(
+                filter_accepted_parent_refs(
+                    Some(&refs),
+                    statuses.as_deref(),
+                    Some("apps"),
+                    Some(&own.controller_name)
+                ),
+                Some(refs.clone())
+            );
+        }
+    }
+
+    #[test]
+    fn duplicate_owned_status_is_rejected_even_with_equivalent_default_spelling() {
+        let refs = vec![parent_ref("gw", None)];
+        let allow = parent_status(refs[0].clone(), true);
+        let mut other = allow.clone();
+        other.parent_ref.namespace = Some("apps".into());
+        other.parent_ref.group = Some(GATEWAY_API_GROUP.into());
+        other.parent_ref.kind = Some("Gateway".into());
+        for accepted in ["True", "False"] {
+            other.conditions[0].status = accepted.into();
+            for statuses in [vec![allow.clone(), other.clone()], vec![other.clone(), allow.clone()]] {
+                assert!(filter_accepted_parent_refs(
+                    Some(&refs),
+                    Some(&statuses),
+                    Some("apps"),
+                    Some(&allow.controller_name)
+                )
+                .is_none());
+            }
+        }
+        // A different port is a different attachment, not a duplicate rejection.
+        other.parent_ref.port = Some(443);
+        assert!(filter_accepted_parent_refs(
+            Some(&refs),
+            Some(&[allow.clone(), other]),
+            Some("apps"),
+            Some(&allow.controller_name)
+        )
+        .is_some());
+    }
+
+    #[test]
     fn delegation_only_parent_refs_are_excluded_with_or_without_status() {
         for kind in ["HTTPRoute", "GRPCRoute"] {
             let mut delegation = parent_ref("parent", None);
@@ -442,10 +499,22 @@ mod tests {
             delegation.kind = Some(kind.to_string());
             let refs = vec![delegation.clone()];
 
-            assert!(filter_accepted_parent_refs(Some(&refs), None, Some("route-ns")).is_none());
+            assert!(filter_accepted_parent_refs(
+                Some(&refs),
+                None,
+                Some("route-ns"),
+                Some("edgion.io/gateway-controller")
+            )
+            .is_none());
 
             let statuses = vec![parent_status(delegation, true)];
-            assert!(filter_accepted_parent_refs(Some(&refs), Some(&statuses), Some("route-ns")).is_none());
+            assert!(filter_accepted_parent_refs(
+                Some(&refs),
+                Some(&statuses),
+                Some("route-ns"),
+                Some("edgion.io/gateway-controller")
+            )
+            .is_none());
         }
     }
 
@@ -458,7 +527,13 @@ mod tests {
         let refs = vec![gateway.clone()];
         let statuses = vec![parent_status(delegation, true), parent_status(gateway, false)];
 
-        assert!(filter_accepted_parent_refs(Some(&refs), Some(&statuses), Some("route-ns")).is_none());
+        assert!(filter_accepted_parent_refs(
+            Some(&refs),
+            Some(&statuses),
+            Some("route-ns"),
+            Some("edgion.io/gateway-controller")
+        )
+        .is_none());
     }
 
     #[test]
@@ -471,7 +546,12 @@ mod tests {
         let statuses = vec![parent_status(explicit, true)];
 
         assert_eq!(
-            filter_accepted_parent_refs(Some(&refs), Some(&statuses), Some("route-ns")),
+            filter_accepted_parent_refs(
+                Some(&refs),
+                Some(&statuses),
+                Some("route-ns"),
+                Some("edgion.io/gateway-controller")
+            ),
             Some(refs)
         );
     }
@@ -501,7 +581,12 @@ mod tests {
         ];
 
         assert_eq!(
-            filter_accepted_parent_refs(Some(&refs), Some(&statuses), Some("route-ns")),
+            filter_accepted_parent_refs(
+                Some(&refs),
+                Some(&statuses),
+                Some("route-ns"),
+                Some("edgion.io/gateway-controller")
+            ),
             Some(vec![first, last])
         );
     }
@@ -604,6 +689,16 @@ mod tests {
 
         assert_eq!(resolved[0].section_name.as_deref(), Some("https"));
         assert_eq!(resolved[1].section_name, None);
+    }
+
+    #[test]
+    fn resolve_parent_refs_preserves_declared_port_constraints() {
+        let mut parent = parent_ref("gw", None);
+        for port in [None, Some(8080), Some(8081)] {
+            parent.port = port;
+            let resolved = resolve_parent_refs(&[parent.clone()], "default");
+            assert_eq!(resolved[0].port, port);
+        }
     }
 
     #[test]

@@ -66,7 +66,7 @@ use crate::conf_mgr::sync_runtime::resource_processor::{
     EdgionBackendTrafficPolicyHandler, EdgionConfigDataHandler, EdgionGatewayConfigHandler, EdgionPluginsHandler,
     EdgionStreamPluginsHandler, EdgionTlsHandler, EndpointSliceHandler, GatewayClassHandler, GatewayHandler,
     GrpcRouteHandler, HttpRouteHandler, LinkSysHandler, ReferenceGrantBetaHandler, ReferenceGrantHandler,
-    SecretHandler, ServiceHandler, TcpRouteHandler, TlsRouteAlpha3Handler, TlsRouteHandler, UdpRouteHandler,
+    SecretHandler, ServiceHandler, TcpRouteHandler, TlsRouteHandler, UdpRouteHandler,
 };
 
 /// Context for spawn functions
@@ -549,21 +549,12 @@ impl KubernetesController {
         // Resolve every multi-version API before spawning any watcher. Returning
         // before startup ensures an API-resolution failure cannot leave partially
         // registered resource controllers behind.
-        use super::version_detection::{probe_reference_grant_version, probe_tls_route_version};
+        use super::version_detection::probe_reference_grant_version;
         let reference_grant_version = if self.should_watch("ReferenceGrant") {
             Some(
                 probe_reference_grant_version(&self.client)
                     .await?
                     .ok_or_else(|| anyhow::anyhow!("ReferenceGrant API disappeared after preflight"))?,
-            )
-        } else {
-            None
-        };
-        let tls_route_version = if self.should_watch("TLSRoute") {
-            Some(
-                probe_tls_route_version(&self.client)
-                    .await?
-                    .ok_or_else(|| anyhow::anyhow!("TLSRoute API disappeared after preflight"))?,
             )
         } else {
             None
@@ -769,25 +760,12 @@ impl KubernetesController {
             ));
         }
         if self.should_watch("TLSRoute") {
-            use super::version_detection::TLSRouteVersion;
-            match tls_route_version.expect("TLSRoute version is preflighted when watched") {
-                TLSRouteVersion::V1 => {
-                    h.spawn(spawn::<TLSRoute, _>(
-                        self,
-                        "TLSRoute",
-                        TlsRouteHandler::new(self.controller_name.clone()),
-                        &ctx,
-                    ));
-                }
-                TLSRouteVersion::V1Alpha3 => {
-                    h.spawn(spawn::<TLSRouteAlpha3, _>(
-                        self,
-                        "TLSRoute",
-                        TlsRouteAlpha3Handler::new(self.controller_name.clone()),
-                        &ctx,
-                    ));
-                }
-            }
+            h.spawn(spawn::<TLSRoute, _>(
+                self,
+                "TLSRoute",
+                TlsRouteHandler::new(self.controller_name.clone()),
+                &ctx,
+            ));
         }
 
         // TLS related (depend on Secret being in cache)

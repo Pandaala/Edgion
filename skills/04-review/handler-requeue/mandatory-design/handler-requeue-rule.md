@@ -26,7 +26,7 @@ flight. TLSRoute adds new edges before parsing and keeps its exact replacement
 in `on_change`: dropped parents must be requeued only after `update_status`
 updates their attachment counts. EdgionTls registers before its proof lookup.
 
-## Affected handlers (as of 2026-03)
+## Affected handlers
 
 | Handler | lookup_gateway() in parse() | gateway_route_index in on_change() |
 |---------|:--:|:--:|
@@ -34,8 +34,8 @@ updates their attachment counts. EdgionTls registers before its proof lookup.
 | `grpc_route.rs` | Yes (via hostname_resolution) | Yes |
 | `tls_route.rs` | Yes | Yes |
 | `edgion_tls.rs` | Yes | Registered in parse before proof lookup; on_change has no index work |
-| `tcp_route.rs` | No | N/A |
-| `udp_route.rs` | No | N/A |
+| `tcp_route.rs` | Yes (via resolve_listener_keys) | Yes |
+| `udp_route.rs` | Yes (via resolve_listener_keys) | Yes |
 
 ## How to verify
 

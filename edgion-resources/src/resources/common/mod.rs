@@ -7,6 +7,7 @@ pub(crate) mod kubernetes_name;
 pub mod log_labels;
 pub mod outbound_request;
 pub mod outbound_tls;
+mod parent_identity;
 pub mod secret_object_ref;
 pub mod secret_slot;
 pub mod service_backend_kind;
@@ -24,6 +25,7 @@ pub use outbound_request::{
     CustomField, CustomSource, ListFields, MethodSpec, OriginField, OutboundRequestSpec, PathSpec, PresencePolicy,
 };
 pub use outbound_tls::{OutboundTlsConfig, OutboundTlsLocal, OutboundTlsValidation};
+pub use parent_identity::{ParentRefIdentity, ParentStatusIdentity};
 pub use secret_object_ref::SecretObjectReference;
 pub use secret_slot::SecretSlot;
 pub use service_backend_kind::ServiceBackendKind;

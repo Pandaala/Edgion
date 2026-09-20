@@ -23,7 +23,7 @@ spec:
 
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| `spec.controllerName` | String | 是 | 必须精确为 `edgion.io/gateway-controller`。Edgion 控制器只协调具有此值的 GatewayClass。 |
+| `spec.controllerName` | String | 是 | 必须匹配 Controller 配置的 `controller_name`，默认值为 `edgion.io/gateway-controller`。 |
 | `spec.parametersRef` | Object | 否 | 指向调优网关行为的 `EdgionGatewayConfig` 的引用。设置后 `group` 必须为 `edgion.io`，`kind` 必须为 `EdgionGatewayConfig`，否则 GatewayClass 将被拒绝（`Accepted: False`）。 |
 | `spec.parametersRef.group` | String | 否 | 参数资源的 API group：`edgion.io`。 |
 | `spec.parametersRef.kind` | String | 否 | `EdgionGatewayConfig`。 |
@@ -34,13 +34,15 @@ spec:
 
 ## controllerName
 
-Edgion 控制器名称是固定常量：
+Edgion 控制器名称的默认值为：
 
 ```
 edgion.io/gateway-controller
 ```
 
-`controllerName` 不匹配此值的 GatewayClass 将被 Edgion 忽略。这允许集群同时运行多个 Gateway API 实现而不冲突。
+Kubernetes 模式可以通过 Controller 配置中的 `controller_name` 修改此名称；GatewayClass 必须匹配实际配置值。
+
+排查 Route 挂载时，同时检查 `status.parents[].parentRef` 和 `controllerName`。Gateway 只使用当前 Edgion 控制器对应条目的 `Accepted` 结果；其他控制器的 `Accepted=True` 不会覆盖 Edgion 的 `Accepted=False`。不同资源类型、Listener section 或端口的父引用分别判断。Controller 会保留读取到的其他控制器状态，并清理自己的过期或重复条目。
 
 ## 配置场景
 
@@ -114,7 +116,7 @@ spec:
 ## 边界情况与注意事项
 
 - `controllerName` 在 Gateway API 中是不可变的；如需更换控制器，必须删除并重新创建 GatewayClass。
-- 如果 `controllerName` 与 `edgion.io/gateway-controller` 不完全匹配，Edgion 永远不会设置 `Accepted` 状态，引用该 class 的 Gateway 将保持未编程状态。
+- 如果 `controllerName` 与 Controller 配置的名称不完全匹配，Edgion 永远不会设置 `Accepted` 状态，引用该 class 的 Gateway 将保持未编程状态。
 - `parametersRef` 的 `group` 或 `kind` 错误时会以 `Accepted: False` 拒绝；未设置 `parametersRef` 是有效的，将回退到默认值。
 - `EdgionGatewayConfig` 是集群作用域的，因此 `parametersRef` 不包含 `namespace`。
 - `EdgionGatewayConfig` 的更改动态生效（无需重启 Gateway）；详见其页面中关于热重载的字段说明。

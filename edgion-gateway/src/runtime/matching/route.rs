@@ -32,10 +32,8 @@ pub struct ResolvedParentRef {
     pub parent_ns: String,
     /// Copied verbatim from the source `ParentReference`.
     pub section_name: Option<String>,
-    // `ParentReference::port` is deliberately absent: its only consumer is
-    // `is_parent_ref_accepted`, which runs inside `filter_accepted_parent_refs`
-    // on the config-publish path, strictly before resolution. Add it here if
-    // request-time parentRef port disambiguation is ever introduced.
+    /// Declared parent port constraint, checked against the logical listener.
+    pub port: Option<i32>,
 }
 
 /// Check if request hostname matches listener hostname constraint.
@@ -114,7 +112,8 @@ pub fn check_allowed_routes(
 ///
 /// Validates:
 /// 1. **Associate** the route with the correct Gateway (namespace + name match)
-/// 2. **Locate the listener** via sectionName (fast path) or hostname isolation (fallback)
+/// 2. **Locate the listener** via sectionName (fast path) or hostname isolation (fallback),
+///    enforcing the optional declared port in either path
 /// 3. **Enforce HTTP Listener Isolation** — hostname matching + more-specific check
 /// 4. **AllowedRoutes** — namespace and kind filtering
 ///
@@ -143,6 +142,9 @@ pub fn check_gateway_listener_match(
         // Still must enforce hostname isolation per Gateway API spec.
         if let Some(section_name) = &pr.section_name {
             if let Some(entry) = gw.get(section_name) {
+                if pr.port.is_some_and(|port| port != entry.port) {
+                    continue;
+                }
                 if let Some(ref listener_host) = entry.hostname {
                     if !hostname_matches_listener(request_hostname, listener_host) {
                         continue;
@@ -162,6 +164,9 @@ pub fn check_gateway_listener_match(
 
         // Slow path: no sectionName → hostname isolation
         for entry in gw.iter() {
+            if pr.port.is_some_and(|port| port != entry.port) {
+                continue;
+            }
             if let Some(ref listener_host) = entry.hostname {
                 if !hostname_matches_listener(request_hostname, listener_host) {
                     continue;
@@ -189,11 +194,44 @@ mod tests {
 
     use crate::runtime::store::listener_gateway_info::ListenerEntry;
 
+    #[test]
+    fn parent_port_keeps_shared_listener_ownership_with_the_declared_gateway() {
+        for kind in ["HTTPRoute", "GRPCRoute", "TCPRoute", "UDPRoute"] {
+            for section in [None, Some("shared")] {
+                let mut a = resolved("default/a", "default", section);
+                a.port = Some(8080);
+                let mut b = resolved("default/b", "default", section);
+                b.port = Some(8081);
+                let entry = |name| {
+                    let mut entry = listener_entry("default", name, Some("shared"), None, None);
+                    entry.port = 8081;
+                    entry
+                };
+                let index = GatewayInfoIndex::from_entries_for_test(vec![
+                    ("default/a".into(), entry("a")),
+                    ("default/b".into(), entry("b")),
+                ]);
+                assert!(check_gateway_listener_match(&[a.clone()], &index, "", "default", kind).is_none());
+                let owner = check_gateway_listener_match(&[a.clone(), b], &index, "", "default", kind).unwrap();
+                assert_eq!(owner.gateway_name(), "b", "{kind}: {section:?}");
+                a.port = None;
+                assert_eq!(
+                    check_gateway_listener_match(&[a], &index, "", "default", kind)
+                        .unwrap()
+                        .gateway_name(),
+                    "a",
+                    "an omitted port must retain its existing semantics"
+                );
+            }
+        }
+    }
+
     fn resolved(gateway_key: &str, parent_ns: &str, section_name: Option<&str>) -> ResolvedParentRef {
         ResolvedParentRef {
             gateway_key: gateway_key.to_string(),
             parent_ns: parent_ns.to_string(),
             section_name: section_name.map(str::to_string),
+            port: None,
         }
     }
 
@@ -205,6 +243,7 @@ mod tests {
         allowed_routes: Option<AllowedRoutes>,
     ) -> ListenerEntry {
         ListenerEntry {
+            port: 8080,
             info: Arc::new(GatewayInfo::new(
                 Some(gateway_ns.to_string()),
                 gateway_name.to_string(),

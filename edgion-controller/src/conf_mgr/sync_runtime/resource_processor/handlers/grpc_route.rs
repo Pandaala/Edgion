@@ -23,21 +23,21 @@ use edgion_resources::prelude_resources::GRPCRoute;
 use edgion_resources::resources::common::{Condition, ParentReference, RefDenied};
 use edgion_resources::resources::extension_ref::{is_supported_edgion_plugins_ref, validate_extension_ref_filter};
 use edgion_resources::resources::grpc_route::{GRPCRouteFilter, GRPCRouteFilterType, GRPCRouteStatus};
-use edgion_resources::resources::http_route::{DelegationIssue, RouteParentStatus, GATEWAY_API_GROUP};
+use edgion_resources::resources::http_route::{DelegationIssue, GATEWAY_API_GROUP};
 use edgion_resources::ResourceKind;
 
 /// True for parentRef entries that attach the route to a Gateway listener
 /// (the Gateway API default when group/kind are absent). Delegation
 /// parentRefs (`kind: GRPCRoute`, reverse-lock declarations) return false.
 fn is_gateway_parent_ref(pr: &ParentReference) -> bool {
-    pr.group.as_deref().unwrap_or(GATEWAY_API_GROUP) == GATEWAY_API_GROUP
-        && pr.kind.as_deref().unwrap_or("Gateway") == "Gateway"
+    pr.canonical_identity(None).is_gateway()
 }
 
 /// True for parentRef entries that reverse-lock delegation to specific parent
 /// GRPCRoutes.
 fn is_delegation_parent_ref(pr: &ParentReference) -> bool {
-    pr.group.as_deref().unwrap_or(GATEWAY_API_GROUP) == GATEWAY_API_GROUP && pr.kind.as_deref() == Some("GRPCRoute")
+    let identity = pr.canonical_identity(None);
+    identity.group == GATEWAY_API_GROUP && identity.kind == "GRPCRoute"
 }
 
 /// `DelegationLookup` backed by the live controller stores.
@@ -238,6 +238,10 @@ impl Default for GrpcRouteHandler {
 
 #[async_trait::async_trait]
 impl ProcessorHandler<GRPCRoute> for GrpcRouteHandler {
+    fn finalize_transport(&self, route: &mut GRPCRoute, _ctx: &HandlerContext) {
+        route.spec.resolved_status_controller = Some(self.controller_name.clone());
+    }
+
     fn validate(&self, route: &GRPCRoute, _ctx: &HandlerContext) -> Vec<String> {
         let errors = validate_grpc_route_if_enabled(route);
         // Note: backend ref validation (service existence, kind check) is handled by
@@ -669,28 +673,14 @@ impl ProcessorHandler<GRPCRoute> for GrpcRouteHandler {
                 // Backend-scoped WAF is different: it cannot join the
                 // request-wide ownership election and rejects the whole route.
 
-                let conditions = if let Some(ps) = status.parents.iter_mut().find(|ps| {
-                    ps.parent_ref.name == parent_ref.name
-                        && ps.parent_ref.namespace == parent_ref.namespace
-                        && ps.parent_ref.section_name == parent_ref.section_name
-                }) {
-                    set_parent_conditions_full(&mut ps.conditions, &accepted_errors, &resolved_refs_errors, generation);
-                    &mut ps.conditions
-                } else {
-                    let mut conditions = Vec::new();
-                    set_parent_conditions_full(&mut conditions, &accepted_errors, &resolved_refs_errors, generation);
-
-                    status.parents.push(RouteParentStatus {
-                        parent_ref: parent_ref.clone(),
-                        controller_name: self.controller_name.clone(),
-                        conditions,
-                    });
-                    &mut status
-                        .parents
-                        .last_mut()
-                        .expect("just pushed; Vec is non-empty")
-                        .conditions
-                };
+                let ps = super::route_utils::parent_status_for_update(
+                    &mut status.parents,
+                    parent_ref,
+                    route_ns,
+                    &self.controller_name,
+                );
+                let conditions = &mut ps.conditions;
+                set_parent_conditions_full(conditions, &accepted_errors, &resolved_refs_errors, generation);
 
                 // Set PartiallyInvalid condition (own-rule findings plus
                 // delegation drops — a dropped delegated rule never flips
@@ -746,27 +736,28 @@ impl ProcessorHandler<GRPCRoute> for GrpcRouteHandler {
                 // and a `kind: GRPCRoute` parentRef with the same name/ns/
                 // section, and the delegation Accepted condition must not
                 // overwrite the Gateway-acceptance entry.
-                if let Some(ps) = status.parents.iter_mut().find(|ps| {
-                    ps.parent_ref.name == parent_ref.name
-                        && ps.parent_ref.namespace == parent_ref.namespace
-                        && ps.parent_ref.section_name == parent_ref.section_name
-                        && ps.parent_ref.kind == parent_ref.kind
-                }) {
-                    update_condition(&mut ps.conditions, condition);
-                } else {
-                    let mut conditions = Vec::new();
-                    update_condition(&mut conditions, condition);
-                    status.parents.push(RouteParentStatus {
-                        parent_ref: parent_ref.clone(),
-                        controller_name: self.controller_name.clone(),
-                        conditions,
-                    });
-                }
+                let ps = super::route_utils::parent_status_for_update(
+                    &mut status.parents,
+                    parent_ref,
+                    route_ns,
+                    &self.controller_name,
+                );
+                update_condition(&mut ps.conditions, condition);
             }
 
-            super::route_utils::retain_current_parent_statuses(&mut status.parents, parent_refs);
+            super::route_utils::retain_current_parent_statuses(
+                &mut status.parents,
+                parent_refs,
+                route_ns,
+                &self.controller_name,
+            );
         } else {
-            status.parents.clear();
+            super::route_utils::retain_current_parent_statuses(
+                &mut status.parents,
+                &[],
+                route_ns,
+                &self.controller_name,
+            );
         }
 
         // Update tracker with only accepted parentRefs so attachedRoutes count is accurate.

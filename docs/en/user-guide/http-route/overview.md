@@ -57,6 +57,10 @@ Matching declared names are considered from exact to longest wildcard suffix, be
 
 A single HTTPRoute can reference multiple Gateways to share routing rules. See [Backend configuration](./backends/README.md) for cross-namespace details.
 
+When both `sectionName` and `port` are set, the listener must match both. Sharing a physical
+port with another Gateway does not expand a parentRef's attachment: a reference to Gateway A
+on port 8080 does not authorize Gateway A on port 8081 through another parentRef.
+
 ### Rules
 
 Each entry in `rules` is an independent routing decision unit containing match conditions, filters, and backend references. When a request matches multiple rules, the most specific match wins (longer path prefixes and exact paths take precedence over shorter prefixes).

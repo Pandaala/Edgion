@@ -605,6 +605,34 @@ mod tests {
     const CONF_PREFIX: &str = "/edgion/conf/";
 
     #[test]
+    fn tls_route_etcd_content_parser_rejects_noncanonical_versions() {
+        use edgion_resources::TLSRoute;
+        // InitApply and runtime Apply both call this parser before raw-store insertion.
+        for version in [
+            None,
+            Some(serde_json::Value::Null),
+            Some(serde_json::json!(42)),
+            Some(serde_json::json!("gateway.networking.k8s.io/v1alpha3")),
+            Some(serde_json::json!("gateway.networking.k8s.io/v1")),
+        ] {
+            let valid = version.as_ref().and_then(serde_json::Value::as_str) == Some("gateway.networking.k8s.io/v1");
+            let mut value = serde_json::json!({
+                "kind": "TLSRoute", "metadata": {"name": "route", "namespace": "default"},
+                "spec": {"hostnames": ["example.com"]}
+            });
+            if let Some(version) = version {
+                value["apiVersion"] = version;
+            }
+            let parsed = parse_resource_content::<TLSRoute>(&value.to_string());
+            assert_eq!(parsed.is_ok(), valid);
+            if let Ok(route) = parsed {
+                assert_eq!(route.metadata.name.as_deref(), Some("route"));
+                assert_eq!(route.spec.hostnames.as_deref(), Some(&["example.com".to_string()][..]));
+            }
+        }
+    }
+
+    #[test]
     fn namespaced_identity_match_returns_key_identity() {
         assert_eq!(
             validate_etcd_identity(

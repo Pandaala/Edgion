@@ -17,13 +17,19 @@
 //!    called by `processor.rs`. It deserializes old/new JSON into
 //!    `serde_json::Value`, then delegates to type-specific comparators.
 
+use edgion_resources::resources::common::{ParentReference, ParentStatusIdentity};
 use serde_json::Value;
 
 /// Entry point: check whether the new status is semantically different from
 /// the old status, given the resource `kind`.
 ///
 /// Returns `true` if a write should be issued (i.e., status actually changed).
-pub fn status_semantically_changed(kind: &str, old_json: &str, new_json: &str) -> bool {
+pub fn status_semantically_changed(
+    kind: &str,
+    old_json: &str,
+    new_json: &str,
+    resource_namespace: Option<&str>,
+) -> bool {
     let old: Value = match serde_json::from_str(old_json) {
         Ok(v) => v,
         Err(_) => return true,
@@ -35,7 +41,7 @@ pub fn status_semantically_changed(kind: &str, old_json: &str, new_json: &str) -
 
     match kind {
         "HTTPRoute" | "GRPCRoute" | "TCPRoute" | "TLSRoute" | "UDPRoute" | "EdgionTls" => {
-            !parents_status_equal(&old, &new)
+            !parents_status_equal(&old, &new, resource_namespace)
         }
         "Gateway" => !gateway_status_equal(&old, &new),
         "BackendTLSPolicy" | "EdgionBackendTrafficPolicy" => !ancestors_status_equal(&old, &new),
@@ -137,7 +143,15 @@ fn conditions_and_fields_status_equal(old: &Value, new: &Value) -> bool {
 // Per-parent status (HTTPRoute, GRPCRoute, TCPRoute, TLSRoute, UDPRoute, EdgionTls)
 // ============================================================================
 
-fn parents_status_equal(old: &Value, new: &Value) -> bool {
+fn parents_status_equal(old: &Value, new: &Value, resource_namespace: Option<&str>) -> bool {
+    if [old, new].iter().any(|status| {
+        !status.is_object()
+            || status
+                .get("parents")
+                .is_some_and(|parents| !parents.is_null() && !parents.is_array())
+    }) {
+        return false;
+    }
     let old_parents = old.get("parents").and_then(Value::as_array);
     let new_parents = new.get("parents").and_then(Value::as_array);
 
@@ -148,34 +162,41 @@ fn parents_status_equal(old: &Value, new: &Value) -> bool {
             if old_arr.len() != new_arr.len() {
                 return false;
             }
-            for new_parent in new_arr {
-                let matched = old_arr.iter().find(|old_p| parent_ref_matches(old_p, new_parent));
-                match matched {
-                    None => return false,
-                    Some(old_p) => {
-                        if !parent_entry_equal(old_p, new_parent) {
-                            return false;
-                        }
-                    }
-                }
+            let decode_refs = |entries: &[Value]| -> Option<Vec<ParentReference>> {
+                entries
+                    .iter()
+                    .map(|entry| serde_json::from_value(entry.get("parentRef")?.clone()).ok())
+                    .collect()
+            };
+            let (Some(old_refs), Some(new_refs)) = (decode_refs(old_arr), decode_refs(new_arr)) else {
+                return false;
+            };
+            let mut used = vec![false; old_arr.len()];
+            for (new_parent, new_ref) in new_arr.iter().zip(&new_refs) {
+                let Some(controller_name) = new_parent.get("controllerName").and_then(Value::as_str) else {
+                    return false;
+                };
+                let identity = ParentStatusIdentity {
+                    parent: new_ref.canonical_identity(resource_namespace),
+                    controller_name,
+                };
+                // Match a multiset, not a first-match lookup that can reuse one old entry.
+                let matched = old_arr
+                    .iter()
+                    .zip(&old_refs)
+                    .enumerate()
+                    .position(|(i, (old_parent, old_ref))| {
+                        !used[i]
+                            && old_parent.get("controllerName").and_then(Value::as_str)
+                                == Some(identity.controller_name)
+                            && old_ref.canonical_identity(resource_namespace) == identity.parent
+                            && parent_entry_equal(old_parent, new_parent)
+                    });
+                let Some(index) = matched else { return false };
+                used[index] = true;
             }
             true
         }
-    }
-}
-
-/// Match parent entries by parentRef identity (name + namespace + sectionName).
-fn parent_ref_matches(a: &Value, b: &Value) -> bool {
-    let a_ref = a.get("parentRef");
-    let b_ref = b.get("parentRef");
-    match (a_ref, b_ref) {
-        (Some(ar), Some(br)) => {
-            ar.get("name") == br.get("name")
-                && ar.get("namespace") == br.get("namespace")
-                && ar.get("sectionName") == br.get("sectionName")
-        }
-        (None, None) => true,
-        _ => false,
     }
 }
 
@@ -303,6 +324,92 @@ fn listener_equal(old: &Value, new: &Value) -> bool {
 mod tests {
     use super::*;
 
+    #[test]
+    fn malformed_parent_status_containers_are_not_equal() {
+        for malformed in ["null", "[]", "1", r#"{"parents":{}}"#, r#"{"parents":"invalid"}"#] {
+            for other in [malformed, "{}", r#"{"parents":[]}"#] {
+                assert!(status_semantically_changed("HTTPRoute", malformed, other, Some("apps")));
+                assert!(status_semantically_changed("HTTPRoute", other, malformed, Some("apps")));
+            }
+        }
+    }
+
+    #[test]
+    fn parent_status_comparison_uses_canonical_owned_identity_for_every_family() {
+        use serde_json::json;
+        let entry = json!({"parentRef": {"name": "gw"}, "controllerName": "custom.example/controller",
+            "conditions": [{"type": "Accepted", "status": "False", "reason": "Test", "message": "m",
+                "observedGeneration": 1, "lastTransitionTime": "2026-01-01T00:00:00Z"}]});
+        let old = json!({"parents": [entry.clone()]}).to_string();
+        for kind in [
+            "HTTPRoute",
+            "GRPCRoute",
+            "TCPRoute",
+            "TLSRoute",
+            "UDPRoute",
+            "EdgionTls",
+        ] {
+            let changed = |entries: Vec<Value>| {
+                status_semantically_changed(kind, &old, &json!({"parents": entries}).to_string(), Some("apps"))
+            };
+            let mut equivalent = entry.clone();
+            equivalent["parentRef"] = json!({"name": "gw", "namespace": "apps",
+                "kind": "Gateway", "group": "gateway.networking.k8s.io"});
+            equivalent["conditions"][0]["lastTransitionTime"] = json!("2026-02-01T00:00:00Z");
+            assert!(!changed(vec![equivalent]), "{kind}");
+            for (field, value) in [
+                ("group", json!("")),
+                ("kind", json!("HTTPRoute")),
+                ("namespace", json!("elsewhere")),
+                ("name", json!("other")),
+                ("sectionName", json!("https")),
+                ("port", json!(443)),
+            ] {
+                let mut different = entry.clone();
+                different["parentRef"][field] = value;
+                assert!(changed(vec![different]), "{kind}: {field}");
+            }
+            let mut other_owner = entry.clone();
+            other_owner["controllerName"] = json!("foreign.example/controller");
+            assert!(changed(vec![other_owner]));
+            let mut generation = entry.clone();
+            generation["conditions"][0]["observedGeneration"] = json!(2);
+            assert!(changed(vec![generation]));
+            assert!(changed(vec![entry.clone(), entry.clone()]));
+        }
+    }
+
+    #[test]
+    fn parent_status_comparison_consumes_duplicate_entries_once_and_ignores_order() {
+        use serde_json::json;
+        let accepted = json!({"parentRef": {"name": "gw"}, "controllerName": "custom/controller",
+            "conditions": [{"type": "Accepted", "status": "True"}]});
+        let mut rejected = accepted.clone();
+        rejected["conditions"][0]["status"] = json!("False");
+        let old = json!({"parents": [accepted.clone(), rejected.clone()]}).to_string();
+        let reordered = json!({"parents": [rejected, accepted.clone()]}).to_string();
+        assert!(!status_semantically_changed(
+            "HTTPRoute",
+            &old,
+            &reordered,
+            Some("apps")
+        ));
+        let duplicated = json!({"parents": [accepted.clone(), accepted]}).to_string();
+        assert!(status_semantically_changed(
+            "HTTPRoute",
+            &old,
+            &duplicated,
+            Some("apps")
+        ));
+        let malformed = json!({"parents": [{"parentRef": {"name": 1}, "controllerName": "c"}]}).to_string();
+        assert!(status_semantically_changed(
+            "HTTPRoute",
+            &malformed,
+            &malformed,
+            Some("apps")
+        ));
+    }
+
     fn acme_status(ltt: &str, cond_status: &str, phase: &str) -> String {
         format!(
             r#"{{"conditions":[{{"type":"Accepted","status":"{cond_status}","reason":"Accepted","message":"ok","lastTransitionTime":"{ltt}","observedGeneration":1}}],"phase":"{phase}"}}"#
@@ -314,7 +421,7 @@ mod tests {
         let old = acme_status("2026-01-01T00:00:00Z", "True", "Ready");
         let new = acme_status("2026-07-19T00:00:00Z", "True", "Ready");
         assert!(
-            !status_semantically_changed("EdgionAcme", &old, &new),
+            !status_semantically_changed("EdgionAcme", &old, &new, None),
             "a lastTransitionTime-only difference must not trigger a status write"
         );
     }
@@ -323,14 +430,14 @@ mod tests {
     fn acme_condition_flip_is_a_status_change() {
         let old = acme_status("2026-01-01T00:00:00Z", "True", "Ready");
         let new = acme_status("2026-01-01T00:00:00Z", "False", "Ready");
-        assert!(status_semantically_changed("EdgionAcme", &old, &new));
+        assert!(status_semantically_changed("EdgionAcme", &old, &new, None));
     }
 
     #[test]
     fn acme_non_condition_field_change_is_a_status_change() {
         let old = acme_status("2026-01-01T00:00:00Z", "True", "Ready");
         let new = acme_status("2026-01-01T00:00:00Z", "True", "Renewing");
-        assert!(status_semantically_changed("EdgionAcme", &old, &new));
+        assert!(status_semantically_changed("EdgionAcme", &old, &new, None));
     }
 
     #[test]
@@ -338,7 +445,7 @@ mod tests {
         let old = r#"{"conditions":[{"type":"Accepted","status":"True","reason":"Accepted","message":"ok","lastTransitionTime":"2026-01-01T00:00:00Z","observedGeneration":1}],"credentialState":"Valid","publishedGeneration":"generation-1"}"#;
         let new = old.replace("2026-01-01", "2026-02-02");
         assert!(
-            !status_semantically_changed("LinkSys", old, &new),
+            !status_semantically_changed("LinkSys", old, &new, None),
             "a lastTransitionTime-only difference must not trigger a status write"
         );
     }
@@ -348,7 +455,7 @@ mod tests {
         let old = r#"{"conditions":[{"type":"Accepted","status":"True","reason":"Accepted","message":"ok","lastTransitionTime":"2026-01-01T00:00:00Z","observedGeneration":1}]}"#;
         let new = r#"{"conditions":[{"type":"Accepted","status":"True","reason":"Accepted","message":"ok","lastTransitionTime":"2026-01-01T00:00:00Z","observedGeneration":1}],"credentialState":"Valid","publishedGeneration":"generation-1","desiredConsumerCount":1,"publishedConsumerCount":1,"conflictedConsumerCount":0}"#;
         assert!(
-            status_semantically_changed("LinkSys", old, new),
+            status_semantically_changed("LinkSys", old, new, None),
             "credential lifecycle fields must trigger a status write"
         );
     }
@@ -358,7 +465,7 @@ mod tests {
         let old = r#"{"conditions":[{"type":"Accepted","status":"True","reason":"Accepted","message":"ok","lastTransitionTime":"2026-01-01T00:00:00Z","observedGeneration":1}],"credentialState":"Valid","publishedGeneration":"generation-1"}"#;
         let new = r#"{"conditions":[{"type":"Accepted","status":"True","reason":"Accepted","message":"ok","lastTransitionTime":"2026-01-01T00:00:00Z","observedGeneration":1}]}"#;
         assert!(
-            status_semantically_changed("LinkSys", old, new),
+            status_semantically_changed("LinkSys", old, new, None),
             "clearing stale credential lifecycle fields must trigger a status write"
         );
     }
@@ -372,14 +479,15 @@ mod tests {
         let old = r#"{"ancestors":[{"ancestorRef":{"name":"gw"},"controllerName":"c","conditions":[{"type":"Accepted","status":"True","reason":"Accepted","message":"m","lastTransitionTime":"2026-01-01T00:00:00Z"}]}]}"#;
         let new_time_only = old.replace("2026-01-01", "2026-02-02");
         assert!(
-            !status_semantically_changed("EdgionBackendTrafficPolicy", old, &new_time_only),
+            !status_semantically_changed("EdgionBackendTrafficPolicy", old, &new_time_only, None),
             "lastTransitionTime-only change must not trigger a status write"
         );
         let new_flipped = old.replace("\"status\":\"True\"", "\"status\":\"False\"");
         assert!(status_semantically_changed(
             "EdgionBackendTrafficPolicy",
             old,
-            &new_flipped
+            &new_flipped,
+            None
         ));
     }
 }

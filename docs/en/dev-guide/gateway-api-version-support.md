@@ -10,7 +10,7 @@ Edgion treats a resource API version and a Gateway API bundle version as two dif
 | Gateway | `gateway.networking.k8s.io/v1` | Core |
 | HTTPRoute | `gateway.networking.k8s.io/v1` | Core |
 | GRPCRoute | `gateway.networking.k8s.io/v1` | Core |
-| TLSRoute | `gateway.networking.k8s.io/v1` | Standard; the code still contains a pending v1alpha3 compatibility path |
+| TLSRoute | `gateway.networking.k8s.io/v1` | Standard; v1 only |
 | ReferenceGrant | `gateway.networking.k8s.io/v1` | Standard; the Kubernetes path can still probe v1beta1 |
 | BackendTLSPolicy | `gateway.networking.k8s.io/v1` | v1 only |
 | TCPRoute | `gateway.networking.k8s.io/v1alpha2` | Experimental |
@@ -39,6 +39,11 @@ The Kubernetes API server applies the schema, defaulting, field pruning, and CEL
 The current startup check confirms only that required GVKs are served. It does not yet establish full compatibility from the CRD's `gateway.networking.k8s.io/bundle-version` and channel annotations. Do not treat an arbitrary Gateway API CRD update as validated by Edgion.
 
 ## Non-Kubernetes mode
+
+TLSRoute documents must explicitly declare `apiVersion: gateway.networking.k8s.io/v1`.
+Filesystem, etcd, and Admin inputs reject missing, malformed, and older TLSRoute
+API versions. Change older manifests to v1 before loading them; there is no
+automatic legacy conversion.
 
 Filesystem, etcd, and Admin API ingestion do not have a Kubernetes API server to perform version conversion. To accept a source version other than the canonical version in the future, Edgion must provide its schema, source type, and explicit conversion. Successful deserialization after ignoring `apiVersion` is not version support.
 

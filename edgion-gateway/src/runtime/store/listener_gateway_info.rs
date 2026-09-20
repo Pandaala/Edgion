@@ -175,6 +175,8 @@ impl GatewayListeners {
 /// Combines GatewayInfo (identity/metrics) with the Listener's hostname + allowedRoutes.
 #[derive(Clone, Debug)]
 pub struct ListenerEntry {
+    /// Declared Gateway listener port, retained independently of the physical key.
+    pub port: i32,
     pub info: Arc<GatewayInfo>,
     /// Proof for the projected Gateway generation that produced this listener.
     /// `None` is used by non-authoritative synthetic indices and cannot
@@ -314,6 +316,7 @@ impl ListenerGatewayInfoStore {
 
                 let gateway_key = gi.gateway_key().to_owned();
                 let entry = ListenerEntry {
+                    port: listener.port,
                     info: Arc::clone(&gi),
                     gateway_proof: Some(gateway_attachment_proof(gateway)),
                     hostname: listener.hostname.clone(),
@@ -787,6 +790,25 @@ mod tests {
         assert_eq!(new.metrics_test_key.as_deref(), Some("new-generation"));
         assert_eq!(old.gateway_key(), "default/test-gw");
         assert_eq!(new.gateway_key(), "default/test-gw");
+    }
+
+    #[test]
+    fn listener_port_replacement_preserves_the_old_index_snapshot() {
+        let store = ListenerGatewayInfoStore::new();
+        let mut gateway = make_gateway("https", vec![]);
+        let old_key = ListenerKey::new("0.0.0.0:443".parse().unwrap(), "HTTPS");
+        let new_key = ListenerKey::new("0.0.0.0:8443".parse().unwrap(), "HTTPS");
+        store.rebuild(&[gateway.clone()]);
+        let old = store.get_index(&old_key);
+        assert_eq!(old.get("default/test-gw", "https").unwrap().port, 443);
+        gateway.spec.listeners.as_mut().unwrap()[0].port = 8443;
+        store.rebuild(&[gateway]);
+        assert!(store.get_index(&old_key).is_empty());
+        assert_eq!(
+            store.get_index(&new_key).get("default/test-gw", "https").unwrap().port,
+            8443
+        );
+        assert_eq!(old.get("default/test-gw", "https").unwrap().port, 443);
     }
 
     #[test]

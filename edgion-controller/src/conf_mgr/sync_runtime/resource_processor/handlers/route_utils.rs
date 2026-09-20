@@ -497,18 +497,54 @@ pub fn validate_parent_ref_accepted(
     }
 }
 
-/// Remove stale parent statuses for parents no longer in the spec.
-///
-/// Mirrors the stale listener status cleanup in Gateway handler.
-pub fn retain_current_parent_statuses(parents: &mut Vec<RouteParentStatus>, parent_refs: &[ParentReference]) {
-    parents.retain(|ps| {
-        parent_refs.iter().any(|pr| {
-            pr.name == ps.parent_ref.name
-                && pr.namespace == ps.parent_ref.namespace
-                && pr.section_name == ps.parent_ref.section_name
-                && pr.port == ps.parent_ref.port
-        })
+/// Reuse only this controller's exact attachment, retaining condition transition times.
+pub(super) fn parent_status_for_update<'a>(
+    parents: &'a mut Vec<RouteParentStatus>,
+    parent_ref: &ParentReference,
+    resource_namespace: &str,
+    controller_name: &str,
+) -> &'a mut RouteParentStatus {
+    let identity = parent_ref.canonical_identity(Some(resource_namespace));
+    if let Some(index) = parents.iter().position(|status| {
+        status.controller_name == controller_name
+            && status.parent_ref.canonical_identity(Some(resource_namespace)) == identity
+    }) {
+        return &mut parents[index];
+    }
+    parents.push(RouteParentStatus {
+        parent_ref: parent_ref.clone(),
+        controller_name: controller_name.to_owned(),
+        conditions: Vec::new(),
     });
+    parents.last_mut().expect("a parent status was just inserted")
+}
+
+/// Remove stale or duplicate owned statuses, preserving foreign input entries verbatim.
+/// The first owned entry is the one updated by `parent_status_for_update`.
+pub(super) fn retain_current_parent_statuses(
+    parents: &mut Vec<RouteParentStatus>,
+    parent_refs: &[ParentReference],
+    resource_namespace: &str,
+    controller_name: &str,
+) {
+    let previous = std::mem::take(parents);
+    parents.reserve(previous.len());
+    for status in previous {
+        if status.controller_name != controller_name {
+            parents.push(status);
+            continue;
+        }
+        let identity = status.canonical_identity(Some(resource_namespace));
+        let current = parent_refs
+            .iter()
+            .any(|parent| parent.canonical_identity(Some(resource_namespace)) == identity.parent);
+        let duplicate = parents
+            .iter()
+            .any(|retained| retained.canonical_identity(Some(resource_namespace)) == identity);
+        if current && !duplicate {
+            parents.push(status);
+        }
+    }
 }
 
 /// Update the attached-route tracker with only accepted parentRefs.

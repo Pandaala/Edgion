@@ -10,7 +10,7 @@ Edgion 将 Gateway API 的“资源 API 版本”和“Gateway API bundle 版本
 | Gateway | `gateway.networking.k8s.io/v1` | Core |
 | HTTPRoute | `gateway.networking.k8s.io/v1` | Core |
 | GRPCRoute | `gateway.networking.k8s.io/v1` | Core |
-| TLSRoute | `gateway.networking.k8s.io/v1` | Standard；代码仍有待清理的 `v1alpha3` 兼容路径 |
+| TLSRoute | `gateway.networking.k8s.io/v1` | Standard；仅支持 v1 |
 | ReferenceGrant | `gateway.networking.k8s.io/v1` | Standard；Kubernetes 路径仍可探测 `v1beta1` |
 | BackendTLSPolicy | `gateway.networking.k8s.io/v1` | 仅支持 v1 |
 | TCPRoute | `gateway.networking.k8s.io/v1alpha2` | Experimental |
@@ -39,6 +39,10 @@ Kubernetes API Server 根据集群实际安装的 CRD 执行 schema、默认值�
 当前启动检查只确认所需 GVK 是否由集群提供，尚未根据 CRD 的 `gateway.networking.k8s.io/bundle-version` 和 channel 注解建立完整兼容性结论。因此，不应将任意更新后的 Gateway API CRD 视为已经通过 Edgion 验证。
 
 ## 非 Kubernetes 模式
+
+TLSRoute 文档必须明确声明 `apiVersion: gateway.networking.k8s.io/v1`。
+文件系统、etcd 和 Admin 输入会拒绝缺失、格式错误及旧版本的 TLSRoute API 版本。
+加载旧清单前请将其更新为 v1；系统不再自动转换旧版本。
 
 文件系统、etcd 和 Admin API 没有 Kubernetes API Server 负责版本转换。未来如果要接受 canonical 版本之外的输入版本，Edgion 必须提供对应 schema、源类型和显式转换；仅仅忽略 `apiVersion` 后反序列化成功，不构成版本支持。
 

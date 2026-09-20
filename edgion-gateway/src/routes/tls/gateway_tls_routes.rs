@@ -212,6 +212,7 @@ mod tests {
                 ..Default::default()
             },
             spec: TLSRouteSpec {
+                resolved_status_controller: Some("edgion.io/gateway-controller".into()),
                 parent_refs: Some(vec![ParentReference {
                     group: Some("gateway.networking.k8s.io".to_string()),
                     kind: Some("Gateway".to_string()),
@@ -252,7 +253,7 @@ mod tests {
             .collect();
         let route = serde_json::from_value(serde_json::json!({
             "metadata": {"namespace": "default", "name": name},
-            "spec": {"hostnames": [hostname], "parentRefs": parents, "resolvedListeners": resolved}
+            "spec": {"hostnames": [hostname], "resolvedStatusController": "edgion.io/gateway-controller", "parentRefs": parents, "resolvedListeners": resolved}
         }))
         .unwrap();
         Arc::new(TlsRouteUnit::from_route(Arc::new(route)))
@@ -266,6 +267,7 @@ mod tests {
                     (
                         format!("default/{gateway}"),
                         ListenerEntry {
+                            port: 443,
                             info: Arc::new(GatewayInfo::new(
                                 Some("default".into()),
                                 (*gateway).into(),

@@ -668,6 +668,7 @@ impl Inputs {
                 entries.entry(listener.key.clone()).or_default().push((
                     key.clone(),
                     ListenerEntry {
+                        port: listener.port,
                         info,
                         gateway_proof: None,
                         hostname: listener.hostname.clone(),

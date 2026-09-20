@@ -151,6 +151,7 @@ mod tests {
                 "EdgionPlugins",
                 &old_status,
                 &new_status,
+                None,
             ),
             "status_semantically_changed must report no change for a repeated apply"
         );

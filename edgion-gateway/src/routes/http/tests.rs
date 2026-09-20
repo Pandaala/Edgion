@@ -33,6 +33,7 @@ mod route_matching_tests {
                     (
                         format!("hostname-contract/{name}"),
                         ListenerEntry {
+                            port: 8080,
                             info: Arc::new(GatewayInfo::new(
                                 Some("hostname-contract".into()),
                                 (*name).into(),
@@ -441,7 +442,7 @@ mod route_matching_tests {
                 "name": name
             },
             "spec": {
-                "parentRefs": parent_refs_json,
+                "resolvedStatusController": "edgion.io/gateway-controller", "parentRefs": parent_refs_json,
                 "hostnames": hostnames,
                 "resolvedListeners": ["0.0.0.0:80/HTTP"],
                 "rules": [{
@@ -497,7 +498,7 @@ mod route_matching_tests {
                 "name": name
             },
             "spec": {
-                "parentRefs": parent_refs_json,
+                "resolvedStatusController": "edgion.io/gateway-controller", "parentRefs": parent_refs_json,
                 "hostnames": hostnames,
                 "resolvedListeners": ["0.0.0.0:80/HTTP"],
                 "rules": [{

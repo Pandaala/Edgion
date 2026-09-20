@@ -498,11 +498,144 @@ fn route() -> Arc<HTTPRoute> {
         serde_json::from_value(json!({
             "apiVersion": "gateway.networking.k8s.io/v1", "kind": "HTTPRoute",
             "metadata": {"namespace": "apps", "name": "route"},
-            "spec": {"parentRefs": [{"name": "a"}], "resolvedListeners": ["0.0.0.0:18080/HTTP"],
+            "spec": {"resolvedStatusController": "edgion.io/gateway-controller", "parentRefs": [{"name": "a"}], "resolvedListeners": ["0.0.0.0:18080/HTTP"],
                 "rules": [{"backendRefs": [{"name": "service", "port": 80}]}]},
         }))
         .unwrap(),
     )
+}
+
+#[test]
+fn owner_and_status_updates_revoke_and_restore_route_plugin_contributions() {
+    let publisher = publisher();
+    // Route-local plugin demand must disappear when the route loses acceptance.
+    publisher.replace_gateway_configs(HashMap::from([(
+        "policy-a".into(),
+        Arc::new(
+            serde_json::from_value(json!({"apiVersion": "edgion.io/v1", "kind": "EdgionGatewayConfig",
+            "metadata": {"name": "policy-a"}, "spec": {}}))
+            .unwrap(),
+        ),
+    )]));
+    publisher.replace_http_plugins(HashMap::from([("apps/plugins".into(), plugin("dsl", true))]));
+    let mut source = (*route()).clone();
+    source.spec.rules.as_mut().unwrap()[0].filters = Some(
+        serde_json::from_value(json!([{
+            "type": "ExtensionRef", "extensionRef": {"group": "edgion.io", "kind": "EdgionPlugins", "name": "plugins"}
+        }]))
+        .unwrap(),
+    );
+    source.status = Some(
+        serde_json::from_value(json!({"parents": [{
+            "parentRef": {"name": "a"}, "controllerName": "example.net/owner",
+            "conditions": [{"type": "Accepted", "status": "False", "reason": "Rejected", "message": "",
+                "lastTransitionTime": "2026-09-20T00:00:00Z"}]
+        }]}))
+        .unwrap(),
+    );
+    let inputs =
+        |source: &HTTPRoute| HashMap::from([("apps/route".into(), RouteInput::from_http(Arc::new(source.clone())))]);
+    publisher.replace_routes(RouteKind::Http, inputs(&source));
+    assert!(scope(&publisher, "apps/a").http("apps/plugins").is_some());
+    source.spec.resolved_status_controller = Some("example.net/owner".into());
+    publisher.update_routes(RouteKind::Http, inputs(&source), &HashSet::new());
+    assert!(scope(&publisher, "apps/a").http("apps/plugins").is_none());
+    source.status.as_mut().unwrap().parents[0].conditions[0].status = "True".into();
+    publisher.update_routes(RouteKind::Http, inputs(&source), &HashSet::new());
+    assert!(scope(&publisher, "apps/a").http("apps/plugins").is_some());
+    source.spec.resolved_status_controller = None;
+    publisher.replace_routes(RouteKind::Http, inputs(&source));
+    assert!(scope(&publisher, "apps/a").http("apps/plugins").is_none());
+    publisher.update_routes(RouteKind::Http, HashMap::new(), &HashSet::from(["apps/route".into()]));
+    assert_eq!(publisher.snapshot().stats().ai_route_tokens, 0);
+}
+
+#[test]
+fn every_route_plugin_input_uses_its_same_generation_owner() {
+    use edgion_resources::{GRPCRoute, TCPRoute, TLSRoute, UDPRoute};
+    for kind in ["HTTPRoute", "GRPCRoute", "TCPRoute", "TLSRoute", "UDPRoute"] {
+        let publisher = publisher();
+        let protocol = match kind {
+            "TCPRoute" => "TCP",
+            "TLSRoute" => "TLS",
+            "UDPRoute" => "UDP",
+            _ => "HTTP",
+        };
+        let listener = ListenerKey::new("0.0.0.0:18080".parse().unwrap(), protocol);
+        let mut gateway = gateway("a", "a", 18080, None);
+        gateway.listeners[0].key = listener.clone();
+        publisher.replace_gateways(HashMap::from([("apps/a".into(), gateway.clone())]));
+        publisher.replace_gateway_configs(HashMap::from([(
+            "policy-a".into(),
+            Arc::new(
+                serde_json::from_value(json!({"apiVersion": "edgion.io/v1", "kind": "EdgionGatewayConfig",
+                "metadata": {"name": "policy-a"}, "spec": {}}))
+                .unwrap(),
+            ),
+        )]));
+        publisher.replace_http_plugins(HashMap::from([("apps/plugins".into(), plugin("dsl", true))]));
+        publisher.replace_stream_plugins(HashMap::from([("apps/stream".into(), stream_source())]));
+        let mut value = json!({"apiVersion": "gateway.networking.k8s.io/v1", "kind": kind,
+            "metadata": {"name": "route", "namespace": "apps"},
+            "spec": {"parentRefs": [{"name": "a"}], "resolvedStatusController": "example.net/owner",
+                "resolvedListeners": [listener.to_string()]},
+            "status": {"parents": [{"parentRef": {"name": "a"}, "controllerName": "example.net/owner",
+                "conditions": [{"type": "Accepted", "status": "False", "reason": "Rejected", "message": "",
+                    "lastTransitionTime": "2026-09-20T00:00:00Z"}]}]}});
+        if kind == "TLSRoute" {
+            value["spec"]["resolvedListeners"] = json!([{"listenerKey": listener.to_string(),
+                "gatewayNamespace": "apps", "gatewayName": "a", "listenerName": "web", "hostnames": ["example.com"]}]);
+        }
+        let route_kind = match kind {
+            "HTTPRoute" => RouteKind::Http,
+            "GRPCRoute" => RouteKind::Grpc,
+            "TCPRoute" => RouteKind::Tcp,
+            "TLSRoute" => RouteKind::Tls,
+            _ => RouteKind::Udp,
+        };
+        let http = matches!(route_kind, RouteKind::Http | RouteKind::Grpc);
+        if http {
+            value["spec"]["rules"] = json!([{"filters": [{"type": "ExtensionRef",
+                "extensionRef": {"group": "edgion.io", "kind": "EdgionPlugins", "name": "plugins"}}]}]);
+        } else {
+            value["metadata"]["annotations"] = json!({"edgion.io/edgion-stream-plugins": "stream"});
+        }
+        let input = |value: serde_json::Value| match kind {
+            "HTTPRoute" => RouteInput::from_http(Arc::new(serde_json::from_value::<HTTPRoute>(value).unwrap())),
+            "GRPCRoute" => RouteInput::from_grpc(&serde_json::from_value::<GRPCRoute>(value).unwrap()),
+            "TCPRoute" => RouteInput::from_tcp(&serde_json::from_value::<TCPRoute>(value).unwrap()),
+            "TLSRoute" => RouteInput::from_tls(&serde_json::from_value::<TLSRoute>(value).unwrap()),
+            _ => RouteInput::from_udp(&serde_json::from_value::<UDPRoute>(value).unwrap()),
+        };
+        assert!(!input(value.clone()).attaches_to("apps/a", &gateway), "{kind}");
+        let has_contribution = || {
+            let scope = scope(&publisher, "apps/a");
+            if http {
+                scope.http("apps/plugins").is_some()
+            } else {
+                scope.stream("apps/stream").is_some()
+            }
+        };
+        let inputs = |value: Value| HashMap::from([("apps/route".into(), input(value))]);
+        publisher.replace_routes(route_kind, inputs(value.clone()));
+        assert!(!has_contribution(), "{kind}");
+        value["spec"]["resolvedStatusController"] = json!("example.net/other");
+        assert!(input(value.clone()).attaches_to("apps/a", &gateway), "{kind}");
+        publisher.update_routes(route_kind, inputs(value.clone()), &HashSet::new());
+        assert!(has_contribution(), "{kind}");
+        value["spec"]["resolvedStatusController"] = json!("example.net/owner");
+        publisher.update_routes(route_kind, inputs(value.clone()), &HashSet::new());
+        assert!(!has_contribution(), "{kind}");
+        value["status"]["parents"][0]["conditions"][0]["status"] = json!("True");
+        publisher.update_routes(route_kind, inputs(value.clone()), &HashSet::new());
+        assert!(has_contribution(), "{kind}");
+        value["spec"]["resolvedStatusController"] = serde_json::Value::Null;
+        assert!(!input(value.clone()).attaches_to("apps/a", &gateway), "{kind}");
+        publisher.replace_routes(route_kind, inputs(value));
+        assert!(!has_contribution(), "{kind}");
+        publisher.update_routes(route_kind, HashMap::new(), &HashSet::from(["apps/route".into()]));
+        assert!(!has_contribution(), "{kind}");
+    }
 }
 
 #[test]

@@ -430,6 +430,7 @@ mod tests {
                 ..Default::default()
             },
             spec: TCPRouteSpec {
+                resolved_status_controller: Some("edgion.io/gateway-controller".into()),
                 parent_refs: None,
                 rules: None,
                 resolved_listeners: None,

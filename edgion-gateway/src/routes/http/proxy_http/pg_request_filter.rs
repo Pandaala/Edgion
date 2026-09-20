@@ -1439,7 +1439,7 @@ mod request_entry_tests {
             let mut route: HTTPRoute = serde_json::from_value(json!({
                 "apiVersion":"gateway.networking.k8s.io/v1", "kind":"HTTPRoute",
                 "metadata":{"name":"http-fallback", "namespace":NAMESPACE},
-                "spec":{"parentRefs":[{"name":"gateway", "sectionName":"host"}],
+                "spec":{"resolvedStatusController": "edgion.io/gateway-controller", "parentRefs":[{"name":"gateway", "sectionName":"host"}],
                     "hostnames":["*.example.com"], "rules":[{
                         "matches":[{"path":{"type":"PathPrefix", "value":"/"}}],
                         "filters":[{"type":"RequestHeaderModifier", "requestHeaderModifier":{
@@ -1474,7 +1474,7 @@ mod request_entry_tests {
                 let mut route: GRPCRoute = serde_json::from_value(json!({
                     "apiVersion":"gateway.networking.k8s.io/v1", "kind":"GRPCRoute",
                     "metadata":{"name":"grpc-existing", "namespace":NAMESPACE},
-                    "spec":{"parentRefs":[{"name":"gateway", "sectionName":"host"}],
+                    "spec":{"resolvedStatusController": "edgion.io/gateway-controller", "parentRefs":[{"name":"gateway", "sectionName":"host"}],
                         "hostnames":["*.example.com"], "rules":[{
                             "matches":[{"method":{"service":"svc", "method":"Existing"}}],
                             "backendRefs":[{"name":"unused-backend", "port":8080}]

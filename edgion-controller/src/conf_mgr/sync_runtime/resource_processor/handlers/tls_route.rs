@@ -10,9 +10,8 @@ use super::{
 use crate::conf_mgr::sync_runtime::resource_processor::{
     set_parent_conditions_full, AcceptedError, HandlerContext, ProcessResult, ProcessorHandler, ResourceRef,
 };
-use edgion_resources::prelude_resources::{TLSRoute, TLSRouteAlpha3};
+use edgion_resources::prelude_resources::TLSRoute;
 use edgion_resources::resources::common::RefDenied;
-use edgion_resources::resources::http_route::RouteParentStatus;
 use edgion_resources::resources::tls_route::TLSRouteStatus;
 use edgion_resources::ResourceKind;
 
@@ -266,29 +265,28 @@ impl TlsRouteHandler {
                 }
                 accepted_errors.extend(validation_accepted_errors.clone());
 
-                let parent_status = status.parents.iter_mut().find(|ps| {
-                    ps.parent_ref.name == parent_ref.name
-                        && ps.parent_ref.namespace == parent_ref.namespace
-                        && ps.parent_ref.section_name == parent_ref.section_name
-                });
-
-                if let Some(ps) = parent_status {
-                    set_parent_conditions_full(&mut ps.conditions, &accepted_errors, &resolved_refs_errors, generation);
-                } else {
-                    let mut conditions = Vec::new();
-                    set_parent_conditions_full(&mut conditions, &accepted_errors, &resolved_refs_errors, generation);
-
-                    status.parents.push(RouteParentStatus {
-                        parent_ref: parent_ref.clone(),
-                        controller_name: self.controller_name.clone(),
-                        conditions,
-                    });
-                }
+                let ps = super::route_utils::parent_status_for_update(
+                    &mut status.parents,
+                    parent_ref,
+                    route_ns,
+                    &self.controller_name,
+                );
+                set_parent_conditions_full(&mut ps.conditions, &accepted_errors, &resolved_refs_errors, generation);
             }
 
-            super::route_utils::retain_current_parent_statuses(&mut status.parents, parent_refs);
+            super::route_utils::retain_current_parent_statuses(
+                &mut status.parents,
+                parent_refs,
+                route_ns,
+                &self.controller_name,
+            );
         } else {
-            status.parents.clear();
+            super::route_utils::retain_current_parent_statuses(
+                &mut status.parents,
+                &[],
+                route_ns,
+                &self.controller_name,
+            );
         }
 
         // Globally rejected routes must not contribute to attachedRoutes.
@@ -311,6 +309,10 @@ impl TlsRouteHandler {
 
 #[async_trait::async_trait]
 impl ProcessorHandler<TLSRoute> for TlsRouteHandler {
+    fn finalize_transport(&self, route: &mut TLSRoute, _ctx: &HandlerContext) {
+        route.spec.resolved_status_controller = Some(self.controller_name.clone());
+    }
+
     fn validate(&self, route: &TLSRoute, _ctx: &HandlerContext) -> Vec<String> {
         self.validate_route(route)
     }
@@ -329,62 +331,6 @@ impl ProcessorHandler<TLSRoute> for TlsRouteHandler {
 
     fn update_status(&self, route: &mut TLSRoute, _ctx: &HandlerContext, validation_errors: &[String]) {
         self.update_route_status(route, _ctx, validation_errors);
-    }
-}
-
-// ============================================================================
-// TLSRoute v1alpha3 compat handler
-// ============================================================================
-
-/// TLSRoute v1alpha3 compat handler.
-///
-/// Keeps the older watch endpoint working while reusing the same validation and
-/// runtime preprocessing logic as the v1 handler.
-pub struct TlsRouteAlpha3Handler {
-    inner: TlsRouteHandler,
-}
-
-impl TlsRouteAlpha3Handler {
-    pub fn new(controller_name: String) -> Self {
-        Self {
-            inner: TlsRouteHandler::new(controller_name),
-        }
-    }
-}
-
-impl Default for TlsRouteAlpha3Handler {
-    fn default() -> Self {
-        Self::new("edgion.io/gateway-controller".to_string())
-    }
-}
-
-#[async_trait::async_trait]
-impl ProcessorHandler<TLSRouteAlpha3> for TlsRouteAlpha3Handler {
-    fn validate(&self, route: &TLSRouteAlpha3, _ctx: &HandlerContext) -> Vec<String> {
-        self.inner.validate_route(&route.clone().into())
-    }
-
-    async fn parse(&self, route: TLSRouteAlpha3, _ctx: &HandlerContext) -> ProcessResult<TLSRouteAlpha3> {
-        match self.inner.parse_route(route.into(), _ctx).await {
-            ProcessResult::Continue(v1) => ProcessResult::Continue(v1.into()),
-            ProcessResult::Skip { reason } => ProcessResult::Skip { reason },
-        }
-    }
-
-    async fn on_change(&self, route: &TLSRouteAlpha3, ctx: &HandlerContext) {
-        let v1: TLSRoute = route.clone().into();
-        self.inner.on_change_route(&v1, ctx).await;
-    }
-
-    async fn on_delete(&self, route: &TLSRouteAlpha3, ctx: &HandlerContext) {
-        let v1: TLSRoute = route.clone().into();
-        self.inner.on_delete_route(&v1, ctx).await;
-    }
-
-    fn update_status(&self, route: &mut TLSRouteAlpha3, _ctx: &HandlerContext, validation_errors: &[String]) {
-        let mut v1: TLSRoute = route.clone().into();
-        self.inner.update_route_status(&mut v1, _ctx, validation_errors);
-        *route = v1.into();
     }
 }
 

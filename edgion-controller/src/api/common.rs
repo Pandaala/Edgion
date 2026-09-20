@@ -346,6 +346,46 @@ mod tests {
     }
 
     #[test]
+    fn admin_parser_tls_route_version_matrix() {
+        use edgion_resources::TLSRoute;
+        let canonical = serde_json::json!({
+            "apiVersion": "gateway.networking.k8s.io/v1", "kind": "TLSRoute",
+            "metadata": {"name": "tls-route", "namespace": "default"},
+            "spec": {"hostnames": ["example.com"]}
+        });
+        for version in [
+            None,
+            Some(serde_json::Value::Null),
+            Some(serde_json::json!(42)),
+            Some(serde_json::json!("")),
+            Some(serde_json::json!("gateway.networking.k8s.io/v1alpha3")),
+            Some(serde_json::json!("gateway.networking.k8s.io/v1")),
+        ] {
+            let valid = version.as_ref().and_then(serde_json::Value::as_str) == Some("gateway.networking.k8s.io/v1");
+            let mut document = canonical.clone();
+            match version {
+                Some(value) => document["apiVersion"] = value,
+                None => {
+                    document.as_object_mut().unwrap().remove("apiVersion");
+                }
+            }
+            for body in [
+                serde_json::to_string(&document).unwrap(),
+                serde_yaml::to_string(&document).unwrap(),
+            ] {
+                for update_version in [false, true] {
+                    let result = parse_resource_and_update_version::<TLSRoute>(&body, update_version);
+                    if valid {
+                        assert!(result.is_ok());
+                    } else {
+                        assert_eq!(result.err(), Some(StatusCode::BAD_REQUEST));
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn admin_parser_rejects_missing_or_malformed_backend_tls_policy_version() {
         let canonical: serde_json::Value =
             serde_json::from_str(&backend_tls_policy_body("gateway.networking.k8s.io/v1")).unwrap();

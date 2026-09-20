@@ -590,7 +590,7 @@ mod tests {
             "kind": "GRPCRoute",
             "metadata": { "namespace": "default", "name": "grpc" },
             "spec": {
-                "parentRefs": [{ "name": "gateway", "kind": "Gateway" }],
+                "resolvedStatusController": "edgion.io/gateway-controller", "parentRefs": [{ "name": "gateway", "kind": "Gateway" }],
                 "rules": [{}]
             }
         });

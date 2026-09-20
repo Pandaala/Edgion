@@ -462,6 +462,7 @@ mod tests {
         GatewayInfoIndex::from_entries_for_test(vec![(
             format!("default/{gateway_name}"),
             ListenerEntry {
+                port: 80,
                 info: Arc::new(GatewayInfo::new(
                     Some("default".to_string()),
                     gateway_name.to_string(),

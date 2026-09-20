@@ -29,7 +29,7 @@ spec:
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `spec.controllerName` | String | Yes | Must be exactly `edgion.io/gateway-controller`. The Edgion controller only reconciles GatewayClasses with this value. |
+| `spec.controllerName` | String | Yes | Must match the Controller's configured `controller_name`, which defaults to `edgion.io/gateway-controller`. |
 | `spec.parametersRef` | Object | No | Reference to an `EdgionGatewayConfig` that tunes gateway behavior. When set, `group` must be `edgion.io` and `kind` must be `EdgionGatewayConfig`, or the GatewayClass is rejected (`Accepted: False`). |
 | `spec.parametersRef.group` | String | No | API group of the parameters resource: `edgion.io`. |
 | `spec.parametersRef.kind` | String | No | `EdgionGatewayConfig`. |
@@ -40,14 +40,20 @@ spec:
 
 ## controllerName
 
-The Edgion controller name is a fixed constant:
+The Edgion controller name defaults to:
 
 ```
 edgion.io/gateway-controller
 ```
 
-A GatewayClass with any other `controllerName` is ignored by Edgion. This is how the cluster
-can run multiple Gateway API implementations side by side without conflict.
+In Kubernetes mode, set `controller_name` in the Controller configuration to customize this name;
+the GatewayClass must match the configured value.
+
+When troubleshooting Route attachment, check both `status.parents[].parentRef` and `controllerName`.
+The Gateway uses the current Edgion controller's matching `Accepted` result: another controller's
+`Accepted=True` cannot override Edgion's `Accepted=False`. Different resource kinds, Listener sections
+and ports are evaluated separately. The Controller preserves observed foreign statuses and removes
+its own stale or duplicate entries.
 
 ## Scenarios
 
@@ -125,7 +131,7 @@ spec:
 
 - `controllerName` is immutable in the Gateway API; to change controllers you must delete and
   recreate the GatewayClass.
-- If `controllerName` does not exactly match `edgion.io/gateway-controller`, Edgion never sets
+- If `controllerName` does not exactly match the configured Controller name, Edgion never sets
   an `Accepted` condition and Gateways referencing the class stay unprogrammed.
 - A `parametersRef` with the wrong `group` or `kind` is rejected with `Accepted: False`; an
   unset `parametersRef` is valid and falls back to defaults.

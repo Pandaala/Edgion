@@ -127,6 +127,55 @@ impl GlobalTcpRouteManagers {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn owner_and_status_updates_replace_acceptance_with_unchanged_listeners() {
+        let managers = GlobalTcpRouteManagers::new();
+        let listener = make_listener_key(19443, "TCP");
+        let mut route = create_test_tcp_route("default", "owner-update", "gateway", "tcp", 19443, listener.clone());
+        let key = "default/owner-update".to_string();
+        let parent = route.spec.parent_refs.as_ref().unwrap()[0].clone();
+        route.status = Some(
+            serde_json::from_value(serde_json::json!({"parents": [{
+                "parentRef": parent, "controllerName": "example.net/owner",
+                "conditions": [{"type": "Accepted", "status": "False", "reason": "Rejected",
+                    "message": "", "lastTransitionTime": "2026-09-20T00:00:00Z"}]
+            }]}))
+            .unwrap(),
+        );
+        route.spec.resolved_status_controller = Some("example.net/other".into());
+        managers.full_set(&HashMap::from([(key.clone(), Arc::new(route.clone()))]));
+        let original = managers.get_route(&key).unwrap();
+        assert_eq!(original.resolved_parent_refs.len(), 1);
+
+        // Only the stamped owner changes: the previously foreign rejection now applies.
+        route.spec.resolved_status_controller = Some("example.net/owner".into());
+        managers.partial_update(
+            HashMap::new(),
+            HashMap::from([(key.clone(), Arc::new(route.clone()))]),
+            HashSet::new(),
+        );
+        assert!(managers.get_route(&key).unwrap().resolved_parent_refs.is_empty());
+        assert_eq!(
+            original.resolved_parent_refs.len(),
+            1,
+            "in-flight snapshot stays immutable"
+        );
+
+        // Only status changes, with exactly the same listener attachment.
+        route.status.as_mut().unwrap().parents[0].conditions[0].status = "True".into();
+        managers.partial_update(
+            HashMap::new(),
+            HashMap::from([(key.clone(), Arc::new(route.clone()))]),
+            HashSet::new(),
+        );
+        assert_eq!(managers.get_route(&key).unwrap().resolved_parent_refs.len(), 1);
+        route.spec.resolved_status_controller = None;
+        managers.full_set(&HashMap::from([(key.clone(), Arc::new(route))]));
+        assert!(managers.get_route(&key).unwrap().resolved_parent_refs.is_empty());
+        managers.partial_update(HashMap::new(), HashMap::new(), HashSet::from([key.clone()]));
+        assert!(managers.get_route(&key).is_none());
+    }
     use edgion_common::conf_sync::traits::ConfHandler;
     use edgion_resources::resources::common::ParentReference;
     use edgion_resources::resources::tcp_route::*;
@@ -152,6 +201,7 @@ mod tests {
                 ..Default::default()
             },
             spec: TCPRouteSpec {
+                resolved_status_controller: Some("edgion.io/gateway-controller".into()),
                 parent_refs: Some(vec![ParentReference {
                     group: Some("gateway.networking.k8s.io".to_string()),
                     kind: Some("Gateway".to_string()),

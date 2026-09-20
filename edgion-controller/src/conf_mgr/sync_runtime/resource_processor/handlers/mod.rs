@@ -58,7 +58,7 @@ pub use reference_grant::{ReferenceGrantBetaHandler, ReferenceGrantHandler};
 pub use secret::SecretHandler;
 pub use service::ServiceHandler;
 pub use tcp_route::TcpRouteHandler;
-pub use tls_route::{TlsRouteAlpha3Handler, TlsRouteHandler};
+pub use tls_route::TlsRouteHandler;
 pub use udp_route::UdpRouteHandler;
 
 use crate::conf_mgr::sync_runtime::resource_processor::{HandlerContext, ResourceRef, SecretRefManager};
@@ -354,6 +354,10 @@ pub(crate) async fn requeue_backend_policies_for_services(dropped_service_keys: 
         }
     }
 }
+
+#[cfg(test)]
+#[path = "tests/parent_status_identity_test.rs"]
+mod parent_status_identity_test;
 
 #[cfg(test)]
 mod tests {

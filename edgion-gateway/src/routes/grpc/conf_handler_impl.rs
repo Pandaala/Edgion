@@ -163,6 +163,7 @@ fn parse_route_to_units(resource_key: &str, route: &Arc<GRPCRoute>) -> Vec<Arc<G
         route.spec.parent_refs.as_deref(),
         route.status.as_ref().map(|s| s.parents.as_slice()),
         Some(route_namespace),
+        route.spec.resolved_status_controller.as_deref(),
     ) else {
         return Vec::new();
     };
@@ -328,6 +329,7 @@ mod tests {
         GatewayInfoIndex::from_entries_for_test(vec![(
             "default/test-gw".to_string(),
             ListenerEntry {
+                port: 19235,
                 info: Arc::new(GatewayInfo::new(
                     Some("default".to_string()),
                     "test-gw".to_string(),
@@ -349,13 +351,90 @@ mod tests {
         let route: GRPCRoute = serde_json::from_value(json!({
             "apiVersion": "gateway.networking.k8s.io/v1", "kind": "GRPCRoute",
             "metadata": {"name": name, "namespace": "default"},
-            "spec": {"parentRefs": [{"name": "test-gw", "sectionName": "grpc"}],
+            "spec": {"resolvedStatusController": "edgion.io/gateway-controller", "parentRefs": [{"name": "test-gw", "sectionName": "grpc"}],
                 "hostnames": [host], "resolvedListeners": ["127.0.0.1:19235/HTTP"],
                 "rules": [{"matches": [matcher], "backendRefs": [{"name": "svc", "port": 80}]}]}
         }))
         .unwrap();
         // Exercise the same serialized fields carried by conf_sync.
         Arc::new(serde_json::from_slice(&serde_json::to_vec(&route).unwrap()).unwrap())
+    }
+
+    #[tokio::test]
+    async fn compiled_grpc_parent_ports_select_the_matching_gateway_on_shared_listener() {
+        use crate::plugins::publication::{inputs::GatewayInput, PluginPublisher};
+
+        let publisher = PluginPublisher::new();
+        let gateways = [("a", vec![8080, 8081]), ("b", vec![8081])]
+            .into_iter()
+            .map(|(name, ports)| {
+                let gateway: edgion_resources::Gateway = serde_json::from_value(json!({
+                    "apiVersion": "gateway.networking.k8s.io/v1", "kind": "Gateway",
+                    "metadata": {"namespace": "default", "name": name},
+                    "spec": {"gatewayClassName": "test", "listeners": ports.into_iter().map(|port|
+                        json!({"name": format!("grpc-{port}"), "port": port, "protocol": "HTTP"})
+                    ).collect::<Vec<_>>()}
+                }))
+                .unwrap();
+                (format!("default/{name}"), GatewayInput::from_gateway(&gateway))
+            })
+            .collect();
+        publisher.replace_gateways(gateways);
+        let publication = publisher.snapshot();
+        let mut route = (*matching_route("port-owner", "example.com", json!({"method": {"method": "Get"}}))).clone();
+        route.spec.parent_refs = Some(
+            serde_json::from_value(json!([
+                {"name": "a", "port": 8080}, {"name": "b", "port": 8081}
+            ]))
+            .unwrap(),
+        );
+        let units = parse_route_to_units("default/port-owner", &Arc::new(route));
+        assert_eq!(units.len(), 1);
+        let engine = GrpcMatchEngine::new(units);
+        let (session, ctx) = matching_session("/svc/Get", "example.com", "").await;
+        for (port, owner) in [(8080, "default/a"), (8081, "default/b")] {
+            let key = ListenerKey::new(format!("0.0.0.0:{port}").parse().unwrap(), "HTTP");
+            let index = publication.listener_index(&key).unwrap();
+            let (_, gateway) = engine.match_route(&session, &ctx, index, "example.com").unwrap();
+            assert_eq!(gateway.gateway_key(), owner);
+        }
+    }
+
+    #[test]
+    fn owner_and_status_updates_replace_acceptance_with_unchanged_listeners() {
+        let managers = GlobalGrpcRouteManagers::new();
+        let key = "default/owner-update-grpc".to_string();
+        let mut route =
+            (*matching_route("owner-update-grpc", "example.com", json!({"method": {"method": "Get"}}))).clone();
+        let parent = route.spec.parent_refs.as_ref().unwrap()[0].clone();
+        route.status = Some(
+            serde_json::from_value(json!({"parents": [{
+                "parentRef": parent, "controllerName": "example.net/owner",
+                "conditions": [{"type": "Accepted", "status": "False", "reason": "Rejected",
+                    "message": "", "lastTransitionTime": "2026-09-20T00:00:00Z"}]
+            }]}))
+            .unwrap(),
+        );
+        managers.full_set(&HashMap::from([(key.clone(), Arc::new(route.clone()))]));
+        let old = managers.route_units_cache.lock()[&key][0].clone();
+        route.spec.resolved_status_controller = Some("example.net/owner".into());
+        managers.partial_update(
+            HashMap::new(),
+            HashMap::from([(key.clone(), Arc::new(route.clone()))]),
+            HashSet::new(),
+        );
+        assert!(managers.route_units_cache.lock()[&key].is_empty());
+        route.status.as_mut().unwrap().parents[0].conditions[0].status = "True".into();
+        managers.partial_update(
+            HashMap::new(),
+            HashMap::from([(key.clone(), Arc::new(route.clone()))]),
+            HashSet::new(),
+        );
+        assert_eq!(managers.route_units_cache.lock()[&key].len(), 1);
+        assert!(!Arc::ptr_eq(&old, &managers.route_units_cache.lock()[&key][0]));
+        route.spec.resolved_status_controller = None;
+        managers.full_set(&HashMap::from([(key.clone(), Arc::new(route))]));
+        assert!(managers.route_units_cache.lock()[&key].is_empty());
     }
 
     #[tokio::test]
@@ -378,6 +457,7 @@ mod tests {
             (
                 "default/empty-exact".into(),
                 ListenerEntry {
+                    port: 19235,
                     info: Arc::new(GatewayInfo::new(
                         Some("default".into()),
                         "empty-exact".into(),
@@ -742,7 +822,7 @@ mod tests {
             serde_json::from_value(json!({
                 "apiVersion":"gateway.networking.k8s.io/v1", "kind":"HTTPRoute",
                 "metadata":{"name":"http-fallback", "namespace":"default"},
-                "spec":{"parentRefs":[{"name":"test-gw", "sectionName":"grpc"}],
+                "spec":{"resolvedStatusController": "edgion.io/gateway-controller", "parentRefs":[{"name":"test-gw", "sectionName":"grpc"}],
                     "hostnames":["api.example.com"], "resolvedListeners":["127.0.0.1:19235/HTTP"],
                     "rules":[{"matches":[{"path":{"type":"PathPrefix", "value":"/"}}],
                         "backendRefs":[{"name":"svc", "port":80}]}]}
@@ -779,7 +859,7 @@ mod tests {
             "kind": "GRPCRoute",
             "metadata": { "namespace": namespace, "name": name },
             "spec": {
-                "parentRefs": [{ "name": "test-gw", "kind": "Gateway" }],
+                "resolvedStatusController": "edgion.io/gateway-controller", "parentRefs": [{ "name": "test-gw", "kind": "Gateway" }],
                 "rules": [{
                     "backendRefs": [{ "name": "svc1", "port": 8080 }]
                 }]
@@ -798,7 +878,7 @@ mod tests {
             "kind": "GRPCRoute",
             "metadata": { "namespace": namespace, "name": name },
             "spec": {
-                "parentRefs": [{ "name": "test-gw", "kind": "Gateway" }],
+                "resolvedStatusController": "edgion.io/gateway-controller", "parentRefs": [{ "name": "test-gw", "kind": "Gateway" }],
                 "rules": [
                     { "matches": [{ "method": { "service": "svc.SpecA" } }],
                       "backendRefs": [{ "name": "spec-svc-a", "port": 8080 }] },
@@ -944,7 +1024,7 @@ mod tests {
             "kind": "GRPCRoute",
             "metadata": { "namespace": "route-ns", "name": "metric-sharing" },
             "spec": {
-                "parentRefs": [{ "name": "test-gw", "kind": "Gateway" }],
+                "resolvedStatusController": "edgion.io/gateway-controller", "parentRefs": [{ "name": "test-gw", "kind": "Gateway" }],
                 "rules": [
                     {
                         "matches": [

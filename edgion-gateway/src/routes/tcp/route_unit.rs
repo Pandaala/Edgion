@@ -44,6 +44,7 @@ impl TcpRouteUnit {
             route.spec.parent_refs.as_deref(),
             route.status.as_ref().map(|status| status.parents.as_slice()),
             Some(namespace),
+            route.spec.resolved_status_controller.as_deref(),
         )
         .unwrap_or_default();
         let resolved_parent_refs = resolve_parent_refs(&accepted, namespace);
@@ -99,6 +100,7 @@ mod tests {
                 ..Default::default()
             },
             spec: TCPRouteSpec {
+                resolved_status_controller: Some("edgion.io/gateway-controller".into()),
                 parent_refs: Some(vec![ParentReference {
                     group: Some("gateway.networking.k8s.io".to_string()),
                     kind: Some("Gateway".to_string()),

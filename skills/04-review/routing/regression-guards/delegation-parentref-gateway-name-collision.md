@@ -89,7 +89,8 @@ Kubernetes path contracts were checked, but live Kubernetes was not run.
 
 This guard covers Gateway-side publication and live attachment behavior. The
 Controller's broader canonical parent-status writer, retention, comparison, and
-configured-controller ownership contract remains separate work.
+configured-controller ownership contract is covered by the
+[canonical ownership guard](../../status/regression-guards/canonical-parent-status-ownership.md).
 
 Re-evaluate this guard when changing parentRef defaulting, route delegation
 reverse locks, status matching, HTTP/gRPC route publication, listener hostname

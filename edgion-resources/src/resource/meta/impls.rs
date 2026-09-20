@@ -24,7 +24,7 @@ impl_resource_meta!(EndpointSlice, EndpointSlice, "EndpointSlice");
 
 use crate::resources::{
     BackendTLSPolicy, GRPCRoute, Gateway, GatewayClass, HTTPRoute, ReferenceGrant, ReferenceGrantBeta, TCPRoute,
-    TLSRoute, TLSRouteAlpha3, UDPRoute,
+    TLSRoute, UDPRoute,
 };
 
 // Cluster-scoped
@@ -52,7 +52,6 @@ impl_resource_meta!(GRPCRoute, GRPCRoute, "GRPCRoute", |self| {
 impl_resource_meta!(TCPRoute, TCPRoute, "TCPRoute");
 impl_resource_meta!(UDPRoute, UDPRoute, "UDPRoute");
 impl_resource_meta!(TLSRoute, TLSRoute, "TLSRoute");
-impl_resource_meta!(TLSRouteAlpha3, TLSRoute, "TLSRoute");
 
 // =============================================================================
 // Edgion custom resources

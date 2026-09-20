@@ -5,9 +5,9 @@
 | Ingress | Structural/schema validation | TypeMeta/version handling | Semantic validation and status |
 |---------|------------------------------|---------------------------|--------------------------------|
 | Kubernetes | API server applies the installed CRD's OpenAPI schema, pruning/defaulting rules, and CEL | Watchers use statically selected or probed GVKs; preflight checks served availability, not bundle compatibility | Controller handlers validate references and behavior, then patch native status |
-| Non-Kubernetes Admin write | Typed parse, serialize back to JSON, then `SchemaValidator`; HTTPRoute additionally runs the shared generated request-transform contract | BackendTLSPolicy has an explicit raw v1 guard; most kinds do not | Schema or transform-contract failure returns 400; accepted resources later enter the normal handler/status path |
+| Non-Kubernetes Admin write | Typed parse, serialize back to JSON, then `SchemaValidator`; HTTPRoute additionally runs the shared generated request-transform contract | BackendTLSPolicy and TLSRoute have explicit raw v1 guards; most kinds do not | Schema or transform-contract failure returns 400; accepted resources later enter the normal handler/status path |
 | Validation endpoint | Same typed-parse-before-schema sequence; always invokes the local schema validator | Same raw-version limitations | Returns schema errors plus side-effect-free business validation for EdgionPlugins and HTTPRoute request transforms |
-| Filesystem and etcd direct write | Serde parse only; local CRD `SchemaValidator` is intentionally not run in watcher paths under the current accepted design | BackendTLSPolicy is guarded; TLSRoute may convert v1alpha3; most kinds discard submitted TypeMeta | Parse failures use error sidecars; parsed objects use handler validation/status |
+| Filesystem and etcd direct write | Serde parse only; local CRD `SchemaValidator` is intentionally not run in watcher paths under the current accepted design | BackendTLSPolicy and TLSRoute have raw v1 guards; most kinds discard submitted TypeMeta | Parse failures use error sidecars; parsed objects use handler validation/status |
 | Gateway conf-sync ingest | No API-server admission; selected HTTPRoute request-transform constraints are rechecked from the embedded generated contract | Receives Controller-produced canonical serialized types | Invalid transform rules are not published; constructors consume prepared immutable transform state and fail closed if malformed state bypasses the Controller |
 
 The accepted rationale for not running the complete CRD validator in direct
@@ -40,9 +40,9 @@ unless bundle/channel policy is part of schema registration.
 
 ## Existing conversions
 
-- TLSRoute has v1 and v1alpha3 Rust resource types, bidirectional conversions,
-  version probing, separate compatibility handler wiring, dynamic CRUD
-  selection, and filesystem v1alpha3-to-v1 normalization.
+- TLSRoute uses v1 only with raw TypeMeta validation, one canonical watcher,
+  and the same v1 identity for CRUD and status. The old conversions and
+  fallback selection have been removed.
 - ReferenceGrant has v1 and v1beta1 Rust types. Kubernetes probing can select a
   v1beta1 watcher whose handler converts into the v1 store representation.
 - BackendTLSPolicy was intentionally promoted to v1-only with raw TypeMeta

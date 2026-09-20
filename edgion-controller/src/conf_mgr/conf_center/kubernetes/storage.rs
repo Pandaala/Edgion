@@ -3,11 +3,10 @@
 //! Implements the CenterApi trait by calling Kubernetes API.
 //! Similar to client-go, this allows creating/updating/deleting K8s resources via API.
 
-use super::version_detection::{
-    probe_reference_grant_version, probe_tls_route_version, ReferenceGrantVersion, TLSRouteVersion,
-};
+use super::version_detection::{probe_reference_grant_version, ReferenceGrantVersion};
 use crate::conf_mgr::conf_center::common::{
     ensure_expected_resource_version_value, merge_operator_update_values, validate_backend_tls_policy_api_version,
+    validate_tls_route_api_version,
 };
 use crate::conf_mgr::conf_center::traits::{
     CenterApi, ConfEntry, ConfWriterError, ListOptions, ListResult, ResourceKey, ResourceKeyMeta, LAST_APPLIED_KEY,
@@ -106,28 +105,10 @@ impl KubernetesStorage {
                 )),
                 Scope::Namespaced,
             ),
-            "TLSRoute" => match probe_tls_route_version(&self.client)
-                .await
-                .map_err(|e| ConfWriterError::InternalError(format!("Failed to detect TLSRoute version: {}", e)))?
-            {
-                Some(TLSRouteVersion::V1) => (
-                    ApiResource::from_gvk(&GroupVersionKind::gvk("gateway.networking.k8s.io", "v1", "TLSRoute")),
-                    Scope::Namespaced,
-                ),
-                Some(TLSRouteVersion::V1Alpha3) => (
-                    ApiResource::from_gvk(&GroupVersionKind::gvk(
-                        "gateway.networking.k8s.io",
-                        "v1alpha3",
-                        "TLSRoute",
-                    )),
-                    Scope::Namespaced,
-                ),
-                None => {
-                    return Err(ConfWriterError::NotFound(
-                        "TLSRoute CRD not found (expected v1 or v1alpha3)".to_string(),
-                    ))
-                }
-            },
+            "TLSRoute" => (
+                ApiResource::from_gvk(&GroupVersionKind::gvk("gateway.networking.k8s.io", "v1", "TLSRoute")),
+                Scope::Namespaced,
+            ),
             "ReferenceGrant" => match probe_reference_grant_version(&self.client).await.map_err(|e| {
                 ConfWriterError::InternalError(format!("Failed to detect ReferenceGrant version: {}", e))
             })? {
@@ -298,9 +279,12 @@ impl KubernetesStorage {
         if kind == "BackendTLSPolicy" {
             validate_backend_tls_policy_api_version(value.get("apiVersion").and_then(Value::as_str))
                 .map_err(ConfWriterError::ValidationError)?;
+        } else if kind == "TLSRoute" {
+            validate_tls_route_api_version(value.get("apiVersion").and_then(Value::as_str))
+                .map_err(ConfWriterError::ValidationError)?;
         }
 
-        if matches!(kind, "TLSRoute" | "ReferenceGrant") {
+        if kind == "ReferenceGrant" {
             project_gateway_api_version(&mut value, &api_resource.kind, &api_resource.api_version);
         }
 
@@ -969,6 +953,92 @@ mod tests {
     use std::convert::Infallible;
     use std::sync::Arc;
     use tower::service_fn;
+
+    #[tokio::test]
+    async fn tls_route_storage_uses_v1_without_discovery_and_rejects_other_versions() {
+        let service = service_fn(|_req: http::Request<Body>| async {
+            panic!("TLSRoute endpoint selection and raw parsing must not perform discovery");
+            #[allow(unreachable_code)]
+            Ok::<_, Infallible>(Response::new(Body::empty()))
+        });
+        let storage = KubernetesStorage {
+            client: Client::new(service, "default"),
+            allowed_namespaces: BTreeSet::new(),
+        };
+        let (api_resource, _) = storage.resolve_api_resource("TLSRoute").await.unwrap();
+        assert_eq!(api_resource.api_version, "gateway.networking.k8s.io/v1");
+        assert_eq!(api_resource.kind, "TLSRoute");
+        for version in [
+            None,
+            Some(Value::Null),
+            Some(json!(42)),
+            Some(json!("")),
+            Some(json!("gateway.networking.k8s.io/v1alpha3")),
+            Some(json!("gateway.networking.k8s.io/v1")),
+        ] {
+            let valid = version.as_ref().and_then(Value::as_str) == Some("gateway.networking.k8s.io/v1");
+            let mut document = json!({"kind": "TLSRoute", "metadata": {"name": "route", "namespace": "default"}, "spec": {"hostnames": ["example.com"]}});
+            if let Some(value) = version {
+                document["apiVersion"] = value;
+            }
+            let parsed = storage.parse_dynamic_object("TLSRoute", &document.to_string(), &api_resource);
+            if valid {
+                assert_eq!(
+                    parsed.unwrap().types.unwrap().api_version,
+                    "gateway.networking.k8s.io/v1"
+                );
+            } else {
+                assert!(matches!(parsed, Err(ConfWriterError::ValidationError(_))));
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn tls_route_create_persists_v1_and_rejects_legacy_before_http() {
+        let requests = Arc::new(Mutex::new(Vec::<(Method, String, Value)>::new()));
+        let captured = requests.clone();
+        let service = service_fn(move |request: http::Request<Body>| {
+            let captured = captured.clone();
+            async move {
+                let (parts, body) = request.into_parts();
+                let bytes = body.collect_bytes().await.unwrap();
+                let value: Value = serde_json::from_slice(&bytes).unwrap();
+                captured
+                    .lock()
+                    .push((parts.method, parts.uri.path().to_string(), value.clone()));
+                Ok::<_, Infallible>(json_response(StatusCode::CREATED, value))
+            }
+        });
+        let storage = KubernetesStorage {
+            client: Client::new(service, "default"),
+            allowed_namespaces: BTreeSet::new(),
+        };
+        let mut value = json!({
+            "apiVersion": "gateway.networking.k8s.io/v1alpha3", "kind": "TLSRoute",
+            "metadata": {"name": "route", "namespace": "default"},
+            "spec": {"hostnames": ["example.com"]}
+        });
+        assert!(matches!(
+            storage
+                .create_one("TLSRoute", Some("default"), "route", value.to_string())
+                .await,
+            Err(ConfWriterError::ValidationError(_))
+        ));
+        assert!(requests.lock().is_empty());
+        value["apiVersion"] = json!("gateway.networking.k8s.io/v1");
+        storage
+            .create_one("TLSRoute", Some("default"), "route", value.to_string())
+            .await
+            .unwrap();
+        let requests = requests.lock();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].0, Method::POST);
+        assert_eq!(
+            requests[0].1,
+            "/apis/gateway.networking.k8s.io/v1/namespaces/default/tlsroutes"
+        );
+        assert_eq!(requests[0].2["apiVersion"], "gateway.networking.k8s.io/v1");
+    }
 
     fn json_response(status: StatusCode, value: Value) -> Response<Body> {
         Response::builder()

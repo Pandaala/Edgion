@@ -55,6 +55,14 @@ At configuration build time, resource preprocessing and `RadixPath::new` share
 and `/abc` use the same tree key and path specificity; non-path ties decide their
 order. Root `/`, Exact trailing slashes, and request URI semantics are preserved.
 
+## Logical listener matching
+
+Before selecting a logical Gateway, the shared deep matcher checks each resolved parent's
+namespace/name, optional section and optional declared port against the current listener index.
+Section and port constraints are conjunctive. The per-route physical listener-key union is only
+a bucketing aid, not authorization for another parent on a shared socket. See the
+[runtime parent-port guard](../../../04-review/routing/regression-guards/runtime-parent-port-eligibility.md).
+
 ## Regex route matching
 
 `RegexRoutesEngine` performs efficient batch regex matching using `regex::RegexSet`:

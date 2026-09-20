@@ -28,6 +28,12 @@ pub struct HTTPRouteSpec {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_refs: Option<Vec<ParentReference>>,
 
+    /// Controller-owned status identity, published with this processed route by conf_sync.
+    /// Overwritten by the Controller; never an operator-authored field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
+    pub resolved_status_controller: Option<String>,
+
     /// Hostnames defines the set of hostnames
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(inner(

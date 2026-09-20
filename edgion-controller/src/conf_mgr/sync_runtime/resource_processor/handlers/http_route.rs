@@ -28,8 +28,7 @@ use edgion_resources::resources::extension_ref::{
     is_supported_edgion_plugins_ref, validate_extension_ref_filter, ExtensionRefValidationError,
 };
 use edgion_resources::resources::http_route::{
-    DelegationIssue, HTTPBackendRefKind, HTTPRouteFilterType, HTTPRouteRule, HTTPRouteStatus, RouteParentStatus,
-    GATEWAY_API_GROUP,
+    DelegationIssue, HTTPBackendRefKind, HTTPRouteFilterType, HTTPRouteRule, HTTPRouteStatus, GATEWAY_API_GROUP,
 };
 #[cfg(test)]
 use edgion_resources::resources::http_route_ai_admission::{self as shared_ai_admission, AiProxyAdmission};
@@ -40,14 +39,14 @@ use edgion_resources::ResourceKind;
 /// (the Gateway API default when group/kind are absent). Delegation
 /// parentRefs (`kind: HTTPRoute`, reverse-lock declarations) return false.
 fn is_gateway_parent_ref(pr: &ParentReference) -> bool {
-    pr.group.as_deref().unwrap_or(GATEWAY_API_GROUP) == GATEWAY_API_GROUP
-        && pr.kind.as_deref().unwrap_or("Gateway") == "Gateway"
+    pr.canonical_identity(None).is_gateway()
 }
 
 /// True for parentRef entries that reverse-lock delegation to specific parent
 /// HTTPRoutes.
 fn is_delegation_parent_ref(pr: &ParentReference) -> bool {
-    pr.group.as_deref().unwrap_or(GATEWAY_API_GROUP) == GATEWAY_API_GROUP && pr.kind.as_deref() == Some("HTTPRoute")
+    let identity = pr.canonical_identity(None);
+    identity.group == GATEWAY_API_GROUP && identity.kind == "HTTPRoute"
 }
 
 /// `DelegationLookup` backed by the live controller stores.
@@ -349,6 +348,10 @@ impl Default for HttpRouteHandler {
 
 #[async_trait::async_trait]
 impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
+    fn finalize_transport(&self, route: &mut HTTPRoute, _ctx: &HandlerContext) {
+        route.spec.resolved_status_controller = Some(self.controller_name.clone());
+    }
+
     fn validate(&self, route: &HTTPRoute, _ctx: &HandlerContext) -> Vec<String> {
         let errors = validate_http_route_if_enabled(route);
         // Note: per-rule validation (filter conflicts, malformed CORS) is handled by
@@ -840,28 +843,14 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
                 // request-wide, so a late backend attachment makes the route's
                 // election ambiguous even when a sibling rule could serve.
 
-                let conditions = if let Some(ps) = status.parents.iter_mut().find(|ps| {
-                    ps.parent_ref.name == parent_ref.name
-                        && ps.parent_ref.namespace == parent_ref.namespace
-                        && ps.parent_ref.section_name == parent_ref.section_name
-                }) {
-                    set_parent_conditions_full(&mut ps.conditions, &accepted_errors, &resolved_refs_errors, generation);
-                    &mut ps.conditions
-                } else {
-                    let mut conditions = Vec::new();
-                    set_parent_conditions_full(&mut conditions, &accepted_errors, &resolved_refs_errors, generation);
-
-                    status.parents.push(RouteParentStatus {
-                        parent_ref: parent_ref.clone(),
-                        controller_name: self.controller_name.clone(),
-                        conditions,
-                    });
-                    &mut status
-                        .parents
-                        .last_mut()
-                        .expect("just pushed; Vec is non-empty")
-                        .conditions
-                };
+                let ps = super::route_utils::parent_status_for_update(
+                    &mut status.parents,
+                    parent_ref,
+                    route_ns,
+                    &self.controller_name,
+                );
+                let conditions = &mut ps.conditions;
+                set_parent_conditions_full(conditions, &accepted_errors, &resolved_refs_errors, generation);
 
                 // Set PartiallyInvalid for per-rule drops while an effective
                 // rule remains matchable. Skipped when
@@ -925,27 +914,28 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
                 // and a `kind: HTTPRoute` parentRef with the same name/ns/
                 // section, and the delegation Accepted condition must not
                 // overwrite the Gateway-acceptance entry.
-                if let Some(ps) = status.parents.iter_mut().find(|ps| {
-                    ps.parent_ref.name == parent_ref.name
-                        && ps.parent_ref.namespace == parent_ref.namespace
-                        && ps.parent_ref.section_name == parent_ref.section_name
-                        && ps.parent_ref.kind == parent_ref.kind
-                }) {
-                    update_condition(&mut ps.conditions, condition);
-                } else {
-                    let mut conditions = Vec::new();
-                    update_condition(&mut conditions, condition);
-                    status.parents.push(RouteParentStatus {
-                        parent_ref: parent_ref.clone(),
-                        controller_name: self.controller_name.clone(),
-                        conditions,
-                    });
-                }
+                let ps = super::route_utils::parent_status_for_update(
+                    &mut status.parents,
+                    parent_ref,
+                    route_ns,
+                    &self.controller_name,
+                );
+                update_condition(&mut ps.conditions, condition);
             }
 
-            super::route_utils::retain_current_parent_statuses(&mut status.parents, parent_refs);
+            super::route_utils::retain_current_parent_statuses(
+                &mut status.parents,
+                parent_refs,
+                route_ns,
+                &self.controller_name,
+            );
         } else {
-            status.parents.clear();
+            super::route_utils::retain_current_parent_statuses(
+                &mut status.parents,
+                &[],
+                route_ns,
+                &self.controller_name,
+            );
         }
 
         // Update tracker with only accepted parentRefs so attachedRoutes count is accurate.

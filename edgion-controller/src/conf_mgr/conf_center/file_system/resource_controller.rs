@@ -986,8 +986,7 @@ mod tests {
     }
     use edgion_resources::prelude_resources::{
         BackendTLSPolicy, BackendTLSPolicySpec, BackendTLSPolicyStatus, BackendTLSPolicyTargetRef,
-        BackendTLSPolicyValidation, TLSBackendRef, TLSRoute, TLSRouteAlpha3, TLSRouteAlpha3Spec, TLSRouteRule,
-        TLSRouteSpec, TLSRouteStatus,
+        BackendTLSPolicyValidation, TLSBackendRef, TLSRoute, TLSRouteRule, TLSRouteSpec, TLSRouteStatus,
     };
     use edgion_resources::resources::common::ParentReference;
 
@@ -1073,6 +1072,7 @@ mod tests {
                 ..Default::default()
             },
             spec: TLSRouteSpec {
+                resolved_status_controller: None,
                 parent_refs: Some(vec![ParentReference {
                     group: Some("gateway.networking.k8s.io".to_string()),
                     kind: Some("Gateway".to_string()),
@@ -1100,31 +1100,32 @@ mod tests {
     }
 
     #[test]
-    fn parse_tls_route_v1alpha3_into_canonical_v1() {
-        let route = make_tls_route();
-        let alpha3 = TLSRouteAlpha3 {
-            metadata: route.metadata.clone(),
-            spec: TLSRouteAlpha3Spec {
-                parent_refs: route.spec.parent_refs.clone(),
-                hostnames: route.spec.hostnames.clone(),
-                rules: route.spec.rules.clone(),
-            },
-            status: route.status.clone(),
-        };
-        let yaml = serde_yaml::to_string(&alpha3).unwrap();
-
-        let parsed: TLSRoute = parse_resource_content(&yaml).unwrap();
-        let serialized = serde_yaml::to_value(&parsed).unwrap();
-
-        assert_eq!(
-            serialized.get("apiVersion").and_then(|v| v.as_str()),
-            Some("gateway.networking.k8s.io/v1")
-        );
-        assert_eq!(parsed.spec.hostnames.as_ref().unwrap()[0], "example.com");
-        assert_eq!(
-            parsed.spec.rules.as_ref().unwrap()[0].backend_refs.as_ref().unwrap()[0].name,
-            "svc"
-        );
+    fn parse_tls_route_rejects_noncanonical_versions() {
+        for version in [
+            None,
+            Some(serde_json::Value::Null),
+            Some(serde_json::json!(1)),
+            Some(serde_json::json!("")),
+            Some(serde_json::json!("gateway.networking.k8s.io/v1alpha3")),
+            Some(serde_json::json!("gateway.networking.k8s.io/v1alpha2")),
+        ] {
+            let mut document = serde_json::to_value(make_tls_route()).unwrap();
+            match version {
+                Some(value) => document["apiVersion"] = value,
+                None => {
+                    document.as_object_mut().unwrap().remove("apiVersion");
+                }
+            }
+            for body in [
+                serde_json::to_string(&document).unwrap(),
+                serde_yaml::to_string(&document).unwrap(),
+            ] {
+                let error = parse_resource_content::<TLSRoute>(&body).unwrap_err();
+                assert!(error
+                    .to_string()
+                    .contains("TLSRoute apiVersion must be gateway.networking.k8s.io/v1"));
+            }
+        }
     }
 
     #[test]
@@ -1161,6 +1162,80 @@ mod tests {
     struct FsNoopHandler;
     #[async_trait::async_trait]
     impl ProcessorHandler<HTTPRoute> for FsNoopHandler {}
+
+    #[tokio::test]
+    async fn tls_route_ingress_rejects_invalid_versions_before_raw_store_and_recovers() {
+        use crate::conf_mgr::sync_runtime::resource_processor::raw_store::RawStore;
+        struct TlsNoopHandler;
+        #[async_trait::async_trait]
+        impl ProcessorHandler<TLSRoute> for TlsNoopHandler {}
+
+        let tmp = tempfile::tempdir().unwrap();
+        let processor = Arc::new(ResourceProcessor::<TLSRoute>::new(
+            "TLSRoute",
+            100,
+            Arc::new(TlsNoopHandler),
+            Arc::new(ControllerRuntime::default()),
+        ));
+        let (tx, rx) = broadcast::channel(16);
+        let shutdown = ShutdownHandle::new();
+        let controller = FileSystemResourceController::new(
+            "TLSRoute",
+            processor.clone(),
+            tmp.path().to_path_buf(),
+            Arc::new(PathRegistry::default()),
+            rx,
+        )
+        .with_shutdown(shutdown.signal());
+        let raw = controller.fs_raw_store.clone();
+        let run = tokio::spawn(controller.run());
+        tx.send(FileSystemEvent::Init).unwrap();
+        for (index, version) in [
+            None,
+            Some(serde_json::Value::Null),
+            Some(serde_json::json!(42)),
+            Some(serde_json::json!("gateway.networking.k8s.io/v1alpha3")),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let mut document = serde_json::to_value(make_tls_route()).unwrap();
+            document["metadata"]["name"] = serde_json::json!(format!("invalid-{index}"));
+            match version {
+                Some(value) => document["apiVersion"] = value,
+                None => {
+                    document.as_object_mut().unwrap().remove("apiVersion");
+                }
+            }
+            tx.send(FileSystemEvent::InitApply {
+                path: tmp.path().join(format!("TLSRoute_default_invalid-{index}.yaml")),
+                content: serde_yaml::to_string(&document).unwrap(),
+            })
+            .unwrap();
+        }
+        // A valid event after the invalid events proves the same stream can recover.
+        tx.send(FileSystemEvent::InitApply {
+            path: tmp.path().join("TLSRoute_default_tr.yaml"),
+            content: serde_yaml::to_string(&make_tls_route()).unwrap(),
+        })
+        .unwrap();
+        tx.send(FileSystemEvent::InitDone).unwrap();
+        timeout(Duration::from_secs(5), async {
+            while processor.get("default/tr").is_none() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        for index in 0..4 {
+            let key = format!("default/invalid-{index}");
+            assert!(processor.get(&key).is_none());
+            assert!(raw.get(&key).is_none());
+        }
+        assert!(raw.get("default/tr").is_some());
+        shutdown.shutdown();
+        timeout(Duration::from_secs(5), run).await.unwrap().unwrap().unwrap();
+    }
 
     #[tokio::test]
     async fn duplicate_init_done_keeps_one_worker() {
@@ -1229,6 +1304,7 @@ mod tests {
                 ..Default::default()
             },
             spec: HTTPRouteSpec {
+                resolved_status_controller: None,
                 parent_refs: None,
                 hostnames: None,
                 resolved_hostnames: None,

@@ -21,6 +21,8 @@ before applying a decision to current code.
 
 ## Regression guards
 
+- [Runtime parent ports constrain logical listeners](regression-guards/runtime-parent-port-eligibility.md)
+
 - [Route attachment cannot override Listener protocol compatibility](regression-guards/route-listener-protocol-acceptance-parity.md)
 - [TLSRoute hostnames stay with listener attachments](regression-guards/tls-hostnames-per-attachment.md)
 - [GRPCRoute method predicates, hostname precedence, and ranked candidate fallback](regression-guards/grpc-method-matching-and-precedence.md)

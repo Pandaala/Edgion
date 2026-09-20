@@ -25,6 +25,12 @@ pub struct UDPRouteSpec {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_refs: Option<Vec<ParentReference>>,
 
+    /// Controller-owned status identity, published with this processed route by conf_sync.
+    /// Overwritten by the Controller; never an operator-authored field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
+    pub resolved_status_controller: Option<String>,
+
     /// Rules defines the UDP routing rules
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rules: Option<Vec<UDPRouteRule>>,

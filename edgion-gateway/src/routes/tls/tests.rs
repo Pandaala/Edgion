@@ -47,7 +47,7 @@ fn selection_unit(name: &str, hostname: &str, parents: &[&str], port: u16) -> Ar
         .collect();
     let route = serde_json::from_value(json!({
         "metadata": {"namespace": "default", "name": name},
-        "spec": {"hostnames": [hostname], "parentRefs": parent_refs, "resolvedListeners": attachments}
+        "spec": {"hostnames": [hostname], "resolvedStatusController": "edgion.io/gateway-controller", "parentRefs": parent_refs, "resolvedListeners": attachments}
     }))
     .unwrap();
     Arc::new(TlsRouteUnit::from_route(Arc::new(route)))

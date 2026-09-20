@@ -143,6 +143,96 @@ mod tests {
         assert!(weak.upgrade().is_none());
     }
     #[test]
+    fn stream_parent_ports_preserve_scope_across_gateway_publications() {
+        use crate::plugins::publication::{inputs::GatewayInput, PluginPublisher};
+        use crate::routes::{tcp::TcpRouteUnit, udp::UdpRouteUnit};
+        use serde_json::json;
+        use std::collections::{HashMap, HashSet};
+
+        for (protocol, kind) in [("TCP", "TCPRoute"), ("UDP", "UDPRoute")] {
+            let publisher = PluginPublisher::new();
+            publisher.replace_gateway_classes(
+                ["ready-a", "ready-b"]
+                    .into_iter()
+                    .map(|name| {
+                        let class = Arc::new(
+                            serde_json::from_value(json!({
+                                "apiVersion": "gateway.networking.k8s.io/v1", "kind": "GatewayClass",
+                                "metadata": {"name": name},
+                                "spec": {"controllerName": "edgion.io/gateway-controller"}
+                            }))
+                            .unwrap(),
+                        );
+                        (name.into(), class)
+                    })
+                    .collect(),
+            );
+            let gateway = |name: &str, ports: &[i32]| {
+                let gateway: edgion_resources::Gateway = serde_json::from_value(json!({
+                    "apiVersion": "gateway.networking.k8s.io/v1", "kind": "Gateway",
+                    "metadata": {"namespace": "default", "name": name},
+                    "spec": {"gatewayClassName": format!("ready-{name}"), "listeners": ports.iter().map(|port|
+                        json!({"name": format!("stream-{port}"), "port": port, "protocol": protocol})
+                    ).collect::<Vec<_>>()}
+                }))
+                .unwrap();
+                GatewayInput::from_gateway(&gateway)
+            };
+            let original = HashMap::from([
+                ("default/a".into(), gateway("a", &[8080, 8081])),
+                ("default/b".into(), gateway("b", &[8081])),
+            ]);
+            publisher.replace_gateways(original.clone());
+            let route = json!({
+                "apiVersion": "gateway.networking.k8s.io/v1alpha2", "kind": kind,
+                "metadata": {"namespace": "default", "name": "port-owner"},
+                "spec": {"resolvedStatusController": "edgion.io/gateway-controller",
+                    "parentRefs": [{"name": "a", "port": 8080}, {"name": "b", "port": 8081}],
+                    "rules": [{"backendRefs": [{"name": "svc", "port": 80}]}]}
+            });
+            let parents = match kind {
+                "TCPRoute" => {
+                    TcpRouteUnit::from_route(Arc::new(serde_json::from_value(route).unwrap())).resolved_parent_refs
+                }
+                "UDPRoute" => {
+                    UdpRouteUnit::from_route(Arc::new(serde_json::from_value(route).unwrap())).resolved_parent_refs
+                }
+                _ => unreachable!(),
+            };
+            let first_key = ListenerKey::new("0.0.0.0:8080".parse().unwrap(), protocol);
+            let shared_key = ListenerKey::new("0.0.0.0:8081".parse().unwrap(), protocol);
+            let old = publisher.snapshot();
+            let first_scope = resolve_route_scope(&old, &first_key, &parents, "", "default", kind).unwrap();
+            let shared_scope = resolve_route_scope(&old, &shared_key, &parents, "", "default", kind).unwrap();
+            assert!(Arc::ptr_eq(&first_scope, &old.gateway("default/a").unwrap().scope));
+            assert!(Arc::ptr_eq(&shared_scope, &old.gateway("default/b").unwrap().scope));
+            assert!(!Arc::ptr_eq(&first_scope, &shared_scope));
+
+            // Moving B leaves only A's unreferenced 8081 listener on the shared socket.
+            publisher.update_gateways(
+                HashMap::from([("default/b".into(), gateway("b", &[9090]))]),
+                &HashSet::new(),
+            );
+            let moved = publisher.snapshot();
+            assert!(resolve_route_scope(&moved, &shared_key, &parents, "", "default", kind).is_none());
+            let moved_key = ListenerKey::new("0.0.0.0:9090".parse().unwrap(), protocol);
+            assert!(resolve_route_scope(&moved, &moved_key, &parents, "", "default", kind).is_none());
+            assert!(Arc::ptr_eq(
+                &shared_scope,
+                &resolve_route_scope(&old, &shared_key, &parents, "", "default", kind).unwrap(),
+            ));
+
+            publisher.replace_gateways(original);
+            let restored = publisher.snapshot();
+            assert!(Arc::ptr_eq(
+                &resolve_route_scope(&restored, &shared_key, &parents, "", "default", kind).unwrap(),
+                &restored.gateway("default/b").unwrap().scope,
+            ));
+            assert!(resolve_route_scope(&moved, &shared_key, &parents, "", "default", kind).is_none());
+        }
+    }
+
+    #[test]
     fn logical_owner_and_policy_are_selected_from_one_publication() {
         use crate::plugins::publication::{
             inputs::{GatewayInput, GatewayListener},
@@ -161,6 +251,7 @@ mod tests {
             connection_key: None,
             listeners: vec![GatewayListener {
                 key: listener.clone(),
+                port: 18443,
                 name: "tls".into(),
                 hostname: Some("owner.example.com".into()),
                 allowed_routes: None,
@@ -172,6 +263,7 @@ mod tests {
         ]));
         let parent = |key: &str| ResolvedParentRef {
             gateway_key: key.into(),
+            port: None,
             parent_ns: "default".into(),
             section_name: Some("tls".into()),
         };

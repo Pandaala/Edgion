@@ -97,10 +97,15 @@ fn extract_status_json<T: Serialize>(obj: &T) -> StatusExtractResult {
 ///
 /// Uses `status_diff::status_semantically_changed` to ignore non-semantic
 /// fields like `lastTransitionTime`, avoiding unnecessary K8s API writes.
-fn status_has_changed(kind: &str, old: &StatusExtractResult, new: &StatusExtractResult) -> bool {
+fn status_has_changed(
+    kind: &str,
+    old: &StatusExtractResult,
+    new: &StatusExtractResult,
+    resource_namespace: Option<&str>,
+) -> bool {
     match (old, new) {
         (StatusExtractResult::Present(old_val), StatusExtractResult::Present(new_val)) => {
-            super::status_diff::status_semantically_changed(kind, old_val, new_val)
+            super::status_diff::status_semantically_changed(kind, old_val, new_val, resource_namespace)
         }
         (StatusExtractResult::Empty, StatusExtractResult::Empty) => false,
         (StatusExtractResult::SerializationError, _) | (_, StatusExtractResult::SerializationError) => true,
@@ -704,7 +709,12 @@ where
                     tracing::warn!("Failed to serialize new status for comparison");
                 }
 
-                let status_changed = status_has_changed(self.kind, &old_status, &new_status);
+                let status_changed = status_has_changed(
+                    self.kind,
+                    &old_status,
+                    &new_status,
+                    parsed_obj.meta().namespace.as_deref(),
+                );
 
                 if status_changed {
                     tracing::debug!(
@@ -1336,7 +1346,7 @@ mod tests {
 
         let new_status = extract_status_json(&gc_modified);
 
-        let changed = status_has_changed("GatewayClass", &old_status, &new_status);
+        let changed = status_has_changed("GatewayClass", &old_status, &new_status, None);
         assert!(changed, "Status should have changed after update_status");
     }
 

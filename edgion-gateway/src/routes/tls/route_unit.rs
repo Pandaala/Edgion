@@ -62,6 +62,7 @@ impl TlsRouteUnit {
             route.spec.parent_refs.as_deref(),
             route.status.as_ref().map(|status| status.parents.as_slice()),
             Some(namespace),
+            route.spec.resolved_status_controller.as_deref(),
         )
         .unwrap_or_default();
         let mut accepted_attachments: Vec<AcceptedTlsAttachment> = Vec::new();
@@ -102,6 +103,7 @@ impl TlsRouteUnit {
                     accepted_attachments.push(AcceptedTlsAttachment {
                         schema_index: i,
                         parent: ResolvedParentRef {
+                            port: parent.port,
                             gateway_key: format_gateway_key(&attachment.gateway_namespace, &attachment.gateway_name),
                             parent_ns: attachment.gateway_namespace.clone(),
                             section_name: Some(attachment.listener_name.clone()),
@@ -183,7 +185,7 @@ mod tests {
     fn malformed_effective_hostname_rejects_the_entire_attachment() {
         let mut route: TLSRoute = serde_json::from_value(serde_json::json!({
             "metadata": {"namespace": "apps", "name": "invalid-effective"},
-            "spec": {"hostnames": ["*.example.com"], "parentRefs": [{"name": "gw"}],
+            "spec": {"hostnames": ["*.example.com"], "resolvedStatusController": "edgion.io/gateway-controller", "parentRefs": [{"name": "gw"}],
                 "resolvedListeners": [
                     {"listenerKey": "0.0.0.0:443/TLS", "gatewayNamespace": "apps",
                         "gatewayName": "gw", "listenerName": "tls",
@@ -203,7 +205,7 @@ mod tests {
         let route = serde_json::from_value(serde_json::json!({
             "metadata": {"namespace": "apps", "name": "ordered"},
             "spec": {"hostnames": ["shared.example.com"],
-                "parentRefs": [{"name": "z"}, {"name": "a"}],
+                "resolvedStatusController": "edgion.io/gateway-controller", "parentRefs": [{"name": "z"}, {"name": "a"}],
                 "resolvedListeners": [
                     {"listenerKey": "0.0.0.0:443/TLS", "gatewayNamespace": "apps",
                         "gatewayName": "a", "listenerName": "tls", "hostnames": ["shared.example.com"]},
@@ -247,6 +249,7 @@ mod tests {
                 ..Default::default()
             },
             spec: TLSRouteSpec {
+                resolved_status_controller: Some("edgion.io/gateway-controller".into()),
                 parent_refs: Some(vec![ParentReference {
                     group: Some("gateway.networking.k8s.io".to_string()),
                     kind: Some("Gateway".to_string()),

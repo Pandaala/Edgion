@@ -535,6 +535,7 @@ fn parse_http_routes_to_domain_rules(data: &HashMap<String, Arc<HTTPRoute>>) -> 
             route.spec.parent_refs.as_deref(),
             route.status.as_ref().map(|s| s.parents.as_slice()),
             Some(&validated.namespace),
+            route.spec.resolved_status_controller.as_deref(),
         ) else {
             skipped_routes += 1;
             continue;
@@ -820,6 +821,111 @@ mod tests {
     use super::*;
     use edgion_resources::HTTPRoute;
 
+    #[tokio::test]
+    async fn compiled_http_parent_ports_select_the_matching_gateway_on_shared_listener() {
+        use crate::ctx::{EdgionHttpContext, NormalizedHostname};
+        use crate::plugins::publication::{inputs::GatewayInput, PluginPublisher};
+        use tokio::io::AsyncWriteExt;
+
+        let publisher = PluginPublisher::new();
+        let gateways = [("a", vec![8080, 8081]), ("b", vec![8081])]
+            .into_iter()
+            .map(|(name, ports)| {
+                let gateway: edgion_resources::Gateway = serde_json::from_value(serde_json::json!({
+                    "apiVersion": "gateway.networking.k8s.io/v1", "kind": "Gateway",
+                    "metadata": {"namespace": "default", "name": name},
+                    "spec": {"gatewayClassName": "test", "listeners": ports.into_iter().map(|port|
+                        serde_json::json!({"name": format!("http-{port}"), "port": port, "protocol": "HTTP"})
+                    ).collect::<Vec<_>>()}
+                }))
+                .unwrap();
+                (format!("default/{name}"), GatewayInput::from_gateway(&gateway))
+            })
+            .collect();
+        publisher.replace_gateways(gateways);
+        let publication = publisher.snapshot();
+        let mut route = route_with_paths(
+            "default",
+            "port-owner",
+            vec!["example.com"],
+            "2026-09-20T00:00:00Z",
+            serde_json::json!([{"matches": [{"path": {"value": "/"}}]}]),
+        );
+        route.spec.parent_refs = Some(
+            serde_json::from_value(serde_json::json!([
+                {"name": "a", "port": 8080}, {"name": "b", "port": 8081}
+            ]))
+            .unwrap(),
+        );
+        route.pre_parse();
+        let rules = parse_http_routes_to_domain_rules(&HashMap::from([("default/port-owner".into(), Arc::new(route))]));
+        let (units, _) = rules.get("example.com").unwrap();
+        let engine = RadixRouteMatchEngine::build(units.clone()).unwrap();
+        let (mut client, server) = tokio::io::duplex(1024);
+        client
+            .write_all(b"GET / HTTP/1.1\r\nHost: example.com\r\n\r\n")
+            .await
+            .unwrap();
+        let mut session = pingora_proxy::Session::new_h1(Box::new(server));
+        assert!(session.read_request().await.unwrap());
+        let mut ctx = EdgionHttpContext::default();
+        ctx.request_info.normalized_current_path = "/".into();
+        ctx.request_info.hostname = NormalizedHostname::new("example.com");
+        for (port, owner) in [(8080, "default/a"), (8081, "default/b")] {
+            let key = ListenerKey::new(format!("0.0.0.0:{port}").parse().unwrap(), "HTTP");
+            let index = publication.listener_index(&key).unwrap();
+            let result = engine.match_route(&mut session, &ctx, index).unwrap();
+            assert_eq!(result.matched_gateway.gateway_key(), owner);
+        }
+    }
+
+    #[test]
+    fn owner_and_status_updates_replace_acceptance_with_unchanged_listeners() {
+        let managers = GlobalHttpRouteManagers::new();
+        let listener = ListenerKey::new("127.0.0.1:19378".parse().unwrap(), "HTTP");
+        let mut route = route_with_paths(
+            "owner-update",
+            "http",
+            vec![],
+            "2026-09-20T00:00:00Z",
+            serde_json::json!([{"matches": [{"path": {"value": "/"}}]}]),
+        );
+        route.spec.resolved_listeners = Some(vec![listener.clone()]);
+        route.pre_parse();
+        let key = "owner-update/http".to_string();
+        let parent = route.spec.parent_refs.as_ref().unwrap()[0].clone();
+        route.status = Some(
+            serde_json::from_value(serde_json::json!({"parents": [{
+                "parentRef": parent, "controllerName": "example.net/owner",
+                "conditions": [{"type": "Accepted", "status": "False", "reason": "Rejected",
+                    "message": "", "lastTransitionTime": "2026-09-20T00:00:00Z"}]
+            }]}))
+            .unwrap(),
+        );
+        managers.full_set(&HashMap::from([(key.clone(), Arc::new(route.clone()))]));
+        let manager = managers.get_or_create_listener_manager(&listener);
+        let old = manager.load_route_table();
+        assert!(old.catch_all_routes.is_some());
+        route.spec.resolved_status_controller = Some("example.net/owner".into());
+        managers.partial_update(
+            HashMap::new(),
+            HashMap::from([(key.clone(), Arc::new(route.clone()))]),
+            HashSet::new(),
+        );
+        assert!(manager.load_route_table().catch_all_routes.is_none());
+        assert!(old.catch_all_routes.is_some());
+        route.status.as_mut().unwrap().parents[0].conditions[0].status = "True".into();
+        managers.partial_update(
+            HashMap::new(),
+            HashMap::from([(key.clone(), Arc::new(route.clone()))]),
+            HashSet::new(),
+        );
+        assert!(manager.load_route_table().catch_all_routes.is_some());
+        route.spec.resolved_status_controller = None;
+        managers.full_set(&HashMap::from([(key, Arc::new(route))]));
+        assert!(manager.load_route_table().catch_all_routes.is_none());
+    }
+
     #[test]
     fn hostname_build_failure_clears_named_and_catch_all_routes() {
         let catch_all = Arc::new(RouteRules {
@@ -906,7 +1012,7 @@ mod tests {
                 "name": name
             },
             "spec": {
-                "parentRefs": parent_refs_json,
+                "resolvedStatusController": "edgion.io/gateway-controller", "parentRefs": parent_refs_json,
                 "hostnames": hostnames,
                 "rules": [{
                     "matches": []
@@ -976,7 +1082,7 @@ mod tests {
                 "creationTimestamp": creation_timestamp
             },
             "spec": {
-                "parentRefs": [{
+                "resolvedStatusController": "edgion.io/gateway-controller", "parentRefs": [{
                     "group": "gateway.networking.k8s.io",
                     "kind": "Gateway",
                     "namespace": "default",
@@ -1805,7 +1911,7 @@ mod tests {
             "kind": "HTTPRoute",
             "metadata": { "namespace": namespace, "name": name },
             "spec": {
-                "parentRefs": [{ "name": "test-gateway", "kind": "Gateway" }],
+                "resolvedStatusController": "edgion.io/gateway-controller", "parentRefs": [{ "name": "test-gateway", "kind": "Gateway" }],
                 "hostnames": ["test.example.com"],
                 "rules": [{
                     "backendRefs": [{
@@ -1835,7 +1941,7 @@ mod tests {
             "kind": "HTTPRoute",
             "metadata": { "namespace": namespace, "name": name },
             "spec": {
-                "parentRefs": [{ "name": "test-gateway", "kind": "Gateway" }],
+                "resolvedStatusController": "edgion.io/gateway-controller", "parentRefs": [{ "name": "test-gateway", "kind": "Gateway" }],
                 "hostnames": ["test.example.com"],
                 "rules": [
                     { "matches": [{ "path": { "type": "PathPrefix", "value": "/spec-a" } }],
@@ -1957,7 +2063,7 @@ mod tests {
             "kind": "HTTPRoute",
             "metadata": { "namespace": "route-ns", "name": "shared-rule-state" },
             "spec": {
-                "parentRefs": [{ "name": "test-gateway", "kind": "Gateway" }],
+                "resolvedStatusController": "edgion.io/gateway-controller", "parentRefs": [{ "name": "test-gateway", "kind": "Gateway" }],
                 "hostnames": ["a.example.com", "b.example.com"],
                 "rules": [
                     {

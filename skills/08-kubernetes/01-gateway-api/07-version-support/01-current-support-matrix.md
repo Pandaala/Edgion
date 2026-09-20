@@ -15,7 +15,7 @@ conformance change.
 | GRPCRoute | v1 | v1 typed watch and CRUD | none | v1 declared |
 | TCPRoute | v1alpha2 | v1alpha2 typed watch and CRUD | none | Experimental source and canonical model are currently the same type |
 | UDPRoute | v1alpha2 | v1alpha2 typed watch and CRUD | none | Experimental source and canonical model are currently the same type |
-| TLSRoute | v1 | v1 preferred; v1alpha3 fallback watcher, static conversion, and compatibility handler | v1alpha2 and v1alpha3 served | v1 declared; v1alpha3 compatibility exists but conflicts with the current atomic-version policy; v1alpha2 has no direct Edgion adapter |
+| TLSRoute | v1 | v1-only watch, CRUD, and raw TypeMeta guard | v1alpha2 and v1alpha3 served | v1 only; alternate versions have no direct Edgion adapter |
 | ReferenceGrant | v1 | v1 preferred; v1beta1 fallback watcher and converter | v1beta1 served and storage in the v1.5.0 bundle | v1 declared; v1beta1 compatibility exists and converts into the v1 store model |
 | BackendTLSPolicy | v1 | v1-only watch, CRUD, and raw TypeMeta guard | v1alpha3 served | v1 declared; v1alpha3 intentionally has no Edgion adapter |
 | ListenerSet | unsupported | no processor or watcher | v1 served | CRD availability only; explicitly not advertised |
@@ -59,7 +59,7 @@ Experimental channel membership are separate properties.
   `edgion-controller/src/conf_mgr/conf_center/kubernetes/controller.rs`.
 - Dynamic CRUD selection:
   `edgion-controller/src/conf_mgr/conf_center/kubernetes/storage.rs`.
-- TLSRoute and ReferenceGrant conversion types and handlers:
+- TLSRoute canonical type and ReferenceGrant conversion types:
   `edgion-resources/src/resources/{tls_route,reference_grant}.rs` and the
   corresponding Controller handlers.
 - Bundled schemas: `config/crd/gateway-api/gateway-api-*-v1.5.0.yaml`.
@@ -73,8 +73,8 @@ Experimental channel membership are separate properties.
   support range.
 - Kubernetes preflight checks whether selected GVKs are served, but does not
   inspect `gateway.networking.k8s.io/bundle-version` or channel annotations.
-- Static/Admin TypeMeta is explicitly enforced only for BackendTLSPolicy;
-  TLSRoute has a special v1alpha3 conversion. Other typed parses can discard a
+- Static/Admin TypeMeta is explicitly enforced for BackendTLSPolicy and
+  TLSRoute. Other typed parses can discard a
   missing or mismatched `apiVersion` before it is evaluated.
 - The public documentation has historically conflated the v1.5.0 CRD bundle
   with the v1.5.1 conformance dependency. They are separate version claims.

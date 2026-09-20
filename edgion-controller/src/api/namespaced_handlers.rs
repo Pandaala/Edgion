@@ -1063,6 +1063,67 @@ mod update_identity_tests {
     }
 
     #[tokio::test]
+    async fn tls_route_create_and_update_reject_invalid_versions_before_persistence() {
+        let (state, _tmp) = make_fs_state().await;
+        let canonical = serde_json::json!({
+            "apiVersion": "gateway.networking.k8s.io/v1", "kind": "TLSRoute",
+            "metadata": {"name": "tls-route", "namespace": "default"},
+            "spec": {"hostnames": ["example.com"]}
+        });
+        for version in [
+            None,
+            Some(serde_json::Value::Null),
+            Some(serde_json::json!(42)),
+            Some(serde_json::json!("gateway.networking.k8s.io/v1alpha3")),
+        ] {
+            let mut invalid = canonical.clone();
+            match version {
+                Some(value) => invalid["apiVersion"] = value,
+                None => {
+                    invalid.as_object_mut().unwrap().remove("apiVersion");
+                }
+            }
+            let result = create_namespaced(
+                State(state.clone()),
+                Path(("TLSRoute".to_string(), "default".to_string())),
+                Bytes::from(invalid.to_string()),
+            )
+            .await;
+            assert_eq!(result.err(), Some(StatusCode::BAD_REQUEST));
+        }
+        assert!(state
+            .conf_center()
+            .get_one("TLSRoute", Some("default"), "tls-route")
+            .await
+            .is_err());
+        let (status, _, _) = create_namespaced(
+            State(state.clone()),
+            Path(("TLSRoute".to_string(), "default".to_string())),
+            Bytes::from(canonical.to_string()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(status, StatusCode::CREATED);
+        let mut invalid = canonical;
+        invalid["apiVersion"] = serde_json::json!("gateway.networking.k8s.io/v1alpha3");
+        let result = update_namespaced(
+            State(state.clone()),
+            Path(("TLSRoute".to_string(), "default".to_string(), "tls-route".to_string())),
+            HeaderMap::new(),
+            Bytes::from(invalid.to_string()),
+        )
+        .await;
+        assert_eq!(result.err(), Some(StatusCode::BAD_REQUEST));
+        let stored = state
+            .conf_center()
+            .get_one("TLSRoute", Some("default"), "tls-route")
+            .await
+            .unwrap();
+        let stored: serde_yaml::Value = serde_yaml::from_str(&stored).unwrap();
+        assert_eq!(stored["apiVersion"], "gateway.networking.k8s.io/v1");
+    }
+
+    #[tokio::test]
     async fn update_rejects_non_v1_backend_tls_policy_and_keeps_canonical_object() {
         let (state, _tmp) = make_fs_state().await;
         let (status, _headers, _response) = create_namespaced(

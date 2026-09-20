@@ -120,32 +120,38 @@ impl ErrorStatus {
 // Shared resource parsing (used by both FileSystem and Etcd backends)
 // ============================================================================
 
-use edgion_resources::prelude_resources::{TLSRoute, TLSRouteAlpha3};
 use edgion_resources::{ResourceKind, ResourceMeta};
 use kube::Resource;
 use serde::de::{DeserializeOwned, Error as _};
 use std::fmt::Debug;
 
-pub const BACKEND_TLS_POLICY_API_VERSION: &str = "gateway.networking.k8s.io/v1";
+const CANONICAL_GATEWAY_API_V1: &str = "gateway.networking.k8s.io/v1";
 
 /// Enforce the single canonical BackendTLSPolicy API version at every raw
 /// document ingress before typed deserialization can discard TypeMeta.
 pub fn validate_backend_tls_policy_api_version(api_version: Option<&str>) -> Result<(), String> {
-    if api_version == Some(BACKEND_TLS_POLICY_API_VERSION) {
+    validate_canonical_api_version("BackendTLSPolicy", api_version)
+}
+
+/// Enforce the canonical source version before TLSRoute TypeMeta is discarded.
+pub fn validate_tls_route_api_version(api_version: Option<&str>) -> Result<(), String> {
+    validate_canonical_api_version("TLSRoute", api_version)
+}
+
+fn validate_canonical_api_version(kind: &str, api_version: Option<&str>) -> Result<(), String> {
+    if api_version == Some(CANONICAL_GATEWAY_API_V1) {
         return Ok(());
     }
 
     Err(format!(
-        "BackendTLSPolicy apiVersion must be {BACKEND_TLS_POLICY_API_VERSION}; found {}",
+        "{kind} apiVersion must be {CANONICAL_GATEWAY_API_V1}; found {}",
         api_version.unwrap_or("<missing>")
     ))
 }
 
 /// Parse YAML content into a resource.
 ///
-/// BackendTLSPolicy is accepted only at the canonical v1 boundary. TLSRoute
-/// retains its separately-scoped legacy conversion until its own atomic
-/// promotion is implemented.
+/// BackendTLSPolicy and TLSRoute are accepted only at the canonical v1 boundary.
 pub fn parse_resource_content<K>(content: &str) -> serde_yaml::Result<K>
 where
     K: ResourceMeta + Resource + Clone + Send + Sync + Debug + serde::Serialize + DeserializeOwned + 'static,
@@ -154,19 +160,7 @@ where
 
     validate_resource_api_version::<K>(content)?;
 
-    let mut parsed = if kind != ResourceKind::TLSRoute {
-        serde_yaml::from_str::<K>(content)?
-    } else {
-        match extract_api_version(content).as_deref() {
-            Some("gateway.networking.k8s.io/v1alpha3") if kind == ResourceKind::TLSRoute => {
-                let legacy: TLSRouteAlpha3 = serde_yaml::from_str(content)?;
-                let canonical: TLSRoute = legacy.into();
-                let normalized = serde_yaml::to_string(&canonical)?;
-                serde_yaml::from_str::<K>(&normalized)?
-            }
-            _ => serde_yaml::from_str::<K>(content)?,
-        }
-    };
+    let mut parsed = serde_yaml::from_str::<K>(content)?;
 
     // FileSystem/etcd unknown-field diagnostic: the Kubernetes watcher
     // gets this via the hand-written `Deserialize` impls on `EdgionPluginsSpec`,
@@ -200,6 +194,9 @@ where
     if K::resource_kind() == ResourceKind::BackendTLSPolicy {
         let api_version = extract_api_version(content);
         validate_backend_tls_policy_api_version(api_version.as_deref()).map_err(serde_yaml::Error::custom)?;
+    } else if K::resource_kind() == ResourceKind::TLSRoute {
+        let api_version = extract_api_version(content);
+        validate_tls_route_api_version(api_version.as_deref()).map_err(serde_yaml::Error::custom)?;
     }
 
     Ok(())

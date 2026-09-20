@@ -125,21 +125,32 @@ fn update_status(&self, resource: &mut T, _ctx: &HandlerContext, validation_erro
             let mut accepted_errors = validate_parent_ref_accepted(resource_ns, parent_ref, ...);
             accepted_errors.extend(validation_accepted_errors.clone());
 
-            // Set Accepted and ResolvedRefs conditions
-            set_parent_conditions_full(&mut conditions, &accepted_errors, &resolved_refs_errors, gen);
+            // Reuse only the current controller's canonical parent entry.
+            let parent = parent_status_for_update(
+                &mut status.parents, parent_ref, resource_ns, &self.controller_name,
+            );
+            let conditions = &mut parent.conditions;
+            set_parent_conditions_full(conditions, &accepted_errors, &resolved_refs_errors, gen);
 
             // Set PartiallyInvalid if some (but not all) rules are invalid
             if !invalid_indices.is_empty() && valid_rules > 0 {
                 update_condition(conditions, condition_true(PARTIALLY_INVALID, RULE_INVALID, ...));
             }
         }
-        retain_current_parent_statuses(&mut status.parents, parent_refs);
+        retain_current_parent_statuses(&mut status.parents, parent_refs, resource_ns, &self.controller_name);
     } else {
-        // ★ CRITICAL: clear stale parents when parent_refs removed
-        status.parents.clear();
+        // Remove our stale entries, retaining other controllers' observed status.
+        retain_current_parent_statuses(&mut status.parents, &[], resource_ns, &self.controller_name);
     }
 }
 ```
+
+Parent identity uses the shared `ParentReference::canonical_identity`: defaulted group/kind,
+effective namespace, name, section and port. A status additionally belongs to `controllerName`.
+The five Route handlers stamp `spec.resolvedStatusController` in `finalize_transport` from the
+configured handler identity, after status derivation and before conf_sync publication. Gateway
+route compilation and plugin publication consume that same-resource owner; EdgionTls keeps its
+separate certificate/proof path. See the [status ownership guard](../../04-review/status/regression-guards/canonical-parent-status-ownership.md).
 
 #### PartiallyInvalid and invalid_rule_indices
 
@@ -334,7 +345,7 @@ state is unchanged.
 | Category | Kinds | Comparator | What it compares |
 |----------|-------|------------|------------------|
 | **Condition-only** | GatewayClass, EdgionGatewayConfig, EdgionPlugins, EdgionStreamPlugins, EdgionConfigData | `conditions_only_status_equal` (explicit arms or the condition-only fallback) | `status.conditions[]` |
-| **Per-parent** | HTTPRoute, GRPCRoute, TCPRoute, TLSRoute, UDPRoute, EdgionTls | `parents_status_equal` | `status.parents[]` matched by parentRef identity |
+| **Per-parent** | HTTPRoute, GRPCRoute, TCPRoute, TLSRoute, UDPRoute, EdgionTls | `parents_status_equal` | Canonical parent identity plus controllerName; one-to-one semantic comparison with resource namespace context |
 | **Per-ancestor** | BackendTLSPolicy, EdgionBackendTrafficPolicy | `ancestors_status_equal` | `status.ancestors[]` matched by ancestorRef identity |
 | **Hybrid** | Gateway | `gateway_status_equal` | `addresses` + gateway-level `conditions` + `listeners[]` (matched by name) |
 | **Hybrid (lifecycle + conditions)** | EdgionAcme, LinkSys | `conditions_and_fields_status_equal` | Semantic conditions plus structural comparison of all lifecycle fields |
@@ -369,9 +380,10 @@ function.
 Old parent statuses are cleaned up in two ways:
 
 1. **Parent removed from spec**: `retain_current_parent_statuses()` removes
-   parent statuses whose `parent_ref` no longer matches any ref in the spec.
+   owned parent statuses whose canonical `parent_ref` no longer matches a ref in the spec,
+   and removes duplicate owned entries. Foreign entries from the input snapshot remain unchanged.
 2. **`parent_refs` removed entirely (set to None)**: The `else` branch on the
-   `if let Some(parent_refs)` clears `status.parents` completely.
+   `if let Some(parent_refs)` removes only this controller's entries, using the same helper with an empty ref list.
 
 ### On Controller restart
 The Controller re-processes all resources from the K8s store. Each resource
@@ -387,7 +399,7 @@ standard conditions, no stale condition values survive re-processing.
 - [ ] **ResolvedRefs reflects reference resolution**: missing Secret/Service → False
 - [ ] **Per-parent status** (for per-parent resources): each parent_ref has its own status
 - [ ] **retain_current_parent_statuses**: stale parent statuses are cleaned up
-- [ ] **parent_refs None → clear parents**: `else` branch calls `status.parents.clear()`
+- [ ] **parent_refs None → clear owned parents**: use the shared ownership-aware retention helper
 - [ ] **Status struct serialization**: `skip_serializing_if` does not hide error information
 - [ ] **No duplicate checks**: if validate() already checks something, update_status uses `validation_errors` instead of re-checking
 - [ ] **No backend ref existence in validate()**: service-not-found and kind checks go in update_status only (via resolved_refs_errors + find_invalid_rule_indices), not in validate()

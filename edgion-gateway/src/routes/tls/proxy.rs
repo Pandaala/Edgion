@@ -559,7 +559,7 @@ mod tests {
         let route = serde_json::from_value(serde_json::json!({
             "metadata": {"namespace": "default", "name": name},
             "spec": {
-                "hostnames": [hostname], "parentRefs": [{"name": "gateway", "sectionName": "tls"}],
+                "hostnames": [hostname], "resolvedStatusController": "edgion.io/gateway-controller", "parentRefs": [{"name": "gateway", "sectionName": "tls"}],
                 "resolvedListeners": [{"listenerKey": "0.0.0.0:443/TLS", "gatewayNamespace": "default",
                     "gatewayName": "gateway", "listenerName": "tls", "hostnames": [hostname]}]
             }

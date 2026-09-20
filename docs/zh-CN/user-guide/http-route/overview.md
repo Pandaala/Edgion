@@ -57,6 +57,8 @@ spec:
 
 一个 HTTPRoute 可以绑定多个 parentRefs，实现跨 Gateway 共享路由规则。跨命名空间详情见 [后端配置](./backends/README.md)。
 
+同时设置 `sectionName` 和 `port` 时，listener 必须同时满足两项约束。多个 Gateway 共用物理端口不会扩大 parentRef 的绑定范围：引用 Gateway A 的 8080 端口，不会因为另一个 parentRef 而允许匹配 Gateway A 的 8081 端口。
+
 ### Rules
 
 `rules` 中的每个条目都是一个独立的路由决策单元，包含匹配条件、过滤器和后端引用。当一个请求匹配多条规则时，最具体的匹配优先（更长的路径前缀和精确路径优先于较短的前缀）。
