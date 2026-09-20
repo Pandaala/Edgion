@@ -9,3 +9,4 @@
 | D0005 | ready-for-separate-task | `tasks/todo/strict-gateway-process-config-unknown-fields.md` | B0009 |
 | D0006 | ready-for-separate-task | `tasks/todo/define-gatewayclass-process-config-ownership.md` | B0011 |
 | D0007 | ready-for-separate-task | `tasks/todo/add-etcd-linksys-health-flip-reporting.md` | B0035 |
+| D0008 | ready-after-campaign-freeze | `tasks/todo/remove-dead-plugin-session-log-hook.md` | B0043 |
