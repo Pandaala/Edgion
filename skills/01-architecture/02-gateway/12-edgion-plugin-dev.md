@@ -326,11 +326,23 @@ HTTPRoute.rules[].filters:
     extensionRef: { kind: EdgionPlugins, name: B }
 ```
 
-- Single declaration → the three stages auto fan-out (request / upstream_response_filter / upstream_response_body_filter).
+- Single declaration → all four stages auto fan out (`Request`, synchronous
+  `UpstreamResponseFilter`, per-chunk `UpstreamResponseBodyFilter`, and async
+  `UpstreamResponse`).
 - Each stage automatically pulls the same-stage subset from B.
 - This is the Gateway API standard convention, equivalent to "inserting B as a bundle into this route".
-- During build, the entries are cloned into three Vecs; see the `HTTPRouteFilterType::ExtensionRef` branch in `plugin_runtime.rs::add_from_httproute_filters_inner`.
-- Per-request snapshot optimization is already in place (the `ctx.resolved_route_ext_refs` index path).
+- During build, the stage-specific `ExtensionRefFilter` clones are inserted into
+  the four runtime vectors; see the `HTTPRouteFilterType::ExtensionRef` branch in
+  `PluginRuntime::add_from_httproute_filters_inner` (and the corresponding gRPC
+  branch).
+- A request captures one immutable `GatewayScope`, which retains the Gateway
+  identity and `http_keys`; its `.scope` is the class-scoped `PluginScope` used
+  for ExtensionRef resolution. Rule references resolve positionally from that
+  `PluginScope` into `ctx.resolved_route_ext_refs`. Backend references resolve
+  lazily from the same `PluginScope` when the selected backend first uses them,
+  then pin either the hit or the miss across retries. A captured owner whose
+  `gateway_key` differs from the matched Gateway is rejected rather than mixed
+  with that Gateway's policy.
 
 ### Two recommended patterns for multi-plugin reuse
 
@@ -365,8 +377,12 @@ If the plugin is referenced by a route through `ExtensionRef`, focus on:
 
 Current behavior:
 
-- At runtime, fetch the `EdgionPlugins` from `PluginStore` by `namespace/name`.
-- Execute using the `Arc<PluginRuntime>` stored in the matching `CompiledPlugins` entry.
+- `ExtensionRefFilter` never looks up the live `PluginStore` directly. Rule
+  filters read their position from `ctx.resolved_route_ext_refs`; backend filters
+  use the request's pinned backend-reference cache. Both projections come from
+  the `.scope` `PluginScope` inside the same request-captured `GatewayScope`.
+- Execute using the `Arc<PluginRuntime>` stored in the matching immutable
+  `CompiledPlugins` entry.
 - Push plugin logs into the dedicated `edgion_plugins` log structure.
 
 If you are debugging "ExtensionRef does not take effect / plugin logs are missing", start tracing from here.

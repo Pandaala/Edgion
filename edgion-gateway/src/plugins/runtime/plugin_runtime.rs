@@ -125,7 +125,8 @@ pub struct PluginRuntime {
     /// when this runtime is built via the backend-scope path
     /// (`from_httproute_filters_for_backend` / `from_grpcroute_filters_for_backend`),
     /// because backend-scope ExtensionRefFilters keep `index = None`; their
-    /// first store result is pinned in the logical request context instead.
+    /// first result from the request-captured class scope, including a miss, is
+    /// pinned in the logical request context instead.
     ext_ref_keys: Vec<(String, String)>,
     /// Pre-resolved Arc to the first enabled `EdgionPlugin::Cors` config in
     /// `request_plugins`. Built once at preparse so the global CORS preflight
@@ -493,8 +494,9 @@ impl PluginRuntime {
         self.cors_config.clone()
     }
 
-    /// Build a runtime for a route rule. Assigns ExtensionRef indices for the
-    /// per-request resolve cache and records (ns, name) in `ext_ref_keys`.
+    /// Build a runtime for a route rule. Assigns ExtensionRef indices for
+    /// positional resolution from the request-captured class scope and records
+    /// (ns, name) in `ext_ref_keys`.
     /// `mirror_tuning` carries the route-level `edgion.io/mirror-*` annotation
     /// values (pre-parsed onto the rule) applied to every RequestMirror filter.
     pub fn from_httproute_filters_for_rule(
@@ -509,8 +511,8 @@ impl PluginRuntime {
     }
 
     /// Build a runtime for a backend reference. ExtensionRef filters retain
-    /// `index = None` and fall back to direct global store lookup at exec time
-    /// (no per-request resolve cache for backend scope yet).
+    /// `index = None`; first use resolves from the request-captured class scope
+    /// and pins either the hit or miss across retries.
     pub fn from_httproute_filters_for_backend(
         filters: &[HTTPRouteFilter],
         namespace: &str,
@@ -626,7 +628,8 @@ impl PluginRuntime {
     }
 
     /// Build a runtime for a gRPC route rule. Assigns ExtensionRef indices for
-    /// the per-request resolve cache and records (ns, name) in `ext_ref_keys`.
+    /// positional resolution from the request-captured class scope and records
+    /// (ns, name) in `ext_ref_keys`.
     pub fn from_grpcroute_filters_for_rule(filters: &[GRPCRouteFilter], namespace: &str) -> Self {
         let mut runtime = Self::new();
         runtime.add_from_grpcroute_filters_inner(filters, namespace, true);
@@ -635,7 +638,8 @@ impl PluginRuntime {
     }
 
     /// Build a runtime for a gRPC backend reference. ExtensionRef filters retain
-    /// `index = None` and fall back to direct global store lookup at exec time.
+    /// `index = None`; first use resolves from the request-captured class scope
+    /// and pins either the hit or miss across retries.
     pub fn from_grpcroute_filters_for_backend(filters: &[GRPCRouteFilter], namespace: &str) -> Self {
         let mut runtime = Self::new();
         runtime.add_from_grpcroute_filters_inner(filters, namespace, false);

@@ -12,13 +12,16 @@ knowledge_type: intentional-design
 ## Conclusion
 
 Edgion syncs each resource kind over an independent gRPC watch stream with its own
-`ClientCache<T>`, its own 100ms `BATCH_DEBOUNCE`, its own ConfHandler, and its own
-per-kind runtime store (`PluginStore` behind `ArcSwap`, `GlobalHttpRouteManagers`
-behind per-listener `ArcSwap`, `GatewayStore` behind `RwLock`). There is no shared
+`ClientCache<T>`, its own 100ms `BATCH_DEBOUNCE`, and its own ConfHandler. The
+HTTPRoute handler publishes route tables and forwards route facts, while
+`PluginStore` is a source adapter that forwards `EdgionPlugins` facts to the
+canonical `PluginPublisher`. That publisher atomically swaps one recomposed
+immutable `PluginPublication` after each input event, but there is no shared
 cross-kind transaction or epoch. When one logical config change spans
 `HTTPRoute` + the `EdgionPlugins` it references via `ExtensionRef`, the two kinds
 land independently, so there is a transient window where the route is live but the
-referenced plugin bundle has not yet arrived in `PluginStore`.
+referenced plugin bundle has not yet reached the immutable class scope published
+for that route.
 
 This is an **accepted design tradeoff**, not a defect and not a narrow review fix.
 The proposed "assign a monotonic `config_generation` shared across kinds in the same
@@ -35,8 +38,9 @@ generation gating + a new pending-reference state machine) and belongs in
 The finding frames the window as "some plugins fail open (skip the filter), some
 fail closed" and warns of a "brief security-plugin bypass window violating
 compliance". That premise does not hold for the ExtensionRef path. When the
-referenced `EdgionPlugins` is not yet in the store, `prepare_execution`
-(`edgion-gateway/src/plugins/runtime/gateway_api_filters/extension_ref.rs:131-146`)
+referenced `EdgionPlugins` is absent from the `.scope` `PluginScope` inside the
+request-captured `GatewayScope`,
+`ExtensionRefFilter::prepare_execution`
 pushes `"extension ref not found"` and returns `Err(())`, which every caller maps
 to a **transient HTTP 500** (`run_extension` -> `ErrResponse { status: 500 }`;
 `run_extension_async` request stage -> 500 + JSON body + `ErrTerminateRequest`;
@@ -45,16 +49,25 @@ bundle is unavailable -> 500; individual plugins inside it are never selectively
 skipped. So the window **fails closed** (transient 500), it does not let a request
 through with security plugins bypassed.
 
-**2. No route rebuild is needed — resolution is per-request against the live store**
+**2. No route rebuild is needed — later requests capture the republished Gateway scope**
 
-`ExtensionRef` targets are resolved at request time against the **current**
-`PluginStore`, not baked into the route table at build time:
-`pg_request_filter.rs:186-192` calls
-`resolve_route_ext_refs(&plugin_store, unit.plugin_runtime.ext_ref_keys())` on the
-live store the first time a request touches the route. The moment the lagging
-`EdgionPlugins` Watch event is applied (store swapped via `ArcSwap`), the next
-request resolves the reference correctly. There is no poisoned route table and no
-operator action required — the window self-heals on plugin arrival.
+Each request captures one immutable `GatewayScope` through
+`capture_matched_scope`. That wrapper retains `gateway_key` and `http_keys`; its
+`.scope` is the class-scoped `PluginScope` used for ExtensionRef resolution. A
+captured owner whose `gateway_key` differs from the matched Gateway is rejected
+instead of mixing the two Gateways' policy. Rule-level targets are resolved
+positionally from that `PluginScope` by `resolve_route_ext_refs` and stored in
+`EdgionHttpContext::resolved_route_ext_refs`. Backend-level targets resolve lazily
+from the same `PluginScope` through `SessionAdapter::pinned_backend_ext_ref`,
+which pins both hits and misses across retries. `ExtensionRefFilter` consumes
+those request projections; it never performs a direct live `PluginStore` lookup.
+
+When the lagging `EdgionPlugins` Watch event is applied, `PluginPublisher`
+publishes a new immutable `GatewayScope` whose `.scope` carries the recomposed
+class policy. The next request captures that wrapper and resolves the reference
+correctly, while an in-flight request remains internally consistent with its
+older captured wrapper. There is no poisoned route table and no operator action
+required — the window self-heals on plugin arrival.
 
 **3. The window is bounded and not below the Envoy/Istio default baseline**
 
@@ -89,9 +102,9 @@ backends); resource-02 covers the HTTPRoute -> EdgionPlugins ExtensionRef window
 - "Make `ExtensionRefFilter` distinguish 'plugin never existed' from 'plugin not
   yet arrived' and apply a per-request retry or a stale-plugin fallback policy" —
   a new pending-reference state machine plus a fallback-policy surface is wide
-  impact; the live-store per-request resolution already self-heals on the next
-  request, and a fallback that serves the *previous* plugin set risks running stale
-  security policy, which is worse than a bounded transient 500.
+  impact; immutable class-scope republication already self-heals on a later
+  request, and a fallback that serves the *previous* plugin set risks running
+  stale security policy, which is worse than a bounded transient 500.
 - "Treat the torn-state window as a high-severity compliance violation / security
   bypass" — rejected on the facts: the ExtensionRef path fails closed (transient
   500), it does not bypass security plugins (Rationale 1).
@@ -112,10 +125,13 @@ Re-open (as a `tasks/todo/` feature, not a review fix) only if:
 ## Reference Cases
 
 - `tasks/review-envoy/resource-02-cross-kind-no-atomic-snapshot.md` (closed 2026-06-14, ⚠️ accepted-tradeoff)
-- `edgion-gateway/src/plugins/runtime/gateway_api_filters/extension_ref.rs:131-146` (`prepare_execution` -> `Err(())` -> transient 500 on unresolved reference; fail-closed)
-- `edgion-gateway/src/routes/http/proxy_http/pg_request_filter.rs:186-192` (`resolve_route_ext_refs` against the live `PluginStore` per request — self-heals on plugin arrival, no route rebuild)
-- `edgion-gateway/src/conf_sync/cache_client/cache_data.rs:11-17` (`BATCH_DEBOUNCE` 100ms per-kind; independent `CacheData`)
-- `edgion-gateway/src/plugins/http/plugin_store.rs:134-135` (`PluginStore` behind `ArcSwap<PluginMap>`)
+- `edgion-gateway/src/plugins/runtime/gateway_api_filters/extension_ref.rs` (`ExtensionRefFilter::prepare_execution` -> `Err(())` -> transient 500 on unresolved reference; fail-closed)
+- `edgion-gateway/src/routes/http/proxy_http/pg_early_request_filter.rs` (`capture_matched_scope` captures the request's immutable `GatewayScope` and rejects a mismatched Gateway owner)
+- `edgion-gateway/src/routes/http/proxy_http/global_plugins_resolve.rs` (`resolve_route_ext_refs` preserves positional hits and misses from that scope)
+- `edgion-gateway/src/plugins/runtime/session_adapter.rs` (`SessionAdapter::pinned_backend_ext_ref` resolves delayed backend references from the captured scope)
+- `edgion-gateway/src/ctx.rs` (`EdgionHttpContext::pinned_backend_ext_ref` pins both hits and misses across retries)
+- `edgion-gateway/src/conf_sync/cache_client/cache_data.rs` (`BATCH_DEBOUNCE` is 100ms per independent `CacheData`)
+- `edgion-gateway/src/plugins/publication/publisher.rs` (`PluginPublisher` atomically publishes each recomposed immutable `PluginPublication`)
 - `skills/04-review/conf-sync/intentional-design/cross-kind-dependency-ordering-not-enforced.md` (sync-02 — sibling cross-kind ordering tradeoff; Service/EndpointSlice/TLS window)
 - `skills/04-review/conf-sync/intentional-design/no-ack-nack-control-plane-validation.md` (sync-01 — sibling Envoy-comparison config-sync tradeoff; control-plane ingest validation)
 - `tasks/review-envoy/controller-04-no-cross-kind-snapshot-atomicity.md` (controller-side sibling of this finding)
