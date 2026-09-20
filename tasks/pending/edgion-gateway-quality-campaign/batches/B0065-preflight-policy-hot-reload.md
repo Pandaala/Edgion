@@ -3,7 +3,7 @@
 ## Scope
 
 - Baseline: `a342833c58fae0764f13d753a856bc089764fca5`.
-- Pipeline state: `blocked-verification`.
+- Pipeline state: `complete`.
 - Active anchor crate: `edgion-gateway`.
 - Owned anchor file: `edgion-gateway/src/routes/http/proxy_http/preflight_handler.rs`.
 - Approved runtime support files: `config/edgion_gateway/conf_handler_impl.rs`, `ctx.rs`, `routes/http/proxy_http/{mod.rs,pg_new_ctx.rs,pg_request_filter.rs,pg_early_request_filter.rs,pg_response_filter.rs,pg_upstream_peer.rs,pg_upstream_request_filter.rs}`, and `runtime/server/listener_builder.rs` under `edgion-gateway/src/`.
@@ -53,10 +53,12 @@
 - Gateway targeted check/clippy, formatting, diff, no-tracing, English-only, and frozen-path checks passed; clippy retained only the known unrelated Kafka warning.
 - The user-authorized prerequisite commit `c8e48ff50` repaired the pre-existing task link; agent-doc validation now passes.
 - Full workspace check and clippy passed. Formatting, diff, agent-doc, SSA-force, metrics-inventory, Pingora-source-policy, no-tracing, cargo-deny, English-only, and frozen-path gates passed; clippy retained only the known unrelated Kafka and frozen-test warnings.
-- The required Gateway API transform-contract gate cannot run because external commit `a768fbed0` declared `cicd/checks/generate_gateway_api_transform_contract.py` and its test without adding either file. Independent diagnosis found no exact substitute or historical version, so the campaign remains blocked outside B0065.
+- Current-HEAD revalidation at `0094fc788` passed 21 preflight-filtered Gateway tests, including all 8 B0065 regressions.
+- The restored Gateway API transform-contract drift gate and all 5 generator tests passed. Full workspace check/clippy, formatting, diff, agent-doc, SSA-force, metrics-inventory, Pingora-source-policy, no-tracing, cargo-deny, English-only, and frozen-path gates passed; only the known Kafka and frozen-test clippy warnings remain.
+- Seven frozen integration paths changed only in proven external commits `5a1dbbddc` and `0094fc788`; current blobs and modes exactly matched those commits before six fingerprints and one new fixture entry were reconciled.
 
 ## Handoff
 
 - Implementation/review complete: yes.
-- Staged or committed: no.
-- Resume action: separately restore the declared Gateway API transform-contract generator and test, run that gate, then revalidate the complete repository gate set and commit B0065.
+- Staged or committed: committed as `b8eb4d7ed` by a concurrent agent; campaign reconciliation remains a separate coordinator commit.
+- Resume action: start B0066 from `edgion-gateway/src/routes/http/redirect_http.rs`.

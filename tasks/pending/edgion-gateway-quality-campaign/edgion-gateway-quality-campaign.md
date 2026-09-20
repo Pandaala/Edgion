@@ -5,7 +5,7 @@
 | Key | Value |
 |-----|-------|
 | Created | 2026-09-19 |
-| Status | blocked |
+| Status | in-progress |
 | Type | refactor |
 | Priority | P2 |
 | Baseline | `a0b4d49b298149422c7e46150a0ca027ad5321f7` |
@@ -33,15 +33,15 @@ Resume the file-by-file quality campaign for the remaining `edgion-gateway` path
 
 ## Campaign state
 
-- Campaign status: `blocked`
+- Campaign status: `in-progress`
 - Ordered crate phases: `edgion-gateway` (active); later crates are not authorized by this residual run.
 - Completed crates: none recorded in this campaign.
-- Active serial batch: B0065 (`preflight_handler.rs`) at `c8e48ff50`; implementation and independent review passed, but the required Gateway API transform-contract gate is blocked because its declared generator is absent.
-- Analysis queue: none; later residual files remain `pending` until B0065 completes its commit gate.
-- Current coverage counts: 582 ledger rows; 504 imported `excluded-with-reason`, 11 `pending`, 1 `in-progress`, 1 `deferred`, 39 `changed`, 25 `examined-no-change`, and 1 `removed`.
+- Active serial batch: none; B0065 (`preflight_handler.rs`) completed in `b8eb4d7ed` and passed current-HEAD revalidation at `0094fc788`.
+- Analysis queue: next residual file is `edgion-gateway/src/routes/http/redirect_http.rs`.
+- Current coverage counts: 582 ledger rows; 504 imported `excluded-with-reason`, 11 `pending`, 1 `deferred`, 40 `changed`, 25 `examined-no-change`, and 1 `removed`.
 - Resolved external gate: the user-authorized prerequisite commit `c8e48ff50` added the missing `tasks/todo/os-packaging-and-system-service-adapters.md`; agent-doc validation now passes.
-- Blocking gate: `python3 cicd/checks/generate_gateway_api_transform_contract.py --check` cannot run because external commit `a768fbed0` declared the gate and CI integration but omitted both the generator and its test. Independent diagnosis found no equivalent existing command or recoverable historical version; this is not attributable to B0065.
-- Frozen integration baseline: 3,442 paths captured in `integration-freeze.tsv`; 15 fingerprints were refreshed to match the externally committed `94c56632a` test changes before B0061 review and verification.
+- Resolved external gate: the Gateway API transform-contract generator and its test are present at `0094fc788`; the drift gate and all 5 generator tests pass.
+- Frozen integration baseline: 3,443 paths captured in `integration-freeze.tsv`; 15 fingerprints were refreshed for external commit `94c56632a`, six existing fingerprints were refreshed for external commits `5a1dbbddc` and `0094fc788`, and the latter commit's new BandwidthLimit backend fixture was added after exact blob/mode attribution.
 - Resolved external gate: `RUSTSEC-2026-0285` was remediated by locking
   `rustls 0.23.45`; the remediation run passed full `cargo deny check` on
   2026-09-19. B0001 remains `in-progress` until the campaign workflow resumes.
