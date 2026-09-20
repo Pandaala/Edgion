@@ -1,6 +1,7 @@
 use crate::link_sys::providers::webhook::manager::configure_webhook_global_max;
 use crate::link_sys::runtime::store::configure_link_sys_max_instances_per_kind;
 use crate::request_body::ResolvedRequestBodyConfig;
+use crate::routes::http::proxy_http::preflight_handler::ResolvedPreflightPolicy;
 use arc_swap::ArcSwap;
 use edgion_common::conf_sync::traits::{arc_map_to_owned, ConfHandler};
 use edgion_common::dns::resolver_select::{candidate_from_egc_default, ResolverCandidate};
@@ -47,12 +48,13 @@ impl Default for ResolvedL4Timeouts {
 /// Request-scoped HTTP configuration resolved from one EdgionGatewayConfig generation.
 ///
 /// A new request clones this value from the current immutable configuration
-/// snapshot. Both fields therefore come from the same publication epoch, while
+/// snapshot. All fields therefore come from the same publication epoch, while
 /// in-flight requests retain their captured values across hot reloads.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ResolvedHttpRequestConfig {
     pub(crate) request_body: ResolvedRequestBodyConfig,
     pub(crate) remote_ip_header: http::HeaderName,
+    pub(crate) preflight_policy: ResolvedPreflightPolicy,
 }
 
 impl ResolvedHttpRequestConfig {
@@ -77,6 +79,7 @@ impl ResolvedHttpRequestConfig {
         Self {
             request_body: ResolvedRequestBodyConfig::resolve(&config.spec.request_body),
             remote_ip_header,
+            preflight_policy: ResolvedPreflightPolicy::resolve(config.spec.preflight_policy.as_ref()),
         }
     }
 }
@@ -86,6 +89,7 @@ impl Default for ResolvedHttpRequestConfig {
         Self {
             request_body: ResolvedRequestBodyConfig::default(),
             remote_ip_header: default_remote_ip_header(),
+            preflight_policy: ResolvedPreflightPolicy::default(),
         }
     }
 }
@@ -163,8 +167,8 @@ impl EdgionGatewayConfigSnapshot {
 ///
 /// All views are published in one immutable snapshot so an EGC update cannot
 /// expose values from different generations to one lookup. Human-readable body
-/// sizes and the upstream RemoteIp header are resolved while constructing the
-/// snapshot, never per request.
+/// sizes, the upstream RemoteIp header, and the preflight policy are resolved
+/// while constructing the snapshot, never per request.
 static EDGION_GATEWAY_CONFIG_STORE: std::sync::LazyLock<ArcSwap<EdgionGatewayConfigSnapshot>> =
     std::sync::LazyLock::new(|| ArcSwap::from_pointee(EdgionGatewayConfigSnapshot::empty()));
 
@@ -483,8 +487,9 @@ pub fn create_edgion_gateway_config_handler() -> Box<dyn ConfHandler<EdgionGatew
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::routes::http::proxy_http::preflight_handler::ResolvedPreflightMode;
     use edgion_resources::resources::edgion_gateway_config::{
-        EdgionGatewayConfigSpec, TcpTimeout, DEFAULT_TCP_CONNECT, DEFAULT_TCP_IDLE,
+        EdgionGatewayConfigSpec, PreflightMode, PreflightPolicy, TcpTimeout, DEFAULT_TCP_CONNECT, DEFAULT_TCP_IDLE,
     };
     use std::collections::HashMap;
 
@@ -678,6 +683,10 @@ mod tests {
         initial.spec.request_body.max_memory_buffer_size = Some("256KiB".to_string());
         initial.spec.request_body.max_body_size = Some("1MiB".to_string());
         initial.spec.request_body.storage_operation_timeout = "750ms".to_string();
+        initial.spec.preflight_policy = Some(PreflightPolicy {
+            mode: PreflightMode::AllOptions,
+            status_code: 299,
+        });
         let mut add = HashMap::new();
         add.insert("http-request-policy".to_string(), Arc::new(initial));
         handler.partial_update(add, HashMap::new(), HashSet::new());
@@ -691,12 +700,23 @@ mod tests {
             in_flight.request_body.storage_operation_timeout,
             std::time::Duration::from_millis(750)
         );
+        assert_eq!(
+            in_flight.preflight_policy,
+            ResolvedPreflightPolicy {
+                mode: ResolvedPreflightMode::AllOptions,
+                status_code: 299,
+            }
+        );
 
         let mut updated = make_config("http-request-policy");
         updated.spec.forwarded_headers.remote_ip_header = "X-Updated-Remote-IP".to_string();
         updated.spec.request_body.max_memory_buffer_size = Some("512KiB".to_string());
         updated.spec.request_body.max_body_size = Some("2MiB".to_string());
         updated.spec.request_body.storage_operation_timeout = "2s".to_string();
+        updated.spec.preflight_policy = Some(PreflightPolicy {
+            mode: PreflightMode::CorsStandard,
+            status_code: 205,
+        });
         let mut update = HashMap::new();
         update.insert("http-request-policy".to_string(), Arc::new(updated));
         handler.partial_update(HashMap::new(), update, HashSet::new());
@@ -707,6 +727,13 @@ mod tests {
         assert_eq!(next.request_body.memory_buffer_bytes, 512 * 1024);
         assert_eq!(next.request_body.max_body_size_bytes, 2 * 1024 * 1024);
         assert_eq!(next.request_body.storage_operation_timeout, Duration::from_secs(2));
+        assert_eq!(
+            next.preflight_policy,
+            ResolvedPreflightPolicy {
+                mode: ResolvedPreflightMode::CorsStandard,
+                status_code: 205,
+            }
+        );
         assert_eq!(in_flight.remote_ip_header, "x-initial-remote-ip");
         assert!(!in_flight.request_body.enabled);
         assert_eq!(in_flight.request_body.memory_buffer_bytes, 256 * 1024);
@@ -714,6 +741,13 @@ mod tests {
         assert_eq!(
             in_flight.request_body.storage_operation_timeout,
             Duration::from_millis(750)
+        );
+        assert_eq!(
+            in_flight.preflight_policy,
+            ResolvedPreflightPolicy {
+                mode: ResolvedPreflightMode::AllOptions,
+                status_code: 299,
+            }
         );
 
         handler.partial_update(
@@ -725,6 +759,31 @@ mod tests {
         assert_eq!(get_resolved_http_request_config(Some("http-request-policy")), default);
         assert_eq!(get_resolved_http_request_config(Some("missing")), default);
         assert_eq!(get_resolved_http_request_config(None), default);
+    }
+
+    #[test]
+    fn invalid_preflight_status_is_preserved_for_runtime_fail_close() {
+        let _g = TEST_MUTEX.lock();
+        clear_store();
+        let handler = EdgionGatewayConfigHandler::new();
+        let mut config = make_config("invalid-preflight-policy");
+        config.spec.preflight_policy = Some(PreflightPolicy {
+            mode: PreflightMode::AllOptions,
+            status_code: 700,
+        });
+
+        handler.full_set(&HashMap::from([(
+            "invalid-preflight-policy".to_string(),
+            Arc::new(config),
+        )]));
+
+        assert_eq!(
+            get_resolved_http_request_config(Some("invalid-preflight-policy")).preflight_policy,
+            ResolvedPreflightPolicy {
+                mode: ResolvedPreflightMode::AllOptions,
+                status_code: 700,
+            }
+        );
     }
 
     #[test]

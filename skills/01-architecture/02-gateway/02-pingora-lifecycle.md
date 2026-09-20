@@ -7,6 +7,13 @@ description: Pingora ProxyHttp lifecycle callbacks — 8-phase processing chain,
 
 `EdgionHttpProxy` (`routes/http/proxy_http/mod.rs`) implements Pingora's `ProxyHttp` trait with `EdgionHttpContext` as the per-request context type (`type CTX = EdgionHttpContext`). Each callback phase is split into an independent `pg_*.rs` submodule for maintainability.
 
+Before Phase 1, `new_ctx` performs one lock-free lookup in the immutable
+`EdgionGatewayConfig` snapshot selected by the listener's GatewayClass. It copies
+the resolved request-body limits, upstream RemoteIp header, and global preflight
+mode/status into the request context. Those values come from one publication
+generation and remain pinned for the request; an EGC hot update affects only
+contexts created afterward and does not require rebuilding the listener.
+
 ## ProxyHttp 8-phase callback chain
 
 ```mermaid
@@ -64,7 +71,11 @@ The most complex phase, responsible for request parsing and route matching:
 
 3. **Preflight handling**: CORS preflight requests are handled along two paths:
    - **Native `type: CORS` filter**: skips the preflight handler; Step 4's `GapiCorsFilter` handles it (builds the 204 response directly).
-   - **EdgionPlugins CORS**: intercepted by the preflight handler before plugin execution; CORS configuration is extracted from the matched route's EdgionPlugins.
+   - **EdgionPlugins CORS**: the preflight handler detects the request from the
+     request-pinned policy, then delegates configured CORS to the normal route
+     plugin pipeline. Only the no-CORS fallback replies with the pinned status.
+     Detection and fallback use the same copied policy value, so a concurrent
+     EGC update cannot mix generations within one request.
 
 4. **Plugin execution** (RequestFilter phase):
    - Run global plugins first (`EdgionGatewayConfig.spec.global_plugins_ref`).

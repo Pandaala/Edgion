@@ -271,7 +271,8 @@ pub async fn request_filter(
     super::pg_early_request_filter::initialize_gateway_request_ids(session, ctx).await?;
 
     // Step 1.5: Handle preflight requests (before plugin execution)
-    if edgion_http.preflight_handler.is_preflight(session) {
+    let preflight_policy = ctx.preflight_policy;
+    if edgion_http.preflight_handler.is_preflight(session, preflight_policy) {
         // If route has a native CORS filter (type: CORS), skip this preflight handler.
         // GapiCorsFilter in Step 3 already has full preflight support and will handle it.
         let has_native_cors = ctx
@@ -300,7 +301,7 @@ pub async fn request_filter(
             // Handle preflight request
             match edgion_http
                 .preflight_handler
-                .handle_preflight(session, ctx, cors_config.as_ref())
+                .handle_preflight(session, ctx, preflight_policy, cors_config.as_ref())
                 .await
             {
                 Ok(true) => {
@@ -875,11 +876,11 @@ mod xff_snapshot_tests {
             server_header_opts: Default::default(),
             access_logger: Arc::new(AccessLogger::default()),
             edgion_gateway_config: Arc::new(config),
-            request_body_config_name: None,
+            http_request_config_name: None,
             parsed_timeouts: Default::default(),
             enable_http2: false,
             real_ip_extractor: None,
-            preflight_handler: super::super::PreflightHandler::new(None),
+            preflight_handler: super::super::PreflightHandler,
             http_route_manager: Arc::new(HttpPortRouteManager::default()),
             grpc_route_manager: Arc::new(GrpcPortRouteManager::default()),
         }
@@ -1453,11 +1454,11 @@ mod request_entry_tests {
                 server_header_opts: Default::default(),
                 access_logger: Arc::new(crate::observe::AccessLogger::default()),
                 edgion_gateway_config: config,
-                request_body_config_name: None,
+                http_request_config_name: None,
                 parsed_timeouts: Default::default(),
                 enable_http2: http2,
                 real_ip_extractor: None,
-                preflight_handler: super::super::PreflightHandler::new(None),
+                preflight_handler: super::super::PreflightHandler,
                 http_route_manager,
                 grpc_route_manager,
             };

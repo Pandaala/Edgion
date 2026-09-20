@@ -19,6 +19,7 @@ before applying a decision to current code.
 ## Regression guards
 
 - [Native Gateway API CORS validation matches v1.5 on every ingest path](regression-guards/native-v15-validation-parity.md)
+- [Preflight policy follows EGC hot reload at the request boundary](regression-guards/preflight-policy-egc-hot-reload.md)
 - [CORS Actual Responses Carry No Preflight-Only Headers — FIXED](regression-guards/actual-response-preflight-only-headers.md)
 - [AllOptions Preserves Route CORS Ownership — FIXED](regression-guards/all-options-route-cors-pass-through.md)
 - [CORS Force-Wildcard (`**`) Does Not Emit `tracing::warn!` (Fixed)](regression-guards/force-wildcard-no-tracing-warn.md)

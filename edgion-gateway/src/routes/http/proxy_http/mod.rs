@@ -69,9 +69,9 @@ pub struct EdgionHttpProxy {
     /// Global gateway configuration
     pub edgion_gateway_config: Arc<EdgionGatewayConfig>,
 
-    /// EGC name used to load the pre-resolved request-body policy for each new
-    /// request. `None` selects the built-in default.
-    pub request_body_config_name: Option<String>,
+    /// EGC name used to load pre-resolved HTTP request policies for each new
+    /// request. `None` selects the built-in defaults.
+    pub http_request_config_name: Option<String>,
 
     /// Pre-parsed timeout configurations (always has default values if not configured)
     pub parsed_timeouts: ParsedTimeouts,

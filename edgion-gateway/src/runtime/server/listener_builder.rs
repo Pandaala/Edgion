@@ -222,9 +222,6 @@ pub fn add_http_listener(
         None
     };
 
-    let preflight_handler = crate::routes::http::proxy_http::PreflightHandler::new(
-        context.edgion_gateway_config.spec.preflight_policy.clone(),
-    );
     let http_route_manager =
         crate::routes::http::get_global_http_route_managers().get_or_create_listener_manager(&context.listener_key);
     let grpc_route_manager =
@@ -242,11 +239,11 @@ pub fn add_http_listener(
         },
         access_logger: context.access_logger.clone(),
         edgion_gateway_config: context.edgion_gateway_config.clone(),
-        request_body_config_name: context.edgion_gateway_config_name.clone(),
+        http_request_config_name: context.edgion_gateway_config_name.clone(),
         parsed_timeouts,
         enable_http2: context.enable_http2,
         real_ip_extractor,
-        preflight_handler,
+        preflight_handler: crate::routes::http::proxy_http::PreflightHandler,
         http_route_manager,
         grpc_route_manager,
     };

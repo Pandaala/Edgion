@@ -57,6 +57,7 @@
 
 - Ledger/changelog updated: yes.
 - Commit: `30ba94f610e804a48696d21ff2c85303c1c08d34`.
+- Current-HEAD revalidation: `a342833c58fae0764f13d753a856bc089764fca5`; external commit `a768fbed0` only adapted a test fixture to the fallible route compiler, and all B0063 runtime invariants plus 117 focused tests remained valid.
 
 ## Protected paths
 

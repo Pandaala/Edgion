@@ -396,11 +396,11 @@ mod tests {
             server_header_opts: Default::default(),
             access_logger: Arc::new(AccessLogger::default()),
             edgion_gateway_config: Arc::new(EdgionGatewayConfig::new("test", Default::default())),
-            request_body_config_name: None,
+            http_request_config_name: None,
             parsed_timeouts: Default::default(),
             enable_http2: false,
             real_ip_extractor: None,
-            preflight_handler: super::super::PreflightHandler::new(None),
+            preflight_handler: super::super::PreflightHandler,
             http_route_manager: Arc::new(HttpPortRouteManager::default()),
             grpc_route_manager: Arc::new(GrpcPortRouteManager::default()),
         }

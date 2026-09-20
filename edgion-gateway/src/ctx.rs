@@ -10,6 +10,7 @@ use crate::plugins::runtime::PluginRuntime;
 use crate::plugins::{EdgionPluginsLog, StageLogs};
 use crate::request_body::RequestBodyState;
 use crate::routes::grpc::{GrpcRouteRuleUnit, SelectedGrpcBackend};
+use crate::routes::http::proxy_http::preflight_handler::ResolvedPreflightPolicy;
 use crate::routes::HttpRouteRuleUnit;
 use crate::runtime::GatewayInfo;
 use bytes::Bytes;
@@ -2600,6 +2601,10 @@ pub struct EdgionHttpContext {
     /// an in-flight request is unaffected by a later config update.
     pub remote_ip_header: http::HeaderName,
 
+    /// Resolved global preflight policy captured from the same immutable EGC
+    /// snapshot as the request-body and forwarded-identity policies.
+    pub(crate) preflight_policy: ResolvedPreflightPolicy,
+
     /// Full request-body cache and mutation framing state. Its read-only view
     /// stays available through the final upstream-response header plugin chain
     /// and is then released before streaming the response.
@@ -3577,6 +3582,7 @@ impl EdgionHttpContext {
             allow_loopback_upstream: false,
             request_body_config: crate::request_body::ResolvedRequestBodyConfig::default(),
             remote_ip_header: http::HeaderName::from_static("x-real-ip"),
+            preflight_policy: ResolvedPreflightPolicy::default(),
             request_body: RequestBodyState::default(),
             request_body_plugins: None,
             ai_state: None,
