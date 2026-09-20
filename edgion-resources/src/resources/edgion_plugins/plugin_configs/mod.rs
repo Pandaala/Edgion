@@ -56,6 +56,9 @@ pub use super::conditions::{
     AllOfGroup, AnyOfClause, Condition, ConditionSet, ConditionValidationProfile, IpAccessMatch, SecretMatchCondition,
 };
 pub use super::mtls_field::SanType;
+use crate::resources::common::request_template::{
+    CompiledTemplate, SecretPolicy, TemplateAdmission, TemplateAdmissionError, VariablePolicy,
+};
 pub use access_log_extern::{is_blocked, AccessLogExternField, LogExtSource, ACCESS_LOG_BLOCKED_CTX_KEYS};
 pub use ai_guard::{
     compile_guard_pattern, AiGuardAction, AiGuardConfig, AiGuardEvaluator, AiGuardMatcher, AiGuardPiiDetector,
@@ -85,9 +88,7 @@ pub use credential_injector::{
 };
 pub use csrf::CsrfConfig;
 pub use ctx_set::{
-    parse_secret_ref, secret_ref_var_names, template_has_secret_ref, validate_secret_ref_segments, CaseType,
-    CompiledTemplate, CtxSetConfig, CtxVarRule, ExtractConfig, MappingConfig, ReplaceConfig, SecretRefParts,
-    TemplateSegment, TemplateVarType, TransformConfig, TransformType,
+    CaseType, CtxSetConfig, CtxVarRule, ExtractConfig, MappingConfig, ReplaceConfig, TransformConfig, TransformType,
 };
 pub use debug_access_log::DebugAccessLogToHeaderConfig;
 pub use direct_endpoint::{DirectEndpointConfig, EndpointExtract};
@@ -173,24 +174,11 @@ pub(super) fn validate_restricted_template(template: &str, field: &str) -> Optio
         Ok(compiled) => compiled,
         Err(error) => return Some(format!("{field}: {error}")),
     };
-    if let Err(error) = validate_secret_ref_segments(&compiled) {
-        return Some(format!("{field}: {error}"));
+    match (TemplateAdmission { variables: VariablePolicy::Trusted, secrets: SecretPolicy::AllowResolved }).validate(&compiled) {
+        Ok(()) => None,
+        Err(TemplateAdmissionError::ClientControlledVariable) => Some(format!(
+            "{field} must not read client-controlled request input; use a trusted ctx, remoteIp, matched-route, or secretRef variable"
+        )),
+        Err(error) => Some(format!("{field}: {error}")),
     }
-    for segment in compiled.segments() {
-        if let TemplateSegment::Variable { var_type, .. } = segment {
-            if !matches!(
-                var_type,
-                TemplateVarType::Ctx
-                    | TemplateVarType::RemoteIp
-                    | TemplateVarType::MatchedHttpRoute
-                    | TemplateVarType::MatchedGrpcRoute
-                    | TemplateVarType::SecretRef
-            ) {
-                return Some(format!(
-                    "{field} must not read client-controlled request input; use a trusted ctx, remoteIp, matched-route, or secretRef variable"
-                ));
-            }
-        }
-    }
-    None
 }

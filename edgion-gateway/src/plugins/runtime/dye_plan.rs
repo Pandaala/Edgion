@@ -14,7 +14,8 @@
 
 use std::sync::Arc;
 
-use edgion_resources::resources::edgion_plugins::{CompiledTemplate, DyeOutcome, DyeRule, DyeSuite};
+use edgion_resources::resources::common::request_template::CompiledTemplate;
+use edgion_resources::resources::edgion_plugins::{DyeOutcome, DyeRule, DyeSuite};
 
 use super::conditions::CompiledPluginConditions;
 

@@ -11,7 +11,9 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::resources::edgion_plugins::plugin_configs::{CompiledTemplate, TemplateSegment};
+use crate::resources::common::request_template::{
+    CompiledTemplate, SecretPolicy, TemplateAdmission, TemplateSegment, VariablePolicy,
+};
 
 /// Operator-facing config. Attached to a Service through
 /// `EdgionBackendTrafficPolicy.spec.upstreamAuthority`.
@@ -148,6 +150,13 @@ impl CompiledUpstreamAuthority {
 
         let label_template =
             CompiledTemplate::compile(label_src).map_err(|e| format!("template is not compilable: {e}"))?;
+
+        (TemplateAdmission {
+            variables: VariablePolicy::Trusted,
+            secrets: SecretPolicy::Deny,
+        })
+        .validate(&label_template)
+        .map_err(|error| format!("template {error}"))?;
 
         // A literal '.' anywhere in the label slot would yield two labels;
         // that is the security-relevant case and gets its own message. Any
@@ -407,6 +416,36 @@ mod tests {
             None
         ))
         .is_err());
+    }
+
+    #[test]
+    fn compile_enforces_trusted_variables_without_secrets() {
+        for expression in [
+            "${header:X-Tenant}",
+            "${query:tenant}",
+            "${cookie:tenant}",
+            "${path}",
+            "${uri}",
+            "${requestPath}",
+            "${requestUri}",
+            "${method}",
+            "${secretRef:ns/token:key}",
+            "${secretRef}",
+        ] {
+            let config = cfg("*.sandbox.internal", &format!("{expression}.sandbox.internal"), None);
+            assert!(CompiledUpstreamAuthority::compile(&config).is_err(), "{expression}");
+            assert_eq!(validate_upstream_authority(&config, false).len(), 1, "{expression}");
+        }
+        for expression in [
+            "${ctx:tenant}",
+            "${remoteIp}",
+            "${matchedHttpRoute:name}",
+            "${matchedGrpcRoute:namespace}",
+        ] {
+            let config = cfg("*.sandbox.internal", &format!("{expression}.sandbox.internal"), None);
+            assert!(CompiledUpstreamAuthority::compile(&config).is_ok(), "{expression}");
+            assert!(validate_upstream_authority(&config, false).is_empty(), "{expression}");
+        }
     }
 
     #[test]

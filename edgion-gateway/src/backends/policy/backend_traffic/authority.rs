@@ -7,7 +7,7 @@
 
 use edgion_resources::resources::upstream_authority::{validate_label, CompiledUpstreamAuthority};
 
-use crate::link_sys::template::evaluate_template;
+use crate::link_sys::template::{render_template, RenderPolicy, SecretCapability};
 use crate::plugins::runtime::PluginSession;
 
 /// Why an authority could not be produced. Both are hard failures — never a
@@ -34,7 +34,17 @@ impl AuthorityError {
 /// Render the wildcard label from the session, validate it, and compose the
 /// authority. The suffix is never rendered.
 pub fn render_authority(c: &CompiledUpstreamAuthority, session: &dyn PluginSession) -> Result<String, AuthorityError> {
-    let label = evaluate_template(&c.label_template, session);
+    let label = render_template(
+        &c.label_template,
+        session,
+        RenderPolicy {
+            max_bytes: Some(63),
+            ..RenderPolicy::EMPTY
+        },
+        SecretCapability::Denied,
+    )
+    .map_err(|_| AuthorityError::InvalidLabel)?
+    .into_string();
     if label.is_empty() {
         return Err(AuthorityError::RenderEmpty);
     }
@@ -92,6 +102,21 @@ mod tests {
     }
 
     #[test]
+    fn authority_budget_counts_combined_segments_before_validation() {
+        let c = compiled("prefix-${ctx:tenant}.sandbox.internal");
+        assert_eq!(
+            render_authority(&c, &session_with_tenant(&"a".repeat(56))).unwrap(),
+            format!("prefix-{}.sandbox.internal", "a".repeat(56))
+        );
+        for length in [57, 100_000] {
+            assert_eq!(
+                render_authority(&c, &session_with_tenant(&"a".repeat(length))),
+                Err(AuthorityError::InvalidLabel)
+            );
+        }
+    }
+
+    #[test]
     fn unset_ctx_var_is_render_empty_not_an_empty_label() {
         let c = compiled("${ctx:tenant}.sandbox.internal");
         let mut s = MockPluginSession::new();
@@ -119,7 +144,7 @@ mod tests {
         // guard directly by constructing a `CompiledUpstreamAuthority` whose
         // suffix bypasses `compile()`'s validation, so a request-controlled
         // label of "127" composes to the IPv4 literal "127.0.0.1".
-        use edgion_resources::resources::edgion_plugins::plugin_configs::CompiledTemplate;
+        use edgion_resources::resources::common::request_template::CompiledTemplate;
 
         let c = CompiledUpstreamAuthority {
             label_template: CompiledTemplate::compile("${ctx:tenant}").expect("compiles"),

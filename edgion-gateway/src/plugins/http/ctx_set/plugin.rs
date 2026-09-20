@@ -409,9 +409,11 @@ vars:
 
         // Attacker sends header value containing template syntax
         mock_session
-            .expect_header_value()
-            .withf(|name| name == "X-Inject")
-            .return_const(Some("${header:Authorization}".to_string()));
+            .expect_request_header_map()
+            .return_const(http::HeaderMap::from_iter([(
+                http::HeaderName::from_bytes(b"X-Inject").unwrap(),
+                http::HeaderValue::from_static("${header:Authorization}"),
+            )]));
         // The value should be the literal string, NOT the resolved Authorization header
         mock_session
             .expect_set_ctx_var()

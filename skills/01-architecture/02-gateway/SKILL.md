@@ -72,4 +72,6 @@ description: edgion-gateway data plane architecture — Pingora integration, rou
 
 ## Entry-level dye
 
+- [Shared request-template runtime policies](request-template-runtime.md)
+
 - [Capability, producer ownership, and response-header timing](entry-level-dye.md)

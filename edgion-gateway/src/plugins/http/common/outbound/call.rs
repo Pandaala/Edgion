@@ -444,7 +444,9 @@ pub async fn outbound_call_with_body(
 fn resolve_timeout(client: &ManagedOutboundClient, session: &dyn PluginSession) -> Duration {
     use edgion_resources::resources::common::external_http::{MAX_OUTBOUND_TIMEOUT_MS, MIN_OUTBOUND_TIMEOUT_MS};
     if let Some(tpl) = client.timeout_template.as_ref() {
-        if let Ok(rendered) = super::request::evaluate_template(tpl, session, client.resolved_secrets.as_ref()) {
+        use crate::link_sys::template::{render_template, RenderPolicy, SecretCapability};
+        if let Ok(rendered) = render_template(tpl, session, RenderPolicy::EMPTY, SecretCapability::Denied) {
+            let rendered = rendered.into_string();
             if let Ok(ms) = rendered.trim().parse::<u64>() {
                 if ms >= MIN_OUTBOUND_TIMEOUT_MS {
                     return Duration::from_millis(ms.min(MAX_OUTBOUND_TIMEOUT_MS));
@@ -722,7 +724,7 @@ mod tests {
     use crate::plugins::runtime::traits::session::MockPluginSession;
     use crate::plugins::runtime::traits::test_helpers::setup_header_mocks;
     use edgion_resources::resources::common::outbound_request::OutboundRequestSpec;
-    use edgion_resources::resources::edgion_plugins::plugin_configs::CompiledTemplate;
+    use edgion_resources::resources::common::request_template::CompiledTemplate;
 
     // ── Helpers ──────────────────────────────────────────────────────────────
 
@@ -1607,9 +1609,11 @@ mod tests {
         session.expect_get_method().return_const("GET".to_string());
         session.expect_get_request_path().return_const("/t".to_string());
         session
-            .expect_header_value()
-            .withf(|n| n == "X-Test-Timeout")
-            .return_const(Some("50".to_string()));
+            .expect_request_header_map()
+            .return_const(http::HeaderMap::from_iter([(
+                http::HeaderName::from_bytes(b"X-Test-Timeout").unwrap(),
+                http::HeaderValue::from_static("50"),
+            )]));
 
         let err = outbound_call(&client, &session, None, 4096, &[], &mut Default::default())
             .await
@@ -1643,9 +1647,11 @@ mod tests {
         session.expect_get_method().return_const("GET".to_string());
         session.expect_get_request_path().return_const("/t2".to_string());
         session
-            .expect_header_value()
-            .withf(|n| n == "X-Test-Timeout")
-            .return_const(Some("abc".to_string()));
+            .expect_request_header_map()
+            .return_const(http::HeaderMap::from_iter([(
+                http::HeaderName::from_bytes(b"X-Test-Timeout").unwrap(),
+                http::HeaderValue::from_static("abc"),
+            )]));
 
         let resp = outbound_call(&client, &session, None, 4096, &[], &mut Default::default())
             .await
@@ -1674,10 +1680,7 @@ mod tests {
         let mut session = MockPluginSession::new();
         session.expect_get_method().return_const("GET".to_string());
         session.expect_get_request_path().return_const("/t3".to_string());
-        session
-            .expect_header_value()
-            .withf(|n| n == "X-Test-Timeout")
-            .return_const(None::<String>);
+        session.expect_request_header_map().return_const(http::HeaderMap::new());
 
         let resp = outbound_call(&client, &session, None, 4096, &[], &mut Default::default())
             .await
@@ -1697,9 +1700,11 @@ mod tests {
 
         let mut session = MockPluginSession::new();
         session
-            .expect_header_value()
-            .withf(|n| n == "X-Test-Timeout")
-            .return_const(Some("999999999".to_string()));
+            .expect_request_header_map()
+            .return_const(http::HeaderMap::from_iter([(
+                http::HeaderName::from_bytes(b"X-Test-Timeout").unwrap(),
+                http::HeaderValue::from_static("999999999"),
+            )]));
 
         let resolved = resolve_timeout(&client, &session);
         assert_eq!(resolved, Duration::from_millis(MAX_OUTBOUND_TIMEOUT_MS));

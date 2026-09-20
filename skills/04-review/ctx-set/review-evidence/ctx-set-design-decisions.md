@@ -31,8 +31,8 @@ knowledge_type: review-evidence
 **Fix**: At config load time, templates are precompiled into `Vec<TemplateSegment>` (`Literal` / `Variable`); at runtime only segment iteration and concatenation is done, with no `find("${")` search at all. Equivalent to the SQL prepared statement approach — structure and data thoroughly separated.
 
 **Files involved**:
-- `edgion-resources/src/resources/edgion_plugins/plugin_configs/ctx_set.rs` — `CompiledTemplate`, `TemplateSegment`
-- `edgion-gateway/src/plugins/http/ctx_set/plugin.rs` — `evaluate_template`, `resolve_var`
+- `edgion-resources/src/resources/common/request_template.rs` — `CompiledTemplate`, `TemplateSegment`
+- `edgion-gateway/src/link_sys/template/engine.rs` — canonical rendering and variable resolution; CtxSet delegates with missing-as-empty and no Secret capability.
 
 **Verdict**: Fixed. In future reviews, if a ctx_set template-related issue is seen again, first confirm whether the precompiled path is in use.
 

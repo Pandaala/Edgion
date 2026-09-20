@@ -230,45 +230,6 @@ impl WebhookServiceConfig {
             return Some(err);
         }
 
-        // Validate every secretRef segment in every request template: must be a
-        // well-formed `${secretRef:ns/name:key}`. This also catches a bare
-        // `${secretRef}` (no name) that `collect_secret_ref_names` skips.
-        use crate::resources::edgion_plugins::plugin_configs::{validate_secret_ref_segments, CompiledTemplate};
-        let mut templates_to_check: Vec<&str> = Vec::new();
-        if let Some(p) = &self.request.path {
-            templates_to_check.push(&p.template);
-        }
-        if let Some(m) = &self.request.method {
-            templates_to_check.push(&m.template);
-        }
-        for group in [&self.request.args, &self.request.headers, &self.request.cookies] {
-            for f in &group.custom {
-                if let CustomSource::Template(t) = &f.source {
-                    templates_to_check.push(t);
-                }
-            }
-        }
-        match &self.request.body {
-            Some(BodySpec::Json { template }) | Some(BodySpec::Raw { template }) => {
-                templates_to_check.push(template);
-            }
-            Some(BodySpec::Form { fields }) => {
-                for f in fields {
-                    if let CustomSource::Template(t) = &f.source {
-                        templates_to_check.push(t);
-                    }
-                }
-            }
-            None => {}
-        }
-        for t in templates_to_check {
-            if let Ok(compiled) = CompiledTemplate::compile(t) {
-                if let Err(e) = validate_secret_ref_segments(&compiled) {
-                    return Some(e);
-                }
-            }
-        }
-
         None
     }
 

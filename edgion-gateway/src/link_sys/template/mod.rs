@@ -7,4 +7,7 @@
 
 pub mod engine;
 
-pub use engine::{evaluate_template, evaluate_template_bounded, TemplateEvaluationError};
+pub use engine::{
+    evaluate_template, evaluate_template_bounded, render_template, EscapeMode, MissingValuePolicy, RenderPolicy,
+    RenderedTemplate, SecretCapability, TemplateEvaluationError,
+};

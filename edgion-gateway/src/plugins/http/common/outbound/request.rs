@@ -15,16 +15,16 @@
 //! `${secretRef:ns/name:key}` segments are compiled at load time into
 //! `CompiledCustomFieldSource::Template` entries. At call time, `build_request`
 //! receives an `Option<&ResolvedSecrets>` map (keyed by `"ns/name:key"`) and
-//! passes it through to `resolve_var`, which performs the lookup.
+//! passes it to the canonical template renderer with an explicit Secret capability.
 
 use edgion_resources::resources::common::external_http::ResolvedSecrets;
 use edgion_resources::resources::common::outbound_request::{
     BodySpec, CustomSource, ListFields, OutboundRequestSpec, PresencePolicy,
 };
-use edgion_resources::resources::edgion_plugins::plugin_configs::{CompiledTemplate, TemplateSegment, TemplateVarType};
+use edgion_resources::resources::common::request_template::CompiledTemplate;
 
+use crate::link_sys::template::{render_template, EscapeMode, RenderPolicy, RenderedTemplate, SecretCapability};
 use crate::plugins::http::common::http_client::{connection_listed_hop_by_hop, is_hop_by_hop_or_listed};
-use crate::plugins::runtime::traits::session::RouteProto;
 use crate::plugins::runtime::{PluginLog, PluginSession, PluginSessionHeaderExt};
 
 /// Value-free evidence collected during one logical outbound request build.
@@ -292,7 +292,7 @@ impl CompiledRequest {
         };
 
         // ── 3. Collect query args ─────────────────────────────────────────
-        let mut query_pairs: Vec<(String, String)> = Vec::new();
+        let mut query_pairs: Vec<CollectedField> = Vec::new();
         collect_list_fields(
             &self.args,
             session,
@@ -310,19 +310,18 @@ impl CompiledRequest {
             format!("/{}", final_path)
         };
         let url_str = format!("{}{}", url_base, path_part);
-        let mut url =
-            reqwest::Url::parse(&url_str).map_err(|e| format!("invalid outbound URL {:?}: {}", url_str, e))?;
+        let mut url = reqwest::Url::parse(&url_str).map_err(|_| "invalid outbound URL".to_string())?;
 
         if !query_pairs.is_empty() {
             let mut qp = url.query_pairs_mut();
-            for (k, v) in &query_pairs {
-                qp.append_pair(k, v);
+            for field in &query_pairs {
+                qp.append_pair(&field.name, &field.value);
             }
         }
 
         // ── 5. Parse HTTP method ──────────────────────────────────────────
         let method = reqwest::Method::from_bytes(final_method.as_bytes())
-            .map_err(|e| format!("invalid HTTP method {:?}: {}", final_method, e))?;
+            .map_err(|_| "invalid outbound HTTP method".to_string())?;
 
         // ── 6. Create request ─────────────────────────────────────────────
         let mut req = reqwest::Request::new(method, url);
@@ -336,7 +335,7 @@ impl CompiledRequest {
         *req.headers_mut() = self.collect_headers(session, resolved, diagnostics)?;
 
         // ── 8. Add cookies as a single Cookie header ──────────────────────
-        let mut cookie_pairs: Vec<(String, String)> = Vec::new();
+        let mut cookie_pairs: Vec<CollectedField> = Vec::new();
         collect_list_fields(
             &self.cookies,
             session,
@@ -348,7 +347,7 @@ impl CompiledRequest {
         if !cookie_pairs.is_empty() {
             let cookie_str = cookie_pairs
                 .iter()
-                .map(|(k, v)| format!("{}={}", k, v))
+                .map(|field| format!("{}={}", field.name, field.value))
                 .collect::<Vec<_>>()
                 .join("; ");
             if let Ok(mut val) = reqwest::header::HeaderValue::from_str(&cookie_str) {
@@ -365,7 +364,7 @@ impl CompiledRequest {
         if let Some(body) = &self.body {
             match body {
                 CompiledBody::Json(tpl) => {
-                    let rendered = evaluate_template_with(tpl, session, resolved, VarEscape::Json)?;
+                    let rendered = render_outbound(tpl, session, resolved, EscapeMode::JsonString)?.into_string();
                     *req.body_mut() = Some(rendered.into());
                     req.headers_mut().insert(
                         reqwest::header::CONTENT_TYPE,
@@ -445,7 +444,7 @@ impl CompiledRequest {
         // Apply explicit origin + custom fields (may override forward_all entries).
         // Propagate Required-field errors rather than swallowing them.
         // Pass resolved so that ${secretRef:...} templates in custom fields resolve.
-        let mut pairs: Vec<(String, String)> = Vec::new();
+        let mut pairs: Vec<CollectedField> = Vec::new();
         collect_list_fields(
             &self.headers,
             session,
@@ -454,15 +453,13 @@ impl CompiledRequest {
             resolved,
             diagnostics,
         )?;
-        for (k, v) in pairs {
+        for field in pairs {
             if let (Ok(name), Ok(mut value)) = (
-                reqwest::header::HeaderName::from_bytes(k.as_bytes()),
-                reqwest::header::HeaderValue::from_str(&v),
+                reqwest::header::HeaderName::from_bytes(field.name.as_bytes()),
+                reqwest::header::HeaderValue::from_str(&field.value),
             ) {
-                // String rendering has discarded provenance. Conservatively protect
-                // explicit fields, including custom credential names, at the cost of
-                // disabling HPACK dynamic indexing for these constructed values.
-                value.set_sensitive(true);
+                // Provenance survives assembly; protect Secrets before storage/transport.
+                value.set_sensitive(field.sensitive);
                 result.insert(name, value);
             }
         }
@@ -517,107 +514,39 @@ fn compile_list_fields(fields: &ListFields) -> Result<CompiledListFields, String
     })
 }
 
-/// How to escape a resolved variable value before splicing into the output.
-#[derive(Clone, Copy)]
-enum VarEscape {
-    /// No escaping — path/method/args/headers/cookies (their sinks escape).
-    None,
-    /// JSON string escaping (RFC 8259 section 7) for json body templates.
-    Json,
+/// Outbound surfaces borrow only the controller-carried resolved Secret map.
+fn render_outbound(
+    tpl: &CompiledTemplate,
+    session: &dyn PluginSession,
+    resolved: Option<&ResolvedSecrets>,
+    escape: EscapeMode,
+) -> Result<RenderedTemplate, String> {
+    render_template(
+        tpl,
+        session,
+        RenderPolicy {
+            escape,
+            ..RenderPolicy::EMPTY
+        },
+        SecretCapability::Resolved(resolved),
+    )
+    .map_err(|error| error.to_string())
 }
 
-/// Append `value` to `out`, escaping JSON string special characters.
-fn push_json_escaped(out: &mut String, value: &str) {
-    for c in value.chars() {
-        match c {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            c if (c as u32) < 0x20 => {
-                use std::fmt::Write;
-                let _ = write!(out, "\\u{:04x}", c as u32);
-            }
-            c => out.push(c),
-        }
-    }
-}
-
-/// Evaluate a compiled template against the current session.
-///
-/// Missing variable values are silently substituted with an empty string —
-/// the same convention used by the ctx_set plugin.
-pub(crate) fn evaluate_template(
+/// Value-only sinks (path, query and body) consume provenance after rendering.
+fn evaluate_template(
     tpl: &CompiledTemplate,
     session: &dyn PluginSession,
     resolved: Option<&ResolvedSecrets>,
 ) -> Result<String, String> {
-    evaluate_template_with(tpl, session, resolved, VarEscape::None)
+    render_outbound(tpl, session, resolved, EscapeMode::None).map(RenderedTemplate::into_string)
 }
 
-/// Evaluate a compiled template, escaping each variable value per `escape`.
-/// Literal segments are never escaped. Missing variables render as empty
-/// string (ctx_set convention).
-fn evaluate_template_with(
-    tpl: &CompiledTemplate,
-    session: &dyn PluginSession,
-    resolved: Option<&ResolvedSecrets>,
-    escape: VarEscape,
-) -> Result<String, String> {
-    let mut result = String::with_capacity(tpl.hint_len());
-    for seg in tpl.segments() {
-        match seg {
-            TemplateSegment::Literal(s) => result.push_str(s),
-            TemplateSegment::Variable { var_type, var_name } => {
-                if let Some(v) = resolve_var(var_type, var_name.as_deref(), session, resolved) {
-                    match escape {
-                        VarEscape::None => result.push_str(&v),
-                        VarEscape::Json => push_json_escaped(&mut result, &v),
-                    }
-                }
-            }
-        }
-    }
-    Ok(result)
-}
-
-/// Resolve a single template variable from the session.
-///
-/// Private: the only caller is `evaluate_template_with` in this module —
-/// `evaluate_template` itself is `pub(crate)` for cross-module callers (e.g.
-/// `outbound::call::resolve_timeout`), but `resolve_var` has no cross-module
-/// caller and does not need the wider visibility.
-fn resolve_var(
-    var_type: &TemplateVarType,
-    var_name: Option<&str>,
-    session: &dyn PluginSession,
-    resolved: Option<&ResolvedSecrets>,
-) -> Option<String> {
-    match var_type {
-        TemplateVarType::Header => session.header_value(var_name?),
-        TemplateVarType::Query => session.get_query_param(var_name?),
-        TemplateVarType::Cookie => session.get_cookie(var_name?),
-        TemplateVarType::Ctx => session.get_ctx_var(var_name?),
-        TemplateVarType::Path => Some(session.get_path().to_string()),
-        TemplateVarType::Uri => Some(session.get_uri()),
-        TemplateVarType::RequestPath => Some(session.get_request_path().to_string()),
-        TemplateVarType::RequestUri => Some(session.get_request_uri()),
-        TemplateVarType::Method => Some(session.get_method().to_string()),
-        TemplateVarType::RemoteIp => {
-            let addr = session.remote_ip();
-            if addr.is_empty() {
-                None
-            } else {
-                Some(addr.to_string())
-            }
-        }
-        TemplateVarType::MatchedHttpRoute => session.matched_route_meta(RouteProto::Http, var_name?),
-        TemplateVarType::MatchedGrpcRoute => session.matched_route_meta(RouteProto::Grpc, var_name?),
-        // Resolved at call time from the controller-carried map (keyed by the
-        // raw var_name "ns/name:key"). Absent → None.
-        TemplateVarType::SecretRef => resolved.and_then(|r| r.0.get(var_name?).cloned()),
-    }
+/// No Debug implementation: values can contain credentials.
+struct CollectedField {
+    name: String,
+    value: String,
+    sensitive: bool,
 }
 
 /// Collect resolved field key-value pairs from `fields` into `output`.
@@ -631,7 +560,7 @@ fn collect_list_fields(
     fields: &CompiledListFields,
     session: &dyn PluginSession,
     kind: FieldKind,
-    output: &mut Vec<(String, String)>,
+    output: &mut Vec<CollectedField>,
     resolved: Option<&ResolvedSecrets>,
     diagnostics: &mut OutboundRequestDiagnostics,
 ) -> Result<(), String> {
@@ -639,7 +568,11 @@ fn collect_list_fields(
     for origin in &fields.origin {
         let value = get_session_field(session, &kind, &origin.name);
         match value {
-            Some(v) => output.push((origin.name.clone(), v)),
+            Some(value) => output.push(CollectedField {
+                name: origin.name.clone(),
+                value,
+                sensitive: true,
+            }),
             None => match origin.presence {
                 PresencePolicy::SkipIfMissing => {}
                 PresencePolicy::WarnIfMissing => {
@@ -657,11 +590,18 @@ fn collect_list_fields(
 
     // Custom fields: injected by the operator.
     for custom in &fields.custom {
-        let value = match &custom.source {
-            CompiledCustomFieldSource::Literal(v) => v.clone(),
-            CompiledCustomFieldSource::Template(tpl) => evaluate_template(tpl, session, resolved)?,
+        let (value, sensitive) = match &custom.source {
+            // Preserve the existing conservative classification of static credentials.
+            CompiledCustomFieldSource::Literal(v) => (v.clone(), true),
+            CompiledCustomFieldSource::Template(tpl) => {
+                render_outbound(tpl, session, resolved, EscapeMode::None)?.into_parts()
+            }
         };
-        output.push((custom.name.clone(), value));
+        output.push(CollectedField {
+            name: custom.name.clone(),
+            value,
+            sensitive,
+        });
     }
 
     Ok(())
@@ -1080,6 +1020,90 @@ mod tests {
     }
 
     #[test]
+    fn template_header_provenance_survives_header_only_and_request_clones() {
+        let mut spec = body_spec(BodySpec::Raw { template: "".into() });
+        spec.headers.custom = vec![
+            CustomField {
+                name: "x-private".into(),
+                source: CustomSource::Template("prefix-${secretRef:ns/token:key}-suffix".into()),
+            },
+            CustomField {
+                name: "x-public".into(),
+                source: CustomSource::Template("prefix-${ctx:name}-suffix".into()),
+            },
+        ];
+        let compiled = CompiledRequest::from_spec(&spec).unwrap();
+        let mut session = MockPluginSession::new();
+        session.expect_get_ctx_var().return_const(Some("public".to_string()));
+        let secret = ResolvedSecrets(std::collections::BTreeMap::from([(
+            "ns/token:key".to_string(),
+            "private".to_string(),
+        )]));
+        for resolved in [Some(&secret), None] {
+            let headers = compiled
+                .collect_headers(&session, resolved, &mut Default::default())
+                .unwrap();
+            let expected = if resolved.is_some() {
+                "prefix-private-suffix"
+            } else {
+                "prefix--suffix"
+            };
+            assert_eq!(headers["x-private"], expected);
+            assert!(headers["x-private"].is_sensitive());
+            assert_eq!(headers["x-public"], "prefix-public-suffix");
+            assert!(!headers["x-public"].is_sensitive());
+            let request = compiled
+                .build_request(
+                    &session,
+                    None,
+                    "http://upstream.test",
+                    resolved,
+                    &mut Default::default(),
+                )
+                .unwrap();
+            let cloned = request.try_clone().unwrap();
+            assert!(cloned.headers()["x-private"].is_sensitive());
+            assert!(!cloned.headers()["x-public"].is_sensitive());
+            assert!(!format!("{:?}", cloned.headers()).contains("prefix-private-suffix"));
+        }
+    }
+
+    #[test]
+    fn rendered_url_and_method_errors_do_not_disclose_template_values() {
+        use edgion_resources::resources::common::outbound_request::MethodSpec;
+        let mut spec = body_spec(BodySpec::Raw { template: "".into() });
+        spec.method = Some(MethodSpec {
+            template: "${secretRef:ns/token:key}".into(),
+        });
+        let secret = ResolvedSecrets(std::collections::BTreeMap::from([(
+            "ns/token:key".to_string(),
+            "sentinel private".to_string(),
+        )]));
+        let compiled = CompiledRequest::from_spec(&spec).unwrap();
+        let session = MockPluginSession::new();
+        let error = compiled
+            .build_request(
+                &session,
+                None,
+                "http://upstream.test",
+                Some(&secret),
+                &mut Default::default(),
+            )
+            .unwrap_err();
+        assert_eq!(error, "invalid outbound HTTP method");
+        let error = compiled
+            .build_request(
+                &session,
+                None,
+                "http://[sentinel-private",
+                Some(&secret),
+                &mut Default::default(),
+            )
+            .unwrap_err();
+        assert_eq!(error, "invalid outbound URL");
+    }
+
+    #[test]
     fn bodyless_outbound_request_does_not_inherit_incoming_content_length() {
         use edgion_resources::resources::common::outbound_request::{MethodSpec, OutboundRequestSpec, PathSpec};
 
@@ -1295,15 +1319,15 @@ mod tests {
     #[test]
     fn json_body_escapes_variable_values_and_sets_content_type() {
         let spec = body_spec(BodySpec::Json {
-            template: r#"{"user": "${header:x-user}", "source": "edgion"}"#.to_string(),
+            template: r#"{"user": "${ctx:user}", "source": "edgion"}"#.to_string(),
         });
         let compiled = CompiledRequest::from_spec(&spec).unwrap();
 
         let mut session = MockPluginSession::new();
         // Value contains a quote, a backslash, and a newline — all must be escaped.
         session
-            .expect_header_value()
-            .withf(|n| n == "x-user")
+            .expect_get_ctx_var()
+            .withf(|n| n == "user")
             .return_const(Some("ali\"ce\\bob\nline2".to_string()));
 
         let req = compiled

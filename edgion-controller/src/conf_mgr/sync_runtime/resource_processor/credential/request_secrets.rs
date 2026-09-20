@@ -9,8 +9,8 @@ use std::collections::BTreeMap;
 
 use k8s_openapi::api::core::v1::Secret;
 
+use edgion_resources::resources::common::request_template::parse_secret_ref;
 use edgion_resources::resources::common::SecretObjectReference;
-use edgion_resources::resources::edgion_plugins::plugin_configs::parse_secret_ref;
 use edgion_resources::ResourceKind;
 
 use super::super::{HandlerContext, ResolvedRefsError, ResourceRef};
@@ -198,6 +198,40 @@ mod tests {
         let (secret_key, secret) = make_secret(ns, name, &[(key, value.as_bytes())]);
         let (ctx, _runtime) = make_ctx(HashMap::from([(secret_key, secret)]));
         ctx
+    }
+
+    #[tokio::test]
+    async fn template_secret_dependencies_survive_missing_and_rotation() {
+        let (ctx, runtime) = make_ctx(HashMap::new());
+        let owner = owner();
+        let refs = ["prod/token:key".to_string()];
+        let (values, errors) = resolve_request_secrets(&ctx, &owner, ResourceKind::LinkSys, &refs).await;
+        assert!(values.is_empty());
+        assert!(matches!(errors.as_slice(), [ResolvedRefsError::SecretNotFound { .. }]));
+        assert!(ctx.secret_ref_manager().get_refs("prod/token").contains(&owner));
+
+        for value in ["first", "rotated"] {
+            let (key, secret) = make_secret("prod", "token", &[("key", value.as_bytes())]);
+            runtime.secret_store.replace_all(HashMap::from([(key, secret)]));
+            let (values, errors) = resolve_request_secrets(&ctx, &owner, ResourceKind::LinkSys, &refs).await;
+            assert!(errors.is_empty());
+            assert_eq!(values["prod/token:key"], value);
+            assert!(request_secret_errors_readonly(&ctx, &owner, ResourceKind::LinkSys, &refs).is_empty());
+        }
+        runtime.secret_store.replace_all(HashMap::new());
+        assert!(matches!(
+            request_secret_errors_readonly(&ctx, &owner, ResourceKind::LinkSys, &refs).as_slice(),
+            [ResolvedRefsError::SecretNotFound { .. }]
+        ));
+    }
+
+    #[test]
+    fn template_secret_status_read_does_not_register_dependencies() {
+        let (ctx, _) = make_ctx(HashMap::new());
+        let owner = owner();
+        let refs = ["prod/missing:key".to_string()];
+        assert!(!request_secret_errors_readonly(&ctx, &owner, ResourceKind::LinkSys, &refs).is_empty());
+        assert!(!ctx.secret_ref_manager().get_refs("prod/missing").contains(&owner));
     }
 
     /// A missing key in a present Secret surfaces as `DecodeError` (the Secret

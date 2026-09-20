@@ -24,7 +24,7 @@ description: Webhook LinkSys provider after the target-unification + request-tem
 - The webhook resource carries a required **`request` block** that is the *single source of truth* for the outbound request shape: `path`, `method`, **allow-listed** `args` / `headers` / `cookies`, and an optional `body`. Nothing is forwarded unless the resource names it.
 - Each `args`/`headers`/`cookies` block splits into **`origin`** (copy the same-named value from the frozen incoming request, with a `presence` policy) and **`custom`** (operator-constructed: a literal `value`, or a `template`; secrets are expressed as `${secretRef:ns/name:key}` inside a template string, controller-resolved and carried inline).
 - `request.body` (`BodySpec`, tagged on `type`) has three variants: `json` and `raw` carry a single `template` (`${type:name}` interpolation); `form` carries structured `fields` (same `CustomField` `value`/`template` source as headers/cookies), percent-encoded by the gateway. `json`/`form` auto-inject `Content-Type`; `raw` does not. See [02-features/03-resources/18-link-sys.md § `request.body`](../../02-features/03-resources/18-link-sys.md) for the full field-by-field contract, including the config-time JSON canary lint and the no-size-cap risk note.
-- Templates reuse the existing **ctx-set template engine** (`${header:X}`, `${ctx:Y}`, ...), pre-compiled at resource ingest.
+- Templates use the **shared request-template engine** (`${header:X}`, `${ctx:Y}`, ...), pre-compiled at resource ingest.
 
 **Why:** unified target resolution (matches routes; ExternalName via a proxy Service), an allow-list so a misbehaving upstream plugin cannot leak headers, full auditability of the outbound request from the resource alone, and first-class `presence` semantics (required / warn / skip) for missing fields.
 
@@ -106,7 +106,7 @@ pub async fn resolve_webhook_key(
 
 ## Template engine reference
 
-Webhook templates reuse the ctx-set engine (`CompiledTemplate` in `edgion-resources/src/resources/edgion_plugins/plugin_configs/ctx_set.rs`), compiled at ingest, evaluated against the `PluginSession`/`SessionSnapshot` at call time.
+Webhook templates use `CompiledTemplate` in `edgion-resources/src/resources/common/request_template.rs`, compiled at ingest and evaluated against `PluginSession`/`SessionSnapshot` by the canonical Gateway `link_sys/template/engine.rs` renderer. The [policy contract](../02-gateway/request-template-runtime.md) covers missing values, JSON escaping, output budgets and Secret provenance through header sinks.
 
 | Token | Meaning |
 |-------|---------|

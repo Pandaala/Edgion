@@ -8,6 +8,7 @@ pub mod log_labels;
 pub mod outbound_request;
 pub mod outbound_tls;
 mod parent_identity;
+pub mod request_template;
 pub mod secret_object_ref;
 pub mod secret_slot;
 pub mod service_backend_kind;

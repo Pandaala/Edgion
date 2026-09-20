@@ -3048,6 +3048,46 @@ pub(crate) mod record_outcome_tests {
     }
 
     #[tokio::test]
+    async fn template_copies_preserve_sensitive_header_and_cookie_sources() {
+        use crate::plugins::http::common::outbound::request::CompiledRequest;
+        use edgion_resources::resources::common::outbound_request::OutboundRequestSpec;
+        let mut session = test_session().await;
+        let mut ctx = EdgionHttpContext::default();
+        let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
+        // The same typed setter used by JWE/auth plugin header producers.
+        for (name, value) in [
+            ("x-decrypted", "private-plaintext"),
+            ("cookie", "session=private-cookie"),
+        ] {
+            let mut value = http::HeaderValue::from_static(value);
+            value.set_sensitive(true);
+            adapter.set_request_header_value(name, value).unwrap();
+        }
+        let spec: OutboundRequestSpec = serde_json::from_value(serde_json::json!({
+            "path": {"template": "/verify"}, "method": {"template": "GET"},
+            "headers": {"custom": [
+                {"name": "x-copy", "template": "prefix-${header:x-decrypted}-suffix"},
+                {"name": "x-session-copy", "template": "${cookie:session}"},
+                {"name": "x-public", "template": "${method}"}
+            ]}
+        }))
+        .unwrap();
+        let request = CompiledRequest::from_spec(&spec)
+            .unwrap()
+            .build_request(&adapter, None, "http://upstream.test", None, &mut Default::default())
+            .unwrap();
+        for request in [&request, &request.try_clone().unwrap()] {
+            assert_eq!(request.headers()["x-copy"], "prefix-private-plaintext-suffix");
+            assert_eq!(request.headers()["x-session-copy"], "private-cookie");
+            assert!(request.headers()["x-copy"].is_sensitive());
+            assert!(request.headers()["x-session-copy"].is_sensitive());
+            assert!(!request.headers()["x-public"].is_sensitive());
+            assert!(!format!("{:?}", request.headers()).contains("private-plaintext"));
+            assert!(!format!("{:?}", request.headers()).contains("private-cookie"));
+        }
+    }
+
+    #[tokio::test]
     async fn typed_request_header_preserves_sensitivity_and_replaces_deferred_credential() {
         let mut session = test_session().await;
         let mut ctx = EdgionHttpContext::default();

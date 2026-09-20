@@ -313,6 +313,8 @@ config:
 - `valueTemplate`: a shared `${type:name}` template whose rendered result is
   inserted as one JSON string. It is never parsed as a JSON fragment or
   re-expanded as another template. A missing source rejects the request.
+  An unavailable (empty) `remoteIp` is missing and returns `400`; a present
+  empty named variable is a valid empty string. Secret references are forbidden.
 
 Numeric `value` literals follow the Kubernetes/serde_json decoded number
 model. If the exact source decimal spelling or precision beyond that model is

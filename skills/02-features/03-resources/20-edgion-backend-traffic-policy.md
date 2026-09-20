@@ -35,6 +35,16 @@ targets; Service policies retain their existing fan-out behavior.
 
 Unsupported sections reject the whole policy.
 
+## Dynamic upstream authority
+
+For Service targets, `upstreamAuthority.template` fills one label under the fixed
+`pattern` suffix. Admission permits only ctx, remoteIp and matched HTTP/gRPC route
+metadata; direct client-controlled variables and secretRef are rejected. Rendered
+label growth is checked against 63 UTF-8 bytes before appending, then normal DNS
+label validation/lowercasing applies. Empty output and invalid labels retain their
+distinct failure reasons, with no static-authority fallback. Service anchoring and
+pinned resolution are unchanged. See the [shared template policies](../../01-architecture/02-gateway/request-template-runtime.md).
+
 ## Active health-check transport
 
 `healthCheck.active.type` is the complete selector for the probe transport. The

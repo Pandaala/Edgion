@@ -51,8 +51,8 @@ pub struct OutboundRequestSpec {
 const BODY_LINT_CANARY: &str = "__edgion_canary__";
 
 /// Render `tpl` with every variable replaced by [`BODY_LINT_CANARY`].
-fn render_with_canary(tpl: &crate::resources::edgion_plugins::plugin_configs::CompiledTemplate) -> String {
-    use crate::resources::edgion_plugins::plugin_configs::TemplateSegment;
+fn render_with_canary(tpl: &crate::resources::common::request_template::CompiledTemplate) -> String {
+    use crate::resources::common::request_template::TemplateSegment;
     let mut out = String::with_capacity(tpl.hint_len());
     for seg in tpl.segments() {
         match seg {
@@ -112,14 +112,30 @@ impl OutboundRequestSpec {
         if let Some(err) = self.body_validation_error() {
             return Some(err);
         }
-        None
+        let mut error = None;
+        self.visit_templates(|template| {
+            if error.is_none() {
+                use super::request_template::{CompiledTemplate, SecretPolicy, TemplateAdmission, VariablePolicy};
+                error = CompiledTemplate::compile(template)
+                    .and_then(|compiled| {
+                        (TemplateAdmission {
+                            variables: VariablePolicy::Request,
+                            secrets: SecretPolicy::AllowResolved,
+                        })
+                        .validate(&compiled)
+                        .map_err(|error| error.to_string())
+                    })
+                    .err();
+            }
+        });
+        error
     }
 
     /// Validate the `body` block: Content-Type conflicts, template compile
     /// errors, and the canary-render JSON lint. Shared by webhook and
     /// forward_auth via `validation_error`.
     fn body_validation_error(&self) -> Option<String> {
-        use crate::resources::edgion_plugins::plugin_configs::CompiledTemplate;
+        use crate::resources::common::request_template::CompiledTemplate;
         let body = self.body.as_ref()?;
 
         // json/form derive their Content-Type; an explicit header conflicts.
@@ -175,13 +191,18 @@ impl OutboundRequestSpec {
     /// custom). Best-effort: templates that fail to compile contribute nothing
     /// (the compile error is surfaced separately by the caller's validation).
     pub fn collect_secret_ref_names(&self) -> Vec<String> {
-        use crate::resources::edgion_plugins::plugin_configs::{secret_ref_var_names, CompiledTemplate};
+        use crate::resources::common::request_template::{secret_ref_var_names, CompiledTemplate};
         let mut out = Vec::new();
-        let mut scan = |t: &str| {
+        self.visit_templates(|t| {
             if let Ok(c) = CompiledTemplate::compile(t) {
                 out.extend(secret_ref_var_names(&c));
             }
-        };
+        });
+        out
+    }
+
+    /// Visit every template surface for both admission and Secret dependency discovery.
+    fn visit_templates(&self, mut scan: impl FnMut(&str)) {
         if let Some(p) = &self.path {
             scan(&p.template);
         }
@@ -206,7 +227,6 @@ impl OutboundRequestSpec {
             }
             None => {}
         }
-        out
     }
 }
 
@@ -706,5 +726,35 @@ body:
             ..Default::default()
         };
         assert!(spec.validation_error().is_some());
+    }
+}
+
+#[cfg(test)]
+mod template_admission_tests {
+    use super::*;
+
+    #[test]
+    fn every_outbound_surface_validates_secret_references() {
+        for template in [
+            "${secretRef}",
+            "${secretRef:token:key}",
+            "${secretRef:ns/token:key}",
+            "${header:X-Id}",
+        ] {
+            let valid = matches!(template, "${secretRef:ns/token:key}" | "${header:X-Id}");
+            for value in [
+                serde_json::json!({"path": {"template": template}}),
+                serde_json::json!({"method": {"template": template}}),
+                serde_json::json!({"args": {"custom": [{"name": "token", "template": template}]}}),
+                serde_json::json!({"headers": {"custom": [{"name": "X-Token", "template": template}]}}),
+                serde_json::json!({"cookies": {"custom": [{"name": "token", "template": template}]}}),
+                serde_json::json!({"body": {"type": "raw", "template": template}}),
+                serde_json::json!({"body": {"type": "json", "template": format!("{{\"token\":\"{template}\"}}")}}),
+                serde_json::json!({"body": {"type": "form", "fields": [{"name": "token", "template": template}]}}),
+            ] {
+                let spec: OutboundRequestSpec = serde_json::from_value(value.clone()).unwrap();
+                assert_eq!(spec.validation_error().is_none(), valid, "{value}");
+            }
+        }
     }
 }

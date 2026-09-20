@@ -6,8 +6,8 @@
 //! output). See skills/01-architecture/02-gateway/entry-level-dye.md.
 
 use super::conditions::PluginConditions;
-use super::plugin_configs::{template_has_secret_ref, CompiledTemplate};
 use crate::gwapi_types::is_valid_header_token;
+use crate::resources::common::request_template::{CompiledTemplate, SecretPolicy, TemplateAdmission, VariablePolicy};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -172,7 +172,13 @@ impl DyeSuite {
                             ))
                         }
                         Ok(tpl) => {
-                            if template_has_secret_ref(&tpl) {
+                            if (TemplateAdmission {
+                                variables: VariablePolicy::Request,
+                                secrets: SecretPolicy::Deny,
+                            })
+                            .validate(&tpl)
+                            .is_err()
+                            {
                                 return Some(format!(
                                     "dye.{}: '{}' value must not reference secretRef \
                                      (dye values are client-visible)",

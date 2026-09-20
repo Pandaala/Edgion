@@ -18,9 +18,9 @@ use edgion_resources::resources::common::external_http::{
     WebhookRetry, WebhookTarget,
 };
 use edgion_resources::resources::common::outbound_request::OutboundRequestSpec;
+use edgion_resources::resources::common::request_template::CompiledTemplate;
 use edgion_resources::resources::common::success::SuccessSpec;
 use edgion_resources::resources::common::ResolvedSecrets;
-use edgion_resources::resources::edgion_plugins::plugin_configs::CompiledTemplate;
 
 use edgion_common::dns::ResolverSpec;
 

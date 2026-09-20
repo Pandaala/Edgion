@@ -8,8 +8,10 @@ use regex::Regex;
 use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-use super::ctx_set::{template_has_secret_ref, CompiledTemplate, TemplateSegment, TemplateVarType};
 use super::json_schema_validation::profile_json_value;
+use crate::resources::common::request_template::{
+    CompiledTemplate, SecretPolicy, TemplateAdmission, TemplateSegment, TemplateVarType, VariablePolicy,
+};
 
 pub const MAX_JSON_PATCH_OPERATIONS: usize = 64;
 pub const MAX_JSON_PATCH_PLAN_BYTES: usize = 64 * 1024;
@@ -367,7 +369,13 @@ fn compile_value(
         }
         (None, Some(template)) => {
             let compiled = CompiledTemplate::compile(template).map_err(|error| format!("{field}Template: {error}"))?;
-            if template_has_secret_ref(&compiled) {
+            if (TemplateAdmission {
+                variables: VariablePolicy::Request,
+                secrets: SecretPolicy::Deny,
+            })
+            .validate(&compiled)
+            .is_err()
+            {
                 return Err(format!("{field}Template must not reference ${{secretRef:...}}"));
             }
             validate_template_variable_shapes(&compiled).map_err(|error| format!("{field}Template: {error}"))?;

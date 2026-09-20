@@ -696,7 +696,7 @@ Each `custom` entry is `{ name, <source> }` where the source is **exactly one** 
 | Source | Form | Resolved | Notes |
 |--------|------|----------|-------|
 | Literal | `value: "edgion"` | n/a | Verbatim static string. |
-| Template | `template: "${ctx:user_id}"` | call time | Interpolated by the ctx-set template engine (see [Template variables](#template-variables)). |
+| Template | `template: "${ctx:user_id}"` | call time | Interpolated by the shared request-template engine (see [Template variables](#template-variables)). |
 | Secret template | `template: "Bearer ${secretRef:namespace/name:key}"` | config + call time | The controller resolves the Secret and ships the real value over conf_sync; admin and config-inspection output redacts it. The gateway substitutes it into the precompiled template per call. |
 
 Reference Secret material inside a template (there is no typed `auth` block or `secret:` custom source):
@@ -714,7 +714,7 @@ gateway — no operator action required.
 
 #### Template variables
 
-Templates in `path.template`, `method.template`, and `custom[].template` reuse the ctx-set template engine. They are pre-compiled at resource ingest, so the hot path only performs substitution. Syntax is `${type:name}`:
+Templates in `path.template`, `method.template`, and `custom[].template` use the shared request-template engine. They are pre-compiled at resource ingest, so the hot path only performs substitution. Syntax is `${type:name}`:
 
 | Token | Meaning |
 |-------|---------|
@@ -728,6 +728,27 @@ Templates in `path.template`, `method.template`, and `custom[].template` reuse t
 | `${remoteIp}` | Resolved client IP. |
 
 A `${ctx:X}` that names an undefined variable resolves to an empty string. To enforce presence, use `presence: required` on an origin field, or set the ctx variable in a ctx-set step before calling the webhook.
+
+Substituted `${...}` text is never expanded again. JSON body templates escape
+substituted values as JSON string contents while leaving literal segments intact.
+Secret references use only controller-resolved values; Secret-derived headers,
+including composed values and custom header names, carry sensitive metadata before
+transport. Header substitutions preserve an existing source sensitive flag, and
+cookie substitutions are conservatively sensitive. Other custom templates are not
+marked sensitive solely for using a template. Existing origin-header and Cookie
+protections remain in place.
+
+The same engine also serves CtxSet and dye (missing values become empty; Secrets
+are forbidden), and ProxyRewrite JSON valueTemplate (missing values reject with
+400; its existing output limit rejects with 413). An unavailable remoteIp is a
+missing value; a present empty named variable remains an empty string.
+
+For Service-targeted `EdgionBackendTrafficPolicy.upstreamAuthority`, the dynamic
+label is limited to 63 rendered UTF-8 bytes before appending the fixed suffix.
+Only ctx, remoteIp and matched HTTP/gRPC route metadata are admitted, as with
+timeout templates. Direct header/query/cookie/path/URI/method variables and
+secretRef are rejected. Populate ctx through trusted policy; merely copying an
+untrusted header into ctx does not establish trust.
 
 #### Path override
 

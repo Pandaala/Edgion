@@ -66,12 +66,26 @@ identity, claims, metadata, or cookies. The typed setter preserves replacement a
 deferred-mutation semantics without converting the value back into a String.
 
 Outbound `forward_all` copies typed values, preserving multiple values and their
-sensitivity while retaining the existing UTF-8 and hop-by-hop filtering. Rendered
-origin/custom headers are conservatively marked sensitive because their String
-collection no longer carries secret/template provenance; reconstructed cookies
-are sensitive too. This can reduce HTTP/2 dynamic-table compression for ordinary
-rendered headers. It does not add a new value allocation or classify arbitrary
-incoming headers as secret based on their names.
+sensitivity while retaining the existing UTF-8 and hop-by-hop filtering. Explicit
+origin headers, static custom values, and reconstructed cookies remain conservatively
+sensitive. Custom templates now retain canonical render-result Secret provenance
+through field assembly: composed Secret-derived values are sensitive, independent
+of the header name. Header substitutions also preserve existing source sensitive
+flags; cookie substitutions are conservatively sensitive. Other templates are not
+marked solely for being templates. This is not a general ctx/PII classifier, but
+the boundary may never discard known sensitive metadata from a source header.
+
+Historically, rendered custom headers were all marked sensitive because String
+collection discarded provenance. That protected Secrets at the cost of disabling
+dynamic-table compression for ordinary rendered values. The
+`unify-gateway-request-template-runtime` change replaces that intermediate shape;
+it does not remove origin/cookie protection or claim the old path exposed Secrets.
+
+A deeper review of the uncommitted implementation found that SecretRef-only
+classification lost JweDecrypt's sensitive plaintext header when a later outbound
+template copied `${header:...}`. The corrected renderer reads typed header metadata
+alongside the value and carries it through composition and request cloning. A real
+Pingora adapter regression also covers cookie-to-custom-header copying.
 
 Elasticsearch Basic/APIKey/Bearer headers and the CLI bearer header carry the same
 metadata. Regression coverage checks exact bytes, custom header names, clones,

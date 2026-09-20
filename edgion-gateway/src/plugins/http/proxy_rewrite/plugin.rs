@@ -571,6 +571,7 @@ impl ProxyRewrite {
                         match error {
                             TemplateEvaluationError::MissingVariable => JsonRewriteFailure::BadRequest,
                             TemplateEvaluationError::TooLarge => JsonRewriteFailure::TooLarge,
+                            TemplateEvaluationError::SecretNotAllowed => JsonRewriteFailure::Internal,
                         }
                     })?;
                 serde_json::Value::String(value)
@@ -829,10 +830,12 @@ mod tests {
     }
 
     fn json_session(body: &'static [u8], content_type: &'static str) -> MockPluginSession {
+        json_session_with_headers(body, request_headers(content_type))
+    }
+
+    fn json_session_with_headers(body: &'static [u8], headers: HeaderMap) -> MockPluginSession {
         let mut session = MockPluginSession::new();
-        session
-            .expect_request_header_map()
-            .return_const(request_headers(content_type));
+        session.expect_request_header_map().return_const(headers);
         session.expect_declares_body().return_const(Some(!body.is_empty()));
         session
             .expect_request_body_available_len()
@@ -881,11 +884,9 @@ mod tests {
         }))
         .unwrap();
         let plugin = plugin(&config);
-        let mut session = json_session(br#"{}"#, "application/problem+json; charset=utf-8");
-        session
-            .expect_header_value()
-            .withf(|name| name == "X-Tenant")
-            .return_const(Some(r#"${ctx:not-expanded}"#.to_string()));
+        let mut headers = request_headers("application/problem+json; charset=utf-8");
+        headers.insert("x-tenant", http::HeaderValue::from_static("${ctx:not-expanded}"));
+        let mut session = json_session_with_headers(br#"{}"#, headers);
         session
             .expect_overwrite_request_body()
             .withf(|body| body.as_ref() == br#"{"tenant":"${ctx:not-expanded}"}"#)
@@ -894,14 +895,28 @@ mod tests {
         assert!(plugin.modify_json_body(&mut session, &mut log).await.is_ok());
 
         let mut missing = json_session(br#"{}"#, "application/json");
-        missing
-            .expect_header_value()
-            .withf(|name| name == "X-Tenant")
-            .return_const(None);
         missing.expect_overwrite_request_body().times(0);
         let mut log = PluginLog::new("ProxyRewrite");
         assert!(matches!(
             plugin.modify_json_body(&mut missing, &mut log).await,
+            Err(PluginRunningResult::ErrResponse { status: 400, .. })
+        ));
+    }
+
+    #[tokio::test]
+    async fn empty_remote_ip_is_missing_for_json_value_template() {
+        let config: ProxyRewriteConfig = serde_json::from_value(serde_json::json!({
+            "jsonBody": {"operations": [{"op": "add", "path": "/client", "valueTemplate": "${remoteIp}"}]}
+        }))
+        .unwrap();
+        let plugin = plugin(&config);
+        let mut session = json_session(br#"{}"#, "application/json");
+        session.expect_remote_ip().return_const(String::new());
+        session.expect_overwrite_request_body().times(0);
+        assert!(matches!(
+            plugin
+                .modify_json_body(&mut session, &mut PluginLog::new("ProxyRewrite"))
+                .await,
             Err(PluginRunningResult::ErrResponse { status: 400, .. })
         ));
     }

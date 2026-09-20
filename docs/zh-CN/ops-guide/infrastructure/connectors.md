@@ -634,7 +634,7 @@ request:
 | 来源 | 形式 | 解析时机 | 说明 |
 |------|------|----------|------|
 | 字面 | `value: "edgion"` | 无 | 逐字的静态字符串。 |
-| 模板 | `template: "${ctx:user_id}"` | 调用时 | 由 ctx-set 模板引擎插值（见[模板变量](#模板变量)）。 |
+| 模板 | `template: "${ctx:user_id}"` | 调用时 | 由共享请求模板引擎插值（见[模板变量](#模板变量)）。 |
 | Secret 模板 | `template: "Bearer ${secretRef:namespace/name:key}"` | 配置时 + 调用时 | 控制器解析 Secret 并通过 conf_sync 下发真实值；管理接口与配置检查输出会将其脱敏。网关在每次调用时将其代入预编译模板。 |
 
 在模板中引用 Secret 材料（不再有类型化的 `auth` 块或 `secret:` 自定义来源）：
@@ -649,7 +649,7 @@ custom:
 
 #### 模板变量
 
-`path.template`、`method.template` 和 `custom[].template` 中的模板复用 ctx-set 模板引擎。它们在资源摄入时预编译，因此热路径只做替换。语法为 `${type:name}`：
+`path.template`、`method.template` 和 `custom[].template` 使用共享请求模板引擎。它们在资源摄入时预编译，因此热路径只做替换。语法为 `${type:name}`：
 
 | Token | 含义 |
 |-------|------|
@@ -663,6 +663,21 @@ custom:
 | `${remoteIp}` | 解析后的客户端 IP。 |
 
 引用未定义变量的 `${ctx:X}` 解析为空字符串。要强制存在性，请在 origin 字段上使用 `presence: required`，或在调用 webhook 之前用 ctx-set 步骤设置该变量。
+
+替换值中出现的 `${...}` 不会再次展开。JSON 请求体模板只对替换值做 JSON
+字符串转义，字面量片段保持原样。Secret 只能使用 Controller 已解析的值；
+由 Secret 生成的请求头（包括带前后缀的值和任意自定义头名）在传输前标记敏感。
+请求头替换会保留来源已有的敏感标记，Cookie 替换值保守标记为敏感。其他自定义
+模板不会仅因使用模板就标记敏感；原请求头和 Cookie 的既有保护保持不变。
+
+同一引擎也服务于 CtxSet、染色（缺失值填空，禁止 Secret）和 ProxyRewrite 的
+JSON valueTemplate（缺失值返回 400，超过既有输出限制返回 413）。无法取得的
+remoteIp 按缺失值处理；已存在但内容为空的命名变量仍是空字符串。
+
+面向 Service 的 `EdgionBackendTrafficPolicy.upstreamAuthority` 在拼接固定后缀前，
+将动态标签限制为 63 个渲染后的 UTF-8 字节。与超时模板一样，只允许 ctx、remoteIp
+和匹配 HTTP/gRPC 路由元数据，拒绝直接读取 header/query/cookie/path/URI/method
+以及 secretRef。应通过可信策略设置 ctx；仅把不可信请求头复制进 ctx 并不会建立信任。
 
 #### 路径覆盖
 

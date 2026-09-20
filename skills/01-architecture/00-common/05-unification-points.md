@@ -269,8 +269,8 @@ not in-process checks.
 ### 11. Request-variable templates — Unified engine + safety allow-list
 
 - **Canon**: template schema/parse in
-  `edgion-resources/src/resources/common/outbound_request.rs`; rendering in
-  `edgion-gateway/src/plugins/http/common/outbound/request.rs` (the
+  `edgion-resources/src/resources/common/request_template.rs`; rendering in
+  `edgion-gateway/src/link_sys/template/engine.rs` (the
   `${type:name}` engine: `ctx` / `header` / `query` / `cookie` / `secretRef`
   / `remoteIp` / ...).
 - **Safety discipline**: security-sensitive fields (anything that steers a
@@ -288,6 +288,8 @@ not in-process checks.
   classify itself: full variable set for request-shaping fields, restricted
   allow-list for security-sensitive ones, full-minus-`secretRef` for
   reflected-output fields.
+  The [runtime policy matrix](../02-gateway/request-template-runtime.md) defines
+  missing values, Secret capability/provenance, escaping, and output budgets.
 
 ### 12. Duration config fields — Two sanctioned styles, one parser
 

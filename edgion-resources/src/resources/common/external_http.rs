@@ -11,6 +11,7 @@
 //!   connection-level retry / rate-limit / health-check config that is part of
 //!   `ExternalHttpConnection`.
 
+use super::request_template::{SecretPolicy, TemplateAdmission, TemplateAdmissionError, VariablePolicy};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -320,15 +321,16 @@ pub fn validate_connection_target(conn: &ExternalHttpConnection) -> Option<Strin
         }
     }
     if let Some(tpl) = conn.timeout_ms_template.as_ref() {
-        let compiled = match crate::resources::edgion_plugins::plugin_configs::CompiledTemplate::compile(tpl) {
+        let compiled = match crate::resources::common::request_template::CompiledTemplate::compile(tpl) {
             Ok(c) => c,
             Err(e) => return Some(format!("timeoutMsTemplate: {e}")),
         };
-        if tpl.contains("${secretRef:") {
-            return Some("timeoutMsTemplate must not reference ${secretRef:...}".to_string());
-        }
-        if let Some(e) = reject_client_controlled_vars(&compiled, "timeoutMsTemplate") {
-            return Some(e);
+        match (TemplateAdmission { variables: VariablePolicy::Trusted, secrets: SecretPolicy::Deny }).validate(&compiled) {
+            Ok(()) => {},
+            Err(TemplateAdmissionError::ClientControlledVariable) => return Some(
+                "timeoutMsTemplate must not read client-controlled input (header/query/cookie/path/method/uri); use ${ctx:...} (set by a trusted upstream plugin), ${remoteIp}, or a matched-route variable".to_string()
+            ),
+            Err(error) => return Some(format!("timeoutMsTemplate {error}")),
         }
     }
     if conn.timeout_ms == 0 || conn.timeout_ms > MAX_OUTBOUND_TIMEOUT_MS {
@@ -336,43 +338,6 @@ pub fn validate_connection_target(conn: &ExternalHttpConnection) -> Option<Strin
     }
     if conn.max_response_bytes == 0 {
         return Some("maxResponseBytes must be greater than 0".to_string());
-    }
-    None
-}
-
-/// Reject any template variable that is not on the trusted allow-list for
-/// `timeoutMsTemplate`.
-///
-/// This field drives a per-request timeout deadline and is security-sensitive:
-/// a client-controlled value would let an attacker pin the timeout to something
-/// tiny (forcing a timeout on every call — a reliable DoS).
-///
-/// ALLOW ONLY `${ctx:...}` (set by a trusted upstream plugin, never the raw
-/// client request), `${remoteIp}`, and matched-route metadata
-/// (`${matchedHttpRoute:...}` / `${matchedGrpcRoute:...}`). Everything else —
-/// `header`/`query`/`cookie`/`path`/`uri`/`requestPath`/`requestUri`/`method`/
-/// `secretRef` — is rejected.
-fn reject_client_controlled_vars(
-    tpl: &crate::resources::edgion_plugins::plugin_configs::CompiledTemplate,
-    field_name: &str,
-) -> Option<String> {
-    use crate::resources::edgion_plugins::plugin_configs::{TemplateSegment, TemplateVarType};
-    for seg in tpl.segments() {
-        if let TemplateSegment::Variable { var_type, .. } = seg {
-            let allowed = matches!(
-                var_type,
-                TemplateVarType::Ctx
-                    | TemplateVarType::RemoteIp
-                    | TemplateVarType::MatchedHttpRoute
-                    | TemplateVarType::MatchedGrpcRoute
-            );
-            if !allowed {
-                return Some(format!(
-                    "{field_name} must not read client-controlled input (header/query/cookie/path/method/uri); \
-                     use ${{ctx:...}} (set by a trusted upstream plugin), ${{remoteIp}}, or a matched-route variable"
-                ));
-            }
-        }
     }
     None
 }
