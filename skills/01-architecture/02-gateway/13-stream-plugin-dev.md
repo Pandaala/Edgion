@@ -187,8 +187,10 @@ This is the actual "resource configuration → runtime plugin object" assembly p
 ## 6. Confirm preprocessing and hot-reload paths need no fixes
 
 Gateway `StreamPluginStore` forwards immutable source inputs to the canonical
-`PluginPublisher`. `StreamPluginGeneration` constructs only enabled, permitted
-entries demanded by attached class/stage views and shares their cached instances.
+`PluginPublisher`, which publishes class-scoped views atomically.
+`StreamPluginGeneration` is the sole production resource-to-executable-view
+construction and orchestration path: it constructs only enabled, permitted entries
+demanded by attached class/stage views and shares their cached instances.
 `ResourceMeta` and Controller handlers never build Gateway runtime objects.
 The Controller resolves references, validates enabled source configuration and
 writes status; it does not stamp execution policy into transported entries.
@@ -496,7 +498,7 @@ For registration and CLI usage, see the
 - Is the new plugin Stage 1, Stage 2, or both?
 - Are the enum, runtime, and module exports all wired?
 - Is an existing configuration struct reused instead of copying a near-duplicate one?
-- Does Gateway `compile_stream_plugins` build the selected stage before publishing each resource generation?
+- Does `PluginPublisher` select the scoped policy and demanded stages before `StreamPluginGeneration` builds the executable view?
 - Does Gateway annotation parsing accept only a same-namespace `name`, while route annotation parsing still supports both `name` and `namespace/name`?
 - After updating / deleting the resource, does the Gateway store hot-reload correctly?
 

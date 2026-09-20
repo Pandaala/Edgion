@@ -91,7 +91,7 @@ impl_resource_meta!(EdgionBackend, EdgionBackend, "EdgionBackend", |self| {
     }
 });
 
-// Stream runtimes are built gateway-side via `compile_stream_plugins`; no pre_parse needed.
+// Stream runtime views are built gateway-side by the canonical scoped publisher; no pre_parse needed.
 impl_resource_meta!(EdgionStreamPlugins, EdgionStreamPlugins, "EdgionStreamPlugins");
 
 impl_resource_meta!(LinkSys, LinkSys, "LinkSys", |self| {

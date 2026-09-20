@@ -31,8 +31,10 @@ well, and reports restoration failures instead of silently ignoring them.
   `invalid_geoip_config_installs_an_always_deny_gate` and
   `invalid_geoip_config_cannot_be_undone_and_policy_block_stays_first` unit tests
   cover gate retention and policy-Block precedence.
-- [Stream store](../../../../edgion-gateway/src/plugins/stream/stream_plugin_store.rs):
-  both full and incremental publication compile incoming generations.
+- [Stream store](../../../../edgion-gateway/src/plugins/stream/stream_plugin_store.rs) and
+  [publisher](../../../../edgion-gateway/src/plugins/publication/publisher.rs):
+  full and incremental source updates flow through atomic scoped publication;
+  `StreamPluginGeneration` builds the demanded executable views.
 - [TCP lifecycle](../../../../edgion-gateway/src/routes/tcp/edgion_tcp.rs):
   `check_stream_plugins` consumes the runtime before upstream forwarding.
 - [Integration case](../../../../edgion-tests/src/client/suites/tcp_route/geo_restriction/geo_restriction.rs):

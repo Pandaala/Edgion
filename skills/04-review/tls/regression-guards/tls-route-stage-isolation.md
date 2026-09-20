@@ -49,10 +49,10 @@ ConnectionRateLimit do not become Stage-2 plugins.
 
 ## Lifecycle and regression boundaries
 
-`compile_stream_plugins` preserves raw schema and builds both runtimes;
 `Option::is_none` serialization preserves `Some([])` through conf_sync.
-`StreamPluginStore` publishes one atomic generation. New connections observe
-the latest publication; established connections are not re-authorized.
+`StreamPluginStore` forwards the raw source to `PluginPublisher`, which uses
+`StreamPluginGeneration` to build demanded stage views and publish them atomically.
+New connections observe the latest publication; established connections are not re-authorized.
 No additional cache, lock, runtime scan, or compatibility adapter is needed.
 
 The regression matrix in `routes/tls/tests.rs` exercises both TLS modes,

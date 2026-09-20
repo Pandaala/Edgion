@@ -11,7 +11,6 @@ use std::sync::LazyLock;
 use super::stream_plugin_runtime::StreamPluginRuntime;
 use super::tls_route::TlsRoutePluginRuntime;
 use edgion_common::conf_sync::traits::ConfHandler;
-use edgion_resources::resource::meta::ResourceMeta;
 use edgion_resources::resources::EdgionStreamPlugins;
 
 static GLOBAL_STREAM_PLUGIN_STORE: LazyLock<Arc<StreamPluginStore>> =
@@ -29,7 +28,8 @@ pub fn create_stream_plugin_handler() -> Box<dyn ConfHandler<EdgionStreamPlugins
 /// Compiled EdgionStreamPlugins: immutable schema + the two gateway stream runtimes.
 ///
 /// `spec` holds the raw schema (no runtime state); the two runtimes are
-/// built by `compile_stream_plugins` and Arc-shared via the store.
+/// built on demand by the publisher's source generation and Arc-shared through
+/// immutable scoped views.
 pub struct CompiledStreamPlugins {
     /// The serializable schema, retained for stage declaration checks and store stats.
     pub spec: Arc<EdgionStreamPlugins>,
@@ -37,30 +37,6 @@ pub struct CompiledStreamPlugins {
     pub stream_plugin_runtime: Arc<StreamPluginRuntime>,
     /// TLSRoute-context runtime used after route matching.
     pub tls_route_plugin_runtime: Arc<TlsRoutePluginRuntime>,
-}
-
-/// Build the compiled runtimes for an EdgionStreamPlugins resource.
-///
-/// When a stage's entries are absent, the runtime defaults to empty (operator
-/// intent: declare an ESP with no rules as a no-op pass-through).
-/// Built once per (namespace/name) and Arc-shared.
-pub fn compile_stream_plugins(esp: &EdgionStreamPlugins) -> Arc<CompiledStreamPlugins> {
-    let ns = esp.metadata.namespace.as_deref().unwrap_or("default");
-
-    let stream_plugin_runtime = match &esp.spec.plugins {
-        Some(plugins) => Arc::new(StreamPluginRuntime::from_stream_plugins(plugins, ns, &esp.key_name())),
-        None => Arc::<StreamPluginRuntime>::default(),
-    };
-    let tls_route_plugin_runtime = match &esp.spec.tls_route_plugins {
-        Some(entries) => Arc::new(TlsRoutePluginRuntime::from_entries(entries, ns)),
-        None => Arc::<TlsRoutePluginRuntime>::default(),
-    };
-
-    Arc::new(CompiledStreamPlugins {
-        spec: Arc::new(esp.clone()),
-        stream_plugin_runtime,
-        tls_route_plugin_runtime,
-    })
 }
 
 /// Source inventory and conf-sync adapter for the canonical scoped publication.
@@ -213,6 +189,7 @@ impl Default for StreamPluginStore {
 mod tests {
     use super::*;
     use crate::plugins::stream::stream_plugin_trait::{StreamContext, StreamLayer, StreamPluginResult};
+    use edgion_resources::resource::meta::ResourceMeta;
     use std::net::IpAddr;
 
     fn local_limit_resource(name: &str, rate: u64, enabled: bool) -> Arc<EdgionStreamPlugins> {
@@ -251,13 +228,6 @@ spec:
             StreamPluginResult::Deny(_)
         ));
 
-        // Compiling an unused future does not activate its rate or suppress the
-        // still-serving older runtime, even with the same entry/port identity.
-        let _unpublished = compile_stream_plugins(&local_limit_resource(name, 100, true));
-        assert!(matches!(
-            old.stream_plugin_runtime.run(&ctx).await,
-            StreamPluginResult::Deny(_)
-        ));
         store.full_set(&HashMap::from([(key.clone(), local_limit_resource(name, 2, true))]));
         assert!(matches!(
             store.get(&key).unwrap().stream_plugin_runtime.run(&ctx).await,

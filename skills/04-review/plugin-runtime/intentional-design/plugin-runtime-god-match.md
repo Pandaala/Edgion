@@ -86,10 +86,11 @@ The stream types have a different representation: both hold ordered
 copies the vector and increments each plugin Arc; it preserves the chain and
 shares plugin state, without deep-cloning plugins. This is O(number of plugins),
 not an O(1) clone of the entire vector. `TlsRoutePluginRuntime` currently has no
-`Clone` implementation despite also using Arc-backed entries. Both are published
-behind outer Arcs by `compile_stream_plugins()` and shared through
-`StreamPluginStore`. Do not infer a blanket no-clone rule for stream runtimes or
-confuse a chain-preserving Arc clone with the removed empty-runtime clone.
+`Clone` implementation despite also using Arc-backed entries. `StreamPluginStore`
+forwards source facts to `PluginPublisher`, which atomically publishes outer Arcs
+constructed through the source-bound `StreamPluginGeneration`. Do not infer a
+blanket no-clone rule for stream runtimes or confuse a chain-preserving Arc clone
+with the removed empty-runtime clone.
 
 Source inspection for `correct-plugin-runtime-architecture-documentation`
 confirmed the constructor and sharing boundaries in `plugin_runtime.rs`, HTTP/gRPC
