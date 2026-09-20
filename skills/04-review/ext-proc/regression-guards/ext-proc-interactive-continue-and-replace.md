@@ -34,8 +34,11 @@ stop-sending semantics are not equivalent to an ordinary per-window mutation.
 
 Submitting headers and body together makes `CONTINUE_AND_REPLACE` impossible:
 the processor has already received the body it instructed the proxy to discard.
-`ExtProcClient::exchange_all` now sends the next phase only after the current
-phase has returned a matching `CONTINUE` verdict.
+The shared `AttachedExtProc` sends each request through
+`ExtProcStream::exchange`, which waits for a matching verdict before the caller
+may send the next phase. The caller applies a valid headers verdict before the
+body exchange; this ordering intentionally does not imply whole-exchange
+rollback if a later body phase fails.
 
 **2. Terminal status and stream closure are separate requirements**
 
@@ -132,3 +135,5 @@ storage publication boundary changes.
 - `BODY-004` — 2026-07-27.
 - `ext-proc-terminalize-owner-on-request-body-publication-failure` — request-body
   publication failure terminalizes the shared owner for both failure policies.
+- `correct-ext-proc-phase-exchange-knowledge` — replaced the removed batch-
+  exchange description and made the per-phase mutation boundary explicit.

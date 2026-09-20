@@ -1,6 +1,6 @@
 ---
 name: ext-proc-phase-verdict-matching
-description: Use when reviewing ExtProc streaming exchanges; covers strict request/response phase matching before mutations are applied.
+description: Use when reviewing ExtProc streaming exchanges; covers strict per-phase request/response matching and mutation boundaries.
 status: fixed
 finding_id: BODY-003
 closed: 2026-07-27
@@ -13,8 +13,13 @@ knowledge_type: regression-guards
 
 Every ExtProc `ProcessingResponse` must match the outstanding
 `ProcessingRequest` phase. Wrong, duplicate, reordered, empty, or missing
-verdicts fail through `failureModeAllow` before any response from the exchange
-is applied; `ImmediateResponse` remains terminal at every phase.
+verdicts fail through `failureModeAllow` before that phase's response is
+applied; `ImmediateResponse` remains terminal at every phase.
+
+This is a per-phase guarantee, not a whole-exchange transaction. A mutation
+from an earlier valid phase may already be visible when a later phase fails;
+the current `AttachedExtProc` / `ExtProcStream` design does not promise
+cross-phase rollback.
 
 Fix suggestions that accept the right number of responses without matching
 their variants are **not accepted**.
@@ -23,33 +28,48 @@ their variants are **not accepted**.
 
 **1. Message count is not a policy verdict**
 
-A headers-plus-body exchange requires one headers verdict and one body verdict.
-Two headers responses have the expected count but provide no body policy
-decision. `ExtProcClient::exchange_all` therefore derives an ordered
-`ProcessingPhase` sequence from the outbound messages and validates each
-inbound variant against it.
+A headers-plus-body flow requires one headers verdict and one body verdict.
+Two headers responses do not provide a body policy decision. For each
+outstanding request, `ExtProcStream::exchange` derives its `ProcessingPhase`
+and accepts only the matching response variant (or a terminal
+`ImmediateResponse`). `AttachedExtProc` separately validates the ordering of
+phases sharing the request-scoped stream.
 
-**2. Validation precedes mutation**
+**2. Validation precedes the current phase's mutation**
 
-The client collects only a completely valid exchange. A later wrong-phase or
-missing response returns `FailedPrecondition` and discards earlier responses,
-so the plugin cannot partially apply a headers mutation before discovering that
-the required body verdict is absent.
+Each `exchange` returns only after its response variant matches the outstanding
+request. The owning plugin path then validates and applies that phase's common
+response before advancing. A later wrong-phase or missing response fails the
+remaining flow, but it does not undo an already applied headers mutation from
+an earlier valid verdict.
 
 **3. Protocol failures use the configured dependency policy**
 
-Phase mismatch and premature stream close are classified as `bad verdict`;
-transport and timeout errors remain `unreachable`. Both classifications pass
-through ExtProc's existing `failureModeAllow` choke point.
+At the stream boundary, phase mismatches return `FailedPrecondition`; premature
+stream closure, transport errors, and timeouts use their corresponding tonic
+statuses. Every consumer routes these failures through the configured policy,
+but their local reason labels are not uniform: request-side paths distinguish
+`bad verdict` from `unreachable`, while the post-commit response-body and
+trailer adapters currently summarize exchange errors as `dependency`.
 
 ## Fix Suggestions Not Accepted
 
 - Stop after receiving the expected message count — does not prove that every
   required phase was decided.
-- Validate variants only inside the plugin application loop — can expose
-  partial mutations before a later invalid verdict is detected.
+- Defer phase matching to ad hoc plugin branches — weakens the shared stream
+  boundary and risks inconsistent handling across request, response-body, and
+  trailer consumers.
 - Treat `ImmediateResponse` as a wrong-phase verdict — it is the protocol's
   valid terminal response for any active phase.
+
+## Verification Boundaries
+
+The client state-machine tests verify per-message phase matching, ordered use
+of one stream, final half-close, and rejection of extra terminal verdicts.
+Request/response body and trailer tests exercise their local wrong- or
+missing-verdict failure paths. These tests do not establish atomic commit or
+rollback across multiple phases, and this page must not be used as evidence of
+such a guarantee.
 
 ## Re-evaluation Triggers
 
@@ -73,3 +93,5 @@ Re-open this decision only if:
 ## Resolution references
 
 - `BODY-003` — 2026-07-27.
+- `correct-ext-proc-phase-exchange-knowledge` — updated the historical batch-
+  exchange description to the current per-phase exchange and mutation boundary.

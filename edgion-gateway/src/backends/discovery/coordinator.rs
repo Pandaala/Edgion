@@ -2002,6 +2002,19 @@ mod tests {
         })
     }
 
+    fn named_service(name: &str, uid: &str) -> Arc<Service> {
+        let mut value = (*service(Some(uid), IntOrString::String("web".to_string()))).clone();
+        value.metadata.name = Some(name.to_string());
+        Arc::new(value)
+    }
+
+    fn owned_slice(name: &str, uid: &str, service_name: &str, address: &str) -> Arc<EndpointSlice> {
+        let mut value = (*slice(name, Some(uid), true)).clone();
+        value.metadata.labels = Some(BTreeMap::from([(SERVICE_NAME.to_string(), service_name.to_string())]));
+        value.endpoints[0].addresses = vec![address.to_string()];
+        Arc::new(value)
+    }
+
     fn publish_base(coordinator: &ServiceDiscoveryCoordinator) {
         coordinator.replace_services(&HashMap::from([(
             "default/backend".to_string(),
@@ -2562,6 +2575,105 @@ mod tests {
         assert!(stored.identity.is_some());
         drop(state);
         assert_eq!(coordinator.load_generation().stats.service_sources, 1);
+    }
+
+    #[test]
+    fn endpoint_slice_owner_update_rebuilds_both_services_and_retires_old_runtime() {
+        let coordinator = ServiceDiscoveryCoordinator::new();
+        let old_key = "default/old".to_string();
+        let new_key = "default/new".to_string();
+        let slice_key = "default/shared".to_string();
+        let policy = health_policy(1);
+        coordinator.set_health_policy(&old_key, Some(Arc::clone(&policy)));
+        coordinator.replace_services(&HashMap::from([
+            (old_key.clone(), named_service("old", "old-service-uid")),
+            (new_key.clone(), named_service("new", "new-service-uid")),
+        ]));
+        coordinator.replace_endpoint_slices(&HashMap::from([(
+            slice_key.clone(),
+            owned_slice("shared", "slice-uid", "old", "10.0.0.1"),
+        )]));
+
+        let before = coordinator.load_generation();
+        let old_projection = before.available(&old_key).unwrap();
+        let old_backend = Arc::clone(&old_projection.canonical_probe_backends()[0]);
+        let old_identity = Arc::clone(old_backend.runtime_identity().unwrap());
+        let old_membership = old_backend.runtime_membership_identity().unwrap();
+        let old_cell = Arc::clone(&old_projection.runtime_cell);
+        let old_active = old_cell.active.load_full();
+        assert!(coordinator.record_health_completion(&policy, old_membership, &old_identity, false, 1, 1));
+
+        coordinator.update_endpoint_slices(
+            HashMap::new(),
+            HashMap::from([(slice_key, owned_slice("shared", "slice-uid", "new", "10.0.0.2"))]),
+            HashSet::new(),
+        );
+
+        let after = coordinator.load_generation();
+        let old_projection = after.available(&old_key).unwrap();
+        assert!(old_projection.raw.endpoint_slices.is_empty());
+        assert!(old_projection.canonical_probe_backends().is_empty());
+        assert!(old_cell.active.load().entries.is_empty());
+        assert!(!old_active.entries[old_identity.as_ref()]
+            .attached
+            .load(Ordering::Acquire));
+        assert!(!coordinator.record_health_completion(&policy, old_membership, &old_identity, true, 1, 1));
+
+        let new_projection = after.available(&new_key).unwrap();
+        assert_eq!(new_projection.raw.endpoint_slices.len(), 1);
+        assert_eq!(new_projection.canonical_probe_backends().len(), 1);
+        assert_eq!(
+            new_projection.canonical_probe_backends()[0]
+                .inner()
+                .addr
+                .as_inet()
+                .map(ToString::to_string),
+            Some("10.0.0.2:8080".to_string())
+        );
+        assert_eq!(after.stats.endpoint_slice_sources, 1);
+    }
+
+    #[test]
+    fn endpoint_slice_compressed_recreate_removes_missing_old_owner_projection() {
+        let coordinator = ServiceDiscoveryCoordinator::new();
+        let old_key = "default/old".to_string();
+        let new_key = "default/new".to_string();
+        let slice_key = "default/shared".to_string();
+        coordinator.replace_services(&HashMap::from([
+            (old_key.clone(), named_service("old", "old-service-uid")),
+            (new_key.clone(), named_service("new", "new-service-uid")),
+        ]));
+        coordinator.replace_endpoint_slices(&HashMap::from([(
+            slice_key.clone(),
+            owned_slice("shared", "old-slice-uid", "old", "10.0.0.1"),
+        )]));
+        assert!(coordinator.runtime_cell(&old_key).is_some());
+
+        coordinator.update_services(HashMap::new(), HashMap::new(), HashSet::from([old_key.clone()]));
+        assert!(matches!(
+            coordinator.load_generation().service(&old_key),
+            Some(ServicePublishedState::Unavailable(
+                ServiceUnavailableReason::MissingService
+            ))
+        ));
+        assert!(coordinator.runtime_cell(&old_key).is_none());
+
+        coordinator.update_endpoint_slices(
+            HashMap::from([(
+                slice_key.clone(),
+                owned_slice("shared", "new-slice-uid", "new", "10.0.0.2"),
+            )]),
+            HashMap::new(),
+            HashSet::from([slice_key]),
+        );
+
+        let generation = coordinator.load_generation();
+        assert!(generation.service(&old_key).is_none());
+        assert!(coordinator.runtime_cell(&old_key).is_none());
+        let new_projection = generation.available(&new_key).unwrap();
+        assert_eq!(new_projection.raw.endpoint_slices.len(), 1);
+        assert_eq!(new_projection.canonical_probe_backends().len(), 1);
+        assert_eq!(generation.stats.endpoint_slice_sources, 1);
     }
 
     #[test]

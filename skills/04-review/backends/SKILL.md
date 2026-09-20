@@ -39,6 +39,7 @@ before applying a decision to current code.
 - [ctrl-02 — AI target limits preserve existing Service policy behavior — FIXED](regression-guards/ebtp-ai-target-limits-preserve-service-fanout.md)
 - [Captured Service policy generation and degrade-threshold selection](regression-guards/ebtp-atomic-service-snapshot.md)
 - [backends-F013 — no-port EndpointSlices fail closed instead of defaulting to 8080](regression-guards/ep-slice-no-port-fail-closed.md)
+- [EndpointSlice ownership transitions rebuild both Service generations](regression-guards/endpoint-slice-ownership-transitions.md)
 - [ExternalName DNS Cache Identity and Lifecycle (task-externalname-dns-cache-identity-and-lifecycle, origin D0001) — FIXED](regression-guards/externalname-dns-cache-identity-and-lifecycle.md)
 - [runtime-F010 — backend error path reuses the listener's HSTS decision](regression-guards/hsts-on-plain-http-error-responses.md)
 - [backends-F001 — IPv6 health-probe URLs are bracketed; gRPC probe no longer panics](regression-guards/ipv6-probe-url-brackets.md)
