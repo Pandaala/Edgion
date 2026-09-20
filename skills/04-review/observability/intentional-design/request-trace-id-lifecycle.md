@@ -40,7 +40,13 @@ parent ID must not be reported as a gateway span ID.
   patch can re-enable the reserved header.
 - Reconcile managed upstream and response headers from live request state at
   final write boundaries. Do not enqueue a stale response value during early
-  execution. Do not automatically echo traceparent or tracestate.
+  execution. On the upstream path, reconcile RequestId after all request-plugin
+  stages and before the proxy publishes its canonical `X-Forwarded-For` and
+  configured RemoteIp header; those proxy-owned identity values win a destination
+  collision without changing the RequestId response or access-log state. Valid
+  RequestId destinations already reject `x-forwarded-*`, and the RemoteIp output
+  name rejects `X-Forwarded-For`, so the ordering is also defense in depth for
+  that chain. Do not automatically echo traceparent or tracestate.
 - At most 16 managed names include suppression tombstones; active values have a
   4096-byte aggregate limit. The usual single-ID case uses a Vec serialized as a
   JSON map. Copied custom values follow the log masking policy without altering

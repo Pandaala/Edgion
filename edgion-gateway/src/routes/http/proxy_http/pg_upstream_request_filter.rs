@@ -7,14 +7,10 @@ use pingora_proxy::Session;
 
 /// Pingora `upstream_request_filter` hook.
 ///
-/// Runs just before the request is written to the upstream connection. The
-/// only mutation today is rewriting `grpc-timeout` for requests that carry
-/// a parsed deadline, so the upstream sees the remaining time rather than
-/// the original client value (which may be stale after route matching,
-/// plugin execution, retries, and queueing).
-///
-/// When no deadline is set (non-gRPC, missing header, or unparseable
-/// header) the upstream request is passed through unchanged.
+/// Runs just before each attempt is written to the upstream connection. It
+/// publishes the remaining gRPC deadline, selected authority, final body
+/// framing, deferred credentials, managed request IDs, and canonical forwarded
+/// identity in their required ownership order before marking AI dispatch.
 ///
 /// Zero-remaining edge case: `upstream_peer`'s entry check normally aborts
 /// before this hook runs, but a deadline can decay to zero in the small
@@ -59,12 +55,11 @@ pub async fn upstream_request_filter(
             .map_err(|_| local_pre_dispatch_failure())?;
     }
 
-    // This is the final owned-header mutation. It intentionally runs after
-    // gRPC deadline, authority, framing, and every request-plugin stage so a
-    // configured RemoteIp header remains authoritative even when its name
-    // overlaps another locally managed header.
-    finalize_forwarded_headers(&ctx.remote_ip_header, upstream_request, ctx);
+    // Reconcile correlation headers after every request-plugin stage, then
+    // publish proxy-owned identity last. A configured RemoteIp header remains
+    // authoritative even when its name overlaps a managed RequestId header.
     ctx.request_info.trace_id.reconcile_request(upstream_request);
+    finalize_forwarded_headers(&ctx.remote_ip_header, upstream_request, ctx);
 
     // All fallible local header/framing preparation has succeeded. Crossing
     // the boundary here keeps a local preparation failure pre-dispatch.
@@ -114,11 +109,15 @@ mod deferred_credential_connection_tests {
     use super::{local_pre_dispatch_failure, upstream_request_filter, validate_deferred_credential_connection};
     use crate::ctx::DeferredCredentialMutations;
     use crate::observe::AccessLogger;
+    use crate::plugins::http::compile_plugins;
     use crate::routes::grpc::GrpcPortRouteManager;
     use crate::routes::http::proxy_http::{EdgionHttpProxy, PreflightHandler};
     use crate::routes::http::routes_mgr::HttpPortRouteManager;
     use crate::EdgionHttpContext;
-    use edgion_resources::{EdgionErrorCode, EdgionGatewayConfig, ListenerKey};
+    use edgion_resources::{
+        EdgionErrorCode, EdgionGatewayConfig, EdgionPlugin, EdgionPlugins, EdgionPluginsSpec, ListenerKey,
+        RequestFilterEntry,
+    };
     use http::{HeaderName, HeaderValue};
     use pingora_core::ErrorType;
     use pingora_http::RequestHeader;
@@ -336,6 +335,97 @@ mod deferred_credential_connection_tests {
 
         assert_eq!(attempt.headers.get("x-provider-token").unwrap(), "private-token");
         assert!(ctx.diagnostics.is_empty());
+    }
+
+    #[tokio::test]
+    async fn full_hook_keeps_forwarded_identity_authoritative_over_request_ids_on_every_attempt() {
+        let mut session = session_from_request(
+            b"GET / HTTP/1.1\r\nHost: test\r\n\
+              Traceparent: 00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01\r\n\
+              X-Real-IP: client-correlation\r\n\
+              X-Business-ID: business-42\r\n\
+              X-Forwarded-For: 198.51.100.8\r\n\r\n",
+        )
+        .await;
+        let mut ctx = EdgionHttpContext::default();
+        ctx.request_info.trace_id.initialize(&session.req_header().headers);
+        ctx.request_info.trace_id.reconcile_request(session.req_header_mut());
+
+        let config = serde_json::from_value(serde_json::json!({
+            "ids": [
+                {"header": "x-real-ip", "generateWhenMissing": false},
+                {
+                    "header": "x-order-id",
+                    "source": {"type": "header", "name": "x-business-id"},
+                    "generateWhenMissing": false
+                }
+            ]
+        }))
+        .unwrap();
+        let resource = EdgionPlugins::new(
+            "forwarded-identity-collision",
+            EdgionPluginsSpec {
+                request_plugins: Some(vec![RequestFilterEntry::new(EdgionPlugin::RequestId(config))]),
+                ..Default::default()
+            },
+        );
+        let compiled = compile_plugins(&resource);
+        assert!(compiled.is_activatable);
+        compiled
+            .plugin_runtime
+            .run_request_plugins(&mut session, &mut ctx)
+            .await;
+
+        let trace_id = ctx.request_info.trace_id.standard_trace_id().unwrap().to_owned();
+        assert_eq!(trace_id, "4bf92f3577b34da6a3ce929d0e0e4736");
+        assert_eq!(
+            ctx.request_info.trace_id.correlation_id("x-real-ip"),
+            Some("client-correlation")
+        );
+        assert_eq!(
+            ctx.request_info.trace_id.correlation_id("x-order-id"),
+            Some("business-42")
+        );
+
+        ctx.request_info.x_forwarded_for = Some("198.51.100.8".to_string());
+        ctx.request_info.downstream_peer_ip = "10.0.0.5".to_string();
+        ctx.request_info.remote_ip = "203.0.113.9".to_string();
+
+        for _ in 0..2 {
+            let mut attempt = session.req_header().clone();
+            upstream_request_filter(&proxy(), &mut session, &mut attempt, &mut ctx)
+                .await
+                .unwrap();
+
+            assert_eq!(attempt.headers.get("x-real-ip").unwrap(), "203.0.113.9");
+            assert_eq!(
+                attempt.headers.get("x-forwarded-for").unwrap(),
+                "198.51.100.8, 10.0.0.5"
+            );
+            assert_eq!(attempt.headers.get("x-order-id").unwrap(), "business-42");
+            assert_eq!(attempt.headers.get("x-trace-id").unwrap(), trace_id.as_str());
+            assert_eq!(
+                attempt.headers.get("traceparent").unwrap(),
+                "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+            );
+        }
+
+        assert_eq!(
+            ctx.request_info.trace_id.correlation_id("x-real-ip"),
+            Some("client-correlation")
+        );
+        assert_eq!(
+            ctx.request_info.trace_id.correlation_id("x-order-id"),
+            Some("business-42")
+        );
+        let access_log_ids = serde_json::to_value(&ctx.request_info.trace_id).unwrap();
+        assert_eq!(access_log_ids["x-trace-id"], trace_id);
+        assert_eq!(access_log_ids["x-real-ip"], "client-correlation");
+        assert_eq!(access_log_ids["x-order-id"], "business-42");
+        assert!(ctx.diagnostics.is_empty());
+        assert!(ctx
+            .ai_state()
+            .is_none_or(|state| !state.attempt_runtime.ever_dispatched()));
     }
 }
 
