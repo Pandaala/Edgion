@@ -43,5 +43,5 @@
 ## Handoff
 
 - Ledger/changelog updated: yes.
-- Deferred issue: D0006 tracks the wider cluster-synced process-configuration ownership question.
+- Deferred issue: D0006 was resolved by defining local YAML as the process-configuration owner; see `skills/04-review/resources/intentional-design/gateway-process-config-is-yaml-only.md`.
 - Commit: `b3274df3ab8529485b7df151aad9f93791895e95`.

@@ -1,13 +1,13 @@
 # EdgionGatewayConfig
 
-EdgionGatewayConfig 是 Edgion 的 Cluster 作用域 CRD（`edgion.io/v1alpha1`），用于设置 GatewayClass 级别的运行时行为，通过 `GatewayClass.spec.parametersRef` 关联，更新后动态生效，无需重启进程。
+EdgionGatewayConfig 是 Edgion 的 Cluster 作用域 CRD（`edgion.io/v1alpha1`），用于设置 GatewayClass 级别的行为，通过 `GatewayClass.spec.parametersRef` 关联。大多数请求级和连接级策略会动态更新；用于构造 HTTP listener 的字段会明确标注为需要重启。
 
 ## 与 Gateway YAML 的区别
 
 | 配置层 | Gateway YAML | EdgionGatewayConfig |
 |--------|-------------|---------------------|
 | 作用域 | 单个 Gateway 进程 | 整个 GatewayClass |
-| 变更生效方式 | 需要重启进程 | 动态生效 |
+| 变更生效方式 | 需要重启进程 | 按字段决定；大多数策略动态生效，`spec.server` 需要重启进程 |
 | 典型用途 | 进程连接参数、日志路径、限流精度 | 超时策略、安全防护、全局插件、真实 IP 提取 |
 
 **何时用 Gateway YAML，何时用 EdgionGatewayConfig：**
@@ -37,11 +37,6 @@ metadata:
   name: default-config   # Cluster 作用域，无需指定 namespace
 spec:
   server:
-    threads: 0
-    workStealing: true
-    gracePeriodSeconds: 30
-    gracefulShutdownTimeoutS: 10
-    upstreamKeepalivePoolSize: 128
     enableCompression: false
     downstreamKeepaliveRequestLimit: 1000
 
@@ -102,14 +97,12 @@ spec:
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `threads` | `Integer` | CPU 核心数 | Pingora 工作线程数，`0` 表示自动检测 |
-| `workStealing` | `Boolean` | `true` | 启用 Tokio 任务窃取 |
-| `gracePeriodSeconds` | `Integer` | `30` | 优雅关闭期间等待连接结束的秒数 |
-| `gracefulShutdownTimeoutS` | `Integer` | `10` | 优雅关闭超时秒数，超过后强制终止 |
-| `upstreamKeepalivePoolSize` | `Integer` | `128` | 上游 keepalive 连接池大小 |
-| `errorLog` | `String` | — | Pingora 内部错误日志文件路径 |
 | `enableCompression` | `Boolean` | `false` | 对带有效 `Content-Length` 且无 `Transfer-Encoding` 的适用下游响应启用 gzip；未知长度和 SSE 响应保持未压缩，以维持增量传输 |
 | `downstreamKeepaliveRequestLimit` | `Integer` | `1000` | 下游每连接最大请求数，`0` 表示无限 |
+
+这两个字段会在构造 HTTP listener 时捕获，修改后需要重启现有 Gateway 进程。Pingora
+工作线程、关闭等待时间、上游 keepalive 池和 Pingora 错误日志路径仅属于本地 Gateway
+YAML 的 `server` 配置，不属于 GatewayClass。
 
 ### spec.httpTimeout.client
 

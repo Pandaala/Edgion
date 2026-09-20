@@ -169,6 +169,30 @@ fn gateway_config_spec_has_no_uncovered_fields() {
 }
 
 #[test]
+fn gateway_config_server_exposes_only_gateway_class_http_behavior() {
+    let generated = serde_json::to_value(schema_for!(edgion_resources::EdgionGatewayConfigSpec)).unwrap();
+    let defs = generated["$defs"].as_object().unwrap();
+    let generated_server = properties(&generated["properties"]["server"], defs)
+        .expect("generated EdgionGatewayConfig server schema must be an object");
+    let committed = crd_section("edgion_gateway_config_crd.yaml", "spec");
+    let committed_server = committed["properties"]["server"]["properties"]
+        .as_object()
+        .expect("committed EdgionGatewayConfig server schema must be an object");
+    let expected = BTreeSet::from(["downstreamKeepaliveRequestLimit", "enableCompression"]);
+    let generated_fields = generated_server.keys().map(String::as_str).collect::<BTreeSet<_>>();
+    let committed_fields = committed_server.keys().map(String::as_str).collect::<BTreeSet<_>>();
+
+    assert_eq!(
+        generated_fields, expected,
+        "process configuration belongs to Gateway YAML"
+    );
+    assert_eq!(
+        committed_fields, expected,
+        "process configuration must not be exposed by the CRD"
+    );
+}
+
+#[test]
 fn gateway_plugin_policy_preserves_defaults_overrides_and_status_bounds() {
     use edgion_resources::resources::plugin_policy::PluginPolicyConfig;
     fn enum_values(schema: &Value) -> Value {

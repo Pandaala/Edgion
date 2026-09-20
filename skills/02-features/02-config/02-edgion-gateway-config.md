@@ -46,14 +46,8 @@ kind: EdgionGatewayConfig
 metadata:
   name: default-config
 spec:
-  # ─── Pingora Server configuration ───
+  # ─── GatewayClass HTTP server behavior (restart-bound) ───
   server:
-    threads: 0                              # uint32, default = CPU core count
-    workStealing: true                      # bool
-    gracePeriodSeconds: 30                  # uint64
-    gracefulShutdownTimeoutS: 10            # uint64
-    upstreamKeepalivePoolSize: 128          # uint32
-    errorLog: ""                            # string, optional
     enableCompression: false                # bool, gzip known-length downstream responses
     downstreamKeepaliveRequestLimit: 1000   # uint32, 0 = unlimited
 
@@ -156,14 +150,12 @@ spec:
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `threads` | `u32` | CPU core count | Pingora worker threads |
-| `workStealing` | `bool` | `true` | Task stealing |
-| `gracePeriodSeconds` | `u64` | `30` | Graceful shutdown wait |
-| `gracefulShutdownTimeoutS` | `u64` | `10` | Shutdown timeout |
-| `upstreamKeepalivePoolSize` | `u32` | `128` | Upstream connection pool |
-| `errorLog` | `String?` | — | Pingora error log |
 | `enableCompression` | `bool` | `false` | Gzip eligible downstream responses with a valid `Content-Length` and no `Transfer-Encoding`; unknown-length and SSE responses remain uncompressed |
 | `downstreamKeepaliveRequestLimit` | `u32` | `1000` | Maximum requests per downstream connection |
+
+These fields are captured when the HTTP listener is constructed and require a Gateway process
+restart to change. Process settings (`threads`, `work_stealing`, shutdown periods,
+`upstream_keepalive_pool_size`, and `error_log`) belong exclusively to the local Gateway YAML.
 
 ### spec.httpTimeout.client
 

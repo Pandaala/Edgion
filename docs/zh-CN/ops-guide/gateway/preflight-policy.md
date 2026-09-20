@@ -69,10 +69,8 @@ apiVersion: edgion.io/v1alpha1
 kind: EdgionGatewayConfig
 metadata:
   name: default-config
-spec:
-  # 无 preflightPolicy 块——使用默认值（mode cors-standard，statusCode 204）
-  server:
-    threads: 0
+# 无 preflightPolicy 块——使用默认值（mode cors-standard，statusCode 204）
+spec: {}
 ```
 
 ### 将所有 OPTIONS 视为预检

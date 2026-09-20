@@ -63,7 +63,6 @@ server:
   grace_period_seconds: 30                 # Wait for connections to drain on shutdown
   graceful_shutdown_timeout_seconds: 10    # Force-terminate after this timeout
   upstream_keepalive_pool_size: 128        # Upstream keepalive connection pool size
-  downstream_keepalive_request_limit: 1000 # Max requests per downstream connection (0 = unlimited)
   # error_log: logs/pingora_error.log      # Pingora internal error log path
 
 # ─── Business logs ────────────────────────────────────────────────
@@ -313,10 +312,11 @@ cannot be enabled below `error`; other targets retain normal module-level filter
 | `grace_period_seconds` | `Integer` | `30` | Seconds to wait for connections to drain during graceful shutdown |
 | `graceful_shutdown_timeout_seconds` | `Integer` | `10` | Force-terminate after this many seconds during shutdown |
 | `upstream_keepalive_pool_size` | `Integer` | `128` | Upstream keepalive connection pool size |
-| `downstream_keepalive_request_limit` | `Integer` | `1000` | Max requests per downstream connection; `0` means unlimited |
 | `error_log` | `String` | — | Pingora internal error log file path |
 
-> These are process-level defaults. To adjust server behavior at the GatewayClass level, use [EdgionGatewayConfig](./edgion-gateway-config.md).
+> These settings configure one Gateway process at startup and require a restart to change. For
+> GatewayClass-scoped HTTP compression and downstream connection request limits, use
+> [EdgionGatewayConfig](./edgion-gateway-config.md).
 
 ### Business Logs
 

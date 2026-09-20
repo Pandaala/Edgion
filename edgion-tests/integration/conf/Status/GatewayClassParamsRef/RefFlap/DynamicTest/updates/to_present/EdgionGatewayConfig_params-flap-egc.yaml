@@ -2,10 +2,4 @@ apiVersion: edgion.io/v1alpha1
 kind: EdgionGatewayConfig
 metadata:
   name: params-flap-egc
-spec:
-  server:
-    threads: 2
-    workStealing: true
-    gracePeriodSeconds: 10
-    gracefulShutdownTimeoutS: 5
-    upstreamKeepalivePoolSize: 64
+spec: {}

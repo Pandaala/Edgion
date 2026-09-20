@@ -90,7 +90,6 @@ server:
   grace_period_seconds: 30                 # Graceful shutdown wait
   graceful_shutdown_timeout_seconds: 10    # Shutdown timeout
   upstream_keepalive_pool_size: 128        # Upstream connection pool size
-  downstream_keepalive_request_limit: 1000 # Maximum requests per downstream connection (0 = unlimited)
   # error_log: logs/pingora_error.log      # Pingora internal error log
 
 # ─── URI path normalization policy ───
@@ -394,10 +393,11 @@ no CLI token flag. See [03-auth-bootstrap.md](03-auth-bootstrap.md#gateway-provi
 | `grace_period_seconds` | `u64` | `30` | Graceful shutdown wait time in seconds |
 | `graceful_shutdown_timeout_seconds` | `u64` | `10` | Shutdown timeout in seconds |
 | `upstream_keepalive_pool_size` | `usize` | `128` | Upstream keepalive connection pool size |
-| `downstream_keepalive_request_limit` | `u32` | `1000` | Maximum requests per downstream connection (0 = unlimited) |
 | `error_log` | `String?` | — | Pingora internal error log path |
 
-> Note: these are process-level default behaviors. If you are tuning GatewayClass-level server behavior, look at `EdgionGatewayConfig` instead.
+> These settings belong exclusively to the local Gateway process, are resolved at startup, and
+> require a restart to change. GatewayClass-scoped HTTP compression and downstream connection
+> request limits belong to `EdgionGatewayConfig.spec.server`.
 
 ### Business Log Schema
 

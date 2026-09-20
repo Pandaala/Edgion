@@ -329,7 +329,7 @@ class Scenario:
 
         self.resource("GatewayClass", "ldap-egress", {"controllerName": "edgion.io/gateway-controller",
                       "parametersRef": {"group": "edgion.io", "kind": "EdgionGatewayConfig", "name": "ldap-egress"}})
-        self.resource("EdgionGatewayConfig", "ldap-egress", {"server": {"threads": 2}})
+        self.resource("EdgionGatewayConfig", "ldap-egress", {})
         self.resource("Gateway", "ldap-egress", {"gatewayClassName": "ldap-egress", "listeners": [
             {"name": "http", "protocol": "HTTP", "port": self.ports["http"]}]})
         class Backend(http.server.BaseHTTPRequestHandler):

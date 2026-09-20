@@ -407,7 +407,7 @@ class Scenario:
             "controllerName": "edgion.io/gateway-controller",
             "parametersRef": {"group": "edgion.io", "kind": "EdgionGatewayConfig", "name": "oidc-egress"},
         })
-        self.resource("EdgionGatewayConfig", "oidc-egress", {"server": {"threads": 2}})
+        self.resource("EdgionGatewayConfig", "oidc-egress", {})
         self.resource("Gateway", "oidc-egress", {
             "gatewayClassName": "oidc-egress",
             "listeners": [{"name": "http", "protocol": "HTTP", "port": self.ports["http"]}],

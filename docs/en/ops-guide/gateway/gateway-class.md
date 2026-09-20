@@ -91,8 +91,8 @@ metadata:
   name: prod-gateway-config
 spec:
   server:
-    threads: 0
-    gracePeriodSeconds: 30
+    enableCompression: true
+    downstreamKeepaliveRequestLimit: 1000
   httpTimeout:
     backend:
       defaultConnectTimeout: "5s"
@@ -105,7 +105,8 @@ tunable fields.
 ### Switch parameters without recreating Gateways
 
 Because Gateways reference the class by name, you can repoint `parametersRef` at a different
-`EdgionGatewayConfig` to roll out new tuning to every Gateway in the class at once.
+`EdgionGatewayConfig`. Dynamically resolved policies apply to subsequent requests or connections;
+listener-construction fields under `spec.server` require a Gateway process restart.
 
 ```yaml
 apiVersion: gateway.networking.k8s.io/v1

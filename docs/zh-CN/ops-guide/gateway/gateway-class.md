@@ -84,8 +84,8 @@ metadata:
   name: prod-gateway-config
 spec:
   server:
-    threads: 0
-    gracePeriodSeconds: 30
+    enableCompression: true
+    downstreamKeepaliveRequestLimit: 1000
   httpTimeout:
     backend:
       defaultConnectTimeout: "5s"
@@ -96,7 +96,7 @@ spec:
 
 ### 无需重建 Gateway 即可切换参数
 
-由于 Gateway 通过名称引用 class，可以将 `parametersRef` 指向不同的 `EdgionGatewayConfig`，从而一次性将新调优推送到该 class 中的所有 Gateway。
+由于 Gateway 通过名称引用 class，可以将 `parametersRef` 指向不同的 `EdgionGatewayConfig`。动态解析的策略会应用于后续请求或连接；`spec.server` 下用于构造 listener 的字段需要重启 Gateway 进程。
 
 ```yaml
 apiVersion: gateway.networking.k8s.io/v1

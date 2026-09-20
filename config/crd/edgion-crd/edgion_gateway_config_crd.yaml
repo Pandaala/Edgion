@@ -28,31 +28,8 @@ spec:
                 # ============================================
                 server:
                   type: object
-                  description: "Server configuration for Pingora"
+                  description: "GatewayClass-scoped HTTP server behavior"
                   properties:
-                    threads:
-                      type: integer
-                      description: "Number of worker threads (default: number of CPU cores)"
-                      format: int32
-                    workStealing:
-                      type: boolean
-                      description: "Enable work stealing (default: true)"
-                      default: true
-                    gracePeriodSeconds:
-                      type: integer
-                      description: "Grace period for shutdown in seconds (default: 30)"
-                      format: int64
-                    gracefulShutdownTimeoutS:
-                      type: integer
-                      description: "Graceful shutdown timeout in seconds (default: 10)"
-                      format: int64
-                    upstreamKeepalivePoolSize:
-                      type: integer
-                      description: "Upstream keepalive pool size (default: 128)"
-                      format: int32
-                    errorLog:
-                      type: string
-                      description: "Error log file path"
                     enableCompression:
                       type: boolean
                       description: "Enable downstream response compression (default: false)"

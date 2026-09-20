@@ -13,7 +13,7 @@ before applying a decision to current code.
 
 - [deny_unknown_fields on LinkSys credential structs vs forward compat — ACCEPTED-TRADEOFF (the attribute is the inline-credential defense)](intentional-design/deny-unknown-fields-credential-structs-forward-compat-tradeoff.md)
 - [`edgion.io/managed-by` Is Inert on EdgionConfigData — WONT-FIX (no ownership mechanism)](intentional-design/edgion-config-data-managed-by-is-inert.md)
-- [Gateway process config is yaml only](intentional-design/gateway-process-config-is-yaml-only.md)
+- [Gateway process configuration is local YAML only](intentional-design/gateway-process-config-is-yaml-only.md)
 - [GEP-2257 Duration Field Scope — CONVERTED SET IS CLOSED](intentional-design/gep2257-duration-field-scope.md)
 - [`PartiallyInvalid` is not route-exclusive — DOCS-DRIFT (fixed)](intentional-design/partially-invalid-not-route-exclusive.md)
 - [ReferenceGrant validation is a controller-global policy — DESIGN-DECISION](intentional-design/reference-grant-validation-controller-scoped.md)

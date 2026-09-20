@@ -3,13 +3,8 @@ kind: EdgionGatewayConfig
 metadata:
   name: example-gateway
 spec:
-  # Server （Pingora ）
+  # GatewayClass HTTP server behavior
   server:
-    threads: 4
-    workStealing: true
-    gracePeriodSeconds: 30
-    gracefulShutdownTimeoutS: 10
-    upstreamKeepalivePoolSize: 128
     downstreamKeepaliveRequestLimit: 1000  # per-connection, HTTP/1.1 only, 0 = unlimited
 
   # Real IP 

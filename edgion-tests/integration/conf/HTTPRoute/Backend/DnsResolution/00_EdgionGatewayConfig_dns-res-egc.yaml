@@ -11,11 +11,5 @@ kind: EdgionGatewayConfig
 metadata:
   name: dns-res-egc
 spec:
-  server:
-    threads: 2
-    workStealing: true
-    gracePeriodSeconds: 10
-    gracefulShutdownTimeoutS: 5
-    upstreamKeepalivePoolSize: 64
   securityProtect:
     allowLoopbackUpstream: true

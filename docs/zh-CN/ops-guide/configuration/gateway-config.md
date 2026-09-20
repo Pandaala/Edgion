@@ -62,7 +62,6 @@ server:
   grace_period_seconds: 30                 # 优雅关闭等待秒数
   graceful_shutdown_timeout_seconds: 10    # 关闭超时秒数
   upstream_keepalive_pool_size: 128        # 上游 keepalive 连接池大小
-  downstream_keepalive_request_limit: 1000 # 下游每连接最大请求数（0 = 无限）
   # error_log: logs/pingora_error.log      # Pingora 内部错误日志路径
 
 # ─── 业务日志 ──────────────────────────────────────────────────────
@@ -248,10 +247,10 @@ leader-only 部署要求节点是能够提供服务的 leader，all-serve 部署
 | `grace_period_seconds` | `Integer` | `30` | 优雅关闭期间等待连接结束的秒数 |
 | `graceful_shutdown_timeout_seconds` | `Integer` | `10` | 优雅关闭超时，超过后强制终止 |
 | `upstream_keepalive_pool_size` | `Integer` | `128` | 上游 keepalive 连接池大小 |
-| `downstream_keepalive_request_limit` | `Integer` | `1000` | 下游每连接最大请求数，`0` 表示无限 |
 | `error_log` | `String` | — | Pingora 内部错误日志文件路径 |
 
-> 这些是进程级行为。如果需要调整 GatewayClass 级别的 server 行为，请使用 [EdgionGatewayConfig](./edgion-gateway-config.md)。
+> 这些设置仅属于本地 Gateway 进程，在启动时解析，修改后需要重启。GatewayClass 级别的
+> HTTP 压缩和下游连接请求数上限由 `EdgionGatewayConfig.spec.server` 配置。
 
 ### 业务日志
 

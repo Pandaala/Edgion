@@ -79,10 +79,8 @@ apiVersion: edgion.io/v1alpha1
 kind: EdgionGatewayConfig
 metadata:
   name: default-config
-spec:
-  # No preflightPolicy block — defaults apply (mode cors-standard, statusCode 204)
-  server:
-    threads: 0
+# No preflightPolicy block — defaults apply (mode cors-standard, statusCode 204)
+spec: {}
 ```
 
 ### Treat all OPTIONS as preflight

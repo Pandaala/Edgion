@@ -1,13 +1,13 @@
 # EdgionGatewayConfig
 
-EdgionGatewayConfig is a cluster-scoped CRD (`edgion.io/v1alpha1`) that configures runtime behavior at the GatewayClass level. It is referenced via `GatewayClass.spec.parametersRef` and takes effect dynamically without restarting the Gateway process.
+EdgionGatewayConfig is a cluster-scoped CRD (`edgion.io/v1alpha1`) that configures behavior at the GatewayClass level. It is referenced via `GatewayClass.spec.parametersRef`. Most request- and connection-scoped policies update dynamically; fields used to construct an HTTP listener are explicitly marked as restart-bound.
 
 ## Difference from Gateway YAML
 
 | Layer | Gateway YAML | EdgionGatewayConfig |
 |-------|-------------|---------------------|
 | Scope | Single Gateway process | Entire GatewayClass |
-| How changes apply | Requires process restart | Dynamic (CRD update) |
+| How changes apply | Requires process restart | Field-specific; most policies are dynamic, while `spec.server` requires a process restart |
 | Typical use | Process connection params, log paths, rate limit precision | Timeout policies, security rules, global plugins, real IP extraction |
 
 **When to use Gateway YAML vs EdgionGatewayConfig:**
@@ -37,11 +37,6 @@ metadata:
   name: default-config   # Cluster-scoped — no namespace needed
 spec:
   server:
-    threads: 0
-    workStealing: true
-    gracePeriodSeconds: 30
-    gracefulShutdownTimeoutS: 10
-    upstreamKeepalivePoolSize: 128
     enableCompression: false
     downstreamKeepaliveRequestLimit: 1000
 
@@ -108,14 +103,13 @@ spec:
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `threads` | `Integer` | CPU core count | Pingora worker thread count; `0` means auto-detect |
-| `workStealing` | `Boolean` | `true` | Enable Tokio work-stealing |
-| `gracePeriodSeconds` | `Integer` | `30` | Seconds to wait for connections to drain during graceful shutdown |
-| `gracefulShutdownTimeoutS` | `Integer` | `10` | Force-terminate after this many seconds during shutdown |
-| `upstreamKeepalivePoolSize` | `Integer` | `128` | Upstream keepalive connection pool size |
-| `errorLog` | `String` | — | Pingora internal error log file path |
 | `enableCompression` | `Boolean` | `false` | Gzip eligible downstream responses with a valid `Content-Length` and no `Transfer-Encoding`; unknown-length and SSE responses remain uncompressed to preserve incremental delivery |
 | `downstreamKeepaliveRequestLimit` | `Integer` | `1000` | Max requests per downstream connection; `0` means unlimited |
+
+Both fields are captured when the HTTP listener is constructed. Updating them on an existing
+Gateway process requires a restart. Pingora worker threads, shutdown periods, the upstream
+keepalive pool, and the Pingora error-log path belong to the local Gateway YAML `server` section;
+they are not GatewayClass fields.
 
 ### spec.httpTimeout.client
 

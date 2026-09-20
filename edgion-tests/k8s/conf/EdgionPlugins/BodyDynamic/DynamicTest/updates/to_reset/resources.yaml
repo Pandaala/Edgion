@@ -4,12 +4,7 @@ metadata:
   name: example-gateway
 spec:
   server:
-    threads: 4
-    workStealing: true
     enableCompression: true
-    gracePeriodSeconds: 30
-    gracefulShutdownTimeoutS: 10
-    upstreamKeepalivePoolSize: 128
   realIp:
     trustedIps:
       - name: private-ranges
