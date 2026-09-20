@@ -47,8 +47,8 @@ consulted Envoy/Traefik pages is not proof that they never discuss the parameter
 
 PAM, systemd, and container limits have different inheritance paths. Pod network
 namespace values must be verified independently of node configuration. Full
-service/package integration remains in
-[the packaging task](../../../../tasks/todo/os-packaging-and-system-service-adapters.md).
+service/package integration remains outside this scoped host-tuning decision and
+requires separately approved work.
 
 ## Verification and re-evaluation
 

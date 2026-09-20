@@ -707,7 +707,7 @@ fn apply_backend_request_headers(
     ctx: &mut EdgionHttpContext,
     backend: &crate::routes::http::match_unit::CompiledBackend,
 ) -> Result<(), AiDispatchError> {
-    // AI dispatch applies native headers directly rather than executing the
+    // AI dispatch borrows the native modifier's plan without executing the
     // backend plugin chain. Honor that chain's publication-time validation.
     if backend.plugin_runtime.rejects_invalid_config() {
         return Err(AiDispatchError::InvalidConfiguration);
@@ -716,21 +716,22 @@ fn apply_backend_request_headers(
     for filter in backend.schema.filters.as_deref().unwrap_or_default() {
         match filter.filter_type {
             HTTPRouteFilterType::RequestHeaderModifier => {
-                let config = filter
-                    .request_header_modifier
-                    .as_ref()
-                    .ok_or(AiDispatchError::InvalidConfiguration)?;
-                for header in config.set.as_deref().unwrap_or_default() {
+                let plan = backend
+                    .plugin_runtime
+                    .backend_request_header_modifier()
+                    .ok_or(AiDispatchError::InvalidConfiguration)?
+                    .plan();
+                for header in plan.set() {
                     adapter
-                        .set_request_header(&header.name, &header.value)
+                        .set_request_header_value(header.name(), header.value().clone())
                         .map_err(|_| AiDispatchError::InvalidConfiguration)?;
                 }
-                for header in config.add.as_deref().unwrap_or_default() {
+                for header in plan.add() {
                     adapter
-                        .append_request_header(&header.name, &header.value)
+                        .append_request_header_value(header.name(), header.value().clone())
                         .map_err(|_| AiDispatchError::InvalidConfiguration)?;
                 }
-                for name in config.remove.as_deref().unwrap_or_default() {
+                for name in plan.remove() {
                     adapter
                         .remove_request_header(name)
                         .map_err(|_| AiDispatchError::InvalidConfiguration)?;
@@ -1102,6 +1103,98 @@ mod tests {
             .then_some(())
             .expect("request must be present");
         session
+    }
+
+    #[tokio::test]
+    async fn header_modifier_ai_backend_matches_native_first_equivalent_operations() {
+        for (first, duplicate) in [("first", "ignored"), ("updated", "first")] {
+            let rule: HTTPRouteRule = serde_json::from_value(serde_json::json!({
+                "backendRefs": [{
+                    "group": "edgion.io", "kind": "EdgionBackend", "name": "provider",
+                    "filters": [{"type": "RequestHeaderModifier", "requestHeaderModifier": {
+                        "set": [
+                            {"name": "X-Set", "value": first},
+                            {"name": "x-set", "value": duplicate},
+                            {"name": "X-Set", "value": "exact-duplicate"}
+                        ],
+                        "add": [
+                            {"name": "X-Add", "value": first},
+                            {"name": "x-add", "value": duplicate},
+                            {"name": "X-Add", "value": "exact-duplicate"}
+                        ],
+                        "remove": ["X-Remove", "x-remove"]
+                    }}]
+                }]
+            }))
+            .unwrap();
+            let runtime = HttpRouteRuleUnit::compile_http_rule(&rule, "default").unwrap();
+            let backend = &runtime.backends[0];
+            let mut results = Vec::new();
+            for ai in [false, true] {
+                let mut session = test_session().await;
+                for name in ["x-set", "x-add", "x-remove"] {
+                    session.req_header_mut().append_header(name, "client-a").unwrap();
+                    session.req_header_mut().append_header(name, "client-b").unwrap();
+                }
+                let mut ctx = EdgionHttpContext::new();
+                if ai {
+                    apply_backend_request_headers(&mut session, &mut ctx, backend).unwrap();
+                } else {
+                    backend
+                        .plugin_runtime
+                        .run_backend_request_plugins(&mut session, &mut ctx)
+                        .await;
+                }
+                let headers = &session.req_header().headers;
+                let values = |name| {
+                    headers
+                        .get_all(name)
+                        .iter()
+                        .map(|value| value.to_str().unwrap())
+                        .collect::<Vec<_>>()
+                };
+                assert_eq!(values("x-set"), [first]);
+                assert_eq!(values("x-add"), ["client-a", "client-b", first]);
+                assert!(!headers.contains_key("x-remove"));
+                results.push(headers.clone());
+            }
+            assert_eq!(results[0], results[1]);
+        }
+    }
+
+    #[tokio::test]
+    async fn header_modifier_ai_backend_rejects_invalid_duplicate_and_recovers() {
+        let rule_for = |duplicate: &str| {
+            serde_json::from_value::<HTTPRouteRule>(serde_json::json!({
+                "backendRefs": [{
+                    "group": "edgion.io", "kind": "EdgionBackend", "name": "provider",
+                    "filters": [{"type": "RequestHeaderModifier", "requestHeaderModifier": {
+                        "set": [
+                            {"name": "X-Generation", "value": "first"},
+                            {"name": "x-generation", "value": duplicate}
+                        ]
+                    }}]
+                }]
+            }))
+            .unwrap()
+        };
+        let captured = HttpRouteRuleUnit::compile_http_rule(&rule_for("ignored"), "default").unwrap();
+        for duplicate in ["ignored", "invalid\r\nvalue", "recovered"] {
+            let current = HttpRouteRuleUnit::compile_http_rule(&rule_for(duplicate), "default").unwrap();
+            let mut session = test_session().await;
+            let mut ctx = EdgionHttpContext::new();
+            let result = apply_backend_request_headers(&mut session, &mut ctx, &current.backends[0]);
+            if duplicate.contains('\r') {
+                assert_eq!(result, Err(AiDispatchError::InvalidConfiguration));
+                assert!(!session.req_header().headers.contains_key("x-generation"));
+            } else {
+                assert_eq!(result, Ok(()));
+                assert_eq!(session.req_header().headers["x-generation"], "first");
+            }
+            // Previously captured requests keep their original valid generation.
+            apply_backend_request_headers(&mut session, &mut ctx, &captured.backends[0]).unwrap();
+            assert_eq!(session.req_header().headers["x-generation"], "first");
+        }
     }
 
     #[tokio::test]

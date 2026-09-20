@@ -26,7 +26,7 @@ filters:
 | `add` | Array\<Object\> | none | Each entry `{name, value}` appends a value, keeping existing values |
 | `remove` | Array\<String\> | none | Header names to delete from the request |
 
-The three operations are applied in order: `set`, then `add`, then `remove`. Gateway API configuration allows only one action for each case-insensitive header name, so equivalent names cannot be repeated within a list or used across multiple lists.
+The three operations are applied in order: `set`, then `add`, then `remove`. Use unique header names within each list and do not use the same case-insensitive name across different actions. If a list contains equivalent names with different casing, only the first entry is executed.
 
 ## Examples
 
@@ -97,11 +97,11 @@ spec:
 
 - Header names are case-insensitive.
 - Names must be valid HTTP header tokens of 1–256 bytes; values must be valid HTTP header values of 1–4096 characters. CR, LF, NUL, and other invalid control characters are rejected.
-- Each of `set`, `add`, and `remove` accepts at most 16 entries. A case-insensitive name cannot appear in more than one action. For equivalent names within one list supplied outside native Kubernetes admission, the first entry is used; every entry still has to pass validation. Operations execute in `set` → `add` → `remove` order.
+- Each of `set`, `add`, and `remove` accepts at most 16 entries. A case-insensitive name cannot appear in more than one action. Within one list, the first equivalent name is used; every entry still has to pass validation. Kubernetes rejects exact duplicate list keys, but differently cased names can pass admission and follow this first-entry rule. Operations execute in `set` → `add` → `remove` order.
 - Native HTTPRoute and GRPCRoute filters must pair their `type` with exactly the corresponding configuration field. Each request/response modifier type can occur only once in one rule or backend filter list. A rule-level modifier and a backend-level modifier are separate lists.
 - Validation also applies to EdgionPlugins and filesystem/etcd configuration. Invalid native modifiers invalidate the owning rule while valid sibling rules remain available; status reports the invalid configuration. If invalid configuration reaches Gateway construction, the affected runtime rejects requests with a generic configuration error instead of silently skipping the modifier.
 - Values are treated as literals; path parameters (`:name`) and template variables are **not** expanded here. If you need dynamic substitution, use the [ProxyRewrite plugin](../edgion-plugins/proxy-rewrite.md).
-- For AI provider backend filters, use unique names within each list; the first-equivalent fallback is not currently guaranteed.
+- AI provider backend filters use the same first-equivalent fallback as ordinary HTTP/gRPC modifiers, including after route updates. This deduplicates configured operations, not existing multi-value request headers.
 - To modify response headers instead, use [ResponseHeaderModifier](./response-header-modifier.md).
 
 ## Related documents

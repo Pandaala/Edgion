@@ -15,6 +15,10 @@ pub struct RequestHeaderModifierFilter {
 }
 
 impl RequestHeaderModifierFilter {
+    pub(crate) fn plan(&self) -> &HeaderModifierPlan {
+        &self.plan
+    }
+
     pub fn new(config: HTTPHeaderFilter) -> Result<Self, &'static str> {
         Ok(Self {
             plan: HeaderModifierPlan::from_http(config)?,
@@ -44,13 +48,19 @@ impl RequestHeaderModifierFilter {
     fn modify_headers(&self, session: &mut dyn PluginSession, log: &mut PluginLog) -> PluginRunningResult {
         // Set headers - overwrite existing
         for header in self.plan.set() {
-            if session.set_request_header(&header.name, &header.value).is_err() {
+            if session
+                .set_request_header_value(header.name(), header.value().clone())
+                .is_err()
+            {
                 log.push_err("set req hdr fail");
             }
         }
         // Add headers - append to existing
         for header in self.plan.add() {
-            if session.append_request_header(&header.name, &header.value).is_err() {
+            if session
+                .append_request_header_value(header.name(), header.value().clone())
+                .is_err()
+            {
                 log.push_err("add req hdr fail");
             }
         }
@@ -101,14 +111,16 @@ mod tests {
         let values = Arc::new(Mutex::new(vec!["client-a".to_string(), "client-b".to_string()]));
         let appended = Arc::clone(&values);
         let mut session = MockPluginSession::new();
-        session.expect_set_request_header().never();
+        session.expect_set_request_header_value().never();
         session.expect_remove_request_header().never();
         session
-            .expect_append_request_header()
+            .expect_append_request_header_value()
             .withf(|name, value| name == "X-Trace" && value == "edge")
             .times(1)
             .returning(move |_, value| {
-                appended.lock().push(value.to_string());
+                appended
+                    .lock()
+                    .push(value.to_str().expect("configured value remains text").to_string());
                 Ok(())
             });
         let mut log = PluginLog::new("RequestHeaderModifier");
@@ -156,13 +168,13 @@ mod tests {
         let mut session = MockPluginSession::new();
         let mut sequence = Sequence::new();
         session
-            .expect_set_request_header()
+            .expect_set_request_header_value()
             .withf(|name, value| name == "X-Set" && value == "set")
             .times(1)
             .in_sequence(&mut sequence)
             .returning(|_, _| Ok(()));
         session
-            .expect_append_request_header()
+            .expect_append_request_header_value()
             .withf(|name, value| name == "X-Add" && value == "add")
             .times(1)
             .in_sequence(&mut sequence)
@@ -192,10 +204,10 @@ mod tests {
         .expect("valid header modifier");
         let mut session = MockPluginSession::new();
         session
-            .expect_set_request_header()
+            .expect_set_request_header_value()
             .returning(|_, _| Err(Box::new(std::io::Error::other("test failure"))));
         session
-            .expect_append_request_header()
+            .expect_append_request_header_value()
             .returning(|_, _| Err(Box::new(std::io::Error::other("test failure"))));
         session
             .expect_remove_request_header()
@@ -222,12 +234,12 @@ mod tests {
         .expect("valid header modifier");
         let mut session = MockPluginSession::new();
         session
-            .expect_set_request_header()
+            .expect_set_request_header_value()
             .withf(|name, value| name == "X-Set" && value == "first")
             .times(1)
             .returning(|_, _| Ok(()));
         session
-            .expect_append_request_header()
+            .expect_append_request_header_value()
             .withf(|name, value| name == "X-Add" && value == "first")
             .times(1)
             .returning(|_, _| Ok(()));

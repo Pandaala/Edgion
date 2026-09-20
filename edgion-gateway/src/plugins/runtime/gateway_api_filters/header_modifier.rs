@@ -1,58 +1,93 @@
 //! Immutable preparation shared by Gateway API request and response header modifiers.
 
 use edgion_resources::resources::{GRPCHeaderFilter, HTTPHeader, HTTPHeaderFilter};
+use http::HeaderValue;
 use std::collections::HashSet;
 
-pub(super) struct HeaderModifierPlan {
-    set: Vec<HTTPHeader>,
-    add: Vec<HTTPHeader>,
+pub(crate) struct HeaderModifierPlan {
+    set: Vec<PreparedHeader>,
+    add: Vec<PreparedHeader>,
     remove: Vec<String>,
+}
+
+pub(crate) struct PreparedHeader {
+    name: String,
+    value: HeaderValue,
+}
+
+impl PreparedHeader {
+    #[inline]
+    pub(crate) fn name(&self) -> &str {
+        &self.name
+    }
+
+    #[inline]
+    pub(crate) fn value(&self) -> &HeaderValue {
+        &self.value
+    }
 }
 
 impl HeaderModifierPlan {
     pub(super) fn from_http(config: HTTPHeaderFilter) -> Result<Self, &'static str> {
         config.validate()?;
-        Ok(Self::from_parts(config.set, config.add, config.remove))
+        Self::from_parts(config.set, config.add, config.remove)
     }
 
     pub(super) fn from_grpc(config: GRPCHeaderFilter) -> Result<Self, &'static str> {
         config.validate()?;
-        Ok(Self::from_parts(config.set, config.add, config.remove))
+        Self::from_parts(config.set, config.add, config.remove)
     }
 
-    fn from_parts(set: Option<Vec<HTTPHeader>>, add: Option<Vec<HTTPHeader>>, remove: Option<Vec<String>>) -> Self {
-        Self {
-            set: retain_first_headers(set),
-            add: retain_first_headers(add),
+    fn from_parts(
+        set: Option<Vec<HTTPHeader>>,
+        add: Option<Vec<HTTPHeader>>,
+        remove: Option<Vec<String>>,
+    ) -> Result<Self, &'static str> {
+        Ok(Self {
+            set: prepare_headers(set)?,
+            add: prepare_headers(add)?,
             remove: retain_first_names(remove),
-        }
+        })
     }
 
     #[inline]
-    pub(super) fn set(&self) -> &[HTTPHeader] {
+    pub(crate) fn set(&self) -> &[PreparedHeader] {
         &self.set
     }
 
     #[inline]
-    pub(super) fn add(&self) -> &[HTTPHeader] {
+    pub(crate) fn add(&self) -> &[PreparedHeader] {
         &self.add
     }
 
     #[inline]
-    pub(super) fn remove(&self) -> &[String] {
+    pub(crate) fn remove(&self) -> &[String] {
         &self.remove
     }
 }
 
-fn retain_first_headers(headers: Option<Vec<HTTPHeader>>) -> Vec<HTTPHeader> {
+fn prepare_headers(headers: Option<Vec<HTTPHeader>>) -> Result<Vec<PreparedHeader>, &'static str> {
     let Some(headers) = headers else {
-        return Vec::new();
+        return Ok(Vec::new());
     };
     let mut seen = HashSet::with_capacity(headers.len());
-    headers
-        .into_iter()
-        .filter(|header| seen.insert(header.name.to_ascii_lowercase()))
-        .collect()
+    let mut prepared = Vec::with_capacity(headers.len());
+    for header in headers {
+        if seen.insert(header.name.to_ascii_lowercase()) {
+            let value = HeaderValue::from_bytes(header.value.as_bytes())
+                .map_err(|_| "header modifier values must be valid HTTP header values")?;
+            // A freshly allocated HeaderValue promotes its Bytes storage on the
+            // first clone. Perform that one-time allocation during publication
+            // so every request-path clone only increments the shared reference.
+            let shared_value = value.clone();
+            drop(value);
+            prepared.push(PreparedHeader {
+                name: header.name,
+                value: shared_value,
+            });
+        }
+    }
+    Ok(prepared)
 }
 
 fn retain_first_names(names: Option<Vec<String>>) -> Vec<String> {
@@ -79,16 +114,16 @@ mod tests {
 
     fn assert_prepared_plan(plan: &HeaderModifierPlan) {
         assert_eq!(plan.set().len(), 2);
-        assert_eq!(plan.set()[0].name, "X-Set");
-        assert_eq!(plan.set()[0].value, "first-set");
-        assert_eq!(plan.set()[1].name, "X-Set-Other");
-        assert_eq!(plan.set()[1].value, "other-set");
+        assert_eq!(plan.set()[0].name(), "X-Set");
+        assert_eq!(plan.set()[0].value(), "first-set");
+        assert_eq!(plan.set()[1].name(), "X-Set-Other");
+        assert_eq!(plan.set()[1].value(), "other-set");
 
         assert_eq!(plan.add().len(), 2);
-        assert_eq!(plan.add()[0].name, "X-Add");
-        assert_eq!(plan.add()[0].value, "first-add");
-        assert_eq!(plan.add()[1].name, "X-Add-Other");
-        assert_eq!(plan.add()[1].value, "other-add");
+        assert_eq!(plan.add()[0].name(), "X-Add");
+        assert_eq!(plan.add()[0].value(), "first-add");
+        assert_eq!(plan.add()[1].name(), "X-Add-Other");
+        assert_eq!(plan.add()[1].value(), "other-add");
 
         assert_eq!(plan.remove(), &["X-Remove", "X-Remove-Other"]);
     }
@@ -183,6 +218,24 @@ mod tests {
             std::hint::black_box((plan.set(), plan.add(), plan.remove()))
         });
 
+        assert_eq!(allocations.calls, 0);
+        assert_eq!(allocations.requested_bytes, 0);
+    }
+
+    #[test]
+    fn prepared_value_clones_share_bytes_without_allocating() {
+        let plan = HeaderModifierPlan::from_http(HTTPHeaderFilter {
+            set: Some(vec![header("X-Set", &"value".repeat(128))]),
+            add: None,
+            remove: None,
+        })
+        .expect("valid header modifier");
+
+        let (value, allocations) = crate::test_allocation_counter::count_allocation_stats(|| {
+            std::hint::black_box(plan.set()[0].value().clone())
+        });
+
+        assert_eq!(value, "value".repeat(128));
         assert_eq!(allocations.calls, 0);
         assert_eq!(allocations.requested_bytes, 0);
     }

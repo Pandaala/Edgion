@@ -188,7 +188,7 @@ async fn apply(ctx: &ScenarioCtx, yaml: String) -> Result<()> {
     result
 }
 
-async fn request(ctx: &ScenarioCtx, entropy: u128) -> Result<(reqwest::StatusCode, Option<bool>)> {
+async fn request(ctx: &ScenarioCtx, entropy: u128, header_probe: bool) -> Result<(reqwest::StatusCode, Value)> {
     let target = ctx.target_socket_addr(AI_GATEWAY_PORT).await?;
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(5))
@@ -196,19 +196,28 @@ async fn request(ctx: &ScenarioCtx, entropy: u128) -> Result<(reqwest::StatusCod
         .resolve(HOST, target)
         .build()
         .context("failed to build weighted AI request client")?;
-    let response = client
-        .post(format!("http://{HOST}:{AI_GATEWAY_PORT}/v1/chat/completions"))
+    let query = if header_probe { "?mock_mode=header_modifier" } else { "" };
+    let mut request = client
+        .post(format!("http://{HOST}:{AI_GATEWAY_PORT}/v1/chat/completions{query}"))
         .header(
             "traceparent",
             crate::access_log_client::traceparent_for_marker(uuid::Uuid::from_u128(entropy).to_string()),
-        )
+        );
+    if header_probe {
+        request = request
+            .header("x-header-modifier-set", "client")
+            .header("x-header-modifier-add", "client-a")
+            .header("x-header-modifier-add", "client-b")
+            .header("x-header-modifier-remove", "client");
+    }
+    let response = request
         .json(&json!({"model": "fixture-model", "messages": []}))
         .send()
         .await
         .context("weighted AI request failed")?;
     let status = response.status();
     if !status.is_success() {
-        return Ok((status, None));
+        return Ok((status, Value::Null));
     }
     let body: Value = response.json().await.context("weighted AI response was not JSON")?;
     let path_has_prefix = body.pointer("/mock/path_has_prefix").and_then(Value::as_bool);
@@ -216,14 +225,18 @@ async fn request(ctx: &ScenarioCtx, entropy: u128) -> Result<(reqwest::StatusCod
         path_has_prefix.is_some(),
         "weighted AI response has no backend observation: {body}"
     );
-    Ok((status, path_has_prefix))
+    Ok((status, body))
 }
 
 async fn sample(ctx: &ScenarioCtx) -> Result<TrafficSample> {
     let mut sample = TrafficSample::default();
     for entropy in 0..SAMPLE_SIZE {
-        match request(ctx, entropy).await? {
-            (status, _) if !status.is_success() => sample.failed += 1,
+        let (status, body) = request(ctx, entropy, false).await?;
+        match (
+            status.is_success(),
+            body.pointer("/mock/path_has_prefix").and_then(Value::as_bool),
+        ) {
+            (false, _) => sample.failed += 1,
             (_, Some(true)) => sample.backend_a += 1,
             (_, Some(false)) => sample.backend_b += 1,
             _ => unreachable!("successful responses always carry a backend observation"),
@@ -262,6 +275,48 @@ async fn cleanup(ctx: &ScenarioCtx) {
     }
 }
 
+async fn check_header_modifier_updates(ctx: &ScenarioCtx) -> Result<()> {
+    // Change the first equivalent operation, restore it, then remove the filter.
+    for first in [Some("first"), Some("updated"), Some("first"), None] {
+        let mut route: Value = serde_yaml::from_str(&route_yaml())?;
+        if let Some(first) = first {
+            for index in 0..2 {
+                route["spec"]["rules"][0]["backendRefs"][index]["filters"] = json!([{
+                    "type": "RequestHeaderModifier",
+                    "requestHeaderModifier": {
+                        "set": [
+                            {"name": "X-Header-Modifier-Set", "value": first},
+                            {"name": "x-header-modifier-set", "value": "ignored"}
+                        ],
+                        "add": [
+                            {"name": "X-Header-Modifier-Add", "value": first},
+                            {"name": "x-header-modifier-add", "value": "ignored"}
+                        ],
+                        "remove": ["X-Header-Modifier-Remove", "x-header-modifier-remove"]
+                    }
+                }]);
+            }
+        }
+        apply(ctx, serde_yaml::to_string(&route)?).await?;
+        let expected = match first {
+            Some(first) => json!({"set": [first], "add": ["client-a", "client-b", first], "remove": []}),
+            None => json!({"set": ["client"], "add": ["client-a", "client-b"], "remove": ["client"]}),
+        };
+        wait_for("AI backend first-equivalent header generation", || async {
+            // A complete weighted cycle observes both backends.
+            for entropy in 0..4 {
+                let (status, body) = request(ctx, entropy, true).await?;
+                if !status.is_success() || body["mock"]["header_modifier"] != expected {
+                    return Ok(false);
+                }
+            }
+            Ok(true)
+        })
+        .await?;
+    }
+    Ok(())
+}
+
 async fn run_inner(ctx: &ScenarioCtx) -> Result<()> {
     apply(ctx, secret_yaml(SECRET_A)).await?;
     apply(ctx, secret_yaml(SECRET_B)).await?;
@@ -290,6 +345,8 @@ async fn run_inner(ctx: &ScenarioCtx) -> Result<()> {
         "exact 1:3 weighted AI distribution with a zero-weight Service",
     )
     .await?;
+
+    check_header_modifier_updates(ctx).await?;
 
     ctx.test_ctx
         .delete_resource("EdgionBackend", BACKEND_NS, BACKEND_B)

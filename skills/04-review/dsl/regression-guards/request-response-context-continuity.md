@@ -134,8 +134,9 @@ Borrowed-read verification on 2026-09-11:
 - Agent-doc validation, SSA-force, metrics-inventory, and Pingora-source guards
   passed. Agent-doc validation initially found an unrelated missing task target;
   the existing header-modifier knowledge page's deferred preparation work was
-  restored as `tasks/todo/prepare-gateway-api-header-modifier-runtime.md`, without
-  changing header behavior or claiming that follow-up resolved.
+  restored as a task, without changing header behavior or claiming that follow-up
+  resolved. That later work is now recorded in the
+  [header modifier regression guard](../../plugin-runtime/regression-guards/header-modifier-validation.md).
 - Independent read-only code and knowledge review returned LGTM, including the
   restored follow-up record. No full-workspace test or new integration execution
   is claimed for this optimization; existing `edgion-tests/**` files are unchanged.

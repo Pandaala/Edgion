@@ -43,13 +43,19 @@ impl ResponseHeaderModifierFilter {
     fn modify_headers(&self, session: &mut dyn PluginSession, log: &mut PluginLog) -> PluginRunningResult {
         // Set headers
         for header in self.plan.set() {
-            if session.set_response_header(&header.name, &header.value).is_err() {
+            if session
+                .set_response_header_value(header.name(), header.value().clone())
+                .is_err()
+            {
                 log.push_err("set resp hdr fail");
             }
         }
         // Add headers
         for header in self.plan.add() {
-            if session.append_response_header(&header.name, &header.value).is_err() {
+            if session
+                .append_response_header_value(header.name(), header.value().clone())
+                .is_err()
+            {
                 log.push_err("add resp hdr fail");
             }
         }
@@ -100,14 +106,16 @@ mod tests {
         let values = Arc::new(Mutex::new(vec!["upstream-a".to_string(), "upstream-b".to_string()]));
         let appended = Arc::clone(&values);
         let mut session = MockPluginSession::new();
-        session.expect_set_response_header().never();
+        session.expect_set_response_header_value().never();
         session.expect_remove_response_header().never();
         session
-            .expect_append_response_header()
+            .expect_append_response_header_value()
             .withf(|name, value| name == "Vary" && value == "Origin")
             .times(1)
             .returning(move |_, value| {
-                appended.lock().push(value.to_string());
+                appended
+                    .lock()
+                    .push(value.to_str().expect("configured value remains text").to_string());
                 Ok(())
             });
         let mut log = PluginLog::new("ResponseHeaderModifier");
@@ -155,13 +163,13 @@ mod tests {
         let mut session = MockPluginSession::new();
         let mut sequence = Sequence::new();
         session
-            .expect_set_response_header()
+            .expect_set_response_header_value()
             .withf(|name, value| name == "X-Set" && value == "set")
             .times(1)
             .in_sequence(&mut sequence)
             .returning(|_, _| Ok(()));
         session
-            .expect_append_response_header()
+            .expect_append_response_header_value()
             .withf(|name, value| name == "X-Add" && value == "add")
             .times(1)
             .in_sequence(&mut sequence)
@@ -191,10 +199,10 @@ mod tests {
         .expect("valid header modifier");
         let mut session = MockPluginSession::new();
         session
-            .expect_set_response_header()
+            .expect_set_response_header_value()
             .returning(|_, _| Err(Box::new(std::io::Error::other("test failure"))));
         session
-            .expect_append_response_header()
+            .expect_append_response_header_value()
             .returning(|_, _| Err(Box::new(std::io::Error::other("test failure"))));
         session
             .expect_remove_response_header()
@@ -221,12 +229,12 @@ mod tests {
         .expect("valid header modifier");
         let mut session = MockPluginSession::new();
         session
-            .expect_set_response_header()
+            .expect_set_response_header_value()
             .withf(|name, value| name == "X-Set" && value == "first")
             .times(1)
             .returning(|_, _| Ok(()));
         session
-            .expect_append_response_header()
+            .expect_append_response_header_value()
             .withf(|name, value| name == "X-Add" && value == "first")
             .times(1)
             .returning(|_, _| Ok(()));

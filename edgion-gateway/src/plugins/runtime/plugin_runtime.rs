@@ -114,6 +114,9 @@ pub struct PluginRuntime {
     rate_limit_local_outcome_slots: usize,
     /// Plugins for request stage (async)
     request_plugins: Vec<Arc<dyn RequestFilter>>,
+    /// The same native HTTP backend modifier held by `request_plugins`.
+    /// AI dispatch borrows its prepared operations without running the async chain.
+    backend_request_header_modifier: Option<Arc<RequestHeaderModifierFilter>>,
     /// Plugins for upstream_response_filter stage (sync)
     upstream_response_plugins: Vec<Arc<dyn UpstreamResponseFilter>>,
     /// Plugins for upstream_response_body_filter stage (sync, bandwidth throttling)
@@ -262,6 +265,7 @@ impl PluginRuntime {
     pub fn new() -> Self {
         Self {
             request_plugins: vec![],
+            backend_request_header_modifier: None,
             upstream_response_plugins: vec![],
             upstream_response_body_plugins: vec![],
             upstream_response_async_plugins: vec![],
@@ -414,6 +418,10 @@ impl PluginRuntime {
         self.invalid_config_sealed
     }
 
+    pub(crate) fn backend_request_header_modifier(&self) -> Option<&RequestHeaderModifierFilter> {
+        self.backend_request_header_modifier.as_deref()
+    }
+
     /// Record an active plugin entry whose conditions cannot be activated.
     ///
     /// The plugin store detects condition compile/validation failures and
@@ -560,7 +568,13 @@ impl PluginRuntime {
                 HTTPRouteFilterType::RequestHeaderModifier => {
                     if let Some(config) = &filter.request_header_modifier {
                         match RequestHeaderModifierFilter::new(config.clone()) {
-                            Ok(filter) => self.add_request_filter(Box::new(filter)),
+                            Ok(filter) => {
+                                let filter = Arc::new(filter);
+                                if !assign_indices {
+                                    self.backend_request_header_modifier = Some(Arc::clone(&filter));
+                                }
+                                self.request_plugins.push(filter);
+                            }
                             Err(_) => self.invalid_plugins.record_non_retainable("RequestHeaderModifier"),
                         }
                     }

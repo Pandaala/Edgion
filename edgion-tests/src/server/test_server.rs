@@ -1945,13 +1945,29 @@ async fn ai_provider_handler(
     }
 
     if !streaming {
-        let response = serde_json::json!({
+        let mut response = serde_json::json!({
             "id": "completion-fixture",
             "object": "chat.completion",
             "choices": [{"index": 0, "message": {"role": "assistant", "content": "fixed completion"}}],
             "usage": {"prompt_tokens": 11, "completion_tokens": 7, "total_tokens": 18},
             "mock": observation,
         });
+        if query.mock_mode.as_deref() == Some("header_modifier") {
+            // Observe only the synthetic fields owned by the modifier regression.
+            let values = |name| {
+                parts
+                    .headers
+                    .get_all(name)
+                    .iter()
+                    .map(|value| value.to_str().unwrap_or_default())
+                    .collect::<Vec<_>>()
+            };
+            response["mock"]["header_modifier"] = serde_json::json!({
+                "set": values("x-header-modifier-set"),
+                "add": values("x-header-modifier-add"),
+                "remove": values("x-header-modifier-remove"),
+            });
+        }
         return Response::builder()
             .status(StatusCode::OK)
             .header("content-type", "application/json")

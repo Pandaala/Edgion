@@ -16,6 +16,12 @@ This proves the invalid positive-weight slot is retained rather than silently
 redistributed. Recreating or re-authorizing the backend restores the exact 1:3
 distribution.
 
+The same route then exercises native backend request-header modifiers through
+initial, updated, restored, and removed filter generations. Both providers must
+observe only the first case-equivalent configured set/add entry, all preexisting
+same-name add values, and removal of every matching field line. The shared AI
+fixture's `mock_mode=header_modifier` observes only these synthetic test fields.
+
 Finally, the scenario replaces the direct parent rule with a delegation to a
 child HTTPRoute carrying the same ordered backend slots. It repeats both the
 healthy distribution and the denied-slot observation, proving that delegation
