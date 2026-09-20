@@ -159,7 +159,9 @@ fn default_group() -> usize {
 /// Value transformation configuration
 ///
 /// Transformations are applied after extraction and before mapping.
-/// Only one transformation type should be specified at a time.
+/// A rule may configure zero or one operation. `trim: false` is not an
+/// operation. Additional steps belong on a later rule that reads the previous
+/// context variable.
 ///
 /// ## YAML Examples:
 ///
@@ -230,6 +232,21 @@ pub struct ReplaceConfig {
 }
 
 impl TransformConfig {
+    /// Count configured operations. `trim: false` is not an operation.
+    fn configured_operation_count(&self) -> usize {
+        usize::from(self.replace.is_some())
+            + usize::from(self.substring.is_some())
+            + usize::from(self.case.is_some())
+            + usize::from(self.prefix.is_some())
+            + usize::from(self.suffix.is_some())
+            + usize::from(self.trim == Some(true))
+    }
+
+    fn multiple_operation_error(&self, idx: usize, name: &str) -> Option<String> {
+        (self.configured_operation_count() > 1)
+            .then(|| format!("vars[{idx}] '{name}': transform allows at most one operation"))
+    }
+
     /// Get the transform type for validation and processing
     pub fn get_transform_type(&self) -> Option<TransformType> {
         if let Some(ref replace) = self.replace {
@@ -553,6 +570,9 @@ impl CtxSetConfig {
                 }
             }
             if let Some(ref transform) = rule.transform {
+                if let Some(error) = transform.multiple_operation_error(idx, &rule.name) {
+                    return Some(error);
+                }
                 if let Some(TransformType::Replace { ref pattern, .. }) = transform.get_transform_type() {
                     if let Err(e) = Regex::new(pattern) {
                         return Some(format!(
@@ -631,6 +651,9 @@ impl CtxSetConfig {
 
             // Validate transform regex if present
             if let Some(ref transform) = rule.transform {
+                if let Some(error) = transform.multiple_operation_error(idx, &rule.name) {
+                    return Err(error);
+                }
                 if let Some(TransformType::Replace { ref pattern, .. }) = transform.get_transform_type() {
                     match Regex::new(pattern) {
                         Ok(re) => {
@@ -964,6 +987,71 @@ vars:
         let mut config: CtxSetConfig = serde_yaml::from_str(yaml).unwrap();
         let err = config.validate().unwrap_err();
         assert!(err.contains("substring start"));
+    }
+
+    fn parse_ctx_set(yaml: &str) -> CtxSetConfig {
+        serde_yaml::from_str(yaml).expect("ctx set yaml should deserialize")
+    }
+
+    fn single_transform_yaml(transform: &str) -> String {
+        format!("vars:\n  - name: user\n    value: ALICE\n    transform:\n{transform}")
+    }
+
+    #[test]
+    fn transform_accepts_zero_or_one_operation() {
+        for yaml in [
+            single_transform_yaml("      {}"),
+            single_transform_yaml("      trim: false"),
+            single_transform_yaml("      replace:\n        pattern: A\n        with: x"),
+            single_transform_yaml("      substring: [0, 1]"),
+            single_transform_yaml("      case: lower"),
+            single_transform_yaml("      prefix: user_"),
+            single_transform_yaml("      suffix: _id"),
+            single_transform_yaml("      trim: true"),
+            single_transform_yaml("      prefix: user_\n      trim: false"),
+        ] {
+            let mut config = parse_ctx_set(&yaml);
+            config
+                .validate()
+                .unwrap_or_else(|err| panic!("expected valid transform, got {err}: {yaml}"));
+            assert_eq!(config.validation_error(), None, "{yaml}");
+        }
+    }
+
+    #[test]
+    fn transform_rejects_multiple_operations() {
+        let expected = "vars[0] 'user': transform allows at most one operation";
+        for yaml in [
+            single_transform_yaml("      case: lower\n      prefix: user_"),
+            single_transform_yaml("      prefix: user_\n      trim: true"),
+            single_transform_yaml("      substring: [0, 8]\n      suffix: _id"),
+            single_transform_yaml("      replace:\n        pattern: A\n        with: x\n      case: lower"),
+        ] {
+            let mut config = parse_ctx_set(&yaml);
+            assert_eq!(config.validate().unwrap_err(), expected, "{yaml}");
+            assert_eq!(config.validation_error().as_deref(), Some(expected), "{yaml}");
+        }
+    }
+
+    #[test]
+    fn chained_ctx_rules_may_apply_one_transform_each() {
+        let mut config = parse_ctx_set(
+            r#"
+vars:
+  - name: user
+    value: ALICE
+    transform:
+      case: lower
+  - name: user
+    from:
+      type: ctx
+      name: user
+    transform:
+      prefix: "user_"
+"#,
+        );
+        config.validate().expect("chained single-operation rules remain valid");
+        assert_eq!(config.validation_error(), None);
     }
 
     #[test]

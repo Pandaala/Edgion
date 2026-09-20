@@ -421,4 +421,63 @@ vars:
         let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
         assert_eq!(result, PluginRunningResult::GoodNext);
     }
+
+    #[test]
+    fn compile_plugins_rejects_multiple_transform_operations() {
+        use crate::plugins::http::compile_plugins;
+        use edgion_resources::resources::edgion_plugins::{EdgionPlugin, EdgionPlugins, RequestFilterEntry};
+
+        let config = parse_config(
+            r#"
+vars:
+  - name: user
+    value: ALICE
+    transform:
+      case: lower
+      prefix: user_
+"#,
+        );
+        let mut resource = EdgionPlugins::new("ctx-set-multi-transform", Default::default());
+        resource.metadata.namespace = Some("default".to_string());
+        resource.spec.request_plugins = Some(vec![RequestFilterEntry::new(EdgionPlugin::CtxSet(config))]);
+
+        let schema_errors = resource.validate_plugins();
+        let compiled = compile_plugins(&resource);
+        assert_eq!(compiled.preparse_errors, schema_errors);
+        assert_eq!(
+            compiled.preparse_errors,
+            vec!["requestPlugins[0] (CtxSet): vars[0] 'user': transform allows at most one operation".to_string()]
+        );
+        assert!(!compiled.is_activatable);
+    }
+
+    #[test]
+    fn compile_plugins_accepts_chained_single_transform_rules() {
+        use crate::plugins::http::compile_plugins;
+        use edgion_resources::resources::edgion_plugins::{EdgionPlugin, EdgionPlugins, RequestFilterEntry};
+
+        let config = parse_config(
+            r#"
+vars:
+  - name: user
+    value: ALICE
+    transform:
+      case: lower
+  - name: user
+    from:
+      type: ctx
+      name: user
+    transform:
+      prefix: user_
+"#,
+        );
+        let mut resource = EdgionPlugins::new("ctx-set-chained-transform", Default::default());
+        resource.metadata.namespace = Some("default".to_string());
+        resource.spec.request_plugins = Some(vec![RequestFilterEntry::new(EdgionPlugin::CtxSet(config))]);
+
+        let compiled = compile_plugins(&resource);
+        assert!(compiled.preparse_errors.is_empty());
+        assert!(resource.validate_plugins().is_empty());
+        assert!(compiled.is_activatable);
+    }
 }

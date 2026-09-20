@@ -12,6 +12,7 @@ before applying a decision to current code.
 ## Regression guards
 
 - [gateway-plugins-03 — JWT/JWE claims unfiltered into access log](regression-guards/claims-access-log-filter.md)
+- [one transform operation per CtxSet rule](regression-guards/one-transform-operation.md)
 
 ## Review evidence
 

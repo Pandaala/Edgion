@@ -86,7 +86,7 @@ User-controlled values that contain `${...}` are emitted as literal text, so tem
 
 ### `transform` fields
 
-Specify at most one transformation per rule:
+Specify at most one transformation operation per rule. `trim: false` does not count as an operation. Additional steps must use a later rule that reads the previous context variable (`from.type: ctx`). Configuring more than one operation in the same `transform` is rejected.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
