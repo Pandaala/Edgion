@@ -275,6 +275,7 @@ const enSidebar = [
       },
       { text: 'Federation & RBAC', link: '/en/ops-guide/federation-rbac' },
       { text: 'Edgion CLI', link: '/en/ops-guide/edgion-cli' },
+      { text: 'Linux Kernel Tuning', link: '/en/ops-guide/kernel-tuning' },
     ],
   },
   {
@@ -511,6 +512,7 @@ const zhSidebar = [
         ],
       },
       { text: 'Edgion CLI', link: '/zh-CN/ops-guide/edgion-cli' },
+      { text: 'Linux Kernel Tuning', link: '/zh-CN/ops-guide/kernel-tuning' },
     ],
   },
   {

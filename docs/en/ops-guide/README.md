@@ -56,4 +56,5 @@ This section is intended for operators, covering Gateway deployment, configurati
 
 ### Operations Tools
 
+- [Linux Kernel Tuning](./kernel-tuning.md): Optional FD/backlog baseline, conditional tuning, verification, and rollback.
 - [edgion-cli](./edgion-cli.md): Resource management and debugging CLI.

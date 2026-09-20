@@ -55,4 +55,5 @@
 
 ### 运维工具
 
+- [Linux 内核调优](./kernel-tuning.md)：可选 FD/backlog 基线、按需调优、验证和回滚。
 - [edgion-cli](./edgion-cli.md)：资源管理与调试 CLI。
