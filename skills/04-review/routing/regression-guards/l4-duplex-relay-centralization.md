@@ -131,9 +131,12 @@ relay or immediate-EOF policy.
 
 The initial network run exposed the short-plateau assumption corrected above.
 Two subsequent attempts were interrupted by competing worktree lifecycle
-operations; those partial runs are not the passing evidence. Shared integration
-process lifecycle isolation remains an unresolved infrastructure concern; the
-successful exclusive run does not establish isolation between concurrent workers.
+operations; those partial runs are not the passing evidence. The canonical local
+shared topology intentionally permits only one owner per host environment, and a
+competing worktree run may clear the fixed-port test processes; see
+the [single-owner takeover decision](../../testing/intentional-design/local-shared-topology-single-owner-takeover.md).
+The successful exclusive run does not establish isolation between concurrent
+workers because that concurrency mode is unsupported.
 Re-evaluate when stream wrappers, readiness/waker behavior, buffer state,
 transport buffer sizes, idle configuration, or shutdown policy changes.
 

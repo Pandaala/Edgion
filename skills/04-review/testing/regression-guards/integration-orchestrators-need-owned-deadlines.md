@@ -14,7 +14,11 @@ whole-run budget so a sequence of individually bounded jobs cannot exceed the in
 Use `utils/run_with_deadline.py` for these boundaries. It starts the command in a new session, sends
 TERM to that owned process group at the deadline, waits a bounded grace period, then sends KILL.
 Callers treat exit 124 as `TIMEOUT`, preserve the child log, and continue to their final summary.
-Do not replace state-based readiness checks with sleeps or kill processes by global name.
+Do not replace state-based readiness checks with sleeps. Deadline wrappers and schedulers must
+signal only the process group they created, never processes selected by global name. The canonical
+fixed-port local shared topology is a separate, explicitly accepted single-run exception whose
+startup and teardown clear its known integration processes; see the
+[single-run cleanup decision](../intentional-design/local-shared-topology-single-owner-takeover.md).
 
 ## Process-group probes and zombie members
 
