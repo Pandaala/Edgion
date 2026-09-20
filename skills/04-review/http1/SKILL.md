@@ -26,7 +26,7 @@ before applying a decision to current code.
 - [Custom Upstream Reuse Is an Independent Decision](regression-guards/custom-upstream-reuse-is-independent.md)
 - [http1-01 — HTTP/1.1 duplicate Host header rejected with 400](regression-guards/duplicate-host.md)
 - [Suppressed Follow-Up Tasks Drain Their Sink Extras](regression-guards/gw-16-suppressed-sink-extras-drained.md)
-- [http1-03 — Hop-by-hop filtering at plugin sub-requests (static set + dynamic Connection-listed)](regression-guards/hop-by-hop-dynamic-stripping.md)
+- [http1-03 — Hop-by-hop filtering at plugin sub-requests and the main proxied response](regression-guards/hop-by-hop-dynamic-stripping.md)
 - [Outbound `forwardAll` preserves duplicate request headers (gw-plugin-outbound-02) — FIXED](regression-guards/outbound-forward-all-preserves-duplicate-headers.md)
 - [WASM local responses collapse duplicate response headers — FIXED](regression-guards/wasm-local-response-duplicate-headers.md)
 - [proxy-wasm `proxy_set_header_map_pairs` whole-map replace drops omitted headers and preserves duplicates (runtime-03) — FIXED](regression-guards/wasm-set-header-map-pairs-replace-all.md)

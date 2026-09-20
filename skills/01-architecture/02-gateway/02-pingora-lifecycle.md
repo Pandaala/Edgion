@@ -151,13 +151,23 @@ Called when upstream response headers are received; interim 1xx are skipped (101
 
 Async response handling, can perform operations that need to await:
 
-1. **Server header**: applied again (covers framework-generated error responses such as 502).
-2. **Request ID reconciliation**: stamp active response-enabled IDs and remove managed suppressed names at final header write, after response plugins. Core W3C context and default `x-trace-id` are initialized in the earliest parsed-header callback.
-3. **Graceful shutdown**: add the `Connection: close` response header during shutdown.
-4. **Async plugin execution** (UpstreamResponse phase):
+1. **Initial hop-by-hop sanitization**: for ordinary final responses that have not
+   already settled on a response-stage denial or local reply, remove the
+   canonical static fields and every valid field nominated across all repeated
+   `Connection` lines. Interim 100/102/103 headers are sanitized before their
+   early return; 101 upgrade handshakes bypass the sanitizer and retain their
+   connection metadata.
+2. **Server header**: applied again (covers framework-generated error responses such as 502).
+3. **Async plugin execution** (UpstreamResponse phase):
    - Rule level: `run_upstream_response_plugins_async()`.
    - Backend level: `run_upstream_response_plugins_async()`.
-5. **Select the final candidate and freeze processors**: this phase no longer
+4. **Final hop-by-hop sanitization**: after stream-processor framing repair,
+   repeat the same cleanup while the response remains unsettled so an async
+   plugin cannot reintroduce connection-scoped metadata. Preserve whether
+   either pass observed `Transfer-Encoding` when deciding compression, even
+   though the field itself has been removed.
+5. **Request ID reconciliation**: stamp active response-enabled IDs and remove managed suppressed names at final header write, after response plugins. Core W3C context and default `x-trace-id` are initialized in the earliest parsed-header callback.
+6. **Select the final candidate and freeze processors**: this phase no longer
    claims that the candidate header has reached the downstream writer. After
    the onion returns, Pingora calls `response_head_commit_plan` on the final
    post-filter header. The default is allocation-free `Immediate`; an active,
@@ -165,6 +175,11 @@ Async response handling, can perform operations that need to await:
    Only `response_head_will_commit`, after Release or Replace has chosen the
    actual header, records the writer claim. Hold boundaries resolve explicitly
    through Release, Replace, or non-retryable Fail before header preparation.
+
+Pingora owns downstream connection reuse and wire framing. During graceful
+shutdown, the Phase-1 `set_keepalive(None)` decision makes Pingora's H1 codec
+emit `Connection: close`; this response filter does not copy or synthesize that
+field.
 
 ### Phase 7: upstream_response_body_filter_event (async, per typed event)
 

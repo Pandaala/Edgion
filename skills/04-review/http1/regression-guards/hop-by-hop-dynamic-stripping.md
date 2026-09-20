@@ -1,26 +1,25 @@
 ---
 name: hop-by-hop-dynamic-stripping
-description: Fixed — plugin sub-request hop-by-hop filtering now honours RFC 9110 §7.6.1 dynamic Connection-listed names in addition to the canonical set. Reject re-reports claiming the list is static-only.
+description: Fixed — plugin sub-requests and main proxied responses strip RFC 9110 §7.6.1 static and dynamic Connection-listed fields at their forwarding boundaries.
 knowledge_type: regression-guards
 ---
 
-# http1-03 — Hop-by-hop filtering at plugin sub-requests (static set + dynamic Connection-listed)
+# http1-03 — Hop-by-hop filtering at forwarding boundaries
 
-**Status:** ✅ fixed · 2026-05-19
+**Status:** ✅ fixed · plugin sub-requests 2026-05-19 · main response 2026-09-20
 **RFC:** RFC 9110 §7.6.1 (MUST)
 
 ## Conclusion
 
-Plugin sub-request callers that previously consulted only the canonical
-`HOP_BY_HOP_HEADERS` array now also strip header names dynamically nominated by
-the originating request's `Connection:` header value, per RFC 9110 §7.6.1.
-The wrong RFC citations (RFC 2616 §13.5.1, RFC 7230 §6.1) in the doc-comment
-have been replaced with RFC 9110 §7.6.1.
+Plugin sub-request callers strip the canonical `HOP_BY_HOP_HEADERS` array and
+header names dynamically nominated by the originating request's `Connection:`
+value. The main proxied response path applies the same canonical static list and
+token parser to every repeated response `Connection` field before forwarding.
+Both directions implement RFC 9110 §7.6.1 at their owned forwarding boundary.
 
-Suggestions of the form "`is_hop_by_hop` only checks a static 8-entry list — a
-`Connection: X-Custom-Header` value lets a downstream client smuggle headers
-to forward_auth / mirror / status / webhook upstreams" are **not accepted** —
-the fix is in place.
+Suggestions that either path checks only the static eight-entry list are not
+accepted. Re-evaluate a report against the exact forwarding site and repeated
+field handling described below.
 
 ## RFC clause
 
@@ -33,9 +32,14 @@ the fix is in place.
 
 ## Scope
 
-Only the *plugin sub-request* paths are affected. The main Pingora proxy
-forwarding pipeline strips hop-by-hop independently of this helper and was
-never affected by the gap.
+This rule covers two distinct forwarding surfaces:
+
+- plugin-generated outbound sub-requests derived from a downstream request;
+- the main proxied response header forwarded to the downstream client.
+
+The helper is shared tokenization policy. Each forwarding owner remains
+responsible for collecting all field lines available at its boundary and
+removing the nominated fields before forwarding.
 
 ## Code shape today
 
@@ -62,6 +66,25 @@ never affected by the gap.
     `Transfer-Encoding` is already hop-by-hop.
   - `link_sys/providers/webhook/resolver.rs::resolve_webhook_key`
     (operator-named `forward_headers` whitelist).
+
+- `edgion-gateway/src/routes/http/proxy_http/pg_response_filter.rs`
+  - `sanitize_forwarded_response_headers` snapshots every repeated response
+    `Connection` line before mutation, uses
+    `connection_listed_hop_by_hop` for tokenization, then validates each
+    nomination as an RFC `tchar` header name before removing it.
+  - A non-text `Connection` value fails closed only after every repeated value
+    has been inspected, so the operation never leaves a partially sanitized
+    header map. Invalid ASCII nomination tokens are ignored while valid sibling
+    tokens are still honored.
+  - Interim 100/102/103 responses are sanitized before their early return. A
+    101 upgrade response bypasses sanitization and keeps its handshake fields.
+  - Ordinary final responses are sanitized before async response plugins and
+    again afterward. Both passes are skipped once a response-stage denial or
+    local reply owns the outcome, preserving that settled response's error and
+    delivery precedence.
+  - Whether either pass observed `Transfer-Encoding` is retained for
+    compression eligibility after the field itself is removed; Pingora owns
+    downstream framing.
 
 ## What is intentionally left as-is
 
@@ -93,7 +116,7 @@ for http1-03 and should be opened as a separate finding with explicit
 operator-impact analysis (changing Mode 2 in either direction is a
 behavior change for existing deployments).
 
-## Known gap: multiple `Connection:` header lines
+## Known plugin-sub-request gap: multiple `Connection:` header lines
 
 `session.header_value("connection")` and the equivalent
 `original_headers.iter().find(|(n, _)| n.eq_ignore_ascii_case("connection"))`
@@ -104,7 +127,9 @@ comma-joined value. A client sending two `Connection:` lines (with a custom
 name in the second line) would currently slip the second-line tokens past
 dynamic stripping.
 
-Closing this gap requires changes beyond `connection_listed_hop_by_hop`
+This gap does not apply to the main response sanitizer, which reads every
+repeated field line. Closing it for the listed plugin sub-request callers
+requires changes beyond `connection_listed_hop_by_hop`
 itself: either iterate `request_headers()` and collect every `connection`
 entry, or extend the `PluginSession` trait with a
 `header_values(name) -> Vec<String>` accessor (single-value `header_value`
@@ -118,9 +143,9 @@ common-case attack surface (single `Connection: X-Custom`).
   `HeaderMap`/`reqwest::Request` from session headers — it must consult
   `is_hop_by_hop_or_listed`, not the old `is_hop_by_hop`.
 - A real-world attack or operator report demonstrates exploitation via
-  multi-line `Connection:` headers — escalate the "Known gap" above into a
-  follow-up finding and extend the session trait with a `header_values`
-  accessor.
+  multi-line request `Connection:` headers in a plugin sub-request — escalate
+  the "Known plugin-sub-request gap" above into a follow-up finding and extend
+  the session trait with a `header_values` accessor.
 - The discrepancy between `forward_auth` Mode 2 and `webhook::resolver`
   starts mattering operationally — reopen the "Known inconsistency" section
   as a standalone design decision.
@@ -155,3 +180,4 @@ AllEndpointStatus still relays those headers are **not accepted**.
 ## Resolution references
 
 - `http1-03` — 2026-05-19.
+- `B0061` main response boundary — 2026-09-20.

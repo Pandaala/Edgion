@@ -27,9 +27,17 @@ during shutdown to signal LB drain" are **not accepted**.
 
 ## Code shape today
 
-- `pg_early_request_filter.rs:20-21` — `if session.is_process_shutting_down() { session.set_keepalive(None); }` is the **only** mechanism by which downstream connection close is signaled during shutdown.
-- `pg_response_filter.rs:22-29` — historical `insert_header("Connection", "close")` is now commented out and kept as a rollback marker with an inline RFC rationale comment.
-- Wire emission of `Connection: close` is handled by Pingora `pingora-core` 0.8.0 `protocols/http/v1/server.rs:524-529`: when `update_resp_headers` is on, the codec sets `Connection` to `keep-alive` or `close` based on `will_keepalive()`, overriding whatever the proxy filter chain left in the response header.
+- `pg_early_request_filter.rs::early_request_filter` calls
+  `session.set_keepalive(None)` during process shutdown; this is the **only**
+  mechanism by which downstream connection close is signaled during shutdown.
+- `pg_response_filter.rs::sanitize_forwarded_response_headers` removes received
+  static and dynamically nominated hop-by-hop fields before an ordinary
+  proxied response reaches the downstream writer. It runs before and after
+  async response plugins; 101 upgrade responses retain their handshake fields.
+- Wire emission of `Connection: close` is handled by the pinned Pingora fork's
+  `pingora-core/src/protocols/http/v1/server.rs`: when response-header updating
+  is enabled, the codec sets `Connection` from `will_keepalive()`. H2 removes
+  connection-specific fields instead of emitting an H1 connection directive.
 
 ## Why this shape
 
@@ -45,7 +53,10 @@ No targeted integration test was added because:
 2. The only meaningful regression target ("graceful-shutdown responses still carry `Connection: close`") would be asserting a Pingora codec invariant, not Edgion code; that belongs in a Pingora-upgrade smoke test, not in this fix's regression suite.
 3. Triggering graceful shutdown mid-request from an integration test (SIGTERM + in-flight request observation) has no template in `edgion-tests/`; building one from scratch is disproportionate to the value.
 
-If Pingora is later upgraded and the `update_resp_headers` default flips or the `header::CONNECTION` rewrite at `write_response_header` is removed, the rollback is to un-comment the 3 lines in `pg_response_filter.rs:27-29` (kept as a rollback marker for exactly this reason).
+If Pingora is later upgraded and the `update_resp_headers` default flips or its
+H1 connection rewrite is removed, re-evaluate downstream framing ownership as
+an explicit Pingora-integration change. Do not restore an upstream
+`Connection` field or bypass the response sanitizer as an implicit fallback.
 
 ## Re-evaluation triggers
 
@@ -56,8 +67,11 @@ If Pingora is later upgraded and the `update_resp_headers` default flips or the 
 ## Reference
 
 - Historical verifier (source queue removed): `tasks/todo/rfc-review/_raw/verification-a1.md → V4` (CONFIRM)
-- Pingora codec: `pingora-core-0.8.0/src/protocols/http/v1/server.rs:497-530`
-- Source: `edgion-gateway/src/routes/http/proxy_http/pg_response_filter.rs:22-29`, `pg_early_request_filter.rs:16-24`
+- Pingora codec: pinned Edgion fork
+  `pingora-core/src/protocols/http/v1/server.rs::prepare_response_header_for_write`
+- Source:
+  `edgion-gateway/src/routes/http/proxy_http/pg_response_filter.rs::sanitize_forwarded_response_headers`,
+  `pg_early_request_filter.rs`
 
 ## Resolution references
 

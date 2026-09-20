@@ -4,21 +4,90 @@ use super::pg_upstream_response_body_filter::enforce_stream_processor_framing;
 use super::pg_upstream_response_filter::{is_interim_informational, response_denial_error, response_stage_settled};
 use super::EdgionHttpProxy;
 use crate::ctx::ResponseStreamKind;
+use crate::plugins::http::common::{connection_listed_hop_by_hop, HOP_BY_HOP_HEADERS};
 use crate::EdgionHttpContext;
 use edgion_resources::{EdgionErrorCode, EdgionInfoCode};
+use http::HeaderName;
 use pingora_core::modules::http::compression::ResponseCompression;
 use pingora_http::ResponseHeader;
 use pingora_proxy::Session;
+
+#[inline]
+fn is_connection_option_tchar(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric()
+        || matches!(
+            byte,
+            b'!' | b'#' | b'$' | b'%' | b'&' | b'\'' | b'*' | b'+' | b'-' | b'.' | b'^' | b'_' | b'`' | b'|' | b'~'
+        )
+}
+
+/// Remove connection-scoped metadata before forwarding a response header.
+///
+/// Every repeated `Connection` field is inspected before the header map is
+/// mutated. This keeps an invalid field fail-closed and atomic while the
+/// shared parser remains the sole owner of comma splitting and case folding.
+/// A 101 response is an upgrade handshake and deliberately retains its
+/// connection metadata.
+#[inline]
+fn sanitize_forwarded_response_headers(response: &mut ResponseHeader) -> pingora_core::Result<bool> {
+    if response.status == http::StatusCode::SWITCHING_PROTOCOLS {
+        return Ok(false);
+    }
+
+    let had_transfer_encoding = response.headers.contains_key(http::header::TRANSFER_ENCODING);
+    let mut dynamic_names = Vec::<HeaderName>::new();
+    let mut invalid_connection_value = false;
+
+    for value in response.headers.get_all(http::header::CONNECTION) {
+        let Ok(value) = value.to_str() else {
+            invalid_connection_value = true;
+            continue;
+        };
+        for option in connection_listed_hop_by_hop(value) {
+            if !option.bytes().all(is_connection_option_tchar) {
+                continue;
+            }
+            let Ok(name) = HeaderName::from_bytes(option.as_bytes()) else {
+                continue;
+            };
+            if !dynamic_names.contains(&name) {
+                dynamic_names.push(name);
+            }
+        }
+    }
+
+    if invalid_connection_value {
+        return Err(pingora_core::Error::explain(
+            pingora_core::ErrorType::InvalidHTTPHeader,
+            "invalid upstream Connection header",
+        ));
+    }
+
+    for name in &dynamic_names {
+        response.remove_header(name);
+    }
+    for name in HOP_BY_HOP_HEADERS {
+        response.remove_header(*name);
+    }
+
+    Ok(had_transfer_encoding)
+}
 
 /// Select compression only for a final response whose complete size is known.
 ///
 /// Pingora's gzip encoder does not flush after each input chunk, so enabling it
 /// for an unknown-length response can hold a low-rate stream indefinitely.
 /// Multiple or combined `Content-Length` values are rejected conservatively;
-/// any `Transfer-Encoding` also means the response is not known-length. The
-/// compression module removes an accepted length before forwarding.
+/// any `Transfer-Encoding`, including one removed by hop-by-hop sanitization,
+/// also means the response is not known-length. The compression module removes
+/// an accepted length before forwarding.
 #[inline]
-fn response_compression_level(enabled: bool, stream_kind: ResponseStreamKind, response: &ResponseHeader) -> u32 {
+fn response_compression_level(
+    enabled: bool,
+    stream_kind: ResponseStreamKind,
+    had_transfer_encoding: bool,
+    response: &ResponseHeader,
+) -> u32 {
     if !enabled || stream_kind == ResponseStreamKind::Sse {
         return 0;
     }
@@ -31,7 +100,7 @@ fn response_compression_level(enabled: bool, stream_kind: ResponseStreamKind, re
         .is_some()
         && content_lengths.next().is_none();
 
-    let has_transfer_encoding = response.headers.contains_key(http::header::TRANSFER_ENCODING);
+    let has_transfer_encoding = had_transfer_encoding || response.headers.contains_key(http::header::TRANSFER_ENCODING);
 
     if has_one_valid_content_length && !has_transfer_encoding {
         DEFAULT_COMPRESSION_LEVEL
@@ -103,18 +172,27 @@ pub async fn response_filter(
     // yet. The final header runs the chains, so nothing is skipped, only
     // deferred.
     //
-    // Deliberately BEFORE any header mutation and, like the sync side, without
-    // stamping `ctx.request_info.status`: the access-log status must describe the
-    // final response, not a 100 Continue.
+    // Deliberately before gateway/plugin mutation and, like the sync side,
+    // without stamping `ctx.request_info.status`: only the mandatory
+    // hop-by-hop sanitizer runs before the early return. The access-log status
+    // must describe the final response, not a 100 Continue.
     if is_interim_informational(upstream_response.status) {
+        sanitize_forwarded_response_headers(upstream_response)?;
         return Ok(());
+    }
+
+    let switching_protocols = upstream_response.status == http::StatusCode::SWITCHING_PROTOCOLS;
+    let mut had_transfer_encoding = false;
+    if !switching_protocols && !response_stage_settled(ctx) {
+        had_transfer_encoding = sanitize_forwarded_response_headers(upstream_response)?;
     }
 
     edgion_http.server_header_opts.apply_to_response(upstream_response);
 
-    // RFC 9110 §7.6.1 forbids forwarding hop-by-hop `Connection` headers. Injecting
-    // `Connection: close` during graceful shutdown is redundant — `set_keepalive(None)` in
-    // pg_early_request_filter already makes Pingora's H1 codec emit it on the downstream wire.
+    // RFC 9110 §7.6.1 cleanup happened above and is repeated after async
+    // plugins. Injecting `Connection: close` during graceful shutdown is
+    // redundant: `set_keepalive(None)` in pg_early_request_filter makes
+    // Pingora's H1 codec emit it on the downstream wire.
 
     // A sync Phase-6 plugin may have already stashed a local reply. Do NOT
     // return here: fall through so the write+abort block below actually writes
@@ -194,6 +272,9 @@ pub async fn response_filter(
     // length metadata for a body-mutating processor.
     if !response_stage_settled(ctx) {
         enforce_stream_processor_framing(upstream_response, ctx);
+        if !switching_protocols {
+            had_transfer_encoding |= sanitize_forwarded_response_headers(upstream_response)?;
+        }
     }
 
     // A denial no local reply could carry aborts before the forward path below.
@@ -260,6 +341,7 @@ pub async fn response_filter(
         let level = response_compression_level(
             enable_compression(edgion_http),
             ctx.response_stream_kind,
+            had_transfer_encoding,
             upstream_response,
         );
         compression_ctx.adjust_level(level);
@@ -289,7 +371,8 @@ fn final_response_eligibility(
 mod tests {
     use super::{
         claim_response_local_reply, complete_local_reply_delivery, final_response_eligibility,
-        response_compression_level, response_filter, EdgionHttpProxy, DEFAULT_COMPRESSION_LEVEL,
+        response_compression_level, response_filter, sanitize_forwarded_response_headers, EdgionHttpProxy,
+        DEFAULT_COMPRESSION_LEVEL,
     };
     use crate::ctx::ResponseStreamKind;
     use crate::observe::AccessLogger;
@@ -492,6 +575,152 @@ mod tests {
     }
 
     #[test]
+    fn response_sanitizer_removes_static_and_repeated_dynamic_fields() {
+        let mut response = response(Some("128"));
+        for name in super::HOP_BY_HOP_HEADERS {
+            response.append_header(*name, "present").unwrap();
+        }
+        response
+            .append_header("connection", "keep-alive, X-Origin-One, , content-length")
+            .unwrap();
+        response
+            .append_header("connection", "X-Origin-Two, x-origin-one")
+            .unwrap();
+        response.insert_header("x-origin-one", "private-one").unwrap();
+        response.insert_header("x-origin-two", "private-two").unwrap();
+        response.append_header("set-cookie", "a=1").unwrap();
+        response.append_header("set-cookie", "b=2").unwrap();
+        response.insert_header("x-end-to-end", "retained").unwrap();
+
+        assert!(sanitize_forwarded_response_headers(&mut response).unwrap());
+
+        for name in super::HOP_BY_HOP_HEADERS {
+            assert!(!response.headers.contains_key(*name), "{name}");
+        }
+        assert!(!response.headers.contains_key("x-origin-one"));
+        assert!(!response.headers.contains_key("x-origin-two"));
+        assert!(!response.headers.contains_key("content-length"));
+        assert_eq!(response.headers.get_all("set-cookie").iter().count(), 2);
+        assert_eq!(response.headers["x-end-to-end"], "retained");
+    }
+
+    #[test]
+    fn response_sanitizer_ignores_invalid_ascii_option_and_keeps_valid_siblings() {
+        let mut response = response(None);
+        response
+            .append_header("connection", "X-First, bad token, X-Second")
+            .unwrap();
+        response.insert_header("x-first", "private-one").unwrap();
+        response.insert_header("x-second", "private-two").unwrap();
+
+        assert!(!sanitize_forwarded_response_headers(&mut response).unwrap());
+
+        assert!(!response.headers.contains_key("connection"));
+        assert!(!response.headers.contains_key("x-first"));
+        assert!(!response.headers.contains_key("x-second"));
+    }
+
+    #[test]
+    fn response_sanitizer_rejects_non_text_connection_atomically() {
+        let mut response = response(Some("128"));
+        response.append_header("connection", "X-First").unwrap();
+        response
+            .append_header("connection", http::HeaderValue::from_bytes(b"X-Opaque, \xff").unwrap())
+            .unwrap();
+        response.append_header("connection", "X-Last").unwrap();
+        response.insert_header("x-first", "private-one").unwrap();
+        response.insert_header("x-last", "private-two").unwrap();
+        let before = response.headers.clone();
+
+        let error = sanitize_forwarded_response_headers(&mut response).unwrap_err();
+
+        assert!(matches!(error.etype(), ErrorType::InvalidHTTPHeader));
+        assert_eq!(response.headers, before);
+    }
+
+    #[test]
+    fn response_sanitizer_preserves_switching_protocols() {
+        let mut response = ResponseHeader::build(101, None).unwrap();
+        response.append_header("connection", "Upgrade, X-Handshake").unwrap();
+        response.append_header("upgrade", "websocket").unwrap();
+        response.insert_header("x-handshake", "retained").unwrap();
+        let before = response.headers.clone();
+
+        assert!(!sanitize_forwarded_response_headers(&mut response).unwrap());
+
+        assert_eq!(response.headers, before);
+    }
+
+    #[test]
+    fn response_sanitizer_cleans_both_response_boundaries() {
+        let mut response = response(Some("128"));
+        response.append_header("connection", "X-Origin").unwrap();
+        response.insert_header("x-origin", "private").unwrap();
+        response.insert_header("transfer-encoding", "chunked").unwrap();
+
+        let mut had_transfer_encoding = sanitize_forwarded_response_headers(&mut response).unwrap();
+        assert!(!response.headers.contains_key("x-origin"));
+
+        response.append_header("connection", "X-Plugin").unwrap();
+        response.insert_header("x-plugin", "private").unwrap();
+        response.insert_header("transfer-encoding", "chunked").unwrap();
+        had_transfer_encoding |= sanitize_forwarded_response_headers(&mut response).unwrap();
+
+        assert!(had_transfer_encoding);
+        assert!(!response.headers.contains_key("connection"));
+        assert!(!response.headers.contains_key("x-plugin"));
+        assert!(!response.headers.contains_key("transfer-encoding"));
+        assert_eq!(
+            response_compression_level(true, ResponseStreamKind::None, had_transfer_encoding, &response),
+            0
+        );
+    }
+
+    #[tokio::test]
+    async fn response_filter_sanitizes_interim_headers_without_final_bookkeeping() {
+        for status in [100, 102, 103] {
+            let (_client, mut session) = h1_session().await;
+            let mut ctx = EdgionHttpContext::default();
+            let mut upstream = ResponseHeader::build(status, None).unwrap();
+            upstream.append_header("connection", "X-Interim").unwrap();
+            upstream.insert_header("x-interim", "private").unwrap();
+            upstream.insert_header("keep-alive", "timeout=5").unwrap();
+
+            response_filter(&proxy(), &mut session, &mut upstream, &mut ctx)
+                .await
+                .unwrap();
+
+            assert!(!upstream.headers.contains_key("connection"), "status {status}");
+            assert!(!upstream.headers.contains_key("x-interim"), "status {status}");
+            assert!(!upstream.headers.contains_key("keep-alive"), "status {status}");
+            assert_eq!(ctx.final_downstream_status(), None, "status {status}");
+            assert!(ctx.stage_logs().is_empty(), "status {status}");
+        }
+    }
+
+    #[tokio::test]
+    async fn settled_local_reply_precedes_opaque_upstream_connection() {
+        let (_client, mut session) = h1_session().await;
+        let mut ctx = EdgionHttpContext::default();
+        ctx.stage_response_local_reply(Box::new(ResponseHeader::build(403, None).unwrap()), bytes::Bytes::new());
+        let mut upstream = ResponseHeader::build(200, None).unwrap();
+        upstream
+            .append_header("connection", http::HeaderValue::from_bytes(b"X-Opaque, \xff").unwrap())
+            .unwrap();
+        upstream.insert_header("x-opaque", "private").unwrap();
+
+        let error = response_filter(&proxy(), &mut session, &mut upstream, &mut ctx)
+            .await
+            .expect_err("the settled local reply stops upstream forwarding");
+
+        assert!(matches!(error.etype(), ErrorType::InternalError));
+        assert!(ctx.local_reply_written());
+        assert_eq!(ctx.final_downstream_status(), Some(403));
+        assert!(upstream.headers.contains_key("connection"));
+        assert!(upstream.headers.contains_key("x-opaque"));
+    }
+
+    #[test]
     fn local_reply_body_failure_records_client_closed_and_preserves_status() {
         let mut ctx = EdgionHttpContext::default();
         assert!(ctx.claim_final_response(403));
@@ -645,22 +874,22 @@ mod tests {
     #[test]
     fn compression_requires_one_valid_content_length() {
         assert_eq!(
-            response_compression_level(true, ResponseStreamKind::None, &response(Some("128"))),
+            response_compression_level(true, ResponseStreamKind::None, false, &response(Some("128"))),
             DEFAULT_COMPRESSION_LEVEL
         );
         assert_eq!(
-            response_compression_level(true, ResponseStreamKind::None, &response(None)),
+            response_compression_level(true, ResponseStreamKind::None, false, &response(None)),
             0
         );
         assert_eq!(
-            response_compression_level(true, ResponseStreamKind::None, &response(Some("invalid"))),
+            response_compression_level(true, ResponseStreamKind::None, false, &response(Some("invalid"))),
             0
         );
 
         let mut duplicate = response(Some("128"));
         duplicate.append_header("content-length", "128").unwrap();
         assert_eq!(
-            response_compression_level(true, ResponseStreamKind::None, &duplicate),
+            response_compression_level(true, ResponseStreamKind::None, false, &duplicate),
             0
         );
 
@@ -669,7 +898,11 @@ mod tests {
             .insert_header("transfer-encoding", "chunked")
             .unwrap();
         assert_eq!(
-            response_compression_level(true, ResponseStreamKind::None, &conflicting_framing),
+            response_compression_level(true, ResponseStreamKind::None, false, &conflicting_framing),
+            0
+        );
+        assert_eq!(
+            response_compression_level(true, ResponseStreamKind::None, true, &response(Some("128"))),
             0
         );
     }
@@ -678,12 +911,15 @@ mod tests {
     fn final_header_mutation_can_disable_compression() {
         let mut response = response(Some("128"));
         assert_eq!(
-            response_compression_level(true, ResponseStreamKind::None, &response),
+            response_compression_level(true, ResponseStreamKind::None, false, &response),
             DEFAULT_COMPRESSION_LEVEL
         );
 
         response.remove_header("content-length");
-        assert_eq!(response_compression_level(true, ResponseStreamKind::None, &response), 0);
+        assert_eq!(
+            response_compression_level(true, ResponseStreamKind::None, false, &response),
+            0
+        );
     }
 
     #[test]
@@ -692,10 +928,13 @@ mod tests {
         response.append_header("content-length", "invalid").unwrap();
         response.insert_header("transfer-encoding", "chunked").unwrap();
         assert_eq!(
-            response_compression_level(false, ResponseStreamKind::None, &response),
+            response_compression_level(false, ResponseStreamKind::None, false, &response),
             0
         );
-        assert_eq!(response_compression_level(true, ResponseStreamKind::Sse, &response), 0);
+        assert_eq!(
+            response_compression_level(true, ResponseStreamKind::Sse, false, &response),
+            0
+        );
     }
 
     #[test]
@@ -706,7 +945,12 @@ mod tests {
         compression.request_filter(&request);
 
         let mut response = response(Some("128"));
-        compression.adjust_level(response_compression_level(true, ResponseStreamKind::None, &response));
+        compression.adjust_level(response_compression_level(
+            true,
+            ResponseStreamKind::None,
+            false,
+            &response,
+        ));
         compression.response_header_filter(&mut response, false);
 
         assert_eq!(response.headers.get("content-encoding").unwrap(), "gzip");
@@ -721,7 +965,12 @@ mod tests {
         compression.request_filter(&request);
 
         let mut response = response(None);
-        compression.adjust_level(response_compression_level(true, ResponseStreamKind::None, &response));
+        compression.adjust_level(response_compression_level(
+            true,
+            ResponseStreamKind::None,
+            false,
+            &response,
+        ));
         compression.response_header_filter(&mut response, false);
 
         assert!(response.headers.get("content-encoding").is_none());
