@@ -1,4 +1,5 @@
 use std::net::{IpAddr, SocketAddr};
+use std::sync::Arc;
 
 use crate::backends::discovery::{ServiceSectionKey, ServiceSelectorGeneration};
 use crate::backends::policy::backend_tls::BackendTLSPolicySnapshot;
@@ -39,6 +40,7 @@ pub struct ValidatedDirectEndpoint {
     pub backend_ref_idx: usize,
     pub addr: SocketAddr,
     pub tls_policy: BackendTlsPolicyLookup,
+    pub app_protocol: Option<Arc<str>>,
 }
 
 /// Prove the requested socket against one captured discovery generation.
@@ -77,6 +79,7 @@ pub fn validate_endpoint_in_route(
             backend_ref_idx: backend.slot,
             addr,
             tls_policy,
+            app_protocol: section.identity.app_protocol.clone(),
         });
     }
     Err(EdgionErrorCode::BackendPortResolutionFailed)
@@ -105,7 +108,20 @@ mod tests {
             Arc::new(
                 serde_json::from_value(json!({
                     "metadata": {"name": "app", "namespace": "default"},
-                    "spec": {"ports": [{"name": "https", "port": 443, "targetPort": target_port}]}
+                    "spec": {"ports": [
+                        {
+                            "name": "https",
+                            "port": 443,
+                            "targetPort": target_port,
+                            "appProtocol": "kubernetes.io/h2c"
+                        },
+                        {
+                            "name": "admin",
+                            "port": 444,
+                            "targetPort": 9000,
+                            "appProtocol": "kubernetes.io/wss"
+                        }
+                    ]}
                 }))
                 .unwrap(),
             ),
@@ -171,6 +187,18 @@ mod tests {
         let endpoint = result.unwrap();
         assert_eq!(endpoint.addr.port(), 8443);
         assert_eq!(endpoint.backend_ref_idx, 3);
+        assert_eq!(endpoint.app_protocol.as_deref(), Some("kubernetes.io/h2c"));
+        let published = discovery
+            .available("default/app")
+            .unwrap()
+            .resolve_section(&ServiceSectionKey::Number(std::num::NonZeroU16::new(443).unwrap()))
+            .unwrap()
+            .identity
+            .app_protocol
+            .as_ref()
+            .unwrap()
+            .clone();
+        assert!(Arc::ptr_eq(endpoint.app_protocol.as_ref().unwrap(), &published));
         assert_eq!(
             endpoint.tls_policy.effective().unwrap().policy.spec.validation.hostname,
             "backend.example.com"
@@ -180,7 +208,17 @@ mod tests {
         for port in [0, 443, 9000] {
             assert!(validate_endpoint_in_route(ip, Some(port), &backends, &discovery, &policies, true).is_err());
         }
-        assert!(validate_endpoint_in_route(ip, Some(8443), &backends, &discovery, &policies, true).is_ok());
+        let explicit = validate_endpoint_in_route(ip, Some(8443), &backends, &discovery, &policies, true).unwrap();
+        assert_eq!(explicit.app_protocol.as_deref(), Some("kubernetes.io/h2c"));
+
+        let adjacent = [backend(Some(444))];
+        let inferred_adjacent = validate_endpoint_in_route(ip, None, &adjacent, &discovery, &policies, false).unwrap();
+        assert_eq!(inferred_adjacent.addr.port(), 9000);
+        assert_eq!(inferred_adjacent.app_protocol.as_deref(), Some("kubernetes.io/wss"));
+        let explicit_adjacent =
+            validate_endpoint_in_route(ip, Some(9000), &adjacent, &discovery, &policies, false).unwrap();
+        assert_eq!(explicit_adjacent.addr.port(), 9000);
+        assert_eq!(explicit_adjacent.app_protocol.as_deref(), Some("kubernetes.io/wss"));
     }
 
     #[test]

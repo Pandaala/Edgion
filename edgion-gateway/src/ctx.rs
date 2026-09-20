@@ -1897,6 +1897,8 @@ pub struct DirectEndpointPreset {
     /// Index of the matched backend_ref in route_unit.rule.backend_refs
     /// Used to pre-select the correct backend_ref for logging and metrics
     pub backend_ref_idx: usize,
+    /// Application protocol captured from the same proven Service section.
+    pub app_protocol: Option<Arc<str>>,
 }
 
 /// Mutually-exclusive upstream-jump slot — exactly one variant lives per request.
@@ -4550,7 +4552,7 @@ mod jump_tests {
     #[test]
     #[cfg(target_pointer_width = "64")]
     fn jump_target_uses_one_pointer_in_the_base_context() {
-        assert_eq!(std::mem::size_of::<UpstreamJumpTarget>(), 72);
+        assert_eq!(std::mem::size_of::<UpstreamJumpTarget>(), 80);
         assert_eq!(std::mem::size_of::<Option<Box<UpstreamJumpTarget>>>(), 8);
     }
 
@@ -4581,7 +4583,21 @@ mod jump_tests {
             addr: "10.0.0.1:8080".parse().unwrap(),
             tls_policy: crate::backends::BackendTlsPolicyLookup::Absent,
             backend_ref_idx: 0,
+            app_protocol: None,
         }
+    }
+
+    #[test]
+    fn direct_preset_clone_retains_published_app_protocol() {
+        let app_protocol: Arc<str> = Arc::from("kubernetes.io/h2c");
+        let mut preset = sample_direct();
+        preset.app_protocol = Some(app_protocol.clone());
+
+        let cloned = preset.clone();
+        assert!(Arc::ptr_eq(
+            preset.app_protocol.as_ref().unwrap(),
+            cloned.app_protocol.as_ref().unwrap()
+        ));
     }
 
     #[test]

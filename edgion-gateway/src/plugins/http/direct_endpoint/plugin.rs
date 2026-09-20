@@ -78,6 +78,7 @@ impl DirectEndpoint {
             addr,
             tls_policy: endpoint.tls_policy,
             backend_ref_idx: endpoint.backend_ref_idx,
+            app_protocol: endpoint.app_protocol,
         })
     }
 }
@@ -255,6 +256,7 @@ mod tests {
                         ports: Some(vec![ServicePort {
                             port: 443,
                             target_port: Some(IntOrString::Int(port)),
+                            app_protocol: Some("kubernetes.io/h2c".to_string()),
                             ..Default::default()
                         }]),
                         ..Default::default()
@@ -431,6 +433,7 @@ mod tests {
                         if info.addr == "10.0.9.9:9191".parse().unwrap()
                             && info.tls_policy.is_absent()
                             && info.backend_ref_idx == 0
+                            && info.app_protocol.as_deref() == Some("kubernetes.io/h2c")
                 )
             })
             .times(1)

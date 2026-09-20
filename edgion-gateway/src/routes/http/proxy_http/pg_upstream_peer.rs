@@ -4,7 +4,9 @@ use crate::ai::dispatch::{
     AiPeerPredispatchFailure, PreparedAiAttempt,
 };
 use crate::ai::{render_openai_error, AiProxyError};
-use crate::backends::peer_builder::{create_tls_peer, extract_tls_config};
+use crate::backends::peer_builder::{
+    apply_backend_app_protocol, create_tls_peer, extract_tls_config, parse_backend_app_protocol,
+};
 use crate::backends::policy::backend_traffic::authority::{render_authority, AuthorityError};
 use crate::backends::policy::backend_traffic::store::get_backend_traffic_policy_store;
 use crate::backends::policy::backend_traffic::RetryBudget;
@@ -1467,11 +1469,19 @@ fn try_direct_endpoint_peer(
     let policy = direct.tls_policy.clone();
     let gateway_key = ctx.gateway_info.as_deref().map(|gateway| gateway.gateway_key());
     let peer = crate::backends::validate_endpoint_backend_addr(&addr, ctx.allow_loopback_upstream)
-        .and_then(|()| crate::backends::peer_builder::peer_from_backend_tls_lookup(addr, &policy, gateway_key))
-        .map_err(|status| {
+        .and_then(|()| crate::backends::peer_builder::peer_from_backend_tls_lookup(addr, &policy, gateway_key));
+    let mut peer = match peer {
+        Ok(peer) => peer,
+        Err(status) => {
             ctx.record_error(status);
-            PingoraError::explain(ErrorType::ConnectError, "direct endpoint unavailable")
-        })?;
+            return Err(PingoraError::explain(
+                ErrorType::ConnectError,
+                "direct endpoint unavailable",
+            ));
+        }
+    };
+    let app_protocol = direct.app_protocol.as_deref().and_then(parse_backend_app_protocol);
+    apply_backend_app_protocol(&mut peer, app_protocol, ctx);
     let result = finish_static_peer(edgion_http, ctx, peer);
     let (use_tls, sni) = extract_tls_config(&policy);
     crate::backends::peer_builder::record_tls_to_upstream(ctx, use_tls, &sni);
@@ -1791,7 +1801,7 @@ mod tests {
     use crate::routes::http::match_unit::{
         CompiledBackend, CompiledBackendTarget, HttpRouteRuleUnit, MatchSpecificity,
     };
-    use crate::{BackendContext, BackendTlsInfo, EdgionHttpContext, UpstreamInfo};
+    use crate::{BackendContext, BackendTlsInfo, DirectEndpointPreset, EdgionHttpContext, UpstreamInfo};
     use crate::{PeerTimeoutSource, SessionPersistenceState};
     use edgion_resources::resources::common::RefDenied;
     use edgion_resources::{EdError, EdgionErrorCode, HTTPBackendRef, HTTPRouteMatch, HTTPRouteRule};
@@ -3899,6 +3909,83 @@ mod tests {
             filters: None,
             backend_tls_policy: None,
             ref_denied: None,
+        }
+    }
+
+    fn direct_peer_proxy() -> super::EdgionHttpProxy {
+        super::EdgionHttpProxy {
+            listener_port: 80,
+            is_https_listener: false,
+            listener_key: edgion_resources::ListenerKey("direct-protocol-test/HTTP".to_string()),
+            server_header_opts: Default::default(),
+            access_logger: Arc::new(crate::observe::AccessLogger::default()),
+            edgion_gateway_config: Arc::new(edgion_resources::EdgionGatewayConfig::new(
+                "direct-protocol-test",
+                Default::default(),
+            )),
+            request_body_config_name: None,
+            parsed_timeouts: Default::default(),
+            enable_http2: false,
+            real_ip_extractor: None,
+            preflight_handler: super::super::PreflightHandler::new(None),
+            http_route_manager: Arc::new(crate::routes::http::routes_mgr::HttpPortRouteManager::default()),
+            grpc_route_manager: Arc::new(crate::routes::grpc::GrpcPortRouteManager::default()),
+        }
+    }
+
+    #[test]
+    fn direct_endpoint_app_protocol_is_pinned_across_retry_peer_builds() {
+        let cases = [
+            (Some("kubernetes.io/h2c"), (2, 2), false),
+            (Some("ws"), (1, 1), true),
+            (Some("kubernetes.io/wss"), (1, 1), true),
+            (Some("unknown"), (1, 1), false),
+            (None, (1, 1), false),
+        ];
+
+        for (app_protocol, expected_versions, expects_websocket) in cases {
+            let proxy = direct_peer_proxy();
+            let mut ctx = EdgionHttpContext::new();
+            ctx.route_unit = Some(jump_route_unit(vec![jump_backend_ref("direct-app-protocol-pinned")]));
+            let published = app_protocol.map(Arc::<str>::from);
+            ctx.jump = Some(Box::new(crate::UpstreamJumpTarget::Direct(DirectEndpointPreset {
+                addr: "10.0.0.1:8080".parse().unwrap(),
+                tls_policy: crate::backends::BackendTlsPolicyLookup::Absent,
+                backend_ref_idx: 0,
+                app_protocol: published.clone(),
+            })));
+
+            for expected_attempt in 1..=2 {
+                let peer = super::try_direct_endpoint_peer(&proxy, &mut ctx).unwrap();
+                assert_eq!(peer.options.alpn.get_max_http_version(), expected_versions.0);
+                assert_eq!(peer.options.alpn.get_min_http_version(), expected_versions.1);
+                assert!(!peer.is_tls(), "ws/wss appProtocol must not imply TLS");
+                assert_eq!(peer.options.connection_timeout, Some(Duration::from_secs(5)));
+                assert_eq!(peer.options.total_connection_timeout, Some(Duration::from_secs(5)));
+                assert_eq!(peer.options.read_timeout, Some(Duration::from_secs(60)));
+                assert_eq!(peer.options.write_timeout, Some(Duration::from_secs(60)));
+                assert_eq!(peer.options.idle_timeout, Some(Duration::from_secs(300)));
+                assert_eq!(ctx.try_cnt, expected_attempt);
+            }
+
+            let backend = ctx.backend_context.as_ref().unwrap();
+            assert_eq!(backend.source, Some(BackendSource::DirectEndpoint));
+            assert_eq!(backend.backend_ref_idx, Some(0));
+            assert_eq!(backend.upstreams.len(), 2);
+            assert!(backend.upstreams.iter().all(|attempt| attempt.tls.is_none()));
+            assert_eq!(
+                ctx.request_info.discover_protocol.as_deref(),
+                expects_websocket.then_some("websocket")
+            );
+            let retained = match ctx.jump.as_deref().unwrap() {
+                crate::UpstreamJumpTarget::Direct(preset) => preset.app_protocol.as_ref(),
+                _ => unreachable!("test installs a direct endpoint preset"),
+            };
+            match (published.as_ref(), retained) {
+                (Some(expected), Some(actual)) => assert!(Arc::ptr_eq(expected, actual)),
+                (None, None) => {}
+                _ => panic!("retry must retain the captured appProtocol"),
+            }
         }
     }
 
