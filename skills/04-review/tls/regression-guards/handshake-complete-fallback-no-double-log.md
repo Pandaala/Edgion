@@ -42,6 +42,13 @@ the pinned implementation and does not explain entry into the completion
 fallback. The allocation performed by Rust's `Box::new(ctx.clone())` is also
 not reported as an `SSL_set_ex_data` zero return.
 
+If that defensive setter failure is ever forced, `store_ssl_ctx` already
+emits and `certificate_callback` emits again after `err_log` is set. That
+second record is a known one-entry-contract hole, accepted while the
+pinned stack cannot open it; see
+[ssl-ctx-exdata-handoff-audit-ownership](../intentional-design/ssl-ctx-exdata-handoff-audit-ownership.md).
+Do not treat that hole as proof that this fallback must start logging.
+
 ## Why the fix is correct
 
 Keeping the fallback non-logging preserves the established one-entry audit

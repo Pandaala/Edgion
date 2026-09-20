@@ -21,6 +21,7 @@ before applying a decision to current code.
 - [Rustls Upstream Additional SAN Enforcement — UNSUPPORTED](intentional-design/rustls-upstream-san-unsupported.md)
 - [TLS setup writes remain transport-bounded](intentional-design/tls-setup-writes-remain-transport-bounded.md)
 - [`EdgionTls.min_tls_version` Allowing `TLS1_0` / `TLS1_1`: Deliberate Opt-In, Not Rejected](intentional-design/tls-version-operator-choice.md)
+- [SslCtx ex-data store stays borrow-and-clone; finalize dual-emit is accepted while unreachable](intentional-design/ssl-ctx-exdata-handoff-audit-ownership.md)
 
 ## Compatibility constraints
 
