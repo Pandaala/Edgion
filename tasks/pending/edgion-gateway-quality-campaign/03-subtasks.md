@@ -71,7 +71,7 @@ The first section preserves the exact residual order supplied by `task/optimizat
 | edgion-gateway | `edgion-gateway/src/routes/http/proxy_http/pg_upstream_peer.rs` | src/routes | changed | B0063 | Preserved the validated Service section appProtocol through DirectEndpoint peer construction | 00eb71e2ad4b739cfaf1ac2fe87ea27e19f8b1e1 |
 | edgion-gateway | `edgion-gateway/src/routes/http/proxy_http/pg_upstream_request_filter.rs` | src/routes | changed | B0064 | Kept canonical RemoteIp and XFF publication final when RequestId uses a colliding header | 30ba94f610e804a48696d21ff2c85303c1c08d34 |
 | edgion-gateway | `edgion-gateway/src/routes/http/proxy_http/preflight_handler.rs` | src/routes | changed | B0065 | Resolve preflight policy in the immutable per-request EGC snapshot so hot reload affects existing listeners | 0094fc78838f4043d7a4b8e728a78527246375dc |
-| edgion-gateway | `edgion-gateway/src/routes/http/redirect_http.rs` | src/routes | pending | — | Residual manifest order | a0b4d49b298149422c7e46150a0ca027ad5321f7 |
+| edgion-gateway | `edgion-gateway/src/routes/http/redirect_http.rs` | src/routes | changed | B0066 | Hot reload and request-pin duplicate-Host policy for redirect and ordinary HTTP listeners | 478bd5765 |
 | edgion-gateway | `edgion-gateway/src/routes/tls/mod.rs` | src/routes | pending | — | Residual manifest order | a0b4d49b298149422c7e46150a0ca027ad5321f7 |
 | edgion-gateway | `edgion-gateway/src/routes/tls/passthrough_proxy.rs` | src/routes | pending | — | Residual manifest order | a0b4d49b298149422c7e46150a0ca027ad5321f7 |
 | edgion-gateway | `edgion-gateway/src/routes/tls/proxy.rs` | src/routes | pending | — | Residual manifest order | a0b4d49b298149422c7e46150a0ca027ad5321f7 |

@@ -36,9 +36,9 @@ Resume the file-by-file quality campaign for the remaining `edgion-gateway` path
 - Campaign status: `in-progress`
 - Ordered crate phases: `edgion-gateway` (active); later crates are not authorized by this residual run.
 - Completed crates: none recorded in this campaign.
-- Active serial batch: none; B0065 (`preflight_handler.rs`) completed in `b8eb4d7ed` and passed current-HEAD revalidation at `0094fc788`.
-- Analysis queue: next residual file is `edgion-gateway/src/routes/http/redirect_http.rs`.
-- Current coverage counts: 582 ledger rows; 504 imported `excluded-with-reason`, 11 `pending`, 1 `deferred`, 40 `changed`, 25 `examined-no-change`, and 1 `removed`.
+- Active serial batch: none; B0066 (`redirect_http.rs`) completed in `478bd5765`.
+- Analysis queue: next residual file is `edgion-gateway/src/routes/tls/mod.rs`.
+- Current coverage counts: 582 ledger rows; 504 imported `excluded-with-reason`, 10 `pending`, 1 `deferred`, 41 `changed`, 25 `examined-no-change`, and 1 `removed`.
 - Resolved external gate: the user-authorized prerequisite commit `c8e48ff50` added the missing `tasks/todo/os-packaging-and-system-service-adapters.md`; agent-doc validation now passes.
 - Resolved external gate: the Gateway API transform-contract generator and its test are present at `0094fc788`; the drift gate and all 5 generator tests pass.
 - Frozen integration baseline: 3,443 paths captured in `integration-freeze.tsv`; 15 fingerprints were refreshed for external commit `94c56632a`, six existing fingerprints were refreshed for external commits `5a1dbbddc` and `0094fc788`, and the latter commit's new BandwidthLimit backend fixture was added after exact blob/mode attribution.
