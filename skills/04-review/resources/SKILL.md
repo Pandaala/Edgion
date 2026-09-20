@@ -27,6 +27,7 @@ before applying a decision to current code.
 
 ## Regression guards
 
+- [Declared CRD objects use Kubernetes structural schema](regression-guards/declared-object-crd-structural-schema.md)
 - [Duration schema admission patterns](regression-guards/duration-schema-admission-patterns.md)
 - [EdgionBackend unknown-field handling is mode-specific](regression-guards/edgion-backend-unknown-fields-are-mode-specific.md)
 - [EdgionGatewayConfig process-global values aggregated deterministically — FIXED](regression-guards/edgion-gateway-config-global-aggregation-deterministic.md)

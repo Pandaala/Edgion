@@ -301,6 +301,12 @@ fn tls_spec_has_no_uncovered_fields() {
 }
 
 #[test]
+fn tls_crd_is_recursively_structural() {
+    let actual = crd_section("edgion_tls_crd.yaml", "spec");
+    assert_declared_objects_are_structural(&actual, "openAPIV3Schema.properties.spec");
+}
+
+#[test]
 fn tls_attachment_dimension_limits_match_runtime_and_crd() {
     let generated = serde_json::to_value(schema_for!(edgion_resources::EdgionTlsSpec)).unwrap();
     let actual = crd_section("edgion_tls_crd.yaml", "spec");

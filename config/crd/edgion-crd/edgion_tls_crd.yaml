@@ -110,7 +110,6 @@ spec:
                       description: "Optional typed Subject Alternative Name allowlist. Omit or empty means no SAN constraint; a non-empty list matches if any entry matches."
                       items:
                         type: object
-                        additionalProperties: false
                         required:
                           - type
                           - value

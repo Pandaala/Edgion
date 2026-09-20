@@ -93,13 +93,14 @@ rerun at the newer HEAD using an isolated target directory after an initial
 shared-target build encountered disappearing dependency metadata.
 
 The original full CRD installation failed on an unrelated EdgionTls structural
-schema error. These live tests use an ephemeral CRD-root copy removing only its
+schema error. These live tests used an ephemeral CRD-root copy removing only its
 invalid `allowedSans.items.additionalProperties: false` declaration; the entire
-upstream Gateway API bundle remains byte-identical. The installed BackendTLSPolicy
-CRD serves v1 as storage and v1alpha3 as non-storage, while Edgion uses only v1.
-This is conditional BackendTLSPolicy verification, not evidence that the original
-complete CRD set installs. The unrelated EdgionTls `allowedSans` structural-schema
-defect remains unresolved, so full CRD installation must still be verified separately.
+upstream Gateway API bundle remained byte-identical. The installed BackendTLSPolicy
+CRD served v1 as storage and v1alpha3 as non-storage, while Edgion used only v1.
+That made this historical BackendTLSPolicy verification conditional rather than
+evidence that the original complete CRD set installed. The EdgionTls defect was
+subsequently corrected and guarded by
+[the declared-object structural-schema rule](../../resources/regression-guards/declared-object-crd-structural-schema.md).
 
 The shared integration topology was reused for conformance with the `edgion`
 GatewayClass, all-namespace watches, and the same mTLS conf-sync configuration.
