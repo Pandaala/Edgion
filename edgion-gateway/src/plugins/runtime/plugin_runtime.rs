@@ -2482,7 +2482,7 @@ pub(crate) fn check_response_stage_terminate(
             // `set_terminate`, which writes a field no response-stage reader
             // consults. Answer it the way the request stage does — 502 fallback
             // plus the plugin-bug marker.
-            plugin_log.push("deny terminate; ");
+            plugin_log.push("deny terminate");
             adapter.set_response_terminate_without_reply();
             true
         }

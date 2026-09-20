@@ -4780,13 +4780,17 @@ pub(crate) mod record_outcome_tests {
         let mut response_header = ResponseHeader::build(200, None).unwrap();
         let result = PluginRunningResult::ErrTerminateRequest;
 
+        let mut log = PluginLog::with_alias("dsl", None);
         let terminate = {
             let mut adapter = PingoraSessionAdapter::with_response_header(&mut session, &mut ctx, &mut response_header);
-            let mut log = PluginLog::with_alias("dsl", None);
             check_response_stage_terminate(&result, &mut log, &mut adapter)
         };
 
         assert!(terminate);
+        assert_eq!(
+            serde_json::to_value(&log).unwrap()["log"],
+            serde_json::json!(["deny terminate"])
+        );
         assert_eq!(ctx.response_denial(), Some(&ResponseStageDenial::Http(502)));
         assert!(ctx
             .diagnostics
