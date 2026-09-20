@@ -21,7 +21,7 @@
 
 use async_trait::async_trait;
 use pingora_core::listeners::ConnectionFilter;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 
 use super::stream_plugin_trait::{StreamContext, StreamLayer, StreamPluginResult};
@@ -73,6 +73,10 @@ impl ConnectionFilter for StreamPluginConnectionFilter {
     }
 }
 
+fn canonical_peer_ip(addr: &SocketAddr) -> IpAddr {
+    addr.ip().to_canonical()
+}
+
 async fn accept_connection_view(view: ConnectionView, addr: Option<&SocketAddr>, port: u16) -> bool {
     let resource = match view {
         ConnectionView::Empty => return true,
@@ -88,7 +92,7 @@ async fn accept_connection_view(view: ConnectionView, addr: Option<&SocketAddr>,
         // availability gate. Ordinary TCP endpoints provide an inet peer.
         return true;
     };
-    let ctx = StreamContext::new(addr.ip(), port, StreamLayer::Stage1);
+    let ctx = StreamContext::new(canonical_peer_ip(addr), port, StreamLayer::Stage1);
     matches!(runtime.run(&ctx).await, StreamPluginResult::Allow)
 }
 
@@ -97,6 +101,17 @@ mod tests {
     use super::*;
     use crate::plugins::stream::plugin_generation::{StreamPluginGeneration, StreamStages};
     use edgion_resources::resources::plugin_policy::PluginPolicyConfig;
+
+    #[test]
+    fn peer_ip_canonicalization_preserves_native_addresses_and_folds_mapped_ipv4() {
+        let ipv4: SocketAddr = "192.0.2.1:443".parse().unwrap();
+        let mapped: SocketAddr = "[::ffff:192.0.2.1]:443".parse().unwrap();
+        let ipv6: SocketAddr = "[2001:db8::1]:443".parse().unwrap();
+
+        assert_eq!(canonical_peer_ip(&ipv4), "192.0.2.1".parse::<IpAddr>().unwrap());
+        assert_eq!(canonical_peer_ip(&mapped), "192.0.2.1".parse::<IpAddr>().unwrap());
+        assert_eq!(canonical_peer_ip(&ipv6), "2001:db8::1".parse::<IpAddr>().unwrap());
+    }
 
     #[tokio::test]
     async fn unavailable_policy_denies_even_without_peer_or_attachment() {

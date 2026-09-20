@@ -36,7 +36,7 @@ The current real path in this repo is:
 1. Define the `EdgionStreamPlugins` resource structure.
 2. Define serializable stage entries; the schema does not contain runtime objects.
 3. The Controller receives the resource, validates it, and writes status.
-4. The Gateway `ConfigClient` syncs the resource into `StreamPluginStore`, where `compile_stream_plugins` builds both runtimes and publishes the immutable generation.
+4. The Gateway `ConfigClient` syncs the source through `StreamPluginStore` into the canonical `PluginPublisher`, which builds immutable class-scoped runtime views for demanded attachments.
 5. Gateway / `TCPRoute` / `TLSRoute` / `UDPRoute` reference the resource through the `edgion.io/edgion-stream-plugins` annotation.
 6. The data plane runs the runtime at different stages:
    - Stage 1: connection-context runtime — only IP / port and other connection context are available. Gateway attachments use Pingora's pre-handshake `ConnectionFilter`; TCPRoute runs it per connection, while UDPRoute runs it when admitting a new UDP session.
@@ -53,7 +53,7 @@ edgion-resources/src/resources/edgion_stream_plugins/
 edgion-gateway/src/plugins/stream/
   stream_plugin_trait.rs    # StreamPlugin / StreamContext / StreamPluginResult
   stream_plugin_runtime.rs  # Stage 1 runtime: builds the plugin chain from entries
-  stream_plugin_store.rs    # Gateway global hot-reload store (ArcSwap)
+  stream_plugin_store.rs    # Conf-sync/source adapter into PluginPublisher
   connection_filter_bridge.rs
   ip_restriction/           # ready reference implementation
   tls_route/                # Stage 2 runtime and trait
@@ -76,6 +76,14 @@ edgion-gateway/src/plugins/stream/
   - IP allow/deny.
   - Rejecting connections as early as possible.
   - Logic that does not need SNI / route match / mTLS info.
+- Gateway listener admission captures one publication snapshot and obtains the
+  physical listener's effective `ConnectionView`. The publisher compares every
+  serving Gateway before exposing a common view; disagreement or unavailable
+  policy fails closed. A ready admission pins its `CompiledStreamPlugins` Arc.
+  The fatal PROXY-policy guard runs before the bridge, and inbound PROXY parsing
+  runs after it. The Stage-1 peer is therefore the physical pre-PROXY
+  `DirectPeerIp`; IPv4-mapped IPv6 is canonicalized to IPv4 without changing
+  peer ownership.
 
 ### Stage 2: TlsRoute
 
@@ -90,8 +98,9 @@ edgion-gateway/src/plugins/stream/
 - Move route-owned IP restrictions to `tlsRoutePlugins`. Connection-only
   plugins such as GeoIP and ConnectionRateLimit belong on the Gateway listener
   (or TCP/UDP route), not on TLSRoute. Gateway and TLSRoute stages remain separate.
-- Each new connection loads the current plugin resource; existing connections
-  are not re-authorized when the resource changes.
+- Each new route admission resolves and pins the current compiled view from one
+  publication; existing connections are not re-authorized when the resource
+  changes.
 - Suitable for:
   - SNI-dependent logic.
   - Logic that depends on which `TLSRoute` was matched.
@@ -188,7 +197,9 @@ writes status; it does not stamp execution policy into transported entries.
 through GatewayClass parametersRef. Block closes new applicable admissions;
 Bypass never constructs or runs the restricted entry for that scope. Listener
 admission compares every serving Gateway candidate's effective connection view,
-allowing one execution only when those views are equivalent. TCP/UDP/TLS-route
+allowing one execution only when those views are equivalent. The bridge captures
+one publication snapshot, reads the physical listener view, fails closed on
+`Unavailable`, and pins the selected `CompiledStreamPlugins`. TCP/UDP/TLS-route
 admission uses the matched logical Gateway. Existing admitted sessions remain
 unchanged; policy edits do not restart listeners.
 
@@ -417,7 +428,7 @@ no-backstop caveat, and the PromQL alert example).
 | Main context | `StreamContext` / `TlsRouteContext` | `PluginSession` |
 | Failure action | Reject the connection | Return an HTTP response or terminate the request |
 | Binding | The `edgion.io/edgion-stream-plugins` annotation references the resource | The `EdgionPlugins` runtime chain on the Route/Gateway |
-| Hot-reload source | `StreamPluginStore` | HTTP plugin runtime / store |
+| Hot-reload source | `StreamPluginStore` source adapter → canonical `PluginPublisher` | HTTP source adapter → canonical `PluginPublisher` |
 
 ## Validation
 

@@ -1,15 +1,15 @@
 ---
 name: stream-plugin-store-key-normalization
-description: Use when reviewing a consumer of the global StreamPluginStore; distinguishes the Gateway same-namespace attachment contract from the route name-or-qualified-name contract.
+description: Use when reviewing stream-plugin attachment normalization; distinguishes the Gateway same-namespace contract from the route name-or-qualified-name contract.
 knowledge_type: intentional-design
 ---
 
-# StreamPluginStore key normalization depends on the attachment owner
+# Stream plugin key normalization depends on the attachment owner
 
 ## Conclusion
 
-The global `StreamPluginStore` is keyed by fully-qualified `namespace/name` strings, but the
-operator-facing annotation contract is intentionally different at the two attachment layers:
+`PluginPublisher` source and attachment inputs use fully-qualified `namespace/name` strings, but
+the operator-facing annotation contract is intentionally different at the two attachment layers:
 
 | Site | Accepted annotation value | Normalization |
 |------|---------------------------|---------------|
@@ -19,8 +19,8 @@ operator-facing annotation contract is intentionally different at the two attach
 Gateway-level attachments are same-namespace because the previous qualified-name path loaded an
 `EdgionStreamPlugins` from another namespace without `ReferenceGrant` authorization. The Controller
 now reports a slash-containing Gateway value as unresolved and does not register the dependency.
-The Gateway independently maps such a value to an impossible store key, preserving fail-close if
-configuration bypasses Controller validation.
+`GatewayInput` independently maps such a value to an impossible publication key, preserving
+fail-close if configuration bypasses Controller validation.
 
 Route-level semantics are outside that decision and must not be tightened as a side effect. Their
 shared resolver remains `edgion-gateway/src/routes/common.rs::resolve_stream_plugin_store_key`.
@@ -37,8 +37,9 @@ ownership of plugin composition and failure behavior from shared ownership of po
 - Do not restore qualified Gateway references without a complete design that transports an explicit
   authorization result to the Gateway and retains independent fail-close enforcement.
 - Do not apply the Gateway restriction to TCPRoute, TLSRoute, or UDPRoute.
-- A new `StreamPluginStore` consumer must document which namespace owns the attachment and normalize
-  to the store's `namespace/name` key accordingly.
+- A new stream attachment consumer must document which namespace owns the attachment and normalize
+  to the publisher's `namespace/name` key accordingly. `StreamPluginStore` is now a conf-sync source
+  adapter, not a data-plane lookup boundary.
 
 ## History
 

@@ -35,11 +35,15 @@ shutdown, so shutdown can cancel the pending filter future.
 
 Edgion's `runtime/server/listener_builder.rs::apply_connection_filter` installs
 the fatal PROXY-policy guard before the optional stream bridge.
-`StreamPluginConnectionFilter.store_key` resolves the Gateway's same-namespace
-resource; `store` supplies a compiled Arc snapshot pinned for each admission;
-`listener_port` supplies the port to `StreamContext`. The peer is pre-PROXY
-`DirectPeerIp`. Preserve this ordering, snapshot scope, configured failure
-policy, and the prohibition on per-connection tracing.
+The bridge captures one immutable `PluginPublication` snapshot and obtains the
+physical listener's `ConnectionView`. Publication compares the effective views
+of every serving Gateway; disagreement or unavailable policy yields
+`Unavailable` and fails closed, while `Ready` pins one `CompiledStreamPlugins`
+Arc for the admission. `listener_port` supplies the port to `StreamContext`.
+The peer is the physical pre-PROXY `DirectPeerIp`; IPv4-mapped IPv6 is folded to
+canonical IPv4 before evaluation without changing that ownership. Preserve this
+ordering, snapshot scope, configured failure policy, and the prohibition on
+per-connection tracing.
 
 `plugins/stream/connection_rate_limit/plugin.rs::on_connection` evaluates:
 

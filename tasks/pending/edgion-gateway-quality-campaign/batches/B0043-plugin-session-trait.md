@@ -36,4 +36,4 @@
 ## Handoff
 
 - Ledger/changelog and D0008 updated: yes.
-- Commit: pending automatic records/deferred-task commit.
+- Commit: `b4ebea75087d3554c864b67a5a4e590bdd0935b2`.

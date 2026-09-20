@@ -63,7 +63,7 @@ Key components:
 
 ### ConnectionFilter (TCP layer)
 
-`StreamPluginConnectionFilter` implements Pingora's `ConnectionFilter` trait, filtering raw TCP connections before TLS handshake and HTTP parsing. It references the `EdgionStreamPlugins` resource via the Gateway annotation `edgion.io/edgion-stream-plugins` and reads the latest configuration from the global `StreamPluginStore` (ArcSwap), supporting hot reload. Each connection invokes `should_accept(addr)` to execute all StreamPlugin chains.
+`StreamPluginConnectionFilter` implements Pingora's `ConnectionFilter` trait, filtering raw TCP connections before inbound PROXY parsing, TLS handshake, and HTTP parsing. The process-fatal PROXY-policy guard runs first. For each admission, the bridge captures one immutable `PluginPublication` snapshot and obtains the physical listener's `ConnectionView`. Publication has already compared the effective views of every serving Gateway: `Unavailable` fails closed, while `Ready` pins one `CompiledStreamPlugins` generation for the admission. The pre-PROXY physical peer remains `DirectPeerIp`; IPv4-mapped IPv6 is folded to canonical IPv4 before constructing `StreamContext`.
 
 ### ProxyHttp (HTTP/gRPC layer)
 

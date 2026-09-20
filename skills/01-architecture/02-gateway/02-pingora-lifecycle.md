@@ -291,11 +291,13 @@ Wrap-up phase after the request completes:
 `StreamPluginConnectionFilter` filters raw TCP connections before TLS handshake and HTTP parsing:
 
 - Implements Pingora's `ConnectionFilter` trait method `should_accept(addr: Option<&SocketAddr>) -> bool`.
-- References the `EdgionStreamPlugins` resource via the Gateway annotation `edgion.io/edgion-stream-plugins`.
-- Reads the latest plugin configuration from the global `StreamPluginStore` (ArcSwap), supporting hot reload.
+- Runs after the process-fatal PROXY-policy guard and before inbound PROXY parsing.
+- Captures one immutable `PluginPublication` snapshot and reads the physical listener's `ConnectionView`.
+- Uses the view that publication derived by comparing every serving Gateway's effective connection policy; `Unavailable` fails closed and `Ready` pins one `CompiledStreamPlugins` generation.
+- Preserves the pre-PROXY physical peer as `DirectPeerIp`, folding only IPv4-mapped IPv6 to its canonical IPv4 representation before constructing `StreamContext`.
 - Executes `StreamPluginRuntime.run(&ctx)` and obtains `StreamPluginResult::Allow` or `StreamPluginResult::Deny`.
-- When address information is missing (`addr == None`), allows by default.
-- Allows by default when no configuration or no active plugin exists.
+- After policy availability is established, missing address information (`addr == None`) retains the narrow non-inet allow behavior.
+- Allows when the shared listener view is `Empty` or its pinned runtime has no active plugin.
 
 Typical uses: IP allow/deny lists, geolocation filtering, connection rate limiting.
 
