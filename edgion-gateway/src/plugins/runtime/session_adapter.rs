@@ -1770,10 +1770,10 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
                 Err(BodyReadError::NotBuffered)
             }
             RequestAdmission::Buffer => {
-                // Not implementable at this stage: `response_filter` is handed
-                // only the downstream Session, and the upstream body arrives
-                // via the per-chunk `upstream_response_body_filter` callback.
-                // The chunk-accumulate-then-replay mechanism is P0's spike.
+                // Full upstream-response reads are intentionally unsupported:
+                // the main response must never be accumulated and replayed.
+                // Response processing uses current chunks or the bounded
+                // semantic-window streaming path.
                 let _cap = resolve_cap(max_bytes, self.ctx.request_body_config.max_body_size_bytes);
                 Err(BodyReadError::Unimplemented)
             }
