@@ -79,9 +79,8 @@ This change does not retarget GatewayClass `parametersRef`, transfer a shared
 physical listener's ownership, rebind ports, or support Gateway deletion/recreation.
 Response compression retains the [known-length restriction](../../http1/compatibility-constraints/compression-requires-known-response-length.md).
 Request-limit versus Pingora reuse-budget accounting is outside this publication
-rule's verification scope. The historical follow-up path
-`tasks/todo/http-keepalive-request-limit-counting.md` is no longer present; its
-absence is not evidence that the accounting behavior was corrected.
+rule's verification scope. Its corrected total-request semantics and wire coverage
+are maintained by the [HTTP/1 keepalive counting guard](../../http1/regression-guards/downstream-keepalive-request-limit-counting.md).
 
 ## Verification and re-evaluation
 

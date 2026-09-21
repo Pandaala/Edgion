@@ -275,6 +275,7 @@ mod tests {
     use crate::backends::degrade_threshold::GLOBAL_STORE_TEST_LOCK;
     use edgion_resources::sensitive::{SensitiveMode, SENSITIVE_MODE};
     use edgion_resources::EdgionGatewayConfig;
+    use pingora_core::apps::{HttpPersistentSettings, ReusedHttpStream};
     use std::collections::{HashMap, HashSet};
     use std::sync::atomic::Ordering;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -305,6 +306,57 @@ mod tests {
 
     fn test_access_logger() -> Arc<AccessLogger> {
         Arc::new(AccessLogger::new())
+    }
+
+    async fn redirect_listener_wire_request_count(
+        redirect: &EdgionHttpRedirectProxy,
+        request_limit: u32,
+        request_cap: usize,
+    ) -> (usize, String) {
+        let (mut client, server) = tokio::io::duplex(8192);
+        let mut next_stream: pingora_core::protocols::Stream = Box::new(server);
+        let mut persistent_settings: Option<HttpPersistentSettings> = None;
+        let mut served = 0;
+
+        for request_index in 0..request_cap {
+            let client_closes = request_limit == 0 && request_index + 1 == request_cap;
+            let connection = if client_closes { "Connection: close\r\n" } else { "" };
+            client
+                .write_all(format!("GET /{request_index} HTTP/1.1\r\nHost: example.com\r\n{connection}\r\n").as_bytes())
+                .await
+                .unwrap();
+
+            let mut session = Session::new_h1(next_stream);
+            if let Some(settings) = persistent_settings.take() {
+                settings.apply_to_session(&mut session.downstream_session);
+            }
+            assert!(session.read_request().await.unwrap());
+
+            let previous = session.downstream_session.take_connection_user_context();
+            let mut ctx = redirect.new_ctx();
+            if let Some(previous) = previous {
+                redirect.on_connection_reuse(&mut session, &mut ctx, previous);
+            }
+            redirect.early_request_filter(&mut session, &mut ctx).await.unwrap();
+            assert!(redirect.request_filter(&mut session, &mut ctx).await.unwrap());
+
+            let mut settings = HttpPersistentSettings::for_session(&session);
+            if let Some(user_context) = redirect.persist_connection_context(&session, &ctx) {
+                settings.set_user_context(user_context);
+            }
+            let reusable = session.downstream_session.finish().await.unwrap();
+            served += 1;
+            let Some(reusable) = reusable else {
+                break;
+            };
+            let (stream, carried) = ReusedHttpStream::from_reusable_stream(reusable, settings).consume();
+            next_stream = stream;
+            persistent_settings = carried;
+        }
+
+        let mut wire = String::new();
+        client.read_to_string(&mut wire).await.unwrap();
+        (served, wire)
     }
 
     #[test]
@@ -485,6 +537,7 @@ mod tests {
                     let mut session = Session::new_h1(Box::new(server));
                     assert!(session.read_request().await.unwrap());
                     let mut ctx = redirect.new_ctx();
+                    redirect.early_request_filter(&mut session, &mut ctx).await.unwrap();
                     assert!(redirect.request_filter(&mut session, &mut ctx).await.unwrap());
                     assert_eq!(ctx.status, expected_status);
 
@@ -529,6 +582,55 @@ mod tests {
         })
         .await
         .expect("redirect connection-policy exchanges must finish without waiting for peer EOF");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn redirect_listener_enforces_total_request_limit_on_the_wire() {
+        let _guard = GLOBAL_STORE_TEST_LOCK.lock();
+        let handler = crate::config::edgion_gateway::create_edgion_gateway_config_handler();
+        let configs = [0_u32, 1, 2]
+            .into_iter()
+            .map(|limit| {
+                let name = format!("redirect-keepalive-{limit}");
+                let config = serde_json::from_value::<EdgionGatewayConfig>(serde_json::json!({
+                    "apiVersion": "edgion.io/v1",
+                    "kind": "EdgionGatewayConfig",
+                    "metadata": {"name": name},
+                    "spec": {"server": {"downstreamKeepaliveRequestLimit": limit}}
+                }))
+                .unwrap();
+                (name, Arc::new(config))
+            })
+            .collect::<HashMap<_, _>>();
+        handler.full_set(&configs);
+
+        for (limit, request_cap, expected_served, expected_keepalive) in [(0, 3, 3, 2), (1, 2, 1, 0), (2, 3, 2, 1)] {
+            let redirect = EdgionHttpRedirectProxy::new(
+                443,
+                test_access_logger(),
+                crate::config::bind_gateway_config(Some(&format!("redirect-keepalive-{limit}"))),
+            );
+            let (served, wire) = redirect_listener_wire_request_count(&redirect, limit, request_cap).await;
+            let wire_lower = wire.to_ascii_lowercase();
+            assert_eq!(served, expected_served, "request_limit={limit}");
+            assert_eq!(
+                wire.matches("HTTP/1.1 301").count(),
+                expected_served,
+                "request_limit={limit}, wire={wire:?}"
+            );
+            assert_eq!(
+                wire_lower.matches("\r\nconnection: keep-alive\r\n").count(),
+                expected_keepalive,
+                "request_limit={limit}, wire={wire:?}"
+            );
+            assert_eq!(
+                wire_lower.matches("\r\nconnection: close\r\n").count(),
+                1,
+                "request_limit={limit}, wire={wire:?}"
+            );
+        }
+
+        handler.full_set(&HashMap::new());
     }
 
     #[tokio::test]

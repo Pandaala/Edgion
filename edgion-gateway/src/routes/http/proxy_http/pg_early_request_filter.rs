@@ -138,9 +138,10 @@ pub(crate) fn apply_client_policy(
     session.set_write_timeout(Some(timeout.write_timeout));
     apply_client_keepalive_timeout(session, timeout.keepalive_timeout, session.is_process_shutting_down());
     if !*keepalive_initialized && session.downstream_session.as_http1().is_some() {
-        // Preserve Pingora's existing configured reuse-budget semantics.
-        let limit = config.downstream_keepalive_request_limit;
-        session.set_keepalive_reuses_remaining((limit != 0).then_some(limit));
+        // The operator value counts the first request, while Pingora stores only
+        // the number of later reuses. Zero remains the unlimited sentinel.
+        let request_limit = config.downstream_keepalive_request_limit;
+        session.set_keepalive_reuses_remaining(request_limit.checked_sub(1));
         *keepalive_initialized = true;
     }
 }
@@ -191,10 +192,13 @@ pub async fn early_request_filter(
 mod tests {
     use super::*;
     use http::header::CONTENT_LENGTH;
+    use http::StatusCode;
+    use pingora_core::apps::{HttpPersistentSettings, ReusedHttpStream};
     use pingora_core::modules::http::grpc_web::GrpcWeb;
     use pingora_core::modules::http::HttpModules;
     use pingora_core::protocols::http::bridge::grpc_web::GrpcWebCtx;
-    use tokio::io::AsyncWriteExt;
+    use pingora_http::ResponseHeader;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     async fn session_from_request(raw_request: &[u8]) -> Session {
         let (mut client, server) = tokio::io::duplex(4096);
@@ -225,6 +229,64 @@ mod tests {
         drop(client);
         assert!(session.read_request().await.expect("request headers should parse"));
         session
+    }
+
+    async fn normal_listener_wire_request_count(request_limit: u32, request_cap: usize) -> (usize, String) {
+        use pingora_proxy::ProxyHttp;
+
+        let proxy = id_proxy();
+        let config = Arc::new(crate::config::ResolvedGatewayConfig {
+            downstream_keepalive_request_limit: request_limit,
+            ..Default::default()
+        });
+        let (mut client, server) = tokio::io::duplex(8192);
+        let mut next_stream: pingora_core::protocols::Stream = Box::new(server);
+        let mut persistent_settings: Option<HttpPersistentSettings> = None;
+        let mut served = 0;
+
+        for request_index in 0..request_cap {
+            let client_closes = request_limit == 0 && request_index + 1 == request_cap;
+            let connection = if client_closes { "Connection: close\r\n" } else { "" };
+            client
+                .write_all(format!("GET /{request_index} HTTP/1.1\r\nHost: test\r\n{connection}\r\n").as_bytes())
+                .await
+                .unwrap();
+
+            let mut session = Session::new_h1(next_stream);
+            if let Some(settings) = persistent_settings.take() {
+                settings.apply_to_session(&mut session.downstream_session);
+            }
+            assert!(session.read_request().await.unwrap());
+
+            let previous = session.downstream_session.take_connection_user_context();
+            let mut ctx = EdgionHttpContext::new();
+            ctx.egc = Arc::clone(&config);
+            if let Some(previous) = previous {
+                proxy.on_connection_reuse(&mut session, &mut ctx, previous);
+            }
+            apply_client_policy(&mut session, &ctx.egc, &mut ctx.downstream_keepalive_initialized);
+
+            let mut response = ResponseHeader::build(StatusCode::NO_CONTENT, Some(2)).unwrap();
+            response.insert_header("Content-Length", "0").unwrap();
+            session.write_response_header(Box::new(response), true).await.unwrap();
+
+            let mut settings = HttpPersistentSettings::for_session(&session);
+            if let Some(user_context) = proxy.persist_connection_context(&session, &ctx) {
+                settings.set_user_context(user_context);
+            }
+            let reusable = session.downstream_session.finish().await.unwrap();
+            served += 1;
+            let Some(reusable) = reusable else {
+                break;
+            };
+            let (stream, carried) = ReusedHttpStream::from_reusable_stream(reusable, settings).consume();
+            next_stream = stream;
+            persistent_settings = carried;
+        }
+
+        let mut wire = String::new();
+        client.read_to_string(&mut wire).await.unwrap();
+        (served, wire)
     }
 
     async fn run_module_request_header_filter(session: &mut Session) {
@@ -399,7 +461,7 @@ mod tests {
         };
         ctx.egc = Arc::new(config);
         apply_client_policy(&mut first, &ctx.egc, &mut ctx.downstream_keepalive_initialized);
-        assert_eq!(first.get_keepalive_reuses_remaining(), Some(4));
+        assert_eq!(first.get_keepalive_reuses_remaining(), Some(3));
         let persisted = proxy.persist_connection_context(&first, &ctx).unwrap();
 
         let config = crate::config::ResolvedGatewayConfig {
@@ -416,7 +478,33 @@ mod tests {
 
         let mut fresh = session_from_request(b"GET / HTTP/1.1\r\nHost: test\r\n\r\n").await;
         apply_client_policy(&mut fresh, &next.egc, &mut false);
-        assert_eq!(fresh.get_keepalive_reuses_remaining(), Some(9));
+        assert_eq!(fresh.get_keepalive_reuses_remaining(), Some(8));
+    }
+
+    #[tokio::test]
+    async fn normal_listener_enforces_total_request_limit_on_the_wire() {
+        for (request_limit, request_cap, expected_served, expected_keepalive) in
+            [(0, 3, 3, 2), (1, 2, 1, 0), (2, 3, 2, 1)]
+        {
+            let (served, wire) = normal_listener_wire_request_count(request_limit, request_cap).await;
+            let wire_lower = wire.to_ascii_lowercase();
+            assert_eq!(served, expected_served, "request_limit={request_limit}");
+            assert_eq!(
+                wire.matches("HTTP/1.1 204").count(),
+                expected_served,
+                "request_limit={request_limit}, wire={wire:?}"
+            );
+            assert_eq!(
+                wire_lower.matches("\r\nconnection: keep-alive\r\n").count(),
+                expected_keepalive,
+                "request_limit={request_limit}, wire={wire:?}"
+            );
+            assert_eq!(
+                wire_lower.matches("\r\nconnection: close\r\n").count(),
+                1,
+                "request_limit={request_limit}, wire={wire:?}"
+            );
+        }
     }
 
     fn id_config(global_names: &[&str]) -> edgion_resources::EdgionGatewayConfig {

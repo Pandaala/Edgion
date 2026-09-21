@@ -94,9 +94,11 @@ linked above records the separate class writer/coverage mechanism.
 
 Agent-doc validation initially failed on a pre-existing reference from
 `skills/04-review/listeners/regression-guards/egc-runtime-snapshot-publication.md`
-to missing `tasks/todo/http-keepalive-request-limit-counting.md`. The dangling
-link is now an explicitly historical path; no accounting fix is claimed.
-Agent-doc validation subsequently passed.
+to the then-missing `tasks/todo/http-keepalive-request-limit-counting.md`. That
+separate follow-up was later resolved by the
+[HTTP/1 keepalive counting guard](../../../skills/04-review/http1/regression-guards/downstream-keepalive-request-limit-counting.md).
+Agent-doc validation subsequently passed for this task; that historical result
+does not claim the later accounting verification was part of this task.
 
 Final verification on 2026-09-21:
 

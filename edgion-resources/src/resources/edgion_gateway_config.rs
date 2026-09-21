@@ -313,7 +313,7 @@ pub struct ServerConfig {
     #[serde(default)]
     pub enable_compression: bool,
 
-    /// Maximum number of requests a downstream connection can serve before being closed.
+    /// Maximum number of requests a downstream HTTP/1 connection can serve before being closed.
     /// Per-connection limit, similar to Nginx's `keepalive_requests`.
     /// Helps with memory management and load balancing distribution.
     /// Default: 1000. Set to 0 to disable the limit.

@@ -24,6 +24,7 @@ before applying a decision to current code.
 - [append_request_header drops additional same-name request header values (F-001)](regression-guards/append-request-header-multi-value.md)
 - [Header EOS Drives the Terminal Response-Body Hook](regression-guards/bodyless-header-eos-terminal-body-hook.md)
 - [Custom Upstream Reuse Is an Independent Decision](regression-guards/custom-upstream-reuse-is-independent.md)
+- [Downstream HTTP/1 keepalive limits count total requests, not later reuses](regression-guards/downstream-keepalive-request-limit-counting.md)
 - [http1-01 — HTTP/1.1 duplicate Host header rejected with 400](regression-guards/duplicate-host.md)
 - [Suppressed Follow-Up Tasks Drain Their Sink Extras](regression-guards/gw-16-suppressed-sink-extras-drained.md)
 - [http1-03 — Hop-by-hop filtering at plugin sub-requests and the main proxied response](regression-guards/hop-by-hop-dynamic-stripping.md)
