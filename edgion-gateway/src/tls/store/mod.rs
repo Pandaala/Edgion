@@ -1,4 +1,5 @@
 pub mod cert_matcher;
+pub mod compiled_tls;
 mod conf_handler;
 pub mod tls_store;
 

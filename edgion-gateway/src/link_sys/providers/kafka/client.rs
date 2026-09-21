@@ -651,8 +651,7 @@ mod tests {
         client.mark_retired();
         let error = client
             .try_produce("logs", "payload".to_string())
-            .err()
-            .expect("retired generation must not accept produce");
+            .expect_err("retired generation must not accept produce");
         assert!(error.to_string().contains("retired"));
     }
 

@@ -1,13 +1,34 @@
 ---
 name: cert-key-install-helper-deferred
-description: Use when reviewing proposals to merge the EdgionTls runtime PEM installer with the Gateway Listener cold-compiled atomic installer; explains why their distinct ownership remains intentional.
-knowledge_type: intentional-design
+description: Retired deferral of a shared cert/key installer; both serving paths are now cold-compiled and share install_compiled_serving_identity.
+knowledge_type: superseded
 ---
 
 # tls-F010 (cert/key install dup) — Shared `install_cert_key_to_ssl` extraction deferred
 
-**Status:** ⚠️ accepted tradeoff (deferred) · 2026-05-27
-**Severity:** Minor (Redundancy / maintenance only)
+**Status:** 🚫 SUPERSEDED · inactive since 2026-09-21 (D0014)
+**Original status:** ⚠️ accepted tradeoff (deferred) · 2026-05-27
+
+> **Do not apply this page's conclusion as a current gate.** Its premise — that
+> one path consumes PEM per handshake while the other consumes a cold-compiled
+> atomic identity — is no longer true. D0014 moved EdgionTls compilation to its
+> publication generation, and both paths now install through the shared
+> `install_compiled_serving_identity`. The deferral this page recorded is
+> resolved, not still pending.
+>
+> **Successor:**
+> [regression-guards/edgion-tls-serving-chain-install.md](../regression-guards/edgion-tls-serving-chain-install.md).
+>
+> **Residual valid constraints** (carried forward into the successor, still
+> binding): both serving paths must retain complete ordered-chain delivery,
+> fail-closed identity replacement, and runtime validity/audit symmetry; the
+> static `err_log` arms must stay fixed non-secret categories and must never
+> expose backend errors. The two `apply_*_cert` functions legitimately remain
+> separate because their surrounding cipher / `clientAuth` /
+> `frontendValidation` / dual-certificate-selection policy differs — that is a
+> policy split, not the installer duplication this page deferred.
+>
+> Everything below is retained as history.
 
 Note: distinct from the earlier `tls-F010` (frontendValidation `is_mtls` empty CA) in
 [frontend-validation-is-mtls-empty-ca.md](../regression-guards/frontend-validation-is-mtls-empty-ca.md) —
@@ -100,7 +121,7 @@ tradeoff (deferred)" referencing this entry:
 - Related rules:
   - [runtime-expiry-recheck-symmetry.md](../regression-guards/runtime-expiry-recheck-symmetry.md) —
     audit-signal symmetry on both install paths (already enforced)
-  - [cert-matcher-duplication-accepted.md](cert-matcher-duplication-accepted.md) —
+  - [cert-matcher-duplication-accepted.md](../intentional-design/cert-matcher-duplication-accepted.md) —
     same class of decline (structural similarity, divergent per-site context)
 
 ## Resolution references

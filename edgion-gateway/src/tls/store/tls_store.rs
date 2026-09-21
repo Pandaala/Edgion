@@ -1,4 +1,5 @@
 use super::cert_matcher::{AttachmentMatchSlot, TlsCertMatcher, TlsCertMatcherSnapshot, MAX_ATTACHMENT_CANDIDATES};
+use super::compiled_tls::CompiledEdgionTls;
 use crate::tls::validation::cert::{validate_cert, CertValidationResult};
 use edgion_algo::matcher::rfc6125_hostname::canonical_key;
 use edgion_resources::listener_key::ListenerKey;
@@ -13,7 +14,11 @@ pub(crate) const MAX_EDGION_TLS_COLLISION_LOG_PARTICIPANTS: usize = 64;
 /// Internal entry for TLS certificate with validation status
 #[derive(Clone)]
 pub(super) struct TlsEntry {
-    tls: Arc<EdgionTls>,
+    /// The accepted resource plus its cold-compiled handshake state. Exactly one
+    /// `Arc<EdgionTls>` exists per entry (`compiled.tls`), so every `Arc::ptr_eq`
+    /// identity check below keeps the meaning it had when this was a bare
+    /// `Arc<EdgionTls>` field.
+    compiled: Arc<CompiledEdgionTls>,
     validation: CertValidationResult,
     matchable: bool,
     /// true once a bad update was rejected for this key; used to log only on
@@ -27,21 +32,24 @@ pub(super) struct TlsEntry {
 /// `BackendTLSPolicyStore::sort_policies_by_precedence`: oldest `creationTimestamp`
 /// wins (`Option<Time>` orders `None` first), then namespace, then name. The winner
 /// is `tls_list.first()` after this sort.
-fn edgion_tls_precedence(a: &Arc<EdgionTls>, b: &Arc<EdgionTls>) -> std::cmp::Ordering {
-    a.metadata
-        .creation_timestamp
-        .cmp(&b.metadata.creation_timestamp)
-        .then_with(|| a.metadata.namespace.cmp(&b.metadata.namespace))
-        .then_with(|| a.metadata.name.cmp(&b.metadata.name))
+fn edgion_tls_precedence(a: &Arc<CompiledEdgionTls>, b: &Arc<CompiledEdgionTls>) -> std::cmp::Ordering {
+    let (a, b) = (&a.tls.metadata, &b.tls.metadata);
+    a.creation_timestamp
+        .cmp(&b.creation_timestamp)
+        .then_with(|| a.namespace.cmp(&b.namespace))
+        .then_with(|| a.name.cmp(&b.name))
 }
 
 /// Add one resource's hosts to a listener bucket using the same canonical
 /// ASCII case as SNI lookup. Duplicate case variants within one resource are
 /// collapsed so they cannot create a false self-collision.
 #[cfg(test)]
-fn add_canonical_hosts(host_map: &mut HashMap<String, Vec<Arc<EdgionTls>>>, tls: &Arc<EdgionTls>) -> usize {
+fn add_canonical_hosts(
+    host_map: &mut HashMap<String, Vec<Arc<CompiledEdgionTls>>>,
+    tls: &Arc<CompiledEdgionTls>,
+) -> usize {
     let mut added = 0;
-    for host in &tls.spec.hosts {
+    for host in &tls.tls.spec.hosts {
         let tls_list = host_map.entry(host.to_ascii_lowercase()).or_default();
         if tls_list.last().is_none_or(|existing| !Arc::ptr_eq(existing, tls)) {
             tls_list.push(tls.clone());
@@ -66,12 +74,17 @@ fn dimensions_are_bounded(tls: &EdgionTls) -> bool {
 /// Warn (config-sync path only — never the handshake path) when several EdgionTls
 /// resources serve the same host on one listener. `tls_list` must already be sorted
 /// by [`edgion_tls_precedence`], so `first()` is the selected certificate.
-fn warn_edgion_tls_collision(host: &str, listener_key: &ListenerKey, tls_list: &[Arc<EdgionTls>], total: usize) {
-    let fmt = |t: &Arc<EdgionTls>| {
+fn warn_edgion_tls_collision(
+    host: &str,
+    listener_key: &ListenerKey,
+    tls_list: &[Arc<CompiledEdgionTls>],
+    total: usize,
+) {
+    let fmt = |t: &Arc<CompiledEdgionTls>| {
         format!(
             "{}/{}",
-            t.metadata.namespace.as_deref().unwrap_or(""),
-            t.metadata.name.as_deref().unwrap_or("")
+            t.tls.metadata.namespace.as_deref().unwrap_or(""),
+            t.tls.metadata.name.as_deref().unwrap_or("")
         )
     };
     let selected = tls_list.first().map(fmt).unwrap_or_default();
@@ -168,11 +181,11 @@ fn record_rejected(key: &str, validation: &CertValidationResult) {
 }
 
 type TlsEntries = PersistentHashMap<String, Arc<TlsEntry>>;
-type HostCandidates = PersistentHashMap<String, Arc<EdgionTls>>;
+type HostCandidates = PersistentHashMap<String, Arc<CompiledEdgionTls>>;
 
 pub(super) struct HostBucket {
     candidates: HostCandidates,
-    pub(super) ordered: Arc<[Arc<EdgionTls>]>,
+    pub(super) ordered: Arc<[Arc<CompiledEdgionTls>]>,
 }
 
 #[derive(Clone, Default)]
@@ -276,8 +289,16 @@ impl TlsStore {
                 parent_ref_count = tls.spec.parent_refs.as_ref().map_or(0, Vec::len),
                 "Skipping EdgionTls from matcher because no listener keys were resolved");
         }
+        // Compile the handshake-ready state here, once per accepted generation.
+        // A non-matchable resource never reaches any index, so its secret-bearing
+        // state is deliberately not compiled.
+        let compiled = Arc::new(if matchable {
+            CompiledEdgionTls::compile(tls)
+        } else {
+            CompiledEdgionTls::not_compiled(tls)
+        });
         Arc::new(TlsEntry {
-            tls,
+            compiled,
             validation,
             matchable,
             rejected_active: false,
@@ -356,7 +377,8 @@ impl TlsStore {
             next.invalid_count += usize::from(incoming.is_some_and(|entry| !entry.validation.is_valid));
             // Rejection state can change while the effective resource stays
             // identical. Do not touch any matcher for that bookkeeping change.
-            if matches!((previous, incoming), (Some(old), Some(new)) if Arc::ptr_eq(&old.tls, &new.tls)) {
+            if matches!((previous, incoming), (Some(old), Some(new)) if Arc::ptr_eq(&old.compiled.tls, &new.compiled.tls))
+            {
                 continue;
             }
             if let Some(previous) = previous {
@@ -391,7 +413,7 @@ impl TlsStore {
     }
 }
 
-type HostChanges = HashMap<String, Option<Arc<EdgionTls>>>;
+type HostChanges = HashMap<String, Option<Arc<CompiledEdgionTls>>>;
 
 #[derive(Default)]
 struct IndexDeltas {
@@ -404,7 +426,7 @@ impl IndexDeltas {
         if !entry.matchable {
             return;
         }
-        let tls = &entry.tls;
+        let tls = &entry.compiled.tls;
         let hosts: HashSet<String> = tls.spec.hosts.iter().filter_map(|host| canonical_key(host)).collect();
         if let Some(listeners) = &tls.spec.resolved_listeners {
             for listener in listeners {
@@ -413,7 +435,7 @@ impl IndexDeltas {
                     changed_hosts
                         .entry(host.clone())
                         .or_default()
-                        .insert(key.to_string(), present.then(|| tls.clone()));
+                        .insert(key.to_string(), present.then(|| entry.compiled.clone()));
                 }
             }
         }
@@ -443,9 +465,9 @@ impl TlsSnapshotData {
                     .hosts
                     .get(&host)
                     .map_or_else(HostCandidates::new_sync, |slot| slot.candidates.clone());
-                for (key, tls) in changes {
-                    if let Some(tls) = tls {
-                        candidates.insert_mut(key, tls);
+                for (key, compiled) in changes {
+                    if let Some(compiled) = compiled {
+                        candidates.insert_mut(key, compiled);
                     } else {
                         candidates.remove_mut(&key);
                     }
@@ -514,7 +536,7 @@ impl TlsSnapshotData {
             } else {
                 let mut ordered: Vec<_> = candidates
                     .iter()
-                    .filter_map(|key| self.entries.get(key).map(|entry| entry.tls.clone()))
+                    .filter_map(|key| self.entries.get(key).map(|entry| entry.compiled.clone()))
                     .collect();
                 ordered.sort_by(edgion_tls_precedence);
                 AttachmentMatchSlot::Ready(Arc::from(ordered))
@@ -539,11 +561,11 @@ fn collision_changed(previous: Option<&HostBucket>, next: &HostBucket) -> bool {
         || previous
             .ordered
             .first()
-            .map(|tls| (&tls.metadata.namespace, &tls.metadata.name))
+            .map(|c| (&c.tls.metadata.namespace, &c.tls.metadata.name))
             != next
                 .ordered
                 .first()
-                .map(|tls| (&tls.metadata.namespace, &tls.metadata.name))
+                .map(|c| (&c.tls.metadata.namespace, &c.tls.metadata.name))
 }
 
 impl Default for TlsStore {
@@ -585,6 +607,13 @@ mod tests {
     use edgion_resources::resources::gateway::SecretObjectReference;
     use k8s_openapi::apimachinery::pkg::apis::meta::v1::Time;
     use kube::api::ObjectMeta;
+
+    /// Wrap a fixture resource for the index-shaped assertions. These exercise
+    /// precedence and bucket placement only, so the secret-bearing state the
+    /// publication path would compile is deliberately left uncompiled.
+    fn uncompiled(tls: Arc<EdgionTls>) -> Arc<CompiledEdgionTls> {
+        Arc::new(CompiledEdgionTls::not_compiled(tls))
+    }
 
     fn make_etls(namespace: &str, name: &str, ts: Option<Time>) -> Arc<EdgionTls> {
         Arc::new(EdgionTls {
@@ -767,9 +796,9 @@ mod tests {
             &std::collections::HashSet::new(),
         );
         let snapshot = store.matcher.data.load();
-        assert_eq!(snapshot.entries["ns/bounded"].tls.spec.hosts.len(), 2);
+        assert_eq!(snapshot.entries["ns/bounded"].compiled.tls.spec.hosts.len(), 2);
         assert!(
-            !dimensions_are_bounded(&snapshot.entries["ns/bounded"].tls),
+            !dimensions_are_bounded(&snapshot.entries["ns/bounded"].compiled.tls),
             "the forged generation must replace, rather than retain, the old valid object and is excluded on rebuild"
         );
         drop(snapshot);
@@ -889,12 +918,12 @@ mod tests {
         let newcomer = make_etls("team-a", "aaa", Some(newer));
 
         for mut list in [
-            vec![newcomer.clone(), incumbent.clone()],
-            vec![incumbent.clone(), newcomer.clone()],
+            vec![uncompiled(newcomer.clone()), uncompiled(incumbent.clone())],
+            vec![uncompiled(incumbent.clone()), uncompiled(newcomer.clone())],
         ] {
             list.sort_by(edgion_tls_precedence);
             assert_eq!(
-                list.first().unwrap().metadata.name.as_deref(),
+                list.first().unwrap().tls.metadata.name.as_deref(),
                 Some("zzz"),
                 "older EdgionTls must win regardless of name or input order"
             );
@@ -907,9 +936,9 @@ mod tests {
         let a = make_etls("team-a", "aaa", None);
         let b = make_etls("team-b", "bbb", None);
 
-        let mut list = [b, a];
+        let mut list = [uncompiled(b), uncompiled(a)];
         list.sort_by(edgion_tls_precedence);
-        assert_eq!(list.first().unwrap().metadata.namespace.as_deref(), Some("team-a"));
+        assert_eq!(list.first().unwrap().tls.metadata.namespace.as_deref(), Some("team-a"));
     }
 
     #[test]
@@ -929,13 +958,13 @@ mod tests {
         ] {
             let mut host_map = HashMap::new();
             for tls in resources {
-                add_canonical_hosts(&mut host_map, &tls);
+                add_canonical_hosts(&mut host_map, &uncompiled(tls));
             }
             assert_eq!(host_map.len(), 1, "ASCII case variants must share one bucket");
             let list = host_map.get_mut("shared.example.com").expect("canonical host bucket");
             assert_eq!(list.len(), 2, "one resource must not collide with itself");
             list.sort_by(edgion_tls_precedence);
-            assert_eq!(list[0].metadata.name.as_deref(), Some("older"));
+            assert_eq!(list[0].tls.metadata.name.as_deref(), Some("older"));
         }
     }
 
@@ -961,9 +990,9 @@ mod tests {
             .entries
             .get("ns/recreated")
             .expect("recreated entry must remain visible as invalid");
-        assert!(Arc::ptr_eq(&entry.tls, &recreated));
+        assert!(Arc::ptr_eq(&entry.compiled.tls, &recreated));
         assert!(!entry.validation.is_valid);
-        assert_eq!(entry.tls.spec.hosts, ["new.example.com"]);
+        assert_eq!(entry.compiled.tls.spec.hosts, ["new.example.com"]);
     }
 
     #[test]
@@ -1068,8 +1097,11 @@ mod tests {
             &before.data.entries["ns/same"],
             &after.data.entries["ns/same"]
         ));
-        assert!(Arc::ptr_eq(&after.data.entries["ns/same"].tls, &same_listener));
-        assert!(Arc::ptr_eq(&after.data.entries["ns/other"].tls, &other_listener));
+        assert!(Arc::ptr_eq(&after.data.entries["ns/same"].compiled.tls, &same_listener));
+        assert!(Arc::ptr_eq(
+            &after.data.entries["ns/other"].compiled.tls,
+            &other_listener
+        ));
         assert!(Arc::ptr_eq(
             &before.data.listeners[&listener(8443)],
             &after.data.listeners[&listener(8443)]
@@ -1099,11 +1131,11 @@ mod tests {
         ]));
         let snapshot = store.snapshot();
         assert!(Arc::ptr_eq(
-            &snapshot.match_sni_candidates(&listener(443), "ONE.EXAMPLE.COM")[0],
+            &snapshot.match_sni_candidates(&listener(443), "ONE.EXAMPLE.COM")[0].tls,
             &exact
         ));
         assert!(Arc::ptr_eq(
-            &snapshot.match_sni_candidates(&listener(443), "two.example.com")[0],
+            &snapshot.match_sni_candidates(&listener(443), "two.example.com")[0].tls,
             &wildcard
         ));
         assert!(snapshot
@@ -1111,7 +1143,7 @@ mod tests {
             .is_empty());
         store.apply_partial_update(HashMap::new(), HashMap::new(), &HashSet::from(["ns/exact".to_string()]));
         assert!(Arc::ptr_eq(
-            &store.snapshot().match_sni_candidates(&listener(443), "one.example.com")[0],
+            &store.snapshot().match_sni_candidates(&listener(443), "one.example.com")[0].tls,
             &wildcard
         ));
         publish_update(
@@ -1143,22 +1175,28 @@ mod tests {
         spec.resolved_listener_attachments = Some(vec![new_attachment.clone()]);
         publish_update(&store, "moving", new.clone());
         let after = store.snapshot();
-        assert!(Arc::ptr_eq(&before.data.entries["ns/moving"].tls, &old));
+        assert!(Arc::ptr_eq(&before.data.entries["ns/moving"].compiled.tls, &old));
         assert!(before.get_validation_status("ns/moving").unwrap().is_valid);
         assert_eq!(before.get_cert_stats(), (1, 0));
         assert!(Arc::ptr_eq(
-            &before.match_sni_candidates(&listener(443), "old.example.com")[0],
+            &before.match_sni_candidates(&listener(443), "old.example.com")[0].tls,
             &old
         ));
         assert!(Arc::ptr_eq(
-            &before.match_attachment_sni(&old_attachment, "old.example.com").unwrap(),
+            &before
+                .match_attachment_sni(&old_attachment, "old.example.com")
+                .unwrap()
+                .tls,
             &old
         ));
         assert!(after.match_sni_candidates(&listener(443), "old.example.com").is_empty());
         assert!(after.match_attachment_sni(&old_attachment, "old.example.com").is_none());
-        assert!(Arc::ptr_eq(&after.data.entries["ns/moving"].tls, &new));
+        assert!(Arc::ptr_eq(&after.data.entries["ns/moving"].compiled.tls, &new));
         assert!(Arc::ptr_eq(
-            &after.match_attachment_sni(&new_attachment, "new.example.com").unwrap(),
+            &after
+                .match_attachment_sni(&new_attachment, "new.example.com")
+                .unwrap()
+                .tls,
             &new
         ));
         assert_eq!(after.listener_count(), 1);
@@ -1188,7 +1226,7 @@ mod tests {
             &rejected.data.listeners[&listener(443)]
         ));
         assert!(!rejected.data.listeners.contains_key(&listener(8443)));
-        assert!(Arc::ptr_eq(&rejected.data.entries["ns/kept"].tls, &original));
+        assert!(Arc::ptr_eq(&rejected.data.entries["ns/kept"].compiled.tls, &original));
         publish_update(&store, "kept", bad.clone());
         assert!(Arc::ptr_eq(&rejected.data, &store.snapshot().data));
 
@@ -1197,7 +1235,10 @@ mod tests {
         assert!(!store.is_rejected_active("ns/kept"));
         publish_update(&store, "kept", bad);
         assert!(store.is_rejected_active("ns/kept"));
-        assert!(Arc::ptr_eq(&store.snapshot().data.entries["ns/kept"].tls, &repaired));
+        assert!(Arc::ptr_eq(
+            &store.snapshot().data.entries["ns/kept"].compiled.tls,
+            &repaired
+        ));
     }
 
     #[test]
@@ -1214,7 +1255,10 @@ mod tests {
             HashMap::from([("ns/recreated".to_string(), invalid.clone())]),
             &HashSet::new(),
         );
-        assert!(Arc::ptr_eq(&store.snapshot().data.entries["ns/recreated"].tls, &added));
+        assert!(Arc::ptr_eq(
+            &store.snapshot().data.entries["ns/recreated"].compiled.tls,
+            &added
+        ));
         assert!(store
             .snapshot()
             .match_sni_candidates(&listener(443), "old.example.com")
@@ -1250,7 +1294,7 @@ mod tests {
         ]));
         let first = store.snapshot();
         let first_slot = &first.data.listeners[&listener(443)].hosts["shared.example.com"];
-        assert!(Arc::ptr_eq(&first_slot.ordered[0], &older));
+        assert!(Arc::ptr_eq(&first_slot.ordered[0].tls, &older));
         assert!(collision_changed(None, first_slot));
 
         let mut renewal = make_valid_tls("ns", "z-old", &["shared.example.com"]);
@@ -1269,13 +1313,13 @@ mod tests {
         let promoted = store.snapshot();
         let promoted_slot = &promoted.data.listeners[&listener(443)].hosts["shared.example.com"];
         assert!(collision_changed(Some(renewed_slot), promoted_slot));
-        assert_eq!(promoted_slot.ordered[0].metadata.name.as_deref(), Some("a-new"));
+        assert_eq!(promoted_slot.ordered[0].tls.metadata.name.as_deref(), Some("a-new"));
 
         store.apply_partial_update(HashMap::new(), HashMap::new(), &HashSet::from(["ns/a-new".to_string()]));
         let single = store.snapshot();
         let single_slot = &single.data.listeners[&listener(443)].hosts["shared.example.com"];
         assert!(!collision_changed(Some(promoted_slot), single_slot));
-        assert_eq!(single_slot.ordered[0].metadata.name.as_deref(), Some("z-old"));
+        assert_eq!(single_slot.ordered[0].tls.metadata.name.as_deref(), Some("z-old"));
 
         publish_update(&store, "a-new", newer);
         let collided_again = store.snapshot();
@@ -1310,6 +1354,7 @@ mod tests {
             ready
                 .match_attachment_sni(&exact, "shared.example.com")
                 .unwrap()
+                .tls
                 .metadata
                 .name
                 .as_deref(),
@@ -1342,6 +1387,7 @@ mod tests {
             recovered
                 .match_attachment_sni(&exact, "shared.example.com")
                 .unwrap()
+                .tls
                 .metadata
                 .name
                 .as_deref(),
@@ -1372,7 +1418,8 @@ mod tests {
             &store
                 .snapshot()
                 .match_attachment_sni(&exact, "shared.example.com")
-                .unwrap(),
+                .unwrap()
+                .tls,
             &overlay
         ));
     }
@@ -1390,10 +1437,11 @@ mod tests {
         assert_eq!(snapshot.get_cert_stats(), full.snapshot().get_cert_stats());
         assert_eq!(snapshot.listener_count(), full.snapshot().listener_count());
         assert!(Arc::ptr_eq(
-            &snapshot.match_sni_candidates(&listener(443), "shared.example.com")[0],
+            &snapshot.match_sni_candidates(&listener(443), "shared.example.com")[0].tls,
             &full
                 .snapshot()
-                .match_sni_candidates(&listener(443), "shared.example.com")[0],
+                .match_sni_candidates(&listener(443), "shared.example.com")[0]
+                .tls,
         ));
         partial.apply_partial_update(HashMap::new(), HashMap::new(), &HashSet::new());
         partial.apply_partial_update(
@@ -1403,6 +1451,107 @@ mod tests {
         );
         assert!(Arc::ptr_eq(&snapshot.data, &partial.snapshot().data));
     }
+    /// A resource whose mTLS CA content cannot be compiled must keep its
+    /// hostname slot and its collision precedence. `validate_cert` only checks
+    /// that a CA reference is present (`validate_mtls_config`), never the
+    /// controller-resolved `ca.crt` bytes, so this state is reachable in
+    /// production. Removing such an entry from the index would silently promote
+    /// the next candidate for that hostname.
+    #[test]
+    fn uncompilable_ca_keeps_index_position_and_fails_closed_at_handshake() {
+        use edgion_resources::resources::edgion_tls::{ClientAuthConfig, ClientAuthMode};
+        use k8s_openapi::api::core::v1::Secret;
+        use k8s_openapi::ByteString;
+        use std::collections::BTreeMap;
+
+        let mut resource = (*make_valid_tls("ns", "broken-ca", &["shared.example.com"])).clone();
+        resource.spec.resolved_listeners = Some(vec![listener(443)]);
+        resource.spec.client_auth = Some(ClientAuthConfig {
+            mode: ClientAuthMode::Mutual,
+            ca_secret_ref: Some(SecretObjectReference {
+                name: "ca".to_string(),
+                namespace: Some("ns".to_string()),
+                group: None,
+                kind: None,
+            }),
+            verify_depth: 1,
+            ca_secret: Some(Secret {
+                data: Some(BTreeMap::from([(
+                    "ca.crt".to_string(),
+                    ByteString(b"not a pem at all".to_vec()),
+                )])),
+                ..Default::default()
+            }),
+            allowed_sans: None,
+            allowed_cns: None,
+        });
+        let resource = Arc::new(resource);
+
+        let store = TlsStore::new();
+        store.replace_all_tls(HashMap::from([("ns/broken-ca".to_string(), resource.clone())]));
+
+        // The store accepted it: a garbage CA body is not a validation failure.
+        assert!(store.get_validation_status("ns/broken-ca").unwrap().is_valid);
+
+        // It still owns its hostname slot rather than yielding it.
+        let candidates = store
+            .snapshot()
+            .match_sni_candidates(&listener(443), "shared.example.com");
+        assert_eq!(candidates.len(), 1, "an uncompilable CA must not drop the resource");
+        assert!(Arc::ptr_eq(&candidates[0].tls, &resource));
+
+        // And the handshake has a precompiled failure to fail closed on.
+        assert!(
+            candidates[0].client_ca_store.is_err(),
+            "a garbage CA bundle must be carried as a compile failure"
+        );
+        // The serving identity itself is unaffected and still usable.
+        assert!(candidates[0].identity.is_ok());
+    }
+
+    /// Cold-compiled state participates in the same structural sharing as the
+    /// resource: a partial update that does not touch a key must leave that
+    /// key's compiled generation allocation untouched, not recompile it.
+    #[test]
+    fn partial_update_shares_compiled_state_for_untouched_keys() {
+        let store = TlsStore::new();
+        let untouched = make_valid_tls("ns", "untouched", &["untouched.example.com"]);
+        let mut initial = (*untouched).clone();
+        initial.spec.resolved_listeners = Some(vec![listener(443)]);
+        let untouched = Arc::new(initial);
+        let moving = make_valid_tls("ns", "moving", &["moving.example.com"]);
+        store.replace_all_tls(HashMap::from([
+            ("ns/untouched".to_string(), untouched.clone()),
+            ("ns/moving".to_string(), moving.clone()),
+        ]));
+        let before = store.matcher.data.load_full();
+
+        store.apply_partial_update(
+            HashMap::new(),
+            HashMap::from([(
+                "ns/moving".to_string(),
+                make_valid_tls("ns", "moving", &["moved.example.com"]),
+            )]),
+            &HashSet::new(),
+        );
+        let after = store.matcher.data.load_full();
+
+        assert!(
+            Arc::ptr_eq(
+                &before.entries["ns/untouched"].compiled,
+                &after.entries["ns/untouched"].compiled
+            ),
+            "an untouched key must keep its compiled generation allocation"
+        );
+        assert!(
+            !Arc::ptr_eq(
+                &before.entries["ns/moving"].compiled,
+                &after.entries["ns/moving"].compiled
+            ),
+            "an updated key must publish freshly compiled state"
+        );
+    }
+
     #[test]
     fn conf_handler_preserves_shared_resource_allocation() {
         use edgion_common::conf_sync::traits::ConfHandler;
@@ -1413,7 +1562,7 @@ mod tests {
         ConfHandler::<EdgionTls>::full_set(&store, &full);
 
         let snapshot = store.matcher.data.load();
-        assert!(Arc::ptr_eq(&snapshot.entries["ns/shared"].tls, &initial));
+        assert!(Arc::ptr_eq(&snapshot.entries["ns/shared"].compiled.tls, &initial));
         drop(snapshot);
 
         let updated = make_valid_tls("ns", "shared", &["updated.example.com"]);
@@ -1425,6 +1574,6 @@ mod tests {
         );
 
         let snapshot = store.matcher.data.load();
-        assert!(Arc::ptr_eq(&snapshot.entries["ns/shared"].tls, &updated));
+        assert!(Arc::ptr_eq(&snapshot.entries["ns/shared"].compiled.tls, &updated));
     }
 }

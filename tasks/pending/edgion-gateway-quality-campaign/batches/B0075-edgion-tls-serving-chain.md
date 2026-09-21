@@ -6,7 +6,7 @@
 - Pipeline state: `complete`.
 - Active anchor crate: `edgion-gateway`.
 - Owned anchor file: `edgion-gateway/src/tls/runtime/gateway/tls_pingora.rs`.
-- Approved knowledge files: `skills/01-architecture/02-gateway/04-tls/01-downstream-tls.md`, `skills/04-review/tls/intentional-design/cert-key-install-helper-deferred.md`, new `skills/04-review/tls/regression-guards/edgion-tls-serving-chain-install.md`, `skills/04-review/tls/regression-guards/runtime-expiry-recheck-symmetry.md`, and `skills/04-review/tls/SKILL.md`.
+- Approved knowledge files: `skills/01-architecture/02-gateway/04-tls/01-downstream-tls.md`, `skills/04-review/tls/superseded/cert-key-install-helper-deferred.md`, new `skills/04-review/tls/regression-guards/edgion-tls-serving-chain-install.md`, `skills/04-review/tls/regression-guards/runtime-expiry-recheck-symmetry.md`, and `skills/04-review/tls/SKILL.md`.
 - Existing `edgion-tests/**`, resource/schema validation, stores/matchers, rustls behavior, user documentation, protected paths, and all other files remain forbidden.
 
 ## Context and value gate

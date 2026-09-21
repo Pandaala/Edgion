@@ -21,7 +21,7 @@ the tls-F004 rule that `handshake_complete_callback`'s no-snapshot fallback
 must not call `log_ssl`.
 
 The claimed "clone duplicates Secret vectors and certificate/key bytes" is
-false for current code. `SslCtx` holds `Option<Arc<EdgionTls>>` and
+false for current code. `SslCtx` holds `Option<Arc<CompiledEdgionTls>>` and
 `Option<Arc<GatewayTlsEntry>>`; clone bumps those Arcs and copies
 `TlsConnMeta` (SNI, `tls_id`, bounded `LogBuffer`, match labels). Compiled
 serving certificates stay behind

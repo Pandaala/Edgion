@@ -37,7 +37,8 @@ and single-label wildcard semantics. Other resource stores retain their represen
 
 ## Preserved boundaries and limits
 
-- TlsEntry.tls is the effective resource; validation records certificate validity;
+- TlsEntry.compiled.tls is the effective resource (TlsEntry.compiled also owns the
+  cold-compiled handshake state published with it); validation records certificate validity;
   matchable additionally requires bounded attachment dimensions. Statistics count
   validation.is_valid, not matcher admission.
 - Invalid updates can retain the old valid resource and set rejected_active.

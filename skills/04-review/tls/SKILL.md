@@ -12,8 +12,8 @@ before applying a decision to current code.
 ## Intentional design
 
 - [EdgionTls last-known-good follows the resource key](intentional-design/last-known-good-follows-resource-key.md)
+- [Relist recompiles every generation — accepted](intentional-design/relist-recompiles-every-generation.md)
 - [Gateway TLS collision candidate ownership](intentional-design/gateway-tls-candidate-ownership.md)
-- [tls-F010 (cert/key install dup) — Shared `install_cert_key_to_ssl` extraction deferred](intentional-design/cert-key-install-helper-deferred.md)
 - [tls-F007 (duplication) — Two SNI matchers stay separate; semantics changes apply to both](intentional-design/cert-matcher-duplication-accepted.md)
 - [tls-07 — `revocationCheck` / `ocspStapling` are reserved schema, not implemented](intentional-design/revocation-config-not-implemented.md)
 - [Rustls Gateway Backend — FUTURE PRODUCT SCOPE](intentional-design/rustls-gateway-backend-unsupported.md)
@@ -52,12 +52,16 @@ before applying a decision to current code.
 - [tls-04 — Gateway listener serves all certificateRefs (RSA + ECDSA)](regression-guards/multi-certificate-ref.md)
 - [passthrough-F001 — TLS passthrough PP2 dst built from bare IP](regression-guards/pp2-dst-bare-ip.md)
 - [tls-F003 — Runtime expiry recheck is required on both cert-install paths](regression-guards/runtime-expiry-recheck-symmetry.md)
-- [EdgionTls installs the complete ordered serving chain and clears failed replacements](regression-guards/edgion-tls-serving-chain-install.md)
+- [EdgionTls cold-compiles and atomically installs its complete ordered serving chain](regression-guards/edgion-tls-serving-chain-install.md)
 - [SNI Passthrough: ClientHello read contract](regression-guards/sni-passthrough-clienthello-read.md)
 - [tls-F001 — `configure_mtls` returns before CA loading for `Terminate` mode](regression-guards/terminate-mtls-ca-ordering.md)
 - [Typed SAN display prefixes are not DNS](regression-guards/typed-san-display-prefix-not-dns.md)
 - [tls-05 — Upstream TLS ALPN for gRPC backends is set by the gRPC peer path, not `create_tls_peer` — FALSE-POSITIVE (primary) + ACCEPTED-TRADEOFF (residual)](regression-guards/upstream-grpc-tls-alpn-set-by-grpc-peer-path.md)
 - [Wildcard Depth: Three Layers, Two Standards](regression-guards/wildcard-depth-gateway-api-vs-rfc6125.md)
+
+## Superseded
+
+- [tls-F010 (cert/key install dup) — shared installer deferral, retired by D0014](superseded/cert-key-install-helper-deferred.md)
 
 ## Review evidence
 

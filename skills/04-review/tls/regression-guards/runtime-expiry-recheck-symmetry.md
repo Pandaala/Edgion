@@ -14,11 +14,14 @@ knowledge_type: regression-guards
 `edgion-gateway/src/tls/runtime/gateway/tls_pingora.rs` rechecks `not_before` / `not_after`
 immediately before installing either serving identity, with source-specific mechanics:
 
-- `apply_edgion_tls_cert` strictly parses the full EdgionTls chain and compares
-  the parser's leaf Unix bounds with the current Unix time.
-- `apply_compiled_certificate_to_ssl` compares a Gateway listener certificate's
-  cold-compiled Unix bounds with the current Unix time, then installs the immutable
-  compiled chain/key. It performs no per-handshake PEM parsing or ASN.1 construction.
+Both paths compare cold-compiled leaf Unix bounds with the current Unix time and
+then install an immutable compiled chain/key. Neither performs per-handshake PEM
+parsing or ASN.1 construction:
+
+- `apply_edgion_tls_cert` reads the bounds from the `CompiledServingCertificate`
+  its `TlsStore` generation compiled (D0014).
+- `apply_compiled_certificate_to_ssl` reads them from the Gateway listener
+  certificate its matcher generation compiled.
 
 Re-reports of the form "expiry recheck is redundant because BoringSSL rejects expired certs during
 the handshake", "`apply_compiled_certificate_to_ssl` does no recheck while `apply_edgion_tls_cert` does
@@ -47,15 +50,19 @@ so a certificate that expired between matcher rebuilds produced no server-side `
 audit entry. The current matcher compiles the certificate and its Unix validity bounds once; the
 handshake path checks those bounds before atomic installation.
 
-## Why the two implementations differ
+## Why the two implementations stayed separate
 
-The audit invariant and classifier are shared, while ownership differs.
-EdgionTls still carries source material that its install path parses strictly;
-the strict parser returns the Unix bounds used for the per-handshake check.
-Gateway listener identities are validated and compiled on matcher rebuild, so
-their install path compares the stored Unix bounds without repeating PEM/key
-parsing. Both paths set the same fail-closed static category before binding an
-invalid identity.
+The audit invariant, the classifier, and now the compiled bounds representation
+are all shared; both paths set the same fail-closed static category before
+binding an invalid identity. The functions remain distinct only because their
+surrounding policy differs (EdgionTls owns the resource's cipher and
+`clientAuth` branches; the Gateway listener path owns dual-certificate selection
+and `frontendValidation`).
+
+**History:** before D0014, `apply_edgion_tls_cert` carried source PEM into the
+handshake and derived its Unix bounds from a per-connection strict parse. That
+asymmetry in *how* the bounds were obtained is gone; the audit symmetry it
+guarded was already enforced and is unchanged.
 
 ## Re-evaluation triggers
 
@@ -68,5 +75,8 @@ invalid identity.
 ## Reference
 
 - Issue: `tasks/tls/tls-F003-runtime-expiry-check-asymmetry.md` (closed by this fix)
-- Related: F-010 (extract `install_cert_key_to_ssl` — deferred / accepted tradeoff, see
-  [cert-key-install-helper-deferred.md](../intentional-design/cert-key-install-helper-deferred.md))
+- Related: [edgion-tls-serving-chain-install.md](edgion-tls-serving-chain-install.md) —
+  the cold-compiled EdgionTls identity and its shared atomic installer (D0014)
+- Historical: F-010 (extract `install_cert_key_to_ssl`) was deferred in 2026-05-27 and is
+  now retired, see
+  [superseded/cert-key-install-helper-deferred.md](../superseded/cert-key-install-helper-deferred.md)

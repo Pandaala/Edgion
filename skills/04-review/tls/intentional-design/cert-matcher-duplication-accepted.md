@@ -35,7 +35,7 @@ The shape is similar; the substrate is not:
 
 | Aspect | `TlsCertMatcher` | `GatewayTlsMatcher` |
 |---|---|---|
-| Value type | `Arc<EdgionTls>` | `GatewayTlsEntry` (carries deterministic precedence metadata, compiled serving certificates, and a compiled frontend mTLS outcome/store) |
+| Value type | `Arc<CompiledEdgionTls>` (the accepted resource plus its cold-compiled serving identity, client CA store and cipher, since D0014) | `GatewayTlsEntry` (carries deterministic precedence metadata, compiled serving certificates, and a compiled frontend mTLS outcome/store) |
 | Container | `ArcSwap<TlsSnapshotData>` (entries and indexes together) | `ArcSwapOption<TlsMatcherData>` (`None` = empty fast-path, common case) |
 | Layers | single hostname matcher | two: `listener_map` (hostname) + `fallback_listener_map` (catch-all listeners without hostname) |
 | Rebuild source | EdgionTls CRD store | Gateway listener spec plus Controller-projected ordered serving-certificate and frontend-CA outcomes; unusable serving sets and strict frontend errors remain explicit reject entries |

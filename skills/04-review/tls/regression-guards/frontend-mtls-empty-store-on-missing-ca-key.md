@@ -42,8 +42,11 @@ ssl.set_verify_cert_store(store)?;
 ssl.set_verify(SslVerifyMode::PEER | SslVerifyMode::FAIL_IF_NO_PEER_CERT);
 ```
 
-`add_ca_bundle_to_store` is itself fail-closed for empty/garbage PEM (returns `Err` on an
-empty `X509::stack_from_pem` result), but that guard is reachable only when the key exists.
+The `add_ca_bundle_to_store` helper quoted above was itself fail-closed for empty/garbage
+PEM, but that guard was reachable only when the key existed. (That helper no longer serves
+this path at all: Gateway `frontendValidation` now compiles its store on matcher rebuild,
+and the helper survives only on the EdgionTls publication path — see
+[ca-bundle-multi-pem.md](ca-bundle-multi-pem.md).)
 If every Secret had `data = None` or a `data` map without the `ca.crt` key (e.g. the operator
 used `ca.pem`, or referenced a `kubernetes.io/tls` Secret that only carries `tls.crt`/`tls.key`),
 the inner body was skipped on every iteration, `store_builder.build()` produced an empty

@@ -1,6 +1,6 @@
 ---
 name: ca-bundle-multi-pem
-description: mTLS CA loading now parses every PEM block in the CA bundle via X509::stack_from_pem. Reject re-reports claiming only the first block / intermediates are dropped.
+description: mTLS CA loading parses every PEM block in the CA bundle via parse_canonical_ca_bundle, on both downstream paths, at generation-publication time. Reject re-reports claiming only the first block / intermediates are dropped.
 knowledge_type: regression-guards
 ---
 
@@ -11,14 +11,22 @@ knowledge_type: regression-guards
 
 ## Conclusion
 
-Both mTLS CA-loading paths in `edgion-gateway/src/tls/runtime/gateway/tls_pingora.rs`
-now parse the whole CA bundle with `X509::stack_from_pem` and add **every**
-certificate to the `X509Store`:
+Both downstream mTLS CA-loading paths parse the whole CA bundle and add **every** certificate to the `X509Store`:
 
-- `configure_mtls` (EdgionTls `clientAuth.caSecretRef`)
-- `configure_gateway_frontend_mtls` (Gateway `frontendValidation` CA secrets)
+- EdgionTls `clientAuth.caSecretRef`
+- Gateway `frontendValidation` CA secrets
 
-Both delegate to the shared free fn `add_ca_bundle_to_store`.
+Both parse through `edgion_common::tls_validation::parse_canonical_ca_bundle`.
+They no longer share one free function, and neither runs at handshake time any
+more — each compiles its store when its own generation is published:
+
+| Path | Compiled in | Helper |
+|---|---|---|
+| EdgionTls | `TlsStore` publication (`compile_client_ca_store`) | `add_ca_bundle_to_store` in `tls/store/compiled_tls.rs` |
+| Gateway `frontendValidation` | matcher rebuild (`runtime/matching/tls.rs`) | inlines `parse_canonical_ca_bundle` with its own aggregate byte/count caps |
+
+The load-every-PEM-block invariant below is what both must satisfy; the helper
+they reach it through is not itself the rule.
 
 Re-reports of the form "CA bundle loads only the first PEM block",
 "intermediates in `ca.crt` are silently discarded", or "use
@@ -38,18 +46,20 @@ CA load.
 - Loading more CAs into the trust store is a **superset** of the old trust set:
   it can only make previously-unbuildable chains validate, never break a
   single-cert bundle (which still parses identically).
-- Empty / unparseable bundles stay **fail-closed**: `add_ca_bundle_to_store`
-  returns `InvalidCert` when the parsed stack is empty, preserving the old
-  `from_pem("")` → error behavior (a misconfigured CA secret cannot silently
-  yield an empty trust store).
-- Runs only at handshake / cert-callback configuration time, not the per-request
+- Empty / unparseable bundles stay **fail-closed** on both paths, preserving the
+  old `from_pem("")` → error behavior (a misconfigured CA secret cannot silently
+  yield an empty trust store). On the EdgionTls path the failure is produced at
+  publication and replayed at handshake with identical text; the resource keeps
+  its matcher position and fails closed rather than yielding the hostname to
+  another candidate.
+- Runs at generation-publication time, never on the handshake or per-request
   proxy hot path; no `tracing::*` added.
 - Gateway API conformance unaffected: multi-PEM mTLS CA bundles are not exercised
   by the GATEWAY-TLS conformance suite.
 
 ## Regression guard
 
-Unit tests in `tls_pingora.rs`:
+Unit tests in `edgion-gateway/src/tls/store/compiled_tls.rs`:
 - `ca_bundle_loads_all_pem_blocks` — 3-block bundle (rcgen self-signed) asserts
   all three certs are added.
 - `ca_bundle_rejects_empty_or_garbage` — empty and non-PEM input both error.
@@ -77,8 +87,9 @@ Do not re-file backend CA bundle reports against tls-06.
 
 ## Re-evaluation triggers
 
-- A new mTLS CA source is added — route it through `add_ca_bundle_to_store`, not
-  a fresh `X509::from_pem`.
+- A new mTLS CA source is added — parse it with `parse_canonical_ca_bundle` and
+  load every block, never a fresh `X509::from_pem`.
+- Either path moves CA-store construction back onto the handshake path.
 
 ## Reference
 

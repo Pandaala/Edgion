@@ -64,13 +64,21 @@ if let Some(ref client_auth) = edgion_tls.spec.client_auth {
 
 Reachable Err points that all silently failed-open:
 
-| Failure source | Reason | Production-realistic? |
-|---|---|---|
-| `edgion_tls.ca_cert_pem()` Err | `caSecretRef` typo / namespace mismatch / Secret-resolver race | Yes |
-| `add_ca_bundle_to_store` Err | rotation emitted empty / malformed CA bundle | Yes |
-| `X509StoreBuilder::new()` Err | BoringSSL allocation failure | Rare |
-| `set_verify_cert_store` Err | BoringSSL internal | Rare |
-| `set_mtls_verify_callback` Err | allocation failure | Rare |
+| Failure source | Evaluated | Reason | Production-realistic? |
+|---|---|---|---|
+| `edgion_tls.ca_cert_pem()` Err | publish | `caSecretRef` typo / namespace mismatch / Secret-resolver race | Yes |
+| `add_ca_bundle_to_store` Err | publish | rotation emitted empty / malformed CA bundle | Yes |
+| `X509StoreBuilder::new()` Err | publish | BoringSSL allocation failure | Rare |
+| `set_verify_cert_store` Err | handshake | BoringSSL internal | Rare |
+| `set_mtls_verify_callback` Err | handshake | allocation failure | Rare |
+
+The `Evaluated` column is current state, not the state at the time of the fix:
+since D0014 the first three sources are resolved when `TlsStore` publishes an
+accepted generation (`compile_client_ca_store`), not per handshake. Their error
+text is carried unchanged on `CompiledEdgionTls.client_ca_store`, and
+`configure_mtls` still stamps the same `mtls config: …` audit entry and returns
+before binding cert/key — the fail-close shape this page guards is unaffected by
+that timing move.
 
 `apply_gateway_tls_cert` had the same shape with
 `configure_gateway_frontend_mtls` running after `apply_secret_to_ssl`. The
@@ -106,7 +114,10 @@ SAN-mirror logic), the ordering decision must be revisited.
   and no `handshake_complete_time` field.
 - `..::test_mtls_ca_garbage_pem_failclosed` drives the EdgionTls path with
   `ca.crt = 'not a pem'`, asserting the same shape via the
-  `add_ca_bundle_to_store` Err leg.
+  `add_ca_bundle_to_store` Err leg. Since D0014 that Err is produced at
+  publication and replayed at handshake with identical text; the resource still
+  keeps its matcher position rather than yielding the hostname to another
+  candidate.
 - `..::test_frontend_mtls_garbage_ca_pem_failclosed` drives the standard Gateway
   `spec.tls.frontend.perPort` path with a garbage `ca.crt`, asserting the
   connection reaches the bound listener but the handshake aborts, while the

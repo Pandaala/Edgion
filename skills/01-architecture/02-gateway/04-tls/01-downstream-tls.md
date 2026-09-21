@@ -32,10 +32,10 @@ Responsibilities:
 
 1. **SNI resolution**: extract the SNI from ClientHello (`ch.servername(NameType::HOST_NAME)`); if missing, fall back to `EdgionGatewayConfig.security_protect.fallback_sni`; if both are missing → `err_log = "no SNI"` + `log_ssl` + return Err.
 2. **Layer 1 match**: `TlsCertMatcher::match_sni(listener_key, sni)` — query EdgionTls. On hit:
-   - Set `is_mtls = et.is_mtls_enabled()` (true only for Mutual / OptionalMutual; Terminate is not mTLS).
-   - If `et.spec.min_tls_version` is set → `ssl.set_min_proto_version(...)` per-connection. On failure, fail-closed: `err_log = "min ver: ..."` + `log_ssl` + return Err.
+   - Set `is_mtls = et.tls.is_mtls_enabled()` (true only for Mutual / OptionalMutual; Terminate is not mTLS).
+   - If `et.tls.spec.min_tls_version` is set → `ssl.set_min_proto_version(...)` per-connection. On failure, fail-closed: `err_log = "min ver: ..."` + `log_ssl` + return Err.
 3. **Layer 2 match** (when Layer 1 misses): `GatewayTlsMatcher::match_sni` — query Gateway listener TLS.
-4. **Write snapshot**: write the match result (`Arc<EdgionTls>` or `GatewayTlsEntry` + the resolved SNI) into SSL ex_data via `store_ssl_ctx`. On `store_ssl_ctx` failure it has already done `log_ssl` once internally; select_cb returns Err directly (fail-closed), keeping at most one ssl.log per connection.
+4. **Write snapshot**: write the match result (`Arc<CompiledEdgionTls>` — the accepted resource plus its cold-compiled serving identity, CA store and cipher — or `GatewayTlsEntry`, plus the resolved SNI) into SSL ex_data via `store_ssl_ctx`. On `store_ssl_ctx` failure it has already done `log_ssl` once internally; select_cb returns Err directly (fail-closed), keeping at most one ssl.log per connection.
 5. **Both miss**: `err_log = "cert not found"` + `log_ssl` + return Err.
 6. **Success**: return Ok, allowing the handshake to proceed to cert_cb.
 
@@ -76,22 +76,29 @@ Invoked after the TLS handshake completes; responsible for:
 
 ### Apply EdgionTls certificate
 
-`apply_edgion_tls_cert` handles certificates from EdgionTls resources:
+`apply_edgion_tls_cert` handles certificates from EdgionTls resources. The
+serving chain, private key, optional mTLS CA store, and operator cipher string
+are compiled once when `TlsStore` publishes an accepted generation
+(`CompiledEdgionTls`), so this callback copies no Secret bytes and parses no PEM:
 
 1. Apply the independent FIPS cipher/curve and mTLS policy before touching the
    serving identity.
-2. Clear any identity inherited by the per-connection SSL, then extract the
-   certificate-chain PEM and private-key PEM from `EdgionTls`.
-3. Strictly parse the complete ordered chain with
-   `parse_strict_certificate_chain`, convert every certificate to BoringSSL
-   `X509`, and parse the private key before binding any part of the identity.
-4. Recheck the strict parser's leaf Unix validity bounds at handshake time.
-5. Install the leaf, each intermediate in input order, and the private key
-   last. Any install failure clears the SSL identity again, so neither an
+2. Clear any identity inherited by the per-connection SSL.
+3. Consume the compiled serving identity. A resource that failed to compile
+   stamps its static category and returns here — after the clear in step 2, so
+   no inherited identity can remain bound.
+4. Recheck the compiled leaf's Unix validity bounds at handshake time.
+5. Install the compiled chain and key atomically
+   (`install_compiled_serving_identity`: `SSL_certs_clear` +
+   `SSL_set_chain_and_key`), which clears again on failure, so neither an
    inherited identity nor a partially installed replacement remains usable.
 6. Optional configuration (only items effective inside cert_cb timing):
-   - **mTLS** (`configure_mtls`): set the CA certificate store, verify mode, and verify depth.
-   - **Cipher suite** (`configure_ciphers`): set the TLS1.2 cipher list via BoringSSL FFI (still works in cert_cb because BoringSSL selects the cipher only after cert_cb — `handshake_server.cc:810`).
+   - **mTLS** (`configure_mtls`): install the compiled CA certificate store, then set verify mode and verify depth.
+   - **Cipher suite** (`configure_ciphers`): apply the compiled TLS1.2 cipher string via BoringSSL FFI (still works in cert_cb because BoringSSL selects the cipher only after cert_cb — `handshake_server.cc:810`).
+
+A resource whose mTLS CA content cannot be compiled keeps its matcher position
+and fails the handshake closed; it is never dropped from the index, which would
+silently promote the next candidate for that hostname.
 
 Certificate/key read, parse, validity, and install failures use fixed
 non-secret diagnostic categories. They never include PEM contents, certificate
@@ -147,7 +154,9 @@ When EdgionTls has `spec.client_auth` configured, `configure_mtls` enables clien
 
 ### Configuration flow
 
-1. Get the CA certificate PEM from EdgionTls and build an `X509Store`.
+1. Install the `X509Store` compiled from the EdgionTls CA certificate PEM when
+   the generation was published (cloning it is an `X509_STORE_up_ref` refcount
+   bump, not a rebuild). `Terminate` mode needs no store and returns first.
 2. Set the verify depth (`verify_depth`, range 1–9).
 3. If `allowed_sans` or `allowed_cns` is configured, set a custom verify callback (`set_mtls_verify_callback`) for allowlist checks. SAN matching is typed (`AllowedSan`: kind × Exact/Prefix/Suffix/Contains/RegularExpression). RegularExpression is compiled when the EdgionTls is ingested into `TlsStore`, never on the handshake path. BoringSSL invokes that callback at every certificate-chain depth: `preverify_ok == 0` rejects immediately at any depth; client-identity extraction and SAN/CN allowlist evaluation run only at leaf depth 0 (`X509_STORE_CTX_get_error_depth`). Intermediate successful depths return 1 without extraction or a whitelist audit. A terminal mTLS failure emits at most one `ssl.log` record for that handshake.
 4. Otherwise use the standard BoringSSL verification chain.

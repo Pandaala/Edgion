@@ -15,5 +15,5 @@
 | D0011 | ready-after-campaign-freeze | `tasks/todo/add-preflight-policy-hot-reload-integration-coverage.md` | B0065 |
 | D0012 | resolved | `skills/04-review/listeners/regression-guards/egc-runtime-snapshot-publication.md` | B0066 |
 | D0013 | ready-after-campaign-freeze | `tasks/todo/add-duplicate-host-policy-hot-reload-integration-coverage.md` | B0066 |
-| D0014 | ready-for-separate-task | `tasks/todo/cold-compile-edgion-tls-runtime-state.md` | B0075 |
+| D0014 | resolved | `skills/04-review/tls/regression-guards/edgion-tls-serving-chain-install.md` | B0075 |
 | D0015 | ready-for-separate-task | `tasks/todo/update-stale-mtls-config-helper-knowledge.md` | B0075 |
