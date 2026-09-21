@@ -403,6 +403,7 @@ spec:
                 ..Default::default()
             },
             spec: LinkSysSpec {
+                current_status: None,
                 unknown_fields: Vec::new(),
                 config: SystemConfig::Etcd(EtcdClientConfig {
                     endpoints: vec!["http://etcd:2379".to_string()],

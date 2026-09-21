@@ -211,7 +211,7 @@ mod tests {
         hostname: &str,
         creation_timestamp: Option<k8s_openapi::apimachinery::pkg::apis::meta::v1::Time>,
     ) -> TLSRoute {
-        TLSRoute {
+        crate::test_current_status::processed(TLSRoute {
             metadata: kube::api::ObjectMeta {
                 namespace: Some(namespace.to_string()),
                 name: Some(name.to_string()),
@@ -219,6 +219,7 @@ mod tests {
                 ..Default::default()
             },
             spec: TLSRouteSpec {
+                current_status: None,
                 resolved_status_controller: Some("edgion.io/gateway-controller".into()),
                 parent_refs: Some(vec![ParentReference {
                     group: Some("gateway.networking.k8s.io".to_string()),
@@ -233,7 +234,7 @@ mod tests {
                 resolved_listeners: None,
             },
             status: None,
-        }
+        })
     }
 
     fn key() -> ListenerKey {
@@ -258,7 +259,7 @@ mod tests {
                 })
             })
             .collect();
-        let route = serde_json::from_value(serde_json::json!({
+        let route = crate::test_current_status::from_value(serde_json::json!({
             "metadata": {"namespace": "default", "name": name},
             "spec": {"hostnames": [hostname], "resolvedStatusController": "edgion.io/gateway-controller", "parentRefs": parents, "resolvedListeners": resolved}
         }))
@@ -453,6 +454,8 @@ mod tests {
                 hostnames: vec!["b.example.com".into()],
             },
         ]);
+        route.spec.current_status = None;
+        route = crate::test_current_status::processed(route);
         let multi = Arc::new(TlsRouteUnit::from_route(Arc::new(route.clone())));
         let control = unit(create_test_tls_route("default", "z-control", "b.example.com"));
         let units = HashMap::from([(multi.key_name(), multi.clone()), (control.key_name(), control.clone())]);
@@ -470,14 +473,7 @@ mod tests {
         assert_eq!(multi.accepted_attachments[1].parent.gateway_key, "default/b");
 
         // Rejecting one parent removes only its attachment from candidate selection.
-        route.status = Some(
-            serde_json::from_value(serde_json::json!({"parents": [{
-                "parentRef": {"name": "a", "port": 443}, "controllerName": "edgion.io/gateway-controller",
-                "conditions": [{"type": "Accepted", "status": "False", "reason": "NotAllowedByListeners",
-                    "message": "denied", "lastTransitionTime": "2026-09-13T00:00:00Z"}]
-            }]}))
-            .unwrap(),
-        );
+        route.spec.current_status.as_mut().unwrap().parents[0].conditions[0].status = "False".into();
         let rejected = Arc::new(TlsRouteUnit::from_route(Arc::new(route)));
         let units = HashMap::from([
             (rejected.key_name(), rejected.clone()),

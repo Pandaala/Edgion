@@ -24,6 +24,12 @@ use serde::{Deserialize, Serialize};
 )]
 #[serde(rename_all = "camelCase")]
 pub struct EdgionGatewayConfigSpec {
+    /// Controller-computed status for this deployment, transported to the Gateway.
+    /// Never supplied by operators or used as the persisted status history.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
+    pub current_status: Option<EdgionGatewayConfigStatus>,
+
     /// GatewayClass-scoped HTTP server behavior.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub server: Option<ServerConfig>,
@@ -517,6 +523,7 @@ fn default_max_retries() -> u32 {
 impl Default for EdgionGatewayConfigSpec {
     fn default() -> Self {
         Self {
+            current_status: None,
             server: None,
             http_timeout: None,
             max_retries: default_max_retries(),

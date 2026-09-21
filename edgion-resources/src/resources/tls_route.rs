@@ -21,6 +21,12 @@ use crate::ListenerKey;
 )]
 #[serde(rename_all = "camelCase")]
 pub struct TLSRouteSpec {
+    /// Controller-computed status for this deployment, transported to the Gateway.
+    /// Never supplied by operators or used as the persisted status history.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
+    pub current_status: Option<TLSRouteStatus>,
+
     /// ParentRefs references the resources that this Route wants to be attached to
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_refs: Option<Vec<ParentReference>>,

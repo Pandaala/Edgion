@@ -688,6 +688,7 @@ mod tests {
             ..Default::default()
         });
         let spec = EdgionBackendSpec {
+            current_status: None,
             ai: AiBackendSpec {
                 provider: AiProvider::OpenAICompatible,
                 endpoint: Some(endpoint.to_string()),

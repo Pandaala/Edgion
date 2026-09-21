@@ -210,6 +210,12 @@ pub struct ActiveHttpChallenge {
 )]
 #[serde(rename_all = "camelCase")]
 pub struct EdgionAcmeSpec {
+    /// Controller-computed status for this deployment, transported to the Gateway.
+    /// Never supplied by operators or used as the persisted status history.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
+    pub current_status: Option<EdgionAcmeStatus>,
+
     /// ACME server directory URL (default: Let's Encrypt production)
     #[serde(default = "default_acme_server")]
     pub server: String,
@@ -378,9 +384,10 @@ impl EdgionAcme {
             .unwrap_or_else(|| format!("acme-{}", self.metadata.name.as_deref().unwrap_or("unknown")))
     }
 
-    /// Get active challenges from status (empty slice when none in flight).
+    /// Get this deployment's current challenges (empty when not published).
     pub fn active_challenges(&self) -> &[ActiveHttpChallenge] {
-        self.status
+        self.spec
+            .current_status
             .as_ref()
             .map(|s| s.active_challenges.as_slice())
             .unwrap_or_default()
@@ -475,7 +482,12 @@ status:
       expireAt: 1700000000
 "#;
 
-        let acme: EdgionAcme = serde_yaml::from_str(yaml).unwrap();
+        let mut acme: EdgionAcme = serde_yaml::from_str(yaml).unwrap();
+        assert!(
+            acme.active_challenges().is_empty(),
+            "full status is not a serving input"
+        );
+        acme.spec.current_status = acme.status.clone();
         let challenges = acme.active_challenges();
         assert_eq!(challenges.len(), 1);
         assert_eq!(challenges[0].domain, "example.com");

@@ -589,6 +589,7 @@ mod tests {
                 ..Default::default()
             },
             spec: BackendTLSPolicySpec {
+                current_status: None,
                 target_refs: vec![BackendTLSPolicyTargetRef {
                     group: String::new(),
                     kind: "Service".to_string(),

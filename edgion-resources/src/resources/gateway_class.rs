@@ -18,6 +18,12 @@ use serde::{Deserialize, Serialize};
 )]
 #[serde(rename_all = "camelCase")]
 pub struct GatewayClassSpec {
+    /// Controller-computed status for this deployment, transported to the Gateway.
+    /// Never supplied by operators or used as the persisted status history.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
+    pub current_status: Option<GatewayClassStatus>,
+
     /// ControllerName is the name of the controller
     pub controller_name: String,
 

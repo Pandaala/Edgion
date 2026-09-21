@@ -343,6 +343,7 @@ mod tests {
         let mut ed = EdgionConfigData::new(
             "canary-selector-override",
             EdgionConfigDataSpec {
+                current_status: None,
                 enable: true,
                 active: None,
                 visibility: Default::default(),
@@ -370,6 +371,7 @@ mod tests {
         let mut ed = EdgionConfigData::new(
             "canary-selector-killswitch",
             EdgionConfigDataSpec {
+                current_status: None,
                 enable: false, // envelope kill-switch
                 active: None,
                 visibility: Default::default(),
@@ -401,6 +403,7 @@ mod tests {
         let mut ed = EdgionConfigData::new(
             "canary-selector-unknown",
             EdgionConfigDataSpec {
+                current_status: None,
                 enable: true,
                 active: None,
                 visibility: Default::default(),
@@ -432,6 +435,7 @@ mod tests {
         let mut ed = EdgionConfigData::new(
             "canary-selector-none-active",
             EdgionConfigDataSpec {
+                current_status: None,
                 enable: true,
                 active: None,
                 visibility: Default::default(),
@@ -469,6 +473,7 @@ mod tests {
         let mut ed = EdgionConfigData::new(
             "canary-selector-wrongtype",
             EdgionConfigDataSpec {
+                current_status: None,
                 enable: true,
                 active: None,
                 visibility: Default::default(),

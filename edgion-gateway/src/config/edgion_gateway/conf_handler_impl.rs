@@ -657,6 +657,7 @@ mod tests {
         EdgionGatewayConfig::new(
             name,
             EdgionGatewayConfigSpec {
+                current_status: None,
                 server: None,
                 http_timeout: None,
                 max_retries: 3,
@@ -1399,6 +1400,7 @@ mod tests {
     fn test_link_sys_config_webhook_max() {
         use edgion_resources::resources::edgion_gateway_config::{EdgionGatewayConfigSpec, LinkSysGlobalConfig};
         let spec = EdgionGatewayConfigSpec {
+            current_status: None,
             link_sys: Some(LinkSysGlobalConfig {
                 webhook_max_response_bytes: 65536,
                 ..Default::default()

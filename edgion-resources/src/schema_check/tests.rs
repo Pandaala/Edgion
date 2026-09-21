@@ -322,6 +322,7 @@ fn real_schema_legitimate_config_across_ten_plugin_types_has_zero_findings() {
     ];
 
     let spec = EdgionPluginsSpec {
+        current_status: None,
         request_plugins: Some(entries),
         ..Default::default()
     };

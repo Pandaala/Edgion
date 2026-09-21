@@ -1046,6 +1046,7 @@ mod tests {
                 ..Default::default()
             },
             spec: LinkSysSpec {
+                current_status: None,
                 unknown_fields: Vec::new(),
                 config: SystemConfig::Webhook(WebhookServiceConfig {
                     conn: ExternalHttpConnection {
@@ -1103,6 +1104,7 @@ mod tests {
                 ..Default::default()
             },
             spec: LinkSysSpec {
+                current_status: None,
                 unknown_fields: Vec::new(),
                 config: SystemConfig::Redis(RedisClientConfig {
                     endpoints: vec!["redis://127.0.0.1:6379".to_string()],
@@ -1163,6 +1165,7 @@ mod tests {
                 ..Default::default()
             },
             spec: LinkSysSpec {
+                current_status: None,
                 unknown_fields: Vec::new(),
                 config: SystemConfig::Etcd(EtcdClientConfig {
                     endpoints: vec!["http://127.0.0.1:2379".to_string()],
@@ -1228,6 +1231,7 @@ mod tests {
                 ..Default::default()
             },
             spec: LinkSysSpec {
+                current_status: None,
                 unknown_fields: Vec::new(),
                 config: SystemConfig::Elasticsearch(ElasticsearchClientConfig {
                     endpoints: vec!["http://127.0.0.1:9200".to_string()],
@@ -1288,6 +1292,7 @@ mod tests {
                 ..Default::default()
             },
             spec: LinkSysSpec {
+                current_status: None,
                 unknown_fields: Vec::new(),
                 config: SystemConfig::Kafka(KafkaClientConfig {
                     brokers: vec!["127.0.0.1:9092".to_string()],
@@ -1345,6 +1350,7 @@ mod tests {
                 ..Default::default()
             },
             spec: LinkSysSpec {
+                current_status: None,
                 unknown_fields: Vec::new(),
                 config: SystemConfig::Otlp(OtlpClientConfig {
                     endpoint: "http://192.0.2.1:4317".to_string(),

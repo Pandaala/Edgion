@@ -1844,6 +1844,7 @@ mod tests {
                 let plugin = edgion_resources::EdgionPlugins::new(
                     "ai-ids",
                     edgion_resources::EdgionPluginsSpec {
+                        current_status: None,
                         request_plugins: Some(vec![edgion_resources::RequestFilterEntry::new(
                             edgion_resources::EdgionPlugin::RequestId(config),
                         )]),
@@ -2693,6 +2694,7 @@ mod tests {
                 ..Default::default()
             },
             spec: EdgionBackendTrafficPolicySpec {
+                current_status: None,
                 target_refs: vec![PolicyTargetRef {
                     group: String::new(),
                     kind: "Service".to_string(),
@@ -2875,6 +2877,7 @@ mod tests {
                 ..Default::default()
             },
             spec: EdgionBackendTrafficPolicySpec {
+                current_status: None,
                 target_refs: vec![PolicyTargetRef {
                     group: String::new(),
                     kind: "Service".to_string(),
@@ -2929,6 +2932,7 @@ mod tests {
                 ..Default::default()
             },
             spec: EdgionBackendTrafficPolicySpec {
+                current_status: None,
                 target_refs: vec![PolicyTargetRef {
                     group: String::new(),
                     kind: "Service".to_string(),
@@ -2987,6 +2991,7 @@ mod tests {
                 ..Default::default()
             },
             spec: EdgionBackendTrafficPolicySpec {
+                current_status: None,
                 target_refs: vec![PolicyTargetRef {
                     group: String::new(),
                     kind: "Service".to_string(),

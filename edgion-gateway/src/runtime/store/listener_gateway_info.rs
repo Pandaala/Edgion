@@ -488,13 +488,14 @@ mod tests {
     }
 
     fn make_gateway(listener_name: &str, conditions: Vec<Condition>) -> Gateway {
-        Gateway {
+        crate::test_current_status::processed(Gateway {
             metadata: ObjectMeta {
                 name: Some("test-gw".to_string()),
                 namespace: Some("default".to_string()),
                 ..Default::default()
             },
             spec: GatewaySpec {
+                current_status: None,
                 gateway_class_name: "test".to_string(),
                 listeners: Some(vec![Listener {
                     name: listener_name.to_string(),
@@ -514,7 +515,7 @@ mod tests {
                 conditions: None,
                 listeners: Some(vec![make_listener_status(listener_name, conditions)]),
             }),
-        }
+        })
     }
 
     #[test]
@@ -633,10 +634,11 @@ mod tests {
 
     #[test]
     fn test_not_programmed_no_status() {
-        // status=None → allow through (startup race)
+        // Missing Controller projection cannot authorize a listener.
         let gw = Gateway {
             metadata: ObjectMeta::default(),
             spec: GatewaySpec {
+                current_status: None,
                 gateway_class_name: "t".to_string(),
                 listeners: None,
                 addresses: None,
@@ -646,7 +648,7 @@ mod tests {
             },
             status: None,
         };
-        assert!(!gateway_listener_is_explicitly_ineligible(&gw, "https"));
+        assert!(gateway_listener_is_explicitly_ineligible(&gw, "https"));
     }
 
     #[test]
@@ -677,10 +679,37 @@ mod tests {
     }
 
     #[test]
-    fn test_not_programmed_false_when_listener_missing_from_status() {
+    fn test_listener_missing_from_current_status_is_ineligible() {
         let gw = make_gateway("https", vec![make_condition("Programmed", "False")]);
-        // Asking about a different listener → safe to allow through
-        assert!(!gateway_listener_is_explicitly_ineligible(&gw, "http"));
+        assert!(gateway_listener_is_explicitly_ineligible(&gw, "http"));
+    }
+
+    #[test]
+    fn listener_publication_uses_only_current_status() {
+        let store = ListenerGatewayInfoStore::new();
+        let key = ListenerKey::new("0.0.0.0:443".parse().unwrap(), "HTTPS");
+        let mut gateway = make_gateway("https", vec![make_condition("Accepted", "True")]);
+        let allowed = gateway.spec.current_status.clone();
+        let rejected = make_gateway("https", vec![make_condition("Accepted", "False")])
+            .spec
+            .current_status;
+
+        gateway.status = rejected.clone();
+        store.rebuild(&[gateway.clone()]);
+        assert!(!store.get_index(&key).is_empty());
+
+        gateway.status = allowed.clone();
+        gateway.spec.current_status = rejected;
+        store.rebuild(&[gateway.clone()]);
+        assert!(store.get_index(&key).is_empty());
+
+        gateway.spec.current_status = None;
+        store.rebuild(&[gateway.clone()]);
+        assert!(store.get_index(&key).is_empty());
+
+        gateway.spec.current_status = allowed;
+        store.rebuild(&[gateway]);
+        assert!(!store.get_index(&key).is_empty());
     }
 
     #[test]

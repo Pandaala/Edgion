@@ -232,13 +232,14 @@ mod tests {
     }
 
     fn create_test_tcp_route(namespace: &str, name: &str, listener_key: ListenerKey) -> TCPRoute {
-        TCPRoute {
+        crate::test_current_status::processed(TCPRoute {
             metadata: kube::api::ObjectMeta {
                 namespace: Some(namespace.to_string()),
                 name: Some(name.to_string()),
                 ..Default::default()
             },
             spec: TCPRouteSpec {
+                current_status: None,
                 resolved_status_controller: Some("edgion.io/gateway-controller".into()),
                 parent_refs: Some(vec![ParentReference {
                     group: Some("gateway.networking.k8s.io".to_string()),
@@ -252,7 +253,7 @@ mod tests {
                 resolved_listeners: Some(vec![listener_key]),
             },
             status: None,
-        }
+        })
     }
 
     fn test_unit(namespace: &str, name: &str, listener_key: ListenerKey) -> Arc<TcpRouteUnit> {

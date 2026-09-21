@@ -859,6 +859,7 @@ mod tests {
         EdgionPlugins {
             metadata: Default::default(),
             spec: EdgionPluginsSpec {
+                current_status: None,
                 request_plugins: Some(entries),
                 ..Default::default()
             },
@@ -996,6 +997,7 @@ mod tests {
         let plugins = EdgionPlugins {
             metadata: Default::default(),
             spec: EdgionPluginsSpec {
+                current_status: None,
                 upstream_response_filter_plugins: Some(vec![entry]),
                 ..Default::default()
             },
@@ -1132,6 +1134,7 @@ mod tests {
         let plugins = EdgionPlugins {
             metadata: Default::default(),
             spec: EdgionPluginsSpec {
+                current_status: None,
                 upstream_response_filter_plugins: Some(vec![entry]),
                 ..Default::default()
             },
@@ -1188,6 +1191,7 @@ mod tests {
         let plugins = EdgionPlugins {
             metadata: Default::default(),
             spec: EdgionPluginsSpec {
+                current_status: None,
                 upstream_response_filter_plugins: Some(vec![entry]),
                 ..Default::default()
             },
@@ -1212,6 +1216,7 @@ mod tests {
         let plugins = EdgionPlugins {
             metadata: Default::default(),
             spec: EdgionPluginsSpec {
+                current_status: None,
                 upstream_response_filter_plugins: Some(vec![entry]),
                 ..Default::default()
             },
@@ -1443,6 +1448,7 @@ mod dye_validate_tests {
         EdgionPlugins {
             metadata: Default::default(),
             spec: EdgionPluginsSpec {
+                current_status: None,
                 request_plugins: Some(entries),
                 ..Default::default()
             },
@@ -1526,6 +1532,7 @@ mod dye_validate_tests {
         let standalone = EdgionPlugins {
             metadata: Default::default(),
             spec: EdgionPluginsSpec {
+                current_status: None,
                 upstream_response_filter_plugins: Some(vec![fallback_entry.clone()]),
                 ..Default::default()
             },
@@ -1536,6 +1543,7 @@ mod dye_validate_tests {
         let ep = EdgionPlugins {
             metadata: Default::default(),
             spec: EdgionPluginsSpec {
+                current_status: None,
                 request_plugins: Some(vec![success_entry]),
                 upstream_response_filter_plugins: Some(vec![fallback_entry]),
                 ..Default::default()

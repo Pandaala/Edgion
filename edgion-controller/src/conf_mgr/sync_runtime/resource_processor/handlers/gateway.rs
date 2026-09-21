@@ -2650,6 +2650,7 @@ mod tests {
                 ..Default::default()
             },
             spec: GatewaySpec {
+                current_status: None,
                 gateway_class_name: "test".to_string(),
                 listeners: None,
                 addresses: None,
@@ -4261,6 +4262,7 @@ mod tests {
                 ..Default::default()
             },
             spec: EdgionTlsSpec {
+                current_status: None,
                 parent_refs: Some(vec![ParentReference {
                     group: None,
                     kind: None,

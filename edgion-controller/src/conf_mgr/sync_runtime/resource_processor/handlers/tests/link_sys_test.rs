@@ -57,6 +57,7 @@ fn make_redis_link_sys(ns: &str, name: &str, secret_name: &str, secret_ns: Optio
             ..Default::default()
         },
         spec: LinkSysSpec {
+            current_status: None,
             unknown_fields: Vec::new(),
             config: SystemConfig::Redis(RedisClientConfig {
                 endpoints: vec!["redis://localhost:6379".to_string()],
@@ -92,6 +93,7 @@ fn make_es_link_sys_apikey(ns: &str, name: &str, secret_name: &str) -> LinkSys {
             ..Default::default()
         },
         spec: LinkSysSpec {
+            current_status: None,
             unknown_fields: Vec::new(),
             config: SystemConfig::Elasticsearch(ElasticsearchClientConfig {
                 endpoints: vec!["http://localhost:9200".to_string()],
@@ -858,6 +860,7 @@ async fn test_no_auth_configured() {
             ..Default::default()
         },
         spec: LinkSysSpec {
+            current_status: None,
             unknown_fields: Vec::new(),
             config: SystemConfig::Redis(RedisClientConfig {
                 endpoints: vec!["redis://localhost:6379".to_string()],
@@ -1332,6 +1335,7 @@ async fn test_webhook_secret_ref_resolved_into_resolved_secrets() {
             ..Default::default()
         },
         spec: edgion_resources::resources::link_sys::LinkSysSpec {
+            current_status: None,
             unknown_fields: Vec::new(),
             config: SystemConfig::Webhook(WebhookServiceConfig {
                 conn: ExternalHttpConnection {
@@ -1413,6 +1417,7 @@ async fn test_webhook_secret_ref_missing_secret_sets_resolved_refs_false() {
             ..Default::default()
         },
         spec: edgion_resources::resources::link_sys::LinkSysSpec {
+            current_status: None,
             unknown_fields: Vec::new(),
             config: SystemConfig::Webhook(WebhookServiceConfig {
                 conn: ExternalHttpConnection {
@@ -1491,6 +1496,7 @@ async fn redis_with_san_rejected_phase1() {
             ..Default::default()
         },
         spec: LinkSysSpec {
+            current_status: None,
             unknown_fields: Vec::new(),
             config: SystemConfig::Redis(RedisClientConfig {
                 endpoints: vec!["redis://localhost:6379".to_string()],
@@ -1557,6 +1563,7 @@ async fn etcd_with_hostname_rejected_phase1() {
             ..Default::default()
         },
         spec: LinkSysSpec {
+            current_status: None,
             unknown_fields: Vec::new(),
             config: SystemConfig::Etcd(EtcdClientConfig {
                 endpoints: vec!["https://etcd:2379".to_string()],
@@ -1617,6 +1624,7 @@ async fn redis_ca_only_no_san_accepted() {
             ..Default::default()
         },
         spec: LinkSysSpec {
+            current_status: None,
             unknown_fields: Vec::new(),
             config: SystemConfig::Redis(RedisClientConfig {
                 endpoints: vec!["redis://localhost:6379".to_string()],

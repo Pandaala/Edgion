@@ -19,13 +19,14 @@ fn test_listener_key(port: u16) -> ListenerKey {
 }
 
 fn create_test_gateway(name: &str, namespace: &str, listeners: Vec<Listener>) -> Gateway {
-    Gateway {
+    crate::test_current_status::processed(Gateway {
         metadata: ObjectMeta {
             name: Some(name.to_string()),
             namespace: Some(namespace.to_string()),
             ..Default::default()
         },
         spec: GatewaySpec {
+            current_status: None,
             gateway_class_name: "test-class".to_string(),
             listeners: Some(listeners),
             addresses: None,
@@ -34,7 +35,7 @@ fn create_test_gateway(name: &str, namespace: &str, listeners: Vec<Listener>) ->
             resolved_attachment_proof: None,
         },
         status: None,
-    }
+    })
 }
 
 fn create_test_listener(name: &str, hostname: Option<&str>, tls: Option<GatewayTLSConfig>) -> Listener {
@@ -990,7 +991,7 @@ fn test_programmed_false_without_explicit_transport_outcome_is_omitted() {
     let listener = create_test_listener("https", Some("api.example.com"), Some(tls_config));
 
     let mut gateway = create_test_gateway("test-gw", "default", vec![listener]);
-    gateway.status = Some(GatewayStatus {
+    gateway.spec.current_status = Some(GatewayStatus {
         addresses: None,
         conditions: None,
         listeners: Some(vec![ListenerStatus {
@@ -1232,7 +1233,7 @@ fn test_programmed_false_does_not_shadow_valid_listener() {
     invalid_tls.frontend_matcher_eligibility = Some(FrontendMatcherEligibility::StrictReject);
     let invalid_listener = create_test_listener("https", None, Some(invalid_tls));
     let mut invalid_gw = create_test_gateway("invalid-gw", "default", vec![invalid_listener]);
-    invalid_gw.status = Some(GatewayStatus {
+    invalid_gw.spec.current_status = Some(GatewayStatus {
         addresses: None,
         conditions: None,
         listeners: Some(vec![ListenerStatus {

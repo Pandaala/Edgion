@@ -16,6 +16,7 @@ fn runtime(config: serde_json::Value) -> Arc<PluginRuntime> {
     let resource = EdgionPlugins::new(
         "request-id-wiring",
         EdgionPluginsSpec {
+            current_status: None,
             request_plugins: Some(vec![RequestFilterEntry::new(plugin)]),
             ..Default::default()
         },
@@ -138,6 +139,7 @@ fn reserved_default_is_rejected_by_schema_and_gateway_runtime() {
         let resource = EdgionPlugins::new(
             "reserved-id",
             EdgionPluginsSpec {
+                current_status: None,
                 request_plugins: Some(vec![RequestFilterEntry::new(plugin)]),
                 ..Default::default()
             },

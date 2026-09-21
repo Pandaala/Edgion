@@ -28,6 +28,12 @@ use std::fmt;
 )]
 #[serde(rename_all = "camelCase")]
 pub struct EdgionBackendTrafficPolicySpec {
+    /// Controller-computed status for this deployment, transported to the Gateway.
+    /// Never supplied by operators or used as the persisted status history.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
+    pub current_status: Option<EdgionBackendTrafficPolicyStatus>,
+
     /// Homogeneous Service or EdgionBackend targets in the policy namespace.
     #[schemars(length(min = 1))]
     pub target_refs: Vec<PolicyTargetRef>,
@@ -866,6 +872,7 @@ outlierDetection:
         use crate::resources::upstream_authority::UpstreamAuthorityConfig;
 
         let base = |ua: Option<UpstreamAuthorityConfig>, hc: bool| EdgionBackendTrafficPolicySpec {
+            current_status: None,
             target_refs: vec![PolicyTargetRef {
                 group: String::new(),
                 kind: "Service".to_string(),

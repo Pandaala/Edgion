@@ -127,6 +127,7 @@ mod tests {
                 ..Default::default()
             },
             spec: EdgionPluginsSpec {
+                current_status: None,
                 request_plugins: Some(vec![RequestFilterEntry::new(EdgionPlugin::RequestHeaderModifier(
                     HTTPHeaderFilter {
                         set: None,

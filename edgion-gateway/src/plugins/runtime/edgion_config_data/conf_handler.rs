@@ -534,6 +534,7 @@ mod stats_tests {
 
     fn ip_list_resource(name: &str, enable: bool, description: Option<&str>, cidr: &str) -> Arc<EdgionConfigData> {
         let spec = EdgionConfigDataSpec {
+            current_status: None,
             enable,
             active: None,
             visibility: Default::default(),
@@ -553,6 +554,7 @@ mod stats_tests {
 
     fn region_route_resource(name: &str, active: Option<&str>) -> Arc<EdgionConfigData> {
         let spec = EdgionConfigDataSpec {
+            current_status: None,
             enable: true,
             active: None,
             visibility: Default::default(),
@@ -570,6 +572,7 @@ mod stats_tests {
 
     fn misc_resource(name: &str, value: serde_json::Value) -> Arc<EdgionConfigData> {
         let spec = EdgionConfigDataSpec {
+            current_status: None,
             enable: true,
             active: None,
             visibility: Default::default(),
@@ -583,6 +586,7 @@ mod stats_tests {
 
     fn selector_resource(name: &str, active: &str) -> Arc<EdgionConfigData> {
         let spec = EdgionConfigDataSpec {
+            current_status: None,
             enable: true,
             active: None,
             visibility: Default::default(),
@@ -599,6 +603,7 @@ mod stats_tests {
 
     fn named_ip_list_resource(name: &str, group: &str, cidr: &str) -> Arc<EdgionConfigData> {
         let spec = EdgionConfigDataSpec {
+            current_status: None,
             enable: true,
             active: None,
             visibility: Default::default(),
@@ -669,6 +674,7 @@ mod stats_tests {
 
         let ip_ed = {
             let spec = EdgionConfigDataSpec {
+                current_status: None,
                 enable: true,
                 active: None,
                 visibility: Default::default(),
@@ -687,6 +693,7 @@ mod stats_tests {
         };
         let key_ed = {
             let spec = EdgionConfigDataSpec {
+                current_status: None,
                 enable: true,
                 active: None,
                 visibility: Default::default(),
@@ -829,6 +836,7 @@ mod stats_tests {
 
         let rr_override_ed = {
             let spec = EdgionConfigDataSpec {
+                current_status: None,
                 enable: true,
                 active: None,
                 visibility: Default::default(),
@@ -862,6 +870,7 @@ mod stats_tests {
         let store = EdgionConfigDataStore::new();
         let ed = {
             let spec = EdgionConfigDataSpec {
+                current_status: None,
                 enable: true,
                 active: None,
                 visibility: Default::default(),
@@ -894,6 +903,7 @@ mod stats_tests {
         let store = EdgionConfigDataStore::new();
         let ed = {
             let spec = EdgionConfigDataSpec {
+                current_status: None,
                 enable: false,
                 active: None,
                 visibility: Default::default(),
@@ -923,6 +933,7 @@ mod stats_tests {
         let store = EdgionConfigDataStore::new();
         let ed = {
             let spec = EdgionConfigDataSpec {
+                current_status: None,
                 enable: true,
                 active: None,
                 visibility: Default::default(),

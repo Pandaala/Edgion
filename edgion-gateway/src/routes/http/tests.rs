@@ -194,6 +194,9 @@ mod route_matching_tests {
         let exact_route = contract_route("exact-route-on-wildcard", vec!["api.example.com"], "/");
         let mut wildcard_route = contract_route("wildcard-route-on-exact", vec!["*.example.com"], "/");
         wildcard_route.spec.parent_refs.as_mut().unwrap()[0].name = "exact-owner".into();
+        wildcard_route.spec.current_status.as_mut().unwrap().parents[0]
+            .parent_ref
+            .name = "exact-owner".into();
         wildcard_route.spec.resolved_hostnames = Some(vec!["api.example.com".into()]);
         let table = contract_table(vec![exact_route, wildcard_route]);
         let broad_only = contract_index(&[("shared", Some("*.example.com"))]);
@@ -399,7 +402,7 @@ mod route_matching_tests {
             }
         });
 
-        serde_json::from_value(json).expect("Failed to create Gateway")
+        crate::test_current_status::from_value(json).expect("Failed to create Gateway")
     }
 
     /// Helper function to create a test HTTPRoute with path matches
@@ -455,7 +458,7 @@ mod route_matching_tests {
             }
         });
 
-        serde_json::from_value(json).expect("Failed to create HTTPRoute")
+        crate::test_current_status::from_value(json).expect("Failed to create HTTPRoute")
     }
 
     /// Helper function to create a test HTTPRoute with regex path matches
@@ -511,7 +514,7 @@ mod route_matching_tests {
             }
         });
 
-        serde_json::from_value(json).expect("Failed to create HTTPRoute")
+        crate::test_current_status::from_value(json).expect("Failed to create HTTPRoute")
     }
 
     /// Helper function to verify route matching without Session

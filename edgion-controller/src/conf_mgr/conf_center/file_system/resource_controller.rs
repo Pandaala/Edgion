@@ -1005,6 +1005,7 @@ mod tests {
                 ..Default::default()
             },
             spec: BackendTLSPolicySpec {
+                current_status: None,
                 target_refs: vec![BackendTLSPolicyTargetRef {
                     group: "".to_string(),
                     kind: "Service".to_string(),
@@ -1079,6 +1080,7 @@ mod tests {
                 ..Default::default()
             },
             spec: TLSRouteSpec {
+                current_status: None,
                 resolved_status_controller: None,
                 parent_refs: Some(vec![ParentReference {
                     group: Some("gateway.networking.k8s.io".to_string()),
@@ -1311,6 +1313,7 @@ mod tests {
                 ..Default::default()
             },
             spec: HTTPRouteSpec {
+                current_status: None,
                 resolved_status_controller: None,
                 parent_refs: None,
                 hostnames: None,

@@ -342,6 +342,7 @@ mod tests {
         let mut esp = EdgionStreamPlugins::new(
             name,
             EdgionStreamPluginsSpec {
+                current_status: None,
                 plugins: None,
                 tls_route_plugins: None,
                 unknown_fields: paths,

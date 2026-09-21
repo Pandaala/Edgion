@@ -169,8 +169,14 @@ Each resource holds at most 32 deployment entries. Existing entries can still
 update at the limit; a new deployment cannot evict another entry. The Controller
 reports the refused status write while continuing local configuration processing.
 Inactive entries do not expire: cleanup requires authoritative GatewayClass
-deletion or identity-replacement evidence. FileSystem, etcd and Gateway-local
-status formats are unchanged. Independent deployments should use distinct
+deletion or identity-replacement evidence. FileSystem and etcd persistence retain
+their native status format. Gateway configuration retains complete `status` and
+includes Controller-generated `spec.currentStatus`. Inspect this current view
+when troubleshooting this deployment's route acceptance, listener status, or
+ACME challenges. Another deployment's successful status does not authorize local
+serving. This is internal diagnostic and transport data; do not set it in resource
+YAML. A Route with missing current status or no matching `Accepted=True` entry is
+not admitted by the data plane. Independent deployments should use distinct
 GatewayClasses; replicas sharing a class must share an election domain and
 configuration view.
 

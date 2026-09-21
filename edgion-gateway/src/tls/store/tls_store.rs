@@ -595,6 +595,7 @@ mod tests {
                 ..Default::default()
             },
             spec: EdgionTlsSpec {
+                current_status: None,
                 parent_refs: None,
                 hosts: vec!["shared.example.com".to_string()],
                 secret_ref: SecretObjectReference {
@@ -651,6 +652,7 @@ mod tests {
                 ..Default::default()
             },
             spec: edgion_resources::EdgionTlsSpec {
+                current_status: None,
                 parent_refs: None,
                 hosts: host_strings,
                 secret_ref: edgion_resources::resources::gateway::SecretObjectReference {
@@ -699,6 +701,7 @@ mod tests {
                 ..Default::default()
             },
             spec: edgion_resources::EdgionTlsSpec {
+                current_status: None,
                 parent_refs: None,
                 hosts: host_strings,
                 secret_ref: edgion_resources::resources::gateway::SecretObjectReference {

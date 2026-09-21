@@ -17,6 +17,7 @@ fn create_test_tls(cert_pem: Option<&str>, key_pem: Option<&str>, hosts: Vec<Str
     EdgionTls {
         metadata: Default::default(),
         spec: edgion_resources::EdgionTlsSpec {
+            current_status: None,
             parent_refs: None,
             hosts,
             secret_ref: edgion_resources::resources::gateway::SecretObjectReference {

@@ -1407,7 +1407,7 @@ mod request_entry_tests {
         fn new(https: bool, http2: bool, global_421: bool, annotation_421: bool, grpc: bool) -> Self {
             let protocol = if https { "HTTPS" } else { "HTTP" };
             let listener_key = ListenerKey::new("0.0.0.0:18479".parse().unwrap(), protocol);
-            let gateway: Gateway = serde_json::from_value(json!({
+            let gateway: Gateway = crate::test_current_status::from_value(json!({
                 "apiVersion":"gateway.networking.k8s.io/v1", "kind":"Gateway",
                 "metadata":{"name":"gateway", "namespace":NAMESPACE,
                     "annotations":{"edgion.io/require-sni-host-match":annotation_421.to_string()}},
@@ -1431,7 +1431,7 @@ mod request_entry_tests {
                 }}
             }))
             .unwrap();
-            let mut route: HTTPRoute = serde_json::from_value(json!({
+            let mut route: HTTPRoute = crate::test_current_status::from_value(json!({
                 "apiVersion":"gateway.networking.k8s.io/v1", "kind":"HTTPRoute",
                 "metadata":{"name":"http-fallback", "namespace":NAMESPACE},
                 "spec":{"resolvedStatusController": "edgion.io/gateway-controller", "parentRefs":[{"name":"gateway", "sectionName":"host"}],
@@ -1466,7 +1466,7 @@ mod request_entry_tests {
             ));
             let grpc_route_manager = Arc::new(GrpcPortRouteManager::default());
             if grpc {
-                let mut route: GRPCRoute = serde_json::from_value(json!({
+                let mut route: GRPCRoute = crate::test_current_status::from_value(json!({
                     "apiVersion":"gateway.networking.k8s.io/v1", "kind":"GRPCRoute",
                     "metadata":{"name":"grpc-existing", "namespace":NAMESPACE},
                     "spec":{"resolvedStatusController": "edgion.io/gateway-controller", "parentRefs":[{"name":"gateway", "sectionName":"host"}],

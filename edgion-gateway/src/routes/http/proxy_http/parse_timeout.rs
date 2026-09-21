@@ -207,6 +207,7 @@ mod tests {
     #[test]
     fn parsed_timeouts_from_config_keeps_invalid_fallbacks() {
         let spec = EdgionGatewayConfigSpec {
+            current_status: None,
             http_timeout: Some(HttpTimeout {
                 client: ClientTimeout {
                     read_timeout: "invalid".to_string(),

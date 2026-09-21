@@ -704,6 +704,7 @@ spec:
         let mut ed = EdgionConfigData::new(
             "blocklist",
             EdgionConfigDataSpec {
+                current_status: None,
                 unknown_fields: Vec::new(),
                 enable: true,
                 active: None,
@@ -840,6 +841,7 @@ spec:
         let mut ed = EdgionConfigData::new(
             "l4-blk",
             EdgionConfigDataSpec {
+                current_status: None,
                 unknown_fields: Vec::new(),
                 enable: true,
                 active: None,
@@ -887,6 +889,7 @@ spec:
         let mut ed = EdgionConfigData::new(
             "blocklist",
             EdgionConfigDataSpec {
+                current_status: None,
                 unknown_fields: Vec::new(),
                 enable: true,
                 active: None,
@@ -943,6 +946,7 @@ spec:
         let mut ed = EdgionConfigData::new(
             "blocklist",
             EdgionConfigDataSpec {
+                current_status: None,
                 enable: true,
                 active: None,
                 visibility: Default::default(),
@@ -1249,6 +1253,7 @@ spec:
         use edgion_resources::resources::edgion_stream_plugins::EdgionStreamPluginsSpec;
 
         let spec = EdgionStreamPluginsSpec {
+            current_status: None,
             plugins: None,
             tls_route_plugins: None,
             unknown_fields: vec!["plugins[0].config.denys".to_string()],
@@ -1445,6 +1450,7 @@ spec:
         let mut ed = EdgionConfigData::new(
             "blocklist",
             EdgionConfigDataSpec {
+                current_status: None,
                 unknown_fields: Vec::new(),
                 enable: true,
                 active: None,
@@ -1513,6 +1519,7 @@ spec:
         let mut ed = EdgionConfigData::new(
             "disabled-list",
             EdgionConfigDataSpec {
+                current_status: None,
                 enable: false,
                 active: None,
                 visibility: Default::default(),

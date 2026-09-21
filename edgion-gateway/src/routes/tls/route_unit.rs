@@ -60,7 +60,11 @@ impl TlsRouteUnit {
         let namespace = route.metadata.namespace.as_deref().unwrap_or("default");
         let accepted = filter_accepted_parent_refs(
             route.spec.parent_refs.as_deref(),
-            route.status.as_ref().map(|status| status.parents.as_slice()),
+            route
+                .spec
+                .current_status
+                .as_ref()
+                .map(|status| status.parents.as_slice()),
             Some(namespace),
             route.spec.resolved_status_controller.as_deref(),
         )
@@ -183,7 +187,7 @@ fn build_backend_selector(route: &TLSRoute) -> Arc<BackendSelector<TLSBackendRef
 mod tests {
     #[test]
     fn malformed_effective_hostname_rejects_the_entire_attachment() {
-        let mut route: TLSRoute = serde_json::from_value(serde_json::json!({
+        let mut route: TLSRoute = crate::test_current_status::from_value(serde_json::json!({
             "metadata": {"namespace": "apps", "name": "invalid-effective"},
             "spec": {"hostnames": ["*.example.com"], "resolvedStatusController": "edgion.io/gateway-controller", "parentRefs": [{"name": "gw"}],
                 "resolvedListeners": [
@@ -202,7 +206,7 @@ mod tests {
 
     #[test]
     fn exact_attachment_parents_preserve_authored_owner_order() {
-        let route = serde_json::from_value(serde_json::json!({
+        let route = crate::test_current_status::from_value(serde_json::json!({
             "metadata": {"namespace": "apps", "name": "ordered"},
             "spec": {"hostnames": ["shared.example.com"],
                 "resolvedStatusController": "edgion.io/gateway-controller", "parentRefs": [{"name": "z"}, {"name": "a"}],
@@ -241,7 +245,7 @@ mod tests {
     use edgion_resources::resources::tls_route::{TLSBackendRef, TLSRouteRule, TLSRouteSpec};
 
     fn make_route(annotations: Option<std::collections::BTreeMap<String, String>>) -> Arc<TLSRoute> {
-        Arc::new(TLSRoute {
+        Arc::new(crate::test_current_status::processed(TLSRoute {
             metadata: kube::api::ObjectMeta {
                 namespace: Some("default".to_string()),
                 name: Some("r".to_string()),
@@ -249,6 +253,7 @@ mod tests {
                 ..Default::default()
             },
             spec: TLSRouteSpec {
+                current_status: None,
                 resolved_status_controller: Some("edgion.io/gateway-controller".into()),
                 parent_refs: Some(vec![ParentReference {
                     group: Some("gateway.networking.k8s.io".to_string()),
@@ -273,7 +278,7 @@ mod tests {
                 resolved_listeners: None,
             },
             status: None,
-        })
+        }))
     }
 
     fn annotated(pairs: &[(&str, &str)]) -> Arc<TLSRoute> {

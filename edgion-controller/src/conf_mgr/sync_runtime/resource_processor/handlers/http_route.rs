@@ -1710,6 +1710,7 @@ mod tests {
         let mut plugins = EdgionPlugins::new(
             "ai",
             EdgionPluginsSpec {
+                current_status: None,
                 request_plugins: Some(vec![RequestFilterEntry::new(EdgionPlugin::AiProxy(
                     serde_json::from_value::<AiProxyConfig>(serde_json::json!({}))
                         .expect("empty AiProxy config must use stable defaults"),
@@ -2191,6 +2192,7 @@ modelRoutes:
         let mut plugins = EdgionPlugins::new(
             "ai",
             EdgionPluginsSpec {
+                current_status: None,
                 request_plugins: Some(vec![RequestFilterEntry::new(EdgionPlugin::AiProxy(config.clone()))]),
                 ..Default::default()
             },

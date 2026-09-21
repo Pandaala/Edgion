@@ -145,7 +145,11 @@ impl RouteInput {
             &route.metadata,
             RouteKind::Http,
             route.spec.parent_refs.as_deref(),
-            route.status.as_ref().map(|status| status.parents.as_slice()),
+            route
+                .spec
+                .current_status
+                .as_ref()
+                .map(|status| status.parents.as_slice()),
             route.spec.resolved_status_controller.as_deref(),
             route.spec.resolved_listeners.as_deref(),
         );
@@ -170,7 +174,11 @@ impl RouteInput {
             &route.metadata,
             RouteKind::Grpc,
             route.spec.parent_refs.as_deref(),
-            route.status.as_ref().map(|status| status.parents.as_slice()),
+            route
+                .spec
+                .current_status
+                .as_ref()
+                .map(|status| status.parents.as_slice()),
             route.spec.resolved_status_controller.as_deref(),
             route.spec.resolved_listeners.as_deref(),
         );
@@ -207,7 +215,11 @@ impl RouteInput {
             &route.metadata,
             RouteKind::Tcp,
             route.spec.parent_refs.as_deref(),
-            route.status.as_ref().map(|status| status.parents.as_slice()),
+            route
+                .spec
+                .current_status
+                .as_ref()
+                .map(|status| status.parents.as_slice()),
             route.spec.resolved_status_controller.as_deref(),
             route.spec.resolved_listeners.as_deref(),
         );
@@ -221,7 +233,11 @@ impl RouteInput {
             &route.metadata,
             RouteKind::Udp,
             route.spec.parent_refs.as_deref(),
-            route.status.as_ref().map(|status| status.parents.as_slice()),
+            route
+                .spec
+                .current_status
+                .as_ref()
+                .map(|status| status.parents.as_slice()),
             route.spec.resolved_status_controller.as_deref(),
             route.spec.resolved_listeners.as_deref(),
         );
@@ -243,7 +259,11 @@ impl RouteInput {
             &route.metadata,
             RouteKind::Tls,
             route.spec.parent_refs.as_deref(),
-            route.status.as_ref().map(|status| status.parents.as_slice()),
+            route
+                .spec
+                .current_status
+                .as_ref()
+                .map(|status| status.parents.as_slice()),
             route.spec.resolved_status_controller.as_deref(),
             Some(&listeners),
         );
@@ -307,7 +327,7 @@ mod tests {
     use serde_json::{json, Value};
 
     fn gateway() -> Gateway {
-        serde_json::from_value(json!({
+        crate::test_current_status::from_value(json!({
             "apiVersion": "gateway.networking.k8s.io/v1", "kind": "Gateway",
             "metadata": {"name": "gateway", "namespace": "apps"},
             "spec": {"gatewayClassName": "public", "listeners": [
@@ -360,7 +380,7 @@ mod tests {
             assert_eq!(GatewayInput::from_gateway(&gateway).connection_key.as_deref(), expected);
         }
         for (condition, status) in [("Conflicted", "True"), ("Programmed", "False"), ("Accepted", "False")] {
-            gateway.status = Some(serde_json::from_value(json!({"listeners": [{
+            gateway.spec.current_status = Some(serde_json::from_value(json!({"listeners": [{
                 "name": "web", "supportedKinds": [], "attachedRoutes": 0,
                 "conditions": [{"type": condition, "status": status, "reason": "Test", "message": "", "lastTransitionTime": "2026-09-11T00:00:00Z"}]
             }]})).unwrap());
@@ -378,7 +398,7 @@ mod tests {
             "filters": [delegated],
             "backendRefs": [{"name": "backend", "port": 80, "filters": [extension("backend-plugin")]}]
         }]);
-        let source: Arc<HTTPRoute> = Arc::new(serde_json::from_value(raw).unwrap());
+        let source: Arc<HTTPRoute> = Arc::new(crate::test_current_status::from_value(raw).unwrap());
         let input = RouteInput::from_http(Arc::clone(&source));
         assert!(Arc::ptr_eq(input.http_route.as_ref().unwrap(), &source));
         assert_eq!(
@@ -410,7 +430,7 @@ mod tests {
             ]),
         );
         raw["spec"]["invalidRuleIndices"] = json!([0]);
-        let source = Arc::new(serde_json::from_value::<HTTPRoute>(raw).unwrap());
+        let source = Arc::new(crate::test_current_status::from_value::<HTTPRoute>(raw).unwrap());
         assert_eq!(
             effective_http_rules(&source)
                 .map(|(index, _)| index)
@@ -425,7 +445,7 @@ mod tests {
     fn grpc_demand_uses_effective_rules_and_backend_filters() {
         let mut raw = route("GRPCRoute", json!([{"filters": [extension("original")]}]));
         raw["spec"]["invalidRuleIndices"] = json!([0]);
-        let mut source: GRPCRoute = serde_json::from_value(raw).unwrap();
+        let mut source: GRPCRoute = crate::test_current_status::from_value(raw).unwrap();
         assert!(RouteInput::from_grpc(&source).http_keys.is_empty());
         let mut delegated = extension("delegated");
         delegated["extensionRef"]["resolvedNamespace"] = json!("child");
@@ -453,11 +473,9 @@ mod tests {
             {"name": "gateway", "sectionName": "web"},
             {"name": "second"}
         ]);
-        raw["status"] = json!({"parents": [{
-            "parentRef": {"name": "denied"}, "controllerName": "edgion.io/gateway-controller",
-            "conditions": [{"type": "Accepted", "status": "False", "reason": "Test", "message": "", "lastTransitionTime": "2026-09-11T00:00:00Z"}]
-        }]});
-        let mut input = RouteInput::from_http(Arc::new(serde_json::from_value(raw).unwrap()));
+        let mut source: HTTPRoute = crate::test_current_status::from_value(raw).unwrap();
+        source.spec.current_status.as_mut().unwrap().parents[1].conditions[0].status = "False".into();
+        let mut input = RouteInput::from_http(Arc::new(source));
         assert_eq!(
             input
                 .parents
@@ -506,7 +524,7 @@ mod tests {
             "gatewayName": "gateway", "listenerName": "web", "hostnames": ["api.example.com"]
         }]);
         raw["metadata"]["annotations"] = json!({annotations::EDGION_STREAM_PLUGINS: " shared/policy "});
-        let tls = RouteInput::from_tls(&serde_json::from_value(raw).unwrap());
+        let tls = RouteInput::from_tls(&crate::test_current_status::from_value(raw).unwrap());
         assert_eq!(tls.stream_key.as_deref(), Some("shared/policy"));
         assert!(!tls.stages.connection && tls.stages.tls_route);
         assert!(tls.http_keys.is_empty() && tls.http_route.is_none());

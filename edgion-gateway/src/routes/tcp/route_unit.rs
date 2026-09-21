@@ -42,7 +42,11 @@ impl TcpRouteUnit {
         let namespace = route.metadata.namespace.as_deref().unwrap_or("default");
         let accepted = filter_accepted_parent_refs(
             route.spec.parent_refs.as_deref(),
-            route.status.as_ref().map(|status| status.parents.as_slice()),
+            route
+                .spec
+                .current_status
+                .as_ref()
+                .map(|status| status.parents.as_slice()),
             Some(namespace),
             route.spec.resolved_status_controller.as_deref(),
         )
@@ -92,7 +96,7 @@ mod tests {
     use edgion_resources::resources::tcp_route::{TCPBackendRef, TCPRouteRule, TCPRouteSpec};
 
     fn make_route(annotations: Option<std::collections::BTreeMap<String, String>>) -> Arc<TCPRoute> {
-        Arc::new(TCPRoute {
+        Arc::new(crate::test_current_status::processed(TCPRoute {
             metadata: kube::api::ObjectMeta {
                 namespace: Some("default".to_string()),
                 name: Some("r".to_string()),
@@ -100,6 +104,7 @@ mod tests {
                 ..Default::default()
             },
             spec: TCPRouteSpec {
+                current_status: None,
                 resolved_status_controller: Some("edgion.io/gateway-controller".into()),
                 parent_refs: Some(vec![ParentReference {
                     group: Some("gateway.networking.k8s.io".to_string()),
@@ -123,7 +128,7 @@ mod tests {
                 resolved_listeners: None,
             },
             status: None,
-        })
+        }))
     }
 
     #[test]

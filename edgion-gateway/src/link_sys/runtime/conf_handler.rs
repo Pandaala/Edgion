@@ -60,6 +60,7 @@ mod tests {
                 ..Default::default()
             },
             spec: LinkSysSpec {
+                current_status: None,
                 unknown_fields: Vec::new(),
                 config: SystemConfig::Webhook(WebhookServiceConfig {
                     conn: ExternalHttpConnection {

@@ -233,7 +233,8 @@ impl ProcessorHandler<EdgionAcme> for EdgionAcmeHandler {
         acme.spec.notify_after_publish = previous.as_ref().is_none_or(|previous| {
             previous.metadata.uid != acme.metadata.uid
                 || previous.metadata.generation != acme.metadata.generation
-                || resolved_refs_identity(previous) != resolved_refs_identity(&acme)
+                || resolved_refs_identity(previous.spec.current_status.as_ref())
+                    != resolved_refs_identity(acme.status.as_ref())
         });
 
         ProcessResult::Continue(acme)
@@ -308,9 +309,8 @@ impl ProcessorHandler<EdgionAcme> for EdgionAcmeHandler {
     }
 }
 
-fn resolved_refs_identity(acme: &EdgionAcme) -> Option<(&str, &str)> {
-    acme.status
-        .as_ref()
+fn resolved_refs_identity(status: Option<&EdgionAcmeStatus>) -> Option<(&str, &str)> {
+    status
         .and_then(|status| {
             status
                 .conditions

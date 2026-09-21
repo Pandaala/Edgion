@@ -98,6 +98,7 @@ mod tests {
 
     fn seed_iplist(ns: &str, name: &str, cidr: &str) {
         let spec = EdgionConfigDataSpec {
+            current_status: None,
             enable: true,
             active: None,
             visibility: Default::default(),

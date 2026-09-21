@@ -62,6 +62,7 @@ fn bounded_status_message(mut message: String) -> String {
 
 use crate::conf_mgr::sync_runtime::resource_processor::handlers::backend_capability::classify_raw_backend;
 use crate::conf_mgr::sync_runtime::resource_processor::handlers::resolve_policy_ancestor_gateways_for_targets;
+use crate::conf_mgr::sync_runtime::resource_processor::status_pipeline::filter_current_native_attachment_status;
 use crate::conf_mgr::sync_runtime::resource_processor::status_utils::{
     condition_false, condition_reasons, condition_true, condition_types, update_condition,
 };
@@ -391,6 +392,10 @@ impl EdgionBackendTrafficPolicyHandler {
 
 #[async_trait::async_trait]
 impl ProcessorHandler<EdgionBackendTrafficPolicy> for EdgionBackendTrafficPolicyHandler {
+    fn finalize_transport(&self, policy: &mut EdgionBackendTrafficPolicy, _ctx: &HandlerContext) {
+        filter_current_native_attachment_status(policy, &self.controller_name);
+    }
+
     fn validate(&self, p: &EdgionBackendTrafficPolicy, ctx: &HandlerContext) -> Vec<String> {
         let evaluation = evaluate_policy(p, ctx);
         let mut errors = evaluation.errors;

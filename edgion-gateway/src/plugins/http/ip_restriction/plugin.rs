@@ -577,6 +577,7 @@ mod tests {
         // Seed an IpList EdgionConfigData under a unique namespace.
         let ns = "http-ipr-denyref-unit";
         let spec = EdgionConfigDataSpec {
+            current_status: None,
             enable: true,
             active: None,
             visibility: Default::default(),
@@ -646,6 +647,7 @@ mod tests {
 
         let ns = "http-ipr-denyref-precedence-unit";
         let spec = EdgionConfigDataSpec {
+            current_status: None,
             enable: true,
             active: None,
             visibility: Default::default(),
@@ -712,6 +714,7 @@ mod tests {
         let key = format!("{ns}/reload-list");
         let seed = |cidr: &str| {
             let spec = EdgionConfigDataSpec {
+                current_status: None,
                 enable: true,
                 active: None,
                 visibility: Default::default(),

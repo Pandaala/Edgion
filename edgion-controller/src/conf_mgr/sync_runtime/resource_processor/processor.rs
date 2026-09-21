@@ -627,11 +627,12 @@ where
 
     async fn process_resource_inner(
         &self,
-        obj: K,
+        mut obj: K,
         ctx: &HandlerContext,
         is_init: bool,
         existing_status_json: Option<String>,
     ) -> WorkItemResult<K> {
+        status_pipeline::clear_current_status(&mut obj);
         let namespace = obj.meta().namespace.clone().unwrap_or_default();
 
         // Eligibility can change without a delivered Delete (LIST replacement or key coalescing).
@@ -779,7 +780,20 @@ where
                 if !persistence_allowed {
                     persisted_status = None;
                 }
+                // The local decision is transported separately from the complete
+                // API history. Gateway proof finalization consumes this projection.
+                status_pipeline::capture_current_status(&mut parsed_obj);
                 self.handler.finalize_transport(&mut parsed_obj, ctx);
+                status_pipeline::filter_current_route_status(&mut parsed_obj);
+                let complete_status = persisted_status.clone().unwrap_or_else(|| match &old_status {
+                    StatusExtractResult::Present(status) => serde_json::from_str(status).unwrap_or_default(),
+                    _ => serde_json::Value::Null,
+                });
+                if let Err(error) = status_pipeline::replace_status(&mut parsed_obj, complete_status) {
+                    tracing::warn!(component = "status_projection", kind = self.kind, error = %error,
+                        "Complete status could not be restored; skipping publication");
+                    return WorkItemResult::Skipped;
+                }
 
                 // 9. Check if status changed
                 let new_status = match persisted_status.as_ref() {
@@ -1415,6 +1429,7 @@ mod tests {
                 ..Default::default()
             },
             spec: edgion_resources::resources::gateway_class::GatewayClassSpec {
+                current_status: None,
                 controller_name: "example.com/controller".to_string(),
                 description: None,
                 parameters_ref: None,
@@ -1529,6 +1544,7 @@ mod tests {
                 ..Default::default()
             },
             spec: edgion_resources::resources::gateway_class::GatewayClassSpec {
+                current_status: None,
                 controller_name: "example.com/controller".to_string(),
                 description: None,
                 parameters_ref: None,
@@ -1573,6 +1589,7 @@ mod tests {
         let mut stream_plugins = EdgionStreamPlugins::new(
             "stream-plugins",
             EdgionStreamPluginsSpec {
+                current_status: None,
                 plugins: None,
                 tls_route_plugins: None,
                 unknown_fields: expected.clone(),
@@ -1584,6 +1601,7 @@ mod tests {
         let mut config_data = EdgionConfigData::new(
             "config-data",
             EdgionConfigDataSpec {
+                current_status: None,
                 enable: true,
                 active: None,
                 visibility: ConfigDataVisibility::Namespace,
@@ -1597,6 +1615,7 @@ mod tests {
         let mut link_sys = LinkSys::new(
             "link-sys",
             LinkSysSpec {
+                current_status: None,
                 config: SystemConfig::HttpDns(HttpDnsResolverConfig {
                     preset: None,
                     url_template: Some("https://resolver.example/dns?name={domain}".to_string()),
@@ -1621,6 +1640,7 @@ mod tests {
                 ..Default::default()
             },
             spec: edgion_resources::resources::gateway_class::GatewayClassSpec {
+                current_status: None,
                 controller_name: "example.com/controller".to_string(),
                 description: None,
                 parameters_ref: None,
@@ -1646,6 +1666,7 @@ mod tests {
                 ..Default::default()
             },
             spec: edgion_resources::resources::gateway_class::GatewayClassSpec {
+                current_status: None,
                 controller_name: "example.com/controller".to_string(),
                 description: None,
                 parameters_ref: None,

@@ -70,6 +70,7 @@ mod tests {
                 ..Default::default()
             },
             spec: EdgionBackendTrafficPolicySpec {
+                current_status: None,
                 target_refs: vec![PolicyTargetRef {
                     group: String::new(),
                     kind: "Service".to_string(),

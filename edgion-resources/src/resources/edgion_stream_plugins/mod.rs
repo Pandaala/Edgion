@@ -44,6 +44,12 @@ pub use crate::resources::edgion_plugins::DefaultAction;
 )]
 #[serde(rename_all = "camelCase")]
 pub struct EdgionStreamPluginsSpec {
+    /// Controller-computed status for this deployment, transported to the Gateway.
+    /// Never supplied by operators or used as the persisted status history.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
+    pub current_status: Option<ConditionsStatus>,
+
     /// Stage 1 (ConnectionFilter) plugin configurations — pre-TLS, IP-only
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plugins: Option<Vec<StreamPluginEntry>>,
@@ -66,6 +72,8 @@ pub struct EdgionStreamPluginsSpec {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct EdgionStreamPluginsSpecShadow {
+    #[serde(default)]
+    current_status: Option<ConditionsStatus>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     plugins: Option<Vec<StreamPluginEntry>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -75,6 +83,7 @@ struct EdgionStreamPluginsSpecShadow {
 impl From<EdgionStreamPluginsSpecShadow> for EdgionStreamPluginsSpec {
     fn from(shadow: EdgionStreamPluginsSpecShadow) -> Self {
         EdgionStreamPluginsSpec {
+            current_status: shadow.current_status,
             plugins: shadow.plugins,
             tls_route_plugins: shadow.tls_route_plugins,
             unknown_fields: Vec::new(),

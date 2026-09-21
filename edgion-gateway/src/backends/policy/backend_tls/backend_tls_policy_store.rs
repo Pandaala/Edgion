@@ -214,8 +214,8 @@ impl BackendTLSPolicyStore {
             && left.spec.resolved_ca_certificates == right.spec.resolved_ca_certificates
             && left.spec.resolved_client_certificate == right.spec.resolved_client_certificate
             && left.spec.use_system_ca == right.spec.use_system_ca
-            && left.status.as_ref().map(|status| &status.ancestors)
-                == right.status.as_ref().map(|status| &status.ancestors)
+            && left.spec.current_status.as_ref().map(|status| &status.ancestors)
+                == right.spec.current_status.as_ref().map(|status| &status.ancestors)
     }
 
     fn is_valid_candidate(policy: &BackendTLSPolicy) -> bool {
@@ -660,6 +660,7 @@ mod tests {
                 ..Default::default()
             },
             spec: BackendTLSPolicySpec {
+                current_status: None,
                 target_refs: vec![BackendTLSPolicyTargetRef {
                     group: group.to_string(),
                     kind: kind.to_string(),
@@ -688,6 +689,22 @@ mod tests {
             namespace: "tenant".to_string(),
             name: name.to_string(),
         }
+    }
+
+    #[test]
+    fn policy_equivalence_ignores_full_status_but_tracks_current_status() {
+        let original = policy(
+            "status",
+            PolicyTargetKind::Service,
+            "backend",
+            None,
+            Some(ResolvedPolicyTargetClass::Service),
+        );
+        let mut changed = (*original).clone();
+        changed.status = Some(serde_json::from_value(serde_json::json!({"ancestors": []})).unwrap());
+        assert!(BackendTLSPolicyStore::policy_resource_equivalent(&original, &changed));
+        changed.spec.current_status = changed.status.clone();
+        assert!(!BackendTLSPolicyStore::policy_resource_equivalent(&original, &changed));
     }
 
     fn target(kind: PolicyTargetKind) -> PolicyTargetKey {

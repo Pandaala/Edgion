@@ -161,7 +161,7 @@ fn parse_route_to_units(resource_key: &str, route: &Arc<GRPCRoute>) -> Vec<Arc<G
 
     let Some(accepted_refs) = filter_accepted_parent_refs(
         route.spec.parent_refs.as_deref(),
-        route.status.as_ref().map(|s| s.parents.as_slice()),
+        route.spec.current_status.as_ref().map(|s| s.parents.as_slice()),
         Some(route_namespace),
         route.spec.resolved_status_controller.as_deref(),
     ) else {
@@ -348,7 +348,7 @@ mod tests {
     }
 
     fn matching_route(name: &str, host: &str, matcher: serde_json::Value) -> Arc<GRPCRoute> {
-        let route: GRPCRoute = serde_json::from_value(json!({
+        let route: GRPCRoute = crate::test_current_status::from_value(json!({
             "apiVersion": "gateway.networking.k8s.io/v1", "kind": "GRPCRoute",
             "metadata": {"name": name, "namespace": "default"},
             "spec": {"resolvedStatusController": "edgion.io/gateway-controller", "parentRefs": [{"name": "test-gw", "sectionName": "grpc"}],
@@ -368,7 +368,7 @@ mod tests {
         let gateways = [("a", vec![8080, 8081]), ("b", vec![8081])]
             .into_iter()
             .map(|(name, ports)| {
-                let gateway: edgion_resources::Gateway = serde_json::from_value(json!({
+                let gateway: edgion_resources::Gateway = crate::test_current_status::from_value(json!({
                     "apiVersion": "gateway.networking.k8s.io/v1", "kind": "Gateway",
                     "metadata": {"namespace": "default", "name": name},
                     "spec": {"gatewayClassName": "test", "listeners": ports.into_iter().map(|port|
@@ -388,6 +388,8 @@ mod tests {
             ]))
             .unwrap(),
         );
+        route.spec.current_status = None;
+        let route = crate::test_current_status::processed(route);
         let units = parse_route_to_units("default/port-owner", &Arc::new(route));
         assert_eq!(units.len(), 1);
         let engine = GrpcMatchEngine::new(units);
@@ -418,13 +420,17 @@ mod tests {
         managers.full_set(&HashMap::from([(key.clone(), Arc::new(route.clone()))]));
         let old = managers.route_units_cache.lock()[&key][0].clone();
         route.spec.resolved_status_controller = Some("example.net/owner".into());
+        route.spec.current_status = route.status.clone();
+        route.status.as_mut().unwrap().parents[0].conditions[0].status = "True".into();
         managers.partial_update(
             HashMap::new(),
             HashMap::from([(key.clone(), Arc::new(route.clone()))]),
             HashSet::new(),
         );
         assert!(managers.route_units_cache.lock()[&key].is_empty());
-        route.status.as_mut().unwrap().parents[0].conditions[0].status = "True".into();
+        route.spec.current_status.as_mut().unwrap().parents[0].controller_name = "example.net/owner".into();
+        route.spec.current_status.as_mut().unwrap().parents[0].conditions[0].status = "True".into();
+        route.status.as_mut().unwrap().parents[0].conditions[0].status = "False".into();
         managers.partial_update(
             HashMap::new(),
             HashMap::from([(key.clone(), Arc::new(route.clone()))]),
@@ -819,7 +825,7 @@ mod tests {
         let grpc = matching_route("grpc-first", "api.example.com", json!({"method":{"method":"Get"}}));
         grpc_mgr.full_set(&HashMap::from([("default/grpc-first".to_string(), grpc)]));
         let http = Arc::new(
-            serde_json::from_value(json!({
+            crate::test_current_status::from_value(json!({
                 "apiVersion":"gateway.networking.k8s.io/v1", "kind":"HTTPRoute",
                 "metadata":{"name":"http-fallback", "namespace":"default"},
                 "spec":{"resolvedStatusController": "edgion.io/gateway-controller", "parentRefs":[{"name":"test-gw", "sectionName":"grpc"}],
@@ -865,7 +871,7 @@ mod tests {
                 }]
             }
         });
-        let mut route: GRPCRoute = serde_json::from_value(json).expect("Failed to build GRPCRoute");
+        let mut route: GRPCRoute = crate::test_current_status::from_value(json).expect("Failed to build GRPCRoute");
         route.pre_parse();
         route
     }
@@ -887,7 +893,7 @@ mod tests {
                 ]
             }
         });
-        let mut route: GRPCRoute = serde_json::from_value(json).expect("Failed to build GRPCRoute");
+        let mut route: GRPCRoute = crate::test_current_status::from_value(json).expect("Failed to build GRPCRoute");
         route.pre_parse();
         route
     }
@@ -1043,7 +1049,7 @@ mod tests {
                 ]
             }
         });
-        let mut route: GRPCRoute = serde_json::from_value(json).expect("Failed to build GRPCRoute");
+        let mut route: GRPCRoute = crate::test_current_status::from_value(json).expect("Failed to build GRPCRoute");
         route.pre_parse();
 
         let units = parse_route_to_units("route-ns/metric-sharing", &Arc::new(route));

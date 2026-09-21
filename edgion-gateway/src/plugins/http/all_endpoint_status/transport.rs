@@ -226,6 +226,7 @@ mod tests {
         let policy = BackendTLSPolicy {
             metadata: Default::default(),
             spec: BackendTLSPolicySpec {
+                current_status: None,
                 target_refs: Vec::new(),
                 resolved_target_class: None,
                 validation: BackendTLSPolicyValidation {

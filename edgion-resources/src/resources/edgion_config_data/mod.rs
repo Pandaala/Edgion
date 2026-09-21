@@ -71,6 +71,12 @@ pub use crate::resources::config_data_ref::EdgionConfigDataRef;
 )]
 #[serde(rename_all = "camelCase")]
 pub struct EdgionConfigDataSpec {
+    /// Controller-computed status for this deployment, transported to the Gateway.
+    /// Never supplied by operators or used as the persisted status history.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
+    pub current_status: Option<EdgionConfigDataStatus>,
+
     /// Top-level kill switch. When `false`, consumers must ignore this EdgionConfigData's
     /// content and fall back to their own base defaults. Defaults to `true`.
     ///
@@ -110,6 +116,8 @@ pub struct EdgionConfigDataSpec {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct EdgionConfigDataSpecShadow {
+    #[serde(default)]
+    current_status: Option<EdgionConfigDataStatus>,
     #[serde(default = "default_enable")]
     enable: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -122,6 +130,7 @@ struct EdgionConfigDataSpecShadow {
 impl From<EdgionConfigDataSpecShadow> for EdgionConfigDataSpec {
     fn from(shadow: EdgionConfigDataSpecShadow) -> Self {
         Self {
+            current_status: shadow.current_status,
             enable: shadow.enable,
             active: shadow.active,
             visibility: shadow.visibility,
@@ -426,6 +435,7 @@ mod tests {
             },
         ];
         let spec = EdgionConfigDataSpec {
+            current_status: None,
             enable: true,
             active: None,
             visibility: ConfigDataVisibility::Namespace,
@@ -465,6 +475,7 @@ mod tests {
             },
         ];
         let spec = EdgionConfigDataSpec {
+            current_status: None,
             enable: true,
             active: None,
             visibility: ConfigDataVisibility::Namespace,

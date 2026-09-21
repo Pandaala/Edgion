@@ -27,9 +27,12 @@ fencing remains separately tracked and is not claimed fixed by this status envel
 - Kubernetes stores complete `ControllerStatus<T>` observations in controllers[],
   keyed by controllerName and gatewayClassName. gatewayClassUid proves incarnation;
   it is not a new key. LinkSys lifecycle fields stay inside the same nested payload.
-- Handlers and conf_sync consume only native local status. The processor returns
-  a separate persistence payload; Kubernetes must not extract it from local cache.
-  Typed status replacement preserves compiled fields and ingest sidecars.
+- Handlers compute with native working status. ServerCache/conf_sync retain the
+  complete logical `status` and a separate typed native `spec.currentStatus` for
+  current-deployment decisions. Gateway status consumers use currentStatus only.
+  The processor returns a separate persistence payload; Kubernetes must not
+  extract it from local cache. Typed status replacement preserves compiled fields
+  and ingest sidecars. This split implements `current-status-projection`.
 - A matching committed raw GatewayClass/controller/nonempty UID identifies a flat
   observer without granting serving authority. Native serving additionally needs
   an owned raw Gateway and matching published UID/class.
@@ -40,6 +43,9 @@ fencing remains separately tracked and is not claimed fixed by this status envel
   evict others. Invalid observations or capacity failure suppress persistence,
   not local configuration processing. Malformed input is retained opaquely until
   the processor can reject its status without rejecting the whole resource.
+  When persistence is suppressed, retain the observed complete status and the
+  independently computed currentStatus. Incoming currentStatus is overwritten;
+  it is transport-only, excluded from operator schemas and API status patches.
 - Recognized native-only input is not inherited by any deployment. Canonicalization
   sends fixed-whitelist native-field null tombstones only on the wire. All retired
   fields must be cleared, including empty/null fields omitted by typed serialization.
@@ -56,7 +62,7 @@ echoes do not fan out. Gateway publication fingerprints use the exact validated
 Gateway/class incarnation, ensuring recovery when a dependent ran between raw and
 processed publication even if listeners did not change.
 
-Fresh 2026-09-21 checks during implementation:
+Historical 2026-09-21 checks for observation isolation, before currentStatus:
 
 - Controller status-related tests: 161 passed; processor suite: 819 passed.
 - Additional typed-empty/native-field retirement regression: passed.
@@ -77,6 +83,14 @@ attempt handoff fencing remain in the
 [scheduler task](../../../../tasks/todo/acme-scheduler-trigger-admission.md).
 
 ## Re-evaluation
+
+The subsequent `current-status-projection` change was independently reviewed and
+verified on 2026-09-21: final Controller processor tests 821, current-status tests
+18, ACME tests 33, transport/schema tests 3 (17 resource schemas and four custom
+deserializers), structural/condition/type CRD checks 19/8/6. Workspace checks and
+all repository guards passed; live Kubernetes/etcd and GatewayDynamic were not
+run. See [canonical parent ownership](canonical-parent-status-ownership.md) for
+Gateway test results and the separate unresolved reporting requirement.
 
 Revisit on new status resources, changed payload schemas, controller identity or
 watch-scope changes, new serving consumers, dependency fanout changes, or a new

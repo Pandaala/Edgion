@@ -24,6 +24,7 @@ fn route_with_parent(gw_name: &str) -> HTTPRoute {
             ..Default::default()
         },
         spec: HTTPRouteSpec {
+            current_status: None,
             resolved_status_controller: None,
             parent_refs: Some(vec![ParentReference {
                 group: None,

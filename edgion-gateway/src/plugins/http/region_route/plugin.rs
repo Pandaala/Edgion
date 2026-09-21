@@ -584,6 +584,7 @@ mod tests {
         let mut resource = EdgionConfigData::new(
             "rr-generation-validation",
             EdgionConfigDataSpec {
+                current_status: None,
                 enable: true,
                 active: None,
                 visibility: Default::default(),
@@ -866,6 +867,7 @@ mod tests {
         let mut ed = EdgionConfigData::new(
             "rr-overlay-envelope-disabled-h1-test",
             EdgionConfigDataSpec {
+                current_status: None,
                 enable: false, // envelope kill-switch
                 active: None,
                 visibility: Default::default(),
@@ -929,6 +931,7 @@ mod tests {
         let mut ed = EdgionConfigData::new(
             "rr-overlay-invalid-dup-names-h2-test",
             EdgionConfigDataSpec {
+                current_status: None,
                 enable: true, // envelope enabled — the validation must catch the bad regions
                 active: None,
                 visibility: Default::default(),

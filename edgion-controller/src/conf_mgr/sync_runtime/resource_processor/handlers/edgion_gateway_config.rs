@@ -218,6 +218,7 @@ mod tests {
         let ctx = make_ctx_with_secrets(secrets);
 
         let spec = EdgionGatewayConfigSpec {
+            current_status: None,
             outbound_tls: Some(OutboundTlsConfig {
                 validation: Some(OutboundTlsValidation {
                     ca_certificate_refs: Some(vec![BackendTLSPolicyCACertificateRef {
@@ -273,6 +274,7 @@ mod tests {
         let ctx = make_ctx_with_secrets(secrets);
 
         let spec = EdgionGatewayConfigSpec {
+            current_status: None,
             outbound_tls: Some(OutboundTlsConfig {
                 validation: Some(OutboundTlsValidation {
                     ca_certificate_refs: Some(vec![BackendTLSPolicyCACertificateRef {
@@ -314,6 +316,7 @@ mod tests {
         let ctx = make_ctx_with_secrets(HashMap::new());
         let handler = EdgionGatewayConfigHandler::new();
         let spec = EdgionGatewayConfigSpec {
+            current_status: None,
             outbound_tls: Some(OutboundTlsConfig {
                 validation: Some(OutboundTlsValidation {
                     ca_certificate_refs: Some(vec![BackendTLSPolicyCACertificateRef {
@@ -408,6 +411,7 @@ mod tests {
         let ctx = make_ctx_with_secrets(HashMap::new());
 
         let spec = EdgionGatewayConfigSpec {
+            current_status: None,
             outbound_tls: Some(OutboundTlsConfig {
                 validation: Some(OutboundTlsValidation {
                     subject_alt_names: Some(vec![SubjectAltName {
@@ -450,6 +454,7 @@ mod tests {
     async fn egc_bad_max_body_size_rejected() {
         let ctx = make_ctx_with_secrets(HashMap::new());
         let spec = EdgionGatewayConfigSpec {
+            current_status: None,
             request_body: edgion_resources::resources::edgion_gateway_config::RequestBodyConfig {
                 max_body_size: Some("garbage".to_string()),
                 ..Default::default()
@@ -505,6 +510,7 @@ mod tests {
 
         let ctx = make_ctx_with_secrets(HashMap::new());
         let spec = EdgionGatewayConfigSpec {
+            current_status: None,
             real_ip: Some(RealIpConfig {
                 trusted_ips: vec![IpGroup {
                     name: "internal".to_string(),
@@ -533,6 +539,7 @@ mod tests {
         let ctx = make_ctx_with_secrets(HashMap::new());
 
         let spec = EdgionGatewayConfigSpec {
+            current_status: None,
             outbound_tls: Some(OutboundTlsConfig {
                 validation: Some(OutboundTlsValidation {
                     hostname: Some("upstream.example.com".to_string()),
@@ -564,6 +571,7 @@ mod tests {
         let ctx = make_ctx_with_secrets(HashMap::new());
 
         let spec = EdgionGatewayConfigSpec {
+            current_status: None,
             outbound_tls: Some(OutboundTlsConfig {
                 validation: Some(OutboundTlsValidation {
                     ca_certificate_refs: Some(vec![BackendTLSPolicyCACertificateRef {

@@ -361,6 +361,7 @@ mod deferred_credential_connection_tests {
         let resource = EdgionPlugins::new(
             "forwarded-identity-collision",
             EdgionPluginsSpec {
+                current_status: None,
                 request_plugins: Some(vec![RequestFilterEntry::new(EdgionPlugin::RequestId(config))]),
                 ..Default::default()
             },

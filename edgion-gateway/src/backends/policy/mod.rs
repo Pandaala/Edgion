@@ -91,6 +91,7 @@ mod tests {
                 ..Default::default()
             },
             spec: BackendTLSPolicySpec {
+                current_status: None,
                 target_refs: refs
                     .iter()
                     .map(|(svc, section)| BackendTLSPolicyTargetRef {

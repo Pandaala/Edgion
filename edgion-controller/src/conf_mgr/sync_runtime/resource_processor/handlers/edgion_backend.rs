@@ -414,6 +414,7 @@ mod tests {
                 ..Default::default()
             },
             spec: EdgionBackendSpec {
+                current_status: None,
                 ai: AiBackendSpec {
                     provider: AiProvider::OpenAI,
                     endpoint: None,

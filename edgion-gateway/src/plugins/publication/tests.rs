@@ -112,7 +112,7 @@ fn gateway(name: &str, class: &str, port: u16, connection: Option<&str>) -> Gate
     if let Some(connection) = connection {
         value["metadata"]["annotations"] = json!({"edgion.io/edgion-stream-plugins": connection});
     }
-    GatewayInput::from_gateway(&serde_json::from_value::<Gateway>(value).unwrap())
+    GatewayInput::from_gateway(&crate::test_current_status::from_value::<Gateway>(value).unwrap())
 }
 
 fn publisher() -> PluginPublisher {
@@ -495,7 +495,7 @@ fn same_key_add_and_delete_recreate_do_not_retain_old_programs() {
 
 fn route() -> Arc<HTTPRoute> {
     Arc::new(
-        serde_json::from_value(json!({
+        crate::test_current_status::from_value(json!({
             "apiVersion": "gateway.networking.k8s.io/v1", "kind": "HTTPRoute",
             "metadata": {"namespace": "apps", "name": "route"},
             "spec": {"resolvedStatusController": "edgion.io/gateway-controller", "parentRefs": [{"name": "a"}], "resolvedListeners": ["0.0.0.0:18080/HTTP"],
@@ -540,7 +540,8 @@ fn owner_and_status_updates_revoke_and_restore_route_plugin_contributions() {
     source.spec.resolved_status_controller = Some("example.net/owner".into());
     publisher.update_routes(RouteKind::Http, inputs(&source), &HashSet::new());
     assert!(scope(&publisher, "apps/a").http("apps/plugins").is_none());
-    source.status.as_mut().unwrap().parents[0].conditions[0].status = "True".into();
+    source.spec.current_status.as_mut().unwrap().parents[0].controller_name = "example.net/owner".into();
+    source.spec.current_status.as_mut().unwrap().parents[0].conditions[0].status = "True".into();
     publisher.update_routes(RouteKind::Http, inputs(&source), &HashSet::new());
     assert!(scope(&publisher, "apps/a").http("apps/plugins").is_some());
     source.spec.resolved_status_controller = None;
@@ -607,6 +608,8 @@ fn every_route_plugin_input_uses_its_same_generation_owner() {
             "TLSRoute" => RouteInput::from_tls(&serde_json::from_value::<TLSRoute>(value).unwrap()),
             _ => RouteInput::from_udp(&serde_json::from_value::<UDPRoute>(value).unwrap()),
         };
+        value["spec"]["currentStatus"] = value["status"].clone();
+        value["status"]["parents"][0]["conditions"][0]["status"] = json!("True");
         assert!(!input(value.clone()).attaches_to("apps/a", &gateway), "{kind}");
         let has_contribution = || {
             let scope = scope(&publisher, "apps/a");
@@ -620,15 +623,23 @@ fn every_route_plugin_input_uses_its_same_generation_owner() {
         publisher.replace_routes(route_kind, inputs(value.clone()));
         assert!(!has_contribution(), "{kind}");
         value["spec"]["resolvedStatusController"] = json!("example.net/other");
-        assert!(input(value.clone()).attaches_to("apps/a", &gateway), "{kind}");
+        assert!(!input(value.clone()).attaches_to("apps/a", &gateway), "{kind}");
         publisher.update_routes(route_kind, inputs(value.clone()), &HashSet::new());
-        assert!(has_contribution(), "{kind}");
+        assert!(!has_contribution(), "{kind}");
         value["spec"]["resolvedStatusController"] = json!("example.net/owner");
         publisher.update_routes(route_kind, inputs(value.clone()), &HashSet::new());
         assert!(!has_contribution(), "{kind}");
-        value["status"]["parents"][0]["conditions"][0]["status"] = json!("True");
+        value["status"]["parents"][0]["conditions"][0]["status"] = json!("False");
+        value["spec"]["currentStatus"]["parents"][0]["conditions"][0]["status"] = json!("True");
         publisher.update_routes(route_kind, inputs(value.clone()), &HashSet::new());
         assert!(has_contribution(), "{kind}");
+        value["status"]["parents"][0]["conditions"][0]["status"] = json!("True");
+        value["spec"]["currentStatus"] = Value::Null;
+        publisher.update_routes(route_kind, inputs(value.clone()), &HashSet::new());
+        assert!(
+            !has_contribution(),
+            "missing current status must not use full status: {kind}"
+        );
         value["spec"]["resolvedStatusController"] = serde_json::Value::Null;
         assert!(!input(value.clone()).attaches_to("apps/a", &gateway), "{kind}");
         publisher.replace_routes(route_kind, inputs(value));

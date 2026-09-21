@@ -133,8 +133,13 @@ Kubernetes 中，`EdgionPlugins`、`EdgionStreamPlugins`、`EdgionBackend` 和
 
 每个资源最多保存 32 个部署条目。达到上限时，已有条目仍可更新，新部署不会挤掉其他条目；
 Controller 会报告无法写入状态，本地配置处理不受影响。停用部署的条目不会按时间自动清除，
-只有观察到 GatewayClass 删除或实例替换等明确证据后才清理。FileSystem、etcd 和
-Gateway 本地配置的状态格式不变。不同独立部署应使用不同的 GatewayClass；
+只有观察到 GatewayClass 删除或实例替换等明确证据后才清理。FileSystem 和 etcd
+仍按原生状态格式持久化。
+Gateway 收到的配置会保留完整 `status`，并包含由 Controller 生成的
+`spec.currentStatus`。排查当前部署的路由接纳、Listener 状态或 ACME challenge 时，
+应查看这份当前状态；其他部署的成功状态不会授权当前部署提供服务。
+该字段是内部诊断和传输内容，不要写入资源 YAML。Route 缺少当前状态或对应的
+`Accepted=True` 条目时，不会被数据面接纳。不同独立部署应使用不同的 GatewayClass；
 共用同一个 class 的副本必须共享选主域和配置视图。
 
 ### GatewayClass 注意事项

@@ -9,6 +9,7 @@
 //! - Gateway API standard status management (per parent)
 
 use super::{remove_from_gateway_route_index, update_gateway_route_index};
+use crate::conf_mgr::sync_runtime::resource_processor::status_pipeline::filter_current_native_attachment_status;
 use crate::conf_mgr::sync_runtime::resource_processor::{
     format_secret_key, set_parent_conditions_full, AcceptedError, HandlerContext, ProcessResult, ProcessorHandler,
     ResolvedRefsError, ResourceRef,
@@ -81,6 +82,10 @@ impl Default for EdgionTlsHandler {
 
 #[async_trait::async_trait]
 impl ProcessorHandler<EdgionTls> for EdgionTlsHandler {
+    fn finalize_transport(&self, tls: &mut EdgionTls, _ctx: &HandlerContext) {
+        filter_current_native_attachment_status(tls, &self.controller_name);
+    }
+
     fn validate(&self, tls: &EdgionTls, ctx: &HandlerContext) -> Vec<String> {
         let mut warnings = Vec::new();
         let owner_ns = tls.metadata.namespace.as_deref().unwrap_or("default");
@@ -554,6 +559,7 @@ mod tests {
                 ..Default::default()
             },
             spec: GatewaySpec {
+                current_status: None,
                 gateway_class_name: "test".to_string(),
                 listeners: Some(vec![GatewayListener {
                     name: "https".to_string(),
@@ -610,6 +616,7 @@ mod tests {
                 ..Default::default()
             },
             spec: edgion_resources::resources::edgion_tls::EdgionTlsSpec {
+                current_status: None,
                 parent_refs,
                 hosts: vec!["example.com".to_string()],
                 secret_ref: SecretObjectReference {

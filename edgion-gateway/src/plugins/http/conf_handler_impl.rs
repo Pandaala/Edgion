@@ -57,6 +57,7 @@ mod tests {
                 ..Default::default()
             },
             spec: EdgionPluginsSpec {
+                current_status: None,
                 request_plugins: Some(vec![RequestFilterEntry::new(EdgionPlugin::RequestHeaderModifier(
                     HTTPHeaderFilter {
                         set: None,
@@ -78,6 +79,7 @@ mod tests {
                 ..Default::default()
             },
             spec: EdgionPluginsSpec {
+                current_status: None,
                 request_plugins: Some(vec![RequestFilterEntry::new(EdgionPlugin::ResponseHeaderModifier(
                     HTTPHeaderFilter {
                         set: None,
@@ -101,6 +103,7 @@ mod tests {
                 ..Default::default()
             },
             spec: EdgionPluginsSpec {
+                current_status: None,
                 request_plugins: Some(vec![RequestFilterEntry::new(EdgionPlugin::Dsl(DslConfig {
                     name: "invalid-reload".to_string(),
                     source: Some("let value =".to_string()),

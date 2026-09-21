@@ -156,12 +156,15 @@ mod tests {
             .unwrap(),
         );
         route.spec.resolved_status_controller = Some("example.net/other".into());
+        route.spec.current_status.as_mut().unwrap().parents[0].controller_name = "example.net/other".into();
         managers.full_set(&HashMap::from([(key.clone(), Arc::new(route.clone()))]));
         let original = managers.get_route(&key).unwrap();
         assert_eq!(original.accepted_attachments.len(), 1);
 
-        // Only the stamped owner changes: the previously foreign rejection now applies.
+        // The current owner rejects while the complete status reports acceptance.
         route.spec.resolved_status_controller = Some("example.net/owner".into());
+        route.spec.current_status = route.status.clone();
+        route.status.as_mut().unwrap().parents[0].conditions[0].status = "True".into();
         managers.partial_update(
             HashMap::new(),
             HashMap::from([(key.clone(), Arc::new(route.clone()))]),
@@ -175,7 +178,9 @@ mod tests {
         );
 
         // Only status changes, with exactly the same listener attachment.
-        route.status.as_mut().unwrap().parents[0].conditions[0].status = "True".into();
+        route.spec.current_status.as_mut().unwrap().parents[0].controller_name = "example.net/owner".into();
+        route.spec.current_status.as_mut().unwrap().parents[0].conditions[0].status = "True".into();
+        route.status.as_mut().unwrap().parents[0].conditions[0].status = "False".into();
         managers.partial_update(
             HashMap::new(),
             HashMap::from([(key.clone(), Arc::new(route.clone()))]),
@@ -206,13 +211,14 @@ mod tests {
     ) -> TLSRoute {
         use edgion_resources::resources::tls_route::*;
 
-        TLSRoute {
+        crate::test_current_status::processed(TLSRoute {
             metadata: kube::api::ObjectMeta {
                 namespace: Some(namespace.to_string()),
                 name: Some(name.to_string()),
                 ..Default::default()
             },
             spec: TLSRouteSpec {
+                current_status: None,
                 resolved_status_controller: Some("edgion.io/gateway-controller".into()),
                 parent_refs: Some(vec![ParentReference {
                     group: Some("gateway.networking.k8s.io".to_string()),
@@ -243,7 +249,7 @@ mod tests {
                 }]),
             },
             status: None,
-        }
+        })
     }
 
     #[test]

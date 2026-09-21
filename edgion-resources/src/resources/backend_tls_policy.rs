@@ -33,6 +33,12 @@ pub const OPTION_CLIENT_CERTIFICATE_REF: &str = "edgion.io/client-certificate-re
 )]
 #[serde(rename_all = "camelCase")]
 pub struct BackendTLSPolicySpec {
+    /// Controller-computed status for this deployment, transported to the Gateway.
+    /// Never supplied by operators or used as the persisted status history.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
+    pub current_status: Option<BackendTLSPolicyStatus>,
+
     /// TargetRefs identifies the API object(s) to apply the policy to.
     pub target_refs: Vec<BackendTLSPolicyTargetRef>,
 
@@ -356,6 +362,7 @@ mod tests {
                 ..Default::default()
             },
             spec: BackendTLSPolicySpec {
+                current_status: None,
                 target_refs: vec![BackendTLSPolicyTargetRef {
                     group: "".to_string(),
                     kind: "Service".to_string(),

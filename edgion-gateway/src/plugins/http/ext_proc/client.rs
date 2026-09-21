@@ -941,6 +941,7 @@ mod tests {
                 let resource = EdgionPlugins {
                     metadata: Default::default(),
                     spec: EdgionPluginsSpec {
+                        current_status: None,
                         request_plugins: Some(vec![RequestFilterEntry::new(EdgionPlugin::ExtProc(config))]),
                         ..Default::default()
                     },

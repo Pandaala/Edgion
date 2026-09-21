@@ -746,6 +746,7 @@ mod tests {
                 ..Default::default()
             },
             spec: EdgionBackendTrafficPolicySpec {
+                current_status: None,
                 target_refs: vec![PolicyTargetRef {
                     group: String::new(),
                     kind: "Service".to_string(),
@@ -778,6 +779,7 @@ mod tests {
                 ..Default::default()
             },
             spec: EdgionBackendTrafficPolicySpec {
+                current_status: None,
                 target_refs: vec![PolicyTargetRef {
                     group: "edgion.io".to_string(),
                     kind: "EdgionBackend".to_string(),
@@ -999,6 +1001,7 @@ mod tests {
                 ..Default::default()
             },
             spec: EdgionBackendTrafficPolicySpec {
+                current_status: None,
                 target_refs: vec![PolicyTargetRef {
                     group: String::new(),
                     kind: "Service".to_string(),

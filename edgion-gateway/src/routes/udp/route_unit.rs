@@ -39,7 +39,11 @@ impl UdpRouteUnit {
         let namespace = route.metadata.namespace.as_deref().unwrap_or("default");
         let accepted = filter_accepted_parent_refs(
             route.spec.parent_refs.as_deref(),
-            route.status.as_ref().map(|status| status.parents.as_slice()),
+            route
+                .spec
+                .current_status
+                .as_ref()
+                .map(|status| status.parents.as_slice()),
             Some(namespace),
             route.spec.resolved_status_controller.as_deref(),
         )
@@ -86,7 +90,7 @@ mod tests {
     use edgion_resources::resources::udp_route::{UDPBackendRef, UDPRouteRule, UDPRouteSpec};
 
     fn make_route(annotations: Option<std::collections::BTreeMap<String, String>>) -> Arc<UDPRoute> {
-        Arc::new(UDPRoute {
+        Arc::new(crate::test_current_status::processed(UDPRoute {
             metadata: kube::api::ObjectMeta {
                 namespace: Some("default".to_string()),
                 name: Some("r".to_string()),
@@ -94,6 +98,7 @@ mod tests {
                 ..Default::default()
             },
             spec: UDPRouteSpec {
+                current_status: None,
                 resolved_status_controller: Some("edgion.io/gateway-controller".into()),
                 parent_refs: Some(vec![ParentReference {
                     group: Some("gateway.networking.k8s.io".to_string()),
@@ -117,7 +122,7 @@ mod tests {
                 resolved_listeners: None,
             },
             status: None,
-        })
+        }))
     }
 
     #[test]

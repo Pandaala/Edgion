@@ -106,9 +106,7 @@ pub(crate) fn to_pingora_tcp_keepalive(config: &TcpKeepaliveConfig) -> pingora_c
 
 /// Check the stamped controller's acceptance for one canonical parent identity.
 ///
-/// Returns true when no matching status entry is found (optimistic: include
-/// until the controller explicitly rejects it, e.g. during the first sync
-/// before status is populated).
+/// The current projection must contain exactly one accepted owned entry.
 fn is_parent_ref_accepted(
     pr: &ParentReference,
     status_parents: &[RouteParentStatus],
@@ -121,7 +119,7 @@ fn is_parent_ref_accepted(
         status_identity.parent == identity && status_identity.controller_name == expected_controller
     });
     let Some(status) = owned.next() else {
-        return true;
+        return false;
     };
     // A processed Controller generation deduplicates owned entries. Reject
     // ambiguous snapshots independently of list order if that contract is broken.
@@ -142,8 +140,8 @@ fn is_gateway_parent_ref(pr: &ParentReference) -> bool {
 /// An existing owned status must be uniquely identified and Accepted=True.
 ///
 /// Returns None if no parentRefs survive (route should be skipped entirely).
-/// A nonempty Controller-owned transport stamp is required. With that stamp,
-/// missing owned status retains optimistic acceptance; foreign status is ignored.
+/// A nonempty Controller-owned transport stamp and current status are required.
+/// Missing owned status cannot authorize an attachment; foreign status is ignored.
 pub(crate) fn filter_accepted_parent_refs(
     parent_refs: Option<&[ParentReference]>,
     status_parents: Option<&[RouteParentStatus]>,
@@ -152,6 +150,7 @@ pub(crate) fn filter_accepted_parent_refs(
 ) -> Option<Vec<ParentReference>> {
     let expected_controller = expected_controller.filter(|owner| !owner.is_empty())?;
     let parent_refs = parent_refs?;
+    let status_parents = status_parents?;
     if parent_refs.is_empty() {
         return None;
     }
@@ -159,11 +158,7 @@ pub(crate) fn filter_accepted_parent_refs(
     let accepted: Vec<ParentReference> = parent_refs
         .iter()
         .filter(|pr| {
-            is_gateway_parent_ref(pr)
-                && match status_parents {
-                    Some(sp) if !sp.is_empty() => is_parent_ref_accepted(pr, sp, route_ns, expected_controller),
-                    _ => true,
-                }
+            is_gateway_parent_ref(pr) && is_parent_ref_accepted(pr, status_parents, route_ns, expected_controller)
         })
         .cloned()
         .collect();
@@ -455,7 +450,7 @@ mod tests {
                     Some("apps"),
                     Some(&own.controller_name)
                 ),
-                Some(refs.clone())
+                None
             );
         }
     }

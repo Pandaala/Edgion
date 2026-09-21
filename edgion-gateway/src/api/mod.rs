@@ -1710,6 +1710,7 @@ mod edgion_tls_scrub_tests {
                 ..Default::default()
             },
             spec: EdgionTlsSpec {
+                current_status: None,
                 parent_refs: None,
                 hosts: vec!["example.com".to_string()],
                 secret_ref: SecretObjectReference {
@@ -1792,6 +1793,7 @@ mod edgion_backend_admin_tests {
             ..Default::default()
         });
         let spec = EdgionBackendSpec {
+            current_status: None,
             ai: AiBackendSpec {
                 provider: AiProvider::OpenAICompatible,
                 endpoint: Some(endpoint.to_string()),

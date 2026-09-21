@@ -41,6 +41,12 @@ pub use webhook::WebhookServiceConfig;
 )]
 #[serde(rename_all = "camelCase")]
 pub struct LinkSysSpec {
+    /// Controller-computed status for this deployment, transported to the Gateway.
+    /// Never supplied by operators or used as the persisted status history.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
+    pub current_status: Option<LinkSysLocalStatus>,
+
     /// System configuration
     #[serde(flatten)]
     pub config: SystemConfig,
@@ -58,6 +64,8 @@ pub struct LinkSysSpec {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct LinkSysSpecShadow {
+    #[serde(default)]
+    current_status: Option<LinkSysLocalStatus>,
     #[serde(flatten)]
     config: SystemConfig,
 }
@@ -65,6 +73,7 @@ struct LinkSysSpecShadow {
 impl From<LinkSysSpecShadow> for LinkSysSpec {
     fn from(shadow: LinkSysSpecShadow) -> Self {
         Self {
+            current_status: shadow.current_status,
             config: shadow.config,
             unknown_fields: Vec::new(),
         }

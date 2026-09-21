@@ -33,6 +33,12 @@ pub const MAX_GATEWAY_FRONTEND_PER_PORT: usize = 64;
 )]
 #[serde(rename_all = "camelCase")]
 pub struct GatewaySpec {
+    /// Controller-computed status for this deployment, transported to the Gateway.
+    /// Never supplied by operators or used as the persisted status history.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
+    pub current_status: Option<GatewayStatus>,
+
     /// GatewayClassName used for this Gateway
     pub gateway_class_name: String,
 
@@ -479,10 +485,8 @@ pub struct ListenerStatus {
 /// Return whether Controller status explicitly excludes a Gateway listener
 /// from data-plane publication.
 ///
-/// Missing Gateway/listener status is allowed during initial publication. An
-/// explicit conflict or negative Accepted/Programmed condition is authoritative
-/// and must be applied consistently by Controller attachment resolvers and the
-/// Gateway listener index.
+/// A Controller-computed current status and matching listener are required.
+/// Complete API status never grants data-plane publication authority.
 pub fn gateway_listener_is_explicitly_ineligible(gateway: &Gateway, listener_name: &str) -> bool {
     gateway_listener_is_conflicted(gateway, listener_name) || gateway_listener_is_not_programmed(gateway, listener_name)
 }
@@ -490,7 +494,8 @@ pub fn gateway_listener_is_explicitly_ineligible(gateway: &Gateway, listener_nam
 /// Return whether status marks the listener as conflicted.
 pub fn gateway_listener_is_conflicted(gateway: &Gateway, listener_name: &str) -> bool {
     gateway
-        .status
+        .spec
+        .current_status
         .as_ref()
         .and_then(|status| status.listeners.as_ref())
         .and_then(|listeners| listeners.iter().find(|listener| listener.name == listener_name))
@@ -503,14 +508,15 @@ pub fn gateway_listener_is_conflicted(gateway: &Gateway, listener_name: &str) ->
 }
 
 /// Return whether status explicitly marks the listener Accepted or Programmed
-/// false. Missing status remains eligible during initial publication.
+/// false. Missing current status or listener is ineligible.
 pub fn gateway_listener_is_not_programmed(gateway: &Gateway, listener_name: &str) -> bool {
     gateway
-        .status
+        .spec
+        .current_status
         .as_ref()
         .and_then(|status| status.listeners.as_ref())
         .and_then(|listeners| listeners.iter().find(|listener| listener.name == listener_name))
-        .is_some_and(|listener| {
+        .is_none_or(|listener| {
             listener.conditions.iter().any(|condition| {
                 (condition.type_ == "Programmed" || condition.type_ == "Accepted") && condition.status == "False"
             })
@@ -585,6 +591,7 @@ mod tests {
                 ..Default::default()
             },
             spec: GatewaySpec {
+                current_status: None,
                 gateway_class_name: "test-class".to_string(),
                 listeners: Some(vec![Listener {
                     name: "http".to_string(),

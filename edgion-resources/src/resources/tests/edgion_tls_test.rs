@@ -5,6 +5,7 @@ fn create_tls(hosts: Vec<&str>) -> EdgionTls {
     EdgionTls {
         metadata: Default::default(),
         spec: EdgionTlsSpec {
+            current_status: None,
             parent_refs: None,
             hosts: hosts.iter().map(|s| s.to_string()).collect(),
             secret_ref: SecretObjectReference {
@@ -114,6 +115,7 @@ fn test_yaml_serialization_produces_camel_case() {
             ..Default::default()
         },
         spec: EdgionTlsSpec {
+            current_status: None,
             parent_refs: Some(vec![ParentReference {
                 group: None,
                 kind: None,

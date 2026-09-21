@@ -24,7 +24,7 @@ fn selection_class(name: &str) -> Arc<GatewayClass> {
 }
 
 fn selection_gateway(name: &str, class: &str, hostname: &str, port: u16) -> Gateway {
-    serde_json::from_value(json!({
+    crate::test_current_status::from_value(json!({
         "metadata": {"namespace": "default", "name": name},
         "spec": {"gatewayClassName": class, "listeners": [
             {"name": "tls", "hostname": hostname, "port": port, "protocol": "TLS",
@@ -48,7 +48,7 @@ fn selection_unit(name: &str, hostname: &str, parents: &[&str], port: u16) -> Ar
             })
         })
         .collect();
-    let route = serde_json::from_value(json!({
+    let route = crate::test_current_status::from_value(json!({
         "metadata": {"namespace": "default", "name": name},
         "spec": {"hostnames": [hostname], "resolvedStatusController": "edgion.io/gateway-controller", "parentRefs": parent_refs, "resolvedListeners": attachments}
     }))

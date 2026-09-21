@@ -92,6 +92,12 @@ pub use validate::{applicable_stages_by_name, StageSet, HTTP_PLUGIN_STAGE_EXCEPT
 )]
 #[serde(rename_all = "camelCase")]
 pub struct EdgionPluginsSpec {
+    /// Controller-computed status for this deployment, transported to the Gateway.
+    /// Never supplied by operators or used as the persisted status history.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
+    pub current_status: Option<ConditionsStatus>,
+
     /// One native WAF instance spanning all supported transaction phases.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub waf: Option<WafConfig>,
@@ -141,6 +147,8 @@ pub struct EdgionPluginsSpec {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct EdgionPluginsSpecShadow {
+    #[serde(default)]
+    current_status: Option<ConditionsStatus>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     waf: Option<WafConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -158,6 +166,7 @@ struct EdgionPluginsSpecShadow {
 impl From<EdgionPluginsSpecShadow> for EdgionPluginsSpec {
     fn from(shadow: EdgionPluginsSpecShadow) -> Self {
         EdgionPluginsSpec {
+            current_status: shadow.current_status,
             waf: shadow.waf,
             request_plugins: shadow.request_plugins,
             upstream_response_filter_plugins: shadow.upstream_response_filter_plugins,

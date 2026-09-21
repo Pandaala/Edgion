@@ -15,6 +15,9 @@ compile_error!(
 compile_error!("features `boringssl` and `rustls` are mutually exclusive; enable exactly one TLS backend");
 
 #[cfg(test)]
+pub(crate) mod test_current_status;
+
+#[cfg(test)]
 mod test_allocation_counter {
     use std::alloc::{GlobalAlloc, Layout, System};
     use std::cell::Cell;

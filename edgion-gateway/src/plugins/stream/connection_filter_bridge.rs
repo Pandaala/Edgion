@@ -168,7 +168,7 @@ mod tests {
                     .collect(),
             );
             let gateway = |name: &str, ports: &[i32]| {
-                let gateway: edgion_resources::Gateway = serde_json::from_value(json!({
+                let gateway: edgion_resources::Gateway = crate::test_current_status::from_value(json!({
                     "apiVersion": "gateway.networking.k8s.io/v1", "kind": "Gateway",
                     "metadata": {"namespace": "default", "name": name},
                     "spec": {"gatewayClassName": format!("ready-{name}"), "listeners": ports.iter().map(|port|

@@ -23,6 +23,7 @@ fn config() -> EdgionGatewayConfig {
     EdgionGatewayConfig::new(
         "shared",
         EdgionGatewayConfigSpec {
+            current_status: None,
             global_plugins_ref: Some(vec![PluginReference {
                 name: "ids".into(),
                 namespace: Some("team-a".into()),
@@ -88,6 +89,7 @@ impl Deployment {
         let mut class_obj = GatewayClass::new(
             class,
             GatewayClassSpec {
+                current_status: None,
                 controller_name: DEFAULT_CONTROLLER_NAME.into(),
                 description: None,
                 parameters_ref: Some(ParametersReference {

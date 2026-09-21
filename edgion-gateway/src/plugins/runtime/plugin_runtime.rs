@@ -2575,6 +2575,7 @@ mod tests {
         PluginGeneration::new(EdgionPlugins::new(
             "scoped-test",
             EdgionPluginsSpec {
+                current_status: None,
                 request_plugins: Some(entries),
                 ..Default::default()
             },

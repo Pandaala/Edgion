@@ -719,7 +719,7 @@ fn evaluate_issuance_eligibility(raw: &EdgionAcme, key: &str, runtime: &Controll
         return EligibilityDecision::Transient;
     }
 
-    let Some(status) = processed.status.as_ref() else {
+    let Some(status) = processed.spec.current_status.as_ref() else {
         return EligibilityDecision::Transient;
     };
     let accepted = status.conditions.iter().find(|condition| condition.type_ == "Accepted");
@@ -1351,6 +1351,12 @@ mod tests {
                 ..Default::default()
             },
             spec: GatewaySpec {
+                current_status: Some(
+                    serde_json::from_value(serde_json::json!({
+                        "listeners": [{"name":"http", "supportedKinds":[], "attachedRoutes":0, "conditions":[]}]
+                    }))
+                    .unwrap(),
+                ),
                 gateway_class_name: "edgion".to_string(),
                 listeners: Some(vec![Listener {
                     name: "http".to_string(),
@@ -1420,7 +1426,7 @@ spec:
                 .expect("test Gateway attachment must resolve"),
         );
         let generation = processed.metadata.generation;
-        let status = processed.status.get_or_insert_with(Default::default);
+        let status = processed.spec.current_status.get_or_insert_with(Default::default);
         status.conditions = vec![
             condition_true(
                 condition_types::ACCEPTED,
@@ -1602,7 +1608,7 @@ spec:
         let raw = test_acme();
         let mut processed = raw.clone();
         let runtime = eligibility_runtime(&mut processed);
-        let status = processed.status.get_or_insert_with(Default::default);
+        let status = processed.spec.current_status.get_or_insert_with(Default::default);
         status
             .conditions
             .retain(|condition| condition.type_ != condition_types::RESOLVED_REFS);

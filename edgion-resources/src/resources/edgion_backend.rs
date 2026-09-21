@@ -38,6 +38,12 @@ pub const KUBE_DNS_LABEL_PATTERN: &str = r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$";
 )]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct EdgionBackendSpec {
+    /// Controller-computed status for this deployment, transported to the Gateway.
+    /// Never supplied by operators or used as the persisted status history.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
+    pub current_status: Option<ConditionsStatus>,
+
     pub ai: AiBackendSpec,
     /// Controller-only resolution outcome used to build current-generation status.
     #[serde(skip)]
@@ -771,6 +777,7 @@ mod tests {
 
     fn spec(provider: AiProvider) -> EdgionBackendSpec {
         EdgionBackendSpec {
+            current_status: None,
             ai: ai_spec(provider),
             reconcile_outcome: None,
         }

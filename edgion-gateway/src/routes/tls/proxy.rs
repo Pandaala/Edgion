@@ -544,7 +544,7 @@ mod tests {
     }
 
     fn route_unit(name: &str, hostname: &str) -> Arc<TlsRouteUnit> {
-        let route = serde_json::from_value(serde_json::json!({
+        let route = crate::test_current_status::from_value(serde_json::json!({
             "metadata": {"namespace": "default", "name": name},
             "spec": {
                 "hostnames": [hostname], "resolvedStatusController": "edgion.io/gateway-controller", "parentRefs": [{"name": "gateway", "sectionName": "tls"}],

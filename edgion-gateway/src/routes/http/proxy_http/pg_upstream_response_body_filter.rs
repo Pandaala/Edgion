@@ -594,7 +594,7 @@ mod tests {
                 "rules": [{}]
             }
         });
-        let mut route: GRPCRoute = serde_json::from_value(json).unwrap();
+        let mut route: GRPCRoute = crate::test_current_status::from_value(json).unwrap();
         route.pre_parse();
         let manager = crate::routes::grpc::GlobalGrpcRouteManagers::new();
         manager.full_set(&HashMap::from([("default/grpc".to_string(), Arc::new(route))]));

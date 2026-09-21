@@ -170,6 +170,12 @@ impl ClientAuthConfig {
 )]
 #[serde(rename_all = "camelCase")]
 pub struct EdgionTlsSpec {
+    /// Controller-computed status for this deployment, transported to the Gateway.
+    /// Never supplied by operators or used as the persisted status history.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
+    pub current_status: Option<EdgionTlsStatus>,
+
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(length(max = MAX_EDGION_TLS_PARENT_REFS))]
     pub parent_refs: Option<Vec<ParentReference>>,
@@ -247,6 +253,7 @@ pub struct EdgionTlsSpec {
 impl Clone for EdgionTlsSpec {
     fn clone(&self) -> Self {
         Self {
+            current_status: self.current_status.clone(),
             parent_refs: self.parent_refs.clone(),
             hosts: self.hosts.clone(),
             secret_ref: self.secret_ref.clone(),

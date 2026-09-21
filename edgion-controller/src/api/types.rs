@@ -502,6 +502,7 @@ mod cache_redact_tests {
                 ..Default::default()
             },
             spec: LinkSysSpec {
+                current_status: None,
                 unknown_fields: Vec::new(),
                 config: SystemConfig::Webhook(webhook_config),
             },

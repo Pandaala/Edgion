@@ -418,20 +418,23 @@ mod tests {
     }
 
     fn route_unit(name: &str) -> Arc<TcpRouteUnit> {
-        Arc::new(TcpRouteUnit::from_route(Arc::new(TCPRoute {
-            metadata: ObjectMeta {
-                namespace: Some("default".to_string()),
-                name: Some(name.to_string()),
-                ..Default::default()
-            },
-            spec: TCPRouteSpec {
-                resolved_status_controller: Some("edgion.io/gateway-controller".into()),
-                parent_refs: None,
-                rules: None,
-                resolved_listeners: None,
-            },
-            status: None,
-        })))
+        Arc::new(TcpRouteUnit::from_route(Arc::new(
+            crate::test_current_status::processed(TCPRoute {
+                metadata: ObjectMeta {
+                    namespace: Some("default".to_string()),
+                    name: Some(name.to_string()),
+                    ..Default::default()
+                },
+                spec: TCPRouteSpec {
+                    current_status: None,
+                    resolved_status_controller: Some("edgion.io/gateway-controller".into()),
+                    parent_refs: None,
+                    rules: None,
+                    resolved_listeners: None,
+                },
+                status: None,
+            }),
+        )))
     }
 
     #[test]

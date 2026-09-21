@@ -1464,6 +1464,7 @@ profiles:
             namespace,
             name,
             EdgionConfigDataSpec {
+                current_status: None,
                 enable: true,
                 active: None,
                 visibility: Default::default(),
@@ -2657,6 +2658,7 @@ profiles:
             "default",
             "rr-override",
             EdgionConfigDataSpec {
+                current_status: None,
                 unknown_fields: Vec::new(),
                 enable: true,
                 active: None,
@@ -2707,6 +2709,7 @@ profiles:
                 "default",
                 name,
                 EdgionConfigDataSpec {
+                    current_status: None,
                     enable: true,
                     active: None,
                     visibility: Default::default(),
@@ -2823,6 +2826,7 @@ profiles:
             "default",
             "not-a-rr-override",
             EdgionConfigDataSpec {
+                current_status: None,
                 unknown_fields: Vec::new(),
                 enable: true,
                 active: None,
@@ -2911,6 +2915,7 @@ profiles:
                 "default",
                 "overlay",
                 EdgionConfigDataSpec {
+                    current_status: None,
                     enable: true,
                     active: None,
                     visibility: Default::default(),
@@ -2966,6 +2971,7 @@ profiles:
                 "default",
                 "overlay",
                 EdgionConfigDataSpec {
+                    current_status: None,
                     enable: envelope_enable,
                     active: None,
                     visibility: Default::default(),
@@ -3014,6 +3020,7 @@ profiles:
             "default",
             "canary-selector",
             EdgionConfigDataSpec {
+                current_status: None,
                 unknown_fields: Vec::new(),
                 enable: true,
                 active: None,
@@ -3128,6 +3135,7 @@ profiles:
             "default",
             "canary-selector-wrong-type",
             EdgionConfigDataSpec {
+                current_status: None,
                 enable: true,
                 active: None,
                 visibility: Default::default(),
@@ -3201,6 +3209,7 @@ profiles:
             "shared-ns",
             "canary-selector",
             EdgionConfigDataSpec {
+                current_status: None,
                 enable: true,
                 active: None,
                 visibility: Default::default(),
@@ -3280,6 +3289,7 @@ profiles:
             "default",
             "blocklist",
             EdgionConfigDataSpec {
+                current_status: None,
                 unknown_fields: Vec::new(),
                 enable: true,
                 active: None,
@@ -3371,6 +3381,7 @@ profiles:
             "default",
             "disabled-list",
             EdgionConfigDataSpec {
+                current_status: None,
                 enable: false,
                 active: None,
                 visibility: Default::default(),
@@ -3428,6 +3439,7 @@ profiles:
             "default",
             "allowlist",
             EdgionConfigDataSpec {
+                current_status: None,
                 enable: true,
                 active: None,
                 visibility: Default::default(),
@@ -3516,6 +3528,7 @@ profiles:
             "default",
             "malformed-list",
             EdgionConfigDataSpec {
+                current_status: None,
                 enable: true,
                 active: None,
                 visibility: Default::default(),
@@ -3582,6 +3595,7 @@ profiles:
             "team-b",
             "blocklist",
             EdgionConfigDataSpec {
+                current_status: None,
                 unknown_fields: Vec::new(),
                 enable: true,
                 active: None,
@@ -3636,6 +3650,7 @@ profiles:
             "shared-ns",
             "gac-selector",
             EdgionConfigDataSpec {
+                current_status: None,
                 enable: true,
                 active: None,
                 visibility: Default::default(),
@@ -3697,6 +3712,7 @@ profiles:
             "team-b",
             "blocklist",
             EdgionConfigDataSpec {
+                current_status: None,
                 unknown_fields: Vec::new(),
                 enable: true,
                 active: None,
@@ -3826,6 +3842,7 @@ profiles:
             "default",
             "shared-networks",
             EdgionConfigDataSpec {
+                current_status: None,
                 enable: true,
                 active: None,
                 visibility: Default::default(),
@@ -3907,6 +3924,7 @@ profiles:
             "team-b",
             "private-networks",
             EdgionConfigDataSpec {
+                current_status: None,
                 enable: true,
                 active: None,
                 visibility: Default::default(),
@@ -3983,6 +4001,7 @@ profiles:
             "default",
             "vendor-callbacks",
             EdgionConfigDataSpec {
+                current_status: None,
                 enable: true,
                 active: None,
                 visibility: Default::default(),
@@ -4382,6 +4401,7 @@ profiles:
             "default",
             "vendor-networks",
             EdgionConfigDataSpec {
+                current_status: None,
                 enable: true,
                 active: None,
                 visibility: Default::default(),
@@ -4477,6 +4497,7 @@ profiles:
             "default",
             "wrong-type",
             EdgionConfigDataSpec {
+                current_status: None,
                 enable: true,
                 active: None,
                 visibility: Default::default(),
@@ -4719,6 +4740,7 @@ profiles:
                 "default",
                 name,
                 EdgionConfigDataSpec {
+                    current_status: None,
                     enable: true,
                     active: None,
                     visibility: Default::default(),
@@ -5177,6 +5199,7 @@ profiles:
             "team-b",
             "blocklist",
             EdgionConfigDataSpec {
+                current_status: None,
                 unknown_fields: Vec::new(),
                 enable: true,
                 active: None,
@@ -5244,6 +5267,7 @@ profiles:
             "team-b",
             "selector-cfg",
             EdgionConfigDataSpec {
+                current_status: None,
                 unknown_fields: Vec::new(),
                 enable: true,
                 active: None,
@@ -5311,6 +5335,7 @@ profiles:
             "default",
             "disabled-selector",
             EdgionConfigDataSpec {
+                current_status: None,
                 enable: false,
                 active: None,
                 visibility: Default::default(),
@@ -5376,6 +5401,7 @@ profiles:
             "team-b",
             "blocklist",
             EdgionConfigDataSpec {
+                current_status: None,
                 enable: true,
                 active: None,
                 visibility: Default::default(),
@@ -6076,6 +6102,7 @@ profiles:
         let (ctx, _runtime) = make_ctx_with_secrets(HashMap::new());
 
         let spec = EdgionPluginsSpec {
+            current_status: None,
             unknown_fields: vec!["config.denys".to_string(), "requestPlugins[0].config.typo".to_string()],
             ..EdgionPluginsSpec::default()
         };
@@ -6156,6 +6183,7 @@ profiles:
             namespace,
             name,
             EdgionConfigDataSpec {
+                current_status: None,
                 enable: true,
                 active: None,
                 visibility: Default::default(),

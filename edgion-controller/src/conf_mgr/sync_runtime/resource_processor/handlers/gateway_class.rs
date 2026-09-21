@@ -313,6 +313,7 @@ mod tests {
                 ..Default::default()
             },
             spec: GatewayClassSpec {
+                current_status: None,
                 controller_name: DEFAULT_CONTROLLER_NAME.to_string(),
                 description: None,
                 parameters_ref: params_ref,

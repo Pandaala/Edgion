@@ -57,6 +57,20 @@ fn listener(name: &str, port: i32, protocol: &str) -> Listener {
 }
 
 fn make_gateway(namespace: &str, name: &str, listeners: Vec<Listener>) -> Gateway {
+    let current_status = GatewayStatus {
+        listeners: Some(
+            listeners
+                .iter()
+                .map(|listener| ListenerStatus {
+                    name: listener.name.clone(),
+                    supported_kinds: vec![],
+                    attached_routes: 0,
+                    conditions: vec![],
+                })
+                .collect(),
+        ),
+        ..Default::default()
+    };
     Gateway {
         metadata: ObjectMeta {
             namespace: Some(namespace.to_string()),
@@ -65,6 +79,7 @@ fn make_gateway(namespace: &str, name: &str, listeners: Vec<Listener>) -> Gatewa
             ..Default::default()
         },
         spec: GatewaySpec {
+            current_status: Some(current_status),
             gateway_class_name: "edgion".to_string(),
             listeners: Some(listeners),
             addresses: None,
@@ -108,6 +123,7 @@ fn make_acme(ns: &str, name: &str, secret_name: &str) -> EdgionAcme {
             ..Default::default()
         },
         spec: edgion_resources::resources::edgion_acme::EdgionAcmeSpec {
+            current_status: None,
             server: "https://acme-v02.api.letsencrypt.org/directory".to_string(),
             email: "admin@example.com".to_string(),
             private_key_secret_ref: SecretObjectReference {
@@ -176,7 +192,10 @@ impl ProcessorHandler<EdgionAcme> for PublicationCheckedAcmeHandler {
             .unwrap();
         assert_eq!(cached.metadata.uid, acme.metadata.uid);
         assert_eq!(cached.metadata.generation, acme.metadata.generation);
-        assert_eq!(resolved_refs_identity(&cached), resolved_refs_identity(acme));
+        assert_eq!(
+            resolved_refs_identity(cached.spec.current_status.as_ref()),
+            resolved_refs_identity(acme.spec.current_status.as_ref())
+        );
         assert!(cached
             .status
             .as_ref()
@@ -302,7 +321,7 @@ async fn recovered_credentials_are_published_before_the_single_notification() {
         .await;
     assert!(notifications.drain().is_empty());
     assert_eq!(
-        resolved_refs_identity(&processor.get("default/recovery").unwrap())
+        resolved_refs_identity(processor.get("default/recovery").unwrap().spec.current_status.as_ref())
             .unwrap()
             .0,
         "False"
@@ -314,7 +333,7 @@ async fn recovered_credentials_are_published_before_the_single_notification() {
         .await;
     assert_eq!(notifications.drain(), ["default/recovery"]);
     assert_eq!(
-        resolved_refs_identity(&processor.get("default/recovery").unwrap())
+        resolved_refs_identity(processor.get("default/recovery").unwrap().spec.current_status.as_ref())
             .unwrap()
             .0,
         "True"
@@ -581,7 +600,7 @@ async fn test_parse_rejects_explicitly_ineligible_gateway_listeners() {
     ] {
         let (ctx, runtime) = make_ctx(HashMap::new());
         let mut gateway = make_gateway("default", "gw", vec![listener("http", 80, "HTTP")]);
-        gateway.status = Some(GatewayStatus {
+        gateway.spec.current_status = Some(GatewayStatus {
             addresses: None,
             conditions: None,
             listeners: Some(vec![ListenerStatus {
@@ -943,8 +962,13 @@ async fn parse_unresolvable_gateway_ref_clears_stale_attachments_and_keeps_activ
     };
     assert!(parsed.spec.resolved_listener_attachments.is_none());
     assert!(!parsed.spec.notify_after_publish);
-    assert_eq!(parsed.active_challenges().len(), 1);
-    assert_eq!(parsed.active_challenges()[0].token, "ownership-token");
+    // A direct parse has not produced the current transport projection yet.
+    assert!(parsed.active_challenges().is_empty());
+    assert_eq!(parsed.status.as_ref().unwrap().active_challenges.len(), 1);
+    assert_eq!(
+        parsed.status.as_ref().unwrap().active_challenges[0].token,
+        "ownership-token"
+    );
     let resolved = parsed
         .status
         .as_ref()

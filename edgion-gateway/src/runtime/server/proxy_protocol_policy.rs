@@ -575,6 +575,7 @@ mod tests {
         let mut gateway = Gateway::new(
             name,
             GatewaySpec {
+                current_status: None,
                 gateway_class_name: "edgion".to_string(),
                 listeners: Some(vec![Listener {
                     name: "tcp".to_string(),

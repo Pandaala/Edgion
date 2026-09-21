@@ -420,6 +420,7 @@ mod tests {
         let plugins = EdgionPlugins {
             metadata: Default::default(),
             spec: EdgionPluginsSpec {
+                current_status: None,
                 request_plugins: Some(vec![entry]),
                 ..Default::default()
             },
@@ -442,6 +443,7 @@ mod tests {
         let san_plugins = EdgionPlugins {
             metadata: Default::default(),
             spec: EdgionPluginsSpec {
+                current_status: None,
                 request_plugins: Some(vec![RequestFilterEntry::new(EdgionPlugin::Guardrail(san_config))]),
                 ..Default::default()
             },
@@ -455,6 +457,7 @@ mod tests {
         let hostname_plugins = EdgionPlugins {
             metadata: Default::default(),
             spec: EdgionPluginsSpec {
+                current_status: None,
                 request_plugins: Some(vec![RequestFilterEntry::new(EdgionPlugin::Guardrail(hostname_config))]),
                 ..Default::default()
             },

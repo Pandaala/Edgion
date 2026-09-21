@@ -215,6 +215,7 @@ mod tests {
         let mut gateway = edgion_resources::Gateway::new(
             "shutdown",
             GatewaySpec {
+                current_status: None,
                 gateway_class_name: "edgion".to_string(),
                 listeners: Some(vec![Listener {
                     name: "tcp".to_string(),

@@ -21,9 +21,9 @@ including multiplicity, so changes cannot hide behind a reused first match.
 
 ControllerName alone is insufficient when independent deployments manage different
 GatewayClasses under the same name. Kubernetes `status_ownership` projection now
-separates the local cache status from the persisted native array: only proven local
-Gateway attachments contribute local state, while foreign controllers and other
-classes remain in the persisted snapshot. Missing Gateway history is retained
+separates `spec.currentStatus` from the complete `status`: only proven local
+Gateway attachments contribute current state, while foreign controllers and other
+classes remain in persisted and cached complete status. Missing Gateway history is retained
 without granting serving authority. The same projection handles both policy
 ancestor families. Raw spec removal can consistently clear this controller's
 removed parent entries without erasing another controller's entries.
@@ -40,14 +40,26 @@ its configured name in `finalize_transport`, after status generation and before 
 Incoming values cannot override that source. The field relies on existing conf_sync authentication;
 it is not a new proof or user-facing configuration setting.
 
-Gateway route compilation and plugin publication filter using the stamp and status from the same
-resource version. Missing/empty identity or duplicate matching owned entries rejects the attachment.
-A single owned entry controls acceptance; foreign statuses never supply its result. A valid stamp
-with no matching owned entry retains the existing optimistic no-status policy, including foreign-only
-status input. Do not describe this as requiring owned Accepted=True in every case.
+Gateway route compilation and plugin publication filter using the stamp and
+`spec.currentStatus` from the same resource version. Missing/empty identity,
+missing current status, a missing owned parent entry, or duplicate matching owned
+entries rejects the attachment. Exactly one matching owned entry with
+`Accepted=True` is required. Complete `status` remains diagnostic data and cannot
+authorize a route. The former optimistic missing-status policy is superseded by
+the user-authorized `current-status-projection` contract.
 
-EdgionTls does not gain this field or a Route acceptance filter: its certificate validation and
-attachment-proof checks remain independent. GatewayClass is not a new Route compilation dependency.
+The Controller clears incoming currentStatus and regenerates it before publication.
+Kubernetes uses the class-aware projection; native FS/etcd Route current status is
+filtered by the handler-authored controller stamp. A full status from another
+deployment is never a fallback when the current view is absent. The processor
+changes typed status fields without re-deserializing compiled resource specs.
+EdgionTls and both policy families filter native current parent/ancestor entries
+in finalization using the handler's configured controller name; full native
+FS/etcd history still retains foreign entries.
+
+EdgionTls gains currentStatus, but not resolvedStatusController or a Route
+acceptance filter: its certificate validation and attachment-proof checks remain
+independent. GatewayClass is not a new Route compilation dependency.
 Worker/status-IO ownership remains unchanged. Kubernetes serving resolution now
 requires an owned raw Gateway and a matching published nonempty UID/class, shared
 by Route, TLS and ACME consumers. Committed raw ownership changes requeue raw
@@ -96,7 +108,29 @@ passed 819 tests. These tests are in-process, not live Kubernetes verification.
 Final workspace validation and fresh independent review passed; see
 [deployment observations](deployment-partitioned-observations.md) for results and limits.
 
+Current-status verification on 2026-09-21:
+
+- Gateway routes: 743 passed; publication: 21; listener index: 17; ACME: 17;
+  BackendTLS policy: 25; runtime matching: 48; TLS store: 22.
+- Final Controller processor suite: 821 passed; current-status-focused suite:
+  18; ACME suite: 33, including notification deduplication after publication.
+- Independent code and knowledge review: LGTM, including native FS/etcd TLS and
+  policy filtering and the final ACME cache-versus-working-status distinction.
+- Workspace all-target check and Clippy passed. Two pre-existing unrelated
+  test-only warnings remain (Kafka err/expect and DSL gRPC redundant async block).
+- GatewayDynamic now inspects full/current transport in initial and incremental
+  phases. It was compiled, not executed against a live integration environment.
+
+See the [implementation plan](../../../../docs/en/dev-guide/current-status-projection.md)
+for schema checks and verification limits. No live Kubernetes, etcd or Gateway
+API conformance result is claimed.
+
 ## Resolution references
 
+- `current-status-projection`: retain complete status in ServerCache and transmit
+  a separate current deployment view; strict Route consumption replaces missing-
+  status optimism. Verification is recorded above and in the implementation
+  plan. This does not resolve the separate
+  [GatewayClass reporting task](../../../../tasks/todo/gatewayclass-status-reporting-ownership.md).
 - `route-parent-status-canonical-identity`: canonical identity and configured ownership corrected;
   concurrent status persistence is covered by the separate guard above.

@@ -533,7 +533,7 @@ fn parse_http_routes_to_domain_rules(data: &HashMap<String, Arc<HTTPRoute>>) -> 
         };
         let Some(accepted_refs) = filter_accepted_parent_refs(
             route.spec.parent_refs.as_deref(),
-            route.status.as_ref().map(|s| s.parents.as_slice()),
+            route.spec.current_status.as_ref().map(|s| s.parents.as_slice()),
             Some(&validated.namespace),
             route.spec.resolved_status_controller.as_deref(),
         ) else {
@@ -831,7 +831,7 @@ mod tests {
         let gateways = [("a", vec![8080, 8081]), ("b", vec![8081])]
             .into_iter()
             .map(|(name, ports)| {
-                let gateway: edgion_resources::Gateway = serde_json::from_value(serde_json::json!({
+                let gateway: edgion_resources::Gateway = crate::test_current_status::from_value(serde_json::json!({
                     "apiVersion": "gateway.networking.k8s.io/v1", "kind": "Gateway",
                     "metadata": {"namespace": "default", "name": name},
                     "spec": {"gatewayClassName": "test", "listeners": ports.into_iter().map(|port|
@@ -857,6 +857,9 @@ mod tests {
             ]))
             .unwrap(),
         );
+        route.pre_parse();
+        route.spec.current_status = None;
+        let mut route = crate::test_current_status::processed(route);
         route.pre_parse();
         let rules = parse_http_routes_to_domain_rules(&HashMap::from([("default/port-owner".into(), Arc::new(route))]));
         let (units, _) = rules.get("example.com").unwrap();
@@ -907,6 +910,8 @@ mod tests {
         let old = manager.load_route_table();
         assert!(old.catch_all_routes.is_some());
         route.spec.resolved_status_controller = Some("example.net/owner".into());
+        route.spec.current_status = route.status.clone();
+        route.status.as_mut().unwrap().parents[0].conditions[0].status = "True".into();
         managers.partial_update(
             HashMap::new(),
             HashMap::from([(key.clone(), Arc::new(route.clone()))]),
@@ -914,7 +919,9 @@ mod tests {
         );
         assert!(manager.load_route_table().catch_all_routes.is_none());
         assert!(old.catch_all_routes.is_some());
-        route.status.as_mut().unwrap().parents[0].conditions[0].status = "True".into();
+        route.spec.current_status.as_mut().unwrap().parents[0].controller_name = "example.net/owner".into();
+        route.spec.current_status.as_mut().unwrap().parents[0].conditions[0].status = "True".into();
+        route.status.as_mut().unwrap().parents[0].conditions[0].status = "False".into();
         managers.partial_update(
             HashMap::new(),
             HashMap::from([(key.clone(), Arc::new(route.clone()))]),
@@ -1020,7 +1027,7 @@ mod tests {
             }
         });
 
-        serde_json::from_value(json).expect("Failed to create HTTPRoute")
+        crate::test_current_status::from_value(json).expect("Failed to create HTTPRoute")
     }
 
     #[test]
@@ -1092,7 +1099,7 @@ mod tests {
                 "rules": rules
             }
         });
-        serde_json::from_value(json).expect("route fixture must deserialize")
+        crate::test_current_status::from_value(json).expect("route fixture must deserialize")
     }
 
     /// Routes sharing one hostname whose paths overlap and which differ across
@@ -1316,7 +1323,7 @@ mod tests {
         use crate::runtime::store::listener_gateway_info::ListenerGatewayInfoStore;
         use pingora_http::RequestHeader;
 
-        let gateway = serde_json::from_value(serde_json::json!({
+        let gateway = crate::test_current_status::from_value(serde_json::json!({
             "apiVersion": "gateway.networking.k8s.io/v1", "kind": "Gateway",
             "metadata": {"namespace": "default", "name": "gw1"},
             "spec": {"gatewayClassName": "test", "listeners": [{"name": "http", "port": 80, "protocol": "HTTP"}]}
@@ -1930,7 +1937,7 @@ mod tests {
                 }]
             }
         });
-        let mut route: HTTPRoute = serde_json::from_value(json).expect("Failed to build HTTPRoute");
+        let mut route: HTTPRoute = crate::test_current_status::from_value(json).expect("Failed to build HTTPRoute");
         route.pre_parse();
         route
     }
@@ -1951,7 +1958,7 @@ mod tests {
                 ]
             }
         });
-        let mut route: HTTPRoute = serde_json::from_value(json).expect("Failed to build HTTPRoute");
+        let mut route: HTTPRoute = crate::test_current_status::from_value(json).expect("Failed to build HTTPRoute");
         route.pre_parse();
         route
     }
@@ -2086,7 +2093,8 @@ mod tests {
                 ]
             }
         });
-        let mut route: HTTPRoute = serde_json::from_value(json).expect("route fixture must deserialize");
+        let mut route: HTTPRoute =
+            crate::test_current_status::from_value(json).expect("route fixture must deserialize");
         route.pre_parse();
 
         let mut data = HashMap::new();

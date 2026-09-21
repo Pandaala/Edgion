@@ -14,14 +14,16 @@ description: update_status implementation rules and pitfalls — status write fl
 
 ```
 process_resource(obj):
-├── Seed backend status, then capture old status before handler mutation
+├── Clear incoming currentStatus; seed backend status and capture full old status
 ├── K8s shared resources: project only this deployment's observation into native status
 ├── validate()             → Vec<String>          ─┐
 ├── preparse()             → Vec<String>           ├─ merged → all_errors
 ├── parse()                → ProcessResult<K>     ─┘
 ├── update_status(&mut obj, ctx, &all_errors) ◀── THIS IS THE FOCUS
-├── Separate local status from the ownership-preserving persistence payload
-├── finalize_transport()
+├── Separate current status from the ownership-preserving persistence payload
+├── Generate typed spec.currentStatus; finalize transport once
+├── Filter native Route currentStatus by the final Controller-authored identity
+├── Restore complete logical status for cache/conf_sync (without wire tombstones)
 ├── Extract new status; status_has_changed(old, new) → bool
 ├── on_change()
 ├── Publish processed object to ServerCache
@@ -80,11 +82,16 @@ EdgionStreamPlugins, EdgionBackend and LinkSys persist complete observations in
 contains `gatewayClassUid` and a nested native `status` payload. UID proves the
 class incarnation, not a new list key. LinkSys lifecycle fields belong inside
 that payload too; there is no aggregate top-level status that competing
-deployments can overwrite. FileSystem/etcd and conf_sync retain native status.
+deployments can overwrite. FileSystem/etcd persistence retains native status.
+conf_sync transports both the complete source-specific status and native currentStatus.
 
 The shared `ControllerStatus<T>` envelope, projection/merge in
 `status_observation`, and `status_pipeline` adapters own this mechanism.
-Handlers consume only projected native values. Missing ownership, invalid
+Handlers consume only projected native working values. Published resources retain
+the complete `status` and a typed native `spec.currentStatus` for this deployment.
+Gateway status decisions consume currentStatus, never the complete diagnostic
+status. Incoming currentStatus is cleared and recomputed; the field is excluded
+from CRD schemas but serialized through conf_sync. Missing ownership, invalid
 observations or the 32-entry cap suppress persistence, not local processing.
 An existing owner can update at the cap; a new owner cannot evict another.
 Inactive observations remain until committed GatewayClass deletion or identity
@@ -341,8 +348,11 @@ This is a type-level reuse; the struct name does not appear in K8s status YAML.
 - Guarded by leader election: `status_changed && can_write_status`
 
 `WorkItemResult::Processed.persisted_status` is the write payload; never extract
-it from the processed object in the Kubernetes worker. The object carries local
-status for cache/conf_sync, while persistence preserves other deployments.
+it from the processed object in the Kubernetes worker. The object carries complete
+logical `status` plus typed native `spec.currentStatus` for cache/conf_sync.
+Both complete status and persistence preserve other deployments; only the
+currentStatus view supplies deployment-local runtime decisions. Suppressed
+persistence retains the observed complete status alongside computed local state.
 Replacing only typed status after handler parsing preserves compiled fields
 and unknown-field sidecars; a full-object serde roundtrip here is incorrect.
 
@@ -356,7 +366,7 @@ tombstones. Mixed or unknown shapes suppress persistence without dropping config
 Native parent/ancestor arrays retain their API shape. Kubernetes projection
 limits writes to attachments whose Gateway belongs to the selected class,
 including when deployments share controllerName. Missing Gateway history is
-preserved on disk but cannot become local serving authority. Delegation selects
+preserved in complete status but cannot become current serving authority. Delegation selects
 one writer from the first sorted canonical parentRef before lookup; missing,
 invalid or cyclic chains do not fall back to a visible alternative branch.
 Serving resolution uses the owned raw Gateway and matching published UID/class,

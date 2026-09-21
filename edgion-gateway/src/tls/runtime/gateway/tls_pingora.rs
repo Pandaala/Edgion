@@ -1406,6 +1406,7 @@ mod tests {
                 ..Default::default()
             },
             spec: EdgionTlsSpec {
+                current_status: None,
                 parent_refs: None,
                 hosts: vec!["example.com".to_string()],
                 secret_ref: SecretObjectReference {

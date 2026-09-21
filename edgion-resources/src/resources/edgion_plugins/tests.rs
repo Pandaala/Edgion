@@ -9,6 +9,7 @@ fn create_edgion_plugins_with_request_filters(plugins: Option<Vec<RequestFilterE
     EdgionPlugins {
         metadata: Default::default(),
         spec: EdgionPluginsSpec {
+            current_status: None,
             request_plugins: plugins,
             ..Default::default()
         },
@@ -152,6 +153,7 @@ fn test_enabled_plugins_filter() {
     let ep = EdgionPlugins {
         metadata: Default::default(),
         spec: EdgionPluginsSpec {
+            current_status: None,
             request_plugins: Some(request_plugins),
             upstream_response_filter_plugins: Some(response_filter_plugins),
             ..Default::default()

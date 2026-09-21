@@ -140,6 +140,7 @@ mod tests {
                 ..Default::default()
             },
             spec: GatewayClassSpec {
+                current_status: None,
                 controller_name: "test/controller".to_string(),
                 description: None,
                 parameters_ref: None,

@@ -458,6 +458,7 @@ mod tests {
         let resource = edgion_resources::EdgionPlugins::new(
             "early-id",
             edgion_resources::EdgionPluginsSpec {
+                current_status: None,
                 request_plugins: Some(vec![edgion_resources::RequestFilterEntry::new(
                     edgion_resources::EdgionPlugin::RequestId(config),
                 )]),
@@ -493,7 +494,7 @@ mod tests {
         store
             .publisher()
             .replace_gateway_configs(HashMap::from([("plugin-store-test".into(), Arc::new(config))]));
-        let gateway: edgion_resources::Gateway = serde_json::from_value(serde_json::json!({
+        let gateway: edgion_resources::Gateway = crate::test_current_status::from_value(serde_json::json!({
             "apiVersion":"gateway.networking.k8s.io/v1","kind":"Gateway","metadata":{"name":"gateway","namespace":"early-id-test"},
             "spec":{"gatewayClassName":"plugin-store-test","listeners":[{"name":"http","port":18089,"protocol":"HTTP"}]}
         })).unwrap();

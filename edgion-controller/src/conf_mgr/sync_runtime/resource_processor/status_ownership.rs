@@ -670,7 +670,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn real_http_handler_pipeline_keeps_foreign_api_status_out_of_local_cache() {
+    async fn real_http_handler_pipeline_keeps_full_status_and_projects_current_status() {
         use crate::conf_mgr::sync_runtime::resource_processor::{HttpRouteHandler, WorkItemResult};
         let fixture = Fixture::new("a").await;
         let processor = Arc::new(ResourceProcessor::new(
@@ -700,7 +700,7 @@ mod tests {
                 panic!("HTTPRoute must be processed");
             };
             assert_eq!(status_changed, turn == 0);
-            let parents = obj.status.as_ref().unwrap().parents.as_slice();
+            let parents = obj.spec.current_status.as_ref().unwrap().parents.as_slice();
             assert_eq!(parents.len(), 1);
             assert_eq!(parents[0].parent_ref.name, "a");
             assert_eq!(obj.spec.resolved_listeners.as_ref().unwrap().len(), 1);
@@ -708,7 +708,8 @@ mod tests {
                 processor
                     .get("apps/route")
                     .unwrap()
-                    .status
+                    .spec
+                    .current_status
                     .as_ref()
                     .unwrap()
                     .parents
@@ -718,6 +719,7 @@ mod tests {
             let entries = persisted["parents"].as_array().unwrap();
             assert!(entries.contains(&foreign));
             assert_eq!(entries.len(), 2);
+            assert_eq!(serde_json::to_value(&obj.status).unwrap(), persisted);
             route.status = Some(serde_json::from_value(persisted).unwrap());
         }
     }

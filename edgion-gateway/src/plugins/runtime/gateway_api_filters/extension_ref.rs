@@ -490,6 +490,7 @@ mod tests {
                 ..Default::default()
             },
             spec: EdgionPluginsSpec {
+                current_status: None,
                 request_plugins: Some(vec![RequestFilterEntry::new(EdgionPlugin::RequestHeaderModifier(
                     HTTPHeaderFilter {
                         set: None,
@@ -513,6 +514,7 @@ mod tests {
                 ..Default::default()
             },
             spec: EdgionPluginsSpec {
+                current_status: None,
                 request_plugins: Some(vec![RequestFilterEntry::new(EdgionPlugin::Mock(
                     edgion_resources::resources::edgion_plugins::MockConfig::default(),
                 ))]),

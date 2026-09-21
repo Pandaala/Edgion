@@ -145,6 +145,7 @@ mod tests {
     async fn deny_refs_block_referenced_ip() {
         let ns = "tls-ipr-denyref-unit";
         let spec = EdgionConfigDataSpec {
+            current_status: None,
             enable: true,
             active: None,
             visibility: Default::default(),

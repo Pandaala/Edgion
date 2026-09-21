@@ -10,6 +10,7 @@ use k8s_openapi::ByteString;
 
 use crate::conf_mgr::sync_runtime::resource_processor::backend_tls_policy_ref::make_target_conflict_key;
 use crate::conf_mgr::sync_runtime::resource_processor::handlers::backend_capability::classify_raw_backend;
+use crate::conf_mgr::sync_runtime::resource_processor::status_pipeline::filter_current_native_attachment_status;
 use crate::conf_mgr::sync_runtime::resource_processor::{
     condition_false, condition_reasons, condition_true, condition_types, format_secret_key, update_condition,
     HandlerContext, ProcessResult, ProcessorHandler, ResourceRef,
@@ -846,6 +847,10 @@ impl BackendTlsPolicyHandler {
 
 #[async_trait::async_trait]
 impl ProcessorHandler<BackendTLSPolicy> for BackendTlsPolicyHandler {
+    fn finalize_transport(&self, policy: &mut BackendTLSPolicy, _ctx: &HandlerContext) {
+        filter_current_native_attachment_status(policy, &self.controller_name);
+    }
+
     fn validate(&self, btp: &BackendTLSPolicy, ctx: &HandlerContext) -> Vec<String> {
         self.evaluate_target(&btp.metadata, &btp.spec, ctx).errors
     }
@@ -956,6 +961,7 @@ mod tests {
                 ..Default::default()
             },
             spec: BackendTLSPolicySpec {
+                current_status: None,
                 target_refs: vec![BackendTLSPolicyTargetRef {
                     group: "".to_string(),
                     kind: "Service".to_string(),

@@ -234,13 +234,14 @@ mod tests {
 
     fn create_test_udp_route(namespace: &str, name: &str, listener_key: ListenerKey) -> UDPRoute {
         use edgion_resources::resources::common::ParentReference;
-        UDPRoute {
+        crate::test_current_status::processed(UDPRoute {
             metadata: kube::api::ObjectMeta {
                 namespace: Some(namespace.to_string()),
                 name: Some(name.to_string()),
                 ..Default::default()
             },
             spec: UDPRouteSpec {
+                current_status: None,
                 resolved_status_controller: Some("edgion.io/gateway-controller".into()),
                 parent_refs: Some(vec![ParentReference {
                     group: Some("gateway.networking.k8s.io".to_string()),
@@ -254,7 +255,7 @@ mod tests {
                 resolved_listeners: Some(vec![listener_key]),
             },
             status: None,
-        }
+        })
     }
 
     fn test_unit(namespace: &str, name: &str, listener_key: ListenerKey) -> Arc<UdpRouteUnit> {

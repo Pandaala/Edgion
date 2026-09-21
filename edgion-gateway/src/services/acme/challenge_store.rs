@@ -507,7 +507,7 @@ mod tests {
     fn make_acme(challenges: Vec<ActiveHttpChallenge>) -> EdgionAcme {
         let active = serde_json::to_value(&challenges).unwrap();
 
-        serde_json::from_value(serde_json::json!({
+        crate::test_current_status::from_value(serde_json::json!({
             "apiVersion": "edgion.io/v1",
             "kind": "EdgionAcme",
             "metadata": { "name": "test", "namespace": "default" },
@@ -811,6 +811,16 @@ mod tests {
         );
 
         let mut without_attachments = serving.clone();
+        let mut without_current = serving.clone();
+        without_current.spec.current_status = None;
+        store.partial_update(&HashMap::from([(key.clone(), without_current)]), &HashSet::new());
+        assert!(
+            store
+                .lookup_for_listener(&listener_key, &index, "ownership-token", "example.com", "example.com")
+                .is_none(),
+            "full status challenges cannot replace a missing current projection"
+        );
+        store.partial_update(&HashMap::from([(key.clone(), serving.clone())]), &HashSet::new());
         without_attachments.spec.resolved_listener_attachments = None;
         store.partial_update(&HashMap::from([(key.clone(), without_attachments)]), &HashSet::new());
         assert!(store
@@ -824,7 +834,8 @@ mod tests {
 
         let mut without_challenges = serving;
         without_challenges
-            .status
+            .spec
+            .current_status
             .as_mut()
             .expect("make_acme writes status")
             .active_challenges

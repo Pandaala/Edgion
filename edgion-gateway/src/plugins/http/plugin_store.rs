@@ -545,7 +545,7 @@ impl PluginStore {
             "apiVersion":"gateway.networking.k8s.io/v1","kind":"GatewayClass","metadata":{"name":"plugin-store-test"},
             "spec":{"controllerName":"edgion.io/gateway-controller","parametersRef":{"group":"edgion.io","kind":"EdgionGatewayConfig","name":"plugin-store-test"}}
         })).unwrap();
-        let gateway: Gateway = serde_json::from_value(serde_json::json!({
+        let gateway: Gateway = crate::test_current_status::from_value(serde_json::json!({
             "apiVersion":"gateway.networking.k8s.io/v1","kind":"Gateway","metadata":{"name":"scope","namespace":"plugin-store-test"},
             "spec":{"gatewayClassName":"plugin-store-test","listeners":[{"name":"http","port":18089,"protocol":"HTTP"}]}
         })).unwrap();
@@ -668,6 +668,7 @@ mod access_log_extern_flag_tests {
         EdgionPlugins {
             metadata: Default::default(),
             spec: EdgionPluginsSpec {
+                current_status: None,
                 access_log_extern: Some(vec![AccessLogExternField {
                     key: "tenant".to_string(),
                     from: LogExtSource::Header,
@@ -1367,6 +1368,7 @@ mod compile_plugins_tests {
         EdgionPlugins {
             metadata: Default::default(),
             spec: EdgionPluginsSpec {
+                current_status: None,
                 request_plugins: Some(vec![entry]),
                 ..Default::default()
             },
@@ -1474,6 +1476,7 @@ mod compile_plugins_tests {
                 ..Default::default()
             },
             spec: EdgionPluginsSpec {
+                current_status: None,
                 request_plugins: Some(vec![entry]),
                 ..Default::default()
             },
@@ -1862,6 +1865,7 @@ mod compile_plugins_tests {
                 ..Default::default()
             },
             spec: EdgionPluginsSpec {
+                current_status: None,
                 waf: Some(WafConfig {
                     rules: rules.to_string(),
                     mode: WafMode::On,
@@ -2373,6 +2377,7 @@ mod compile_plugins_tests {
         let ep = EdgionPlugins {
             metadata: Default::default(),
             spec: EdgionPluginsSpec {
+                current_status: None,
                 request_plugins: Some(request_plugins),
                 upstream_response_filter_plugins: Some(response_filter_plugins),
                 ..Default::default()
@@ -2412,6 +2417,7 @@ mod compile_plugins_tests {
         let ep = EdgionPlugins {
             metadata: Default::default(),
             spec: EdgionPluginsSpec {
+                current_status: None,
                 request_plugins: Some(request_plugins),
                 upstream_response_filter_plugins: Some(response_filter_plugins),
                 ..Default::default()
@@ -2443,6 +2449,7 @@ mod compile_plugins_tests {
         let ep = EdgionPlugins {
             metadata: Default::default(),
             spec: EdgionPluginsSpec {
+                current_status: None,
                 request_plugins: Some(vec![entry]),
                 ..Default::default()
             },
@@ -2468,6 +2475,7 @@ mod compile_plugins_tests {
         let ep = EdgionPlugins {
             metadata: Default::default(),
             spec: EdgionPluginsSpec {
+                current_status: None,
                 access_log_extern: Some(vec![
                     AccessLogExternField {
                         key: "leak".to_string(),
@@ -2722,6 +2730,7 @@ mod compile_plugins_tests {
             EdgionPlugins {
                 metadata: Default::default(),
                 spec: EdgionPluginsSpec {
+                    current_status: None,
                     request_plugins: request,
                     upstream_response_filter_plugins: urf,
                     ..Default::default()
@@ -2737,6 +2746,7 @@ mod compile_plugins_tests {
             EdgionPlugins {
                 metadata: Default::default(),
                 spec: EdgionPluginsSpec {
+                    current_status: None,
                     access_log_extern: Some(vec![AccessLogExternField {
                         key: "leak".to_string(),
                         from: LogExtSource::Header,
@@ -3083,6 +3093,7 @@ mod compile_plugins_tests {
                 let resource = EdgionPlugins {
                     metadata: Default::default(),
                     spec: EdgionPluginsSpec {
+                        current_status: None,
                         request_plugins: Some(vec![RequestFilterEntry::new(plugin)]),
                         ..Default::default()
                     },
