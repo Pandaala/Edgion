@@ -46,7 +46,7 @@ mod watch_source;
 pub use center::KubernetesCenter;
 pub use config::{HaMode, KubernetesConfig, LeaderElectionConfig, MetadataFilterConfig};
 pub use controller::{ControllerExitReason, KubernetesController};
-pub use leader_election::{LeaderElection, LeaderFence, LeaderHandle};
+pub use leader_election::{LeaderElection, LeaderFence, LeaderFenceValidation, LeaderHandle};
 pub use namespace::NamespaceWatchMode;
 pub use resource_controller::ResourceController;
 pub use storage::KubernetesStorage;

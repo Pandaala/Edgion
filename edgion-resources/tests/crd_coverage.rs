@@ -490,12 +490,21 @@ fn has_property(section: &Value, dotted: &str) -> bool {
 }
 
 #[test]
-fn acme_status_declares_active_challenges() {
+fn acme_status_declares_runtime_owned_fields() {
     let status = crd_section("edgion_acme_crd.yaml", "status");
     assert!(
         has_property(&status, "activeChallenges.token"),
         "acme CRD status must declare activeChallenges (live HTTP-01 pruning bug)"
     );
+    for field in [
+        "scheduler.observedGeneration",
+        "scheduler.attemptId",
+        "scheduler.attemptsUsed",
+        "scheduler.attemptStartedAt",
+        "scheduler.nextRetryAt",
+    ] {
+        assert!(has_property(&status, field), "acme CRD status must declare {field}");
+    }
     let spec = crd_section("edgion_acme_crd.yaml", "spec");
     assert!(
         !has_property(&spec, "activeChallenges"),

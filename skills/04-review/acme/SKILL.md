@@ -16,6 +16,7 @@ before applying a decision to current code.
 ## Regression guards
 
 - [ACME HTTP-01 GatewayRef serving ownership](regression-guards/acme-http01-gatewayref-serving-ownership.md)
+- [ACME scheduler fencing and recovery](regression-guards/acme-scheduler-fencing-recovery.md)
 - [fr-rhttp-01 — ACME HTTP-01 challenge host port-stripping preserves IPv6-literal brackets](regression-guards/challenge-host-split-ipv6-literal.md)
 - [Resource change notification backpressure](regression-guards/resource-change-notification-backpressure.md)
 - [Resource change notification gating](regression-guards/resource-change-notification-gating.md)

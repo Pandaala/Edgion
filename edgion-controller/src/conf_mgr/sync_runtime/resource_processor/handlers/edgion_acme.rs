@@ -196,8 +196,8 @@ impl ProcessorHandler<EdgionAcme> for EdgionAcmeHandler {
         // `account_corrupted` means the Secret exists but carries unusable
         // `accountCredentials` (decode failure / unsupported Secret.type).
         // We still return Continue so `update_status` persists the condition,
-        // but we must NOT notify AcmeService — it must not attempt registration
-        // against a broken account.
+        // and notify AcmeService so its authority gate retires any active work;
+        // the published denial prevents registration against a broken account.
         let (account_condition, account_corrupted) = match account_action {
             AcmeResolveAction::Continue(cond) => (cond, false),
             AcmeResolveAction::Abort(cond) => (cond, true),
@@ -212,30 +212,24 @@ impl ProcessorHandler<EdgionAcme> for EdgionAcmeHandler {
         // Secret bytes are intentionally NOT attached to the in-memory
         // resource — AcmeService re-fetches via the Kubernetes API.
 
-        if account_corrupted || !gateway_resolved {
-            // Return Continue so `update_status` persists `ResolvedRefs=False`
-            // and Gateway/operators can see the failure. We intentionally skip
-            // `notify_resource_changed` — without
-            // a usable account there is nothing productive for AcmeService to do.
-            //
-            // Consequence for background state: if a *prior* reconcile already
-            // notified AcmeService and it cached an account / issuance state,
-            // flipping to corrupted here does NOT tear that cache down. That is
-            // deliberate — one bad Secret edit should not destroy a working
-            // account. Operators must manually restart the service (or rotate
-            // back to a valid Secret) to pick up repaired account data.
-            return ProcessResult::Continue(acme);
-        }
-
-        // Notification must follow publication: the service's eligibility gate
-        // must see the recovered/new conditions, not the previous cached denial.
-        // Startup scanning and explicit Admin retry retain their own notifications.
+        // Scheduling observes identity, eligibility, and the exact serving
+        // proof. The service retires pre-issuance work on proof changes, while
+        // issued certificates can continue under a refreshed equivalent selection.
         acme.spec.notify_after_publish = previous.as_ref().is_none_or(|previous| {
             previous.metadata.uid != acme.metadata.uid
                 || previous.metadata.generation != acme.metadata.generation
                 || resolved_refs_identity(previous.spec.current_status.as_ref())
                     != resolved_refs_identity(acme.status.as_ref())
+                || previous.spec.resolved_listener_attachments != acme.spec.resolved_listener_attachments
         });
+
+        if account_corrupted || !gateway_resolved {
+            // Return Continue so `update_status` persists `ResolvedRefs=False`
+            // and Gateway/operators can see the failure. The publication hook
+            // still notifies the scheduler so an active attempt can observe
+            // the denial and retire without starting replacement work.
+            return ProcessResult::Continue(acme);
+        }
 
         ProcessResult::Continue(acme)
     }
@@ -258,6 +252,7 @@ impl ProcessorHandler<EdgionAcme> for EdgionAcmeHandler {
         ctx.runtime().cross_ns_ref_mgr.clear_resource_refs(&resource_ref);
         let resource_namespace = acme.metadata.namespace.as_deref().unwrap_or("default");
         let resource_name = acme.metadata.name.as_deref().unwrap_or_default();
+        notify_resource_changed(format!("{resource_namespace}/{resource_name}")).await;
         remove_from_gateway_route_index(
             ResourceKind::EdgionAcme,
             resource_namespace,

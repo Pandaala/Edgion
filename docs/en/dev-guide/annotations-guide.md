@@ -145,7 +145,6 @@ These keys are often useful during debugging, but should not usually be hand-aut
 | `edgion.io/sync-version` | reserved annotation | Correlates control-plane and data-plane state |
 | `edgion.io/skip-load-validation` | test/tooling annotation | Lets the config-load validator skip a YAML file |
 | `edgion.io/force-sync` | test annotation | Used by integration scripts to trigger Secret update events |
-| `edgion.io/trigger` | operational annotation | Manually re-triggers ACME processing |
 
 ## Historical Drift To Watch For
 

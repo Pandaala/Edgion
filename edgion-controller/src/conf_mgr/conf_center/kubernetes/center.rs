@@ -1269,7 +1269,12 @@ impl KubernetesCenter {
         runtime: Arc<ControllerRuntime>,
         leader_handle: LeaderHandle,
     ) {
-        crate::services::acme::start_acme_service(client.clone(), watch_namespaces.to_vec(), runtime.clone());
+        crate::services::acme::start_acme_service(
+            client.clone(),
+            watch_namespaces.to_vec(),
+            runtime.clone(),
+            leader_handle.clone(),
+        );
         crate::services::conf_sync_ca::rotation::start_conf_sync_rotation(client.clone());
         crate::services::dns_resolver::start_dns_resolver_service(client.clone(), watch_namespaces.to_vec());
         crate::services::credential_manager::start_credential_manager_service(

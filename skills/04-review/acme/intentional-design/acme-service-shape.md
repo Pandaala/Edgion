@@ -1,6 +1,6 @@
 ---
 name: acme-service-shape
-description: Decide on ACME `service.rs` "huge phase function should be split / global singleton should use DI" findings. Audited as design tradeoff; refactoring fix suggestions not accepted.
+description: Decide on ACME `service.rs` phase splitting and global dependency-injection findings after the actor scheduler refactor.
 knowledge_type: intentional-design
 ---
 
@@ -8,7 +8,7 @@ knowledge_type: intentional-design
 
 **Audit date**: 2026-04-26
 **Linked issue**: P1-05 (closed, only the code-defect parts fixed; no architectural refactoring)
-**File**: `edgion-controller/src/services/acme/service.rs` (~1158 lines)
+**Scheduler re-evaluation**: 2026-09-21 (`acme-scheduler-trigger-admission`)
 
 DNS-01 was removed on 2026-09-09. DNS-specific references below are historical; the service-structure decisions continue to apply to HTTP-01.
 
@@ -32,11 +32,15 @@ or correctness defects. DNS provider error disclosure is covered separately by
 - "Linear story sliced horizontally" is negative-value, hitting a failed acceptance against the triple in `architecture/size-and-similarity-heuristics.md`.
 - **Verdict**: split not accepted.
 
-### 2. "`handle_resource_check` (~173 lines) should be split"
+### 2. Scheduler orchestration was re-evaluated
 
-- The bulk is the inline block inside `tokio::spawn` (success/failure/retry-scheduling three-branch).
-- Extracting to `async fn run_acme_flow(...)` is a mechanical operation; behavior unchanged; benefit is only "one less indentation level".
-- Optional; does not constitute P1/P2 finding; filing such suggestions requires "real reader confusion" evidence.
+- The former detached-task scheduler was replaced after concrete correctness
+  evidence: duplicate timers, restart retry loss, leadership handoff, and stale
+  attempt publication could not be repaired reliably with local checks.
+- One actor now owns per-key state while `check_resource` and `run_attempt` are
+  typed jobs. This exception was justified by state-machine invariants, not file
+  length or indentation. Purely cosmetic phase splitting remains unaccepted.
+- See the [scheduler fencing guard](../regression-guards/acme-scheduler-fencing-recovery.md).
 
 ### 3. "`ACME_SERVICE: Mutex<Option<AcmeServiceHandle>>` global singleton should switch to `Arc<...>` injected into HandlerContext"
 
@@ -47,9 +51,9 @@ or correctness defects. DNS provider error disclosure is covered separately by
 
 ### 4. "`update_acme_status` / `patch_active_challenges` use `PatchParams::apply(...).force()` unconditionally; should drop `.force()` or implement try-then-force-on-409"
 
-- The ACME service has exactly two dedicated SSA writers/managers — `edgion-acme-controller` (lifecycle fields) and `edgion-acme-challenges` (active challenges only). This is not an inventory of every status writer: the generic resource handler also sends a Merge Patch of its observed status.
-- The two managers do not overlap on any field: `EdgionAcmeStatus.conditions` and `active_challenges` both carry `#[serde(skip_serializing_if = "Vec::is_empty")]`, so `update_acme_status`'s `Default`-built status omits `active_challenges` from the patch entirely. SSA only manages fields explicitly present in the patch, so the `edgion-acme-controller` writer never touches `activeChallenges` in practice.
-- ACME service execution is leader-gated, but leadership gating is not API-server fencing. The generic handler's raw-input resourceVersion precondition prevents stale snapshot rollback of successful service writes; it does not establish nonoverlapping ownership, especially for `last_failure_reason`. See the [snapshot concurrency guard](../../status/regression-guards/kubernetes-status-snapshot-concurrency.md).
+- The ACME service has three dedicated SSA writers/managers — `edgion-acme-controller` (lifecycle fields), `edgion-acme-challenges` (active challenges only), and `edgion-acme-scheduler` (the recovery checkpoint). This is not an inventory of every status writer: the generic resource handler also sends a Merge Patch of its observed status.
+- The managers do not overlap: lifecycle serialization omits empty challenge and absent scheduler fields; the challenge and scheduler patches explicitly contain only their owned field.
+- Active attempts now validate the live Lease fence and source UID/generation around side effects. This is API-server fencing, but it is still not a transaction across the source, Secret, EdgionTls, and status objects. See the [scheduler fencing guard](../regression-guards/acme-scheduler-fencing-recovery.md) and [snapshot concurrency guard](../../status/regression-guards/kubernetes-status-snapshot-concurrency.md).
 - The unconditional `.force()` is the project-wide convention for SSA writes against Edgion-owned resources (see `conf_center/kubernetes/storage.rs:325` for the same pattern with `edgion-controller`); changing it only here would diverge from that convention.
 - "Drop `.force()`" introduces an unhandled 409 path on the critical status write-back route. "Try-then-force-on-409" introduces a retry/state-machine layer to all 5 call sites for a hypothetical future risk that requires a third-party field manager to ever land on `EdgionAcme/status`.
 - **Verdict**: SSA `.force()` fix suggestions on `update_acme_status` / `patch_active_challenges` are not accepted. Re-evaluate only if a third-party controller is actually introduced that writes the same status fields.

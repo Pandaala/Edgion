@@ -345,6 +345,13 @@ pub struct EdgionAcmeStatus {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub account_uri: Option<String>,
 
+    /// Durable checkpoint for the Controller's ACME scheduler.
+    ///
+    /// This is read-only operational state. It is persisted so a new leader can
+    /// recover the retry budget without treating a restart as a fresh attempt.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scheduler: Option<AcmeSchedulerStatus>,
+
     /// Active HTTP-01 challenge tokens.
     ///
     /// Written by the Controller's AcmeService through the `/status` subresource
@@ -353,6 +360,30 @@ pub struct EdgionAcmeStatus {
     /// Empty (or absent) when no challenge is in flight.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub active_challenges: Vec<ActiveHttpChallenge>,
+}
+
+/// Durable, non-secret ACME scheduler checkpoint.
+#[derive(Default, Serialize, Deserialize, Debug, Clone, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AcmeSchedulerStatus {
+    /// Resource generation for which this retry budget was recorded.
+    pub observed_generation: i64,
+
+    /// Identifier of the most recently reserved issuance attempt.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attempt_id: Option<String>,
+
+    /// Number of issuance attempts reserved for this resource generation.
+    #[serde(default)]
+    pub attempts_used: u32,
+
+    /// Time at which the current/last attempt was reserved.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attempt_started_at: Option<String>,
+
+    /// Earliest time at which the scheduler may start another attempt.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_retry_at: Option<String>,
 }
 
 // ============================================================================

@@ -26,6 +26,13 @@ use zeroize::Zeroizing;
 
 use edgion_resources::resources::edgion_acme::AcmeKeyType;
 
+/// Attempt-local authority and cancellation seam for irreversible ACME calls.
+#[async_trait::async_trait]
+pub trait AcmeOperationGuard: Send + Sync {
+    async fn check(&self, operation: &'static str) -> Result<()>;
+    async fn cancelled(&self);
+}
+
 /// ACME client wrapper
 pub struct AcmeClient {
     account: Account,
@@ -56,6 +63,7 @@ impl AcmeClient {
         email: &str,
         eab_kid: Option<&str>,
         eab_hmac_key: Option<&str>,
+        guard: &impl AcmeOperationGuard,
     ) -> Result<(Self, AccountCredentials)> {
         let new_account = NewAccount {
             contact: &[&format!("mailto:{}", email)],
@@ -76,10 +84,12 @@ impl AcmeClient {
 
         let builder = Account::builder().context("Failed to create ACME account builder")?;
 
-        let (account, credentials) = builder
-            .create(&new_account, server_url.to_string(), eab.as_ref())
-            .await
-            .context("Failed to create ACME account")?;
+        guard.check("register ACME account").await?;
+        let create = builder.create(&new_account, server_url.to_string(), eab.as_ref());
+        let (account, credentials) = tokio::select! {
+            result = create => result.context("Failed to create ACME account")?,
+            _ = guard.cancelled() => anyhow::bail!("ACME account registration was cancelled"),
+        };
 
         tracing::info!(
             server = server_url,
@@ -175,14 +185,17 @@ impl AcmeClient {
     pub async fn prepare_http01_order(
         &self,
         domains: &[String],
+        guard: &impl AcmeOperationGuard,
     ) -> Result<(Vec<PendingHttpChallenge>, Http01OrderContext)> {
         let identifiers: Vec<Identifier> = domains.iter().map(|d| Identifier::Dns(d.clone())).collect();
 
-        let mut order = self
-            .account
-            .new_order(&NewOrder::new(&identifiers))
-            .await
-            .context("Failed to create ACME order")?;
+        guard.check("create ACME order").await?;
+        let new_order = NewOrder::new(&identifiers);
+        let create_order = self.account.new_order(&new_order);
+        let mut order = tokio::select! {
+            result = create_order => result.context("Failed to create ACME order")?,
+            _ = guard.cancelled() => anyhow::bail!("ACME order creation was cancelled"),
+        };
 
         let mut auths = order.authorizations();
         let mut pending = Vec::new();
@@ -222,7 +235,11 @@ impl AcmeClient {
     ///
     /// Call this AFTER the challenge tokens have been deployed to the Gateway.
     /// Re-fetches authorizations and calls `set_ready()` on each pending challenge.
-    pub async fn activate_http01_challenges(&self, ctx: &mut Http01OrderContext) -> Result<()> {
+    pub async fn activate_http01_challenges(
+        &self,
+        ctx: &mut Http01OrderContext,
+        guard: &impl AcmeOperationGuard,
+    ) -> Result<()> {
         let mut auths = ctx.order.authorizations();
 
         while let Some(auth_result) = auths.next().await {
@@ -238,10 +255,14 @@ impl AcmeClient {
                 .challenge(ChallengeType::Http01)
                 .ok_or_else(|| anyhow::anyhow!("No HTTP-01 challenge for {}", &domain))?;
 
-            challenge
-                .set_ready()
-                .await
-                .context(format!("Failed to set HTTP-01 challenge ready for {}", &domain))?;
+            guard.check("activate HTTP-01 challenge").await?;
+            let set_ready = challenge.set_ready();
+            tokio::select! {
+                result = set_ready => {
+                    result.context(format!("Failed to set HTTP-01 challenge ready for {}", &domain))?;
+                }
+                _ = guard.cancelled() => anyhow::bail!("HTTP-01 challenge activation was cancelled"),
+            }
 
             tracing::debug!(
                 domain = %domain,
@@ -260,8 +281,9 @@ impl AcmeClient {
         ctx: Http01OrderContext,
         domains: &[String],
         key_type: &AcmeKeyType,
+        guard: &impl AcmeOperationGuard,
     ) -> Result<AcmeCertificateResult> {
-        self.finalize_order(ctx.order, domains, key_type).await
+        self.finalize_order(ctx.order, domains, key_type, guard).await
     }
 
     /// Finalize the HTTP-01 order
@@ -270,28 +292,32 @@ impl AcmeClient {
         mut order: instant_acme::Order,
         domains: &[String],
         key_type: &AcmeKeyType,
+        guard: &impl AcmeOperationGuard,
     ) -> Result<AcmeCertificateResult> {
         // Wait for the order to become ready (challenges validated)
         let retry = instant_acme::RetryPolicy::default();
-        order
-            .poll_ready(&retry)
-            .await
-            .context("Order validation failed or timed out")?;
+        tokio::select! {
+            result = order.poll_ready(&retry) => {
+                let _ = result.context("Order validation failed or timed out")?;
+            }
+            _ = guard.cancelled() => anyhow::bail!("ACME order validation was cancelled"),
+        }
 
         // Generate key pair and CSR
         let (private_key_pem, csr_der) = generate_csr(domains, key_type)?;
 
         // Submit CSR to ACME server
-        order
-            .finalize_csr(&csr_der)
-            .await
-            .context("Failed to finalize ACME order with CSR")?;
+        guard.check("finalize ACME order").await?;
+        tokio::select! {
+            result = order.finalize_csr(&csr_der) => result.context("Failed to finalize ACME order with CSR")?,
+            _ = guard.cancelled() => anyhow::bail!("ACME order finalization was cancelled"),
+        }
 
         // Wait for and retrieve the certificate
-        let certificate_pem = order
-            .poll_certificate(&retry)
-            .await
-            .context("Failed to retrieve certificate")?;
+        let certificate_pem = tokio::select! {
+            result = order.poll_certificate(&retry) => result.context("Failed to retrieve certificate")?,
+            _ = guard.cancelled() => anyhow::bail!("ACME certificate polling was cancelled"),
+        };
 
         tracing::info!(
             domains = ?domains,

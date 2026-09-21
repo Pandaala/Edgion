@@ -113,10 +113,24 @@ pub async fn create_account_secret(
 pub async fn patch_account_key_into_existing_secret(
     secret_api: &Api<Secret>,
     secret_name: &str,
+    snapshot: &Secret,
     creds_json: &Zeroizing<String>,
 ) -> Result<()> {
+    let uid = snapshot
+        .metadata
+        .uid
+        .as_deref()
+        .context("ACME account Secret has no UID")?;
+    let resource_version = snapshot
+        .metadata
+        .resource_version
+        .as_deref()
+        .context("ACME account Secret has no resourceVersion")?;
     let b64 = base64::engine::general_purpose::STANDARD.encode(creds_json.as_bytes());
-    let patch = serde_json::json!({ "data": { ACME_ACCOUNT_KEY: b64 } });
+    let patch = serde_json::json!({
+        "metadata": {"uid": uid, "resourceVersion": resource_version},
+        "data": { ACME_ACCOUNT_KEY: b64 }
+    });
     // No `.force()` here, deliberately: this is a Patch::Merge, and `force` is honored
     // only for Patch::Apply — a merge patch raises no field-ownership conflict at all.
     // `PatchParams::apply(...)` is used solely to set the field manager (kube exposes no

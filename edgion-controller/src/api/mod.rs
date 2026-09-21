@@ -441,7 +441,7 @@ async fn trigger_acme(Path((namespace, name)): Path<(String, String)>) -> impl I
     // `false` means the ACME service is not running (no sender). Reporting a
     // `200 OK` in that case would mislead the operator into thinking the
     // trigger took effect, so surface it as a 503 instead.
-    if crate::services::acme::notify_resource_changed(key.clone()).await {
+    if crate::services::acme::trigger_resource(key.clone()).await {
         Json(ApiResponse::ok_body(format!("ACME check triggered for {}", key))).into_response()
     } else {
         let body = Json(ApiResponse::<String>::err_body(format!(

@@ -191,6 +191,26 @@ spec:
                   type: string
                 accountUri:
                   type: string
+                scheduler:
+                  type: object
+                  description: "Read-only ACME scheduler recovery checkpoint"
+                  required: [observedGeneration, attemptsUsed]
+                  properties:
+                    observedGeneration:
+                      type: integer
+                      format: int64
+                    attemptId:
+                      type: string
+                    attemptsUsed:
+                      type: integer
+                      format: int32
+                      minimum: 0
+                    attemptStartedAt:
+                      type: string
+                      format: date-time
+                    nextRetryAt:
+                      type: string
+                      format: date-time
                 activeChallenges:
                   type: array
                   description: "Active HTTP-01 challenge tokens (written by Controller via /status subresource)"

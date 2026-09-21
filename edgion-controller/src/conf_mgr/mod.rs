@@ -93,7 +93,7 @@ pub use conf_center::kubernetes::{
 };
 
 // Leader election
-pub use conf_center::kubernetes::{LeaderElection, LeaderHandle};
+pub use conf_center::kubernetes::{LeaderElection, LeaderFence, LeaderFenceValidation, LeaderHandle};
 
 // ==================== Backward compatibility aliases ====================
 

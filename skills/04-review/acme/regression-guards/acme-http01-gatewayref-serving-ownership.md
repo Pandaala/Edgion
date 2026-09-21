@@ -32,35 +32,30 @@ UID, generation, current `Accepted`/`ResolvedRefs`, resolved attachments, and a
 fresh live resolution must agree. Publication skew uses one convergence timer
 per key and service generation and does not consume issuance retries.
 
-## Active attempt publication checks
+## Active attempt fencing
 
-The minimal correction for `acme-scheduler-trigger-admission` reuses the
-eligibility gate before publishing certificate Secrets, EdgionTls, lifecycle
-status, and active challenges (including clearing challenges). `AcmeAttempt`
-retains references to the admitted resource and runtime plus the service
-generation. A fresh GET must match the admitted UID/generation, have no deletion
-timestamp, and pass current eligibility; the service generation is checked both
-before and after the GET. A GET failure suppresses publication.
+Every attempt carries a service generation, unique attempt ID, admitted source
+UID/generation, serving proof, and Kubernetes Lease fence. The attempt guard
+re-reads the Lease and source resource and reuses this eligibility gate before
+ACME side effects, account persistence, certificate Secret/EdgionTls writes,
+lifecycle status, and active challenge publication or clearing. Long waits and
+CA polls also observe cooperative cancellation.
 
-Lifecycle/challenge SSA retains forced field ownership and includes the checked
-UID/resourceVersion, so an intervening change to that same resource rejects the
-write. A retired attempt does not publish Failed or increment its retry budget
-after failing the outer completion check; its processing marker is removed.
-Status-only resourceVersion changes do not retire an otherwise eligible attempt.
-The existing generation-scoped timer schedules a recheck after a rejected
-completion check. `Issuing`/`Renewing` without a local processing marker is
-interrupted work, subject to the same retry limit as `Failed`, rather than proof
-that another local task is running. This prevents transient publication checks
-from leaving a permanently in-progress phase. Renewal intent is retained.
+Lifecycle, challenge, and scheduler SSA include the checked source
+UID/resourceVersion. Existing derived targets include their own UID and
+resourceVersion. A ResourceChanged command cancels pre-issuance work after proof,
+condition, generation, or identity changes. After issuance, each write accepts
+a fresh proof only for the same Gateway UID/spec generation and selected
+listener identities/keys; its digest may change when the issued Secret reloads.
+The live eligibility gate still rejects ownership/condition denial and source
+replacement. A stale attempt cannot clear a
+successor's challenge state or publish terminal status into it. Rejected cleanup
+may leave the stale token until its bounded expiry.
 
-This is deliberately a limited publication guard, not a cancellation framework
-or exactly-once guarantee. Source validation and Secret/EdgionTls writes are
-separate API operations, and serving ownership comes from the current local
-runtime view. Handoff after validation, account credential writes, requests
-already sent to the CA, and complete scheduler recovery remain outside this
-correction. A rejected challenge cleanup may leave tokens until expiry or
-subsequent reconciliation. Remaining work is identified by the
-`acme-scheduler-trigger-admission` follow-up.
+The complete scheduling, retry, restart, and Lease contract is recorded in the
+[scheduler fencing guard](acme-scheduler-fencing-recovery.md). It remains a
+fenced, at-least-once workflow rather than an exactly-once CA protocol or a
+multi-object Kubernetes transaction.
 
 Regression coverage is in `service.rs`:
 `certificate_publication_rechecks_authority_between_writes` drives the actual
@@ -70,21 +65,14 @@ serving authority, and changes between Secret/TLS/status writes.
 `retired_attempt_cannot_publish_challenges_or_failure` checks both challenge
 publication/clearing and failure status. No live CA or Kubernetes cluster is
 claimed by these tests.
-`interrupted_attempt_recovers_after_transient_publication_check` drives the
-worker through transient GET failures, processing cleanup, the actual recheck
-command, and resumed Issuing/Renewing work without invoking a CA.
 Terminating resources are rejected before admission, preventing repeated
 publication rejection while finalizers delay deletion. The publication transport
 also exposed a pre-existing inferred EdgionTls plural mismatch, identified by the
 separate `acme-edgiontls-api-plural` follow-up; its current path
 assertion does not establish that the live API accepts that endpoint.
 
-Fresh verification for this minimal correction: Controller `--lib acme` tests
-passed (37 tests); independent read-only review returned LGTM after the
-interrupted-attempt recovery and deletion-admission corrections. Workspace
-check/Clippy, formatting, agent-doc validation, SSA force, metrics inventory,
-Pingora source policy, and Gateway API transform checks passed. Clippy reported
-only the two existing warnings in the unrelated DSL gRPC and Kafka tests.
+Fresh verification evidence belongs to the task or change that modifies this
+contract; historical pass counts are not proof of the current tree.
 
 ## Gateway contract
 

@@ -268,8 +268,15 @@ async fn status_echoes_with_unpersisted_conditions_do_not_notify_again() {
         processor
             .process_work_item("default/echo", Some(raw.clone()), None, TriggerChain::default())
             .await;
-        assert!(notifications.drain().is_empty(), "status echo {iteration} notified");
-        assert!(!processor.get("default/echo").unwrap().spec.notify_after_publish);
+        if iteration == 0 {
+            assert_eq!(notifications.drain(), ["default/echo"]);
+        } else {
+            assert!(notifications.drain().is_empty(), "status echo {iteration} notified");
+        }
+        assert_eq!(
+            processor.get("default/echo").unwrap().spec.notify_after_publish,
+            iteration == 0
+        );
     }
     raw.metadata.generation = Some(2);
     processor
@@ -319,14 +326,14 @@ async fn recovered_credentials_are_published_before_the_single_notification() {
     processor
         .process_work_item("default/recovery", Some(raw.clone()), None, TriggerChain::default())
         .await;
-    assert!(notifications.drain().is_empty());
+    assert_eq!(notifications.drain(), ["default/recovery"]);
     assert_eq!(
         resolved_refs_identity(processor.get("default/recovery").unwrap().spec.current_status.as_ref())
             .unwrap()
             .0,
         "False"
     );
-    assert!(!processor.get("default/recovery").unwrap().spec.notify_after_publish);
+    assert!(processor.get("default/recovery").unwrap().spec.notify_after_publish);
     runtime.secret_store.replace_all(HashMap::from([(secret_key, valid)]));
     processor
         .process_work_item("default/recovery", Some(raw.clone()), None, TriggerChain::default())
@@ -961,7 +968,7 @@ async fn parse_unresolvable_gateway_ref_clears_stale_attachments_and_keeps_activ
         ProcessResult::Skip { reason } => panic!("unexpected skip: {reason}"),
     };
     assert!(parsed.spec.resolved_listener_attachments.is_none());
-    assert!(!parsed.spec.notify_after_publish);
+    assert!(parsed.spec.notify_after_publish);
     // A direct parse has not produced the current transport projection yet.
     assert!(parsed.active_challenges().is_empty());
     assert_eq!(parsed.status.as_ref().unwrap().active_challenges.len(), 1);

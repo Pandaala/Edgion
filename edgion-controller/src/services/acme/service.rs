@@ -17,9 +17,12 @@
 //!   on `status.activeChallenges` written via the `/status` subresource
 //! - Account credentials persisted in a dedicated K8s Secret
 
-use parking_lot::{Mutex, RwLock};
-use std::collections::{BTreeMap, HashMap, HashSet};
-use std::sync::atomic::{AtomicU64, Ordering};
+use futures::stream::{FuturesUnordered, StreamExt};
+use parking_lot::Mutex;
+use std::collections::{BTreeMap, HashMap};
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -29,10 +32,13 @@ use k8s_openapi::ByteString;
 use kube::api::{Api, Patch, PatchParams};
 use kube::Client;
 use tokio::sync::mpsc;
+use tokio::time::Instant;
+use tokio_util::sync::CancellationToken;
+use uuid::Uuid;
 
 use zeroize::Zeroizing;
 
-use super::acme_client::{AcmeCertificateResult, AcmeClient};
+use super::acme_client::{AcmeCertificateResult, AcmeClient, AcmeOperationGuard};
 use super::secret_io::{
     account_credentials_from_json, create_account_secret, extract_account_json_string,
     patch_account_key_into_existing_secret,
@@ -41,12 +47,14 @@ use crate::conf_mgr::sync_runtime::resource_processor::handlers::route_utils::{
     resolve_acme_listener_attachments, AcmeGatewayRefError,
 };
 use crate::conf_mgr::sync_runtime::resource_processor::status_ownership::acme_is_owned;
-use crate::conf_mgr::ControllerRuntime;
+use crate::conf_mgr::{ControllerRuntime, LeaderFence, LeaderFenceValidation, LeaderHandle};
 use edgion_common::time::now_rfc3339;
 use edgion_resources::duration::parse_duration;
 use edgion_resources::resources::edgion_acme::{
-    AcmeCertPhase, AcmeChallenge, ActiveHttpChallenge, EdgionAcme, EdgionAcmeStatus, MAX_ACME_RESOLVED_ATTACHMENTS,
+    AcmeCertPhase, AcmeChallenge, AcmeSchedulerStatus, ActiveHttpChallenge, EdgionAcme, EdgionAcmeStatus,
+    MAX_ACME_RESOLVED_ATTACHMENTS,
 };
+use edgion_resources::resources::edgion_tls::ResolvedListenerAttachment;
 
 // ============================================================================
 // Global singleton (re-initializable for controller re-election)
@@ -79,6 +87,7 @@ struct AcmeServiceHandle {
     tx: mpsc::Sender<AcmeCommand>,
     /// Generation that owns this handle (see `ACME_GENERATION`).
     generation: u64,
+    cancel: CancellationToken,
 }
 
 /// Commands that can be sent to the ACME service
@@ -86,10 +95,10 @@ struct AcmeServiceHandle {
 enum AcmeCommand {
     /// An EdgionAcme resource was created or updated
     ResourceChanged { key: String },
-    /// Trigger a renewal check for a specific resource
-    RenewalCheck { key: String },
-    /// Recheck Controller-processed eligibility after a transient cache skew.
-    EligibilityCheck { key: String },
+    /// An operator explicitly requested a retry and retry-budget reset.
+    AdminTrigger { key: String },
+    /// Startup recovery must not reset the persisted retry budget.
+    StartupCheck { key: String },
 }
 
 /// Captures real notification sends without starting a worker or performing IO.
@@ -107,7 +116,11 @@ impl NotificationCapture {
         let generation = ACME_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
         let mut service = ACME_SERVICE.lock();
         assert!(service.is_none(), "notification capture requires an idle service");
-        *service = Some(AcmeServiceHandle { tx, generation });
+        *service = Some(AcmeServiceHandle {
+            tx,
+            generation,
+            cancel: CancellationToken::new(),
+        });
         Self { rx, generation }
     }
 
@@ -143,7 +156,12 @@ impl Drop for NotificationCapture {
 ///
 /// On startup, the service scans EdgionAcme resources in the configured watch
 /// namespaces to recover renewal timers that were lost during controller restart.
-pub fn start_acme_service(client: Client, watch_namespaces: Vec<String>, runtime: Arc<ControllerRuntime>) {
+pub fn start_acme_service(
+    client: Client,
+    watch_namespaces: Vec<String>,
+    runtime: Arc<ControllerRuntime>,
+    leader: LeaderHandle,
+) {
     let mut guard = ACME_SERVICE.lock();
     if guard.is_some() {
         tracing::warn!(
@@ -153,15 +171,21 @@ pub fn start_acme_service(client: Client, watch_namespaces: Vec<String>, runtime
         return;
     }
 
-    // Allocate a fresh generation for this service instance so detached timers
-    // and the startup scan can recognize a later restart and no-op.
+    // Allocate a fresh generation for this service instance so the startup
+    // scan can recognize a later restart and no-op.
     let generation = ACME_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
 
     let (tx, rx) = mpsc::channel::<AcmeCommand>(256);
-    *guard = Some(AcmeServiceHandle { tx, generation });
+    let cancel = CancellationToken::new();
+    *guard = Some(AcmeServiceHandle {
+        tx,
+        generation,
+        cancel: cancel.clone(),
+    });
     drop(guard); // Release lock before spawning tasks
 
-    let service = AcmeServiceWorker::new(client.clone(), runtime, generation);
+    let startup_cancel = cancel.clone();
+    let service = AcmeServiceWorker::new(client.clone(), runtime, leader, generation, cancel);
     let worker_handle = tokio::spawn(async move {
         service.run(rx).await;
     });
@@ -182,8 +206,14 @@ pub fn start_acme_service(client: Client, watch_namespaces: Vec<String>, runtime
     // This recovers timers lost during controller restart.
     let startup_client = client;
     tokio::spawn(async move {
-        // Wait a bit for processors to finish initial sync
-        tokio::time::sleep(Duration::from_secs(10)).await;
+        // Wait a bit for processors to finish initial sync.
+        if startup_cancel
+            .run_until_cancelled(tokio::time::sleep(Duration::from_secs(10)))
+            .await
+            .is_none()
+        {
+            return;
+        }
         // Skip if this generation's service has already been stopped/replaced,
         // so a stale startup scan cannot enqueue into a later generation.
         if current_generation() != generation {
@@ -194,7 +224,18 @@ pub fn start_acme_service(client: Client, watch_namespaces: Vec<String>, runtime
             );
             return;
         }
-        scan_all_acme_resources(startup_client, &watch_namespaces).await;
+        while current_generation() == generation && !startup_cancel.is_cancelled() {
+            if scan_all_acme_resources(startup_client.clone(), &watch_namespaces, generation).await {
+                break;
+            }
+            if startup_cancel
+                .run_until_cancelled(tokio::time::sleep(CONTROL_PLANE_RECHECK_DELAY))
+                .await
+                .is_none()
+            {
+                break;
+            }
+        }
     });
 
     tracing::info!(
@@ -210,15 +251,15 @@ pub fn start_acme_service(client: Client, watch_namespaces: Vec<String>, runtime
 /// shuts down or loses leadership. Dropping the `Sender` causes the worker's
 /// `recv()` to return `None`, making it exit its event loop cleanly.
 ///
-/// Detached renewal/retry timers and the delayed startup scan are not aborted
-/// here; instead each carries the generation that scheduled it and no-ops when
-/// it fires after this call (see `ACME_GENERATION` / `get_sender_for_generation`),
-/// so stale timers cannot enqueue into a later service generation.
+/// The service cancellation token stops the actor, its jobs, and the delayed
+/// startup scan. The generation guard additionally prevents stale startup work
+/// from enqueueing into a later service instance.
 ///
 /// After this call, `start_acme_service()` can be called again on re-election.
 pub fn stop_acme_service() {
     let mut guard = ACME_SERVICE.lock();
-    if guard.take().is_some() {
+    if let Some(handle) = guard.take() {
+        handle.cancel.cancel();
         crate::conf_mgr::sync_runtime::metrics::leader_job_gauge("acme").set(0.0);
         tracing::info!(component = "acme_service", "ACME service stopped");
     }
@@ -233,7 +274,7 @@ pub fn stop_acme_service() {
 /// - `Ready` certs get their renewal timers re-established
 /// - `Pending`/`Failed` certs get retried
 /// - Nothing is silently forgotten after a controller restart
-async fn scan_all_acme_resources(client: Client, watch_namespaces: &[String]) {
+async fn scan_all_acme_resources(client: Client, watch_namespaces: &[String], generation: u64) -> bool {
     use kube::api::ListParams;
 
     tracing::info!(component = "acme_service", "Starting full scan of EdgionAcme resources");
@@ -247,13 +288,16 @@ async fn scan_all_acme_resources(client: Client, watch_namespaces: &[String]) {
                 let ns = acme.metadata.namespace.as_deref().unwrap_or("default");
                 let name = acme.metadata.name.as_deref().unwrap_or_default();
                 let key = format!("{}/{}", ns, name);
-                notify_resource_changed(key).await;
+                if let Some(tx) = get_sender_for_generation(generation) {
+                    let _ = tx.send(AcmeCommand::StartupCheck { key }).await;
+                }
             }
             tracing::info!(
                 component = "acme_service",
                 count = count,
                 "Startup scan complete, triggered check for all EdgionAcme resources"
             );
+            true
         }
         Err(e) => {
             tracing::error!(
@@ -261,6 +305,7 @@ async fn scan_all_acme_resources(client: Client, watch_namespaces: &[String]) {
                 error = %e,
                 "Failed to list EdgionAcme resources during startup scan"
             );
+            false
         }
     }
 }
@@ -345,19 +390,24 @@ pub async fn notify_resource_changed(key: String) -> bool {
     }
 }
 
-/// Schedule a renewal check for a resource.
-///
-/// `generation` is the ACME service generation that scheduled this timer. When
-/// the timer fires it only enqueues if that generation is still the running one,
-/// so timers outliving a `stop_acme_service()`/`start_acme_service()` cycle
-/// no-op instead of injecting stale work into a later generation.
-fn schedule_renewal_check(generation: u64, key: String, delay: Duration) {
-    tokio::spawn(async move {
-        tokio::time::sleep(delay).await;
-        if let Some(tx) = get_sender_for_generation(generation) {
-            let _ = tx.send(AcmeCommand::RenewalCheck { key }).await;
+/// Explicitly request an ACME retry and reset the retry budget for the current
+/// resource generation.
+pub async fn trigger_resource(key: String) -> bool {
+    let Some(tx) = get_sender() else {
+        return false;
+    };
+    match tx.send(AcmeCommand::AdminTrigger { key: key.clone() }).await {
+        Ok(()) => true,
+        Err(error) => {
+            tracing::warn!(
+                component = "acme_service",
+                key = %key,
+                error = %error,
+                "Failed to trigger ACME service (channel closed)"
+            );
+            false
         }
-    });
+    }
 }
 
 // ============================================================================
@@ -371,6 +421,9 @@ const MAX_RETRY_ATTEMPTS: u32 = 5;
 
 /// Short convergence delay for raw-object and processed-cache publication skew.
 const ELIGIBILITY_RECHECK_DELAY: Duration = Duration::from_secs(1);
+
+/// Retry delay for Kubernetes/Lease reads whose outcome is unknown.
+const CONTROL_PLANE_RECHECK_DELAY: Duration = Duration::from_secs(5);
 
 /// Compute exponential backoff duration for a given attempt.
 ///
@@ -409,300 +462,559 @@ fn spec_duration_or(value: &str, field: &'static str, default: Duration) -> Dura
 // ACME Service Worker
 // ============================================================================
 
-/// The background worker that processes ACME commands
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TriggerKind {
+    Resource,
+    Admin,
+    Startup,
+    Renewal,
+    Retry,
+    Eligibility,
+}
+
+impl TriggerKind {
+    fn resets_retry_budget(self) -> bool {
+        matches!(self, Self::Admin)
+    }
+}
+
+#[derive(Default)]
+struct ResourceSchedule {
+    busy: bool,
+    active_cancel: Option<CancellationToken>,
+    active_attempt_id: Option<String>,
+    certificate_issued: Option<Arc<AtomicBool>>,
+    pending: Option<TriggerKind>,
+    deadline: Option<(Instant, TriggerKind)>,
+}
+
+impl ResourceSchedule {
+    fn merge_pending(&mut self, trigger: TriggerKind) {
+        if trigger == TriggerKind::Admin || self.pending.is_none() {
+            self.pending = Some(trigger);
+        }
+    }
+
+    fn set_deadline(&mut self, delay: Duration, trigger: TriggerKind) {
+        let candidate = Instant::now() + delay;
+        if self
+            .deadline
+            .is_none_or(|(current, _)| candidate < current || trigger == TriggerKind::Admin)
+        {
+            self.deadline = Some((candidate, trigger));
+        }
+    }
+}
+
+struct AttemptPlan {
+    attempt: AcmeAttempt,
+    is_renewal: bool,
+    fail_backoff_base: u64,
+    attempts_used: u32,
+}
+
+enum CheckOutcome {
+    Deleted,
+    Idle,
+    Recheck(Duration, TriggerKind),
+    Wait(Duration, TriggerKind),
+    Start(Box<AttemptPlan>),
+}
+
+enum AttemptOutcome {
+    Success(Duration),
+    Failed(Option<Duration>),
+    Retired,
+}
+
+enum WorkerJobResult {
+    Checked {
+        key: String,
+        outcome: CheckOutcome,
+    },
+    AttemptFinished {
+        key: String,
+        attempt_id: String,
+        outcome: AttemptOutcome,
+    },
+}
+
+type WorkerJob = Pin<Box<dyn Future<Output = WorkerJobResult> + Send>>;
+
+/// The background scheduler. It alone owns per-resource scheduling state;
+/// Kubernetes and CA work runs in `jobs` and reports typed completions back.
 struct AcmeServiceWorker {
     client: Client,
     runtime: Arc<ControllerRuntime>,
-    /// Generation this worker belongs to; stamped onto timers it schedules.
+    leader: Option<LeaderHandle>,
     generation: u64,
-    /// Keys of resources currently being processed (prevents duplicate work)
-    processing: Arc<RwLock<HashSet<String>>>,
-    /// Consecutive failure count per resource key (for exponential backoff).
-    /// Reset to 0 on success or when the user edits the CRD (ResourceChanged).
-    retry_tracker: Arc<RwLock<HashMap<String, u32>>>,
-    /// At most one processed-cache convergence timer per resource key and
-    /// service generation. Timers remove their marker before re-enqueueing.
-    eligibility_waiting: Arc<RwLock<HashSet<String>>>,
+    cancel: CancellationToken,
+    schedules: HashMap<String, ResourceSchedule>,
+    jobs: FuturesUnordered<WorkerJob>,
 }
 
 impl AcmeServiceWorker {
-    fn new(client: Client, runtime: Arc<ControllerRuntime>, generation: u64) -> Self {
+    fn new(
+        client: Client,
+        runtime: Arc<ControllerRuntime>,
+        leader: LeaderHandle,
+        generation: u64,
+        cancel: CancellationToken,
+    ) -> Self {
         Self {
             client,
             runtime,
+            leader: Some(leader),
             generation,
-            processing: Arc::new(RwLock::new(HashSet::new())),
-            retry_tracker: Arc::new(RwLock::new(HashMap::new())),
-            eligibility_waiting: Arc::new(RwLock::new(HashSet::new())),
+            cancel,
+            schedules: HashMap::new(),
+            jobs: FuturesUnordered::new(),
         }
     }
 
-    async fn run(self, mut rx: mpsc::Receiver<AcmeCommand>) {
+    async fn run(mut self, mut rx: mpsc::Receiver<AcmeCommand>) {
         tracing::info!(component = "acme_service", "Worker started, waiting for commands");
 
-        while let Some(cmd) = rx.recv().await {
-            match cmd {
-                AcmeCommand::ResourceChanged { key } => {
-                    // User or system changed the CRD: reset retry counter
-                    self.retry_tracker.write().remove(&key);
-                    self.handle_resource_check(&key).await;
-                }
-                AcmeCommand::RenewalCheck { key } => {
-                    // Timer-driven check (renewal or retry): don't reset counter
-                    self.handle_resource_check(&key).await;
-                }
-                AcmeCommand::EligibilityCheck { key } => {
-                    // Cache-convergence checks are not issuance retries and do
-                    // not reset or increment the retry budget.
-                    self.handle_resource_check(&key).await;
-                }
-            }
-        }
-
-        tracing::info!(component = "acme_service", "Worker stopped (channel closed)");
-    }
-
-    /// Core resource check — shared by ResourceChanged and RenewalCheck.
-    ///
-    /// Fetches the resource from K8s, checks phase/expiry, and spawns the
-    /// ACME flow if needed. All retry/backoff logic is handled via timers,
-    /// never via the K8s resource queue.
-    async fn handle_resource_check(&self, key: &str) {
-        // Skip if already processing
-        if self.processing.read().contains(key) {
-            return;
-        }
-
-        let (namespace, name) = parse_resource_key(key);
-
-        let api: Api<EdgionAcme> = Api::namespaced(self.client.clone(), &namespace);
-        let acme = match api.get(&name).await {
-            Ok(a) => a,
-            Err(e) => {
-                tracing::debug!(
-                    component = "acme_service",
-                    key = %key,
-                    error = %e,
-                    "Failed to get EdgionAcme resource (may have been deleted)"
-                );
-                // Resource deleted — clean up retry tracker
-                self.retry_tracker.write().remove(key);
-                return;
-            }
-        };
-
-        if acme.metadata.deletion_timestamp.is_some() {
-            return;
-        }
-
-        match evaluate_issuance_eligibility(&acme, key, &self.runtime) {
-            EligibilityDecision::Eligible => {}
-            EligibilityDecision::AuthoritativelyIneligible => return,
-            EligibilityDecision::Transient => {
-                self.schedule_eligibility_recheck(key);
-                return;
-            }
-        }
-
-        let phase = acme
-            .status
-            .as_ref()
-            .map(|s| &s.phase)
-            .unwrap_or(&AcmeCertPhase::Pending);
-        match phase {
-            AcmeCertPhase::Ready => {
-                if !self.needs_renewal(&acme) {
-                    // Not time to renew yet — schedule next check
-                    let check_interval = spec_duration_or(
-                        &acme.spec.renewal.check_interval,
-                        "checkInterval",
-                        Duration::from_secs(86400),
-                    );
-                    schedule_renewal_check(self.generation, key.to_string(), check_interval);
-                    return;
-                }
-                // Fall through to start renewal
-            }
-            AcmeCertPhase::Failed | AcmeCertPhase::Issuing | AcmeCertPhase::Renewing => {
-                // The processing set already excluded live local attempts.
-                // A persisted in-progress phase alone must not strand interrupted work.
-                // Check retry limit before attempting again
-                let attempt = *self.retry_tracker.read().get(key).unwrap_or(&0);
-                if attempt >= MAX_RETRY_ATTEMPTS {
-                    tracing::warn!(
-                        component = "acme_service",
-                        key = %key,
-                        attempts = attempt,
-                        "Retry limit reached ({}), not retrying. Edit the CRD to reset.",
-                        MAX_RETRY_ATTEMPTS
-                    );
-                    return;
-                }
-                // Fall through to retry issuance
-            }
-            AcmeCertPhase::Pending => {
-                // Fresh resource, start issuance
-            }
-        }
-
-        // Check validation errors — don't waste retries on config problems
-        if let Some(status) = &acme.status {
-            if let Some(ref reason) = status.last_failure_reason {
-                if reason.starts_with("EdgionAcme:") {
-                    tracing::debug!(
-                        component = "acme_service",
-                        key = %key,
-                        reason = %reason,
-                        "Skipping: resource has validation errors"
-                    );
-                    return;
-                }
-            }
-        }
-
-        self.processing.write().insert(key.to_string());
-
-        // Spawn the ACME flow task
-        let client = self.client.clone();
-        let processing = self.processing.clone();
-        let retry_tracker = self.retry_tracker.clone();
-        let key_owned = key.to_string();
-        let is_renewal = matches!(phase, AcmeCertPhase::Ready | AcmeCertPhase::Renewing);
-        let fail_backoff_base =
-            spec_duration_or(&acme.spec.renewal.fail_backoff, "failBackoff", Duration::from_secs(300)).as_secs();
-        let generation = self.generation;
-        let runtime = self.runtime.clone();
-
-        tokio::spawn(async move {
-            let attempt = AcmeAttempt {
-                acme: &acme,
-                runtime: &runtime,
-                generation,
-            };
-            let result = process_acme_resource(client.clone(), &attempt, is_renewal).await;
-
-            match result {
-                Ok(()) => {
-                    tracing::info!(
-                        component = "acme_service",
-                        key = %key_owned,
-                        "ACME flow completed successfully"
-                    );
-                    // Success: clear retry counter
-                    retry_tracker.write().remove(&key_owned);
-                }
-                Err(e) => {
-                    // A retired attempt must not publish failure into its successor.
-                    let (ns, name) = parse_resource_key(&key_owned);
-                    let api: Api<EdgionAcme> = Api::namespaced(client, &ns);
-                    if let Err(error) = attempt.current_resource(&api).await {
-                        tracing::warn!(component = "acme_service", key = %key_owned, error = %error,
-                            "Skipping ACME failure publication: attempt authority could not be confirmed");
-                        processing.write().remove(&key_owned);
-                        schedule_renewal_check(generation, key_owned, ELIGIBILITY_RECHECK_DELAY);
-                        return;
-                    }
-                    // Increment retry counter
-                    let retry_attempt = {
-                        let mut tracker = retry_tracker.write();
-                        let count = tracker.entry(key_owned.clone()).or_insert(0);
-                        *count += 1;
-                        *count
+        loop {
+            let deadline = self
+                .schedules
+                .values()
+                .filter_map(|state| state.deadline.map(|(deadline, _)| deadline))
+                .min()
+                .unwrap_or_else(|| Instant::now() + Duration::from_secs(365 * 24 * 3600));
+            tokio::select! {
+                _ = self.cancel.cancelled() => break,
+                command = rx.recv() => {
+                    let Some(command) = command else { break };
+                    let (key, trigger) = match command {
+                        AcmeCommand::ResourceChanged { key } => (key, TriggerKind::Resource),
+                        AcmeCommand::AdminTrigger { key } => (key, TriggerKind::Admin),
+                        AcmeCommand::StartupCheck { key } => (key, TriggerKind::Startup),
                     };
-
-                    tracing::error!(
-                        component = "acme_service",
-                        key = %key_owned,
-                        error = %e,
-                        attempt = retry_attempt,
-                        max_attempts = MAX_RETRY_ATTEMPTS,
-                        "ACME flow failed"
-                    );
-
-                    // Update status to Failed
-                    if let Err(status_err) =
-                        update_acme_status(&api, &attempt, &name, AcmeCertPhase::Failed, |status| {
-                            status.last_failure_reason = Some(format!("{:#}", e));
-                            status.last_failure_time = Some(now_rfc3339());
-                        })
-                        .await
-                    {
-                        // Without this, phase stays in Issuing/Renewing and operators
-                        // cannot see that the flow failed.
-                        tracing::warn!(
-                            component = "acme_service",
-                            key = %key_owned,
-                            error = %status_err,
-                            "Failed to write Failed status back to EdgionAcme"
-                        );
-                    }
-
-                    // Schedule retry with exponential backoff (if under limit)
-                    if retry_attempt < MAX_RETRY_ATTEMPTS {
-                        let backoff = exponential_backoff(fail_backoff_base, retry_attempt - 1);
-                        tracing::info!(
-                            component = "acme_service",
-                            key = %key_owned,
-                            attempt = retry_attempt,
-                            backoff_secs = backoff.as_secs(),
-                            "Scheduling retry with exponential backoff"
-                        );
-                        schedule_renewal_check(generation, key_owned.clone(), backoff);
-                    } else {
-                        tracing::error!(
-                            component = "acme_service",
-                            key = %key_owned,
-                            "Giving up after {} failed attempts. Edit CRD to reset.",
-                            MAX_RETRY_ATTEMPTS
-                        );
-                    }
+                    self.enqueue_check(key, trigger);
+                }
+                Some(result) = self.jobs.next(), if !self.jobs.is_empty() => {
+                    self.handle_job_result(result);
+                }
+                _ = tokio::time::sleep_until(deadline) => {
+                    self.fire_due_deadlines();
                 }
             }
+        }
 
-            processing.write().remove(&key_owned);
-        });
+        tracing::info!(component = "acme_service", "Worker stopped");
     }
 
-    fn schedule_eligibility_recheck(&self, key: &str) {
-        if !self.eligibility_waiting.write().insert(key.to_string()) {
+    fn enqueue_check(&mut self, key: String, trigger: TriggerKind) {
+        let state = self.schedules.entry(key.clone()).or_default();
+        let cancel_active = trigger == TriggerKind::Resource;
+        let trigger = claim_trigger(state, trigger);
+        if state.busy {
+            if cancel_active
+                && !state
+                    .certificate_issued
+                    .as_ref()
+                    .is_some_and(|issued| issued.load(Ordering::Acquire))
+            {
+                if let Some(cancel) = &state.active_cancel {
+                    cancel.cancel();
+                }
+            }
+            state.merge_pending(trigger);
             return;
         }
-        let pending = self.eligibility_waiting.clone();
-        let key = key.to_string();
+        state.busy = true;
+        let client = self.client.clone();
+        let runtime = self.runtime.clone();
+        let leader = self.leader.clone();
         let generation = self.generation;
-        tokio::spawn(async move {
-            tokio::time::sleep(ELIGIBILITY_RECHECK_DELAY).await;
-            pending.write().remove(&key);
-            if let Some(tx) = get_sender_for_generation(generation) {
-                let _ = tx.send(AcmeCommand::EligibilityCheck { key }).await;
+        let cancel = self.cancel.child_token();
+        state.active_cancel = Some(cancel.clone());
+        self.jobs.push(Box::pin(async move {
+            let outcome = check_resource(client, runtime, leader, generation, cancel, &key, trigger).await;
+            WorkerJobResult::Checked { key, outcome }
+        }));
+    }
+
+    fn handle_job_result(&mut self, result: WorkerJobResult) {
+        match result {
+            WorkerJobResult::Checked { key, outcome } => match outcome {
+                CheckOutcome::Start(plan) => {
+                    let attempt_id = plan.attempt.attempt_id.clone();
+                    let state = self.schedules.entry(key.clone()).or_default();
+                    state.active_cancel = Some(plan.attempt.cancel.clone());
+                    state.active_attempt_id = Some(attempt_id.clone());
+                    state.certificate_issued = Some(plan.attempt.certificate_issued.clone());
+                    self.jobs.push(Box::pin(async move {
+                        let outcome = run_attempt(&plan).await;
+                        WorkerJobResult::AttemptFinished {
+                            key,
+                            attempt_id,
+                            outcome,
+                        }
+                    }));
+                }
+                outcome => self.finish_key(key, outcome),
+            },
+            WorkerJobResult::AttemptFinished {
+                key,
+                attempt_id,
+                outcome,
+            } => {
+                let state = self.schedules.entry(key.clone()).or_default();
+                if state.active_attempt_id.as_deref() != Some(attempt_id.as_str()) {
+                    tracing::warn!(component = "acme_service", key = %key, attempt_id = %attempt_id,
+                        "Ignoring stale ACME attempt completion");
+                    return;
+                }
+                state.busy = false;
+                state.active_cancel = None;
+                state.active_attempt_id = None;
+                state.certificate_issued = None;
+                match outcome {
+                    AttemptOutcome::Success(delay) => state.set_deadline(delay, TriggerKind::Renewal),
+                    AttemptOutcome::Failed(Some(delay)) => state.set_deadline(delay, TriggerKind::Retry),
+                    AttemptOutcome::Failed(None) => {}
+                    AttemptOutcome::Retired => state.set_deadline(ELIGIBILITY_RECHECK_DELAY, TriggerKind::Eligibility),
+                }
+                tracing::debug!(component = "acme_service", key = %key, attempt_id = %attempt_id, "ACME attempt settled");
+                self.start_pending(key);
             }
-        });
+        }
     }
 
-    /// Check if a certificate needs renewal based on expiry time
-    fn needs_renewal(&self, acme: &EdgionAcme) -> bool {
-        let Some(status) = &acme.status else {
-            return true; // No status means no cert
-        };
-
-        let Some(not_after) = &status.certificate_not_after else {
-            return true; // No expiry means no cert
-        };
-
-        let Ok(expiry) = chrono::DateTime::parse_from_rfc3339(not_after) else {
-            return true; // Can't parse expiry
-        };
-
-        let renew_before = chrono::Duration::from_std(spec_duration_or(
-            &acme.spec.renewal.renew_before,
-            "renewBefore",
-            Duration::from_secs(720 * 3600),
-        ))
-        .unwrap_or_else(|_| chrono::Duration::days(30));
-        let renew_at = expiry - renew_before;
-
-        chrono::Utc::now() >= renew_at
+    fn finish_key(&mut self, key: String, outcome: CheckOutcome) {
+        if matches!(outcome, CheckOutcome::Deleted) {
+            let pending = take_deleted_pending(&mut self.schedules, &key);
+            if let Some(trigger) = pending {
+                self.enqueue_check(key, trigger);
+            }
+            return;
+        }
+        let state = self.schedules.entry(key.clone()).or_default();
+        state.busy = false;
+        state.active_cancel = None;
+        state.active_attempt_id = None;
+        state.certificate_issued = None;
+        match outcome {
+            CheckOutcome::Recheck(delay, trigger) => state.set_deadline(delay, trigger),
+            CheckOutcome::Wait(delay, trigger) => state.set_deadline(delay, trigger),
+            CheckOutcome::Deleted | CheckOutcome::Idle | CheckOutcome::Start(_) => {}
+        }
+        self.start_pending(key);
     }
+
+    fn start_pending(&mut self, key: String) {
+        let pending = self.schedules.get_mut(&key).and_then(|state| state.pending.take());
+        if let Some(trigger) = pending {
+            self.enqueue_check(key, trigger);
+        }
+    }
+
+    fn fire_due_deadlines(&mut self) {
+        let now = Instant::now();
+        let due: Vec<_> = self
+            .schedules
+            .iter_mut()
+            .filter_map(|(key, state)| {
+                state
+                    .deadline
+                    .filter(|(deadline, _)| *deadline <= now)
+                    .map(|(_, trigger)| {
+                        state.deadline = None;
+                        (key.clone(), trigger)
+                    })
+            })
+            .collect();
+        for (key, trigger) in due {
+            self.enqueue_check(key, trigger);
+        }
+    }
+}
+
+fn claim_trigger(state: &mut ResourceSchedule, incoming: TriggerKind) -> TriggerKind {
+    let scheduled = state.deadline.take().map(|(_, trigger)| trigger);
+    if incoming == TriggerKind::Admin || scheduled == Some(TriggerKind::Admin) {
+        TriggerKind::Admin
+    } else {
+        incoming
+    }
+}
+
+fn take_deleted_pending(schedules: &mut HashMap<String, ResourceSchedule>, key: &str) -> Option<TriggerKind> {
+    schedules.remove(key).and_then(|state| state.pending)
+}
+
+async fn check_resource(
+    client: Client,
+    runtime: Arc<ControllerRuntime>,
+    leader: Option<LeaderHandle>,
+    generation: u64,
+    cancel: CancellationToken,
+    key: &str,
+    trigger: TriggerKind,
+) -> CheckOutcome {
+    let (namespace, name) = parse_resource_key(key);
+    let api: Api<EdgionAcme> = Api::namespaced(client.clone(), &namespace);
+    let acme = match api.get(&name).await {
+        Ok(acme) => acme,
+        Err(kube::Error::Api(response)) if response.code == 404 => return CheckOutcome::Deleted,
+        Err(error) => {
+            tracing::warn!(
+                component = "acme_service",
+                key = %key,
+                error = %error,
+                "Cannot read EdgionAcme; retaining scheduler state for retry"
+            );
+            return CheckOutcome::Recheck(CONTROL_PLANE_RECHECK_DELAY, trigger);
+        }
+    };
+    if acme.metadata.deletion_timestamp.is_some() {
+        return CheckOutcome::Deleted;
+    }
+    match evaluate_issuance_eligibility(&acme, key, &runtime) {
+        EligibilityDecision::Eligible => {}
+        EligibilityDecision::AuthoritativelyIneligible => return CheckOutcome::Idle,
+        EligibilityDecision::Transient => return CheckOutcome::Recheck(ELIGIBILITY_RECHECK_DELAY, trigger),
+    }
+
+    let Some(resource_generation) = acme.metadata.generation else {
+        return CheckOutcome::Recheck(ELIGIBILITY_RECHECK_DELAY, trigger);
+    };
+    let persisted = acme.status.as_ref().and_then(|status| status.scheduler.clone());
+    let same_generation = persisted
+        .as_ref()
+        .is_some_and(|status| status.observed_generation == resource_generation);
+    let attempts_used = persisted_attempts(trigger, resource_generation, persisted.as_ref());
+    let phase = acme
+        .status
+        .as_ref()
+        .map(|status| status.phase.clone())
+        .unwrap_or(AcmeCertPhase::Pending);
+    let leader_fence = match leader.as_ref() {
+        Some(leader) => match leader.current_fence() {
+            Some(fence) => Some(fence),
+            None => return CheckOutcome::Recheck(CONTROL_PLANE_RECHECK_DELAY, trigger),
+        },
+        None => None,
+    };
+    let Some(serving_attachments) = admitted_serving_attachments(key, &runtime) else {
+        return CheckOutcome::Recheck(ELIGIBILITY_RECHECK_DELAY, trigger);
+    };
+    let attempt = AcmeAttempt {
+        attempt_id: Uuid::new_v4().to_string(),
+        client,
+        acme,
+        runtime,
+        leader,
+        leader_fence,
+        serving_attachments,
+        certificate_issued: Arc::new(AtomicBool::new(false)),
+        generation,
+        cancel,
+    };
+    let mut attempts_used = attempts_used;
+    if matches!(phase, AcmeCertPhase::Ready) && persisted.is_some() {
+        if let Err(error) = patch_scheduler_status(&api, &attempt, None).await {
+            tracing::warn!(component = "acme_service", key = %key, error = %error,
+                "Failed to clear a completed ACME scheduler checkpoint");
+            return CheckOutcome::Recheck(CONTROL_PLANE_RECHECK_DELAY, trigger);
+        }
+        attempts_used = 0;
+    }
+    if matches!(phase, AcmeCertPhase::Ready) && !needs_renewal(&attempt.acme) {
+        let delay = spec_duration_or(
+            &attempt.acme.spec.renewal.check_interval,
+            "checkInterval",
+            Duration::from_secs(86400),
+        );
+        return CheckOutcome::Wait(delay, TriggerKind::Renewal);
+    }
+    if !trigger.resets_retry_budget() && same_generation && !matches!(phase, AcmeCertPhase::Ready) {
+        if let Some(next_retry_at) = persisted.as_ref().and_then(|status| status.next_retry_at.as_deref()) {
+            if let Ok(next) = chrono::DateTime::parse_from_rfc3339(next_retry_at) {
+                let now = chrono::Utc::now();
+                if next > now {
+                    let delay = next
+                        .signed_duration_since(now.fixed_offset())
+                        .to_std()
+                        .unwrap_or(CONTROL_PLANE_RECHECK_DELAY);
+                    return CheckOutcome::Wait(delay, TriggerKind::Retry);
+                }
+            }
+        }
+    }
+
+    if attempts_used >= MAX_RETRY_ATTEMPTS {
+        if !matches!(phase, AcmeCertPhase::Failed) {
+            if let Err(error) = update_acme_status(&api, &attempt, &name, AcmeCertPhase::Failed, |status| {
+                status.last_failure_reason = Some("ACME attempt budget exhausted after an interrupted attempt; edit the resource or use the Admin trigger to retry".to_string());
+                status.last_failure_time = Some(now_rfc3339());
+            }).await {
+                tracing::warn!(component = "acme_service", key = %key, error = %error,
+                    "Failed to persist exhausted ACME attempt state; retrying without contacting the CA");
+                return CheckOutcome::Recheck(CONTROL_PLANE_RECHECK_DELAY, trigger);
+            }
+        }
+        tracing::warn!(
+            component = "acme_service",
+            key = %key,
+            attempts = attempts_used,
+            "ACME retry limit reached; edit the resource or use the Admin trigger to reset"
+        );
+        return CheckOutcome::Idle;
+    }
+    if attempt
+        .acme
+        .status
+        .as_ref()
+        .and_then(|status| status.last_failure_reason.as_deref())
+        .is_some_and(|reason| reason.starts_with("EdgionAcme:"))
+    {
+        return CheckOutcome::Idle;
+    }
+
+    let attempts_used = attempts_used.saturating_add(1);
+    let checkpoint = AcmeSchedulerStatus {
+        observed_generation: resource_generation,
+        attempt_id: Some(attempt.attempt_id.clone()),
+        attempts_used,
+        attempt_started_at: Some(now_rfc3339()),
+        next_retry_at: None,
+    };
+    if let Err(error) = patch_scheduler_status(&api, &attempt, Some(&checkpoint)).await {
+        tracing::warn!(component = "acme_service", key = %key, error = %error,
+            "Failed to reserve ACME attempt; no CA request was started");
+        return CheckOutcome::Recheck(CONTROL_PLANE_RECHECK_DELAY, trigger);
+    }
+    let is_renewal = matches!(phase, AcmeCertPhase::Ready | AcmeCertPhase::Renewing);
+    let fail_backoff_base = spec_duration_or(
+        &attempt.acme.spec.renewal.fail_backoff,
+        "failBackoff",
+        Duration::from_secs(300),
+    )
+    .as_secs();
+    CheckOutcome::Start(Box::new(AttemptPlan {
+        attempt,
+        is_renewal,
+        fail_backoff_base,
+        attempts_used,
+    }))
+}
+
+fn persisted_attempts(trigger: TriggerKind, resource_generation: i64, persisted: Option<&AcmeSchedulerStatus>) -> u32 {
+    if trigger.resets_retry_budget() || persisted.is_none_or(|status| status.observed_generation != resource_generation)
+    {
+        0
+    } else {
+        persisted.map_or(0, |status| status.attempts_used)
+    }
+}
+
+fn needs_renewal(acme: &EdgionAcme) -> bool {
+    let Some(status) = &acme.status else {
+        return true;
+    };
+    let Some(not_after) = &status.certificate_not_after else {
+        return true;
+    };
+    let Ok(expiry) = chrono::DateTime::parse_from_rfc3339(not_after) else {
+        return true;
+    };
+    let renew_before = chrono::Duration::from_std(spec_duration_or(
+        &acme.spec.renewal.renew_before,
+        "renewBefore",
+        Duration::from_secs(720 * 3600),
+    ))
+    .unwrap_or_else(|_| chrono::Duration::days(30));
+    chrono::Utc::now() >= expiry - renew_before
+}
+
+async fn run_attempt(plan: &AttemptPlan) -> AttemptOutcome {
+    let attempt = &plan.attempt;
+    let (namespace, name) = attempt.resource_names();
+    let api: Api<EdgionAcme> = Api::namespaced(attempt.client(), &namespace);
+    let issued = issue_acme_resource(&api, attempt, plan.is_renewal).await;
+    let (certificate, account_uri) = match issued {
+        Ok(result) => result,
+        Err(error) => {
+            if attempt.await_current_resource(&api).await.is_err() {
+                return AttemptOutcome::Retired;
+            }
+            let next_delay = (plan.attempts_used < MAX_RETRY_ATTEMPTS)
+                .then(|| exponential_backoff(plan.fail_backoff_base, plan.attempts_used.saturating_sub(1)));
+            let next_retry_at = next_delay.and_then(|delay| {
+                chrono::Duration::from_std(delay)
+                    .ok()
+                    .map(|delay| (chrono::Utc::now() + delay).to_rfc3339())
+            });
+            let checkpoint = AcmeSchedulerStatus {
+                observed_generation: attempt.acme.metadata.generation.unwrap_or_default(),
+                attempt_id: Some(attempt.attempt_id.clone()),
+                attempts_used: plan.attempts_used,
+                attempt_started_at: Some(now_rfc3339()),
+                next_retry_at,
+            };
+            loop {
+                if attempt.await_current_resource(&api).await.is_err() {
+                    return AttemptOutcome::Retired;
+                }
+                let status_result = update_acme_status(&api, attempt, &name, AcmeCertPhase::Failed, |status| {
+                    status.last_failure_reason = Some(format!("{error:#}"));
+                    status.last_failure_time = Some(now_rfc3339());
+                })
+                .await;
+                let checkpoint_result = patch_scheduler_status(&api, attempt, Some(&checkpoint)).await;
+                if status_result.is_ok() && checkpoint_result.is_ok() {
+                    break;
+                }
+                tracing::warn!(component = "acme_service", key = %attempt.key(),
+                    "Failed to persist ACME failure checkpoint; retrying without another CA attempt");
+                if attempt.wait_or_cancel(CONTROL_PLANE_RECHECK_DELAY).await.is_err() {
+                    return AttemptOutcome::Retired;
+                }
+            }
+            return AttemptOutcome::Failed(next_delay);
+        }
+    };
+
+    loop {
+        match publish_certificate(attempt.client_ref(), &api, attempt, &certificate, &account_uri).await {
+            Ok(()) => break,
+            Err(error) => {
+                if attempt.await_current_resource(&api).await.is_err() {
+                    return AttemptOutcome::Retired;
+                }
+                tracing::warn!(component = "acme_service", key = %attempt.key(), error = %error,
+                    "Certificate was issued but publication failed; retrying publication without contacting the CA");
+                if attempt.wait_or_cancel(CONTROL_PLANE_RECHECK_DELAY).await.is_err() {
+                    return AttemptOutcome::Retired;
+                }
+            }
+        }
+    }
+    loop {
+        if attempt.await_current_resource(&api).await.is_err() {
+            return AttemptOutcome::Retired;
+        }
+        match patch_scheduler_status(&api, attempt, None).await {
+            Ok(()) => break,
+            Err(error) => {
+                tracing::warn!(component = "acme_service", key = %attempt.key(), error = %error,
+                    "Certificate is published but the scheduler checkpoint could not be cleared; retrying");
+                if attempt.wait_or_cancel(CONTROL_PLANE_RECHECK_DELAY).await.is_err() {
+                    return AttemptOutcome::Retired;
+                }
+            }
+        }
+    }
+    let renewal_delay = spec_duration_or(
+        &attempt.acme.spec.renewal.check_interval,
+        "checkInterval",
+        Duration::from_secs(86400),
+    );
+    tracing::info!(component = "acme_service", key = %attempt.key(), "ACME flow completed successfully");
+    AttemptOutcome::Success(renewal_delay)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -789,8 +1101,8 @@ fn evaluate_issuance_eligibility(raw: &EdgionAcme, key: &str, runtime: &Controll
     ) {
         Ok(attachments) => attachments,
         // A projected Gateway can disappear briefly while a publication epoch
-        // changes. The proof-only requeue intentionally does not notify the
-        // service, so startup/Admin work must retain one convergence check.
+        // changes. Resource notifications and all other trigger sources retain
+        // one convergence check until the processed proof catches up.
         Err(AcmeGatewayRefError::ParentNotFound { .. } | AcmeGatewayRefError::UnresolvedGateway) => {
             return EligibilityDecision::Transient;
         }
@@ -812,55 +1124,239 @@ fn evaluate_issuance_eligibility(raw: &EdgionAcme, key: &str, runtime: &Controll
     EligibilityDecision::Eligible
 }
 
+fn admitted_serving_attachments(key: &str, runtime: &ControllerRuntime) -> Option<Vec<ResolvedListenerAttachment>> {
+    runtime
+        .processor_registry
+        .get("EdgionAcme")?
+        .get_cached_any(key)?
+        .downcast::<EdgionAcme>()
+        .ok()?
+        .spec
+        .resolved_listener_attachments
+        .clone()
+}
+
+/// After issuance, a Gateway certificate reload may change its digest and epoch.
+/// Keep the selected listener set and Gateway UID/spec generation fixed, while
+/// eligibility independently requires the new proof to be fully published/live.
+fn same_serving_selection(previous: &[ResolvedListenerAttachment], current: &[ResolvedListenerAttachment]) -> bool {
+    previous.len() == current.len()
+        && previous.iter().all(|old| {
+            current.iter().any(|new| {
+                old.gateway_namespace == new.gateway_namespace
+                    && old.gateway_name == new.gateway_name
+                    && old.listener_name == new.listener_name
+                    && old.listener_key == new.listener_key
+                    && old.gateway_proof.instance == new.gateway_proof.instance
+                    && old.gateway_proof.generation == new.gateway_proof.generation
+            })
+        })
+}
+
 // ============================================================================
 // ACME Flow - The core certificate issuance/renewal logic
 // ============================================================================
 
-/// Publication checks for one admitted snapshot, not a distributed fencing token.
-struct AcmeAttempt<'a> {
-    acme: &'a EdgionAcme,
-    runtime: &'a ControllerRuntime,
+/// Authority captured for one admitted issuance attempt.
+struct AcmeAttempt {
+    attempt_id: String,
+    client: Client,
+    acme: EdgionAcme,
+    runtime: Arc<ControllerRuntime>,
+    leader: Option<LeaderHandle>,
+    leader_fence: Option<LeaderFence>,
+    serving_attachments: Vec<ResolvedListenerAttachment>,
+    certificate_issued: Arc<AtomicBool>,
     generation: u64,
+    cancel: CancellationToken,
 }
 
-impl AcmeAttempt<'_> {
-    async fn current_resource(&self, api: &Api<EdgionAcme>) -> Result<EdgionAcme> {
-        anyhow::ensure!(
-            self.generation != 0 && current_generation() == self.generation,
-            "ACME service generation is no longer current"
-        );
-        let name = self.acme.metadata.name.as_deref().context("EdgionAcme has no name")?;
-        let current = api
-            .get(name)
-            .await
-            .context("Cannot confirm ACME publication authority")?;
+#[derive(Debug, thiserror::Error)]
+enum AttemptAuthorityError {
+    #[error("ACME attempt authority was lost: {0:#}")]
+    Lost(anyhow::Error),
+    #[error("ACME attempt authority is temporarily uncertain: {0:#}")]
+    Uncertain(anyhow::Error),
+}
+
+impl AcmeAttempt {
+    fn key(&self) -> String {
+        let (namespace, name) = self.resource_names();
+        format!("{namespace}/{name}")
+    }
+
+    fn resource_names(&self) -> (String, String) {
+        (
+            self.acme.metadata.namespace.as_deref().unwrap_or("default").to_string(),
+            self.acme.metadata.name.as_deref().unwrap_or_default().to_string(),
+        )
+    }
+
+    fn client(&self) -> Client {
+        self.client.clone()
+    }
+
+    fn client_ref(&self) -> &Client {
+        &self.client
+    }
+
+    async fn validate_leader_typed(&self) -> std::result::Result<(), AttemptAuthorityError> {
+        if self.cancel.is_cancelled() {
+            return Err(AttemptAuthorityError::Lost(anyhow::anyhow!(
+                "ACME attempt was cancelled"
+            )));
+        }
+        if self.generation == 0 || current_generation() != self.generation {
+            return Err(AttemptAuthorityError::Lost(anyhow::anyhow!(
+                "ACME service generation is no longer current"
+            )));
+        }
+        match (&self.leader, &self.leader_fence) {
+            (Some(leader), Some(fence)) => match leader.validate_fence_typed(fence).await {
+                LeaderFenceValidation::Current => {}
+                LeaderFenceValidation::Lost => {
+                    return Err(AttemptAuthorityError::Lost(anyhow::anyhow!(
+                        "ACME leadership fence is no longer current"
+                    )))
+                }
+                LeaderFenceValidation::Uncertain(error) => {
+                    return Err(AttemptAuthorityError::Uncertain(
+                        anyhow::Error::new(error).context("Cannot confirm ACME leadership fence"),
+                    ))
+                }
+            },
+            (None, None) if cfg!(test) => {}
+            _ => {
+                return Err(AttemptAuthorityError::Lost(anyhow::anyhow!(
+                    "ACME attempt has no leadership fence"
+                )))
+            }
+        }
+        if self.cancel.is_cancelled() || current_generation() != self.generation {
+            return Err(AttemptAuthorityError::Lost(anyhow::anyhow!(
+                "ACME service generation changed during authority validation"
+            )));
+        }
+        Ok(())
+    }
+
+    async fn current_resource_typed(
+        &self,
+        api: &Api<EdgionAcme>,
+    ) -> std::result::Result<EdgionAcme, AttemptAuthorityError> {
+        self.validate_leader_typed().await?;
+        let name = self
+            .acme
+            .metadata
+            .name
+            .as_deref()
+            .ok_or_else(|| AttemptAuthorityError::Lost(anyhow::anyhow!("EdgionAcme has no name")))?;
+        let current = match api.get(name).await {
+            Ok(current) => current,
+            Err(kube::Error::Api(response)) if response.code == 404 => {
+                return Err(AttemptAuthorityError::Lost(anyhow::anyhow!(
+                    "EdgionAcme no longer exists"
+                )))
+            }
+            Err(error) => {
+                return Err(AttemptAuthorityError::Uncertain(
+                    anyhow::Error::new(error).context("Cannot confirm ACME publication authority"),
+                ))
+            }
+        };
         let key = format!(
             "{}/{}",
             self.acme.metadata.namespace.as_deref().unwrap_or("default"),
             name
         );
-        anyhow::ensure!(
-            current_generation() == self.generation
-                && current.metadata.deletion_timestamp.is_none()
-                && current.metadata.uid == self.acme.metadata.uid
-                && current.metadata.generation == self.acme.metadata.generation
-                && matches!(
-                    evaluate_issuance_eligibility(&current, &key, self.runtime),
-                    EligibilityDecision::Eligible
-                ),
-            "ACME resource identity, generation, or serving authority changed"
-        );
+        if self.cancel.is_cancelled()
+            || current_generation() != self.generation
+            || current.metadata.deletion_timestamp.is_some()
+            || current.metadata.uid != self.acme.metadata.uid
+            || current.metadata.generation != self.acme.metadata.generation
+        {
+            return Err(AttemptAuthorityError::Lost(anyhow::anyhow!(
+                "ACME resource identity or generation changed"
+            )));
+        }
+        match evaluate_issuance_eligibility(&current, &key, &self.runtime) {
+            EligibilityDecision::Eligible => {}
+            EligibilityDecision::AuthoritativelyIneligible => {
+                return Err(AttemptAuthorityError::Lost(anyhow::anyhow!(
+                    "ACME serving authority was revoked"
+                )))
+            }
+            EligibilityDecision::Transient => {
+                return Err(AttemptAuthorityError::Uncertain(anyhow::anyhow!(
+                    "ACME serving authority is not yet converged"
+                )))
+            }
+        }
+        let current_attachments = admitted_serving_attachments(&key, &self.runtime);
+        let attachments_match = current_attachments.as_deref().is_some_and(|current| {
+            if self.certificate_issued.load(Ordering::Acquire) {
+                same_serving_selection(&self.serving_attachments, current)
+            } else {
+                current == self.serving_attachments
+            }
+        });
+        if !attachments_match {
+            return Err(AttemptAuthorityError::Lost(anyhow::anyhow!(
+                "ACME serving proof changed"
+            )));
+        }
+        self.validate_leader_typed().await?;
         Ok(current)
+    }
+
+    async fn current_resource(&self, api: &Api<EdgionAcme>) -> Result<EdgionAcme> {
+        self.current_resource_typed(api).await.map_err(anyhow::Error::new)
+    }
+
+    async fn await_current_resource(&self, api: &Api<EdgionAcme>) -> Result<EdgionAcme> {
+        loop {
+            match self.current_resource_typed(api).await {
+                Ok(current) => return Ok(current),
+                Err(AttemptAuthorityError::Lost(error)) => return Err(error),
+                Err(AttemptAuthorityError::Uncertain(error)) => {
+                    tracing::warn!(component = "acme_service", key = %self.key(), error = %error,
+                        "ACME attempt authority is temporarily uncertain; retrying in place");
+                    self.wait_or_cancel(CONTROL_PLANE_RECHECK_DELAY).await?;
+                }
+            }
+        }
+    }
+
+    async fn wait_or_cancel(&self, delay: Duration) -> Result<()> {
+        tokio::select! {
+            _ = tokio::time::sleep(delay) => Ok(()),
+            _ = self.cancel.cancelled() => anyhow::bail!("ACME attempt was cancelled"),
+        }
     }
 }
 
-/// Process a single EdgionAcme resource through the full ACME flow
-async fn process_acme_resource(client: Client, attempt: &AcmeAttempt<'_>, is_renewal: bool) -> Result<()> {
-    let acme = attempt.acme;
-    let namespace = acme.metadata.namespace.as_deref().unwrap_or("default");
-    let name = acme.metadata.name.as_deref().context("EdgionAcme has no name")?;
+#[async_trait::async_trait]
+impl AcmeOperationGuard for AcmeAttempt {
+    async fn check(&self, _operation: &'static str) -> Result<()> {
+        let (namespace, _) = self.resource_names();
+        let api: Api<EdgionAcme> = Api::namespaced(self.client.clone(), &namespace);
+        self.await_current_resource(&api).await.map(|_| ())
+    }
 
-    let api: Api<EdgionAcme> = Api::namespaced(client.clone(), namespace);
+    async fn cancelled(&self) {
+        self.cancel.cancelled().await;
+    }
+}
+
+/// Run the CA-facing part of an attempt and retain the certificate in memory so
+/// publication retries never repeat issuance within this service generation.
+async fn issue_acme_resource(
+    api: &Api<EdgionAcme>,
+    attempt: &AcmeAttempt,
+    is_renewal: bool,
+) -> Result<(AcmeCertificateResult, String)> {
+    let acme = &attempt.acme;
+    let name = acme.metadata.name.as_deref().context("EdgionAcme has no name")?;
 
     // 1. Update status to Issuing/Renewing
     let phase = if is_renewal {
@@ -868,26 +1364,27 @@ async fn process_acme_resource(client: Client, attempt: &AcmeAttempt<'_>, is_ren
     } else {
         AcmeCertPhase::Issuing
     };
-    update_acme_status(&api, attempt, name, phase, |_| {}).await?;
+    update_acme_status(api, attempt, name, phase, |_| {}).await?;
 
     // 2. Create or restore ACME account
-    let acme_client = get_or_create_acme_account(&client, acme).await?;
+    let acme_client = get_or_create_acme_account(attempt, acme).await?;
 
     // 3. Execute HTTP-01 and obtain the certificate
-    let cert_result = execute_http01_flow(attempt, &api, name, &acme_client, acme).await?;
+    let cert_result = execute_http01_flow(attempt, api, name, &acme_client, acme).await?;
 
-    publish_certificate(&client, &api, attempt, &cert_result, acme_client.account_id()).await
+    let account_uri = acme_client.account_id().to_string();
+    Ok((cert_result, account_uri))
 }
 
 /// Kept separate from CA IO so publication after a resource change is testable.
 async fn publish_certificate(
     client: &Client,
     api: &Api<EdgionAcme>,
-    attempt: &AcmeAttempt<'_>,
+    attempt: &AcmeAttempt,
     cert_result: &AcmeCertificateResult,
     account_uri: &str,
 ) -> Result<()> {
-    let acme = attempt.acme;
+    let acme = &attempt.acme;
     let namespace = acme.metadata.namespace.as_deref().unwrap_or("default");
     let name = acme.metadata.name.as_deref().context("EdgionAcme has no name")?;
     let key = format!("{}/{}", namespace, name);
@@ -895,12 +1392,20 @@ async fn publish_certificate(
     // 4. Store certificate in K8s Secret
     let secret_ns = acme.get_secret_namespace();
     attempt.current_resource(api).await?;
-    create_or_update_cert_secret(client, &secret_ns, &acme.spec.storage.secret_name, cert_result, name).await?;
+    create_or_update_cert_secret(
+        client,
+        attempt,
+        &secret_ns,
+        &acme.spec.storage.secret_name,
+        cert_result,
+        name,
+    )
+    .await?;
 
     // 5. Create/update EdgionTls if enabled
     if acme.spec.auto_edgion_tls.enabled {
         attempt.current_resource(api).await?;
-        create_or_update_edgion_tls(client, acme).await?;
+        create_or_update_edgion_tls(client, attempt, acme).await?;
     }
 
     // 6. Parse certificate info for status
@@ -920,14 +1425,6 @@ async fn publish_certificate(
         status.account_uri = Some(account_uri.to_string());
     })
     .await?;
-
-    // 8. Schedule renewal check
-    let check_interval = spec_duration_or(
-        &acme.spec.renewal.check_interval,
-        "checkInterval",
-        Duration::from_secs(86400),
-    );
-    schedule_renewal_check(attempt.generation, format!("{}/{}", namespace, name), check_interval);
 
     tracing::info!(
         component = "acme_service",
@@ -953,7 +1450,7 @@ async fn publish_certificate(
 const CHALLENGE_PROPAGATION_WAIT_SECS: u64 = 5;
 
 async fn execute_http01_flow(
-    attempt: &AcmeAttempt<'_>,
+    attempt: &AcmeAttempt,
     api: &Api<EdgionAcme>,
     name: &str,
     acme_client: &AcmeClient,
@@ -968,7 +1465,7 @@ async fn execute_http01_flow(
 
     // Phase 1: Create order and extract challenge tokens (does NOT notify ACME server yet)
     let (pending, mut order_ctx) = acme_client
-        .prepare_http01_order(&acme.spec.domains)
+        .prepare_http01_order(&acme.spec.domains, attempt)
         .await
         .context("Failed to prepare HTTP-01 ACME order")?;
 
@@ -1011,12 +1508,14 @@ async fn execute_http01_flow(
             wait_secs = CHALLENGE_PROPAGATION_WAIT_SECS,
             "Waiting for challenge tokens to propagate to Gateway"
         );
-        tokio::time::sleep(Duration::from_secs(CHALLENGE_PROPAGATION_WAIT_SECS)).await;
+        attempt
+            .wait_or_cancel(Duration::from_secs(CHALLENGE_PROPAGATION_WAIT_SECS))
+            .await?;
 
         // Phase 4: NOW tell the ACME server to start validation
         // (Gateway is ready to serve challenge responses at this point)
         acme_client
-            .activate_http01_challenges(&mut order_ctx)
+            .activate_http01_challenges(&mut order_ctx, attempt)
             .await
             .context("Failed to activate HTTP-01 challenges")?;
 
@@ -1029,8 +1528,15 @@ async fn execute_http01_flow(
 
     // Phase 5: Poll for validation, finalize order, retrieve certificate
     let cert_result = acme_client
-        .complete_http01_order(order_ctx, &acme.spec.domains, &acme.spec.key_type)
+        .complete_http01_order(order_ctx, &acme.spec.domains, &acme.spec.key_type, attempt)
         .await;
+
+    // Secret publication can requeue this Gateway and rotate its proof epoch.
+    // Preserve the issued certificate through that feedback while every write
+    // still validates the source and the semantic serving selection.
+    if cert_result.is_ok() {
+        attempt.certificate_issued.store(true, Ordering::Release);
+    }
 
     // Phase 6: Attempt cleanup on success or failure, but never clear a successor's tokens.
     // Rejected cleanup leaves old tokens subject to their expiry (up to 600s).
@@ -1080,7 +1586,8 @@ async fn fetch_eab_hmac(client: &Client, acme: &EdgionAcme, owner_ns: &str) -> R
 /// - Secret exists but missing those keys: register, then **merge-patch** `accountCredentials` only
 ///   (self-managed empty Secret).
 /// - Key present but JSON invalid: **error** (operator must fix; we do not re-register over it).
-async fn get_or_create_acme_account(client: &Client, acme: &EdgionAcme) -> Result<AcmeClient> {
+async fn get_or_create_acme_account(attempt: &AcmeAttempt, acme: &EdgionAcme) -> Result<AcmeClient> {
+    let client = attempt.client_ref();
     let owner_ns = acme.metadata.namespace.as_deref().unwrap_or("default");
     let acme_name = acme.metadata.name.as_deref().context("EdgionAcme has no name")?;
     let acme_uid = acme.metadata.uid.as_deref();
@@ -1102,19 +1609,30 @@ async fn get_or_create_acme_account(client: &Client, acme: &EdgionAcme) -> Resul
                         name = %acme_name,
                         "Restored ACME account from Secret"
                     );
+                    attempt.check("restore ACME account").await?;
                     return AcmeClient::from_credentials(creds).await;
                 }
             }
             // Secret object exists, but no account key yet — pre-created empty (self-managed)
             let eab_hmac = fetch_eab_hmac(client, acme, owner_ns).await?;
-            let (acme_client, credentials) =
-                AcmeClient::new(&acme.spec.server, &acme.spec.email, eab_kid, eab_hmac.as_deref())
-                    .await
-                    .context("Failed to create ACME account")?;
+            let (acme_client, credentials) = AcmeClient::new(
+                &acme.spec.server,
+                &acme.spec.email,
+                eab_kid,
+                eab_hmac.as_deref(),
+                attempt,
+            )
+            .await
+            .context("Failed to create ACME account")?;
 
             let creds_json =
                 Zeroizing::new(serde_json::to_string(&credentials).context("Failed to serialize account credentials")?);
-            patch_account_key_into_existing_secret(&secret_api, secret_name, &creds_json).await?;
+            if let Some(existing) =
+                persist_registered_account(attempt, &secret_api, secret_name, secret, &creds_json).await?
+            {
+                attempt.check("restore concurrently persisted ACME account").await?;
+                return AcmeClient::from_credentials(existing).await;
+            }
 
             tracing::info!(
                 component = "acme_service",
@@ -1131,13 +1649,19 @@ async fn get_or_create_acme_account(client: &Client, acme: &EdgionAcme) -> Resul
                 "No account Secret yet; creating ACME account and Secret"
             );
             let eab_hmac = fetch_eab_hmac(client, acme, owner_ns).await?;
-            let (acme_client, credentials) =
-                AcmeClient::new(&acme.spec.server, &acme.spec.email, eab_kid, eab_hmac.as_deref())
-                    .await
-                    .context("Failed to create ACME account")?;
+            let (acme_client, credentials) = AcmeClient::new(
+                &acme.spec.server,
+                &acme.spec.email,
+                eab_kid,
+                eab_hmac.as_deref(),
+                attempt,
+            )
+            .await
+            .context("Failed to create ACME account")?;
 
             let creds_json =
                 Zeroizing::new(serde_json::to_string(&credentials).context("Failed to serialize account credentials")?);
+            attempt.check("persist ACME account credentials").await?;
             create_account_secret(&secret_api, secret_name, secret_ns, acme_name, acme_uid, &creds_json).await?;
 
             tracing::info!(
@@ -1149,6 +1673,55 @@ async fn get_or_create_acme_account(client: &Client, acme: &EdgionAcme) -> Resul
             Ok(acme_client)
         }
         Err(e) => Err(e).context("Failed to get ACME account Secret"),
+    }
+}
+
+/// Retain newly registered credentials across control-plane uncertainty. An
+/// existing valid account always wins a CAS conflict; never overwrite it.
+async fn persist_registered_account(
+    attempt: &AcmeAttempt,
+    api: &Api<Secret>,
+    name: &str,
+    mut snapshot: Secret,
+    credentials: &Zeroizing<String>,
+) -> Result<Option<instant_acme::AccountCredentials>> {
+    let original_uid = snapshot.metadata.uid.clone();
+    loop {
+        attempt.check("persist ACME account credentials").await?;
+        if snapshot.metadata.uid != original_uid || snapshot.metadata.deletion_timestamp.is_some() {
+            anyhow::bail!("ACME account Secret was replaced or is being deleted; retry with its current identity");
+        }
+        if let Some(json) = snapshot
+            .data
+            .as_ref()
+            .map(extract_account_json_string)
+            .transpose()?
+            .flatten()
+        {
+            return account_credentials_from_json(&json).map(Some);
+        }
+        match patch_account_key_into_existing_secret(api, name, &snapshot, credentials).await {
+            Ok(()) => return Ok(None),
+            Err(error) => match error.downcast_ref::<kube::Error>() {
+                Some(kube::Error::Api(response)) if response.code == 409 || response.code >= 500 => {}
+                Some(kube::Error::Api(_)) | None => return Err(error),
+                Some(_) => {}
+            },
+        }
+        // A conflict or ambiguous response requires a fresh snapshot before any
+        // retry. Delay also bounds contention with a concurrent Secret writer.
+        loop {
+            attempt.wait_or_cancel(CONTROL_PLANE_RECHECK_DELAY).await?;
+            attempt.check("refresh ACME account Secret after conflict").await?;
+            match api.get(name).await {
+                Ok(current) => {
+                    snapshot = current;
+                    break;
+                }
+                Err(kube::Error::Api(response)) if response.code < 500 => return Err(kube::Error::Api(response).into()),
+                Err(_) => continue,
+            }
+        }
     }
 }
 
@@ -1167,11 +1740,11 @@ async fn get_or_create_acme_account(client: &Client, acme: &EdgionAcme) -> Resul
 /// keeps ownership under our manager and zeroes the observable token list.
 async fn patch_active_challenges(
     api: &Api<EdgionAcme>,
-    attempt: &AcmeAttempt<'_>,
+    attempt: &AcmeAttempt,
     name: &str,
     challenges: Option<&[ActiveHttpChallenge]>,
 ) -> Result<()> {
-    let current = attempt.current_resource(api).await?;
+    let current = attempt.await_current_resource(api).await?;
     let resource_version = current
         .metadata
         .resource_version
@@ -1194,6 +1767,37 @@ async fn patch_active_challenges(
     Ok(())
 }
 
+/// Persist or clear the scheduler-owned recovery checkpoint. This dedicated
+/// field manager never owns lifecycle, condition, or challenge fields.
+async fn patch_scheduler_status(
+    api: &Api<EdgionAcme>,
+    attempt: &AcmeAttempt,
+    scheduler: Option<&AcmeSchedulerStatus>,
+) -> Result<()> {
+    let current = attempt.current_resource(api).await?;
+    let name = current.metadata.name.as_deref().context("EdgionAcme has no name")?;
+    let resource_version = current
+        .metadata
+        .resource_version
+        .context("EdgionAcme has no resourceVersion")?;
+    let scheduler = scheduler.map(serde_json::to_value).transpose()?;
+    let patch = serde_json::json!({
+        "apiVersion": "edgion.io/v1",
+        "kind": "EdgionAcme",
+        "metadata": {
+            "name": name,
+            "uid": current.metadata.uid,
+            "resourceVersion": resource_version,
+        },
+        "status": { "scheduler": scheduler },
+    });
+    let params = PatchParams::apply("edgion-acme-scheduler").force();
+    api.patch_status(name, &params, &Patch::Apply(patch))
+        .await
+        .context("Failed to update ACME scheduler checkpoint")?;
+    Ok(())
+}
+
 /// Update EdgionAcme status using Server-Side Apply.
 ///
 /// SSA avoids the read-modify-write race condition by letting the K8s API
@@ -1201,7 +1805,7 @@ async fn patch_active_challenges(
 /// be managed; other controllers' fields are preserved.
 async fn update_acme_status<F>(
     api: &Api<EdgionAcme>,
-    attempt: &AcmeAttempt<'_>,
+    attempt: &AcmeAttempt,
     name: &str,
     phase: AcmeCertPhase,
     modify: F,
@@ -1245,12 +1849,18 @@ where
 /// Create or update the K8s TLS Secret with the issued certificate
 async fn create_or_update_cert_secret(
     client: &Client,
+    attempt: &AcmeAttempt,
     namespace: &str,
     name: &str,
     cert: &AcmeCertificateResult,
     acme_resource_name: &str,
 ) -> Result<()> {
     let api: Api<Secret> = Api::namespaced(client.clone(), namespace);
+    let current = api
+        .get_opt(name)
+        .await
+        .context("Failed to read TLS certificate Secret")?;
+    attempt.check("publish TLS certificate Secret").await?;
 
     // Zeroize the intermediate key bytes when this variable goes out of scope.
     // Note: `ByteString` takes ownership of a `Vec<u8>`; after `clone()` below
@@ -1261,6 +1871,10 @@ async fn create_or_update_cert_secret(
         metadata: kube::api::ObjectMeta {
             name: Some(name.to_string()),
             namespace: Some(namespace.to_string()),
+            uid: current.as_ref().and_then(|secret| secret.metadata.uid.clone()),
+            resource_version: current
+                .as_ref()
+                .and_then(|secret| secret.metadata.resource_version.clone()),
             labels: Some(BTreeMap::from([
                 ("edgion.io/managed-by".to_string(), "acme".to_string()),
                 ("edgion.io/acme-resource".to_string(), acme_resource_name.to_string()),
@@ -1299,7 +1913,7 @@ async fn create_or_update_cert_secret(
 }
 
 /// Create or update the EdgionTls resource for the issued certificate
-async fn create_or_update_edgion_tls(client: &Client, acme: &EdgionAcme) -> Result<()> {
+async fn create_or_update_edgion_tls(client: &Client, attempt: &AcmeAttempt, acme: &EdgionAcme) -> Result<()> {
     let namespace = acme.metadata.namespace.as_deref().unwrap_or("default");
     let tls_name = acme.get_edgion_tls_name();
     let secret_ns = acme.get_secret_namespace();
@@ -1308,7 +1922,7 @@ async fn create_or_update_edgion_tls(client: &Client, acme: &EdgionAcme) -> Resu
     let parent_refs = acme.spec.auto_edgion_tls.parent_refs.clone();
 
     // Build EdgionTls JSON for server-side apply
-    let edgion_tls = serde_json::json!({
+    let mut edgion_tls = serde_json::json!({
         "apiVersion": "edgion.io/v1",
         "kind": "EdgionTls",
         "metadata": {
@@ -1333,6 +1947,24 @@ async fn create_or_update_edgion_tls(client: &Client, acme: &EdgionAcme) -> Resu
     let gvk = kube::api::GroupVersionKind::gvk("edgion.io", "v1", "EdgionTls");
     let ar = kube::api::ApiResource::from_gvk(&gvk);
     let api: Api<kube::api::DynamicObject> = Api::namespaced_with(client.clone(), namespace, &ar);
+    let current = api.get_opt(&tls_name).await.context("Failed to read EdgionTls")?;
+    attempt.check("publish EdgionTls").await?;
+
+    let metadata = edgion_tls
+        .get_mut("metadata")
+        .and_then(serde_json::Value::as_object_mut)
+        .context("Generated EdgionTls metadata is not an object")?;
+    if let Some(current) = current {
+        if let Some(uid) = current.metadata.uid {
+            metadata.insert("uid".to_string(), serde_json::Value::String(uid));
+        }
+        if let Some(resource_version) = current.metadata.resource_version {
+            metadata.insert(
+                "resourceVersion".to_string(),
+                serde_json::Value::String(resource_version),
+            );
+        }
+    }
 
     // `force`: EdgionTls is an operator-facing CRD, so a hand-created or hand-edited
     // instance (owned by kubectl) is expected; without force the apply 409s and ACME
@@ -1543,6 +2175,22 @@ spec:
         runtime
     }
 
+    fn test_attempt(client: Client, acme: EdgionAcme, runtime: Arc<ControllerRuntime>, generation: u64) -> AcmeAttempt {
+        let serving_attachments = admitted_serving_attachments("default/test", &runtime).unwrap_or_default();
+        AcmeAttempt {
+            attempt_id: "test-attempt".to_string(),
+            client,
+            acme,
+            runtime,
+            leader: None,
+            leader_fence: None,
+            serving_attachments,
+            certificate_issued: Arc::new(AtomicBool::new(false)),
+            generation,
+            cancel: CancellationToken::new(),
+        }
+    }
+
     fn empty_acme_list() -> Response<Body> {
         Response::builder()
             .status(StatusCode::OK)
@@ -1565,6 +2213,14 @@ spec:
         // Simulate a completed CA request, then change the resource before
         // publication or between its writes. No live CA or sleeps are needed.
         for (scenario, expected_paths) in [
+            (
+                "proof-feedback",
+                vec![
+                    "/api/v1/namespaces/default/secrets/certificate",
+                    "/apis/edgion.io/v1/namespaces/default/edgiontlses/acme-test",
+                    "/apis/edgion.io/v1/namespaces/default/edgionacmes/test/status",
+                ],
+            ),
             (
                 "current",
                 vec![
@@ -1618,13 +2274,15 @@ spec:
             if scenario == "generation" {
                 current.metadata.generation = Some(2);
             }
+            let feedback_runtime = runtime.clone();
             let client = Client::new(
                 service_fn(move |request: http::Request<Body>| {
                     let recorded = recorded.clone();
                     let mut current = current.clone();
+                    let feedback_runtime = feedback_runtime.clone();
                     async move {
                         let (parts, body) = request.into_parts();
-                        let value = if parts.method == http::Method::GET {
+                        let value = if parts.method == http::Method::GET && parts.uri.path().contains("/edgionacmes/") {
                             if scenario == "stop-during-get" {
                                 ACME_SERVICE.lock().take();
                             }
@@ -1648,11 +2306,27 @@ spec:
                                 current.metadata.generation = Some(2);
                             }
                             serde_json::to_value(current).unwrap()
+                        } else if parts.method == http::Method::GET {
+                            return Ok::<_, Infallible>(
+                                Response::builder()
+                                    .status(404)
+                                    .header(http::header::CONTENT_TYPE, "application/json")
+                                    .body(Body::from(
+                                        json!({"apiVersion":"v1", "kind":"Status", "status":"Failure",
+                                            "message":"not found", "reason":"NotFound", "code":404})
+                                        .to_string()
+                                        .into_bytes(),
+                                    ))
+                                    .unwrap(),
+                            );
                         } else {
                             assert_eq!(parts.method, http::Method::PATCH);
                             let value: serde_json::Value =
                                 serde_json::from_slice(&body.collect_bytes().await.unwrap()).unwrap();
                             recorded.lock().push((parts.uri.path().to_string(), value.clone()));
+                            if scenario == "proof-feedback" && parts.uri.path().ends_with("/secrets/certificate") {
+                                refresh_test_serving_proof(&feedback_runtime);
+                            }
                             if parts.uri.path().ends_with("/status") {
                                 let mut response = serde_json::to_value(current).unwrap();
                                 response["status"] = value["status"].clone();
@@ -1672,11 +2346,8 @@ spec:
                 "default",
             );
             let api = Api::namespaced(client.clone(), "default");
-            let attempt = AcmeAttempt {
-                acme: &acme,
-                runtime: &runtime,
-                generation: capture.generation,
-            };
+            let attempt = test_attempt(client.clone(), acme, runtime, capture.generation);
+            attempt.certificate_issued.store(true, Ordering::Release);
             let result = publish_certificate(
                 &client,
                 &api,
@@ -1688,7 +2359,11 @@ spec:
                 "test-account",
             )
             .await;
-            assert_eq!(result.is_ok(), scenario == "current", "{scenario}: {result:?}");
+            assert_eq!(
+                result.is_ok(),
+                matches!(scenario, "current" | "proof-feedback"),
+                "{scenario}: {result:?}"
+            );
             let writes = writes.lock();
             let paths: Vec<_> = writes.iter().map(|(path, _)| path.as_str()).collect();
             assert_eq!(paths, expected_paths, "{scenario}");
@@ -1697,6 +2372,305 @@ spec:
                 assert_eq!(writes[2].1["metadata"]["resourceVersion"], "11");
                 assert_eq!(writes[2].1["status"]["phase"], "Ready");
             }
+        }
+    }
+
+    fn refresh_test_serving_proof(runtime: &Arc<ControllerRuntime>) {
+        let gateway = Arc::new(ResourceProcessor::<Gateway>::new(
+            "Gateway",
+            8,
+            Arc::new(NoopGatewayHandler),
+            runtime.clone(),
+        ));
+        let mut refreshed = test_gateway("certificate-reload");
+        refreshed
+            .spec
+            .resolved_attachment_proof
+            .as_mut()
+            .unwrap()
+            .attachment_digest = "b".repeat(64);
+        gateway.save(refreshed, None);
+        runtime.processor_registry.register(gateway);
+        let mut processed = runtime
+            .processor_registry
+            .get("EdgionAcme")
+            .unwrap()
+            .get_cached_any("default/test")
+            .unwrap()
+            .downcast::<EdgionAcme>()
+            .unwrap()
+            .as_ref()
+            .clone();
+        let AcmeChallenge::Http01 { gateway_ref } = &processed.spec.challenge;
+        processed.spec.resolved_listener_attachments =
+            Some(resolve_acme_listener_attachments(gateway_ref, "default", runtime).unwrap());
+        let processor = Arc::new(ResourceProcessor::<EdgionAcme>::new(
+            "EdgionAcme",
+            8,
+            Arc::new(NoopAcmeHandler),
+            runtime.clone(),
+        ));
+        processor.save(processed, None);
+        runtime.processor_registry.register(processor);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn operation_guards_retain_local_state_through_transient_reads() {
+        let _lock = ACME_TEST_MUTEX.lock().await;
+        let capture = NotificationCapture::install();
+        let acme = test_acme();
+        let runtime = eligibility_runtime(&mut acme.clone());
+        let fail_next = Arc::new(AtomicBool::new(false));
+        let response_fail = fail_next.clone();
+        let response_acme = acme.clone();
+        let client = Client::new(
+            service_fn(move |request: http::Request<Body>| {
+                assert_eq!(request.method(), http::Method::GET);
+                let fail = response_fail.swap(false, Ordering::SeqCst);
+                let body = serde_json::to_value(&response_acme).unwrap();
+                async move {
+                    Ok::<_, Infallible>(test_api_response(
+                        if fail { 503 } else { 200 },
+                        if fail {
+                            json!({"apiVersion":"v1", "kind":"Status", "status":"Failure", "reason":"Unavailable", "code":503})
+                        } else {
+                            body
+                        },
+                    ))
+                }
+            }),
+            "default",
+        );
+        let attempt = test_attempt(client, acme, runtime, capture.generation);
+        let mut completed_operations = Vec::new();
+        for operation in [
+            "activate HTTP-01 challenge",
+            "finalize ACME order",
+            "persist ACME account credentials",
+        ] {
+            fail_next.store(true, Ordering::SeqCst);
+            let before = Instant::now();
+            attempt.check(operation).await.unwrap();
+            assert!(Instant::now().duration_since(before) >= CONTROL_PLANE_RECHECK_DELAY);
+            completed_operations.push(operation);
+        }
+        assert_eq!(completed_operations.len(), 3);
+        fail_next.store(true, Ordering::SeqCst);
+        let check = attempt.check("finalize ACME order");
+        tokio::pin!(check);
+        tokio::select! { result = &mut check => panic!("guard must await uncertainty: {result:?}"), _ = tokio::task::yield_now() => {} }
+        attempt.cancel.cancel();
+        assert!(check.await.is_err());
+    }
+
+    fn test_api_response(code: u16, value: serde_json::Value) -> Response<Body> {
+        Response::builder()
+            .status(code)
+            .header(http::header::CONTENT_TYPE, "application/json")
+            .body(Body::from(value.to_string().into_bytes()))
+            .unwrap()
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn account_secret_conflict_adopts_concurrent_credentials_or_retries_empty_snapshot() {
+        let _lock = ACME_TEST_MUTEX.lock().await;
+        let capture = NotificationCapture::install();
+        for scenario in ["credentials", "empty", "replaced", "corrupt"] {
+            let acme = test_acme();
+            let runtime = eligibility_runtime(&mut acme.clone());
+            let snapshot: Secret = serde_json::from_value(json!({"apiVersion":"v1", "kind":"Secret",
+                "metadata":{"name":"account", "namespace":"default", "uid":"account-uid", "resourceVersion":"10"}}))
+            .unwrap();
+            // Deserialization is the production validation boundary here;
+            // account restoration itself remains the ACME client's operation.
+            let winner = json!({"id":"https://ca.example/account/winner", "key_pkcs8":"AQID", "directory":"https://ca.example/directory"}).to_string();
+            let mut refreshed = snapshot.clone();
+            refreshed.metadata.resource_version = Some("11".into());
+            if scenario == "replaced" {
+                refreshed.metadata.uid = Some("replacement-uid".into());
+            }
+            if matches!(scenario, "credentials" | "corrupt") {
+                refreshed.data = Some(BTreeMap::from([(
+                    edgion_resources::credentials::ACME_ACCOUNT_KEY.to_string(),
+                    ByteString(if scenario == "credentials" {
+                        winner.as_bytes().to_vec()
+                    } else {
+                        b"invalid".to_vec()
+                    }),
+                )]));
+            }
+            let patches = Arc::new(Mutex::new(Vec::new()));
+            let recorded = patches.clone();
+            let response_acme = acme.clone();
+            let client = Client::new(
+                service_fn(move |request: http::Request<Body>| {
+                    let recorded = recorded.clone();
+                    let refreshed = refreshed.clone();
+                    let response_acme = response_acme.clone();
+                    async move {
+                        let (parts, body) = request.into_parts();
+                        if parts.uri.path().contains("/edgionacmes/") {
+                            assert_eq!(parts.method, http::Method::GET);
+                            return Ok::<_, Infallible>(test_api_response(
+                                200,
+                                serde_json::to_value(response_acme).unwrap(),
+                            ));
+                        }
+                        if parts.method == http::Method::PATCH {
+                            let patch: serde_json::Value =
+                                serde_json::from_slice(&body.collect_bytes().await.unwrap()).unwrap();
+                            assert_eq!(patch["metadata"]["uid"], "account-uid");
+                            let mut patches = recorded.lock();
+                            assert_eq!(
+                                patch["metadata"]["resourceVersion"],
+                                if patches.is_empty() { "10" } else { "11" }
+                            );
+                            patches.push(patch);
+                            if patches.len() == 1 {
+                                return Ok(test_api_response(
+                                    409,
+                                    json!({"apiVersion":"v1", "kind":"Status", "status":"Failure", "reason":"Conflict", "code":409}),
+                                ));
+                            }
+                        }
+                        Ok(test_api_response(200, serde_json::to_value(refreshed).unwrap()))
+                    }
+                }),
+                "default",
+            );
+            let api = Api::namespaced(client.clone(), "default");
+            let attempt = test_attempt(client, acme, runtime, capture.generation);
+            let result = persist_registered_account(
+                &attempt,
+                &api,
+                "account",
+                snapshot,
+                &Zeroizing::new("newly registered credentials".into()),
+            )
+            .await;
+            match scenario {
+                "credentials" => {
+                    let adopted = result.unwrap().unwrap();
+                    assert_eq!(
+                        serde_json::to_value(adopted).unwrap()["id"],
+                        "https://ca.example/account/winner"
+                    );
+                    assert_eq!(patches.lock().len(), 1);
+                }
+                "empty" => {
+                    assert!(result.unwrap().is_none());
+                    assert_eq!(patches.lock().len(), 2);
+                }
+                _ => {
+                    assert!(result.is_err());
+                    assert_eq!(patches.lock().len(), 1);
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn resource_notification_preserves_issued_certificate_but_cancels_preissuance() {
+        let _lock = ACME_TEST_MUTEX.lock().await;
+        let capture = NotificationCapture::install();
+        let acme = test_acme();
+        let runtime = eligibility_runtime(&mut acme.clone());
+        let client = Client::new(
+            service_fn(|_: http::Request<Body>| async { Ok::<_, Infallible>(test_api_response(500, json!({}))) }),
+            "default",
+        );
+        let mut worker = AcmeServiceWorker {
+            client,
+            runtime,
+            leader: None,
+            generation: capture.generation,
+            cancel: CancellationToken::new(),
+            schedules: HashMap::new(),
+            jobs: FuturesUnordered::new(),
+        };
+        for issued in [false, true] {
+            let cancel = CancellationToken::new();
+            worker.schedules.insert(
+                "default/test".into(),
+                ResourceSchedule {
+                    busy: true,
+                    active_cancel: Some(cancel.clone()),
+                    certificate_issued: Some(Arc::new(AtomicBool::new(issued))),
+                    ..Default::default()
+                },
+            );
+            worker.enqueue_check("default/test".into(), TriggerKind::Resource);
+            assert_eq!(cancel.is_cancelled(), !issued);
+            assert_eq!(worker.schedules["default/test"].pending, Some(TriggerKind::Resource));
+            assert!(worker.jobs.is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn exhausted_interrupted_attempt_recovers_failed_without_reservation() {
+        let _lock = ACME_TEST_MUTEX.lock().await;
+        let capture = NotificationCapture::install();
+        for phase in [AcmeCertPhase::Issuing, AcmeCertPhase::Renewing] {
+            let mut acme = test_acme();
+            acme.metadata.resource_version = Some("10".into());
+            acme.status = Some(EdgionAcmeStatus {
+                phase,
+                scheduler: Some(AcmeSchedulerStatus {
+                    observed_generation: 1,
+                    attempts_used: MAX_RETRY_ATTEMPTS,
+                    attempt_id: Some("interrupted".into()),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            });
+            let runtime = eligibility_runtime(&mut acme.clone());
+            let patches = Arc::new(Mutex::new(Vec::new()));
+            let fail_write = Arc::new(AtomicBool::new(true));
+            let recorded = patches.clone();
+            let response_fail = fail_write.clone();
+            let client = Client::new(
+                service_fn(move |request: http::Request<Body>| {
+                    let acme = acme.clone();
+                    let recorded = recorded.clone();
+                    let response_fail = response_fail.clone();
+                    async move {
+                        let (parts, body) = request.into_parts();
+                        if parts.method == http::Method::PATCH {
+                            let patch: serde_json::Value =
+                                serde_json::from_slice(&body.collect_bytes().await.unwrap()).unwrap();
+                            assert_eq!(patch["status"]["phase"], "Failed");
+                            assert!(patch["status"].get("scheduler").is_none());
+                            assert_eq!(patch["metadata"]["uid"], "uid-1");
+                            recorded.lock().push(patch);
+                            if response_fail.swap(false, Ordering::SeqCst) {
+                                return Ok::<_, Infallible>(test_api_response(
+                                    503,
+                                    json!({"kind":"Status", "apiVersion":"v1", "status":"Failure", "reason":"Unavailable", "code":503}),
+                                ));
+                            }
+                        }
+                        Ok::<_, Infallible>(test_api_response(200, serde_json::to_value(acme).unwrap()))
+                    }
+                }),
+                "default",
+            );
+            for expected_retry in [true, false] {
+                let outcome = check_resource(
+                    client.clone(),
+                    runtime.clone(),
+                    None,
+                    capture.generation,
+                    CancellationToken::new(),
+                    "default/test",
+                    TriggerKind::Startup,
+                )
+                .await;
+                assert_eq!(matches!(outcome, CheckOutcome::Recheck(_, _)), expected_retry);
+                if !expected_retry {
+                    assert!(matches!(outcome, CheckOutcome::Idle));
+                }
+            }
+            assert_eq!(patches.lock().len(), 2);
         }
     }
 
@@ -1723,12 +2697,8 @@ spec:
             }),
             "default",
         );
-        let api = Api::namespaced(client, "default");
-        let attempt = AcmeAttempt {
-            acme: &acme,
-            runtime: &runtime,
-            generation: capture.generation,
-        };
+        let api = Api::namespaced(client.clone(), "default");
+        let attempt = test_attempt(client, acme, runtime, capture.generation);
         let challenges = [ActiveHttpChallenge {
             domain: "example.com".into(),
             token: "test-token".into(),
@@ -1747,94 +2717,141 @@ spec:
     }
 
     #[tokio::test]
-    async fn interrupted_attempt_recovers_after_transient_publication_check() {
+    async fn admitted_attempt_rejects_a_new_serving_proof() {
         let _guard = ACME_TEST_MUTEX.lock().await;
-        for phase in [AcmeCertPhase::Issuing, AcmeCertPhase::Renewing] {
-            let mut capture = NotificationCapture::install();
-            let mut acme = test_acme();
-            acme.metadata.resource_version = Some("10".into());
-            acme.status.get_or_insert_with(Default::default).phase = phase.clone();
-            let runtime = eligibility_runtime(&mut acme.clone());
-            let reads = Arc::new(AtomicU64::new(0));
-            let read_count = reads.clone();
-            let phases = Arc::new(Mutex::new(Vec::new()));
-            let written_phases = phases.clone();
-            let client = Client::new(
-                service_fn(move |request: http::Request<Body>| {
-                    let reads = read_count.clone();
-                    let phases = written_phases.clone();
-                    let acme = acme.clone();
+        let capture = NotificationCapture::install();
+        let acme = test_acme();
+        let mut processed = acme.clone();
+        let runtime = eligibility_runtime(&mut processed);
+        let client = Client::new(
+            service_fn({
+                let acme = acme.clone();
+                move |_request: http::Request<Body>| {
+                    let body = serde_json::to_vec(&acme).unwrap();
                     async move {
-                        let mut response = serde_json::to_value(acme).unwrap();
-                        let mut code = 200;
-                        if request.method() == http::Method::GET {
-                            // Admission succeeds, then both publication checks encounter
-                            // a temporary read failure. The next check can recover.
-                            if matches!(reads.fetch_add(1, Ordering::SeqCst), 1 | 2) {
-                                code = 503;
-                            }
-                        } else {
-                            assert!(request.uri().path().ends_with("/status"));
-                            let patch: serde_json::Value =
-                                serde_json::from_slice(&request.into_body().collect_bytes().await.unwrap()).unwrap();
-                            phases.lock().push(patch["status"]["phase"].clone());
-                            response["status"] = patch["status"].clone();
-                            // Stop before account/CA IO after proving the worker resumed.
-                            if patch["status"]["phase"] != "Failed" {
-                                code = 422;
-                            }
-                        }
-                        if code != 200 {
-                            response = json!({"apiVersion":"v1", "kind":"Status", "status":"Failure",
-                            "message":"test operation rejected", "reason":"Unavailable", "code":code});
-                        }
                         Ok::<_, Infallible>(
                             Response::builder()
-                                .status(code)
                                 .header(http::header::CONTENT_TYPE, "application/json")
-                                .body(Body::from(serde_json::to_vec(&response).unwrap()))
+                                .body(Body::from(body))
                                 .unwrap(),
                         )
                     }
-                }),
-                "default",
-            );
-            let worker = AcmeServiceWorker::new(client, runtime, capture.generation);
-            worker.handle_resource_check("default/test").await;
-            tokio::time::timeout(Duration::from_secs(5), async {
-                while worker.processing.read().contains("default/test") {
-                    tokio::task::yield_now().await;
                 }
-            })
-            .await
-            .expect("rejected attempt must release its processing marker");
-            assert!(phases.lock().is_empty());
-            assert!(worker.retry_tracker.read().is_empty());
-            let command = tokio::time::timeout(Duration::from_secs(5), capture.rx.recv())
-                .await
-                .unwrap();
-            assert!(matches!(command, Some(AcmeCommand::RenewalCheck { key }) if key == "default/test"));
-            worker.handle_resource_check("default/test").await;
-            tokio::time::timeout(Duration::from_secs(5), async {
-                while worker.processing.read().contains("default/test") {
-                    tokio::task::yield_now().await;
-                }
-            })
-            .await
-            .expect("resumed attempt must finish");
-            assert_eq!(
-                *phases.lock(),
-                vec![serde_json::to_value(phase).unwrap(), json!("Failed")]
+            }),
+            "default",
+        );
+        let attempt = test_attempt(client.clone(), acme.clone(), runtime.clone(), capture.generation);
+
+        let replacement_gateway = Arc::new(ResourceProcessor::<Gateway>::new(
+            "Gateway",
+            8,
+            Arc::new(NoopGatewayHandler),
+            runtime.clone(),
+        ));
+        replacement_gateway.save(test_gateway("2"), None);
+        runtime.processor_registry.register(replacement_gateway);
+        let gateway_ref = match &processed.spec.challenge {
+            AcmeChallenge::Http01 { gateway_ref } => gateway_ref,
+        };
+        processed.spec.resolved_listener_attachments = Some(
+            resolve_acme_listener_attachments(gateway_ref, "default", &runtime)
+                .expect("replacement proof must resolve"),
+        );
+        let replacement_acme = Arc::new(ResourceProcessor::<EdgionAcme>::new(
+            "EdgionAcme",
+            8,
+            Arc::new(NoopAcmeHandler),
+            runtime.clone(),
+        ));
+        replacement_acme.save(processed, None);
+        runtime.processor_registry.register(replacement_acme);
+
+        let api = Api::namespaced(client, "default");
+        assert!(matches!(
+            attempt.current_resource_typed(&api).await,
+            Err(AttemptAuthorityError::Lost(_))
+        ));
+        attempt.certificate_issued.store(true, Ordering::Release);
+        assert!(attempt.current_resource_typed(&api).await.is_ok());
+        let current = admitted_serving_attachments("default/test", &runtime).unwrap();
+        for change in ["gateway-uid", "gateway-generation", "listener", "selection"] {
+            let mut changed = current.clone();
+            match change {
+                "gateway-uid" => changed[0].gateway_proof.instance = "replacement".into(),
+                "gateway-generation" => changed[0].gateway_proof.generation += 1,
+                "listener" => changed[0].listener_name = "other".into(),
+                _ => changed.clear(),
+            }
+            assert!(
+                !same_serving_selection(&attempt.serving_attachments, &changed),
+                "{change}"
             );
-            assert_eq!(worker.retry_tracker.read().get("default/test"), Some(&1));
-            assert!(reads.load(Ordering::SeqCst) >= 6);
         }
+    }
+
+    #[tokio::test]
+    async fn ready_recovery_clears_stale_scheduler_checkpoint() {
+        let _guard = ACME_TEST_MUTEX.lock().await;
+        let capture = NotificationCapture::install();
+        let mut acme = test_acme();
+        acme.metadata.resource_version = Some("10".into());
+        let runtime = eligibility_runtime(&mut acme.clone());
+        acme.status = Some(EdgionAcmeStatus {
+            phase: AcmeCertPhase::Ready,
+            certificate_not_after: Some("2099-01-01T00:00:00Z".into()),
+            scheduler: Some(AcmeSchedulerStatus {
+                observed_generation: 1,
+                attempt_id: Some("completed-attempt".into()),
+                attempts_used: 4,
+                attempt_started_at: Some("2026-01-01T00:00:00Z".into()),
+                next_retry_at: Some("2098-01-01T00:00:00Z".into()),
+            }),
+            ..Default::default()
+        });
+        let patches = Arc::new(Mutex::new(Vec::new()));
+        let recorded = patches.clone();
+        let response_acme = acme.clone();
+        let client = Client::new(
+            service_fn(move |request: http::Request<Body>| {
+                let recorded = recorded.clone();
+                let response_acme = response_acme.clone();
+                async move {
+                    let (parts, body) = request.into_parts();
+                    if parts.method == http::Method::PATCH {
+                        let bytes = body.collect_bytes().await.unwrap();
+                        let patch = serde_json::from_slice::<serde_json::Value>(&bytes).unwrap();
+                        recorded.lock().push(patch);
+                    }
+                    Ok::<_, Infallible>(
+                        Response::builder()
+                            .header(http::header::CONTENT_TYPE, "application/json")
+                            .body(Body::from(serde_json::to_vec(&response_acme).unwrap()))
+                            .unwrap(),
+                    )
+                }
+            }),
+            "default",
+        );
+        let outcome = check_resource(
+            client,
+            runtime,
+            None,
+            capture.generation,
+            CancellationToken::new(),
+            "default/test",
+            TriggerKind::Startup,
+        )
+        .await;
+        assert!(matches!(outcome, CheckOutcome::Wait(_, TriggerKind::Renewal)));
+        let patches = patches.lock();
+        assert_eq!(patches.len(), 1);
+        assert!(patches[0]["status"]["scheduler"].is_null());
     }
 
     #[tokio::test]
     async fn terminating_resource_does_not_start_an_attempt() {
         let _guard = ACME_TEST_MUTEX.lock().await;
-        let mut capture = NotificationCapture::install();
+        let capture = NotificationCapture::install();
         let mut acme = test_acme();
         acme.metadata.deletion_timestamp =
             Some(k8s_openapi::apimachinery::pkg::apis::meta::v1::Time(chrono::Utc::now()));
@@ -1857,13 +2874,69 @@ spec:
             }),
             "default",
         );
-        let worker = AcmeServiceWorker::new(client, runtime, capture.generation);
-        worker.handle_resource_check("default/test").await;
-        assert!(worker.processing.read().is_empty());
-        assert!(worker.eligibility_waiting.read().is_empty());
-        assert!(worker.retry_tracker.read().is_empty());
+        let outcome = check_resource(
+            client,
+            runtime,
+            None,
+            capture.generation,
+            CancellationToken::new(),
+            "default/test",
+            TriggerKind::Resource,
+        )
+        .await;
+        assert!(matches!(outcome, CheckOutcome::Deleted));
         assert_eq!(reads.load(Ordering::SeqCst), 1);
-        assert!(capture.rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn resource_get_classifies_not_found_and_transient_failure() {
+        for (code, deleted) in [(404, true), (503, false)] {
+            let client = Client::new(
+                service_fn(move |_request: http::Request<Body>| async move {
+                    Ok::<_, Infallible>(
+                        Response::builder()
+                            .status(code)
+                            .header(http::header::CONTENT_TYPE, "application/json")
+                            .body(Body::from(
+                                json!({
+                                    "apiVersion": "v1",
+                                    "kind": "Status",
+                                    "status": "Failure",
+                                    "message": "test read failure",
+                                    "reason": if code == 404 { "NotFound" } else { "Unavailable" },
+                                    "code": code,
+                                })
+                                .to_string()
+                                .into_bytes(),
+                            ))
+                            .unwrap(),
+                    )
+                }),
+                "default",
+            );
+            let trigger = if code == 503 {
+                TriggerKind::Admin
+            } else {
+                TriggerKind::Startup
+            };
+            let outcome = check_resource(
+                client,
+                Arc::new(ControllerRuntime::default()),
+                None,
+                1,
+                CancellationToken::new(),
+                "default/test",
+                trigger,
+            )
+            .await;
+            assert_eq!(matches!(&outcome, CheckOutcome::Deleted), deleted, "HTTP {code}");
+            assert_eq!(
+                matches!(&outcome, CheckOutcome::Recheck(delay, retry_trigger)
+                    if *delay == CONTROL_PLANE_RECHECK_DELAY && *retry_trigger == trigger),
+                !deleted,
+                "HTTP {code}"
+            );
+        }
     }
 
     #[tokio::test]
@@ -2069,7 +3142,7 @@ spec:
     /// test because they mutate the `ACME_SERVICE` global; splitting them would
     /// let the cases race against each other.
     #[tokio::test]
-    async fn test_timer_generation_isolation() {
+    async fn test_service_generation_sender_isolation() {
         // Serialize against any other test that touches the global `ACME_SERVICE`
         // (e.g. the handler tests whose `after_publish` reaches `notify_resource_changed`
         // -> `get_sender()`), so a concurrent notify cannot clone the handle we
@@ -2082,6 +3155,7 @@ spec:
         *ACME_SERVICE.lock() = Some(AcmeServiceHandle {
             tx: tx1,
             generation: gen1,
+            cancel: CancellationToken::new(),
         });
 
         // A timer stamped with gen1 can enqueue while gen1 is running.
@@ -2100,6 +3174,7 @@ spec:
         *ACME_SERVICE.lock() = Some(AcmeServiceHandle {
             tx: tx2,
             generation: gen2,
+            cancel: CancellationToken::new(),
         });
 
         // A stale gen1 timer must NOT see gen2's sender.
@@ -2107,37 +3182,83 @@ spec:
         // The current generation's timer still works.
         assert!(get_sender_for_generation(gen2).is_some());
 
-        // End to end through schedule_renewal_check: a stale-generation timer
-        // fires but never enqueues into the running generation.
-        schedule_renewal_check(gen1, "default/stale".to_string(), Duration::from_millis(10));
-        let stale = tokio::time::timeout(Duration::from_millis(200), rx2.recv()).await;
-        assert!(stale.is_err(), "stale-generation timer must not enqueue");
-
-        // A current-generation timer does enqueue.
-        schedule_renewal_check(gen2, "default/live".to_string(), Duration::from_millis(10));
-        let live = tokio::time::timeout(Duration::from_secs(1), rx2.recv())
+        assert!(get_sender_for_generation(gen1).is_none());
+        get_sender_for_generation(gen2)
+            .unwrap()
+            .send(AcmeCommand::StartupCheck {
+                key: "default/live".to_string(),
+            })
             .await
-            .expect("current-generation timer should enqueue before timeout");
-        assert!(matches!(live, Some(AcmeCommand::RenewalCheck { key }) if key == "default/live"));
+            .unwrap();
+        let live = rx2.recv().await;
+        assert!(matches!(live, Some(AcmeCommand::StartupCheck { key }) if key == "default/live"));
 
         // Cleanup global state.
         ACME_SERVICE.lock().take();
     }
 
-    #[tokio::test]
-    async fn eligibility_recheck_timer_is_deduplicated_per_key() {
-        let _guard = ACME_TEST_MUTEX.lock().await;
-        ACME_SERVICE.lock().take();
-        let client = Client::new(
-            service_fn(|_request: http::Request<Body>| async move { Ok::<_, Infallible>(empty_acme_list()) }),
-            "default",
+    #[test]
+    fn scheduler_keeps_one_earliest_deadline_and_admin_pending() {
+        let mut state = ResourceSchedule::default();
+        state.set_deadline(Duration::from_secs(30), TriggerKind::Renewal);
+        let first = state.deadline.unwrap().0;
+        state.set_deadline(Duration::from_secs(60), TriggerKind::Retry);
+        assert_eq!(state.deadline.unwrap().0, first);
+        state.set_deadline(Duration::from_secs(1), TriggerKind::Eligibility);
+        assert!(state.deadline.unwrap().0 < first);
+
+        state.merge_pending(TriggerKind::Resource);
+        state.merge_pending(TriggerKind::Admin);
+        state.merge_pending(TriggerKind::Startup);
+        assert_eq!(state.pending, Some(TriggerKind::Admin));
+    }
+
+    #[test]
+    fn admin_recheck_priority_survives_ordinary_notifications() {
+        let mut waiting = ResourceSchedule::default();
+        waiting.set_deadline(CONTROL_PLANE_RECHECK_DELAY, TriggerKind::Admin);
+        assert_eq!(claim_trigger(&mut waiting, TriggerKind::Resource), TriggerKind::Admin);
+        assert!(waiting.deadline.is_none());
+
+        let mut completing = ResourceSchedule {
+            busy: true,
+            pending: Some(TriggerKind::Resource),
+            ..Default::default()
+        };
+        completing.set_deadline(CONTROL_PLANE_RECHECK_DELAY, TriggerKind::Admin);
+        completing.busy = false;
+        let pending = completing.pending.take().unwrap();
+        assert_eq!(claim_trigger(&mut completing, pending), TriggerKind::Admin);
+    }
+
+    #[test]
+    fn delete_completion_preserves_a_concurrent_recreate_notification() {
+        let mut schedules = HashMap::from([(
+            "default/test".to_string(),
+            ResourceSchedule {
+                busy: true,
+                pending: Some(TriggerKind::Resource),
+                ..Default::default()
+            },
+        )]);
+        assert_eq!(
+            take_deleted_pending(&mut schedules, "default/test"),
+            Some(TriggerKind::Resource)
         );
-        let worker = AcmeServiceWorker::new(client, Arc::new(ControllerRuntime::default()), 99);
-        worker.schedule_eligibility_recheck("default/test");
-        worker.schedule_eligibility_recheck("default/test");
-        assert_eq!(worker.eligibility_waiting.read().len(), 1);
-        tokio::time::sleep(ELIGIBILITY_RECHECK_DELAY + Duration::from_millis(100)).await;
-        assert!(worker.eligibility_waiting.read().is_empty());
+        assert!(!schedules.contains_key("default/test"));
+    }
+
+    #[test]
+    fn persisted_retry_budget_resets_only_for_admin_or_new_generation() {
+        let checkpoint = AcmeSchedulerStatus {
+            observed_generation: 7,
+            attempts_used: 4,
+            ..Default::default()
+        };
+        assert_eq!(persisted_attempts(TriggerKind::Resource, 7, Some(&checkpoint)), 4);
+        assert_eq!(persisted_attempts(TriggerKind::Startup, 7, Some(&checkpoint)), 4);
+        assert_eq!(persisted_attempts(TriggerKind::Admin, 7, Some(&checkpoint)), 0);
+        assert_eq!(persisted_attempts(TriggerKind::Resource, 8, Some(&checkpoint)), 0);
     }
 
     #[test]

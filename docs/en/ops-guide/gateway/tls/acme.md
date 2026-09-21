@@ -10,7 +10,7 @@ Built-in ACME supports **HTTP-01 only**, with no DNS-01 or DNS provider API inte
 
 ## Overview
 
-Certificate issuance and activation are separate: the Gateway loads the certificate after its Secret is updated. Before publishing a result, the Controller rechecks that the EdgionAcme identity and configuration version are unchanged and that it still owns the work. If this check fails, the result is not published. This check does not cancel requests already sent to the CA or make writes across resources atomic.
+Certificate issuance and activation are separate: the Gateway loads the certificate after its Secret is updated. The leader Controller serializes scheduling per EdgionAcme, persists retry checkpoints in status, and rechecks both its Kubernetes Lease term and current resource authority before ACME and Kubernetes side effects. Leadership or resource changes cooperatively cancel obsolete attempts. Requests already accepted by the CA cannot be recalled, and writes across multiple Kubernetes resources are not transactional.
 
 ```
 EdgionAcme (Controller) --ACME order--> ACME server (Let's Encrypt)
@@ -113,7 +113,7 @@ The Controller publishes the token in `status.activeChallenges`; the Gateway ans
 |-----------|------|---------|-------------|
 | `renewal.renewBefore` | Duration | `720h` | Renew this far before expiry (720h = 30 days) |
 | `renewal.checkInterval` | Duration | `24h` | Interval between renewal checks |
-| `renewal.failBackoff` | Duration | `5m` | Base retry delay after a failure. Each consecutive failure multiplies the delay by 4 (`failBackoff * 4^attempt`, e.g. 5m, 20m, 80m, ~5.3h, ~21.3h). After 5 consecutive failures the resource stays `Failed` and stops retrying until you edit the CRD or [manually trigger](#manual-trigger) it (which resets the counter); a success also resets it |
+| `renewal.failBackoff` | Duration | `5m` | Base retry delay after a failure. Each reserved attempt multiplies the delay by 4 (`failBackoff * 4^attempt`, e.g. 5m, 20m, 80m, ~5.3h, ~21.3h). After 5 attempts for one spec generation the resource stays `Failed`. A spec change starts a new generation; an explicit [Admin trigger](#manual-trigger) resets the current generation's budget; success clears it |
 
 ### External Account Binding
 
@@ -226,18 +226,9 @@ spec:
 
 ## Manual trigger
 
-To immediately re-run issuance or renewal (for example after fixing DNS or network problems), trigger reprocessing — this also resets the failure retry counter.
+To immediately re-run issuance or renewal (for example after fixing DNS or network problems), use the Admin trigger. It has explicit reset semantics: the current spec generation's persisted retry budget is replaced before the next attempt. A metadata-only annotation is not an issuance command and does not reset the budget.
 
-### Method 1: annotate the resource
-
-Any metadata change makes the Controller reprocess the resource:
-
-```bash
-kubectl annotate edgionacme example-acme -n production \
-  edgion.io/trigger="$(date +%s)" --overwrite
-```
-
-### Method 2: Admin API
+### Admin API
 
 > **Authentication required**: all Controller Admin API calls need a Bearer token. Set `EDGION_TOKEN` to a token from `edgion-cli gen-token`, or use `edgion-cli acme trigger` directly. See [Federation RBAC — CLI Token RBAC](../../federation-rbac.md#cli-token-rbac).
 
@@ -274,7 +265,7 @@ If the ACME service is not running on the contacted replica (for example one tha
 | `Issuing` | ACME order in progress (validating or issuing) |
 | `Ready` | Certificate issued and valid |
 | `Renewing` | Renewal in progress |
-| `Failed` | Last operation failed; retried with exponential backoff (`failBackoff * 4^attempt`) for up to 5 attempts, then stays `Failed` until the CRD is edited or a [manual trigger](#manual-trigger) resets the retry counter |
+| `Failed` | Last operation failed; retried with exponential backoff for up to 5 reserved attempts in one spec generation, then stays `Failed` until the spec changes or an [Admin trigger](#manual-trigger) resets the retry counter |
 
 ### Useful status fields
 
@@ -282,6 +273,7 @@ If the ACME service is not running on the contacted replica (for example one tha
 - `status.lastFailureReason`, `status.lastFailureTime` — most recent failure detail
 - `status.secretName`, `status.edgionTlsName` — the Secret and EdgionTls in use
 - `status.accountUri` — the registered ACME account URI
+- `status.scheduler` — read-only recovery checkpoint containing the observed spec generation, reserved attempt ID/count, attempt start time, and next retry time
 
 ### Common issues
 

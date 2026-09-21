@@ -24,7 +24,7 @@ User creates/updates EdgionAcme
   Handler validates, resolves references/status, and notifies AcmeService
         │
         ▼
-  AcmeService mpsc worker processes an issuance command
+  AcmeService actor coalesces the trigger and reserves an attempt
         │
         ▼
   Gateway serves HTTP-01 challenge tokens
@@ -42,8 +42,8 @@ User creates/updates EdgionAcme
 ### Detailed Steps
 
 1. **Resource intake**: the user creates or updates an EdgionAcme resource; it enters the Workqueue → ResourceProcessor pipeline
-2. **Handler processing**: the EdgionAcme Handler validates configuration, resolves the account credential and `challenge.gatewayRef`, publishes Controller-owned HTTP listener attachments, and updates `Accepted`/`ResolvedRefs`. It compares UID/generation and ResolvedRefs status/reason with the previous processed cache, then notifies the service from `after_publish` when that comparison changed and the attachment/account result permits notification. Status-only echoes cannot reset the service retry budget merely because a generic status CAS failed; the service sees the newly published eligibility conditions before consuming a recovery notification. See the [notification guard](../../04-review/acme/regression-guards/resource-change-notification-gating.md).
-3. **Background worker**: the Kubernetes leader's AcmeService consumes its own `mpsc<AcmeCommand>` queue, verifies the raw object against the current processed generation and live Gateway attachment, then requests issuance from the ACME server
+2. **Handler processing**: the EdgionAcme Handler validates configuration, resolves the account credential and `challenge.gatewayRef`, publishes Controller-owned HTTP listener attachments, and updates `Accepted`/`ResolvedRefs`. It compares UID/generation, ResolvedRefs, and the resolved listener proof with the previous processed cache, then notifies the service from `after_publish` when authority may have changed. Delete and authoritative denial also notify so an active attempt can retire. Status-only echoes do not reset the retry budget. See the [notification guard](../../04-review/acme/regression-guards/resource-change-notification-gating.md).
+3. **Actor scheduler**: the Kubernetes leader's AcmeService owns one state entry per resource. It coalesces duplicate commands, keeps at most one active attempt, one pending trigger, and one earliest deadline per key, and runs Kubernetes/CA work outside the resource workqueue. Before CA work starts, it persists an attempt reservation in `status.scheduler`.
 4. **Domain validation**: performs proof of domain ownership using HTTP-01
 5. **Certificate issuance**: once validation passes, the ACME server issues the certificate; the client downloads the certificate chain and private key
 6. **Secret storage**: writes the issued certificate and private key into the corresponding Secret resource for use by Gateway TLS
@@ -73,24 +73,38 @@ The ACME service runs only on the Leader node. Reasons:
 
 - **HTTP-01 challenge**: requires a single endpoint to respond to the ACME server's HTTP validation request; running on multiple instances would make the challenge response non-deterministic
 - **Avoid duplicate issuance**: multiple instances simultaneously requesting from the ACME server would cause unnecessary duplicate operations and risk hitting rate limits
-- **State consistency**: exclusive Leader processing ensures atomicity and consistency of the certificate-issuance flow
+- **State consistency**: the actor serializes scheduling decisions per resource, while a live Kubernetes Lease fence rejects work from an obsolete leadership term
 
-On leadership change, the old service sender is dropped and the new leader starts
-its service plus startup scan. Detached timers and already spawned issuance tasks
-are not synchronously aborted by `stop_acme_service`, so do not assume every
-in-flight operation is cancelled and restarted.
+On leadership change, `stop_acme_service` cancels the actor, startup scan, and
+active attempts. Each admitted attempt captures the service generation, source
+UID/generation, serving proof, a unique attempt ID, and the current Lease UID,
+holder, term, and transition count. The guard re-reads both the Lease and source
+resource before every externally visible write or irreversible ACME operation.
+Cancellation also interrupts long ACME polls and propagation waits.
 
-Before certificate Secret, EdgionTls, lifecycle status, or challenge publication,
-the active flow now rechecks its service generation, GETs the current EdgionAcme,
-compares UID/generation, rejects deletion, and reuses the eligibility gate.
-Status writes also carry the checked UID/resourceVersion. These are conservative
-publication checks, not atomic fencing across the source resource, derived
-resources, and leader election. Account registration and CA requests are not
-cancelled; scheduler recovery remains outside this correction under the
-`acme-scheduler-trigger-admission` follow-up.
-An attempt rejected at completion releases its processing marker and schedules
-an existing generation-scoped recheck. A persisted Issuing/Renewing phase without
-a local processing marker is recoverable work, with the normal retry limit.
+This is fencing, not a multi-object transaction. A request already accepted by
+the CA cannot be recalled, and source, Secret, EdgionTls, and status writes are
+separate Kubernetes operations. Target writes use the target UID/resourceVersion
+when it already exists, and every following operation revalidates authority.
+After issuance, publication failures are retried with the certificate retained
+in memory, so they do not create another CA order in the same service run.
+Publishing that Secret can refresh the selected Gateway's proof. Once a
+certificate is issued, resource notifications no longer cancel it blindly:
+each write requires fresh converged eligibility and the same Gateway UID/spec
+generation and listener identity/key set. Proof epoch and digest changes caused
+by certificate reload are accepted; ownership denial, source replacement, and
+actual selection changes still retire the attempt.
+Transient Lease/source read failures wait inside the operation guard, retaining
+the current order or registered account credentials until authority is known.
+
+`status.scheduler` is the restart checkpoint. It records the source generation,
+reserved attempt ID, consumed attempt count, start time, and next retry time.
+Reservation is persisted before contacting the CA. A startup scan reconstructs
+deadlines from this state; transient GET failures retain the actor entry and
+retry, while a confirmed 404 removes it. A new spec generation or explicit Admin
+trigger resets the budget. Ordinary resource/status notifications do not.
+An interrupted final attempt is recovered as `Failed`; failure to persist that
+terminal state schedules a control-plane retry without another CA request.
 
 ## Integration Mechanism
 
@@ -98,12 +112,17 @@ a local processing marker is recoverable work, with the normal retry limit.
 
 After issuance, the ACME service writes the certificate into a Secret resource. Changes to the Secret trigger reprocessing of dependent resources (such as a Gateway Listener) via the requeue mechanism, enabling automatic hot reload of certificates.
 
+An existing account Secret is updated with its original UID/resourceVersion.
+After a conflict, the service re-reads it and adopts valid credentials written
+concurrently; an empty same-UID Secret can be retried from its fresh version.
+A replacement UID or corrupt credentials are never overwritten.
+
 ### Cascading Requeue
 
 State changes of an EdgionAcme resource trigger reprocessing of related resources via RequeueChain:
 
 - EdgionAcme issued successfully → Secret updated → Gateways/Listeners depending on that Secret are reprocessed
-- Certificate about to expire → AcmeService timer sends `RenewalCheck` on its own command queue → renewal flow starts
+- Certificate about to expire → the actor's per-key deadline becomes due → renewal flow starts
 
 The renewal/retry queue is distinct from the resource Workqueue.
 
@@ -119,5 +138,8 @@ Every service command, including startup, Admin, renewal, and retry work,
 passes the same eligibility gate. The raw and processed objects must have the
 same UID and generation, current `Accepted`/`ResolvedRefs` conditions, and an
 attachment vector equal to a fresh live resolution. Cache publication skew is
-retried by one generation-scoped timer per key without consuming the issuance
-retry budget.
+retried by the same per-key deadline without consuming the issuance retry budget.
+Resource changes cancel a pre-issuance attempt and leave one coalesced follow-up check;
+after issuance, the retained certificate continues only under the publication
+authority rules above.
+Admin triggers take priority and reset the budget.

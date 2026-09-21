@@ -7,4 +7,4 @@ pub mod acme_client;
 mod secret_io;
 pub mod service;
 
-pub use service::{notify_resource_changed, start_acme_service, stop_acme_service};
+pub use service::{notify_resource_changed, start_acme_service, stop_acme_service, trigger_resource};
