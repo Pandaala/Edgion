@@ -76,7 +76,7 @@ The first section preserves the exact residual order supplied by `task/optimizat
 | edgion-gateway | `edgion-gateway/src/routes/tls/passthrough_proxy.rs` | src/routes | changed | B0068 | Reused the canonical outbound PPv2 setup helper before ClientHello replay | 83595505 |
 | edgion-gateway | `edgion-gateway/src/routes/tls/proxy.rs` | src/routes | changed | B0068 | Centralized terminate and passthrough PPv2 bytes, errors, success accounting, and logging with direct boundary tests | 83595505 |
 | edgion-gateway | `edgion-gateway/src/routes/tls/routes_mgr.rs` | src/routes | changed | B0069 | Expose independently retained TLS route-table candidate entries in canonical store stats | 6da1baa5 |
-| edgion-gateway | `edgion-gateway/src/routes/tls/tests.rs` | src/routes | pending | — | Residual manifest order | a0b4d49b298149422c7e46150a0ca027ad5321f7 |
+| edgion-gateway | `edgion-gateway/src/routes/tls/tests.rs` | src/routes | changed | B0070 | Added explicit terminate/passthrough negotiated-identity isolation coverage at the Stage 2 dispatcher boundary | 395ccb42 |
 | edgion-gateway | `edgion-gateway/src/routes/udp/routes_mgr.rs` | src/routes | pending | — | Residual manifest order | a0b4d49b298149422c7e46150a0ca027ad5321f7 |
 | edgion-gateway | `edgion-gateway/src/routes/udp/udp_route_table.rs` | src/routes | pending | — | Residual manifest order | a0b4d49b298149422c7e46150a0ca027ad5321f7 |
 | edgion-gateway | `edgion-gateway/src/runtime/matching/tls.rs` | src/runtime | pending | — | Residual manifest order | a0b4d49b298149422c7e46150a0ca027ad5321f7 |
