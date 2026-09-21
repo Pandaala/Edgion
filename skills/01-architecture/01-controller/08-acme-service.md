@@ -86,8 +86,8 @@ compares UID/generation, rejects deletion, and reuses the eligibility gate.
 Status writes also carry the checked UID/resourceVersion. These are conservative
 publication checks, not atomic fencing across the source resource, derived
 resources, and leader election. Account registration and CA requests are not
-cancelled; scheduler recovery remains in the
-[scheduler task](../../../tasks/todo/acme-scheduler-trigger-admission.md).
+cancelled; scheduler recovery remains outside this correction under the
+`acme-scheduler-trigger-admission` follow-up.
 An attempt rejected at completion releases its processing marker and schedules
 an existing generation-scoped recheck. A persisted Issuing/Renewing phase without
 a local processing marker is recoverable work, with the normal retry limit.

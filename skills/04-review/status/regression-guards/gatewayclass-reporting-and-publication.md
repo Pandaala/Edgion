@@ -82,8 +82,8 @@ deployments; no live Kubernetes or conformance pass is claimed.
 The broader Controller library run found five existing failures (1541 passed,
 5 failed, 6 ignored). All five were independently reproduced on unchanged HEAD
 `8d3d681875afb72af437340e556cf738e848cc38` in a temporary worktree. They remain
-tracked separately as [LinkSys fixture maintenance](../../../../tasks/todo/linksys-timeout-advisory-test-fixtures.md)
-and [FileSystem repair-status investigation](../../../../tasks/todo/filesystem-repaired-resource-error-status.md).
+outside this correction as the `linksys-timeout-advisory-test-fixtures` and
+`filesystem-repaired-resource-error-status` follow-ups.
 Neither is treated as corrected or accepted by this fix.
 
 Fresh verification for this correction on 2026-09-21:

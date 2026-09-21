@@ -59,8 +59,8 @@ separate API operations, and serving ownership comes from the current local
 runtime view. Handoff after validation, account credential writes, requests
 already sent to the CA, and complete scheduler recovery remain outside this
 correction. A rejected challenge cleanup may leave tokens until expiry or
-subsequent reconciliation. Remaining work stays in the
-[scheduler task](../../../../tasks/todo/acme-scheduler-trigger-admission.md).
+subsequent reconciliation. Remaining work is identified by the
+`acme-scheduler-trigger-admission` follow-up.
 
 Regression coverage is in `service.rs`:
 `certificate_publication_rechecks_authority_between_writes` drives the actual
@@ -75,8 +75,8 @@ worker through transient GET failures, processing cleanup, the actual recheck
 command, and resumed Issuing/Renewing work without invoking a CA.
 Terminating resources are rejected before admission, preventing repeated
 publication rejection while finalizers delay deletion. The publication transport
-also exposed a pre-existing inferred EdgionTls plural mismatch, tracked
-[separately](../../../../tasks/todo/acme-edgiontls-api-plural.md); its current path
+also exposed a pre-existing inferred EdgionTls plural mismatch, identified by the
+separate `acme-edgiontls-api-plural` follow-up; its current path
 assertion does not establish that the live API accepts that endpoint.
 
 Fresh verification for this minimal correction: Controller `--lib acme` tests
