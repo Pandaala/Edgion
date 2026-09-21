@@ -799,7 +799,7 @@ spec:
   config:
     endpoints: [redis://127.0.0.1:6379]
     timeout:
-      connect: 10
+      connect: 3s
       conect: 20
 "#;
 

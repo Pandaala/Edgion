@@ -1189,7 +1189,7 @@ mod unknown_field_warning_tests {
     fn link_sys_body(name: &str, typo: bool) -> Bytes {
         let typo_field = if typo { r#", "conect": 20"# } else { "" };
         Bytes::from(
-            r#"{"apiVersion":"edgion.io/v1","kind":"LinkSys","metadata":{"name":"NAME","namespace":"default"},"spec":{"type":"redis","config":{"endpoints":["redis://127.0.0.1:6379"],"timeout":{"connect":10TYPO}}}}"#
+            r#"{"apiVersion":"edgion.io/v1","kind":"LinkSys","metadata":{"name":"NAME","namespace":"default"},"spec":{"type":"redis","config":{"endpoints":["redis://127.0.0.1:6379"],"timeout":{"connect":"3s"TYPO}}}}"#
                 .replace("NAME", name)
                 .replace("TYPO", typo_field),
         )
