@@ -1950,6 +1950,7 @@ mod store_stats_tests {
             udp_routes: crate::routes::udp::UdpRouteManagerStats {
                 route_cache: 0,
                 listener_count: 0,
+                total_routes_in_tables: 0,
             },
             tls_routes: crate::routes::tls::TlsRouteManagerStats {
                 route_cache: 0,
@@ -2021,6 +2022,7 @@ mod store_stats_tests {
         assert_eq!(json["wasm_oci_cache"]["retained_bytes"], 0);
         assert_eq!(json["wasm_oci_cache"]["keys"], serde_json::json!([]));
         assert_eq!(json["tls_routes"]["total_candidate_entries_in_tables"], 0);
+        assert_eq!(json["udp_routes"]["total_routes_in_tables"], 0);
         assert!(json.get("client_caches").is_some());
         assert!(json.get("service_discovery").is_some());
         assert!(json.get("service_store").is_none());

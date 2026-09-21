@@ -192,14 +192,26 @@ pub(crate) fn resolved_listeners_for_route(route: &UDPRoute) -> &[ListenerKey] {
 pub struct UdpRouteManagerStats {
     pub route_cache: usize,
     pub listener_count: usize,
+    /// Sum of route entries across every current listener-table snapshot.
+    /// A UDPRoute attached to multiple listeners contributes once per table,
+    /// so this is deliberately not a unique resource count.
+    pub total_routes_in_tables: usize,
 }
 
 impl GlobalUdpRouteManagers {
-    /// Collect size statistics for leak-detection tests.
+    /// Collect cold-path size statistics for leak-detection tests.
+    ///
+    /// Each listener's ArcSwap snapshot is loaded independently without the
+    /// rebuild lock, so this does not claim cross-manager atomicity.
     pub fn stats(&self) -> UdpRouteManagerStats {
+        let mut total_routes_in_tables = 0usize;
+        for entry in self.by_listener.iter() {
+            total_routes_in_tables += entry.value().load_route_table().route_count();
+        }
         UdpRouteManagerStats {
             route_cache: self.route_cache.len(),
             listener_count: self.by_listener.len(),
+            total_routes_in_tables,
         }
     }
 }
@@ -283,15 +295,27 @@ mod tests {
     }
 
     #[test]
-    fn test_stats() {
+    fn stats_report_empty_and_retained_table_routes() {
         let managers = GlobalUdpRouteManagers::new();
-        let key = make_listener_key(9000, "UDP");
-        managers.insert_route(test_unit("default", "route1", key.clone()));
-        let _ = managers.get_or_create_listener_manager(&key);
+        let empty = managers.stats();
+        assert_eq!(empty.route_cache, 0);
+        assert_eq!(empty.listener_count, 0);
+        assert_eq!(empty.total_routes_in_tables, 0);
+
+        let listener_a = make_listener_key(9000, "UDP");
+        let listener_b = make_listener_key(9001, "UDP");
+        let unit = test_unit("default", "route1", listener_a.clone());
+        let routes = HashMap::from([(unit.key_name(), unit)]);
+        managers.get_or_create_listener_manager(&listener_a).rebuild(&routes);
+        managers.get_or_create_listener_manager(&listener_b).rebuild(&routes);
 
         let stats = managers.stats();
-        assert_eq!(stats.route_cache, 1);
-        assert_eq!(stats.listener_count, 1);
+        assert_eq!(stats.route_cache, 0, "listener tables retain their own snapshots");
+        assert_eq!(stats.listener_count, 2);
+        assert_eq!(
+            stats.total_routes_in_tables, 2,
+            "entries are counted per listener table"
+        );
     }
 
     #[test]
@@ -392,5 +416,9 @@ mod tests {
 
         assert_eq!(mgr.load_route_table().route_count(), 0);
         assert!(managers.by_listener.contains_key(&listener));
+        let cleared = managers.stats();
+        assert_eq!(cleared.route_cache, 0);
+        assert_eq!(cleared.listener_count, 1);
+        assert_eq!(cleared.total_routes_in_tables, 0);
     }
 }
