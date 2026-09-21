@@ -2775,11 +2775,6 @@ impl EdgionHttpContext {
     }
 
     #[inline]
-    pub(crate) fn push_pending_edgion_plugins_log(&mut self, log: EdgionPluginsLog) {
-        self.plugin_execution.pending_edgion_plugins_logs.push(log);
-    }
-
-    #[inline]
     pub(crate) fn start_pending_edgion_plugins_log(&mut self, name: String) -> usize {
         let state = &mut self.plugin_execution;
         let idx = state.pending_edgion_plugins_logs.len();

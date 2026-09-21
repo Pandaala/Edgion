@@ -17,7 +17,7 @@ use edgion_gateway::plugins::http::dsl::{
     },
     runtime::{DslRateLimits, DslRuntime},
 };
-use edgion_gateway::plugins::runtime::log::{EdgionPluginsLog, EdgionPluginsLogToken};
+use edgion_gateway::plugins::runtime::log::EdgionPluginsLogToken;
 use edgion_gateway::plugins::runtime::traits::session::RouteProto;
 use edgion_gateway::plugins::{PluginLog, PluginSession, PluginSessionResult};
 use edgion_gateway::{EdgionHttpContext, MirrorState, PendingHeaderOp, SetJumpOutcome, UpstreamJumpTarget};
@@ -184,9 +184,6 @@ impl PluginSession for ResultSession {
         panic!("unexpected session operation")
     }
     fn record_error(&mut self, _status: EdgionErrorCode) {
-        panic!("unexpected session operation")
-    }
-    fn push_edgion_plugins_log(&mut self, _log: EdgionPluginsLog) {
         panic!("unexpected session operation")
     }
     fn start_edgion_plugins_log(&mut self, _name: String) -> EdgionPluginsLogToken {

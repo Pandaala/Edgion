@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use super::conditions::EvaluationResult;
 use super::dye_plan::{CompiledDyePlan, CompiledDyeRule};
-use super::log::{EdgionPluginsLog, EdgionPluginsLogToken, PluginLog};
+use super::log::{EdgionPluginsLogToken, PluginLog};
 use super::traits::session::{
     empty_response_header_map, BodyReadError, BodyReadResult, RequestBodySnapshotReader, RouteProto,
 };
@@ -1917,10 +1917,6 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
                 .http(key)
                 .map(|compiled| Arc::clone(&compiled.plugin_runtime))
         })
-    }
-
-    fn push_edgion_plugins_log(&mut self, log: EdgionPluginsLog) {
-        self.ctx.push_pending_edgion_plugins_log(log);
     }
 
     fn start_edgion_plugins_log(&mut self, name: String) -> EdgionPluginsLogToken {

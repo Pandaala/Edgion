@@ -3,7 +3,7 @@
 use crate::ai::{AiAttemptPlan, AiRequestContext};
 use crate::ctx::ClientCertInfo;
 use crate::plugins::runtime::dye_plan::CompiledDyePlan;
-use crate::plugins::runtime::log::{EdgionPluginsLog, EdgionPluginsLogToken, PluginLog};
+use crate::plugins::runtime::log::{EdgionPluginsLogToken, PluginLog};
 use crate::request_body::{BodyOperationError, BodyScanResult};
 use crate::{EdgionHttpContext, MirrorState, PendingHeaderOp, SetJumpOutcome, UpstreamJumpTarget};
 use async_trait::async_trait;
@@ -742,21 +742,17 @@ pub trait PluginSession: Send + Sync {
         None
     }
 
-    /// Push EdgionPlugins execution log to pending list (for ExtensionRef)
-    fn push_edgion_plugins_log(&mut self, log: EdgionPluginsLog);
-
     /// Start a new EdgionPluginsLog and return a token for safe log pushing.
     ///
     /// This creates an empty EdgionPluginsLog entry in the pending list and returns
-    /// a token that can be used with `push_to_edgion_plugins_log` to append logs.
-    /// The token records the current depth to prevent misuse in nested scopes.
+    /// a token containing its index. Use the token with
+    /// `push_to_edgion_plugins_log` before the pending list is drained at the end
+    /// of the plugin stage.
     fn start_edgion_plugins_log(&mut self, name: String) -> EdgionPluginsLogToken;
 
     /// Push a PluginLog to the EdgionPluginsLog identified by the token.
     ///
-    /// # Panics
-    /// In debug builds, panics if the current depth doesn't match the token's depth,
-    /// indicating the token is being used in the wrong scope.
+    /// If the token's index is not present in the pending list, the log is ignored.
     fn push_to_edgion_plugins_log(&mut self, token: &EdgionPluginsLogToken, log: PluginLog);
 
     // ========== KeyGet/KeySet unified accessor methods ==========

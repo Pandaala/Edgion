@@ -9,7 +9,7 @@
 | D0005 | ready-for-separate-task | `tasks/todo/strict-gateway-process-config-unknown-fields.md` | B0009 |
 | D0006 | ready-for-separate-task | `tasks/todo/define-gatewayclass-process-config-ownership.md` | B0011 |
 | D0007 | ready-for-separate-task | `tasks/todo/add-etcd-linksys-health-flip-reporting.md` | B0035 |
-| D0008 | ready-after-campaign-freeze | `tasks/todo/remove-dead-plugin-session-log-hook.md` | B0043 |
+| D0008 | resolved | `skills/04-review/plugin-runtime/regression-guards/extension-ref-tokenized-plugin-log-contract.md` | B0043 |
 | D0009 | ready-for-separate-task | `tasks/todo/align-route-retry-limits-with-pingora-loop-ceiling.md` | B0056 |
 | D0010 | ready-for-separate-task | `tasks/todo/preserve-openai-error-rendering-at-ai-connect-retry-ceiling.md` | B0056 |
 | D0011 | ready-after-campaign-freeze | `tasks/todo/add-preflight-policy-hot-reload-integration-coverage.md` | B0065 |

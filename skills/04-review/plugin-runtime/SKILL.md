@@ -23,6 +23,8 @@ before applying a decision to current code.
 
 ## Regression guards
 
+- [ExtensionRef tokenized plugin-log contract](regression-guards/extension-ref-tokenized-plugin-log-contract.md)
+
 - [Request-template policies, bounds, and Secret provenance](regression-guards/request-template-policy-unification.md)
 
 - [Borrowed plugin header access](regression-guards/borrowed-plugin-header-access.md)
