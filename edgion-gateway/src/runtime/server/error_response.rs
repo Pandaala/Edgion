@@ -249,10 +249,12 @@ async fn send_html_error(
 
     let mut resp = ResponseHeader::build(status, None)?;
     server_header_opts.apply_to_response(&mut resp);
+    ctx.drain_pending_response_header_ops(&mut resp);
+    ctx.request_info.trace_id.reconcile_response(&mut resp);
+    resp.remove_header(&http::header::CONTENT_LENGTH);
+    resp.remove_header(&http::header::TRANSFER_ENCODING);
     resp.insert_header("Content-Type", "text/html")
         .expect("static ASCII header literal, cannot fail");
-
-    ctx.request_info.trace_id.reconcile_response(&mut resp);
     let resp_box = Box::new(resp);
     session.write_response_header(resp_box, false).await?;
     session
@@ -467,14 +469,35 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn request_id_html_error_ignores_stale_queued_framing() {
+    async fn html_error_drains_queued_ops_then_reasserts_invariants() {
         let (mut session, mut client) = live_downstream_session().await;
         let mut ctx = EdgionHttpContext::default();
         ctx.request_info.trace_id.initialize(&session.req_header().headers);
-        ctx.queue_pending_response_header_op(PendingHeaderOp::Set {
-            name: "content-length".into(),
-            value: http::HeaderValue::from_static("0"),
-        });
+        let canonical_trace_id = ctx.request_info.trace_id.standard_trace_id().unwrap().to_owned();
+        for op in [
+            PendingHeaderOp::Append {
+                name: "x-html-error-test".into(),
+                value: http::HeaderValue::from_static("allowed"),
+            },
+            PendingHeaderOp::Set {
+                name: "x-trace-id".into(),
+                value: http::HeaderValue::from_static("queued-stale"),
+            },
+            PendingHeaderOp::Set {
+                name: "content-type".into(),
+                value: http::HeaderValue::from_static("application/json"),
+            },
+            PendingHeaderOp::Set {
+                name: "content-length".into(),
+                value: http::HeaderValue::from_static("0"),
+            },
+            PendingHeaderOp::Set {
+                name: "transfer-encoding".into(),
+                value: http::HeaderValue::from_static("chunked"),
+            },
+        ] {
+            ctx.queue_pending_response_header_op(op);
+        }
         send_html_error(
             &mut session,
             &mut ctx,
@@ -484,14 +507,33 @@ mod tests {
         )
         .await
         .unwrap();
-        assert!(session.response_written().unwrap().headers.contains_key("x-trace-id"));
+
+        let written = session.response_written().expect("HTML response header");
+        assert_eq!(written.status.as_u16(), 400);
+        assert_eq!(written.headers.get("x-html-error-test").unwrap(), "allowed");
+        assert_eq!(written.headers.get_all("x-html-error-test").iter().count(), 1);
+        assert_eq!(
+            written.headers.get("x-trace-id").unwrap().to_str().unwrap(),
+            canonical_trace_id
+        );
+        assert_eq!(written.headers.get("content-type").unwrap(), "text/html");
+        assert!(written.headers.get("content-length").is_none());
+        assert!(written.headers.get("transfer-encoding").is_none());
+        assert!(!ctx.has_pending_response_header_ops());
+        assert!(ctx.pending_response_header_ops().is_empty());
+
         drop(session);
         let mut wire = Vec::new();
         timeout(Duration::from_secs(2), client.read_to_end(&mut wire))
             .await
             .unwrap()
             .unwrap();
-        assert!(String::from_utf8(wire).unwrap().contains("expected-error-body"));
+        let body_start = wire
+            .windows(4)
+            .position(|bytes| bytes == b"\r\n\r\n")
+            .expect("response header terminator")
+            + 4;
+        assert_eq!(&wire[body_start..], b"expected-error-body");
     }
 
     async fn live_grpc_web_session() -> (Session, tokio::io::DuplexStream) {

@@ -2036,7 +2036,7 @@ pub enum MirrorState {
 /// and drained destructively (`drain_pending_response_header_ops`) when building
 /// a response-phase local reply (`build_response_local_reply`) and at
 /// request-stage termination points that build their own response (`ErrResponse`,
-/// gRPC errors).
+/// gRPC errors, framework HTML errors).
 #[derive(Debug, Clone)]
 pub enum PendingHeaderOp {
     Set { name: String, value: http::HeaderValue },
@@ -3526,7 +3526,8 @@ impl EdgionHttpContext {
     /// Drain queued response-header ops onto the given real `ResponseHeader`,
     /// preserving each op's original set/append/conditional/remove semantics. Called
     /// from drain points: upstream-response stage and request-stage termination
-    /// paths that build their own response (ErrResponse, gRPC errors).
+    /// paths that build their own response (ErrResponse, gRPC errors, framework
+    /// HTML errors).
     pub fn drain_pending_response_header_ops(&mut self, response_header: &mut ResponseHeader) {
         let Some(state) = self.plugin_aux_mut() else {
             return;
