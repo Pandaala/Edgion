@@ -107,6 +107,7 @@ impl Fixture {
             listener_name: "tls".into(),
             hostnames: vec![HOST.to_string()],
         }]);
+        route.spec.resolved_status_controller = Some("edgion.io/gateway-controller".into());
         let routes = GlobalTlsRouteManagers::new();
         routes.full_set(&HashMap::from([("hello-wire/route".into(), Arc::new(route))]));
         let config: EdgionGatewayConfig = serde_json::from_value(json!({
