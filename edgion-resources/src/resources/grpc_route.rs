@@ -1011,6 +1011,23 @@ mod tests {
     }
 
     #[test]
+    fn grpc_route_retry_accepts_the_i32_domain_ceiling() {
+        let mut route = route_json(serde_json::json!({
+            "rules": [{"retry": {"attempts": i32::MAX}}]
+        }));
+
+        route.parse_retry();
+
+        assert_eq!(
+            route.spec.rules.as_ref().unwrap()[0]
+                .parsed_retry
+                .as_ref()
+                .and_then(|retry| retry.attempts),
+            Some(i32::MAX as u32)
+        );
+    }
+
+    #[test]
     fn test_resolved_rules_annotation_copy_reaches_resolved_rules() {
         let mut route: GRPCRoute = serde_json::from_value(serde_json::json!({
             "apiVersion": "gateway.networking.k8s.io/v1",

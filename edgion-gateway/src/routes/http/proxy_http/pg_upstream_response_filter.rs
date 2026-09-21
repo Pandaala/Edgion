@@ -272,8 +272,8 @@ pub fn upstream_response_filter(
             if let Some(parsed_retry) = route_unit.rule.parsed_retry.as_ref() {
                 if let Some(codes) = parsed_retry.codes.as_ref() {
                     if codes.contains(&status_code) {
-                        // Determine max_retries: rule.retry.attempts > global
-                        let max_retries = parsed_retry.attempts.unwrap_or(ctx.egc.max_retries);
+                        // Determine retry attempts: rule.retry.attempts > global
+                        let retry_attempts = parsed_retry.attempts.unwrap_or(ctx.egc.retry_attempts);
 
                         // Check request timeout. Either the route-level
                         // `request_timeout` or a client-supplied `grpc-timeout`
@@ -288,9 +288,12 @@ pub fn upstream_response_filter(
                         let deadline_exceeded = request_timeout_exceeded || ctx.grpc_deadline_exceeded();
 
                         let buffer_ok = session.request_relay_retry_state().can_start_next_attempt();
-                        if ctx.try_cnt <= max_retries && !deadline_exceeded && buffer_ok {
+                        if super::retry_budget_allows_next_attempt(ctx.try_cnt, retry_attempts)
+                            && !deadline_exceeded
+                            && buffer_ok
+                        {
                             // Retry budget (retryConstraint): composes AFTER the
-                            // maxRetries/deadline/buffer checks above (D3). This is the
+                            // attempts/deadline/buffer checks above (D3). This is the
                             // point where a status-code retry is DECIDED, so the budget
                             // is consulted here. On refusal, `retry_on_status` is left
                             // false (making pg_error_while_proxy Case 1 a no-op so no

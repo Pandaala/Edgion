@@ -216,9 +216,9 @@ pub fn error_while_proxy(
     // relayed 100/102/103 headers still permit a later final response, while a
     // 101 upgrade or ordinary final header closes retry.
     if is_backend_request_timeout_retry_candidate(&e, ctx.peer_timeout_source, ctx.retry_configured(), session) {
-        let max_retries = ctx.retry_attempts().unwrap_or(ctx.egc.max_retries);
+        let retry_attempts = ctx.retry_attempts().unwrap_or(ctx.egc.retry_attempts);
         let deadline_exceeded = ctx.request_timeout_exceeded() || ctx.grpc_deadline_exceeded();
-        if buffer_ok && ctx.try_cnt <= max_retries && !deadline_exceeded {
+        if buffer_ok && super::retry_budget_allows_next_attempt(ctx.try_cnt, retry_attempts) && !deadline_exceeded {
             // Stamp the canceled attempt's per-upstream log entry so it is
             // self-describing (mirrors pg_fail_to_connect): without this the
             // entry shows neither status nor error and operators must infer
@@ -232,7 +232,7 @@ pub fn error_while_proxy(
                         .as_millis() as u64,
                 );
             }
-            // Retry budget (retryConstraint): composes AFTER the maxRetries/
+            // Retry budget (retryConstraint): composes AFTER the attempts/
             // deadline/buffer checks of this Case 1.5 (D3) — both gates must pass.
             // On refusal the retry flag is NOT set; instead the client gets a
             // deterministic 503 by swapping the error's ErrorType (pg_fail_to_proxy
@@ -254,7 +254,7 @@ pub fn error_while_proxy(
     }
 
     // Case 2: connection reuse retry (Pingora built-in: stale keepalive connection)
-    let max_retries = ctx.retry_attempts().unwrap_or(ctx.egc.max_retries);
+    let retry_attempts = ctx.retry_attempts().unwrap_or(ctx.egc.retry_attempts);
 
     // Either route `request_timeout` or client `grpc-timeout` having
     // expired disqualifies further retries.
@@ -271,7 +271,11 @@ pub fn error_while_proxy(
     // request bytes upstream and is therefore always safe to retry.
     let method_retry_ok = session.req_header().method.is_idempotent() || ctx.retry_allow_non_idempotent();
 
-    let can_retry = client_reused && buffer_ok && method_retry_ok && ctx.try_cnt <= max_retries && !deadline_exceeded;
+    let can_retry = client_reused
+        && buffer_ok
+        && method_retry_ok
+        && super::retry_budget_allows_next_attempt(ctx.try_cnt, retry_attempts)
+        && !deadline_exceeded;
 
     // Capture whether the retry decision is ours to make: errors that arrive
     // already Decided(true) (e.g. h2 GOAWAY / REFUSED_STREAM decided inside

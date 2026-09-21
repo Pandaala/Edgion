@@ -191,11 +191,11 @@ pub fn fail_to_connect(
         return e;
     }
 
-    // Determine max_retries: rule.retry.attempts > global (HTTP or gRPC route)
-    let max_retries = ctx.retry_attempts().unwrap_or(ctx.egc.max_retries);
+    // Determine retry attempts: rule.retry.attempts > global (HTTP or gRPC route)
+    let retry_attempts = ctx.retry_attempts().unwrap_or(ctx.egc.retry_attempts);
 
-    if ctx.try_cnt <= max_retries {
-        // Retry budget (retryConstraint): composes AFTER the maxRetries/deadline
+    if super::retry_budget_allows_next_attempt(ctx.try_cnt, retry_attempts) {
+        // Retry budget (retryConstraint): composes AFTER the attempts/deadline
         // checks above (D3) — both gates must pass. On refusal the retry flag is
         // NOT set; instead the client gets a deterministic 503, delivered by
         // swapping the error's ErrorType (pg_fail_to_proxy renders the status from

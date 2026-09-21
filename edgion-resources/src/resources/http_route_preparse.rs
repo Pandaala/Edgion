@@ -503,6 +503,27 @@ mod tests {
         );
     }
 
+    #[test]
+    fn http_route_retry_accepts_the_i32_domain_ceiling() {
+        let mut route: HTTPRoute = serde_json::from_value(serde_json::json!({
+            "apiVersion": "gateway.networking.k8s.io/v1",
+            "kind": "HTTPRoute",
+            "metadata": {"name": "retry-max", "namespace": "default"},
+            "spec": {"rules": [{"retry": {"attempts": i32::MAX}}]}
+        }))
+        .unwrap();
+
+        route.parse_retry();
+
+        assert_eq!(
+            route.spec.rules.as_ref().unwrap()[0]
+                .parsed_retry
+                .as_ref()
+                .and_then(|retry| retry.attempts),
+            Some(i32::MAX as u32)
+        );
+    }
+
     // =========================================================================
     // forward-raw-path annotation parsing tests
     // =========================================================================

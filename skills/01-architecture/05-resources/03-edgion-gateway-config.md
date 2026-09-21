@@ -19,7 +19,8 @@ EdgionGatewayConfig is a cluster-scoped Edgion-extension resource used to config
 
 ### parse
 
-`preparse` rejects unsupported outbound TLS SAN pinning and validates that DNS resolver
+`preparse` rejects unsupported outbound TLS SAN pinning, validates
+`spec.retry.attempts` against the shared route domain, and validates that DNS resolver
 `linkSysRef` and inline servers are mutually exclusive. It also validates
 `spec.pluginPolicy` with the shared pure compiler; invalid names, duplicate
 entries, action/status combinations and out-of-range statuses surface as
@@ -34,8 +35,8 @@ existing unknown/not-rejected behavior; this is not proof of plugin availability
 Plugin dependency registration stays on EGC, preserving plugin → EGC → class
 requeues. See the [shared status guard](../../04-review/status/regression-guards/shared-config-status-deployment-independence.md).
 
-`parse` checks removed/deprecated fields, clears prior Secret registrations, resolves the
-cluster-wide `outboundTls.validation.caCertificateRefs` through runtime material stores with
+`parse` clears prior Secret registrations and resolves the cluster-wide
+`outboundTls.validation.caCertificateRefs` through runtime material stores with
 ReferenceGrant enforcement, and embeds `resolved_ca_certificates` for conf_sync. Because the owner
 is cluster-scoped, referenced material must carry an explicit namespace.
 

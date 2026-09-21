@@ -11,8 +11,13 @@ use kube::CustomResource;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+/// Largest retry budget shared by Gateway API routes and the Gateway-wide
+/// default. The public route fields are signed 32-bit integers, so this keeps
+/// every configuration source in the same non-negative domain.
+pub const MAX_RETRY_ATTEMPTS: u32 = i32::MAX as u32;
+
 /// EdgionGatewayConfig is the configuration for a GatewayClass
-#[derive(CustomResource, Deserialize, Serialize, Clone, Debug, JsonSchema)]
+#[derive(CustomResource, Deserialize, Serialize, Clone, Debug, Default, JsonSchema)]
 #[kube(
     group = "edgion.io",
     version = "v1alpha1",
@@ -38,9 +43,9 @@ pub struct EdgionGatewayConfigSpec {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub http_timeout: Option<HttpTimeout>,
 
-    /// Maximum number of retries for upstream connections (default: 3)
-    #[serde(default = "default_max_retries")]
-    pub max_retries: u32,
+    /// GatewayClass-wide retry defaults used when a route omits its own policy.
+    #[serde(default)]
+    pub retry: RetryConfig,
 
     /// Real IP extraction configuration
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -138,6 +143,24 @@ pub struct ForwardedHeadersConfig {
         length(max = crate::gwapi_types::HEADER_NAME_MAX_LEN)
     )]
     pub remote_ip_header: String,
+}
+
+/// GatewayClass-wide retry policy.
+#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct RetryConfig {
+    /// Maximum retries after the initial upstream attempt.
+    #[serde(default = "default_retry_attempts")]
+    #[schemars(range(max = 2147483647))]
+    pub attempts: u32,
+}
+
+impl Default for RetryConfig {
+    fn default() -> Self {
+        Self {
+            attempts: default_retry_attempts(),
+        }
+    }
 }
 
 fn default_remote_ip_header() -> String {
@@ -364,12 +387,6 @@ pub struct BackendTimeout {
     #[serde(default = "default_backend_idle_timeout")]
     #[schemars(pattern(crate::duration::GEP2257_PATTERN))]
     pub default_idle_timeout: String,
-
-    /// **DEPRECATED**: Use top-level `maxRetries` in EdgionGatewayConfigSpec instead.
-    /// This field is kept temporarily for backward compatibility detection.
-    /// If present in config, a warning will be logged during config loading.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub default_max_retries: Option<u32>,
 }
 
 // ============================================
@@ -516,32 +533,8 @@ fn default_backend_idle_timeout() -> String {
 }
 
 // Global configuration defaults
-fn default_max_retries() -> u32 {
-    3
-}
-
-impl Default for EdgionGatewayConfigSpec {
-    fn default() -> Self {
-        Self {
-            current_status: None,
-            server: None,
-            http_timeout: None,
-            max_retries: default_max_retries(),
-            real_ip: None,
-            forwarded_headers: ForwardedHeadersConfig::default(),
-            security_protect: None,
-            request_body: RequestBodyConfig::default(),
-            plugin_policy: None,
-            global_plugins_ref: None,
-            access_log_extern: None,
-            preflight_policy: None,
-            link_sys: None,
-            tcp_timeout: None,
-            load_balancing: None,
-            outbound_tls: None,
-            dns_resolver: None,
-        }
-    }
+fn default_retry_attempts() -> u32 {
+    2
 }
 
 impl Default for ClientTimeout {
@@ -560,7 +553,6 @@ impl Default for BackendTimeout {
             default_connect_timeout: default_backend_connect_timeout(),
             default_request_timeout: default_backend_request_timeout(),
             default_idle_timeout: default_backend_idle_timeout(),
-            default_max_retries: None,
         }
     }
 }
@@ -835,6 +827,19 @@ impl UnmaskedKeys {
 }
 
 impl EdgionGatewayConfigSpec {
+    /// Validate the Gateway-wide retry budget against the route field's
+    /// representable domain.
+    pub fn validate_retry(&self) -> Vec<String> {
+        if self.retry.attempts > MAX_RETRY_ATTEMPTS {
+            vec![format!(
+                "retry.attempts must be between 0 and {MAX_RETRY_ATTEMPTS}, got {}",
+                self.retry.attempts
+            )]
+        } else {
+            Vec::new()
+        }
+    }
+
     /// Validate plugin policy with the same pure compiler used by the Gateway.
     pub fn validate_plugin_policy(&self) -> Vec<String> {
         self.plugin_policy
@@ -915,25 +920,6 @@ impl EdgionGatewayConfigSpec {
             }
         }
         errors
-    }
-
-    /// Check for deprecated fields and log warnings.
-    pub fn check_deprecated_fields(&self) {
-        if let Some(ref http_timeout) = self.http_timeout {
-            if let Some(old_retries) = http_timeout.backend.default_max_retries {
-                tracing::warn!(
-                    deprecated_field = "httpTimeout.backend.defaultMaxRetries",
-                    old_value = old_retries,
-                    current_field = "maxRetries",
-                    current_value = self.max_retries,
-                    "EdgionGatewayConfig: 'httpTimeout.backend.defaultMaxRetries' is deprecated and will be removed. \
-                     Please migrate to top-level 'maxRetries'. The deprecated value ({}) is ignored; \
-                     current effective value is maxRetries={}.",
-                    old_retries,
-                    self.max_retries,
-                );
-            }
-        }
     }
 }
 
@@ -1338,40 +1324,41 @@ spec:
     }
 
     #[test]
-    fn test_deprecated_default_max_retries_accepted() {
+    fn retry_defaults_to_two_attempts() {
         let yaml = r#"
 apiVersion: example.com/v1alpha1
 kind: EdgionGatewayConfig
 metadata:
-  name: test-deprecated
-spec:
-  httpTimeout:
-    backend:
-      defaultConnectTimeout: 5s
-      defaultMaxRetries: 5
-  maxRetries: 7
+  name: test-default
+spec: {}
 "#;
-        let config: EdgionGatewayConfig = serde_yaml::from_str(yaml).expect("Should accept deprecated field");
-        assert_eq!(config.spec.max_retries, 7);
-        assert_eq!(
-            config.spec.http_timeout.as_ref().unwrap().backend.default_max_retries,
-            Some(5)
-        );
+        let config: EdgionGatewayConfig = serde_yaml::from_str(yaml).expect("Should parse defaults");
+        assert_eq!(config.spec.retry.attempts, 2);
     }
 
     #[test]
-    fn test_no_deprecated_field_is_none() {
+    fn retry_attempts_parse_and_validate_at_domain_boundary() {
         let yaml = r#"
 apiVersion: example.com/v1alpha1
 kind: EdgionGatewayConfig
 metadata:
-  name: test-new
+  name: test-retry
 spec:
-  maxRetries: 10
+  retry:
+    attempts: 10
 "#;
         let config: EdgionGatewayConfig = serde_yaml::from_str(yaml).expect("Should parse");
-        assert_eq!(config.spec.max_retries, 10);
-        assert!(config.spec.http_timeout.is_none());
+        assert_eq!(config.spec.retry.attempts, 10);
+        assert!(config.spec.validate_retry().is_empty());
+
+        let mut spec = EdgionGatewayConfigSpec::default();
+        spec.retry.attempts = MAX_RETRY_ATTEMPTS;
+        assert!(spec.validate_retry().is_empty());
+
+        spec.retry.attempts = MAX_RETRY_ATTEMPTS + 1;
+        let errors = spec.validate_retry();
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].contains("retry.attempts"));
     }
 }
 

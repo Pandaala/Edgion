@@ -50,7 +50,8 @@ spec:
       defaultRequestTimeout: "60s"
       defaultIdleTimeout: "300s"
 
-  maxRetries: 3
+  retry:
+    attempts: 2
 
   realIp:
     trustedIps:
@@ -186,13 +187,15 @@ spec:
     connectTimeout: 10s
 ```
 
-### spec.maxRetries
+### spec.retry
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `maxRetries` | `Integer` | `3` | Maximum retry attempts on upstream connection failure |
+| `attempts` | `Integer` | `2` | Maximum retries after the initial upstream attempt. `0` disables retries; the supported range is `0..=2147483647` |
 
-> The older `httpTimeout.backend.defaultMaxRetries` field is **deprecated**. If present, its value is ignored and a warning is logged at config load; use the top-level `maxRetries` instead.
+The initial upstream request does not consume this retry budget, so the maximum
+number of upstream requests is `1 + attempts`. A route-level
+`rules[].retry.attempts` value overrides this GatewayClass-wide default.
 
 ### spec.realIp
 

@@ -64,7 +64,7 @@ pub struct ResolvedGatewayConfig {
     pub fallback_sni: Option<String>,
     pub tls_proxy_log_record: bool,
     pub parsed_timeouts: ParsedTimeouts,
-    pub max_retries: u32,
+    pub retry_attempts: u32,
     pub real_ip_extractor: Option<Arc<RealIpExtractor>>,
     pub enable_compression: bool,
     pub downstream_keepalive_request_limit: u32,
@@ -128,6 +128,18 @@ impl ResolvedGatewayConfig {
             })
         };
         let security = config.spec.security_protect.as_ref();
+        let retry_attempts = if config.spec.validate_retry().is_empty() {
+            config.spec.retry.attempts
+        } else {
+            let fallback = edgion_resources::resources::edgion_gateway_config::RetryConfig::default().attempts;
+            tracing::error!(
+                config = %config.name_any(),
+                configured_attempts = config.spec.retry.attempts,
+                fallback_attempts = fallback,
+                "Invalid retry configuration received by the gateway, using defaults"
+            );
+            fallback
+        };
         Self {
             request_body: ResolvedRequestBodyConfig::resolve(&config.spec.request_body),
             remote_ip_header,
@@ -144,7 +156,7 @@ impl ResolvedGatewayConfig {
             fallback_sni: security.and_then(|s| s.fallback_sni.clone()),
             tls_proxy_log_record: security.is_none_or(|s| s.tls_proxy_log_record),
             parsed_timeouts: ParsedTimeouts::from_config(config),
-            max_retries: config.spec.max_retries,
+            retry_attempts,
             real_ip_extractor,
             enable_compression: config.spec.server.as_ref().is_some_and(|s| s.enable_compression),
             downstream_keepalive_request_limit: config
@@ -171,8 +183,9 @@ impl Default for ResolvedGatewayConfig {
             fallback_sni: None,
             tls_proxy_log_record: true,
             parsed_timeouts: ParsedTimeouts::default(),
-            max_retries: edgion_resources::resources::edgion_gateway_config::EdgionGatewayConfigSpec::default()
-                .max_retries,
+            retry_attempts: edgion_resources::resources::edgion_gateway_config::EdgionGatewayConfigSpec::default()
+                .retry
+                .attempts,
             real_ip_extractor: None,
             enable_compression: false,
             downstream_keepalive_request_limit: 1000,
@@ -660,7 +673,7 @@ mod tests {
                 current_status: None,
                 server: None,
                 http_timeout: None,
-                max_retries: 3,
+                retry: Default::default(),
                 real_ip: None,
                 forwarded_headers: Default::default(),
                 security_protect: None,
@@ -705,21 +718,21 @@ mod tests {
         assert!(Arc::ptr_eq(&bound.load(), &default_gateway_config()));
         let config = |retries| {
             let mut config = make_config("default");
-            config.spec.max_retries = retries;
+            config.spec.retry.attempts = retries;
             Arc::new(config)
         };
         handler.full_set(&HashMap::from([("default".into(), config(17))]));
         let pinned = bound.load();
         let old_runtime = Arc::downgrade(&pinned);
-        assert_eq!(pinned.max_retries, 17);
+        assert_eq!(pinned.retry_attempts, 17);
         assert!(Arc::ptr_eq(&unbound.load(), &default_gateway_config()));
         handler.partial_update(
             HashMap::new(),
             HashMap::from([("default".into(), config(23))]),
             HashSet::new(),
         );
-        assert_eq!(bound.load().max_retries, 23);
-        assert_eq!(pinned.max_retries, 17);
+        assert_eq!(bound.load().retry_attempts, 23);
+        assert_eq!(pinned.retry_attempts, 17);
         handler.partial_update(HashMap::new(), HashMap::new(), HashSet::from(["default".into()]));
         assert!(Arc::ptr_eq(&bound.load(), &default_gateway_config()));
         assert!(Arc::ptr_eq(&bound, &bind_gateway_config(Some("default"))));
@@ -728,11 +741,11 @@ mod tests {
             HashMap::new(),
             HashSet::new(),
         );
-        assert_eq!(bound.load().max_retries, 29);
+        assert_eq!(bound.load().retry_attempts, 29);
         handler.full_set(&HashMap::new());
         assert!(Arc::ptr_eq(&bound.load(), &default_gateway_config()));
         handler.full_set(&HashMap::from([("default".into(), config(31))]));
-        assert_eq!(bound.load().max_retries, 31);
+        assert_eq!(bound.load().retry_attempts, 31);
         drop(pinned);
         assert!(old_runtime.upgrade().is_none());
 
@@ -764,14 +777,14 @@ mod tests {
             });
             let writer = std::thread::spawn(move || {
                 let mut config = make_config("concurrent-binding");
-                config.spec.max_retries = retries;
+                config.spec.retry.attempts = retries;
                 barrier.wait();
                 EdgionGatewayConfigHandler::new()
                     .full_set(&HashMap::from([("concurrent-binding".into(), Arc::new(config))]));
             });
             let bound = binder.join().unwrap();
             writer.join().unwrap();
-            assert_eq!(bound.load().max_retries, retries);
+            assert_eq!(bound.load().retry_attempts, retries);
             assert!(Arc::ptr_eq(&bound, &bind_gateway_config(Some("concurrent-binding"))));
         }
         clear_store();
@@ -827,13 +840,13 @@ mod tests {
         handler.partial_update(add, HashMap::new(), std::collections::HashSet::new());
 
         let mut updated = make_config("foo");
-        updated.spec.max_retries = 99;
+        updated.spec.retry.attempts = 99;
         let mut upd = HashMap::new();
         upd.insert("foo".to_string(), Arc::new(updated));
         handler.partial_update(HashMap::new(), upd, std::collections::HashSet::new());
 
         let result = get_edgion_gateway_config_by_name("foo").expect("must exist after update");
-        assert_eq!(result.spec.max_retries, 99);
+        assert_eq!(result.spec.retry.attempts, 99);
         assert_eq!(count_edgion_gateway_configs(), 1);
     }
 
@@ -866,6 +879,23 @@ mod tests {
                 storage_operation_timeout: Duration::from_secs(3),
             }
         );
+    }
+
+    #[test]
+    fn invalid_retry_attempts_fall_back_before_request_snapshot() {
+        let _g = TEST_MUTEX.lock();
+        clear_store();
+        let handler = EdgionGatewayConfigHandler::new();
+
+        let mut invalid = make_config("foo");
+        invalid.spec.retry.attempts = edgion_resources::resources::edgion_gateway_config::MAX_RETRY_ATTEMPTS + 1;
+        handler.partial_update(
+            HashMap::from([("foo".to_string(), Arc::new(invalid))]),
+            HashMap::new(),
+            HashSet::new(),
+        );
+
+        assert_eq!(get_resolved_gateway_config(Some("foo")).retry_attempts, 2);
     }
 
     #[test]
@@ -1022,7 +1052,7 @@ mod tests {
         let handler = EdgionGatewayConfigHandler;
         let mut initial = make_config("runtime-policy");
         initial.spec = serde_json::from_value(serde_json::json!({
-            "maxRetries": 7,
+            "retry": {"attempts": 7},
             "server": {"enableCompression": true, "downstreamKeepaliveRequestLimit": 19},
             "securityProtect": {
                 "xForwardedForLimit": 31, "requireSniHostMatch": false,
@@ -1043,7 +1073,7 @@ mod tests {
         assert_eq!(old.fallback_sni.as_deref(), Some("old.example.com"));
         assert!(!old.tls_proxy_log_record);
         assert!(!old.reject_duplicate_host);
-        assert_eq!(old.max_retries, 7);
+        assert_eq!(old.retry_attempts, 7);
         assert!(old.enable_compression);
         assert_eq!(old.downstream_keepalive_request_limit, 19);
         assert_eq!(old.parsed_timeouts.client.read_timeout, Duration::from_secs(3));

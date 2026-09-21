@@ -29,7 +29,7 @@ rules:
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `attempts` | Integer | `EdgionGatewayConfig.spec.maxRetries` (default `3`) | Maximum retry attempts. `0` disables retry. When omitted, the global default applies |
+| `attempts` | Integer | `EdgionGatewayConfig.spec.retry.attempts` (default `2`) | Maximum retries after the initial attempt. `0` disables retry. When omitted, the global default applies |
 | `backoff` | Duration | none | Minimum wait between retries; used as the exponential backoff base. Example: `"1s"`, `"100ms"`. When omitted, retries are issued with no delay |
 | `codes` | Array\<Integer\> | none | HTTP status codes (400–599) that trigger a retry, matching the Gateway API HTTPRouteRetry range. Out-of-range codes are ignored. When omitted, only connection errors are retried |
 
@@ -47,7 +47,10 @@ rules:
 
 ### Attempts budget
 
-The effective budget is `rule.retry.attempts` when set, otherwise the global `EdgionGatewayConfig.spec.maxRetries` (default `3`). Setting `attempts: 0` disables retry for the rule.
+The effective budget is `rule.retry.attempts` when set, otherwise the global
+`EdgionGatewayConfig.spec.retry.attempts` (default `2`). `attempts` counts only
+retries after the initial request: `attempts: 2` therefore allows at most three
+upstream requests. Setting `attempts: 0` disables retries for the rule.
 
 ### Backoff
 
@@ -99,7 +102,7 @@ Notes:
   and is also treated as the per-try bound — so **any** rule with a retry
   policy gets timeout-retry behavior. Always pair a retry policy with
   `timeouts.request`: without it there is no end-to-end cap and the worst case
-  is `(1 + attempts) × backendRequest` (4 × 60s with all defaults).
+  is `(1 + attempts) × backendRequest` (3 × 60s with all defaults).
 - There is no "retry on status codes but not on timeouts" mode: configuring
   any retry policy (even `codes` only) opts the rule into timeout-retry, per
   GEP-1731, which classes per-try timeouts with connection errors.

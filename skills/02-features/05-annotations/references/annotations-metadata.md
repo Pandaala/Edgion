@@ -105,7 +105,7 @@ has been removed.
 
 Notes:
 
-- Retry configuration uses the standard Gateway API `spec.rules[*].retry` field (see HTTPRoute/GRPCRoute resource docs). Runtime precedence: `rule.retry.attempts > EdgionGatewayConfig.spec.maxRetries`.
+- Retry configuration uses the standard Gateway API `spec.rules[*].retry` field (see HTTPRoute/GRPCRoute resource docs). Runtime precedence: `rule.retry.attempts > EdgionGatewayConfig.spec.retry.attempts`.
 - `edgion.io/hostname-resolution` is currently injected on `HTTPRoute` and `GRPCRoute`.
 
 ### `edgion.io/retry-non-idempotent`

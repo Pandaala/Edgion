@@ -78,7 +78,7 @@ spec:
 调优要点：
 
 - 若不希望单个客户端请求就能触发逐出，请把 `consecutiveErrors` / `consecutiveGatewayErrors` 设置为大于 `attempts + 1`。
-- `consecutiveLocalOriginFailures` 需要同样处理，且对完全没有配置 `retry` 的规则同样适用：连接失败会按 `EdgionGatewayConfig.spec.maxRetries`（默认 `3`）重试，因此默认情况下一个客户端请求最多可贡献 4 次本地源失败。
+- `consecutiveLocalOriginFailures` 需要同样处理，且对完全没有配置 `retry` 的规则同样适用：连接失败会按 `EdgionGatewayConfig.spec.retry.attempts`（默认 `2`）重试，因此默认情况下一个客户端请求最多可贡献 3 次本地源失败。
 - `maxEjectionPercent` 无法保护单端点 Service——该上限的下界为 1 个端点，因此即便使用默认的 `maxEjectionPercent: 50`，Service 的唯一端点也始终可能被逐出。逐出期间网关没有可选的端点，会在逐出到期前返回本地 `503`。
 
 ## 调优建议

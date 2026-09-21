@@ -2,7 +2,7 @@
 
 ## Meta
 
-- Status: ready-for-separate-task
+- Status: resolved
 - Severity: medium
 - Discovered in: B0056, `edgion-gateway/src/routes/http/proxy_http/pg_fail_to_connect.rs`
 - Category: retry configuration contract
@@ -23,6 +23,6 @@ Gateway config resolution, route policy, listener/server construction, user
 documentation, and the locked Pingora loop. It is not safe to clamp one callback
 or silently change accepted configuration inside B0056.
 
-## Canonical task
+## Resolution
 
-- `tasks/todo/align-route-retry-limits-with-pingora-loop-ceiling.md`
+- `skills/04-review/routing/regression-guards/retry-budget-owns-pingora-loop-capacity.md`

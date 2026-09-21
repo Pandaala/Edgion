@@ -8,11 +8,16 @@ use crate::runtime::server::proxy_protocol_policy::{
 };
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
+use edgion_resources::resources::edgion_gateway_config::MAX_RETRY_ATTEMPTS;
 use pingora_core::server::configuration::ServerConf;
 use pingora_core::server::{RunArgs, Server};
 #[cfg(unix)]
 use pingora_core::server::{ShutdownSignal, ShutdownSignalWatch, UnixShutdownSignalWatch};
 use std::sync::Arc;
+
+/// Pingora counts the initial upstream request inside `ServerConf.max_retries`,
+/// while Edgion's public `attempts` fields count retries after that request.
+const PINGORA_MAX_UPSTREAM_ATTEMPTS: usize = MAX_RETRY_ATTEMPTS as usize + 1;
 
 /// Create Pingora ServerConf from local YAML configuration
 fn create_server_conf(config: &EdgionGatewayConfig) -> ServerConf {
@@ -40,6 +45,7 @@ fn create_server_conf(config: &EdgionGatewayConfig) -> ServerConf {
         graceful_shutdown_timeout_seconds,
         upstream_keepalive_pool_size,
         error_log,
+        max_retries: PINGORA_MAX_UPSTREAM_ATTEMPTS,
         ..Default::default()
     };
 
@@ -76,6 +82,15 @@ mod server_conf_tests {
         config.server.threads = Some(7);
 
         assert_eq!(create_server_conf(&config).threads, 7);
+    }
+
+    #[test]
+    fn pingora_loop_capacity_includes_initial_attempt() {
+        let conf = create_server_conf(&EdgionGatewayConfig::default());
+
+        assert_eq!(conf.max_retries, MAX_RETRY_ATTEMPTS as usize + 1);
+        assert!(conf.max_retries > crate::ai::attempt::MAX_AI_BACKENDS);
+        assert!(conf.max_retries > usize::from(crate::ai::attempt::MAX_AI_DISPATCH_ATTEMPTS));
     }
 }
 

@@ -67,8 +67,9 @@ spec:
     idleTimeout: "1h"
     connectTimeout: "10s"
 
-  # ─── Max retries ───
-  maxRetries: 3                             # uint32, max upstream connection retries
+  # ─── Retry defaults ───
+  retry:
+    attempts: 2                            # retries after the initial request; range 0..=i32::MAX
 
   # ─── Load balancing ───
   loadBalancing:

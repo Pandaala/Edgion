@@ -54,6 +54,17 @@ pub use parse_timeout::{ParsedBackendTimeout, ParsedClientTimeout, ParsedTimeout
 pub(crate) use pg_early_request_filter::apply_client_policy;
 pub use preflight_handler::PreflightHandler;
 
+/// Returns whether the configured retry budget permits another upstream attempt.
+///
+/// `completed_attempts` includes the initial request, while `retry_attempts`
+/// counts only attempts after it. This keeps the public contract at
+/// `1 + retry_attempts` total upstream requests without overflow at the route
+/// schema's `i32::MAX` ceiling.
+#[inline]
+fn retry_budget_allows_next_attempt(completed_attempts: u32, retry_attempts: u32) -> bool {
+    completed_attempts <= retry_attempts
+}
+
 /// HTTP proxy service for Gateway HTTP/HTTPS listeners.
 pub struct EdgionHttpProxy {
     pub listener_port: u16,
@@ -391,5 +402,29 @@ impl ProxyHttp for EdgionHttpProxy {
             ctx,
         )
         .await
+    }
+}
+
+#[cfg(test)]
+mod retry_budget_tests {
+    use super::retry_budget_allows_next_attempt;
+
+    #[test]
+    fn zero_retries_stops_after_the_initial_attempt() {
+        assert!(!retry_budget_allows_next_attempt(1, 0));
+    }
+
+    #[test]
+    fn two_retries_allow_three_total_attempts() {
+        assert!(retry_budget_allows_next_attempt(1, 2));
+        assert!(retry_budget_allows_next_attempt(2, 2));
+        assert!(!retry_budget_allows_next_attempt(3, 2));
+    }
+
+    #[test]
+    fn route_schema_maximum_does_not_overflow() {
+        let retry_attempts = i32::MAX as u32;
+        assert!(retry_budget_allows_next_attempt(retry_attempts, retry_attempts));
+        assert!(!retry_budget_allows_next_attempt(retry_attempts + 1, retry_attempts));
     }
 }

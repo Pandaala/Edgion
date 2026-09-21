@@ -52,6 +52,7 @@ impl ProcessorHandler<EdgionGatewayConfig> for EdgionGatewayConfigHandler {
         errors.extend(egc.spec.validate_dns_resolver());
         errors.extend(egc.spec.validate_link_sys());
         errors.extend(egc.spec.validate_request_body());
+        errors.extend(egc.spec.validate_retry());
         errors.extend(egc.spec.validate_forwarded_headers());
         errors.extend(egc.spec.validate_real_ip());
         errors.extend(egc.spec.validate_preflight_policy());
@@ -62,8 +63,6 @@ impl ProcessorHandler<EdgionGatewayConfig> for EdgionGatewayConfigHandler {
     }
 
     async fn parse(&self, mut egc: EdgionGatewayConfig, ctx: &HandlerContext) -> ProcessResult<EdgionGatewayConfig> {
-        egc.spec.check_deprecated_fields();
-
         // Resolve the cluster-wide outbound CA Secret (validation.caCertificateRefs) and
         // register the reference so a Secret change requeues this EGC. EGC is
         // cluster-scoped, so `metadata.namespace` is None; the referenced Secret
@@ -162,7 +161,7 @@ mod tests {
     use crate::conf_mgr::ControllerRuntime;
     use edgion_resources::resources::backend_tls_policy::BackendTLSPolicyCACertificateRef;
     use edgion_resources::resources::common::{OutboundTlsConfig, OutboundTlsValidation};
-    use edgion_resources::resources::edgion_gateway_config::EdgionGatewayConfigSpec;
+    use edgion_resources::resources::edgion_gateway_config::{EdgionGatewayConfigSpec, MAX_RETRY_ATTEMPTS};
     use k8s_openapi::api::core::v1::Secret;
     use k8s_openapi::ByteString;
     use std::collections::{BTreeMap, HashMap};
@@ -172,6 +171,19 @@ mod tests {
         let runtime = Arc::new(ControllerRuntime::default());
         runtime.secret_store.replace_all(secrets);
         HandlerContext::new(None, None, Default::default(), 5, 20, runtime)
+    }
+
+    #[test]
+    fn preparse_rejects_retry_attempts_above_route_domain() {
+        let ctx = make_ctx_with_secrets(HashMap::new());
+        let handler = EdgionGatewayConfigHandler::new();
+        let mut egc = EdgionGatewayConfig::new("global", EdgionGatewayConfigSpec::default());
+        assert!(handler.preparse(&mut egc, &ctx).is_empty());
+
+        egc.spec.retry.attempts = MAX_RETRY_ATTEMPTS + 1;
+        let errors = handler.preparse(&mut egc, &ctx);
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].contains("retry.attempts"));
     }
 
     #[tokio::test]

@@ -78,7 +78,7 @@ A rule with `retry.attempts: N` therefore issues up to `N + 1` upstream attempts
 Tuning implications:
 
 - If one client request should not be able to trip ejection on its own, set `consecutiveErrors` / `consecutiveGatewayErrors` above `attempts + 1`.
-- `consecutiveLocalOriginFailures` needs the same treatment, and it applies even to rules with no `retry` block: connection failures are retried against `EdgionGatewayConfig.spec.maxRetries` (default `3`), so by default one client request can contribute up to 4 local-origin failures.
+- `consecutiveLocalOriginFailures` needs the same treatment, and it applies even to rules with no `retry` block: connection failures are retried against `EdgionGatewayConfig.spec.retry.attempts` (default `2`), so by default one client request can contribute up to 3 local-origin failures.
 - `maxEjectionPercent` does not protect a single-endpoint Service — the cap is floored at one endpoint, so the only endpoint of a Service can always be ejected, even at the default `maxEjectionPercent: 50`. While it is ejected the gateway has no endpoint left to select and returns a local `503` until the ejection expires.
 
 ## Tuning

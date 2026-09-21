@@ -19,7 +19,7 @@ spec:
             type: PathPrefix
             value: /blackhole
       # No retries: a single connect attempt keeps the assertion tight to one
-      # connectTimeout window instead of (maxRetries + 1) windows.
+      # connectTimeout window instead of (retry attempts + 1) windows.
       retry:
         attempts: 0
       backendRefs:

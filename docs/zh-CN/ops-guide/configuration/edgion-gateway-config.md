@@ -50,7 +50,8 @@ spec:
       defaultRequestTimeout: "60s"
       defaultIdleTimeout: "300s"
 
-  maxRetries: 3
+  retry:
+    attempts: 2
 
   realIp:
     trustedIps:
@@ -172,11 +173,14 @@ spec:
     connectTimeout: 10s
 ```
 
-### spec.maxRetries
+### spec.retry
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `maxRetries` | `Integer` | `3` | 上游连接失败时的最大重试次数 |
+| `attempts` | `Integer` | `2` | 首次上游尝试后的最大重试次数；`0` 表示禁用重试，支持范围为 `0..=2147483647` |
+
+首次上游请求不消耗此重试预算，因此上游请求总数最多为 `1 + attempts`。
+路由级 `rules[].retry.attempts` 会覆盖此 GatewayClass 全局默认值。
 
 ### spec.realIp
 

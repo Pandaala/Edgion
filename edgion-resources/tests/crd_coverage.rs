@@ -158,9 +158,7 @@ fn crd_section(file: &str, section: &str) -> Value {
 fn gateway_config_spec_has_no_uncovered_fields() {
     let expected = serde_json::to_value(schema_for!(edgion_resources::EdgionGatewayConfigSpec)).unwrap();
     let actual = crd_section("edgion_gateway_config_crd.yaml", "spec");
-    // Deprecated, intentionally absent from the CRD (back-compat detection only).
-    let allow = ["spec.httpTimeout.backend.defaultMaxRetries"];
-    let (d1, d2) = compare_spec(&expected, &actual, &allow);
+    let (d1, d2) = compare_spec(&expected, &actual, &[]);
     assert!(
         d1.is_empty() && d2.is_empty(),
         "EdgionGatewayConfig CRD drift:\n  missing from CRD (Direction-1): {d1:?}\n  stale in CRD (Direction-2): {d2:?}\n\

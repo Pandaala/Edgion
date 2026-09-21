@@ -57,8 +57,8 @@ persistence; in the default non-strict mode `take_sp_target_or_select` consumes
 (`sp_should_repin_on_strict_retry` requires `strict`).
 
 Local-origin failures have the same shape without any `retry` block:
-`pg_fail_to_connect` falls back to `EdgionGatewayConfig.spec.maxRetries`
-(default 3), so one client request can contribute up to 4 local-origin failures
+`pg_fail_to_connect` falls back to `EdgionGatewayConfig.spec.retry.attempts`
+(default 2), so one client request can contribute up to 3 local-origin failures
 against a default `consecutiveLocalOriginFailures` of 5.
 
 `maxEjectionPercent` is not a backstop: the guard in

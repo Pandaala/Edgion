@@ -29,7 +29,7 @@ rules:
 
 | 字段 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `attempts` | Integer | `EdgionGatewayConfig.spec.maxRetries`（默认 `3`） | 最大重试次数。`0` 禁用重试。省略时使用全局默认值 |
+| `attempts` | Integer | `EdgionGatewayConfig.spec.retry.attempts`（默认 `2`） | 首次尝试后的最大重试次数。`0` 禁用重试。省略时使用全局默认值 |
 | `backoff` | Duration | 无 | 重试之间的最小等待时间；作为指数退避的基数。示例：`"1s"`、`"100ms"`。省略时重试不等待 |
 | `codes` | Array\<Integer\> | 无 | 触发重试的 HTTP 状态码（400–599），与 Gateway API HTTPRouteRetry 的取值范围一致。超出范围的状态码被忽略。省略时仅重试连接错误 |
 
@@ -44,7 +44,9 @@ rules:
 
 ### 重试次数预算
 
-有效预算为 `rule.retry.attempts`（若已设置），否则使用全局 `EdgionGatewayConfig.spec.maxRetries`（默认 `3`）。设置 `attempts: 0` 可为该规则禁用重试。
+有效预算为 `rule.retry.attempts`（若已设置），否则使用全局
+`EdgionGatewayConfig.spec.retry.attempts`（默认 `2`）。`attempts` 仅计算首次请求后的
+重试：因此 `attempts: 2` 最多允许三次上游请求。设置 `attempts: 0` 可为该规则禁用重试。
 
 ### 退避
 
@@ -85,7 +87,7 @@ rules:
 注意事项：
 
 - 由 `request` 截止时间或客户端 `grpc-timeout` 引发的超时**不会**重试——调用方已经没有时间预算了。
-- 规则未设置 `backendRequest` 时，全局默认后端超时（`EdgionGatewayConfig.defaultRequestTimeout`，默认 `60s`）生效，并且同样作为单次尝试的上限——因此**任何**配置了重试策略的规则都会获得超时重试行为。配置重试策略时请务必同时设置 `timeouts.request`：否则没有端到端上限，最坏情况为 `(1 + attempts) × backendRequest`（全默认配置下为 4 × 60s）。
+- 规则未设置 `backendRequest` 时，全局默认后端超时（`EdgionGatewayConfig.defaultRequestTimeout`，默认 `60s`）生效，并且同样作为单次尝试的上限——因此**任何**配置了重试策略的规则都会获得超时重试行为。配置重试策略时请务必同时设置 `timeouts.request`：否则没有端到端上限，最坏情况为 `(1 + attempts) × backendRequest`（全默认配置下为 3 × 60s）。
 - 不存在"只按状态码重试、超时不重试"的模式：配置任何重试策略（哪怕只配 `codes`）都会让该规则获得超时重试——这是 GEP-1731 的要求，它把单次尝试超时归入连接错误一类。
 - 只有在尚未向客户端发送最终响应时，单次尝试超时才会重试。100、102 和 103 信息响应之后仍可重试；101 Switching Protocols 是最终响应。一旦普通最终响应头已转发到下游，传输响应体过程中的超时会直接终止请求而不是重试。
 - 重试会重新执行常规负载均衡，**不会**排除刚刚超时的后端。RoundRobin 通常会轮转到其他端点，但 ConsistentHash 会确定性地再次选中**同一个**后端（哈希键相同）；在 ConsistentHash 路由上使用较紧的单次尝试超时时，请配合熔断器 annotation，让持续缓慢的端点被摘除。

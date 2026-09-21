@@ -54,6 +54,7 @@ before applying a decision to current code.
 - [Radix route candidate precedence is ranked at build time — FIXED](regression-guards/radix-candidate-precedence-rank-precomputed.md)
 - [HTTP path specificity excludes parameter identifiers and Prefix trailing slashes](regression-guards/radix-path-specificity.md)
 - [route-06 — Retry backoff minimum wait can be skipped under a tight deadline — FIXED](regression-guards/retry-backoff-minimum-wait-conformance.md)
+- [Route retry budget owns the Pingora loop capacity](regression-guards/retry-budget-owns-pingora-loop-capacity.md)
 - [Reused-connection retry replays non-idempotent bodies — FIXED (method-safety guard)](regression-guards/retry-non-idempotent-method-guard.md)
 - [Shared service backend ref predicate](regression-guards/shared-service-backend-ref-predicate.md)
 - [route-09 — SP strict mode never fail-closes — FIXED (with a documented commitment-model boundary)](regression-guards/sp-strict-mode-fail-close.md)

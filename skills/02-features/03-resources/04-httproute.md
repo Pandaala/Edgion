@@ -274,11 +274,11 @@ pages live under `docs/zh-CN/`.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `attempts` | `i32` | `EdgionGatewayConfig.spec.maxRetries` (default 3) | Max retry attempts (`0` disables retry) |
+| `attempts` | `i32` | `EdgionGatewayConfig.spec.retry.attempts` (default 2) | Max retries after the initial attempt (`0` disables retry) |
 | `backoff` | `Duration` | — | Minimum retry interval (exponential backoff base, capped at 30s) |
 | `codes` | `Vec<i32>` | — | HTTP status codes that trigger a retry (100-599) |
 
-> **Priority**: `rule.retry.attempts` > `EdgionGatewayConfig.spec.maxRetries` (global default). Connection failures and status-code retries share the same attempts counter. The `backendRequest` timeout simultaneously serves as the route-level override for Pingora `connection_timeout` / `read_timeout` / `write_timeout`.
+> **Priority**: `rule.retry.attempts` > `EdgionGatewayConfig.spec.retry.attempts` (global default). The maximum number of upstream requests is `1 + attempts`. Connection failures and status-code retries share the same attempts counter. The `backendRequest` timeout simultaneously serves as the route-level override for Pingora `connection_timeout` / `read_timeout` / `write_timeout`.
 
 > **Per-try timeout**: with a retry policy present, `timeouts.backendRequest`
 > bounds each attempt and a timed-out attempt is retried while nothing has

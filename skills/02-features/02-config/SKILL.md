@@ -35,7 +35,7 @@ description: Configuration schema reference: complete field definitions for Cont
 | Access/SSL/TCP/TLS/UDP log toggles and paths | Gateway YAML `*_log` sections |
 | Pingora worker thread count/connection pool | Gateway YAML `server` |
 | Global HTTP timeouts | EdgionGatewayConfig CRD `spec.httpTimeout` |
-| Global retry count | EdgionGatewayConfig CRD `spec.maxRetries` (top-level field; `spec.httpTimeout.backend.defaultMaxRetries` is deprecated) |
+| Global retry count | EdgionGatewayConfig CRD `spec.retry.attempts` |
 | Global real IP extraction | EdgionGatewayConfig CRD `spec.realIp` |
 | Global security protection (XFF restriction, SNI match) | EdgionGatewayConfig CRD `spec.securityProtect` |
 | Global plugins | EdgionGatewayConfig CRD `spec.globalPluginsRef` |

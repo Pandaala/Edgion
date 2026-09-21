@@ -536,7 +536,8 @@ pub async fn upstream_peer_http(
             state.attempt_runtime.drain_pending().await;
         }
         loop {
-            let mut target = match prepare_first_attempt(session, ctx, entropy, route_retry_cap, ctx.egc.max_retries) {
+            let mut target = match prepare_first_attempt(session, ctx, entropy, route_retry_cap, ctx.egc.retry_attempts)
+            {
                 Ok(target) => target,
                 Err(error) => {
                     if let Some(response) = ai_predispatch_deadline_response(&error, ctx) {

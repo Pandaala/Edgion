@@ -218,7 +218,6 @@ mod tests {
                     default_connect_timeout: "invalid".to_string(),
                     default_request_timeout: "invalid".to_string(),
                     default_idle_timeout: "invalid".to_string(),
-                    default_max_retries: None,
                 },
             }),
             ..Default::default()

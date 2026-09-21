@@ -63,7 +63,7 @@ mod tests {
                     "apiVersion": "edgion.io/v1", "kind": "EdgionGatewayConfig",
                     "metadata": {"name": "http-generation"},
                     "spec": {
-                        "maxRetries": retries,
+                        "retry": {"attempts": retries},
                         "securityProtect": {"xForwardedForLimit": limit,
                             "requireSniHostMatch": enabled, "allowLoopbackUpstream": enabled},
                         "server": {"enableCompression": enabled, "downstreamKeepaliveRequestLimit": retries},
@@ -93,8 +93,8 @@ mod tests {
         assert!(second.allow_loopback_upstream);
         assert!(!first.egc.enable_compression);
         assert!(second.egc.enable_compression);
-        assert_eq!(first.egc.max_retries, 2);
-        assert_eq!(second.egc.max_retries, 7);
+        assert_eq!(first.egc.retry_attempts, 2);
+        assert_eq!(second.egc.retry_attempts, 7);
         assert_eq!(
             first.egc.parsed_timeouts.backend.connect_timeout,
             std::time::Duration::from_secs(3)
@@ -111,7 +111,7 @@ mod tests {
         let defaults = new_ctx(&proxy);
         assert!(!defaults.allow_loopback_upstream);
         assert_eq!(defaults.egc.x_forwarded_for_limit, None);
-        assert_eq!(second.egc.max_retries, 7);
+        assert_eq!(second.egc.retry_attempts, 7);
         assert!(second.egc.enable_compression);
     }
 

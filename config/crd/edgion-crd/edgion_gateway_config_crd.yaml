@@ -87,13 +87,19 @@ spec:
                           pattern: "^([0-9]{1,5}(h|m|s|ms)){1,4}$"
 
                 # ============================================
-                # Max Retries
+                # Retry Policy
                 # ============================================
-                maxRetries:
-                  type: integer
-                  description: "Maximum number of retries for upstream connections (default: 3)"
-                  format: int32
-                  default: 3
+                retry:
+                  type: object
+                  description: "GatewayClass-wide retry defaults"
+                  properties:
+                    attempts:
+                      type: integer
+                      description: "Maximum retries after the initial upstream attempt (default: 2)"
+                      format: int32
+                      minimum: 0
+                      maximum: 2147483647
+                      default: 2
 
                 # ============================================
                 # Real IP Configuration

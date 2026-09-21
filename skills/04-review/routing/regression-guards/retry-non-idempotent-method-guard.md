@@ -31,7 +31,7 @@ Re-report fix suggestions of the following forms are **not accepted**:
 - "Also guard Case 1 (status-code `retry.codes`) and Case 1.5 (per-try timeout)" — those
   fire only under an **explicit** operator-configured retry policy (`retry_configured()`),
   i.e. the operator opted into retrying. Case 2 is the only path that retries on the global
-  `max_retries` default (3) with no per-route config, so it is the only *implicit* exposure.
+  `retry.attempts` default (2) with no per-route config, so it is the only *implicit* exposure.
   Scoping the guard to Case 2 is the accepted decision.
 
 ## Core Rationale

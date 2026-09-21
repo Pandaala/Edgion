@@ -2,7 +2,7 @@
 
 ## Meta
 
-- Status: ready-for-separate-task
+- Status: resolved-with-D0009
 - Severity: medium
 - Discovered in: B0056, `edgion-gateway/src/routes/http/proxy_http/pg_fail_to_connect.rs`
 - Category: AI terminal error contract
@@ -24,6 +24,11 @@ renderer. It also interacts directly with D0009's retry-ceiling contract. A
 local response from `fail_to_connect` would duplicate terminal ownership and is
 not safe to add within B0056.
 
-## Canonical task
+## Resolution
 
-- `tasks/todo/preserve-openai-error-rendering-at-ai-connect-retry-ceiling.md`
+- `skills/04-review/routing/regression-guards/retry-budget-owns-pingora-loop-capacity.md`
+
+The Pingora loop is now capacity for the full public route retry domain instead
+of an independent 16-iteration limit. AI remains bounded to 16 candidate
+backends and 8 dispatched attempts, both below that capacity, so exhaustion
+renders its own terminal response before the Pingora boundary can intervene.

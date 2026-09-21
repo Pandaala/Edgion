@@ -6,7 +6,8 @@ kind: EdgionGatewayConfig
 metadata:
   name: chain-egc
 spec:
-  maxRetries: 0
+  retry:
+    attempts: 0
   requestBody: {}
   forwardedHeaders:
     remoteIpHeader: X-Edgion-Remote-IP
