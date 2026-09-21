@@ -1,99 +1,87 @@
 ---
 name: controller-06-gatewayclass-egc-no-gateway-requeue
-description: Use when reviewing findings that EdgionGatewayConfig / GatewayClass handlers lack on_change/on_delete and "do not requeue dependent Gateways"; covers why this is intentional and why a requeue alone is a no-op.
+description: Separate GatewayClass ownership invalidation from parametersRef status propagation and data-plane listener reconstruction.
 knowledge_type: intentional-design
 ---
 
-# GatewayClass / EdgionGatewayConfig Do Not Requeue Dependent Gateways — DESIGN-TRADEOFF
+# Class ownership requeues do not propagate parameter status or rebuild listeners
 
-> **Update (controller-07, 2026-06-01):** the first re-evaluation trigger below has fired. The
-> `GatewayClassHandler` now derives `ResolvedRefs`/`Accepted` from whether its `parametersRef` EGC
-> exists, so controller-07 added an **EdgionGatewayConfig → GatewayClass** requeue
-> (`EdgionGatewayConfigHandler::{on_change,on_delete}` + `trigger_gatewayclass_params_revalidation`).
-> That is a *different edge* from the one rejected here: this finding rejects **EGC → Gateway**
-> (a no-op, since the Gateway handler reads neither resource), and that rejection still stands. See
-> `skills/01-architecture/01-controller/06-requeue-mechanism.md` path 6.
+## Current decision
 
-## Conclusion
+GatewayClass publication and unpublication requeue referencing raw Gateways for
+**ownership admission and withdrawal**. The historical blanket statement that
+GatewayClass-to-Gateway requeues are a no-op is superseded: Kubernetes Gateway
+eligibility now reads the class owner and published incarnation.
 
-`EdgionGatewayConfigHandler` and `GatewayClassHandler`
-(`edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/{edgion_gateway_config.rs, gateway_class.rs}`)
-intentionally have no `on_change` / `on_delete`, so a change to either resource does **not** requeue
-the Gateways that reference them. This is correct as-is. The finding's factual premise (no requeue)
-is true, but its causal claims (stale Gateway status / stale cached view / stale federation count)
-and its suggested fix (add `on_change`/`on_delete` that requeue Gateways) are wrong: a requeue here
-would be a **no-op**, because the controller-side Gateway handler derives no state from either
-resource.
+The retained boundary is narrower: a Gateway requeue does not propagate
+GatewayClass `Accepted` or EGC parameter errors into Gateway conditions, and does
+not reconstruct live data-plane listeners. EGC has no direct Gateway requeue.
+Its existing EGC-to-GatewayClass notification remains relevant to parametersRef
+validation and may indirectly trigger an ownership recheck.
 
-Fix suggestions of the form "add `on_change`/`on_delete` to `EdgionGatewayConfigHandler` /
-`GatewayClassHandler` that `requeue_all_keys()` the Gateways" or "introduce a `GatewayConfigRefManager`
-analogous to `SecretRefManager`" are **not accepted**.
+## Ownership mechanism
 
-## Core Rationale
+`GatewayClassOwnership` pairs the configured controller name with the selected
+class in Kubernetes. `GatewayClassHandler::filter` accepts only that pair.
+`GatewayHandler::filter` additionally requires a matching raw class owner and a
+nonempty raw UID equal to the class already published by this deployment.
+It does not compare generation or require `Accepted=True`.
 
-**1. The data plane consumes both resources directly via gRPC sync.**
+Raw ownership alone can authorize a briefly owned incarnation which disappears
+before its class worker ever publishes it. The published-UID requirement closes
+that coalescing hole. Losing eligibility uses the processor's normal deletion
+path to clear refs, listener registrations, cached Gateway and attachment proof.
 
-`EdgionGatewayConfig` and `GatewayClass` are each independently synced resource kinds with their own
-gateway-side stores (`EDGION_GATEWAY_CONFIG_STORE` + `ConfHandler` in
-`edgion-gateway/src/config/edgion_gateway/conf_handler_impl.rs`; the GatewayClass store likewise). The
-data plane reads them at listener-build time via `config_client.get_gateway_class()` /
-`get_edgion_gateway_config()` (`edgion-gateway/src/runtime/server/base.rs`). Runtime consumers that
-support hot reload update directly from their EGC ConfHandler: request-body policy is published in the
-immutable EGC snapshot and process-global aggregates are recomputed there. This does not rebuild the
-Pingora listener, and listener-frozen fields need their own explicit hot-reload mechanism. No
-controller-side Gateway requeue is needed or capable of updating those live data-plane objects.
+`GatewayClassHandler::{after_publish,after_unpublish}` scan Gateway `raw_keys`,
+select matching `gatewayClassName`, and call `ctx.requeue` after the cache mutation.
+Scanning processed keys would omit previously rejected Gateways and break
+missing-class recovery. The existing single queue/worker and dirty-key behavior
+handle unpublication while a Gateway is already being processed. No API IO,
+timer, second queue, dependency map or retry loop is added to handlers.
 
-**2. The controller-side Gateway handler derives no status from these resources — a requeue changes nothing.**
+FileSystem/etcd preserve controller-name-only GatewayClass filtering and unscoped
+Gateway handling. In Kubernetes, disabling the GatewayClass watcher fails closed
+for Gateway processing. Independent deployments need distinct classes; replicas
+sharing a class and controller identity need the same election domain and
+configuration view. This is not fencing for arbitrarily overlapping deployments.
 
-`GatewayHandler::{parse, validate, update_status}` (`handlers/gateway.rs`) never reads
-`gateway_class.spec.parameters_ref` or any `EdgionGatewayConfig`. Gateway status conditions are
-computed only from listener validation, TLS Secret refs, port conflicts, and the stream-plugin
-annotation ref. Re-running `parse`/`update_status` for a Gateway (which is all a requeue does) cannot
-produce `ResolvedRefs=False` / `Accepted=False` for a broken or deleted `parametersRef` chain, because
-no code path inspects that chain on the Gateway. The cached processed Gateway likewise contains no
-EdgionGatewayConfig-derived state, so it is never stale with respect to these resources; federation
-counts Gateway resources, not config-derived state, so they are unaffected as well.
+## Retained rationale
 
-**3. parametersRef errors are already visible — on the GatewayClass, which is where Gateway API puts them.**
+The data plane consumes GatewayClass and EGC independently through conf_sync.
+Runtime policies with hot reload publish their own immutable snapshots; fields
+frozen during listener construction still need their explicit restart/reload
+contract. Controller ownership requeues cannot implement listener reconstruction.
 
-`GatewayClassHandler::validate` rejects a `parametersRef` whose group/kind is not
-`edgion.io/EdgionGatewayConfig` and stamps `Accepted=False` on the **GatewayClass's own** status. Per
-the Gateway API model, `parametersRef` validity is reflected on the GatewayClass status, not propagated
-to the Gateway; there is no conformance requirement for a Gateway-level condition mirroring GatewayClass
-acceptance. Operators see the broken ref via `kubectl get gatewayclass -o yaml`.
+Parameter errors remain visible on GatewayClass rather than copied into Gateway
+conditions. Changing that propagation policy is a separate feature, not a
+consequence of adding an ownership dependency.
 
-## Fix Suggestions Not Accepted
+## Evidence and re-evaluation
 
-- "Add `on_change`/`on_delete` that `requeue_all_keys()` the Gateways" — no-op for the claimed benefits
-  (status / cache / federation), because the Gateway handler reads neither resource; adds churn and a
-  new cross-resource requeue path (GatewayClass→Gateway, EdgionGatewayConfig→Gateway) with no payoff.
-- "Introduce a `GatewayConfigRefManager` analogous to `SecretRefManager`" — same no-op problem, plus the
-  cost of a new bidirectional ref-tracking subsystem for a dependency that the data plane already
-  resolves directly.
-- "Surface `ResolvedRefs=False` on the Gateway when the class/config is broken" — this is a new
-  status-propagation feature (resolve parametersRef → EdgionGatewayConfig → derive a new Gateway
-  condition), beyond Gateway API conformance; not a bug fix. If genuinely wanted, it belongs in
-  `tasks/todo/` via the brainstorming workflow, not in a review-issue requeue patch.
+Implementation: `handlers/{gateway,gateway_class}.rs` and the contextual
+eligibility/deletion path in `resource_processor/processor.rs`.
+Controller-local coverage: `handlers/tests/gateway_ownership_test.rs` checks
+missing/deleted/recreated classes, independent owners/classes, namespace filtering,
+unpublished raw incarnations, UID/generation/Accepted boundaries, in-flight
+unpublication, cleanup and repeated status echoes. These tests do not start a
+Kubernetes server or prove convergence for overlapping independently elected writers.
 
-## Re-evaluation Triggers
+Verified on 2026-09-21 for this ownership correction: 796 resource-processor tests
+(including seven ownership/publication regressions), 20 Kubernetes resource-controller
+tests, and `cargo check -p edgion-controller --all-targets` passed. Formatting,
+agent-doc validation and `git diff --check` passed. Independent read-only final review
+reached LGTM. These results do not include a live Kubernetes deployment.
 
-Re-open this decision only if:
-
-- The Gateway handler gains real status-derivation logic that reads `parametersRef` / EdgionGatewayConfig
-  (at that point a requeue would no longer be a no-op and the registration rule would apply).
-- A concrete operator requirement or conformance test mandates a Gateway-level condition mirroring
-  GatewayClass/EdgionGatewayConfig validity — handle as a new feature task, not a requeue patch.
-
-## Reference Cases
-
-- `tasks/review-envoy/controller-06-egc-gc-no-downstream-requeue.md` (closed 2026-05-29, ⚠️ accepted tradeoff).
-- Requeue inventory: `skills/01-architecture/01-controller/06-requeue-mechanism.md` (GatewayClass /
-  EdgionGatewayConfig rows: "referenced by Gateway; no requeue").
-- Data-plane consumption: `edgion-gateway/src/runtime/server/base.rs`.
-- Request-body hot reload: `skills/04-review/http-body/mandatory-design/request-body-policy-egc-hot-reload.md`.
-- Contrast with the genuine cascading-requeue case: `handler-requeue-rule.md` (handlers that call
-  `lookup_gateway()` / `get_secret()` in `parse()` MUST register and requeue — these two do not).
+Re-evaluate when class ownership, cache publication order, raw-key enumeration,
+workqueue dirty handling or Gateway parameter-status propagation changes.
 
 ## Resolution references
 
-- `controller-06` — 2026-05-29 (⚠️ accepted tradeoff).
+- `controller-06` (2026-05-29): historical rejection of parameter-only Gateway
+  requeues; its no-ownership-dependency premise is now superseded.
+- `controller-07` (2026-06-01): EGC-to-GatewayClass parameter revalidation.
+- `CAND-P2-1`: Gateway ownership and class lifecycle invalidation correction.
+
+Related: [requeue inventory](../../../01-architecture/01-controller/06-requeue-mechanism.md),
+[status concurrency](../../status/regression-guards/kubernetes-status-snapshot-concurrency.md),
+[request-body hot reload](../../http-body/mandatory-design/request-body-policy-egc-hot-reload.md).

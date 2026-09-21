@@ -2,7 +2,7 @@
 //!
 //! LinkSys is used to connect to external systems like Redis, Etcd, Elasticsearch, Kafka, etc.
 
-use super::common::Condition;
+use super::common::{Condition, ControllerStatus};
 use kube::CustomResource;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -244,10 +244,10 @@ impl LinkSys {
 // LinkSys Status
 // ============================================================================
 
-/// LinkSysStatus describes the status of the LinkSys resource
+/// Local LinkSys status observed by one controller.
 #[derive(Deserialize, Serialize, Clone, Debug, JsonSchema, Default)]
-#[serde(rename_all = "camelCase")]
-pub struct LinkSysStatus {
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LinkSysLocalStatus {
     /// Conditions describe the current conditions of the LinkSys resource.
     /// Standard conditions: Accepted, ResolvedRefs (Gateway API).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -274,6 +274,9 @@ pub struct LinkSysStatus {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub conflicted_consumer_count: Option<u32>,
 }
+
+/// Status of LinkSys in native backends or a Kubernetes controller envelope.
+pub type LinkSysStatus = ControllerStatus<LinkSysLocalStatus>;
 
 #[derive(Deserialize, Serialize, Clone, Copy, Debug, JsonSchema, PartialEq, Eq)]
 pub enum CredentialSourceState {

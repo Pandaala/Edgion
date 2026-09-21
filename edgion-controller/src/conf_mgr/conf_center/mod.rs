@@ -45,10 +45,7 @@ pub mod traits;
 /// Excludes conditional `EndpointSlice`; callers handle it.
 macro_rules! for_each_provider_core_resource {
     ($cb:ident) => {
-        $cb!(
-            GatewayClass,
-            GatewayClassHandler::new(crate::conf_mgr::conf_center::common::DEFAULT_CONTROLLER_NAME.to_string())
-        );
+        $cb!(GatewayClass, GatewayClassHandler::default());
         $cb!(Secret, SecretHandler::new());
         $cb!(ConfigMap, ConfigMapHandler::new());
         $cb!(ReferenceGrant, ReferenceGrantHandler::new());

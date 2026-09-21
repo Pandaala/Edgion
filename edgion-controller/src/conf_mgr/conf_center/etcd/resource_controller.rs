@@ -139,7 +139,10 @@ where
 
                             let result = self.processor.on_init_apply(obj, existing_status_json).await;
 
-                            if let WorkItemResult::Processed { obj, status_changed } = result {
+                            if let WorkItemResult::Processed {
+                                obj, status_changed, ..
+                            } = result
+                            {
                                 init_count += 1;
                                 if status_changed {
                                     self.persist_status(kind, &rkey, &obj).await;
@@ -214,7 +217,10 @@ where
                                 self.fs_raw_store.upsert(rkey.clone(), Arc::new(obj.clone()));
                                 let existing_status_json = self.status_handler.read_status_json(kind, &rkey).await;
                                 let result = self.processor.on_init_apply(obj, existing_status_json).await;
-                                if let WorkItemResult::Processed { obj, status_changed } = result {
+                                if let WorkItemResult::Processed {
+                                    obj, status_changed, ..
+                                } = result
+                                {
                                     init_count += 1;
                                     if status_changed {
                                         self.persist_status(kind, &rkey, &obj).await;
@@ -422,7 +428,9 @@ where
                         .await;
 
                     match result {
-                        WorkItemResult::Processed { obj, status_changed } => {
+                        WorkItemResult::Processed {
+                            obj, status_changed, ..
+                        } => {
                             if status_changed {
                                 if let Some(status_value) = extract_status_value(&obj) {
                                     match status_handler

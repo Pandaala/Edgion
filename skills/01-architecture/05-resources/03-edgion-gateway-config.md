@@ -25,6 +25,15 @@ EdgionGatewayConfig is a cluster-scoped Edgion-extension resource used to config
 entries, action/status combinations and out-of-range statuses surface as
 source validation errors.
 
+The shared cluster-scoped `Accepted` condition depends only on intrinsic config
+validation, not on which namespaces a deployment can observe. Early RequestId
+validation of referenced `globalPluginsRef` resources runs on the consuming
+GatewayClass and reports `Accepted=False/InvalidParameters` there while keeping
+`ResolvedRefs=True` when the EGC exists. Missing/unwatched plugins retain the
+existing unknown/not-rejected behavior; this is not proof of plugin availability.
+Plugin dependency registration stays on EGC, preserving plugin → EGC → class
+requeues. See the [shared status guard](../../04-review/status/regression-guards/shared-config-status-deployment-independence.md).
+
 `parse` checks removed/deprecated fields, clears prior Secret registrations, resolves the
 cluster-wide `outboundTls.validation.caCertificateRefs` through runtime material stores with
 ReferenceGrant enforcement, and embeds `resolved_ca_certificates` for conf_sync. Because the owner

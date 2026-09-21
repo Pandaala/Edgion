@@ -33,6 +33,7 @@
 //! 4. **No ConfigServer**: Processor manages its own ServerCache internally.
 //! 5. **Graceful Shutdown**: Handles SIGTERM/SIGINT for clean shutdown.
 
+use crate::conf_mgr::sync_runtime::resource_processor::status_ownership::KubernetesStatusIdentity;
 use anyhow::Result;
 use futures::TryStreamExt;
 use k8s_openapi::api::core::v1::{ConfigMap, Namespace, Secret, Service};
@@ -55,6 +56,7 @@ use super::namespace::NamespaceWatchMode;
 use super::resource_controller::{ApiScope, ResourceController};
 use super::ShutdownSignal;
 use crate::conf_mgr::conf_center::MetadataFilterConfig;
+use crate::conf_mgr::sync_runtime::resource_processor::handlers::GatewayClassOwnership;
 use crate::conf_mgr::sync_runtime::resource_processor::{ProcessorHandler, ResourceProcessor};
 use crate::conf_mgr::ControllerRuntime;
 use edgion_resources::prelude_resources::*;
@@ -443,6 +445,10 @@ impl KubernetesController {
         shutdown_signal: ShutdownSignal,
         runtime: Arc<ControllerRuntime>,
     ) -> Result<ControllerExitReason> {
+        runtime.set_status_identity(KubernetesStatusIdentity {
+            controller_name: self.controller_name.clone(),
+            gateway_class_name: self.gateway_class_name.clone(),
+        });
         self.run_controllers(shutdown_signal, runtime).await
     }
 
@@ -573,7 +579,10 @@ impl KubernetesController {
             h.spawn(spawn_cluster::<GatewayClass, _>(
                 self,
                 "GatewayClass",
-                GatewayClassHandler::new(self.controller_name.clone()),
+                GatewayClassHandler::new(GatewayClassOwnership::new(
+                    self.controller_name.clone(),
+                    Some(self.gateway_class_name.clone()),
+                )),
                 &ctx,
             ));
         }
@@ -689,7 +698,13 @@ impl KubernetesController {
             h.spawn(spawn::<Gateway, _>(
                 self,
                 "Gateway",
-                GatewayHandler::new(Some(self.gateway_class_name.clone()), self.gateway_address.clone()),
+                GatewayHandler::new(
+                    Some(GatewayClassOwnership::new(
+                        self.controller_name.clone(),
+                        Some(self.gateway_class_name.clone()),
+                    )),
+                    self.gateway_address.clone(),
+                ),
                 &ctx,
             ));
         }

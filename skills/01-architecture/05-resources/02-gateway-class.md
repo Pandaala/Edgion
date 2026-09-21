@@ -24,11 +24,24 @@ GatewayClass is a cluster-scoped resource that identifies the Gateway controller
 
 ### filter
 
-Filters by `spec.controllerName`, processing only GatewayClasses whose controllerName matches the configuration (default `edgion.io/gateway-controller`).
+Filters by `spec.controllerName` and, in Kubernetes mode, the configured `gateway_class`
+name using the shared `GatewayClassOwnership` value. FileSystem/etcd retain controller-name
+matching without a selected-class restriction.
+
+### after_publish / after_unpublish
+
+After the class cache mutation, scan raw Gateway keys and requeue those referencing this
+class. Raw keys include previously rejected Gateways; scanning only processed cache keys
+would prevent recovery after a missing class is created. Gateway eligibility requires a
+matching raw owner and the same nonempty UID in this deployment's published class. It
+does not require matching generation or `Accepted=True`. Existing workqueue dirty-key
+handling preserves notifications while a Gateway is being processed.
 
 ### validate
 
-Validates `parametersRef` (if set): `group` must be `edgion.io`, and `kind` must be `EdgionGatewayConfig`. Invalid values produce a validation error → `Accepted: False`. When `parametersRef` is unset, no error is produced.
+The validate hook has no separate parameter checks. `update_status` resolves
+`parametersRef` against the raw EGC store so existence, reference validity, and
+deployment-local attachment validation share one result.
 
 ### parse
 
@@ -36,8 +49,23 @@ No special handling; passes through directly.
 
 ### update_status
 
-- `Accepted`: True (reason=Accepted) when there are no validation_errors; False (reason=Invalid) when errors exist
+- `parametersRef` must use group `edgion.io` and kind `EdgionGatewayConfig`.
+  Invalid group/kind or missing EGC produces `ResolvedRefs=False` and
+  `Accepted=False`, both with reason `InvalidParameters`.
+- When the EGC exists, `ResolvedRefs=True`. Its visible `globalPluginsRef`
+  resources use the shared early RequestId validator against current raw plugin
+  generations. Invalid early sources/conditions produce
+  `Accepted=False/InvalidParameters` on this owned class, never on shared EGC.
+  A missing/unwatched plugin retains the existing unknown/not-rejected behavior.
+- With no parametersRef or unwatched EGC kind, remove stale ResolvedRefs and do
+  not reject solely for the unknown reference. Other validation errors use
+  `Accepted=False/Invalid`; otherwise `Accepted=True/Accepted`.
 - `SupportedVersion`: always True, indicating support for the current Gateway API version
+
+Plugin changes/deletes requeue the registered EGC, which requeues the consuming
+classes. The class lookup reads raw EGC/plugin stores, so it does not depend on
+whether the EGC's new processed object has already been published. See the
+[shared status guard](../../04-review/status/regression-guards/shared-config-status-deployment-independence.md).
 
 ## Gateway-side processing
 

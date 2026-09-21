@@ -28,6 +28,8 @@ pub enum WorkItemResult<K> {
         obj: K,
         /// Whether status changed and needs persistence
         status_changed: bool,
+        /// Backend persistence payload; Kubernetes may include foreign observations.
+        persisted_status: Option<serde_json::Value>,
     },
     /// Resource was deleted
     Deleted {
@@ -49,6 +51,7 @@ use super::context::HandlerContext;
 use super::handler::{ProcessResult, ProcessorHandler};
 use super::make_resource_key;
 use super::raw_store::RawStore;
+use super::{status_observation, status_ownership, status_pipeline};
 use crate::conf_mgr::sync_runtime::workqueue::{TriggerChain, Workqueue};
 
 /// Result of status extraction
@@ -409,6 +412,10 @@ where
         *self.raw_store.write() = Some(store);
     }
 
+    pub(crate) fn runtime(&self) -> &ControllerRuntime {
+        &self.runtime
+    }
+
     /// Set metadata filter configuration
     pub fn set_metadata_filter(&self, filter: MetadataFilterConfig) {
         *self.metadata_filter.write() = Some(Arc::new(filter));
@@ -631,7 +638,7 @@ where
         let namespace_eligible = ctx
             .namespace_filter()
             .is_none_or(|allowed_ns| namespace.is_empty() || allowed_ns.iter().any(|n| n == &namespace));
-        if !namespace_eligible || !self.handler.filter(&obj) {
+        if !namespace_eligible || !self.handler.filter(&obj, ctx) {
             if let Some(cached) = self.cache.get_by_key(&make_resource_key(&obj)) {
                 self.process_delete(&cached, ctx).await;
                 return WorkItemResult::Deleted {
@@ -674,6 +681,43 @@ where
             tracing::warn!("Failed to serialize old status for comparison");
         }
 
+        let kubernetes = self.runtime.status_identity().is_some();
+        let raw_resource = kubernetes.then(|| serde_json::to_value(&obj).ok()).flatten();
+        let observed_status = raw_resource.as_ref().and_then(|raw| raw.get("status"));
+        let observer = kubernetes
+            .then(|| status_pipeline::observer_identity(&self.runtime))
+            .flatten();
+        let mut persistence_allowed = !kubernetes || raw_resource.is_some();
+        if !kubernetes && status_pipeline::has_non_native_status(&obj) {
+            // Native backends cannot attribute imported Kubernetes observations.
+            // Recompute local diagnostics rather than passing an envelope to handlers.
+            let _ = status_pipeline::replace_status(&mut obj, serde_json::Value::Null);
+        }
+        if kubernetes && status_pipeline::is_partitioned(self.kind) {
+            let local = match (&observer, observed_status) {
+                (Some(identity), Some(status)) => status_observation::project_status(self.kind, status, identity),
+                (Some(_), None) => Ok(None),
+                (None, _) => {
+                    persistence_allowed = false;
+                    Ok(None)
+                }
+            };
+            let local = match local {
+                Ok(local) => local.unwrap_or(serde_json::Value::Null),
+                Err(error) => {
+                    persistence_allowed = false;
+                    tracing::warn!(component = "status_projection", kind = self.kind, error = %error,
+                        "Invalid controller observations; skipping status persistence");
+                    serde_json::Value::Null
+                }
+            };
+            if status_pipeline::replace_status(&mut obj, local).is_err() {
+                persistence_allowed = false;
+                // Empty native state must replace an unprojected envelope before handlers.
+                let _ = status_pipeline::replace_status(&mut obj, serde_json::Value::Null);
+            }
+        }
+
         // 4. Validate (log warnings but continue)
         let mut all_errors = self.handler.validate(&obj, ctx);
         for error in &all_errors {
@@ -699,22 +743,62 @@ where
 
                 // 8. Update status (handler sets Gateway API conditions)
                 self.handler.update_status(&mut parsed_obj, ctx, &all_errors);
+                let mut persisted_status = extract_status_value(&parsed_obj);
+                if kubernetes && status_pipeline::is_partitioned(self.kind) {
+                    persisted_status = match (&observer, persisted_status.as_ref()) {
+                        (Some(identity), Some(local)) if persistence_allowed => {
+                            let facts = status_pipeline::class_observations(&self.runtime, observed_status);
+                            match status_observation::merge_status(self.kind, observed_status, local, identity, &facts)
+                            {
+                                Ok(status) => status,
+                                Err(error) => {
+                                    tracing::warn!(component = "status_projection", kind = self.kind, error = %error,
+                                        "Controller observation cannot be persisted; local configuration retained");
+                                    None
+                                }
+                            }
+                        }
+                        _ => None,
+                    };
+                } else if let (Some(raw), Some(computed)) = (raw_resource.as_ref(), persisted_status.as_ref()) {
+                    if let Some((local, persisted)) = status_ownership::native_status_projection(
+                        self.kind,
+                        &namespace,
+                        raw,
+                        observed_status.unwrap_or(&serde_json::Value::Null),
+                        computed,
+                        &self.runtime,
+                    ) {
+                        if status_pipeline::replace_status(&mut parsed_obj, local).is_ok() {
+                            persisted_status = Some(persisted);
+                        } else {
+                            persistence_allowed = false;
+                        }
+                    }
+                }
+                if !persistence_allowed {
+                    persisted_status = None;
+                }
                 self.handler.finalize_transport(&mut parsed_obj, ctx);
 
                 // 9. Check if status changed
-                let new_status = extract_status_json(&parsed_obj);
+                let new_status = match persisted_status.as_ref() {
+                    Some(status) => StatusExtractResult::Present(status.to_string()),
+                    None => StatusExtractResult::Empty,
+                };
 
                 // Log serialization errors
                 if matches!(new_status, StatusExtractResult::SerializationError) {
                     tracing::warn!("Failed to serialize new status for comparison");
                 }
 
-                let status_changed = status_has_changed(
-                    self.kind,
-                    &old_status,
-                    &new_status,
-                    parsed_obj.meta().namespace.as_deref(),
-                );
+                let status_changed = persisted_status.is_some()
+                    && status_has_changed(
+                        self.kind,
+                        &old_status,
+                        &new_status,
+                        parsed_obj.meta().namespace.as_deref(),
+                    );
 
                 if status_changed {
                     tracing::debug!(
@@ -775,9 +859,31 @@ where
                 // object just published above, never the previous cache value.
                 self.handler.after_publish(&obj_for_result, ctx).await;
 
+                // Merge Patch must remove the retired native siblings when first
+                // installing an envelope. Tombstones are wire-only, not local or
+                // semantic-comparison state, and come only from validated fields.
+                if kubernetes && status_pipeline::is_partitioned(self.kind) {
+                    if let (Some(observed), Some(persisted)) = (
+                        observed_status.filter(|status| status.get("controllers").is_none()),
+                        persisted_status.as_mut(),
+                    ) {
+                        match status_observation::retired_native_fields(self.kind, observed) {
+                            Ok(fields) => {
+                                if let Some(map) = persisted.as_object_mut() {
+                                    for field in fields {
+                                        map.insert(field, serde_json::Value::Null);
+                                    }
+                                }
+                            }
+                            Err(_) => persisted_status = None,
+                        }
+                    }
+                }
+
                 WorkItemResult::Processed {
                     obj: obj_for_result,
-                    status_changed,
+                    status_changed: status_changed && persisted_status.is_some(),
+                    persisted_status,
                 }
             }
             ProcessResult::Skip { reason } => {
@@ -944,7 +1050,7 @@ mod tests {
     struct EligibilityHandler;
     #[async_trait::async_trait]
     impl ProcessorHandler<TestResource> for EligibilityHandler {
-        fn filter(&self, obj: &TestResource) -> bool {
+        fn filter(&self, obj: &TestResource, _ctx: &HandlerContext) -> bool {
             obj.spec != "excluded"
         }
     }
@@ -1395,7 +1501,9 @@ mod tests {
 
         let result = processor.on_init_apply(resource, None).await;
         match result {
-            WorkItemResult::Processed { obj, status_changed } => {
+            WorkItemResult::Processed {
+                obj, status_changed, ..
+            } => {
                 assert!(status_changed, "parse-time status mutation must be persisted");
                 assert_eq!(
                     obj.status

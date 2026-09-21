@@ -11,6 +11,12 @@ before applying a decision to current code.
 
 ## Regression guards
 
+- [Deployment-partitioned observations](regression-guards/deployment-partitioned-observations.md)
+
+- [Deterministic condition messages](regression-guards/deterministic-condition-messages.md)
+- [Shared configuration status is deployment-independent](regression-guards/shared-config-status-deployment-independence.md)
+
+- [Kubernetes status writes use their raw snapshot version](regression-guards/kubernetes-status-snapshot-concurrency.md)
 - [Canonical parent status ownership](regression-guards/canonical-parent-status-ownership.md)
 
 - [EdgionBackend partial pools keep ResolvedRefs false](regression-guards/ai-backend-partial-pool-keeps-resolvedrefs-false.md)

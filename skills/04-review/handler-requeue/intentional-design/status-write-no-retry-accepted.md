@@ -20,6 +20,12 @@ Fix suggestions of the form "re-queue the key via `enqueue_after` on any non-404
 error" or "reintroduce an exponential `requeue_with_backoff` like
 controller-runtime" are **not accepted**.
 
+The shared raw-input resourceVersion precondition also follows this policy: a stale-snapshot
+409 ends the current attempt, with no GET/retry or failure-triggered requeue. Missing/empty
+input versions fail locally through the existing error path. This retry decision never
+authorized unconditional writes or lost foreign updates; see the separate
+[snapshot concurrency correction](../../status/regression-guards/kubernetes-status-snapshot-concurrency.md).
+
 ## Core Rationale
 
 **1. Recovery depends on a later reconciliation opportunity**

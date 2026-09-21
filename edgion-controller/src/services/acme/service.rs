@@ -40,6 +40,7 @@ use super::secret_io::{
 use crate::conf_mgr::sync_runtime::resource_processor::handlers::route_utils::{
     resolve_acme_listener_attachments, AcmeGatewayRefError,
 };
+use crate::conf_mgr::sync_runtime::resource_processor::status_ownership::acme_is_owned;
 use crate::conf_mgr::ControllerRuntime;
 use edgion_common::time::now_rfc3339;
 use edgion_resources::duration::parse_duration;
@@ -64,7 +65,7 @@ static ACME_GENERATION: AtomicU64 = AtomicU64::new(0);
 ///
 /// `test_timer_generation_isolation` installs a real handle into `ACME_SERVICE`
 /// and asserts nothing else enqueues into its receiver within a time window.
-/// Any concurrently running test that drives `EdgionAcmeHandler::parse` reaches
+/// Any concurrently running test that drives `EdgionAcmeHandler::after_publish` reaches
 /// `notify_resource_changed` -> `get_sender()`, which clones whatever handle is
 /// currently installed and sends into it — landing a stray message in the
 /// isolation test's receiver and tripping its assertion. Every test that touches
@@ -89,6 +90,50 @@ enum AcmeCommand {
     RenewalCheck { key: String },
     /// Recheck Controller-processed eligibility after a transient cache skew.
     EligibilityCheck { key: String },
+}
+
+/// Captures real notification sends without starting a worker or performing IO.
+/// Callers must hold `ACME_TEST_MUTEX` for the capture's entire lifetime.
+#[cfg(test)]
+pub(crate) struct NotificationCapture {
+    rx: mpsc::Receiver<AcmeCommand>,
+    generation: u64,
+}
+
+#[cfg(test)]
+impl NotificationCapture {
+    pub(crate) fn install() -> Self {
+        let (tx, rx) = mpsc::channel(64);
+        let generation = ACME_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
+        let mut service = ACME_SERVICE.lock();
+        assert!(service.is_none(), "notification capture requires an idle service");
+        *service = Some(AcmeServiceHandle { tx, generation });
+        Self { rx, generation }
+    }
+
+    pub(crate) fn drain(&mut self) -> Vec<String> {
+        let mut keys = Vec::new();
+        while let Ok(command) = self.rx.try_recv() {
+            match command {
+                AcmeCommand::ResourceChanged { key } => keys.push(key),
+                command => panic!("unexpected ACME command: {command:?}"),
+            }
+        }
+        keys
+    }
+}
+
+#[cfg(test)]
+impl Drop for NotificationCapture {
+    fn drop(&mut self) {
+        let mut service = ACME_SERVICE.lock();
+        if service
+            .as_ref()
+            .is_some_and(|handle| handle.generation == self.generation)
+        {
+            service.take();
+        }
+    }
 }
 
 /// Initialize and start the global ACME service.
@@ -267,7 +312,7 @@ fn current_generation() -> u64 {
 
 /// Notify the ACME service that a resource has changed.
 ///
-/// Called from `EdgionAcmeHandler::parse()` after processing, from the startup
+/// Called from `EdgionAcmeHandler::after_publish()`, from the startup
 /// scan, and from the Admin API trigger endpoint.
 ///
 /// Uses async `send().await` to apply back-pressure instead of dropping the
@@ -650,6 +695,11 @@ enum EligibilityDecision {
 }
 
 fn evaluate_issuance_eligibility(raw: &EdgionAcme, key: &str, runtime: &ControllerRuntime) -> EligibilityDecision {
+    // Source ownership changes requeue raw ACME resources, including ones never
+    // published here. A non-owner must not spin an eligibility retry timer.
+    if !acme_is_owned(raw, runtime) {
+        return EligibilityDecision::AuthoritativelyIneligible;
+    }
     let Some(uid) = raw.metadata.uid.as_deref() else {
         return EligibilityDecision::Transient;
     };
@@ -1464,6 +1514,21 @@ spec:
         assert!(result.as_secs() > 0); // Should not be zero/wrap
     }
 
+    #[test]
+    fn issuance_eligibility_missing_owner_does_not_start_transient_retry() {
+        use crate::conf_mgr::sync_runtime::resource_processor::status_ownership::KubernetesStatusIdentity;
+        let raw = test_acme();
+        let runtime = ControllerRuntime::default();
+        runtime.set_status_identity(KubernetesStatusIdentity {
+            controller_name: "example.com/controller".into(),
+            gateway_class_name: "ours".into(),
+        });
+        assert_eq!(
+            evaluate_issuance_eligibility(&raw, "default/test-acme", &runtime),
+            EligibilityDecision::AuthoritativelyIneligible
+        );
+    }
+
     #[tokio::test]
     async fn issuance_eligibility_requires_matching_processed_generation_and_live_proof() {
         let raw = test_acme();
@@ -1602,7 +1667,7 @@ spec:
     #[tokio::test]
     async fn test_timer_generation_isolation() {
         // Serialize against any other test that touches the global `ACME_SERVICE`
-        // (e.g. the handler tests whose `parse` reaches `notify_resource_changed`
+        // (e.g. the handler tests whose `after_publish` reaches `notify_resource_changed`
         // -> `get_sender()`), so a concurrent notify cannot clone the handle we
         // install below and enqueue a stray message into our receiver.
         let _guard = ACME_TEST_MUTEX.lock().await;

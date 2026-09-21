@@ -47,6 +47,21 @@ mod scan_conditions_tests {
     use serde_json::json;
 
     #[test]
+    fn controller_observations_nested_conditions_are_scanned() {
+        let resource = json!({"status": {"controllers": [
+            {"controllerName": "example/controller", "gatewayClassName": "a", "gatewayClassUid": "a-uid",
+             "status": {"conditions": [{"type": "ResolvedRefs", "status": "False"}]}},
+            {"controllerName": "example/controller", "gatewayClassName": "b", "gatewayClassUid": "b-uid",
+             "status": {"conditions": [{"type": "Accepted", "status": "True"}]}}
+        ]}});
+        let conditions = scan_conditions(&resource);
+        assert_eq!(conditions.len(), 2);
+        let (errors, _) = classify(&conditions).unwrap();
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].type_, "ResolvedRefs");
+    }
+
+    #[test]
     fn gateway_top_level_plus_listeners() {
         let j = json!({
             "status": {

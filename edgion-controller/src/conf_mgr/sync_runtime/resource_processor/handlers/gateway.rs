@@ -39,6 +39,11 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeSet, HashSet};
 use std::sync::Arc;
 
+use super::GatewayClassOwnership;
+use crate::conf_mgr::sync_runtime::resource_processor::status_ownership::{
+    gateway_publication_identity, ownership_dependency_kinds,
+};
+
 const GATEWAY_SYSTEM_NAMESPACE: &str = "edgion-system";
 const GATEWAY_API_GROUP: &str = "gateway.networking.k8s.io";
 const INVALID_PROXY_PROTOCOL_CONFIG: &str = "InvalidProxyProtocolConfig";
@@ -49,7 +54,7 @@ const PROXY_PROTOCOL_POLICY_CONFLICT: &str = "ProxyProtocolPolicyConflict";
 /// Gateway handler
 ///
 /// Features:
-/// - filter: Filter by gateway_class_name (optional, None means no filter)
+/// - filter: Verify Kubernetes class ownership and its published incarnation
 /// - parse: Resolve TLS certificateRefs into ordered typed outcomes
 /// - parse: Register Secret references to SecretRefManager
 /// - parse: Register listeners to ListenerPortManager for intra-gateway conflict detection
@@ -57,9 +62,8 @@ const PROXY_PROTOCOL_POLICY_CONFLICT: &str = "ProxyProtocolPolicyConflict";
 /// - on_delete: Clear SecretRefManager and ListenerPortManager references
 /// - update_status: Set Conflicted/Programmed/ListenersNotValid conditions based on intra-gateway port conflicts
 pub struct GatewayHandler {
-    /// If Some, only process Gateways with matching gatewayClassName
-    /// If None, process all Gateways (used by FileSystem mode)
-    gateway_class_name: Option<String>,
+    /// Kubernetes deployment ownership. FS/etcd intentionally process all Gateways.
+    ownership: Option<GatewayClassOwnership>,
     /// Static fallback address for Gateway status.addresses
     default_address: Option<String>,
 }
@@ -194,11 +198,10 @@ struct ListenerInfo {
 impl GatewayHandler {
     /// Create a new GatewayHandler
     ///
-    /// - `gateway_class_name`: If Some, filter Gateways by this class name (K8s mode).
-    ///   If None, process all Gateways (FileSystem mode).
-    pub fn new(gateway_class_name: Option<String>, default_address: Option<String>) -> Self {
+    /// `ownership` is supplied by Kubernetes; FS/etcd use `None`.
+    pub fn new(ownership: Option<GatewayClassOwnership>, default_address: Option<String>) -> Self {
         Self {
-            gateway_class_name,
+            ownership,
             default_address,
         }
     }
@@ -547,11 +550,11 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
         errors
     }
 
-    fn filter(&self, g: &Gateway) -> bool {
-        match &self.gateway_class_name {
-            Some(class_name) => g.spec.gateway_class_name == *class_name,
-            None => true, // No filter, process all Gateways
-        }
+    fn filter(&self, g: &Gateway, ctx: &HandlerContext) -> bool {
+        let Some(ownership) = &self.ownership else {
+            return true;
+        };
+        ownership.owns_gateway(g, ctx.runtime())
     }
 
     async fn parse(&self, mut g: Gateway, ctx: &HandlerContext) -> ProcessResult<Gateway> {
@@ -901,6 +904,21 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
         // Route resolvers prefer the published Gateway cache. Enqueue only
         // after publication, with a config gate to break Route/Gateway cycles.
         let route_index = &ctx.runtime().gateway_route_index;
+        if ctx.runtime().status_identity().is_some()
+            && route_index
+                .update_publication_ownership(&gateway_key, gateway_publication_identity(gateway, ctx.runtime()))
+        {
+            // Source events may reach dependents before this incarnation is
+            // published. Replay once after publication, including uncached ACME
+            // and transitive delegation references absent from the direct index.
+            for kind in ownership_dependency_kinds("Gateway") {
+                if let Some(processor) = ctx.runtime().processor_registry.get(kind) {
+                    for key in processor.raw_keys() {
+                        ctx.requeue(kind, key).await;
+                    }
+                }
+            }
+        }
         if let Some(routes) = route_index.update_listener_config_and_collect_routes(&gateway_key, gateway) {
             for (route_kind, route_key) in routes {
                 if !matches!(route_kind, ResourceKind::EdgionTls | ResourceKind::EdgionAcme) {
@@ -1300,13 +1318,14 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
 
         // ListenersNotValid: shared PROXY policy conflict is process-fatal and
         // therefore also blocks the Gateway-level Programmed condition.
+        let mut conflicting_names: Vec<&String> = conflicts.keys().collect();
+        conflicting_names.sort_unstable();
         if !proxy_protocol_conflicts.is_empty() {
             let mut message = format!(
                 "Listeners have conflicting inbound PROXY protocol policies: {:?}",
                 proxy_protocol_conflicts
             );
             if !conflicts.is_empty() {
-                let conflicting_names: Vec<&String> = conflicts.keys().collect();
                 message.push_str(&format!("; listeners also have port conflicts: {conflicting_names:?}"));
             }
             let cond = condition_true(
@@ -1317,7 +1336,6 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
             );
             update_gateway_condition(conditions, cond);
         } else if !conflicts.is_empty() {
-            let conflicting_names: Vec<&String> = conflicts.keys().collect();
             let cond = condition_true(
                 condition_types::LISTENERS_NOT_VALID,
                 condition_reasons::LISTENER_CONFLICT,
@@ -2679,6 +2697,88 @@ mod tests {
 
     fn proxy_protocol_test_context(runtime: Arc<ControllerRuntime>) -> HandlerContext {
         HandlerContext::new(None, None, Default::default(), 5, 20, runtime)
+    }
+
+    #[tokio::test]
+    async fn conflict_status_messages_converge_across_repeated_reconciliation() {
+        use crate::conf_mgr::sync_runtime::resource_processor::status_diff::status_semantically_changed;
+
+        for with_proxy_conflict in [false, true] {
+            let runtime = Arc::new(ControllerRuntime::default());
+            let ctx = proxy_protocol_test_context(runtime);
+            let handler = GatewayHandler::new(None, None);
+            if with_proxy_conflict {
+                let peer = make_proxy_protocol_gateway(r#"{"source":"inline","config":{"mode":"required"}}"#);
+                assert!(matches!(handler.parse(peer, &ctx).await, ProcessResult::Continue(_)));
+            }
+            // Distinct protocols keep each (port, protocol, hostname) tuple
+            // unique, as required by Gateway API admission. The controller's
+            // socket-level conflict detector still reports this combination.
+            let mut gateway: Gateway = serde_json::from_value(serde_json::json!({
+                "metadata": {"namespace": "default", "name": "conflicts", "generation": 1},
+                "spec": {"gatewayClassName": "test", "listeners": [
+                    {"name": "z-http", "port": 80, "protocol": "HTTP"},
+                    {"name": "a-tcp", "port": 80, "protocol": "TCP"},
+                    {"name": "m-tls", "port": 80, "protocol": "TLS", "tls": {"mode": "Passthrough"}}
+                ]}
+            }))
+            .unwrap();
+            let mut previous = None::<String>;
+            for round in 0..12 {
+                gateway.spec.listeners.as_mut().unwrap().rotate_left(1);
+                let errors = handler.validate(&gateway, &ctx);
+                assert!(errors.is_empty(), "{errors:?}");
+                let ProcessResult::Continue(mut computed) = handler.parse(gateway, &ctx).await else {
+                    panic!("conflicting Gateway must remain observable");
+                };
+                handler.update_status(&mut computed, &ctx, &errors);
+                let status = computed.status.as_ref().unwrap();
+                let aggregate = status
+                    .conditions
+                    .as_ref()
+                    .unwrap()
+                    .iter()
+                    .find(|condition| condition.type_ == "ListenersNotValid")
+                    .unwrap();
+                assert_eq!(
+                    aggregate.reason,
+                    if with_proxy_conflict {
+                        "ProxyProtocolPolicyConflict"
+                    } else {
+                        "ListenerConflict"
+                    }
+                );
+                let message = &aggregate.message;
+                assert!(message.ends_with("[\"a-tcp\", \"m-tls\", \"z-http\"]"), "{message}");
+                for listener in status.listeners.as_ref().unwrap() {
+                    let others = ["a-tcp", "m-tls", "z-http"]
+                        .into_iter()
+                        .filter(|name| *name != listener.name)
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    let conflict = listener
+                        .conditions
+                        .iter()
+                        .find(|condition| condition.type_ == "Conflicted")
+                        .unwrap();
+                    assert!(
+                        conflict.message.contains(&format!("conflicts with: {others}")),
+                        "{}: {}",
+                        listener.name,
+                        conflict.message
+                    );
+                }
+                let current = serde_json::to_string(status).unwrap();
+                if let Some(previous) = &previous {
+                    assert!(
+                        !status_semantically_changed("Gateway", previous, &current, Some("default")),
+                        "round {round}, proxy={with_proxy_conflict}"
+                    );
+                }
+                previous = Some(current);
+                gateway = computed;
+            }
+        }
     }
 
     fn make_proxy_protocol_gateway(annotation: &str) -> Gateway {

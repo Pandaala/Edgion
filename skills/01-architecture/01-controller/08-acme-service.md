@@ -42,7 +42,7 @@ User creates/updates EdgionAcme
 ### Detailed Steps
 
 1. **Resource intake**: the user creates or updates an EdgionAcme resource; it enters the Workqueue → ResourceProcessor pipeline
-2. **Handler processing**: the EdgionAcme Handler validates configuration, resolves the account credential and `challenge.gatewayRef`, publishes Controller-owned HTTP listener attachments, updates `Accepted`/`ResolvedRefs`, and notifies the ACME service only when the attachment is usable
+2. **Handler processing**: the EdgionAcme Handler validates configuration, resolves the account credential and `challenge.gatewayRef`, publishes Controller-owned HTTP listener attachments, and updates `Accepted`/`ResolvedRefs`. It compares UID/generation and ResolvedRefs status/reason with the previous processed cache, then notifies the service from `after_publish` when that comparison changed and the attachment/account result permits notification. Status-only echoes cannot reset the service retry budget merely because a generic status CAS failed; the service sees the newly published eligibility conditions before consuming a recovery notification. See the [notification guard](../../04-review/acme/regression-guards/resource-change-notification-gating.md).
 3. **Background worker**: the Kubernetes leader's AcmeService consumes its own `mpsc<AcmeCommand>` queue, verifies the raw object against the current processed generation and live Gateway attachment, then requests issuance from the ACME server
 4. **Domain validation**: performs proof of domain ownership using HTTP-01
 5. **Certificate issuance**: once validation passes, the ACME server issues the certificate; the client downloads the certificate chain and private key

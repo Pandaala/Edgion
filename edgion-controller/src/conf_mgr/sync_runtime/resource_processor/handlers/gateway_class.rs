@@ -3,11 +3,13 @@
 //! Handles GatewayClass resources.
 
 use crate::conf_mgr::conf_center::common::DEFAULT_CONTROLLER_NAME;
+use crate::conf_mgr::sync_runtime::resource_processor::status_ownership::gateway_has_class_owner;
 use crate::conf_mgr::sync_runtime::resource_processor::{
     condition_false, condition_reasons, condition_true, condition_types, update_condition, HandlerContext,
     ProcessResult, ProcessorHandler,
 };
-use edgion_resources::prelude_resources::GatewayClass;
+use crate::conf_mgr::ControllerRuntime;
+use edgion_resources::prelude_resources::{EdgionGatewayConfig, EdgionPlugins, Gateway, GatewayClass};
 use edgion_resources::resources::gateway_class::{GatewayClassStatus, SupportedFeature, SUPPORTED_FEATURES};
 
 /// Outcome of resolving `GatewayClass.spec.parametersRef`.
@@ -16,6 +18,8 @@ enum ParamsRefState {
     Skip,
     /// parametersRef present, group/kind valid, and the target EdgionGatewayConfig exists.
     Resolved,
+    /// The target exists, but a deployment-local early plugin attachment is invalid.
+    ResolvedInvalid(String),
     /// parametersRef present but unusable: bad group/kind, or target not found.
     Invalid(String),
 }
@@ -39,39 +43,127 @@ fn resolve_params_ref(gc: &GatewayClass, ctx: &HandlerContext) -> ParamsRefState
         // EGC kind not watched (no_watch_kinds opt-out): existence unknown, do not assert.
         None => ParamsRefState::Skip,
         Some(processor) => {
-            if processor.get_raw_any(&params_ref.name).is_some() {
-                ParamsRefState::Resolved
-            } else {
-                ParamsRefState::Invalid(format!(
+            let Some(egc) = processor
+                .get_raw_any(&params_ref.name)
+                .and_then(|raw| raw.downcast::<EdgionGatewayConfig>().ok())
+            else {
+                return ParamsRefState::Invalid(format!(
                     "referenced EdgionGatewayConfig \"{}\" not found",
                     params_ref.name
-                ))
+                ));
+            };
+            // Unlike the shared cluster-scoped EGC, this class is owned by one
+            // deployment and may report that deployment's local plugin validation.
+            let mut errors = Vec::new();
+            if let Some(plugins_processor) = ctx.runtime().processor_registry.get("EdgionPlugins") {
+                for reference in egc.spec.global_plugins_ref.as_deref().unwrap_or_default() {
+                    let namespace = reference.namespace.as_deref().unwrap_or("default");
+                    let key = format!("{namespace}/{}", reference.name);
+                    if let Some(plugins) = plugins_processor
+                        .get_raw_any(&key)
+                        .and_then(|raw| raw.downcast::<EdgionPlugins>().ok())
+                    {
+                        errors.extend(
+                            plugins
+                                .validate_request_id_early_attachment()
+                                .into_iter()
+                                .map(|error| format!("globalPluginsRef {key}: {error}")),
+                        );
+                    }
+                }
+            }
+            if errors.is_empty() {
+                ParamsRefState::Resolved
+            } else {
+                ParamsRefState::ResolvedInvalid(errors.join("; "))
             }
         }
     }
 }
 
+/// Deployment ownership of GatewayClasses. Non-Kubernetes sources may omit
+/// the selected class; Kubernetes always supplies its configured class name.
+pub struct GatewayClassOwnership {
+    controller_name: String,
+    gateway_class_name: Option<String>,
+}
+
+impl GatewayClassOwnership {
+    pub(super) fn owns_gateway(&self, gateway: &Gateway, runtime: &ControllerRuntime) -> bool {
+        gateway_has_class_owner(
+            gateway,
+            &self.controller_name,
+            self.gateway_class_name.as_deref(),
+            runtime,
+        )
+    }
+
+    pub fn new(controller_name: String, gateway_class_name: Option<String>) -> Self {
+        Self {
+            controller_name,
+            gateway_class_name,
+        }
+    }
+
+    pub(super) fn matches(&self, gc: &GatewayClass) -> bool {
+        gc.spec.controller_name == self.controller_name
+            && self
+                .gateway_class_name
+                .as_ref()
+                .is_none_or(|name| gc.metadata.name.as_ref() == Some(name))
+    }
+}
+
 /// GatewayClass handler
 pub struct GatewayClassHandler {
-    controller_name: String,
+    ownership: GatewayClassOwnership,
 }
 
 impl GatewayClassHandler {
-    pub fn new(controller_name: String) -> Self {
-        Self { controller_name }
+    pub fn new(ownership: GatewayClassOwnership) -> Self {
+        Self { ownership }
     }
 }
 
 impl Default for GatewayClassHandler {
     fn default() -> Self {
-        Self::new(DEFAULT_CONTROLLER_NAME.to_string())
+        Self::new(GatewayClassOwnership::new(DEFAULT_CONTROLLER_NAME.to_string(), None))
+    }
+}
+
+/// Ownership can make a Gateway absent from ServerCache, so recovery must
+/// inspect raw keys. Publish/unpublish first: the consumer checks that the raw
+/// class incarnation has actually been published by this deployment.
+async fn requeue_class_gateways(gc: &GatewayClass, ctx: &HandlerContext) {
+    let Some(name) = gc.metadata.name.as_deref() else {
+        return;
+    };
+    let Some(processor) = ctx.runtime().processor_registry.get("Gateway") else {
+        return;
+    };
+    for key in processor.raw_keys() {
+        if processor
+            .get_raw_any(&key)
+            .and_then(|raw| raw.downcast::<Gateway>().ok())
+            .is_some_and(|gateway| gateway.spec.gateway_class_name == name)
+        {
+            ctx.requeue("Gateway", key).await;
+        }
     }
 }
 
 #[async_trait::async_trait]
 impl ProcessorHandler<GatewayClass> for GatewayClassHandler {
-    fn filter(&self, gc: &GatewayClass) -> bool {
-        gc.spec.controller_name == self.controller_name
+    fn filter(&self, gc: &GatewayClass, _ctx: &HandlerContext) -> bool {
+        self.ownership.matches(gc)
+    }
+
+    async fn after_publish(&self, gc: &GatewayClass, ctx: &HandlerContext) {
+        requeue_class_gateways(gc, ctx).await;
+    }
+
+    async fn after_unpublish(&self, gc: &GatewayClass, ctx: &HandlerContext) {
+        requeue_class_gateways(gc, ctx).await;
     }
 
     fn validate(&self, _gc: &GatewayClass, _ctx: &HandlerContext) -> Vec<String> {
@@ -93,7 +185,7 @@ impl ProcessorHandler<GatewayClass> for GatewayClassHandler {
         // ResolvedRefs condition (Edgion extension on GatewayClass; upstream Gateway API
         // defines only Accepted + SupportedVersion here).
         match &ref_state {
-            ParamsRefState::Resolved => update_condition(
+            ParamsRefState::Resolved | ParamsRefState::ResolvedInvalid(_) => update_condition(
                 &mut status.conditions,
                 condition_true(
                     condition_types::RESOLVED_REFS,
@@ -120,7 +212,7 @@ impl ProcessorHandler<GatewayClass> for GatewayClassHandler {
 
         // Accepted condition. Precedence: a parametersRef problem yields reason
         // InvalidParameters; any other validation error keeps reason Invalid; otherwise Accepted.
-        let accepted = if let ParamsRefState::Invalid(msg) = &ref_state {
+        let accepted = if let ParamsRefState::Invalid(msg) | ParamsRefState::ResolvedInvalid(msg) = &ref_state {
             condition_false(
                 condition_types::ACCEPTED,
                 condition_reasons::INVALID_PARAMETERS,
@@ -164,6 +256,10 @@ impl ProcessorHandler<GatewayClass> for GatewayClassHandler {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "tests/gateway_class_status_test.rs"]
+mod status_tests;
 
 #[cfg(test)]
 mod tests {

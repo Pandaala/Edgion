@@ -26,7 +26,10 @@ use super::watch_source::{SourceState, WatchScope};
 use super::InitSyncTimer;
 use super::ShutdownSignal;
 use crate::conf_mgr::sync_runtime::resource_processor::{
-    extract_status_value, raw_store::RawStore, KubeRawStore, ResourceProcessor, WorkItemResult,
+    make_resource_key,
+    raw_store::RawStore,
+    status_ownership::{ownership_dependency_kinds, ownership_dependency_signature},
+    KubeRawStore, ResourceProcessor, WorkItemResult,
 };
 use anyhow::Result;
 use edgion_resources::ResourceMeta;
@@ -38,6 +41,7 @@ use kube::runtime::WatchStreamExt;
 use kube::{Api, Client, Resource, ResourceExt};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
+use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::pin::Pin;
@@ -266,7 +270,44 @@ where
                 if matches!(&event, Event::Init) && timer.is_none() && !running {
                     timer = Some(InitSyncTimer::start(self.kind));
                 }
+                let tracks_ownership = matches!(self.kind, "GatewayClass" | "Gateway" | "HTTPRoute" | "GRPCRoute");
+                // WATCH echoes read one key; only a complete LIST compares the source snapshot.
+                let changed_key = match &event {
+                    Event::Apply(obj) | Event::Delete(obj) => Some(make_resource_key(obj)),
+                    _ => None,
+                };
+                let list_commit = matches!(&event, Event::InitDone);
+                let compare_ownership = tracks_ownership && (list_commit || changed_key.is_some());
+                let signatures = || {
+                    let objects = match changed_key.as_deref() {
+                        Some(key) => raw.get(key).into_iter().collect(),
+                        None => raw.snapshot(),
+                    };
+                    objects
+                        .into_iter()
+                        .filter_map(|obj| {
+                            let value = serde_json::to_value(obj.as_ref()).ok()?;
+                            Some((
+                                make_resource_key(obj.as_ref()),
+                                ownership_dependency_signature(self.kind, &value)?,
+                            ))
+                        })
+                        .collect::<BTreeMap<_, _>>()
+                };
+                let before = compare_ownership.then(&signatures);
+                let was_committed = sources[index].ever_committed;
                 let keys = sources[index].apply(event)?;
+                let first_commit = !was_committed && sources[index].ever_committed;
+                if self.kind == "GatewayClass"
+                    && first_commit
+                    && self.watcher_config.label_selector.is_none()
+                    && self.watcher_config.field_selector.is_none()
+                {
+                    self.processor.runtime().set_gateway_classes_complete(true);
+                }
+                if compare_ownership && (first_commit || before.as_ref() != Some(&signatures())) {
+                    self.requeue_ownership_dependents().await;
+                }
                 if running {
                     for key in keys {
                         // The outer cancellation abandons the epoch, including a partial delivery.
@@ -335,8 +376,24 @@ where
                 let _ = handle.await;
             }
         }
+        if self.kind == "GatewayClass" {
+            // Source teardown clears its stores; that absence is not an API deletion.
+            self.processor.runtime().set_gateway_classes_complete(false);
+        }
         drop(sources);
         result
+    }
+
+    /// Source identity events bypass publication filters but still use the sole workqueue.
+    async fn requeue_ownership_dependents(&self) {
+        let kinds = ownership_dependency_kinds(self.kind);
+        for kind in kinds {
+            if let Some(processor) = self.processor.runtime().processor_registry.get(kind) {
+                for key in processor.raw_keys() {
+                    processor.requeue(key).await;
+                }
+            }
+        }
     }
 }
 
@@ -395,6 +452,8 @@ where
                     Some(work_item) => {
                         // Parse key to ObjectRef and get from store
                         let store_obj = store.get(&work_item.key).map(|arc| (*arc).clone());
+                        // Fence the write against the input snapshot, not handler-mutated metadata.
+                        let resource_version = store_obj.as_ref().and_then(|obj| obj.meta().resource_version.clone());
 
                         {
                             // K8s mode: pass None for existing_status_json (status is already in store_obj from K8s API)
@@ -402,24 +461,30 @@ where
                                 .process_work_item(&work_item.key, store_obj, None, work_item.trigger_chain.clone())
                                 .await;
 
-                            if let WorkItemResult::Processed { obj, status_changed } = result {
+                            if let WorkItemResult::Processed {
+                                obj,
+                                status_changed,
+                                persisted_status,
+                            } = result
+                            {
                                 let can_write_status = leader_handle.as_ref().is_none_or(|h| h.is_leader());
                                 if status_changed && can_write_status {
                                     let name = obj.meta().name.as_deref().unwrap_or("");
                                     let namespace = obj.meta().namespace.as_deref();
 
-                                    match extract_status_value(&obj) {
+                                    match persisted_status {
                                         Some(status_value) => {
                                             if let Err(e) = persist_k8s_status::<K>(
                                                 &client,
                                                 &api_scope,
                                                 namespace,
                                                 name,
+                                                resource_version.as_deref(),
                                                 &status_value,
                                             )
                                             .await
                                             {
-                                                if matches!(&e, kube::Error::Api(status) if status.code == 404) {
+                                                if e.is_not_found() {
                                                     tracing::info!(
                                                         component = "resource_controller",
                                                         kind = kind,
@@ -470,17 +535,34 @@ where
     })
 }
 
-/// Persist status to K8s API using JSON Merge Patch on status subresource
+#[derive(Debug, thiserror::Error)]
+enum StatusWriteError {
+    #[error("Cannot persist Kubernetes status without the input resourceVersion; wait for a valid source snapshot")]
+    MissingResourceVersion,
+    #[error(transparent)]
+    Kubernetes(#[from] kube::Error),
+}
+
+impl StatusWriteError {
+    fn is_not_found(&self) -> bool {
+        matches!(self, Self::Kubernetes(kube::Error::Api(status)) if status.code == 404)
+    }
+}
+
+/// Persist status with an atomic precondition on the raw input resourceVersion.
 ///
 /// Uses DynamicObject to avoid the Scope type constraint issue.
 /// The `ApiResource` is built from K's `#[kube]`-derived GVK + plural metadata.
+/// All resource kinds inherit the guard. A conflict ends this attempt; recovery uses
+/// subsequent source events/requeues, never a fresh version attached to stale status.
 async fn persist_k8s_status<K>(
     client: &Client,
     api_scope: &ApiScope,
     namespace: Option<&str>,
     name: &str,
+    resource_version: Option<&str>,
     status_value: &serde_json::Value,
-) -> Result<(), kube::Error>
+) -> Result<(), StatusWriteError>
 where
     K: Resource + Clone + Debug + DeserializeOwned + Serialize,
     K::DynamicType: Default,
@@ -500,20 +582,30 @@ where
 
     let kind_str = K::kind(&dt).to_string();
 
-    let patch = serde_json::json!({ "status": status_value });
-    let params = PatchParams::default();
+    let result = async {
+        let resource_version = resource_version
+            .filter(|version| !version.is_empty())
+            .ok_or(StatusWriteError::MissingResourceVersion)?;
+        let patch = serde_json::json!({
+            "metadata": { "resourceVersion": resource_version },
+            "status": status_value,
+        });
+        let params = PatchParams::default();
 
-    let result = match api_scope {
-        ApiScope::Namespaced(_) => {
-            let ns = namespace.unwrap_or("default");
-            let api: Api<DynamicObject> = Api::namespaced_with(client.clone(), ns, &api_resource);
-            api.patch_status(name, &params, &Patch::Merge(&patch)).await
+        match api_scope {
+            ApiScope::Namespaced(_) => {
+                let ns = namespace.unwrap_or("default");
+                let api: Api<DynamicObject> = Api::namespaced_with(client.clone(), ns, &api_resource);
+                api.patch_status(name, &params, &Patch::Merge(&patch)).await?;
+            }
+            ApiScope::ClusterScoped => {
+                let api: Api<DynamicObject> = Api::all_with(client.clone(), &api_resource);
+                api.patch_status(name, &params, &Patch::Merge(&patch)).await?;
+            }
         }
-        ApiScope::ClusterScoped => {
-            let api: Api<DynamicObject> = Api::all_with(client.clone(), &api_resource);
-            api.patch_status(name, &params, &Patch::Merge(&patch)).await
-        }
-    };
+        Ok::<(), StatusWriteError>(())
+    }
+    .await;
 
     match &result {
         Ok(_) => {
@@ -531,7 +623,7 @@ where
         }
     }
 
-    result.map(|_| ())
+    result
 }
 
 /// Check if resource passes namespace filter
@@ -579,7 +671,13 @@ where
         return false;
     }
 
-    let WorkItemResult::Processed { obj, status_changed } = processor.on_init_apply(obj, None).await else {
+    let resource_version = obj.meta().resource_version.clone();
+    let WorkItemResult::Processed {
+        obj,
+        status_changed,
+        persisted_status,
+    } = processor.on_init_apply(obj, None).await
+    else {
         return false;
     };
 
@@ -587,9 +685,18 @@ where
     if status_changed && can_write_status {
         let name = obj.meta().name.as_deref().unwrap_or("");
         let namespace = obj.meta().namespace.as_deref();
-        if let Some(status_value) = extract_status_value(&obj) {
-            if let Err(e) = persist_k8s_status::<K>(client, api_scope, namespace, name, &status_value).await {
-                if matches!(&e, kube::Error::Api(status) if status.code == 404) {
+        if let Some(status_value) = persisted_status {
+            if let Err(e) = persist_k8s_status::<K>(
+                client,
+                api_scope,
+                namespace,
+                name,
+                resource_version.as_deref(),
+                &status_value,
+            )
+            .await
+            {
+                if e.is_not_found() {
                     tracing::info!(
                         component = "resource_controller",
                         kind = kind,
@@ -613,6 +720,11 @@ where
 
     true
 }
+
+// Status persistence regression tests live in `tests/status_persistence_test.rs`.
+#[cfg(test)]
+#[path = "tests/status_persistence_test.rs"]
+mod status_persistence_tests;
 
 #[cfg(test)]
 mod tests {
@@ -651,7 +763,7 @@ mod tests {
 
     #[async_trait::async_trait]
     impl ProcessorHandler<ConfigMap> for RecordingHandler {
-        fn filter(&self, obj: &ConfigMap) -> bool {
+        fn filter(&self, obj: &ConfigMap, _ctx: &HandlerContext) -> bool {
             obj.metadata
                 .labels
                 .as_ref()

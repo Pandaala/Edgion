@@ -11,7 +11,8 @@ knowledge_type: regression-guards
 
 ## Conclusion
 
-K8s-mode status persistence uses `Patch::Merge({"status": <serialized>})`
+K8s-mode status persistence uses `Patch::Merge` with serialized `status` and a raw-input
+`metadata.resourceVersion` precondition
 (`persist_k8s_status`, `edgion-controller/.../kubernetes/resource_controller.rs`).
 Under RFC 7386 a `{"status": {}}` body is a no-op and a key is deleted only by an
 explicit `null`; arrays are replaced wholesale. So a **bare `Vec` status list
@@ -56,21 +57,25 @@ Vec<Condition>` are `skip_serializing_if = "Vec::is_empty"`, but the controller
 always sets ≥1 condition (`Accepted`) and never clears them, so the empty
 transition is unreachable.
 
-**4. Safe — `EdgionAcme.active_challenges` skip is required**
+**4. ACME clears challenges through its dedicated writer**
 
 `active_challenges: Vec` is skip-serialized *intentionally*: it is written by a
 dedicated field manager (`edgion-acme-challenges`) via
 `patch_active_challenges` (`services/acme/service.rs`), which builds raw JSON with
 an **explicit** `"activeChallenges": active` array (empty `[]` clears it) using
-`Patch::Apply`. The skip keeps the *generic* worker's merge patch and
-`update_acme_status`'s SSA (field manager `edgion-acme-controller`) from
-clobbering the separately-managed field. Removing the skip would reintroduce a
-field-manager collision.
+`Patch::Apply`. The skip keeps `update_acme_status`'s freshly constructed empty
+challenge list out of its SSA payload (field manager `edgion-acme-controller`).
+It does not omit a nonempty list observed by the generic worker. The earlier claim
+that skip-empty alone prevents generic-worker clobbering was incorrect: concurrency
+safety comes from the shared raw-input resourceVersion precondition, described in the
+[snapshot concurrency guard](../../status/regression-guards/kubernetes-status-snapshot-concurrency.md).
+Removing the skip would make the generic worker explicitly clear observed empty lists
+and make the lifecycle SSA writer submit a field owned by the challenge writer.
 
 ## Fix Suggestions Not Accepted
 
 - "Also always-serialize every `conditions` list" — unreachable empty transition; adds churn for no benefit.
-- "Remove `skip_serializing_if` from `EdgionAcme.active_challenges`" — breaks the field-manager separation that keeps the challenge writer and the status writer from clobbering each other.
+- "Remove `skip_serializing_if` from `EdgionAcme.active_challenges`" — makes the lifecycle SSA payload submit the challenge writer's field; explicit clearing already belongs to `patch_active_challenges`.
 - "Emit an explicit `null` tombstone in the persist path instead of always-serializing" — a per-field `[]` at the struct is simpler, local, and testable; a generic null-injector in `persist_k8s_status` cannot know which keys are lists.
 
 ## Re-evaluation Triggers

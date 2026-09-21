@@ -394,9 +394,17 @@ impl ProcessorHandler<EdgionStreamPlugins> for EdgionStreamPluginsHandler {
             partially_invalid_condition(Some(msg), generation)
         };
 
-        let status = esp
+        let Some(status) = esp
             .status
-            .get_or_insert_with(|| EdgionStreamPluginsStatus { conditions: vec![] });
+            .get_or_insert_with(EdgionStreamPluginsStatus::default)
+            .as_local_mut()
+        else {
+            tracing::warn!(
+                component = "edgion_stream_plugins_handler",
+                "Status projection missing; skipping status mutation"
+            );
+            return;
+        };
         update_condition(&mut status.conditions, accepted);
         update_condition(&mut status.conditions, resolved_refs);
         update_condition(&mut status.conditions, partially_invalid);
@@ -1144,6 +1152,8 @@ spec:
 
         let status = esp.status.as_ref().expect("status populated");
         let accepted = status
+            .as_local()
+            .expect("native test status")
             .conditions
             .iter()
             .find(|c| c.type_ == "Accepted")
@@ -1200,6 +1210,8 @@ spec:
 
         let status = esp.status.as_ref().expect("status populated");
         let accepted = status
+            .as_local()
+            .expect("native test status")
             .conditions
             .iter()
             .find(|c| c.type_ == "Accepted")
@@ -1219,7 +1231,13 @@ spec:
         handler.update_status(&mut esp, &make_ctx(), &errors);
 
         let status = esp.status.as_ref().unwrap();
-        let accepted = status.conditions.iter().find(|c| c.type_ == "Accepted").unwrap();
+        let accepted = status
+            .as_local()
+            .expect("native test status")
+            .conditions
+            .iter()
+            .find(|c| c.type_ == "Accepted")
+            .unwrap();
         assert_eq!(accepted.reason, "Invalid");
     }
 
@@ -1243,6 +1261,8 @@ spec:
 
         let status = esp.status.unwrap();
         let cond = status
+            .as_local()
+            .expect("native test status")
             .conditions
             .iter()
             .find(|c| c.type_ == condition_types::UNKNOWN_CONFIG_FIELDS)
@@ -1252,6 +1272,8 @@ spec:
 
         // Accepted must stay True and untouched by this advisory condition.
         let accepted = status
+            .as_local()
+            .expect("native test status")
             .conditions
             .iter()
             .find(|c| c.type_ == condition_types::ACCEPTED)
@@ -1267,17 +1289,21 @@ spec:
         use crate::conf_mgr::sync_runtime::resource_processor::status_utils::{
             condition_reasons, condition_true, condition_types,
         };
+        use edgion_resources::resources::common::ConditionsStatus;
 
         let mut esp = clean_esp();
         esp.spec.unknown_fields = Vec::new(); // fixed
-        esp.status = Some(EdgionStreamPluginsStatus {
-            conditions: vec![condition_true(
-                condition_types::UNKNOWN_CONFIG_FIELDS,
-                condition_reasons::UNKNOWN_FIELDS_DETECTED,
-                "stale",
-                Some(1),
-            )],
-        });
+        esp.status = Some(
+            ConditionsStatus {
+                conditions: vec![condition_true(
+                    condition_types::UNKNOWN_CONFIG_FIELDS,
+                    condition_reasons::UNKNOWN_FIELDS_DETECTED,
+                    "stale",
+                    Some(1),
+                )],
+            }
+            .into(),
+        );
 
         let handler = EdgionStreamPluginsHandler::new();
         handler.update_status(&mut esp, &make_ctx(), &[]);
@@ -1285,6 +1311,8 @@ spec:
         assert!(esp
             .status
             .unwrap()
+            .as_local()
+            .expect("native test status")
             .conditions
             .iter()
             .all(|c| c.type_ != condition_types::UNKNOWN_CONFIG_FIELDS));
@@ -1449,6 +1477,8 @@ spec:
             .as_ref()
             .expect("status must be populated by update_status");
         let cond = status
+            .as_local()
+            .expect("native test status")
             .conditions
             .iter()
             .find(|c| c.type_ == "ResolvedRefs")

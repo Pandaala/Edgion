@@ -2,7 +2,7 @@
 //!
 //! EdgionPlugins defines reusable plugin configurations that can be referenced by HTTPRoutes
 
-use crate::resources::common::Condition;
+use crate::resources::common::{ConditionsStatus, ControllerStatus};
 use kube::CustomResource;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -202,12 +202,8 @@ impl<'de> Deserialize<'de> for EdgionPluginsSpec {
     }
 }
 
-/// Status of EdgionPlugins
-#[derive(Default, Serialize, Deserialize, Debug, PartialEq, Clone, JsonSchema)]
-pub struct EdgionPluginsStatus {
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub conditions: Vec<Condition>,
-}
+/// Status of EdgionPlugins.
+pub type EdgionPluginsStatus = ControllerStatus<ConditionsStatus>;
 
 impl EdgionPlugins {
     /// Get the namespace of this resource

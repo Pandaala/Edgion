@@ -138,7 +138,14 @@ fn outcome_to_result<T>(outcome: ResolveOutcome<T>) -> Result<T, ResolvedRefsErr
 /// on success so the condition transitions `False → True` when an operator
 /// fixes the Secret.
 fn apply_resolved_refs_condition(ls: &mut LinkSys, generation: Option<i64>, errors: &[ResolvedRefsError]) {
-    let status = ls.status.get_or_insert_with(LinkSysStatus::default);
+    let Some(status) = ls.status.get_or_insert_with(LinkSysStatus::default).as_local_mut() else {
+        tracing::warn!(
+            component = "status",
+            kind = "LinkSys",
+            "Unprojected status cannot be updated"
+        );
+        return;
+    };
     update_condition(&mut status.conditions, resolved_refs_condition(errors, generation));
 }
 
@@ -346,7 +353,14 @@ impl ProcessorHandler<LinkSys> for LinkSysHandler {
 
         // `ResolvedRefs` is maintained by `parse` (see `apply_resolved_refs_condition`);
         // this method owns `Accepted` and the independent unknown-field advisory.
-        let status = ls.status.get_or_insert_with(LinkSysStatus::default);
+        let Some(status) = ls.status.get_or_insert_with(LinkSysStatus::default).as_local_mut() else {
+            tracing::warn!(
+                component = "status",
+                kind = "LinkSys",
+                "Unprojected status cannot be updated"
+            );
+            return;
+        };
 
         status.observed_generation = None;
         status.credential_state = None;
@@ -446,6 +460,8 @@ mod unknown_fields_tests {
         resource
             .status
             .get_or_insert_with(LinkSysStatus::default)
+            .as_local_mut()
+            .expect("status must be projected before handler mutation")
             .conditions
             .push(resolved_refs_condition(&[], Some(7)));
         let ctx = HandlerContext::new(
@@ -458,7 +474,13 @@ mod unknown_fields_tests {
         );
 
         handler.update_status(&mut resource, &ctx, &[]);
-        let conditions = &resource.status.as_ref().expect("status").conditions;
+        let conditions = &resource
+            .status
+            .as_ref()
+            .expect("status")
+            .as_local()
+            .expect("native test status")
+            .conditions;
         assert!(conditions.iter().any(|condition| {
             condition.type_ == condition_types::UNKNOWN_CONFIG_FIELDS
                 && condition.reason == condition_reasons::UNKNOWN_FIELDS_DETECTED
@@ -476,10 +498,18 @@ mod unknown_fields_tests {
             .status
             .as_mut()
             .expect("status")
+            .as_local_mut()
+            .expect("native test status")
             .conditions
             .push(condition_true("Unrelated", "Stable", "keep", Some(7)));
         handler.update_status(&mut resource, &ctx, &[]);
-        let conditions = &resource.status.as_ref().expect("status").conditions;
+        let conditions = &resource
+            .status
+            .as_ref()
+            .expect("status")
+            .as_local()
+            .expect("native test status")
+            .conditions;
         assert!(conditions
             .iter()
             .all(|condition| condition.type_ != condition_types::UNKNOWN_CONFIG_FIELDS));

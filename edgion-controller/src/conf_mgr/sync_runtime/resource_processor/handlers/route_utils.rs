@@ -7,6 +7,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use crate::conf_mgr::sync_runtime::resource_processor::attached_route_tracker::Attachment;
+use crate::conf_mgr::sync_runtime::resource_processor::status_ownership::{parent_is_owned, serving_gateway};
 use crate::conf_mgr::sync_runtime::resource_processor::{AcceptedError, ResolvedRefsError};
 use crate::conf_mgr::ControllerRuntime;
 use edgion_algo::matcher::radix_hostname::RadixHostnamePatternRef;
@@ -86,7 +87,7 @@ pub(crate) fn resolve_acme_listener_attachments(
         });
     }
 
-    let gateway = lookup_projected_gateway(gateway_namespace, &parent_ref.name, runtime).ok_or_else(|| {
+    let gateway = serving_gateway(gateway_namespace, &parent_ref.name, runtime).ok_or_else(|| {
         AcmeGatewayRefError::ParentNotFound {
             namespace: gateway_namespace.to_string(),
             name: parent_ref.name.clone(),
@@ -574,6 +575,10 @@ pub fn update_tracker_accepted_only(
             continue;
         }
 
+        if !parent_is_owned(parent_ref, route_ns, runtime) {
+            continue;
+        }
+
         let result = validate_parent_ref_accepted(route_ns, parent_ref, route_hostnames, route_kind.as_str(), runtime);
         if !result.errors.is_empty() {
             continue;
@@ -673,12 +678,6 @@ pub fn lookup_gateway(namespace: &str, name: &str, runtime: &ControllerRuntime) 
     let processor = runtime.processor_registry.get("Gateway")?;
     let key = format!("{}/{}", namespace, name);
     processor.get_raw_any(&key)?.downcast::<Gateway>().ok()
-}
-
-fn lookup_projected_gateway(namespace: &str, name: &str, runtime: &ControllerRuntime) -> Option<Arc<Gateway>> {
-    let processor = runtime.processor_registry.get("Gateway")?;
-    let key = format!("{}/{}", namespace, name);
-    processor.get_cached_any(&key)?.downcast::<Gateway>().ok()
 }
 
 /// Resolve listener keys from parentRefs for per-listener route isolation.
@@ -812,9 +811,13 @@ fn resolve_listeners_inner(
             .or(fallback_namespace)
             .unwrap_or("default");
 
-        let Some(gateway) = lookup_projected_gateway(gw_ns, &parent_ref.name, runtime)
-            .or_else(|| lookup_gateway(gw_ns, &parent_ref.name, runtime))
-        else {
+        let Some(gateway) = serving_gateway(gw_ns, &parent_ref.name, runtime).or_else(|| {
+            runtime
+                .status_identity()
+                .is_none()
+                .then(|| lookup_gateway(gw_ns, &parent_ref.name, runtime))
+                .flatten()
+        }) else {
             // Parent Gateway not in the store at compute time (e.g. the route
             // was processed before its parent Gateway). The route gets no
             // resolved listeners for this parentRef until the Gateway is

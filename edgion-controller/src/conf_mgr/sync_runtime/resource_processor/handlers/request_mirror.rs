@@ -491,6 +491,8 @@ mod tests {
             .status
             .as_ref()
             .unwrap()
+            .as_local()
+            .unwrap()
             .conditions
             .iter()
             .find(|condition| condition.type_ == "ResolvedRefs")
@@ -521,6 +523,8 @@ mod tests {
         let accepted = plugins
             .status
             .as_ref()
+            .unwrap()
+            .as_local()
             .unwrap()
             .conditions
             .iter()

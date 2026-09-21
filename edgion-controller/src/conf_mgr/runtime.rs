@@ -13,6 +13,7 @@ use parking_lot::RwLock;
 
 use super::conf_center::CenterApi;
 use super::processor_registry::ProcessorRegistry;
+use super::sync_runtime::resource_processor::status_ownership::KubernetesStatusIdentity;
 use super::sync_runtime::resource_processor::{
     attached_route_tracker::AttachedRouteTracker,
     backend_tls_policy_ref::BackendTLSPolicyState,
@@ -41,6 +42,8 @@ use crate::services::credential_manager::memory::CredentialMemoryStore;
 /// All fields are plain (non-Arc) values; the struct itself is shared as
 /// `Arc<ControllerRuntime>` so cloning is cheap and all owners see the same data.
 pub struct ControllerRuntime {
+    status_identity: RwLock<Option<KubernetesStatusIdentity>>,
+    gateway_classes_complete: AtomicBool,
     pub(crate) processor_registry: ProcessorRegistry,
     pub(crate) namespace_store: NamespaceStore,
     pub(crate) ref_grant_dispatcher: ReferenceGrantEventDispatcher,
@@ -111,6 +114,8 @@ pub struct ControllerRuntime {
 impl ControllerRuntime {
     pub fn new() -> Self {
         Self {
+            status_identity: RwLock::new(None),
+            gateway_classes_complete: AtomicBool::new(false),
             processor_registry: ProcessorRegistry::new(),
             namespace_store: NamespaceStore::new(),
             ref_grant_dispatcher: ReferenceGrantEventDispatcher::new(),
@@ -143,6 +148,23 @@ impl ControllerRuntime {
             gateway_attachment_boot_nonce: uuid::Uuid::new_v4().to_string(),
             conf_writer: RwLock::new(None),
         }
+    }
+
+    pub fn status_identity(&self) -> Option<KubernetesStatusIdentity> {
+        self.status_identity.read().clone()
+    }
+
+    pub fn set_status_identity(&self, identity: KubernetesStatusIdentity) {
+        *self.status_identity.write() = Some(identity);
+    }
+
+    /// Only an unfiltered, committed cluster-wide LIST proves class absence.
+    pub fn set_gateway_classes_complete(&self, complete: bool) {
+        self.gateway_classes_complete.store(complete, Ordering::Release);
+    }
+
+    pub fn gateway_classes_complete(&self) -> bool {
+        self.gateway_classes_complete.load(Ordering::Acquire)
     }
 
     pub fn set_managed_credentials_supported(&self, supported: bool) {
@@ -197,6 +219,8 @@ impl ControllerRuntime {
     /// is process-scoped and never dropped. `clear_processors()` breaks the first cycle
     /// on each restart; dispatcher listeners are left alive by design (see above).
     pub fn reset(&self) {
+        *self.status_identity.write() = None;
+        self.set_gateway_classes_complete(false);
         self.processor_registry.clear_processors();
         tracing::info!(component = "controller_runtime", "Cleared ProcessorRegistry");
 

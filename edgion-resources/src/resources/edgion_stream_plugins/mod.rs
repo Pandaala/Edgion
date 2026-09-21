@@ -6,7 +6,7 @@
 //! - `plugins` (Stage 1): ConnectionFilter — pre-TLS, IP-only
 //! - `tls_route_plugins` (Stage 2): TlsRoute — post-handshake, post-route-match
 
-use crate::resources::common::Condition;
+use crate::resources::common::{ConditionsStatus, ControllerStatus};
 use kube::CustomResource;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -163,12 +163,8 @@ impl TlsRoutePluginEntry {
     }
 }
 
-/// Status of EdgionStreamPlugins
-#[derive(Default, Serialize, Deserialize, Debug, PartialEq, Clone, JsonSchema)]
-pub struct EdgionStreamPluginsStatus {
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub conditions: Vec<Condition>,
-}
+/// Status of EdgionStreamPlugins.
+pub type EdgionStreamPluginsStatus = ControllerStatus<ConditionsStatus>;
 
 impl EdgionStreamPlugins {
     /// Get the namespace of this resource

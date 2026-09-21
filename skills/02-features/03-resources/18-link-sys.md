@@ -462,6 +462,15 @@ EdgionPlugins `resolvedCredential` (Admin redacts that value).
 
 ## Status Schema
 
+In Kubernetes, this native payload is nested under each
+`status.controllers[].status`. Select the entry by `controllerName` and
+`gatewayClassName`; `gatewayClassUid` identifies its incarnation. All lifecycle
+fields (including credentialState, generations, refresh timestamps and consumer
+counts) belong to that same entry. There is no top-level aggregate conditions or
+lifecycle status. FileSystem/etcd and conf_sync retain the native shape shown
+below. The shared envelope has a 32-entry cap; see
+[status ownership](../../01-architecture/01-controller/10-status-management.md#7-status-persistence).
+
 ```yaml
 status:
   conditions:

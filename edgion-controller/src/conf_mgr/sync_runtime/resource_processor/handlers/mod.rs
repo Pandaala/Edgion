@@ -21,6 +21,9 @@ mod edgion_tls;
 mod endpoint_slice;
 mod gateway;
 mod gateway_class;
+#[cfg(test)]
+#[path = "tests/gateway_ownership_test.rs"]
+mod gateway_ownership_tests;
 mod grpc_route;
 pub(crate) mod grpc_route_delegation;
 pub(crate) mod hostname_resolution;
@@ -50,7 +53,7 @@ pub use edgion_stream_plugins::EdgionStreamPluginsHandler;
 pub use edgion_tls::EdgionTlsHandler;
 pub use endpoint_slice::EndpointSliceHandler;
 pub use gateway::GatewayHandler;
-pub use gateway_class::GatewayClassHandler;
+pub use gateway_class::{GatewayClassHandler, GatewayClassOwnership};
 pub use grpc_route::GrpcRouteHandler;
 pub use http_route::HttpRouteHandler;
 pub use link_sys::LinkSysHandler;

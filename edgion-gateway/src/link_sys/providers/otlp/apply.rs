@@ -224,7 +224,7 @@ mod tests {
     use edgion_resources::resources::common::outbound_tls::OutboundTlsLocal;
     use edgion_resources::resources::common::{SecretObjectReference, SecretSlot};
     use edgion_resources::resources::link_sys::otlp::{OtlpAuth, OtlpClientConfig};
-    use edgion_resources::resources::link_sys::{LinkSysSpec, LinkSysStatus};
+    use edgion_resources::resources::link_sys::{LinkSysLocalStatus, LinkSysSpec};
     use k8s_openapi::ByteString;
 
     use super::*;
@@ -327,10 +327,13 @@ mod tests {
             "edgion.io/sync-version".to_string(),
             "second".to_string(),
         )]));
-        second.status = Some(LinkSysStatus {
-            observed_generation: Some(7),
-            ..Default::default()
-        });
+        second.status = Some(
+            LinkSysLocalStatus {
+                observed_generation: Some(7),
+                ..Default::default()
+            }
+            .into(),
+        );
         assert!(fingerprint_otlp(&first)
             .unwrap()
             .equal_runtime(&fingerprint_otlp(&second).unwrap()));

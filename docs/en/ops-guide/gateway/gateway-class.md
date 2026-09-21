@@ -49,11 +49,38 @@ edgion.io/gateway-controller
 In Kubernetes mode, set `controller_name` in the Controller configuration to customize this name;
 the GatewayClass must match the configured value.
 
+Kubernetes ownership checks both `controller_name` and the configured `gateway_class`.
+The Controller processes a Gateway only after it has published the matching GatewayClass
+incarnation (the same nonempty Kubernetes UID). A missing, foreign or unwatched class
+does not authorize Gateway processing; `no_watch_kinds: [GatewayClass]` therefore disables
+Gateway processing. Deleting or replacing the class withdraws affected cached Gateways
+until ownership is established again. Class `Accepted=False` does not itself transfer
+ownership, and an ordinary generation update does not revoke it.
+
+Use distinct GatewayClasses for independent deployments. HA replicas sharing one class
+and controller name must share their election domain and configuration/resource view.
+The version check below does not prevent two independently elected, overlapping deployments
+from alternating different desired statuses.
+
+Known limitation: distinct classes do not yet isolate EdgionAcme status writers.
+If independently elected deployments both watch the same EdgionAcme, but only one
+publishes its referenced Gateway, they can alternate `ResolvedRefs` conditions.
+Until ACME ownership admission is implemented, avoid overlapping EdgionAcme watch
+scope across independent deployments; different controller names alone do not
+prevent this conflict.
+
 When troubleshooting Route attachment, check both `status.parents[].parentRef` and `controllerName`.
 The Gateway uses the current Edgion controller's matching `Accepted` result: another controller's
 `Accepted=True` cannot override Edgion's `Accepted=False`. Different resource kinds, Listener sections
 and ports are evaluated separately. The Controller preserves observed foreign statuses and removes
 its own stale or duplicate entries.
+
+In Kubernetes mode, generic Controller status updates check the resource version used to
+compute them. If another writer updates the resource first, the stale write fails with
+`409 Conflict`, preserving the successful newer state. The Controller records the failure
+without an immediate retry; a later resource event, related dependency change or successful
+LIST can trigger another reconciliation. Recovery has no fixed deadline. If status stays
+stale, check Controller status-write warnings and API permissions.
 
 ## Scenarios
 
@@ -129,6 +156,26 @@ spec:
 
 ## Edge cases and caveats
 
+### Deployment status on shared resources
+
+In Kubernetes, `EdgionPlugins`, `EdgionStreamPlugins`, `EdgionBackend` and
+`LinkSys` store each deployment's complete observation in `status.controllers[]`.
+Select the entry by `controllerName` and `gatewayClassName`, then inspect its
+`status.conditions`. `gatewayClassUid` identifies the current GatewayClass
+incarnation. LinkSys credential lifecycle fields also live inside that entry's
+`status`, not at the top level.
+
+Each resource holds at most 32 deployment entries. Existing entries can still
+update at the limit; a new deployment cannot evict another entry. The Controller
+reports the refused status write while continuing local configuration processing.
+Inactive entries do not expire: cleanup requires authoritative GatewayClass
+deletion or identity-replacement evidence. FileSystem, etcd and Gateway-local
+status formats are unchanged. Independent deployments should use distinct
+GatewayClasses; replicas sharing a class must share an election domain and
+configuration view.
+
+### GatewayClass caveats
+
 - `controllerName` is immutable in the Gateway API; to change controllers you must delete and
   recreate the GatewayClass.
 - If `controllerName` does not exactly match the configured Controller name, Edgion never sets
@@ -136,6 +183,11 @@ spec:
 - A `parametersRef` with the wrong `group` or `kind` is rejected with `Accepted: False`; an
   unset `parametersRef` is valid and falls back to defaults.
 - `EdgionGatewayConfig` is cluster-scoped, so `parametersRef` carries no `namespace`.
+- Shared `EdgionGatewayConfig.status` reports intrinsic configuration validity.
+  If a visible `globalPluginsRef` has an invalid early RequestId source or condition,
+  the consuming GatewayClass reports `Accepted=False/InvalidParameters` while
+  `ResolvedRefs=True` still means the EGC exists. Check the class status for these
+  deployment-local errors. Missing/unwatched plugins are not newly rejected by this check.
 - `EdgionGatewayConfig` changes apply dynamically (no Gateway restart); see its page for the
   fields that hot-reload.
 

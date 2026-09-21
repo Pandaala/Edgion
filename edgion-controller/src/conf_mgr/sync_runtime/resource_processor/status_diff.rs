@@ -9,16 +9,17 @@
 //!
 //! Instead of a single trait, we use a layered approach:
 //!
-//! 1. **Condition level** – `conditions_semantically_equal` compares `Vec<Condition>`
-//!    ignoring `last_transition_time`, matching by `type_`.
-//! 2. **Composite helpers** – `parents_semantically_equal`, `ancestors_semantically_equal`,
-//!    `listeners_semantically_equal` for structured sub-statuses.
+//! 1. **Condition level** – `conditions_equal` compares condition arrays,
+//!    ignoring `lastTransitionTime`, matching by `type`.
+//! 2. **Composite helpers** – `attachment_statuses_equal` compares parents and
+//!    ancestors; `gateway_status_equal` includes listener status.
 //! 3. **Top-level** – `status_semantically_changed` is the single entry point
 //!    called by `processor.rs`. It deserializes old/new JSON into
 //!    `serde_json::Value`, then delegates to type-specific comparators.
 
 use edgion_resources::resources::common::{ParentReference, ParentStatusIdentity};
 use serde_json::Value;
+use std::collections::BTreeMap;
 
 /// Entry point: check whether the new status is semantically different from
 /// the old status, given the resource `kind`.
@@ -39,17 +40,66 @@ pub fn status_semantically_changed(
         Err(_) => return true,
     };
 
+    if super::status_observation::is_partitioned_kind(kind)
+        && (old.get("controllers").is_some() || new.get("controllers").is_some())
+    {
+        return !controller_observations_equal(kind, &old, &new);
+    }
+
+    !native_status_equal(kind, &old, &new, resource_namespace)
+}
+
+fn native_status_equal(kind: &str, old: &Value, new: &Value, resource_namespace: Option<&str>) -> bool {
     match kind {
         "HTTPRoute" | "GRPCRoute" | "TCPRoute" | "TLSRoute" | "UDPRoute" | "EdgionTls" => {
-            !parents_status_equal(&old, &new, resource_namespace)
+            attachment_statuses_equal(old, new, resource_namespace, "parents", "parentRef")
         }
-        "Gateway" => !gateway_status_equal(&old, &new),
-        "BackendTLSPolicy" | "EdgionBackendTrafficPolicy" => !ancestors_status_equal(&old, &new),
-        "EdgionAcme" | "LinkSys" => !conditions_and_fields_status_equal(&old, &new),
+        "Gateway" => gateway_status_equal(old, new),
+        "BackendTLSPolicy" | "EdgionBackendTrafficPolicy" => {
+            attachment_statuses_equal(old, new, resource_namespace, "ancestors", "ancestorRef")
+        }
+        "EdgionAcme" | "LinkSys" => conditions_and_fields_status_equal(old, new),
         // Simple condition-only resources:
         // GatewayClass, EdgionGatewayConfig, EdgionPlugins, EdgionStreamPlugins, EdgionConfigData
-        _ => !conditions_only_status_equal(&old, &new),
+        _ => conditions_only_status_equal(old, new),
     }
+}
+
+/// Kubernetes observations are a map keyed by deployment identity, not array order.
+/// UID changes are semantic even when the new incarnation reports identical conditions.
+fn controller_observations_equal(kind: &str, old: &Value, new: &Value) -> bool {
+    type Observations<'a> = BTreeMap<(&'a str, &'a str), (&'a str, &'a Value)>;
+    fn decode(value: &Value) -> Option<Observations<'_>> {
+        let object = value.as_object()?;
+        if object.len() != 1 {
+            return None;
+        }
+        let mut entries = BTreeMap::new();
+        for entry in object.get("controllers")?.as_array()? {
+            let controller = entry.get("controllerName")?.as_str()?;
+            let class = entry.get("gatewayClassName")?.as_str()?;
+            let uid = entry.get("gatewayClassUid")?.as_str()?;
+            let status = entry.get("status")?;
+            if controller.is_empty()
+                || class.is_empty()
+                || uid.is_empty()
+                || !status.is_object()
+                || entries.insert((controller, class), (uid, status)).is_some()
+            {
+                return None;
+            }
+        }
+        Some(entries)
+    }
+    let (Some(old), Some(new)) = (decode(old), decode(new)) else {
+        return false;
+    };
+    old.len() == new.len()
+        && new.iter().all(|(key, (uid, payload))| {
+            old.get(key).is_some_and(|(old_uid, old_payload)| {
+                uid == old_uid && native_status_equal(kind, old_payload, payload, None)
+            })
+        })
 }
 
 // ============================================================================
@@ -140,20 +190,26 @@ fn conditions_and_fields_status_equal(old: &Value, new: &Value) -> bool {
 }
 
 // ============================================================================
-// Per-parent status (HTTPRoute, GRPCRoute, TCPRoute, TLSRoute, UDPRoute, EdgionTls)
+// Shared per-parent / per-ancestor status comparison
 // ============================================================================
 
-fn parents_status_equal(old: &Value, new: &Value, resource_namespace: Option<&str>) -> bool {
+fn attachment_statuses_equal(
+    old: &Value,
+    new: &Value,
+    resource_namespace: Option<&str>,
+    list_field: &str,
+    reference_field: &str,
+) -> bool {
     if [old, new].iter().any(|status| {
         !status.is_object()
             || status
-                .get("parents")
+                .get(list_field)
                 .is_some_and(|parents| !parents.is_null() && !parents.is_array())
     }) {
         return false;
     }
-    let old_parents = old.get("parents").and_then(Value::as_array);
-    let new_parents = new.get("parents").and_then(Value::as_array);
+    let old_parents = old.get(list_field).and_then(Value::as_array);
+    let new_parents = new.get(list_field).and_then(Value::as_array);
 
     match (old_parents, new_parents) {
         (None, None) => true,
@@ -165,7 +221,7 @@ fn parents_status_equal(old: &Value, new: &Value, resource_namespace: Option<&st
             let decode_refs = |entries: &[Value]| -> Option<Vec<ParentReference>> {
                 entries
                     .iter()
-                    .map(|entry| serde_json::from_value(entry.get("parentRef")?.clone()).ok())
+                    .map(|entry| serde_json::from_value(entry.get(reference_field)?.clone()).ok())
                     .collect()
             };
             let (Some(old_refs), Some(new_refs)) = (decode_refs(old_arr), decode_refs(new_arr)) else {
@@ -190,7 +246,7 @@ fn parents_status_equal(old: &Value, new: &Value, resource_namespace: Option<&st
                             && old_parent.get("controllerName").and_then(Value::as_str)
                                 == Some(identity.controller_name)
                             && old_ref.canonical_identity(resource_namespace) == identity.parent
-                            && parent_entry_equal(old_parent, new_parent)
+                            && attachment_entry_equal(old_parent, new_parent)
                     });
                 let Some(index) = matched else { return false };
                 used[index] = true;
@@ -200,58 +256,8 @@ fn parents_status_equal(old: &Value, new: &Value, resource_namespace: Option<&st
     }
 }
 
-/// Compare a single parent status entry: controllerName + conditions.
-fn parent_entry_equal(old: &Value, new: &Value) -> bool {
-    if old.get("controllerName") != new.get("controllerName") {
-        return false;
-    }
-    let old_conds = old.get("conditions").unwrap_or(&Value::Null);
-    let new_conds = new.get("conditions").unwrap_or(&Value::Null);
-    conditions_equal(old_conds, new_conds)
-}
-
-// ============================================================================
-// Per-ancestor status (BackendTLSPolicy, EdgionBackendTrafficPolicy)
-// ============================================================================
-
-fn ancestors_status_equal(old: &Value, new: &Value) -> bool {
-    let old_ancestors = old.get("ancestors").and_then(Value::as_array);
-    let new_ancestors = new.get("ancestors").and_then(Value::as_array);
-
-    match (old_ancestors, new_ancestors) {
-        (None, None) => true,
-        (Some(a), None) | (None, Some(a)) => a.is_empty(),
-        (Some(old_arr), Some(new_arr)) => {
-            if old_arr.len() != new_arr.len() {
-                return false;
-            }
-            for new_anc in new_arr {
-                let matched = old_arr.iter().find(|old_a| ancestor_ref_matches(old_a, new_anc));
-                match matched {
-                    None => return false,
-                    Some(old_a) => {
-                        if !ancestor_entry_equal(old_a, new_anc) {
-                            return false;
-                        }
-                    }
-                }
-            }
-            true
-        }
-    }
-}
-
-fn ancestor_ref_matches(a: &Value, b: &Value) -> bool {
-    let a_ref = a.get("ancestorRef");
-    let b_ref = b.get("ancestorRef");
-    match (a_ref, b_ref) {
-        (Some(ar), Some(br)) => ar.get("name") == br.get("name") && ar.get("namespace") == br.get("namespace"),
-        (None, None) => true,
-        _ => false,
-    }
-}
-
-fn ancestor_entry_equal(old: &Value, new: &Value) -> bool {
+/// Compare a single attachment status entry: controllerName + conditions.
+fn attachment_entry_equal(old: &Value, new: &Value) -> bool {
     if old.get("controllerName") != new.get("controllerName") {
         return false;
     }
@@ -323,6 +329,99 @@ fn listener_equal(old: &Value, new: &Value) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn controller_observations_compare_identity_uid_and_native_semantics() {
+        use serde_json::json;
+        for kind in ["EdgionPlugins", "EdgionStreamPlugins", "EdgionBackend", "LinkSys"] {
+            let entry = |class: &str| {
+                json!({
+                    "controllerName": "example/controller", "gatewayClassName": class,
+                    "gatewayClassUid": "uid-1", "status": {"conditions": [{
+                        "type": "ResolvedRefs", "status": "True", "reason": "ResolvedRefs",
+                        "message": "Resolved", "observedGeneration": 1,
+                        "lastTransitionTime": "2026-01-01T00:00:00Z"
+                    }]}
+                })
+            };
+            let old = json!({"controllers": [entry("a"), entry("b")]});
+            let mut new = json!({"controllers": [entry("b"), entry("a")]});
+            new["controllers"][0]["status"]["conditions"][0]["lastTransitionTime"] = json!("2026-02-01T00:00:00Z");
+            let changed = |value: &Value| status_semantically_changed(kind, &old.to_string(), &value.to_string(), None);
+            assert!(!changed(&new), "{kind}: order and transition time are not changes");
+            let mut changed_uid = new.clone();
+            changed_uid["controllers"][0]["gatewayClassUid"] = json!("uid-2");
+            assert!(changed(&changed_uid));
+            let mut changed_condition = new.clone();
+            changed_condition["controllers"][0]["status"]["conditions"][0]["status"] = json!("False");
+            assert!(changed(&changed_condition));
+            let duplicate = json!({"controllers": [entry("a"), entry("a")]});
+            assert!(changed(&duplicate));
+            assert!(changed(&json!({"conditions": []})));
+            if kind == "LinkSys" {
+                new["controllers"][0]["status"]["publishedGeneration"] = json!(2);
+                assert!(changed(&new));
+            }
+        }
+    }
+
+    #[test]
+    fn policy_ancestors_share_canonical_identity_and_multiset_comparison() {
+        use serde_json::json;
+        for kind in ["BackendTLSPolicy", "EdgionBackendTrafficPolicy"] {
+            let entry = json!({"ancestorRef": {"name": "gw"}, "controllerName": "ours/controller",
+                "conditions": [{"type": "Accepted", "status": "True", "observedGeneration": 1}]});
+            let status = |entries: Vec<Value>| json!({"ancestors": entries}).to_string();
+            let changed = |old: &str, new: &str| status_semantically_changed(kind, old, new, Some("apps"));
+            let old = status(vec![entry.clone()]);
+            let mut equivalent = entry.clone();
+            equivalent["ancestorRef"] = json!({"name": "gw", "namespace": "apps",
+                "group": "gateway.networking.k8s.io", "kind": "Gateway"});
+            equivalent["conditions"][0]["lastTransitionTime"] = json!("2026-01-01T00:00:00Z");
+            assert!(!changed(&old, &status(vec![equivalent])));
+            for (field, value) in [
+                ("group", json!("")),
+                ("kind", json!("Service")),
+                ("namespace", json!("other")),
+                ("name", json!("other")),
+                ("sectionName", json!("https")),
+                ("port", json!(443)),
+            ] {
+                let mut different = entry.clone();
+                different["ancestorRef"][field] = value;
+                assert!(changed(&old, &status(vec![different])), "{kind}: {field}");
+            }
+            let mut foreign = entry.clone();
+            foreign["controllerName"] = json!("foreign/controller");
+            assert!(changed(&old, &status(vec![foreign.clone()])));
+            let mixed = status(vec![foreign.clone(), entry.clone()]);
+            assert!(!changed(&mixed, &mixed));
+            assert!(!changed(&mixed, &status(vec![entry.clone(), foreign])));
+            let mut rejected = entry.clone();
+            rejected["conditions"][0]["status"] = json!("False");
+            assert!(changed(&old, &status(vec![rejected.clone()])));
+            let duplicates = status(vec![entry.clone(), rejected.clone()]);
+            assert!(!changed(&duplicates, &status(vec![rejected, entry.clone()])));
+            assert!(changed(&duplicates, &status(vec![entry.clone(), entry.clone()])));
+            assert!(changed(&old, &status(vec![entry.clone(), entry])));
+            for malformed in [
+                "null",
+                "[]",
+                "1",
+                r#"{"ancestors":{}}"#,
+                r#"{"ancestors":"invalid"}"#,
+                r#"{"ancestors":[{"ancestorRef":{"name":1},"controllerName":"c"}]}"#,
+                r#"{"ancestors":[{"ancestorRef":{"name":"gw"}}]}"#,
+            ] {
+                for other in [malformed, "{}", r#"{"ancestors":[]}"#] {
+                    assert!(changed(malformed, other), "{kind}: {malformed}");
+                    assert!(changed(other, malformed), "{kind}: {malformed}");
+                }
+            }
+            assert!(!changed("{}", r#"{"ancestors":[]}"#));
+            assert!(!changed(r#"{"ancestors":null}"#, r#"{"ancestors":[]}"#));
+        }
+    }
 
     #[test]
     fn malformed_parent_status_containers_are_not_equal() {
@@ -471,7 +570,7 @@ mod tests {
     }
 
     /// `EdgionBackendTrafficPolicy` (GEP-2648 `status.ancestors[]`, like
-    /// `BackendTLSPolicy`) must dispatch through `ancestors_status_equal`: a
+    /// `BackendTLSPolicy`) must dispatch through `attachment_statuses_equal`: a
     /// `lastTransitionTime`-only change is not a semantic change, but a
     /// `status` flip on a condition is.
     #[test]

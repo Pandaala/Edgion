@@ -34,6 +34,11 @@ parent ID must not be reported as a gateway span ID.
   RequestId is unsupported and rejected on Controller and Gateway.
 - Early sources/conditions must only use available parsed-header data and the
   canonical trace ID. Body/dye and late context dependencies are rejected.
+  For EGC global references, Controller diagnostics belong to the consuming
+  GatewayClass (`Accepted=False/InvalidParameters` with `ResolvedRefs=True` for
+  an existing EGC), not the shared EGC status. This keeps namespace-limited
+  deployments from fighting over one cluster-scoped condition. Both paths still
+  use the shared early-attachment validator; data-plane validation is unchanged.
 - A valid established custom destination value wins. Default disable removes
   the reserved wire header but retains W3C identity in the access log. Suppression
   must survive backend echo and later response plugins; only a default-policy

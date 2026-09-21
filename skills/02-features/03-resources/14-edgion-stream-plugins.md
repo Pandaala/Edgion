@@ -126,6 +126,12 @@ only `IpRestriction` in the current Rust enum.
 
 ## Status Schema
 
+In Kubernetes, the native conditions below live in
+`status.controllers[].status.conditions`, selected by `controllerName` and
+`gatewayClassName` with `gatewayClassUid` incarnation evidence. FileSystem/etcd
+and conf_sync keep the native shape. Reuse the shared 32-entry observation
+[contract](../../01-architecture/01-controller/10-status-management.md#7-status-persistence).
+
 ```yaml
 status:
   conditions:

@@ -8,8 +8,8 @@
 //! direct policy is the Gateway whose routes reach a target. One entry is
 //! produced per ancestor Gateway (via the typed ancestor resolver),
 //! stamped with this controller's name, so the same policy can be Accepted on
-//! one Gateway and Conflicted on another. `status.ancestors` is empty when no
-//! route references any target (matching the BackendTLSPolicy handler's
+//! one Gateway and Conflicted on another. Owned ancestors are removed when no
+//! route references any target; foreign entries are retained (matching the BackendTLSPolicy handler's
 //! precedent) — lenient admission still applies (an invalid or unresolved policy
 //! still syncs to the data plane, whose marker withdraws invalid specs):
 //! - `Accepted`:
@@ -580,6 +580,12 @@ impl ProcessorHandler<EdgionBackendTrafficPolicy> for EdgionBackendTrafficPolicy
         // stable when the status does not actually flip (mirrors the
         // BackendTLSPolicy handler post-ffe29c28).
         let old_ancestors = std::mem::take(&mut status.ancestors);
+        status.ancestors.extend(
+            old_ancestors
+                .iter()
+                .filter(|ancestor| ancestor.controller_name != self.controller_name)
+                .cloned(),
+        );
 
         for (gw_key, targets) in &ancestors_map {
             let Some((gw_ns, gw_name)) = gw_key.split_once('/') else {
@@ -1561,8 +1567,59 @@ mod tests {
         assert!(younger_status.spec.resolved_target_class.is_none());
     }
 
-    /// One Service reachable through two Gateways -> two ancestor entries,
-    /// each stamped with our controllerName.
+    /// Rebuilding owned ancestors preserves foreign entries and stable condition times.
+    #[test]
+    fn status_rebuild_preserves_foreign_ancestors_and_owned_transition_times() {
+        for has_gateway in [false, true] {
+            let (ctx, rt) = make_ctx();
+            let handler = make_handler();
+            if has_gateway {
+                wire_service_to_gateway(&rt, "ns", "payments", "route", "gateway");
+            }
+            let mut policy = make_policy("policy", "payments", "2026-01-01T00:00:00Z");
+            let foreign: PolicyAncestorStatus = serde_json::from_value(json!({
+                "ancestorRef": {"group": "gateway.networking.k8s.io", "kind": "Gateway", "namespace": "ns", "name": "gateway"},
+                "controllerName": "foreign.example/controller",
+                "conditions": [{"type": "Accepted", "status": "False", "reason": "ForeignReason",
+                    "message": "Foreign controller decision", "lastTransitionTime": "2000-01-01T00:00:00Z"}]
+            })).unwrap();
+            let mut stale_owned = foreign.clone();
+            stale_owned.controller_name = TEST_CONTROLLER.to_owned();
+            stale_owned.ancestor_ref.name = "removed-gateway".to_owned();
+            policy.status = Some(EdgionBackendTrafficPolicyStatus {
+                ancestors: vec![foreign.clone(), stale_owned],
+            });
+            handler.update_status(&mut policy, &ctx, &[]);
+            let ancestors = &mut policy.status.as_mut().unwrap().ancestors;
+            assert_eq!(ancestors[0], foreign);
+            assert_eq!(ancestors.len(), if has_gateway { 2 } else { 1 });
+            if has_gateway {
+                assert_eq!(ancestors[1].controller_name, TEST_CONTROLLER);
+                assert_eq!(ancestors[1].ancestor_ref.name, "gateway");
+                assert!(ancestors[1]
+                    .conditions
+                    .iter()
+                    .all(|condition| condition.reason != "ForeignReason"));
+                for condition in &mut ancestors[1].conditions {
+                    condition.last_transition_time = "2000-01-01T00:00:00Z".to_owned();
+                }
+            }
+            let prior = policy.status.clone().unwrap().ancestors;
+            let prior_json = serde_json::to_string(&policy.status).unwrap();
+            handler.update_status(&mut policy, &ctx, &[]);
+            assert!(
+                !crate::conf_mgr::sync_runtime::resource_processor::status_diff::status_semantically_changed(
+                    "EdgionBackendTrafficPolicy",
+                    &prior_json,
+                    &serde_json::to_string(&policy.status).unwrap(),
+                    Some("ns"),
+                )
+            );
+            assert_eq!(policy.status.unwrap().ancestors, prior);
+        }
+    }
+
+    /// One Service reachable through two Gateways -> two owned ancestor entries.
     #[tokio::test]
     async fn two_gateways_yield_two_ancestor_entries() {
         let (ctx, rt) = make_ctx();

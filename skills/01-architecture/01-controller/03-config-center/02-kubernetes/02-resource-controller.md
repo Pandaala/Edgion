@@ -1,130 +1,68 @@
 ---
 name: kubernetes-resource-controller
-description: Kubernetes ResourceController lifecycle — Reflector watching, Init/Runtime phases, ResourceProcessor 11-step pipeline, status writeback, 410 Gone handling.
+description: Kubernetes ResourceController lifecycle — source snapshots, union bootstrap, one runtime worker, and conditional status writeback.
 ---
 
 # ResourceController Lifecycle
 
-Each K8s resource type is managed by a dedicated `ResourceController<K>`. All instances run independently and in parallel.
+Each kind has one `ResourceController<K>`, one `ResourceProcessor<K>` and one workqueue
+worker. Different kinds run independently. Multiple namespace watchers feed the same
+kind's controller; they do not create additional processors or workers.
 
-## Architecture Overview
+## Sources and bootstrap
 
-```
-KubernetesController.run()
-├── spawn::<HTTPRoute, _>(handler)      → ResourceController<HTTPRoute>
-├── spawn::<Gateway, _>(handler)        → ResourceController<Gateway>
-├── spawn::<Service, _>(handler)        → ResourceController<Service>
-└── ... (all resource kinds selected by KubernetesController)
-```
+`run_namespaced()` builds one source for all namespaces, one selected namespace, or
+each distinct namespace in a configured list. `run_cluster_scoped()` builds one cluster
+source. Both enter `run_sources(inputs)`; the former `run_with_api` path is gone.
 
-Internal structure of a ResourceController:
+Each source owns a native reflector store through `SourceState`. `KubeRawStore` exposes
+one store or the nonoverlapping namespace-store union and is injected before processing.
+It represents raw API objects, including those later rejected by business filters.
 
-```
-ResourceController<K>
-├── kind: &'static str
-├── client: kube::Client
-├── watcher_config: watcher::Config
-├── api_scope: ApiScope                  # Namespaced(watch_mode) | ClusterScoped
-├── processor: Arc<ResourceProcessor<K>> # holds ServerCache + Workqueue + Handler
-├── namespace_filter: Option<Vec<String>>
-├── shutdown_signal: Option<ShutdownSignal>
-├── relink_signal: Option<RelinkSignalSender>
-└── leader_handle: Option<LeaderHandle>
-```
+1. Sources collect `Init` / `InitApply` and commit complete snapshots at `InitDone`.
+2. Wait until every source has committed once; snapshot the complete raw union.
+3. Call `processor.on_init()`, then `run_init_apply_once` for every snapshot object.
+   Sources are not polled during replay, so lookups see the complete union.
+4. Each replay captures the raw resourceVersion, calls `on_init_apply`, then awaits
+   conditional status persistence if changed and leadership permits.
+5. Call `on_init_done()` and spawn exactly one worker.
 
-Startup steps:
-1. Create `ResourceProcessor<K>` (containing `ServerCache<K>` + `Workqueue`)
-2. Register it into `runtime.processor_registry`
-3. Call `run_namespaced()` or `run_cluster_scoped()` → `run_with_api(api)`
-4. Enter the Init phase → Runtime phase
+Initial watch changes contribute to the committed snapshot; there is no separate pre-init
+`Apply` persistence entrypoint. Duplicate completion does not create a second worker.
 
-## Init Phase (Steps 1-6)
+## Runtime events and source relists
 
-```
-run_with_api(api)
-│
-├── Step 1: Create the Reflector store + watcher stream and inject KubeRawStore
-│   store, writer = reflector::store()
-│   processor.set_raw_store(KubeRawStore::new(store.clone()))  # ← injected immediately, before any InitApply
-│   watcher_stream = watcher(api, watcher_config)
-│   stream = reflector(writer, watcher_stream)  # merged event stream
-│
-├── Step 2: Event::Init
-│   └── processor.on_init()                     # mark initialization started
-│       └── init_timer = InitSyncTimer::start()
-│
-├── Step 3-5: Event::InitApply(obj)  (repeated N times, once per LIST result)
-│   ├── namespace_filter check
-│   ├── processor.on_init_apply(obj, None)
-│   │   └── Full ResourceProcessor 11-step pipeline
-│   ├── init_count += 1
-│   └── if status_changed && can_write_status:
-│       └── persist_k8s_status()                # leader guard
-│
-└── Step 6: Event::InitDone
-    ├── processor.on_init_done()                # mark ready
-    └── spawn_worker()                          # start Workqueue worker
-```
+After bootstrap, `SourceState::apply` updates its source and returns affected keys.
+`run_sources` sends every returned key through `processor.on_event_key` for the existing
+worker, including deletes. The worker fetches the current raw object at dequeue time,
+captures its resourceVersion, and calls `process_work_item`. Coalesced events therefore
+reconcile current state rather than replaying obsolete object bodies.
 
-The Init phase processes K8s API LIST results; each object triggers `InitApply`.
-Status writebacks during this phase are synchronous (awaited directly inside the event loop) since the worker is not yet started.
+A successful source relist replaces that source's complete snapshot and enqueues current
+keys (including unchanged resourceVersions) plus removed keys. Other sources retain their
+snapshots; ServerCache and the worker are not reset. A source error retains its last
+committed snapshot and uses source-local backoff. A 410 Gone followed by LIST uses this
+relist flow, not a global Relink rebuild. Resuming WATCH without LIST does not force resync.
 
-## Runtime Phase (Steps 7-8)
+Required source EOF or worker termination fails the controller epoch; it is not silently
+treated as a healthy smaller source set. Cancellation/shutdown stops the worker and drops
+the sources. See [lifecycle](00-lifecycle.md) for the surrounding epoch contract.
 
-```
-Step 7-8: Runtime Phase (WATCH)
-├── Event::Apply(obj)
-│   ├── namespace_filter check
-│   ├── processor.on_apply(obj)       → enqueue key
-│   └── (special case: Apply arriving before init_done is processed directly + status written)
-│
-├── Event::Delete(obj)
-│   └── processor.on_delete(obj)      → enqueue key
-│
-└── Worker loop (spawn_worker):
-    ├── dequeue work item             # blocks; key released from pending
-    ├── get obj from reflector store
-    ├── processor.process_work_item(obj, store)
-    └── if status_changed && can_write_status:
-        └── persist_k8s_status()      # leader guard
-```
+## ResourceProcessor pipeline
 
-The Runtime phase uses a Go-operator-style workqueue: every event (Apply/Delete) first enqueues a key,
-then the worker uniformly dequeues and processes it. The worker fetches the latest object state from the reflector store,
-so even if multiple events arrive in a short window, only the latest state is processed once.
+`ResourceProcessor::process_resource` applies namespace/business filters, cleans metadata,
+validates/preparses/parses, computes status, finalizes transport, semantically compares
+status, notifies dependents through `on_change`, and publishes to ServerCache. Status persistence
+is a subsequent Kubernetes-controller responsibility, not an API call inside a handler.
+The raw input version is captured before this processing and must not be derived from
+processed metadata or sync-version annotations.
 
-> **KubeRawStore note**: `KubeRawStore` wraps the reflector's cloneable `Store<K>` and shares the
-> reflector's current object view rather than copying all objects.
-> It contains every K8s object, unaffected by handler filters such as `gatewayClassName`,
-> and is used by cross-resource lookups like `lookup_gateway` / `lookup_service_cluster_ip`.
+Cross-resource requeues go through the processor registry. `on_change` precedes
+`save_to_cache`; a handler's self-lookup uses RawStore, not its prior ServerCache entry.
+See [status management](../../10-status-management.md) for derivation and semantic diff
+and [workqueue](../../04-workqueue.md) for deduplication and trigger chains.
 
-## ResourceProcessor 11-step Pipeline
-
-Each resource goes through the full processing pipeline (`process_resource`):
-
-```
-process_resource(obj):
-├── Step 1.  Namespace filter check      — In multi-namespace mode, filter out unrelated namespaces
-├── Step 2.  Handler filter              — Business filter (e.g. gateway_class match)
-├── Step 3.  Clean metadata              — Remove managedFields, blocked annotations
-├── Step 4.  Validate                    — Schema + semantic validation; collect errors
-├── Step 5.  Preparse                    — Build runtime structures (e.g. parse host/path matching rules)
-├── Step 6.  Parse                       — Resolve references, update caches (Secret/Service ref registration)
-├── Step 7.  Extract old status          — Extract the old status from the current object (for change comparison)
-├── Step 8.  Update status               — Compute the new status (Gateway API conditions)
-├── Step 9.  Check if status changed     — Apply kind-aware semantic status comparison
-├── Step 10. on_change                   — Notify dependent resources (cross-resource requeue)
-└── Step 11. Save to ServerCache         — Save into the gRPC sync cache
-```
-
-Steps 4-6 are the responsibility of the concrete `ProcessorHandler<K>` implementation; each resource type has its own Handler.
-Steps 7-9 use unified status extraction and comparison logic.
-Cross-resource requeue in Step 10 is implemented via `ctx.runtime().processor_registry.requeue()`.
-After Step 11 writes to `ServerCache`, the gRPC Watch stream automatically pushes the change to the Gateway.
-
-## persist_k8s_status — Status Writeback
-
-Status is written back via the K8s API status subresource:
+## Conditional status writeback
 
 ```rust
 async fn persist_k8s_status<K>(
@@ -132,88 +70,55 @@ async fn persist_k8s_status<K>(
     api_scope: &ApiScope,
     namespace: Option<&str>,
     name: &str,
+    resource_version: Option<&str>,
     status_value: &serde_json::Value,
-) -> Result<(), kube::Error>
+) -> Result<(), StatusWriteError>
 ```
 
-Uses `DynamicObject` + JSON Merge Patch to write the `/status` subresource.
-`DynamicObject` is chosen over a generic `Api<K>` to avoid Scope generic-constraint issues
-(the same function must handle both Namespaced and ClusterScoped resources).
+The generic function uses `DynamicObject` with K's canonical GVK and plural, selecting
+the namespaced or cluster-scoped `/status` endpoint from `ApiScope`. GatewayClass and
+EdgionGatewayConfig both use the cluster-scoped path. All status-computing kinds and future
+`ResourceController` consumers inherit the same behavior without an opt-in list.
 
-### Leader Guard
+There are exactly two persistence entrypoints:
 
-Every `persist_k8s_status()` call is gated by `leader_handle`:
+| Entrypoint | Input version | Write gate |
+|---|---|---|
+| `run_init_apply_once` | Initial complete raw union object, before processing | `status_changed` and leadership |
+| `spawn_worker` | Raw object fetched for the dequeued key, before processing | `status_changed` and leadership |
 
-```rust
-let can_write_status = leader_handle.as_ref().is_none_or(|h| h.is_leader());
-if status_changed && can_write_status {
-    persist_k8s_status::<K>(...).await;
-}
+`leader_handle.as_ref().is_none_or(|h| h.is_leader())` supplies the leadership gate.
+Kubernetes lifecycle wiring supplies the handle. The write uses one JSON Merge Patch:
+
+```json
+{"metadata":{"resourceVersion":"raw-input-version"},"status":{"parents":[]}}
 ```
 
-The same logic is applied at three checkpoints:
+The version is opaque and must be nonempty. Missing/empty versions produce a local
+`StatusWriteError::MissingResourceVersion` before any request. Kubernetes rejects stale
+versions atomically: an intervening successful status, spec, or metadata update prevents
+an old snapshot from replacing newer fields/arrays. Never GET a fresh version and attach
+it to stale computed status, or fall back to an unconditional write.
 
-| Checkpoint | Location | Description |
-|------------|----------|-------------|
-| Init phase | `Event::InitApply` processing | Status writeback for LIST results |
-| Init edge case | `Event::Apply` arriving before init_done | Status writeback under race conditions |
-| Runtime worker | Work-item processing in `spawn_worker` | Regular runtime status writeback |
+Arrays still replace wholesale: handlers preserve foreign entries in the input snapshot
+and explicitly serialize empty arrays when clearing owned lists. The version precondition
+does not replace ownership rules, establish field-manager ownership, or fence leadership.
+ACME's field-scoped SSA service writers remain separate.
 
-The Kubernetes center supplies a `LeaderHandle`; non-Kubernetes centers do not use `persist_k8s_status()`.
+Existing success/error metrics cover this path. Callers treat 404 as already deleted;
+other failures, including 409 and missing versions, are warned without immediate retry or
+failure-triggered requeue. Status IO remains inline in the serial worker. Later events,
+successful source LISTs, dependency requeues or leadership-acquisition requeues provide
+another opportunity, with no bounded recovery guarantee. See the
+[no-retry decision](../../../../04-review/handler-requeue/intentional-design/status-write-no-retry-accepted.md)
+and [snapshot concurrency guard](../../../../04-review/status/regression-guards/kubernetes-status-snapshot-concurrency.md).
 
-### Status Change Detection
+## Key files
 
-Status is extracted as JSON and then compared semantically:
-
-```rust
-enum StatusExtractResult {
-    Present(String),       // status field is present and non-null; contains serialized JSON
-    Empty,                 // status is null or empty
-    SerializationError,    // serialization failed
-}
-```
-
-Only an actual semantic change triggers a K8s API call. The kind-aware comparison ignores known
-non-semantic churn such as condition ordering and `lastTransitionTime`, while falling back safely for
-unknown shapes or serialization failures. See `sync_runtime/resource_processor/status_diff.rs`.
-
-## Workqueue Mechanism
-
-Each `ResourceController` drives a per-kind Workqueue (dedup, dirty requeue, delayed/coalesced
-cross-resource requeue, and TriggerChain cycle detection). There is intentionally no
-exponential-backoff retry; status-write failures self-heal on watcher relist. The canonical structure
-and behavior are documented in [`../../04-workqueue.md`](../../04-workqueue.md) — see it for the real
-`Workqueue` / `WorkqueueConfig` / `TriggerChain` definitions.
-
-## 410 Gone Handling
-
-When the K8s API server's watch bookmark expires, the watcher receives a 410 Gone error,
-causing the Reflector to reconnect and re-LIST.
-
-`ResourceController` detects `Event::Init` reappearing after `init_done = true` and treats this as a watcher reconnect:
-
-```rust
-Event::Init => {
-    if init_done {
-        // Watcher reconnecting (possible 410 Gone)
-        relink_signal.try_send(RelinkReason::WatcherReconnected);
-        break;  // exit the current ResourceController
-    }
-}
-```
-
-After sending the `RelinkReason::WatcherReconnected` signal, the upper-level `KubernetesController` receives a `ControllerExit(Relink)` event,
-triggering a full Controller rebuild:
-`ControllerRuntime::reset()` → recreate every `ResourceController` → re-LIST + WATCH.
-
-This is a conservative but safe strategy: any single resource's watcher reconnect triggers a full rebuild,
-avoiding the risk of partial cache being out of sync with the K8s API.
-
-## Key Files
-
-- `edgion-controller/src/conf_mgr/conf_center/kubernetes/resource_controller.rs` — `ResourceController<K>`, `ApiScope`, `RelinkReason`
-- `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/processor.rs` — `ResourceProcessor<K>`, `ProcessorObj` trait
-- `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handler.rs` — `ProcessorHandler<K>` trait
-- `edgion-controller/src/conf_mgr/sync_runtime/workqueue.rs` — `Workqueue`, `WorkItem`, `WorkqueueConfig`
-- `edgion-controller/src/conf_mgr/processor_registry.rs` — per-runtime `ProcessorRegistry`
-- `edgion-controller/src/conf_mgr/conf_center/kubernetes/resource_controller.rs` — `persist_k8s_status` (inlined; `status.rs` was removed)
+- `edgion-controller/src/conf_mgr/conf_center/kubernetes/resource_controller.rs` — lifecycle, worker, status persistence
+- `edgion-controller/src/conf_mgr/conf_center/kubernetes/watch_source.rs` — source snapshots
+- `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/processor.rs` — processing and publication
+- `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handler.rs` — handler contract
+- `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/status_diff.rs` — semantic comparison
+- `edgion-controller/src/conf_mgr/sync_runtime/workqueue.rs` — serial workqueue
+- `edgion-controller/src/conf_mgr/processor_registry.rs` — cross-resource dispatch

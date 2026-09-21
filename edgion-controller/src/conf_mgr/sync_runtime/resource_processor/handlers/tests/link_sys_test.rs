@@ -15,7 +15,12 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 fn find_cond<'a>(ls: &'a LinkSys, type_: &str) -> Option<&'a Condition> {
-    ls.status.as_ref()?.conditions.iter().find(|c| c.type_ == type_)
+    ls.status
+        .as_ref()?
+        .as_local()?
+        .conditions
+        .iter()
+        .find(|c| c.type_ == type_)
 }
 
 fn make_ctx(secrets: HashMap<String, Secret>) -> (HandlerContext, Arc<ControllerRuntime>) {
@@ -311,6 +316,8 @@ fn credential_source_reports_unsupported_non_kubernetes_center_reason() {
         .status
         .as_ref()
         .unwrap()
+        .as_local()
+        .unwrap()
         .conditions
         .iter()
         .find(|condition| condition.type_ == condition_types::ACCEPTED)
@@ -340,6 +347,8 @@ async fn persist_off_is_rejected_when_not_single_publisher() {
     let accepted = link_sys
         .status
         .as_ref()
+        .unwrap()
+        .as_local()
         .unwrap()
         .conditions
         .iter()
@@ -426,6 +435,8 @@ fn persist_off_is_allowed_on_non_kubernetes_single_publisher() {
     let accepted = link_sys
         .status
         .as_ref()
+        .unwrap()
+        .as_local()
         .unwrap()
         .conditions
         .iter()
@@ -715,6 +726,8 @@ async fn test_resolved_refs_transitions_true_to_false_when_secret_broken() {
         .status
         .as_ref()
         .expect("status")
+        .as_local()
+        .unwrap()
         .conditions
         .iter()
         .filter(|c| c.type_ == condition_types::RESOLVED_REFS)
@@ -883,7 +896,11 @@ fn test_update_status_sets_accepted_true() {
 
     handler.update_status(&mut ls, &ctx, &[]);
 
-    let status = ls.status.expect("status should be set");
+    let status = ls
+        .status
+        .expect("status should be set")
+        .into_local()
+        .expect("native status");
     let accepted = status
         .conditions
         .iter()
@@ -913,7 +930,11 @@ fn redis_endpoint_validation_sets_accepted_false_without_echoing_input() {
     let errors = handler.preparse(&mut ls, &ctx);
     handler.update_status(&mut ls, &ctx, &errors);
 
-    let status = ls.status.expect("status should be set");
+    let status = ls
+        .status
+        .expect("status should be set")
+        .into_local()
+        .expect("native status");
     let accepted = status
         .conditions
         .iter()

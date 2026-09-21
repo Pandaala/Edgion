@@ -110,6 +110,19 @@ Important rules:
 - If `parse()` looks up Gateway relationships, register with `gateway_route_index` in `on_change()` / `on_delete()`
 - If it tracks Service refs, Secret refs, or cross-namespace refs, follow the matching helper pattern used by similar handlers
 - If the resource needs no special logic, still add a minimal `ProcessorHandler<T>` so it participates in the normal processor lifecycle
+- For status-computing resources, use the generic `ResourceController` persistence path:
+  it captures the raw input resourceVersion before processing and conditionally patches
+  `/status` in both bootstrap and runtime. Do not add a per-kind writer or attach a later
+  version to previously computed status. See [status persistence](../10-status-management.md#7-status-persistence).
+- Preserve other controllers' observed parent/ancestor entries; explicit empty arrays must
+  remain serialized when clearing owned lists. Version checks do not replace ownership rules.
+- For deployment-dependent status on shared resources, reuse `ControllerStatus<T>`:
+  Kubernetes persists `controllers[]` observations while handlers and conf_sync use
+  projected native status. Register the payload with `status_observation`, the typed
+  `status_pipeline` replacement, the semantic comparator and CRD envelope tests.
+  Never derive Kubernetes persistence from the processed object's local status.
+  Cover opposite namespace views, foreign preservation, identity replacement,
+  timestamp-only echoes, capacity and FS/etcd native roundtrips.
 
 > **`on_change` runs before `save_to_cache`** (this is intentional; see the Step 10/11 comments in `processor.rs`).
 > When `on_change` looks up "the resource currently being processed itself", it **must use `RawStore` (`get_raw_any`)**,
@@ -189,6 +202,10 @@ At minimum, decide which of these you need:
 - Rust unit tests near the resource type or handler
 - integration tests under `edgion-tests/`
 - controller / gateway admin API coverage if you exposed new endpoints
+- For a status-computing kind, extend the Controller's generic status transport test
+  inventory (checked against `ALL_RESOURCE_INFOS`), checking canonical endpoint/scope and
+  raw-version conflict protection. For a non-writing kind, explicitly classify it in that
+  inventory instead. New resources inherit the persistence guard without production opt-in.
 
 For route-like or dependency-heavy resources, integration coverage is usually the real safety net.
 

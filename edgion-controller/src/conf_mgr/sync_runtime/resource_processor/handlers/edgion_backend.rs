@@ -321,7 +321,18 @@ impl ProcessorHandler<EdgionBackend> for EdgionBackendHandler {
             )
         };
 
-        let status = backend.status.get_or_insert_with(EdgionBackendStatus::default);
+        let Some(status) = backend
+            .status
+            .get_or_insert_with(EdgionBackendStatus::default)
+            .as_local_mut()
+        else {
+            tracing::warn!(
+                component = "status",
+                kind = "EdgionBackend",
+                "Unprojected status cannot be updated"
+            );
+            return;
+        };
         let old = std::mem::take(&mut status.conditions);
         preserve_transition_time(&old, &mut accepted);
         preserve_transition_time(&old, &mut resolved_refs);
@@ -431,6 +442,8 @@ mod tests {
             .status
             .as_ref()
             .unwrap()
+            .as_local()
+            .expect("native test status")
             .conditions
             .iter()
             .find(|condition| condition.type_ == type_)
@@ -744,14 +757,29 @@ mod tests {
             .status
             .as_mut()
             .unwrap()
+            .as_local_mut()
+            .expect("native test status")
             .conditions
             .push(condition_true("StaleCondition", "Stale", "stale", Some(1)));
-        for condition in &mut backend.status.as_mut().unwrap().conditions {
+        for condition in &mut backend
+            .status
+            .as_mut()
+            .unwrap()
+            .as_local_mut()
+            .expect("native test status")
+            .conditions
+        {
             condition.last_transition_time = SENTINEL.to_string();
         }
 
         handler.update_status(&mut backend, &ctx, &[]);
-        let conditions = &backend.status.as_ref().unwrap().conditions;
+        let conditions = &backend
+            .status
+            .as_ref()
+            .unwrap()
+            .as_local()
+            .expect("native test status")
+            .conditions;
         assert_eq!(conditions.len(), 3);
         assert_eq!(conditions[0].type_, condition_types::ACCEPTED);
         assert_eq!(conditions[1].type_, condition_types::RESOLVED_REFS);
@@ -769,7 +797,13 @@ mod tests {
             }],
         }));
         handler.update_status(&mut backend, &ctx, &[]);
-        let conditions = &backend.status.as_ref().unwrap().conditions;
+        let conditions = &backend
+            .status
+            .as_ref()
+            .unwrap()
+            .as_local()
+            .expect("native test status")
+            .conditions;
         assert_eq!(conditions[0].last_transition_time, SENTINEL);
         assert_ne!(conditions[1].last_transition_time, SENTINEL);
         assert_eq!(conditions[2].last_transition_time, SENTINEL);

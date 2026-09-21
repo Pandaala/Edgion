@@ -19,7 +19,17 @@ Gateway is Edgion's core resource. It defines the gateway's Listeners (listening
 
 ### filter
 
-Filters by `gatewayClassName`. If `gateway_class_name` is configured as `Some(name)` (K8s mode), only matching Gateways are processed; if `None` (FileSystem mode), all Gateways are processed.
+Kubernetes supplies `GatewayClassOwnership`: the selected class name and controller name.
+The raw referenced GatewayClass must match both, and its nonempty UID must match the
+GatewayClass already published in this deployment's processed cache. Missing, unwatched,
+foreign or not-yet-published class incarnations fail closed. Generation and `Accepted`
+are not ownership gates. Losing eligibility uses the processor's ordinary deletion path
+to withdraw the Gateway, its references, listener registrations and attachment proof.
+FileSystem/etcd supply no ownership gate and retain their unscoped Gateway handling.
+
+GatewayClass publication/unpublication requeues matching raw Gateways, including those
+previously filtered out of the processed cache. The notification occurs after the class
+cache mutation, so ownership checks see the published incarnation or its absence.
 
 ### parse
 

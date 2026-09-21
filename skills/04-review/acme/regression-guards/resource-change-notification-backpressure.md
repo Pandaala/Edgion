@@ -12,6 +12,11 @@ knowledge_type: regression-guards
 
 ## Evidence boundary
 
+The resource handler now invokes this bounded notification from `after_publish`,
+not `parse`, after comparing against the previous processed cache. This ordering
+and deduplication correction is covered by the [notification guard](resource-change-notification-gating.md);
+the async send, startup scan, and explicit Admin trigger contracts remain unchanged.
+
 This decision was migrated from an earlier review record. The historical source paths,
 verification claims, and assumptions describe that resolution, not a new code audit.
 Before applying it to a new finding, trace the current implementation and tests.

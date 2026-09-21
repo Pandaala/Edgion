@@ -32,7 +32,7 @@ spec:
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `controllerName` | `String` | Yes | Controller identifier (fixed at `edgion.io/gateway-controller` for Edgion) |
+| `controllerName` | `String` | Yes | Must match the configured `controller_name` (default `edgion.io/gateway-controller`) |
 | `parametersRef` | `ParametersRef?` | No | Reference to an EdgionGatewayConfig CRD |
 | `description` | `String?` | No | Human-readable description |
 
@@ -59,8 +59,10 @@ GatewayClass (cluster-scoped)
 ```
 
 - One GatewayClass can correspond to multiple Gateways.
-- In K8s mode, the Controller matches the GatewayClass name via `conf_center.gateway_class`.
-- GatewayClass filtering is ignored in FileSystem mode.
+- In K8s mode, the Controller matches both the configured GatewayClass name and controller name.
+  Gateway processing also requires a matching raw and published class incarnation (nonempty UID).
+- FileSystem/etcd retain GatewayClass filtering by the default controller name without a
+  selected-class restriction; their Gateway handlers do not require class publication.
 
 ## Status Schema
 

@@ -44,7 +44,14 @@ struct Inner {
     forward: HashMap<String, HashSet<RouteEntry>>,
     reverse: HashMap<RouteEntry, HashSet<String>>,
     /// Routing inputs, preserving each logical listener's field associations.
-    gateway_listeners: HashMap<String, Vec<ListenerRouteConfig>>,
+    gateway_listeners: HashMap<String, GatewayRouteConfig>,
+}
+
+#[derive(Default)]
+struct GatewayRouteConfig {
+    listeners: Option<Vec<ListenerRouteConfig>>,
+    /// Stable incarnation identity, never the per-publication proof epoch.
+    ownership: Option<(String, String)>,
 }
 
 impl Inner {
@@ -202,11 +209,25 @@ impl GatewayRouteIndex {
     ) -> Option<Vec<(ResourceKind, String)>> {
         let listeners = ListenerRouteConfig::for_gateway(gateway);
         let mut inner = self.inner.write();
-        if inner.gateway_listeners.get(gateway_key) == Some(&listeners) {
+        let entry = inner.gateway_listeners.entry(gateway_key.to_string()).or_default();
+        if entry.listeners.as_ref() == Some(&listeners) {
             return None;
         }
-        inner.gateway_listeners.insert(gateway_key.to_string(), listeners);
+        entry.listeners = Some(listeners);
         Some(inner.collect_routes_for_gateway(gateway_key))
+    }
+
+    /// Record the published Gateway/class incarnation without feeding status or
+    /// proof-epoch echoes back into the route queues. Clearing a lost proof is a
+    /// real transition too. The record shares listener-config cleanup ownership.
+    pub fn update_publication_ownership(&self, gateway_key: &str, ownership: Option<(String, String)>) -> bool {
+        let mut inner = self.inner.write();
+        let entry = inner.gateway_listeners.entry(gateway_key.to_string()).or_default();
+        if entry.ownership == ownership {
+            return false;
+        }
+        entry.ownership = ownership;
+        true
     }
 
     /// Register new dependencies before reading Gateway snapshots. Keep old

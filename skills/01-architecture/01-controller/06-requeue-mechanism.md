@@ -148,16 +148,15 @@ Call sites:
 | ReferenceGrant | yes | yes | CrossNsRevalidationListener |
 | ConfigMap | yes | yes | requeues resources that depend on referenced ConfigMap data |
 | EndpointSlice | yes | yes | requeues affected backend/route consumers |
-| GatewayClass | — | — | requeue **target** of EdgionGatewayConfig (path 6); resolves its own `parametersRef` in `update_status` |
+| GatewayClass | after_publish | after_unpublish | requeues matching raw Gateways for ownership admission/withdrawal; also target of EdgionGatewayConfig (path 6) |
 | EdgionGatewayConfig | yes | yes | requeues all GatewayClasses (path 6); still no requeue toward Gateway (see note) |
 
-> **Note (EdgionGatewayConfig / GatewayClass → Gateway "no requeue" is intentional):** both resources
-> are independently synced to the data plane and consumed directly at listener-build time
-> (`edgion-gateway/src/runtime/server/base.rs:110-129`), and the controller-side `GatewayHandler`
-> derives no status from them, so requeuing a **Gateway** on their change would be a no-op. See
-> `skills/04-review/handler-requeue/intentional-design/controller-06-gatewayclass-egc-no-gateway-requeue.md`. This is
-> orthogonal to path 6 (EGC → **GatewayClass**), which is a real requeue because the GatewayClass
-> handler does derive `ResolvedRefs`/`Accepted` from the EGC's existence (controller-07).
+> **Ownership is a real GatewayClass → Gateway dependency:** Kubernetes Gateway eligibility
+> reads raw class ownership and the matching published class UID. Class publication and
+> unpublication therefore requeue matching **raw** Gateway keys after the cache mutation.
+> This is not parametersRef-status propagation or listener reconstruction. EGC still has
+> no direct Gateway requeue; parameter consumers on the data plane retain their own lifecycle.
+> See `skills/04-review/handler-requeue/intentional-design/controller-06-gatewayclass-egc-no-gateway-requeue.md`.
 
 ## Cycle Safety
 

@@ -173,7 +173,9 @@ where
 
                                     // Handle status persistence (same as runtime)
                                     match result {
-                                        WorkItemResult::Processed { obj, status_changed } => {
+                                        WorkItemResult::Processed {
+                                            obj, status_changed, ..
+                                        } => {
                                             init_count += 1;
                                             if status_changed {
                                                 match extract_status_value(&obj) {
@@ -318,7 +320,10 @@ where
                                         let existing_status_json = status_handler.read_status_json(kind, &key).await;
                                         let result = self.processor.on_init_apply(obj, existing_status_json).await;
 
-                                        if let WorkItemResult::Processed { obj, status_changed } = result {
+                                        if let WorkItemResult::Processed {
+                                            obj, status_changed, ..
+                                        } = result
+                                        {
                                             init_count += 1;
                                             if status_changed {
                                                 if let Some(status_value) = extract_status_value(&obj) {
@@ -747,7 +752,9 @@ where
 
                     // Persist status based on result
                     match result {
-                        WorkItemResult::Processed { obj, status_changed } => {
+                        WorkItemResult::Processed {
+                            obj, status_changed, ..
+                        } => {
                             if status_changed {
                                 match extract_status_value(&obj) {
                                     Some(status_value) => {

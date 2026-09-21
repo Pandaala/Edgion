@@ -4,11 +4,12 @@ use crate::conf_mgr::sync_runtime::resource_processor::handlers::GatewayHandler;
 use crate::conf_mgr::sync_runtime::resource_processor::{ProcessorHandler, ResourceProcessor};
 use crate::conf_mgr::sync_runtime::workqueue::TriggerChain;
 use crate::conf_mgr::ControllerRuntime;
+use crate::services::acme::service::{NotificationCapture, ACME_TEST_MUTEX};
 use edgion_resources::prelude_resources::Gateway;
 use edgion_resources::resources::common::ParentReference;
 use edgion_resources::resources::common::SecretObjectReference;
 use edgion_resources::resources::edgion_acme::{
-    AcmeChallenge, AcmeStorageConfig, ActiveHttpChallenge, EdgionAcmeStatus,
+    AcmeCertPhase, AcmeChallenge, AcmeStorageConfig, ActiveHttpChallenge, EdgionAcmeStatus,
 };
 use edgion_resources::resources::edgion_tls::{GatewayAttachmentProof, ResolvedListenerAttachment};
 use edgion_resources::resources::gateway::{GatewaySpec, GatewayStatus, Listener, ListenerStatus};
@@ -128,6 +129,7 @@ fn make_acme(ns: &str, name: &str, secret_name: &str) -> EdgionAcme {
                 },
             },
             resolved_listener_attachments: None,
+            notify_after_publish: false,
             renewal: Default::default(),
             external_account_binding: None,
             storage: AcmeStorageConfig {
@@ -144,6 +146,185 @@ fn make_acme(ns: &str, name: &str, secret_name: &str) -> EdgionAcme {
 // Shared scenario type and driver for parse() table-driven tests
 // ========================================================================
 
+/// Exercise the real handler while checking publication before its notification hook.
+struct PublicationCheckedAcmeHandler;
+
+#[async_trait::async_trait]
+impl ProcessorHandler<EdgionAcme> for PublicationCheckedAcmeHandler {
+    async fn parse(&self, acme: EdgionAcme, ctx: &HandlerContext) -> ProcessResult<EdgionAcme> {
+        EdgionAcmeHandler::new().parse(acme, ctx).await
+    }
+
+    fn update_status(&self, acme: &mut EdgionAcme, ctx: &HandlerContext, errors: &[String]) {
+        EdgionAcmeHandler::new().update_status(acme, ctx, errors);
+    }
+
+    async fn after_publish(&self, acme: &EdgionAcme, ctx: &HandlerContext) {
+        let key = format!(
+            "{}/{}",
+            acme.metadata.namespace.as_deref().unwrap(),
+            acme.metadata.name.as_deref().unwrap()
+        );
+        let cached = ctx
+            .runtime()
+            .processor_registry
+            .get("EdgionAcme")
+            .unwrap()
+            .get_cached_any(&key)
+            .unwrap()
+            .downcast::<EdgionAcme>()
+            .unwrap();
+        assert_eq!(cached.metadata.uid, acme.metadata.uid);
+        assert_eq!(cached.metadata.generation, acme.metadata.generation);
+        assert_eq!(resolved_refs_identity(&cached), resolved_refs_identity(acme));
+        assert!(cached
+            .status
+            .as_ref()
+            .unwrap()
+            .conditions
+            .iter()
+            .any(|condition| condition.type_ == "Accepted"));
+        EdgionAcmeHandler::new().after_publish(acme, ctx).await;
+    }
+}
+
+#[tokio::test]
+async fn status_echoes_with_unpersisted_conditions_do_not_notify_again() {
+    let _guard = ACME_TEST_MUTEX.lock().await;
+    let mut notifications = NotificationCapture::install();
+    let (ctx, runtime) = make_ctx(HashMap::new());
+    let processor = Arc::new(ResourceProcessor::<EdgionAcme>::new(
+        "EdgionAcme",
+        16,
+        Arc::new(PublicationCheckedAcmeHandler),
+        runtime.clone(),
+    ));
+    runtime.processor_registry.register(processor.clone());
+    let mut raw = make_acme("default", "echo", "account");
+    raw.metadata.uid = Some("uid-one".to_string());
+    // parse may decide to notify, but must not send before publication.
+    let parsed = match EdgionAcmeHandler::new().parse(raw.clone(), &ctx).await {
+        ProcessResult::Continue(parsed) => parsed,
+        ProcessResult::Skip { reason } => panic!("unexpected skip: {reason}"),
+    };
+    assert!(parsed.spec.notify_after_publish);
+    assert!(notifications.drain().is_empty());
+    processor.on_init_apply(raw.clone(), None).await;
+    assert_eq!(notifications.drain(), ["default/echo"]);
+
+    let gateway_processor = Arc::new(ResourceProcessor::<Gateway>::new(
+        "Gateway",
+        16,
+        Arc::new(NoopGatewayHandler),
+        runtime.clone(),
+    ));
+    let mut gateway = make_gateway("default", "gw", vec![listener("http", 80, "HTTP")]);
+    gateway.spec.resolved_attachment_proof.as_mut().unwrap().epoch = "new-publication".to_string();
+    gateway_processor.save(gateway, None);
+    runtime.processor_registry.register(gateway_processor);
+
+    // Deliberately never feed the computed conditions back into raw, as when
+    // a service lifecycle write wins before each generic status CAS attempt.
+    for iteration in 0..20 {
+        raw.metadata.resource_version = Some(format!("service-{iteration}"));
+        raw.status = Some(EdgionAcmeStatus {
+            phase: if iteration % 2 == 0 {
+                AcmeCertPhase::Issuing
+            } else {
+                AcmeCertPhase::Failed
+            },
+            active_challenges: if iteration % 2 == 0 {
+                vec![ActiveHttpChallenge {
+                    domain: "example.com".to_string(),
+                    token: "token".to_string(),
+                    key_authorization: "authorization".to_string(),
+                    expire_at: 100,
+                }]
+            } else {
+                vec![]
+            },
+            ..Default::default()
+        });
+        raw.spec.notify_after_publish = true; // A reused clone cannot replay old intent.
+        processor
+            .process_work_item("default/echo", Some(raw.clone()), None, TriggerChain::default())
+            .await;
+        assert!(notifications.drain().is_empty(), "status echo {iteration} notified");
+        assert!(!processor.get("default/echo").unwrap().spec.notify_after_publish);
+    }
+    raw.metadata.generation = Some(2);
+    processor
+        .process_work_item("default/echo", Some(raw.clone()), None, TriggerChain::default())
+        .await;
+    assert_eq!(notifications.drain(), ["default/echo"]);
+    raw.metadata.uid = Some("uid-two".to_string());
+    processor
+        .process_work_item("default/echo", Some(raw.clone()), None, TriggerChain::default())
+        .await;
+    assert_eq!(notifications.drain(), ["default/echo"]);
+    raw.metadata.generation = None;
+    processor
+        .process_work_item("default/echo", Some(raw.clone()), None, TriggerChain::default())
+        .await;
+    assert_eq!(notifications.drain(), ["default/echo"]);
+    processor
+        .process_work_item("default/echo", Some(raw), None, TriggerChain::default())
+        .await;
+    assert!(
+        notifications.drain().is_empty(),
+        "missing generation is not always a first create"
+    );
+}
+
+#[tokio::test]
+async fn recovered_credentials_are_published_before_the_single_notification() {
+    let _guard = ACME_TEST_MUTEX.lock().await;
+    let mut notifications = NotificationCapture::install();
+    let (secret_key, valid) = make_secret("default", "account", &[("accountCredentials", br#"{"valid":true}"#)]);
+    let (_, runtime) = make_ctx(HashMap::from([(secret_key.clone(), valid.clone())]));
+    let processor = Arc::new(ResourceProcessor::<EdgionAcme>::new(
+        "EdgionAcme",
+        16,
+        Arc::new(PublicationCheckedAcmeHandler),
+        runtime.clone(),
+    ));
+    runtime.processor_registry.register(processor.clone());
+    let mut raw = make_acme("default", "recovery", "account");
+    processor.on_init_apply(raw.clone(), None).await;
+    assert_eq!(notifications.drain(), ["default/recovery"]);
+    let (_, corrupted) = make_secret("default", "account", &[("accountCredentials", b"invalid-json")]);
+    runtime
+        .secret_store
+        .replace_all(HashMap::from([(secret_key.clone(), corrupted)]));
+    raw.spec.notify_after_publish = true;
+    processor
+        .process_work_item("default/recovery", Some(raw.clone()), None, TriggerChain::default())
+        .await;
+    assert!(notifications.drain().is_empty());
+    assert_eq!(
+        resolved_refs_identity(&processor.get("default/recovery").unwrap())
+            .unwrap()
+            .0,
+        "False"
+    );
+    assert!(!processor.get("default/recovery").unwrap().spec.notify_after_publish);
+    runtime.secret_store.replace_all(HashMap::from([(secret_key, valid)]));
+    processor
+        .process_work_item("default/recovery", Some(raw.clone()), None, TriggerChain::default())
+        .await;
+    assert_eq!(notifications.drain(), ["default/recovery"]);
+    assert_eq!(
+        resolved_refs_identity(&processor.get("default/recovery").unwrap())
+            .unwrap()
+            .0,
+        "True"
+    );
+    processor
+        .process_work_item("default/recovery", Some(raw), None, TriggerChain::default())
+        .await;
+    assert!(notifications.drain().is_empty());
+}
+
 struct AcmeParseScenario {
     name: &'static str,
     secrets: Vec<(String, Secret)>,
@@ -157,9 +338,8 @@ struct AcmeParseScenario {
 }
 
 async fn run_acme_parse_scenario(scenario: AcmeParseScenario) {
-    // `parse` reaches `notify_resource_changed` -> `get_sender()`, which reads the
-    // process-global `ACME_SERVICE`. Serialize against the ACME service tests that
-    // install a handle into that global (see `ACME_TEST_MUTEX`).
+    // Keep these handler scenarios serialized with notification-capture tests;
+    // only after_publish, not parse, now accesses the global service sender.
     let _acme_guard = crate::services::acme::service::ACME_TEST_MUTEX.lock().await;
 
     let secrets: HashMap<String, Secret> = scenario.secrets.into_iter().collect();
@@ -290,8 +470,7 @@ async fn test_acme_account_resolve_scenarios() {
 
 #[tokio::test]
 async fn test_on_delete_clears_refs() {
-    // `parse` below reaches `notify_resource_changed` -> `get_sender()`; serialize
-    // against the ACME service tests that install a handle (see `ACME_TEST_MUTEX`).
+    // Share the handler scenario lock with tests that exercise after_publish.
     let _acme_guard = crate::services::acme::service::ACME_TEST_MUTEX.lock().await;
 
     let (key, secret) = make_secret("default", "acme-account", &[("accountCredentials", br#"{"ok":true}"#)]);
@@ -733,6 +912,7 @@ async fn parse_unresolvable_gateway_ref_clears_stale_attachments_and_keeps_activ
     let (key, secret) = make_secret("default", "account", &[("accountCredentials", br#"{"ok":true}"#)]);
     let (ctx, _runtime) = make_ctx(HashMap::from([(key, secret)]));
     let mut acme = make_acme("default", "ownership", "account");
+    acme.spec.notify_after_publish = true;
     let AcmeChallenge::Http01 { gateway_ref } = &mut acme.spec.challenge;
     gateway_ref.name = "missing".to_string();
     acme.spec.resolved_listener_attachments = Some(vec![ResolvedListenerAttachment {
@@ -762,6 +942,7 @@ async fn parse_unresolvable_gateway_ref_clears_stale_attachments_and_keeps_activ
         ProcessResult::Skip { reason } => panic!("unexpected skip: {reason}"),
     };
     assert!(parsed.spec.resolved_listener_attachments.is_none());
+    assert!(!parsed.spec.notify_after_publish);
     assert_eq!(parsed.active_challenges().len(), 1);
     assert_eq!(parsed.active_challenges()[0].token, "ownership-token");
     let resolved = parsed

@@ -17,6 +17,7 @@ use crate::conf_mgr::sync_runtime::resource_processor::credential::{
 
 use super::route_utils::{resolve_acme_listener_attachments, AcmeGatewayRefError};
 use super::{remove_from_gateway_route_index, update_gateway_route_index};
+use crate::conf_mgr::sync_runtime::resource_processor::status_ownership::acme_is_owned;
 use crate::conf_mgr::sync_runtime::resource_processor::status_utils::{
     condition_false, condition_reasons, condition_true, condition_types, condition_unknown, update_condition,
 };
@@ -68,6 +69,10 @@ mod acme_reasons {
 
 #[async_trait::async_trait]
 impl ProcessorHandler<EdgionAcme> for EdgionAcmeHandler {
+    fn filter(&self, acme: &EdgionAcme, ctx: &HandlerContext) -> bool {
+        acme_is_owned(acme, ctx.runtime())
+    }
+
     fn validate(&self, acme: &EdgionAcme, _ctx: &HandlerContext) -> Vec<String> {
         let mut errors = Vec::new();
 
@@ -111,6 +116,7 @@ impl ProcessorHandler<EdgionAcme> for EdgionAcmeHandler {
     }
 
     async fn parse(&self, mut acme: EdgionAcme, ctx: &HandlerContext) -> ProcessResult<EdgionAcme> {
+        acme.spec.notify_after_publish = false;
         // Controller-derived serving authority is never trusted from input or
         // carried across reconciles.
         acme.spec.resolved_listener_attachments = None;
@@ -159,22 +165,16 @@ impl ProcessorHandler<EdgionAcme> for EdgionAcmeHandler {
             acme.spec.resolved_listener_attachments = Some(attachments.clone());
         }
 
-        // Snapshot pre-parse state for change-gated notification (see notify guard below).
-        // `prev_controller_gen` is the generation last written by `update_status`; it differs
-        // from the current generation only when the spec changed. `prev_resolved_refs` captures
-        // the credential state so a Secret add/remove/corrupt triggers a notify even when
-        // generation is identical.
-        let current_generation = acme.metadata.generation;
-        let prev_controller_gen = acme
-            .status
-            .as_ref()
-            .and_then(|s| s.conditions.iter().find(|c| c.type_ == condition_types::ACCEPTED))
-            .and_then(|c| c.observed_generation);
-        let prev_resolved_refs = acme
-            .status
-            .as_ref()
-            .and_then(|s| s.conditions.iter().find(|c| c.type_ == condition_types::RESOLVED_REFS))
-            .map(|c| (c.status.clone(), c.reason.clone()));
+        // Deliberately read the previous processed generation, not this input's
+        // status: a concurrent service write may have rejected the previous
+        // conditions PATCH. The serial worker publishes this cache before it
+        // can process another status echo, even when status persistence fails.
+        let previous = ctx
+            .runtime()
+            .processor_registry
+            .get(ResourceKind::EdgionAcme.as_str())
+            .and_then(|processor| processor.get_cached_any(&resource_ref.resource_key()))
+            .and_then(|value| value.downcast::<EdgionAcme>().ok());
 
         // ── Resolve ACME account credential via pipeline ────────────────────
         let outcome = resolve_secret(
@@ -227,29 +227,24 @@ impl ProcessorHandler<EdgionAcme> for EdgionAcmeHandler {
             return ProcessResult::Continue(acme);
         }
 
-        // Notify AcmeService only when something meaningful changed:
-        //   spec_changed  — generation advanced (user edited spec) or first create (no prev gen)
-        //   creds_changed — ResolvedRefs status/reason flipped (Secret added/deleted/corrupted)
-        //
-        // AcmeService status writes (phase, certificate fields) trigger a reconcile with the same
-        // generation and unchanged credentials. Without this guard those writes caused an infinite
-        // notify→re-check→status-write→reconcile→notify loop. Restart safety is handled by
-        // `scan_all_acme_resources`, which fires `notify_resource_changed` for every resource
-        // ~10 s after `start_acme_service`.
-        let new_resolved_refs = acme
-            .status
-            .as_ref()
-            .and_then(|s| s.conditions.iter().find(|c| c.type_ == condition_types::RESOLVED_REFS))
-            .map(|c| (c.status.clone(), c.reason.clone()));
-        let spec_changed = current_generation != prev_controller_gen || prev_controller_gen.is_none();
-        let creds_changed = prev_resolved_refs != new_resolved_refs;
-        if spec_changed || creds_changed {
+        // Notification must follow publication: the service's eligibility gate
+        // must see the recovered/new conditions, not the previous cached denial.
+        // Startup scanning and explicit Admin retry retain their own notifications.
+        acme.spec.notify_after_publish = previous.as_ref().is_none_or(|previous| {
+            previous.metadata.uid != acme.metadata.uid
+                || previous.metadata.generation != acme.metadata.generation
+                || resolved_refs_identity(previous) != resolved_refs_identity(&acme)
+        });
+
+        ProcessResult::Continue(acme)
+    }
+
+    async fn after_publish(&self, acme: &EdgionAcme, _ctx: &HandlerContext) {
+        if acme.spec.notify_after_publish {
             let ns = acme.metadata.namespace.as_deref().unwrap_or("default");
             let name = acme.metadata.name.as_deref().unwrap_or_default();
             notify_resource_changed(format!("{}/{}", ns, name)).await;
         }
-
-        ProcessResult::Continue(acme)
     }
 
     async fn on_delete(&self, acme: &EdgionAcme, ctx: &HandlerContext) {
@@ -311,6 +306,18 @@ impl ProcessorHandler<EdgionAcme> for EdgionAcmeHandler {
             status.last_failure_reason = Some(validation_errors.join("; "));
         }
     }
+}
+
+fn resolved_refs_identity(acme: &EdgionAcme) -> Option<(&str, &str)> {
+    acme.status
+        .as_ref()
+        .and_then(|status| {
+            status
+                .conditions
+                .iter()
+                .find(|condition| condition.type_ == condition_types::RESOLVED_REFS)
+        })
+        .map(|condition| (condition.status.as_str(), condition.reason.as_str()))
 }
 
 fn gateway_ref_error_condition(error: &AcmeGatewayRefError, generation: Option<i64>) -> Condition {

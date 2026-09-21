@@ -45,7 +45,14 @@ Resolved Secret bytes are **not** written back to the in-memory `EdgionAcme` —
    - Goes through the credential pipeline (`resource_processor::credential::pipeline::resolve_secret` + `AcmeAccountResolver`)
    - The Secret is allowed to be `Opaque` type, with the required key `accountCredentials` (JSON, i.e., `instant_acme::AccountCredentials`)
    - If the Secret does not yet exist (first-time install / waiting for `AcmeService` write-back), `ResolvedRefs=Unknown/NeedsRegistration` is recorded; once `AcmeService` generates the account it writes the Secret and triggers requeue
-4. **Notify ACME Service**: notify only after the Gateway attachment is resolved and the account result is not a hard error
+4. **Prepare notification**: when the attachment is resolved and the account result is not a hard error, compare UID/generation and ResolvedRefs status/reason with the previous processed cache. Reset and recompute the internal `notify_after_publish` flag each parse; it is excluded from serde and schemars.
+
+### after_publish
+
+Send the prepared notification only after the new eligibility conditions and attachments
+are visible in ServerCache. Never use raw persisted conditions as the deduplication
+baseline: a failed generic status CAS must not turn a service status echo into another
+notification that resets its retry budget. See the [notification guard](../../04-review/acme/regression-guards/resource-change-notification-gating.md).
 
 ### on_delete
 
@@ -61,18 +68,30 @@ Handler side (`EdgionAcmeHandler::update_status`) **only** manages the Gateway-A
   This is pre-release removal debt for old tooling, not a field new consumers
   should read or writers should extend.
 
-**phase and other ACME lifecycle fields** (`certificate_serial`, `last_renewal_time`, `secret_name`, etc.) are not written by the handler; they are updated independently by the background `AcmeService` via Server-Side Apply (field manager `edgion-acme-controller`). The three writers' field ownership does not overlap:
-- Handler writes `status.conditions` (Merge Patch)
-- AcmeService writes `status.phase` and related fields (SSA, fieldManager `edgion-acme-controller`; in the payload, `conditions` is skipped due to `skip_serializing_if = "Vec::is_empty"` and will not clear what handler wrote; `activeChallenges` is similarly skipped due to `Vec::is_empty` and is not touched by this SSA)
-- AcmeService writes `status.activeChallenges` (SSA, fieldManager `edgion-acme-challenges`, an independent path; only has values during HTTP-01 in flight)
+**Phase and other ACME lifecycle fields** (`certificate_serial`, `last_renewal_time`,
+`secret_name`, etc.) are computed by the background `AcmeService`. The write paths are:
 
-There is a theoretical brief rollback window where SSA + handler Merge Patch coexist — "while the processor handles an event, the watch has not yet reflected AcmeService's latest phase". The same applies to `activeChallenges`: the handler's Merge Patch payload serializes the in-memory `EdgionAcmeStatus` whole and writes it to `/status`, including `activeChallenges` (when non-empty) deserialized from the watch event. If the handler is processing an RV=N event while AcmeService writes a new round of challenges at RV=N+1, the handler's Merge Patch will roll `activeChallenges` back to the RV=N version. In practice:
+- The handler derives conditions but the generic Merge Patch serializes its whole observed
+  status, including nonempty lifecycle/challenge fields. It also updates `last_failure_reason`.
+- `update_acme_status` sends lifecycle fields using forced SSA with field manager
+  `edgion-acme-controller`. Its freshly built payload has empty conditions and challenges,
+  so serde omits those fields.
+- `patch_active_challenges` sends an explicit `activeChallenges` array using forced SSA
+  with field manager `edgion-acme-challenges`; `[]` explicitly clears the challenges.
 
-- AcmeService pushes once at HTTP-01 phase 2 and clears once at phase 6, with no intermediate writes in between, so a normal issuance does not trigger the race;
-- The only thing that triggers it is the rare combination of "operator changes spec while a flow is in progress";
-- Self-heal path: on the next watch event, the handler re-reads the latest `activeChallenges` and writes it back; the AcmeService retry mechanism is the safety net.
+The shared `persist_k8s_status` captures the handler input resourceVersion before processing
+and includes it as an atomic PATCH precondition. If either service writer succeeds after
+that snapshot, the stale handler write fails with 409 instead of rolling back the newer
+phase or challenge list. A missing/empty version is rejected locally. One attempt is made;
+later source events/requeues can recompute status, but recovery has no time bound.
 
-**Root-cause fix** (TODO, framework-level): the handler's status persistence should be changed to SSA + an explicit fieldManager (e.g., `edgion-acme-handler`), with K8s field ownership rejecting cross-manager overrides. This requires changing the generic `persist_k8s_status` path and is out of scope here.
+Skipping an empty list is not a concurrency guarantee: a nonempty observed list is still
+serialized. The version guard is also not SSA field ownership or leader fencing. In
+particular, `last_failure_reason` remains an overlapping handler/service field; removing
+that field or redesigning its ownership is outside this correction. The two specialized
+SSA writers remain in place. A blanket conversion of full generic snapshots to forced SSA
+would still submit fields belonging to other writers and is not the selected remedy.
+See [status snapshot concurrency](../../04-review/status/regression-guards/kubernetes-status-snapshot-concurrency.md).
 
 ## ACME Service
 

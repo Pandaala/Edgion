@@ -14,14 +14,19 @@ description: update_status implementation rules and pitfalls — status write fl
 
 ```
 process_resource(obj):
-├── 4. validate()           → Vec<String>          ─┐
-├── 5. preparse()           → Vec<String>           ├─ merged → all_errors
-├── 6. parse()              → ProcessResult<K>     ─┘
-├── 7. Extract old status   (for change detection)
-├── 8. update_status(&mut obj, ctx, &all_errors) ◀── THIS IS THE FOCUS
-├── 9. Extract new status   (for change detection)
-├── 10. status_has_changed(old, new) → bool
-└── 11. persist_k8s_status() / write_status_value() if changed
+├── Seed backend status, then capture old status before handler mutation
+├── K8s shared resources: project only this deployment's observation into native status
+├── validate()             → Vec<String>          ─┐
+├── preparse()             → Vec<String>           ├─ merged → all_errors
+├── parse()                → ProcessResult<K>     ─┘
+├── update_status(&mut obj, ctx, &all_errors) ◀── THIS IS THE FOCUS
+├── Separate local status from the ownership-preserving persistence payload
+├── finalize_transport()
+├── Extract new status; status_has_changed(old, new) → bool
+├── on_change()
+├── Publish processed object to ServerCache
+├── after_publish()
+└── Return result; outer worker conditionally persists status
 ```
 
 Key: `all_errors = validate() errors ∪ preparse() errors`, passed as `validation_errors`.
@@ -69,6 +74,23 @@ A Controller → Gateway HTTP Pull reverse-query scheme was once evaluated (with
 
 **Pattern:** GatewayClass, EdgionGatewayConfig, LinkSys, EdgionPlugins, EdgionStreamPlugins, EdgionConfigData
 
+This is the **local** condition shape. In Kubernetes, EdgionPlugins,
+EdgionStreamPlugins, EdgionBackend and LinkSys persist complete observations in
+`status.controllers[]`, keyed by `(controllerName, gatewayClassName)`. Each entry
+contains `gatewayClassUid` and a nested native `status` payload. UID proves the
+class incarnation, not a new list key. LinkSys lifecycle fields belong inside
+that payload too; there is no aggregate top-level status that competing
+deployments can overwrite. FileSystem/etcd and conf_sync retain native status.
+
+The shared `ControllerStatus<T>` envelope, projection/merge in
+`status_observation`, and `status_pipeline` adapters own this mechanism.
+Handlers consume only projected native values. Missing ownership, invalid
+observations or the 32-entry cap suppress persistence, not local processing.
+An existing owner can update at the cap; a new owner cannot evict another.
+Inactive observations remain until committed GatewayClass deletion or identity
+replacement proves them obsolete. Absence requires a completed, unfiltered
+GatewayClass LIST; filtered, unwatched and initializing views cannot prove it.
+
 These Edgion status structs use
 `edgion_resources::resources::common::Condition` and the shared
 `status_utils::{condition_true, condition_false, update_condition}` helpers.
@@ -78,10 +100,11 @@ shared helpers; do not introduce handler-local duplicates based on the old split
 **Not this pattern:** BackendTLSPolicy and EdgionBackendTrafficPolicy report
 GEP-2648 **per-ancestor** status (`status.ancestors[]`, one `PolicyAncestorStatus`
 per ancestor Gateway) instead of a single flat `conditions[]` — see the
-`ancestors_status_equal` row in [§7](#7-status-persistence) and
+per-ancestor comparator row in [§7](#7-status-persistence) and
 [20-edgion-backend-traffic-policy.md](../../02-features/03-resources/20-edgion-backend-traffic-policy.md#status-schema).
 
-**GatewayClass special:** GatewayClassStatus also has `supported_features: Option<Vec<String>>`,
+**GatewayClass special:** GatewayClassStatus also has `supported_features: Option<Vec<SupportedFeature>>`
+(each wire entry is an object with a `name` field),
 populated in `update_status()` with the full list of supported Gateway API features (matching
 the conformance test declaration in `edgion-tests/conformance/conformance_test.go`).
 
@@ -203,11 +226,9 @@ shared `RuleInvalid` reason.
 
 1. **Resource-specific reason.** It is the first emitter to use its own reason,
    `InvalidCredentials` (`status_utils.rs`), instead of the shared `RuleInvalid`.
-2. **Emitted from `parse()`, not `update_status()`.** Credential resolution is `async`, so
-   the `ResolvedRefs` + `PartiallyInvalid` pair is written in `parse()`; `update_status()`
-   handles only `Accepted`. This is the sole handler where that split applies — do not copy
-   it for a resource whose reference checks can run synchronously, where the
-   `update_status()` rule above still holds.
+2. **One status publication phase.** Credential resolution records a reconcile
+   outcome in `parse()`; `update_status()` emits Accepted, ResolvedRefs and
+   PartiallyInvalid together from that outcome and validation errors.
 
 It sets `PartiallyInvalid=True` when `resolved_count > 0` and at least one provider
 credential failed to resolve. The message is
@@ -223,7 +244,7 @@ resource with validation errors, so the substitution branch is reachable. Note i
 | Scenario | ResolvedRefs | PartiallyInvalid |
 |----------|--------------|------------------|
 | All credentials resolved | True | False (`AllRulesValid`) |
-| Some resolved, some failed | True | True (`InvalidCredentials`) |
+| Some resolved, some failed | False | True (`InvalidCredentials`) |
 | None resolved | False | False (`AllRulesValid`) |
 
 New resources may follow this precedent, but they still draw from the fixed condition
@@ -241,12 +262,18 @@ respect `validation_errors`.
 
 EdgionAcme has both a Gateway API-style `Accepted` condition and ACME-specific lifecycle fields (`phase` / `certificate_serial` / `last_renewal_time` / etc.):
 
-- **Handler parse** resolves account/DNS Secret material and writes `ResolvedRefs`
+- **Handler parse** resolves the HTTP-01 attachment and account Secret and writes `ResolvedRefs`
 - **Handler update_status** manages `Accepted`, reflecting the spec validation result
+- **Handler after_publish** sends a notification only for a meaningful change from the previous processed cache (UID/generation or ResolvedRefs status/reason). It must not deduplicate against raw persisted conditions or notify before publishing recovered eligibility; see the [ACME notification guard](../../04-review/acme/regression-guards/resource-change-notification-gating.md).
 - **Background AcmeService** independently updates `phase` and the timestamp fields via Server-Side Apply (field manager `edgion-acme-controller`). The AcmeService SSA patch uses `skip_serializing_if = "Vec::is_empty"` to skip `conditions`, so it does not clear the condition written by the handler
 - `last_failure_reason` still exists for old tooling, but that is pre-release
   removal debt. New status consumers must use conditions; do not extend the
   text field's contract.
+
+The generic handler persists the whole serialized status snapshot, including nonempty
+observed lifecycle/challenge fields. Its raw-input resourceVersion precondition prevents
+rollback of a newer service write. This is distinct from field ownership: the handler and
+service still overlap on `last_failure_reason`. See [ACME writer boundaries](../05-resources/17-edgion-acme.md).
 
 ### 4.5 Resources without status
 
@@ -313,11 +340,87 @@ This is a type-level reuse; the struct name does not appear in K8s status YAML.
 - Uses `DynamicObject` + `ApiResource` to avoid generic constraints
 - Guarded by leader election: `status_changed && can_write_status`
 
+`WorkItemResult::Processed.persisted_status` is the write payload; never extract
+it from the processed object in the Kubernetes worker. The object carries local
+status for cache/conf_sync, while persistence preserves other deployments.
+Replacing only typed status after handler parsing preserves compiled fields
+and unknown-field sidecars; a full-object serde roundtrip here is incorrect.
+
+Recognized native-only Kubernetes status is unowned input, never inherited by a
+deployment. The first envelope write removes all retired native fields using a
+fixed, kind-specific wire-only null set. Typed serialization may omit empty
+arrays or nulls that still exist on the API object, so clearing only fields
+visible after reserialization is insufficient. Logical comparison excludes these
+tombstones. Mixed or unknown shapes suppress persistence without dropping config.
+
+Native parent/ancestor arrays retain their API shape. Kubernetes projection
+limits writes to attachments whose Gateway belongs to the selected class,
+including when deployments share controllerName. Missing Gateway history is
+preserved on disk but cannot become local serving authority. Delegation selects
+one writer from the first sorted canonical parentRef before lookup; missing,
+invalid or cyclic chains do not fall back to a visible alternative branch.
+Serving resolution uses the owned raw Gateway and matching published UID/class,
+never an unprojected raw Gateway fallback in Kubernetes.
+
+Committed raw identity deltas for GatewayClass, Gateway and HTTP/GRPCRoute
+enqueue dependents through their existing queues, including never-published
+objects and complete-LIST removals. Status/resourceVersion echoes do not fan out.
+
+The shared function sends `{metadata: {resourceVersion: raw_input_version}, status: ...}`.
+Both `run_init_apply_once` and the runtime worker capture the raw source version before
+processing; a processed sync version or a later GET's version must never replace it.
+Versions are opaque strings. Missing or empty versions fail locally with `StatusWriteError`
+and no API request; there is no unconditional-write fallback.
+
+This applies automatically to all 17 status-computing kinds: the six parent-status resources,
+BackendTLSPolicy, EdgionBackendTrafficPolicy, Gateway, GatewayClass, EdgionGatewayConfig,
+EdgionPlugins, EdgionStreamPlugins, EdgionConfigData, EdgionBackend, LinkSys and EdgionAcme.
+GatewayClass and EdgionGatewayConfig are cluster-scoped; the others are namespaced.
+Future kinds using `ResourceController` inherit the guard without a per-kind switch.
+Secret, ConfigMap, Service, EndpointSlice and ReferenceGrant do not compute status;
+the separate Namespace observer does not write status either.
+
+Exactly one PATCH is attempted per changed status. Any intervening successful object update
+(including metadata/spec-only changes) makes the snapshot stale and yields 409 Conflict.
+Non-404 failures use existing warning/error-metric paths; 404 remains an already-deleted
+resource case. There is no immediate retry, GET, or status-failure requeue. A later relevant
+event, successful source LIST, dependency requeue or leadership-acquisition requeue can
+recompute from current raw state. Recovery has no time bound; a resumed WATCH alone does
+not force reconciliation. Status IO remains inline in the single per-kind worker.
+
+Version checking protects against stale writes, not incorrect snapshot ownership or stale
+leadership. Kubernetes GatewayClass writes are restricted to the configured class and
+controller-name pair. Gateway processing additionally requires that the referenced raw
+class's nonempty UID matches this deployment's published class incarnation. Class
+publication/unpublication requeues matching raw Gateways after the cache mutation;
+ownership loss withdraws cached state rather than writing a rejection into another
+controller's status. Generation and class `Accepted` do not define ownership. Independent
+deployments must use distinct classes; replicas sharing one class/owner need the same
+election domain and configuration view. This is not a fence for arbitrarily overlapping
+independent writers. Handlers must preserve foreign `parents`/`ancestors` entries already in their
+input, and explicitly serialize empty owned lists when clearing them. Both policy handlers
+retain foreign ancestors while rebuilding only their own entries. ACME's two field-scoped
+SSA service writers retain their separate responsibilities. See the
+[snapshot concurrency guard](../../04-review/status/regression-guards/kubernetes-status-snapshot-concurrency.md).
+
+For both BackendTLSPolicy and EdgionBackendTrafficPolicy, ancestor semantic diff uses the
+shared `attachment_statuses_equal` one-to-one canonical identity plus controllerName comparison as parents,
+including duplicate multiplicity. A first name/namespace-only match can compare an owned
+entry against a foreign one and repeatedly report unchanged mixed-owner status as changed.
+This shared semantic comparison applies across Kubernetes, FileSystem and etcd; the
+resourceVersion PATCH precondition itself remains Kubernetes-specific.
+
 ### FileSystem mode
 - `status_handler.write_status_value(kind, &key, &status_value)` → `.status` YAML file
 - Guarded by: `status_changed` only (no leader check)
 
 ### Change detection — Semantic Status Diff
+
+Condition messages must be deterministic for unchanged inputs. Sort names derived
+from unordered collections before formatting diagnostics; do not remove `message`
+from semantic comparison to suppress a feedback loop. Gateway conflict producers
+follow this rule for both aggregate and per-listener messages; see the
+[regression guard](../../04-review/status/regression-guards/deterministic-condition-messages.md).
 
 **Every status write is a K8s API call.** Minimizing unnecessary writes is
 critical for scalability.
@@ -345,10 +448,11 @@ state is unchanged.
 | Category | Kinds | Comparator | What it compares |
 |----------|-------|------------|------------------|
 | **Condition-only** | GatewayClass, EdgionGatewayConfig, EdgionPlugins, EdgionStreamPlugins, EdgionConfigData | `conditions_only_status_equal` (explicit arms or the condition-only fallback) | `status.conditions[]` |
-| **Per-parent** | HTTPRoute, GRPCRoute, TCPRoute, TLSRoute, UDPRoute, EdgionTls | `parents_status_equal` | Canonical parent identity plus controllerName; one-to-one semantic comparison with resource namespace context |
-| **Per-ancestor** | BackendTLSPolicy, EdgionBackendTrafficPolicy | `ancestors_status_equal` | `status.ancestors[]` matched by ancestorRef identity |
+| **Per-parent** | HTTPRoute, GRPCRoute, TCPRoute, TLSRoute, UDPRoute, EdgionTls | `attachment_statuses_equal` | Canonical parent identity plus controllerName; one-to-one semantic comparison with resource namespace context |
+| **Per-ancestor** | BackendTLSPolicy, EdgionBackendTrafficPolicy | `attachment_statuses_equal` | `status.ancestors[]` matched one-to-one by canonical ancestorRef identity plus controllerName, including multiplicity |
 | **Hybrid** | Gateway | `gateway_status_equal` | `addresses` + gateway-level `conditions` + `listeners[]` (matched by name) |
 | **Hybrid (lifecycle + conditions)** | EdgionAcme, LinkSys | `conditions_and_fields_status_equal` | Semantic conditions plus structural comparison of all lifecycle fields |
+| **K8s deployment observations** | EdgionPlugins, EdgionStreamPlugins, EdgionBackend, LinkSys | `controller_observations_equal` | Stable deployment key and class UID, then native payload semantics; ignores array order and nested condition transition times |
 | **Unknown** | Future resources | `conditions_only_status_equal` | Safe fallback |
 
 #### Key scenarios this optimizes
@@ -364,8 +468,11 @@ state is unchanged.
 
 When adding a new resource with status, add its `kind` string to the
 appropriate match arm in `status_diff::status_semantically_changed()`. If the
-status structure doesn't fit any existing pattern, create a new comparator
-function.
+status is deployment-dependent on a shared resource, reuse `ControllerStatus<T>`
+and register its native payload in the shared projection/merge, typed replacement,
+CRD envelope and comparison inventory. Add alternating-deployment convergence,
+foreign preservation and native FileSystem/etcd roundtrip tests. Only add a new
+comparator when the structure does not fit an existing pattern.
 
 #### Important edge cases
 

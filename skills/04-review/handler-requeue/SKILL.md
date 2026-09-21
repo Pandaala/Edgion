@@ -15,7 +15,7 @@ before applying a decision to current code.
 
 ## Intentional design
 
-- [GatewayClass / EdgionGatewayConfig Do Not Requeue Dependent Gateways — DESIGN-TRADEOFF](intentional-design/controller-06-gatewayclass-egc-no-gateway-requeue.md)
+- [Class ownership requeues versus parameter propagation and listener reconstruction](intentional-design/controller-06-gatewayclass-egc-no-gateway-requeue.md)
 - [Status-Write Failure Is Not Re-queued — DESIGN-TRADEOFF](intentional-design/status-write-no-retry-accepted.md)
 - [Status IO Stays Inline in the Worker Path — DESIGN-TRADEOFF](intentional-design/worker-path-status-io-inline-accepted.md)
 

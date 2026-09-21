@@ -255,65 +255,86 @@ spec:
               type: object
               description: "Status of LinkSys"
               properties:
-                conditions:
+                controllers:
                   type: array
-                  description: |
-                    Gateway-API-style conditions:
-                      - `Accepted` reflects spec validation.
-                      - `ResolvedRefs` reflects whether all referenced Kubernetes
-                        Secrets (auth + TLS) were successfully resolved by the
-                        Controller. Extension reasons: `SecretNotFound`,
-                        `MissingKeys`, `DecodeError`, `InvalidSecretType`; and
-                        the standard `RefNotPermitted` for cross-namespace denial.
+                  maxItems: 32
+                  x-kubernetes-list-type: map
+                  x-kubernetes-list-map-keys:
+                    - controllerName
+                    - gatewayClassName
                   items:
                     type: object
+                    required: [controllerName, gatewayClassName, gatewayClassUid, status]
                     properties:
-                      type:
+                      controllerName:
                         type: string
+                        minLength: 1
+                      gatewayClassName:
+                        type: string
+                        minLength: 1
+                      gatewayClassUid:
+                        type: string
+                        minLength: 1
                       status:
-                        type: string
-                      lastTransitionTime:
-                        type: string
-                        format: date-time
-                      reason:
-                        type: string
-                      message:
-                        type: string
-                      observedGeneration:
-                        type: integer
-                        format: int64
-                observedGeneration:
-                  type: integer
-                  format: int64
-                credentialState:
-                  type: string
-                  enum: [Idle, Valid, Expired, Unavailable]
-                publishedGeneration:
-                  type: string
-                issuedAt:
-                  type: string
-                  format: date-time
-                validUntil:
-                  type: string
-                  format: date-time
-                lastSuccessfulRefreshTime:
-                  type: string
-                  format: date-time
-                nextRefreshTime:
-                  type: string
-                  format: date-time
-                desiredConsumerCount:
-                  type: integer
-                  format: int32
-                  minimum: 0
-                publishedConsumerCount:
-                  type: integer
-                  format: int32
-                  minimum: 0
-                conflictedConsumerCount:
-                  type: integer
-                  format: int32
-                  minimum: 0
+                        type: object
+                        properties:
+                          conditions:
+                            type: array
+                            description: Gateway API Accepted and ResolvedRefs conditions.
+                            x-kubernetes-list-type: map
+                            x-kubernetes-list-map-keys:
+                              - type
+                            items:
+                              type: object
+                              required:
+                                - type
+                              properties:
+                                type:
+                                  type: string
+                                status:
+                                  type: string
+                                lastTransitionTime:
+                                  type: string
+                                  format: date-time
+                                reason:
+                                  type: string
+                                message:
+                                  type: string
+                                observedGeneration:
+                                  type: integer
+                                  format: int64
+                          observedGeneration:
+                            type: integer
+                            format: int64
+                          credentialState:
+                            type: string
+                            enum: [Idle, Valid, Expired, Unavailable]
+                          publishedGeneration:
+                            type: string
+                          issuedAt:
+                            type: string
+                            format: date-time
+                          validUntil:
+                            type: string
+                            format: date-time
+                          lastSuccessfulRefreshTime:
+                            type: string
+                            format: date-time
+                          nextRefreshTime:
+                            type: string
+                            format: date-time
+                          desiredConsumerCount:
+                            type: integer
+                            format: int32
+                            minimum: 0
+                          publishedConsumerCount:
+                            type: integer
+                            format: int32
+                            minimum: 0
+                          conflictedConsumerCount:
+                            type: integer
+                            format: int32
+                            minimum: 0
       subresources:
         status: {}
       additionalPrinterColumns:
@@ -325,13 +346,10 @@ spec:
           type: string
           jsonPath: .spec.config.endpoints[0]
           description: "First endpoint"
-        - name: Accepted
+        - name: GatewayClasses
           type: string
-          jsonPath: .status.conditions[?(@.type=='Accepted')].status
-        - name: ResolvedRefs
-          type: string
-          jsonPath: .status.conditions[?(@.type=='ResolvedRefs')].status
-          description: "Whether all referenced Secrets have been resolved"
+          jsonPath: .status.controllers[*].gatewayClassName
+          description: "GatewayClasses with controller observations"
         - name: Age
           type: date
           jsonPath: .metadata.creationTimestamp

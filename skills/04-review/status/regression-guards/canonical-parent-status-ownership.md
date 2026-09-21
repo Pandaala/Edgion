@@ -19,6 +19,19 @@ reuse the existing entry to preserve transition times. Empty/absent parentRefs a
 entries. Parent-status diff receives the resource namespace and compares entries one-to-one,
 including multiplicity, so changes cannot hide behind a reused first match.
 
+ControllerName alone is insufficient when independent deployments manage different
+GatewayClasses under the same name. Kubernetes `status_ownership` projection now
+separates the local cache status from the persisted native array: only proven local
+Gateway attachments contribute local state, while foreign controllers and other
+classes remain in the persisted snapshot. Missing Gateway history is retained
+without granting serving authority. The same projection handles both policy
+ancestor families. Raw spec removal can consistently clear this controller's
+removed parent entries without erasing another controller's entries.
+
+HTTP/GRPC reverse-lock diagnostics keep their local meaning but use one persisted
+writer selected from the first sorted canonical explicit parentRef before lookup.
+Missing, invalid, cyclic or over-depth chains do not select another visible branch.
+
 ## Transport and Gateway consumption
 
 Five Route specs carry the internal `resolvedStatusController` field. It is serde-transported but
@@ -35,7 +48,12 @@ status input. Do not describe this as requiring owned Accepted=True in every cas
 
 EdgionTls does not gain this field or a Route acceptance filter: its certificate validation and
 attachment-proof checks remain independent. GatewayClass is not a new Route compilation dependency.
-Existing requeue edges, worker/status-IO ownership and Gateway publication barriers remain unchanged.
+Worker/status-IO ownership remains unchanged. Kubernetes serving resolution now
+requires an owned raw Gateway and a matching published nonempty UID/class, shared
+by Route, TLS and ACME consumers. Committed raw ownership changes requeue raw
+dependents, including never-published objects. Post-publication Gateway/class UID
+fingerprints restore dependents that ran before the new projection was available;
+unchanged status echoes do not repeat that recovery fanout.
 
 ## Rationale and limits
 
@@ -44,15 +62,15 @@ lookup that ignored controllerName. Resource-local ownership avoids adding class
 identity invalidation to already-compiled route units. The previous [delegation collision guard](../../routing/regression-guards/delegation-parentref-gateway-name-collision.md)
 remains valid and is extended by controller ownership, not replaced.
 
-Snapshot preservation is not concurrent-writer safety: Kubernetes Merge Patch replaces the parents
-array. A foreign update after our input snapshot may still be overwritten. This independent limitation
-requires separate storage-layer investigation. The previously referenced follow-up
-`tasks/todo/route-status-concurrent-writer-preservation.md` is absent from the repository;
-this missing task does not establish that the limitation was resolved.
+Snapshot preservation and concurrent-writer safety are separate requirements: Kubernetes Merge
+Patch replaces the parents array. The shared persistence path now conditions that replacement on
+the raw input resourceVersion, rejecting a snapshot made stale by another writer. See the
+[snapshot concurrency guard](kubernetes-status-snapshot-concurrency.md) for the correction,
+coverage and recovery limits; ownership retention above remains necessary for fresh snapshots.
 
 ## Verification and re-evaluation
 
-Fresh targeted verification on 2026-09-20:
+Historical targeted verification on 2026-09-20 (before class-scoped projection):
 
 - Resources `parent_identity`: 3 passed, including transport/schema coverage for all five specs.
 - Controller `parent_status_identity_test`: 8 passed, including all six writers and five actual
@@ -71,7 +89,14 @@ Existing `edgion-tests` files were unchanged. These are crate-level tests, not a
 Kubernetes, etcd, or end-to-end dynamic run. Re-evaluate when parent defaults, ownership transport,
 source-version ingestion, status persistence or publication caching changes.
 
+The 2026-09-21 class-scoped change passed 11 ownership tests, including the real
+HTTPRoute handler/processor local-versus-persisted split and Gateway publication
+recovery through the existing delayed queue. The encompassing processor suite
+passed 819 tests. These tests are in-process, not live Kubernetes verification.
+Final workspace validation and fresh independent review passed; see
+[deployment observations](deployment-partitioned-observations.md) for results and limits.
+
 ## Resolution references
 
 - `route-parent-status-canonical-identity`: canonical identity and configured ownership corrected;
-  concurrent status persistence remains separately tracked above.
+  concurrent status persistence is covered by the separate guard above.

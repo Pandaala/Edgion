@@ -7,7 +7,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
-use super::common::{Condition, SecretObjectReference, SecretSlot};
+use super::common::{ConditionsStatus, ControllerStatus, SecretObjectReference, SecretSlot};
 use super::edgion_plugins::OnRedisFailure;
 
 pub const OPENAI_DEFAULT_ENDPOINT: &str = "https://api.openai.com";
@@ -341,12 +341,7 @@ const fn default_streaming() -> bool {
     true
 }
 
-#[derive(Deserialize, Serialize, Clone, Debug, Default, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct EdgionBackendStatus {
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub conditions: Vec<Condition>,
-}
+pub type EdgionBackendStatus = ControllerStatus<ConditionsStatus>;
 
 impl EdgionBackendSpec {
     /// Validate the AI backend configuration.

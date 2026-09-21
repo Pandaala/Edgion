@@ -247,6 +247,12 @@ pub struct EdgionAcmeSpec {
     #[schemars(skip)]
     pub resolved_listener_attachments: Option<Vec<ResolvedListenerAttachment>>,
 
+    /// Per-reconcile Controller notification intent, consumed after cache publication.
+    /// Never accepted from input or included in the CRD/conf-sync schema.
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub notify_after_publish: bool,
+
     /// Certificate renewal configuration
     #[serde(default)]
     pub renewal: AcmeRenewalConfig,
@@ -623,6 +629,7 @@ spec:
     secretName: cert
 "#;
         let mut acme: EdgionAcme = serde_yaml::from_str(yaml).expect("test resource must deserialize");
+        acme.spec.notify_after_publish = true;
         acme.spec.resolved_listener_attachments = Some(vec![ResolvedListenerAttachment {
             gateway_namespace: "default".to_string(),
             gateway_name: "gw".to_string(),
@@ -640,6 +647,17 @@ spec:
         }]);
         let encoded = serde_json::to_vec(&acme).expect("transport resource must serialize");
         let decoded: EdgionAcme = serde_json::from_slice(&encoded).expect("transport resource must deserialize");
+        assert!(!decoded.spec.notify_after_publish);
+        let mut wire = serde_json::to_value(&acme).unwrap();
+        assert!(wire["spec"].get("notifyAfterPublish").is_none());
+        wire["spec"]["notifyAfterPublish"] = serde_json::json!(true);
+        let injected: EdgionAcme = serde_json::from_value(wire).unwrap();
+        assert!(
+            !injected.spec.notify_after_publish,
+            "input must not inject notification intent"
+        );
+        let schema = serde_json::to_value(schemars::schema_for!(EdgionAcmeSpec)).unwrap();
+        assert!(schema["properties"].get("notifyAfterPublish").is_none());
         assert_eq!(
             decoded.spec.resolved_listener_attachments,
             acme.spec.resolved_listener_attachments

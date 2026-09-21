@@ -528,9 +528,17 @@ impl ProcessorHandler<EdgionPlugins> for EdgionPluginsHandler {
             partially_invalid_condition(Some(partial_messages.join("; ")), generation)
         };
 
-        let status = ep
+        let Some(status) = ep
             .status
-            .get_or_insert_with(|| EdgionPluginsStatus { conditions: vec![] });
+            .get_or_insert_with(EdgionPluginsStatus::default)
+            .as_local_mut()
+        else {
+            tracing::warn!(
+                component = "edgion_plugins_handler",
+                "Status projection missing; skipping status mutation"
+            );
+            return;
+        };
         update_condition(&mut status.conditions, accepted);
         update_condition(&mut status.conditions, resolved_refs);
         update_condition(&mut status.conditions, partially_invalid);
@@ -1254,6 +1262,8 @@ mod tests {
             .status
             .as_ref()
             .unwrap()
+            .as_local()
+            .expect("native test status")
             .conditions
             .iter()
             .find(|condition| condition.type_ == "ResolvedRefs")
@@ -2557,6 +2567,8 @@ profiles:
             .status
             .as_ref()
             .unwrap()
+            .as_local()
+            .expect("native test status")
             .conditions
             .iter()
             .find(|condition| condition.type_ == "ResolvedRefs")
@@ -2584,6 +2596,8 @@ profiles:
             .status
             .as_ref()
             .unwrap()
+            .as_local()
+            .expect("native test status")
             .conditions
             .iter()
             .find(|condition| condition.type_ == "ResolvedRefs")
@@ -2912,7 +2926,13 @@ profiles:
                 .edgion_config_data_store
                 .replace_all(HashMap::from([("default/overlay".to_string(), overlay)]));
             EdgionPluginsHandler.update_status(&mut ep, &ctx, &[]);
-            let conditions = &ep.status.as_ref().unwrap().conditions;
+            let conditions = &ep
+                .status
+                .as_ref()
+                .unwrap()
+                .as_local()
+                .expect("native test status")
+                .conditions;
             assert_eq!(
                 conditions.iter().find(|c| c.type_ == "Accepted").unwrap().status,
                 "True"
@@ -3924,7 +3944,13 @@ profiles:
         };
         EdgionPluginsHandler.update_status(&mut parsed, &ctx, &[]);
 
-        let conditions = &parsed.status.as_ref().unwrap().conditions;
+        let conditions = &parsed
+            .status
+            .as_ref()
+            .unwrap()
+            .as_local()
+            .expect("native test status")
+            .conditions;
         let resolved = conditions
             .iter()
             .find(|condition| condition.type_ == "ResolvedRefs")
@@ -4132,6 +4158,8 @@ profiles:
             .status
             .as_ref()
             .unwrap()
+            .as_local()
+            .expect("native test status")
             .conditions
             .iter()
             .find(|condition| condition.type_ == "ResolvedRefs")
@@ -4161,6 +4189,8 @@ profiles:
             .status
             .as_ref()
             .unwrap()
+            .as_local()
+            .expect("native test status")
             .conditions
             .iter()
             .find(|condition| condition.type_ == "ResolvedRefs")
@@ -4238,6 +4268,8 @@ profiles:
                 .status
                 .as_ref()
                 .unwrap()
+                .as_local()
+                .expect("native test status")
                 .conditions
                 .iter()
                 .find(|condition| condition.type_ == "ResolvedRefs")
@@ -4272,6 +4304,8 @@ profiles:
             .status
             .as_ref()
             .unwrap()
+            .as_local()
+            .expect("native test status")
             .conditions
             .iter()
             .find(|condition| condition.type_ == "ResolvedRefs")
@@ -4307,6 +4341,8 @@ profiles:
                 .status
                 .as_ref()
                 .unwrap()
+                .as_local()
+                .expect("native test status")
                 .conditions
                 .iter()
                 .find(|condition| condition.type_ == "ResolvedRefs")
@@ -4325,6 +4361,8 @@ profiles:
             .status
             .as_ref()
             .unwrap()
+            .as_local()
+            .expect("native test status")
             .conditions
             .iter()
             .find(|condition| condition.type_ == "ResolvedRefs")
@@ -4479,7 +4517,13 @@ profiles:
                 1
             );
         }
-        let conditions = &parsed.status.as_ref().unwrap().conditions;
+        let conditions = &parsed
+            .status
+            .as_ref()
+            .unwrap()
+            .as_local()
+            .expect("native test status")
+            .conditions;
         assert_eq!(
             conditions
                 .iter()
@@ -4928,6 +4972,8 @@ profiles:
                 .status
                 .as_ref()
                 .unwrap()
+                .as_local()
+                .expect("native test status")
                 .conditions
                 .iter()
                 .find(|condition| condition.type_ == "ResolvedRefs")
@@ -5175,6 +5221,8 @@ profiles:
             .status
             .as_ref()
             .unwrap()
+            .as_local()
+            .expect("native test status")
             .conditions
             .iter()
             .find(|c| c.type_ == "ResolvedRefs")
@@ -5237,6 +5285,8 @@ profiles:
             .status
             .as_ref()
             .unwrap()
+            .as_local()
+            .expect("native test status")
             .conditions
             .iter()
             .find(|c| c.type_ == "ResolvedRefs")
@@ -5300,6 +5350,8 @@ profiles:
             .status
             .as_ref()
             .unwrap()
+            .as_local()
+            .expect("native test status")
             .conditions
             .iter()
             .find(|c| c.type_ == "ResolvedRefs")
@@ -5475,6 +5527,8 @@ profiles:
             .status
             .as_ref()
             .unwrap()
+            .as_local()
+            .expect("native test status")
             .conditions
             .iter()
             .find(|c| c.type_ == "ResolvedRefs")
@@ -5707,6 +5761,8 @@ profiles:
             .status
             .as_ref()
             .unwrap()
+            .as_local()
+            .expect("native test status")
             .conditions
             .iter()
             .find(|condition| condition.type_ == "ResolvedRefs")
@@ -5735,6 +5791,8 @@ profiles:
             .status
             .as_ref()
             .unwrap()
+            .as_local()
+            .expect("native test status")
             .conditions
             .iter()
             .find(|condition| condition.type_ == "ResolvedRefs")
@@ -5766,6 +5824,8 @@ profiles:
             .status
             .as_ref()
             .unwrap()
+            .as_local()
+            .expect("native test status")
             .conditions
             .iter()
             .find(|condition| condition.type_ == "ResolvedRefs")
@@ -6027,6 +6087,8 @@ profiles:
 
         let status = ep.status.unwrap();
         let cond = status
+            .as_local()
+            .expect("native test status")
             .conditions
             .iter()
             .find(|c| c.type_ == condition_types::UNKNOWN_CONFIG_FIELDS)
@@ -6037,6 +6099,8 @@ profiles:
         // Accepted must stay True and untouched by this advisory condition
         // (validation_errors is empty here).
         let accepted = status
+            .as_local()
+            .expect("native test status")
             .conditions
             .iter()
             .find(|c| c.type_ == condition_types::ACCEPTED)
@@ -6053,7 +6117,7 @@ profiles:
         use crate::conf_mgr::sync_runtime::resource_processor::status_utils::{
             condition_reasons, condition_true, condition_types,
         };
-        use edgion_resources::resources::edgion_plugins::EdgionPluginsStatus;
+        use edgion_resources::resources::common::ConditionsStatus;
 
         let (ctx, _runtime) = make_ctx_with_secrets(HashMap::new());
 
@@ -6061,14 +6125,17 @@ profiles:
         // still on the resource from a previous generation.
         let mut ep = EdgionPlugins::new("fixed-ep", EdgionPluginsSpec::default());
         ep.metadata.namespace = Some("default".to_string());
-        ep.status = Some(EdgionPluginsStatus {
-            conditions: vec![condition_true(
-                condition_types::UNKNOWN_CONFIG_FIELDS,
-                condition_reasons::UNKNOWN_FIELDS_DETECTED,
-                "stale",
-                Some(1),
-            )],
-        });
+        ep.status = Some(
+            ConditionsStatus {
+                conditions: vec![condition_true(
+                    condition_types::UNKNOWN_CONFIG_FIELDS,
+                    condition_reasons::UNKNOWN_FIELDS_DETECTED,
+                    "stale",
+                    Some(1),
+                )],
+            }
+            .into(),
+        );
 
         let handler = EdgionPluginsHandler;
         handler.update_status(&mut ep, &ctx, &[]);
@@ -6076,6 +6143,8 @@ profiles:
         assert!(ep
             .status
             .unwrap()
+            .as_local()
+            .expect("native test status")
             .conditions
             .iter()
             .all(|c| c.type_ != condition_types::UNKNOWN_CONFIG_FIELDS));
@@ -6300,6 +6369,8 @@ profiles:
             .status
             .as_ref()
             .unwrap()
+            .as_local()
+            .expect("native test status")
             .conditions
             .iter()
             .find(|condition| condition.type_ == "ResolvedRefs")

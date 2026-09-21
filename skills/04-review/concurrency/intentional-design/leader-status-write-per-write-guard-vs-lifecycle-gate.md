@@ -12,12 +12,18 @@ knowledge_type: intentional-design
 ## Conclusion
 
 The worker loop's per-write `leader_handle.is_leader()` check before `persist_k8s_status`
-(`resource_controller.rs:530`) is the **correct minimal leadership gate** for Edgion's
+(`resource_controller.rs`) is the **accepted minimal leadership gate** for Edgion's
 `AllServe` HA mode, not a defective substitute for client-go's `OnStoppedLeading` /
-context-cancellation lifecycle gate. The brief leadership-transition window where two
-replicas may write status for the same resource is bounded by Kubernetes optimistic
-concurrency (409 Conflict drops the losing write; no corruption; `lastTransitionTime`
-self-corrects on the next reconcile).
+context-cancellation lifecycle gate. It does not fence an already-started write at the
+API server or prove that only the current leader can write. The shared status persistence
+path now rejects stale raw resourceVersions with 409; this protects against intervening
+object updates, not leadership changes themselves. A demoted writer with a current version
+can still pass that condition. Later reconciliation can refresh status, without a time bound.
+
+Historical correction: this page previously asserted that the original unconditional
+Merge Patch already supplied resourceVersion conflict protection. That assertion was
+false. The separate [snapshot concurrency correction](../../status/regression-guards/kubernetes-status-snapshot-concurrency.md)
+adds the actual precondition; it does not strengthen the leadership gate into fencing.
 
 Fix suggestions of the form "introduce a `CancellationToken` created on leadership acquire
 and cancelled on leadership loss, thread it into every worker, and have
@@ -47,13 +53,14 @@ on `AllServe` is **wrong**: cancelling/draining in-flight workers on leadership 
 blackhole that replica's config supply to its downstream Gateways — the opposite of what
 AllServe requires.
 
-**3. The per-write AtomicBool is the right minimal gate**
+**3. The per-write leadership check is the accepted minimal gate**
 
 Only status writes must be single-writer; config push is multi-writer *by design* in
-AllServe. Gating exactly the status write (and nothing else) with one `Ordering::Acquire`
-atomic load is the minimal correct mechanism. Memory ordering is already correct
-(Acquire/Release). The residual race is purely the transition-window double status write,
-which K8s resolves via resourceVersion optimistic concurrency.
+AllServe. Gating exactly the status write (and nothing else) through `LeaderHandle::is_leader`
+reads the shared watch-channel boolean; the former AtomicBool implementation is gone.
+A leadership transition can still leave an in-flight write. Snapshot
+version comparison rejects it only if another update has already changed the object;
+the accepted lifecycle gate and snapshot concurrency protection have distinct scopes.
 
 **4. The `leader_handle = None` injection risk is not reachable in multi-replica K8s**
 
@@ -84,8 +91,8 @@ Re-open this decision only if:
 
 - A new HA mode is added that requires non-leader replicas to stop serving config on
   leadership loss (i.e. an actual leader-only-with-shared-watchers model).
-- Status writes ever gain a non-idempotent side effect where a 409-dropped write leaves
-  observable inconsistent state (today the next reconcile self-corrects).
+- Status writes gain a non-idempotent side effect, require server-side leader fencing,
+  or require bounded convergence after a dropped write.
 - AllServe status writes move off Kubernetes optimistic concurrency (e.g. a backend
   without resourceVersion conflict semantics).
 

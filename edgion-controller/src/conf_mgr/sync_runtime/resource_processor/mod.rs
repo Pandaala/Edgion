@@ -35,6 +35,9 @@ pub mod route_delegation_index;
 pub mod secret_utils;
 pub mod service_ref;
 pub mod status_diff;
+pub mod status_observation;
+pub mod status_ownership;
+mod status_pipeline;
 pub mod status_utils;
 pub(crate) mod unknown_fields_stamp;
 

@@ -203,7 +203,7 @@ impl ListenerPortManager {
             // Check hostname intersection pairwise: two listeners on the same socket address
             // conflict if they have the same hostname (including both being wildcard).
             for (i, listener) in same_gw.iter().enumerate() {
-                let others: Vec<&str> = same_gw
+                let mut others: Vec<&str> = same_gw
                     .iter()
                     .enumerate()
                     .filter(|(j, other)| {
@@ -211,6 +211,9 @@ impl ListenerPortManager {
                     })
                     .map(|(_, l)| l.listener_name.as_str())
                     .collect();
+                // Condition messages are semantic status: hash iteration must
+                // not turn a status-only WATCH into another status write.
+                others.sort_unstable();
 
                 if !others.is_empty() {
                     let reason = format!("Socket {}: conflicts with: {}", conflict_key, others.join(", "));
@@ -262,6 +265,40 @@ mod tests {
 
     fn key(port: u16) -> ConflictKey {
         make_conflict_key(addr(port))
+    }
+
+    #[test]
+    fn conflict_messages_are_stable_across_registration_order() {
+        let manager = ListenerPortManager::new();
+        let mut listeners = vec![
+            ("z-http".to_string(), key(80), None),
+            ("a-tcp".to_string(), key(80), None),
+            ("m-tls".to_string(), key(80), None),
+        ];
+        let expected = HashMap::from([
+            (
+                "a-tcp".to_string(),
+                "Socket 0.0.0.0:80: conflicts with: m-tls, z-http".to_string(),
+            ),
+            (
+                "m-tls".to_string(),
+                "Socket 0.0.0.0:80: conflicts with: a-tcp, z-http".to_string(),
+            ),
+            (
+                "z-http".to_string(),
+                "Socket 0.0.0.0:80: conflicts with: a-tcp, m-tls".to_string(),
+            ),
+        ]);
+        for round in 0..12 {
+            listeners.rotate_left(1);
+            if round % 2 == 0 {
+                listeners.reverse();
+            }
+            manager.register_gateway("default/gateway", &listeners);
+            assert_eq!(manager.detect_conflicts("default/gateway"), expected);
+        }
+        manager.unregister_gateway("default/gateway");
+        assert_eq!(manager.stats(), (0, 0));
     }
 
     #[test]

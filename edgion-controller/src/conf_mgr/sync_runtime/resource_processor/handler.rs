@@ -46,7 +46,7 @@ where
     /// Returns true to process, false to skip.
     ///
     /// Default: accept all resources
-    fn filter(&self, _obj: &K) -> bool {
+    fn filter(&self, _obj: &K, _ctx: &HandlerContext) -> bool {
         true
     }
 
