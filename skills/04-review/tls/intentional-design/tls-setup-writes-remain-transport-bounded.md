@@ -26,10 +26,12 @@ its existing phase and does not create a separate setup policy.
 
 The current call chains are:
 
-- `routes/tls/proxy.rs::send_proxy_protocol_v2` writes and flushes PP2 before
-  entering `bidirectional_relay`.
-- `routes/tls/passthrough_proxy.rs::handle_connection` writes PP2, then calls
-  `replay_initial_bytes`, then enters `bidirectional_relay`.
+- Terminate and passthrough both call the canonical
+  `routes/tls/proxy.rs::send_proxy_protocol_v2` after a successful connect.
+  The helper writes and flushes PP2 without adding a separate deadline.
+- Terminate enters `bidirectional_relay` after the helper succeeds.
+- Passthrough calls `replay_initial_bytes` after the helper succeeds, then
+  enters `bidirectional_relay`.
 - `replay_initial_bytes` owns at most the bytes drained into
   `sni_parser::MAX_CLIENT_HELLO_LEN` (16 KiB), forwards them exactly once, and
   updates `TlsUpstreamInfo.bytes_sent` only after the complete write and flush.
@@ -79,8 +81,9 @@ The closure investigation inspected the current TLS call chains, the resolved
 L4 timeout publication, Cargo's pinned Pingora source, and Tokio's TCP
 `AsyncWrite` implementation. A local macOS socket probe accepted 64 KiB on a
 fresh connection even when a smaller socket buffer was requested; that probe is
-supporting evidence only and is not a cross-platform guarantee. No runtime code
-or test was changed for this decision.
+supporting evidence only and is not a cross-platform guarantee. The later B0068
+unification added generic writer tests for exact PP2 bytes and write/flush
+failure accounting without changing this timeout decision.
 
 Re-evaluate when any of the following occurs:
 

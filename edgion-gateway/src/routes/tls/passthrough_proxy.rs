@@ -8,7 +8,6 @@
 use crate::config::{get_resolved_l4_timeouts, ResolvedL4Timeouts};
 use crate::plugins::publication::global_publisher;
 use async_trait::async_trait;
-use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::io::{AsyncReadExt, AsyncWrite, AsyncWriteExt};
@@ -19,7 +18,7 @@ use pingora_core::protocols::Stream;
 use pingora_core::server::ShutdownWatch;
 use pingora_core::upstreams::peer::BasicPeer;
 
-use super::proxy::{TlsContext, TlsUpstreamInfo};
+use super::proxy::{send_proxy_protocol_v2, TlsContext, TlsUpstreamInfo};
 #[cfg(test)]
 use super::route_unit::TlsRouteUnit;
 use super::sni_parser;
@@ -32,7 +31,6 @@ use crate::observe::log_tls;
 use crate::observe::AccessLogger;
 use crate::routes::common::UNSAFE_UPSTREAM_ADDRESS_LOG;
 use crate::routes::l4_duplex::bidirectional_relay;
-use crate::util::proxy_protocol::ProxyProtocolV2Builder;
 use crate::{MatchedInfo, Rsc};
 use edgion_resources::resources::edgion_gateway_config::EdgionGatewayConfig;
 use edgion_resources::ListenerKey;
@@ -365,33 +363,16 @@ impl EdgionTlsPassthroughProxy {
         };
 
         // 5. Send Proxy Protocol v2 if configured
-        if let Some(2) = unit.proxy_protocol_version {
-            if let Ok(src_ip) = ctx.remote_ip.parse::<IpAddr>() {
-                // Use the already-bracketed upstream_addr_str (SocketAddr Display) for the PP2
-                // destination. Re-deriving it from the bare-IP info.addr would drop the IPv6
-                // brackets and fail to parse, silently advertising 0.0.0.0:0 — see proxy.rs,
-                // which feeds the bracketed string straight into the PP2 builder.
-                let src_addr = std::net::SocketAddr::new(src_ip, ctx.remote_port);
-                let dst_addr: std::net::SocketAddr = upstream_addr_str.parse().unwrap_or_else(|_| {
-                    std::net::SocketAddr::new(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED), 0)
-                });
-                let mut builder = ProxyProtocolV2Builder::new(src_addr, dst_addr);
-                builder.add_authority(sni);
-                let pp2_header = builder.build();
-
-                if let Err(e) = upstream_stream.write_all(&pp2_header).await {
-                    ctx.err_log = Some(format!("PP2 write failed: {e}"));
-                    return;
-                }
-                if upstream_stream.flush().await.is_err() {
-                    ctx.err_log = Some("PP2 flush failed".to_string());
-                    return;
-                }
-                if let Some(info) = ctx.current_upstream_mut() {
-                    info.proxy_protocol_sent = true;
-                }
-                ctx.push_log("PP2 sent");
-            }
+        if !send_proxy_protocol_v2(
+            unit.proxy_protocol_version,
+            ctx,
+            sni,
+            &upstream_addr_str,
+            &mut upstream_stream,
+        )
+        .await
+        {
+            return;
         }
 
         // 6. Forward the initial ClientHello bytes already read from downstream

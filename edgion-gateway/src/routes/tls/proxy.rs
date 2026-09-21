@@ -3,7 +3,7 @@ use async_trait::async_trait;
 use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncWrite, AsyncWriteExt};
 
 use pingora_core::apps::ServerApp;
 use pingora_core::connectors::TransportConnector;
@@ -136,6 +136,45 @@ impl TlsContext {
     pub(super) fn current_upstream_mut(&mut self) -> Option<&mut TlsUpstreamInfo> {
         self.upstream_info.last_mut()
     }
+}
+
+/// Send a Proxy Protocol v2 header to an established upstream when enabled.
+/// Returns `false` if the write or flush fails and the caller must abort.
+pub(super) async fn send_proxy_protocol_v2<W: AsyncWrite + Unpin>(
+    proxy_protocol_version: Option<u8>,
+    ctx: &mut TlsContext,
+    sni: &str,
+    upstream_addr_str: &str,
+    upstream: &mut W,
+) -> bool {
+    let Some(2) = proxy_protocol_version else {
+        return true;
+    };
+    let Ok(src_ip) = ctx.remote_ip.parse::<IpAddr>() else {
+        return true;
+    };
+
+    let src_addr = std::net::SocketAddr::new(src_ip, ctx.remote_port);
+    let dst_addr: std::net::SocketAddr = upstream_addr_str
+        .parse()
+        .unwrap_or_else(|_| std::net::SocketAddr::new(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED), 0));
+    let mut builder = ProxyProtocolV2Builder::new(src_addr, dst_addr);
+    builder.add_authority(sni);
+    let pp2_header = builder.build();
+
+    if let Err(e) = upstream.write_all(&pp2_header).await {
+        ctx.err_log = Some(format!("PP2 write failed: {e}"));
+        return false;
+    }
+    if upstream.flush().await.is_err() {
+        ctx.err_log = Some("PP2 flush failed".to_string());
+        return false;
+    }
+    if let Some(info) = ctx.current_upstream_mut() {
+        info.proxy_protocol_sent = true;
+    }
+    ctx.push_log("PP2 sent");
+    true
 }
 
 /// TLS-to-TCP proxy service for Gateway TLS listeners.
@@ -407,15 +446,14 @@ impl EdgionTlsTcpProxy {
         };
 
         // 5. Send Proxy Protocol v2 header if configured
-        if !self
-            .send_proxy_protocol_v2(
-                unit.proxy_protocol_version,
-                ctx,
-                sni,
-                &upstream_addr_str,
-                &mut upstream_stream,
-            )
-            .await
+        if !send_proxy_protocol_v2(
+            unit.proxy_protocol_version,
+            ctx,
+            sni,
+            &upstream_addr_str,
+            &mut upstream_stream,
+        )
+        .await
         {
             return;
         }
@@ -423,46 +461,6 @@ impl EdgionTlsTcpProxy {
         // 6. Bidirectional data forwarding
         self.duplex(downstream, upstream_stream, ctx, l4_timeouts.idle_timeout)
             .await
-    }
-
-    /// Send Proxy Protocol v2 header to upstream if PP2 is enabled.
-    /// Returns `false` if the write fails (caller should abort the connection).
-    async fn send_proxy_protocol_v2(
-        &self,
-        proxy_protocol_version: Option<u8>,
-        ctx: &mut TlsContext,
-        sni: &str,
-        upstream_addr_str: &str,
-        upstream: &mut Stream,
-    ) -> bool {
-        let Some(2) = proxy_protocol_version else {
-            return true;
-        };
-        let Ok(src_ip) = ctx.remote_ip.parse::<IpAddr>() else {
-            return true;
-        };
-
-        let src_addr = std::net::SocketAddr::new(src_ip, ctx.remote_port);
-        let dst_addr: std::net::SocketAddr = upstream_addr_str
-            .parse()
-            .unwrap_or_else(|_| std::net::SocketAddr::new(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED), 0));
-        let mut builder = ProxyProtocolV2Builder::new(src_addr, dst_addr);
-        builder.add_authority(sni);
-        let pp2_header = builder.build();
-
-        if let Err(e) = upstream.write_all(&pp2_header).await {
-            ctx.err_log = Some(format!("PP2 write failed: {e}"));
-            return false;
-        }
-        if upstream.flush().await.is_err() {
-            ctx.err_log = Some("PP2 flush failed".to_string());
-            return false;
-        }
-        if let Some(info) = ctx.current_upstream_mut() {
-            info.proxy_protocol_sent = true;
-        }
-        ctx.push_log("PP2 sent");
-        true
     }
 
     /// Bidirectional data transfer between downstream (TLS-terminated) and upstream (TCP)
@@ -546,6 +544,9 @@ mod tests {
     use super::*;
     use crate::ctx::ClientCertInfo;
     use std::collections::HashMap;
+    use std::io;
+    use std::pin::Pin;
+    use std::task::{Context, Poll};
 
     #[test]
     fn tls_log_masks_only_backend_addresses() {
@@ -665,5 +666,149 @@ mod tests {
         assert!(ctx.sni.is_none());
         assert!(ctx.matched.is_none());
         assert!(!ctx.is_mtls);
+    }
+
+    fn pp2_context(remote_ip: &str) -> TlsContext {
+        let mut ctx = TlsContext::new(8443, "192.0.2.1".into(), 4321, remote_ip.into(), 12345);
+        ctx.upstream_info.push(TlsUpstreamInfo {
+            addr: None,
+            port: None,
+            backend: None,
+            bytes_sent: 7,
+            bytes_received: 0,
+            connect_time: None,
+            connection_established: true,
+            proxy_protocol_sent: false,
+            upstream_protocol: None,
+        });
+        ctx
+    }
+
+    #[derive(Default)]
+    struct Pp2Writer {
+        bytes: Vec<u8>,
+        fail_after: Option<usize>,
+        fail_flush: bool,
+        flushes: usize,
+    }
+
+    impl AsyncWrite for Pp2Writer {
+        fn poll_write(mut self: Pin<&mut Self>, _: &mut Context<'_>, bytes: &[u8]) -> Poll<io::Result<usize>> {
+            let remaining = self.fail_after.unwrap_or(usize::MAX).saturating_sub(self.bytes.len());
+            if remaining == 0 {
+                return Poll::Ready(Err(io::Error::other("test write failed")));
+            }
+            let count = bytes.len().min(5).min(remaining);
+            self.bytes.extend_from_slice(&bytes[..count]);
+            Poll::Ready(Ok(count))
+        }
+
+        fn poll_flush(mut self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<io::Result<()>> {
+            self.flushes += 1;
+            Poll::Ready(if self.fail_flush {
+                Err(io::Error::other("test flush failed"))
+            } else {
+                Ok(())
+            })
+        }
+
+        fn poll_shutdown(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    #[tokio::test]
+    async fn proxy_protocol_v2_emits_exact_ipv6_header_and_marks_success() {
+        let sni = "secure.example.com";
+        let source: std::net::Ipv6Addr = "2001:db8::10".parse().unwrap();
+        let destination: std::net::Ipv6Addr = "2001:db8::20".parse().unwrap();
+        let mut writer = Pp2Writer::default();
+        let mut ctx = pp2_context(&source.to_string());
+
+        assert!(send_proxy_protocol_v2(Some(2), &mut ctx, sni, "[2001:db8::20]:8443", &mut writer,).await);
+
+        let mut expected = Vec::new();
+        expected.extend_from_slice(&crate::util::proxy_protocol::PP2_SIGNATURE);
+        expected.extend_from_slice(&[0x21, 0x21]);
+        expected.extend_from_slice(&((36 + 3 + sni.len()) as u16).to_be_bytes());
+        expected.extend_from_slice(&source.octets());
+        expected.extend_from_slice(&destination.octets());
+        expected.extend_from_slice(&12345u16.to_be_bytes());
+        expected.extend_from_slice(&8443u16.to_be_bytes());
+        expected.push(crate::util::proxy_protocol::PP2_TYPE_AUTHORITY);
+        expected.extend_from_slice(&(sni.len() as u16).to_be_bytes());
+        expected.extend_from_slice(sni.as_bytes());
+
+        assert_eq!(writer.bytes, expected);
+        assert_eq!(writer.flushes, 1);
+        assert!(ctx.upstream_info[0].proxy_protocol_sent);
+        assert_eq!(ctx.upstream_info[0].bytes_sent, 7);
+        assert_eq!(ctx.log.as_ref().unwrap().entries().collect::<Vec<_>>(), ["PP2 sent"]);
+        assert!(ctx.err_log.is_none());
+    }
+
+    #[tokio::test]
+    async fn proxy_protocol_v2_skips_disabled_or_unparseable_source() {
+        for version in [None, Some(1)] {
+            let mut writer = Pp2Writer::default();
+            let mut ctx = pp2_context("192.0.2.10");
+            assert!(send_proxy_protocol_v2(version, &mut ctx, "example.com", "192.0.2.20:443", &mut writer).await);
+            assert!(writer.bytes.is_empty());
+            assert_eq!(writer.flushes, 0);
+            assert!(!ctx.upstream_info[0].proxy_protocol_sent);
+            assert_eq!(ctx.upstream_info[0].bytes_sent, 7);
+            assert!(ctx.log.is_none());
+            assert!(ctx.err_log.is_none());
+        }
+
+        let mut writer = Pp2Writer::default();
+        let mut ctx = pp2_context("unknown");
+        assert!(send_proxy_protocol_v2(Some(2), &mut ctx, "example.com", "192.0.2.20:443", &mut writer).await);
+        assert!(writer.bytes.is_empty());
+        assert_eq!(writer.flushes, 0);
+        assert!(!ctx.upstream_info[0].proxy_protocol_sent);
+        assert_eq!(ctx.upstream_info[0].bytes_sent, 7);
+        assert!(ctx.log.is_none());
+        assert!(ctx.err_log.is_none());
+    }
+
+    #[tokio::test]
+    async fn proxy_protocol_v2_preserves_unspecified_destination_fallback() {
+        let mut writer = Pp2Writer::default();
+        let mut ctx = pp2_context("192.0.2.10");
+        assert!(send_proxy_protocol_v2(Some(2), &mut ctx, "example.com", "invalid", &mut writer).await);
+        assert_eq!(writer.bytes[13], 0x11);
+        assert_eq!(&writer.bytes[20..24], &[0, 0, 0, 0]);
+        assert_eq!(&writer.bytes[26..28], &[0, 0]);
+        assert!(ctx.upstream_info[0].proxy_protocol_sent);
+    }
+
+    #[tokio::test]
+    async fn proxy_protocol_v2_failures_do_not_mark_or_account_success() {
+        let mut writer = Pp2Writer {
+            fail_after: Some(4),
+            ..Default::default()
+        };
+        let mut ctx = pp2_context("192.0.2.10");
+        assert!(!send_proxy_protocol_v2(Some(2), &mut ctx, "example.com", "192.0.2.20:443", &mut writer).await);
+        assert_eq!(writer.bytes.len(), 4);
+        assert_eq!(writer.flushes, 0);
+        assert!(!ctx.upstream_info[0].proxy_protocol_sent);
+        assert_eq!(ctx.upstream_info[0].bytes_sent, 7);
+        assert!(ctx.log.is_none());
+        assert_eq!(ctx.err_log.as_deref(), Some("PP2 write failed: test write failed"));
+
+        let mut writer = Pp2Writer {
+            fail_flush: true,
+            ..Default::default()
+        };
+        let mut ctx = pp2_context("192.0.2.10");
+        assert!(!send_proxy_protocol_v2(Some(2), &mut ctx, "example.com", "192.0.2.20:443", &mut writer).await);
+        assert!(!writer.bytes.is_empty());
+        assert_eq!(writer.flushes, 1);
+        assert!(!ctx.upstream_info[0].proxy_protocol_sent);
+        assert_eq!(ctx.upstream_info[0].bytes_sent, 7);
+        assert!(ctx.log.is_none());
+        assert_eq!(ctx.err_log.as_deref(), Some("PP2 flush failed"));
     }
 }
