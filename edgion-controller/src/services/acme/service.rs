@@ -30,6 +30,7 @@ use anyhow::{Context, Result};
 use k8s_openapi::api::core::v1::Secret;
 use k8s_openapi::ByteString;
 use kube::api::{Api, Patch, PatchParams};
+use kube::core::{ApiResource, DynamicObject};
 use kube::Client;
 use tokio::sync::mpsc;
 use tokio::time::Instant;
@@ -54,7 +55,7 @@ use edgion_resources::resources::edgion_acme::{
     AcmeCertPhase, AcmeChallenge, AcmeSchedulerStatus, ActiveHttpChallenge, EdgionAcme, EdgionAcmeStatus,
     MAX_ACME_RESOLVED_ATTACHMENTS,
 };
-use edgion_resources::resources::edgion_tls::ResolvedListenerAttachment;
+use edgion_resources::resources::edgion_tls::{EdgionTls, ResolvedListenerAttachment};
 
 // ============================================================================
 // Global singleton (re-initializable for controller re-election)
@@ -1943,10 +1944,9 @@ async fn create_or_update_edgion_tls(client: &Client, attempt: &AcmeAttempt, acm
         }
     });
 
-    // Use dynamic API for EdgionTls
-    let gvk = kube::api::GroupVersionKind::gvk("edgion.io", "v1", "EdgionTls");
-    let ar = kube::api::ApiResource::from_gvk(&gvk);
-    let api: Api<kube::api::DynamicObject> = Api::namespaced_with(client.clone(), namespace, &ar);
+    // Erase the typed resource so the dynamic API retains its declared plural.
+    let ar = ApiResource::erase::<EdgionTls>(&());
+    let api: Api<DynamicObject> = Api::namespaced_with(client.clone(), namespace, &ar);
     let current = api.get_opt(&tls_name).await.context("Failed to read EdgionTls")?;
     attempt.check("publish EdgionTls").await?;
 
@@ -2217,7 +2217,7 @@ spec:
                 "proof-feedback",
                 vec![
                     "/api/v1/namespaces/default/secrets/certificate",
-                    "/apis/edgion.io/v1/namespaces/default/edgiontlses/acme-test",
+                    "/apis/edgion.io/v1/namespaces/default/edgiontls/acme-test",
                     "/apis/edgion.io/v1/namespaces/default/edgionacmes/test/status",
                 ],
             ),
@@ -2225,7 +2225,7 @@ spec:
                 "current",
                 vec![
                     "/api/v1/namespaces/default/secrets/certificate",
-                    "/apis/edgion.io/v1/namespaces/default/edgiontlses/acme-test",
+                    "/apis/edgion.io/v1/namespaces/default/edgiontls/acme-test",
                     "/apis/edgion.io/v1/namespaces/default/edgionacmes/test/status",
                 ],
             ),
@@ -2241,7 +2241,7 @@ spec:
                 "after-tls",
                 vec![
                     "/api/v1/namespaces/default/secrets/certificate",
-                    "/apis/edgion.io/v1/namespaces/default/edgiontlses/acme-test",
+                    "/apis/edgion.io/v1/namespaces/default/edgiontls/acme-test",
                 ],
             ),
         ] {

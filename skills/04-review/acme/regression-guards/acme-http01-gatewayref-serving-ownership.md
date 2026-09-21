@@ -66,10 +66,12 @@ serving authority, and changes between Secret/TLS/status writes.
 publication/clearing and failure status. No live CA or Kubernetes cluster is
 claimed by these tests.
 Terminating resources are rejected before admission, preventing repeated
-publication rejection while finalizers delay deletion. The publication transport
-also exposed a pre-existing inferred EdgionTls plural mismatch, identified by the
-separate `acme-edgiontls-api-plural` follow-up; its current path
-assertion does not establish that the live API accepts that endpoint.
+publication rejection while finalizers delay deletion. The
+`acme-edgiontls-api-plural` regression was caused by constructing the dynamic
+API from a GVK that guessed `edgiontlses`. Publication now type-erases
+`EdgionTls` so its declared `edgiontls` plural remains canonical, and the
+transport test asserts that CRD-declared endpoint. This test verifies request
+construction, not acceptance by a live Kubernetes API server.
 
 Fresh verification evidence belongs to the task or change that modifies this
 contract; historical pass counts are not proof of the current tree.
