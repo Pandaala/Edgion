@@ -137,6 +137,17 @@ start_controller() {
     local controller_conf="${WORK_DIR}/edgion-controller.yaml"
     conf_sync_security_block server > "$controller_conf"
 
+    # conf_center.controller_name is mandatory outside Kubernetes and has no CLI
+    # flag, so the block has to come from the config file. conf_dir is required
+    # by the schema; --conf-dir below resolves to the same directory.
+    cat >> "$controller_conf" << EOF
+
+conf_center:
+  type: file_system
+  controller_name: edgion.io/gateway-controller
+  conf_dir: "${CONFIG_DIR}"
+EOF
+
     "$controller_bin" \
         --config-file "$controller_conf" \
         --work-dir "$WORK_DIR" \
@@ -487,6 +498,70 @@ test_nested_status_follows_spec() {
     return 1
 }
 
+# Test 10b: Error sidecar of a statusless resource is cleared once it is repaired
+#
+# A Secret has no handler-computed status, so a successful reapply persists
+# nothing that could overwrite the ParseError sidecar written while the file was
+# broken. The controller must delete it explicitly; cleanup_orphans() cannot,
+# because the configuration file still exists.
+test_error_status_cleared_after_repair() {
+    log_section "Test 10b: ParseError sidecar cleared after repairing a Secret"
+
+    local spec_file="$CONFIG_DIR/Secret_default_repaired.yaml"
+    local status_file="${spec_file}.status"
+
+    # `data` must be a string map; a scalar fails deserialization.
+    cat > "$spec_file" << 'EOF'
+apiVersion: v1
+kind: Secret
+metadata:
+  name: repaired
+  namespace: default
+type: Opaque
+data: 42
+EOF
+
+    local waited=0
+    while [ $waited -lt 10 ]; do
+        if [ -f "$status_file" ] && grep -q "ParseError" "$status_file"; then
+            break
+        fi
+        sleep 1
+        waited=$((waited + 1))
+    done
+    if [ ! -f "$status_file" ] || ! grep -q "ParseError" "$status_file"; then
+        log_error "ParseError sidecar did not appear at $status_file"
+        [ -f "$status_file" ] && cat "$status_file"
+        return 1
+    fi
+    log_success "ParseError sidecar written for the broken Secret"
+
+    cat > "$spec_file" << 'EOF'
+apiVersion: v1
+kind: Secret
+metadata:
+  name: repaired
+  namespace: default
+type: Opaque
+data:
+  token: aGVsbG8=
+EOF
+
+    waited=0
+    while [ $waited -lt 10 ]; do
+        if [ ! -f "$status_file" ] || ! grep -q "ParseError" "$status_file"; then
+            log_success "Sidecar no longer reports ParseError after repair"
+            return 0
+        fi
+        sleep 1
+        waited=$((waited + 1))
+    done
+
+    log_error "Repaired Secret still reports its previous failure"
+    cat "$status_file"
+    return 1
+}
+
 # Test 11: Same (kind, key) in two subdirs — diagnostics endpoint surfaces conflict
 test_collision_diagnostics() {
     log_section "Test 11: Cross-subdir collision exposed via /diagnostics/conf-conflicts"
@@ -651,6 +726,7 @@ main() {
     test_delete_file                 || failed=1
     test_nested_dir_load                       || failed=1
     test_nested_status_follows_spec            || failed=1
+    test_error_status_cleared_after_repair     || failed=1
     test_collision_diagnostics                 || failed=1
     test_api_create_namespace_subdir           || failed=1
     test_api_create_returns_conflict_for_legacy_flat || failed=1

@@ -64,7 +64,8 @@ FileSystemCenter does not call the K8s API; it writes status to a local `.status
 - **Write timing**: written by ResourceProcessor after processing completes when the status changes
 - **Read usage**: status change detection (read and converted to a JSON string for comparison)
 - **Error status**: when a resource fails to parse, a simplified `ErrorStatus` is written (`conditions: [{type: Ready, status: False, reason: ParseError}]`)
-- **Orphan cleanup**: at startup, `cleanup_orphans()` scans and deletes any `.status` files without a corresponding configuration file
+- **Error-status clearing**: after a repaired resource is applied, a resource that computes no status of its own cannot overwrite that sidecar, so init and the worker delete it explicitly. The `Ready` condition type is the sole sidecar marker, so any other persisted status is left untouched (see [native status sidecar cleanup](../../../04-review/status/regression-guards/native-status-sidecar-cleanup.md))
+- **Orphan cleanup**: at startup, `cleanup_orphans()` scans and deletes any `.status` files without a corresponding configuration file. It never removes a sidecar whose configuration file still exists
 
 ## Startup Flow
 

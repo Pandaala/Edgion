@@ -170,13 +170,7 @@ fn seed_existing_status<T: Serialize + DeserializeOwned + 'static>(obj: &mut T, 
     // manages its condition type, so once seeded it would survive every
     // upsert-only update_status as a permanent ghost. Skipping the seed lets
     // the recovery pass rebuild a clean status that replaces the sidecar.
-    let is_error_status_sidecar = status.get("conditions").and_then(|c| c.as_array()).is_some_and(|arr| {
-        arr.iter().any(|c| {
-            c.get("type").and_then(|t| t.as_str())
-                == Some(crate::conf_mgr::conf_center::common::ERROR_STATUS_CONDITION_TYPE)
-        })
-    });
-    if is_error_status_sidecar {
+    if crate::conf_mgr::conf_center::common::is_error_status_sidecar(&status) {
         return;
     }
     let unknown_fields = capture_unknown_fields_sidecar(obj);

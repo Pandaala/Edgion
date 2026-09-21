@@ -54,6 +54,30 @@ pub fn get_runtime_invalid(envelopes: &RuntimeInvalidEnvelopes, key: &str) -> Op
 /// resource).
 pub const ERROR_STATUS_CONDITION_TYPE: &str = "Ready";
 
+/// Return whether a persisted status document is an [`ErrorStatus`] sidecar.
+///
+/// The sole marker is [`ERROR_STATUS_CONDITION_TYPE`]: no resource handler
+/// manages a condition of that type, so its presence proves the document was
+/// written by `write_error_status` rather than computed from the resource.
+/// Both the status seed and the post-repair sidecar cleanup must agree on this
+/// predicate, so it has exactly one implementation.
+pub fn is_error_status_sidecar(status: &Value) -> bool {
+    status
+        .get("conditions")
+        .and_then(|conditions| conditions.as_array())
+        .is_some_and(|conditions| {
+            conditions.iter().any(|condition| {
+                condition.get("type").and_then(|kind| kind.as_str()) == Some(ERROR_STATUS_CONDITION_TYPE)
+            })
+        })
+}
+
+/// [`is_error_status_sidecar`] over the persisted JSON text; unparsable status
+/// is never treated as a sidecar.
+pub fn is_error_status_sidecar_json(status_json: &str) -> bool {
+    serde_json::from_str::<Value>(status_json).is_ok_and(|status| is_error_status_sidecar(&status))
+}
+
 /// Simple error status structure (for parse errors, etc.)
 ///
 /// Used when the resource can't be fully parsed and we can't extract native status.
@@ -489,6 +513,37 @@ mod error_status_tests {
         let status = ErrorStatus::error_for_persist("ParseError", "bad yaml", None).expect("first error must persist");
         assert_eq!(status.conditions[0].status, "False");
         assert!(!status.conditions[0].last_transition_time.is_empty());
+    }
+
+    #[test]
+    fn written_error_status_is_recognized_as_a_sidecar() {
+        let persisted = serde_json::to_string(&ErrorStatus::error("ParseError", "bad yaml")).unwrap();
+        assert!(
+            is_error_status_sidecar_json(&persisted),
+            "what write_error_status persists must be detectable as a sidecar"
+        );
+        let mismatch = serde_json::to_string(&ErrorStatus::error("IdentityMismatch", "key drifted")).unwrap();
+        assert!(is_error_status_sidecar_json(&mismatch));
+    }
+
+    #[test]
+    fn handler_owned_status_is_never_a_sidecar() {
+        // A route status carries no condition of the sidecar type, so the
+        // post-repair cleanup must never delete it.
+        let route_status = serde_json::json!({
+            "parents": [{
+                "controllerName": "edgion.io/gateway-controller",
+                "conditions": [{"type": "Accepted", "status": "True", "reason": "Accepted"}]
+            }]
+        });
+        assert!(!is_error_status_sidecar(&route_status));
+        assert!(!is_error_status_sidecar(&serde_json::json!({})));
+        assert!(!is_error_status_sidecar(&serde_json::Value::Null));
+    }
+
+    #[test]
+    fn unparsable_status_is_not_a_sidecar() {
+        assert!(!is_error_status_sidecar_json("not json"));
     }
 }
 

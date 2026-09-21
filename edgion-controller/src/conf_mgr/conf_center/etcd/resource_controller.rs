@@ -136,16 +136,26 @@ where
                             self.fs_raw_store.upsert(rkey.clone(), Arc::new(obj.clone()));
 
                             let existing_status_json = self.status_handler.read_status_json(kind, &rkey).await;
+                            // A resource repaired while the controller was down
+                            // still carries its failure status; note it before
+                            // the seed consumes it.
+                            let had_error_sidecar = existing_status_json
+                                .as_deref()
+                                .is_some_and(crate::conf_mgr::conf_center::common::is_error_status_sidecar_json);
 
                             let result = self.processor.on_init_apply(obj, existing_status_json).await;
 
                             if let WorkItemResult::Processed {
-                                obj, status_changed, ..
+                                obj,
+                                status_changed,
+                                persisted_status,
                             } = result
                             {
                                 init_count += 1;
                                 if status_changed {
                                     self.persist_status(kind, &rkey, &obj).await;
+                                } else if persisted_status.is_none() && had_error_sidecar {
+                                    self.clear_stale_error_status(kind, &rkey).await;
                                 }
                             }
                         }
@@ -216,14 +226,21 @@ where
                                 };
                                 self.fs_raw_store.upsert(rkey.clone(), Arc::new(obj.clone()));
                                 let existing_status_json = self.status_handler.read_status_json(kind, &rkey).await;
+                                let had_error_sidecar = existing_status_json
+                                    .as_deref()
+                                    .is_some_and(crate::conf_mgr::conf_center::common::is_error_status_sidecar_json);
                                 let result = self.processor.on_init_apply(obj, existing_status_json).await;
                                 if let WorkItemResult::Processed {
-                                    obj, status_changed, ..
+                                    obj,
+                                    status_changed,
+                                    persisted_status,
                                 } = result
                                 {
                                     init_count += 1;
                                     if status_changed {
                                         self.persist_status(kind, &rkey, &obj).await;
+                                    } else if persisted_status.is_none() && had_error_sidecar {
+                                        self.clear_stale_error_status(kind, &rkey).await;
                                     }
                                 }
                             }
@@ -352,6 +369,20 @@ where
             }
         }
     }
+
+    /// Drop the error status a previous failure left behind for a resource that
+    /// computes no status of its own; nothing else would ever overwrite it.
+    async fn clear_stale_error_status(&self, kind: &str, key: &str) {
+        if let Err(e) = self.status_handler.delete_status(kind, key).await {
+            tracing::warn!(
+                component = "etcd_resource_controller",
+                kind = kind,
+                key = %key,
+                error = %e,
+                "Failed to clear stale error status after repair"
+            );
+        }
+    }
 }
 
 /// Spawn worker task for processing workqueue items.
@@ -417,6 +448,12 @@ where
                     } else {
                         None
                     };
+                    // A resource that produces no status of its own cannot
+                    // overwrite the status a previous failure left behind, so
+                    // remember whether one is present before it is consumed.
+                    let had_error_sidecar = existing_status_json
+                        .as_deref()
+                        .is_some_and(crate::conf_mgr::conf_center::common::is_error_status_sidecar_json);
 
                     let result = processor
                         .process_work_item(
@@ -429,7 +466,9 @@ where
 
                     match result {
                         WorkItemResult::Processed {
-                            obj, status_changed, ..
+                            obj,
+                            status_changed,
+                            persisted_status,
                         } => {
                             if status_changed {
                                 if let Some(status_value) = extract_status_value(&obj) {
@@ -451,7 +490,19 @@ where
                                             );
                                         }
                                     }
-                                } else if let Err(e) = status_handler.delete_status(kind, &work_item.key).await {
+                                } else {
+                                    tracing::warn!(
+                                        component = "etcd_resource_controller",
+                                        kind = kind,
+                                        key = %work_item.key,
+                                        "Status changed but failed to extract"
+                                    );
+                                }
+                            } else if persisted_status.is_none() && had_error_sidecar {
+                                // A repaired resource that computes no status of
+                                // its own must still drop the retained error
+                                // status; nothing else will overwrite it.
+                                if let Err(e) = status_handler.delete_status(kind, &work_item.key).await {
                                     tracing::warn!(
                                         component = "etcd_resource_controller",
                                         kind = kind,

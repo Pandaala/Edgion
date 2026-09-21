@@ -168,13 +168,21 @@ where
 
                                     // Read existing status from .status file for comparison
                                     let existing_status_json = status_handler.read_status_json(kind, &key).await;
+                                    // A file repaired while the controller was
+                                    // down still carries its failure sidecar;
+                                    // note it before the seed consumes it.
+                                    let had_error_sidecar = existing_status_json.as_deref().is_some_and(
+                                        crate::conf_mgr::conf_center::common::is_error_status_sidecar_json,
+                                    );
 
                                     let result = self.processor.on_init_apply(obj, existing_status_json).await;
 
                                     // Handle status persistence (same as runtime)
                                     match result {
                                         WorkItemResult::Processed {
-                                            obj, status_changed, ..
+                                            obj,
+                                            status_changed,
+                                            persisted_status,
                                         } => {
                                             init_count += 1;
                                             if status_changed {
@@ -216,6 +224,19 @@ where
                                                             "Status changed but failed to extract during init"
                                                         );
                                                     }
+                                                }
+                                            } else if persisted_status.is_none() && had_error_sidecar {
+                                                // A repaired resource that computes no
+                                                // status of its own must still drop the
+                                                // retained error sidecar.
+                                                if let Err(e) = status_handler.delete_status(kind, &key).await {
+                                                    tracing::warn!(
+                                                        component = "fs_resource_controller",
+                                                        kind = kind,
+                                                        key = %key,
+                                                        error = %e,
+                                                        "Failed to clear stale error status during init"
+                                                    );
                                                 }
                                             }
                                         }
@@ -318,10 +339,15 @@ where
                                         }
                                         self.fs_raw_store.upsert(key.clone(), Arc::new(obj.clone()));
                                         let existing_status_json = status_handler.read_status_json(kind, &key).await;
+                                        let had_error_sidecar = existing_status_json.as_deref().is_some_and(
+                                            crate::conf_mgr::conf_center::common::is_error_status_sidecar_json,
+                                        );
                                         let result = self.processor.on_init_apply(obj, existing_status_json).await;
 
                                         if let WorkItemResult::Processed {
-                                            obj, status_changed, ..
+                                            obj,
+                                            status_changed,
+                                            persisted_status,
                                         } = result
                                         {
                                             init_count += 1;
@@ -357,6 +383,19 @@ where
                                                             );
                                                         }
                                                     }
+                                                }
+                                            } else if persisted_status.is_none() && had_error_sidecar {
+                                                // A repaired resource that computes no
+                                                // status of its own must still drop the
+                                                // retained error sidecar.
+                                                if let Err(e) = status_handler.delete_status(kind, &key).await {
+                                                    tracing::warn!(
+                                                        component = "fs_resource_controller",
+                                                        kind = kind,
+                                                        key = %key,
+                                                        error = %e,
+                                                        "Failed to clear stale error status during apply-as-init"
+                                                    );
                                                 }
                                             }
                                         }
@@ -739,6 +778,12 @@ where
                     } else {
                         None
                     };
+                    // A resource that produces no status of its own cannot
+                    // overwrite the sidecar a previous failure left behind, so
+                    // remember whether one is present before it is consumed.
+                    let had_error_sidecar = existing_status_json
+                        .as_deref()
+                        .is_some_and(crate::conf_mgr::conf_center::common::is_error_status_sidecar_json);
 
                     // Use processor's process_work_item which handles the reconciliation logic
                     let result = processor
@@ -753,7 +798,9 @@ where
                     // Persist status based on result
                     match result {
                         WorkItemResult::Processed {
-                            obj, status_changed, ..
+                            obj,
+                            status_changed,
+                            persisted_status,
                         } => {
                             if status_changed {
                                 match extract_status_value(&obj) {
@@ -787,18 +834,26 @@ where
                                         }
                                     }
                                     None => {
-                                        // A repaired statusless resource must
-                                        // remove the retained ParseError sidecar.
-                                        if let Err(e) = status_handler.delete_status(kind, &work_item.key).await {
-                                            tracing::warn!(
-                                                component = "fs_resource_controller",
-                                                kind = kind,
-                                                key = %work_item.key,
-                                                error = %e,
-                                                "Failed to clear stale error status after repair"
-                                            );
-                                        }
+                                        tracing::warn!(
+                                            component = "fs_resource_controller",
+                                            kind = kind,
+                                            key = %work_item.key,
+                                            "Status changed but failed to extract"
+                                        );
                                     }
+                                }
+                            } else if persisted_status.is_none() && had_error_sidecar {
+                                // A repaired resource that computes no status of
+                                // its own must still drop the retained error
+                                // sidecar; nothing else will overwrite it.
+                                if let Err(e) = status_handler.delete_status(kind, &work_item.key).await {
+                                    tracing::warn!(
+                                        component = "fs_resource_controller",
+                                        kind = kind,
+                                        key = %work_item.key,
+                                        error = %e,
+                                        "Failed to clear stale error status after repair"
+                                    );
                                 }
                             }
                         }
@@ -1467,6 +1522,189 @@ mod tests {
             assert!(std::time::Instant::now() < deadline, "worker did not re-apply in time");
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         }
+    }
+
+    #[tokio::test]
+    async fn handler_owned_status_survives_a_statusless_reconcile() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (processor, _registry, raw_store, status_handler, _invalid, _worker) = fs_worker_test_harness(tmp.path());
+        let key = "default/r1";
+        let path = tmp.path().join("default").join("HTTPRoute_default_r1.yaml");
+        tokio::fs::create_dir_all(path.parent().unwrap()).await.unwrap();
+
+        // A status this controller computed earlier, not a failure sidecar.
+        let owned_status = serde_json::json!({
+            "parents": [{
+                "parentRef": {"name": "gw"},
+                "controllerName": "edgion.io/gateway-controller",
+                "conditions": [{
+                    "type": "Accepted",
+                    "status": "True",
+                    "reason": "Accepted",
+                    "message": "Route accepted",
+                    "lastTransitionTime": "2026-01-01T00:00:00Z"
+                }]
+            }]
+        });
+        status_handler
+            .write_status_value("HTTPRoute", key, &owned_status)
+            .await
+            .unwrap();
+
+        let route = make_route("default", "r1");
+        tokio::fs::write(&path, serde_yaml::to_string(&route).unwrap())
+            .await
+            .unwrap();
+        raw_store.upsert(key.to_string(), Arc::new(route));
+        processor.on_event_key(key.to_string()).await;
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while processor.get(key).is_none() {
+            assert!(std::time::Instant::now() < deadline, "worker did not apply object");
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+
+        // The handler computes no status here, so nothing replaces the stored
+        // one; the cleanup must not mistake it for a failure sidecar.
+        assert!(
+            status_handler.read_status_json("HTTPRoute", key).await.is_some(),
+            "a handler-owned status must survive a successful reconcile"
+        );
+    }
+
+    #[tokio::test]
+    async fn imported_controller_envelope_status_is_never_cleared() {
+        use edgion_resources::prelude_resources::EdgionPlugins;
+
+        struct PluginsNoopHandler;
+        #[async_trait::async_trait]
+        impl ProcessorHandler<EdgionPlugins> for PluginsNoopHandler {}
+
+        let tmp = tempfile::tempdir().unwrap();
+        let processor = Arc::new(ResourceProcessor::<EdgionPlugins>::new(
+            "EdgionPlugins",
+            100,
+            Arc::new(PluginsNoopHandler),
+            Arc::new(ControllerRuntime::default()),
+        ));
+        let registry = Arc::new(PathRegistry::default());
+        let raw_store = Arc::new(LocalRawStore::<EdgionPlugins>::new());
+        let status_handler = FileSystemStatusHandler::new(tmp.path().to_path_buf()).with_registry(registry.clone());
+        let _worker = spawn_worker(
+            processor.clone(),
+            tmp.path().to_path_buf(),
+            registry.clone(),
+            "EdgionPlugins",
+            None,
+            raw_store.clone(),
+            Arc::new(RuntimeInvalidEnvelopes::default()),
+        );
+
+        let key = "default/p1";
+        let path = tmp.path().join("default").join("EdgionPlugins_default_p1.yaml");
+        tokio::fs::create_dir_all(path.parent().unwrap()).await.unwrap();
+        let plugins: EdgionPlugins = serde_json::from_value(serde_json::json!({
+            "metadata": {"name": "p1", "namespace": "default"},
+            "spec": {}
+        }))
+        .unwrap();
+        tokio::fs::write(&path, serde_yaml::to_string(&plugins).unwrap())
+            .await
+            .unwrap();
+        raw_store.upsert(key.to_string(), Arc::new(plugins));
+
+        // A Kubernetes controller envelope carried into FileSystem mode. It is
+        // legitimate persisted status, but it is not native here, so the
+        // pipeline clears it from the object and computes nothing to persist.
+        status_handler
+            .write_status_value(
+                "EdgionPlugins",
+                key,
+                &serde_json::json!({"controllers": [{
+                    "controllerName": "edgion.io/gateway-controller",
+                    "gatewayClassName": "edgion",
+                    "gatewayClassUid": "uid-1",
+                    "status": {"conditions": []}
+                }]}),
+            )
+            .await
+            .unwrap();
+
+        processor.on_event_key(key.to_string()).await;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while processor.get(key).is_none() {
+            assert!(std::time::Instant::now() < deadline, "worker did not apply object");
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+
+        assert!(
+            status_handler.read_status_json("EdgionPlugins", key).await.is_some(),
+            "only an error sidecar may be cleared; a foreign-but-real status must survive"
+        );
+    }
+
+    #[tokio::test]
+    async fn init_clears_error_status_of_a_resource_repaired_while_down() {
+        let tmp = tempfile::tempdir().unwrap();
+        let processor = Arc::new(ResourceProcessor::<HTTPRoute>::new(
+            "HTTPRoute",
+            100,
+            Arc::new(FsNoopHandler),
+            Arc::new(ControllerRuntime::default()),
+        ));
+        let registry = Arc::new(PathRegistry::default());
+        let key = "default/r1";
+        let path = tmp.path().join("default").join("HTTPRoute_default_r1.yaml");
+        tokio::fs::create_dir_all(path.parent().unwrap()).await.unwrap();
+        registry.record(ResourceKey::new("HTTPRoute", key), path.clone());
+        let status_handler = FileSystemStatusHandler::new(tmp.path().to_path_buf()).with_registry(registry.clone());
+
+        // The previous run left a ParseError beside the file; the operator then
+        // repaired it while the controller was down.
+        status_handler
+            .write_error_status("HTTPRoute", key, "ParseError", "invalid listener structure")
+            .await
+            .unwrap();
+        let repaired = make_route("default", "r1");
+        let repaired_content = serde_yaml::to_string(&repaired).unwrap();
+        tokio::fs::write(&path, &repaired_content).await.unwrap();
+
+        let (event_tx, event_rx) = tokio::sync::broadcast::channel(16);
+        let shutdown = crate::conf_mgr::sync_runtime::ShutdownHandle::new();
+        let controller = FileSystemResourceController::new(
+            "HTTPRoute",
+            processor.clone(),
+            tmp.path().to_path_buf(),
+            registry,
+            event_rx,
+        )
+        .with_shutdown(shutdown.signal());
+        let controller_task = tokio::spawn(controller.run());
+
+        event_tx.send(FileSystemEvent::Init).unwrap();
+        event_tx
+            .send(FileSystemEvent::InitApply {
+                path: path.clone(),
+                content: repaired_content,
+            })
+            .unwrap();
+        event_tx.send(FileSystemEvent::InitDone).unwrap();
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while processor.get(key).is_none() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "controller did not apply repaired object during init"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+
+        assert!(
+            status_handler.read_status_json("HTTPRoute", key).await.is_none(),
+            "init must not leave a repaired resource reporting its previous failure"
+        );
+        shutdown.shutdown();
+        assert!(controller_task.await.unwrap().is_ok());
     }
 
     #[tokio::test]
