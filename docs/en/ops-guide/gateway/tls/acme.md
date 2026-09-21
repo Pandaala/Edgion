@@ -10,6 +10,8 @@ Built-in ACME supports **HTTP-01 only**, with no DNS-01 or DNS provider API inte
 
 ## Overview
 
+Certificate issuance and activation are separate: the Gateway loads the certificate after its Secret is updated. Before publishing a result, the Controller rechecks that the EdgionAcme identity and configuration version are unchanged and that it still owns the work. If this check fails, the result is not published. This check does not cancel requests already sent to the CA or make writes across resources atomic.
+
 ```
 EdgionAcme (Controller) --ACME order--> ACME server (Let's Encrypt)
    ├─ HTTP-01: token published in status -> Gateway serves /.well-known/acme-challenge/<token>

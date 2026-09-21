@@ -10,6 +10,8 @@ EdgionAcme 在控制器（Controller）侧运行 ACME 客户端：注册账号�
 
 ## 概述
 
+证书申请和生效是两个阶段：Secret 更新后，Gateway 才会加载证书。发布结果前，Controller 会重新确认 EdgionAcme 的资源身份、配置版本没有变化，而且自己仍负责该任务；检查失败时不发布结果。这项检查不会撤回已发送给 CA 的请求，也不保证跨资源写入的原子性。
+
 ```
 EdgionAcme (Controller) --ACME order--> ACME server (Let's Encrypt)
    ├─ HTTP-01: token published in status -> Gateway serves /.well-known/acme-challenge/<token>

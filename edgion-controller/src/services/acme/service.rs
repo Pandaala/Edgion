@@ -491,6 +491,10 @@ impl AcmeServiceWorker {
             }
         };
 
+        if acme.metadata.deletion_timestamp.is_some() {
+            return;
+        }
+
         match evaluate_issuance_eligibility(&acme, key, &self.runtime) {
             EligibilityDecision::Eligible => {}
             EligibilityDecision::AuthoritativelyIneligible => return,
@@ -506,9 +510,6 @@ impl AcmeServiceWorker {
             .map(|s| &s.phase)
             .unwrap_or(&AcmeCertPhase::Pending);
         match phase {
-            AcmeCertPhase::Issuing | AcmeCertPhase::Renewing => {
-                return; // Already in progress
-            }
             AcmeCertPhase::Ready => {
                 if !self.needs_renewal(&acme) {
                     // Not time to renew yet — schedule next check
@@ -522,7 +523,9 @@ impl AcmeServiceWorker {
                 }
                 // Fall through to start renewal
             }
-            AcmeCertPhase::Failed => {
+            AcmeCertPhase::Failed | AcmeCertPhase::Issuing | AcmeCertPhase::Renewing => {
+                // The processing set already excluded live local attempts.
+                // A persisted in-progress phase alone must not strand interrupted work.
                 // Check retry limit before attempting again
                 let attempt = *self.retry_tracker.read().get(key).unwrap_or(&0);
                 if attempt >= MAX_RETRY_ATTEMPTS {
@@ -564,13 +567,19 @@ impl AcmeServiceWorker {
         let processing = self.processing.clone();
         let retry_tracker = self.retry_tracker.clone();
         let key_owned = key.to_string();
-        let is_renewal = *phase == AcmeCertPhase::Ready;
+        let is_renewal = matches!(phase, AcmeCertPhase::Ready | AcmeCertPhase::Renewing);
         let fail_backoff_base =
             spec_duration_or(&acme.spec.renewal.fail_backoff, "failBackoff", Duration::from_secs(300)).as_secs();
         let generation = self.generation;
+        let runtime = self.runtime.clone();
 
         tokio::spawn(async move {
-            let result = process_acme_resource(client.clone(), &acme, is_renewal, generation).await;
+            let attempt = AcmeAttempt {
+                acme: &acme,
+                runtime: &runtime,
+                generation,
+            };
+            let result = process_acme_resource(client.clone(), &attempt, is_renewal).await;
 
             match result {
                 Ok(()) => {
@@ -583,8 +592,18 @@ impl AcmeServiceWorker {
                     retry_tracker.write().remove(&key_owned);
                 }
                 Err(e) => {
+                    // A retired attempt must not publish failure into its successor.
+                    let (ns, name) = parse_resource_key(&key_owned);
+                    let api: Api<EdgionAcme> = Api::namespaced(client, &ns);
+                    if let Err(error) = attempt.current_resource(&api).await {
+                        tracing::warn!(component = "acme_service", key = %key_owned, error = %error,
+                            "Skipping ACME failure publication: attempt authority could not be confirmed");
+                        processing.write().remove(&key_owned);
+                        schedule_renewal_check(generation, key_owned, ELIGIBILITY_RECHECK_DELAY);
+                        return;
+                    }
                     // Increment retry counter
-                    let attempt = {
+                    let retry_attempt = {
                         let mut tracker = retry_tracker.write();
                         let count = tracker.entry(key_owned.clone()).or_insert(0);
                         *count += 1;
@@ -595,19 +614,18 @@ impl AcmeServiceWorker {
                         component = "acme_service",
                         key = %key_owned,
                         error = %e,
-                        attempt = attempt,
+                        attempt = retry_attempt,
                         max_attempts = MAX_RETRY_ATTEMPTS,
                         "ACME flow failed"
                     );
 
                     // Update status to Failed
-                    let (ns, name) = parse_resource_key(&key_owned);
-                    let api: Api<EdgionAcme> = Api::namespaced(client, &ns);
-                    if let Err(status_err) = update_acme_status(&api, &name, AcmeCertPhase::Failed, |status| {
-                        status.last_failure_reason = Some(format!("{:#}", e));
-                        status.last_failure_time = Some(now_rfc3339());
-                    })
-                    .await
+                    if let Err(status_err) =
+                        update_acme_status(&api, &attempt, &name, AcmeCertPhase::Failed, |status| {
+                            status.last_failure_reason = Some(format!("{:#}", e));
+                            status.last_failure_time = Some(now_rfc3339());
+                        })
+                        .await
                     {
                         // Without this, phase stays in Issuing/Renewing and operators
                         // cannot see that the flow failed.
@@ -620,12 +638,12 @@ impl AcmeServiceWorker {
                     }
 
                     // Schedule retry with exponential backoff (if under limit)
-                    if attempt < MAX_RETRY_ATTEMPTS {
-                        let backoff = exponential_backoff(fail_backoff_base, attempt - 1);
+                    if retry_attempt < MAX_RETRY_ATTEMPTS {
+                        let backoff = exponential_backoff(fail_backoff_base, retry_attempt - 1);
                         tracing::info!(
                             component = "acme_service",
                             key = %key_owned,
-                            attempt = attempt,
+                            attempt = retry_attempt,
                             backoff_secs = backoff.as_secs(),
                             "Scheduling retry with exponential backoff"
                         );
@@ -798,11 +816,49 @@ fn evaluate_issuance_eligibility(raw: &EdgionAcme, key: &str, runtime: &Controll
 // ACME Flow - The core certificate issuance/renewal logic
 // ============================================================================
 
+/// Publication checks for one admitted snapshot, not a distributed fencing token.
+struct AcmeAttempt<'a> {
+    acme: &'a EdgionAcme,
+    runtime: &'a ControllerRuntime,
+    generation: u64,
+}
+
+impl AcmeAttempt<'_> {
+    async fn current_resource(&self, api: &Api<EdgionAcme>) -> Result<EdgionAcme> {
+        anyhow::ensure!(
+            self.generation != 0 && current_generation() == self.generation,
+            "ACME service generation is no longer current"
+        );
+        let name = self.acme.metadata.name.as_deref().context("EdgionAcme has no name")?;
+        let current = api
+            .get(name)
+            .await
+            .context("Cannot confirm ACME publication authority")?;
+        let key = format!(
+            "{}/{}",
+            self.acme.metadata.namespace.as_deref().unwrap_or("default"),
+            name
+        );
+        anyhow::ensure!(
+            current_generation() == self.generation
+                && current.metadata.deletion_timestamp.is_none()
+                && current.metadata.uid == self.acme.metadata.uid
+                && current.metadata.generation == self.acme.metadata.generation
+                && matches!(
+                    evaluate_issuance_eligibility(&current, &key, self.runtime),
+                    EligibilityDecision::Eligible
+                ),
+            "ACME resource identity, generation, or serving authority changed"
+        );
+        Ok(current)
+    }
+}
+
 /// Process a single EdgionAcme resource through the full ACME flow
-async fn process_acme_resource(client: Client, acme: &EdgionAcme, is_renewal: bool, generation: u64) -> Result<()> {
+async fn process_acme_resource(client: Client, attempt: &AcmeAttempt<'_>, is_renewal: bool) -> Result<()> {
+    let acme = attempt.acme;
     let namespace = acme.metadata.namespace.as_deref().unwrap_or("default");
     let name = acme.metadata.name.as_deref().context("EdgionAcme has no name")?;
-    let key = format!("{}/{}", namespace, name);
 
     let api: Api<EdgionAcme> = Api::namespaced(client.clone(), namespace);
 
@@ -812,28 +868,46 @@ async fn process_acme_resource(client: Client, acme: &EdgionAcme, is_renewal: bo
     } else {
         AcmeCertPhase::Issuing
     };
-    update_acme_status(&api, name, phase, |_| {}).await?;
+    update_acme_status(&api, attempt, name, phase, |_| {}).await?;
 
     // 2. Create or restore ACME account
     let acme_client = get_or_create_acme_account(&client, acme).await?;
 
     // 3. Execute HTTP-01 and obtain the certificate
-    let cert_result = execute_http01_flow(&client, &api, name, &acme_client, acme).await?;
+    let cert_result = execute_http01_flow(attempt, &api, name, &acme_client, acme).await?;
+
+    publish_certificate(&client, &api, attempt, &cert_result, acme_client.account_id()).await
+}
+
+/// Kept separate from CA IO so publication after a resource change is testable.
+async fn publish_certificate(
+    client: &Client,
+    api: &Api<EdgionAcme>,
+    attempt: &AcmeAttempt<'_>,
+    cert_result: &AcmeCertificateResult,
+    account_uri: &str,
+) -> Result<()> {
+    let acme = attempt.acme;
+    let namespace = acme.metadata.namespace.as_deref().unwrap_or("default");
+    let name = acme.metadata.name.as_deref().context("EdgionAcme has no name")?;
+    let key = format!("{}/{}", namespace, name);
 
     // 4. Store certificate in K8s Secret
     let secret_ns = acme.get_secret_namespace();
-    create_or_update_cert_secret(&client, &secret_ns, &acme.spec.storage.secret_name, &cert_result, name).await?;
+    attempt.current_resource(api).await?;
+    create_or_update_cert_secret(client, &secret_ns, &acme.spec.storage.secret_name, cert_result, name).await?;
 
     // 5. Create/update EdgionTls if enabled
     if acme.spec.auto_edgion_tls.enabled {
-        create_or_update_edgion_tls(&client, acme).await?;
+        attempt.current_resource(api).await?;
+        create_or_update_edgion_tls(client, acme).await?;
     }
 
     // 6. Parse certificate info for status
     let cert_info = parse_cert_info(&cert_result.certificate_pem);
 
     // 7. Update status to Ready
-    update_acme_status(&api, name, AcmeCertPhase::Ready, |status| {
+    update_acme_status(api, attempt, name, AcmeCertPhase::Ready, |status| {
         status.certificate_serial = cert_info.serial.clone();
         status.certificate_not_after = cert_info.not_after.clone();
         status.last_renewal_time = Some(now_rfc3339());
@@ -843,7 +917,7 @@ async fn process_acme_resource(client: Client, acme: &EdgionAcme, is_renewal: bo
         if acme.spec.auto_edgion_tls.enabled {
             status.edgion_tls_name = Some(acme.get_edgion_tls_name());
         }
-        status.account_uri = Some(acme_client.account_id().to_string());
+        status.account_uri = Some(account_uri.to_string());
     })
     .await?;
 
@@ -853,7 +927,7 @@ async fn process_acme_resource(client: Client, acme: &EdgionAcme, is_renewal: bo
         "checkInterval",
         Duration::from_secs(86400),
     );
-    schedule_renewal_check(generation, format!("{}/{}", namespace, name), check_interval);
+    schedule_renewal_check(attempt.generation, format!("{}/{}", namespace, name), check_interval);
 
     tracing::info!(
         component = "acme_service",
@@ -879,7 +953,7 @@ async fn process_acme_resource(client: Client, acme: &EdgionAcme, is_renewal: bo
 const CHALLENGE_PROPAGATION_WAIT_SECS: u64 = 5;
 
 async fn execute_http01_flow(
-    _client: &Client,
+    attempt: &AcmeAttempt<'_>,
     api: &Api<EdgionAcme>,
     name: &str,
     acme_client: &AcmeClient,
@@ -928,7 +1002,7 @@ async fn execute_http01_flow(
             "Pushing HTTP-01 challenge tokens to CRD"
         );
 
-        patch_active_challenges(api, name, Some(&challenges)).await?;
+        patch_active_challenges(api, attempt, name, Some(&challenges)).await?;
 
         // Phase 3: Wait for Gateway to receive tokens via gRPC watch stream
         tracing::debug!(
@@ -958,9 +1032,9 @@ async fn execute_http01_flow(
         .complete_http01_order(order_ctx, &acme.spec.domains, &acme.spec.key_type)
         .await;
 
-    // Phase 6: ALWAYS clear challenge tokens from CRD, regardless of success or failure.
-    // Otherwise stale tokens remain in Gateway ChallengeStore until expire_at (up to 600s).
-    if let Err(e) = patch_active_challenges(api, name, None).await {
+    // Phase 6: Attempt cleanup on success or failure, but never clear a successor's tokens.
+    // Rejected cleanup leaves old tokens subject to their expiry (up to 600s).
+    if let Err(e) = patch_active_challenges(api, attempt, name, None).await {
         tracing::warn!(
             component = "acme_service",
             name = %name,
@@ -1093,14 +1167,20 @@ async fn get_or_create_acme_account(client: &Client, acme: &EdgionAcme) -> Resul
 /// keeps ownership under our manager and zeroes the observable token list.
 async fn patch_active_challenges(
     api: &Api<EdgionAcme>,
+    attempt: &AcmeAttempt<'_>,
     name: &str,
     challenges: Option<&[ActiveHttpChallenge]>,
 ) -> Result<()> {
+    let current = attempt.current_resource(api).await?;
+    let resource_version = current
+        .metadata
+        .resource_version
+        .context("EdgionAcme has no resourceVersion")?;
     let active = challenges.unwrap_or(&[]);
     let patch = serde_json::json!({
         "apiVersion": "edgion.io/v1",
         "kind": "EdgionAcme",
-        "metadata": { "name": name },
+        "metadata": { "name": name, "uid": current.metadata.uid, "resourceVersion": resource_version },
         "status": {
             "activeChallenges": active,
         }
@@ -1119,10 +1199,21 @@ async fn patch_active_challenges(
 /// SSA avoids the read-modify-write race condition by letting the K8s API
 /// server atomically merge fields. Only the fields we explicitly set will
 /// be managed; other controllers' fields are preserved.
-async fn update_acme_status<F>(api: &Api<EdgionAcme>, name: &str, phase: AcmeCertPhase, modify: F) -> Result<()>
+async fn update_acme_status<F>(
+    api: &Api<EdgionAcme>,
+    attempt: &AcmeAttempt<'_>,
+    name: &str,
+    phase: AcmeCertPhase,
+    modify: F,
+) -> Result<()>
 where
     F: FnOnce(&mut EdgionAcmeStatus),
 {
+    let current = attempt.current_resource(api).await?;
+    let resource_version = current
+        .metadata
+        .resource_version
+        .context("EdgionAcme has no resourceVersion")?;
     let mut status = EdgionAcmeStatus {
         phase,
         ..Default::default()
@@ -1132,7 +1223,7 @@ where
     let patch = serde_json::json!({
         "apiVersion": "edgion.io/v1",
         "kind": "EdgionAcme",
-        "metadata": { "name": name },
+        "metadata": { "name": name, "uid": current.metadata.uid, "resourceVersion": resource_version },
         "status": status
     });
 
@@ -1466,6 +1557,313 @@ spec:
                 .expect("response JSON must serialize"),
             ))
             .expect("response must build")
+    }
+
+    #[tokio::test]
+    async fn certificate_publication_rechecks_authority_between_writes() {
+        let _guard = ACME_TEST_MUTEX.lock().await;
+        // Simulate a completed CA request, then change the resource before
+        // publication or between its writes. No live CA or sleeps are needed.
+        for (scenario, expected_paths) in [
+            (
+                "current",
+                vec![
+                    "/api/v1/namespaces/default/secrets/certificate",
+                    "/apis/edgion.io/v1/namespaces/default/edgiontlses/acme-test",
+                    "/apis/edgion.io/v1/namespaces/default/edgionacmes/test/status",
+                ],
+            ),
+            ("uid", vec![]),
+            ("generation", vec![]),
+            ("deleted", vec![]),
+            ("get-error", vec![]),
+            ("stopped", vec![]),
+            ("stop-during-get", vec![]),
+            ("ownership", vec![]),
+            ("after-secret", vec!["/api/v1/namespaces/default/secrets/certificate"]),
+            (
+                "after-tls",
+                vec![
+                    "/api/v1/namespaces/default/secrets/certificate",
+                    "/apis/edgion.io/v1/namespaces/default/edgiontlses/acme-test",
+                ],
+            ),
+        ] {
+            let capture = NotificationCapture::install();
+            let mut acme = test_acme();
+            acme.metadata.resource_version = Some("10".into());
+            acme.spec.auto_edgion_tls.enabled = true;
+            let runtime = eligibility_runtime(&mut acme.clone());
+            if scenario == "ownership" {
+                runtime
+                    .processor_registry
+                    .register(Arc::new(ResourceProcessor::<Gateway>::new(
+                        "Gateway",
+                        8,
+                        Arc::new(NoopGatewayHandler),
+                        runtime.clone(),
+                    )));
+            }
+            if scenario == "stopped" {
+                ACME_SERVICE.lock().take();
+            }
+            let writes = Arc::new(Mutex::new(Vec::new()));
+            let recorded = writes.clone();
+            let mut current = acme.clone();
+            // A status-only resourceVersion change does not retire an attempt.
+            current.metadata.resource_version = Some("11".into());
+            if scenario == "uid" {
+                current.metadata.uid = Some("replacement".into());
+            }
+            if scenario == "generation" {
+                current.metadata.generation = Some(2);
+            }
+            let client = Client::new(
+                service_fn(move |request: http::Request<Body>| {
+                    let recorded = recorded.clone();
+                    let mut current = current.clone();
+                    async move {
+                        let (parts, body) = request.into_parts();
+                        let value = if parts.method == http::Method::GET {
+                            if scenario == "stop-during-get" {
+                                ACME_SERVICE.lock().take();
+                            }
+                            if scenario == "deleted" || scenario == "get-error" {
+                                let code = if scenario == "deleted" { 404 } else { 503 };
+                                return Ok::<_, Infallible>(
+                                    Response::builder()
+                                        .status(code)
+                                        .header(http::header::CONTENT_TYPE, "application/json")
+                                        .body(Body::from(
+                                            json!({"apiVersion":"v1", "kind":"Status", "status":"Failure",
+                                    "message":"test read failure", "reason":"Unavailable", "code":code})
+                                            .to_string()
+                                            .into_bytes(),
+                                        ))
+                                        .unwrap(),
+                                );
+                            }
+                            let count = recorded.lock().len();
+                            if (scenario == "after-secret" && count >= 1) || (scenario == "after-tls" && count >= 2) {
+                                current.metadata.generation = Some(2);
+                            }
+                            serde_json::to_value(current).unwrap()
+                        } else {
+                            assert_eq!(parts.method, http::Method::PATCH);
+                            let value: serde_json::Value =
+                                serde_json::from_slice(&body.collect_bytes().await.unwrap()).unwrap();
+                            recorded.lock().push((parts.uri.path().to_string(), value.clone()));
+                            if parts.uri.path().ends_with("/status") {
+                                let mut response = serde_json::to_value(current).unwrap();
+                                response["status"] = value["status"].clone();
+                                response
+                            } else {
+                                value
+                            }
+                        };
+                        Ok::<_, Infallible>(
+                            Response::builder()
+                                .header(http::header::CONTENT_TYPE, "application/json")
+                                .body(Body::from(value.to_string().into_bytes()))
+                                .unwrap(),
+                        )
+                    }
+                }),
+                "default",
+            );
+            let api = Api::namespaced(client.clone(), "default");
+            let attempt = AcmeAttempt {
+                acme: &acme,
+                runtime: &runtime,
+                generation: capture.generation,
+            };
+            let result = publish_certificate(
+                &client,
+                &api,
+                &attempt,
+                &AcmeCertificateResult {
+                    certificate_pem: "test certificate".into(),
+                    private_key_pem: Zeroizing::new("test key".into()),
+                },
+                "test-account",
+            )
+            .await;
+            assert_eq!(result.is_ok(), scenario == "current", "{scenario}: {result:?}");
+            let writes = writes.lock();
+            let paths: Vec<_> = writes.iter().map(|(path, _)| path.as_str()).collect();
+            assert_eq!(paths, expected_paths, "{scenario}");
+            if scenario == "current" {
+                assert_eq!(writes[2].1["metadata"]["uid"], "uid-1");
+                assert_eq!(writes[2].1["metadata"]["resourceVersion"], "11");
+                assert_eq!(writes[2].1["status"]["phase"], "Ready");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn retired_attempt_cannot_publish_challenges_or_failure() {
+        let _guard = ACME_TEST_MUTEX.lock().await;
+        let capture = NotificationCapture::install();
+        let acme = test_acme();
+        let runtime = eligibility_runtime(&mut acme.clone());
+        let mut replacement = acme.clone();
+        replacement.metadata.uid = Some("replacement".into());
+        let client = Client::new(
+            service_fn(move |request: http::Request<Body>| {
+                assert_eq!(request.method(), http::Method::GET, "retired attempt must not write");
+                let body = serde_json::to_vec(&replacement).unwrap();
+                async move {
+                    Ok::<_, Infallible>(
+                        Response::builder()
+                            .header(http::header::CONTENT_TYPE, "application/json")
+                            .body(Body::from(body))
+                            .unwrap(),
+                    )
+                }
+            }),
+            "default",
+        );
+        let api = Api::namespaced(client, "default");
+        let attempt = AcmeAttempt {
+            acme: &acme,
+            runtime: &runtime,
+            generation: capture.generation,
+        };
+        let challenges = [ActiveHttpChallenge {
+            domain: "example.com".into(),
+            token: "test-token".into(),
+            key_authorization: "test-authorization".into(),
+            expire_at: 600,
+        }];
+        assert!(patch_active_challenges(&api, &attempt, "test", Some(&challenges))
+            .await
+            .is_err());
+        assert!(patch_active_challenges(&api, &attempt, "test", None).await.is_err());
+        assert!(
+            update_acme_status(&api, &attempt, "test", AcmeCertPhase::Failed, |_| {})
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn interrupted_attempt_recovers_after_transient_publication_check() {
+        let _guard = ACME_TEST_MUTEX.lock().await;
+        for phase in [AcmeCertPhase::Issuing, AcmeCertPhase::Renewing] {
+            let mut capture = NotificationCapture::install();
+            let mut acme = test_acme();
+            acme.metadata.resource_version = Some("10".into());
+            acme.status.get_or_insert_with(Default::default).phase = phase.clone();
+            let runtime = eligibility_runtime(&mut acme.clone());
+            let reads = Arc::new(AtomicU64::new(0));
+            let read_count = reads.clone();
+            let phases = Arc::new(Mutex::new(Vec::new()));
+            let written_phases = phases.clone();
+            let client = Client::new(
+                service_fn(move |request: http::Request<Body>| {
+                    let reads = read_count.clone();
+                    let phases = written_phases.clone();
+                    let acme = acme.clone();
+                    async move {
+                        let mut response = serde_json::to_value(acme).unwrap();
+                        let mut code = 200;
+                        if request.method() == http::Method::GET {
+                            // Admission succeeds, then both publication checks encounter
+                            // a temporary read failure. The next check can recover.
+                            if matches!(reads.fetch_add(1, Ordering::SeqCst), 1 | 2) {
+                                code = 503;
+                            }
+                        } else {
+                            assert!(request.uri().path().ends_with("/status"));
+                            let patch: serde_json::Value =
+                                serde_json::from_slice(&request.into_body().collect_bytes().await.unwrap()).unwrap();
+                            phases.lock().push(patch["status"]["phase"].clone());
+                            response["status"] = patch["status"].clone();
+                            // Stop before account/CA IO after proving the worker resumed.
+                            if patch["status"]["phase"] != "Failed" {
+                                code = 422;
+                            }
+                        }
+                        if code != 200 {
+                            response = json!({"apiVersion":"v1", "kind":"Status", "status":"Failure",
+                            "message":"test operation rejected", "reason":"Unavailable", "code":code});
+                        }
+                        Ok::<_, Infallible>(
+                            Response::builder()
+                                .status(code)
+                                .header(http::header::CONTENT_TYPE, "application/json")
+                                .body(Body::from(serde_json::to_vec(&response).unwrap()))
+                                .unwrap(),
+                        )
+                    }
+                }),
+                "default",
+            );
+            let worker = AcmeServiceWorker::new(client, runtime, capture.generation);
+            worker.handle_resource_check("default/test").await;
+            tokio::time::timeout(Duration::from_secs(5), async {
+                while worker.processing.read().contains("default/test") {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .expect("rejected attempt must release its processing marker");
+            assert!(phases.lock().is_empty());
+            assert!(worker.retry_tracker.read().is_empty());
+            let command = tokio::time::timeout(Duration::from_secs(5), capture.rx.recv())
+                .await
+                .unwrap();
+            assert!(matches!(command, Some(AcmeCommand::RenewalCheck { key }) if key == "default/test"));
+            worker.handle_resource_check("default/test").await;
+            tokio::time::timeout(Duration::from_secs(5), async {
+                while worker.processing.read().contains("default/test") {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .expect("resumed attempt must finish");
+            assert_eq!(
+                *phases.lock(),
+                vec![serde_json::to_value(phase).unwrap(), json!("Failed")]
+            );
+            assert_eq!(worker.retry_tracker.read().get("default/test"), Some(&1));
+            assert!(reads.load(Ordering::SeqCst) >= 6);
+        }
+    }
+
+    #[tokio::test]
+    async fn terminating_resource_does_not_start_an_attempt() {
+        let _guard = ACME_TEST_MUTEX.lock().await;
+        let mut capture = NotificationCapture::install();
+        let mut acme = test_acme();
+        acme.metadata.deletion_timestamp =
+            Some(k8s_openapi::apimachinery::pkg::apis::meta::v1::Time(chrono::Utc::now()));
+        let runtime = eligibility_runtime(&mut acme.clone());
+        let reads = Arc::new(AtomicU64::new(0));
+        let read_count = reads.clone();
+        let client = Client::new(
+            service_fn(move |request: http::Request<Body>| {
+                assert_eq!(request.method(), http::Method::GET);
+                read_count.fetch_add(1, Ordering::SeqCst);
+                let body = serde_json::to_vec(&acme).unwrap();
+                async move {
+                    Ok::<_, Infallible>(
+                        Response::builder()
+                            .header(http::header::CONTENT_TYPE, "application/json")
+                            .body(Body::from(body))
+                            .unwrap(),
+                    )
+                }
+            }),
+            "default",
+        );
+        let worker = AcmeServiceWorker::new(client, runtime, capture.generation);
+        worker.handle_resource_check("default/test").await;
+        assert!(worker.processing.read().is_empty());
+        assert!(worker.eligibility_waiting.read().is_empty());
+        assert!(worker.retry_tracker.read().is_empty());
+        assert_eq!(reads.load(Ordering::SeqCst), 1);
+        assert!(capture.rx.try_recv().is_err());
     }
 
     #[tokio::test]

@@ -80,6 +80,18 @@ its service plus startup scan. Detached timers and already spawned issuance task
 are not synchronously aborted by `stop_acme_service`, so do not assume every
 in-flight operation is cancelled and restarted.
 
+Before certificate Secret, EdgionTls, lifecycle status, or challenge publication,
+the active flow now rechecks its service generation, GETs the current EdgionAcme,
+compares UID/generation, rejects deletion, and reuses the eligibility gate.
+Status writes also carry the checked UID/resourceVersion. These are conservative
+publication checks, not atomic fencing across the source resource, derived
+resources, and leader election. Account registration and CA requests are not
+cancelled; scheduler recovery remains in the
+[scheduler task](../../../tasks/todo/acme-scheduler-trigger-admission.md).
+An attempt rejected at completion releases its processing marker and schedules
+an existing generation-scoped recheck. A persisted Issuing/Renewing phase without
+a local processing marker is recoverable work, with the normal retry limit.
+
 ## Integration Mechanism
 
 ### Secret Management Integration
