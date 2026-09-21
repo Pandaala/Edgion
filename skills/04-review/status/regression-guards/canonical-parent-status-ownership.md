@@ -130,7 +130,6 @@ API conformance result is claimed.
 - `current-status-projection`: retain complete status in ServerCache and transmit
   a separate current deployment view; strict Route consumption replaces missing-
   status optimism. Verification is recorded above and in the implementation
-  plan. This does not resolve the separate
-  [GatewayClass reporting task](../../../../tasks/todo/gatewayclass-status-reporting-ownership.md).
+  plan. GatewayClass writer ownership remains unchanged.
 - `route-parent-status-canonical-identity`: canonical identity and configured ownership corrected;
   concurrent status persistence is covered by the separate guard above.

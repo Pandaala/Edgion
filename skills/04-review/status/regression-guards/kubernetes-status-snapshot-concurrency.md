@@ -55,7 +55,7 @@ PATCH precondition is specific to Kubernetes.
   handler admission and service eligibility now share `acme_is_owned`, preventing
   foreign classes from writing competing handler conditions. This is separate
   from notification deduplication. Active-attempt ownership handoff and scheduler
-  recovery remain in the [scheduler task](../../../../tasks/todo/acme-scheduler-trigger-admission.md).
+  recovery remain outside this correction.
 - One API attempt is made per changed status. 409 uses the existing warning/error-metric
   path, without immediate GET/retry or failure-triggered requeue. Later events, source LIST,
   dependency requeue or leadership acquisition can reconcile again. There is no bounded

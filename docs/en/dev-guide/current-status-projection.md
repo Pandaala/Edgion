@@ -5,7 +5,7 @@
 | Key | Value |
 |-----|-------|
 | Created | 2026-09-21 |
-| Status | implemented and verified (reporting task remains open) |
+| Status | implemented and verified |
 | Type | refactor |
 | Priority | P1 |
 | Issue | current-status-projection |
@@ -15,10 +15,8 @@
 The user approved keeping complete status in ServerCache while generating a
 separate typed currentStatus on the Controller cold path for Gateway decisions.
 Implement this consistently across status-bearing resources and existing status
-consumers. This is related to, but does not close,
-[GatewayClass reporting ownership](../../../tasks/todo/gatewayclass-status-reporting-ownership.md).
-The original task still needs a decision about writers for unselected classes;
-this change does not alter controllerName, election topology, or class admission.
+consumers. This change preserves the existing GatewayClass writer ownership and
+does not alter controllerName, election topology, or class admission.
 
 ## Design
 
@@ -87,8 +85,7 @@ Resource/Controller and Gateway changes were implemented in separate file scopes
 An independent read-only reviewer approved the design and reviewed the code and
 canonical knowledge. Review found and corrected native FS/etcd foreign-status
 filtering for EdgionTls and both policy families. This document retains the
-implementation plan, not an additional active issue; the original reporting task
-remains the source of unresolved work.
+implementation plan, not an additional active issue.
 
 ## Verification notes
 

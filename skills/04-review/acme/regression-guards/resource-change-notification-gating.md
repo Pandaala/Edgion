@@ -48,13 +48,11 @@ scanning and explicit Admin retry retain their existing independent notification
   credential rotation or a listener change whose ResolvedRefs status/reason stays
   unchanged. Service scheduler backoff, timer deduplication, and GET-error policy
   are outside this correction; this guard is not proof against every ACME loop.
-  The remaining questions are tracked in the
-  [scheduler admission follow-up](../../../../tasks/todo/acme-scheduler-trigger-admission.md).
 - Notification deduplication does not itself gate generic status writes. The
   separate `acme_is_owned` handler/service admission check now prevents foreign
   GatewayClasses from writing competing flat handler conditions. Active attempts
-  that outlive ownership transfer still require the separately tracked scheduler
-  cancellation/fencing work; admission is not a strict exactly-once issuance proof.
+  that outlive ownership transfer are outside this correction; admission is not
+  a strict exactly-once issuance proof.
 
 Fresh targeted verification for this correction:
 

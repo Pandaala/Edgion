@@ -75,12 +75,11 @@ formatting, documentation, SSA, metrics, Pingora source and transform-contract
 guards passed on 2026-09-21; CRD coverage checks passed (19 + 8 tests). Clippy
 retained two unrelated existing warnings. A fresh independent read-only code and
 knowledge review returned LGTM. The completed observation-isolation and ACME
-admission tasks were removed; scheduler work remains open below.
+admission tasks were removed. ACME scheduler limits remain documented below.
 Independent deployments claiming the same class still need the same election
 domain and configuration view. The existing native ancestor capacity limit is not
 permission to truncate foreign entries. ACME timers, restart recovery and active
-attempt handoff fencing remain in the
-[scheduler task](../../../../tasks/todo/acme-scheduler-trigger-admission.md).
+attempt handoff fencing remain outside the verified correction.
 
 ## Re-evaluation
 
