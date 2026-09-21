@@ -25,7 +25,6 @@ use arc_swap::ArcSwapOption;
 use edgion_algo::matcher::rfc6125_hostname::Rfc6125HostnameMatcher;
 use edgion_resources::listener_key::{resolve_listener_addr, ListenerKey};
 use edgion_resources::prelude_resources::Gateway;
-use edgion_resources::resources::edgion_tls::GatewayAttachmentProof;
 use edgion_resources::resources::edgion_tls::ResolvedListenerAttachment;
 use edgion_resources::resources::gateway::{
     gateway_attachment_proof, FrontendCASourceKind, FrontendMatcherEligibility, FrontendTLSValidation,
@@ -47,22 +46,10 @@ pub struct GatewayTlsEntry {
     /// Complete immutable logical attachment key, compiled on matcher rebuild
     /// and borrowed directly by the handshake path.
     pub attachment: ResolvedListenerAttachment,
-    /// Gateway namespace
-    pub gateway_namespace: String,
-    /// Gateway name
-    pub gateway_name: String,
     /// Gateway `metadata.creationTimestamp` — primary tiebreak key when two
     /// Gateways collide on the same hostname (oldest wins, per the Gateway API
     /// route-conflict convention; mirrors `BackendTLSPolicyStore` precedence).
     pub gateway_creation_ts: Option<Time>,
-    /// Listener name
-    pub listener_name: String,
-    /// Listener key identifying the physical listener ("{addr}/{protocol}")
-    pub listener_key: ListenerKey,
-    /// Exact Controller-captured Gateway instance/generation/epoch proof.
-    pub gateway_proof: GatewayAttachmentProof,
-    /// Hostname pattern (e.g., "*.example.com")
-    pub hostname: String,
     /// References to Secrets containing certificates
     pub certificate_refs: Vec<SecretObjectReference>,
     /// Exact identity-checked serving certificates compiled on matcher rebuild.
@@ -387,9 +374,9 @@ pub struct GatewayTlsMatcher {
 fn tls_entry_order(a: &Arc<GatewayTlsEntry>, b: &Arc<GatewayTlsEntry>) -> std::cmp::Ordering {
     a.gateway_creation_ts
         .cmp(&b.gateway_creation_ts)
-        .then_with(|| a.gateway_namespace.cmp(&b.gateway_namespace))
-        .then_with(|| a.gateway_name.cmp(&b.gateway_name))
-        .then_with(|| a.listener_name.cmp(&b.listener_name))
+        .then_with(|| a.attachment.gateway_namespace.cmp(&b.attachment.gateway_namespace))
+        .then_with(|| a.attachment.gateway_name.cmp(&b.attachment.gateway_name))
+        .then_with(|| a.attachment.listener_name.cmp(&b.attachment.listener_name))
 }
 
 /// Emit a warning when a TLS matcher slot accumulates more than one entry.
@@ -400,12 +387,22 @@ fn tls_entry_order(a: &Arc<GatewayTlsEntry>, b: &Arc<GatewayTlsEntry>) -> std::c
 fn warn_tls_sni_collision(hostname: &str, entries: &[Arc<GatewayTlsEntry>], total: usize) {
     let participants = entries
         .iter()
-        .map(|e| format!("{}/{}#{}", e.gateway_namespace, e.gateway_name, e.listener_name))
+        .map(|e| {
+            format!(
+                "{}/{}#{}",
+                e.attachment.gateway_namespace, e.attachment.gateway_name, e.attachment.listener_name
+            )
+        })
         .collect::<Vec<_>>()
         .join(", ");
     let selected = entries
         .first()
-        .map(|e| format!("{}/{}#{}", e.gateway_namespace, e.gateway_name, e.listener_name))
+        .map(|e| {
+            format!(
+                "{}/{}#{}",
+                e.attachment.gateway_namespace, e.attachment.gateway_name, e.attachment.listener_name
+            )
+        })
         .unwrap_or_default();
     tracing::warn!(
         component = "gateway_tls_matcher",
@@ -509,6 +506,7 @@ impl GatewayTlsMatcher {
                 );
                 continue;
             }
+            let gateway_proof = gateway_attachment_proof(gateway);
 
             for listener in listeners {
                 // Skip listeners without TLS config
@@ -572,29 +570,23 @@ impl GatewayTlsMatcher {
                     compiled_serving.is_some(),
                 );
 
+                let entry = Arc::new(GatewayTlsEntry {
+                    attachment: ResolvedListenerAttachment {
+                        gateway_namespace: gateway_namespace.clone(),
+                        gateway_name: gateway_name.clone(),
+                        listener_name: listener.name.clone(),
+                        listener_key: listener_key.clone(),
+                        gateway_proof: gateway_proof.clone(),
+                    },
+                    gateway_creation_ts: gateway.metadata.creation_timestamp.clone(),
+                    certificate_refs: cert_refs,
+                    compiled_serving_certificates: compiled_serving,
+                    compiled_frontend_ca_store: compiled_frontend.store,
+                    frontend_mtls: compiled_frontend.outcome,
+                });
+
                 match &listener.hostname {
                     Some(hostname) => {
-                        let entry = Arc::new(GatewayTlsEntry {
-                            attachment: ResolvedListenerAttachment {
-                                gateway_namespace: gateway_namespace.clone(),
-                                gateway_name: gateway_name.clone(),
-                                listener_name: listener.name.clone(),
-                                listener_key: listener_key.clone(),
-                                gateway_proof: gateway_attachment_proof(gateway),
-                            },
-                            gateway_namespace: gateway_namespace.clone(),
-                            gateway_name: gateway_name.clone(),
-                            gateway_creation_ts: gateway.metadata.creation_timestamp.clone(),
-                            listener_name: listener.name.clone(),
-                            listener_key: listener_key.clone(),
-                            gateway_proof: gateway_attachment_proof(gateway),
-                            hostname: hostname.clone(),
-                            certificate_refs: cert_refs,
-                            compiled_serving_certificates: compiled_serving.clone(),
-                            compiled_frontend_ca_store: compiled_frontend.store.clone(),
-                            frontend_mtls: compiled_frontend.outcome,
-                        });
-
                         let host_matcher = listener_map.entry(listener_key).or_insert_with(|| {
                             listener_count += 1;
                             Rfc6125HostnameMatcher::new()
@@ -624,26 +616,6 @@ impl GatewayTlsMatcher {
                     }
                     None => {
                         // Catch-all listener (no hostname) — register as fallback for this listener
-                        let entry = Arc::new(GatewayTlsEntry {
-                            attachment: ResolvedListenerAttachment {
-                                gateway_namespace: gateway_namespace.clone(),
-                                gateway_name: gateway_name.clone(),
-                                listener_name: listener.name.clone(),
-                                listener_key: listener_key.clone(),
-                                gateway_proof: gateway_attachment_proof(gateway),
-                            },
-                            gateway_namespace: gateway_namespace.clone(),
-                            gateway_name: gateway_name.clone(),
-                            gateway_creation_ts: gateway.metadata.creation_timestamp.clone(),
-                            listener_name: listener.name.clone(),
-                            listener_key: listener_key.clone(),
-                            gateway_proof: gateway_attachment_proof(gateway),
-                            hostname: String::new(),
-                            certificate_refs: cert_refs,
-                            compiled_serving_certificates: compiled_serving.clone(),
-                            compiled_frontend_ca_store: compiled_frontend.store.clone(),
-                            frontend_mtls: compiled_frontend.outcome,
-                        });
                         let slot = fallback_listener_map.entry(listener_key).or_default();
                         slot.push(entry);
                         if slot.len() > 1 {

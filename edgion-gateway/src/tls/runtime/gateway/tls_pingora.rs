@@ -836,13 +836,13 @@ impl TlsCallback {
         ssl_ctx.meta.matched = Some(MatchedInfo {
             rsc: Rsc {
                 kind: "Gateway".to_string(),
-                ns: gateway_tls.gateway_namespace.clone(),
-                name: gateway_tls.gateway_name.clone(),
+                ns: gateway_tls.attachment.gateway_namespace.clone(),
+                name: gateway_tls.attachment.gateway_name.clone(),
                 // GatewayTlsEntry is a derived listener struct without the full
                 // Gateway metadata, so no operator log labels are available here.
                 labels: None,
             },
-            section: Some(gateway_tls.listener_name.clone()),
+            section: Some(gateway_tls.attachment.listener_name.clone()),
             sv: 0,
         });
 
@@ -1341,16 +1341,10 @@ mod tests {
                 gateway_namespace: "default".to_string(),
                 gateway_name: "winner".to_string(),
                 listener_name: "https".to_string(),
-                listener_key: listener_key.clone(),
-                gateway_proof: gateway_proof.clone(),
+                listener_key,
+                gateway_proof,
             },
-            gateway_namespace: "default".to_string(),
-            gateway_name: "winner".to_string(),
             gateway_creation_ts: None,
-            listener_name: "https".to_string(),
-            listener_key,
-            gateway_proof,
-            hostname: "example.com".to_string(),
             certificate_refs: Vec::new(),
             compiled_serving_certificates: None,
             compiled_frontend_ca_store: None,

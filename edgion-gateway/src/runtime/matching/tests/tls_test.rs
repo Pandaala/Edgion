@@ -1,6 +1,7 @@
 //! Unit tests for `tls.rs` (see `super`).
 use super::*;
 use edgion_resources::constants::secret_keys::tls::{CA_CERT, CERT as TLS_CERT, KEY as TLS_KEY};
+use edgion_resources::resources::edgion_tls::{GatewayAttachmentProof, ResolvedListenerAttachment};
 use edgion_resources::resources::gateway::{
     FrontendCACertificateRef, FrontendCASourceIdentity, FrontendCASourceKind, FrontendTLSValidation,
     FrontendValidationMode, GatewaySpec, GatewayTLSConfig, GatewayTlsMode, Listener, ResolvedFrontendCAReference,
@@ -474,7 +475,7 @@ fn strict_reject_and_serve_candidates_share_collision_precedence() {
         let winner = matcher
             .match_sni(&test_listener_key(443), "collision.example.com")
             .unwrap();
-        assert_eq!(winner.gateway_name, "alpha");
+        assert_eq!(winner.attachment.gateway_name, "alpha");
         assert_eq!(
             winner.frontend_mtls,
             FrontendMtlsOutcome::StrictReject {
@@ -494,7 +495,21 @@ fn test_rebuild_from_gateways() {
         Some("example.com"),
         Some(make_tls_config("test-cert", Some("default"))),
     );
-    let gateway = create_test_gateway("test-gw", "default", vec![listener]);
+    let proof = GatewayAttachmentProof {
+        instance: "gateway-uid".to_string(),
+        generation: 7,
+        epoch: "resource-version-9".to_string(),
+        attachment_digest: "a".repeat(64),
+    };
+    let mut gateway = create_test_gateway("test-gw", "default", vec![listener]);
+    gateway.spec.resolved_attachment_proof = Some(proof.clone());
+    let expected_attachment = ResolvedListenerAttachment {
+        gateway_namespace: "default".to_string(),
+        gateway_name: "test-gw".to_string(),
+        listener_name: "https".to_string(),
+        listener_key: key.clone(),
+        gateway_proof: proof,
+    };
 
     matcher.rebuild_from_gateways(&[gateway]);
 
@@ -502,9 +517,7 @@ fn test_rebuild_from_gateways() {
     let result = matcher.match_sni(&key, "example.com");
     assert!(result.is_some());
     let entry = result.unwrap();
-    assert_eq!(entry.gateway_name, "test-gw");
-    assert_eq!(entry.gateway_namespace, "default");
-    assert_eq!(entry.listener_name, "https");
+    assert_eq!(entry.attachment, expected_attachment);
     assert_eq!(entry.certificate_refs.len(), 1);
 }
 
@@ -552,8 +565,8 @@ fn test_no_hostname() {
     let result = matcher.match_sni(&key, "example.com");
     assert!(result.is_some(), "Catch-all listener should match any SNI");
     let entry = result.unwrap();
-    assert_eq!(entry.gateway_name, "test-gw");
-    assert_eq!(entry.listener_name, "https");
+    assert_eq!(entry.attachment.gateway_name, "test-gw");
+    assert_eq!(entry.attachment.listener_name, "https");
 
     // Should also match other arbitrary SNIs
     let result = matcher.match_sni(&key, "anything.foo.bar");
@@ -590,7 +603,7 @@ fn test_wildcard_match() {
     let result = matcher.match_sni(&key, "api.example.com");
     assert!(result.is_some(), "api.example.com should match *.example.com");
     let entry = result.unwrap();
-    assert_eq!(entry.gateway_name, "wildcard-gw");
+    assert_eq!(entry.attachment.gateway_name, "wildcard-gw");
     assert_eq!(entry.certificate_refs[0].name, "wildcard-cert");
 
     // Another subdomain should also match
@@ -671,23 +684,23 @@ fn test_multiple_gateways_multiple_listeners() {
     let result = matcher.match_sni(&key, "api.example.com");
     assert!(result.is_some());
     let entry = result.unwrap();
-    assert_eq!(entry.gateway_name, "api-gateway");
+    assert_eq!(entry.attachment.gateway_name, "api-gateway");
     assert_eq!(entry.certificate_refs[0].name, "api-cert");
 
     // Test www.example.com
     let result = matcher.match_sni(&key, "www.example.com");
     assert!(result.is_some());
     let entry = result.unwrap();
-    assert_eq!(entry.gateway_name, "web-gateway");
-    assert_eq!(entry.listener_name, "www-https");
+    assert_eq!(entry.attachment.gateway_name, "web-gateway");
+    assert_eq!(entry.attachment.listener_name, "www-https");
     assert_eq!(entry.certificate_refs[0].name, "www-cert");
 
     // Test admin.example.com
     let result = matcher.match_sni(&key, "admin.example.com");
     assert!(result.is_some());
     let entry = result.unwrap();
-    assert_eq!(entry.gateway_name, "web-gateway");
-    assert_eq!(entry.listener_name, "admin-https");
+    assert_eq!(entry.attachment.gateway_name, "web-gateway");
+    assert_eq!(entry.attachment.listener_name, "admin-https");
     assert_eq!(entry.certificate_refs[0].name, "admin-cert");
 
     // Test unknown domain
@@ -726,7 +739,7 @@ fn test_certificate_ref_namespace_fallback() {
     let entry = result.unwrap();
 
     // Verify Gateway namespace is captured for later Secret lookup
-    assert_eq!(entry.gateway_namespace, "my-namespace");
+    assert_eq!(entry.attachment.gateway_namespace, "my-namespace");
     // Certificate ref has no explicit namespace
     assert!(entry.certificate_refs[0].namespace.is_none());
 }
@@ -851,14 +864,14 @@ fn test_listener_dimension_matching() {
     let result = matcher.match_sni(&key_443, "api.example.com");
     assert!(result.is_some(), "Should find cert for listener on port 443");
     let entry = result.unwrap();
-    assert_eq!(entry.listener_key, key_443);
+    assert_eq!(entry.attachment.listener_key, key_443);
     assert_eq!(entry.certificate_refs[0].name, "cert-443");
 
     // Test listener on port 8443
     let result = matcher.match_sni(&key_8443, "api.example.com");
     assert!(result.is_some(), "Should find cert for listener on port 8443");
     let entry = result.unwrap();
-    assert_eq!(entry.listener_key, key_8443);
+    assert_eq!(entry.attachment.listener_key, key_8443);
     assert_eq!(entry.certificate_refs[0].name, "cert-8443");
 
     // Test non-existent listener
@@ -1021,7 +1034,7 @@ fn test_exact_hostname_not_merged_into_wildcard_bucket() {
     assert!(result.is_some(), "exact hostname should match");
     let entry = result.unwrap();
     assert_eq!(
-        entry.listener_name, "https-exact",
+        entry.attachment.listener_name, "https-exact",
         "exact hostname must select the exact listener, not the wildcard"
     );
     assert_eq!(entry.certificate_refs[0].name, "exact-cert");
@@ -1029,7 +1042,7 @@ fn test_exact_hostname_not_merged_into_wildcard_bucket() {
     // Other subdomains should still match the wildcard
     let result = matcher.match_sni(&key, "other.wildcard.org");
     assert!(result.is_some());
-    assert_eq!(result.unwrap().listener_name, "https-wc");
+    assert_eq!(result.unwrap().attachment.listener_name, "https-wc");
 }
 
 #[test]
@@ -1070,12 +1083,15 @@ fn test_cross_gateway_sni_collision_is_deterministic() {
     let winner2 = matcher2.match_sni(&key, "shared.example.com").unwrap();
 
     // Same deterministic winner irrespective of input order
-    assert_eq!(winner1.gateway_namespace, winner2.gateway_namespace);
-    assert_eq!(winner1.gateway_name, winner2.gateway_name);
+    assert_eq!(
+        winner1.attachment.gateway_namespace,
+        winner2.attachment.gateway_namespace
+    );
+    assert_eq!(winner1.attachment.gateway_name, winner2.attachment.gateway_name);
     // Neither Gateway sets a creationTimestamp (None), so the tiebreak falls back to
     // (namespace, name): "team-a" < "team-b".
-    assert_eq!(winner1.gateway_namespace, "team-a");
-    assert_eq!(winner1.gateway_name, "alpha-gw");
+    assert_eq!(winner1.attachment.gateway_namespace, "team-a");
+    assert_eq!(winner1.attachment.gateway_name, "alpha-gw");
     assert_eq!(winner1.certificate_refs[0].name, "alpha-cert");
 }
 
@@ -1120,7 +1136,7 @@ fn test_cross_gateway_collision_prefers_oldest_creation_timestamp() {
         matcher.rebuild_from_gateways(&order);
         let winner = matcher.match_sni(&key, "shared.example.com").unwrap();
         assert_eq!(
-            winner.gateway_name, "zzz-gw",
+            winner.attachment.gateway_name, "zzz-gw",
             "older Gateway must win regardless of name or input order"
         );
         assert_eq!(winner.certificate_refs[0].name, "incumbent-cert");
@@ -1161,8 +1177,8 @@ fn test_cross_gateway_wildcard_collision_is_deterministic() {
     matcher2.rebuild_from_gateways(&[gw_b, gw_a]);
     let winner2 = matcher2.match_sni(&key, "foo.example.com").unwrap();
 
-    assert_eq!(winner1.gateway_name, winner2.gateway_name);
-    assert_eq!(winner1.gateway_name, "alpha-gw");
+    assert_eq!(winner1.attachment.gateway_name, winner2.attachment.gateway_name);
+    assert_eq!(winner1.attachment.gateway_name, "alpha-gw");
     assert_eq!(winner1.certificate_refs[0].name, "alpha-cert");
 }
 
@@ -1198,8 +1214,8 @@ fn test_cross_gateway_catchall_collision_is_deterministic() {
     matcher2.rebuild_from_gateways(&[gw_b, gw_a]);
     let winner2 = matcher2.match_sni(&key, "anything.example.com").unwrap();
 
-    assert_eq!(winner1.gateway_name, winner2.gateway_name);
-    assert_eq!(winner1.gateway_name, "alpha-gw");
+    assert_eq!(winner1.attachment.gateway_name, winner2.attachment.gateway_name);
+    assert_eq!(winner1.attachment.gateway_name, "alpha-gw");
     assert_eq!(winner1.certificate_refs[0].name, "alpha-cert");
 }
 
@@ -1244,7 +1260,7 @@ fn test_programmed_false_does_not_shadow_valid_listener() {
     // Valid listener should still match
     let result = matcher.match_sni(&key, "api.example.com");
     assert!(result.is_some(), "valid listener should still be registered");
-    assert_eq!(result.unwrap().gateway_name, "valid-gw");
+    assert_eq!(result.unwrap().attachment.gateway_name, "valid-gw");
 
     // The invalid catch-all remains an explicit rejection entry, never a
     // serving fallback and never an opportunity for EdgionTls rescue.
