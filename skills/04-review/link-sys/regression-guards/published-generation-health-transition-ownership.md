@@ -53,6 +53,29 @@ the same cells outside that lifecycle.
 
 ## Verification and re-evaluation
 
+The Kafka integration recovery oracle checks the current
+`edgion_link_sys_health` gauge for the exact LinkSys key and delivery of an
+identified access-log record generated after broker restart. Supply a unique
+valid W3C `traceparent` and match its canonical
+`request_info.trace_id["x-trace-id"]`; request paths may be masked and an inbound
+`x-trace-id` alone does not establish the canonical identity. Keep normal log
+redaction enabled. Match the metric
+name and link label independently of global labels such as `service` and their
+order. Missing or failed scrapes are not evidence of either health level.
+Transition logs are rate-limited and can omit a real recovery; increasing topic
+counts alone can reflect old queued records. Neither is a sufficient recovery
+oracle. A recovery timeout fails the suite, rather than emitting a warning-only
+PASS. Test consumers have container-side deadlines because terminating the host
+`docker exec` client does not terminate the container's consumer.
+
+On 2026-09-21, the final trace-ID-based standalone Kafka run passed all eight
+assertions, including broker-down health and broker-up current health plus fresh
+record delivery. The preceding path-based attempt passed seven assertions but
+failed recovery because normal masking replaced the path; that failure verified the nonzero failure
+exit, not a production recovery defect. Bash 3.2 matcher fixtures and independent
+Astra review cover global-label ordering, missing/wrong health samples, and
+masked-path records with correct versus absent or stale trace IDs.
+
 Deterministic tests cover unpublished baselines, duplicate directions,
 replacement and deletion handover, concurrent writers, reporter-free Controller
 use, Etcd degradation/recovery/retirement, and a runner-level old-versus-current

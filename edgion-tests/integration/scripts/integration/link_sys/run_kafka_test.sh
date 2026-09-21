@@ -57,6 +57,7 @@ TEST_SERVER_PORT=30001
 CONTROLLER_URL="http://127.0.0.1:${CONTROLLER_ADMIN_PORT}"
 CONTROLLER_PROBE_URL="${CONTROLLER_PROBE_URL:-http://127.0.0.1:12100}"
 GATEWAY_PROBE_URL="${GATEWAY_PROBE_URL:-http://127.0.0.1:12000}"
+GATEWAY_METRICS_URL="http://127.0.0.1:12090/metrics"
 : "${EDGION_GATEWAY_ADMIN_TOKEN:=integration-gateway-admin-token-0123456789}"
 
 KAFKA_TOPIC="edgion-access"
@@ -148,25 +149,58 @@ assert_ge() {
     fi
 }
 
-# Count total messages in the topic by consuming from offset=start for up to
-# WAIT_SECS seconds. rpk has no --timeout flag; we run it in the background
-# and kill it after the wait, then count what arrived.
+# Enforce the consumer deadline inside the container: stopping docker exec on
+# the host does not stop rpk. The fixture provides /usr/bin/timeout. Also bound
+# the host client in case the Docker daemon stops answering.
+consume_topic_for() {
+    local wait_secs="$1" max_records="${2:-9999}" bg_pid elapsed=0
+    docker exec edgion-test-redpanda \
+        /usr/bin/timeout --signal=TERM --kill-after=1 "$wait_secs" \
+        rpk topic consume "$KAFKA_TOPIC" -o start --num "$max_records" 2>/dev/null &
+    bg_pid=$!
+    while kill -0 "$bg_pid" 2>/dev/null && [ "$elapsed" -lt "$((wait_secs + 3))" ]; do
+        sleep 1
+        elapsed=$((elapsed + 1))
+    done
+    if kill -0 "$bg_pid" 2>/dev/null; then
+        kill -KILL "$bg_pid" 2>/dev/null || true
+    fi
+    wait "$bg_pid" 2>/dev/null || true
+}
+
+# Count messages delivered during a bounded consume from offset=start.
 count_topic_messages() {
     local wait_secs="${1:-5}"
     local tmpfile
     tmpfile=$(mktemp)
-    docker exec edgion-test-redpanda \
-        rpk topic consume "$KAFKA_TOPIC" -o start --num 9999 2>/dev/null \
-        > "$tmpfile" &
-    local bg_pid=$!
-    sleep "$wait_secs"
-    kill "$bg_pid" 2>/dev/null || true
-    wait "$bg_pid" 2>/dev/null || true
+    consume_topic_for "$wait_secs" > "$tmpfile"
     local count
     count=$(grep '"topic"' "$tmpfile" 2>/dev/null | wc -l | tr -d '[:space:]')
     count="${count:-0}"
     rm -f "$tmpfile"
     echo "$count"
+}
+
+# The gauge samples the currently published client at scrape time. Missing or
+# unavailable metrics must not be mistaken for an unhealthy client.
+kafka_health_is() {
+    local expected="$1" metrics
+    metrics=$(curl -fsS --connect-timeout 1 --max-time 2 "$GATEWAY_METRICS_URL" 2>/dev/null) || return 1
+    printf '%s\n' "$metrics" | awk -v expected="$expected" '
+        $1 ~ /^edgion_link_sys_health\{/ &&
+        $1 ~ /[{,]link="default\/kafka-test"[,}]/ && $2 == expected { found = 1 }
+        END { exit !found }
+    '
+}
+
+# Match canonical identity, which remains visible under access-log masking.
+# A topic count can increase when pre-outage records finish flushing.
+topic_has_trace_id() {
+    local trace_id="$1"
+    consume_topic_for 4 > "${LOG_DIR}/kafka-recovery-records.json"
+    jq -se --arg trace_id "$trace_id" '
+        any(.[]; (.value | fromjson? | .request_info.trace_id["x-trace-id"]) == $trace_id)
+    ' "${LOG_DIR}/kafka-recovery-records.json" >/dev/null 2>&1
 }
 
 # =============================================================================
@@ -402,9 +436,7 @@ log_info "─── 3. Record body ───"
 
 if [ "$COUNT_AFTER_SEND" -ge 1 ]; then
     TMPFILE=$(mktemp)
-    docker exec edgion-test-redpanda \
-        rpk topic consume "$KAFKA_TOPIC" -o start --num 1 2>/dev/null > "$TMPFILE" &
-    BG=$!; sleep 3; kill "$BG" 2>/dev/null || true; wait "$BG" 2>/dev/null || true
+    consume_topic_for 3 1 > "$TMPFILE"
     FIRST_MSG=$(cat "$TMPFILE"); rm -f "$TMPFILE"
 
     BODY=$(echo "$FIRST_MSG" | jq -r '.value // ""' 2>/dev/null || echo "")
@@ -483,16 +515,16 @@ for i in $(seq 1 5); do
 done
 
 # Health probing is asynchronous and its interval can exceed a fixed sleep on
-# loaded Linux CI hosts. Poll the generic runtime transition with a hard bound.
+# loaded Linux CI hosts. Poll current health; transition logs are rate-limited.
 KAFKA_DEGRADED=false
 for i in $(seq 1 45); do
-    if grep 'link-sys degraded' "${LOG_DIR}/gateway.log" 2>/dev/null | grep -q 'kafka'; then
+    if kafka_health_is 0; then
         KAFKA_DEGRADED=true
         break
     fi
     sleep 1
 done
-assert_eq "Gateway logs Kafka degraded after broker down" "true" "$KAFKA_DEGRADED"
+assert_eq "Kafka current health degrades after broker down" "true" "$KAFKA_DEGRADED"
 
 # -- Up phase: restart the broker and wait for readiness ----------------------
 log_info "Restarting Redpanda broker..."
@@ -508,61 +540,24 @@ for i in $(seq 1 60); do
     sleep 1
 done
 
-# Baseline message count recorded after the broker is back up, before driving
-# new traffic, so the recovery check can compare against it.
-COUNT_BASELINE_AFTER_UP=$(count_topic_messages 4)
-
-for i in $(seq 1 5); do
-    curl -sf "${GATEWAY_PROXY}/health" -H "Host: kafka-gateway.edgion-test.example.com" \
-        -o /dev/null 2>/dev/null || true
-done
-sleep 3
-
-# -- Recovery assertion (graceful) --------------------------------------------
-# rskafka's already-built PartitionClient may not reconnect automatically after
-# the broker restarts mid-stream (Mode B' residual). We wait up to ~35 s,
-# driving a few requests each iteration, and look for BOTH signals:
-#   1. Generic link-system recovery log line (emitted on health-state flip)
-#   2. Topic message count increased beyond the post-restart baseline
-#
-# If recovery is observed => PASS (increment counters normally).
-# If NOT observed after the timeout => log a prominent warning and deliberately
-# DO NOT increment TESTS_FAILED. This keeps the suite green while clearly
-# flagging the known limitation; reconnect recovery is owned by task 05
-# (background probe). A missing recovery here is NOT a regression.
+# -- Recovery assertion ------------------------------------------------------
+# Only send this unique W3C identity after restart, so queued pre-outage records
+# cannot satisfy delivery. Core derives canonical x-trace-id from traceparent;
+# an incoming x-trace-id alone would be replaced. Paths may be log-masked.
+# Require current healthy state AND that exact record; either timeout is a FAIL.
+RECOVERY_TRACE_ID=$(printf '%016x%016x' "$(date +%s)" "$$")
 RECOVERY_FOUND=false
-for attempt in $(seq 1 5); do
-    for i in $(seq 1 3); do
-        curl -sf "${GATEWAY_PROXY}/health" -H "Host: kafka-gateway.edgion-test.example.com" \
-            -o /dev/null 2>/dev/null || true
-    done
-    sleep 5
-
-    RECOVERED_LOG="$(grep 'link-sys recovered' "${LOG_DIR}/gateway.log" 2>/dev/null | grep -q 'kafka' && echo found || echo missing)"
-    COUNT_NOW=$(count_topic_messages 4)
-
-    if [ "$RECOVERED_LOG" = "found" ] && [ "$COUNT_NOW" -gt "$COUNT_BASELINE_AFTER_UP" ]; then
+for attempt in $(seq 1 12); do
+    curl -fsS --connect-timeout 1 --max-time 2 "${GATEWAY_PROXY}/health" \
+        -H "traceparent: 00-${RECOVERY_TRACE_ID}-0000000000000001-00" \
+        -H "Host: kafka-gateway.edgion-test.example.com" -o /dev/null 2>/dev/null || true
+    if topic_has_trace_id "$RECOVERY_TRACE_ID" && kafka_health_is 1; then
         RECOVERY_FOUND=true
         break
     fi
+    sleep 1
 done
-
-if [ "$RECOVERY_FOUND" = "true" ]; then
-    TESTS_TOTAL=$((TESTS_TOTAL + 1))
-    TESTS_PASSED=$((TESTS_PASSED + 1))
-    log_success "Kafka health recovered after broker restart (Mode B)"
-else
-    # Deliberately NOT incrementing TESTS_FAILED: the Mode B' scenario (rskafka
-    # PartitionClient not reconnecting mid-stream) is a documented limitation
-    # tracked under task 05 (background-probe reconnect). Failing the suite here
-    # would produce a false regression signal for the fix being validated here.
-    log_warn "═══════════════════════════════════════════════════════════════════"
-    log_warn "Mode B' residual: rskafka PartitionClient did not reconnect"
-    log_warn "  mid-stream after broker restart. Recovery is owned by task 05"
-    log_warn "  (background probe reconnect logic). This is a documented known"
-    log_warn "  limitation — NOT a regression in the current fix being tested."
-    log_warn "═══════════════════════════════════════════════════════════════════"
-fi
+assert_eq "Kafka current health and fresh access-log delivery recover after broker restart" "true" "$RECOVERY_FOUND"
 
 # =============================================================================
 # REPORT

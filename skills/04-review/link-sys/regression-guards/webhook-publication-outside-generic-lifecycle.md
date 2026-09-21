@@ -38,7 +38,8 @@ Owning sources are link_sys/runtime/store.rs, providers/webhook/client.rs,
 providers/webhook/manager.rs, and the canonical outbound engine under
 plugins/http/common/outbound/. Review source-event ordering, same-type failure
 preservation, kind changes, and full-set omission whenever publication changes.
-The active refactor task records fresh test results; historical verification of
+The [provider-owned removal page](../intentional-design/provider-owned-runtime-and-simple-removal.md)
+records the unified table's verification boundary; historical verification of
 the removed manager does not verify the new table.
 
 ## Resolution references

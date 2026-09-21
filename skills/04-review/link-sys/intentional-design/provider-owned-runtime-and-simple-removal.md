@@ -59,9 +59,20 @@ The motivating issue was a Webhook-to-other-provider partial update that left
 an independently registered old Webhook callable. One typed lookup authority
 eliminates that stale registry rather than coordinating two publications.
 
-This page records the user-approved design. Fresh implementation verification is
-recorded in the active task until independent review and checks complete; no
-historical test result establishes the current diff's correctness.
+Verification on 2026-09-21: all 274 Gateway LinkSys unit tests and the replacement
+fixture/DSL validation test passed. The shared Redis suite passed 71 assertions
+and its cache-residue check. `LinkSysProviderReplacement` passed against the
+standard shared topology with `base,HTTPRoute/Basic,EdgionPlugins/base` loaded:
+Webhook to Redis to Webhook, deletion, recreation, rapid recreation, and a
+non-retried ten-second stability window with fresh traffic. A prior attempt
+after the Redis runner's final configuration wipe lacked the complete baseline
+and returned RouteNotFound; it is not successful lifecycle evidence.
+
+Independent Astra source review approved the current store and scenario under
+this contract. These results establish current lookup and bounded convergence
+evidence, not completion of every retired SDK task or live coverage of every
+provider pair. Historical test results never substitute for fresh verification
+after a relevant change.
 
 ## Re-evaluation triggers
 

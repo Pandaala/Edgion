@@ -39,7 +39,7 @@
 - D0007 recorded the Etcd sub-scrape flip-counter gap. Its later resolution uses
   a binary-owned transition seam because the shared Etcd client must not depend
   on Gateway metrics.
-- The existing `tasks/todo/link-sys-cross-provider-partial-replacement.md` remains separate and was not modified.
+- The cross-provider replacement issue was separate and was not modified by this batch. Its later resolution is documented in [provider-owned runtime and simple removal](../../../../skills/04-review/link-sys/intentional-design/provider-owned-runtime-and-simple-removal.md).
 
 ## Verification
 
