@@ -1,6 +1,6 @@
 ---
 name: runtime-expiry-recheck-symmetry
-description: Both certificate-install paths recheck validity at handshake time; EdgionTls parses PEM and compares Asn1Time, while Gateway TLS compares cold-compiled Unix bounds before atomic identity installation.
+description: Both certificate-install paths compare strict-parser Unix validity bounds at handshake time and emit the same static audit categories.
 knowledge_type: regression-guards
 ---
 
@@ -14,8 +14,8 @@ knowledge_type: regression-guards
 `edgion-gateway/src/tls/runtime/gateway/tls_pingora.rs` rechecks `not_before` / `not_after`
 immediately before installing either serving identity, with source-specific mechanics:
 
-- `apply_edgion_tls_cert` parses the EdgionTls PEM and compares the certificate's
-  `Asn1Time` bounds with `Asn1Time::days_from_now(0)`.
+- `apply_edgion_tls_cert` strictly parses the full EdgionTls chain and compares
+  the parser's leaf Unix bounds with the current Unix time.
 - `apply_compiled_certificate_to_ssl` compares a Gateway listener certificate's
   cold-compiled Unix bounds with the current Unix time, then installs the immutable
   compiled chain/key. It performs no per-handshake PEM parsing or ASN.1 construction.
@@ -31,8 +31,9 @@ BoringSSL's own chain validation does cause the *client* to reject a genuinely e
 so the handshake fails either way. The recheck exists for **server-side observability**, not
 correctness of the handshake outcome:
 
-- It writes a structured `err_log` (`cert_expired: not_after=…` / `cert_not_yet_valid: not_before=…`)
-  on `ssl_ctx.meta` that flows into tls.log and downstream alerting.
+- It writes a static non-secret `err_log` category (`cert_expired` or
+  `cert_not_yet_valid`) on `ssl_ctx.meta` that flows into tls.log and downstream
+  alerting. Certificate dates are intentionally not embedded in diagnostics.
 - Without it, operators see a generic handshake failure without knowing the configured cert has
   drifted past its `not_after` between controller rebuilds (rebuild cadence is operator-controlled,
   minutes to hours).
@@ -48,19 +49,20 @@ handshake path checks those bounds before atomic installation.
 
 ## Why the two implementations differ
 
-The audit invariant is shared, while ownership differs. EdgionTls still carries source material
-that its install path parses and checks with `Asn1Time`. Gateway listener identities are validated
-and compiled on matcher rebuild; repeating PEM/key parsing or ASN.1 time construction in cert_cb
-would discard that cold-path ownership. Its install path therefore compares the stored Unix bounds
-and applies the compiled identity. Both paths set the same fail-closed audit codes before binding an
+The audit invariant and classifier are shared, while ownership differs.
+EdgionTls still carries source material that its install path parses strictly;
+the strict parser returns the Unix bounds used for the per-handshake check.
+Gateway listener identities are validated and compiled on matcher rebuild, so
+their install path compares the stored Unix bounds without repeating PEM/key
+parsing. Both paths set the same fail-closed static category before binding an
 invalid identity.
 
 ## Re-evaluation triggers
 
 - A third cert-install entry point is added — re-check that it performs the validity check before
   binding an identity. Audit symmetry is the rule, not a property of these two functions.
-- F-010 lands and the helper is extracted — the two cfg-gated blocks should collapse into one; the
-  audit-signal invariant must be preserved.
+- Either identity path changes its validity representation or classifier; the
+  shared audit-signal invariant must be preserved.
 - Compiled Gateway certificate ownership or its stored validity representation changes.
 
 ## Reference

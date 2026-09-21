@@ -747,67 +747,77 @@ impl TlsCallback {
             }
         }
 
-        let cert_pem = match edgion_tls.cert_pem() {
-            Ok(pem) => pem,
-            Err(e) => {
-                ssl_ctx.meta.err_log = Some(format!("cert read: {e}"));
-                return;
-            }
-        };
-        let cert = match X509::from_pem(cert_pem.as_bytes()) {
-            Ok(c) => c,
-            Err(e) => {
-                ssl_ctx.meta.err_log = Some(format!("bad cert: {e}"));
-                return;
-            }
-        };
-        // Runtime expiry recheck — cert may have expired after load. Mirrors
-        // validate_cert/check_expiration semantics (RFC 5280 inclusive bounds).
-        #[cfg(feature = "boringssl")]
-        match boring::asn1::Asn1Time::days_from_now(0) {
-            Ok(now) => {
-                if cert.not_after() < now {
-                    ssl_ctx.meta.err_log = Some(format!("cert_expired: not_after={}", cert.not_after()));
-                    return;
-                }
-                if cert.not_before() > now {
-                    ssl_ctx.meta.err_log = Some(format!("cert_not_yet_valid: not_before={}", cert.not_before()));
-                    return;
-                }
-            }
-            Err(_e) => {
-                // days_from_now(0) only fails on BoringSSL allocation failure
-                // (effectively impossible). Don't fail the connection — the
-                // cert was validated at load time and BoringSSL rejects
-                // genuinely broken certs during the handshake.
-                let _ = ssl_ctx
-                    .meta
-                    .log
-                    .get_or_insert_with(crate::observe::logs::LogBuffer::new)
-                    .push_err("cert_expiry_check_failed");
-            }
+        // EdgionTls is installed directly on the per-connection SSL. Clear any
+        // identity inherited from its context before reading or parsing the
+        // selected resource so an early failure cannot fall back to it.
+        unsafe {
+            boring_sys::SSL_certs_clear(ssl.as_ptr());
         }
-        if let Err(e) = pingora_core::tls::ext::ssl_use_certificate(ssl, &cert) {
-            ssl_ctx.meta.err_log = Some(format!("set cert: {e}"));
+
+        let Ok(cert_pem) = edgion_tls.cert_pem() else {
+            ssl_ctx.meta.err_log = Some("read certificate failed".to_string());
+            return;
+        };
+        let Ok(parsed_chain) = edgion_common::tls_validation::parse_strict_certificate_chain(cert_pem.as_bytes())
+        else {
+            ssl_ctx.meta.err_log = Some("parse certificate failed".to_string());
+            return;
+        };
+        let Ok(certificates) = parsed_chain
+            .certificates_der
+            .iter()
+            .map(|der| X509::from_der(der))
+            .collect::<std::result::Result<Vec<_>, _>>()
+        else {
+            ssl_ctx.meta.err_log = Some("parse certificate failed".to_string());
+            return;
+        };
+
+        let Ok(key_pem) = edgion_tls.key_pem() else {
+            ssl_ctx.meta.err_log = Some("read private key failed".to_string());
+            return;
+        };
+        let Ok(key) = PKey::private_key_from_pem(key_pem.as_bytes()) else {
+            ssl_ctx.meta.err_log = Some("parse private key failed".to_string());
+            return;
+        };
+
+        // Runtime expiry recheck — the certificate may have expired since the
+        // resource was published. Reuse the strict parser's Unix bounds and
+        // the same inclusive classifier as the cold-compiled Gateway path.
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64;
+        if let Some(error) =
+            serving_certificate_validity_error(parsed_chain.leaf_not_before_unix, parsed_chain.leaf_not_after_unix, now)
+        {
+            ssl_ctx.meta.err_log = Some(error.to_string());
             return;
         }
 
-        let key_pem = match edgion_tls.key_pem() {
-            Ok(pem) => pem,
-            Err(e) => {
-                ssl_ctx.meta.err_log = Some(format!("key read: {e}"));
+        let leaf = &certificates[0];
+        if pingora_core::tls::ext::ssl_use_certificate(ssl, leaf).is_err() {
+            unsafe {
+                boring_sys::SSL_certs_clear(ssl.as_ptr());
+            }
+            ssl_ctx.meta.err_log = Some("set certificate failed".to_string());
+            return;
+        }
+        for intermediate in certificates.iter().skip(1) {
+            if pingora_core::tls::ext::ssl_add_chain_cert(ssl, intermediate).is_err() {
+                unsafe {
+                    boring_sys::SSL_certs_clear(ssl.as_ptr());
+                }
+                ssl_ctx.meta.err_log = Some("set certificate chain failed".to_string());
                 return;
             }
-        };
-        let key = match PKey::private_key_from_pem(key_pem.as_bytes()) {
-            Ok(k) => k,
-            Err(e) => {
-                ssl_ctx.meta.err_log = Some(format!("bad key: {e}"));
-                return;
+        }
+        if pingora_core::tls::ext::ssl_use_private_key(ssl, &key).is_err() {
+            unsafe {
+                boring_sys::SSL_certs_clear(ssl.as_ptr());
             }
-        };
-        if let Err(e) = pingora_core::tls::ext::ssl_use_private_key(ssl, &key) {
-            ssl_ctx.meta.err_log = Some(format!("set key: {e}"));
+            ssl_ctx.meta.err_log = Some("set private key failed".to_string());
         }
     }
 
@@ -1260,7 +1270,7 @@ fn pick_secret_index(kinds: &[Option<bool>], prefer_ecdsa: bool) -> Option<usize
 mod tests {
     use super::{
         install_compiled_serving_identity, pick_secret_index, select_gateway_edgion_tls_overlay,
-        serving_certificate_validity_error,
+        serving_certificate_validity_error, SslCtx, TlsCallback,
     };
     use crate::runtime::matching::{FrontendMtlsOutcome, GatewayTlsEntry};
     use edgion_resources::resources::edgion_tls::{
@@ -1277,6 +1287,104 @@ mod tests {
     const RSA: Option<bool> = Some(false);
     const ECDSA: Option<bool> = Some(true);
     const UNKNOWN: Option<bool> = None;
+
+    struct ServingChainFixture {
+        chain_pem: String,
+        root: boring::x509::X509,
+    }
+
+    fn serving_chain(prefix: &str, leaf_key: &rcgen::KeyPair) -> ServingChainFixture {
+        use rcgen::{BasicConstraints, CertificateParams, IsCa, Issuer, KeyPair};
+
+        let root_key = KeyPair::generate().unwrap();
+        let mut root_params = CertificateParams::default();
+        root_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+        root_params
+            .distinguished_name
+            .push(rcgen::DnType::CommonName, format!("{prefix}-root"));
+        let root_issuer = Issuer::from_params(&root_params, &root_key);
+        let root = root_params.self_signed(&root_key).unwrap();
+
+        let intermediate_key = KeyPair::generate().unwrap();
+        let mut intermediate_params = CertificateParams::default();
+        intermediate_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+        intermediate_params
+            .distinguished_name
+            .push(rcgen::DnType::CommonName, format!("{prefix}-intermediate"));
+        let intermediate_issuer = Issuer::from_params(&intermediate_params, &intermediate_key);
+        let intermediate = intermediate_params.signed_by(&intermediate_key, &root_issuer).unwrap();
+
+        let leaf = CertificateParams::new(vec!["localhost".to_string()])
+            .unwrap()
+            .signed_by(leaf_key, &intermediate_issuer)
+            .unwrap();
+        ServingChainFixture {
+            chain_pem: format!("{}{}", leaf.pem(), intermediate.pem()),
+            root: boring::x509::X509::from_der(root.der()).unwrap(),
+        }
+    }
+
+    fn edgion_tls_identity(cert_pem: String, key_pem: String) -> Arc<EdgionTls> {
+        use edgion_resources::constants::secret_keys::tls::{CERT, KEY};
+        use k8s_openapi::api::core::v1::Secret;
+        use k8s_openapi::ByteString;
+        use std::collections::BTreeMap;
+
+        let (fixture, _) = overlay_fixture("winner", false);
+        let mut tls = (*fixture).clone();
+        tls.spec.secret = Some(Secret {
+            data: Some(BTreeMap::from([
+                (CERT.to_string(), ByteString(cert_pem.into_bytes())),
+                (KEY.to_string(), ByteString(key_pem.into_bytes())),
+            ])),
+            ..Default::default()
+        });
+        Arc::new(tls)
+    }
+
+    fn install_test_identity(ssl: &mut boring::ssl::SslRef, chain_pem: &str, key_pem: &str) {
+        let chain = edgion_common::tls_validation::parse_strict_certificate_chain(chain_pem.as_bytes()).unwrap();
+        let certificates = chain
+            .certificates_der
+            .iter()
+            .map(|der| boring::x509::X509::from_der(der).unwrap())
+            .collect::<Vec<_>>();
+        pingora_core::tls::ext::ssl_use_certificate(ssl, &certificates[0]).unwrap();
+        for intermediate in certificates.iter().skip(1) {
+            pingora_core::tls::ext::ssl_add_chain_cert(ssl, intermediate).unwrap();
+        }
+        let key = boring::pkey::PKey::private_key_from_pem(key_pem.as_bytes()).unwrap();
+        pingora_core::tls::ext::ssl_use_private_key(ssl, &key).unwrap();
+    }
+
+    fn loopback_handshake(ssl: boring::ssl::Ssl, trusted_root: boring::x509::X509) -> (bool, bool) {
+        use boring::ssl::{Ssl, SslContext, SslMethod, SslVerifyMode};
+        use boring::x509::store::X509StoreBuilder;
+        use std::net::{TcpListener, TcpStream};
+        use std::time::Duration;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (tcp, _) = listener.accept().unwrap();
+            tcp.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+            tcp.set_write_timeout(Some(Duration::from_secs(5))).unwrap();
+            ssl.accept(tcp).is_ok()
+        });
+
+        let mut store = X509StoreBuilder::new().unwrap();
+        store.add_cert(trusted_root).unwrap();
+        let mut client_builder = SslContext::builder(SslMethod::tls()).unwrap();
+        client_builder.set_verify(SslVerifyMode::PEER);
+        client_builder.set_verify_cert_store(store.build()).unwrap();
+        let tcp = TcpStream::connect(address).unwrap();
+        tcp.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        tcp.set_write_timeout(Some(Duration::from_secs(5))).unwrap();
+        let mut client_ssl = Ssl::new(&client_builder.build()).unwrap();
+        client_ssl.set_hostname("localhost").unwrap();
+        let client_ok = client_ssl.connect(tcp).is_ok();
+        (server.join().unwrap(), client_ok)
+    }
 
     #[test]
     fn compiled_certificate_validity_bounds_are_inclusive() {
@@ -1527,6 +1635,75 @@ mod tests {
         let ec_cert = certificate("ec-leaf", &ec_key, None, &ec_key, 3);
         let ec_cert_pem = String::from_utf8(ec_cert.to_pem().unwrap()).unwrap();
         edgion_common::tls_validation::check_key_matches_cert(&ec_cert_pem, &ec_sec1).unwrap();
+    }
+
+    #[test]
+    fn edgion_tls_clears_inherited_identity_before_strict_parse() {
+        let _serial = HANDSHAKE_TEST_LOCK.lock();
+        use boring::ssl::{Ssl, SslContext, SslMethod};
+
+        let prior_key = rcgen::KeyPair::generate().unwrap();
+        let prior = serving_chain("entry-clear", &prior_key);
+        let prior_key_pem = prior_key.serialize_pem();
+        let server_ctx = SslContext::builder(SslMethod::tls()).unwrap().build();
+        let mut ssl = Ssl::new(&server_ctx).unwrap();
+        install_test_identity(ssl.as_mut(), &prior.chain_pem, &prior_key_pem);
+
+        let malformed_chain = format!("{}not-a-certificate", prior.chain_pem);
+        let tls = edgion_tls_identity(malformed_chain, prior_key_pem);
+        let mut ssl_ctx = SslCtx::new(443);
+        TlsCallback::new(443).apply_edgion_tls_cert(ssl.as_mut(), &tls, &mut ssl_ctx);
+
+        assert_eq!(ssl_ctx.meta.err_log.as_deref(), Some("parse certificate failed"));
+        let (server_ok, client_ok) = loopback_handshake(ssl, prior.root);
+        assert!(!server_ok);
+        assert!(
+            !client_ok,
+            "a strict-chain failure must not serve the inherited identity"
+        );
+    }
+
+    #[test]
+    fn edgion_tls_clears_partial_identity_after_key_install_failure() {
+        let _serial = HANDSHAKE_TEST_LOCK.lock();
+        use boring::ssl::{Ssl, SslContext, SslMethod};
+
+        let shared_key = rcgen::KeyPair::generate().unwrap();
+        let shared_key_pem = shared_key.serialize_pem();
+        let prior = serving_chain("key-clear-prior", &shared_key);
+        let new = serving_chain("key-clear-new", &shared_key);
+        let wrong_key_pem = rcgen::KeyPair::generate().unwrap().serialize_pem();
+        let callback = TlsCallback::new(443);
+        let server_ctx = SslContext::builder(SslMethod::tls()).unwrap().build();
+
+        // Positive control: the new leaf/intermediate fixture and shared key
+        // form a complete identity trusted by a root-only client.
+        let mut control_ssl = Ssl::new(&server_ctx).unwrap();
+        let control_tls = edgion_tls_identity(new.chain_pem.clone(), shared_key_pem.clone());
+        let mut control_ctx = SslCtx::new(443);
+        callback.apply_edgion_tls_cert(control_ssl.as_mut(), &control_tls, &mut control_ctx);
+        assert_eq!(control_ctx.meta.err_log, None);
+        let (control_server_ok, control_client_ok) = loopback_handshake(control_ssl, new.root.clone());
+        assert!(control_server_ok);
+        assert!(
+            control_client_ok,
+            "a client trusting only the root must validate the served intermediate"
+        );
+
+        let mut ssl = Ssl::new(&server_ctx).unwrap();
+        install_test_identity(ssl.as_mut(), &prior.chain_pem, &shared_key_pem);
+        let mismatched_tls = edgion_tls_identity(new.chain_pem, wrong_key_pem);
+        let mut ssl_ctx = SslCtx::new(443);
+        callback.apply_edgion_tls_cert(ssl.as_mut(), &mismatched_tls, &mut ssl_ctx);
+
+        assert_eq!(ssl_ctx.meta.err_log.as_deref(), Some("set private key failed"));
+        assert!(
+            ssl.certificate().is_none(),
+            "a key-install failure must clear the partially installed identity"
+        );
+        let (server_ok, client_ok) = loopback_handshake(ssl, new.root);
+        assert!(!server_ok);
+        assert!(!client_ok, "the cleared partial identity must not complete a handshake");
     }
 
     #[test]

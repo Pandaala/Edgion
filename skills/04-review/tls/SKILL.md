@@ -52,6 +52,7 @@ before applying a decision to current code.
 - [tls-04 — Gateway listener serves all certificateRefs (RSA + ECDSA)](regression-guards/multi-certificate-ref.md)
 - [passthrough-F001 — TLS passthrough PP2 dst built from bare IP](regression-guards/pp2-dst-bare-ip.md)
 - [tls-F003 — Runtime expiry recheck is required on both cert-install paths](regression-guards/runtime-expiry-recheck-symmetry.md)
+- [EdgionTls installs the complete ordered serving chain and clears failed replacements](regression-guards/edgion-tls-serving-chain-install.md)
 - [SNI Passthrough: ClientHello read contract](regression-guards/sni-passthrough-clienthello-read.md)
 - [tls-F001 — `configure_mtls` returns before CA loading for `Terminate` mode](regression-guards/terminate-mtls-ca-ordering.md)
 - [Typed SAN display prefixes are not DNS](regression-guards/typed-san-display-prefix-not-dns.md)

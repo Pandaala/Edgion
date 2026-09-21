@@ -78,11 +78,24 @@ Invoked after the TLS handshake completes; responsible for:
 
 `apply_edgion_tls_cert` handles certificates from EdgionTls resources:
 
-1. Extract cert PEM and key PEM from `EdgionTls`.
-2. Parse into `X509` and `PKey` and set them on the SSL connection via the Pingora TLS extension API.
-3. Optional configuration (only items effective inside cert_cb timing):
+1. Apply the independent FIPS cipher/curve and mTLS policy before touching the
+   serving identity.
+2. Clear any identity inherited by the per-connection SSL, then extract the
+   certificate-chain PEM and private-key PEM from `EdgionTls`.
+3. Strictly parse the complete ordered chain with
+   `parse_strict_certificate_chain`, convert every certificate to BoringSSL
+   `X509`, and parse the private key before binding any part of the identity.
+4. Recheck the strict parser's leaf Unix validity bounds at handshake time.
+5. Install the leaf, each intermediate in input order, and the private key
+   last. Any install failure clears the SSL identity again, so neither an
+   inherited identity nor a partially installed replacement remains usable.
+6. Optional configuration (only items effective inside cert_cb timing):
    - **mTLS** (`configure_mtls`): set the CA certificate store, verify mode, and verify depth.
    - **Cipher suite** (`configure_ciphers`): set the TLS1.2 cipher list via BoringSSL FFI (still works in cert_cb because BoringSSL selects the cipher only after cert_cb — `handshake_server.cc:810`).
+
+Certificate/key read, parse, validity, and install failures use fixed
+non-secret diagnostic categories. They never include PEM contents, certificate
+dates, key material, or backend error-stack detail.
 
 > **The effective point of `min_tls_version` has moved to `select_certificate_callback`** (see the previous section). By the time cert_cb runs, BoringSSL has frozen the version range; calling `set_min_proto_version` here is silently ineffective, so `apply_edgion_tls_cert` no longer handles this field.
 
@@ -92,7 +105,10 @@ Invoked after the TLS handshake completes; responsible for:
 
 1. Use the complete ordered Secret outcomes resolved by the Controller from all `certificateRefs`. Matcher rebuild verifies each index and source identity, validates each certificate chain and private key with the shared strict parser, checks key/certificate matching, and retains only an immutable compiled Secret set. The Gateway never falls back to its global SecretStore; missing, denied, partial, reordered, or identity-mismatched outcomes remain fail-closed regardless of Secret existence.
 2. Select the cert matching the client (`select_gateway_secret`). **BoringSSL exposes only a single certificate slot per `SSL` (unlike OpenSSL's per-key-type slots), so a dual-cert listener (RSA + ECDSA) cannot rely on the library to auto-pick — we select explicitly.** ECDSA is preferred only when **(a) the negotiated version is TLS 1.3** (`negotiated_is_tls13`, via the safe `SslRef::version2()`) **and (b)** the client advertised an ECDSA `signature_algorithm` (`client_supports_ecdsa`, FFI `SSL_get0_peer_verify_algorithms` + `SSL_get_signature_algorithm_key_type`); then the ECDSA cert is served, otherwise the first RSA cert. The TLS 1.3 gate is required because in TLS 1.2 the cert key type also constrains the usable cipher suites (ECDHE-ECDSA vs ECDHE-RSA) — selecting ECDSA purely from sigalgs there could break a client that offered only ECDHE-RSA ciphers, so TLS 1.2 keeps legacy first-cert behavior. TLS 1.3 decouples auth from the cipher, making sigalg-based selection safe. This mirrors BoringSSL's / Envoy's own selection. With a single cert it is a no-op. The pure selection rule is factored into `pick_secret_index` (unit-tested).
-3. Extract the certificate and private key from the selected Secret's `data["tls.crt"]` and `data["tls.key"]` and set them on the SSL connection (`apply_secret_to_ssl`). A bad/missing cert fails the handshake (fail-closed) instead of being silently dropped.
+3. Install the selected immutable `CompiledServingCertificate` atomically with
+   `apply_compiled_certificate_to_ssl`. Invalid Secret material is rejected
+   during matcher rebuild; a missing, expired, or failed atomic identity remains
+   fail-closed instead of falling back to another Secret.
 4. Apply the matcher generation's compiled frontend outcome before binding a server certificate. Strict missing, partial, empty-key, or malformed CA sets are `StrictReject`; a reject candidate remains in the same SNI matcher slot and precedence order as a serving candidate.
 
 > **Why not iterate `SSL_use_certificate` per cert?** On OpenSSL that populates separate RSA/ECDSA slots; on BoringSSL each call *replaces* the single slot (last-wins), so iterating would serve only one key type. Explicit ClientHello-driven selection is the BoringSSL-correct approach.
