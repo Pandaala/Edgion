@@ -28,6 +28,7 @@ description: Common Edgion deployment patterns: FileSystem, Etcd, Kubernetes, an
 # edgion-controller.yaml
 conf_center:
   type: file_system
+  controller_name: edgion.io/gateway-controller
   conf_dir: config/resources     # YAML resource directory
 
 # Required explicit transport choice for local plaintext development only.
@@ -62,6 +63,7 @@ paths outside isolated local development.
 ```yaml
 conf_center:
   type: etcd
+  controller_name: edgion.io/gateway-controller
   endpoints: ["https://etcd-0:2379", "https://etcd-1:2379"]
   key_prefix: /edgion
   connect_timeout_ms: 5000

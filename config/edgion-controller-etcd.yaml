@@ -45,6 +45,7 @@ server:
 # ============================================================================
 conf_center:
   type: etcd
+  controller_name: edgion.io/gateway-controller
   endpoints: [http://127.0.0.1:2379]
   key_prefix: /edgion
 

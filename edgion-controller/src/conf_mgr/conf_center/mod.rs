@@ -44,8 +44,11 @@ pub mod traits;
 /// Invoke `$cb!(TypeIdent, handler_expr)` for each provider resource.
 /// Excludes conditional `EndpointSlice`; callers handle it.
 macro_rules! for_each_provider_core_resource {
-    ($cb:ident) => {
-        $cb!(GatewayClass, GatewayClassHandler::default());
+    ($cb:ident, $controller_name:expr) => {
+        $cb!(
+            GatewayClass,
+            GatewayClassHandler::new(GatewayClassOwnership::new($controller_name.to_string(), None))
+        );
         $cb!(Secret, SecretHandler::new());
         $cb!(ConfigMap, ConfigMapHandler::new());
         $cb!(ReferenceGrant, ReferenceGrantHandler::new());
@@ -56,36 +59,18 @@ macro_rules! for_each_provider_core_resource {
 
 /// Invoke `$cb!(TypeIdent, handler_expr)` for each dependent resource.
 macro_rules! for_each_dependent_resource {
-    ($cb:ident) => {
+    ($cb:ident, $controller_name:expr) => {
         // Routes
-        $cb!(
-            HTTPRoute,
-            HttpRouteHandler::new(crate::conf_mgr::conf_center::common::DEFAULT_CONTROLLER_NAME.to_string())
-        );
-        $cb!(
-            GRPCRoute,
-            GrpcRouteHandler::new(crate::conf_mgr::conf_center::common::DEFAULT_CONTROLLER_NAME.to_string())
-        );
-        $cb!(
-            TCPRoute,
-            TcpRouteHandler::new(crate::conf_mgr::conf_center::common::DEFAULT_CONTROLLER_NAME.to_string())
-        );
-        $cb!(
-            UDPRoute,
-            UdpRouteHandler::new(crate::conf_mgr::conf_center::common::DEFAULT_CONTROLLER_NAME.to_string())
-        );
-        $cb!(
-            TLSRoute,
-            TlsRouteHandler::new(crate::conf_mgr::conf_center::common::DEFAULT_CONTROLLER_NAME.to_string())
-        );
+        $cb!(HTTPRoute, HttpRouteHandler::new($controller_name.to_string()));
+        $cb!(GRPCRoute, GrpcRouteHandler::new($controller_name.to_string()));
+        $cb!(TCPRoute, TcpRouteHandler::new($controller_name.to_string()));
+        $cb!(UDPRoute, UdpRouteHandler::new($controller_name.to_string()));
+        $cb!(TLSRoute, TlsRouteHandler::new($controller_name.to_string()));
         // TLS
-        $cb!(
-            EdgionTls,
-            EdgionTlsHandler::new(crate::conf_mgr::conf_center::common::DEFAULT_CONTROLLER_NAME.to_string())
-        );
+        $cb!(EdgionTls, EdgionTlsHandler::new($controller_name.to_string()));
         $cb!(
             BackendTLSPolicy,
-            BackendTlsPolicyHandler::new(crate::conf_mgr::conf_center::common::DEFAULT_CONTROLLER_NAME.to_string())
+            BackendTlsPolicyHandler::new($controller_name.to_string())
         );
         // Plugins
         $cb!(EdgionPlugins, EdgionPluginsHandler::new());
@@ -97,9 +82,7 @@ macro_rules! for_each_dependent_resource {
         // Backend traffic policy
         $cb!(
             EdgionBackendTrafficPolicy,
-            EdgionBackendTrafficPolicyHandler::new(
-                crate::conf_mgr::conf_center::common::DEFAULT_CONTROLLER_NAME.to_string()
-            )
+            EdgionBackendTrafficPolicyHandler::new($controller_name.to_string())
         );
         // Cluster-scoped dependent
         $cb!(EdgionGatewayConfig, EdgionGatewayConfigHandler::new());

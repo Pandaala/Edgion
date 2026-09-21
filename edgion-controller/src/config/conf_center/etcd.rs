@@ -29,6 +29,7 @@ use edgion_resources::resources::link_sys::etcd::{EtcdAuth, EtcdClientConfig, Et
 /// ```yaml
 /// conf_center:
 ///   type: etcd
+///   controller_name: edgion.io/gateway-controller
 ///   endpoints: ["http://127.0.0.1:2379"]
 ///   key_prefix: /edgion
 ///   auth:
@@ -41,6 +42,9 @@ use edgion_resources::resources::link_sys::etcd::{EtcdAuth, EtcdClientConfig, Et
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EtcdConfig {
+    /// Explicit Gateway API identity of this deployment.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub controller_name: Option<String>,
     /// etcd cluster endpoint list (e.g., ["http://127.0.0.1:2379"])
     pub endpoints: Vec<String>,
 
@@ -494,6 +498,7 @@ auth:
     #[test]
     fn test_to_client_config_minimal() {
         let config = EtcdConfig {
+            controller_name: Some("edgion.io/gateway-controller".into()),
             endpoints: vec!["http://127.0.0.1:2379".to_string()],
             key_prefix: "/edgion".to_string(),
             auth: None,
@@ -526,6 +531,7 @@ auth:
     fn test_to_client_config_with_auth_wires_yaml_credentials_into_state() {
         // YAML `conf_center.auth` must flow through to `CredentialState::Resolved`.
         let config = EtcdConfig {
+            controller_name: Some("edgion.io/gateway-controller".into()),
             endpoints: vec!["http://127.0.0.1:2379".to_string()],
             key_prefix: "/edgion".to_string(),
             auth: Some(EtcdAuthConfig {
@@ -562,6 +568,7 @@ auth:
     #[test]
     fn test_to_client_config_without_auth_is_not_required() {
         let config = EtcdConfig {
+            controller_name: Some("edgion.io/gateway-controller".into()),
             endpoints: vec!["http://127.0.0.1:2379".to_string()],
             key_prefix: "/edgion".to_string(),
             auth: None,
@@ -603,6 +610,7 @@ auth:
         let ca_path = ca_file.path().to_str().unwrap().to_string();
 
         let config = EtcdConfig {
+            controller_name: Some("edgion.io/gateway-controller".into()),
             endpoints: vec!["https://etcd:2379".to_string()],
             key_prefix: "/edgion".to_string(),
             auth: None,

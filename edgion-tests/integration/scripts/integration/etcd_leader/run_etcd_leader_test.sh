@@ -183,6 +183,7 @@ logging:
 
 conf_center:
   type: etcd
+  controller_name: edgion.io/gateway-controller
   endpoints: ["${ETCD_ENDPOINT}"]
   key_prefix: "${ETCD_PREFIX}"
   leader_election:

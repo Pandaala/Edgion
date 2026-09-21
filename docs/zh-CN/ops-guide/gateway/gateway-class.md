@@ -10,6 +10,9 @@ Edgion 采用 1 控制器 : 1 GatewayClass 模型：单个 Edgion 实例管理�
 
 ## 配置
 
+以下示例显式配置 `conf_center.controller_name: edgion.io/gateway-controller`。
+请将示例中的身份替换为实际部署配置或生成的值。
+
 ```yaml
 apiVersion: gateway.networking.k8s.io/v1
 kind: GatewayClass
@@ -23,7 +26,7 @@ spec:
 
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| `spec.controllerName` | String | 是 | 必须匹配 Controller 配置的 `controller_name`，默认值为 `edgion.io/gateway-controller`。 |
+| `spec.controllerName` | String | 是 | 必须与 Controller 配置或生成的 `controller_name` 完全一致。 |
 | `spec.parametersRef` | Object | 否 | 指向调优网关行为的 `EdgionGatewayConfig` 的引用。设置后 `group` 必须为 `edgion.io`，`kind` 必须为 `EdgionGatewayConfig`，否则 GatewayClass 将被拒绝（`Accepted: False`）。 |
 | `spec.parametersRef.group` | String | 否 | 参数资源的 API group：`edgion.io`。 |
 | `spec.parametersRef.kind` | String | 否 | `EdgionGatewayConfig`。 |
@@ -34,19 +37,23 @@ spec:
 
 ## controllerName
 
-Edgion 控制器名称的默认值为：
+Kubernetes 未配置 `conf_center.controller_name` 时，使用
+`edgion.io/gateway-controller/{POD_NAMESPACE}/{EDGION_CONTROLLER_DEPLOYMENT_NAME}`。
+通过 Downward API 注入 namespace，并显式注入稳定的 Deployment 名称，不能使用 Pod 名称；
+同一部署的所有副本必须生成相同身份。缺失或非法的组成部分会导致启动失败。
+显式配置优先，空白或格式非法的值也会导致启动失败。FileSystem 和 etcd 必须显式配置身份。
+详见 [Controller 配置](../configuration/controller-config.md)。
 
-```
-edgion.io/gateway-controller
-```
-
-Kubernetes 模式可以通过 Controller 配置中的 `controller_name` 修改此名称；GatewayClass 必须匹配实际配置值。
+Controller 为所有匹配此 controllerName 的 GatewayClass 报告状态。
+未被 `gateway_class` 选中的类获得 `Accepted=False/Unsupported`，清空支持能力，且不发布给 Gateway。
+GatewayClass 的监听忽略 `label_selector`，因此没有匹配标签的类也能获得状态。
+`no_watch_kinds: [GatewayClass]` 同时关闭状态报告和 Gateway 处理。
 
 Kubernetes 所有权同时检查 `controller_name` 和配置的 `gateway_class`。Controller 只有在已发布匹配的 GatewayClass 实例后才处理 Gateway，原始对象与已发布对象必须具有相同且非空的 Kubernetes UID。缺失、属于其他控制器或未监听的 class 不能授权处理 Gateway；因此 `no_watch_kinds: [GatewayClass]` 会停止处理 Gateway。class 删除或替换时，相关 Gateway 缓存会撤销，待所有权重新成立后恢复。class 的 `Accepted=False` 本身不转移所有权，普通 generation 更新也不会撤销所有权。
 
-独立部署应使用不同的 GatewayClass。共享同一 class 和 controller name 的 HA 副本必须共享选举域及配置、资源视图。下述版本校验不能阻止两套独立选主且管理范围重叠的部署交替写入不同的期望状态。
+独立部署必须使用不同的 controller name 和 GatewayClass。运行时不会检测显式配置的身份冲突。共享同一 class 和 controller name 的 HA 副本必须共享选举域及配置、资源视图。下述版本校验不能阻止两套独立选主且管理范围重叠的部署交替写入不同的期望状态。
 
-已知限制：不同 class 尚不能隔离 EdgionAcme 的状态写入者。如果两套独立选主的部署都监听同一个 EdgionAcme，但只有一套发布了它引用的 Gateway，两者可能交替写入相反的 `ResolvedRefs`。在补齐 ACME 所有权准入前，应避免独立部署的 EdgionAcme 监听范围重叠；仅使用不同 controller name 也不能阻止此冲突。
+EdgionAcme 的 handler 准入和服务资格使用同一套 Gateway/class 所有权证明。这并不保证部署交接时已经运行的证书申请能够被隔离或恢复；该调度边界与 GatewayClass 状态报告是不同的问题。
 
 排查 Route 挂载时，同时检查 `status.parents[].parentRef` 和 `controllerName`。Gateway 只使用当前 Edgion 控制器对应条目的 `Accepted` 结果；其他控制器的 `Accepted=True` 不会覆盖 Edgion 的 `Accepted=False`。不同资源类型、Listener section 或端口的父引用分别判断。Controller 会保留读取到的其他控制器状态，并清理自己的过期或重复条目。
 
@@ -139,7 +146,7 @@ Gateway 收到的配置会保留完整 `status`，并包含由 Controller 生成
 `spec.currentStatus`。排查当前部署的路由接纳、Listener 状态或 ACME challenge 时，
 应查看这份当前状态；其他部署的成功状态不会授权当前部署提供服务。
 该字段是内部诊断和传输内容，不要写入资源 YAML。Route 缺少当前状态或对应的
-`Accepted=True` 条目时，不会被数据面接纳。不同独立部署应使用不同的 GatewayClass；
+`Accepted=True` 条目时，不会被数据面接纳。不同独立部署必须使用不同的 controller name 和 GatewayClass；
 共用同一个 class 的副本必须共享选主域和配置视图。
 
 ### GatewayClass 注意事项

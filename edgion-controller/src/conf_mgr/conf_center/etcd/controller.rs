@@ -73,6 +73,7 @@ impl LocalControllerBackend for EtcdControllerBackend {
 
 /// EtcdController — top-level controller for etcd mode.
 pub struct EtcdController {
+    controller_name: String,
     client: Arc<EtcdLinkClient>,
     key_prefix: String,
     /// Optional leadership fence threaded into the status handler so a
@@ -81,13 +82,19 @@ pub struct EtcdController {
 }
 
 impl EtcdController {
-    pub fn new(client: Arc<EtcdLinkClient>, key_prefix: String, gate: Option<LeadershipGate>) -> Self {
+    pub fn new(
+        client: Arc<EtcdLinkClient>,
+        key_prefix: String,
+        gate: Option<LeadershipGate>,
+        controller_name: String,
+    ) -> Self {
         tracing::info!(
             component = "etcd_controller",
             key_prefix = %key_prefix,
             "Creating EtcdController"
         );
         Self {
+            controller_name,
             client,
             key_prefix,
             gate,
@@ -120,7 +127,14 @@ impl EtcdController {
         };
 
         // Spawn all resource controllers
-        let handles = spawn_all_controllers(&backend, shutdown_signal.clone(), runtime, "etcd_controller").await?;
+        let handles = spawn_all_controllers(
+            &backend,
+            shutdown_signal.clone(),
+            runtime,
+            "etcd_controller",
+            &self.controller_name,
+        )
+        .await?;
 
         tracing::info!(
             component = "etcd_controller",

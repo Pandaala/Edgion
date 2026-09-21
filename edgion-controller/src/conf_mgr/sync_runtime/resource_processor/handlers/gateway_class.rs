@@ -2,6 +2,7 @@
 //!
 //! Handles GatewayClass resources.
 
+#[cfg(test)]
 use crate::conf_mgr::conf_center::common::DEFAULT_CONTROLLER_NAME;
 use crate::conf_mgr::sync_runtime::resource_processor::status_ownership::gateway_has_class_owner;
 use crate::conf_mgr::sync_runtime::resource_processor::{
@@ -125,6 +126,7 @@ impl GatewayClassHandler {
     }
 }
 
+#[cfg(test)]
 impl Default for GatewayClassHandler {
     fn default() -> Self {
         Self::new(GatewayClassOwnership::new(DEFAULT_CONTROLLER_NAME.to_string(), None))
@@ -155,6 +157,10 @@ async fn requeue_class_gateways(gc: &GatewayClass, ctx: &HandlerContext) {
 #[async_trait::async_trait]
 impl ProcessorHandler<GatewayClass> for GatewayClassHandler {
     fn filter(&self, gc: &GatewayClass, _ctx: &HandlerContext) -> bool {
+        gc.spec.controller_name == self.ownership.controller_name
+    }
+
+    fn should_publish(&self, gc: &GatewayClass, _ctx: &HandlerContext) -> bool {
         self.ownership.matches(gc)
     }
 
@@ -179,6 +185,27 @@ impl ProcessorHandler<GatewayClass> for GatewayClassHandler {
 
     fn update_status(&self, gc: &mut GatewayClass, ctx: &HandlerContext, validation_errors: &[String]) {
         let generation = gc.metadata.generation;
+        if !self.ownership.matches(gc) {
+            // Reporting responsibility spans every matching controllerName, but
+            // serving authority remains limited to the selected class. Do not
+            // resolve deployment-local parameters for an unsupported class.
+            let status = gc.status.get_or_insert_with(GatewayClassStatus::default);
+            status
+                .conditions
+                .retain(|condition| !matches!(condition.type_.as_str(), "ResolvedRefs" | "SupportedVersion"));
+            update_condition(
+                &mut status.conditions,
+                condition_false(
+                    condition_types::ACCEPTED,
+                    "Unsupported",
+                    "GatewayClass is not selected by this controller deployment",
+                    generation,
+                ),
+            );
+            // An omitted field cannot clear an old list in a JSON Merge Patch.
+            status.supported_features = Some(Vec::new());
+            return;
+        }
         let ref_state = resolve_params_ref(gc, ctx);
         let status = gc.status.get_or_insert_with(GatewayClassStatus::default);
 

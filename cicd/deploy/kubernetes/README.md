@@ -183,10 +183,27 @@ Edit `controller/configmap.yaml` to customize:
 
 | Setting | Default | Description |
 |---------|---------|-------------|
+| `conf_center.controller_name` | Derived from namespace and Deployment name | Must match GatewayClass.spec.controllerName |
 | `conf_center.watch_namespaces` | `[]` (all) | Limit namespaces to watch |
 | `conf_center.ha_mode` | `leader-only` | HA mode: `leader-only` or `all-serve`. In both modes only the leader replica runs the federation client (EdgionCenter), so an `all-serve` follower keeps serving gRPC reads but does not federate |
 | `conf_center.leader_election.*` | — | Lease timing parameters |
 | `logging.log_level` | `info` | Controller log level |
+
+The supplied Controller omits `controller_name` and derives
+`edgion.io/gateway-controller/edgion-system/edgion-controller` from
+`POD_NAMESPACE` and `EDGION_CONTROLLER_DEPLOYMENT_NAME`. The latter is explicitly
+injected and must equal the stable Deployment name, never a Pod name. Update both
+the injected value and `base-config/01-GatewayClass.yaml` when renaming the
+Deployment; update the class identity when changing its namespace. Missing or
+invalid identity inputs stop startup. GatewayClass `spec.controllerName` is
+immutable: create a replacement class when changing it.
+
+Independent deployments must use distinct controller names and GatewayClasses.
+Replicas sharing an identity must share the selected class, configuration view,
+and election domain. Explicit identity collisions are not detected at runtime.
+GatewayClass watches ignore `label_selector` so every matching class gets status;
+unselected classes receive `Accepted=False/Unsupported` and are not served.
+`no_watch_kinds: [GatewayClass]` disables this reporting and Gateway processing.
 
 ### Gateway Config
 

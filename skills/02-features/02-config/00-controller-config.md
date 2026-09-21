@@ -18,6 +18,16 @@ description: Full schema for the edgion-controller YAML configuration.
 
 ## Full Schema
 
+`conf_center.controller_name` is required for FileSystem/etcd. Kubernetes may omit
+it to derive `edgion.io/gateway-controller/{POD_NAMESPACE}/{EDGION_CONTROLLER_DEPLOYMENT_NAME}`.
+Both environment inputs must be present and valid; the Deployment name is injected
+explicitly, never inferred from a Pod name. Explicit blank or invalid identities
+fail startup in every mode. GatewayClass.spec.controllerName must match exactly.
+Independent deployments use different identities; replicas share one identity,
+selected class, election domain and configuration view. Explicit collisions are
+not detected. GatewayClass WATCH ignores label_selector for reporting coverage;
+no_watch_kinds still disables the watcher and reporting.
+
 ```yaml
 # Working directory (only fields that explicitly use the work-dir resolver use this base)
 # Priority: CLI --work-dir > ENV EDGION_WORK_DIR > this value > "."
@@ -89,6 +99,7 @@ conf_sync:
 # ─── FileSystem mode ───
 conf_center:
   type: file_system
+  controller_name: edgion.io/gateway-controller # Required explicit identity
   conf_dir: config/resources              # YAML resource directory
 
 # ─── Kubernetes mode ───
@@ -115,6 +126,7 @@ conf_center:
 # ─── Etcd mode ───
 # conf_center:
 #   type: etcd
+#   controller_name: edgion.io/gateway-controller # Required explicit identity
 #   endpoints: ["https://etcd-0:2379", "https://etcd-1:2379"]
 #   key_prefix: /edgion                   # Default: /edgion
 #   connect_timeout_ms: 5000              # Optional

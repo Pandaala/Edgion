@@ -3,7 +3,7 @@ kind: GatewayClass
 metadata:
   name: public-gateway
 spec:
-  controllerName: edgion.io/gateway-controller
+  controllerName: edgion.io/gateway-controller/edgion-system/edgion-controller
   description: "Edgion API Gateway"
   parametersRef:
     group: edgion.io

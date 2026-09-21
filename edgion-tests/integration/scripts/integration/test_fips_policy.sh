@@ -236,6 +236,7 @@ EOF
     cat > "$CTRL_TMPDIR/controller.yaml" <<EOF
 conf_center:
   type: file_system
+  controller_name: edgion.io/gateway-controller
   conf_dir: ${CONF_DIR}
 EOF
     conf_sync_security_block server >> "$CTRL_TMPDIR/controller.yaml"

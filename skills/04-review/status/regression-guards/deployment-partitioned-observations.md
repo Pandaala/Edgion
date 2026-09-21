@@ -81,6 +81,12 @@ domain and configuration view. The existing native ancestor capacity limit is no
 permission to truncate foreign entries. ACME timers, restart recovery and active
 attempt handoff fencing remain outside the verified correction.
 
+The subsequent [GatewayClass reporting correction](gatewayclass-reporting-and-publication.md)
+requires distinct controllerName values for independent deployments, including
+those selecting different classes. Observation partitioning remains unchanged;
+sharing a controllerName across independent election/configuration domains is no
+longer a supported deployment contract.
+
 ## Re-evaluation
 
 The subsequent `current-status-projection` change was independently reviewed and

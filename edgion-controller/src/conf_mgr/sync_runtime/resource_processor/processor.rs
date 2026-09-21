@@ -849,7 +849,10 @@ where
                 // lookup_gateway) MUST use RawStore (via get_raw_any) rather than
                 // ServerCache, because the current resource has not yet been written
                 // to ServerCache at this point.
-                self.handler.on_change(&parsed_obj, ctx).await;
+                let publish = self.handler.should_publish(&parsed_obj, ctx);
+                if publish {
+                    self.handler.on_change(&parsed_obj, ctx).await;
+                }
 
                 let phase = if is_init { "init" } else { "runtime" };
                 tracing::debug!(
@@ -862,7 +865,11 @@ where
                 // Use InitAdd during init phase (synchronous), EventUpdate at runtime (async).
                 // `None` means "assign sync_version at the store, under its write lock".
                 let obj_for_result = parsed_obj.clone();
-                if is_init {
+                if !publish {
+                    if let Some(cached) = self.cache.get_by_key(&make_resource_key(&parsed_obj)) {
+                        self.process_delete(&cached, ctx).await;
+                    }
+                } else if is_init {
                     self.cache.apply_change(ResourceChange::InitAdd, parsed_obj, None);
                     self.stats_dirty.store(true, Ordering::Relaxed);
                 } else {
@@ -871,7 +878,9 @@ where
 
                 // Consumers of controller-owned proofs must observe the exact
                 // object just published above, never the previous cache value.
-                self.handler.after_publish(&obj_for_result, ctx).await;
+                if publish {
+                    self.handler.after_publish(&obj_for_result, ctx).await;
+                }
 
                 // Merge Patch must remove the retired native siblings when first
                 // installing an envelope. Tombstones are wire-only, not local or
@@ -1019,7 +1028,17 @@ where
     }
 
     async fn requeue_all_keys(&self) -> usize {
-        let keys = self.cache.list_keys();
+        // Status-only classes are intentionally absent from ServerCache. A new
+        // leader must still reconcile every observed class after acquisition.
+        let keys = if self.kind == "GatewayClass" {
+            let mut keys = self.raw_keys();
+            keys.extend(self.cache.list_keys());
+            keys.sort_unstable();
+            keys.dedup();
+            keys
+        } else {
+            self.cache.list_keys()
+        };
         let count = keys.len();
         for key in keys {
             self.workqueue.enqueue(key).await;

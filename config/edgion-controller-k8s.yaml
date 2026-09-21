@@ -17,7 +17,10 @@ conf_center:
   type: kubernetes
   # Gateway class name that this controller will handle
   gateway_class: public-gateway
-  # Gateway API controllerName used in status and GatewayClass matching
+  # Explicit identity: use a distinct value for each independent deployment.
+  # Omit to derive edgion.io/gateway-controller/{POD_NAMESPACE}/{EDGION_CONTROLLER_DEPLOYMENT_NAME}.
+  # Both environment variables must be injected; use the stable Deployment name, not a Pod name.
+  # GatewayClass.spec.controllerName must match the explicit or generated value.
   controller_name: "edgion.io/gateway-controller"
   # Watch all namespaces (empty array means all)
   watch_namespaces: []

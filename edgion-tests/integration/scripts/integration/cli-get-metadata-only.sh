@@ -90,6 +90,7 @@ logging:
 
 conf_center:
   type: file_system
+  controller_name: edgion.io/gateway-controller
   conf_dir: "${CONF_WATCH_DIR}"
 
 conf_sync:

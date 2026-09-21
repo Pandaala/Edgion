@@ -11,6 +11,8 @@ before applying a decision to current code.
 
 ## Regression guards
 
+- [GatewayClass reporting and publication](regression-guards/gatewayclass-reporting-and-publication.md)
+
 - [Deployment-partitioned observations](regression-guards/deployment-partitioned-observations.md)
 
 - [Deterministic condition messages](regression-guards/deterministic-condition-messages.md)

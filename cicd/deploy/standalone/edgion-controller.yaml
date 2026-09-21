@@ -21,6 +21,7 @@ logging:
 # Place your GatewayClass, Gateway, HTTPRoute, etc. YAML files in conf_dir.
 conf_center:
   type: file_system
+  controller_name: edgion.io/gateway-controller
   conf_dir: conf
 
 # ----------------------------------------------------------------------------
@@ -42,6 +43,7 @@ conf_center:
 #
 # conf_center:
 #   type: etcd
+#   controller_name: edgion.io/gateway-controller
 #   endpoints: ["http://10.0.0.1:2379", "http://10.0.0.2:2379", "http://10.0.0.3:2379"]
 #   key_prefix: /edgion
 #   leader_election:

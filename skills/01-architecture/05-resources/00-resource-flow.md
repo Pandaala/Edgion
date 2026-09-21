@@ -38,9 +38,11 @@ ResourceProcessor performs the following ordered steps for each resource:
 6. **handler.parse()** — resolve references through `HandlerContext` and runtime-owned stores
 7. **capture old status + handler.update_status()** — compute conditions from collected errors
 8. **semantic status diff** — compare status with kind-aware rules, not the entire resource JSON
-9. **handler.on_change()** — update indexes and trigger dependent requeues; this intentionally runs
+9. **handler.should_publish()** — status-only outcomes retain persistence but withdraw any
+   cached object through normal cleanup, without on_change/after_publish
+10. **handler.on_change()** — update indexes and trigger dependent requeues; this intentionally runs
    before the current object is saved to ServerCache
-10. **ServerCache save** — publish the processed object to the sync cache
+11. **ServerCache save** — publish the processed object to the sync cache
 
 Delete events run **on_delete()** instead of parse/on_change, cleaning up all registered references and indexes.
 

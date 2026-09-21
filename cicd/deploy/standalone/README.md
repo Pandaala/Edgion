@@ -131,6 +131,7 @@ logging:
 # FileSystem mode: watch local YAML directory
 conf_center:
   type: file_system
+  controller_name: edgion.io/gateway-controller
   conf_dir: conf
 
 conf_sync:
@@ -147,6 +148,11 @@ conf_sync_security:
 ```
 
 Key difference from Kubernetes mode: `conf_center.type: file_system` replaces `kubernetes`. The controller watches the `conf_dir` directory for YAML files and hot-reloads on changes.
+
+FileSystem and etcd require an explicit `conf_center.controller_name`; omission,
+blank values or invalid Gateway API controller names fail startup. This example's
+identity matches the supplied GatewayClass. Use distinct identities for independent
+deployments and update their GatewayClasses to match.
 
 #### Etcd HA (multi-controller)
 

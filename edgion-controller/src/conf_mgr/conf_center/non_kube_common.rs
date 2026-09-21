@@ -18,6 +18,7 @@ use tokio::task::JoinHandle;
 
 use crate::conf_mgr::conf_center::etcd::leadership_gate::LeaderHandle;
 use crate::conf_mgr::sync_runtime::metrics::reload_metrics;
+use crate::conf_mgr::sync_runtime::resource_processor::handlers::GatewayClassOwnership;
 use crate::conf_mgr::sync_runtime::resource_processor::{
     run_post_cache_ready_revalidations, BackendTlsPolicyHandler, ConfigMapHandler, EdgionAcmeHandler,
     EdgionBackendHandler, EdgionBackendTrafficPolicyHandler, EdgionConfigDataHandler, EdgionGatewayConfigHandler,
@@ -477,6 +478,7 @@ pub async fn spawn_all_controllers<B: LocalControllerBackend>(
     shutdown_signal: ShutdownSignal,
     runtime: Arc<ControllerRuntime>,
     component: &'static str,
+    controller_name: &str,
 ) -> Result<Vec<JoinHandle<Result<()>>>> {
     let mut handles = Vec::new();
     // Collects the kind name of every spawned controller, in spawn order.
@@ -506,7 +508,7 @@ pub async fn spawn_all_controllers<B: LocalControllerBackend>(
     // ==================== Phase 1: Provider Resources ====================
     tracing::info!(component = component, "Phase 1: Spawning provider resource controllers");
 
-    for_each_provider_core_resource!(do_spawn);
+    for_each_provider_core_resource!(do_spawn, controller_name);
 
     tracing::info!(component = component, "Registering EndpointSlice provider controller");
     do_spawn!(EndpointSlice, EndpointSliceHandler::new());
@@ -574,7 +576,7 @@ pub async fn spawn_all_controllers<B: LocalControllerBackend>(
         component = component,
         "Phase 3: Spawning dependent resource controllers"
     );
-    for_each_dependent_resource!(do_spawn);
+    for_each_dependent_resource!(do_spawn, controller_name);
 
     let dependent_kinds: Vec<&'static str> = spawned_kinds[gateway_count..].to_vec();
     if let Err(error) = backend.dispatch_init(&dependent_kinds).await {
@@ -616,7 +618,7 @@ mod tests {
                 providers.push(stringify!($K));
             };
         }
-        for_each_provider_core_resource!(collect_provider);
+        for_each_provider_core_resource!(collect_provider, "edgion.io/gateway-controller");
         providers.push("EndpointSlice");
 
         let mut dependents = Vec::new();
@@ -625,7 +627,7 @@ mod tests {
                 dependents.push(stringify!($K));
             };
         }
-        for_each_dependent_resource!(collect_dependent);
+        for_each_dependent_resource!(collect_dependent, "edgion.io/gateway-controller");
 
         assert!(providers.contains(&"EdgionConfigData"));
         assert!(!providers.contains(&"Gateway"));

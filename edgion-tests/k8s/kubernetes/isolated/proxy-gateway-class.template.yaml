@@ -5,6 +5,6 @@ metadata:
   labels:
     edgion.io/test-run: "__RUN_ID__"
 spec:
-  controllerName: edgion.io/gateway-controller
+  controllerName: edgion.io/proxy-controller/__GATEWAY_CLASS__
   description: "Run-owned Edgion PROXY protocol integration class"
 __PARAMETERS_REF__

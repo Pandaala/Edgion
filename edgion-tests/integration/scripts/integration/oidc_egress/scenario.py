@@ -475,6 +475,7 @@ server:
   metrics_listen: "127.0.0.1:{ports['controller_metrics']}"
 conf_center:
   type: file_system
+  controller_name: edgion.io/gateway-controller
   conf_dir: {json.dumps(str(self.work / 'conf'))}
 logging:
   log_dir: {json.dumps(str(self.work / 'logs'))}

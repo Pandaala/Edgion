@@ -2,8 +2,10 @@
 //! No API server, status writer, or duplicate resource worker is started.
 
 use super::{GatewayClassHandler, GatewayClassOwnership, GatewayHandler};
+use crate::conf_mgr::sync_runtime::resource_processor::status_ownership::KubernetesStatusIdentity;
 use crate::conf_mgr::sync_runtime::resource_processor::{
-    HandlerContext, LocalRawStore, ProcessResult, ProcessorHandler, RawStore, ResourceProcessor, WorkItemResult,
+    HandlerContext, LocalRawStore, ProcessResult, ProcessorHandler, ProcessorObj, RawStore, ResourceProcessor,
+    WorkItemResult,
 };
 use crate::conf_mgr::sync_runtime::workqueue::{WorkItem, Workqueue};
 use crate::conf_mgr::ControllerRuntime;
@@ -216,7 +218,8 @@ async fn independent_deployments_only_publish_the_selected_class_and_owner() {
     ] {
         let f = Fixture::new(owner, selected);
         let result = f.class_event(CLASS, Some(class(OWNER, CLASS, "uid"))).await;
-        assert_eq!(matches!(result, WorkItemResult::Processed { .. }), allowed);
+        assert_eq!(matches!(result, WorkItemResult::Processed { .. }), owner == OWNER);
+        assert_eq!(f.classes.get(CLASS).is_some(), allowed);
         // Use an event for denied deployments; they have no class publication requeue.
         let result = f.gateway_turn(!allowed).await;
         assert_eq!(matches!(result, WorkItemResult::Processed { .. }), allowed);
@@ -364,4 +367,189 @@ async fn repeated_class_and_gateway_status_echoes_converge_without_status_change
         f.gateways.workqueue().metrics().delayed_total.load(Ordering::Relaxed),
         6
     );
+}
+
+#[tokio::test]
+async fn unselected_class_reports_rejection_preserves_foreign_conditions_and_never_publishes() {
+    let f = Fixture::new(OWNER, CLASS);
+    f.runtime.set_status_identity(KubernetesStatusIdentity {
+        controller_name: OWNER.into(),
+        gateway_class_name: CLASS.into(),
+    });
+    let mut value = class(OWNER, "unassigned", "uid-unassigned");
+    value.spec.parameters_ref = Some(
+        serde_json::from_value(serde_json::json!({
+            "group": "wrong.example", "kind": "Wrong", "name": "missing"
+        }))
+        .unwrap(),
+    );
+    let foreign = serde_json::json!({
+        "type": "example.com/External", "status": "True", "reason": "External",
+        "message": "external condition", "observedGeneration": 1,
+        "lastTransitionTime": "2000-01-01T00:00:00Z"
+    });
+    value.status = Some(
+        serde_json::from_value(serde_json::json!({
+            "conditions": [foreign.clone(), {
+                "type": "ResolvedRefs", "status": "False", "reason": "InvalidParameters",
+                "message": "old diagnostic", "lastTransitionTime": "2000-01-01T00:00:00Z"
+            }, {
+                "type": "SupportedVersion", "status": "True", "reason": "SupportedVersion",
+                "message": "old diagnostic", "lastTransitionTime": "2000-01-01T00:00:00Z"
+            }],
+            "supportedFeatures": [{"name": "Gateway"}]
+        }))
+        .unwrap(),
+    );
+    for round in 0..4 {
+        let WorkItemResult::Processed {
+            obj,
+            status_changed,
+            persisted_status,
+        } = f.class_event("unassigned", Some(value)).await
+        else {
+            panic!("matching unselected class needs a status result");
+        };
+        assert_eq!(status_changed, round == 0);
+        let status = persisted_status.unwrap();
+        assert_eq!(status["conditions"][0], foreign);
+        assert_eq!(status["conditions"].as_array().unwrap().len(), 2);
+        assert_eq!(status["conditions"][1]["type"], "Accepted");
+        assert_eq!(status["conditions"][1]["status"], "False");
+        assert_eq!(status["conditions"][1]["reason"], "Unsupported");
+        assert_eq!(status["supportedFeatures"], serde_json::json!([]));
+        assert!(f.classes.get("unassigned").is_none());
+        assert!(
+            f.gateways.workqueue().is_empty(),
+            "no publication hook for status-only output"
+        );
+        value = obj;
+    }
+    // A features-only drift is semantic too; omitted/null is not an explicit clear.
+    value.status.as_mut().unwrap().supported_features = None;
+    assert!(matches!(
+        f.class_event("unassigned", Some(value)).await,
+        WorkItemResult::Processed {
+            status_changed: true,
+            ..
+        }
+    ));
+    f.assert_published(false);
+}
+
+#[tokio::test]
+async fn status_only_class_init_withdrawal_and_leader_recovery_use_raw_keys() {
+    let f = Fixture::new(OWNER, CLASS);
+    let value = class(OWNER, "unassigned", "old");
+    f.class_raw.upsert("unassigned".into(), Arc::new(value.clone()));
+    assert!(matches!(
+        f.classes.on_init_apply(value.clone(), None).await,
+        WorkItemResult::Processed {
+            status_changed: true,
+            ..
+        }
+    ));
+    assert!(f.classes.get("unassigned").is_none());
+
+    // Simulate a formerly published object. Status-only processing must withdraw
+    // it with ordinary cleanup and enqueue raw Gateway dependents after removal.
+    f.classes.save(value.clone(), None);
+    let mut dependent = gateway();
+    dependent.spec.gateway_class_name = "unassigned".into();
+    f.gateway_raw.upsert(KEY.into(), Arc::new(dependent));
+    assert!(matches!(
+        f.class_event("unassigned", Some(value)).await,
+        WorkItemResult::Processed { .. }
+    ));
+    assert!(f.classes.get("unassigned").is_none());
+    assert!(matches!(f.gateway_turn(false).await, WorkItemResult::Skipped));
+    f.assert_published(false);
+
+    // Delete/recreate before a leader change. The unpublished new incarnation
+    // must be visited even though ServerCache has no key for it.
+    f.class_event("unassigned", None).await;
+    f.class_raw
+        .upsert("unassigned".into(), Arc::new(class(OWNER, "unassigned", "new")));
+    assert_eq!(f.classes.requeue_all_keys().await, 1);
+    let queue = f.classes.workqueue();
+    let item = dequeue(&queue).await;
+    let result = f
+        .classes
+        .process_work_item(
+            &item.key,
+            f.class_raw.get(&item.key).map(|value| (*value).clone()),
+            None,
+            item.trigger_chain,
+        )
+        .await;
+    queue.done(&item.key);
+    let WorkItemResult::Processed {
+        obj, status_changed, ..
+    } = result
+    else {
+        panic!("leader must recover status-only classes");
+    };
+    assert_eq!(obj.metadata.uid.as_deref(), Some("new"));
+    assert!(status_changed);
+    assert!(f.classes.get("unassigned").is_none());
+}
+
+#[tokio::test]
+async fn distinct_controller_identities_converge_with_selected_and_unassigned_classes() {
+    let a = Fixture::new("example.com/a", "a");
+    let b = Fixture::new("example.com/b", "b");
+    for (owner, name, accepted) in [
+        ("example.com/a", "a", "True"),
+        ("example.com/b", "b", "True"),
+        ("example.com/a", "unassigned", "False"),
+    ] {
+        let mut value = class(owner, name, name);
+        for round in 0..4 {
+            for (identity, deployment) in [("example.com/a", &a), ("example.com/b", &b)] {
+                match deployment.class_event(name, Some(value.clone())).await {
+                    WorkItemResult::Processed {
+                        obj,
+                        status_changed,
+                        persisted_status,
+                    } => {
+                        assert_eq!(identity, owner);
+                        assert_eq!(status_changed, round == 0);
+                        let status = persisted_status.unwrap();
+                        let condition = status["conditions"]
+                            .as_array()
+                            .unwrap()
+                            .iter()
+                            .find(|condition| condition["type"] == "Accepted")
+                            .unwrap();
+                        assert_eq!(condition["status"], accepted);
+                        value = obj;
+                    }
+                    WorkItemResult::Skipped => assert_ne!(identity, owner),
+                    other => panic!("unexpected result: {other:?}"),
+                }
+            }
+        }
+    }
+    assert!(a.classes.get("a").is_some());
+    assert!(b.classes.get("b").is_some());
+    assert!(a.classes.get("b").is_none());
+    assert!(b.classes.get("a").is_none());
+    assert!(a.classes.get("unassigned").is_none());
+    assert!(b.classes.get("unassigned").is_none());
+}
+
+#[tokio::test]
+async fn one_selected_class_still_publishes_multiple_gateways() {
+    let f = Fixture::new(OWNER, CLASS);
+    let mut second = gateway();
+    second.metadata.name = Some("second".into());
+    second.metadata.uid = Some("second-uid".into());
+    f.gateway_raw.upsert("apps/second".into(), Arc::new(second));
+    f.class_event(CLASS, Some(class(OWNER, CLASS, "class-uid"))).await;
+    f.gateway_turn(false).await;
+    f.gateway_turn(false).await;
+    for key in [KEY, "apps/second"] {
+        assert!(f.gateways.get(key).unwrap().spec.resolved_attachment_proof.is_some());
+    }
+    assert!(f.gateways.workqueue().is_empty());
 }

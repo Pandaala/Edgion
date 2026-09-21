@@ -27,7 +27,9 @@ GatewayClass `resolve_params_ref`. It reads raw EGC and plugin generations, so
 the plugins → EGC → GatewayClass requeue chain does not depend on cross-worker
 processed-cache publication order. EGC retains plugin reference registration and
 delete cleanup. Class ownership remains the separate controllerName/selected-class
-gate; this correction adds no second ownership mechanism or status writer.
+publication gate. The subsequent [reporting correction](gatewayclass-reporting-and-publication.md)
+separates controller-name reporting from selected-class publication: unsupported
+classes bypass local parameter validation. This does not add a second status writer.
 
 ## Limits and regression evidence
 

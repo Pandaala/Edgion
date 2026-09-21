@@ -517,7 +517,8 @@ mod failover_version_tests {
 
     async fn make_fs_state() -> (Arc<AdminState>, tempfile::TempDir) {
         let tmp_data = tempfile::tempdir().expect("tempdir for conf data");
-        let fs_config = FileSystemConfig::new(tmp_data.path().to_path_buf());
+        let fs_config =
+            FileSystemConfig::new(tmp_data.path().to_path_buf()).with_controller_name("edgion.io/gateway-controller");
         let conf_mgr = Arc::new(
             ConfMgr::create(ConfCenterConfig::FileSystem(fs_config))
                 .await

@@ -63,6 +63,7 @@ conf_sync_security:
 # ─── conf_center：FileSystem 模式（本地开发）─────────────────────
 conf_center:
   type: file_system
+  controller_name: edgion.io/gateway-controller
   conf_dir: config/resources      # YAML 资源目录（建议写绝对路径）
 
 # ─── conf_center：Kubernetes 模式（生产部署）─────────────────────
@@ -159,11 +160,33 @@ conf_center:
 
 证书可通过 `edgion-cli gen-certs --output file --output-dir <dir>` 生成。
 
+### Controller 身份
+
+`conf_center.controller_name` 必须与 GatewayClass 的 `spec.controllerName` 完全一致，
+采用 Gateway API 要求的域名前缀加路径格式，最多 253 个字符。显式配置为空白或格式非法时启动失败。
+
+FileSystem 和 etcd 必须显式配置该字段。仅 Kubernetes 在省略时使用
+`edgion.io/gateway-controller/{POD_NAMESPACE}/{EDGION_CONTROLLER_DEPLOYMENT_NAME}`。
+通过 `metadata.namespace` 注入 `POD_NAMESPACE`，显式注入稳定的 Deployment 名称作为
+`EDGION_CONTROLLER_DEPLOYMENT_NAME`，不能使用 Pod 名称。组成部分缺失或非法时启动失败。
+例如 namespace 为 `edgion-system`、Deployment 为 `edgion-controller` 时，GatewayClass 应配置
+`edgion.io/gateway-controller/edgion-system/edgion-controller`。
+
+独立部署必须使用不同的 controller name 和 GatewayClass；运行时不会检测显式身份冲突。
+同一身份的副本必须共享选定类、配置视图和选举域。独立 Kubernetes 部署还需使用不同的选主 Lease；
+自动生成 controller name 不会修改 lease_name 或 lease_namespace。GatewayClass 的 `spec.controllerName`
+不可变；更换身份时需要创建替代类。
+
+Controller 为身份匹配但未被 `gateway_class` 选中的类报告 `Accepted=False/Unsupported`，不接管流量。
+GatewayClass 的监听忽略 `label_selector`，覆盖没有匹配标签的类。
+将 `GatewayClass` 加入 `no_watch_kinds` 会关闭此报告，并停止 Gateway 处理。
+
 ### [conf_center] — FileSystem 模式
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `type` | `String` | — | 必须填 `file_system`（snake_case，不是 `filesystem`） |
+| `controller_name` | `String` | **必填** | 显式 Gateway API 控制器身份 |
 | `conf_dir` | `Path` | — | YAML 资源目录，**建议写绝对路径**（当前实现不会随 `work_dir` 自动解析） |
 
 注意：`--conf-dir` CLI 参数会直接覆盖此处的 `conf_dir`，并将 `conf_center` 切换到 FileSystem 模式。
@@ -174,9 +197,9 @@ conf_center:
 |------|------|--------|------|
 | `type` | `String` | — | 固定填 `"kubernetes"` |
 | `gateway_class` | `String` | **必填** | 匹配的 GatewayClass 名称 |
-| `controller_name` | `String` | — | Gateway API status 里回报的 `controllerName` |
+| `controller_name` | `String` | namespace + Deployment 身份 | 显式覆盖自动生成的控制器身份 |
 | `watch_namespaces` | `Array<String>` | `[]`（全部） | 监听的命名空间列表，空列表表示监听所有命名空间 |
-| `label_selector` | `String` | `""` | 资源标签过滤表达式 |
+| `label_selector` | `String` | `""` | 资源标签过滤表达式，不作用于 GatewayClass |
 | `gateway_address` | `String` | — | Gateway status 中报告的地址，可选 |
 | `ha_mode` | `String` | — | HA 模式：`"leader-only"` 或 `"all-serve"` |
 | `no_watch_kinds` | `Array<String>` | `[]` | 跳过 CRD 预检和 watch 的资源 kind（PascalCase），如 `["TCPRoute", "UDPRoute"]` |
@@ -212,6 +235,7 @@ Etcd 模式面向非 Kubernetes（裸金属 / 虚拟机）生产环境：Control
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `type` | `String` | — | 固定填 `etcd` |
+| `controller_name` | `String` | **必填** | 显式 Gateway API 控制器身份 |
 | `endpoints` | `Array<String>` | **必填** | etcd 集群端点列表，如 `["http://10.0.0.1:2379"]` |
 | `key_prefix` | `String` | `/edgion` | 存入 etcd 的所有配置键的前缀 |
 | `auth` | Object | — | 可选的 etcd 用户名 / 密码认证（`auth.username`、`auth.password`） |
@@ -392,6 +416,7 @@ center:
 ```yaml
 conf_center:
   type: file_system
+  controller_name: edgion.io/gateway-controller
   conf_dir: /home/user/my-project/config/resources
 ```
 
@@ -433,6 +458,7 @@ conf_center:
   type: kubernetes
   gateway_class: edgion
   ha_mode: leader-only
+  controller_name: edgion.io/gateway-controller
   leader_election:
     lease_name: edgion-controller-leader
     lease_namespace: edgion-system
@@ -464,6 +490,7 @@ Controller **A**（`10.0.0.11`）：
 ```yaml
 conf_center:
   type: etcd
+  controller_name: edgion.io/gateway-controller
   endpoints: ["http://10.0.0.1:2379", "http://10.0.0.2:2379", "http://10.0.0.3:2379"]
   key_prefix: /edgion
   leader_election:

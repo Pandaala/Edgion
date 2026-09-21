@@ -15,12 +15,16 @@ use std::path::PathBuf;
 ///
 /// ```yaml
 /// type: file_system
+/// controller_name: edgion.io/gateway-controller
 /// conf_dir: /etc/edgion/conf
 /// poll_interval_ms: 500
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FileSystemConfig {
+    /// Explicit Gateway API identity of this deployment.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub controller_name: Option<String>,
     /// Directory containing configuration YAML files
     pub conf_dir: PathBuf,
     /// Polling interval in milliseconds for the file watcher.
@@ -32,6 +36,7 @@ pub struct FileSystemConfig {
 impl Default for FileSystemConfig {
     fn default() -> Self {
         Self {
+            controller_name: None,
             conf_dir: PathBuf::from("conf"),
             poll_interval_ms: None,
         }
@@ -39,9 +44,16 @@ impl Default for FileSystemConfig {
 }
 
 impl FileSystemConfig {
+    /// Set the explicit Gateway API identity of this deployment.
+    pub fn with_controller_name(mut self, controller_name: impl Into<String>) -> Self {
+        self.controller_name = Some(controller_name.into());
+        self
+    }
+
     /// Create a new FileSystemConfig with the given directory
     pub fn new(conf_dir: PathBuf) -> Self {
         Self {
+            controller_name: None,
             conf_dir,
             poll_interval_ms: None,
         }
@@ -73,6 +85,7 @@ mod tests {
     #[test]
     fn test_file_system_config_serialize() {
         let config = FileSystemConfig {
+            controller_name: None,
             conf_dir: PathBuf::from("/etc/edgion/conf"),
             poll_interval_ms: None,
         };

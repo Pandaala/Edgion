@@ -50,6 +50,13 @@ where
         true
     }
 
+    /// Whether a processed resource may be published to the data plane.
+    /// Returning false retains status persistence but withdraws any cached object
+    /// through the normal cleanup hooks, without calling on_change/after_publish.
+    fn should_publish(&self, _obj: &K, _ctx: &HandlerContext) -> bool {
+        true
+    }
+
     /// Clean metadata
     ///
     /// Remove unwanted annotations, managedFields, etc.

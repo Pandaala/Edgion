@@ -36,7 +36,7 @@ kind: GatewayClass
 metadata:
   name: public-gateway
 spec:
-  controllerName: edgion.io/gateway-controller
+  controllerName: edgion.io/gateway-controller/edgion-system/edgion-controller
 ```
 
 > `GatewayClass` is a cluster-scoped resource and does not have a `namespace` field.

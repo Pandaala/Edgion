@@ -141,6 +141,7 @@ logging:
   console: false
 conf_center:
   type: file_system
+  controller_name: edgion.io/gateway-controller
   conf_dir: "$CASE_DIR"
 conf_sync:
   no_sync_kinds: [ReferenceGrant, Secret]

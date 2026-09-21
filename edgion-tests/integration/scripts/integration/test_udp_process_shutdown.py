@@ -291,6 +291,7 @@ logging:
   console: false
 conf_center:
   type: file_system
+  controller_name: edgion.io/gateway-controller
   conf_dir: {self.work / 'conf'}
 conf_sync:
   no_sync_kinds: [ReferenceGrant, Secret]

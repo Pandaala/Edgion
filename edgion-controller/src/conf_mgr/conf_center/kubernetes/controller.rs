@@ -137,6 +137,16 @@ where
     ctx.tracker.track_future(async move { rc.run_namespaced().await })
 }
 
+/// GatewayClass reporting covers all classes with our controllerName, even if
+/// operator selectors exclude them from the rest of the deployment's view.
+fn cluster_watcher_config(kind: &str, config: &watcher::Config) -> watcher::Config {
+    let mut config = config.clone();
+    if kind == "GatewayClass" {
+        config.label_selector = None;
+    }
+    config
+}
+
 /// Spawn a cluster-scoped ResourceController with the given handler
 fn spawn_cluster<K, H>(
     controller: &KubernetesController,
@@ -180,7 +190,7 @@ where
         controller.client.clone(),
         processor,
         ApiScope::ClusterScoped,
-        ctx.watcher_config.clone(),
+        cluster_watcher_config(kind, &ctx.watcher_config),
     )
     .with_shutdown(ctx.shutdown.clone())
     .with_epoch(ctx.cancel.clone(), ctx.tracker.clone());
@@ -931,6 +941,17 @@ mod source_lifecycle_tests {
     use crate::conf_mgr::sync_runtime::resource_processor::raw_store::LocalRawStore;
     use futures::FutureExt;
     use kube::runtime::watcher::Event;
+
+    #[test]
+    fn gateway_class_reporting_bypasses_labels_without_changing_other_watches() {
+        let config = watcher::Config::default().labels("team=blue");
+        assert!(cluster_watcher_config("GatewayClass", &config).label_selector.is_none());
+        assert_eq!(
+            cluster_watcher_config("EdgionGatewayConfig", &config).label_selector,
+            Some("team=blue".into())
+        );
+        assert_eq!(config.label_selector, Some("team=blue".into()));
+    }
 
     struct GatewayFixtureHandler;
     #[async_trait::async_trait]

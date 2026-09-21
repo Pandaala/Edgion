@@ -89,6 +89,7 @@ logging:
 
 conf_center:
   type: file_system  # or kubernetes
+  controller_name: edgion.io/gateway-controller
   conf_dir: edgion-tests/integration/conf
 
 conf_sync:

@@ -244,6 +244,7 @@ async fn next_loop_turn(
 /// This struct implements both `CenterApi` and `CenterLifeCycle`,
 /// automatically getting `ConfCenter` implementation via blanket impl.
 pub struct KubernetesCenter {
+    controller_name: String,
     /// Configuration
     config: KubernetesConfig,
     /// Writer for CRUD operations (delegate)
@@ -271,6 +272,7 @@ impl KubernetesCenter {
     /// Create a new KubernetesCenter
     pub async fn new(config: KubernetesConfig) -> Result<Self> {
         config.validate()?;
+        let controller_name = config.resolve_controller_name()?;
 
         // Kubernetes ingest always deserializes JSON via `kube` (`serde_json`
         // under the hood), so the supported resource-spec unknown-field walk's `Value`
@@ -293,6 +295,7 @@ impl KubernetesCenter {
         runtime.set_single_publisher(config.ha_mode() != HaMode::AllServe);
 
         Ok(Self {
+            controller_name,
             config,
             writer,
             config_sync_server: RwLock::new(None),
@@ -375,7 +378,7 @@ impl KubernetesCenter {
             component = "kubernetes_center",
             mode = "kubernetes",
             gateway_class = %config.gateway_class(),
-            controller_name = %config.controller_name(),
+            controller_name = %self.controller_name,
             namespaces = ?config.watch_namespaces(),
             metadata_filter_enabled = true,
             blocked_annotations_count = config.metadata_filter().blocked_annotations.len(),
@@ -387,7 +390,7 @@ impl KubernetesCenter {
         KubernetesController::with_metadata_filter(
             client.clone(),
             config.gateway_class.clone(),
-            config.controller_name.clone(),
+            self.controller_name.clone(),
             config.gateway_address.clone(),
             config.watch_namespaces.clone(),
             config.label_selector.clone(),
@@ -1428,6 +1431,7 @@ mod leadership_signal_tests {
         let runtime = Arc::new(ControllerRuntime::new());
         runtime.set_single_publisher(config.ha_mode() != HaMode::AllServe);
         KubernetesCenter {
+            controller_name: "edgion.io/gateway-controller".into(),
             config,
             writer: KubernetesStorage::new_unconnected_for_test(),
             config_sync_server: RwLock::new(None),

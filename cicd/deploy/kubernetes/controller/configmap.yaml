@@ -33,7 +33,7 @@ data:
     conf_center:
       type: kubernetes
       gateway_class: public-gateway
-      controller_name: edgion.io/gateway-controller
+      # controller_name derives from the Controller namespace and Deployment name.
       watch_namespaces: []
       ha_mode: leader-only
 

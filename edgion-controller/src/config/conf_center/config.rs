@@ -23,6 +23,7 @@ use std::path::PathBuf;
 ///
 /// ```yaml
 /// type: file_system
+/// controller_name: edgion.io/gateway-controller
 /// conf_dir: /etc/edgion/conf
 /// ```
 ///
@@ -30,6 +31,7 @@ use std::path::PathBuf;
 ///
 /// ```yaml
 /// type: kubernetes
+/// controller_name: edgion.io/gateway-controller
 /// gateway_class: edgion
 /// watch_namespaces:
 ///   - default
@@ -117,6 +119,7 @@ mod tests {
     #[test]
     fn test_file_system_config() {
         let config = ConfCenterConfig::FileSystem(FileSystemConfig {
+            controller_name: None,
             conf_dir: PathBuf::from("/etc/edgion/conf"),
             poll_interval_ms: None,
         });

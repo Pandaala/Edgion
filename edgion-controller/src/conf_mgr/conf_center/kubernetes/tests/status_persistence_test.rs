@@ -93,6 +93,59 @@ fn assert_conflict(result: Result<(), StatusWriteError>) {
 }
 
 #[tokio::test]
+async fn unselected_gateway_class_patch_clears_features_and_watch_echo_converges() {
+    use crate::conf_mgr::sync_runtime::resource_processor::handlers::{GatewayClassHandler, GatewayClassOwnership};
+    use crate::conf_mgr::sync_runtime::resource_processor::status_ownership::KubernetesStatusIdentity;
+    let runtime = Arc::new(ControllerRuntime::default());
+    runtime.set_status_identity(KubernetesStatusIdentity {
+        controller_name: "example.com/controller".into(),
+        gateway_class_name: "selected".into(),
+    });
+    let processor = ResourceProcessor::new(
+        "GatewayClass",
+        8,
+        Arc::new(GatewayClassHandler::new(GatewayClassOwnership::new(
+            "example.com/controller".into(),
+            Some("selected".into()),
+        ))),
+        runtime,
+    );
+    let initial = json!({"apiVersion": "gateway.networking.k8s.io/v1", "kind": "GatewayClass",
+        "metadata": {"name": "resource", "uid": "uid", "resourceVersion": "opaque-rv", "generation": 1},
+        "spec": {"controllerName": "example.com/controller"},
+        "status": {"supportedFeatures": [{"name": "Gateway"}], "conditions": []}});
+    let (client, state) = api_client(initial);
+    for round in 0..4 {
+        let snapshot = state.lock().object.clone();
+        let obj = serde_json::from_value(snapshot.clone()).unwrap();
+        let WorkItemResult::Processed {
+            status_changed,
+            persisted_status,
+            ..
+        } = processor.on_init_apply(obj, None).await
+        else {
+            panic!("missing class status");
+        };
+        assert_eq!(status_changed, round == 0);
+        if status_changed {
+            persist_k8s_status::<GatewayClass>(
+                &client,
+                &scope(true),
+                None,
+                "resource",
+                snapshot["metadata"]["resourceVersion"].as_str(),
+                &persisted_status.unwrap(),
+            )
+            .await
+            .unwrap();
+        }
+        assert!(processor.get("resource").is_none());
+        assert_eq!(state.lock().object["status"]["supportedFeatures"], json!([]));
+    }
+    assert_eq!(state.lock().requests.len(), 1);
+}
+
+#[tokio::test]
 async fn canonical_observation_patch_removes_only_retired_native_fields_and_converges() {
     use crate::conf_mgr::sync_runtime::resource_processor::status_diff::status_semantically_changed;
     use crate::conf_mgr::sync_runtime::resource_processor::status_observation::{

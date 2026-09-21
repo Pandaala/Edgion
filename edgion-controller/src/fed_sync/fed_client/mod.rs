@@ -986,9 +986,9 @@ mod tests {
         // The deny path returns before conf_mgr is used, but the function signature requires it.
         let tmp = tempfile::tempdir().expect("tempdir");
         let conf_mgr = Arc::new(
-            ConfMgr::create(ConfCenterConfig::FileSystem(FileSystemConfig::new(
-                tmp.path().to_path_buf(),
-            )))
+            ConfMgr::create(ConfCenterConfig::FileSystem(
+                FileSystemConfig::new(tmp.path().to_path_buf()).with_controller_name("edgion.io/gateway-controller"),
+            ))
             .await
             .expect("ConfMgr::create failed"),
         );
@@ -1060,9 +1060,9 @@ mod tests {
 
         let tmp = tempfile::tempdir().expect("tempdir");
         let conf_mgr = Arc::new(
-            ConfMgr::create(ConfCenterConfig::FileSystem(FileSystemConfig::new(
-                tmp.path().to_path_buf(),
-            )))
+            ConfMgr::create(ConfCenterConfig::FileSystem(
+                FileSystemConfig::new(tmp.path().to_path_buf()).with_controller_name("edgion.io/gateway-controller"),
+            ))
             .await
             .expect("ConfMgr::create failed"),
         );
@@ -1132,9 +1132,9 @@ mod tests {
 
         let tmp = tempfile::tempdir().expect("tempdir");
         let conf_mgr = Arc::new(
-            ConfMgr::create(ConfCenterConfig::FileSystem(FileSystemConfig::new(
-                tmp.path().to_path_buf(),
-            )))
+            ConfMgr::create(ConfCenterConfig::FileSystem(
+                FileSystemConfig::new(tmp.path().to_path_buf()).with_controller_name("edgion.io/gateway-controller"),
+            ))
             .await
             .expect("ConfMgr::create failed"),
         );

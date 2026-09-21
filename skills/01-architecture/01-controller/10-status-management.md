@@ -112,8 +112,11 @@ per-ancestor comparator row in [§7](#7-status-persistence) and
 
 **GatewayClass special:** GatewayClassStatus also has `supported_features: Option<Vec<SupportedFeature>>`
 (each wire entry is an object with a `name` field),
-populated in `update_status()` with the full list of supported Gateway API features (matching
+populated for selected classes with the full list of supported Gateway API features (matching
 the conformance test declaration in `edgion-tests/conformance/conformance_test.go`).
+Unselected matching classes receive `Accepted=False/Unsupported` and an explicit
+empty feature list, without publication or deployment-local parameter resolution.
+Foreign conditions are retained; old owned ResolvedRefs/SupportedVersion are removed.
 
 ```rust
 fn update_status(&self, obj: &mut T, _ctx: &HandlerContext, validation_errors: &[String]) {
@@ -399,13 +402,16 @@ recompute from current raw state. Recovery has no time bound; a resumed WATCH al
 not force reconciliation. Status IO remains inline in the single per-kind worker.
 
 Version checking protects against stale writes, not incorrect snapshot ownership or stale
-leadership. Kubernetes GatewayClass writes are restricted to the configured class and
-controller-name pair. Gateway processing additionally requires that the referenced raw
+leadership. Kubernetes GatewayClass status covers all classes matching the resolved
+controller name, independently of the global label selector. Only the selected class
+is published; leader acquisition requeues raw class keys as well as published keys.
+Explicitly disabling the GatewayClass watcher disables reporting. Gateway processing
+additionally requires that the referenced raw
 class's nonempty UID matches this deployment's published class incarnation. Class
 publication/unpublication requeues matching raw Gateways after the cache mutation;
 ownership loss withdraws cached state rather than writing a rejection into another
 controller's status. Generation and class `Accepted` do not define ownership. Independent
-deployments must use distinct classes; replicas sharing one class/owner need the same
+deployments must use distinct controller names; replicas sharing one class/owner need the same
 election domain and configuration view. This is not a fence for arbitrarily overlapping
 independent writers. Handlers must preserve foreign `parents`/`ancestors` entries already in their
 input, and explicitly serialize empty owned lists when clearing them. Both policy handlers
@@ -457,11 +463,11 @@ state is unchanged.
 
 | Category | Kinds | Comparator | What it compares |
 |----------|-------|------------|------------------|
-| **Condition-only** | GatewayClass, EdgionGatewayConfig, EdgionPlugins, EdgionStreamPlugins, EdgionConfigData | `conditions_only_status_equal` (explicit arms or the condition-only fallback) | `status.conditions[]` |
+| **Condition-only** | EdgionGatewayConfig, EdgionPlugins, EdgionStreamPlugins, EdgionConfigData | `conditions_only_status_equal` (explicit arms or the condition-only fallback) | `status.conditions[]` |
 | **Per-parent** | HTTPRoute, GRPCRoute, TCPRoute, TLSRoute, UDPRoute, EdgionTls | `attachment_statuses_equal` | Canonical parent identity plus controllerName; one-to-one semantic comparison with resource namespace context |
 | **Per-ancestor** | BackendTLSPolicy, EdgionBackendTrafficPolicy | `attachment_statuses_equal` | `status.ancestors[]` matched one-to-one by canonical ancestorRef identity plus controllerName, including multiplicity |
 | **Hybrid** | Gateway | `gateway_status_equal` | `addresses` + gateway-level `conditions` + `listeners[]` (matched by name) |
-| **Hybrid (lifecycle + conditions)** | EdgionAcme, LinkSys | `conditions_and_fields_status_equal` | Semantic conditions plus structural comparison of all lifecycle fields |
+| **Hybrid (fields + conditions)** | EdgionAcme, LinkSys, GatewayClass | `conditions_and_fields_status_equal` | Semantic conditions plus structural comparison of lifecycle fields or supportedFeatures |
 | **K8s deployment observations** | EdgionPlugins, EdgionStreamPlugins, EdgionBackend, LinkSys | `controller_observations_equal` | Stable deployment key and class UID, then native payload semantics; ignores array order and nested condition transition times |
 | **Unknown** | Future resources | `conditions_only_status_equal` | Safe fallback |
 

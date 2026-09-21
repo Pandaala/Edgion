@@ -432,6 +432,7 @@ class Scenario:
             [("admin", self.admin), ("probe", self.probe), ("metrics", self.metrics), ("grpc", self.grpc)]},
             "logging": {"log_dir": "logs", "log_level": "info", "console": True},
             "conf_center": {"type": "kubernetes", "gateway_class": "namespace-watch-test",
+                "controller_name": f"edgion.io/namespace-watch/{self.run_id}",
                 "watch_namespaces": [a, b, a], "label_selector": self.faults.selector,
                 "ha_mode": self.mode, "no_watch_kinds": [kind for kind in kinds if kind != "Service"],
                 "leader_election": {"lease_namespace": a, "lease_name": "namespace-watch-leader"}}}

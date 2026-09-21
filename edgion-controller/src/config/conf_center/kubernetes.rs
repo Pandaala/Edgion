@@ -37,6 +37,7 @@ impl std::fmt::Display for HaMode {
 ///
 /// ```yaml
 /// type: kubernetes
+/// controller_name: edgion.io/gateway-controller
 /// gateway_class: edgion
 /// watch_namespaces:
 ///   - default
@@ -56,16 +57,17 @@ pub struct KubernetesConfig {
     #[serde(default)]
     pub watch_namespaces: Vec<String>,
 
-    /// Label selector for filtering resources
+    /// Label selector for filtering resources, except GatewayClass reporting.
     #[serde(default)]
     pub label_selector: Option<String>,
 
     /// Gateway class name this controller manages
     pub gateway_class: String,
 
-    /// Gateway API controller name this controller reports in status
-    #[serde(default = "default_controller_name")]
-    pub controller_name: String,
+    /// Gateway API identity. When omitted, derive it from POD_NAMESPACE and
+    /// EDGION_CONTROLLER_DEPLOYMENT_NAME; invalid/missing inputs fail startup.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub controller_name: Option<String>,
 
     /// Metadata filter configuration for reducing resource memory usage
     #[serde(default)]
@@ -115,7 +117,7 @@ impl KubernetesConfig {
             watch_namespaces: Vec::new(),
             label_selector: None,
             gateway_class: gateway_class.into(),
-            controller_name: default_controller_name(),
+            controller_name: None,
             metadata_filter: MetadataFilterConfig::default(),
             leader_election: LeaderElectionConfig::default(),
             gateway_address: None,
@@ -142,7 +144,7 @@ impl KubernetesConfig {
     /// Set controller name used in Gateway API status reporting. Test-only builder seam.
     #[cfg(test)]
     pub fn with_controller_name(mut self, controller_name: impl Into<String>) -> Self {
-        self.controller_name = controller_name.into();
+        self.controller_name = Some(controller_name.into());
         self
     }
 
@@ -170,8 +172,12 @@ impl KubernetesConfig {
     }
 
     /// Get controller name
-    pub fn controller_name(&self) -> &str {
-        &self.controller_name
+    pub fn resolve_controller_name(&self) -> Result<String> {
+        super::controller_identity::resolve_kubernetes_controller_name(
+            self.controller_name.as_deref(),
+            std::env::var("POD_NAMESPACE").ok().as_deref(),
+            std::env::var("EDGION_CONTROLLER_DEPLOYMENT_NAME").ok().as_deref(),
+        )
     }
 
     /// Get metadata filter
@@ -260,10 +266,6 @@ fn default_lease_name() -> String {
     "edgion-controller-leader".to_string()
 }
 
-fn default_controller_name() -> String {
-    "edgion.io/gateway-controller".to_string()
-}
-
 fn default_lease_namespace() -> String {
     // Try to get namespace from environment (set by K8s Downward API)
     std::env::var("POD_NAMESPACE").unwrap_or_else(|_| "default".to_string())
@@ -338,7 +340,7 @@ mod tests {
     fn test_kubernetes_config_new() {
         let config = KubernetesConfig::new("edgion");
         assert_eq!(config.gateway_class, "edgion");
-        assert_eq!(config.controller_name, "edgion.io/gateway-controller");
+        assert_eq!(config.controller_name, None);
         assert!(config.watch_namespaces.is_empty());
         assert!(config.label_selector.is_none());
     }
@@ -351,7 +353,7 @@ mod tests {
             .with_controller_name("example.com/controller");
 
         assert_eq!(config.gateway_class(), "edgion");
-        assert_eq!(config.controller_name(), "example.com/controller");
+        assert_eq!(config.resolve_controller_name().unwrap(), "example.com/controller");
         assert_eq!(config.watch_namespaces(), &["default", "prod"]);
         assert_eq!(config.label_selector(), Some("app=edgion"));
     }
@@ -362,7 +364,7 @@ mod tests {
 
         let yaml = serde_yaml::to_string(&config).unwrap();
         assert!(yaml.contains("gateway_class: edgion"));
-        assert!(yaml.contains("controller_name: edgion.io/gateway-controller"));
+        assert!(!yaml.contains("controller_name:"));
         assert!(yaml.contains("watch_namespaces:"));
     }
 
@@ -377,7 +379,7 @@ label_selector: app=edgion
 "#;
         let config: KubernetesConfig = serde_yaml::from_str(yaml).unwrap();
         assert_eq!(config.gateway_class, "edgion");
-        assert_eq!(config.controller_name, "edgion.io/gateway-controller");
+        assert_eq!(config.controller_name, None);
         assert_eq!(config.watch_namespaces, vec!["default", "prod"]);
         assert_eq!(config.label_selector, Some("app=edgion".to_string()));
     }

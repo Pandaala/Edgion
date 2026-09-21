@@ -15,8 +15,10 @@
 The user approved keeping complete status in ServerCache while generating a
 separate typed currentStatus on the Controller cold path for Gateway decisions.
 Implement this consistently across status-bearing resources and existing status
-consumers. This change preserves the existing GatewayClass writer ownership and
-does not alter controllerName, election topology, or class admission.
+consumers. This projection change did not alter controllerName, election topology,
+or class admission. The subsequent
+[GatewayClass reporting correction](../../../skills/04-review/status/regression-guards/gatewayclass-reporting-and-publication.md)
+separates reporting from publication under a distinct-deployment identity contract.
 
 ## Design
 
@@ -85,7 +87,8 @@ Resource/Controller and Gateway changes were implemented in separate file scopes
 An independent read-only reviewer approved the design and reviewed the code and
 canonical knowledge. Review found and corrected native FS/etcd foreign-status
 filtering for EdgionTls and both policy families. This document retains the
-implementation plan, not an additional active issue.
+implementation plan, not an additional active issue. The reporting correction
+linked above records the separate class writer/coverage mechanism.
 
 ## Verification notes
 
@@ -114,4 +117,4 @@ Final verification on 2026-09-21:
 
 No commit or push was performed. Complete status is retained; currentStatus is
 an internal typed projection, not an operator-configurable field or position
-pointer. The separate GatewayClass reporting writer/coverage decision is open.
+pointer. GatewayClass reporting is covered by the separate correction linked above.

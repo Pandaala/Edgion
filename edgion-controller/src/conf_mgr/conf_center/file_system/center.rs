@@ -40,6 +40,7 @@ use crate::conf_sync::conf_server::ConfigSyncServer;
 /// instance. HA deployments must use the Kubernetes or Etcd backend, both of
 /// which elect a single active leader.
 pub struct FileSystemCenter {
+    controller_name: String,
     /// Configuration
     config: FileSystemConfig,
     /// Writer for CRUD operations (delegate)
@@ -56,6 +57,9 @@ pub struct FileSystemCenter {
 impl FileSystemCenter {
     /// Create a new FileSystemCenter
     pub fn new(config: FileSystemConfig) -> Result<Self> {
+        let controller_name = crate::config::conf_center::controller_identity::require_controller_name(
+            config.controller_name.as_deref(),
+        )?;
         let registry = Arc::new(PathRegistry::new());
         // §0: absolutize once at the single source. Storage's scan base and the
         // watcher's recorded paths must be byte-identical or the list drop-loser
@@ -74,6 +78,7 @@ impl FileSystemCenter {
         let writer = FileSystemStorage::new(conf_dir_abs.clone()).with_registry(registry.clone());
 
         Ok(Self {
+            controller_name,
             config,
             writer,
             registry,
@@ -137,13 +142,19 @@ impl CenterLifeCycle for FileSystemCenter {
         let conf_dir = self.conf_dir_abs.clone();
         let registry = self.registry.clone();
         let poll_interval_override = self.config.poll_interval_ms.map(Duration::from_millis);
+        let controller_name = self.controller_name.clone();
 
         self.base
             .run_lifecycle(
                 shutdown_handle,
                 "file_system_center",
                 move |shutdown, runtime, error_tx| {
-                    let ctrl = FileSystemController::new(conf_dir.clone(), registry.clone(), poll_interval_override);
+                    let ctrl = FileSystemController::new(
+                        conf_dir.clone(),
+                        registry.clone(),
+                        poll_interval_override,
+                        controller_name.clone(),
+                    );
                     tokio::spawn(async move {
                         if let Err(e) = ctrl.run(shutdown, runtime).await {
                             tracing::error!(
@@ -193,8 +204,18 @@ mod center_path_tests {
     use super::*;
 
     #[test]
+    fn missing_or_blank_identity_fails_before_starting_the_source() {
+        assert!(FileSystemCenter::new(FileSystemConfig::default()).is_err());
+        assert!(FileSystemCenter::new(FileSystemConfig::default().with_controller_name(" ")).is_err());
+    }
+
+    #[test]
     fn new_absolutizes_conf_dir_and_shares_base_with_storage() {
-        let center = FileSystemCenter::new(FileSystemConfig::new(std::path::PathBuf::from("relative/conf"))).unwrap();
+        let center = FileSystemCenter::new(
+            FileSystemConfig::new(std::path::PathBuf::from("relative/conf"))
+                .with_controller_name("edgion.io/gateway-controller"),
+        )
+        .unwrap();
         assert!(
             center.conf_dir_abs().is_absolute(),
             "conf_dir handed to the watcher must be absolute"

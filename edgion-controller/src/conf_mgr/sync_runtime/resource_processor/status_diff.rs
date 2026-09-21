@@ -58,9 +58,9 @@ fn native_status_equal(kind: &str, old: &Value, new: &Value, resource_namespace:
         "BackendTLSPolicy" | "EdgionBackendTrafficPolicy" => {
             attachment_statuses_equal(old, new, resource_namespace, "ancestors", "ancestorRef")
         }
-        "EdgionAcme" | "LinkSys" => conditions_and_fields_status_equal(old, new),
+        "EdgionAcme" | "LinkSys" | "GatewayClass" => conditions_and_fields_status_equal(old, new),
         // Simple condition-only resources:
-        // GatewayClass, EdgionGatewayConfig, EdgionPlugins, EdgionStreamPlugins, EdgionConfigData
+        // EdgionGatewayConfig, EdgionPlugins, EdgionStreamPlugins, EdgionConfigData
         _ => conditions_only_status_equal(old, new),
     }
 }
@@ -155,7 +155,7 @@ fn condition_fields_equal(a: &Value, b: &Value) -> bool {
 }
 
 // ============================================================================
-// Simple condition-only status (GatewayClass, EdgionGatewayConfig,
+// Simple condition-only status (EdgionGatewayConfig,
 // EdgionPlugins, EdgionStreamPlugins, EdgionConfigData, etc.)
 // ============================================================================
 

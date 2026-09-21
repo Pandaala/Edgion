@@ -168,9 +168,9 @@ mod tests {
         use crate::conf_mgr::{ConfCenterConfig, ConfMgr, FileSystemConfig, SchemaValidator};
 
         let conf_mgr = Arc::new(
-            ConfMgr::create(ConfCenterConfig::FileSystem(FileSystemConfig::new(
-                tmp_dir.to_path_buf(),
-            )))
+            ConfMgr::create(ConfCenterConfig::FileSystem(
+                FileSystemConfig::new(tmp_dir.to_path_buf()).with_controller_name("edgion.io/gateway-controller"),
+            ))
             .await
             .expect("ConfMgr::create failed"),
         );

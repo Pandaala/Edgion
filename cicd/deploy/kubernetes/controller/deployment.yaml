@@ -48,6 +48,9 @@ spec:
           initialDelaySeconds: 5
           periodSeconds: 10
         env:
+        # Keep this equal to Deployment metadata.name, never the Pod name.
+        - name: EDGION_CONTROLLER_DEPLOYMENT_NAME
+          value: edgion-controller
         - name: RUST_LOG
           value: "info"
         - name: POD_NAMESPACE

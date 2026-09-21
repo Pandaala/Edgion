@@ -191,7 +191,8 @@ class Topology:
                 ("admin_listen", "ctrl_admin"), ("grpc_listen", "ctrl_grpc"),
                 ("probe_listen", "ctrl_probe"), ("metrics_listen", "ctrl_metrics"))},
             "logging": {"log_dir": "logs", "console": True},
-            "conf_center": {"type": "file_system", "conf_dir": str(self.work / "conf")},
+            "conf_center": {"type": "file_system", "controller_name": "edgion.io/gateway-controller",
+                            "conf_dir": str(self.work / "conf")},
             "conf_sync": {"no_sync_kinds": ["ReferenceGrant", "Secret"], "default_capacity": 200},
         }
         gateway = {

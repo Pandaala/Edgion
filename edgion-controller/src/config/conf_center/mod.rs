@@ -9,6 +9,7 @@
 //! behavior (centers, controllers, storage) lives in those `conf_mgr` modules.
 
 pub mod config;
+pub mod controller_identity;
 pub mod etcd;
 pub mod file_system;
 pub mod kubernetes;

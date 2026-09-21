@@ -100,13 +100,14 @@ logging:
 # FileSystem mode example:
 # conf_center:
 #   type: file_system
+#   controller_name: edgion.io/gateway-controller
 #   conf_dir: edgion-tests/integration/conf  # In the current implementation relative paths resolve against the process cwd; use an absolute path for more stable behavior
 #
 # Kubernetes mode example (production):
 # conf_center:
 #   type: kubernetes
 #   gateway_class: edgion              # Required: GatewayClass name to manage
-#   controller_name: "edgion.io/gateway-controller"  # Required: Gateway API controllerName
+#   controller_name: "edgion.io/gateway-controller"  # Explicit identity; distinct per independent deployment
 #   watch_namespaces: []               # Empty = all namespaces, or [ns1, ns2]
 #   label_selector: ""                 # Optional: filter resources by label
 #
@@ -126,6 +127,7 @@ logging:
 # ============================================================================
 conf_center:
   type: file_system
+  controller_name: edgion.io/gateway-controller
   conf_dir: edgion-tests/integration/conf
 
 debug:

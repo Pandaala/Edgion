@@ -63,6 +63,7 @@ conf_sync_security:
 # ─── conf_center: FileSystem mode (local development) ─────────────
 conf_center:
   type: file_system
+  controller_name: edgion.io/gateway-controller
   conf_dir: config/resources      # YAML resource directory (prefer absolute paths)
 
 # ─── conf_center: Kubernetes mode (production) ────────────────────
@@ -164,11 +165,39 @@ Certificates can be generated with `edgion-cli gen-certs --output file --output-
 `conf_center.type` selects the backend. Accepted values are `file_system`,
 `kubernetes`, and `etcd` (snake_case — `file_system`, not `filesystem`).
 
+### Controller identity
+
+Set `conf_center.controller_name` to the exact `spec.controllerName` used by your
+GatewayClasses. It must be a Gateway API domain-prefixed path of at most 253
+characters. Blank or invalid configured values fail startup.
+
+FileSystem and etcd require this field. In Kubernetes only, omitting it derives
+`edgion.io/gateway-controller/{POD_NAMESPACE}/{EDGION_CONTROLLER_DEPLOYMENT_NAME}`.
+Inject `POD_NAMESPACE` from `metadata.namespace`, and explicitly inject
+`EDGION_CONTROLLER_DEPLOYMENT_NAME` with the stable Deployment name, never a Pod
+name. Missing or invalid components fail startup. For namespace `edgion-system`
+and Deployment `edgion-controller`, configure the GatewayClass with
+`edgion.io/gateway-controller/edgion-system/edgion-controller`.
+
+Independent deployments must use distinct controller names and GatewayClasses;
+explicit identity collisions are not detected at runtime. Replicas sharing an
+identity must share the selected class, configuration view and election domain.
+Independent Kubernetes deployments also need separate leader-election Leases;
+generating a controller name does not change lease_name or lease_namespace.
+GatewayClass `spec.controllerName` is immutable; create a replacement class when
+changing its identity.
+
+The Controller reports `Accepted=False/Unsupported` for matching classes other
+than its selected `gateway_class`, without serving them. GatewayClass watches
+ignore `label_selector` to cover unlabeled classes too. Adding `GatewayClass` to
+`no_watch_kinds` disables this reporting and prevents Gateway processing.
+
 ### [conf_center] — FileSystem Mode
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `type` | `String` | — | Must be `file_system` |
+| `controller_name` | `String` | **Required** | Explicit Gateway API controller identity |
 | `conf_dir` | `Path` | — | YAML resource directory. **Use absolute paths** — the current implementation does not resolve this relative to `work_dir` |
 
 Note: The `--conf-dir` CLI flag overrides `conf_dir` and switches `conf_center` to FileSystem mode.
@@ -179,9 +208,9 @@ Note: The `--conf-dir` CLI flag overrides `conf_dir` and switches `conf_center` 
 |-----------|------|---------|-------------|
 | `type` | `String` | — | Must be `"kubernetes"` |
 | `gateway_class` | `String` | **Required** | GatewayClass name this controller manages |
-| `controller_name` | `String` | — | `controllerName` reported in Gateway API status |
+| `controller_name` | `String` | Namespace + Deployment identity | Explicit override of the generated controller identity |
 | `watch_namespaces` | `Array<String>` | `[]` (all) | Namespaces to watch; empty list means all namespaces |
-| `label_selector` | `String` | `""` | Label selector filter for watched resources |
+| `label_selector` | `String` | `""` | Label selector filter for watched resources, excluding GatewayClass |
 | `gateway_address` | `String` | — | Address reported in Gateway status. Optional |
 | `ha_mode` | `String` | — | HA mode: `"leader-only"` or `"all-serve"` |
 | `no_watch_kinds` | `Array<String>` | `[]` | Resource kinds to skip CRD pre-check and watch for (PascalCase), e.g. `["TCPRoute", "UDPRoute"]` |
@@ -226,6 +255,7 @@ resources in an etcd cluster instead of the Kubernetes API. It supports active-p
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `type` | `String` | — | Must be `etcd` |
+| `controller_name` | `String` | **Required** | Explicit Gateway API controller identity |
 | `endpoints` | `Array<String>` | **Required** | etcd cluster endpoints, e.g. `["http://10.0.0.1:2379"]` |
 | `key_prefix` | `String` | `/edgion` | Prefix for all configuration keys stored in etcd |
 | `auth` | Object | — | Optional etcd username/password authentication (`auth.username`, `auth.password`) |
@@ -295,6 +325,7 @@ Use local YAML files to simulate Kubernetes resources without a cluster:
 ```yaml
 conf_center:
   type: file_system
+  controller_name: edgion.io/gateway-controller
   conf_dir: /home/user/my-project/config/resources
 ```
 
@@ -336,6 +367,7 @@ conf_center:
   type: kubernetes
   gateway_class: edgion
   ha_mode: leader-only
+  controller_name: edgion.io/gateway-controller
   leader_election:
     lease_name: edgion-controller-leader
     lease_namespace: edgion-system
@@ -367,6 +399,7 @@ Controller **A** (`10.0.0.11`):
 ```yaml
 conf_center:
   type: etcd
+  controller_name: edgion.io/gateway-controller
   endpoints: ["http://10.0.0.1:2379", "http://10.0.0.2:2379", "http://10.0.0.3:2379"]
   key_prefix: /edgion
   leader_election:

@@ -146,6 +146,7 @@ run_phase1() (
     cat > "$TMPDIR/controller.yaml" <<EOF
 conf_center:
   type: file_system
+  controller_name: edgion.io/gateway-controller
   conf_dir: ${CONF_DIR}
 EOF
     conf_sync_security_block server >> "$TMPDIR/controller.yaml"
@@ -261,6 +262,7 @@ run_phase2() (
     cat > "$TMPDIR/controller.yaml" <<EOF
 conf_center:
   type: file_system
+  controller_name: edgion.io/gateway-controller
   conf_dir: ${CONF_DIR}
 EOF
     conf_sync_security_block server >> "$TMPDIR/controller.yaml"

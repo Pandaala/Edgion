@@ -16,6 +16,9 @@ set, it must reference an `edgion.io/EdgionGatewayConfig`.
 
 ## Configuration
 
+The examples use an explicitly configured `conf_center.controller_name` of
+`edgion.io/gateway-controller`. Replace it with your deployment's resolved identity.
+
 ```yaml
 apiVersion: gateway.networking.k8s.io/v1
 kind: GatewayClass
@@ -29,7 +32,7 @@ spec:
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `spec.controllerName` | String | Yes | Must match the Controller's configured `controller_name`, which defaults to `edgion.io/gateway-controller`. |
+| `spec.controllerName` | String | Yes | Must exactly match the Controller's configured or generated `controller_name`. |
 | `spec.parametersRef` | Object | No | Reference to an `EdgionGatewayConfig` that tunes gateway behavior. When set, `group` must be `edgion.io` and `kind` must be `EdgionGatewayConfig`, or the GatewayClass is rejected (`Accepted: False`). |
 | `spec.parametersRef.group` | String | No | API group of the parameters resource: `edgion.io`. |
 | `spec.parametersRef.kind` | String | No | `EdgionGatewayConfig`. |
@@ -40,14 +43,24 @@ spec:
 
 ## controllerName
 
-The Edgion controller name defaults to:
+When Kubernetes configuration omits `conf_center.controller_name`, the identity is:
 
 ```
-edgion.io/gateway-controller
+edgion.io/gateway-controller/{POD_NAMESPACE}/{EDGION_CONTROLLER_DEPLOYMENT_NAME}
 ```
 
-In Kubernetes mode, set `controller_name` in the Controller configuration to customize this name;
-the GatewayClass must match the configured value.
+Inject the namespace through the Downward API and explicitly inject the stable
+Deployment name. Never use a Pod name: all replicas must resolve the same identity.
+Missing or invalid components stop startup. An explicit `controller_name` takes
+precedence; blank or invalid values fail startup. FileSystem and etcd require an
+explicit value. See [Controller configuration](../configuration/controller-config.md).
+
+The Controller reports status for every GatewayClass with this controller name.
+Classes other than the configured `gateway_class` receive
+`Accepted=False/Unsupported`, with no supported features, and are not published to
+Gateways. The GatewayClass watch ignores `label_selector` so unlabeled classes are
+also reported. `no_watch_kinds: [GatewayClass]` disables both reporting and Gateway
+processing.
 
 Kubernetes ownership checks both `controller_name` and the configured `gateway_class`.
 The Controller processes a Gateway only after it has published the matching GatewayClass
@@ -57,17 +70,16 @@ Gateway processing. Deleting or replacing the class withdraws affected cached Ga
 until ownership is established again. Class `Accepted=False` does not itself transfer
 ownership, and an ordinary generation update does not revoke it.
 
-Use distinct GatewayClasses for independent deployments. HA replicas sharing one class
+Use distinct controller names and GatewayClasses for independent deployments.
+Explicit identity collisions are not detected at runtime. HA replicas sharing one class
 and controller name must share their election domain and configuration/resource view.
 The version check below does not prevent two independently elected, overlapping deployments
 from alternating different desired statuses.
 
-Known limitation: distinct classes do not yet isolate EdgionAcme status writers.
-If independently elected deployments both watch the same EdgionAcme, but only one
-publishes its referenced Gateway, they can alternate `ResolvedRefs` conditions.
-Until ACME ownership admission is implemented, avoid overlapping EdgionAcme watch
-scope across independent deployments; different controller names alone do not
-prevent this conflict.
+EdgionAcme handler admission and service eligibility use the same Gateway/class
+ownership proof. This does not establish fencing or recovery for an already
+running certificate attempt during deployment handoff; that scheduler boundary
+is separate from GatewayClass status reporting.
 
 When troubleshooting Route attachment, check both `status.parents[].parentRef` and `controllerName`.
 The Gateway uses the current Edgion controller's matching `Accepted` result: another controller's
@@ -177,7 +189,7 @@ ACME challenges. Another deployment's successful status does not authorize local
 serving. This is internal diagnostic and transport data; do not set it in resource
 YAML. A Route with missing current status or no matching `Accepted=True` entry is
 not admitted by the data plane. Independent deployments should use distinct
-GatewayClasses; replicas sharing a class must share an election domain and
+controller names and GatewayClasses; replicas sharing a class must share an election domain and
 configuration view.
 
 ### GatewayClass caveats

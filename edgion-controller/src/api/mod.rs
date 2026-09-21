@@ -871,7 +871,8 @@ mod reload_center_tests {
         use crate::conf_mgr::{ConfCenterConfig, ConfMgr, FileSystemConfig, SchemaValidator};
 
         let tmp_data = tempfile::tempdir().expect("tempdir for conf data");
-        let fs_config = FileSystemConfig::new(tmp_data.path().to_path_buf());
+        let fs_config =
+            FileSystemConfig::new(tmp_data.path().to_path_buf()).with_controller_name("edgion.io/gateway-controller");
         let conf_mgr = Arc::new(
             ConfMgr::create(ConfCenterConfig::FileSystem(fs_config))
                 .await
@@ -1016,7 +1017,8 @@ center:
         use crate::conf_mgr::{ConfCenterConfig, ConfMgr, FileSystemConfig, SchemaValidator};
 
         let tmp_data = tempfile::tempdir().expect("tempdir for conf data");
-        let fs_config = FileSystemConfig::new(tmp_data.path().to_path_buf());
+        let fs_config =
+            FileSystemConfig::new(tmp_data.path().to_path_buf()).with_controller_name("edgion.io/gateway-controller");
         let conf_mgr = Arc::new(
             ConfMgr::create(ConfCenterConfig::FileSystem(fs_config))
                 .await
@@ -1340,9 +1342,9 @@ mod leadership_gate_tests {
     async fn gate_is_passthrough_when_not_applicable() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let conf_mgr = Arc::new(
-            ConfMgr::create(ConfCenterConfig::FileSystem(FileSystemConfig::new(
-                tmp.path().to_path_buf(),
-            )))
+            ConfMgr::create(ConfCenterConfig::FileSystem(
+                FileSystemConfig::new(tmp.path().to_path_buf()).with_controller_name("edgion.io/gateway-controller"),
+            ))
             .await
             .expect("ConfMgr::create"),
         );

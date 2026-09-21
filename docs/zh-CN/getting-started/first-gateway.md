@@ -36,7 +36,7 @@ kind: GatewayClass
 metadata:
   name: public-gateway
 spec:
-  controllerName: edgion.io/gateway-controller
+  controllerName: edgion.io/gateway-controller/edgion-system/edgion-controller
 ```
 
 > `GatewayClass` 是集群级资源，没有 `namespace` 字段。

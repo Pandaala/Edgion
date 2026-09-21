@@ -16,7 +16,8 @@ use edgion_resources::resources::common::Condition;
 // Shared controller constants and helpers (FileSystem and Etcd backends)
 // ============================================================================
 
-/// Default controller name used by FileSystem and Etcd backends.
+/// Explicit fixture identity; runtime identities always come from configuration.
+#[cfg(test)]
 pub const DEFAULT_CONTROLLER_NAME: &str = "edgion.io/gateway-controller";
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -76,6 +76,7 @@ impl LocalControllerBackend for FileSystemControllerBackend {
 
 /// FileSystemController - Top-level controller for FileSystem mode
 pub struct FileSystemController {
+    controller_name: String,
     conf_dir: PathBuf,
     registry: Arc<PathRegistry>,
     poll_interval_override: Option<Duration>,
@@ -83,7 +84,12 @@ pub struct FileSystemController {
 
 impl FileSystemController {
     /// Create a new FileSystemController
-    pub fn new(conf_dir: PathBuf, registry: Arc<PathRegistry>, poll_interval_override: Option<Duration>) -> Self {
+    pub fn new(
+        conf_dir: PathBuf,
+        registry: Arc<PathRegistry>,
+        poll_interval_override: Option<Duration>,
+        controller_name: String,
+    ) -> Self {
         tracing::info!(
             component = "fs_controller",
             conf_dir = %conf_dir.display(),
@@ -91,6 +97,7 @@ impl FileSystemController {
         );
 
         Self {
+            controller_name,
             conf_dir,
             registry,
             poll_interval_override,
@@ -140,7 +147,14 @@ impl FileSystemController {
         };
 
         // Spawn all resource controllers
-        let handles = spawn_all_controllers(&backend, shutdown_signal.clone(), runtime, "fs_controller").await?;
+        let handles = spawn_all_controllers(
+            &backend,
+            shutdown_signal.clone(),
+            runtime,
+            "fs_controller",
+            &self.controller_name,
+        )
+        .await?;
 
         tracing::info!(
             component = "fs_controller",

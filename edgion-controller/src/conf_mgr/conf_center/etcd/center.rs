@@ -27,6 +27,7 @@ use edgion_common::link_sys_core::providers::etcd::EtcdLinkClient;
 
 /// EtcdCenter — configuration center backed by etcd.
 pub struct EtcdCenter {
+    controller_name: String,
     config: EtcdConfig,
     writer: EtcdStorage,
     client: Arc<EtcdLinkClient>,
@@ -53,6 +54,9 @@ impl EtcdCenter {
     ///
     /// This connects to etcd and initializes the client.
     pub async fn new(config: EtcdConfig) -> Result<Self> {
+        let controller_name = crate::config::conf_center::controller_identity::require_controller_name(
+            config.controller_name.as_deref(),
+        )?;
         tracing::info!(
             component = "etcd_center",
             endpoints = ?config.endpoints,
@@ -81,6 +85,7 @@ impl EtcdCenter {
         let writer = EtcdStorage::new_gated(client.clone(), config.key_prefix.clone(), election.gate());
 
         Ok(Self {
+            controller_name,
             config,
             writer,
             client,
@@ -88,6 +93,21 @@ impl EtcdCenter {
             term_token_slot: Arc::new(ArcSwap::from_pointee(CancellationToken::new())),
             base: CenterBase::new(),
         })
+    }
+}
+
+#[cfg(test)]
+mod identity_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn missing_identity_fails_before_constructing_the_etcd_client() {
+        // An invalid endpoint makes precedence observable without any network IO.
+        let config: EtcdConfig = serde_yaml::from_str("endpoints: ['not-an-endpoint']").unwrap();
+        let Err(error) = EtcdCenter::new(config).await else {
+            panic!("missing controller identity must fail startup");
+        };
+        assert!(error.to_string().contains("conf_center.controller_name is required"));
     }
 }
 
@@ -113,6 +133,7 @@ impl CenterLifeCycle for EtcdCenter {
         // a fresh token into `term_token_slot` at each campaign win (the conf_sync
         // gRPC server reads the slot via `CenterLifeCycle::term_token_slot`).
         let election = self.election.clone();
+        let controller_name = self.controller_name.clone();
         let election_shutdown = shutdown_handle.signal();
         let election_slot = self.term_token_slot.clone();
         tokio::spawn(async move {
@@ -129,7 +150,12 @@ impl CenterLifeCycle for EtcdCenter {
                 "etcd_center",
                 Some(self.election.handle()),
                 move |shutdown, runtime, error_tx| {
-                    let ctrl = EtcdController::new(client.clone(), key_prefix.clone(), Some(gate.clone()));
+                    let ctrl = EtcdController::new(
+                        client.clone(),
+                        key_prefix.clone(),
+                        Some(gate.clone()),
+                        controller_name.clone(),
+                    );
                     tokio::spawn(async move {
                         if let Err(e) = ctrl.run(shutdown, runtime).await {
                             tracing::error!(

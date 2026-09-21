@@ -7,11 +7,20 @@ description: GatewayClass resource — cluster-scoped controller matching and fi
 
 > **Common flow**: see [00-resource-flow.md](00-resource-flow.md)
 
-GatewayClass is a cluster-scoped resource that identifies the Gateway controller's type. Edgion uses it for controller-matching filtering: only GatewayClasses whose `spec.controllerName` matches `edgion.io/gateway-controller` are processed.
+GatewayClass is a cluster-scoped resource that identifies the Gateway controller.
+Edgion reports status for every class whose `spec.controllerName` matches the
+deployment's resolved `conf_center.controller_name`.
 
 ## Design decisions
 
-- **1 Controller : 1 GatewayClass**: consistent with Envoy Gateway and NGINX Gateway Fabric, Edgion explicitly does not support a single instance managing multiple GatewayClasses. Deploy multiple Edgion instances when different configurations are needed.
+- **Kubernetes: one selected class, multiple Gateways**: reporting an unselected class
+  does not grant serving authority. Independent deployments use distinct controllerName
+  values. Replicas sharing one identity must share the selected class, election domain
+  and configuration view. Explicit duplicate identities are not detected or coordinated.
+- **Startup identity**: explicit `conf_center.controller_name` is required for FS/etcd.
+  Kubernetes may omit it to derive `edgion.io/gateway-controller/{namespace}/{deployment}`
+  from `POD_NAMESPACE` and `EDGION_CONTROLLER_DEPLOYMENT_NAME`; missing or invalid inputs
+  fail startup. FS/etcd retain their controller-name-only class selection.
 - **parametersRef is optional**: `parametersRef` is not required. When unset, Gateway uses the built-in defaults of `EdgionGatewayConfigSpec`. When set, it must reference `edgion.io/EdgionGatewayConfig`; otherwise Controller rejects it (`Accepted: False`).
 
 ## Source code locations
@@ -24,9 +33,17 @@ GatewayClass is a cluster-scoped resource that identifies the Gateway controller
 
 ### filter
 
-Filters by `spec.controllerName` and, in Kubernetes mode, the configured `gateway_class`
-name using the shared `GatewayClassOwnership` value. FileSystem/etcd retain controller-name
-matching without a selected-class restriction.
+Filters only by `spec.controllerName` for status reporting. Kubernetes watches
+GatewayClass without the global label selector; explicit `no_watch_kinds` still
+disables the watcher and its reporting capability.
+
+### should_publish
+
+The shared `GatewayClassOwnership` also checks the selected `gateway_class` name
+in Kubernetes mode. An unselected matching class produces status but is not
+published; an old cached object is withdrawn via normal cleanup. It does not run
+on_change/after_publish. Leadership recovery includes raw GatewayClass keys,
+because status-only objects are absent from the published cache.
 
 ### after_publish / after_unpublish
 
@@ -49,6 +66,12 @@ No special handling; passes through directly.
 
 ### update_status
 
+- An unselected matching class receives `Accepted=False/Unsupported` without
+  resolving deployment-local parameters. Remove old owned ResolvedRefs and
+  SupportedVersion diagnostics, preserve foreign conditions, and write an explicit
+  empty supportedFeatures list. Semantic comparison includes this list so a
+  features-only change is persisted and WATCH echoes converge.
+- The following validation applies to selected classes (all matching classes in FS/etcd):
 - `parametersRef` must use group `edgion.io` and kind `EdgionGatewayConfig`.
   Invalid group/kind or missing EGC produces `ResolvedRefs=False` and
   `Accepted=False`, both with reason `InvalidParameters`.

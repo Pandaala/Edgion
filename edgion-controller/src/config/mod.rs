@@ -574,6 +574,11 @@ impl EdgionControllerConfig {
         // Case A: --conf-dir provided — build a new FileSystemConfig and apply poll interval override
         if let Some(conf_dir) = &cli.conf_dir {
             let mut fs_cfg = FileSystemConfig::new(conf_dir.clone());
+            fs_cfg.controller_name = match &base.conf_center {
+                ConfCenterConfig::FileSystem(config) => config.controller_name.clone(),
+                ConfCenterConfig::Kubernetes(config) => config.controller_name.clone(),
+                ConfCenterConfig::Etcd(config) => config.controller_name.clone(),
+            };
             fs_cfg.poll_interval_ms = cli.fs_poll_interval_ms;
             base.conf_center = ConfCenterConfig::FileSystem(fs_cfg);
         }
@@ -881,6 +886,26 @@ mod tests {
         cfg.logging.console = Some(false);
         let log_cfg = cfg.to_log_config();
         assert!(!log_cfg.console);
+    }
+
+    #[test]
+    fn conf_dir_override_preserves_explicit_controller_identity() {
+        let mut base = EdgionControllerConfig {
+            conf_center: ConfCenterConfig::FileSystem(
+                FileSystemConfig::default().with_controller_name("example.com/deployment-a"),
+            ),
+            ..Default::default()
+        };
+        let cli = EdgionControllerConfig {
+            conf_dir: Some(std::path::PathBuf::from("replacement")),
+            ..Default::default()
+        };
+        EdgionControllerConfig::merge(&mut base, &cli);
+        let ConfCenterConfig::FileSystem(config) = base.conf_center else {
+            panic!("--conf-dir must select FileSystem");
+        };
+        assert_eq!(config.controller_name.as_deref(), Some("example.com/deployment-a"));
+        assert_eq!(config.conf_dir, std::path::PathBuf::from("replacement"));
     }
 
     #[test]
