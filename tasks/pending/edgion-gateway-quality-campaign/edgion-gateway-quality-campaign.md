@@ -36,9 +36,9 @@ Resume the file-by-file quality campaign for the remaining `edgion-gateway` path
 - Campaign status: `in-progress`
 - Ordered crate phases: `edgion-gateway` (active); later crates are not authorized by this residual run.
 - Completed crates: none recorded in this campaign.
-- Active serial batch: none; B0070 (`routes/tls/tests.rs`) completed at `395ccb42` and B0071 awaits current-HEAD revalidation.
-- Analysis queue: B0071 (`routes/udp/routes_mgr.rs`) is the next ordered candidate.
-- Current coverage counts: 582 ledger rows; 504 imported `excluded-with-reason`, 5 `pending`, 0 `in-progress`, 1 `deferred`, 45 `changed`, 26 `examined-no-change`, and 1 `removed`.
+- Active serial batch: none; B0071 (`routes/udp/routes_mgr.rs`) completed at `47bfe647` and B0072 awaits current-HEAD revalidation.
+- Analysis queue: B0072 (`routes/udp/udp_route_table.rs`) has a queued `examined-no-change` report that cannot promote before revalidation.
+- Current coverage counts: 582 ledger rows; 504 imported `excluded-with-reason`, 4 `pending`, 0 `in-progress`, 1 `deferred`, 46 `changed`, 26 `examined-no-change`, and 1 `removed`.
 - Resolved external gate: the user-authorized prerequisite commit `c8e48ff50` added the missing `tasks/todo/os-packaging-and-system-service-adapters.md`; agent-doc validation now passes.
 - Resolved external gate: the Gateway API transform-contract generator and its test are present at `0094fc788`; the drift gate and all 5 generator tests pass.
 - Frozen integration baseline: 3,452 paths captured in `integration-freeze.tsv`; latest reconciliation proved 10 existing and 9 new paths against external commits `04413c3e`, `ab459fba`, and `c6aa6e90` before updating only those entries.
