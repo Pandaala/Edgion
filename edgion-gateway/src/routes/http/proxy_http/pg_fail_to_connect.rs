@@ -105,7 +105,7 @@ fn finish_ai_connect_failure(ctx: &mut EdgionHttpContext, continuation: ConnectR
 
 #[inline]
 pub fn fail_to_connect(
-    edgion_http: &EdgionHttpProxy,
+    _edgion_http: &EdgionHttpProxy,
     session: &mut Session,
     _peer: &HttpPeer,
     ctx: &mut EdgionHttpContext,
@@ -192,9 +192,7 @@ pub fn fail_to_connect(
     }
 
     // Determine max_retries: rule.retry.attempts > global (HTTP or gRPC route)
-    let max_retries = ctx
-        .retry_attempts()
-        .unwrap_or(edgion_http.edgion_gateway_config.spec.max_retries);
+    let max_retries = ctx.retry_attempts().unwrap_or(ctx.egc.max_retries);
 
     if ctx.try_cnt <= max_retries {
         // Retry budget (retryConstraint): composes AFTER the maxRetries/deadline

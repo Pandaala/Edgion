@@ -110,17 +110,6 @@ fn response_compression_level(
 }
 
 #[inline]
-fn enable_compression(edgion_http: &EdgionHttpProxy) -> bool {
-    edgion_http
-        .edgion_gateway_config
-        .spec
-        .server
-        .as_ref()
-        .map(|server| server.enable_compression)
-        .unwrap_or(false)
-}
-
-#[inline]
 fn complete_local_reply_delivery(
     ctx: &mut EdgionHttpContext,
     body_result: pingora_core::Result<()>,
@@ -339,7 +328,7 @@ pub async fn response_filter(
     }
     if let Some(compression_ctx) = session.downstream_modules_ctx.get_mut::<ResponseCompression>() {
         let level = response_compression_level(
-            enable_compression(edgion_http),
+            ctx.egc.enable_compression,
             ctx.response_stream_kind,
             had_transfer_encoding,
             upstream_response,
@@ -380,7 +369,7 @@ mod tests {
     use crate::routes::grpc::GrpcPortRouteManager;
     use crate::routes::http::routes_mgr::HttpPortRouteManager;
     use crate::EdgionHttpContext;
-    use edgion_resources::{EdgionErrorCode, EdgionGatewayConfig, EdgionInfoCode, ListenerKey};
+    use edgion_resources::{EdgionErrorCode, EdgionInfoCode, ListenerKey};
     use pingora_core::protocols::http::compression::ResponseCompressionCtx;
     use pingora_core::{Error, ErrorType};
     use pingora_http::{RequestHeader, ResponseHeader};
@@ -395,11 +384,8 @@ mod tests {
             listener_key: ListenerKey("127.0.0.1:80/HTTP".to_string()),
             server_header_opts: Default::default(),
             access_logger: Arc::new(AccessLogger::default()),
-            edgion_gateway_config: Arc::new(EdgionGatewayConfig::new("test", Default::default())),
-            http_request_config_name: None,
-            parsed_timeouts: Default::default(),
+            egc: crate::config::bind_gateway_config(None),
             enable_http2: false,
-            real_ip_extractor: None,
             preflight_handler: super::super::PreflightHandler,
             http_route_manager: Arc::new(HttpPortRouteManager::default()),
             grpc_route_manager: Arc::new(GrpcPortRouteManager::default()),

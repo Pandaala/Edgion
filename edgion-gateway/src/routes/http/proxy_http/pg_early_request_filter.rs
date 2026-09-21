@@ -128,6 +128,23 @@ fn apply_client_keepalive_timeout(session: &mut Session, keepalive_timeout: u64,
     session.set_keepalive(keepalive);
 }
 
+pub(crate) fn apply_client_policy(
+    session: &mut Session,
+    config: &crate::config::ResolvedGatewayConfig,
+    keepalive_initialized: &mut bool,
+) {
+    let timeout = &config.parsed_timeouts.client;
+    session.set_read_timeout(Some(timeout.read_timeout));
+    session.set_write_timeout(Some(timeout.write_timeout));
+    apply_client_keepalive_timeout(session, timeout.keepalive_timeout, session.is_process_shutting_down());
+    if !*keepalive_initialized && session.downstream_session.as_http1().is_some() {
+        // Preserve Pingora's existing configured reuse-budget semantics.
+        let limit = config.downstream_keepalive_request_limit;
+        session.set_keepalive_reuses_remaining((limit != 0).then_some(limit));
+        *keepalive_initialized = true;
+    }
+}
+
 #[inline]
 fn classify_and_initialize_grpc_web(session: &mut Session, ctx: &mut EdgionHttpContext) {
     super::pg_request_filter::detect_request_protocol(session.req_header(), ctx);
@@ -144,16 +161,20 @@ pub async fn early_request_filter(
     session: &mut Session,
     ctx: &mut EdgionHttpContext,
 ) -> pingora_core::Result<()> {
-    // Set client timeouts from pre-parsed config (no runtime overhead)
-    let client_timeout = &edgion_http.parsed_timeouts.client;
-    session.set_read_timeout(Some(client_timeout.read_timeout));
-    session.set_write_timeout(Some(client_timeout.write_timeout));
+    apply_client_policy(session, &ctx.egc, &mut ctx.downstream_keepalive_initialized);
 
-    // During normal service, configure only sessions that Pingora still
-    // considers reusable. During graceful shutdown, disable reuse so clients
-    // drain away from this instance.
-    let process_shutting_down = session.is_process_shutting_down();
-    apply_client_keepalive_timeout(session, client_timeout.keepalive_timeout, process_shutting_down);
+    // This hook precedes Pingora's module request filter. Select the captured
+    // policy before it decides whether to parse Accept-Encoding.
+    if let Some(compression) = session
+        .downstream_modules_ctx
+        .get_mut::<pingora_core::modules::http::compression::ResponseCompression>()
+    {
+        compression.adjust_level(if ctx.egc.enable_compression {
+            super::pg_init_downstream_modules::DEFAULT_COMPRESSION_LEVEL
+        } else {
+            0
+        });
+    }
 
     // Freeze protocol classification from the raw downstream headers before
     // Pingora's built-in request_header_filter rewrites gRPC-Web to gRPC. Only
@@ -366,7 +387,39 @@ mod tests {
         assert!(session.get_keepalive().is_none());
     }
 
-    fn id_proxy(global_names: &[&str]) -> EdgionHttpProxy {
+    #[tokio::test]
+    async fn keepalive_budget_is_captured_once_while_new_connections_take_new_policy() {
+        use pingora_proxy::ProxyHttp;
+        let proxy = id_proxy();
+        let mut first = session_from_request(b"GET / HTTP/1.1\r\nHost: test\r\n\r\n").await;
+        let mut ctx = EdgionHttpContext::new();
+        let config = crate::config::ResolvedGatewayConfig {
+            downstream_keepalive_request_limit: 4,
+            ..Default::default()
+        };
+        ctx.egc = Arc::new(config);
+        apply_client_policy(&mut first, &ctx.egc, &mut ctx.downstream_keepalive_initialized);
+        assert_eq!(first.get_keepalive_reuses_remaining(), Some(4));
+        let persisted = proxy.persist_connection_context(&first, &ctx).unwrap();
+
+        let config = crate::config::ResolvedGatewayConfig {
+            downstream_keepalive_request_limit: 9,
+            ..Default::default()
+        };
+        let mut next = EdgionHttpContext::new();
+        next.egc = Arc::new(config);
+        let mut reused = session_from_request(b"GET / HTTP/1.1\r\nHost: test\r\n\r\n").await;
+        reused.set_keepalive_reuses_remaining(Some(3));
+        proxy.on_connection_reuse(&mut reused, &mut next, persisted);
+        apply_client_policy(&mut reused, &next.egc, &mut next.downstream_keepalive_initialized);
+        assert_eq!(reused.get_keepalive_reuses_remaining(), Some(3));
+
+        let mut fresh = session_from_request(b"GET / HTTP/1.1\r\nHost: test\r\n\r\n").await;
+        apply_client_policy(&mut fresh, &next.egc, &mut false);
+        assert_eq!(fresh.get_keepalive_reuses_remaining(), Some(9));
+    }
+
+    fn id_config(global_names: &[&str]) -> edgion_resources::EdgionGatewayConfig {
         let mut config = edgion_resources::EdgionGatewayConfig::new("early-id-test", Default::default());
         config.spec.global_plugins_ref = Some(
             global_names
@@ -379,17 +432,18 @@ mod tests {
                 )
                 .collect(),
         );
+        config
+    }
+
+    fn id_proxy() -> EdgionHttpProxy {
         EdgionHttpProxy {
             listener_port: 18089,
             is_https_listener: false,
             listener_key: edgion_resources::ListenerKey("0.0.0.0:18089/HTTP".to_owned()),
             server_header_opts: Default::default(),
             access_logger: Arc::new(crate::observe::AccessLogger::default()),
-            edgion_gateway_config: Arc::new(config),
-            http_request_config_name: None,
-            parsed_timeouts: Default::default(),
+            egc: crate::config::bind_gateway_config(None),
             enable_http2: false,
-            real_ip_extractor: None,
             preflight_handler: super::super::PreflightHandler,
             http_route_manager: Arc::new(crate::routes::http::routes_mgr::HttpPortRouteManager::default()),
             grpc_route_manager: Arc::new(crate::routes::grpc::GrpcPortRouteManager::default()),
@@ -428,13 +482,13 @@ mod tests {
 
     fn configure_owners(
         store: &crate::plugins::http::PluginStore,
-        proxy: &EdgionHttpProxy,
+        global_names: &[&str],
         ambiguous: bool,
         gateway_keys: &[&str],
     ) {
         use crate::plugins::publication::inputs::GatewayInput;
         use std::collections::HashMap;
-        let mut config = (*proxy.edgion_gateway_config).clone();
+        let mut config = id_config(global_names);
         config.metadata.name = Some("plugin-store-test".into());
         store
             .publisher()
@@ -459,8 +513,8 @@ mod tests {
             "early-id-test/present".into(),
             id_plugin("x-first-id"),
         )]));
-        let proxy = id_proxy(&["present", "missing"]);
-        configure_owners(&store, &proxy, false, &[]);
+        let proxy = id_proxy();
+        configure_owners(&store, &["present", "missing"], false, &[]);
         let first = store
             .publisher()
             .snapshot()
@@ -485,7 +539,7 @@ mod tests {
             ("early-id-test/present".into(), id_plugin("x-reloaded-id")),
             ("early-id-test/missing".into(), id_plugin("x-was-missing-id")),
         ]));
-        configure_owners(&store, &proxy, false, &[]);
+        configure_owners(&store, &["present", "missing"], false, &[]);
         initialize_request_ids_with_publisher(&proxy, &mut session, &mut ctx, store.publisher())
             .await
             .unwrap();
@@ -511,9 +565,9 @@ mod tests {
             "early-id-test/gateway-present".into(),
             id_plugin("x-gateway-first-id"),
         )]));
-        let proxy = id_proxy(&[]);
+        let proxy = id_proxy();
         let keys = ["early-id-test/gateway-present", "early-id-test/gateway-missing"];
-        configure_owners(&store, &proxy, true, &keys);
+        configure_owners(&store, &[], true, &keys);
         let mut session = session_from_request(b"GET / HTTP/1.1\r\nHost: test\r\n\r\n").await;
         let mut ctx = EdgionHttpContext::default();
         initialize_request_ids_with_publisher(&proxy, &mut session, &mut ctx, store.publisher())
@@ -536,7 +590,7 @@ mod tests {
                 id_plugin("x-gateway-was-missing-id"),
             ),
         ]));
-        configure_owners(&store, &proxy, true, &keys);
+        configure_owners(&store, &[], true, &keys);
         initialize_gateway_request_ids(&mut session, &mut ctx).await.unwrap();
         assert_eq!(ctx.resolved_gateway_plugins().unwrap().len(), 1);
         assert!(Arc::ptr_eq(&ctx.resolved_gateway_plugins().unwrap()[0], &first));

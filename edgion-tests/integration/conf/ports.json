@@ -421,6 +421,12 @@
     },
     "TCPRoute/L4TimeoutHotReload/Passthrough": {
       "tls": 31980
+    },
+    "Gateway/EgcRuntimeHotReload": {
+      "http": 31981
+    },
+    "Gateway/EgcRuntimeHotReload/TLS": {
+      "tls": 31982
     }
   }
 }

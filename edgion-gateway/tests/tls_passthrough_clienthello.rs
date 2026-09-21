@@ -54,6 +54,133 @@ struct Fixture {
 }
 
 impl Fixture {
+    fn publish_security(allow_loopback: bool, log_connections: bool) {
+        let config: EdgionGatewayConfig = serde_json::from_value(json!({
+            "metadata": {"name": "hello-wire"},
+            "spec": {"securityProtect": {
+                "allowLoopbackUpstream": allow_loopback,
+                "tlsProxyLogRecord": log_connections
+            }}
+        }))
+        .unwrap();
+        edgion_gateway::config::edgion_gateway::create_edgion_gateway_config_handler().partial_update(
+            HashMap::new(),
+            HashMap::from([("hello-wire".into(), Arc::new(config))]),
+            Default::default(),
+        );
+    }
+
+    async fn security_reload(&mut self, hello: &[u8]) {
+        // Use the real endpoint guard: this executable must not enable the
+        // shared-topology escape hatch that independently permits loopback.
+        assert!(!edgion_common::test_mode::is_integration_testing_mode());
+        tokio::time::timeout(BUDGET, self.security_reload_inner(hello))
+            .await
+            .expect("security hot-reload exchange timed out");
+        Self::publish_security(true, true);
+        self.exchange(hello, true, None).await;
+    }
+
+    async fn security_reload_inner(&mut self, hello: &[u8]) {
+        Self::publish_security(true, true);
+        let mut old_client = TcpStream::connect(self.listener.local_addr().unwrap()).await.unwrap();
+        let (old_downstream, _) = self.listener.accept().await.unwrap();
+        let (_shutdown_tx, shutdown) = watch::channel(false);
+        let proxy = Arc::clone(&self.proxy);
+        let old_process = proxy.process_new(Box::new(l4::stream::Stream::from(old_downstream)), &shutdown);
+        let traffic = async {
+            old_client.write_all(hello).await.unwrap();
+            let (mut old_backend, _) = tokio::time::timeout(Duration::from_secs(1), self.backend.accept())
+                .await
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "initial allowed generation did not dial backend: {error}; log={:?}",
+                        self.logs.try_recv()
+                    )
+                })
+                .unwrap();
+            let mut received = vec![0; hello.len()];
+            tokio::time::timeout(Duration::from_secs(1), old_backend.read_exact(&mut received))
+                .await
+                .expect("initial ClientHello was not relayed")
+                .unwrap();
+            assert_eq!(received, hello);
+
+            for log_enabled in [true, false] {
+                Self::publish_security(false, log_enabled);
+                let mut new_client = TcpStream::connect(self.listener.local_addr().unwrap()).await.unwrap();
+                let (new_downstream, _) = self.listener.accept().await.unwrap();
+                let proxy = Arc::clone(&self.proxy);
+                let new_process = proxy.process_new(Box::new(l4::stream::Stream::from(new_downstream)), &shutdown);
+                let new_traffic = async {
+                    new_client.write_all(hello).await.unwrap();
+                    let mut reply = [0];
+                    match new_client.read(&mut reply).await {
+                        Ok(0) => {}
+                        Err(error) if error.kind() == std::io::ErrorKind::ConnectionReset => {}
+                        result => panic!("expected loopback rejection and socket closure: {result:?}"),
+                    }
+                };
+                let (returned, ()) =
+                    tokio::time::timeout(Duration::from_secs(1), async { tokio::join!(new_process, new_traffic) })
+                        .await
+                        .expect("new denied generation did not close");
+                assert!(returned.is_none());
+                if log_enabled {
+                    let log: Value =
+                        serde_json::from_str(&self.logs.try_recv().expect("missing rejection log")).unwrap();
+                    assert_eq!(log["err_log"], "unsafe upstream address");
+                    assert_eq!(log["sni"], HOST);
+                }
+                assert!(self.logs.try_recv().is_err(), "unexpected connection log");
+                // The production future completed; any forbidden dial would
+                // now be in the backlog, not delayed by configuration sync.
+                assert!(
+                    tokio::time::timeout(Duration::from_millis(25), self.backend.accept())
+                        .await
+                        .is_err(),
+                    "denied generation dialed the loopback backend"
+                );
+            }
+
+            // The established stream keeps the old policy after revocation.
+            old_client.write_all(b"after-update").await.unwrap();
+            let mut payload = [0; 12];
+            tokio::time::timeout(Duration::from_secs(1), old_backend.read_exact(&mut payload))
+                .await
+                .expect("old generation stopped forwarding after update")
+                .unwrap();
+            assert_eq!(&payload, b"after-update");
+            old_backend.write_all(&payload).await.unwrap();
+            tokio::time::timeout(Duration::from_secs(1), old_client.read_exact(&mut payload))
+                .await
+                .expect("old generation stopped returning backend bytes")
+                .unwrap();
+            assert_eq!(&payload, b"after-update");
+            old_client.shutdown().await.unwrap();
+            let mut extra = Vec::new();
+            tokio::time::timeout(Duration::from_secs(1), old_backend.read_to_end(&mut extra))
+                .await
+                .expect("old client shutdown did not reach backend")
+                .unwrap();
+            assert!(extra.is_empty());
+            old_backend.shutdown().await.unwrap();
+        };
+        let (returned, ()) = tokio::join!(old_process, traffic);
+        assert!(returned.is_none());
+        let log: Value = serde_json::from_str(
+            &tokio::time::timeout(Duration::from_secs(1), self.logs.recv())
+                .await
+                .expect("old generation did not retain enabled logging")
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(log["sni"], HOST);
+        assert_eq!(log["upstream_info"].as_array().unwrap().len(), 1);
+        assert_eq!(log["upstream_info"][0]["bytes_sent"], hello.len() + 12);
+        assert!(self.logs.try_recv().is_err(), "duplicate captured-generation log");
+    }
+
     async fn new() -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let backend = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -100,6 +227,7 @@ impl Fixture {
             "spec": {"parentRefs": [{"name": "gateway", "sectionName": "tls"}], "hostnames": [HOST], "rules": [{"backendRefs": [{"name": "backend", "port": port}]}]}
         }))
         .unwrap();
+        route.spec.resolved_status_controller = Some("edgion.io/gateway-controller".into());
         route.spec.resolved_listeners = Some(vec![ResolvedTlsListener {
             listener_key: key.clone(),
             gateway_namespace: "hello-wire".into(),
@@ -118,13 +246,17 @@ impl Fixture {
         let (sender, logs) = mpsc::unbounded_channel();
         let mut logger = AccessLogger::new();
         logger.register(Box::new(LogCapture(sender)));
+        edgion_gateway::config::edgion_gateway::create_edgion_gateway_config_handler().partial_update(
+            HashMap::from([("hello-wire".into(), Arc::new(config))]),
+            HashMap::new(),
+            Default::default(),
+        );
         let proxy = Arc::new(EdgionTlsPassthroughProxy {
             listener_port: addr.port(),
             listener_key: key.clone(),
             tls_route_manager: routes.get_or_create_listener_manager(&key),
             access_logger: Arc::new(logger),
-            edgion_gateway_config: Arc::new(config),
-            edgion_gateway_config_name: None,
+            egc: edgion_gateway::config::bind_gateway_config(Some("hello-wire")),
             connector: TransportConnector::new(None),
         });
         Self {
@@ -226,6 +358,7 @@ impl Drop for Fixture {
         discovery.replace_services(&HashMap::new());
         edgion_gateway::runtime::create_gateway_handler().full_set(&HashMap::new());
         edgion_gateway::config::gateway_class::create_gateway_class_handler().full_set(&HashMap::new());
+        edgion_gateway::config::edgion_gateway::create_edgion_gateway_config_handler().full_set(&HashMap::new());
     }
 }
 
@@ -275,6 +408,9 @@ fn extension_offsets(bytes: &[u8]) -> (usize, usize) {
 #[tokio::test]
 async fn complete_clienthello_nested_lengths_reject_before_backend_dial() {
     let mut fixture = Fixture::new().await;
+    fixture
+        .security_reload(&client_hello(&rustls::version::TLS13, HOST))
+        .await;
     for version in [&rustls::version::TLS12, &rustls::version::TLS13] {
         let original = client_hello(version, HOST);
         fixture.exchange(&original, true, None).await;

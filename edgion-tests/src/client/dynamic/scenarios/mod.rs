@@ -47,6 +47,7 @@ pub mod waf_dynamic;
 
 pub mod request_id_dynamic;
 
+pub mod egc_runtime_hot_reload;
 pub mod ext_proc_tls_policy_recovery;
 pub mod http_route_duplicate_headers;
 pub mod http_route_named_parameter_precedence;

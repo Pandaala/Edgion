@@ -16,7 +16,7 @@ use crate::routes::grpc::GrpcPortRouteManager;
 use crate::routes::http::routes_mgr::HttpPortRouteManager;
 use crate::runtime::server::server_header::ServerHeaderOpts;
 use crate::EdgionHttpContext;
-use edgion_resources::{EdgionGatewayConfig, ListenerKey};
+use edgion_resources::ListenerKey;
 
 // Sub-modules
 pub mod content_type;
@@ -51,6 +51,7 @@ pub use content_type::{is_grpc_content_type, is_grpc_web_content_type};
 pub(crate) use global_plugins_resolve::select_waf_owner;
 pub(crate) use global_plugins_resolve::{resolve_gateway_plugins, resolve_global_plugins, resolve_route_ext_refs};
 pub use parse_timeout::{ParsedBackendTimeout, ParsedClientTimeout, ParsedTimeouts};
+pub(crate) use pg_early_request_filter::apply_client_policy;
 pub use preflight_handler::PreflightHandler;
 
 /// HTTP proxy service for Gateway HTTP/HTTPS listeners.
@@ -66,21 +67,11 @@ pub struct EdgionHttpProxy {
     /// Access logger for writing access logs
     pub access_logger: Arc<AccessLogger>,
 
-    /// Global gateway configuration
-    pub edgion_gateway_config: Arc<EdgionGatewayConfig>,
-
-    /// EGC name used to load pre-resolved HTTP request policies for each new
-    /// request. `None` selects the built-in defaults.
-    pub http_request_config_name: Option<String>,
-
-    /// Pre-parsed timeout configurations (always has default values if not configured)
-    pub parsed_timeouts: ParsedTimeouts,
+    /// Stable EGC binding; each request captures its current immutable generation.
+    pub egc: Arc<crate::config::GatewayConfigHandle>,
 
     /// Whether HTTP/2 is enabled for this listener
     pub enable_http2: bool,
-
-    /// Real IP extractor for trusted proxy support
-    pub real_ip_extractor: Option<Arc<crate::util::RealIpExtractor>>,
 
     /// Preflight request handler
     pub preflight_handler: PreflightHandler,
@@ -103,6 +94,24 @@ impl ProxyHttp for EdgionHttpProxy {
 
     fn new_ctx(&self) -> Self::CTX {
         pg_new_ctx::new_ctx(self)
+    }
+
+    fn persist_connection_context(
+        &self,
+        _session: &Session,
+        ctx: &Self::CTX,
+    ) -> Option<Box<dyn std::any::Any + Send + Sync>> {
+        ctx.downstream_keepalive_initialized
+            .then(|| Box::new(()) as Box<dyn std::any::Any + Send + Sync>)
+    }
+
+    fn on_connection_reuse(
+        &self,
+        _session: &mut Session,
+        ctx: &mut Self::CTX,
+        _previous: Box<dyn std::any::Any + Send + Sync>,
+    ) {
+        ctx.downstream_keepalive_initialized = true;
     }
 
     async fn upstream_peer(&self, session: &mut Session, ctx: &mut Self::CTX) -> pingora_core::Result<Box<HttpPeer>> {

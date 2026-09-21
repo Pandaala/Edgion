@@ -24,10 +24,15 @@ setup writes, and a retry-sequence total budget are separate mechanisms.
 ## Rationale and evidence
 
 `config/edgion_gateway/conf_handler_impl.rs::EdgionGatewayConfigSnapshot` owns the
-resource map and resolved timeout map in the same `ArcSwap` generation. Its
-`get_resolved_l4_timeouts` accessor performs one lock-free snapshot load, one
-bounded lookup by the listener's startup-selected EGC name, and a `Copy`. The
+resource map and resolved runtime map in the same `ArcSwap` generation. A
+listener's `GatewayConfigHandle::load` accessor captures one Arc from the listener's stable
+binding without a name lookup. Publication updates that handle on EGC changes.
+The connection retains that Arc and copies its `l4_timeouts` for the relay. The
 duration parser and blocking write lock stay on the configuration update path.
+
+The former separate resolved-timeout map is now part of the unified
+[EGC runtime snapshot](egc-runtime-snapshot-publication.md); the timeout lifetime
+and defaults below are unchanged.
 
 `runtime/server/base.rs` preserves `None` for a GatewayClass with no
 `parametersRef`; it must not infer the reference from the synthetic default
@@ -66,11 +71,13 @@ recreation. Those remain listener-lifecycle boundaries.
 
 ## Verification and re-evaluation
 
-Targeted unit tests cover partial update and removal, authoritative empty full
+Historical timeout-fix verification: targeted unit tests covered partial update and removal, authoritative empty full
 sets, missing/default behavior, a real EGC named `default`, independent configs,
 mixed invalid and zero fields, connection-copy stability, and release of an old
 parent snapshot. The targeted command
 `cargo test -p edgion-gateway l4_timeout_ --lib` passed all three selected tests.
+This historical result does not establish fresh verification of later unified
+EGC publication changes.
 
 The dynamic scenario `L4TimeoutHotReload`
 (`edgion-tests/src/client/dynamic/scenarios/l4_timeout_hot_reload.rs`) is the

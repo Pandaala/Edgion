@@ -8,7 +8,6 @@ use crate::runtime::server::proxy_protocol_policy::{
 use crate::runtime::store::listener_gateway_info::is_listener_conflicted;
 use anyhow::{Context, Result};
 use edgion_resources::listener_key::{resolve_listener_addr, ListenerKey};
-use edgion_resources::resources::edgion_gateway_config::{EdgionGatewayConfig, EdgionGatewayConfigSpec};
 use edgion_resources::resources::proxy_protocol::ResolvedInboundProxyProtocol;
 use edgion_resources::{Gateway, ResourceMeta};
 use kube::ResourceExt;
@@ -108,9 +107,9 @@ impl GatewayBase {
             };
 
             // Get EdgionGatewayConfig for this Gateway
-            let (edgion_gateway_config, edgion_gateway_config_name) = match gateway_class.spec.parameters_ref.as_ref() {
+            let edgion_gateway_config_name = match gateway_class.spec.parameters_ref.as_ref() {
                 Some(params_ref) => match self.config_client.get_edgion_gateway_config(&params_ref.name) {
-                    Some(egwc) => (egwc, Some(params_ref.name.clone())),
+                    Some(_) => Some(params_ref.name.clone()),
                     None => {
                         tracing::warn!(
                             gateway = %gateway.key_name(),
@@ -126,12 +125,11 @@ impl GatewayBase {
                         gateway_class = %gateway_class_name,
                         "GatewayClass has no parametersRef, using built-in defaults"
                     );
-                    (
-                        EdgionGatewayConfig::new("default", EdgionGatewayConfigSpec::default()),
-                        None,
-                    )
+                    None
                 }
             };
+
+            let egc = crate::config::bind_gateway_config(edgion_gateway_config_name.as_deref());
 
             // Process listeners for this Gateway
             if let Some(listeners) = &gateway.spec.listeners {
@@ -201,8 +199,7 @@ impl GatewayBase {
                         listener: listener.clone(),
                         listener_key: listener_key.clone(),
                         access_logger: self.get_access_logger(),
-                        edgion_gateway_config: Arc::new(edgion_gateway_config.clone()),
-                        edgion_gateway_config_name: edgion_gateway_config_name.clone(),
+                        egc: Arc::clone(&egc),
                         server_conf: server_conf_arc.clone(),
                         enable_http2,
                         gateway_annotations: gateway_annotations.clone(),

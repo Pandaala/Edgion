@@ -13,7 +13,7 @@ description: Configuration schema reference: complete field definitions for Cont
 |-------|---------|-------|------------------|
 | Controller process configuration | YAML file | A single Controller instance | Low (loaded at startup) |
 | Gateway process configuration | YAML file | A single Gateway instance | Low (loaded at startup) |
-| Runtime configuration | EdgionGatewayConfig CRD | All Gateways under the same GatewayClass | Medium (mostly dynamic; listener-construction fields require restart) |
+| Runtime configuration | EdgionGatewayConfig CRD | All Gateways under the same GatewayClass | Dynamic at the documented request, connection, handshake, or shared-subsystem boundary |
 
 ## File List
 

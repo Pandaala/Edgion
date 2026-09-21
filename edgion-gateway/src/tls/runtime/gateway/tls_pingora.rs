@@ -9,7 +9,6 @@ use crate::{MatchedInfo, Rsc, TlsConnMeta};
 use anyhow::anyhow;
 use anyhow::Result;
 use edgion_resources::listener_key::ListenerKey;
-use edgion_resources::resources::edgion_gateway_config::EdgionGatewayConfig;
 use edgion_resources::resources::edgion_tls::{ClientAuthConfig, ClientAuthMode, EdgionTls};
 use edgion_resources::ResourceMeta;
 #[cfg(feature = "boringssl")]
@@ -483,11 +482,10 @@ impl TlsCallback {
     pub fn new_tls_settings_with_callback(
         port: u16,
         listener_key: ListenerKey,
-        edgion_gateway_config: Arc<EdgionGatewayConfig>,
+        egc: Arc<crate::config::GatewayConfigHandle>,
         enable_http2: bool,
     ) -> Result<TlsSettings> {
         let lk = listener_key;
-        let gw_config = edgion_gateway_config;
         let callback = Box::new(TlsCallback::new(port));
         let mut settings =
             TlsSettings::with_callbacks(callback).map_err(|e| anyhow!("Failed to create TLS settings: {}", e))?;
@@ -506,6 +504,7 @@ impl TlsCallback {
         // connection immediately (before version negotiation).
         settings.deref_mut().set_select_certificate_callback(
             move |mut ch: ClientHello<'_>| -> std::result::Result<(), SelectCertError> {
+                let gateway_config = egc.load();
                 let mut ssl_ctx = SslCtx::new(port);
 
                 // ── 1. SNI resolution ─────────────────────────────────────
@@ -513,12 +512,7 @@ impl TlsCallback {
                 // If neither, we cannot pick a cert; emit ssl.log and close.
                 let sni = if let Some(sni_val) = ch.servername(NameType::HOST_NAME) {
                     sni_val.to_lowercase()
-                } else if let Some(fallback_sni) = gw_config
-                    .spec
-                    .security_protect
-                    .as_ref()
-                    .and_then(|sp| sp.fallback_sni.clone())
-                {
+                } else if let Some(fallback_sni) = gateway_config.fallback_sni.clone() {
                     let _ = ssl_ctx.meta.log.get_or_insert_with(LogBuffer::new).push("fallback SNI");
                     fallback_sni
                 } else {

@@ -5,7 +5,7 @@
 //! then transparently relays all bytes (including the original ClientHello)
 //! to the selected upstream.
 
-use crate::config::{get_resolved_l4_timeouts, ResolvedL4Timeouts};
+use crate::config::ResolvedGatewayConfig;
 use crate::plugins::publication::global_publisher;
 use async_trait::async_trait;
 use std::sync::Arc;
@@ -32,7 +32,6 @@ use crate::observe::AccessLogger;
 use crate::routes::common::UNSAFE_UPSTREAM_ADDRESS_LOG;
 use crate::routes::l4_duplex::bidirectional_relay;
 use crate::{MatchedInfo, Rsc};
-use edgion_resources::resources::edgion_gateway_config::EdgionGatewayConfig;
 use edgion_resources::ListenerKey;
 use edgion_resources::ResourceMeta;
 
@@ -57,14 +56,14 @@ pub struct EdgionTlsPassthroughProxy {
     pub listener_key: ListenerKey,
     pub tls_route_manager: Arc<TlsRouteManager>,
     pub access_logger: Arc<AccessLogger>,
-    pub edgion_gateway_config: Arc<EdgionGatewayConfig>,
-    pub edgion_gateway_config_name: Option<String>,
+    pub egc: Arc<crate::config::GatewayConfigHandle>,
     pub connector: TransportConnector,
 }
 
 #[async_trait]
 impl ServerApp for EdgionTlsPassthroughProxy {
     async fn process_new(self: &Arc<Self>, mut downstream: Stream, shutdown: &ShutdownWatch) -> Option<Stream> {
+        let gateway_config = self.egc.load();
         let digest = downstream.get_socket_digest();
         let addrs = crate::util::resolve_transport_client_addrs(
             digest.as_deref().and_then(|d| d.peer_addr()),
@@ -81,11 +80,9 @@ impl ServerApp for EdgionTlsPassthroughProxy {
 
         if *shutdown.borrow() {
             ctx.err_log = Some("shutdown".to_string());
-            self.log_disconnect(&mut ctx).await;
+            self.log_disconnect(&mut ctx, gateway_config.tls_proxy_log_record).await;
             return None;
         }
-
-        let l4_timeouts = get_resolved_l4_timeouts(self.edgion_gateway_config_name.as_deref());
 
         // 1. Read the beginning of the stream to extract SNI from ClientHello.
         //    We read into a bounded buffer with an absolute deadline. SNI is
@@ -98,7 +95,7 @@ impl ServerApp for EdgionTlsPassthroughProxy {
             Ok(spans) => spans,
             Err(err) => {
                 ctx.err_log = Some(err);
-                self.log_disconnect(&mut ctx).await;
+                self.log_disconnect(&mut ctx, gateway_config.tls_proxy_log_record).await;
                 return None;
             }
         };
@@ -106,7 +103,7 @@ impl ServerApp for EdgionTlsPassthroughProxy {
         // 2. Extract SNI from the complete record.
         let Some(sni) = sni_parser::extract_sni(&peek_buf[..record_end]) else {
             ctx.err_log = Some("no SNI in ClientHello".to_string());
-            self.log_disconnect(&mut ctx).await;
+            self.log_disconnect(&mut ctx, gateway_config.tls_proxy_log_record).await;
             return None;
         };
         ctx.sni = Some(sni.clone());
@@ -116,9 +113,9 @@ impl ServerApp for EdgionTlsPassthroughProxy {
         //    ClientHello record — so any trailing 0-RTT EarlyData reaches
         //    the backend.
         peek_buf.truncate(filled);
-        self.handle_connection(downstream, &mut ctx, &sni, peek_buf, l4_timeouts)
+        self.handle_connection(downstream, &mut ctx, &sni, peek_buf, &gateway_config)
             .await;
-        self.log_disconnect(&mut ctx).await;
+        self.log_disconnect(&mut ctx, gateway_config.tls_proxy_log_record).await;
 
         None
     }
@@ -188,7 +185,7 @@ impl EdgionTlsPassthroughProxy {
         ctx: &mut TlsContext,
         sni: &str,
         initial_bytes: Vec<u8>,
-        l4_timeouts: ResolvedL4Timeouts,
+        gateway_config: &ResolvedGatewayConfig,
     ) {
         // 1. Match TLSRoute unit by SNI
         let publication = global_publisher().snapshot();
@@ -306,7 +303,7 @@ impl EdgionTlsPassthroughProxy {
                 proxy_protocol_sent: false,
                 upstream_protocol: Some("TLS-Passthrough".to_string()),
             });
-            if validate_endpoint_backend_addr(upstream_addr, self.allow_loopback_upstream()).is_err() {
+            if validate_endpoint_backend_addr(upstream_addr, gateway_config.allow_loopback_upstream).is_err() {
                 ctx.err_log = Some(UNSAFE_UPSTREAM_ADDRESS_LOG.to_string());
                 return;
             }
@@ -319,7 +316,7 @@ impl EdgionTlsPassthroughProxy {
             // Bound the connect (TCP handshake; the TLS handshake is end-to-end
             // for passthrough) so an unreachable backend fails fast instead of
             // stranding the downstream connection until the OS retransmit timeout.
-            peer.options.connection_timeout = l4_timeouts.connect_timeout;
+            peer.options.connection_timeout = gateway_config.l4_timeouts.connect_timeout;
             match self.connector.new_stream(&peer).await {
                 Ok(stream) => {
                     if let Some(info) = ctx.current_upstream_mut() {
@@ -381,8 +378,13 @@ impl EdgionTlsPassthroughProxy {
         }
 
         // 7. Bidirectional relay of raw TLS traffic
-        self.duplex(downstream, upstream_stream, ctx, l4_timeouts.idle_timeout)
-            .await;
+        self.duplex(
+            downstream,
+            upstream_stream,
+            ctx,
+            gateway_config.l4_timeouts.idle_timeout,
+        )
+        .await;
     }
 
     /// Bidirectional data transfer between downstream and upstream.
@@ -390,25 +392,8 @@ impl EdgionTlsPassthroughProxy {
         bidirectional_relay(downstream, upstream, TlsDuplexHooks { ctx }, idle_timeout).await;
     }
 
-    fn is_tls_proxy_log_enabled(&self) -> bool {
-        self.edgion_gateway_config
-            .spec
-            .security_protect
-            .as_ref()
-            .is_none_or(|sp| sp.tls_proxy_log_record)
-    }
-
-    fn allow_loopback_upstream(&self) -> bool {
-        self.edgion_gateway_config
-            .spec
-            .security_protect
-            .as_ref()
-            .map(|s| s.allow_loopback_upstream)
-            .unwrap_or(false)
-    }
-
-    async fn log_disconnect(&self, ctx: &mut TlsContext) {
-        if !self.is_tls_proxy_log_enabled() {
+    async fn log_disconnect(&self, ctx: &mut TlsContext, enabled: bool) {
+        if !enabled {
             return;
         }
         ctx.end_time = Some(

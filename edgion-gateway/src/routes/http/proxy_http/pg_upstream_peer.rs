@@ -536,13 +536,7 @@ pub async fn upstream_peer_http(
             state.attempt_runtime.drain_pending().await;
         }
         loop {
-            let mut target = match prepare_first_attempt(
-                session,
-                ctx,
-                entropy,
-                route_retry_cap,
-                edgion_http.edgion_gateway_config.spec.max_retries,
-            ) {
+            let mut target = match prepare_first_attempt(session, ctx, entropy, route_retry_cap, ctx.egc.max_retries) {
                 Ok(target) => target,
                 Err(error) => {
                     if let Some(response) = ai_predispatch_deadline_response(&error, ctx) {
@@ -1127,8 +1121,8 @@ fn replay_write_floor(body_captured: bool, global_backend_request: std::time::Du
 
 /// Configure peer timeouts from global and route-level configs (inline for performance)
 #[inline]
-pub fn configure_peer_timeouts(edgion_http: &EdgionHttpProxy, peer: &mut Box<HttpPeer>, ctx: &mut EdgionHttpContext) {
-    let backend_timeout = &edgion_http.parsed_timeouts.backend;
+pub fn configure_peer_timeouts(_edgion_http: &EdgionHttpProxy, peer: &mut Box<HttpPeer>, ctx: &mut EdgionHttpContext) {
+    let backend_timeout = &ctx.egc.parsed_timeouts.backend;
     let route_timeouts = ctx
         .route_unit
         .as_ref()
@@ -1823,11 +1817,8 @@ mod tests {
             listener_key: edgion_resources::ListenerKey("ai-id-test/HTTP".to_string()),
             server_header_opts: Default::default(),
             access_logger: Arc::new(crate::observe::AccessLogger::default()),
-            edgion_gateway_config: Arc::new(edgion_resources::EdgionGatewayConfig::new("test", Default::default())),
-            http_request_config_name: None,
-            parsed_timeouts: Default::default(),
+            egc: crate::config::bind_gateway_config(None),
             enable_http2: false,
-            real_ip_extractor: None,
             preflight_handler: super::super::PreflightHandler,
             http_route_manager: Arc::new(crate::routes::http::routes_mgr::HttpPortRouteManager::default()),
             grpc_route_manager: Arc::new(crate::routes::grpc::GrpcPortRouteManager::default()),
@@ -2492,17 +2483,14 @@ mod tests {
     fn configure_connect_bounds_are_independent_and_reset_for_each_peer() {
         use crate::ctx::ConnectTimeoutSource;
         use edgion_resources::resources::http_route::{ParsedRouteTimeouts, RouteTimeout};
-        let mut proxy = super::EdgionHttpProxy {
+        let proxy = super::EdgionHttpProxy {
             listener_port: 80,
             is_https_listener: false,
             listener_key: edgion_resources::ListenerKey("127.0.0.1:80/HTTP".to_string()),
             server_header_opts: Default::default(),
             access_logger: Arc::new(crate::observe::AccessLogger::default()),
-            edgion_gateway_config: Arc::new(edgion_resources::EdgionGatewayConfig::new("test", Default::default())),
-            http_request_config_name: None,
-            parsed_timeouts: Default::default(),
+            egc: crate::config::bind_gateway_config(None),
             enable_http2: false,
-            real_ip_extractor: None,
             preflight_handler: super::super::PreflightHandler,
             http_route_manager: Arc::new(crate::routes::http::routes_mgr::HttpPortRouteManager::default()),
             grpc_route_manager: Arc::new(crate::routes::grpc::GrpcPortRouteManager::default()),
@@ -2537,7 +2525,9 @@ mod tests {
 
         ctx.route_unit = None;
         ctx.request_info = Default::default();
-        proxy.parsed_timeouts.backend.connect_timeout = Duration::ZERO;
+        let mut config = crate::config::ResolvedGatewayConfig::default();
+        config.parsed_timeouts.backend.connect_timeout = Duration::ZERO;
+        ctx.egc = Arc::new(config);
         super::configure_peer_timeouts(&proxy, &mut peer, &mut ctx);
         assert_eq!(ctx.connect_timeout_source, None);
         assert_eq!(peer.options.connection_timeout, None);
@@ -3919,14 +3909,8 @@ mod tests {
             listener_key: edgion_resources::ListenerKey("direct-protocol-test/HTTP".to_string()),
             server_header_opts: Default::default(),
             access_logger: Arc::new(crate::observe::AccessLogger::default()),
-            edgion_gateway_config: Arc::new(edgion_resources::EdgionGatewayConfig::new(
-                "direct-protocol-test",
-                Default::default(),
-            )),
-            http_request_config_name: None,
-            parsed_timeouts: Default::default(),
+            egc: crate::config::bind_gateway_config(None),
             enable_http2: false,
-            real_ip_extractor: None,
             preflight_handler: super::super::PreflightHandler,
             http_route_manager: Arc::new(crate::routes::http::routes_mgr::HttpPortRouteManager::default()),
             grpc_route_manager: Arc::new(crate::routes::grpc::GrpcPortRouteManager::default()),

@@ -28,7 +28,6 @@ use crate::routes::udp::{get_global_udp_route_managers, get_udp_listener_registr
 #[cfg(feature = "boringssl")]
 use crate::tls::runtime::gateway::tls_pingora::TlsCallback;
 use edgion_resources::constants::annotations::edgion;
-use edgion_resources::resources::edgion_gateway_config::EdgionGatewayConfig;
 use edgion_resources::resources::gateway::{GatewayTlsMode, Listener};
 use edgion_resources::resources::proxy_protocol::ProxyProtocolPolicySourceKind;
 use edgion_resources::ListenerKey;
@@ -44,10 +43,8 @@ pub struct ListenerContext {
     pub listener: Listener,
     pub listener_key: ListenerKey,
     pub access_logger: Arc<AccessLogger>,
-    pub edgion_gateway_config: Arc<EdgionGatewayConfig>,
-    /// Name of the EGC referenced by this listener's GatewayClass.
-    /// `None` means the GatewayClass uses built-in defaults.
-    pub edgion_gateway_config_name: Option<String>,
+    /// Shared binding to the GatewayClass EGC, or the distinct built-in default.
+    pub egc: Arc<crate::config::GatewayConfigHandle>,
     pub server_conf: Arc<ServerConf>,
     /// Whether to enable HTTP/2 support (from Gateway annotation)
     pub enable_http2: bool,
@@ -160,11 +157,8 @@ pub fn add_http_listener(
             .and_then(|v| v.parse().ok())
             .unwrap_or(443);
 
-        let redirect_handler = EdgionHttpRedirectProxy::new(
-            https_port,
-            context.access_logger.clone(),
-            context.edgion_gateway_config_name.clone(),
-        );
+        let redirect_handler =
+            EdgionHttpRedirectProxy::new(https_port, context.access_logger.clone(), context.egc.clone());
         let mut http_service = http_proxy_service(&context.server_conf, redirect_handler);
         apply_connection_filter(&mut http_service, context);
         probe_tcp_bind(&addr, &context.gateway_key, &listener_name)?;
@@ -182,46 +176,6 @@ pub fn add_http_listener(
         return Ok(());
     }
 
-    // Pre-parse timeout configurations once at initialization
-    let parsed_timeouts = crate::routes::http::proxy_http::ParsedTimeouts::from_config(&context.edgion_gateway_config);
-
-    // Gateway-side backstop for `spec.realIp`, mirroring what the
-    // EdgionGatewayConfig store already does for `spec.forwardedHeaders`:
-    // Controller preparse warns and still publishes, so an invalid
-    // `realIpHeader` would otherwise reach the data plane and make extraction
-    // silently inert. Refusing to build the extractor keeps the outcome
-    // identical to a missing `realIp` and leaves one actionable error line.
-    let real_ip_errors = context.edgion_gateway_config.spec.validate_real_ip();
-    let real_ip_extractor = if !real_ip_errors.is_empty() {
-        tracing::error!(
-            gateway = %context.gateway_name,
-            listener = %listener_name,
-            errors = ?real_ip_errors,
-            "Ignoring invalid realIp configuration received by the gateway, real IP extraction disabled"
-        );
-        None
-    } else if let Some(real_ip_config) = &context.edgion_gateway_config.spec.real_ip {
-        match crate::util::RealIpExtractor::new(
-            &real_ip_config.trusted_ips,
-            real_ip_config.real_ip_header.clone(),
-            real_ip_config.recursive,
-            real_ip_config.max_trusted_hops,
-        ) {
-            Ok(extractor) => Some(Arc::new(extractor)),
-            Err(e) => {
-                tracing::warn!(
-                    gateway = %context.gateway_name,
-                    listener = %listener_name,
-                    error = ?e,
-                    "Failed to build RealIpExtractor, real IP extraction disabled"
-                );
-                None
-            }
-        }
-    } else {
-        None
-    };
-
     let http_route_manager =
         crate::routes::http::get_global_http_route_managers().get_or_create_listener_manager(&context.listener_key);
     let grpc_route_manager =
@@ -238,11 +192,8 @@ pub fn add_http_listener(
             opts
         },
         access_logger: context.access_logger.clone(),
-        edgion_gateway_config: context.edgion_gateway_config.clone(),
-        http_request_config_name: context.edgion_gateway_config_name.clone(),
-        parsed_timeouts,
+        egc: context.egc.clone(),
         enable_http2: context.enable_http2,
-        real_ip_extractor,
         preflight_handler: crate::routes::http::proxy_http::PreflightHandler,
         http_route_manager,
         grpc_route_manager,
@@ -260,25 +211,7 @@ pub fn add_http_listener(
         );
     }
 
-    // Downstream keepalive request limit (per-connection, HTTP/1.1 only)
-    // 0 means unlimited; non-zero sets the limit
-    let limit = context
-        .edgion_gateway_config
-        .spec
-        .server
-        .as_ref()
-        .map(|s| s.downstream_keepalive_request_limit)
-        .unwrap_or(1000);
-    if limit > 0 {
-        opts.keepalive_request_limit = Some(limit);
-        tracing::info!(
-            gateway=%context.gateway_key,
-            listener=%listener_name,
-            limit=%limit,
-            "Downstream keepalive request limit configured"
-        );
-    }
-
+    // Each new connection captures its EGC keepalive budget in the HTTP hook.
     let mut http_service = ProxyServiceBuilder::new(&context.server_conf, edgion_http)
         .server_options(opts)
         .build();
@@ -292,7 +225,7 @@ pub fn add_http_listener(
             let mut tls_settings = TlsCallback::new_tls_settings_with_callback(
                 port,
                 context.listener_key.clone(),
-                context.edgion_gateway_config.clone(),
+                context.egc.clone(),
                 true,
             )?;
             // Enable HTTP/2 for HTTPS if enable_http2 is true
@@ -350,8 +283,7 @@ pub fn add_tcp_listener(server: &mut Server, context: &ListenerContext) -> Resul
         listener_port: port,
         listener_key: context.listener_key.clone(),
         tcp_route_manager,
-        edgion_gateway_config: context.edgion_gateway_config.clone(),
-        edgion_gateway_config_name: context.edgion_gateway_config_name.clone(),
+        egc: context.egc.clone(),
         connector: TransportConnector::new(None),
     };
 
@@ -400,7 +332,7 @@ pub fn add_udp_listener(_server: &mut Server, context: &ListenerContext) -> Resu
         port,
         context.listener_key.clone(),
         udp_route_manager,
-        context.edgion_gateway_config.clone(),
+        context.egc.clone(),
         socket,
         cancel_token.clone(),
         child_tasks.clone(),
@@ -439,18 +371,13 @@ pub fn add_tls_terminate_to_tcp_listener(server: &mut Server, context: &Listener
         listener_key: context.listener_key.clone(),
         tls_route_manager,
         access_logger: context.access_logger.clone(),
-        edgion_gateway_config: context.edgion_gateway_config.clone(),
-        edgion_gateway_config_name: context.edgion_gateway_config_name.clone(),
+        egc: context.egc.clone(),
         connector: TransportConnector::new(None),
     };
 
     // Create TLS settings with callback for certificate loading (with port for SNI lookup)
-    let tls_settings = TlsCallback::new_tls_settings_with_callback(
-        port,
-        context.listener_key.clone(),
-        context.edgion_gateway_config.clone(),
-        false,
-    )?;
+    let tls_settings =
+        TlsCallback::new_tls_settings_with_callback(port, context.listener_key.clone(), context.egc.clone(), false)?;
 
     let mut tls_service = Service::new(format!("TLS-TCP-{}", listener_name), edgion_tls);
 
@@ -491,8 +418,7 @@ pub fn add_tls_passthrough_listener(server: &mut Server, context: &ListenerConte
         listener_key: context.listener_key.clone(),
         tls_route_manager,
         access_logger: context.access_logger.clone(),
-        edgion_gateway_config: context.edgion_gateway_config.clone(),
-        edgion_gateway_config_name: context.edgion_gateway_config_name.clone(),
+        egc: context.egc.clone(),
         connector: TransportConnector::new(None),
     };
 

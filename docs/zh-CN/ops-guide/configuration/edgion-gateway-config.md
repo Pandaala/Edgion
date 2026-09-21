@@ -1,13 +1,13 @@
 # EdgionGatewayConfig
 
-EdgionGatewayConfig 是 Edgion 的 Cluster 作用域 CRD（`edgion.io/v1alpha1`），用于设置 GatewayClass 级别的行为，通过 `GatewayClass.spec.parametersRef` 关联。大多数请求级和连接级策略会动态更新；用于构造 HTTP listener 的字段会明确标注为需要重启。
+EdgionGatewayConfig 是 Edgion 的 Cluster 作用域 CRD（`edgion.io/v1alpha1`），用于设置 GatewayClass 级别的行为，通过 `GatewayClass.spec.parametersRef` 关联。更新会传播到已有 Gateway，无需重启进程；具体字段决定从哪个新请求、连接或操作开始采用更新。
 
 ## 与 Gateway YAML 的区别
 
 | 配置层 | Gateway YAML | EdgionGatewayConfig |
 |--------|-------------|---------------------|
 | 作用域 | 单个 Gateway 进程 | 整个 GatewayClass |
-| 变更生效方式 | 需要重启进程 | 按字段决定；大多数策略动态生效，`spec.server` 需要重启进程 |
+| 变更生效方式 | 需要重启进程 | 动态生效，按字段的请求、连接或操作边界应用 |
 | 典型用途 | 进程连接参数、日志路径、限流精度 | 超时策略、安全防护、全局插件、真实 IP 提取 |
 
 **何时用 Gateway YAML，何时用 EdgionGatewayConfig：**
@@ -91,6 +91,30 @@ spec:
     statusCode: 204
 ```
 
+## 热更新生效边界
+
+Edgion 会将被引用 EGC 的更新传播到已有 Gateway。这是 Edgion 的产品行为；
+Gateway API 并未要求 GatewayClass 参数变更必须传播到已创建的 Gateway。
+
+监听器持有共享配置句柄。EGC 更新时替换句柄内已解析的快照；每个新请求直接
+捕获该快照，无需按 EGC 名称查表。删除和同名重建也会更新同一个句柄。
+
+| 配置 | 新值生效时机 |
+|---|---|
+| HTTP 超时、重试、RealIp、XFF 与 SNI/Host 检查、重复 Host 检查、请求体、转发头、预检、压缩、HTTP 回环许可 | 每个新 HTTP 请求捕获一代配置，重试和响应处理继续使用该代配置 |
+| `server.downstreamKeepaliveRequestLimit` | HTTP/1 首个请求捕获连接预算，同一连接后续请求继续使用该预算 |
+| `tcpTimeout`、TCP/TLS 回环许可、`tlsProxyLogRecord` | 每条新 L4 代理连接捕获一次，重试、中继和日志继续使用该策略 |
+| UDP 回环许可 | 每个新建 UDP 会话；已有会话保留原策略 |
+| `fallbackSni` | 每次新 TLS 握手；已建立 TLS 连接不会重新选择证书 |
+| 插件策略、全局插件、日志脱敏、LinkSys、负载均衡默认值、出站 TLS、DNS | 由各自已有的动态发布与消费机制按其作用域和生命周期更新 |
+
+这些机制不构成跨资源种类或 Gateway 副本的原子更新。进行中的请求不会切换其捕获的
+EGC 代次，但独立发布的共享服务仍遵循各自的更新语义。
+
+删除被引用 EGC 后，新的请求和连接消费者恢复内置默认值；插件准入独立执行缺失引用的
+fail-close 策略。修改 GatewayClass 引用本身、增加监听端口、转移共享监听器归属、
+删除并重建 Gateway，均不属于此热更新契约。
+
 ## 配置参数
 
 ### spec.server
@@ -100,7 +124,8 @@ spec:
 | `enableCompression` | `Boolean` | `false` | 对带有效 `Content-Length` 且无 `Transfer-Encoding` 的适用下游响应启用 gzip；未知长度和 SSE 响应保持未压缩，以维持增量传输 |
 | `downstreamKeepaliveRequestLimit` | `Integer` | `1000` | 下游每连接最大请求数，`0` 表示无限 |
 
-这两个字段会在构造 HTTP listener 时捕获，修改后需要重启现有 Gateway 进程。Pingora
+压缩开关由每个 HTTP 请求捕获。keepalive 请求预算由 HTTP/1 首个请求捕获，并保留到
+该连接结束。两者更新均无需重启监听器。Pingora
 工作线程、关闭等待时间、上游 keepalive 池和 Pingora 错误日志路径仅属于本地 Gateway
 YAML 的 `server` 配置，不属于 GatewayClass。
 
@@ -173,12 +198,15 @@ Controller preparse 只告警、不阻止发布，因此 Gateway 侧做了同样
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `xForwardedForLimit` | `Integer` | `200` | `X-Forwarded-For` 头部最大字节数，超过则截断 |
+| `xForwardedForLimit` | `Integer` | `200` | `X-Forwarded-For` 头部最大字节数，超过则返回 `400 Bad Request` |
 | `requireSniHostMatch` | `Boolean` | `true` | HTTPS listener 级别 421 Misdirected Request 检测，SNI 与 Host 不匹配时拒绝请求 |
 | `fallbackSni` | `String` | — | 客户端未提供 SNI 时使用的备用主机名 |
 | `tlsProxyLogRecord` | `Boolean` | `true` | 是否记录 TLS 代理连接日志 |
 | `allowLoopbackUpstream` | `Boolean` | `false` | 显式放行该 GatewayClass 的 loopback upstream；link-local / metadata 仍然拒绝 |
 | `rejectDuplicateHost` | `Boolean` | `true` | 拒绝同一 HTTP/1.1 请求里出现多于一个 `Host:` 头部行，返回 `400 Bad Request`(RFC 9110 §7.2,Host smuggling 防御)。仅在需要兼容会发重复 `Host` 行的旧式中间件时关闭 |
+
+省略整个 `securityProtect` 块时，不启用 XFF 字节上限；配置该块但省略
+`xForwardedForLimit` 时，该字段默认为 200。
 
 ### spec.requestBody
 
@@ -231,7 +259,8 @@ accessLogExtern:
 
 **某个 `unmaskedKeys` 列表缺省，保留的是该列表的默认值，而不是清空它。** `UnmaskedKeys` 会为每个缺省的列表分别填充其自身的默认值，因此 `unmaskedKeys: {ctx: [tenant_id]}` 并不代表「只有 `tenant_id` 明文」——它同时保留了上面 `header` 和 `respHeader` 的默认列表。若只想明文 `tenant_id` 并去掉 header 默认值，需要显式列出每个类别，例如 `header: []`。
 
-**生效范围实际是按监听器而非按 Gateway**：当两个不同 GatewayClass 的 Gateway 共享同一个监听地址/端口时，只有第一个 Gateway 的 `EdgionGatewayConfig`（包括这份白名单）会绑定到该监听器。
+脱敏策略与逻辑 Gateway 选中的插件运行时作用域一起发布。其发布独立于监听器的
+请求／连接 EGC 快照；共享监听器归属不会替代该插件作用域。
 
 ### spec.preflightPolicy
 

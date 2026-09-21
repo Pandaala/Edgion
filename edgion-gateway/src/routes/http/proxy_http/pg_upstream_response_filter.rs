@@ -273,9 +273,7 @@ pub fn upstream_response_filter(
                 if let Some(codes) = parsed_retry.codes.as_ref() {
                     if codes.contains(&status_code) {
                         // Determine max_retries: rule.retry.attempts > global
-                        let max_retries = parsed_retry
-                            .attempts
-                            .unwrap_or(edgion_http.edgion_gateway_config.spec.max_retries);
+                        let max_retries = parsed_retry.attempts.unwrap_or(ctx.egc.max_retries);
 
                         // Check request timeout. Either the route-level
                         // `request_timeout` or a client-supplied `grpc-timeout`

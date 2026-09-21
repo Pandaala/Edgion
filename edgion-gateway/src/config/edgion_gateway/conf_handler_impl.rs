@@ -2,6 +2,8 @@ use crate::link_sys::providers::webhook::manager::configure_webhook_global_max;
 use crate::link_sys::runtime::store::configure_link_sys_max_instances_per_kind;
 use crate::request_body::ResolvedRequestBodyConfig;
 use crate::routes::http::proxy_http::preflight_handler::ResolvedPreflightPolicy;
+use crate::routes::http::proxy_http::ParsedTimeouts;
+use crate::util::RealIpExtractor;
 use arc_swap::ArcSwap;
 use edgion_common::conf_sync::traits::{arc_map_to_owned, ConfHandler};
 use edgion_common::dns::resolver_select::{candidate_from_egc_default, ResolverCandidate};
@@ -13,7 +15,7 @@ use edgion_resources::resources::edgion_gateway_config::{
 use kube::ResourceExt;
 use parking_lot::Mutex;
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 use std::time::Duration;
 
 /// Connection-scoped L4 timeout policy resolved from an EdgionGatewayConfig.
@@ -45,21 +47,44 @@ impl Default for ResolvedL4Timeouts {
     }
 }
 
-/// Request-scoped HTTP configuration resolved from one EdgionGatewayConfig generation.
+/// Runtime configuration resolved from one EdgionGatewayConfig generation.
 ///
 /// A new request clones this value from the current immutable configuration
 /// snapshot. All fields therefore come from the same publication epoch, while
 /// in-flight requests retain their captured values across hot reloads.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct ResolvedHttpRequestConfig {
-    pub(crate) request_body: ResolvedRequestBodyConfig,
-    pub(crate) remote_ip_header: http::HeaderName,
+#[derive(Clone)]
+pub struct ResolvedGatewayConfig {
+    pub request_body: ResolvedRequestBodyConfig,
+    pub remote_ip_header: http::HeaderName,
     pub(crate) preflight_policy: ResolvedPreflightPolicy,
-    pub(crate) reject_duplicate_host: bool,
+    pub reject_duplicate_host: bool,
+    pub x_forwarded_for_limit: Option<usize>,
+    pub require_sni_host_match: bool,
+    pub allow_loopback_upstream: bool,
+    pub fallback_sni: Option<String>,
+    pub tls_proxy_log_record: bool,
+    pub parsed_timeouts: ParsedTimeouts,
+    pub max_retries: u32,
+    pub real_ip_extractor: Option<Arc<RealIpExtractor>>,
+    pub enable_compression: bool,
+    pub downstream_keepalive_request_limit: u32,
+    pub l4_timeouts: ResolvedL4Timeouts,
 }
 
-impl ResolvedHttpRequestConfig {
-    fn resolve(config: &EdgionGatewayConfig) -> Self {
+impl std::fmt::Debug for ResolvedGatewayConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Do not expose configured hostnames or trusted-proxy topology.
+        f.debug_struct("ResolvedGatewayConfig")
+            .field("request_body", &self.request_body)
+            .field("parsed_timeouts", &self.parsed_timeouts)
+            .field("has_real_ip_extractor", &self.real_ip_extractor.is_some())
+            .finish_non_exhaustive()
+    }
+}
+
+impl ResolvedGatewayConfig {
+    /// Compile runtime policy on the configuration publication path only.
+    pub fn resolve(config: &EdgionGatewayConfig) -> Self {
         let errors = config.spec.validate_forwarded_headers();
         let remote_ip_header = if errors.is_empty() {
             config
@@ -77,6 +102,32 @@ impl ResolvedHttpRequestConfig {
             default_remote_ip_header()
         };
 
+        let real_ip_errors = config.spec.validate_real_ip();
+        let real_ip_extractor = if !real_ip_errors.is_empty() {
+            tracing::error!(
+                config = %config.name_any(),
+                errors = ?real_ip_errors,
+                "Ignoring invalid realIp configuration received by the gateway, real IP extraction disabled"
+            );
+            None
+        } else {
+            config.spec.real_ip.as_ref().and_then(|real_ip| {
+                match RealIpExtractor::new(
+                    &real_ip.trusted_ips,
+                    real_ip.real_ip_header.clone(),
+                    real_ip.recursive,
+                    real_ip.max_trusted_hops,
+                ) {
+                    Ok(extractor) => Some(Arc::new(extractor)),
+                    Err(error) => {
+                        tracing::warn!(config = %config.name_any(), error = ?error,
+                            "Failed to build RealIpExtractor, real IP extraction disabled");
+                        None
+                    }
+                }
+            })
+        };
+        let security = config.spec.security_protect.as_ref();
         Self {
             request_body: ResolvedRequestBodyConfig::resolve(&config.spec.request_body),
             remote_ip_header,
@@ -87,17 +138,45 @@ impl ResolvedHttpRequestConfig {
                 .as_ref()
                 .map(|security| security.reject_duplicate_host)
                 .unwrap_or(true),
+            x_forwarded_for_limit: security.map(|s| s.x_forwarded_for_limit),
+            require_sni_host_match: security.is_none_or(|s| s.require_sni_host_match),
+            allow_loopback_upstream: security.is_some_and(|s| s.allow_loopback_upstream),
+            fallback_sni: security.and_then(|s| s.fallback_sni.clone()),
+            tls_proxy_log_record: security.is_none_or(|s| s.tls_proxy_log_record),
+            parsed_timeouts: ParsedTimeouts::from_config(config),
+            max_retries: config.spec.max_retries,
+            real_ip_extractor,
+            enable_compression: config.spec.server.as_ref().is_some_and(|s| s.enable_compression),
+            downstream_keepalive_request_limit: config
+                .spec
+                .server
+                .as_ref()
+                .map(|s| s.downstream_keepalive_request_limit)
+                .unwrap_or(1000),
+            l4_timeouts: ResolvedL4Timeouts::resolve(config),
         }
     }
 }
 
-impl Default for ResolvedHttpRequestConfig {
+impl Default for ResolvedGatewayConfig {
     fn default() -> Self {
         Self {
             request_body: ResolvedRequestBodyConfig::default(),
             remote_ip_header: default_remote_ip_header(),
             preflight_policy: ResolvedPreflightPolicy::default(),
             reject_duplicate_host: true,
+            x_forwarded_for_limit: None,
+            require_sni_host_match: true,
+            allow_loopback_upstream: false,
+            fallback_sni: None,
+            tls_proxy_log_record: true,
+            parsed_timeouts: ParsedTimeouts::default(),
+            max_retries: edgion_resources::resources::edgion_gateway_config::EdgionGatewayConfigSpec::default()
+                .max_retries,
+            real_ip_extractor: None,
+            enable_compression: false,
+            downstream_keepalive_request_limit: 1000,
+            l4_timeouts: ResolvedL4Timeouts::default(),
         }
     }
 }
@@ -136,8 +215,7 @@ impl ResolvedDnsResolverDefault {
 
 struct EdgionGatewayConfigSnapshot {
     configs: HashMap<String, EdgionGatewayConfig>,
-    http_request_configs: HashMap<String, ResolvedHttpRequestConfig>,
-    l4_timeouts: HashMap<String, ResolvedL4Timeouts>,
+    runtime_configs: HashMap<String, Arc<ResolvedGatewayConfig>>,
     dns_resolver_default: Option<Arc<ResolvedDnsResolverDefault>>,
 }
 
@@ -150,18 +228,13 @@ impl EdgionGatewayConfigSnapshot {
             .and_then(|(_, config)| config.spec.dns_resolver.as_ref())
             .map(ResolvedDnsResolverDefault::resolve)
             .map(Arc::new);
-        let http_request_configs = configs
+        let runtime_configs = configs
             .values()
-            .map(|config| (config.name_any(), ResolvedHttpRequestConfig::resolve(config)))
-            .collect();
-        let l4_timeouts = configs
-            .values()
-            .map(|config| (config.name_any(), ResolvedL4Timeouts::resolve(config)))
+            .map(|config| (config.name_any(), Arc::new(ResolvedGatewayConfig::resolve(config))))
             .collect();
         Self {
             configs,
-            http_request_configs,
-            l4_timeouts,
+            runtime_configs,
             dns_resolver_default,
         }
     }
@@ -173,20 +246,113 @@ impl EdgionGatewayConfigSnapshot {
 
 /// Global EdgionGatewayConfig store and its request-path-ready derived policy.
 ///
-/// All views are published in one immutable snapshot so an EGC update cannot
-/// expose values from different generations to one lookup. Human-readable body
+/// Raw resources and derived policies share one immutable source snapshot.
+/// Listener bindings publish independently with per-EGC atomicity. Human-readable body
 /// sizes, the upstream RemoteIp header, and the preflight policy are resolved
 /// while constructing the snapshot, never per request.
 static EDGION_GATEWAY_CONFIG_STORE: std::sync::LazyLock<ArcSwap<EdgionGatewayConfigSnapshot>> =
     std::sync::LazyLock::new(|| ArcSwap::from_pointee(EdgionGatewayConfigSnapshot::empty()));
 
-/// Serialize snapshot read-modify-write cycles.
+/// Serialize snapshot read-modify-write cycles and listener binding.
 ///
 /// The normal ClientCache callback path is already per-kind serial, but
 /// ConfHandler is Send + Sync and may gain another rebuild trigger. Keeping the
 /// guarantee here prevents a later concurrent writer from publishing a snapshot
 /// derived from stale state. Request readers never acquire this lock.
-static EDGION_GATEWAY_CONFIG_WRITE_LOCK: Mutex<()> = Mutex::new(());
+static EDGION_GATEWAY_CONFIG_WRITE_LOCK: std::sync::LazyLock<Mutex<HashMap<String, Weak<GatewayConfigHandle>>>> =
+    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// Stable listener binding. Only publication replaces its immutable generation.
+#[derive(Debug)]
+pub struct GatewayConfigHandle {
+    current: ArcSwap<ResolvedGatewayConfig>,
+}
+
+impl GatewayConfigHandle {
+    /// Capture one generation without a resource-table lookup or blocking lock.
+    #[inline]
+    pub fn load(&self) -> Arc<ResolvedGatewayConfig> {
+        self.current.load_full()
+    }
+}
+
+pub fn default_gateway_config() -> Arc<ResolvedGatewayConfig> {
+    static DEFAULT: std::sync::LazyLock<Arc<ResolvedGatewayConfig>> =
+        std::sync::LazyLock::new(|| Arc::new(ResolvedGatewayConfig::default()));
+    Arc::clone(&DEFAULT)
+}
+
+/// Bind on listener construction, never on the request or connection path.
+/// Binding and publication share the writer lock so neither can miss an update.
+pub fn bind_gateway_config(name: Option<&str>) -> Arc<GatewayConfigHandle> {
+    static DEFAULT: std::sync::LazyLock<Arc<GatewayConfigHandle>> = std::sync::LazyLock::new(|| {
+        Arc::new(GatewayConfigHandle {
+            current: ArcSwap::from(default_gateway_config()),
+        })
+    });
+    let Some(name) = name else {
+        return Arc::clone(&DEFAULT);
+    };
+    let mut bindings = EDGION_GATEWAY_CONFIG_WRITE_LOCK.lock();
+    bindings.retain(|_, handle| handle.strong_count() != 0);
+    if let Some(handle) = bindings.get(name).and_then(Weak::upgrade) {
+        return handle;
+    }
+    let config = EDGION_GATEWAY_CONFIG_STORE
+        .load()
+        .runtime_configs
+        .get(name)
+        .cloned()
+        .unwrap_or_else(default_gateway_config);
+    let handle = Arc::new(GatewayConfigHandle {
+        current: ArcSwap::from(config),
+    });
+    bindings.insert(name.to_owned(), Arc::downgrade(&handle));
+    handle
+}
+
+/// Publish under the writer lock. Each live name retains its handle across
+/// removal/recreation; expired bindings retain no runtime and are pruned here.
+/// Atomicity is per EGC, not across resources or the raw-resource/admin view.
+fn publish_snapshot(
+    configs: HashMap<String, EdgionGatewayConfig>,
+    bindings: &mut HashMap<String, Weak<GatewayConfigHandle>>,
+) {
+    let snapshot = Arc::new(EdgionGatewayConfigSnapshot::new(configs));
+    bindings.retain(|name, weak| {
+        let Some(handle) = weak.upgrade() else {
+            return false;
+        };
+        handle.current.store(
+            snapshot
+                .runtime_configs
+                .get(name)
+                .cloned()
+                .unwrap_or_else(default_gateway_config),
+        );
+        true
+    });
+    EDGION_GATEWAY_CONFIG_STORE.store(snapshot);
+}
+
+#[derive(Default, serde::Serialize)]
+pub struct GatewayConfigBindingStats {
+    pub count: usize,
+    pub expired_count: usize,
+    pub keys: Vec<String>,
+}
+
+/// Debug-only inventory: observing stats must not hide expired bindings.
+pub fn gateway_config_binding_stats() -> GatewayConfigBindingStats {
+    let bindings = EDGION_GATEWAY_CONFIG_WRITE_LOCK.lock();
+    let mut keys: Vec<_> = bindings.keys().cloned().collect();
+    keys.sort();
+    GatewayConfigBindingStats {
+        count: bindings.len(),
+        expired_count: bindings.values().filter(|handle| handle.strong_count() == 0).count(),
+        keys,
+    }
+}
 
 /// Count EdgionGatewayConfig resources in the store
 pub fn count_edgion_gateway_configs() -> usize {
@@ -211,33 +377,16 @@ pub fn list_edgion_gateway_configs() -> Vec<EdgionGatewayConfig> {
     items
 }
 
-/// Load the HTTP request configuration referenced by a listener's GatewayClass.
-///
-/// `None`, a missing EGC, and a deleted EGC all resolve to the built-in safe
-/// default. The hot path performs one ArcSwap load, one bounded map lookup, and
-/// a shallow clone of the compact resolved value.
-#[inline]
-pub(crate) fn get_resolved_http_request_config(config_name: Option<&str>) -> ResolvedHttpRequestConfig {
-    let snapshot = EDGION_GATEWAY_CONFIG_STORE.load();
-    config_name
-        .and_then(|name| snapshot.http_request_configs.get(name))
-        .cloned()
-        .unwrap_or_default()
+// Name-based accessors are confined to publication tests. Runtime consumers
+// bind once and use GatewayConfigHandle::load.
+#[cfg(test)]
+fn get_resolved_gateway_config(config_name: Option<&str>) -> Arc<ResolvedGatewayConfig> {
+    bind_gateway_config(config_name).load()
 }
 
-/// Load the L4 timeout policy referenced by a listener's GatewayClass.
-///
-/// The configuration update path has already parsed the duration strings. A
-/// connection performs one lock-free snapshot load and one bounded map lookup,
-/// then keeps the copied value for its lifetime. Missing and deleted configs,
-/// and GatewayClasses without a parametersRef, use the built-in safe defaults.
-#[inline]
-pub fn get_resolved_l4_timeouts(config_name: Option<&str>) -> ResolvedL4Timeouts {
-    let snapshot = EDGION_GATEWAY_CONFIG_STORE.load();
-    config_name
-        .and_then(|name| snapshot.l4_timeouts.get(name))
-        .copied()
-        .unwrap_or_default()
+#[cfg(test)]
+fn get_resolved_l4_timeouts(config_name: Option<&str>) -> ResolvedL4Timeouts {
+    get_resolved_gateway_config(config_name).l4_timeouts
 }
 
 /// The data-plane default DNS resolver (`spec.dnsResolver`) from the effectively
@@ -402,7 +551,7 @@ fn recompute_global_config(store: &HashMap<String, EdgionGatewayConfig>) -> bool
 
 impl ConfHandler<EdgionGatewayConfig> for EdgionGatewayConfigHandler {
     fn full_set(&self, data: &HashMap<String, Arc<EdgionGatewayConfig>>) {
-        let _write_guard = EDGION_GATEWAY_CONFIG_WRITE_LOCK.lock();
+        let mut bindings = EDGION_GATEWAY_CONFIG_WRITE_LOCK.lock();
         tracing::info!(
             count = data.len(),
             "EdgionGatewayConfig full_set: received {} EdgionGatewayConfig resources",
@@ -410,8 +559,8 @@ impl ConfHandler<EdgionGatewayConfig> for EdgionGatewayConfigHandler {
         );
         let configs = arc_map_to_owned(data);
         let outbound_tls_changed = recompute_global_config(&configs);
-        EDGION_GATEWAY_CONFIG_STORE.store(Arc::new(EdgionGatewayConfigSnapshot::new(configs)));
-        drop(_write_guard);
+        publish_snapshot(configs, &mut bindings);
+        drop(bindings);
         if outbound_tls_changed {
             crate::link_sys::get_global_link_sys_store().rebuild_clients();
         }
@@ -430,7 +579,7 @@ impl ConfHandler<EdgionGatewayConfig> for EdgionGatewayConfigHandler {
             .chain(update.iter())
             .map(|(key, value)| (key.clone(), Arc::clone(value)))
             .collect();
-        let _write_guard = EDGION_GATEWAY_CONFIG_WRITE_LOCK.lock();
+        let mut bindings = EDGION_GATEWAY_CONFIG_WRITE_LOCK.lock();
         let mut configs = EDGION_GATEWAY_CONFIG_STORE.load_full().configs.clone();
 
         if !add.is_empty() {
@@ -477,8 +626,8 @@ impl ConfHandler<EdgionGatewayConfig> for EdgionGatewayConfigHandler {
         // result is deterministic across instances and the delete path restores
         // the default once no config carries the field.
         let outbound_tls_changed = recompute_global_config(&configs);
-        EDGION_GATEWAY_CONFIG_STORE.store(Arc::new(EdgionGatewayConfigSnapshot::new(configs)));
-        drop(_write_guard);
+        publish_snapshot(configs, &mut bindings);
+        drop(bindings);
         if outbound_tls_changed {
             crate::link_sys::get_global_link_sys_store().rebuild_clients();
         }
@@ -538,8 +687,94 @@ mod tests {
     }
 
     fn clear_store() {
-        let _write_guard = EDGION_GATEWAY_CONFIG_WRITE_LOCK.lock();
-        EDGION_GATEWAY_CONFIG_STORE.store(Arc::new(EdgionGatewayConfigSnapshot::empty()));
+        let mut bindings = EDGION_GATEWAY_CONFIG_WRITE_LOCK.lock();
+        publish_snapshot(HashMap::new(), &mut bindings);
+    }
+
+    #[test]
+    fn binding_survives_missing_update_delete_recreate_and_prunes_expired_entries() {
+        let _g = TEST_MUTEX.lock();
+        clear_store();
+        assert_eq!(gateway_config_binding_stats().count, 0);
+        let handler = EdgionGatewayConfigHandler::new();
+        let unbound = bind_gateway_config(None);
+        let bound = bind_gateway_config(Some("default"));
+        assert!(!Arc::ptr_eq(&unbound, &bound));
+        assert!(Arc::ptr_eq(&bound, &bind_gateway_config(Some("default"))));
+        assert!(Arc::ptr_eq(&bound.load(), &default_gateway_config()));
+        let config = |retries| {
+            let mut config = make_config("default");
+            config.spec.max_retries = retries;
+            Arc::new(config)
+        };
+        handler.full_set(&HashMap::from([("default".into(), config(17))]));
+        let pinned = bound.load();
+        let old_runtime = Arc::downgrade(&pinned);
+        assert_eq!(pinned.max_retries, 17);
+        assert!(Arc::ptr_eq(&unbound.load(), &default_gateway_config()));
+        handler.partial_update(
+            HashMap::new(),
+            HashMap::from([("default".into(), config(23))]),
+            HashSet::new(),
+        );
+        assert_eq!(bound.load().max_retries, 23);
+        assert_eq!(pinned.max_retries, 17);
+        handler.partial_update(HashMap::new(), HashMap::new(), HashSet::from(["default".into()]));
+        assert!(Arc::ptr_eq(&bound.load(), &default_gateway_config()));
+        assert!(Arc::ptr_eq(&bound, &bind_gateway_config(Some("default"))));
+        handler.partial_update(
+            HashMap::from([("default".into(), config(29))]),
+            HashMap::new(),
+            HashSet::new(),
+        );
+        assert_eq!(bound.load().max_retries, 29);
+        handler.full_set(&HashMap::new());
+        assert!(Arc::ptr_eq(&bound.load(), &default_gateway_config()));
+        handler.full_set(&HashMap::from([("default".into(), config(31))]));
+        assert_eq!(bound.load().max_retries, 31);
+        drop(pinned);
+        assert!(old_runtime.upgrade().is_none());
+
+        let transient = bind_gateway_config(Some("transient"));
+        drop(transient);
+        assert_eq!(gateway_config_binding_stats().expired_count, 1);
+        // Even rebinding an already live name must prune unrelated dead entries.
+        assert!(Arc::ptr_eq(&bound, &bind_gateway_config(Some("default"))));
+        assert_eq!(gateway_config_binding_stats().keys, vec!["default"]);
+        drop(bound);
+        assert_eq!(gateway_config_binding_stats().expired_count, 1);
+        handler.full_set(&HashMap::new());
+        let stats = gateway_config_binding_stats();
+        assert_eq!(stats.count, 0);
+        assert_eq!(stats.expired_count, 0);
+        assert!(stats.keys.is_empty());
+    }
+
+    #[test]
+    fn concurrent_binding_and_publication_cannot_lose_the_new_generation() {
+        let _g = TEST_MUTEX.lock();
+        clear_store();
+        for retries in 10..30 {
+            let barrier = Arc::new(std::sync::Barrier::new(2));
+            let bind_barrier = Arc::clone(&barrier);
+            let binder = std::thread::spawn(move || {
+                bind_barrier.wait();
+                bind_gateway_config(Some("concurrent-binding"))
+            });
+            let writer = std::thread::spawn(move || {
+                let mut config = make_config("concurrent-binding");
+                config.spec.max_retries = retries;
+                barrier.wait();
+                EdgionGatewayConfigHandler::new()
+                    .full_set(&HashMap::from([("concurrent-binding".into(), Arc::new(config))]));
+            });
+            let bound = binder.join().unwrap();
+            writer.join().unwrap();
+            assert_eq!(bound.load().max_retries, retries);
+            assert!(Arc::ptr_eq(&bound, &bind_gateway_config(Some("concurrent-binding"))));
+        }
+        clear_store();
+        assert_eq!(gateway_config_binding_stats().count, 0);
     }
 
     #[test]
@@ -619,7 +854,7 @@ mod tests {
             HashSet::new(),
         );
 
-        let resolved = get_resolved_http_request_config(Some("foo"));
+        let resolved = get_resolved_gateway_config(Some("foo"));
         assert_eq!(resolved.remote_ip_header, "x-real-ip");
         assert_eq!(
             resolved.request_body,
@@ -701,7 +936,7 @@ mod tests {
         add.insert("http-request-policy".to_string(), Arc::new(initial));
         handler.partial_update(add, HashMap::new(), HashSet::new());
 
-        let in_flight = get_resolved_http_request_config(Some("http-request-policy"));
+        let in_flight = get_resolved_gateway_config(Some("http-request-policy"));
         assert_eq!(in_flight.remote_ip_header, "x-initial-remote-ip");
         assert!(!in_flight.request_body.enabled);
         assert_eq!(in_flight.request_body.memory_buffer_bytes, 256 * 1024);
@@ -734,7 +969,7 @@ mod tests {
         update.insert("http-request-policy".to_string(), Arc::new(updated));
         handler.partial_update(HashMap::new(), update, HashSet::new());
 
-        let next = get_resolved_http_request_config(Some("http-request-policy"));
+        let next = get_resolved_gateway_config(Some("http-request-policy"));
         assert_eq!(next.remote_ip_header, "x-updated-remote-ip");
         assert!(next.request_body.enabled);
         assert_eq!(next.request_body.memory_buffer_bytes, 512 * 1024);
@@ -770,11 +1005,92 @@ mod tests {
             HashMap::new(),
             HashSet::from(["http-request-policy".to_string()]),
         );
-        let default = ResolvedHttpRequestConfig::default();
-        assert_eq!(get_resolved_http_request_config(Some("http-request-policy")), default);
-        assert_eq!(get_resolved_http_request_config(Some("missing")), default);
-        assert_eq!(get_resolved_http_request_config(None), default);
+        let default = get_resolved_gateway_config(None);
+        assert!(Arc::ptr_eq(
+            &get_resolved_gateway_config(Some("http-request-policy")),
+            &default
+        ));
+        assert!(Arc::ptr_eq(&get_resolved_gateway_config(Some("missing")), &default));
+        assert!(Arc::ptr_eq(&get_resolved_gateway_config(None), &default));
         assert!(default.reject_duplicate_host);
+    }
+
+    #[test]
+    fn runtime_egc_hot_reload_pins_security_and_compiled_http_policy() {
+        let _guard = TEST_MUTEX.lock();
+        let handler = EdgionGatewayConfigHandler;
+        let mut initial = make_config("runtime-policy");
+        initial.spec = serde_json::from_value(serde_json::json!({
+            "maxRetries": 7,
+            "server": {"enableCompression": true, "downstreamKeepaliveRequestLimit": 19},
+            "securityProtect": {
+                "xForwardedForLimit": 31, "requireSniHostMatch": false,
+                "allowLoopbackUpstream": true, "fallbackSni": "old.example.com",
+                "tlsProxyLogRecord": false, "rejectDuplicateHost": false
+            },
+            "httpTimeout": {"client": {"readTimeout": "3s"}, "backend": {"defaultConnectTimeout": "4s"}},
+            "tcpTimeout": {"connectTimeout": "5s", "idleTimeout": "6s"},
+            "realIp": {"trustedIps": [{"name": "local", "cidrs": ["127.0.0.1/32"]}], "realIpHeader": "X-Forwarded-For"}
+        }))
+        .unwrap();
+        handler.full_set(&HashMap::from([("runtime-policy".into(), Arc::new(initial))]));
+        let old = get_resolved_gateway_config(Some("runtime-policy"));
+        assert!(Arc::ptr_eq(&old, &get_resolved_gateway_config(Some("runtime-policy"))));
+        assert_eq!(old.x_forwarded_for_limit, Some(31));
+        assert!(!old.require_sni_host_match);
+        assert!(old.allow_loopback_upstream);
+        assert_eq!(old.fallback_sni.as_deref(), Some("old.example.com"));
+        assert!(!old.tls_proxy_log_record);
+        assert!(!old.reject_duplicate_host);
+        assert_eq!(old.max_retries, 7);
+        assert!(old.enable_compression);
+        assert_eq!(old.downstream_keepalive_request_limit, 19);
+        assert_eq!(old.parsed_timeouts.client.read_timeout, Duration::from_secs(3));
+        assert_eq!(old.parsed_timeouts.backend.connect_timeout, Duration::from_secs(4));
+        assert_eq!(old.l4_timeouts.connect_timeout, Some(Duration::from_secs(5)));
+        assert!(old.real_ip_extractor.is_some());
+
+        let mut updated = make_config("runtime-policy");
+        updated.spec.security_protect = Some(
+            serde_json::from_value(serde_json::json!({
+                "xForwardedForLimit": 8, "fallbackSni": "new.example.com"
+            }))
+            .unwrap(),
+        );
+        handler.partial_update(
+            HashMap::new(),
+            HashMap::from([("runtime-policy".into(), Arc::new(updated))]),
+            HashSet::new(),
+        );
+        let next = get_resolved_gateway_config(Some("runtime-policy"));
+        assert!(!Arc::ptr_eq(&old, &next));
+        assert_eq!(next.x_forwarded_for_limit, Some(8));
+        assert_eq!(next.fallback_sni.as_deref(), Some("new.example.com"));
+        assert!(next.require_sni_host_match && next.tls_proxy_log_record && next.reject_duplicate_host);
+        assert!(!next.allow_loopback_upstream && !next.enable_compression);
+        assert!(next.real_ip_extractor.is_none());
+        assert_eq!(next.parsed_timeouts.client.read_timeout, Duration::from_secs(60));
+        assert_eq!(old.fallback_sni.as_deref(), Some("old.example.com"));
+        assert!(old.allow_loopback_upstream && old.enable_compression);
+        assert_eq!(old.l4_timeouts.idle_timeout, Some(Duration::from_secs(6)));
+
+        handler.partial_update(HashMap::new(), HashMap::new(), HashSet::from(["runtime-policy".into()]));
+        let default = get_resolved_gateway_config(None);
+        assert!(Arc::ptr_eq(
+            &default,
+            &get_resolved_gateway_config(Some("runtime-policy"))
+        ));
+        assert!(Arc::ptr_eq(&default, &get_resolved_gateway_config(Some("missing"))));
+        assert!(default.fallback_sni.is_none());
+        assert!(!default.allow_loopback_upstream);
+        assert_eq!(next.fallback_sni.as_deref(), Some("new.example.com"));
+        let old_weak = Arc::downgrade(&old);
+        drop(old);
+        assert!(
+            old_weak.upgrade().is_none(),
+            "published store must release superseded generations"
+        );
+        handler.full_set(&HashMap::new());
     }
 
     #[test]
@@ -794,7 +1110,7 @@ mod tests {
         )]));
 
         assert_eq!(
-            get_resolved_http_request_config(Some("invalid-preflight-policy")).preflight_policy,
+            get_resolved_gateway_config(Some("invalid-preflight-policy")).preflight_policy,
             ResolvedPreflightPolicy {
                 mode: ResolvedPreflightMode::AllOptions,
                 status_code: 700,
@@ -820,7 +1136,7 @@ mod tests {
         data.insert("invalid-body-policy".to_string(), Arc::new(config));
         handler.full_set(&data);
 
-        let resolved = get_resolved_http_request_config(Some("invalid-body-policy"));
+        let resolved = get_resolved_gateway_config(Some("invalid-body-policy"));
         assert_eq!(resolved.remote_ip_header, "x-valid-remote-ip");
         assert_eq!(
             resolved.request_body,

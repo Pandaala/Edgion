@@ -54,11 +54,14 @@ two consumers reach it differently, and this distinction must not be blurred:
   warn-not-reject policy: an `Accepted=False/reason=Invalid` condition is
   stamped and the resource is still synced. So `validate_real_ip` alone does not
   keep an invalid `spec.realIp` out of the data plane. The Gateway therefore
-  re-runs it in `runtime/server/listener_builder.rs` and refuses to build the
+  re-runs it in `config/edgion_gateway/conf_handler_impl.rs::ResolvedGatewayConfig::resolve` and refuses to build the
   extractor, mirroring the existing `forwardedHeaders` backstop in
   `config/edgion_gateway/conf_handler_impl.rs`. On the Kubernetes path the CRD's
   `pattern`/`maxLength` on `realIpHeader` rejects the object at the API server
-  before any of this runs.
+  before any of this runs. The extractor is now compiled on every EGC publication
+  and retained in the request's runtime Arc, so updates and removal apply to new
+  requests without rebuilding listeners. The prior listener-builder location is
+  historical; the validation and disabled-extraction fallback remain unchanged.
 
 **3. Read direction, so no reserved-name list**
 

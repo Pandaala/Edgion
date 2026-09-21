@@ -46,7 +46,7 @@ kind: EdgionGatewayConfig
 metadata:
   name: default-config
 spec:
-  # ─── GatewayClass HTTP server behavior (restart-bound) ───
+  # ─── GatewayClass HTTP server behavior (dynamic) ───
   server:
     enableCompression: false                # bool, gzip known-length downstream responses
     downstreamKeepaliveRequestLimit: 1000   # uint32, 0 = unlimited
@@ -153,9 +153,33 @@ spec:
 | `enableCompression` | `bool` | `false` | Gzip eligible downstream responses with a valid `Content-Length` and no `Transfer-Encoding`; unknown-length and SSE responses remain uncompressed |
 | `downstreamKeepaliveRequestLimit` | `u32` | `1000` | Maximum requests per downstream connection |
 
-These fields are captured when the HTTP listener is constructed and require a Gateway process
-restart to change. Process settings (`threads`, `work_stealing`, shutdown periods,
+Compression is captured per HTTP request. The keepalive budget is captured by the
+first HTTP/1 request and retained by that connection; existing connections do not
+adopt a later budget. Both fields update without listener reconstruction.
+Process settings (`threads`, `work_stealing`, shutdown periods,
 `upstream_keepalive_pool_size`, and `error_log`) belong exclusively to the local Gateway YAML.
+
+### Runtime publication boundaries
+
+Edgion propagates referenced EGC changes to existing Gateways. The single EGC
+`ArcSwap` snapshot publishes `Arc<ResolvedGatewayConfig>` entries keyed by name.
+Listeners bind once to a stable per-name `GatewayConfigHandle`; publication
+updates its ArcSwap under the same lock used for binding. HTTP request creation
+loads directly from that handle without a name lookup and keeps the Arc through retries and response
+processing. This covers timeouts, retries, RealIp, security checks, body policy,
+forwarded headers, preflight, and compression. Parsing and matcher construction
+occur at publication, never on the request path.
+
+TCP and both TLS proxy modes capture at `process_new`; UDP captures only when a
+session is created; fallback SNI is selected from a handshake snapshot. Existing
+consumers keep their generation. Missing/deleted EGC references use runtime
+defaults, while scoped plugin admission independently fails closed for a missing
+referenced EGC. No reference is distinct from an EGC literally named `default`.
+
+Plugin policy/global plugins/access-log masking and shared LinkSys, load-balancing,
+outbound TLS, and DNS mechanisms retain their existing dynamic publication scopes.
+They are not part of an atomic transaction with the HTTP request Arc. This does
+not retarget GatewayClass references or change physical listener ownership.
 
 ### spec.httpTimeout.client
 
@@ -211,12 +235,18 @@ Extraction logic: traverse `realIpHeader` right-to-left, skip addresses listed i
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `xForwardedForLimit` | `usize` | `200` | Max byte length of X-Forwarded-For |
+| `xForwardedForLimit` | `usize` | `200` | Max byte length of X-Forwarded-For; excess returns HTTP 400 |
 | `requireSniHostMatch` | `bool` | `true` | HTTPS listener-level 421 Misdirected Request detection (can also be enabled per-Gateway via Gateway annotations) |
 | `fallbackSni` | `String?` | — | Fallback hostname when the client does not provide SNI |
 | `tlsProxyLogRecord` | `bool` | `true` | Record TLS proxy connection logs |
 | `allowLoopbackUpstream` | `bool` | `false` | Explicitly allow loopback upstream; link-local / metadata are not allowed |
 | `rejectDuplicateHost` | `bool` | `true` | Reject HTTP/1.1 requests containing multiple Host field lines with 400. |
+
+Omitting the entire `securityProtect` block disables the XFF byte cap. A present
+block with an omitted `xForwardedForLimit` uses 200. New HTTP requests use updated
+XFF, SNI/Host, duplicate-Host and loopback policies; new TCP/TLS connections and
+UDP sessions use updated loopback policies. TLS proxy logging is connection-pinned,
+and fallback SNI applies to new handshakes.
 
 ### spec.requestBody
 

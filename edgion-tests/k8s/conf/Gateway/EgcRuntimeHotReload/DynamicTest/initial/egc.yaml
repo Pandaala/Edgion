@@ -1,0 +1,12 @@
+apiVersion: edgion.io/v1alpha1
+kind: EdgionGatewayConfig
+metadata:
+  name: egc-runtime-hot-reload
+spec:
+  server:
+    enableCompression: false
+  tcpTimeout:
+    idleTimeout: 120s
+  securityProtect:
+    xForwardedForLimit: 4096
+    fallbackSni: egc-runtime.sandbox.example.com

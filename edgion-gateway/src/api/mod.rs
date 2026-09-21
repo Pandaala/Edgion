@@ -403,6 +403,7 @@ struct StoreStatsResponse {
     backend_tls_policy: crate::backends::policy::BackendTLSPolicyStoreStats,
     gateway_class_store: SimpleCountStats,
     edgion_gateway_config_store: SimpleCountStats,
+    egc_bindings: crate::config::edgion_gateway::GatewayConfigBindingStats,
     client_caches: ClientCachesStats,
     service_discovery: crate::backends::discovery::ServiceDiscoveryStatsSnapshot,
     health_status_store: SimpleCountStats,
@@ -623,6 +624,7 @@ async fn store_stats(State(client): State<Arc<ConfigClient>>) -> Json<ApiRespons
         backend_tls_policy,
         gateway_class_store,
         edgion_gateway_config_store,
+        egc_bindings: crate::config::edgion_gateway::gateway_config_binding_stats(),
         client_caches,
         service_discovery,
         health_status_store,
@@ -1981,6 +1983,7 @@ mod store_stats_tests {
             },
             gateway_class_store: SimpleCountStats { count: 0 },
             edgion_gateway_config_store: SimpleCountStats { count: 0 },
+            egc_bindings: Default::default(),
             client_caches: ClientCachesStats {
                 by_kind: std::collections::BTreeMap::new(),
             },

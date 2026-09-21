@@ -11,7 +11,7 @@ use pingora_core::upstreams::peer::BasicPeer;
 use crate::backends::{
     select_service_endpoint, service_section_key_from_port, validate_endpoint_backend_addr, ServiceDegradePolicy,
 };
-use crate::config::{get_resolved_l4_timeouts, ResolvedL4Timeouts};
+use crate::config::ResolvedGatewayConfig;
 use crate::observe::{log_tcp, TcpLogEntry};
 use crate::plugins::publication::global_publisher;
 use crate::plugins::stream::connection_filter_bridge::resolve_route_scope;
@@ -24,7 +24,6 @@ use crate::routes::common::{
 use crate::routes::l4_duplex::{bidirectional_relay, DuplexError, DuplexHooks};
 use crate::routes::tcp::route_unit::TcpRouteUnit;
 use crate::routes::tcp::TcpPortRouteManager;
-use edgion_resources::resources::edgion_gateway_config::EdgionGatewayConfig;
 use edgion_resources::ListenerKey;
 
 /// TCP connection context
@@ -102,14 +101,14 @@ pub struct EdgionTcpProxy {
     pub listener_port: u16,
     pub listener_key: ListenerKey,
     pub tcp_route_manager: Arc<TcpPortRouteManager>,
-    pub edgion_gateway_config: Arc<EdgionGatewayConfig>,
-    pub edgion_gateway_config_name: Option<String>,
+    pub egc: Arc<crate::config::GatewayConfigHandle>,
     pub connector: TransportConnector,
 }
 
 #[async_trait]
 impl ServerApp for EdgionTcpProxy {
     async fn process_new(self: &Arc<Self>, downstream: Stream, shutdown: &ShutdownWatch) -> Option<Stream> {
+        let gateway_config = self.egc.load();
         if *shutdown.borrow() {
             return None;
         }
@@ -136,8 +135,7 @@ impl ServerApp for EdgionTcpProxy {
             deny_reason: None,
         };
 
-        let l4_timeouts = get_resolved_l4_timeouts(self.edgion_gateway_config_name.as_deref());
-        self.handle_connection(downstream, &mut ctx, l4_timeouts).await;
+        self.handle_connection(downstream, &mut ctx, &gateway_config).await;
 
         self.log_connection(&ctx).await;
 
@@ -146,7 +144,12 @@ impl ServerApp for EdgionTcpProxy {
 }
 
 impl EdgionTcpProxy {
-    async fn handle_connection(&self, downstream: Stream, ctx: &mut TcpContext, l4_timeouts: ResolvedL4Timeouts) {
+    async fn handle_connection(
+        &self,
+        downstream: Stream,
+        ctx: &mut TcpContext,
+        gateway_config: &ResolvedGatewayConfig,
+    ) {
         // 1. Match TCPRoute unit from per-port route table
         let Some(unit) = select_route_unit(&self.tcp_route_manager) else {
             ctx.status = TcpStatus::NoRouteMatched;
@@ -243,7 +246,7 @@ impl EdgionTcpProxy {
         let outlier_store = crate::backends::get_outlier_detection_store();
         let outlier_token = outlier_store.capture_completion_token(backend.as_ref());
         let upstream_addr_str = ctx.upstream_addr.insert(upstream_addr_str);
-        if validate_endpoint_backend_addr(&upstream_addr, self.allow_loopback_upstream()).is_err() {
+        if validate_endpoint_backend_addr(&upstream_addr, gateway_config.allow_loopback_upstream).is_err() {
             ctx.status = TcpStatus::UnsafeUpstreamAddress;
             // Mirror the TLS/UDP fail-close access-log fields: surface the
             // shared SSRF-guard literal into `deny_reason` so operator log
@@ -263,7 +266,7 @@ impl EdgionTcpProxy {
         // Bound the connect (TCP handshake) so an unreachable backend fails fast
         // instead of stranding the downstream connection until the OS TCP
         // retransmit timeout; mirrors the HTTP path's connection_timeout.
-        peer.options.connection_timeout = l4_timeouts.connect_timeout;
+        peer.options.connection_timeout = gateway_config.l4_timeouts.connect_timeout;
         let Ok(upstream) = self.connector.new_stream(&peer).await else {
             ctx.status = TcpStatus::UpstreamConnectionFailed;
             // L4 upstream connect failure — local-origin failure.
@@ -285,7 +288,8 @@ impl EdgionTcpProxy {
         }
 
         // 8. Bidirectional data forwarding
-        self.duplex(downstream, upstream, ctx, l4_timeouts.idle_timeout).await;
+        self.duplex(downstream, upstream, ctx, gateway_config.l4_timeouts.idle_timeout)
+            .await;
     }
 
     async fn duplex(&self, downstream: Stream, upstream: Stream, ctx: &mut TcpContext, idle_timeout: Option<Duration>) {
@@ -295,15 +299,6 @@ impl EdgionTcpProxy {
     async fn log_connection(&self, ctx: &TcpContext) {
         let log_entry = TcpLogEntry::from_context(ctx);
         log_tcp(&log_entry).await;
-    }
-
-    fn allow_loopback_upstream(&self) -> bool {
-        self.edgion_gateway_config
-            .spec
-            .security_protect
-            .as_ref()
-            .map(|s| s.allow_loopback_upstream)
-            .unwrap_or(false)
     }
 }
 

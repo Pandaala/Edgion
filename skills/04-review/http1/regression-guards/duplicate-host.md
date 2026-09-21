@@ -22,7 +22,7 @@ Suggestions of the form "accept and pick the first/last Host", "downgrade to `tr
 
 ## Code shape today
 
-- `conf_handler_impl.rs::ResolvedHttpRequestConfig` — resolves the switch into the immutable EGC request snapshot with a safe `true` fallback for an absent, missing, or deleted configuration.
+- `conf_handler_impl.rs::ResolvedGatewayConfig` — resolves the switch into the immutable EGC runtime Arc with a safe `true` fallback for an absent, missing, or deleted configuration.
 - `pg_new_ctx.rs` + `pg_request_filter.rs::build_request_metadata` — each ordinary HTTP request captures the switch with the request-body, RemoteIp-header, and preflight policies from one publication generation. The filter generates `x_trace_id` first (so the rejection's access-log entry is correlatable with `tls.log`), then counts `req_header.headers.get_all("host")` before path/ACME/hostname extraction; `>1` ⇒ `record_error(EdgionErrorCode::DuplicateHostHeader) + end_response_400`.
 - `redirect_http.rs::EdgionHttpRedirectProxy::{new_ctx,request_filter}` — the redirect listener retains only the referenced EGC name; each new context captures the current switch, and the request filter applies the same gate before it can echo a Host into the 301 `Location:` URL.
 - `edgion_gateway_config.rs::SecurityProtectConfig.reject_duplicate_host: bool` — default `true` (`default_reject_duplicate_host`).

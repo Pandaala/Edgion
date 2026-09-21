@@ -46,7 +46,9 @@ remains valid and is extended by controller ownership, not replaced.
 
 Snapshot preservation is not concurrent-writer safety: Kubernetes Merge Patch replaces the parents
 array. A foreign update after our input snapshot may still be overwritten. This independent limitation
-is tracked in [the storage follow-up](../../../../tasks/todo/route-status-concurrent-writer-preservation.md).
+requires separate storage-layer investigation. The previously referenced follow-up
+`tasks/todo/route-status-concurrent-writer-preservation.md` is absent from the repository;
+this missing task does not establish that the limitation was resolved.
 
 ## Verification and re-evaluation
 

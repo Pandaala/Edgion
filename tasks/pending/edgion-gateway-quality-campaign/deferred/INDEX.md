@@ -13,7 +13,7 @@
 | D0009 | ready-for-separate-task | `tasks/todo/align-route-retry-limits-with-pingora-loop-ceiling.md` | B0056 |
 | D0010 | ready-for-separate-task | `tasks/todo/preserve-openai-error-rendering-at-ai-connect-retry-ceiling.md` | B0056 |
 | D0011 | ready-after-campaign-freeze | `tasks/todo/add-preflight-policy-hot-reload-integration-coverage.md` | B0065 |
-| D0012 | ready-for-separate-task | `tasks/todo/audit-security-protect-egc-hot-reload.md` | B0066 |
+| D0012 | resolved | `skills/04-review/listeners/regression-guards/egc-runtime-snapshot-publication.md` | B0066 |
 | D0013 | ready-after-campaign-freeze | `tasks/todo/add-duplicate-host-policy-hot-reload-integration-coverage.md` | B0066 |
 | D0014 | ready-for-separate-task | `tasks/todo/cold-compile-edgion-tls-runtime-state.md` | B0075 |
 | D0015 | ready-for-separate-task | `tasks/todo/update-stale-mtls-config-helper-knowledge.md` | B0075 |

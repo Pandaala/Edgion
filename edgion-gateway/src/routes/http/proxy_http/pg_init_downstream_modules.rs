@@ -16,25 +16,10 @@ fn register_downstream_modules(modules: &mut HttpModules, compression_level: u32
 }
 
 #[inline]
-pub fn init_downstream_modules(edgion_http: &EdgionHttpProxy, modules: &mut HttpModules) {
-    let enable_compression = edgion_http
-        .edgion_gateway_config
-        .spec
-        .server
-        .as_ref()
-        .map(|server| server.enable_compression)
-        .unwrap_or(false);
-
-    // An enabled initial level is required for Pingora's request filter to
-    // capture Accept-Encoding. The final response hook, shared by origin and
-    // cache-hit paths, always narrows this to level 0 or the default before the
-    // response module selects an encoder.
-    let level = if enable_compression {
-        DEFAULT_COMPRESSION_LEVEL
-    } else {
-        0
-    };
-    register_downstream_modules(modules, level);
+pub fn init_downstream_modules(_edgion_http: &EdgionHttpProxy, modules: &mut HttpModules) {
+    // Always register the module. The early request hook applies the captured
+    // switch before Accept-Encoding parsing; the response hook narrows encoding.
+    register_downstream_modules(modules, DEFAULT_COMPRESSION_LEVEL);
 }
 
 #[cfg(test)]

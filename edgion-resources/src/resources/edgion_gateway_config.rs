@@ -741,10 +741,9 @@ fn default_max_instances_per_kind() -> usize {
 /// `EdgionGatewayConfig` (referenced via `GatewayClass.spec.parametersRef`) so a
 /// tenant who owns a route and its `EdgionPlugins` cannot widen masking.
 ///
-/// Scope caveat: `bound_listeners` dedup (`runtime/server/base.rs`) skips a
-/// listener already bound at the same addr/protocol, so two Gateways of
-/// different GatewayClasses sharing an addr:port share the first one's config.
-/// The whitelist is therefore effectively per-listener, not per-Gateway.
+/// The request's captured plugin publication scope selects this policy through
+/// its owning GatewayClass. EGC updates rebuild that scope; an in-flight request
+/// retains its captured masking policy even when physical listeners are shared.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", default)]
 pub struct AccessLogExternPolicy {

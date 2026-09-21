@@ -2462,6 +2462,9 @@ pub(crate) struct AiHttpState {
 }
 
 pub struct EdgionHttpContext {
+    /// One immutable EGC generation captured at the start of this request.
+    pub(crate) egc: Arc<crate::config::ResolvedGatewayConfig>,
+    pub(crate) downstream_keepalive_initialized: bool,
     // --- Request lifecycle and identity ---
     /// Request start time for latency calculation
     pub start_time: Instant,
@@ -3556,7 +3559,13 @@ impl EdgionHttpContext {
     }
 
     pub fn new() -> Self {
+        Self::with_gateway_config(crate::config::default_gateway_config())
+    }
+
+    pub(crate) fn with_gateway_config(egc: Arc<crate::config::ResolvedGatewayConfig>) -> Self {
         Self {
+            egc,
+            downstream_keepalive_initialized: false,
             start_time: Instant::now(),
             gateway_info: None,
             request_info: RequestInfo::default(),

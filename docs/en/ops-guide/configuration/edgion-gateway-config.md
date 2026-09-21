@@ -1,13 +1,13 @@
 # EdgionGatewayConfig
 
-EdgionGatewayConfig is a cluster-scoped CRD (`edgion.io/v1alpha1`) that configures behavior at the GatewayClass level. It is referenced via `GatewayClass.spec.parametersRef`. Most request- and connection-scoped policies update dynamically; fields used to construct an HTTP listener are explicitly marked as restart-bound.
+EdgionGatewayConfig is a cluster-scoped CRD (`edgion.io/v1alpha1`) that configures behavior at the GatewayClass level. It is referenced via `GatewayClass.spec.parametersRef`. Updates propagate to existing Gateways without restarting the process; the field determines which new request, connection, or operation adopts the update.
 
 ## Difference from Gateway YAML
 
 | Layer | Gateway YAML | EdgionGatewayConfig |
 |-------|-------------|---------------------|
 | Scope | Single Gateway process | Entire GatewayClass |
-| How changes apply | Requires process restart | Field-specific; most policies are dynamic, while `spec.server` requires a process restart |
+| How changes apply | Requires process restart | Dynamic, at the field's request, connection, or operation boundary |
 | Typical use | Process connection params, log paths, rate limit precision | Timeout policies, security rules, global plugins, real IP extraction |
 
 **When to use Gateway YAML vs EdgionGatewayConfig:**
@@ -97,6 +97,35 @@ spec:
 
 > Note: URI path normalization (`%2F` rejection, invalid percent-encoding rejection, etc.) is **not** part of EdgionGatewayConfig — it is configured in the Gateway YAML `path_normalization` section. See [Gateway Configuration](./gateway-config.md).
 
+## Hot Update Boundaries
+
+Edgion propagates changes to the referenced EGC into existing Gateways. This is an
+Edgion behavior: Gateway API does not require GatewayClass parameter changes to
+propagate to Gateways that already exist.
+
+Listeners retain a shared configuration handle. An EGC update replaces its
+resolved snapshot; each new request captures that snapshot directly without
+looking up the EGC name. Deletion and same-name recreation update the same handle.
+
+| Configuration | When the updated value applies |
+|---|---|
+| HTTP timeouts, retries, RealIp, XFF and SNI/Host checks, duplicate Host checks, request body, forwarded headers, preflight, compression, HTTP loopback permission | Each new HTTP request captures one configuration generation and keeps it through retries and response processing |
+| `server.downstreamKeepaliveRequestLimit` | The first HTTP/1 request captures a budget for its connection; later requests on that connection retain it |
+| `tcpTimeout`, TCP/TLS loopback permission, `tlsProxyLogRecord` | Each new L4 proxy connection captures its policy and retains it through retries, relay, and logging |
+| UDP loopback permission | Each newly created UDP session; existing sessions retain their policy |
+| `fallbackSni` | Each new TLS handshake; an established TLS connection does not select a new certificate |
+| Plugin policy, global plugins, access-log masking, LinkSys, load-balancing defaults, outbound TLS, DNS | Their existing dynamic publishers and consumers apply updates with their own scopes and lifetimes |
+
+These mechanisms do not form one atomic update across resource kinds or Gateway
+replicas. An in-flight request does not change its captured EGC generation, but
+independently published shared services retain their own update semantics.
+
+Removing a referenced EGC restores the built-in request/connection defaults for
+new consumers. Plugin admission independently fails closed for a missing referenced
+EGC. Changing the GatewayClass reference itself, adding listener ports, transferring
+shared-listener ownership, or deleting and recreating a Gateway remains outside
+this hot-update contract.
+
 ## Configuration Parameters
 
 ### spec.server
@@ -106,8 +135,9 @@ spec:
 | `enableCompression` | `Boolean` | `false` | Gzip eligible downstream responses with a valid `Content-Length` and no `Transfer-Encoding`; unknown-length and SSE responses remain uncompressed to preserve incremental delivery |
 | `downstreamKeepaliveRequestLimit` | `Integer` | `1000` | Max requests per downstream connection; `0` means unlimited |
 
-Both fields are captured when the HTTP listener is constructed. Updating them on an existing
-Gateway process requires a restart. Pingora worker threads, shutdown periods, the upstream
+Compression is captured per HTTP request. The keepalive request budget is captured
+by the first HTTP/1 request and retained for that connection. Both support updates
+without restarting listeners. Pingora worker threads, shutdown periods, the upstream
 keepalive pool, and the Pingora error-log path belong to the local Gateway YAML `server` section;
 they are not GatewayClass fields.
 
@@ -184,12 +214,15 @@ Controller preparse warns rather than refusing to publish, so the Gateway applie
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `xForwardedForLimit` | `Integer` | `200` | Maximum byte length of the `X-Forwarded-For` header; excess is truncated |
+| `xForwardedForLimit` | `Integer` | `200` | Maximum byte length of the `X-Forwarded-For` header; exceeding it returns `400 Bad Request` |
 | `requireSniHostMatch` | `Boolean` | `true` | HTTPS listener-level 421 Misdirected Request detection; rejects requests where SNI does not match the Host header |
 | `fallbackSni` | `String` | — | Fallback hostname used when the client provides no SNI |
 | `tlsProxyLogRecord` | `Boolean` | `true` | Record TLS proxy connection logs |
 | `allowLoopbackUpstream` | `Boolean` | `false` | Explicitly allow loopback upstream addresses for this GatewayClass. Link-local / metadata ranges remain blocked |
 | `rejectDuplicateHost` | `Boolean` | `true` | Reject HTTP/1.1 requests carrying more than one `Host` header line with `400 Bad Request` (RFC 9110 §7.2 Host smuggling defense). Disable only as a transitional escape hatch for legacy middleware that emits duplicate `Host` lines |
+
+If the entire `securityProtect` block is absent, the XFF byte cap is disabled.
+If the block is present and `xForwardedForLimit` is omitted, its default is 200.
 
 ### spec.requestBody
 
@@ -269,10 +302,9 @@ unmasked" — it also keeps the default `header` and `respHeader` lists shown
 above. To unmask only `tenant_id` and drop the header defaults, list every
 category explicitly, e.g. `header: []`.
 
-**Effective scope is per-listener, not per-Gateway**: when two Gateways of
-different GatewayClasses share the same bind address/port, only the first
-Gateway's `EdgionGatewayConfig` — including this whitelist — is bound for that
-listener.
+Masking is published with the scoped plugin runtime selected for the logical
+Gateway. Its publication is independent of the listener's request/connection EGC
+snapshot; shared-listener ownership does not replace that plugin scope.
 
 ### spec.preflightPolicy
 

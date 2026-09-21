@@ -130,13 +130,7 @@ pub async fn request_filter(
         if let Some((sni_listener_name, gateway_key)) = ctx.request_info.gateway_tls_match() {
             if let Some(gw_listeners) = gateway_index.get_gateway(gateway_key) {
                 if let Some(sni_entry) = gw_listeners.get(sni_listener_name) {
-                    let global_enabled = edgion_http
-                        .edgion_gateway_config
-                        .spec
-                        .security_protect
-                        .as_ref()
-                        .map(|s| s.require_sni_host_match)
-                        .unwrap_or(true);
+                    let global_enabled = ctx.egc.require_sni_host_match;
                     let gw_annotation_enabled = sni_entry.info.require_sni_host_match.unwrap_or(false);
 
                     if global_enabled || gw_annotation_enabled {
@@ -442,16 +436,11 @@ async fn build_request_metadata(
     ctx.request_info.direct_peer_ip = addrs.direct_peer_ip;
     ctx.request_info.direct_peer_port = addrs.direct_peer_port;
 
-    let xff_limit = edgion_http
-        .edgion_gateway_config
-        .spec
-        .security_protect
-        .as_ref()
-        .map(|config| config.x_forwarded_for_limit);
+    let xff_limit = ctx.egc.x_forwarded_for_limit;
     let xff_snapshot = snapshot_x_forwarded_for(req_header, xff_limit);
     let xff_too_long = xff_snapshot.too_long;
 
-    let resolved = if let Some(extractor) = &edgion_http.real_ip_extractor {
+    let resolved = if let Some(extractor) = &ctx.egc.real_ip_extractor {
         if extractor.real_ip_header().eq_ignore_ascii_case("x-forwarded-for") {
             extractor
                 .resolve_real_ip(&ctx.request_info.downstream_peer_ip, xff_snapshot.value.as_deref())
@@ -856,7 +845,7 @@ mod xff_snapshot_tests {
         request
     }
 
-    fn proxy(limit: usize) -> EdgionHttpProxy {
+    fn context(limit: usize) -> EdgionHttpContext {
         let config: EdgionGatewayConfig = serde_json::from_value(json!({
             "apiVersion": "edgion.io/v1",
             "kind": "EdgionGatewayConfig",
@@ -864,17 +853,20 @@ mod xff_snapshot_tests {
             "spec": {"securityProtect": {"xForwardedForLimit": limit}}
         }))
         .unwrap();
+        let mut ctx = EdgionHttpContext::default();
+        ctx.egc = Arc::new(crate::config::ResolvedGatewayConfig::resolve(&config));
+        ctx
+    }
+
+    fn proxy() -> EdgionHttpProxy {
         EdgionHttpProxy {
             listener_port: 80,
             is_https_listener: false,
             listener_key: ListenerKey("127.0.0.1:80/HTTP".to_string()),
             server_header_opts: Default::default(),
             access_logger: Arc::new(AccessLogger::default()),
-            edgion_gateway_config: Arc::new(config),
-            http_request_config_name: None,
-            parsed_timeouts: Default::default(),
+            egc: crate::config::bind_gateway_config(None),
             enable_http2: false,
-            real_ip_extractor: None,
             preflight_handler: super::super::PreflightHandler,
             http_route_manager: Arc::new(HttpPortRouteManager::default()),
             grpc_route_manager: Arc::new(GrpcPortRouteManager::default()),
@@ -988,9 +980,9 @@ mod xff_snapshot_tests {
         let (mut session, _client) =
             session_from_request(b"GET / HTTP/1.1\r\nHost: first.test\r\nX-Forwarded-For: 12345\r\n\r\n").await;
         session.req_header_mut().append_header("host", "second.test").unwrap();
-        let mut ctx = EdgionHttpContext::default();
+        let mut ctx = context(4);
 
-        assert!(build_request_metadata(&proxy(4), &mut session, &mut ctx).await.unwrap());
+        assert!(build_request_metadata(&proxy(), &mut session, &mut ctx).await.unwrap());
         assert!(ctx.diagnostics.contains_error(EdgionErrorCode::DuplicateHostHeader));
         assert!(!ctx.diagnostics.contains_error(EdgionErrorCode::XffHeaderTooLong));
         assert_eq!(ctx.request_info.x_forwarded_for, None);
@@ -1014,8 +1006,8 @@ mod xff_snapshot_tests {
                 "duplicate-host-policy".to_string(),
                 Arc::new(config(true)),
             )]));
-            let mut proxy = proxy(200);
-            proxy.http_request_config_name = Some("duplicate-host-policy".to_string());
+            let mut proxy = proxy();
+            proxy.egc = crate::config::bind_gateway_config(Some("duplicate-host-policy"));
             let pinned_true = crate::routes::http::proxy_http::pg_new_ctx::new_ctx(&proxy);
 
             handler.partial_update(
@@ -1056,9 +1048,9 @@ mod xff_snapshot_tests {
     #[tokio::test]
     async fn missing_host_precedes_xff_rejection() {
         let (mut session, _client) = session_from_request(b"GET / HTTP/1.1\r\nX-Forwarded-For: 12345\r\n\r\n").await;
-        let mut ctx = EdgionHttpContext::default();
+        let mut ctx = context(4);
 
-        assert!(build_request_metadata(&proxy(4), &mut session, &mut ctx).await.unwrap());
+        assert!(build_request_metadata(&proxy(), &mut session, &mut ctx).await.unwrap());
         assert!(ctx.diagnostics.contains_error(EdgionErrorCode::HostMissing));
         assert!(!ctx.diagnostics.contains_error(EdgionErrorCode::XffHeaderTooLong));
         assert_eq!(ctx.request_info.x_forwarded_for, None);
@@ -1092,9 +1084,13 @@ mod xff_snapshot_tests {
             .req_header_mut()
             .append_header("x-forwarded-for", HeaderValue::from_bytes(b"\xff").unwrap())
             .unwrap();
-        let mut proxy = proxy(200);
-        proxy.real_ip_extractor = Some(Arc::new(trusted_proxy_extractor("X-Forwarded-For")));
-        let mut ctx = EdgionHttpContext::default();
+        let proxy = proxy();
+        let mut ctx = context(200);
+        let config = crate::config::ResolvedGatewayConfig {
+            real_ip_extractor: Some(Arc::new(trusted_proxy_extractor("X-Forwarded-For"))),
+            ..Default::default()
+        };
+        ctx.egc = Arc::new(config);
 
         assert!(!build_request_metadata(&proxy, &mut session, &mut ctx).await.unwrap());
         assert_eq!(ctx.request_info.remote_ip, "0.0.0.0");
@@ -1129,12 +1125,10 @@ mod xff_snapshot_tests {
             .req_header_mut()
             .append_header("x-forwarded-for", "12345")
             .unwrap();
-        let mut invalid_ctx = EdgionHttpContext::default();
-        assert!(
-            build_request_metadata(&proxy(7), &mut invalid_session, &mut invalid_ctx)
-                .await
-                .unwrap()
-        );
+        let mut invalid_ctx = context(7);
+        assert!(build_request_metadata(&proxy(), &mut invalid_session, &mut invalid_ctx)
+            .await
+            .unwrap());
         assert!(invalid_ctx
             .diagnostics
             .contains_error(EdgionErrorCode::XffHeaderTooLong));
@@ -1144,7 +1138,7 @@ mod xff_snapshot_tests {
             b"GET / HTTP/1.1\r\nHost: example.test\r\nX-Forwarded-For: 203.0.113.7\r\nX-Forwarded-For: 10.0.0.5\r\n\r\n",
         )
         .await;
-        let proxy = proxy(200);
+        let proxy = proxy();
         let mut ctx = EdgionHttpContext::default();
         assert!(!build_request_metadata(&proxy, &mut session, &mut ctx).await.unwrap());
         assert_eq!(
@@ -1405,6 +1399,7 @@ mod request_entry_tests {
     struct Fixture {
         proxy: EdgionHttpProxy,
         owner: Arc<GatewayScope>,
+        egc: Arc<crate::config::ResolvedGatewayConfig>,
         _index: TestListenerIndexGuard,
     }
 
@@ -1505,16 +1500,14 @@ mod request_entry_tests {
                 listener_key,
                 server_header_opts: Default::default(),
                 access_logger: Arc::new(crate::observe::AccessLogger::default()),
-                edgion_gateway_config: config,
-                http_request_config_name: None,
-                parsed_timeouts: Default::default(),
+                egc: crate::config::bind_gateway_config(None),
                 enable_http2: http2,
-                real_ip_extractor: None,
                 preflight_handler: super::super::PreflightHandler,
                 http_route_manager,
                 grpc_route_manager,
             };
             Self {
+                egc: Arc::new(crate::config::ResolvedGatewayConfig::resolve(&config)),
                 proxy,
                 owner,
                 _index: index,
@@ -1525,6 +1518,7 @@ mod request_entry_tests {
             let mut ctx = EdgionHttpContext::new();
             // The actual early hook still initializes IDs. Only its owner input
             // is local, so parallel tests cannot replace this policy generation.
+            ctx.egc = self.egc.clone();
             ctx.capture_plugin_scope(self.owner.clone());
             ctx
         }

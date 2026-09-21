@@ -21,6 +21,7 @@ before applying a decision to current code.
 
 ## Regression guards
 
+- [EGC runtime snapshot publication and lifecycle capture](regression-guards/egc-runtime-snapshot-publication.md)
 - [UDP process shutdown and task completion](regression-guards/udp-process-shutdown.md)
 - [UDP upstream response source must match the pinned backend](regression-guards/udp-upstream-response-source.md)
 - [Full set direct store update](regression-guards/full-set-direct-store-update.md)

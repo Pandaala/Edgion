@@ -22,7 +22,6 @@ use crate::routes::common::{
 };
 use crate::routes::tcp::edgion_tcp::{check_stream_plugins, StreamPluginCheck};
 use crate::routes::udp::UdpPortRouteManager;
-use edgion_resources::resources::edgion_gateway_config::EdgionGatewayConfig;
 use edgion_resources::ListenerKey;
 
 /// UDP session idle timeout: a session is reclaimed after 60 seconds without
@@ -131,7 +130,7 @@ pub struct EdgionUdpProxy {
     pub listener_port: u16,
     pub listener_key: ListenerKey,
     pub udp_route_manager: Arc<UdpPortRouteManager>,
-    pub edgion_gateway_config: Arc<EdgionGatewayConfig>,
+    pub egc: Arc<crate::config::GatewayConfigHandle>,
     pub socket: Arc<UdpSocket>,
     client_sessions: Arc<DashMap<std::net::SocketAddr, Arc<ClientSession>>>,
     session_permits: Arc<Semaphore>,
@@ -144,7 +143,7 @@ impl EdgionUdpProxy {
         listener_port: u16,
         listener_key: ListenerKey,
         udp_route_manager: Arc<UdpPortRouteManager>,
-        edgion_gateway_config: Arc<EdgionGatewayConfig>,
+        egc: Arc<crate::config::GatewayConfigHandle>,
         socket: UdpSocket,
         cancel_token: CancellationToken,
         child_tasks: TaskTracker,
@@ -153,7 +152,7 @@ impl EdgionUdpProxy {
             listener_port,
             listener_key,
             udp_route_manager,
-            edgion_gateway_config,
+            egc,
             socket: Arc::new(socket),
             client_sessions: Arc::new(DashMap::new()),
             session_permits: Arc::new(Semaphore::new(MAX_UDP_SESSIONS)),
@@ -246,6 +245,7 @@ impl EdgionUdpProxy {
             return;
         }
 
+        let gateway_config = self.egc.load();
         let direct_peer_ip = crate::ctx::canonicalize_ip(direct_peer_addr.ip());
         let direct_peer_port = direct_peer_addr.port();
         let route_table = self.udp_route_manager.load_route_table();
@@ -389,8 +389,11 @@ impl EdgionUdpProxy {
         let PingoraSocketAddr::Inet(upstream_addr) = upstream_pingora_addr else {
             return;
         };
-        if validate_endpoint_backend_addr(&PingoraSocketAddr::Inet(upstream_addr), self.allow_loopback_upstream())
-            .is_err()
+        if validate_endpoint_backend_addr(
+            &PingoraSocketAddr::Inet(upstream_addr),
+            gateway_config.allow_loopback_upstream,
+        )
+        .is_err()
         {
             log_udp(&UdpLogEntry::failure(
                 self.listener_port,
@@ -633,15 +636,6 @@ impl EdgionUdpProxy {
     pub(crate) fn session_count(&self) -> usize {
         self.client_sessions.len()
     }
-
-    fn allow_loopback_upstream(&self) -> bool {
-        self.edgion_gateway_config
-            .spec
-            .security_protect
-            .as_ref()
-            .map(|s| s.allow_loopback_upstream)
-            .unwrap_or(false)
-    }
 }
 
 #[cfg(test)]
@@ -652,16 +646,6 @@ mod tests {
 
     fn make_test_listener_key(port: u16) -> ListenerKey {
         ListenerKey::new(SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), port), "UDP")
-    }
-
-    fn make_test_config() -> Arc<EdgionGatewayConfig> {
-        let json = serde_json::json!({
-            "apiVersion": "edgion.io/v1alpha1",
-            "kind": "EdgionGatewayConfig",
-            "metadata": { "name": "test-config" },
-            "spec": {}
-        });
-        Arc::new(serde_json::from_value(json).expect("test config"))
     }
 
     #[test]
@@ -753,7 +737,7 @@ mod tests {
         let cancel = CancellationToken::new();
         let socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
         let manager = Arc::new(UdpPortRouteManager::new());
-        let config = make_test_config();
+        let config = crate::config::bind_gateway_config(None);
         let proxy = Arc::new(EdgionUdpProxy::new(
             19998,
             make_test_listener_key(19998),
@@ -808,7 +792,7 @@ mod tests {
         let cancel = CancellationToken::new();
         let socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
         let manager = Arc::new(UdpPortRouteManager::new());
-        let config = make_test_config();
+        let config = crate::config::bind_gateway_config(None);
         let proxy = Arc::new(EdgionUdpProxy::new(
             19997,
             make_test_listener_key(19997),
@@ -838,7 +822,7 @@ mod tests {
         let cancel = CancellationToken::new();
         let socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
         let manager = Arc::new(UdpPortRouteManager::new());
-        let config = make_test_config();
+        let config = crate::config::bind_gateway_config(None);
         let proxy = Arc::new(EdgionUdpProxy::new(
             19996,
             make_test_listener_key(19996),
@@ -857,7 +841,7 @@ mod tests {
         let cancel = CancellationToken::new();
         let socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
         let manager = Arc::new(UdpPortRouteManager::new());
-        let config = make_test_config();
+        let config = crate::config::bind_gateway_config(None);
         let proxy = Arc::new(EdgionUdpProxy::new(
             19995,
             make_test_listener_key(19995),
@@ -902,7 +886,7 @@ mod tests {
         let cancel = CancellationToken::new();
         let socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
         let manager = Arc::new(UdpPortRouteManager::new());
-        let config = make_test_config();
+        let config = crate::config::bind_gateway_config(None);
         let proxy = Arc::new(EdgionUdpProxy::new(
             19994,
             make_test_listener_key(19994),

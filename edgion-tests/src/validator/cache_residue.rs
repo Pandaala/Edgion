@@ -96,6 +96,9 @@ impl Snapshot {
 // DO NOT add `gateway.tcp_routes.total_routes_in_tables` (added by the
 // cross-kind audit specifically so L4 orphan residue is OBSERVABLE).
 const IGNORE_PATHS: &[&str] = &[
+    // Live bindings belong to startup-owned listeners, which survive resource wipe.
+    // Expired bindings remain checked: the EGC publication path must prune them.
+    "gateway.egc_bindings.count",
     "controller.event_store.next_resource_version",
     "controller.watch_objects.count",
 ];
@@ -1053,6 +1056,25 @@ mod walk_tests {
         let v = json!({ "event_store": { "next_resource_version": 142 } });
         walk_json("controller", &v, &mut snap);
         assert!(snap.is_empty(), "ignored path must not appear");
+    }
+
+    #[test]
+    fn egc_binding_residue_exempts_live_handles_but_detects_expired_entries() {
+        let mut snap = Snapshot::default();
+        walk_json(
+            "gateway",
+            &json!({"egc_bindings": {"count": 2, "expired_count": 1}}),
+            &mut snap,
+        );
+        assert_eq!(snap.residue.get("gateway.egc_bindings.expired_count"), Some(&1));
+        assert!(!snap.residue.contains_key("gateway.egc_bindings.count"));
+        let mut clean = Snapshot::default();
+        walk_json(
+            "gateway",
+            &json!({"egc_bindings": {"count": 1, "expired_count": 0}}),
+            &mut clean,
+        );
+        assert!(clean.is_empty());
     }
 
     #[test]

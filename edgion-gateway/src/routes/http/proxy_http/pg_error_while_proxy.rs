@@ -74,7 +74,7 @@ fn is_backend_request_timeout_retry_candidate(
 
 #[inline]
 pub fn error_while_proxy(
-    edgion_http: &EdgionHttpProxy,
+    _edgion_http: &EdgionHttpProxy,
     peer: &HttpPeer,
     session: &mut Session,
     e: Box<Error>,
@@ -216,9 +216,7 @@ pub fn error_while_proxy(
     // relayed 100/102/103 headers still permit a later final response, while a
     // 101 upgrade or ordinary final header closes retry.
     if is_backend_request_timeout_retry_candidate(&e, ctx.peer_timeout_source, ctx.retry_configured(), session) {
-        let max_retries = ctx
-            .retry_attempts()
-            .unwrap_or(edgion_http.edgion_gateway_config.spec.max_retries);
+        let max_retries = ctx.retry_attempts().unwrap_or(ctx.egc.max_retries);
         let deadline_exceeded = ctx.request_timeout_exceeded() || ctx.grpc_deadline_exceeded();
         if buffer_ok && ctx.try_cnt <= max_retries && !deadline_exceeded {
             // Stamp the canceled attempt's per-upstream log entry so it is
@@ -256,9 +254,7 @@ pub fn error_while_proxy(
     }
 
     // Case 2: connection reuse retry (Pingora built-in: stale keepalive connection)
-    let max_retries = ctx
-        .retry_attempts()
-        .unwrap_or(edgion_http.edgion_gateway_config.spec.max_retries);
+    let max_retries = ctx.retry_attempts().unwrap_or(ctx.egc.max_retries);
 
     // Either route `request_timeout` or client `grpc-timeout` having
     // expired disqualifies further retries.
