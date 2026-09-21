@@ -61,6 +61,12 @@ missing resources, invalid canonical addresses, and delete/recreate. Its
 global-store mutations are serial: unique keys alone cannot make multiple
 `partial_update` writers safe because production relies on conf-sync serialization.
 
+The dispatcher identity boundary is covered with a local injected Stage-2
+spy. Terminated mode exposes the borrowed negotiated TLS identity and actual
+mTLS state. Passthrough mode strips both even when its outer `TlsContext`
+contains them, while SNI, canonical direct and remote IPs, listener port, and
+the matched resource remain the same.
+
 Existing TLSRoute/StreamPlugins deny/allow fixtures are migrated in local and
 Kubernetes trees. The canonical `TlsRoutePluginsReload` scenario checks both
 TLS modes through real connections and shared Controller/Gateway topology.
@@ -70,8 +76,13 @@ Unreachable listeners or timeouts must not count as policy denials.
 
 Current verification:
 
-- `cargo test -p edgion-gateway --lib routes::tls::tests -- --test-threads=1`:
-  8 passed, including the serialized both-mode stage/hot-update matrix.
+- `cargo test -p edgion-gateway --lib routes::tls::tests::tls_route_modes_isolate_negotiated_identity -- --exact --test-threads=1`:
+  passed; the deterministic Stage-2 denial observed identity only in Terminated
+  mode and preserved the shared route context in both modes.
+- `cargo test -p edgion-gateway --lib routes::tls -- --test-threads=1`: 80
+  passed, including the serialized both-mode stage/hot-update matrix.
+- `cargo test -p edgion-gateway --test tls_passthrough_clienthello -- --test-threads=1`:
+  the socket-level ClientHello regression passed.
 - `cargo test -p edgion-tests --bin test_client`: 21 registration/harness checks passed.
 - `cargo fmt --all`, `cargo check --workspace --all-targets`, and
   `cargo clippy --workspace --all-targets`: passed; Clippy reports existing

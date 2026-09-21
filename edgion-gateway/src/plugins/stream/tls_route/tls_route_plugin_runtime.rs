@@ -32,6 +32,11 @@ impl TlsRoutePluginRuntime {
         Self { plugins: Vec::new() }
     }
 
+    #[cfg(test)]
+    pub(crate) fn from_test_plugins(plugins: Vec<Arc<dyn TlsRoutePlugin>>) -> Self {
+        Self { plugins }
+    }
+
     /// Build runtime from TLS route plugin entries.
     pub fn from_entries(entries: &[TlsRoutePluginEntry], parent_namespace: &str) -> Self {
         Self::from_cached_entries(entries, parent_namespace, None, &mut vec![None; entries.len()])

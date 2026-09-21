@@ -3,11 +3,14 @@
 use super::*;
 use crate::plugins::publication::{inputs::GatewayInput, PluginPublisher};
 use crate::plugins::stream::plugin_generation::{StreamPluginGeneration, StreamStages};
+use crate::plugins::stream::{StreamPluginRuntime, TlsRoutePlugin, TlsRoutePluginRuntime};
 use edgion_resources::resources::edgion_stream_plugins::{EdgionStreamPlugins, StreamPluginEntry, TlsRoutePluginEntry};
 use edgion_resources::resources::plugin_policy::{PluginPolicyConfig, PluginPolicyEntryConfig, PolicyActionKind};
 use edgion_resources::{Gateway, GatewayClass};
+use parking_lot::Mutex;
 use serde_json::json;
 use std::collections::{HashMap, HashSet};
+use std::net::IpAddr;
 use std::sync::Arc;
 
 fn selection_class(name: &str) -> Arc<GatewayClass> {
@@ -318,6 +321,126 @@ async fn tls_route_stage_contract_survives_generations_and_scope_policy() {
     resource.spec.plugins = None;
     resource.spec.tls_route_plugins = Some(vec![stage2_entry(false)]);
     assert_dispatch(Some(&compile_stage_view(&resource, "tls-route", None)), true, None).await;
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct ObservedTlsRouteContext {
+    direct_peer_ip: IpAddr,
+    remote_ip: IpAddr,
+    listener_port: u16,
+    sni: String,
+    tls_id: Option<String>,
+    rsc_ptr: usize,
+    rsc_kind: String,
+    rsc_namespace: String,
+    rsc_name: String,
+    is_mtls: bool,
+}
+
+struct SpyDenyTlsRoutePlugin {
+    observed: Arc<Mutex<Option<ObservedTlsRouteContext>>>,
+}
+
+#[async_trait::async_trait]
+impl TlsRoutePlugin for SpyDenyTlsRoutePlugin {
+    async fn on_tls_route(&self, ctx: &TlsRouteContext<'_>) -> StreamPluginResult {
+        *self.observed.lock() = Some(ObservedTlsRouteContext {
+            direct_peer_ip: ctx.direct_peer_ip,
+            remote_ip: ctx.remote_ip,
+            listener_port: ctx.listener_port,
+            sni: ctx.sni.to_string(),
+            tls_id: ctx.tls_id.map(str::to_string),
+            rsc_ptr: std::ptr::from_ref(ctx.rsc) as usize,
+            rsc_kind: ctx.rsc.kind.clone(),
+            rsc_namespace: ctx.rsc.ns.clone(),
+            rsc_name: ctx.rsc.name.clone(),
+            is_mtls: ctx.is_mtls,
+        });
+        StreamPluginResult::Deny("test denial".to_string())
+    }
+}
+
+fn compiled_spy_tls_route_resource(observed: Arc<Mutex<Option<ObservedTlsRouteContext>>>) -> CompiledStreamPlugins {
+    let mut spec: EdgionStreamPlugins = serde_yaml::from_str(
+        "apiVersion: edgion.io/v1\nkind: EdgionStreamPlugins\nmetadata: {name: identity-spy, namespace: default}\nspec: {}\n",
+    )
+    .unwrap();
+    // The raw Stage-2 declaration is explicit; only its executable runtime is
+    // replaced with the local spy so this test reaches the dispatcher boundary.
+    spec.spec.tls_route_plugins = Some(Vec::new());
+    CompiledStreamPlugins {
+        spec: Arc::new(spec),
+        stream_plugin_runtime: Arc::new(StreamPluginRuntime::new()),
+        tls_route_plugin_runtime: Arc::new(TlsRoutePluginRuntime::from_test_plugins(vec![Arc::new(
+            SpyDenyTlsRoutePlugin { observed },
+        )])),
+    }
+}
+
+#[tokio::test]
+async fn tls_route_modes_isolate_negotiated_identity() {
+    for (mode, expected_tls_id, expected_is_mtls) in [
+        (TlsRouteMode::Terminated, Some("negotiated-tls-id"), true),
+        (TlsRouteMode::Passthrough, None, false),
+    ] {
+        let observed = Arc::new(Mutex::new(None));
+        let resource = compiled_spy_tls_route_resource(Arc::clone(&observed));
+        let mut ctx = TlsContext::new(9443, "192.0.2.10".into(), 41000, "198.51.100.20".into(), 42000);
+        ctx.tls_id = Some("negotiated-tls-id".into());
+        ctx.sni = Some("route.example.com".into());
+        ctx.is_mtls = true;
+        ctx.matched = Some(crate::MatchedInfo {
+            rsc: crate::Rsc::new("TLSRoute", "default", "identity-route"),
+            section: Some("tls".into()),
+            sv: 42,
+        });
+        let expected_rsc_ptr = std::ptr::from_ref(&ctx.matched.as_ref().unwrap().rsc) as usize;
+        let sni = ctx.sni.clone().unwrap();
+
+        let allowed = run_tls_route_plugins(
+            Some("default/identity-spy"),
+            Some(&resource),
+            &mut ctx,
+            &sni,
+            9443,
+            mode,
+        )
+        .await;
+
+        assert!(!allowed, "the deterministic spy denial must be terminal");
+        assert_eq!(ctx.err_log.as_deref(), Some("tls route plugin denied: test denial"));
+        assert_eq!(
+            observed.lock().take(),
+            Some(ObservedTlsRouteContext {
+                direct_peer_ip: "192.0.2.10".parse().unwrap(),
+                remote_ip: "198.51.100.20".parse().unwrap(),
+                listener_port: 9443,
+                sni: "route.example.com".into(),
+                tls_id: expected_tls_id.map(str::to_string),
+                rsc_ptr: expected_rsc_ptr,
+                rsc_kind: "TLSRoute".into(),
+                rsc_namespace: "default".into(),
+                rsc_name: "identity-route".into(),
+                is_mtls: expected_is_mtls,
+            })
+        );
+
+        assert_eq!(ctx.tls_id.as_deref(), Some("negotiated-tls-id"));
+        assert!(ctx.is_mtls);
+        assert_eq!(ctx.listener_port, 9443);
+        assert_eq!(ctx.direct_peer_ip, "192.0.2.10");
+        assert_eq!(ctx.direct_peer_port, 41000);
+        assert_eq!(ctx.remote_ip, "198.51.100.20");
+        assert_eq!(ctx.remote_port, 42000);
+        assert_eq!(ctx.sni.as_deref(), Some("route.example.com"));
+        let matched = ctx.matched.as_ref().unwrap();
+        assert_eq!(std::ptr::from_ref(&matched.rsc) as usize, expected_rsc_ptr);
+        assert_eq!(matched.rsc.kind, "TLSRoute");
+        assert_eq!(matched.rsc.ns, "default");
+        assert_eq!(matched.rsc.name, "identity-route");
+        assert_eq!(matched.section.as_deref(), Some("tls"));
+        assert_eq!(matched.sv, 42);
+    }
 }
 
 #[tokio::test]
