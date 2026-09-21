@@ -252,7 +252,7 @@ async fn collect(
     args: &Args,
     ignored_controller_configmaps: &BTreeSet<String>,
     ignored_controller_conf_sync_secrets: &BTreeSet<String>,
-) -> reqwest::Result<Snapshot> {
+) -> anyhow::Result<Snapshot> {
     let mut snap = Snapshot::default();
 
     if args.skip.as_deref() != Some("controller") {
@@ -263,13 +263,12 @@ async fn collect(
             .error_for_status()?
             .json()
             .await?;
-        let runtime_secret_keys = body.get("data").and_then(parse_secret_store_keys);
-        if let Some(data) = body.get("data") {
-            walk_json("controller", data, &mut snap);
-            if let Some(kinds) = data.get("raw_cache").and_then(Value::as_object) {
-                for kind in kinds.keys() {
-                    apply_raw_fixture_exclusions(data, kind, &BTreeSet::new(), &mut snap);
-                }
+        let data = require_store_stats_data(&body, "controller")?;
+        let runtime_secret_keys = parse_secret_store_keys(data);
+        walk_json("controller", data, &mut snap);
+        if let Some(kinds) = data.get("raw_cache").and_then(Value::as_object) {
+            for kind in kinds.keys() {
+                apply_raw_fixture_exclusions(data, kind, &BTreeSet::new(), &mut snap);
             }
         }
         if !ignored_controller_conf_sync_secrets.is_empty() && runtime_secret_keys.is_none() {
@@ -289,9 +288,7 @@ async fn collect(
                 let remaining_keys = resource_keys(&items)
                     .filter(|key| !verified.contains(key))
                     .collect::<Vec<_>>();
-                if let Some(data) = body.get("data") {
-                    apply_raw_fixture_exclusions(data, "ConfigMap", &verified, &mut snap);
-                }
+                apply_raw_fixture_exclusions(data, "ConfigMap", &verified, &mut snap);
                 set_residue_count(
                     &mut snap,
                     "controller.conf_center_storage.ConfigMap",
@@ -346,9 +343,7 @@ async fn collect(
                         );
                     }
                 }
-                if let Some(data) = body.get("data") {
-                    apply_raw_fixture_exclusions(data, "Secret", &verified, &mut snap);
-                }
+                apply_raw_fixture_exclusions(data, "Secret", &verified, &mut snap);
             }
         }
     }
@@ -361,9 +356,8 @@ async fn collect(
             .error_for_status()?
             .json()
             .await?;
-        if let Some(data) = body.get("data") {
-            walk_json("gateway", data, &mut snap);
-        }
+        let data = require_store_stats_data(&body, "gateway")?;
+        walk_json("gateway", data, &mut snap);
     }
 
     // Best-effort sample key collection
@@ -385,6 +379,19 @@ async fn collect(
     }
 
     Ok(snap)
+}
+
+fn require_store_stats_data<'a>(body: &'a Value, source: &str) -> anyhow::Result<&'a Value> {
+    match body.get("success").and_then(Value::as_bool) {
+        Some(true) => {}
+        Some(false) => anyhow::bail!("{source} store-stats API reported failure"),
+        None => anyhow::bail!("{source} store-stats response omitted boolean success"),
+    }
+    match body.get("data") {
+        Some(data @ Value::Object(_)) => Ok(data),
+        Some(_) => anyhow::bail!("{source} store-stats response data must be an object"),
+        None => anyhow::bail!("{source} store-stats success response omitted data"),
+    }
 }
 
 async fn fetch_samples(
@@ -799,6 +806,26 @@ mod e2e_tests {
             decide_exit(snap.is_empty(), &args.mode).unwrap(),
             ExitDecision::Residue
         ));
+    }
+
+    #[test]
+    fn store_stats_envelope_must_be_successful_and_contain_object_data() {
+        for (body, expected) in [
+            (json!({"success": false, "data": {}}), "reported failure"),
+            (json!({"data": {}}), "omitted boolean success"),
+            (json!({"success": true}), "omitted data"),
+            (json!({"success": true, "data": null}), "data must be an object"),
+            (json!({"success": true, "data": []}), "data must be an object"),
+        ] {
+            let error = require_store_stats_data(&body, "gateway")
+                .expect_err("an incomplete store-stats check must fail closed");
+            assert!(error.to_string().contains(expected), "unexpected error: {error}");
+        }
+
+        assert_eq!(
+            require_store_stats_data(&json!({"success": true, "data": {}}), "gateway").unwrap(),
+            &json!({})
+        );
     }
 
     #[tokio::test]

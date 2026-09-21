@@ -26,7 +26,6 @@ before applying a decision to current code.
 - [`ClientCache::start_watch` two remaining extraction phases deliberately deferred — DEFERRED-REFACTOR](intentional-design/start-watch-extract-fn-deferred.md)
 - [Watcher `send(...).await` end-to-end backpressure (no `send_timeout`) — DESIGN-TRADEOFF](intentional-design/watcher-send-await-backpressure-no-timeout.md)
 - [Webhook active health task is abort-only (no cooperative watch signal) — DESIGN-TRADEOFF](intentional-design/webhook-active-health-abort-only.md)
-- [Wasm tick-callout grant registry: evict/register race can drop a fresh grant — ACCEPTED-RISK](intentional-design/wasm-tick-callout-grant-evict-race.md)
 
 ## Regression guards
 
@@ -66,3 +65,4 @@ before applying a decision to current code.
 
 - [Former WebhookManager RwLock decision](superseded/webhook-manager-rwlock-intentional.md)
 - [LinkSys webhook `extract_ready_ips` IPv6 bracketing (link-sys-F001, controller path)](superseded/webhook-extract-ready-ips-ipv6-brackets.md)
+- [Former Wasm tick-callout grant eviction accepted risk](superseded/wasm-tick-callout-grant-evict-race.md)

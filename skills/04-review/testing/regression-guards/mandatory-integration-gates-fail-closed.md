@@ -16,6 +16,14 @@ runner currently permits `--skip-residue-check` (or `SKIP_RESIDUE_CHECK=true`) f
 validation and `RESIDUE_MODE=warn` for a deliberately non-gating residue policy. Missing
 prerequisites never activate those policies implicitly.
 
+The cache-residue validator also treats the store-stats response envelope as a
+mandatory prerequisite. Both Controller and Gateway responses must contain
+`success: true` and an object-valued `data` field before any counts are walked.
+An HTTP 200 response with `success: false`, a missing/non-boolean `success`, or
+missing/null/non-object `data` is an infrastructure error, never an empty cache
+snapshot. This prevents an unavailable or contract-broken diagnostics handler
+from making the final residue gate pass without checking either process.
+
 ## Configuration submission and log pipelines
 
 `start_all_with_conf.sh::load_configs` submits each selected suite through
@@ -58,3 +66,5 @@ propagation changes.
 
 - `ITEST-005` — 2026-08-26.
 - `edgionplugins-resource-sweep-config-list-drift` — configuration failure propagation.
+- `cache-residue-store-stats-envelope-fail-open` — strict Controller/Gateway
+  envelope validation and malformed-envelope regression coverage.

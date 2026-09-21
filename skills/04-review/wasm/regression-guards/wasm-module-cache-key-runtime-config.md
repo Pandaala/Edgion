@@ -84,7 +84,7 @@ compiling one module once per distinct config becomes a measured hot-path concer
   `same_source_distinct_plugin_config_do_not_alias`,
   `plugin_config_only_reload_lands_new_entry` (same file).
 - Related wasm cache decisions: [`../cpu-memory/cases/wasm-shared-data-no-eviction-no-cluster-kv.md`](../../cpu-memory/intentional-design/wasm-shared-data-no-eviction-no-cluster-kv.md),
-  [`../concurrency/wasm-tick-callout-grant-evict-race.md`](../../concurrency/intentional-design/wasm-tick-callout-grant-evict-race.md).
+  [`../concurrency/wasm-tick-callout-grant-evict-race.md`](../../concurrency/superseded/wasm-tick-callout-grant-evict-race.md).
 
 ## Resolution references
 

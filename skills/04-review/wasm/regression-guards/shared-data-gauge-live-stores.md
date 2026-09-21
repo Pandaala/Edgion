@@ -59,8 +59,12 @@ request-style Arc, and live-handle keepalive with exporter idle eviction enabled
 also covers the ownership boundary used by cache-residue validation: the handle
 remains visible during the module cache's anti-thrash grace and disappears after
 an unleased zero-reference entry is evicted. The validator preserves a nonzero
-`wasm_shared_data_metrics.count` as residue, and its 75-second default deadline
-exceeds the production 60-second grace.
+`wasm_shared_data_metrics.count` as residue. Its 75-second default deadline
+exceeds the production 60-second eviction scheduling grace for an idle entry,
+but it is not a complete upper bound on a running tick round: sequential bounded
+callouts can retain a `VmLease` and `SharedData` beyond that deadline. Explicit
+tick quiescence is deferred to
+`tasks/todo/stop-wasm-tick-on-zero-reference-eviction.md`.
 Existing CAS/capacity tests remain in place. No live integration scenario changes.
 Fresh verification: `cargo test -p edgion-gateway --lib shared_data` passed all
 21 selected tests, including the real guest ABI roundtrip and preflight checks.
@@ -76,8 +80,8 @@ For `wasm-shared-data-eviction-grace-exceeds-residue-timeout`, focused current-t
 verification passed the delayed module-eviction metric-handle test, all 23
 `cache_residue` tests, the local runner deadline contract test, and the Kubernetes
 residue-gate shell test. This focused evidence distinguishes bounded grace from a
-nonzero signal that survives the validator deadline; it does not claim a fresh live
-EdgionPlugins integration sweep.
+nonzero idle-entry signal that survives the validator deadline; it does not cover a
+running tick callout or claim a fresh live EdgionPlugins integration sweep.
 
 Re-evaluate if recorder installation order, idle eviction, metrics rendering
 entry points, store accounting, or module ownership changes. Metrics must be
@@ -89,5 +93,6 @@ series under the cardinality guard remains subject to that guard's policy.
 - `wasm-shared-data-gauge-generation-lifecycle` — pending task created
   2026-09-07; corrected with mutation deltas and destruction symmetry.
 - `wasm-shared-data-eviction-grace-exceeds-residue-timeout` — the residue
-  deadline now exceeds the bounded module eviction grace, with lifecycle and
-  fail-close regression coverage.
+  deadline now exceeds the idle module eviction grace, with metric visibility
+  and fail-close regression coverage. Running-tick quiescence remains tracked
+  by `stop-wasm-tick-on-zero-reference-eviction`.
