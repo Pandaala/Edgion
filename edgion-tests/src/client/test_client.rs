@@ -74,6 +74,7 @@ const EXPECTED_DYNAMIC_SCENARIO_IDS: &[&str] = &[
     "AcmeGatewayRefOwnership",
     "L4TimeoutHotReload",
     "EgcRuntimeHotReload",
+    "DuplicateHostPolicyHotReload",
 ];
 
 fn capability_entry_applies(kind: &str, entry_id: &str, id: &str) -> bool {
@@ -1553,6 +1554,7 @@ fn dynamic_port_contract(id: &str) -> Result<Option<(&'static str, port_config::
         "TcpEspReload" => Some(("TCPRoute/StreamPlugins/Dynamic", PortKind::Tcp)),
         "L4TimeoutHotReload" => Some(("TCPRoute/L4TimeoutHotReload", PortKind::Tcp)),
         "EgcRuntimeHotReload" => Some(("Gateway/EgcRuntimeHotReload", PortKind::Http)),
+        "DuplicateHostPolicyHotReload" => Some(("Gateway/DuplicateHostPolicyHotReload", PortKind::Http)),
         "TlsRoutePluginsReload" => Some(("TLSRoute/StreamPlugins", PortKind::Tls)),
         "TlsLastKnownGood" => Some(("EdgionTls/LastKnownGood", PortKind::Https)),
         "AcmeGatewayRefOwnership" => Some(("Gateway/AcmeGatewayRefOwnership", PortKind::Http)),

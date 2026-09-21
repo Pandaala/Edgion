@@ -5,6 +5,7 @@ use crate::dynamic::scenario::Scenario;
 /// All registered dynamic scenarios.
 pub fn all() -> Vec<&'static Scenario> {
     vec![
+        crate::dynamic::scenarios::duplicate_host_policy_hot_reload::SCENARIO,
         crate::dynamic::scenarios::egc_runtime_hot_reload::SCENARIO,
         crate::dynamic::scenarios::cors_validation::SCENARIO,
         crate::dynamic::scenarios::acme_gatewayref_ownership::SCENARIO,

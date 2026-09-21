@@ -427,6 +427,12 @@
     },
     "Gateway/EgcRuntimeHotReload/TLS": {
       "tls": 31982
+    },
+    "Gateway/DuplicateHostPolicyHotReload": {
+      "http": 31983
+    },
+    "Gateway/DuplicateHostPolicyHotReload/Redirect": {
+      "http": 31984
     }
   }
 }

@@ -19,6 +19,7 @@ pub mod direct_endpoint_port_resolution;
 pub mod dns_resolution_flap;
 pub mod dsl_dynamic;
 pub mod dsl_terminate_dynamic;
+pub mod duplicate_host_policy_hot_reload;
 pub mod edgion_config_data_ref_flap;
 pub mod edgion_tls_last_known_good;
 pub mod encrypted_active_health_checks;

@@ -27,11 +27,11 @@ Suggestions of the form "accept and pick the first/last Host", "downgrade to `tr
 - `redirect_http.rs::EdgionHttpRedirectProxy::{new_ctx,request_filter}` — the redirect listener retains only the referenced EGC name; each new context captures the current switch, and the request filter applies the same gate before it can echo a Host into the 301 `Location:` URL.
 - `edgion_gateway_config.rs::SecurityProtectConfig.reject_duplicate_host: bool` — default `true` (`default_reject_duplicate_host`).
 - `diagnostic.rs::EdgionErrorCode::DuplicateHostHeader` — stable string code emitted with intrinsic `kind: "error"`; HTTP 400 is selected explicitly by the response path.
-- Integration: `edgion-tests/src/client/suites/http_route/filters/security.rs` — `test_duplicate_host_headers` (same-case `Host:` × 2) and `test_duplicate_host_headers_mixed_case` (`Host:` + `host:`); both raw TCP, both assert HTTP/1.1 400.
+- Static integration: `edgion-tests/src/client/suites/http_route/filters/security.rs` — `test_duplicate_host_headers` (same-case `Host:` × 2) and `test_duplicate_host_headers_mixed_case` (`Host:` + `host:`); both raw TCP, both assert HTTP/1.1 400.
+- Hot-reload integration: `edgion-tests/src/client/dynamic/scenarios/duplicate_host_policy_hot_reload.rs` — `DuplicateHostPolicyHotReload` keeps ordinary and redirect listeners running while the referenced EGC moves through default `true`, explicit `false`, restored `true`, and deletion fallback. Raw HTTP/1.1 requests retain both `Host` field lines; the escape-hatch generation asserts ordinary routing (200) and redirect behavior (301 plus `Location`), while every safe generation asserts 400 on both listeners. The focused cross-process scenario passed on 2026-09-21.
 
 ### Test coverage gaps (intentional)
 
-- **Cross-process hot reload**: update/delete behavior is covered at the snapshot, ordinary-consumer, and redirect wire-unit boundaries. The frozen integration suite does not yet update the EGC while both listener types are serving.
 - **gRPC-over-h1 → `grpc-status=3`**: `end_response_400` is verified by code inspection to call `send_grpc_error_three_frame(..., 400)` (maps to `INVALID_ARGUMENT`), but raw-TCP wire assertions for HTTP/1.1 trailers are too brittle to add here — pingora's `write_response_trailers` is designed for HTTP/2 framing. An h2-native scenario would be more reliable if real test coverage of this path is needed.
 
 ## Known limitation
@@ -60,3 +60,4 @@ Suggestions of the form "accept and pick the first/last Host", "downgrade to `tr
 ## Resolution references
 
 - `http1-01` — 2026-05-17.
+- `D0013` — 2026-09-21; added cross-process duplicate-Host policy hot-reload coverage for ordinary and redirect listeners.

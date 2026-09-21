@@ -643,6 +643,14 @@ spec:
     port: 31973
     targetPort: 31973
     protocol: TCP
+  - name: p31983
+    port: 31983
+    targetPort: 31983
+    protocol: TCP
+  - name: p31984
+    port: 31984
+    targetPort: 31984
+    protocol: TCP
   - name: p58330
     port: 58330
     targetPort: 58330
