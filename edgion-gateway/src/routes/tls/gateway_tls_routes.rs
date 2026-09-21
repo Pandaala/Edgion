@@ -59,6 +59,13 @@ impl TlsRouteTable {
         }
     }
 
+    /// Cold diagnostic count of retained candidate entries across hostname
+    /// groups. This is not a unique Route count: one Route may contribute an
+    /// entry to multiple hostname groups and listener tables.
+    pub(super) fn candidate_entry_count(&self) -> usize {
+        self.hosts.groups().map(|(_, candidates)| candidates.len()).sum()
+    }
+
     /// Existing L4 discovery cost remains explicit. Reuse both the tree and
     /// unchanged ordered candidate groups; never rebuild cached Route selectors.
     pub fn with_units(&self, listener_key: &ListenerKey, units: &HashMap<String, Arc<TlsRouteUnit>>) -> Self {
@@ -395,6 +402,28 @@ mod tests {
     fn test_empty_table() {
         let table = TlsRouteTable::new();
         assert!(table.match_route("test.example.com").is_none());
+        assert_eq!(table.candidate_entry_count(), 0);
+    }
+
+    #[test]
+    fn candidate_entry_count_preserves_hostname_group_multiplicity() {
+        let mut multi = create_test_tls_route("default", "multi", "a.example.com");
+        multi.spec.hostnames = Some(vec!["a.example.com".into(), "b.example.com".into()]);
+        let multi = unit(multi);
+        let competitor = unit(create_test_tls_route("default", "competitor", "a.example.com"));
+        let table = TlsRouteTable::from_units(
+            &key(),
+            &HashMap::from([(multi.key_name(), multi), (competitor.key_name(), competitor)]),
+        );
+
+        let mut retained_by_hostname: Vec<_> = table
+            .hosts
+            .groups()
+            .map(|(pattern, candidates)| (pattern.as_str(), candidates.len()))
+            .collect();
+        retained_by_hostname.sort_unstable();
+        assert_eq!(retained_by_hostname, [("a.example.com", 2), ("b.example.com", 1)]);
+        assert_eq!(table.candidate_entry_count(), 3);
     }
 
     #[test]

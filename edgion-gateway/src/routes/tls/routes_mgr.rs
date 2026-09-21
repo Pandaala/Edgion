@@ -199,14 +199,23 @@ pub(crate) fn resolved_listeners_for_route(route: &TLSRoute) -> Vec<ListenerKey>
 pub struct TlsRouteManagerStats {
     pub route_cache: usize,
     pub listener_count: usize,
+    /// Sum of retained candidate entries across every current listener-table
+    /// snapshot. A Route can contribute more than once across hostnames and
+    /// listeners, so this is deliberately not a unique resource count.
+    pub total_candidate_entries_in_tables: usize,
 }
 
 impl GlobalTlsRouteManagers {
     /// Collect size statistics for leak-detection tests.
     pub fn stats(&self) -> TlsRouteManagerStats {
+        let mut total_candidate_entries_in_tables = 0usize;
+        for entry in self.by_listener.iter() {
+            total_candidate_entries_in_tables += entry.value().load_route_table().candidate_entry_count();
+        }
         TlsRouteManagerStats {
             route_cache: self.route_cache.len(),
             listener_count: self.by_listener.len(),
+            total_candidate_entries_in_tables,
         }
     }
 }
@@ -299,6 +308,39 @@ mod tests {
         );
     }
 
+    #[test]
+    fn stats_report_empty_and_retained_candidate_entries() {
+        let managers = GlobalTlsRouteManagers::new();
+        let empty = managers.stats();
+        assert_eq!(empty.route_cache, 0);
+        assert_eq!(empty.listener_count, 0);
+        assert_eq!(empty.total_candidate_entries_in_tables, 0);
+
+        let listener = make_listener_key(8442, "TLS");
+        let manager = managers.get_or_create_listener_manager(&listener);
+        let mut multi = create_test_tls_route("default", "multi", listener.clone());
+        multi.spec.hostnames = Some(vec!["a.example.com".into(), "b.example.com".into()]);
+        multi.spec.resolved_listeners.as_mut().unwrap()[0].hostnames =
+            vec!["a.example.com".into(), "b.example.com".into()];
+        let multi = Arc::new(TlsRouteUnit::from_route(Arc::new(multi)));
+        let mut competitor = create_test_tls_route("default", "competitor", listener);
+        competitor.spec.hostnames = Some(vec!["a.example.com".into()]);
+        competitor.spec.resolved_listeners.as_mut().unwrap()[0].hostnames = vec!["a.example.com".into()];
+        let competitor = Arc::new(TlsRouteUnit::from_route(Arc::new(competitor)));
+        manager.rebuild(&HashMap::from([
+            (multi.key_name(), multi),
+            (competitor.key_name(), competitor),
+        ]));
+
+        let populated = managers.stats();
+        assert_eq!(
+            populated.route_cache, 0,
+            "the listener snapshot is independently retained"
+        );
+        assert_eq!(populated.listener_count, 1);
+        assert_eq!(populated.total_candidate_entries_in_tables, 3);
+    }
+
     /// Regression for F-007: `rebuild_all` must clear the route table of an
     /// active listener that previously had routes but now has none.
     #[test]
@@ -364,6 +406,9 @@ mod tests {
             mgr.load_route_table().match_route("test.example.com").is_some(),
             "precondition: listener has the prior route"
         );
+        let populated = managers.stats();
+        assert_eq!(populated.listener_count, 1);
+        assert_eq!(populated.total_candidate_entries_in_tables, 1);
 
         let mut affected: HashSet<ListenerKey> = HashSet::new();
         affected.insert(listener.clone());
@@ -374,6 +419,9 @@ mod tests {
             "affected TLS listener with no routes should be cleared"
         );
         assert!(managers.by_listener.contains_key(&listener));
+        let cleared = managers.stats();
+        assert_eq!(cleared.listener_count, 1);
+        assert_eq!(cleared.total_candidate_entries_in_tables, 0);
     }
 
     #[test]

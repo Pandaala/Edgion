@@ -1954,6 +1954,7 @@ mod store_stats_tests {
             tls_routes: crate::routes::tls::TlsRouteManagerStats {
                 route_cache: 0,
                 listener_count: 0,
+                total_candidate_entries_in_tables: 0,
             },
             gateway_config: GatewayConfigStats { gateways: 0 },
             listener_gateway_info: crate::runtime::store::listener_gateway_info::ListenerGatewayInfoStats {
@@ -2019,6 +2020,7 @@ mod store_stats_tests {
         assert_eq!(json["wasm_oci_cache"]["entries"], 0);
         assert_eq!(json["wasm_oci_cache"]["retained_bytes"], 0);
         assert_eq!(json["wasm_oci_cache"]["keys"], serde_json::json!([]));
+        assert_eq!(json["tls_routes"]["total_candidate_entries_in_tables"], 0);
         assert!(json.get("client_caches").is_some());
         assert!(json.get("service_discovery").is_some());
         assert!(json.get("service_store").is_none());
