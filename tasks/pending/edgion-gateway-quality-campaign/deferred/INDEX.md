@@ -15,3 +15,5 @@
 | D0011 | ready-after-campaign-freeze | `tasks/todo/add-preflight-policy-hot-reload-integration-coverage.md` | B0065 |
 | D0012 | ready-for-separate-task | `tasks/todo/audit-security-protect-egc-hot-reload.md` | B0066 |
 | D0013 | ready-after-campaign-freeze | `tasks/todo/add-duplicate-host-policy-hot-reload-integration-coverage.md` | B0066 |
+| D0014 | ready-for-separate-task | `tasks/todo/cold-compile-edgion-tls-runtime-state.md` | B0075 |
+| D0015 | ready-for-separate-task | `tasks/todo/update-stale-mtls-config-helper-knowledge.md` | B0075 |

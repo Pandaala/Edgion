@@ -5,7 +5,7 @@
 | Key | Value |
 |-----|-------|
 | Created | 2026-09-19 |
-| Status | in-progress |
+| Status | complete |
 | Type | refactor |
 | Priority | P2 |
 | Baseline | `a0b4d49b298149422c7e46150a0ca027ad5321f7` |
@@ -33,12 +33,12 @@ Resume the file-by-file quality campaign for the remaining `edgion-gateway` path
 
 ## Campaign state
 
-- Campaign status: `in-progress`
-- Ordered crate phases: `edgion-gateway` (active); later crates are not authorized by this residual run.
-- Completed crates: none recorded in this campaign.
-- Active serial batch: none; B0074 (`runtime/server/error_response.rs`) completed at `159a2a8d` and B0075 awaits current-HEAD revalidation.
-- Analysis queue: B0075 (`tls/runtime/gateway/tls_pingora.rs`) has a queued complex change report that cannot promote before revalidation and plan review.
-- Current coverage counts: 582 ledger rows; 504 imported `excluded-with-reason`, 1 `pending`, 0 `in-progress`, 1 `deferred`, 48 `changed`, 27 `examined-no-change`, and 1 `removed`.
+- Campaign status: `complete`
+- Ordered crate phases: `edgion-gateway` completed; later crates were not authorized by this residual run.
+- Completed crates: `edgion-gateway`.
+- Active serial batch: none; final batch B0075 completed at `18a94a49`.
+- Analysis queue: none; every residual anchor was processed in manifest order.
+- Current coverage counts: 582 ledger rows; 504 imported `excluded-with-reason`, 0 `pending`, 0 `in-progress`, 1 `deferred`, 49 `changed`, 27 `examined-no-change`, and 1 `removed`.
 - Resolved external gate: the user-authorized prerequisite commit `c8e48ff50` added the missing `tasks/todo/os-packaging-and-system-service-adapters.md`; agent-doc validation now passes.
 - Resolved external gate: the Gateway API transform-contract generator and its test are present at `0094fc788`; the drift gate and all 5 generator tests pass.
 - Frozen integration baseline: 3,452 paths captured in `integration-freeze.tsv`; latest reconciliation proved 10 existing and 9 new paths against external commits `04413c3e`, `ab459fba`, and `c6aa6e90` before updating only those entries.
@@ -66,9 +66,9 @@ Resume the file-by-file quality campaign for the remaining `edgion-gateway` path
 | Document | Status | Notes |
 |----------|--------|-------|
 | `00-context.md` | done | Campaign workflow and repository knowledge entry points |
-| `03-subtasks.md` | in-progress | Full inventory reconciled with the residual manifest |
-| `07-changelog.md` | in-progress | Unified batch audit trail |
-| `deferred/INDEX.md` | in-progress | Coordinator-owned deferred issue index |
+| `03-subtasks.md` | done | Full inventory reconciled with the residual manifest |
+| `07-changelog.md` | done | Unified batch audit trail |
+| `deferred/INDEX.md` | done | Coordinator-owned deferred issue index |
 | `integration-freeze.tsv` | done | Frozen existing integration-test manifest |
 
 ## Coverage plan
