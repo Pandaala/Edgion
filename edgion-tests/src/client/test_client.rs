@@ -628,6 +628,7 @@ mod capability_tests {
         assert!(runner.contains(r#"report_test "Final_RequeueDeadLoop" "FAIL""#));
         assert!(runner.contains(r#"report_test "Final_CacheResidue" "FAIL""#));
         assert!(runner.contains("invalid RESIDUE_MODE=${residue_mode}; expected fail or warn"));
+        assert!(runner.contains("--timeout-secs 75"));
         assert!(!runner.contains(r#"report_test "Final_RequeueDeadLoop" "SKIP""#));
         assert!(runner.contains(r#"report_test "Final_CacheResidue" "SKIP" "0" "explicitly disabled""#));
     }

@@ -69,9 +69,9 @@ Current verification (2026-09-15): the `test_client` unit-test binary passed all
 exact/recursive directory matching. A live `-r EdgionPlugins` sweep loaded the
 inventory, and every executed plugin suite passed; the metrics-label,
 unknown-field, and requeue final gates also passed. Its report recorded 64 PASS
-entries, one SKIP, and one separate cache-residue
-failure, which is tracked by
-`wasm-shared-data-eviction-grace-exceeds-residue-timeout`. A focused
+entries, one SKIP, and one separate historical cache-residue failure caused by
+the validator deadline being shorter than the intentional Wasm module eviction
+grace. The validator deadline now exceeds that grace. A focused
 `-r EdgionPlugins -i DslGrpcError` run also passed with the ordinary residue gate.
 
 ## Re-evaluation Triggers

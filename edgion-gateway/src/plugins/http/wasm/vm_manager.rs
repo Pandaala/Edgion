@@ -2996,6 +2996,44 @@ mod tests {
         assert!(lease.call_on_request_headers(0).is_ok());
     }
 
+    /// The store-stats signal used by cache-residue validation follows the
+    /// complete module-entry lifetime: it stays live during the anti-thrash
+    /// grace and disappears once an unleased zero-reference entry is evicted.
+    #[tokio::test]
+    async fn shared_data_metric_handle_follows_delayed_module_eviction() {
+        let f = write_temp_wasm(MINI_GUEST);
+        let config = file_config(f.path());
+        let key = runtime_cache_key(&config);
+        let mut mgr = WasmVmManager::new_for_test();
+        mgr.set_evict_grace_for_test(Duration::from_millis(100));
+
+        mgr.register_plugin(&key, CalloutGrant::none());
+        let entry = load(&mgr, &config).await.expect("loads");
+        let metrics_label = entry.metrics_label.clone();
+        drop(entry);
+
+        mgr.unregister_plugin(&key, "test-module", &CalloutGrant::none());
+        tokio::time::sleep(Duration::from_millis(25)).await;
+        assert!(mgr.try_get(&key).is_some(), "entry must remain during grace");
+        assert!(
+            crate::observe::metrics::registry::wasm_shared_data_metric_stats()
+                .keys
+                .contains(&metrics_label),
+            "live shared-data handle must remain visible during grace"
+        );
+
+        let mut released = false;
+        for _ in 0..40 {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            let stats = crate::observe::metrics::registry::wasm_shared_data_metric_stats();
+            if mgr.try_get(&key).is_none() && !stats.keys.contains(&metrics_label) {
+                released = true;
+                break;
+            }
+        }
+        assert!(released, "entry and shared-data metric handle must release after grace");
+    }
+
     /// A re-register during the grace period cancels the eviction.
     #[tokio::test]
     async fn reregister_during_grace_keeps_entry() {

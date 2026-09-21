@@ -26,6 +26,7 @@ before applying a decision to current code.
 - [`ClientCache::start_watch` two remaining extraction phases deliberately deferred — DEFERRED-REFACTOR](intentional-design/start-watch-extract-fn-deferred.md)
 - [Watcher `send(...).await` end-to-end backpressure (no `send_timeout`) — DESIGN-TRADEOFF](intentional-design/watcher-send-await-backpressure-no-timeout.md)
 - [Webhook active health task is abort-only (no cooperative watch signal) — DESIGN-TRADEOFF](intentional-design/webhook-active-health-abort-only.md)
+- [Wasm tick-callout grant registry: evict/register race can drop a fresh grant — ACCEPTED-RISK](intentional-design/wasm-tick-callout-grant-evict-race.md)
 
 ## Regression guards
 
@@ -52,7 +53,6 @@ before applying a decision to current code.
 - [Body-Buffer Replay `next_chunk` Cancellation Safety — FIXED (two-phase peek/consume)](regression-guards/pingora-body-buffer-replay-cancel-safety.md)
 - [Provider cooldown survives a concurrent success](regression-guards/provider-cooldown-survives-concurrent-success.md)
 - [Outbound rate-limit atomic window/admission, monotonic expiry and delayed calls](regression-guards/sliding-window-check-then-increment.md)
-- [Wasm tick-callout grant registry: evict/register race can drop a fresh grant — ACCEPTED-RISK](regression-guards/wasm-tick-callout-grant-evict-race.md)
 - [LinkSys Webhook dispatch credential gate (link-sys-F003)](regression-guards/webhook-dispatch-credential-gate.md)
 - [LinkSys webhook `webhook_call` full response-body read before size check (link-sys-F019)](regression-guards/webhook-full-body-read-before-size-check.md)
 

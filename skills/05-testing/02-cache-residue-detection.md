@@ -12,7 +12,8 @@ description: Cache residue detection — wipe-all + store-stats based leak detec
 1. `run_integration.sh` invokes the `cache_residue` binary after all test loops finish and before `cleanup`.
 2. `cache_residue` calls `POST controller /api/v1/admin/wipe-all` (registered only in testing mode), which deletes all 22 kinds in tier order.
 3. It calls `DELETE gateway /api/v1/testing/access-logs` to clear the access log (eliminates TTL false positives).
-4. It polls (default 500ms interval, up to 30s):
+4. It polls (default 500ms interval, up to 75s). The deadline exceeds the Wasm
+   module cache's intentional 60-second post-delete anti-thrash grace:
    - `GET controller /api/v1/debug/store-stats`
    - `GET gateway /api/v1/debug/store-stats`
    - The built-in ignore-path filters out structural constant fields (e.g., `next_resource_version`).
@@ -61,7 +62,7 @@ Any extension to store-stats or wipe-all must be reverse-tested manually: tempor
 Example report:
 
 ```
-[FAIL] Cache residue detected after wipe-all (timeout 30s):
+[FAIL] Cache residue detected after wipe-all (timeout 75s):
 
   controller:
     conf_center_storage.HTTPRoute        = 1

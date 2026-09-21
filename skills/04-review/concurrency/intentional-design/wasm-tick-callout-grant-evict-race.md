@@ -4,7 +4,7 @@ description: Use when reviewing the Wasm tick-callout grant registry (TickCallou
 status: accepted-tradeoff
 finding_id: wasm-tick-callout-DR3
 closed: 2026-07-12
-knowledge_type: regression-guards
+knowledge_type: intentional-design
 ---
 
 # Wasm tick-callout grant registry: evict/register race can drop a fresh grant — ACCEPTED-RISK

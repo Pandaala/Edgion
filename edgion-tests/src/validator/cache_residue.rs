@@ -15,6 +15,7 @@ use std::time::{Duration, Instant};
 
 const HTTP_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 const WIPE_ALL_REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
+const DEFAULT_TIMEOUT_SECS: u64 = 75;
 
 const ROOT_CA_DESCRIPTION: &str = "Contains a CA bundle that can be used to verify the kube-apiserver when using internal endpoints such as the internal service IP or kubernetes.default.svc. No other usage is guaranteed across distributions of Kubernetes clusters.";
 
@@ -43,7 +44,7 @@ struct Args {
 
     /// Must exceed the longest intentional post-delete cache grace period.
     /// Wasm module entries currently retain a 60-second anti-thrash grace.
-    #[arg(long, default_value = "75")]
+    #[arg(long, default_value_t = DEFAULT_TIMEOUT_SECS)]
     timeout_secs: u64,
 
     #[arg(long, default_value = "500")]
@@ -669,6 +670,20 @@ mod exit_tests {
     use super::*;
 
     #[test]
+    fn default_timeout_exceeds_wasm_eviction_grace() {
+        let args = Args::try_parse_from([
+            "cache_residue",
+            "--controller-addr",
+            "http://controller",
+            "--gateway-addr",
+            "http://gateway",
+        ])
+        .expect("required addresses are present");
+        assert_eq!(args.timeout_secs, DEFAULT_TIMEOUT_SECS);
+        assert!(args.timeout_secs > 60);
+    }
+
+    #[test]
     fn empty_snapshot_always_exits_zero() {
         assert!(matches!(decide_exit(true, "warn").unwrap(), ExitDecision::Ok));
         assert!(matches!(decide_exit(true, "fail").unwrap(), ExitDecision::Ok));
@@ -742,6 +757,48 @@ mod e2e_tests {
         assert!(!snap
             .residue
             .contains_key("controller.event_store.next_resource_version"));
+    }
+
+    #[tokio::test]
+    async fn collect_preserves_live_wasm_shared_data_metric_residue() {
+        let gw = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/api/v1/debug/store-stats"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "success": true,
+                "data": {
+                    "wasm_shared_data_metrics": {
+                        "count": 1,
+                        "keys": ["file:test-module.wasm"]
+                    }
+                }
+            })))
+            .mount(&gw)
+            .await;
+
+        let args = Args {
+            controller_addr: String::new(),
+            gateway_addr: gw.uri(),
+            controller_token: None,
+            gateway_token: None,
+            no_wipe: true,
+            timeout_secs: 1,
+            poll_interval_ms: 100,
+            mode: "fail".to_string(),
+            skip: Some("controller".to_string()),
+            ignore_controller_configmap: Vec::new(),
+            ignore_controller_conf_sync_secret: Vec::new(),
+        };
+        let snap = collect(&Client::new(), &args, &BTreeSet::new(), &BTreeSet::new())
+            .await
+            .unwrap();
+
+        assert_eq!(snap.residue.get("gateway.wasm_shared_data_metrics.count"), Some(&1));
+        assert!(matches!(
+            decide_exit(snap.is_empty(), &args.mode).unwrap(),
+            ExitDecision::Residue
+        ));
     }
 
     #[tokio::test]

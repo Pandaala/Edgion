@@ -40,9 +40,9 @@ Live verification on 2026-09-15 loaded the complete EdgionPlugins inventory;
 every executed plugin suite passed, including the historically failing suites
 and `DslGrpcError`; the metrics-label, unknown-field, and requeue final gates
 also passed. The report recorded 64 PASS entries, one SKIP, and one final
-cache-residue failure caused by a distinct Wasm
-delayed-eviction issue, tracked by
-`wasm-shared-data-eviction-grace-exceeds-residue-timeout`; that result does not
+cache-residue failure caused by a distinct Wasm delayed-eviction deadline
+mismatch. The validator deadline now exceeds the intentional 60-second module
+eviction grace; that historical result does not
 invalidate configuration-submission or suite behavior evidence. A focused
 `DslGrpcError` run subsequently passed its ordinary cache-residue gate as well.
 
