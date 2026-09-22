@@ -36,9 +36,9 @@ spec:
                       default: false
                     downstreamKeepaliveRequestLimit:
                       type: integer
-                      description: "Maximum requests a downstream HTTP/1 connection serves before close (default 1000; 0 means unlimited)"
+                      description: "Maximum requests a downstream HTTP/1 connection serves before close (default 10000; 0 means unlimited)"
                       format: int32
-                      default: 1000
+                      default: 10000
 
                 # ============================================
                 # HTTP Timeout Configuration

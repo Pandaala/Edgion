@@ -137,7 +137,7 @@ metadata:
 spec:
   server:
     enableCompression: true
-    downstreamKeepaliveRequestLimit: 1000
+    downstreamKeepaliveRequestLimit: 10000
   httpTimeout:
     backend:
       defaultConnectTimeout: "5s"
@@ -150,8 +150,9 @@ tunable fields.
 ### Switch parameters without recreating Gateways
 
 Because Gateways reference the class by name, you can repoint `parametersRef` at a different
-`EdgionGatewayConfig`. Dynamically resolved policies apply to subsequent requests or connections;
-listener-construction fields under `spec.server` require a Gateway process restart.
+`EdgionGatewayConfig`. Dynamically resolved policies apply without rebuilding the listener.
+Compression changes apply to subsequent requests; the first HTTP/1 request on a connection
+captures its keepalive request budget for the lifetime of that connection.
 
 ```yaml
 apiVersion: gateway.networking.k8s.io/v1

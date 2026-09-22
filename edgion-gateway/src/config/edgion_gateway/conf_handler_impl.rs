@@ -164,7 +164,7 @@ impl ResolvedGatewayConfig {
                 .server
                 .as_ref()
                 .map(|s| s.downstream_keepalive_request_limit)
-                .unwrap_or(1000),
+                .unwrap_or(10_000),
             l4_timeouts: ResolvedL4Timeouts::resolve(config),
         }
     }
@@ -188,7 +188,7 @@ impl Default for ResolvedGatewayConfig {
                 .attempts,
             real_ip_extractor: None,
             enable_compression: false,
-            downstream_keepalive_request_limit: 1000,
+            downstream_keepalive_request_limit: 10_000,
             l4_timeouts: ResolvedL4Timeouts::default(),
         }
     }
@@ -1044,6 +1044,7 @@ mod tests {
         assert!(Arc::ptr_eq(&get_resolved_gateway_config(Some("missing")), &default));
         assert!(Arc::ptr_eq(&get_resolved_gateway_config(None), &default));
         assert!(default.reject_duplicate_host);
+        assert_eq!(default.downstream_keepalive_request_limit, 10_000);
     }
 
     #[test]
@@ -1097,6 +1098,7 @@ mod tests {
         assert!(!Arc::ptr_eq(&old, &next));
         assert_eq!(next.x_forwarded_for_limit, Some(8));
         assert_eq!(next.fallback_sni.as_deref(), Some("new.example.com"));
+        assert_eq!(next.downstream_keepalive_request_limit, 10_000);
         assert!(next.require_sni_host_match && next.tls_proxy_log_record && next.reject_duplicate_host);
         assert!(!next.allow_loopback_upstream && !next.enable_compression);
         assert!(next.real_ip_extractor.is_none());

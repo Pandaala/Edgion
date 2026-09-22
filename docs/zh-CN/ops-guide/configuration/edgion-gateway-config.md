@@ -38,7 +38,7 @@ metadata:
 spec:
   server:
     enableCompression: false
-    downstreamKeepaliveRequestLimit: 1000
+    downstreamKeepaliveRequestLimit: 10000
 
   httpTimeout:
     client:
@@ -123,7 +123,7 @@ fail-close 策略。修改 GatewayClass 引用本身、增加监听端口、转�
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `enableCompression` | `Boolean` | `false` | 对带有效 `Content-Length` 且无 `Transfer-Encoding` 的适用下游响应启用 gzip；未知长度和 SSE 响应保持未压缩，以维持增量传输 |
-| `downstreamKeepaliveRequestLimit` | `Integer` | `1000` | 每条下游 HTTP/1 连接的最大请求数，`0` 表示无限 |
+| `downstreamKeepaliveRequestLimit` | `Integer` | `10000` | 每条下游 HTTP/1 连接的最大请求数，`0` 表示无限 |
 
 压缩开关由每个 HTTP 请求捕获。keepalive 请求预算由 HTTP/1 首个请求捕获，并保留到
 该连接结束。两者更新均无需重启监听器。Pingora

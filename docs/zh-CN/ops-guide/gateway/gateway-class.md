@@ -102,7 +102,7 @@ metadata:
 spec:
   server:
     enableCompression: true
-    downstreamKeepaliveRequestLimit: 1000
+    downstreamKeepaliveRequestLimit: 10000
   httpTimeout:
     backend:
       defaultConnectTimeout: "5s"
@@ -113,7 +113,7 @@ spec:
 
 ### 无需重建 Gateway 即可切换参数
 
-由于 Gateway 通过名称引用 class，可以将 `parametersRef` 指向不同的 `EdgionGatewayConfig`。动态解析的策略会应用于后续请求或连接；`spec.server` 下用于构造 listener 的字段需要重启 Gateway 进程。
+由于 Gateway 通过名称引用 class，可以将 `parametersRef` 指向不同的 `EdgionGatewayConfig`，无需重建 listener。压缩配置变更应用于后续请求；每条 HTTP/1 连接由首个请求捕获 keepalive 请求预算，并在该连接的生命周期内保持不变。
 
 ```yaml
 apiVersion: gateway.networking.k8s.io/v1

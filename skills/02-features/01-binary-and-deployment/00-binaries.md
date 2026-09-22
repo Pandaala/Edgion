@@ -92,7 +92,6 @@ edgion-gateway [OPTIONS]
 | `--grace-period-seconds` | — | `u64` | `30` | Graceful shutdown wait time in seconds |
 | `--graceful-shutdown-timeout-seconds` | — | `u64` | `10` | Shutdown timeout in seconds |
 | `--upstream-keepalive-pool-size` | — | `usize` | `128` | Upstream connection pool size |
-| `--downstream-keepalive-request-limit` | — | `u32` | `1000` | Maximum requests per downstream connection (0 = unlimited) |
 | `--error-log` | — | `String` | — | Pingora error log path |
 | `--log-dir` | — | `String` | `logs` | System log directory |
 | `--log-level` | — | `String` | `info` | Log level |

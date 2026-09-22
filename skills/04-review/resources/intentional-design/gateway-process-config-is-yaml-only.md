@@ -24,10 +24,12 @@ They are local-only, process-wide, and restart-bound. They must not be exposed b
 the cluster-synced `EdgionGatewayConfig` CRD.
 
 `EdgionGatewayConfig.spec.server` instead owns two GatewayClass-scoped HTTP
-listener settings: `enableCompression` and
-`downstreamKeepaliveRequestLimit`. Both are captured while constructing the
-HTTP listener and therefore also require a Gateway process restart to change.
-The local Gateway YAML must not expose a duplicate downstream request limit.
+runtime settings: `enableCompression` and
+`downstreamKeepaliveRequestLimit`. Updates are published through the shared EGC
+runtime snapshot without rebuilding the listener: compression is captured per
+request, while the first HTTP/1 request captures the keepalive budget for that
+connection. The local Gateway YAML and CLI must not expose a duplicate downstream
+request limit.
 
 ## Why ownership is split
 
@@ -74,8 +76,7 @@ This format history is independent of the process-versus-CRD ownership rule.
   `Server::run()` begins.
 - Edgion introduces an explicit singleton bootstrap resource with defined
   precedence over local process configuration.
-- HTTP listeners become dynamically replaceable, allowing
-  `EdgionGatewayConfig.spec.server` changes to apply without a process restart.
+- The EGC runtime snapshot or request/connection capture boundaries change.
 
 ## Resolution references
 

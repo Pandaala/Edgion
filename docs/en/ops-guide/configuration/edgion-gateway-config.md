@@ -38,7 +38,7 @@ metadata:
 spec:
   server:
     enableCompression: false
-    downstreamKeepaliveRequestLimit: 1000
+    downstreamKeepaliveRequestLimit: 10000
 
   httpTimeout:
     client:
@@ -134,7 +134,7 @@ this hot-update contract.
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `enableCompression` | `Boolean` | `false` | Gzip eligible downstream responses with a valid `Content-Length` and no `Transfer-Encoding`; unknown-length and SSE responses remain uncompressed to preserve incremental delivery |
-| `downstreamKeepaliveRequestLimit` | `Integer` | `1000` | Maximum requests per downstream HTTP/1 connection; `0` means unlimited |
+| `downstreamKeepaliveRequestLimit` | `Integer` | `10000` | Maximum requests per downstream HTTP/1 connection; `0` means unlimited |
 
 Compression is captured per HTTP request. The keepalive request budget is captured
 by the first HTTP/1 request and retained for that connection. Both support updates

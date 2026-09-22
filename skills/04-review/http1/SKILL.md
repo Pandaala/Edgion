@@ -11,6 +11,7 @@ before applying a decision to current code.
 
 ## Intentional design
 
+- [Downstream HTTP/1 keepalive defaults to 10,000 requests per connection](intentional-design/downstream-keepalive-request-limit-default.md)
 - [rfc-003 — `Max-Forwards` not honored for TRACE / OPTIONS](intentional-design/max-forwards-not-honored.md)
 - [http1-02 — No manual `Connection: close` injection in proxied responses](intentional-design/no-connection-close-injection.md)
 

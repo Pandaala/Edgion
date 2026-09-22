@@ -49,7 +49,7 @@ spec:
   # ─── GatewayClass HTTP server behavior (dynamic) ───
   server:
     enableCompression: false                # bool, gzip known-length downstream responses
-    downstreamKeepaliveRequestLimit: 1000   # uint32, 0 = unlimited
+    downstreamKeepaliveRequestLimit: 10000  # uint32, 0 = unlimited
 
   # ─── HTTP timeouts ───
   httpTimeout:
@@ -152,7 +152,7 @@ spec:
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `enableCompression` | `bool` | `false` | Gzip eligible downstream responses with a valid `Content-Length` and no `Transfer-Encoding`; unknown-length and SSE responses remain uncompressed |
-| `downstreamKeepaliveRequestLimit` | `u32` | `1000` | Maximum requests per downstream HTTP/1 connection; `0` means unlimited |
+| `downstreamKeepaliveRequestLimit` | `u32` | `10000` | Maximum requests per downstream HTTP/1 connection; `0` means unlimited |
 
 Compression is captured per HTTP request. The keepalive budget is captured by the
 first HTTP/1 request and retained by that connection; existing connections do not

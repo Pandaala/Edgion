@@ -316,13 +316,13 @@ pub struct ServerConfig {
     /// Maximum number of requests a downstream HTTP/1 connection can serve before being closed.
     /// Per-connection limit, similar to Nginx's `keepalive_requests`.
     /// Helps with memory management and load balancing distribution.
-    /// Default: 1000. Set to 0 to disable the limit.
+    /// Default: 10000. Set to 0 to disable the limit.
     #[serde(default = "default_downstream_keepalive_request_limit")]
     pub downstream_keepalive_request_limit: u32,
 }
 
 fn default_downstream_keepalive_request_limit() -> u32 {
-    1000
+    10_000
 }
 
 // ============================================
@@ -1090,6 +1090,16 @@ mod tcp_timeout_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn server_keepalive_request_limit_defaults_to_ten_thousand() {
+        let spec: EdgionGatewayConfigSpec = serde_json::from_value(serde_json::json!({
+            "server": {}
+        }))
+        .unwrap();
+
+        assert_eq!(spec.server.unwrap().downstream_keepalive_request_limit, 10_000);
+    }
 
     #[test]
     fn preflight_policy_accepts_only_ordinary_final_statuses() {
