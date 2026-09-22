@@ -4,6 +4,7 @@ use crate::gwapi_types::is_valid_header_token;
 use regex::Regex;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
 use std::collections::HashMap;
 
 /// CORS plugin configuration
@@ -72,6 +73,14 @@ pub struct CorsConfig {
     #[schemars(skip)]
     pub compiled_timing_regex: Option<Regex>,
 }
+
+/// Wire value emitted for the `allow_methods: "**"` force-wildcard shorthand.
+/// Fixed at compile time so the expansion never allocates on the request path.
+const FORCE_WILDCARD_METHODS: &str = "GET,POST,PUT,DELETE,PATCH,HEAD,OPTIONS,CONNECT,TRACE";
+
+/// Wire value emitted for the `allow_headers: "**"` force-wildcard shorthand when
+/// the preflight request carries no `Access-Control-Request-Headers` to reflect.
+const FORCE_WILDCARD_HEADERS_FALLBACK: &str = "*";
 
 // Security-first defaults: restrictive by default, explicit allow required
 fn default_allow_origins() -> String {
@@ -274,22 +283,34 @@ impl CorsConfig {
         false
     }
 
-    /// Get the actual allow-methods value (expand ** if needed)
-    pub fn get_allow_methods(&self) -> String {
+    /// Get the actual allow-methods value (expand ** if needed).
+    ///
+    /// Both outcomes are fixed once the configuration is published: the `**`
+    /// expansion is a compile-time constant and every other value is the stored
+    /// configuration string itself, so this borrows instead of allocating on the
+    /// request path.
+    pub fn get_allow_methods(&self) -> &str {
         if self.allow_methods == "**" {
-            "GET,POST,PUT,DELETE,PATCH,HEAD,OPTIONS,CONNECT,TRACE".to_string()
+            FORCE_WILDCARD_METHODS
         } else {
-            self.allow_methods.clone()
+            &self.allow_methods
         }
     }
 
-    /// Get the actual allow-headers value (may need dynamic reflection)
-    pub fn get_allow_headers(&self, requested_headers: Option<&str>) -> String {
+    /// Get the actual allow-headers value (may need dynamic reflection).
+    ///
+    /// Only the `**` shorthand is request-dependent, so it takes ownership of
+    /// `requested_headers` and moves it into the result rather than copying it.
+    /// Every other configuration borrows the stored string.
+    pub fn get_allow_headers(&self, requested_headers: Option<String>) -> Cow<'_, str> {
         if self.allow_headers == "**" {
             // Dynamic reflection: return what client requested
-            requested_headers.unwrap_or("*").to_string()
+            match requested_headers {
+                Some(requested) => Cow::Owned(requested),
+                None => Cow::Borrowed(FORCE_WILDCARD_HEADERS_FALLBACK),
+            }
         } else {
-            self.allow_headers.clone()
+            Cow::Borrowed(&self.allow_headers)
         }
     }
 
@@ -526,7 +547,7 @@ mod tests {
             allow_headers: "**".to_string(),
             ..Default::default()
         };
-        let headers = cors.get_allow_headers(Some("Content-Type,X-Custom"));
+        let headers = cors.get_allow_headers(Some("Content-Type,X-Custom".to_string()));
 
         assert_eq!(headers, "Content-Type,X-Custom");
     }

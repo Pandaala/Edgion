@@ -57,8 +57,15 @@ tracing does not violate the data-plane no-tracing rule. The shared `validation_
 credential-policy violations, invalid method/header tokens, and individually invalid regexes
 before initialization. It does not prove that wrapped/merged runtime regex compilation succeeds.
 The former claim that all construction errors are unreachable for operator input was too broad.
-Full compilation parity remains in the [precomputation follow-up](../../../../tasks/todo/precompute-cors-response-headers.md);
-see [shared list validation](token-list-validation.md) for the bounded current correction.
+Full compilation parity is therefore still open: Controller ingest can accept a config whose
+merged runtime regex only fails later at Gateway construction, which is why the deny-safe
+fallback above must stay. It is tracked by
+[merged-regex validation parity](../../../../tasks/todo/align-cors-merged-regex-validation-parity.md).
+That task supersedes the former pointer to `precompute-cors-response-headers`, which closed on
+2026-09-22 having delivered request-path header preparation only (see
+[response-header values borrow](../intentional-design/response-header-values-borrowed.md))
+without touching this parity item. See [shared list validation](token-list-validation.md) for the
+bounded current correction.
 
 **4. Regression locked at the constructor→evaluator boundary**
 
@@ -85,9 +92,10 @@ Re-open only if:
 - A new `#[serde(skip)]` runtime field is added to `CorsConfig` and either construction site is not
   updated to populate it.
 - `validate_and_init` and `validation_error` diverge such that an operator-reachable config passes
-  preparse but fails matcher build at construction. Merged-regex parity is already tracked by the
-  linked follow-up; assess the remaining initialized and raw matching fields before describing
-  any construction fallback as deny-safe.
+  preparse but fails matcher build at construction. Merged-regex parity is a known open gap tracked
+  by [merged-regex validation parity](../../../../tasks/todo/align-cors-merged-regex-validation-parity.md);
+  assess the remaining initialized and raw matching fields before describing any construction
+  fallback as deny-safe.
 
 ## Reference Cases
 

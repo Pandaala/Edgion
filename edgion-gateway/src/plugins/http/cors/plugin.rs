@@ -2,6 +2,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use pingora_http::ResponseHeader;
 use smallvec::SmallVec;
+use std::borrow::Cow;
 use std::sync::Arc;
 
 use crate::plugins::runtime::{PluginLog, PluginSession, PluginSessionHeaderExt, RequestFilter};
@@ -10,7 +11,11 @@ use edgion_resources::resources::edgion_plugins::CorsConfig;
 
 type CorsError = Box<dyn std::error::Error + Send + Sync>;
 type CorsResult<T> = Result<T, CorsError>;
-type CorsHeaderPairs = SmallVec<[(&'static str, String); 8]>;
+/// Response-header pairs built for one request. Values are `Cow` so the parts
+/// that are fixed by configuration (allow-methods, allow-headers, expose-headers,
+/// the literal flag values) borrow instead of allocating; only the genuinely
+/// request-dependent parts own their bytes.
+type CorsHeaderPairs<'a> = SmallVec<[(&'static str, Cow<'a, str>); 8]>;
 
 /// CORS (Cross-Origin Resource Sharing) plugin
 pub struct Cors {
@@ -89,15 +94,15 @@ impl Cors {
     /// Compute all CORS + timing + private-network headers as key-value pairs.
     /// This allows callers to apply headers to either a ResponseHeader (preflight)
     /// or via session queue (simple requests / preflight_continue).
-    fn build_cors_header_pairs(
-        &self,
+    fn build_cors_header_pairs<'a>(
+        &'a self,
         session: &mut dyn PluginSession,
-        allowed_origin: &str,
+        allowed_origin: &'a str,
         is_preflight: bool,
-    ) -> CorsHeaderPairs {
+    ) -> CorsHeaderPairs<'a> {
         let mut headers = CorsHeaderPairs::new();
 
-        headers.push(("Access-Control-Allow-Origin", allowed_origin.to_string()));
+        headers.push(("Access-Control-Allow-Origin", Cow::Borrowed(allowed_origin)));
 
         // Access-Control-Allow-Methods / -Headers (preflight only). Per WHATWG Fetch
         // 3.2.2/3.2.3 the CORS-preflight fetch algorithm is the only reader of these
@@ -107,28 +112,31 @@ impl Cors {
         // renders a content-free `Access-Control-Allow-Headers: *` plus the fully
         // expanded method list.
         if is_preflight {
-            headers.push(("Access-Control-Allow-Methods", self.config.get_allow_methods()));
+            headers.push((
+                "Access-Control-Allow-Methods",
+                Cow::Borrowed(self.config.get_allow_methods()),
+            ));
 
             let requested_headers = session.header_value("access-control-request-headers");
             headers.push((
                 "Access-Control-Allow-Headers",
-                self.config.get_allow_headers(requested_headers.as_deref()),
+                self.config.get_allow_headers(requested_headers),
             ));
         }
 
         let expose = self.config.get_expose_headers();
         if !expose.is_empty() {
-            headers.push(("Access-Control-Expose-Headers", expose.to_string()));
+            headers.push(("Access-Control-Expose-Headers", Cow::Borrowed(expose)));
         }
 
         if self.config.allow_credentials {
-            headers.push(("Access-Control-Allow-Credentials", "true".to_string()));
+            headers.push(("Access-Control-Allow-Credentials", Cow::Borrowed("true")));
         }
 
         // Access-Control-Max-Age (preflight only)
         if is_preflight {
             if let Some(max_age) = self.config.max_age {
-                headers.push(("Access-Control-Max-Age", max_age.to_string()));
+                headers.push(("Access-Control-Max-Age", Cow::Owned(max_age.to_string())));
             }
         }
 
@@ -136,14 +144,14 @@ impl Cors {
             if self.config.is_timing_origin_allowed(&origin) {
                 let timing_value = if let Some(ref timing_origins) = self.config.timing_allow_origins {
                     if timing_origins == "**" {
-                        origin.clone()
+                        Cow::Owned(origin)
                     } else if timing_origins == "*" {
-                        "*".to_string()
+                        Cow::Borrowed("*")
                     } else {
-                        origin.clone()
+                        Cow::Owned(origin)
                     }
                 } else {
-                    origin.clone()
+                    Cow::Owned(origin)
                 };
                 headers.push(("Timing-Allow-Origin", timing_value));
             }
@@ -153,7 +161,7 @@ impl Cors {
         if self.config.allow_private_network {
             if let Some(req_pn) = session.header_value("access-control-request-private-network") {
                 if req_pn == "true" {
-                    headers.push(("Access-Control-Allow-Private-Network", "true".to_string()));
+                    headers.push(("Access-Control-Allow-Private-Network", Cow::Borrowed("true")));
                 }
             }
         }
@@ -189,8 +197,8 @@ impl Cors {
         let headers = self.build_cors_header_pairs(session, allowed_origin, true);
         let mut resp = ResponseHeader::build(204, Some(headers.len() + 1)).map_err(|e| Box::new(e) as CorsError)?;
         for (name, value) in &headers {
-            resp.insert_header(*name, value.as_str())
-                .map_err(|e| Box::new(e) as CorsError)?;
+            let value: &str = value;
+            resp.insert_header(*name, value).map_err(|e| Box::new(e) as CorsError)?;
         }
         if self.config.should_add_vary_header() {
             resp.append_header("Vary", "Origin")
@@ -337,20 +345,18 @@ mod tests {
 
         assert_eq!(headers.len(), 8);
         assert!(!headers.spilled());
+        let emitted: Vec<(&str, &str)> = headers.iter().map(|(name, value)| (*name, &**value)).collect();
         assert_eq!(
-            headers.as_slice(),
+            emitted.as_slice(),
             [
-                ("Access-Control-Allow-Origin", "https://example.com".to_string()),
-                ("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE".to_string()),
-                ("Access-Control-Allow-Headers", "Content-Type,Authorization".to_string(),),
-                (
-                    "Access-Control-Expose-Headers",
-                    "X-Trace-Id,X-RateLimit-Remaining".to_string(),
-                ),
-                ("Access-Control-Allow-Credentials", "true".to_string()),
-                ("Access-Control-Max-Age", "3600".to_string()),
-                ("Timing-Allow-Origin", "https://example.com".to_string()),
-                ("Access-Control-Allow-Private-Network", "true".to_string()),
+                ("Access-Control-Allow-Origin", "https://example.com"),
+                ("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE"),
+                ("Access-Control-Allow-Headers", "Content-Type,Authorization"),
+                ("Access-Control-Expose-Headers", "X-Trace-Id,X-RateLimit-Remaining"),
+                ("Access-Control-Allow-Credentials", "true"),
+                ("Access-Control-Max-Age", "3600"),
+                ("Timing-Allow-Origin", "https://example.com"),
+                ("Access-Control-Allow-Private-Network", "true"),
             ]
             .as_slice()
         );

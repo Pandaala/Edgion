@@ -52,8 +52,9 @@ change wire values beyond this fix.
 
 Shared input checks do not imply complete regex compilation parity: stateless
 validation checks individual patterns, while initialization still builds merged
-regexes. No runtime-cache or request-path optimization is claimed. Remaining
-work is tracked in [header precomputation](../../../../tasks/todo/precompute-cors-response-headers.md).
+regexes. This page claims nothing about request-path header preparation; that
+decision now lives in
+[response-header values borrow](../intentional-design/response-header-values-borrowed.md).
 
 ## Verification and re-evaluation
 
@@ -84,5 +85,7 @@ preflight regression guards remain applicable.
 ## Resolution references
 
 - `unify-cors-validation-and-header-precomputation.md`: real validation defect;
-  scoped fix authorized with conservative input acceptance. Precomputation is
-  deferred in the linked task, not included in this correction.
+  scoped fix authorized with conservative input acceptance. Precomputation was
+  deferred at the time and not included in this correction; it was delivered
+  separately on 2026-09-22 — see
+  [response-header values borrow](../intentional-design/response-header-values-borrowed.md).
