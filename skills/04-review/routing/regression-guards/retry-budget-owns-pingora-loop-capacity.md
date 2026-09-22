@@ -21,6 +21,17 @@ Pingora's `ServerConf.max_retries` counts loop iterations including the initial
 request. Edgion therefore configures it to `i32::MAX + 1`; it is capacity for
 the public route budget, not a second operator-visible retry policy.
 
+Raising that capacity also removed the only bound on retries Pingora decides by
+itself. `handle_read_header_error` marks h2 GOAWAY, RST_STREAM(REFUSED_STREAM),
+HTTP/1.1-required downgrade, and reused-connection IO errors as
+`RetryType::Decided(true)` before `error_while_proxy` ever sees them, and
+`RetryType::decide_reuse` is a no-op once a decision exists, so neither the route
+retry budget nor the AI dispatch budget can veto them. `error_while_proxy`
+therefore counts those pre-decided failures in `EdgionHttpContext::pingora_decided_retries`
+and clamps them at `MAX_PINGORA_DECIDED_RETRIES` (16, the former
+`ServerConf.max_retries` default). Retries this callback sets itself are not
+counted; they already passed their own gates.
+
 ## Rationale and evidence
 
 The locked Pingora loop increments its counter once per upstream attempt and
@@ -48,8 +59,12 @@ renderer instead of ending at an unrelated 16-iteration ceiling.
 Regression coverage checks default 2, explicit 0, `i32::MAX`, rejection of one
 above the maximum in the global resource, the `1 + attempts` decision boundary,
 gateway publication fallback, runtime hot reload, CRD parity, and the explicit
-Pingora loop capacity. Re-evaluate if Gateway API changes the type or bounds of
-`retry.attempts`, Pingora changes `max_retries` semantics, or retry counting no
+Pingora loop capacity. The Pingora-decided ceiling is covered by the
+`pingora_decided_retries_are_bounded_by_the_fail_safe_ceiling` unit test and
+end-to-end by the `HTTPRoute/Protocol/H2TrailerMalformed` integration suite,
+whose upstream answers every stream with RST_STREAM(REFUSED_STREAM).
+
+Re-evaluate if Gateway API changes the type or bounds of `retry.attempts`, Pingora changes `max_retries` semantics, or retry counting no
 longer increments before upstream selection. Also re-evaluate D0010 if AI's
 backend/dispatch bounds increase to approach the Pingora capacity or endpoint
 connect failures stop advancing at backend scope.
@@ -60,3 +75,8 @@ connect failures stop advancing at backend scope.
   the Pingora Loop Ceiling.”
 - D0010, resolved by removing the independent Pingora 16-iteration terminal
   boundary; the AI retry budget and renderer remain independently owned.
+- Follow-up fixed 2026-09-22: the removed 16-iteration boundary had also been
+  the only ceiling on Pingora-decided transport retries, so an upstream that
+  always answered RST_STREAM(REFUSED_STREAM) drove ~42k upstream attempts per
+  request until the downstream client timed out. The ceiling is now owned
+  explicitly by `pg_error_while_proxy`.

@@ -147,6 +147,11 @@ pub enum EdgionErrorCode {
     /// A per-backend retry budget (retryConstraint) refused an additional retry.
     RetryBudgetExhausted,
 
+    /// The fail-safe ceiling on transport retries decided inside Pingora
+    /// (h2 GOAWAY, RST_STREAM(REFUSED_STREAM), HTTP/1.1-required downgrade,
+    /// reused-connection IO errors) refused a further upstream attempt.
+    UpstreamTransportRetryCeiling,
+
     /// Service not found in service store
     BackendServiceNotFound,
 
@@ -406,6 +411,7 @@ impl EdgionErrorCode {
             Self::BackendEndpointSliceNotFoundByRoundRobinDefault => "BackendEndpointSliceNotFoundByRoundRobinDefault",
             Self::BackendEndpointSliceNotFoundByEwma => "BackendEndpointSliceNotFoundByEwma",
             Self::RetryBudgetExhausted => "RetryBudgetExhausted",
+            Self::UpstreamTransportRetryCeiling => "UpstreamTransportRetryCeiling",
             Self::BackendServiceNotFound => "BackendServiceNotFound",
             Self::BackendClusterIpNotFound => "BackendClusterIpNotFound",
             Self::BackendExternalNameNotFound => "BackendExternalNameNotFound",
@@ -540,6 +546,10 @@ mod tests {
                 "BackendEndpointSliceNotFoundByEwma",
             ),
             (EdgionErrorCode::RetryBudgetExhausted, "RetryBudgetExhausted"),
+            (
+                EdgionErrorCode::UpstreamTransportRetryCeiling,
+                "UpstreamTransportRetryCeiling",
+            ),
             (EdgionErrorCode::BackendServiceNotFound, "BackendServiceNotFound"),
             (EdgionErrorCode::BackendClusterIpNotFound, "BackendClusterIpNotFound"),
             (

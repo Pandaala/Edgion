@@ -72,8 +72,57 @@ fn is_backend_request_timeout_retry_candidate(
         && !has_final_response_written(session)
 }
 
+/// Fail-safe ceiling for retries Pingora decided on its own, i.e. failures that
+/// reach this callback already carrying `RetryType::Decided(true)`: h2 GOAWAY,
+/// RST_STREAM(REFUSED_STREAM), an HTTP/1.1-required downgrade, or a
+/// reused-connection IO error. Those decisions are made inside the upstream h2
+/// client and never pass through the route retry budget or the AI dispatch
+/// budget, and `RetryType::decide_reuse` is a no-op once a decision exists, so
+/// nothing in this file can veto them.
+///
+/// `ServerConf.max_retries` used to bound them at its default of 16. It is now
+/// sized for the public route budget (`1 + attempts`, up to `i32::MAX`), so
+/// without a dedicated ceiling an upstream that answers every stream with
+/// RST_STREAM(REFUSED_STREAM) spins the proxy loop until the downstream client
+/// gives up. This restores the former bound for exactly that class of retry.
+const MAX_PINGORA_DECIDED_RETRIES: u32 = 16;
+
+#[inline]
+fn pingora_decided_retry_exhausted(decided_retries: u32) -> bool {
+    decided_retries > MAX_PINGORA_DECIDED_RETRIES
+}
+
+/// Applies Edgion's fail-safe ceiling on top of the ordinary retry decision.
+///
+/// Only retries Pingora decided for us are counted and clamped; a retry this
+/// file set explicitly has already passed the route or AI budget gates and is
+/// left alone.
 #[inline]
 pub fn error_while_proxy(
+    edgion_http: &EdgionHttpProxy,
+    peer: &HttpPeer,
+    session: &mut Session,
+    e: Box<Error>,
+    ctx: &mut EdgionHttpContext,
+    client_reused: bool,
+) -> Box<Error> {
+    let pingora_decided_retry = matches!(e.retry, pingora_core::RetryType::Decided(true));
+    if pingora_decided_retry {
+        ctx.pingora_decided_retries = ctx.pingora_decided_retries.saturating_add(1);
+    }
+
+    let mut e = decide_retry(edgion_http, peer, session, e, ctx, client_reused);
+
+    if pingora_decided_retry && e.retry() && pingora_decided_retry_exhausted(ctx.pingora_decided_retries) {
+        ctx.record_error(EdgionErrorCode::UpstreamTransportRetryCeiling);
+        e.set_retry(false);
+    }
+
+    e
+}
+
+#[inline]
+fn decide_retry(
     _edgion_http: &EdgionHttpProxy,
     peer: &HttpPeer,
     session: &mut Session,
@@ -299,7 +348,8 @@ pub fn error_while_proxy(
 mod tests {
     use super::{
         ai_failure_wants_retry, classify_ai_proxy_failure, is_backend_request_timeout_retry_candidate,
-        should_record_local_origin_failure, AiProxyFailureClass,
+        pingora_decided_retry_exhausted, should_record_local_origin_failure, AiProxyFailureClass,
+        MAX_PINGORA_DECIDED_RETRIES,
     };
     use crate::PeerTimeoutSource;
     use pingora_core::{ErrorSource, ErrorType};
@@ -324,6 +374,13 @@ mod tests {
     fn timeout_retry_candidate(session: &Session, error_type: ErrorType) -> bool {
         let error = pingora_core::Error::new_up(error_type);
         is_backend_request_timeout_retry_candidate(&error, Some(PeerTimeoutSource::BackendRequest), true, session)
+    }
+
+    #[test]
+    fn pingora_decided_retries_are_bounded_by_the_fail_safe_ceiling() {
+        assert!(!pingora_decided_retry_exhausted(1));
+        assert!(!pingora_decided_retry_exhausted(MAX_PINGORA_DECIDED_RETRIES));
+        assert!(pingora_decided_retry_exhausted(MAX_PINGORA_DECIDED_RETRIES + 1));
     }
 
     #[test]

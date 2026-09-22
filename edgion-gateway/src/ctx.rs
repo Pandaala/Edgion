@@ -2524,6 +2524,13 @@ pub struct EdgionHttpContext {
     /// Number of connection attempts to backends
     pub try_cnt: u32,
 
+    /// Number of proxy failures that arrived at `error_while_proxy` already
+    /// carrying Pingora's own `RetryType::Decided(true)` (h2 GOAWAY,
+    /// RST_STREAM(REFUSED_STREAM), HTTP/1.1-required downgrade, reused-connection
+    /// IO errors). Those decisions never pass through the route retry budget or
+    /// the AI dispatch budget, so they need their own fail-safe ceiling.
+    pub pingora_decided_retries: u32,
+
     /// Signal set by upstream_response_filter when upstream status code matches retry.codes.
     /// Consumed by error_while_proxy to trigger retry via e.set_retry(true).
     /// Reset to false after each retry attempt.
@@ -3578,6 +3585,7 @@ impl EdgionHttpContext {
             waf: None,
             waf_selection_complete: false,
             try_cnt: 0,
+            pingora_decided_retries: 0,
             retry_on_status: false,
             peer_timeout_source: None,
             connect_timeout_source: None,
