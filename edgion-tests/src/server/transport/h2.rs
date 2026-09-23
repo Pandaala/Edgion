@@ -15,6 +15,7 @@ use anyhow::Result;
 use bytes::Bytes;
 use h2::server as h2s;
 use prost::Message;
+use sha2::{Digest, Sha256};
 use std::time::Duration;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{mpsc, oneshot};
@@ -258,6 +259,7 @@ impl ReqCtx {
 #[derive(Default)]
 struct BodyState {
     total: usize,
+    digest: Sha256,
     end_emitted: bool,
     trailers: bool,
 }
@@ -518,6 +520,7 @@ async fn pump_body(body: &mut h2::RecvStream, ctx: &ReqCtx, state: &mut BodyStat
                 let len = chunk.len();
                 let _ = body.flow_control().release_capacity(len);
                 state.total += len;
+                state.digest.update(&chunk);
                 let end = body.is_end_stream();
                 if end {
                     state.end_emitted = true;
@@ -587,6 +590,7 @@ fn drain_ready(body: &mut h2::RecvStream, ctx: &ReqCtx, state: &mut BodyState) -
                 let len = chunk.len();
                 let _ = body.flow_control().release_capacity(len);
                 state.total += len;
+                state.digest.update(&chunk);
                 let end = body.is_end_stream();
                 if end {
                     state.end_emitted = true;
@@ -771,6 +775,10 @@ fn framing_report(script: &UpScript, state: &BodyState, ctx: &ReqCtx, headers_eo
     let mut headers = vec![
         ("x-up-headers-eos".to_string(), headers_eos.to_string()),
         ("x-up-req-body-len".to_string(), state.total.to_string()),
+        (
+            "x-up-req-body-sha256".to_string(),
+            format!("{:x}", state.digest.clone().finalize()),
+        ),
         ("x-up-req-trailers".to_string(), state.trailers.to_string()),
         ("x-up-http-version".to_string(), "2".to_string()),
         ("x-up-conn".to_string(), ctx.conn.to_string()),

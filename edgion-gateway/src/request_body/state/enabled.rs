@@ -16,6 +16,12 @@ pub(super) struct Backend {
 }
 
 impl Backend {
+    pub(super) fn freeze_mutation(&self) {
+        if let Some(view) = &self.view {
+            view.freeze_mutation();
+        }
+    }
+
     pub(super) fn has_cached_body(&self) -> bool {
         self.view.is_some()
     }

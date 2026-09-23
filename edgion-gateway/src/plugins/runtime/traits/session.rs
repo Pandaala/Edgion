@@ -546,6 +546,13 @@ pub trait PluginSession: Send + Sync {
         true
     }
 
+    /// Capture an inspection prefix before upstream dispatch. The boolean is
+    /// true only when the captured bytes represent the complete logical body.
+    /// A prefix must never be exposed through the complete-body read API.
+    async fn read_request_body_prefix(&mut self, _limit: usize) -> Result<(bytes::Bytes, bool), BodyReadError> {
+        Err(BodyReadError::Unimplemented)
+    }
+
     /// Append an EdgionErrorCode error to the gateway context so it surfaces in the
     /// access-log diagnostics array. Narrow interface — plugins cannot mutate other
     /// ctx fields; only the error list.

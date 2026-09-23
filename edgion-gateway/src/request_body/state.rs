@@ -20,6 +20,11 @@ use std::sync::Arc;
 pub struct RequestBodyState(Backend);
 
 impl RequestBodyState {
+    /// Preserve the logical body used by a completed security inspection.
+    pub(crate) fn freeze_mutation(&self) {
+        self.0.freeze_mutation();
+    }
+
     /// Whether a complete request-body cache is available.
     pub fn has_cached_body(&self) -> bool {
         self.0.has_cached_body()

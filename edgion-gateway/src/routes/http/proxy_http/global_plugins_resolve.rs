@@ -162,6 +162,7 @@ mod tests {
                 rules: "SecAction \"id:1,phase:1,pass\"".to_string(),
                 mode: WafMode::On,
                 priority,
+                request_body: Default::default(),
             })
             .expect("test WAF compiles");
         Arc::new(runtime)

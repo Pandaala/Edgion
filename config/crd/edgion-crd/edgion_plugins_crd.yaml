@@ -45,6 +45,17 @@ spec:
                       maximum: 65535
                       default: 0
                       description: "WAF owner-selection priority; a larger value wins"
+                    requestBody:
+                      type: object
+                      properties:
+                        inspection:
+                          type: string
+                          enum: [prefix, full]
+                          default: prefix
+                          description: "Inspect a bounded prefix before forwarding, or explicitly inspect the complete bounded request body"
+                        prefixSize:
+                          type: string
+                          description: "Prefix window from 1 byte through 1 MiB; defaults to 64KiB when omitted. Only valid with prefix inspection."
                 # ============================================
                 # Request Stage Plugins (async)
                 # ============================================

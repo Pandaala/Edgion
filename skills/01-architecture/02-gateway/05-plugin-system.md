@@ -34,6 +34,16 @@ an end-of-response hook. See the
 and the [Gateway response driver](../../../edgion-gateway/src/routes/http/proxy_http/pg_response_filter.rs).
 
 Execution flow notes:
+
+- Native WAF request-body admission uses `spec.waf.requestBody.inspection`.
+  Default `prefix` reads up to `prefixSize` (64 KiB by default, at most 1 MiB)
+  into in-memory `BodyStorage` before upstream dispatch through the
+  canonical `BodyStorage` / Pingora registered-buffer seam, then drains the
+  prefix and resumes live forwarding. Prefix sealing is not transport EOS and
+  never publishes a partial complete-body cache. Explicit `full` retains the
+  complete capture path. Existing complete caches are reused and their logical
+  body is frozen after prefix inspection. See the
+  [prefix admission contract](../../04-review/http-body/regression-guards/waf-prefix-before-dispatch.md).
 - Within each phase, plugins run in registration order.
 - If any plugin returns `ErrTerminateRequest` or `ErrResponse`, the phase terminates immediately and subsequent plugins are skipped.
 - In the UpstreamResponseBodyFilter phase, when multiple plugins return Duration values, the maximum is used (the strictest limit takes effect).

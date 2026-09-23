@@ -155,7 +155,7 @@ pub use tiny_ufo_ttl_cache_config::{
     TINY_UFO_WEIGHT_UNIT_BYTES,
 };
 pub use upstream_fallback::UpstreamFallback;
-pub use waf::{WafConfig, WafMode};
+pub use waf::{WafConfig, WafMode, WafRequestBodyConfig, WafRequestBodyInspection};
 pub use wasm::{
     normalize_callout_origin, normalize_callout_origin_quiet, WasmAuthHeaderSecretRef, WasmConfig, WasmFetchRetry,
     WasmFetchSpec, WasmRawBase64, WasmRawConfig, WasmRawJson, WasmRawString, WasmSourceSpec, INLINE_WARN_DECODED_BYTES,

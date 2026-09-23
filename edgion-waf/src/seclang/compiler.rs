@@ -20,8 +20,8 @@ use super::{
 mod transaction;
 
 pub use transaction::{
-    EvaluationMode, Intervention, PhaseOutcome, RequestHead, RequestHeader, ResponseHead, ResponseHeader,
-    ResponseWindow, RuleEngineMode, RuleFinding, RuntimeError, RuntimeLimits, RuntimeMatcherError,
+    EvaluationMode, Intervention, PhaseOutcome, RequestBodyPrefixCompletion, RequestHead, RequestHeader, ResponseHead,
+    ResponseHeader, ResponseWindow, RuleEngineMode, RuleFinding, RuntimeError, RuntimeLimits, RuntimeMatcherError,
     RuntimeTransformError, Transaction, DEFAULT_MAX_RUNTIME_CAPTURE_BYTES, DEFAULT_MAX_RUNTIME_CAPTURE_ENTRIES,
     DEFAULT_MAX_RUNTIME_COLLECTION_ENTRIES, DEFAULT_MAX_RUNTIME_COOKIES, DEFAULT_MAX_RUNTIME_FINDINGS,
     DEFAULT_MAX_RUNTIME_HEADERS, DEFAULT_MAX_RUNTIME_HEADER_BYTES, DEFAULT_MAX_RUNTIME_INPUT_BYTES,
@@ -31,6 +31,7 @@ pub use transaction::{
     DEFAULT_MAX_RUNTIME_RETAINED_BYTES, DEFAULT_MAX_RUNTIME_SELECTED_VALUES, DEFAULT_MAX_RUNTIME_SETVAR_ACTIONS,
     DEFAULT_MAX_RUNTIME_TRANSFORMATION_OUTPUT_BYTES, DEFAULT_MAX_RUNTIME_TRANSFORMATION_WORK_BYTES,
     DEFAULT_MAX_RUNTIME_TX_BYTES, DEFAULT_MAX_RUNTIME_TX_VARIABLES, DEFAULT_MAX_RUNTIME_VALUE_BYTES,
+    DEFAULT_REQUEST_BODY_PREFIX_BYTES, MAX_REQUEST_BODY_PREFIX_BYTES,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -740,6 +741,8 @@ struct CompiledMarker {
 #[derive(Debug)]
 #[expect(dead_code, reason = "transaction execution consumes the immutable compiled arenas")]
 pub struct CompiledGeneration {
+    prefix_validation: Result<(), &'static str>,
+    requires_complete_request_body: bool,
     bytes: Vec<u8>,
     templates: Vec<CompiledTemplate>,
     segments: Vec<CompiledTemplateSegment>,
@@ -1063,6 +1066,94 @@ impl CompiledGeneration {
         summary
     }
 
+    /// Validate the complete generation for bounded request-prefix inspection.
+    /// This deliberately narrower contract does not follow streaming classification.
+    pub fn validate_request_body_prefix(&self) -> Result<(), &'static str> {
+        self.prefix_validation
+    }
+
+    /// Whether a phase after request headers consumes a complete-body value.
+    /// Phase-one ARGS contains query arguments only and does not trigger capture.
+    pub const fn requires_complete_request_body(&self) -> bool {
+        self.requires_complete_request_body
+    }
+
+    fn has_complete_request_body_dependency(&self) -> bool {
+        self.units.iter().any(|unit| {
+            if unit.phase == Phase::RequestHeaders {
+                return false;
+            }
+            self.members[unit.member_start..unit.member_start + unit.member_count]
+                .iter()
+                .any(|member| {
+                    member.target_plan.is_some_and(|id| {
+                        let plan = self.target_plans[id];
+                        self.target_records[plan.record_start..plan.record_start + plan.record_count]
+                            .iter()
+                            .any(|record| collection_requires_request_body(record.collection))
+                    }) || self.member_has_body_macro(*member)
+                })
+        })
+    }
+
+    fn member_has_body_macro(&self, member: CompiledMemberPlan) -> bool {
+        // ARGS macros include parsed body entries after phase one. TX values copied
+        // from body targets are covered at the producing member instead.
+        member
+            .operator_template
+            .is_some_and(|id| self.template_has_body_macro(id))
+            || self.actions[member.action_start..member.action_start + member.action_count]
+                .iter()
+                .any(|action| match action.operand {
+                    CompiledActionOperand::Template(id) => self.template_has_body_macro(id),
+                    CompiledActionOperand::SetVar(id) => {
+                        let setvar = self.setvars[id];
+                        self.template_has_body_macro(setvar.key)
+                            || setvar.value.is_some_and(|id| self.template_has_body_macro(id))
+                    }
+                    _ => false,
+                })
+    }
+
+    fn template_has_body_macro(&self, id: usize) -> bool {
+        let template = self.templates[id];
+        self.segments[template.segment_start..template.segment_start + template.segment_count]
+            .iter()
+            .any(|segment| {
+                matches!(segment.kind, CompiledSegmentKind::Macro(id)
+                if self.macros[id].source == MacroSource::Args)
+            })
+    }
+
+    fn check_request_body_prefix(&self) -> Result<(), &'static str> {
+        if !self.macros.is_empty() {
+            return Err("requestBody.inspection prefix does not support macros; select full");
+        }
+        for unit in &self.units {
+            if unit.member_count != 1 {
+                return Err("requestBody.inspection prefix does not support chains; select full");
+            }
+            let member = self.members[unit.member_start];
+            if !prefix_actions_supported(self, member) {
+                return Err("requestBody.inspection prefix does not support control or state actions; select full");
+            }
+            if unit.phase == Phase::RequestBody {
+                if !is_prefix_body_member(self, unit.member_start) {
+                    return Err("requestBody.inspection prefix requires positive raw REQUEST_BODY contains/pm rules; select full");
+                }
+            } else if unit.phase != Phase::RequestHeaders {
+                if let Some(plan) = member.target_plan.map(|id| self.target_plans[id]) {
+                    for record in &self.target_records[plan.record_start..plan.record_start + plan.record_count] {
+                        if collection_requires_request_body(record.collection) {
+                            return Err("requestBody.inspection prefix cannot provide later-phase request body values; select full");
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
     pub const fn compiler_owned_bytes(&self) -> usize {
         self.compiler_owned_bytes
     }
@@ -1078,6 +1169,77 @@ impl CompiledGeneration {
     pub const fn compilation_peak_bytes(&self) -> usize {
         self.peak_bytes
     }
+}
+
+fn prefix_actions_supported(generation: &CompiledGeneration, member: CompiledMemberPlan) -> bool {
+    generation.actions[member.action_start..member.action_start + member.action_count]
+        .iter()
+        .all(|action| match action.kind {
+            ActionEnvelopeKind::Transformation => true,
+            ActionEnvelopeKind::Action(kind) => matches!(
+                kind,
+                super::ActionKind::AuditLog
+                    | super::ActionKind::Block
+                    | super::ActionKind::Deny
+                    | super::ActionKind::Id
+                    | super::ActionKind::Log
+                    | super::ActionKind::NoAuditLog
+                    | super::ActionKind::NoLog
+                    | super::ActionKind::Pass
+                    | super::ActionKind::Phase
+                    | super::ActionKind::Severity
+                    | super::ActionKind::Status
+                    | super::ActionKind::Tag
+                    | super::ActionKind::Ver
+                    | super::ActionKind::Msg
+            ),
+        })
+}
+
+fn collection_requires_request_body(collection: CollectionKind) -> bool {
+    matches!(
+        collection,
+        CollectionKind::RequestBody
+            | CollectionKind::RequestBodyLength
+            | CollectionKind::Args
+            | CollectionKind::ArgsCombinedSize
+            | CollectionKind::ArgsNames
+            | CollectionKind::Files
+            | CollectionKind::FilesCombinedSize
+            | CollectionKind::FilesNames
+            | CollectionKind::MultipartPartHeaders
+            | CollectionKind::Xml
+            | CollectionKind::ReqbodyProcessor
+    )
+}
+
+fn is_prefix_body_member(generation: &CompiledGeneration, index: usize) -> bool {
+    let member = generation.members[index];
+    let Some(plan) = member.target_plan.map(|id| generation.target_plans[id]) else {
+        return false;
+    };
+    let records = &generation.target_records[plan.record_start..plan.record_start + plan.record_count];
+    if !matches!(
+        records,
+        [CompiledTargetRecord {
+            collection: CollectionKind::RequestBody,
+            modifier: TargetModifier::None,
+            selector: CompiledTargetSelector::None
+        }]
+    ) {
+        return false;
+    }
+    if !generation.operator_plans[index].is_some_and(|operator| {
+        !operator.negated && matches!(operator.kind, super::OperatorKind::Contains | super::OperatorKind::Pm)
+    }) {
+        return false;
+    }
+    member.transformation_plan.is_none_or(|id| {
+        let plan = generation.transformation_plans[id];
+        generation.transformations[plan.transformation_start..plan.transformation_start + plan.transformation_count]
+            .iter()
+            .all(|kind| matches!(kind, TransformationKind::None | TransformationKind::Lowercase))
+    })
 }
 
 fn classify_request_body_unit(generation: &CompiledGeneration, unit: CompiledRuleUnit) -> RequestBodyExecutionClass {
@@ -3295,7 +3457,9 @@ impl CompiledGeneration {
             members,
             ..
         } = asset_templates;
-        Ok(Self {
+        let mut generation = Self {
+            prefix_validation: Ok(()),
+            requires_complete_request_body: false,
             bytes,
             templates,
             segments,
@@ -3322,7 +3486,10 @@ impl CompiledGeneration {
             compiler_owned_bytes: work.compiler_owned_bytes,
             matcher_charged_bytes: work.matcher_charged_bytes,
             peak_bytes: work.peak_bytes,
-        })
+        };
+        generation.prefix_validation = generation.check_request_body_prefix();
+        generation.requires_complete_request_body = generation.has_complete_request_body_dependency();
+        Ok(generation)
     }
 }
 

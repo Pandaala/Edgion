@@ -18,6 +18,9 @@ spec:
   waf:
     mode: on
     priority: 100
+    requestBody:
+      inspection: prefix
+      prefixSize: 64KiB
     rules: |
       SecRule REQUEST_URI "@contains /admin" "id:1001,phase:1,deny,status:403"
       SecRule REQUEST_BODY "@contains forbidden" "id:1002,phase:2,deny,status:406"
@@ -33,6 +36,8 @@ Reference this resource from an `HTTPRoute` with the usual Gateway API
 | `rules` | yes | — | Inline SecLang source compiled as one immutable generation |
 | `mode` | no | `on` | `on` enforces disruptive actions; `detectionOnly` records matches without blocking |
 | `priority` | no | `0` | Owner-selection priority from `0` through `65535`; a larger value wins |
+| `requestBody.inspection` | no | `prefix` | Inspect a bounded prefix before backend dispatch, or use `full` for complete-body inspection |
+| `requestBody.prefixSize` | no | `64KiB` | Prefix window from 1 byte through `1MiB`, using size strings such as `16KiB`, `100k`, or `1m`; only valid with `prefix` |
 
 Rule source is never emitted through WAF errors, plugin logs, response bodies,
 metrics, or Rust `Debug`. Gateway admin configuration output replaces it with
@@ -43,12 +48,33 @@ source.
 
 - Phase 1 inspects the entry request URI, method/protocol, client address, and
   ordered request headers. A phase-1 denial occurs before request-body capture.
-- Phase-2 rules that are exact raw-byte phrase scans consume Pingora request
-  chunks directly with constant-size matcher state and do not populate
-  `BodyStorage`. Rules that require structured or compatibility views currently
-  use the separately bounded snapshot lane. Gateway physical body limits and
-  the WAF engine's independent work limits apply to both lanes; an incomplete
-  or uninspectable body fails closed.
+- With `requestBody.inspection: prefix`, phase 2 inspects at most the first
+  `prefixSize` payload bytes (64 KiB by default, at most 1 MiB) before backend
+  selection or connection. Transfer framing
+  is removed; `Content-Encoding` is not decompressed. A matching blocking rule
+  sends no request headers or body to the backend. Admission only means no rule
+  blocked this prefix; bytes after the window are not inspected by WAF.
+- Prefix mode accepts a conservative subset of positive raw `REQUEST_BODY`
+  `@contains` / `@pm` rules. Negated, structured, chained, control-flow, and
+  whole-body-dependent rules require explicit `inspection: full`. Validation
+  checks the entire generation, including later-phase body dependencies.
+- WAF alone captures only its inspection window in the shared request-body
+  storage, entirely in memory, including a 1 MiB window. This bounded prefix
+  uses its window as both memory and total capacity, independently of the
+  complete-body spill threshold.
+  After admission the original prefix is sent once,
+  followed by the unread remainder. A pre-existing complete body cache is reused.
+  Body mutation after prefix inspection and incompatible streaming processors
+  fail closed. Native prefix captures disable upstream retries, including short
+  bodies; complete shared captures retain their existing retry policy.
+- `inspection: full` waits for complete bounded capture and uses the existing
+  shared memory/disk storage before phase 2. Choose it when rules need complete
+  body semantics; omit `prefixSize` in this mode. Physical body and execution
+  limits still apply. It also applies to raw rules that previously ran while forwarding.
+- The gateway physical body cap remains independent of the inspection window.
+  Overflow detected after prefix admission can happen after backend exposure;
+  it is not a pre-dispatch WAF rejection. `detectionOnly` suppresses rule-based
+  blocking, but does not suppress transport, storage, or physical-limit failures.
 - Phase 3 inspects upstream status and ordered response headers before they are
   sent downstream.
 - The current production profile does not aggregate upstream responses and

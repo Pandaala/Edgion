@@ -522,6 +522,7 @@ impl<'a> SegmentSplicer<'a> {
 struct MutationState {
     snapshot: Option<Arc<BodySnapshot>>,
     generation: u64,
+    frozen: bool,
 }
 
 struct InitialBody {
@@ -547,6 +548,12 @@ pub struct BodyStorageView {
 }
 
 impl BodyStorageView {
+    /// Pin the inspected logical representation. Reads and replay remain
+    /// available, but no subsequent mutation may invalidate an admission.
+    pub(crate) fn freeze_mutation(&self) {
+        self.inner.mutation.write().frozen = true;
+    }
+
     fn new(inner: Arc<BodyStorageViewInner>) -> Self {
         Self { inner }
     }
@@ -571,6 +578,9 @@ impl BodyStorageView {
             }));
         }
         let mut mutation = self.inner.mutation.write();
+        if mutation.frozen {
+            return Err(BodyReadError::NotBuffered.into());
+        }
         if mutation.generation != expected_generation {
             // Distinct from `Incomplete`: a lost update and a truncated body
             // demand opposite handling, and offsets computed against the stale

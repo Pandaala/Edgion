@@ -1,5 +1,8 @@
 //! Native WAF hot-reload integration phase suites.
 
+#[path = "waf_wire.rs"]
+mod wire;
+
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use std::time::{Duration, Instant};
 
@@ -202,18 +205,50 @@ impl TestSuite for WafDynamicInitialTestSuite {
                 406,
             ),
             invalid_response_status_case(),
+            wire::case(false, 65_536),
         ]
     }
 }
 
-phase_suite!(
-    WafDynamicUpdatedTestSuite,
-    "Native WAF Dynamic - Updated",
-    [
-        ("waf_updated_v2_allowed", "updated WAF allows v2", "v2", None, 200),
-        ("waf_updated_v1_denied", "updated WAF denies v1", "v1", None, 451),
-    ]
-);
+pub struct WafDynamicUpdatedTestSuite;
+
+pub struct WafDynamicConfiguredPrefixTestSuite;
+
+impl TestSuite for WafDynamicConfiguredPrefixTestSuite {
+    fn name(&self) -> &str {
+        "Native WAF Dynamic - Configured Prefix"
+    }
+
+    fn test_cases(&self) -> Vec<TestCase> {
+        vec![wire::case(false, 1024 * 1024)]
+    }
+}
+
+pub struct WafDynamicDetectionTestSuite;
+
+impl TestSuite for WafDynamicDetectionTestSuite {
+    fn name(&self) -> &str {
+        "Native WAF Dynamic - Detection"
+    }
+
+    fn test_cases(&self) -> Vec<TestCase> {
+        vec![wire::detection_case()]
+    }
+}
+
+impl TestSuite for WafDynamicUpdatedTestSuite {
+    fn name(&self) -> &str {
+        "Native WAF Dynamic - Updated"
+    }
+
+    fn test_cases(&self) -> Vec<TestCase> {
+        vec![
+            request_case("waf_updated_v2_allowed", "updated WAF allows v2", "v2", None, 200),
+            request_case("waf_updated_v1_denied", "updated WAF denies v1", "v1", None, 451),
+            wire::case(true, 65_536),
+        ]
+    }
+}
 
 phase_suite!(
     WafDynamicRecoveredTestSuite,

@@ -61,5 +61,6 @@ Gateway 对经过该资源的请求返回 HTTP 500，包括热更新为非法值
 | [response-rewrite.md](response-rewrite.md) | 响应重写 |
 | [request-id.md](request-id.md) | RequestId 与默认 W3C 上下文 |
 | [wasm.md](wasm.md) | 通过 wasmtime 执行 proxy-wasm ABI guest 模块（WebAssembly） |
+| [waf.md](waf.md) | 原生 WAF、请求体前缀准入与完整检查 |
 | [all-endpoint-status.md](all-endpoint-status.md) | 查询所有后端 Endpoint 状态 |
 | [debug-access-log.md](debug-access-log.md) | 将 Access Log 注入响应头（仅开发用） |

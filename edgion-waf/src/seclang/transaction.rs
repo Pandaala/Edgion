@@ -643,6 +643,20 @@ impl Deref for GenerationHandle<'_> {
     }
 }
 
+/// Default payload-byte inspection window.
+pub const DEFAULT_REQUEST_BODY_PREFIX_BYTES: usize = 64 * 1024;
+/// Hard upper bound for configurable prefix inspection.
+pub const MAX_REQUEST_BODY_PREFIX_BYTES: usize = 1024 * 1024;
+
+/// Why prefix inspection stopped; this is separate from body publication.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RequestBodyPrefixCompletion {
+    EndOfStream,
+    WindowFilled,
+    /// No phase-two rules exist, so no payload inspection was needed.
+    NotRequired,
+}
+
 pub struct Transaction<'generation> {
     generation: GenerationHandle<'generation>,
     request: RequestState,
@@ -660,6 +674,7 @@ pub struct Transaction<'generation> {
     rule_engine_mode: RuleEngineMode,
     request_body_stream: Option<RequestBodyStreamState>,
     stream_member_matches: Option<Vec<Option<bool>>>,
+    request_prefix_completion: Option<RequestBodyPrefixCompletion>,
 }
 
 struct RequestBodyStreamState {
@@ -814,6 +829,7 @@ impl<'generation> Transaction<'generation> {
             rule_engine_mode,
             request_body_stream: None,
             stream_member_matches: None,
+            request_prefix_completion: None,
         })
     }
 
@@ -918,6 +934,128 @@ impl<'generation> Transaction<'generation> {
             return Err(RuntimeError::RequestBodyNotPublished);
         }
         self.execute_phase(Phase::RequestBody)
+    }
+
+    /// Decide phase two over borrowed prefix bytes without publishing a complete body.
+    pub fn execute_request_body_prefix(
+        &mut self,
+        prefix: &[u8],
+        limit: usize,
+        completion: RequestBodyPrefixCompletion,
+    ) -> Result<PhaseOutcome, RuntimeError> {
+        if self.next_phase() != Some(Phase::RequestBody) {
+            return Err(RuntimeError::PhaseOrder {
+                expected: self.next_phase(),
+                actual: Phase::RequestBody,
+            });
+        }
+        self.generation
+            .validate_request_body_prefix()
+            .map_err(|_| RuntimeError::GenerationInvariant)?;
+        if self.request.body.is_some()
+            || self.request_body_stream.is_some()
+            || limit == 0
+            || limit > MAX_REQUEST_BODY_PREFIX_BYTES
+            || prefix.len() > limit
+            || (completion == RequestBodyPrefixCompletion::WindowFilled && prefix.len() != limit)
+            || (completion == RequestBodyPrefixCompletion::NotRequired
+                && (!prefix.is_empty()
+                    || self
+                        .generation
+                        .units
+                        .iter()
+                        .any(|unit| unit.phase == Phase::RequestBody)))
+        {
+            return Err(RuntimeError::GenerationInvariant);
+        }
+        if prefix.len() > self.limits.body.max_body_bytes {
+            return Err(RuntimeError::Body {
+                kind: BodyError::ByteLimit {
+                    actual: prefix.len(),
+                    limit: self.limits.body.max_body_bytes,
+                },
+            });
+        }
+        if completion == RequestBodyPrefixCompletion::NotRequired {
+            let outcome = self.execute_phase(Phase::RequestBody)?;
+            self.request_prefix_completion = Some(completion);
+            return Ok(outcome);
+        }
+        let override_bytes = self.generation.members.len().saturating_mul(size_of::<Option<bool>>());
+        if self.retained_bytes().saturating_add(override_bytes) > self.limits.max_retained_bytes {
+            return Err(RuntimeError::RetainedByteLimit {
+                limit: self.limits.max_retained_bytes,
+            });
+        }
+        let mut overrides = Vec::new();
+        overrides
+            .try_reserve_exact(self.generation.members.len())
+            .map_err(|_| RuntimeError::Allocation)?;
+        overrides.resize(self.generation.members.len(), None);
+        let mut work = 0_usize;
+        let mut evaluations = 0_usize;
+        for unit in &self.generation.units {
+            if unit.phase != Phase::RequestBody {
+                continue;
+            }
+            evaluations = evaluations.checked_add(1).ok_or(RuntimeError::Arithmetic)?;
+            if evaluations > self.limits.max_operator_evaluations {
+                return Err(RuntimeError::OperatorEvaluationLimit {
+                    limit: self.limits.max_operator_evaluations,
+                });
+            }
+            let id = unit.member_start;
+            let member = self.generation.members[id];
+            let transformations = member
+                .transformation_plan
+                .map(|id| {
+                    let plan = self.generation.transformation_plans[id];
+                    &self.generation.transformations
+                        [plan.transformation_start..plan.transformation_start + plan.transformation_count]
+                })
+                .unwrap_or_default();
+            let transformed = apply_transformations(
+                prefix,
+                transformations,
+                TransformLimits {
+                    max_output_bytes: self.limits.max_transformation_output_bytes,
+                    max_work_bytes: self.limits.max_transformation_work_bytes,
+                },
+            )
+            .map_err(map_transform_error)?;
+            work = work
+                .checked_add(prefix.len())
+                .and_then(|work| work.checked_add(transformed.len()))
+                .ok_or(RuntimeError::Arithmetic)?;
+            if work > self.limits.max_operator_work_bytes {
+                return Err(RuntimeError::OperatorWorkLimit {
+                    limit: self.limits.max_operator_work_bytes,
+                });
+            }
+            overrides[id] = Some(evaluate_operator(
+                &self.generation,
+                &self.request,
+                &self.tx,
+                &mut self.group_scratch,
+                &mut self.boolean_scratch,
+                &mut self.capture_scratch,
+                self.generation.operator_plans[id].ok_or(RuntimeError::GenerationInvariant)?,
+                &transformed,
+                member.runtime_expansion_byte_limit,
+                self.evaluation_mode,
+            )?);
+        }
+        self.stream_member_matches = Some(overrides);
+        let outcome = self.execute_phase(Phase::RequestBody);
+        self.stream_member_matches = None;
+        if outcome.is_ok() {
+            self.request_prefix_completion = Some(completion);
+        }
+        outcome
+    }
+
+    pub const fn request_prefix_completion(&self) -> Option<RequestBodyPrefixCompletion> {
+        self.request_prefix_completion
     }
 
     /// Prepare the exact constant-memory raw-body lane selected by the compiler.
@@ -4111,6 +4249,143 @@ mod tests {
             [61, 62, 63, 68]
         );
         assert_eq!(transaction.next_phase(), Some(Phase::ResponseHeaders));
+    }
+
+    #[test]
+    fn prefix_configurable_window_matches_at_the_boundary_up_to_one_mib() {
+        let generation = generation("SecRule REQUEST_BODY \"@contains forbidden\" \"id:1,phase:2,deny,t:lowercase\"\n");
+        for limit in [16 * 1024, 100 * 1024, MAX_REQUEST_BODY_PREFIX_BYTES] {
+            let mut payload = vec![b'x'; limit];
+            payload[limit - 9..].copy_from_slice(b"FORBIDDEN");
+            let mut transaction = Transaction::new(&generation, request(&[], b"/"), RuntimeLimits::default()).unwrap();
+            transaction.execute_request_headers().unwrap();
+            let outcome = transaction
+                .execute_request_body_prefix(&payload, limit, RequestBodyPrefixCompletion::WindowFilled)
+                .unwrap();
+            assert!(outcome.intervention().is_some());
+            assert_eq!(outcome.findings().len(), 1);
+        }
+        for limit in [0, MAX_REQUEST_BODY_PREFIX_BYTES + 1] {
+            let mut transaction = Transaction::new(&generation, request(&[], b"/"), RuntimeLimits::default()).unwrap();
+            transaction.execute_request_headers().unwrap();
+            assert!(transaction
+                .execute_request_body_prefix(b"", limit, RequestBodyPrefixCompletion::EndOfStream)
+                .is_err());
+        }
+    }
+
+    #[test]
+    fn prefix_completion_preserves_body_absence_and_advances_phase_once() {
+        let generation = generation(concat!(
+            "SecRule REQUEST_BODY \"@contains forbidden\" \"id:1,phase:2,deny,status:403\"\n",
+            "SecRule RESPONSE_STATUS \"@eq 200\" \"id:2,phase:3,pass\"\n",
+        ));
+        assert_eq!(generation.validate_request_body_prefix(), Ok(()));
+        for completion in [
+            RequestBodyPrefixCompletion::EndOfStream,
+            RequestBodyPrefixCompletion::WindowFilled,
+        ] {
+            let mut bytes = vec![b'x'; DEFAULT_REQUEST_BODY_PREFIX_BYTES];
+            bytes[DEFAULT_REQUEST_BODY_PREFIX_BYTES - 9..].copy_from_slice(b"forbidden");
+            let mut transaction = Transaction::new(&generation, request(&[], b"/"), RuntimeLimits::default()).unwrap();
+            transaction.execute_request_headers().unwrap();
+            let outcome = transaction
+                .execute_request_body_prefix(&bytes, DEFAULT_REQUEST_BODY_PREFIX_BYTES, completion)
+                .unwrap();
+            assert_eq!(outcome.findings().len(), 1);
+            assert!(outcome.intervention().is_some());
+            assert!(transaction.request.body.is_none());
+            assert_eq!(transaction.request_prefix_completion(), Some(completion));
+            assert_eq!(transaction.next_phase(), Some(Phase::ResponseHeaders));
+            assert!(transaction
+                .execute_request_body_prefix(&bytes, DEFAULT_REQUEST_BODY_PREFIX_BYTES, completion)
+                .is_err());
+            transaction.publish_response_head(ResponseHead::new(200, &[])).unwrap();
+            assert_eq!(
+                transaction.execute_response_headers().unwrap().findings()[0].rule_id(),
+                2
+            );
+        }
+    }
+
+    #[test]
+    fn prefix_detection_only_uses_pm_transform_and_short_body_completion() {
+        let generation =
+            generation("SecRule REQUEST_BODY \"@pm forbidden blocked\" \"id:1,phase:2,deny,t:lowercase\"\n");
+        let mut transaction = Transaction::new_with_modes(
+            &generation,
+            request(&[], b"/"),
+            RuntimeLimits::default(),
+            EvaluationMode::Accelerated,
+            RuleEngineMode::DetectionOnly,
+        )
+        .unwrap();
+        transaction.execute_request_headers().unwrap();
+        let outcome = transaction
+            .execute_request_body_prefix(
+                b"BLOCKED",
+                DEFAULT_REQUEST_BODY_PREFIX_BYTES,
+                RequestBodyPrefixCompletion::EndOfStream,
+            )
+            .unwrap();
+        assert_eq!(outcome.findings().len(), 1);
+        assert!(outcome.intervention().is_none());
+        assert!(transaction.request.body.is_none());
+    }
+
+    #[test]
+    fn prefix_rejects_false_window_completion_and_supports_no_body_rules() {
+        let generation = generation("SecRule REQUEST_URI \"@contains private\" \"id:1,phase:1,deny\"\n");
+        let mut transaction = Transaction::new(&generation, request(&[], b"/"), RuntimeLimits::default()).unwrap();
+        transaction.execute_request_headers().unwrap();
+        assert!(transaction
+            .execute_request_body_prefix(
+                b"short",
+                DEFAULT_REQUEST_BODY_PREFIX_BYTES,
+                RequestBodyPrefixCompletion::WindowFilled
+            )
+            .is_err());
+        assert!(transaction
+            .execute_request_body_prefix(
+                &[],
+                DEFAULT_REQUEST_BODY_PREFIX_BYTES,
+                RequestBodyPrefixCompletion::NotRequired
+            )
+            .is_ok());
+        assert!(transaction.request.body.is_none());
+    }
+
+    #[test]
+    fn prefix_admission_checks_only_the_selected_window_and_enforces_limits() {
+        let generation = generation("SecRule REQUEST_BODY \"@contains forbidden\" \"id:1,phase:2,deny\"\n");
+        let mut payload = vec![b'x'; DEFAULT_REQUEST_BODY_PREFIX_BYTES];
+        payload.extend_from_slice(b"forbidden");
+        let mut transaction = Transaction::new(&generation, request(&[], b"/"), RuntimeLimits::default()).unwrap();
+        transaction.execute_request_headers().unwrap();
+        assert!(transaction
+            .execute_request_body_prefix(
+                &payload,
+                DEFAULT_REQUEST_BODY_PREFIX_BYTES,
+                RequestBodyPrefixCompletion::EndOfStream
+            )
+            .is_err());
+        assert!(transaction
+            .execute_request_body_prefix(
+                &[],
+                DEFAULT_REQUEST_BODY_PREFIX_BYTES,
+                RequestBodyPrefixCompletion::NotRequired
+            )
+            .is_err());
+        let outcome = transaction
+            .execute_request_body_prefix(
+                &payload[..DEFAULT_REQUEST_BODY_PREFIX_BYTES],
+                DEFAULT_REQUEST_BODY_PREFIX_BYTES,
+                RequestBodyPrefixCompletion::WindowFilled,
+            )
+            .unwrap();
+        assert!(outcome.findings().is_empty());
+        assert!(outcome.intervention().is_none());
+        assert!(transaction.request.body.is_none());
     }
 
     #[test]

@@ -5,9 +5,9 @@ use std::time::Instant;
 
 use async_trait::async_trait;
 use edgion_resources::filters::PluginRunningResult;
-use edgion_resources::resources::edgion_plugins::{BodyRequirement, WafConfig, WafMode};
+use edgion_resources::resources::edgion_plugins::{BodyRequirement, WafConfig, WafMode, WafRequestBodyInspection};
 use edgion_waf::seclang::{
-    BodyError, BodyProcessorSelection, PhaseOutcome, RequestBody, RequestBodyExecutionSummary, RequestHead,
+    BodyError, BodyProcessorSelection, PhaseOutcome, RequestBody, RequestBodyPrefixCompletion, RequestHead,
     RequestHeader, ResponseHead, ResponseHeader, ResponseWindow, RuleEngineMode, RuntimeError, RuntimeLimits,
     Transaction,
 };
@@ -49,7 +49,8 @@ struct SharedWaf {
     owner: Arc<()>,
     engine_mode: RuleEngineMode,
     requires_request_body: bool,
-    request_body_execution: RequestBodyExecutionSummary,
+    request_body_inspection: WafRequestBodyInspection,
+    request_body_prefix_bytes: usize,
     priority: u16,
     _generation_metric: WafGenerationMetricLease,
 }
@@ -79,7 +80,9 @@ impl WafPlugin {
             WafMode::DetectionOnly => RuleEngineMode::DetectionOnly,
         };
         let request_body_execution = generation.request_body_execution_summary();
-        let requires_request_body = request_body_execution.requires_request_body();
+        let requires_request_body = request_body_execution.requires_request_body()
+            || (config.request_body.inspection == WafRequestBodyInspection::Full
+                && generation.requires_complete_request_body());
         let generation_bytes = generation.retained_bytes();
         Ok(Self {
             shared: Arc::new(SharedWaf {
@@ -87,7 +90,8 @@ impl WafPlugin {
                 owner: Arc::new(()),
                 engine_mode,
                 requires_request_body,
-                request_body_execution,
+                request_body_inspection: config.request_body.inspection,
+                request_body_prefix_bytes: config.request_body.prefix_size_bytes()?,
                 priority: config.priority,
                 _generation_metric: WafGenerationMetricLease::new(generation_bytes),
             }),
@@ -290,38 +294,23 @@ impl RequestFilter for WafPlugin {
             return Self::intervention_result(phase_one);
         }
 
-        let raw_stream_only = self.shared.requires_request_body
-            && self.shared.request_body_execution.streaming_raw_rule_units() != 0
-            && self.shared.request_body_execution.streaming_structured_rule_units() == 0
-            && self.shared.request_body_execution.bounded_snapshot_rule_units() == 0
-            && self.shared.request_body_execution.unsupported_rule_units() == 0;
-        if raw_stream_only {
-            if let Err(error) = transaction.start_request_body_stream() {
-                return self.runtime_failure(session, WafLogPhase::RequestBody, &error);
-            }
-            let restored = self.restore_transaction(session, transaction, WafLogPhase::RequestBody);
-            if !matches!(restored, PluginRunningResult::GoodNext) {
-                return restored;
-            }
-            let body_limit = session.ctx().request_body_config.max_body_size_bytes;
-            if !session.enable_waf_request_body_streaming(&self.shared.owner, body_limit) {
-                session.record_waf_terminal_error(
-                    &self.shared.owner,
-                    WafLogPhase::RequestBody,
-                    WafErrorCode::BodyStreamInstallFailed,
-                    500,
-                );
-                return PluginRunningResult::ErrResponse {
-                    status: 500,
-                    body: None,
-                };
-            }
-            return PluginRunningResult::GoodNext;
-        }
-
+        let prefix_mode = self.shared.request_body_inspection == WafRequestBodyInspection::Prefix
+            && self.shared.requires_request_body;
+        let mut prefix_complete = false;
         let body = if self.shared.requires_request_body {
-            let cap = session.ctx().request_body_config.max_body_size_bytes;
-            match session.read_request_body(Some(cap)).await {
+            let result = if prefix_mode {
+                session
+                    .read_request_body_prefix(self.shared.request_body_prefix_bytes)
+                    .await
+                    .map(|(body, complete)| {
+                        prefix_complete = complete;
+                        body
+                    })
+            } else {
+                let cap = session.ctx().request_body_config.max_body_size_bytes;
+                session.read_request_body(Some(cap)).await
+            };
+            match result {
                 Ok(body) => body,
                 Err(error) => {
                     let result = body_read_failure_result(session, &BodyRequirement::fail_close(), log, &error);
@@ -341,11 +330,26 @@ impl RequestFilter for WafPlugin {
         } else {
             bytes::Bytes::new()
         };
-        if let Err(error) = transaction.publish_request_body(RequestBody::new(&body, BodyProcessorSelection::Auto)) {
-            return self.runtime_failure(session, WafLogPhase::RequestBody, &error);
+        if self.shared.request_body_inspection == WafRequestBodyInspection::Full {
+            if let Err(error) = transaction.publish_request_body(RequestBody::new(&body, BodyProcessorSelection::Auto))
+            {
+                return self.runtime_failure(session, WafLogPhase::RequestBody, &error);
+            }
         }
         let started = Instant::now();
-        let execution = transaction.execute_request_body();
+        let execution = if self.shared.request_body_inspection == WafRequestBodyInspection::Prefix {
+            let completion = if !self.shared.requires_request_body {
+                RequestBodyPrefixCompletion::NotRequired
+            } else if prefix_complete {
+                RequestBodyPrefixCompletion::EndOfStream
+            } else {
+                RequestBodyPrefixCompletion::WindowFilled
+            };
+            crate::observe::metrics::record_waf_body_bytes_inspected("request", body.len());
+            transaction.execute_request_body_prefix(&body, self.shared.request_body_prefix_bytes, completion)
+        } else {
+            transaction.execute_request_body()
+        };
         let request_body_us = elapsed_micros(started);
         crate::observe::metrics::record_waf_execution_micros("request_body", request_body_us);
         let phase_two = match execution {
@@ -476,10 +480,18 @@ mod tests {
     use crate::EdgionHttpContext;
 
     fn plugin(rules: &str, mode: WafMode) -> WafPlugin {
+        plugin_with_inspection(rules, mode, WafRequestBodyInspection::Full)
+    }
+
+    fn plugin_with_inspection(rules: &str, mode: WafMode, inspection: WafRequestBodyInspection) -> WafPlugin {
         WafPlugin::try_new(&WafConfig {
             rules: rules.to_string(),
             mode,
             priority: 0,
+            request_body: edgion_resources::resources::edgion_plugins::WafRequestBodyConfig {
+                inspection,
+                ..Default::default()
+            },
         })
         .expect("test WAF compiles")
     }
@@ -498,6 +510,7 @@ mod tests {
             rules: " \n\t".to_string(),
             mode: WafMode::On,
             priority: 0,
+            request_body: Default::default(),
         };
 
         assert_eq!(
@@ -577,29 +590,131 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn raw_phrase_generation_installs_streaming_without_body_storage() {
-        let plugin = plugin(
+    async fn raw_phrase_prefix_is_decided_before_returning_to_dispatch() {
+        let plugin = plugin_with_inspection(
             "SecRule REQUEST_BODY \"@pm blocked\" \"id:20,phase:2,deny,status:409\"\n",
             WafMode::On,
+            WafRequestBodyInspection::Prefix,
         );
         let mut session = MockPluginSession::new();
         expect_request_head(&mut session, "/stream");
         session.expect_install_waf_transaction().return_once(|_, transaction| {
-            assert_eq!(transaction.next_phase(), Some(edgion_waf::seclang::Phase::RequestBody));
+            assert_eq!(
+                transaction.next_phase(),
+                Some(edgion_waf::seclang::Phase::ResponseHeaders)
+            );
             drop(transaction);
             true
         });
-        let mut ctx = EdgionHttpContext::new();
-        ctx.request_body_config.max_body_size_bytes = 8192;
-        session.expect_ctx().return_const(ctx);
         session
-            .expect_enable_waf_request_body_streaming()
-            .withf(|_, limit| *limit == 8192)
-            .return_once(|_, _| true);
+            .expect_read_request_body_prefix()
+            .withf(|limit| *limit == edgion_waf::seclang::DEFAULT_REQUEST_BODY_PREFIX_BYTES)
+            .return_once(|_| Ok((Bytes::from_static(b"allowed"), true)));
         let mut log = PluginLog::new(NAME);
 
         assert_eq!(
             RequestFilter::run_request(&plugin, &mut session, &mut log).await,
+            PluginRunningResult::GoodNext
+        );
+    }
+
+    #[tokio::test]
+    async fn configured_prefix_size_reaches_capture_and_engine() {
+        let plugin = WafPlugin::try_new(&WafConfig {
+            rules: "SecRule REQUEST_BODY \"@contains blocked\" \"id:21,phase:2,deny,status:409\"".to_string(),
+            request_body: edgion_resources::resources::edgion_plugins::WafRequestBodyConfig {
+                prefix_size: Some("1m".to_string()),
+                ..Default::default()
+            },
+            ..Default::default()
+        })
+        .unwrap();
+        let mut session = MockPluginSession::new();
+        expect_request_head(&mut session, "/prefix");
+        session
+            .expect_read_request_body_prefix()
+            .withf(|limit| *limit == 1024 * 1024)
+            .times(1)
+            .return_once(|limit| {
+                let mut body = vec![b'x'; limit];
+                body[limit - 7..].copy_from_slice(b"blocked");
+                Ok((Bytes::from(body), false))
+            });
+        let mut log = PluginLog::new(NAME);
+        assert!(matches!(
+            RequestFilter::run_request(&plugin, &mut session, &mut log).await,
+            PluginRunningResult::ErrResponse { status: 409, .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn prefix_match_blocks_before_dispatch_and_detection_only_records() {
+        for mode in [WafMode::On, WafMode::DetectionOnly] {
+            let plugin = plugin_with_inspection(
+                "SecRule REQUEST_BODY \"@contains blocked\" \"id:21,phase:2,deny,status:409\"\n",
+                mode,
+                WafRequestBodyInspection::Prefix,
+            );
+            let mut session = MockPluginSession::new();
+            expect_request_head(&mut session, "/prefix");
+            session
+                .expect_read_request_body_prefix()
+                .times(1)
+                .return_once(|_| Ok((Bytes::from_static(b"blocked"), true)));
+            if mode == WafMode::DetectionOnly {
+                session.expect_install_waf_transaction().return_once(|_, transaction| {
+                    assert_eq!(
+                        transaction.next_phase(),
+                        Some(edgion_waf::seclang::Phase::ResponseHeaders)
+                    );
+                    true
+                });
+            }
+            let result = RequestFilter::run_request(&plugin, &mut session, &mut PluginLog::new(NAME)).await;
+            assert_eq!(
+                result,
+                if mode == WafMode::On {
+                    PluginRunningResult::ErrResponse {
+                        status: 409,
+                        body: None,
+                    }
+                } else {
+                    PluginRunningResult::GoodNext
+                }
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn full_mode_captures_body_for_later_phase_only_dependency() {
+        let plugin = plugin(
+            "SecRule REQUEST_BODY \"@contains blocked\" \"id:22,phase:3,deny,status:409\"\n",
+            WafMode::On,
+        );
+        let mut session = MockPluginSession::new();
+        expect_request_head(&mut session, "/full");
+        session.expect_ctx().return_const(EdgionHttpContext::default());
+        session
+            .expect_read_request_body()
+            .times(1)
+            .return_once(|_| Ok(Bytes::from_static(b"blocked")));
+        session
+            .expect_install_waf_transaction()
+            .return_once(|_, mut transaction| {
+                transaction.publish_response_head(ResponseHead::new(200, &[])).unwrap();
+                assert_eq!(
+                    transaction
+                        .execute_response_headers()
+                        .unwrap()
+                        .intervention()
+                        .unwrap()
+                        .status(),
+                    409
+                );
+                true
+            });
+        assert_eq!(
+            RequestFilter::run_request(&plugin, &mut session, &mut PluginLog::new(NAME)).await,
             PluginRunningResult::GoodNext
         );
     }

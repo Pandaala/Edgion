@@ -31,6 +31,20 @@ pub async fn request_body_filter_action(
     event: RequestBodyEvent,
     ctx: &mut EdgionHttpContext,
 ) -> pingora_core::Result<RequestBodyAction> {
+    // Prefix admission only bounds WAF inspection. The physical body cap
+    // continues to apply to transport reads after admission, including a
+    // cross-window overread. Replay must not charge these bytes twice.
+    if session.request_body_prefix_active()
+        && session.body_bytes_read() as u64 > ctx.request_body_config.max_body_size_bytes
+    {
+        ctx.record_selected_waf_terminal_error(WafLogPhase::RequestBody, WafErrorCode::BodyLimit, 413);
+        session.set_keepalive(None);
+        pg_request_body_filter::abandon_request_mirror(ctx, MirrorAbandonReason::BodyAbandoned);
+        if request_body_should_write_terminate_reply(session.response_head_selected_by_pipeline()) {
+            write_terminate_reply(session, ctx, 413, None, None, Vec::new()).await;
+        }
+        return Ok(RequestBodyAction::Terminate);
+    }
     // Every per-chunk consumer activates the same optional state at install
     // time. Requests without a handler, WAF stream, observer, or mirror pay one
     // nullable-pointer branch and no allocation.
@@ -443,6 +457,7 @@ mod tests {
             rules: "SecRule REQUEST_BODY \"@pm blocked\" \"id:1,phase:2,deny,status:409\"\n".to_string(),
             mode: WafMode::On,
             priority: 0,
+            request_body: Default::default(),
         };
         let generation = Arc::new(config.compile_generation().expect("test WAF compiles"));
         let request = RequestHead::new(

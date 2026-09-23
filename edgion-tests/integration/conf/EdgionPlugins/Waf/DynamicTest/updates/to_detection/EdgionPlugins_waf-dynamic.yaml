@@ -1,0 +1,10 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: waf-dynamic
+  namespace: edgion-default
+spec:
+  waf:
+    mode: detectionOnly
+    rules: |
+      SecRule REQUEST_BODY "@contains blocked" "id:2501,phase:2,deny,status:406"

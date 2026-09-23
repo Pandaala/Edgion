@@ -467,6 +467,9 @@ impl<'a> PingoraSessionAdapter<'a> {
     }
 
     async fn ensure_bodyless_request_replay_owner(&mut self) -> Result<(), BodyReadError> {
+        if self.ctx.waf_prefix_inspected {
+            return Err(BodyReadError::NotBuffered);
+        }
         if !self.ctx.request_body_config.enabled {
             return Err(BodyReadError::Unimplemented);
         }
@@ -1691,6 +1694,9 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         if let Some(len) = self.ctx.request_body.cached_len()? {
             return Ok(len);
         }
+        if self.inner.request_body_prefix_active() {
+            return Err(BodyReadError::NotBuffered);
+        }
 
         // `in_request_body_stage` (set at request entry and cleared when the
         // global/Gateway/route request-plugin chain completes) is the
@@ -1723,6 +1729,107 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
             return Ok(body);
         }
         Ok(bytes::Bytes::new())
+    }
+
+    async fn read_request_body_prefix(&mut self, limit: usize) -> Result<(Bytes, bool), BodyReadError> {
+        if limit == 0
+            || limit > edgion_waf::seclang::MAX_REQUEST_BODY_PREFIX_BYTES
+            || !self.ctx.request_info.in_request_body_stage
+            || self.ctx.request_body_stream_active()
+        {
+            return Err(BodyReadError::NotBuffered);
+        }
+        // Reuse a prior complete capture, including its current logical edits.
+        // Do not materialize the remainder merely to inspect the prefix.
+        if let Some(len) = self.ctx.request_body.cached_len()? {
+            self.ctx.request_body.freeze_mutation();
+            let prefix = self
+                .ctx
+                .request_body
+                .read_range(0, limit as u64, limit as u64)
+                .await
+                .map_err(|error| match error {
+                    BodyOperationError::Body(error) => error,
+                    _ => BodyReadError::Incomplete,
+                })?
+                .value;
+            self.ctx.waf_prefix_inspected = true;
+            return Ok((prefix, len <= limit as u64));
+        }
+        match request_admission(self.ctx, false) {
+            RequestAdmission::PassThrough => {
+                self.ctx.waf_prefix_inspected = true;
+                return Ok((Bytes::new(), true));
+            }
+            RequestAdmission::Refuse(code) => {
+                self.ctx.record_error(code);
+                return Err(BodyReadError::NotBuffered);
+            }
+            RequestAdmission::Buffer => {}
+        }
+        if !self.ctx.request_body_config.enabled {
+            return Err(BodyReadError::Unimplemented);
+        }
+        let cap = self.ctx.request_body_config.max_body_size_bytes;
+        if self
+            .inner
+            .req_header()
+            .headers
+            .get(http::header::CONTENT_LENGTH)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.parse::<u64>().ok())
+            .is_some_and(|len| len > cap)
+        {
+            return Err(reject_over_limit_request_body(self.inner.as_mut(), cap));
+        }
+        let expect_continue = self.inner.req_header().version == http::Version::HTTP_11
+            && self
+                .inner
+                .req_header()
+                .headers
+                .get(http::header::EXPECT)
+                .and_then(|value| value.to_str().ok())
+                .is_some_and(|value| value.eq_ignore_ascii_case("100-continue"));
+        if expect_continue {
+            self.inner
+                .write_continue_response()
+                .await
+                .map_err(|_| BodyReadError::Incomplete)?;
+            self.inner.req_header_mut().remove_header(&http::header::EXPECT);
+        }
+        // A smaller physical cap needs at most one additional byte to prove
+        // overflow. This is a capture budget, not the whole-request size cap.
+        let capture_limit = limit.min(usize::try_from(cap.saturating_add(1)).unwrap_or(usize::MAX));
+        // WAF prefixes are capped at 1 MiB and stay in memory independently
+        // of the spill threshold used by complete-body consumers.
+        let (storage, view) = BodyStorage::with_storage_timeout(
+            capture_limit,
+            capture_limit as u64,
+            self.ctx.request_body_config.storage_operation_timeout,
+        );
+        if let Err(error) = self
+            .inner
+            .capture_request_body_prefix(Box::new(storage), capture_limit)
+            .await
+        {
+            disable_h1_reuse_after_capture_failure(self.inner.as_mut());
+            return Err(match error.etype() {
+                pingora_core::ErrorType::ReadTimedout => BodyReadError::Timeout,
+                pingora_core::ErrorType::HTTPStatus(413) => BodyReadError::BufferLimitExceeded { limit: cap },
+                pingora_core::ErrorType::InternalError => BodyReadError::StorageFailure,
+                _ => BodyReadError::Incomplete,
+            });
+        }
+        if self.inner.body_bytes_read() as u64 > cap {
+            return Err(reject_over_limit_request_body(self.inner.as_mut(), cap));
+        }
+        let complete =
+            self.inner.request_body_prefix_transport_complete() && self.inner.body_bytes_read() <= capture_limit;
+        let prefix = view.read_all().await?;
+        // The storage remains owned by Pingora for first-attempt delivery.
+        // Never install this view as a complete request-body cache.
+        self.ctx.waf_prefix_inspected = true;
+        Ok((prefix, complete))
     }
 
     async fn read_response_body(&mut self, max_bytes: Option<u64>) -> BodyReadResult {
@@ -2094,6 +2201,9 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         &mut self,
         handler: Box<dyn crate::plugins::runtime::traits::request_body_stream::RequestBodyStreamHandler>,
     ) -> bool {
+        if self.ctx.waf_prefix_inspected {
+            return false;
+        }
         // The transport fact answers `None` for session types that cannot be
         // driven per chunk (custom-connector, subrequest) — refuse so the
         // caller applies its failure policy.
@@ -3359,6 +3469,89 @@ pub(crate) mod record_outcome_tests {
             .then_some(())
             .expect("client must not close before sending the request");
         session
+    }
+
+    #[tokio::test]
+    async fn waf_prefix_reuses_storage_and_preserves_the_unread_remainder() {
+        let max_prefix = edgion_waf::seclang::MAX_REQUEST_BODY_PREFIX_BYTES;
+        for (len, limit) in [(3, 4), (4, 4), (5, 4), (100_000, 4), (max_prefix + 1, max_prefix)] {
+            let original: Vec<_> = (0..len).map(|index| (index % 251) as u8).collect();
+            let mut session = test_session_with_body(&original).await;
+            let mut ctx = EdgionHttpContext::default();
+            ctx.request_info.body_declared = Some(true);
+            ctx.request_info.in_request_body_stage = true;
+            // Prefix capture stays in memory even when the complete-body
+            // policy would spill at a lower threshold.
+            ctx.request_body_config.memory_buffer_bytes = 2;
+            {
+                let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
+                let (prefix, complete) = adapter.read_request_body_prefix(limit).await.unwrap();
+                assert_eq!(prefix.as_ref(), &original[..len.min(limit)]);
+                assert_eq!(complete, len <= limit);
+                assert!(!adapter.ctx.request_body.has_cached_body());
+                assert!(matches!(
+                    adapter.ensure_request_body(None).await,
+                    Err(BodyReadError::NotBuffered)
+                ));
+                assert!(matches!(
+                    adapter.overwrite_request_body(Bytes::new()).await,
+                    Err(BodyReadError::NotBuffered)
+                ));
+                assert!(!adapter.install_request_body_stream_handler(Box::new(NoopStreamHandler)));
+            }
+            session.begin_request_body_replay().await.unwrap();
+            let mut forwarded = Vec::new();
+            while !session.is_body_done() {
+                if let Some(chunk) = session.read_body_or_idle(false).await.unwrap() {
+                    forwarded.extend_from_slice(&chunk);
+                }
+            }
+            assert_eq!(forwarded, original);
+            assert_eq!(session.body_bytes_read(), len);
+        }
+    }
+
+    #[tokio::test]
+    async fn waf_prefix_reuses_an_existing_complete_body_and_freezes_mutation() {
+        let mut session = test_session_with_body(b"original-body").await;
+        let mut ctx = EdgionHttpContext::default();
+        ctx.request_info.body_declared = Some(true);
+        ctx.request_info.in_request_body_stage = true;
+        let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
+        adapter.ensure_request_body(None).await.unwrap();
+        adapter
+            .overwrite_request_body(Bytes::from_static(b"edited-body"))
+            .await
+            .unwrap();
+        let (prefix, complete) = adapter.read_request_body_prefix(6).await.unwrap();
+        assert_eq!(prefix.as_ref(), b"edited");
+        assert!(!complete);
+        assert!(!adapter.inner.request_body_prefix_active());
+        assert_eq!(adapter.read_request_body(None).await.unwrap().as_ref(), b"edited-body");
+        assert!(adapter
+            .ctx
+            .request_body
+            .overwrite(Bytes::from_static(b"bypass"))
+            .is_err());
+        assert!(adapter
+            .request_body_append(Bytes::from_static(b"bypass"))
+            .await
+            .is_err());
+    }
+
+    #[tokio::test]
+    async fn waf_prefix_rejects_a_declared_body_above_the_physical_cap_before_reading() {
+        let mut session = test_session_with_body(b"12345").await;
+        let mut ctx = EdgionHttpContext::default();
+        ctx.request_info.body_declared = Some(true);
+        ctx.request_info.in_request_body_stage = true;
+        ctx.request_body_config.max_body_size_bytes = 4;
+        let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
+        assert!(matches!(
+            adapter.read_request_body_prefix(64).await,
+            Err(BodyReadError::BufferLimitExceeded { limit: 4 })
+        ));
+        assert_eq!(adapter.inner.body_bytes_read(), 0);
     }
 
     fn compile_plan(yaml: &str, type_prefix: &'static str) -> Arc<CompiledDyePlan> {

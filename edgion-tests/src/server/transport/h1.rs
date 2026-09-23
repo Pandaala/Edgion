@@ -8,6 +8,7 @@
 // on, so it lives on its own port.
 
 use anyhow::Result;
+use sha2::{Digest, Sha256};
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
@@ -78,6 +79,7 @@ impl ReqCtx {
 #[derive(Default)]
 struct BodyState {
     total: usize,
+    digest: Sha256,
     end_emitted: bool,
     trailers: bool,
 }
@@ -303,6 +305,7 @@ async fn pump_body(
         match pump.next(io).await? {
             BodyItem::Data(data) => {
                 state.total += data.len();
+                state.digest.update(&data);
                 let end = pump.is_finished();
                 if end {
                     state.end_emitted = true;
@@ -417,6 +420,10 @@ fn framing_report(head: &RequestHead, script: &UpScript, state: &BodyState, ctx:
             head.transfer_encoding().unwrap_or("absent").to_string(),
         ),
         ("x-up-req-body-len".to_string(), state.total.to_string()),
+        (
+            "x-up-req-body-sha256".to_string(),
+            format!("{:x}", state.digest.clone().finalize()),
+        ),
         ("x-up-req-trailers".to_string(), state.trailers.to_string()),
         ("x-up-http-version".to_string(), head.version.clone()),
         ("x-up-conn".to_string(), ctx.conn.to_string()),

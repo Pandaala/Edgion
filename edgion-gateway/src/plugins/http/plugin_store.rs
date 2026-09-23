@@ -1870,6 +1870,7 @@ mod compile_plugins_tests {
                     rules: rules.to_string(),
                     mode: WafMode::On,
                     priority: 0,
+                    request_body: Default::default(),
                 }),
                 ..Default::default()
             },

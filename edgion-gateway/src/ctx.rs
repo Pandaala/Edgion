@@ -601,6 +601,7 @@ mod waf_context_tests {
             rules: rules.to_string(),
             mode: WafMode::On,
             priority: 0,
+            request_body: Default::default(),
         };
         let generation = Arc::new(config.compile_generation().expect("test WAF compiles"));
         let request = RequestHead::new(
@@ -2623,6 +2624,8 @@ pub struct EdgionHttpContext {
     /// stays available through the final upstream-response header plugin chain
     /// and is then released before streaming the response.
     pub request_body: RequestBodyState,
+    /// The admitted WAF prefix pins the body representation against mutation.
+    pub(crate) waf_prefix_inspected: bool,
 
     /// Lazily allocated request-body callback drivers. The outer state is
     /// small; the fixed-capacity observer registry remains independently boxed
@@ -3602,6 +3605,7 @@ impl EdgionHttpContext {
             preflight_policy: ResolvedPreflightPolicy::default(),
             reject_duplicate_host: true,
             request_body: RequestBodyState::default(),
+            waf_prefix_inspected: false,
             request_body_plugins: None,
             ai_state: None,
             response_terminal_state: ResponseTerminalState::Open,

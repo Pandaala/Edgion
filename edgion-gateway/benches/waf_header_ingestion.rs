@@ -174,6 +174,7 @@ fn compile_generation() -> CompiledGeneration {
         .to_string(),
         mode: WafMode::On,
         priority: 0,
+        request_body: Default::default(),
     }
     .compile_generation()
     .expect("static benchmark WAF rules must compile")

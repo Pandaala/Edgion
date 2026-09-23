@@ -22,6 +22,8 @@ before applying a decision to current code.
 
 ## Regression guards
 
+- [WAF prefix admission before backend dispatch](regression-guards/waf-prefix-before-dispatch.md)
+
 - [The silent admission disposition requires unanimous facts — FIXED](regression-guards/body-admission-reads-pre-plugin-snapshots.md)
 - [BODY-008 — Bodyless Request Replay Owner — FIXED](regression-guards/bodyless-request-replay-owner.md)
 - [Request-Body Documentation Runtime Contract — FIXED](regression-guards/request-body-documentation-runtime-contract.md)

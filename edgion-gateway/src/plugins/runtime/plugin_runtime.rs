@@ -3031,6 +3031,7 @@ mod tests {
                 rules: "SecAction \"id:1,phase:1,pass,log\"\n".to_string(),
                 mode: edgion_resources::resources::edgion_plugins::WafMode::On,
                 priority: 12,
+                request_body: Default::default(),
             })
             .unwrap();
         let candidate = runtime.waf_candidate().unwrap();

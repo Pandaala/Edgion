@@ -23,7 +23,23 @@ fn deleted() -> Box<dyn TestSuite> {
     Box::new(suites::WafDynamicDeletedTestSuite)
 }
 
+fn configured_prefix() -> Box<dyn TestSuite> {
+    Box::new(suites::WafDynamicConfiguredPrefixTestSuite)
+}
+
+fn detection() -> Box<dyn TestSuite> {
+    Box::new(suites::WafDynamicDetectionTestSuite)
+}
+
 static PHASES: &[PhaseSuite] = &[
+    PhaseSuite {
+        name: "configured-prefix",
+        factory: configured_prefix,
+    },
+    PhaseSuite {
+        name: "detection",
+        factory: detection,
+    },
     PhaseSuite {
         name: "initial",
         factory: initial,
@@ -55,6 +71,11 @@ fn run(ctx: ScenarioCtx) -> ScenarioRunFuture {
         ctx.apply_dir("updates/to_invalid").await?;
         ctx.wait_phase(scenario, "invalid-retained", Duration::from_secs(15))
             .await?;
+        ctx.apply_dir("updates/to_prefix_1m").await?;
+        ctx.wait_phase(scenario, "configured-prefix", Duration::from_secs(15))
+            .await?;
+        ctx.apply_dir("updates/to_detection").await?;
+        ctx.wait_phase(scenario, "detection", Duration::from_secs(15)).await?;
         ctx.apply_dir("updates/to_recovered").await?;
         ctx.wait_phase(scenario, "recovered", Duration::from_secs(15)).await?;
         ctx.delete_resources("delete/resources.txt").await?;
