@@ -71,7 +71,7 @@ Key facts:
   the other build-style Rust jobs install dependencies and enable cache
 - The current CI commands do not include `--all-features`; before changing this, confirm whether you really want to expand the matrix rather than casually inflate CI cost
 - Every resolving Cargo command uses `--locked`. The manifest follows the
-  Edgion Pingora `edgion_v4` branch, but CI always builds the exact commit in the
+  Edgion Pingora `edgion_v5` branch, but CI always builds the exact commit in the
   committed lockfile. `check_pingora_source_policy.py` also verifies that all
   seven direct fork dependencies share that branch and the complete lockfile
   family resolves to one commit.

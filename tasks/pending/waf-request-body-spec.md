@@ -169,10 +169,11 @@ limit, or execution-budget failures.
 ## Delivery status
 
 Local implementation exists in Edgion and the sibling Pingora branch
-`feat/waf-request-body-prefix`. Local checks and independent reviews are recorded
-in the tracking task. The Gateway wire/hot-reload matrix has not run against the
-shared test topology. Publishing the fork through the supported source policy
-and updating the final dependency revision also remain pending. This spec does
+`edgion_v5`, with the prefix implementation and discard fix in one commit.
+Edgion's manifest and lockfile select that commit through the canonical Git
+source. Local checks and independent reviews are recorded in the tracking task.
+The Gateway wire/hot-reload matrix has not run against the shared test topology.
+Remote publication remains pending under the no-push instruction. This spec does
 not claim those acceptance gates have passed.
 
 ## References

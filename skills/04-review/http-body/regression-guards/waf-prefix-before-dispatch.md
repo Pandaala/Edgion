@@ -100,9 +100,10 @@ focused prefix, cancellation, and retry-refusal tests also passing.
 
 The Gateway WafDynamic wire/hot-reload matrix is implemented and compiled but
 has not run: switching the existing shared test topology requires user approval.
-Publishing the fork through `edgion_v4` and updating the final lockfile remain
-pending. The repository lockfile retains the original published revision; its
-source-policy guard passes only for that baseline, not the new local APIs.
+The prefix implementation and discard correction are consolidated into one
+commit on local `edgion_v5`. Edgion's manifest and lockfile select that branch
+and commit through the canonical Git source, without a path override. Remote
+publication remains pending under the user's no-push instruction.
 The active task stays open until these integration and publication gates pass.
 Re-evaluate when adding rule shapes, changing the prefix window, enabling prefix
 retry, changing body source ownership, or allowing post-inspection body mutation.

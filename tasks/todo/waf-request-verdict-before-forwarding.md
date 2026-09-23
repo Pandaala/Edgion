@@ -77,7 +77,7 @@ exactly once. Explicit `full` retains complete capture before the body verdict.
    detection-only, and hot reload. Update English/Chinese WAF docs and the
    owning gateway/Pingora body contracts; measure latency and retained bytes.
 
-The fork change must be integrated through the supported `edgion_v4` source
+The fork change must be integrated through the supported `edgion_v5` source
 policy and locked to one revision. Do not leave a path override or an
 unpublished fork commit as the final implementation. Run targeted tests,
 format, workspace check/clippy, documentation validation, and policy guards
@@ -120,6 +120,18 @@ this task or treat an ordinary unpatched build as verified until publication
 and final integration checks complete.
 
 ## Dependencies and context
+
+Current dependency state: local `edgion_v5` consolidates the prefix feature and
+discard fix into commit `c74d7fb2d59349b8cb1f7948102c7f9bbf829638`, with the same
+tree as the reviewed feature branch. Edgion now selects that branch and commit
+in its manifest and lockfile. No repository path patch is used. The older
+verification sections above describe the historical temporary-patch baseline.
+Remote publication and the Gateway wire/hot-reload matrix remain pending.
+Fresh validation against the canonical Git source passed workspace check and
+Clippy with `--locked`, 40 Gateway WAF-related tests, formatting, documentation,
+SSA, metrics inventory, Pingora source policy, and Gateway API transform guards.
+The unpublished Git commit was fetched locally for validation; no persistent
+Git URL rewrite or repository path patch was installed.
 
 - Coordinate recording-backend cases with [production rule acceptance](waf-production-rule-acceptance.md).
 - Parent: [native WAF roadmap](waf-self-built-implementation.md).

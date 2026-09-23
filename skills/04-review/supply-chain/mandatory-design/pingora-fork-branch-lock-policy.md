@@ -15,7 +15,7 @@ the Edgion fork (`Pandaala/pingora`). There is no stock crates.io Pingora
 family — the former `body-buffering`/`upstream-pingora` flavor duality was
 removed on 2026-08-03 (fork-only build).
 
-- Normal development selects `branch = "edgion_v4"` for all seven entries.
+- Normal development selects `branch = "edgion_v5"` for all seven entries.
 - `Cargo.lock` records the exact resolved commit for the complete transitive
   fork family.
 - CI, release workflows, Cargo Chef, and image builds use `--locked`.
@@ -45,7 +45,7 @@ An intentional fork advance therefore consists of:
 `cicd/checks/check_pingora_source_policy.py` verifies:
 
 - all seven direct dependencies point to the fork URL;
-- every entry uses the same supported selector (`edgion_v4` branch or one release
+- every entry uses the same supported selector (`edgion_v5` branch or one release
   tag), with no `rev`;
 - every fork package in `Cargo.lock` uses that selector;
 - all locked fork packages resolve to exactly one commit;

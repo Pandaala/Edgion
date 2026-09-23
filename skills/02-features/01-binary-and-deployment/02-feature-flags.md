@@ -56,7 +56,7 @@ The Controller no longer links Pingora. TLS-backend selection is Gateway-local.
 
 The seven direct fork dependencies (`pingora-core`, `pingora-http`,
 `pingora-proxy`, `pingora-limits`, `pingora-load-balancing`, `pingora-ketama`,
-and `TinyUFO`) all track the fork's `edgion_v4` branch (`Pandaala/pingora`).
+and `TinyUFO`) all track the fork's `edgion_v5` branch (`Pandaala/pingora`).
 They must move as one source family; never pin or advance only one package.
 
 Reproducibility comes from the committed `Cargo.lock`, which records the exact
