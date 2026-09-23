@@ -64,41 +64,32 @@ pub(super) enum ChainLimit {
 pub(super) struct ChainAppendPlan {
     storage: PlannedStorage,
     len: usize,
-    resident_capacity: usize,
-    handle_count: usize,
-    metadata_capacity: usize,
-    scratch_resident: usize,
-    scratch_metadata: usize,
+}
+
+/// Allocation-free admission data. Additional storage excludes the live table
+/// reused by AppendSlices and the arena reused by AppendCoalesced.
+pub(super) struct ChainAppendLayout {
+    kind: AppendKind,
+    len: usize,
+    pub resident: usize,
+    pub handles: usize,
+    pub metadata: usize,
+    pub additional_resident: usize,
+    pub additional_metadata: usize,
+}
+
+enum AppendKind {
+    NewTable,
+    AppendSlices,
+    Coalesce,
+    AppendCoalesced,
 }
 
 enum PlannedStorage {
     Slices(Vec<StoredSlice>),
     AppendSlices(Vec<StoredSlice>),
     Coalesced(BytesMut),
-    AppendCoalesced(Bytes),
-    Noop,
-}
-
-impl ChainAppendPlan {
-    pub(super) fn resident_capacity(&self) -> usize {
-        self.resident_capacity
-    }
-
-    pub(super) fn handle_count(&self) -> usize {
-        self.handle_count
-    }
-
-    pub(super) fn metadata_capacity(&self) -> usize {
-        self.metadata_capacity
-    }
-
-    pub(super) fn scratch_resident(&self) -> usize {
-        self.scratch_resident
-    }
-
-    pub(super) fn scratch_metadata(&self) -> usize {
-        self.scratch_metadata
-    }
+    AppendCoalesced(Vec<Bytes>),
 }
 
 impl SliceChain {
@@ -132,7 +123,7 @@ impl SliceChain {
         }
     }
 
-    /// General decoder append. Window code uses [`Self::plan_append`] so a
+    /// General decoder append. Window code uses [`Self::inspect_append`] so a
     /// rejected append cannot alter bytes or accounting.
     pub fn push(&mut self, bytes: Bytes, byte_limit: usize) -> Result<(), ()> {
         if bytes.is_empty() {
@@ -176,143 +167,122 @@ impl SliceChain {
         Ok(())
     }
 
-    pub(super) fn plan_append(
+    pub(super) fn inspect_append(
         &self,
-        incoming: Vec<Bytes>,
+        incoming: &[Bytes],
         logical_limit: usize,
         resident_limit: usize,
-    ) -> Result<ChainAppendPlan, ChainLimit> {
+    ) -> Result<ChainAppendLayout, ChainLimit> {
         let incoming_len = incoming.iter().try_fold(0usize, |total, bytes| {
             total.checked_add(bytes.len()).ok_or(ChainLimit::Logical)
         })?;
-        let new_len = self.len.checked_add(incoming_len).ok_or(ChainLimit::Logical)?;
-        if new_len > logical_limit {
+        let len = self.len.checked_add(incoming_len).ok_or(ChainLimit::Logical)?;
+        if len > logical_limit {
             return Err(ChainLimit::Logical);
         }
         let incoming_handles = incoming.iter().filter(|bytes| !bytes.is_empty()).count();
-
-        // Decide the representation before allocating any StoredSlice table.
-        // A hostile record with many tiny handles goes directly into one
-        // bounded arena; the caller-owned input Vec is consumed in place.
-        if let ChainStorage::Slices(current) = &self.storage {
-            if current.len().saturating_add(incoming_handles) > MAX_SLICE_HANDLES {
-                let mut arena = BytesMut::with_capacity(logical_limit);
-                if arena.capacity() > resident_limit {
+        let layout = match &self.storage {
+            ChainStorage::Slices(current) if incoming_handles > MAX_SLICE_HANDLES.saturating_sub(current.len()) => {
+                ChainAppendLayout {
+                    kind: AppendKind::Coalesce,
+                    len,
+                    resident: logical_limit,
+                    handles: usize::from(len != 0),
+                    metadata: 0,
+                    additional_resident: logical_limit,
+                    additional_metadata: 0,
+                }
+            }
+            ChainStorage::Slices(current) => {
+                let new_table = current.capacity() < MAX_SLICE_HANDLES && incoming_handles != 0;
+                ChainAppendLayout {
+                    kind: if new_table {
+                        AppendKind::NewTable
+                    } else {
+                        AppendKind::AppendSlices
+                    },
+                    len,
+                    resident: self
+                        .resident_capacity()
+                        .checked_add(incoming_len)
+                        .ok_or(ChainLimit::Resident)?,
+                    handles: current.len() + incoming_handles,
+                    metadata: if new_table {
+                        MAX_SLICE_HANDLES * size_of::<StoredSlice>()
+                    } else {
+                        self.slice_metadata_capacity()
+                    },
+                    additional_resident: incoming_len,
+                    additional_metadata: if new_table { MAX_SLICE_HANDLES } else { incoming_handles }
+                        * size_of::<StoredSlice>(),
+                }
+            }
+            ChainStorage::Coalesced(current) => {
+                if len > current.capacity() {
                     return Err(ChainLimit::Resident);
                 }
-                for slice in current {
-                    arena.extend_from_slice(&slice.bytes);
+                ChainAppendLayout {
+                    kind: AppendKind::AppendCoalesced,
+                    len,
+                    resident: current.capacity(),
+                    handles: usize::from(len != 0),
+                    metadata: 0,
+                    additional_resident: 0,
+                    additional_metadata: 0,
                 }
+            }
+        };
+        if layout.resident > resident_limit {
+            return Err(ChainLimit::Resident);
+        }
+        Ok(layout)
+    }
+
+    /// The caller admits every layout allocation before transferring the input.
+    /// No validation or capacity growth remains after this point.
+    pub(super) fn prepare_append(&self, incoming: Vec<Bytes>, layout: ChainAppendLayout) -> ChainAppendPlan {
+        let storage = match layout.kind {
+            AppendKind::Coalesce => {
+                let mut arena = BytesMut::with_capacity(layout.resident);
+                self.for_each_range(ByteRange::new(0, self.len), |part| arena.extend_from_slice(part));
                 for bytes in incoming {
                     arena.extend_from_slice(&bytes);
                 }
-                let resident_capacity = arena.capacity();
-                return Ok(ChainAppendPlan {
-                    storage: PlannedStorage::Coalesced(arena),
-                    len: new_len,
-                    resident_capacity,
-                    handle_count: usize::from(new_len != 0),
-                    metadata_capacity: 0,
-                    scratch_resident: resident_capacity,
-                    scratch_metadata: 0,
-                });
+                PlannedStorage::Coalesced(arena)
             }
-        }
-        if let ChainStorage::Coalesced(current) = &self.storage {
-            if new_len > current.capacity() || current.capacity() > resident_limit {
-                return Err(ChainLimit::Resident);
-            }
-            if incoming_len == 0 {
-                return Ok(ChainAppendPlan {
-                    storage: PlannedStorage::Noop,
-                    len: new_len,
-                    resident_capacity: current.capacity(),
-                    handle_count: usize::from(new_len != 0),
-                    metadata_capacity: 0,
-                    scratch_resident: 0,
-                    scratch_metadata: 0,
-                });
-            }
-            let mut compact = BytesMut::with_capacity(incoming_len);
-            if compact.capacity() > resident_limit {
-                return Err(ChainLimit::Resident);
-            }
-            for bytes in incoming {
-                compact.extend_from_slice(&bytes);
-            }
-            let scratch_resident = compact.capacity();
-            return Ok(ChainAppendPlan {
-                storage: PlannedStorage::AppendCoalesced(compact.freeze()),
-                len: new_len,
-                resident_capacity: current.capacity(),
-                handle_count: usize::from(new_len != 0),
-                metadata_capacity: 0,
-                scratch_resident,
-                scratch_metadata: 0,
-            });
-        }
-
-        let normalized = normalize_slices(incoming, resident_limit)?;
-        let incoming_resident = normalized.iter().try_fold(0usize, |total, slice| {
-            total.checked_add(slice.resident_capacity).ok_or(ChainLimit::Resident)
-        })?;
-        let incoming_metadata = normalized
-            .capacity()
-            .checked_mul(size_of::<StoredSlice>())
-            .ok_or(ChainLimit::Resident)?;
-
-        match &self.storage {
-            ChainStorage::Slices(current)
-                if current.len() + normalized.len() <= MAX_SLICE_HANDLES && current.capacity() < MAX_SLICE_HANDLES =>
-            {
-                let normalized_len = normalized.len();
-                // One fixed handle table makes every later retained fragment
-                // an O(1) append until the one-time coalesce threshold.
-                let mut slices = Vec::with_capacity(MAX_SLICE_HANDLES);
-                slices.extend(current.iter().cloned());
-                slices.extend(normalized);
-                let resident_capacity = slices.iter().try_fold(0usize, |total, slice| {
-                    total.checked_add(slice.resident_capacity).ok_or(ChainLimit::Resident)
-                })?;
-                if resident_capacity > resident_limit {
-                    return Err(ChainLimit::Resident);
+            AppendKind::AppendCoalesced => PlannedStorage::AppendCoalesced(incoming),
+            AppendKind::NewTable | AppendKind::AppendSlices => {
+                let mut slices = Vec::with_capacity(layout.additional_metadata / size_of::<StoredSlice>());
+                if matches!(layout.kind, AppendKind::NewTable) {
+                    if let ChainStorage::Slices(current) = &self.storage {
+                        slices.extend(current.iter().cloned());
+                    }
                 }
-                let metadata_capacity = slices
-                    .capacity()
-                    .checked_mul(size_of::<StoredSlice>())
-                    .ok_or(ChainLimit::Resident)?;
-                Ok(ChainAppendPlan {
-                    storage: PlannedStorage::Slices(slices),
-                    len: new_len,
-                    resident_capacity,
-                    handle_count: current.len() + normalized_len,
-                    metadata_capacity,
-                    scratch_resident: resident_capacity,
-                    scratch_metadata: 0,
-                })
-            }
-            ChainStorage::Slices(current) if current.len() + normalized.len() <= MAX_SLICE_HANDLES => {
-                let handle_count = current.len() + normalized.len();
-                let resident_capacity = self
-                    .resident_capacity()
-                    .checked_add(incoming_resident)
-                    .ok_or(ChainLimit::Resident)?;
-                if resident_capacity > resident_limit {
-                    return Err(ChainLimit::Resident);
+                for original in incoming {
+                    if original.is_empty() {
+                        continue;
+                    }
+                    let len = original.len();
+                    let bytes = match original.try_into_mut() {
+                        Ok(bytes) if bytes.capacity() == len => bytes.freeze(),
+                        Ok(bytes) => Bytes::copy_from_slice(&bytes),
+                        Err(bytes) => Bytes::copy_from_slice(&bytes),
+                    };
+                    slices.push(StoredSlice {
+                        bytes,
+                        resident_capacity: len,
+                    });
                 }
-                Ok(ChainAppendPlan {
-                    storage: PlannedStorage::AppendSlices(normalized),
-                    len: new_len,
-                    resident_capacity,
-                    handle_count,
-                    metadata_capacity: current.capacity().saturating_mul(size_of::<StoredSlice>()),
-                    scratch_resident: incoming_resident,
-                    scratch_metadata: incoming_metadata,
-                })
+                if matches!(layout.kind, AppendKind::NewTable) {
+                    PlannedStorage::Slices(slices)
+                } else {
+                    PlannedStorage::AppendSlices(slices)
+                }
             }
-            ChainStorage::Slices(_) | ChainStorage::Coalesced(_) => {
-                unreachable!("representation branches were decided before normalization")
-            }
+        };
+        ChainAppendPlan {
+            storage,
+            len: layout.len,
         }
     }
 
@@ -340,13 +310,18 @@ impl SliceChain {
                 let ChainStorage::Coalesced(current) = &mut self.storage else {
                     unreachable!("append plan matches the chain representation")
                 };
-                current.extend_from_slice(&incoming);
-                self.copied_bytes = self.copied_bytes.saturating_add(incoming.len());
+                for bytes in incoming {
+                    current.extend_from_slice(&bytes);
+                    self.copied_bytes = self.copied_bytes.saturating_add(bytes.len());
+                }
                 self.normalized_slice_prefix = 0;
             }
-            PlannedStorage::Noop => {}
         }
         self.len = plan.len;
+    }
+
+    pub(super) fn clear(&mut self) {
+        *self = Self::default();
     }
 
     /// Normalize only retained handles, committing only after every slice and
@@ -453,11 +428,6 @@ impl SliceChain {
             ChainStorage::Slices(slices) => slices.iter().map(|slice| slice.bytes.clone()).collect(),
             ChainStorage::Coalesced(bytes) => vec![Bytes::copy_from_slice(bytes)],
         }
-    }
-
-    pub(super) fn take_raw_slices(&mut self) -> Vec<Bytes> {
-        let output = Vec::with_capacity(self.handle_count());
-        self.take_raw_slices_into(output)
     }
 
     pub(super) fn take_raw_slices_into(&mut self, mut output: Vec<Bytes>) -> Vec<Bytes> {

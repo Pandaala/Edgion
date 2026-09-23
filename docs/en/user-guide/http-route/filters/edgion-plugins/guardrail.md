@@ -127,6 +127,10 @@ fields are dependency failures. `code` is optional ASCII
 `[A-Za-z0-9_.-]` up to 64 bytes; `reason` is optional UTF-8 up to 256 bytes.
 Neither value is sent to the downstream client or logged.
 
+A bucket may contain prior `context` but have an empty `current` because it has
+no semantic fragment in this window. Its replacement must be empty: there is
+no current JSON string token in which to emit additional text.
+
 ## Streaming and failure behavior
 
 The gateway allows only one decision in flight per downstream request and
@@ -138,6 +142,17 @@ snapshot while in-flight requests keep the old one.
 Pass releases original bytes unchanged. Replace preserves comments, event/id
 fields, usage, finish reasons, line endings, and `[DONE]`; only the current
 semantic JSON string ranges change.
+
+The next window's context retains a bounded suffix of the previously accepted
+text followed by the text actually emitted by Pass or Replace. A short or empty
+replacement therefore does not erase valid earlier context. At EOS, replacement
+does not allocate context for a nonexistent next window.
+
+Window memory limits cover simultaneously live visible buffer capacities,
+including input metadata, semantic scratch, snapshots, and replacement output.
+They are independent of the callout and callback-output limits and are not a
+total process RSS limit. A record whose input handle table itself exceeds the
+metadata limit is rejected even when its payload is small.
 
 With the default `holdFirstWindow: false`, a valid Reject discards the current
 unreleased window and terminates the already-committed stream. With

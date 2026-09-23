@@ -527,14 +527,9 @@ impl GuardrailResponseProcessor {
                         let emitted_len = match &decision {
                             ParsedDecision::Pass => stats.raw_bytes,
                             ParsedDecision::Replace(replacements) => {
-                                let replacements: Vec<_> = replacements
-                                    .iter()
-                                    .map(|(key, current)| SemanticReplacement {
-                                        key: *key,
-                                        current: current.clone(),
-                                    })
-                                    .collect();
-                                match self.window.preview_semantic_replace(&replacements) {
+                                match self.window.preview_semantic_replace(
+                                    replacements.iter().map(|(key, text)| (*key, text.as_str())),
+                                ) {
                                     Ok(len) => len,
                                     Err(_) => {
                                         self.fail_dependency(&mut output, records, sink, session, "replacement");
@@ -607,14 +602,10 @@ impl GuardrailResponseProcessor {
                 let emitted_len = match &decision {
                     ParsedDecision::Pass => stats.raw_bytes,
                     ParsedDecision::Replace(replacements) => {
-                        let replacements: Vec<_> = replacements
-                            .iter()
-                            .map(|(key, current)| SemanticReplacement {
-                                key: *key,
-                                current: current.clone(),
-                            })
-                            .collect();
-                        match self.window.preview_semantic_replace(&replacements) {
+                        match self
+                            .window
+                            .preview_semantic_replace(replacements.iter().map(|(key, text)| (*key, text.as_str())))
+                        {
                             Ok(len) => len,
                             Err(_) => {
                                 self.fail_dependency(&mut output, records, sink, session, "replacement");
@@ -683,14 +674,10 @@ impl GuardrailResponseProcessor {
                 let emitted_len = match &decision {
                     ParsedDecision::Pass => stats.raw_bytes,
                     ParsedDecision::Replace(replacements) => {
-                        let replacements: Vec<_> = replacements
-                            .iter()
-                            .map(|(key, current)| SemanticReplacement {
-                                key: *key,
-                                current: current.clone(),
-                            })
-                            .collect();
-                        match self.window.preview_semantic_replace(&replacements) {
+                        match self
+                            .window
+                            .preview_semantic_replace(replacements.iter().map(|(key, text)| (*key, text.as_str())))
+                        {
                             Ok(len) => len,
                             Err(_) => {
                                 self.fail_dependency(&mut output, VecDeque::new(), sink, session, "replacement");
@@ -979,6 +966,42 @@ mod tests {
         let (discarded, policy_reject) = reject.apply_decision(ParsedDecision::Reject).unwrap();
         assert!(policy_reject, "policy Reject is independent of fail-open");
         assert_eq!(discarded, WindowOutput::Discard);
+    }
+
+    #[test]
+    fn borrowed_preview_matches_final_replacement_after_prior_context() {
+        let key = LogicalBucketKey {
+            choice_index: 0,
+            field: LogicalField::Content,
+        };
+        let mut processor = processor(false);
+        processor.window = RawWindow::with_policy(RawWindowPolicy {
+            per_bucket_overlap_bytes: 16,
+            global_overlap_bytes: 16,
+            max_replacement_bytes: 4096,
+        })
+        .unwrap();
+        processor.window.retain(semantic_record("prior")).unwrap();
+        processor.apply_decision(ParsedDecision::Pass).unwrap();
+        processor.window.start_next().unwrap();
+        processor.window.retain(semantic_record("hidden")).unwrap();
+        let replacements = vec![(key, "é\\\"".to_string())];
+        let preview = processor
+            .window
+            .preview_semantic_replace(replacements.iter().map(|(key, text)| (*key, text.as_str())))
+            .unwrap();
+        assert_eq!(processor.window.snapshot_all().unwrap()[0].context, "prior");
+        let (output, reject) = processor
+            .apply_final_decision(ParsedDecision::Replace(replacements))
+            .unwrap();
+        let WindowOutput::Replace(bytes) = output else {
+            panic!("expected semantic replacement")
+        };
+        assert!(!reject);
+        assert_eq!(bytes.len(), preview);
+        assert_eq!(bytes, semantic_record("é\\\"").into_raw_slices().concat());
+        assert_eq!(processor.window.start_next(), Err(WindowError::Finished));
+        assert_eq!(processor.summary.windows, 2);
     }
 
     #[test]
