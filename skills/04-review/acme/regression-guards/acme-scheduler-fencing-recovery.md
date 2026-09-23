@@ -79,7 +79,10 @@ The in-memory Kubernetes transport tests cover Secret-publication proof feedback
 operation-guard transient reads and cancellation, exhausted interrupted-attempt
 terminal-write retries, and existing-account Secret conflicts (concurrent valid
 credentials, still-empty target, replacement UID, and corrupt credentials).
-They do not run a real CA or Kubernetes API server.
+They do not run a real CA or Kubernetes API server. The non-Ready `nextRetryAt`
+admission gate has no direct test: the only checkpoint test carrying a future
+`nextRetryAt` is the Ready-recovery case, where the checkpoint is cleared and the
+gate is skipped. Cover that branch before relying on it as verified behavior.
 
 Re-evaluate this design if ACME work becomes multi-leader, certificate material
 must survive a process crash before publication, or another controller begins

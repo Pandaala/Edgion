@@ -49,8 +49,22 @@ retry retain independent commands; the actor coalesces all command sources.
 - This does not simulate an API server or live certificate issuance. The status
   echo test deliberately withholds computed conditions to model CAS rejection;
   the generic persistence tests separately exercise actual conflict responses.
-- Secret dependency requeues and listener-proof comparison cover credential and
-  serving changes even when ResolvedRefs status/reason remains unchanged.
+- Secret dependency requeues and listener-proof comparison cover serving changes
+  and the corrupt-credential and credential-recovery transitions. The gate compares
+  the `resolved_refs_identity` status/reason pair, so a change in either member
+  requests a notification: valid/corrupt flips the status, while a denial-to-corrupt
+  move such as `RefNotPermitted` to `DecodeError` changes only the reason.
+- Valid-to-valid account credential rotation intentionally emits no notification.
+  UID, generation, ResolvedRefs status/reason, and listener attachments are all
+  unchanged, so `notify_after_publish` stays false and no immediate recheck is
+  requested. This is the intended behavior rather than a residue of the status-loop
+  correction: the account Secret is never attached to the in-memory resource, so the
+  next admitted attempt re-reads it from the API server and uses the rotated
+  credential. An attempt already in flight keeps the credential it loaded and may
+  complete against the pre-rotation account; the rotated value takes effect from the
+  next admitted attempt. A reprocess whose gate inputs are unchanged emitting no
+  notification is asserted by the tail of
+  `recovered_credentials_are_published_before_the_single_notification`.
 - Notification deduplication does not itself gate generic status writes. The
   separate `acme_is_owned` handler/service admission check now prevents foreign
   GatewayClasses from writing competing flat handler conditions. Active attempts
@@ -71,4 +85,5 @@ Fresh targeted verification for this correction:
 
 - `c1-013` — —.
 - `CAND-P3-01` — status-CAS notification feedback correction.
-- `acme-scheduler-trigger-admission` — active-attempt cancellation event source.
+- `acme-scheduler-trigger-admission` — active-attempt cancellation event source;
+  intended valid-to-valid account credential rotation behavior.
