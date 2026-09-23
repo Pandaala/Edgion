@@ -735,6 +735,12 @@ impl WasmVmManager {
     /// In-flight `VmLease`s stay safe: they hold `Arc<ModuleEntry>` strong
     /// refs, so removal from the map only unpins the entry — memory is freed
     /// once the last lease returns.
+    ///
+    /// Unpinning alone does NOT quiesce the entry's tick task: a tick round
+    /// upgrades its `Weak` for the whole round, so the strong count cannot
+    /// reach zero (and `Drop`'s abort cannot fire) while a round is inside a
+    /// callout future. Eviction therefore stops the task explicitly, exactly
+    /// like the OCI refresh handoff does.
     pub fn unregister_plugin(&self, cache_key: &str, metrics_label: &str, grant: &CalloutGrant) {
         super::oci::cache::unregister_owner();
         self.cache.tick_callout_state(cache_key).remove(grant);
@@ -751,7 +757,9 @@ impl WasmVmManager {
         let cache = self.cache.clone();
         let key = cache_key.to_string();
         let label = metrics_label.to_string();
-        let evict = move || {
+        // Returns the evicted entry (when one was published) so the caller can
+        // quiesce its tick task; `None` means nothing was evicted.
+        let evict = move || -> Option<Arc<ModuleEntry>> {
             // Re-check: a concurrent register_plugin during the grace period
             // keeps the entry. `remove_if` is atomic per entry.
             if cache.refs.remove_if(&key, |_, count| *count == 0).is_some() {
@@ -761,24 +769,36 @@ impl WasmVmManager {
                 // its preload ran) has refs + tick_callouts records but no
                 // modules entry, and the record would otherwise leak forever.
                 cache.tick_callouts.remove(&key);
-                if cache.modules.remove(&key).is_some() {
+                if let Some((_, slot)) = cache.modules.remove(&key) {
                     record_wasm_module_evicted(&label);
                     set_wasm_modules_loaded(cache.modules.len());
                     tracing::info!(module = %label, "wasm module cache entry evicted (refcount zero)");
+                    return slot.published.load_full();
                 }
             }
+            None
         };
         match tokio::runtime::Handle::try_current() {
             Ok(handle) => {
                 let grace = self.evict_grace;
                 handle.spawn(async move {
                     tokio::time::sleep(grace).await;
-                    evict();
+                    if let Some(entry) = evict() {
+                        // Bounded: the abort lands on the tick task's next host
+                        // await point, and a synchronous guest call in progress
+                        // is already capped by the engine epoch deadline. This
+                        // task is not the tick task, so there is no self-abort;
+                        // `stop_tick` takes the join handle out of its mutex
+                        // before awaiting, so no lock is held across the await.
+                        entry.stop_tick().await;
+                    }
                 });
             }
             // No runtime (process teardown): evict immediately. The grace is
             // an anti-thrash optimization, not a correctness requirement.
-            Err(_) => evict(),
+            // Nothing can await here, so the tick task falls back to `Drop`'s
+            // abort once the dying process releases its last strong reference.
+            Err(_) => drop(evict()),
         }
     }
 
@@ -1695,13 +1715,29 @@ impl ModuleEntry {
                         // path there is no context to open/close here.
                         if let Some(timeout_ms) = armed {
                             if !lease.state().pending_callouts.is_empty() {
+                                // Cancellation safety: eviction aborts this task
+                                // at an await point inside callout resolution,
+                                // which drops the lease with guest state mid-
+                                // round (a taken pending queue, a callout
+                                // response staged for delivery). Poison first so
+                                // that drop discards the VM instead of pooling
+                                // it; healthy state is restored only on a clean
+                                // round. The root context needs no close hook,
+                                // so `open_context` cannot cover this like it
+                                // covers the request path.
+                                lease.poison();
                                 match resolve_callouts_on(&mut lease, ROOT_CONTEXT_ID, timeout_ms, &label).await {
-                                    Ok(outcome) => tracing::debug!(
-                                        delivered = outcome.delivered,
-                                        leftover = outcome.leftover,
-                                        module = %label,
-                                        "wasm tick callouts resolved"
-                                    ),
+                                    Ok(outcome) => {
+                                        // The round completed without a trap or
+                                        // cancellation: the VM is reusable again.
+                                        lease.healthy = true;
+                                        tracing::debug!(
+                                            delivered = outcome.delivered,
+                                            leftover = outcome.leftover,
+                                            module = %label,
+                                            "wasm tick callouts resolved"
+                                        );
+                                    }
                                     Err(e) => {
                                         tracing::warn!(error = %e, module = %label, "wasm tick callout delivery failed");
                                         // Callback failure poisons the lease;
@@ -3829,6 +3865,66 @@ mod tests {
         }
     }
 
+    /// Tick linker whose dispatch queues one callout against `origin`. Paired
+    /// with a listener that never answers, it parks the tick round inside the
+    /// callout response await for the full timeout.
+    fn blocking_tick_callout_linker(
+        origin: String,
+        dispatch_calls: Arc<AtomicUsize>,
+    ) -> impl FnOnce(&mut Linker<HostState>) -> Result<(), String> + Send {
+        move |linker| {
+            panicking_linker(Arc::new(AtomicBool::new(false)), Arc::new(AtomicUsize::new(0)), None)(linker)?;
+            linker
+                .func_wrap(
+                    edgion_wasm::host::MODULE,
+                    edgion_wasm::host::PROXY_HTTP_CALL,
+                    move |mut caller: wasmtime::Caller<'_, HostState>,
+                          _cluster_ptr: i32,
+                          _cluster_len: i32,
+                          _headers_ptr: i32,
+                          _headers_len: i32,
+                          _body_ptr: i32,
+                          _body_len: i32,
+                          _trailers_ptr: i32,
+                          _trailers_len: i32,
+                          _timeout_ms: i32,
+                          _token_ptr: i32|
+                          -> i32 {
+                        dispatch_calls.fetch_add(1, Ordering::SeqCst);
+                        caller.data_mut().pending_callouts.push(host_abi::PendingCallout {
+                            token: 7,
+                            origin: origin.clone(),
+                            path: "/".to_string(),
+                            method: "GET".to_string(),
+                            authority: None,
+                            headers: Vec::new(),
+                            body: Vec::new(),
+                            timeout_ms: BLOCKED_CALLOUT_TIMEOUT_MS,
+                        });
+                        host_abi::STATUS_OK
+                    },
+                )
+                .map(|_| ())
+                .map_err(|e| format!("test callout linker setup: {e}"))
+        }
+    }
+
+    /// Long enough that a cancelled round is unmistakably distinguishable from
+    /// one that simply ran to completion.
+    const BLOCKED_CALLOUT_TIMEOUT_MS: u32 = 30_000;
+
+    /// Poll the module's live tick-task count (maintained by
+    /// `TestTickTaskGuard`) until it reaches `expected`.
+    async fn wait_for_active_tick_tasks(state: &TickCalloutState, expected: usize, context: &str) {
+        let wait = tokio::time::timeout(Duration::from_secs(5), async {
+            while state.active_tick_tasks.load(Ordering::Acquire) != expected {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await;
+        assert!(wait.is_ok(), "timed out waiting for {expected} tick task(s): {context}");
+    }
+
     async fn wait_for_test_calls(calls: &AtomicUsize, minimum: usize) {
         for _ in 0..40 {
             if calls.load(Ordering::SeqCst) >= minimum {
@@ -3915,6 +4011,99 @@ mod tests {
             "failed callout callback state must not replace the last trusted period"
         );
         assert_eq!(entry.pool_len(), 0, "each panicking callback VM must be discarded");
+    }
+
+    /// Zero-reference eviction must quiesce a tick round that is parked inside
+    /// a callout. The round holds the strong `Arc` that `Drop`'s abort depends
+    /// on, so without an explicit stop the entry (and its shared data) would
+    /// survive until the callout's own timeout expires.
+    #[tokio::test]
+    async fn zero_reference_eviction_stops_a_tick_round_blocked_in_a_callout() {
+        // Accept connections and never answer them: the callout stays in its
+        // response await for the whole `BLOCKED_CALLOUT_TIMEOUT_MS` budget.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let origin = format!("http://{}", listener.local_addr().expect("listener addr"));
+        let connected = Arc::new(AtomicUsize::new(0));
+        let accepted = connected.clone();
+        let accept_task = tokio::spawn(async move {
+            let mut held = Vec::new();
+            while let Ok((stream, _)) = listener.accept().await {
+                accepted.fetch_add(1, Ordering::SeqCst);
+                held.push(stream);
+            }
+        });
+
+        let file = write_temp_wasm(TICK_CALLOUT_PANIC_GUEST);
+        let config = file_config(file.path());
+        let key = runtime_cache_key(&config);
+        let mut mgr = WasmVmManager::new_for_test();
+        mgr.set_evict_grace_for_test(Duration::from_millis(50));
+
+        let callout_grant = grant(vec![origin.clone()], u64::from(BLOCKED_CALLOUT_TIMEOUT_MS));
+        mgr.register_plugin(&key, callout_grant.clone());
+        let dispatch_calls = Arc::new(AtomicUsize::new(0));
+        let entry = mgr
+            .get_or_load_with_linker(
+                &config,
+                &key,
+                blocking_tick_callout_linker(origin, dispatch_calls.clone()),
+            )
+            .await
+            .expect("tick callout guest loads");
+        let tick_state = entry.tick_callouts.clone();
+        entry.activate_tick(MIN_TICK_PERIOD_MS);
+        // Only the cache may pin the entry; a test-held Arc would mask the bug.
+        drop(entry);
+
+        wait_for_test_calls(&dispatch_calls, 1).await;
+        wait_for_test_calls(&connected, 1).await;
+
+        mgr.unregister_plugin(&key, "test-module", &callout_grant);
+        wait_for_active_tick_tasks(
+            &tick_state,
+            0,
+            "eviction must stop a tick round still inside its callout",
+        )
+        .await;
+        assert!(mgr.try_get(&key).is_none(), "zero-reference entry must be evicted");
+
+        accept_task.abort();
+    }
+
+    /// The tick shutdown added to eviction must not fire when a plugin
+    /// re-registers inside the anti-thrash grace: entry and tick task both stay.
+    #[tokio::test]
+    async fn reregister_during_grace_keeps_the_tick_task_running() {
+        let f = write_temp_wasm(TICK_GUEST);
+        let config = file_config(f.path());
+        let key = runtime_cache_key(&config);
+        let mut mgr = WasmVmManager::new_for_test();
+        mgr.set_evict_grace_for_test(Duration::from_millis(100));
+
+        mgr.register_plugin(&key, CalloutGrant::none());
+        let entry = load(&mgr, &config).await.expect("loads");
+        let tick_state = entry.tick_callouts.clone();
+        wait_for_active_tick_tasks(&tick_state, 1, "guest-requested tick starts at load").await;
+
+        mgr.unregister_plugin(&key, "test-module", &CalloutGrant::none());
+        // Reload thrash: a new plugin instance re-registers within the grace.
+        mgr.register_plugin(&key, CalloutGrant::none());
+        tokio::time::sleep(Duration::from_millis(400)).await;
+
+        assert!(
+            mgr.try_get(&key).is_some(),
+            "re-registered entry must survive the grace window"
+        );
+        assert_eq!(
+            tick_state.active_tick_tasks.load(Ordering::Acquire),
+            1,
+            "the surviving entry must keep its tick task"
+        );
+        assert!(
+            entry.tick_enabled.load(Ordering::Acquire),
+            "a cancelled eviction must not disable tick"
+        );
+        assert!(entry.tick_task.lock().is_some(), "the tick join handle must remain");
     }
 
     /// on_tick fires periodically once the guest sets a period during
@@ -4496,16 +4685,6 @@ mod tests {
                 .mount(server)
                 .await;
         }
-        async fn wait_for_active(state: &TickCalloutState, expected: usize) {
-            tokio::time::timeout(Duration::from_secs(2), async {
-                while state.active_tick_tasks.load(Ordering::Acquire) != expected {
-                    tokio::task::yield_now().await;
-                }
-            })
-            .await
-            .expect("tick task count reaches expected value");
-        }
-
         let wasm_a = wat::parse_str(TICK_GUEST).unwrap();
         let wasm_b = wat::parse_str(TICK_GUEST.replace(
             "(func (export \"proxy_on_tick\")",
@@ -4525,7 +4704,7 @@ mod tests {
         let mgr = WasmVmManager::new_for_test();
         let old_entry = mgr.get_or_load(&config, &cache_key).await.unwrap();
         let tick_state = old_entry.tick_callouts.clone();
-        wait_for_active(&tick_state, 1).await;
+        wait_for_active_tick_tasks(&tick_state, 1, "the published entry owns the tick task").await;
 
         server.reset().await;
         mount(&server, wasm_b).await;
@@ -4535,7 +4714,7 @@ mod tests {
         mgr.wait_for_oci_refresh_for_test(&cache_key).await;
         let new_entry = mgr.try_get(&cache_key).expect("new entry published");
         assert!(!Arc::ptr_eq(&old_entry, &new_entry));
-        wait_for_active(&tick_state, 1).await;
+        wait_for_active_tick_tasks(&tick_state, 1, "the refreshed entry owns the tick task").await;
 
         assert_eq!(
             tick_state.max_active_tick_tasks.load(Ordering::Acquire),

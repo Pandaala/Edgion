@@ -12,6 +12,7 @@ before applying a decision to current code.
 ## Regression guards
 
 - [Shared-data byte gauges aggregate live stores and balance destruction](regression-guards/shared-data-gauge-live-stores.md)
+- [Zero-reference eviction explicitly quiesces the module tick task](regression-guards/tick-quiescence-on-zero-reference-eviction.md)
 - [Claim Wasm preload before copying task inputs](regression-guards/preload-claim-before-owned-inputs.md)
 - [Wasm Body Counter Assertions Use Per-Request Deltas — FIXED](regression-guards/wasm-body-counter-delta-rerun-safe.md)
 - [Wasm module cache key must fold in per-plugin runtime config — FIXED](regression-guards/wasm-module-cache-key-runtime-config.md)

@@ -59,12 +59,12 @@ request-style Arc, and live-handle keepalive with exporter idle eviction enabled
 also covers the ownership boundary used by cache-residue validation: the handle
 remains visible during the module cache's anti-thrash grace and disappears after
 an unleased zero-reference entry is evicted. The validator preserves a nonzero
-`wasm_shared_data_metrics.count` as residue. Its 75-second default deadline
-exceeds the production 60-second eviction scheduling grace for an idle entry,
-but it is not a complete upper bound on a running tick round: sequential bounded
-callouts can retain a `VmLease` and `SharedData` beyond that deadline. Explicit
-tick quiescence is deferred to
-`tasks/todo/stop-wasm-tick-on-zero-reference-eviction.md`.
+`wasm_shared_data_metrics.count` as residue. Its 75-second default deadline now
+bounds the quiesced eviction path: eviction schedules after the 60-second grace
+and then stops the tick task explicitly, so a running tick round no longer
+retains a `VmLease` and `SharedData` past the deadline. The residual windows that
+path does not cover are enumerated in
+[tick-quiescence-on-zero-reference-eviction](tick-quiescence-on-zero-reference-eviction.md).
 Existing CAS/capacity tests remain in place. No live integration scenario changes.
 Fresh verification: `cargo test -p edgion-gateway --lib shared_data` passed all
 21 selected tests, including the real guest ABI roundtrip and preflight checks.
@@ -80,8 +80,10 @@ For `wasm-shared-data-eviction-grace-exceeds-residue-timeout`, focused current-t
 verification passed the delayed module-eviction metric-handle test, all 23
 `cache_residue` tests, the local runner deadline contract test, and the Kubernetes
 residue-gate shell test. This focused evidence distinguishes bounded grace from a
-nonzero idle-entry signal that survives the validator deadline; it does not cover a
-running tick callout or claim a fresh live EdgionPlugins integration sweep.
+nonzero idle-entry signal that survives the validator deadline; it does not claim a
+fresh live EdgionPlugins integration sweep. The running-tick-callout case is covered
+separately by
+[tick-quiescence-on-zero-reference-eviction](tick-quiescence-on-zero-reference-eviction.md).
 
 Re-evaluate if recorder installation order, idle eviction, metrics rendering
 entry points, store accounting, or module ownership changes. Metrics must be
@@ -94,5 +96,6 @@ series under the cardinality guard remains subject to that guard's policy.
   2026-09-07; corrected with mutation deltas and destruction symmetry.
 - `wasm-shared-data-eviction-grace-exceeds-residue-timeout` — the residue
   deadline now exceeds the idle module eviction grace, with metric visibility
-  and fail-close regression coverage. Running-tick quiescence remains tracked
-  by `stop-wasm-tick-on-zero-reference-eviction`.
+  and fail-close regression coverage. Running-tick quiescence was closed by
+  `wasm-tick-retention-exceeds-residue-deadline` (2026-09-23); its rule lives in
+  [tick-quiescence-on-zero-reference-eviction](tick-quiescence-on-zero-reference-eviction.md).
