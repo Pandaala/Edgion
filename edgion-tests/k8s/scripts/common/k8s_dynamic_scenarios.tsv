@@ -1,12 +1,17 @@
 # scenario_id	k8s_conf_path	reset_path	kubectl_resource	gateway_kind	namespace	name
 CorsValidation	EdgionPlugins/Cors/DynamicTest	initial	httproutes.gateway.networking.k8s.io	httproute	edgion-default	cors-validation-dynamic
 DslTerminateDynamic	EdgionPlugins/DslTerminateDynamic/DynamicTest	initial	edgionplugins.edgion.io	edgionplugins	edgion-default	dsl-terminate-dynamic
+ExtProcTlsPolicyRecovery	EdgionPlugins/ExtProc/DynamicTest	initial	edgionplugins.edgion.io	edgionplugins	edgion-default	ext-proc-external-tls
 HttpRouteNamedParameterPrecedence	HTTPRoute/NamedParameterPrecedence/DynamicTest	initial	httproutes.gateway.networking.k8s.io	httproute	edgion-test	named-static-z-winner
 HttpRoutePathPrefixTrailingSlash	HTTPRoute/PathPrefixTrailingSlash/DynamicTest	initial	httproutes.gateway.networking.k8s.io	httproute	edgion-test	prefix-slash-z-winner
 LinkSysDisabledTls	LinkSys/Redis/DisabledTls/DynamicTest	initial	linksys.edgion.io	linksys	edgion-default	redis-disabled-tls-dynamic
+L4TimeoutHotReload	TCPRoute/L4TimeoutHotReload/DynamicTest	initial	gatewayclasses.gateway.networking.k8s.io	gatewayclass	-	l4-timeout-class
 LinkSysProviderReplacement	LinkSys/Redis/ProviderReplacement/DynamicTest	initial	linksys.edgion.io	linksys	edgion-test	linksys-provider-replacement
+PluginPolicyDynamic	PluginPolicy/DynamicTest	initial	gatewayclasses.gateway.networking.k8s.io	gatewayclass	-	pp-a
+PreflightPolicyHotReload	Gateway/PreflightPolicyHotReload/DynamicTest	initial	gatewayclasses.gateway.networking.k8s.io	gatewayclass	-	preflight-policy-hot-reload
 RateLimitLocalOverflowDynamic	EdgionPlugins/RateLimitLocal/OverflowDynamic/DynamicTest	initial	edgionplugins.edgion.io	edgionplugins	edgion-default	rate-limit-overflow-dynamic
 TlsRouteAttachments	TLSRoute/Attachments	bootstrap	gateways.gateway.networking.k8s.io	gateway	edgion-test	tls-attachments-a
+WasmRuntimeOwnership	EdgionPlugins/Wasm/DynamicTest	initial	edgionplugins.edgion.io	edgionplugins	edgion-default	wasm-runtime-a
 EgcRuntimeHotReload	Gateway/EgcRuntimeHotReload/DynamicTest	initial	edgiongatewayclassconfigs.edgion.io	edgiongatewayconfig	-	egc-runtime-hot-reload
 DuplicateHostPolicyHotReload	Gateway/DuplicateHostPolicyHotReload/DynamicTest	initial	edgiongatewayclassconfigs.edgion.io	edgiongatewayconfig	-	duplicate-host-policy-hot-reload
 HttpRouteDuplicateHeaders	HTTPRoute/Match/DynamicTest	initial	httproutes.gateway.networking.k8s.io	httproute	edgion-test	duplicate-header-dynamic

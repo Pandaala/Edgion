@@ -1,0 +1,25 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: ext-proc-external
+  namespace: edgion-test
+spec:
+  clusterIP: None
+  ipFamilyPolicy: SingleStack
+  ipFamilies:
+    - IPv4
+  selector:
+    app: ext-proc-external
+  ports:
+    - name: grpc
+      port: 30044
+      targetPort: grpc
+    - name: admin
+      port: 30045
+      targetPort: admin
+    - name: tls-grpc
+      port: 30046
+      targetPort: tls-grpc
+    - name: mtls-grpc
+      port: 30047
+      targetPort: mtls-grpc

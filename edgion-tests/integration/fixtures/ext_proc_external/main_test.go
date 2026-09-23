@@ -851,6 +851,26 @@ func TestValidateListenAddress(t *testing.T) {
 	if err := validateListenAddress("127.0.0.1:9000"); err != nil {
 		t.Fatalf("valid loopback address rejected: %v", err)
 	}
+	if err := validateListenAddressForMode("0.0.0.0:9000", true); err != nil {
+		t.Fatalf("cluster wildcard rejected: %v", err)
+	}
+	if err := validateListenAddressForMode("localhost:9000", true); err == nil {
+		t.Fatal("cluster mode accepted a nonliteral listener")
+	}
+}
+
+func TestClusterServerCertificateDNSName(t *testing.T) {
+	const serverDNSName = "ext-proc-external.edgion-test.svc.cluster.local"
+	materials, err := generateTLSMaterialsWithDNS(filepath.Join(t.TempDir(), "materials"), serverDNSName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, generation := range []string{"a", "b"} {
+		certificate := materials.servers[generation].certificate.Leaf
+		if err := certificate.VerifyHostname(serverDNSName); err != nil {
+			t.Fatalf("server generation %s DNS name: %v", generation, err)
+		}
+	}
 }
 
 type testTLSFixture struct {

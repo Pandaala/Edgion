@@ -21,7 +21,8 @@ def kubectl(*args, body=None):
         input=json.dumps(body) if body is not None else None,
         text=True, capture_output=True, check=True, timeout=15,
     )
-    return json.loads(result.stdout) if result.stdout.strip() else None
+    output = result.stdout.strip()
+    return json.loads(output) if output.startswith(("{", "[")) else output or None
 
 
 def wait_for(check, description):
@@ -105,7 +106,7 @@ def main():
             assert get()["metadata"]["resourceVersion"] == stable["metadata"]["resourceVersion"], \
                 "matching class keeps being rewritten"
             time.sleep(0.1)
-        kubectl("delete", "gatewayclass", name, "--wait=true", "-o", "json")
+        kubectl("delete", "gatewayclass", name, "--wait=true", "-o", "name")
         created = False
         create()
         created = True
@@ -133,9 +134,9 @@ def main():
         print("PASS: matching GatewayClass publication, updates, stable echoes, recreation, foreign isolation")
     finally:
         if foreign_created:
-            kubectl("delete", "gatewayclass", foreign_name, "--ignore-not-found", "--wait=true", "-o", "json")
+            kubectl("delete", "gatewayclass", foreign_name, "--ignore-not-found", "--wait=true", "-o", "name")
         if created:
-            kubectl("delete", "gatewayclass", name, "--ignore-not-found", "--wait=true", "-o", "json")
+            kubectl("delete", "gatewayclass", name, "--ignore-not-found", "--wait=true", "-o", "name")
 
 
 if __name__ == "__main__":

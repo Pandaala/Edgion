@@ -38,12 +38,33 @@ array to close the parity gate.
 `AcmeGatewayRefOwnership` remains an explicit exception because its phases
 inject challenge ownership and expiry through ACME resource status. Ordinary
 Kubernetes apply cannot write the status subresource, and the current helper
-has no status patch phase. `ExtProcTlsPolicyRecovery` remains an explicit
-exception because it requires an independent Go processor with TLS material
-and an admin observation API; the Kubernetes topology only has the built-in
-fake processor. These rows do not represent executed Kubernetes assertions.
+has no status patch phase. This row does not represent executed Kubernetes assertions.
 The pre-existing `EncryptedActiveHealthChecks` exception has a separate local
 certificate and listener boundary.
+
+The current implementation adds an independent Go processor Pod with generated
+TLS material and an admin observation endpoint, registers
+`ExtProcTlsPolicyRecovery`, and registers the three private GatewayClass
+scenarios after Controller selection changed to `controller_name`. It also
+adds `WasmRuntimeOwnership` fixtures and a Gateway-mounted Wasm test artifact.
+On 2026-09-23, current local arm64 Controller, Gateway, and test-client images
+passed the six originally missing dynamic scenarios plus `L4TimeoutHotReload`,
+`PreflightPolicyHotReload`, and `WasmRuntimeOwnership` in OrbStack Kubernetes.
+`PluginPolicyDynamic` exercised distinct `pp-a` and `pp-b` class parameters and
+all original phases. The GatewayClass reporting regression passed matching
+publication, update, recreation, and foreign-controller isolation. The final
+cache-residue gate passed. Controller and Gateway Pod UIDs stayed fixed with
+zero restarts across the dynamic phases. The parity inventory passed at 55/55.
+The bulk static fixture apply stopped in `Status/` when the local Service IP
+range filled; the targeted dynamic runs restored their own initial fixtures
+after freeing test-owned, unrelated Services. This live evidence covers the
+listed dynamic scenarios, not a full static suite run.
+The cache-residue gate deletes configuration objects by design. After it ran,
+the test namespaces were removed and the saved four Service specs, two
+ConfigMap data maps, two Deployment specs, and four CRD specs were restored
+exactly. The original Controller, Gateway, and unrelated Redis Pods became
+Ready again. Run cache residue only after other live assertions and restore
+from a pre-run snapshot when using an existing developer cluster.
 
 The exact fixture constraints and removal conditions are recorded in
 [Kubernetes dynamic fixture boundaries](../compatibility-constraints/kubernetes-dynamic-fixture-boundaries.md).
@@ -60,11 +81,11 @@ The static `EdgionPlugins/DslTerminate` suite passed all four assertions after
 its Kubernetes HTTP contract fixtures were added. The full prepare could not
 finish because the cluster Service IP range filled during bulk fixture apply;
 the focused runs used the deployed stack and each scenario's reset fixtures.
-The three private GatewayClass scenarios were tried and failed because this
-controller deployment selects only `public-gateway`; they are now explicit
-scope exceptions rather than executable manifest entries. Re-evaluate each
-exception when its stated topology requirement changes. Re-run inventory
-parity whenever either runner or manifest changes.
+The earlier private GatewayClass attempts failed under the former
+single-class controller deployment. That result is historical and does not
+verify the current multi-class implementation. Re-run inventory parity and
+the registered scenarios against current images whenever the runner, manifest,
+or Controller class selection changes.
 
 ## Resolution references
 

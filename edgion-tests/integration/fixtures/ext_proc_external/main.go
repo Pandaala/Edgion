@@ -153,6 +153,7 @@ func generateLeaf(
 	ca *x509.Certificate,
 	caKey *ecdsa.PrivateKey,
 	now time.Time,
+	serverDNSName string,
 ) (*leafMaterial, error) {
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -172,6 +173,9 @@ func generateLeaf(
 	}
 	if usage == x509.ExtKeyUsageServerAuth {
 		template.IPAddresses = []net.IP{net.ParseIP("127.0.0.1")}
+		if serverDNSName != "" {
+			template.DNSNames = []string{serverDNSName}
+		}
 	}
 	raw, err := x509.CreateCertificate(rand.Reader, template, ca, &key.PublicKey, caKey)
 	if err != nil {
@@ -256,6 +260,10 @@ data:
 }
 
 func generateTLSMaterials(directory string) (*tlsMaterials, error) {
+	return generateTLSMaterialsWithDNS(directory, "")
+}
+
+func generateTLSMaterialsWithDNS(directory, serverDNSName string) (*tlsMaterials, error) {
 	if directory == "" {
 		return nil, errors.New("TLS material directory is required")
 	}
@@ -295,14 +303,14 @@ func generateTLSMaterials(directory string) (*tlsMaterials, error) {
 	for _, generation := range []string{"a", "b"} {
 		materials.servers[generation], err = generateLeaf(
 			"Edgion external ExtProc server "+strings.ToUpper(generation), x509.ExtKeyUsageServerAuth,
-			serverCA, serverCAKey, now,
+			serverCA, serverCAKey, now, serverDNSName,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("generate server leaf %s: %w", generation, err)
 		}
 		materials.clients[generation], err = generateLeaf(
 			"Edgion external ExtProc client "+strings.ToUpper(generation), x509.ExtKeyUsageClientAuth,
-			clientCA, clientCAKey, now,
+			clientCA, clientCAKey, now, "",
 		)
 		if err != nil {
 			return nil, fmt.Errorf("generate client leaf %s: %w", generation, err)
@@ -1606,12 +1614,16 @@ func writeJSON(w http.ResponseWriter, code int, value any) {
 }
 
 func validateListenAddress(raw string) error {
+	return validateListenAddressForMode(raw, false)
+}
+
+func validateListenAddressForMode(raw string, allowClusterListen bool) error {
 	host, port, err := net.SplitHostPort(raw)
 	if err != nil {
 		return fmt.Errorf("invalid listen address %q: %w", raw, err)
 	}
-	if host != "127.0.0.1" {
-		return fmt.Errorf("listen address %q must use literal 127.0.0.1", raw)
+	if host != "127.0.0.1" && !(allowClusterListen && host == "0.0.0.0") {
+		return fmt.Errorf("listen address %q must use literal 127.0.0.1 or an explicitly enabled cluster wildcard", raw)
 	}
 	if port == "" {
 		return fmt.Errorf("listen address %q has no port", raw)
@@ -1637,11 +1649,13 @@ func listenBoth(grpcAddress, adminAddress string) (net.Listener, net.Listener, e
 }
 
 type runOptions struct {
-	grpcAddress       string
-	adminAddress      string
-	tlsAddress        string
-	mtlsAddress       string
-	materialDirectory string
+	grpcAddress        string
+	adminAddress       string
+	tlsAddress         string
+	mtlsAddress        string
+	materialDirectory  string
+	allowClusterListen bool
+	serverDNSName      string
 }
 
 func run(ctx context.Context, grpcAddress, adminAddress string) error {
@@ -1666,15 +1680,15 @@ func runWithOptions(ctx context.Context, options runOptions) error {
 	if err := verifyEnvoyModuleVersion(); err != nil {
 		return err
 	}
-	if err := validateListenAddress(options.grpcAddress); err != nil {
+	if err := validateListenAddressForMode(options.grpcAddress, options.allowClusterListen); err != nil {
 		return err
 	}
-	if err := validateListenAddress(options.adminAddress); err != nil {
+	if err := validateListenAddressForMode(options.adminAddress, options.allowClusterListen); err != nil {
 		return err
 	}
 	for name, address := range map[string]string{"TLS": options.tlsAddress, "mTLS": options.mtlsAddress} {
 		if address != "" {
-			if err := validateListenAddress(address); err != nil {
+			if err := validateListenAddressForMode(address, options.allowClusterListen); err != nil {
 				return fmt.Errorf("%s listener: %w", name, err)
 			}
 		}
@@ -1686,7 +1700,7 @@ func runWithOptions(ctx context.Context, options runOptions) error {
 	var materials *tlsMaterials
 	var err error
 	if tlsEnabled {
-		materials, err = generateTLSMaterials(options.materialDirectory)
+		materials, err = generateTLSMaterialsWithDNS(options.materialDirectory, options.serverDNSName)
 		if err != nil {
 			return err
 		}
@@ -1792,21 +1806,27 @@ func runWithOptions(ctx context.Context, options runOptions) error {
 }
 
 func main() {
-	grpcAddress := flag.String("grpc-listen", "", "loopback address for the ExtProc gRPC listener")
-	adminAddress := flag.String("admin-listen", "", "loopback address for the readiness and observation listener")
-	tlsAddress := flag.String("tls-listen", "", "optional loopback address for the TLS ExtProc gRPC listener")
-	mtlsAddress := flag.String("mtls-listen", "", "optional loopback address for the mTLS ExtProc gRPC listener")
+	grpcAddress := flag.String("grpc-listen", "", "address for the ExtProc gRPC listener")
+	adminAddress := flag.String("admin-listen", "", "address for the readiness and observation listener")
+	tlsAddress := flag.String("tls-listen", "", "optional address for the TLS ExtProc gRPC listener")
+	mtlsAddress := flag.String("mtls-listen", "", "optional address for the mTLS ExtProc gRPC listener")
 	materialDirectory := flag.String("tls-material-dir", "", "work-directory path for generated TLS test material")
+	allowClusterListen := flag.Bool("allow-cluster-listen", false, "allow wildcard listeners in the isolated Kubernetes test fixture")
+	serverDNSName := flag.String("server-dns-name", "", "optional DNS name in generated server certificates")
 	flag.Parse()
 	if *grpcAddress == "" || *adminAddress == "" {
 		flag.Usage()
 		os.Exit(2)
+	}
+	if *serverDNSName != "" && !*allowClusterListen {
+		log.Fatal("--server-dns-name requires --allow-cluster-listen")
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	if err := runWithOptions(ctx, runOptions{
 		grpcAddress: *grpcAddress, adminAddress: *adminAddress, tlsAddress: *tlsAddress,
 		mtlsAddress: *mtlsAddress, materialDirectory: *materialDirectory,
+		allowClusterListen: *allowClusterListen, serverDNSName: *serverDNSName,
 	}); err != nil {
 		log.Printf("%s failed: %v", fixtureIdentity, err)
 		os.Exit(1)

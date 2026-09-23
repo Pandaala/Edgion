@@ -12,6 +12,7 @@ PORTS_CONFIG="${TEMP_DIR}/ports.json"
 BASE_DYNAMIC_MANIFEST="${TEMP_DIR}/base-dynamic-scenarios.tsv"
 CLUSTER_DYNAMIC_MANIFEST="${TEMP_DIR}/cluster-dynamic-scenarios.tsv"
 ENDPOINT_DYNAMIC_MANIFEST="${TEMP_DIR}/endpoint-dynamic-scenarios.tsv"
+EXTERNAL_DYNAMIC_MANIFEST="${TEMP_DIR}/external-dynamic-scenarios.tsv"
 FAKE_ENDPOINT_INVENTORY="${TEMP_DIR}/fake-endpoint-inventory.sh"
 SYSTEM_TAR="$(command -v tar)"
 
@@ -61,6 +62,7 @@ EOF
 write_fixture "${SAFE_CONF}/EdgionPlugins/BasicAuth/DynamicTest/initial/resource.yaml" "basic-auth-k8s"
 write_fixture "${SAFE_CONF}/EdgionPlugins/BasicAuth/DynamicTest/initial_grouped/resource.yaml" "basic-auth-grouped-k8s"
 write_fixture "${SAFE_CONF}/EdgionPlugins/RateLimitLocal/DynamicTest/initial/resource.yaml" "rate-limit-k8s"
+write_fixture "${SAFE_CONF}/EdgionPlugins/ExtProc/DynamicTest/initial/resource.yaml" "ext-proc-k8s"
 printf '{"current_max":1,"suites":{}}\n' > "${PORTS_CONFIG}"
 cat > "${BASE_DYNAMIC_MANIFEST}" <<'EOF'
 # scenario_id	k8s_conf_path	reset_path	kubectl_resource	gateway_kind	namespace	name
@@ -69,6 +71,11 @@ BasicAuthDynamicGrouped	EdgionPlugins/BasicAuth/DynamicTest	initial_grouped	edgi
 RateLimitLocalDynamic	EdgionPlugins/RateLimitLocal/DynamicTest	initial	edgionplugins.edgion.io	edgionplugins	edgion-default	rate-limit-dynamic
 EOF
 export DYNAMIC_MANIFEST="${BASE_DYNAMIC_MANIFEST}"
+
+cat > "${EXTERNAL_DYNAMIC_MANIFEST}" <<'EOF'
+# scenario_id	k8s_conf_path	reset_path	kubectl_resource	gateway_kind	namespace	name
+ExtProcTlsPolicyRecovery	EdgionPlugins/ExtProc/DynamicTest	initial	edgionplugins.edgion.io	edgionplugins	edgion-default	ext-proc-k8s
+EOF
 
 cat > "${CLUSTER_DYNAMIC_MANIFEST}" <<'EOF'
 # scenario_id	k8s_conf_path	reset_path	kubectl_resource	gateway_kind	namespace	name
@@ -282,6 +289,17 @@ fi
 assert_contains "${TEMP_DIR}/missing-registry.log" "dynamic registry does not contain RateLimitLocalDynamic"
 assert_not_contains "${KUBECTL_LOG}" "STAGED:"
 assert_not_contains "${KUBECTL_LOG}" "RUN:"
+
+: > "${KUBECTL_LOG}"
+if PATH="${FAKE_BIN}:${PATH}" POD=fake-pod KUBECTL_LOG="${KUBECTL_LOG}" PORTS_CONFIG="${PORTS_CONFIG}" \
+  DYNAMIC_MANIFEST="${EXTERNAL_DYNAMIC_MANIFEST}" FAKE_DYNAMIC_REGISTRY="ExtProcTlsPolicyRecovery" \
+  SYNC_TIMEOUT_SECONDS=1 SYNC_POLL_INTERVAL_SECONDS=1 \
+  "${RUNNER}" --conf-root "${SAFE_CONF}" --scenario ExtProcTlsPolicyRecovery \
+  > "${TEMP_DIR}/missing-external-processor.log" 2>&1; then
+  fail "external processor scenario ran without a ready processor Pod"
+fi
+assert_contains "${TEMP_DIR}/missing-external-processor.log" "no ready independent ExtProc processor Pod"
+assert_not_contains "${KUBECTL_LOG}" "RUN:ExtProcTlsPolicyRecovery"
 
 : > "${KUBECTL_LOG}"
 if PATH="${FAKE_BIN}:${PATH}" POD=fake-pod KUBECTL_LOG="${KUBECTL_LOG}" PORTS_CONFIG="${PORTS_CONFIG}" \

@@ -4,6 +4,46 @@ use crate::framework::TestContext;
 use serde_json::Value;
 use std::time::{Duration, Instant};
 
+/// Select this Controller's local status from the Kubernetes envelope, or
+/// return the native status used by filesystem and etcd integration tests.
+pub fn controller_local_status<'a>(status: &'a Value, controller_name: &str) -> Option<&'a Value> {
+    match status["controllers"].as_array() {
+        Some(controllers) => controllers
+            .iter()
+            .find(|entry| entry["controllerName"] == controller_name)
+            .map(|entry| &entry["status"]),
+        None => Some(status),
+    }
+}
+
+#[cfg(test)]
+mod controller_status_tests {
+    use super::controller_local_status;
+    use serde_json::json;
+
+    #[test]
+    fn selects_only_the_matching_controller_and_preserves_native_status() {
+        let native = json!({"conditions": [{"type": "Accepted", "status": "True"}]});
+        assert_eq!(
+            controller_local_status(&native, "edgion.io/gateway-controller"),
+            Some(&native)
+        );
+
+        let partitioned = json!({"controllers": [
+            {"controllerName": "foreign.example/controller", "status": {"conditions": []}},
+            {"controllerName": "edgion.io/gateway-controller", "status": native}
+        ]});
+        assert_eq!(
+            controller_local_status(&partitioned, "edgion.io/gateway-controller"),
+            Some(&partitioned["controllers"][1]["status"])
+        );
+        assert_eq!(
+            controller_local_status(&partitioned, "missing.example/controller"),
+            None
+        );
+    }
+}
+
 /// Route namespace used by the DeniedBackendRef fixtures in the selected topology.
 /// The local fixtures use edgion-test -> backend, while Kubernetes fixtures use
 /// edgion-default -> edgion-backend. Never probe another namespace on a 404: a

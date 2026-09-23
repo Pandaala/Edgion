@@ -148,6 +148,10 @@ if [[ -n "${CONTROLLER_IMAGE}" ]]; then
 fi
 
 echo "[4/5] Apply gateway"
+kubectl create configmap edgion-test-wasm \
+  --namespace edgion-system \
+  --from-file="header_demo.wasm=${PROJECT_ROOT}/edgion-tests/wasm/artifacts/header_demo.wasm" \
+  --dry-run=client -o yaml | kubectl apply -f -
 kubectl apply -f "$K8S_DEPLOY_ROOT/gateway/"
 if [[ -n "${GATEWAY_IMAGE}" ]]; then
   echo "Override gateway image: ${GATEWAY_IMAGE}"
@@ -198,6 +202,7 @@ if [[ "${SKIP_TEST}" != "true" ]]; then
     kubectl set image deployment/edgion-test-server -n edgion-deleg-dyn test-server="${TEST_SERVER_IMAGE}"
     kubectl set image deployment/edgion-test-server -n edgion-grpc-deleg-dyn test-server="${TEST_SERVER_IMAGE}"
     kubectl set image deployment/edgion-test-server -n "${BACKEND_TEST_NAMESPACE}" test-server="${TEST_SERVER_IMAGE}" || true
+    kubectl set image deployment/ext-proc-external -n edgion-test processor="${TEST_SERVER_IMAGE}"
   fi
 
   if [[ -n "${TEST_CLIENT_IMAGE}" ]]; then
@@ -238,6 +243,7 @@ if [[ -n "${PULL_POLICY_OVERRIDE}" ]]; then
   set_pull_policy_if_exists "edgion-test" "edgion-test-client" "${PULL_POLICY_OVERRIDE}"
   if [[ "${SKIP_TEST}" != "true" ]]; then
     set_pull_policy_if_exists "edgion-test" "edgion-test-server" "${PULL_POLICY_OVERRIDE}"
+    set_pull_policy_if_exists "edgion-test" "ext-proc-external" "${PULL_POLICY_OVERRIDE}"
     set_pull_policy_if_exists "edgion-default" "edgion-test-server" "${PULL_POLICY_OVERRIDE}"
     set_pull_policy_if_exists "edgion-deleg-dyn" "edgion-test-server" "${PULL_POLICY_OVERRIDE}"
     set_pull_policy_if_exists "edgion-grpc-deleg-dyn" "edgion-test-server" "${PULL_POLICY_OVERRIDE}"
@@ -255,6 +261,7 @@ if [[ "${WAIT_READY}" == "true" ]]; then
   if [[ "${SKIP_TEST}" != "true" ]]; then
     echo "Waiting test-server rollout (edgion-test)..."
     rollout_if_exists "edgion-test" "edgion-test-server" "300s"
+    rollout_if_exists "edgion-test" "ext-proc-external" "300s"
 
     echo "Waiting test-server rollout (edgion-default)..."
     rollout_if_exists "edgion-default" "edgion-test-server" "300s"

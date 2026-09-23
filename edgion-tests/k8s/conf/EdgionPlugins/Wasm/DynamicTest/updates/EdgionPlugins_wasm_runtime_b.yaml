@@ -1,0 +1,19 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: wasm-runtime-b
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - type: Wasm
+      enable: true
+      config:
+        source:
+          file: /usr/local/edgion/test-assets/header_demo.wasm
+        pluginConfig:
+          string: "http://edgion-test-server.edgion-test.svc.cluster.local:30040"
+        failOpen: false
+        timeoutMs: 1000
+        calloutAllowlist:
+          - "http://edgion-test-server.edgion-test.svc.cluster.local:30040"
+        calloutTimeoutMs: 3000

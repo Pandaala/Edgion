@@ -8,7 +8,7 @@ use tokio::net::{TcpStream, UdpSocket};
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use crate::metrics_helper::counter_value;
-use crate::suites::status::helpers::fetch_resource_status;
+use crate::suites::status::helpers::{controller_local_status, fetch_resource_status};
 use crate::suites::tls_route::probe_tls_policy;
 
 pub const MOCK_BODY: &str = "PP-MOCK-TERMINATED";
@@ -206,7 +206,9 @@ async fn source_status(ctx: &TestContext, invalid: bool) -> Result<()> {
         let resource = fetch_resource_status(ctx, "EdgionPlugins", "edgion-test", name)
             .await
             .map_err(anyhow::Error::msg)?;
-        let conditions = resource["status"]["conditions"]
+        let local_status = controller_local_status(&resource["status"], "edgion.io/gateway-controller")
+            .context("source status has no Edgion controller observation")?;
+        let conditions = local_status["conditions"]
             .as_array()
             .context("source status has no conditions")?;
         ensure!(

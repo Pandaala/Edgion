@@ -1,0 +1,23 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: ext-proc-external-tls
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: ExtProc
+      config:
+        grpcService:
+          target: ext-proc-external.edgion-test.svc.cluster.local:30046
+          timeoutMs: 10000
+          tls:
+            enabled: true
+            validation:
+              caCertificateRefs:
+                - kind: Secret
+                  name: ext-proc-external-server-ca
+        processingMode:
+          requestHeaderMode: SEND
+          responseHeaderMode: SEND
+        failureModeAllow: false

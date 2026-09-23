@@ -38,6 +38,7 @@ BINARIES="gateway controller"
 # (formerly under examples/, now moved into edgion-tests). Built only via the
 # dedicated --test-images mode, never alongside the standard images.
 TEST_BINARIES="test_server test_client"
+TEST_SERVER_AUXILIARY_BINARIES="ext_proc_external_processor"
 TEST_CLIENT_AUXILIARY_BINARIES="cache_residue"
 
 # =============================================================================
@@ -456,6 +457,7 @@ compile_test_binaries() {
     local arch_info
     arch_info=$(get_arch_info "${arch}")
     IFS=':' read -r platform target suffix <<< "${arch_info}"
+    local bin_path="target/${target}/release"
     local builder_tag
     builder_tag=$(builder_image_tag "${platform}")
 
@@ -499,6 +501,13 @@ compile_test_binaries() {
         log_error "Test binaries compilation failed for ${arch}"
         exit 1
     fi
+
+    docker run --rm \
+        --platform "${platform}" \
+        -v "${PROJECT_DIR}":/project \
+        -w /project/edgion-tests/integration/fixtures/ext_proc_external \
+        "${builder_tag}" \
+        go build -mod=readonly -trimpath -o "/project/${bin_path}/ext_proc_external_processor" .
 
     log_success "Compiled test binaries for ${arch}"
 }
@@ -587,6 +596,8 @@ build_test_images() {
         if [[ "${testbin}" == "test_client" ]]; then
             extra_packages="curl bash"
             auxiliary_binaries="${TEST_CLIENT_AUXILIARY_BINARIES}"
+        elif [[ "${testbin}" == "test_server" ]]; then
+            auxiliary_binaries="${TEST_SERVER_AUXILIARY_BINARIES}"
         fi
 
         log_info "Building ${testbin} image for ${arch}..."
