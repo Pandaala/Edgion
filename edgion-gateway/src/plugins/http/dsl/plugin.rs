@@ -205,6 +205,58 @@ mod tests {
     }
 
     #[test]
+    fn builtin_argument_capacity_has_controller_gateway_parity() {
+        for count in [255, 256, 257] {
+            let source = format!("log_fmt(\"{}\"{})", "{}".repeat(count - 1), ", nil".repeat(count - 1));
+            let config = config(&source);
+            if count == 255 {
+                assert!(config.compile_and_validate().is_ok());
+                assert!(DslPlugin::from_config(&config).is_some());
+                assert!(DslPlugin::from_config_response(&config).is_some());
+            } else {
+                let error = config.compile_and_validate().unwrap_err();
+                assert!(
+                    error.contains("builtin call exceeds maximum argument count (255)"),
+                    "{error}"
+                );
+                assert_eq!(DslPlugin::resolve_parts(&config).err().unwrap(), error);
+                assert!(DslPlugin::from_config(&config).is_none());
+                assert!(DslPlugin::from_config_response(&config).is_none());
+            }
+        }
+    }
+
+    #[test]
+    fn truncated_builtin_bytecode_is_rejected_by_both_factories() {
+        use edgion_dsl::bytecode::{BuiltinId, OpCode};
+
+        let mut config = config(&format!("log_fmt(\"{}\"{})", "{}".repeat(254), ", nil".repeat(254)));
+        let original = config.compile_and_validate().unwrap();
+        for argc in [0, 1] {
+            let mut script = original.clone();
+            for op in &mut script.code {
+                if let OpCode::CallBuiltin(BuiltinId::LogFmt, count) = op {
+                    *count = argc;
+                }
+            }
+            // Bytecode has priority even when valid source is also supplied.
+            config.bytecode = Some(script.serialize_base64().unwrap());
+            let error = config.compile_and_validate().unwrap_err();
+            assert!(
+                error.contains(if argc == 0 {
+                    "expects 1 to 255"
+                } else {
+                    "operand stack is not empty"
+                }),
+                "{error}"
+            );
+            assert_eq!(DslPlugin::resolve_parts(&config).err().unwrap(), error);
+            assert!(DslPlugin::from_config(&config).is_none());
+            assert!(DslPlugin::from_config_response(&config).is_none());
+        }
+    }
+
+    #[test]
     fn standalone_factories_enforce_plugin_log_name_capacity() {
         assert_eq!(DslConfig::MAX_NAME_BYTES, crate::plugins::runtime::log::NAME_CAPACITY);
 

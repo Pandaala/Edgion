@@ -9,6 +9,8 @@ use super::error::ValidationError;
 use super::json_path::DefiniteJsonPath;
 use super::parser::parse_program;
 
+mod stack;
+
 const MAX_REGEX_PATTERN_LEN: usize = 1024;
 
 /// Validation limits for compiled scripts
@@ -450,6 +452,14 @@ impl Validator {
             }
         }
 
+        // Only analyze structurally valid, instruction-bounded bytecode. This
+        // checks actual operand flow rather than trusting declared call counts.
+        if errors.is_empty() {
+            if let Err(error) = stack::validate(&script.code) {
+                errors.push(error);
+            }
+        }
+
         errors
     }
 }
@@ -705,9 +715,11 @@ mod tests {
             (BuiltinId::RedisSet, 3),
             (BuiltinId::RedisSet, 4),
         ] {
+            let mut code = vec![OpCode::LoadNil; usize::from(argc)];
+            code.extend([OpCode::CallBuiltin(builtin, argc), OpCode::Pop, OpCode::ReturnNext]);
             let script = CompiledScript {
                 version: BYTECODE_VERSION,
-                code: vec![OpCode::CallBuiltin(builtin, argc), OpCode::ReturnNext],
+                code,
                 constants: vec![],
                 local_count: 0,
                 max_loop_depth: 0,
@@ -716,7 +728,7 @@ mod tests {
             };
             let errors = Validator::new(ValidationLimits::default()).validate(&script);
             assert!(
-                !errors.iter().any(|error| error.to_string().contains("expects")),
+                errors.is_empty(),
                 "valid boundary rejected for {builtin:?}/{argc}: {errors:?}"
             );
         }
@@ -930,7 +942,12 @@ mod tests {
     fn json_select_script(entries: Vec<JsonSelectEntry>) -> CompiledScript {
         CompiledScript {
             version: BYTECODE_VERSION,
-            code: vec![OpCode::JsonSelect(0), OpCode::ReturnNext],
+            code: vec![
+                OpCode::CallBuiltin(BuiltinId::ReqBody, 0),
+                OpCode::JsonSelect(0),
+                OpCode::Pop,
+                OpCode::ReturnNext,
+            ],
             constants: vec![Constant::JsonSelect(entries)],
             local_count: 0,
             max_loop_depth: 0,

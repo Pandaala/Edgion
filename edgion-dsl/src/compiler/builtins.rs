@@ -1,14 +1,19 @@
 //! Namespace method resolution and builtin argument arity table
 
-use super::super::bytecode::BuiltinId;
+use super::super::bytecode::{BuiltinId, MAX_BUILTIN_ARGS};
+use super::super::error::CompileError;
 use std::fmt;
+
+/// Check capacity before compiling operands, so no call can truncate its count.
+pub(super) fn checked_builtin_argc(actual: usize) -> Result<u8, CompileError> {
+    u8::try_from(actual).map_err(|_| CompileError::new("builtin call exceeds maximum argument count (255)"))
+}
 
 /// Canonical argument-count rule shared by source compilation and bytecode validation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum BuiltinArity {
     Exact(usize),
     RangeInclusive { min: usize, max: usize },
-    Any,
 }
 
 impl BuiltinArity {
@@ -16,7 +21,6 @@ impl BuiltinArity {
         match self {
             Self::Exact(expected) => actual == expected,
             Self::RangeInclusive { min, max } => (min..=max).contains(&actual),
-            Self::Any => true,
         }
     }
 }
@@ -26,7 +30,6 @@ impl fmt::Display for BuiltinArity {
         match self {
             Self::Exact(expected) => write!(formatter, "{expected}"),
             Self::RangeInclusive { min, max } => write!(formatter, "{min} to {max}"),
-            Self::Any => formatter.write_str("any number of"),
         }
     }
 }
@@ -118,7 +121,7 @@ pub(super) fn resolve_namespace_method(namespace: &str, method: &str) -> Option<
 
 /// Argument-count rule for each builtin.
 pub(crate) fn builtin_arity(id: &BuiltinId) -> BuiltinArity {
-    use BuiltinArity::{Any, Exact, RangeInclusive};
+    use BuiltinArity::{Exact, RangeInclusive};
 
     match id {
         // req.* read — 0-arg (field access)
@@ -195,7 +198,10 @@ pub(crate) fn builtin_arity(id: &BuiltinId) -> BuiltinArity {
         }
         BuiltinId::Range => Exact(2),
 
-        BuiltinId::LogFmt => Any,
+        BuiltinId::LogFmt => RangeInclusive {
+            min: 1,
+            max: MAX_BUILTIN_ARGS,
+        },
 
         BuiltinId::HttpCall => RangeInclusive { min: 3, max: 5 },
 

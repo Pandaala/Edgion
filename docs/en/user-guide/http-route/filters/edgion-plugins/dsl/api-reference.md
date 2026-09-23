@@ -2204,6 +2204,27 @@ log("processing request for user: " + to_str(user))
 
 ---
 
+### log_fmt
+
+**Signature**: `log_fmt(template_literal, value1, ...)` → `Nil`
+
+Appends a formatted entry to the current request's plugin access log. The template
+must be a string literal, with one `{}` placeholder per value. Values pass through
+the configured sensitive-data masking; literal template text is not masked.
+
+Every builtin call is limited to 255 total arguments and must also satisfy its
+function-specific argument count. For `log_fmt`, this means one template plus at
+most 254 values. Excess arguments are rejected during compilation, including
+configuration reload. `maxStackDepth` is a separate execution limit: raising it
+does not increase the argument capacity. Precompiled bytecode is also checked for
+valid argument counts and consistent operand-stack heights before execution.
+
+```
+log_fmt("user {}", req.header("X-User-Id"))
+```
+
+---
+
 ### log_warn
 
 **Signature**: `log_warn(msg)` → `Nil`
@@ -2319,6 +2340,7 @@ if sig == nil {
 | `uuid()` | Utility | `Str` | 0 |
 | `range(start, end)` | Utility | `List` | 2 |
 | `log(msg)` | Utility | `Nil` | 1 |
+| `log_fmt(template_literal, value1, ...)` | Utility | `Nil` | 1–255 |
 | `log_warn(msg)` | Utility | `Nil` | 1 |
 | `log_error(msg)` | Utility | `Nil` | 1 |
 

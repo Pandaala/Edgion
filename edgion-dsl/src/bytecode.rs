@@ -11,6 +11,8 @@ use serde::{Deserialize, Serialize};
 /// payloads are intentionally rejected so they can never execute with
 /// different Body or stack semantics.
 pub const BYTECODE_VERSION: u16 = 5;
+/// Maximum argument count represented exactly by `CallBuiltin`.
+pub const MAX_BUILTIN_ARGS: usize = u8::MAX as usize;
 /// Hard ceiling for one static JSON multi-select plan.
 pub const JSON_SELECT_MAX_ENTRIES: usize = 64;
 /// Maximum UTF-8 byte length of one JSON multi-select output name.
@@ -465,6 +467,21 @@ impl CompiledScript {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn builtin_argument_capacity_rejects_out_of_range_wire_counts() {
+        use base64::Engine;
+        for count in [-1, 256, 257, 65535] {
+            let payload = serde_json::json!({
+                "version": super::BYTECODE_VERSION,
+                "code": [{"CallBuiltin": ["LogFmt", count]}],
+                "constants": [], "local_count": 0, "max_loop_depth": 0
+            });
+            let encoded = base64::engine::general_purpose::STANDARD.encode(payload.to_string());
+            let error = super::CompiledScript::deserialize_base64(&encoded).unwrap_err();
+            assert!(error.contains("u8"), "{error}");
+        }
+    }
+
     use super::*;
 
     fn minimal_script() -> CompiledScript {

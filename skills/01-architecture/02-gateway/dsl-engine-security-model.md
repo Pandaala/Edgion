@@ -16,8 +16,8 @@ The compile-time layers (parser, validator, compiler, bytecode loader) now live 
 | Layer | Where it runs | What it caps | Code |
 |---|---|---|---|
 | Parser | source → AST | source bytes, AST node count, parse-step budget | `edgion-dsl/src/parser/mod.rs:17,32-46,80-86,96-100` |
-| Validator (post-decode) | bytecode → AST-shaped program | instruction count, local-var count, constant pool count & bytes, single-string-constant length, observed loop nest depth, `MakeMap(n)` operand, regex/DFA rebuild, definite JSONPath validation | `edgion-dsl/src/validator.rs` |
-| Compiler | AST → bytecode | regex pattern length, literal-pattern enforcement, streaming-DFA validation, definite literal JSONPath enforcement | `edgion-dsl/src/compiler/` |
+| Validator (post-decode) | bytecode → validated program | instruction count, local-var count, constant pool count & bytes, single-string-constant length, observed loop nest depth, `MakeMap(n)` operand, regex/DFA rebuild, definite JSONPath validation, builtin arity, reachable operand-stack heights | `edgion-dsl/src/validator.rs`, `edgion-dsl/src/validator/stack.rs` |
+| Compiler | AST → bytecode | regex pattern length, literal-pattern enforcement, streaming-DFA validation, definite literal JSONPath enforcement, exact builtin argument encoding | `edgion-dsl/src/compiler/` |
 | Bytecode load | decoded base64 → struct | total decoded bytes ≤ 256 KB | `edgion-dsl/src/bytecode.rs:13,285-301` |
 | VM (per-instruction) | runtime | steps, calls, stack depth, loops, string len, list len, map size | `lang/vm.rs:34-95,132-176` |
 | VM init (regex precompile) | script load | per-pattern DFA memory ≤ 1 MiB | `lang/vm.rs:199-235` |
@@ -95,6 +95,7 @@ Adding a new runtime limit requires:
 | Constant / field | Default | Where |
 |---|---|---|
 | `MAX_SOURCE_LEN` | 64 KB | `edgion-dsl/src/parser/mod.rs:17` |
+| `MAX_BUILTIN_ARGS` | 255 total arguments | `edgion-dsl/src/bytecode.rs`, `compiler/builtins.rs::checked_builtin_argc`; `log_fmt` includes its literal template in this count |
 | Parse-step budget | 50_000 | `edgion-dsl/src/parser/mod.rs:26,41` (`parse_budget`) |
 | `max_ast_nodes` | 2_000 | `edgion-dsl/src/parser/mod.rs:34,45` |
 | `max_nesting_depth` (parser) | 64 | `edgion-dsl/src/parser/mod.rs:30,43` — parser stack-overflow guard, separate from the compiler's `max_loop_depth` |
@@ -108,6 +109,12 @@ Adding a new runtime limit requires:
 | `MAX_DECODED_BYTECODE_LEN` | 256 KB | `edgion-dsl/src/bytecode.rs:13,297-301` |
 
 These constants are deliberately **not** runtime-configurable. They protect the loader/parser themselves; exposing them to operator config would invite the bytecode-format attack surface to grow with deployment time.
+
+After structural validation, operand-stack analysis rejects reachable underflow,
+inconsistent heights at branch/loop joins, and extra operands at returns or
+fallthrough. It runs only while loading bytecode, with linear time and memory
+in the bounded instruction count. This does not prove value types or literal
+template provenance; see the [argument and stack regression guard](../../04-review/dsl/regression-guards/builtin-argument-capacity-and-stack-validation.md).
 
 ## 4. Map and List size caps — Point 02 result
 
