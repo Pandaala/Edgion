@@ -274,7 +274,13 @@ fn run(ctx: ScenarioCtx) -> ScenarioRunFuture {
         }
         .await;
 
-        let cleanup = remove_routes_and_gateway(&ctx).await;
+        let cleanup = async {
+            if result.is_err() {
+                ctx.apply_dir("initial").await?;
+            }
+            remove_routes_and_gateway(&ctx).await
+        }
+        .await;
         match (result, cleanup) {
             (Ok(()), Ok(())) => Ok(()),
             (Err(error), Ok(())) => Err(error),
