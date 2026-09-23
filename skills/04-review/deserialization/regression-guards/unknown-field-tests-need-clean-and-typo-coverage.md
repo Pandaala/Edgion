@@ -45,6 +45,14 @@ corrected, the advisory semantics and schema strictness are not relaxed. Prefer 
 literal well inside the provider bounds (`3s`, matching every other redis fixture in
 the repository) over one sitting exactly on `REDIS_MAX_CONNECT_TIMEOUT`.
 
+The LinkSys Admin create path also needs a clean-document assertion beside the
+typo create/update assertions. `link_sys_body("clean", false)` exercises a valid
+Redis `timeout.connect`; the create response must be `201 Created`, have empty
+`ApiResponse::warnings`, and omit the `warnings` key when serialized. This
+guards the Admin response path against false positives; the conf-center clean
+fixture test alone does not cover that response. This is test coverage, not a
+change to the advisory write policy.
+
 Re-evaluation trigger: whenever a duration, numeric, or enum field referenced by an
 unknown-field fixture changes its typed representation, re-run the clean and typo
 tests for that variant and update the fixture literal rather than loosening the schema.
@@ -53,3 +61,4 @@ tests for that variant and update the fixture literal rather than loosening the 
 
 - `UFD-06` — 2026-08-22.
 - `linksys-timeout-advisory-test-fixtures` — 2026-09-21.
+- `linksys-admin-clean-document-assertion` — LinkSys Admin clean create coverage.

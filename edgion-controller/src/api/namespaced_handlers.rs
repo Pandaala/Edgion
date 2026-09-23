@@ -1342,4 +1342,21 @@ mod unknown_field_warning_tests {
         .expect("LinkSys advisory must not reject update");
         assert_eq!(updated.0.warnings, ["config.timeout.conect"]);
     }
+
+    #[tokio::test]
+    async fn link_sys_clean_create_has_no_warnings() {
+        let (state, _tmp) = make_fs_state().await;
+        let (status, _headers, body) = create_namespaced(
+            State(state),
+            Path(("LinkSys".to_string(), "default".to_string())),
+            link_sys_body("clean", false),
+        )
+        .await
+        .expect("clean LinkSys must create successfully");
+        assert_eq!(status, StatusCode::CREATED);
+        assert!(body.0.warnings.is_empty());
+
+        let serialized = serde_json::to_value(&body.0).expect("ApiResponse must serialize");
+        assert!(serialized.get("warnings").is_none());
+    }
 }
