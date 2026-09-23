@@ -9,6 +9,8 @@ use super::error::ValidationError;
 use super::json_path::DefiniteJsonPath;
 use super::parser::parse_program;
 
+mod stack;
+
 const MAX_REGEX_PATTERN_LEN: usize = 1024;
 
 /// Validation limits for compiled scripts
@@ -348,16 +350,22 @@ impl Validator {
         // arbitrarily-nested LoopInit/LoopEnd pairs, which the runtime would then execute.
         let mut loop_depth: i32 = 0;
         let mut max_observed_depth: i32 = 0;
+        let mut active_loops = Vec::new();
+        let mut loop_owners = Vec::with_capacity(code_len + 1);
         {
             for (i, op) in script.code.iter().enumerate() {
+                // A LoopInit index uniquely identifies its lexical parent chain.
+                loop_owners.push(active_loops.last().copied());
                 match op {
                     OpCode::LoopInit => {
+                        active_loops.push(i);
                         loop_depth += 1;
                         if loop_depth > max_observed_depth {
                             max_observed_depth = loop_depth;
                         }
                     }
                     OpCode::LoopEnd => {
+                        active_loops.pop();
                         loop_depth -= 1;
                         if loop_depth < 0 {
                             errors.push(ValidationError::new(format!(
@@ -375,10 +383,40 @@ impl Validator {
                     _ => {}
                 }
             }
+            loop_owners.push(active_loops.last().copied());
             if loop_depth != 0 {
                 errors.push(ValidationError::new(format!(
                     "unbalanced LoopInit/LoopEnd: {} LoopInit(s) without matching LoopEnd",
                     loop_depth
+                )));
+            }
+        }
+
+        // A jump must preserve lexical loop ownership, not only nesting
+        // depth. LoopEnd is still inside its loop at entry, so
+        // breaks and natural exits may target its cleanup instruction.
+        for (i, op) in script.code.iter().enumerate() {
+            let (offset, is_loop_back) = match op {
+                OpCode::Jump(offset) | OpCode::JumpIfFalse(offset) => (*offset, false),
+                OpCode::LoopBack(offset) => (*offset, true),
+                _ => continue,
+            };
+            let target = i as i64 + 1 + offset as i64;
+            if target < 0 || target as usize > code_len {
+                continue; // Already reported by the target-bound check.
+            }
+            let target = target as usize;
+            if is_loop_back {
+                if target >= i || loop_owners[i].is_none() || loop_owners[i] != loop_owners[target] {
+                    errors.push(ValidationError::new(format!(
+                        "LoopBack at instruction {} must target backward within the same innermost loop",
+                        i
+                    )));
+                }
+            } else if target <= i || loop_owners[i] != loop_owners[target] {
+                errors.push(ValidationError::new(format!(
+                    "jump at instruction {} must target forward within the same active loops",
+                    i
                 )));
             }
         }
@@ -411,6 +449,14 @@ impl Validator {
                         i, n, self.limits.max_map_size
                     )));
                 }
+            }
+        }
+
+        // Only analyze structurally valid, instruction-bounded bytecode. This
+        // checks actual operand flow rather than trusting declared call counts.
+        if errors.is_empty() {
+            if let Err(error) = stack::validate(&script.code, &script.constants) {
+                errors.push(error);
             }
         }
 
@@ -669,9 +715,11 @@ mod tests {
             (BuiltinId::RedisSet, 3),
             (BuiltinId::RedisSet, 4),
         ] {
+            let mut code = vec![OpCode::LoadNil; usize::from(argc)];
+            code.extend([OpCode::CallBuiltin(builtin, argc), OpCode::Pop, OpCode::ReturnNext]);
             let script = CompiledScript {
                 version: BYTECODE_VERSION,
-                code: vec![OpCode::CallBuiltin(builtin, argc), OpCode::ReturnNext],
+                code,
                 constants: vec![],
                 local_count: 0,
                 max_loop_depth: 0,
@@ -680,7 +728,7 @@ mod tests {
             };
             let errors = Validator::new(ValidationLimits::default()).validate(&script);
             assert!(
-                !errors.iter().any(|error| error.to_string().contains("expects")),
+                errors.is_empty(),
                 "valid boundary rejected for {builtin:?}/{argc}: {errors:?}"
             );
         }
@@ -894,7 +942,12 @@ mod tests {
     fn json_select_script(entries: Vec<JsonSelectEntry>) -> CompiledScript {
         CompiledScript {
             version: BYTECODE_VERSION,
-            code: vec![OpCode::JsonSelect(0), OpCode::ReturnNext],
+            code: vec![
+                OpCode::CallBuiltin(BuiltinId::ReqBody, 0),
+                OpCode::JsonSelect(0),
+                OpCode::Pop,
+                OpCode::ReturnNext,
+            ],
             constants: vec![Constant::JsonSelect(entries)],
             local_count: 0,
             max_loop_depth: 0,

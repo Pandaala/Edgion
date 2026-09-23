@@ -545,6 +545,29 @@ PY
   wait_for_gateway_resource_version "${scenario_id}"
 }
 
+prepare_ext_proc_external() {
+  local processor_pod=""
+  local material_dir="/var/lib/edgion/ext-proc-external-tls"
+  kubectl rollout status deployment/ext-proc-external -n edgion-test --timeout=60s || return 1
+  processor_pod="$(
+    kubectl get pods -n edgion-test -l app=ext-proc-external \
+      --field-selector=status.phase=Running -o json \
+      | jq -r '[.items[] | select(.metadata.deletionTimestamp == null and
+          any(.status.conditions[]?; .type == "Ready" and .status == "True"))
+          | .metadata.name] | sort | first // empty'
+  )"
+  if [[ -z "${processor_pod}" ]]; then
+    echo "ERROR: no ready independent ExtProc processor Pod" >&2
+    return 1
+  fi
+  if ! kubectl exec -n edgion-test "${processor_pod}" -c processor -- \
+    cat "${material_dir}/ext-proc-external-server-ca.yaml" \
+    | kubectl apply --server-side --force-conflicts -f - >/dev/null; then
+    echo "ERROR: failed to install external ExtProc server CA Secret" >&2
+    return 1
+  fi
+}
+
 run_phase_endpoint_inventory() {
   local scenario_id="$1"
   local phase="$2"
@@ -661,6 +684,8 @@ run_scenario_with_phase_barriers() {
     EDGION_TEST_GATEWAY_ADMIN_URL="${GATEWAY_ADMIN_URL}" \
     EDGION_TEST_GATEWAY_CAPABILITIES="${GATEWAY_CAPABILITIES}" \
     EDGION_TEST_K8S_MODE=true \
+    EDGION_EXT_PROC_EXTERNAL_REQUIRED=1 \
+    EDGION_EXT_PROC_EXTERNAL_ADMIN_URL="http://ext-proc-external.edgion-test.svc.cluster.local:30045" \
     EDGION_TEST_DIRECT_ENDPOINT_IP="${DIRECT_ENDPOINT_IP}" \
     EDGION_TEST_DIRECT_UNREADY_ENDPOINT_IP="${DIRECT_UNREADY_ENDPOINT_IP}" \
     EDGION_TEST_REGION_BACKEND_IP="${REGION_BACKEND_IP}" \
@@ -914,7 +939,10 @@ for scenario_id in "${SELECTED_SCENARIOS[@]}"; do
   scenario_rc=0
   echo "@@DYNAMIC_START ${scenario_id}"
   mark_scenario_dirty "${scenario_id}"
-  if restore_scenario_initial "${scenario_id}"; then
+  if [[ "${scenario_id}" == "ExtProcTlsPolicyRecovery" ]]; then
+    prepare_ext_proc_external || scenario_rc=1
+  fi
+  if [[ "${scenario_rc}" -eq 0 ]] && restore_scenario_initial "${scenario_id}"; then
     mark_scenario_clean "${scenario_id}"
     mark_scenario_dirty "${scenario_id}"
     if [[ -f "${CONF_ROOT}/${SCENARIO_CONF_PATH}/endpoint-inventory.tsv" ]]; then
@@ -932,6 +960,8 @@ for scenario_id in "${SELECTED_SCENARIOS[@]}"; do
       EDGION_TEST_GATEWAY_ADMIN_URL="${GATEWAY_ADMIN_URL}" \
       EDGION_TEST_GATEWAY_CAPABILITIES="${GATEWAY_CAPABILITIES}" \
       EDGION_TEST_K8S_MODE=true \
+      EDGION_EXT_PROC_EXTERNAL_REQUIRED=1 \
+      EDGION_EXT_PROC_EXTERNAL_ADMIN_URL="http://ext-proc-external.edgion-test.svc.cluster.local:30045" \
       EDGION_TEST_DIRECT_ENDPOINT_IP="${DIRECT_ENDPOINT_IP}" \
       EDGION_TEST_DIRECT_UNREADY_ENDPOINT_IP="${DIRECT_UNREADY_ENDPOINT_IP}" \
       EDGION_TEST_REGION_BACKEND_IP="${REGION_BACKEND_IP}" \

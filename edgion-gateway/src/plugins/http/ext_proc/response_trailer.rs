@@ -260,15 +260,10 @@ fn validate_trailer_map(map: &HeaderMap, grpc: bool) -> Result<(), ()> {
 }
 
 /// Trailer-specific union of the ordinary proxy-managed header set and the
-/// platform trailer validator. The latter additionally forbids routing and
-/// proxy-authentication fields even on native H2/custom transports.
+/// platform trailer validator. The latter additionally forbids the routing
+/// field even on native H2/custom transports.
 fn is_forbidden_trailer_name(name: &str) -> bool {
-    super::mutation::is_protected_header(name)
-        || matches_ignore_ascii_case(name, &["host", "proxy-authenticate", "proxy-authorization"])
-}
-
-fn matches_ignore_ascii_case(value: &str, candidates: &[&str]) -> bool {
-    candidates.iter().any(|candidate| value.eq_ignore_ascii_case(candidate))
+    super::mutation::is_protected_header(name) || name.eq_ignore_ascii_case("host")
 }
 
 fn apply_mutation(

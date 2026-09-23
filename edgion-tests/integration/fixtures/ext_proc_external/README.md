@@ -27,7 +27,11 @@ Optional independent TLS listeners are enabled explicitly:
   --tls-material-dir /absolute/workdir/ext-proc-tls
 ```
 
-All four listen flags accept only a literal `127.0.0.1` address. The material
+By default, all four listen flags accept only a literal `127.0.0.1` address.
+The Kubernetes test Deployment opts into literal `0.0.0.0` listeners with
+`--allow-cluster-listen` and supplies its Service DNS name through
+`--server-dns-name` so both generated server certificates validate at that name.
+Other hostnames and listener addresses remain rejected. The material
 directory is required when either secure listener is enabled and must be an
 absolute path. It is created with mode `0700`; every generated PEM or YAML file
 has mode `0600`.
@@ -81,7 +85,7 @@ modes use only fixed fixture-owned values and never retain arbitrary headers.
 
 ## Admin API
 
-The separate loopback-only HTTP listener exposes:
+The separate HTTP listener exposes:
 
 - `GET /readyz`
 - `POST /v1/cases/{id}/reset` with an empty body

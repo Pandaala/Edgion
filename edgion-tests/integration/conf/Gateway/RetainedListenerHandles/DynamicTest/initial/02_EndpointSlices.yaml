@@ -1,0 +1,50 @@
+apiVersion: discovery.k8s.io/v1
+kind: EndpointSlice
+metadata:
+  name: retained-handles-http
+  namespace: edgion-test
+  labels:
+    kubernetes.io/service-name: retained-handles-http
+addressType: IPv4
+ports:
+  - name: http
+    port: 30001
+    protocol: TCP
+endpoints:
+  - addresses: ["127.0.0.1"]
+    conditions:
+      ready: true
+---
+apiVersion: discovery.k8s.io/v1
+kind: EndpointSlice
+metadata:
+  name: retained-handles-grpc
+  namespace: edgion-test
+  labels:
+    kubernetes.io/service-name: retained-handles-grpc
+addressType: IPv4
+ports:
+  - name: grpc
+    port: 30021
+    protocol: TCP
+endpoints:
+  - addresses: ["127.0.0.1"]
+    conditions:
+      ready: true
+---
+apiVersion: discovery.k8s.io/v1
+kind: EndpointSlice
+metadata:
+  name: retained-handles-tcp
+  namespace: edgion-test
+  labels:
+    kubernetes.io/service-name: retained-handles-tcp
+addressType: IPv4
+ports:
+  - name: tcp
+    port: 30010
+    protocol: TCP
+endpoints:
+  - addresses: ["127.0.0.1"]
+    conditions:
+      ready: true

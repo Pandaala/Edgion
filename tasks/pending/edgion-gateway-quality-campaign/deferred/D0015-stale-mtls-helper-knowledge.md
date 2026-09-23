@@ -1,7 +1,7 @@
 # D0015 — Stale mTLS Helper Knowledge
 
-- Status: ready-for-separate-task
-- Canonical task: `tasks/todo/update-stale-mtls-config-helper-knowledge.md`
+- Status: resolved
+- Knowledge destination: `skills/04-review/tls/regression-guards/mtls-config-reorder.md`
 - Discovered in: B0075
 
 ## Evidence
@@ -11,3 +11,7 @@
 ## Boundary
 
 Revalidate the mTLS ordering guard against current BoringSSL callback symbols, replace only stale helper ownership statements, and preserve its historical evidence and FIPS/mTLS ordering invariant.
+
+## Resolution
+
+The regression guard now identifies the removed Gateway Secret installer as historical and names the current shared compiled-identity installer. Its fail-close ordering and historical evidence remain intact.

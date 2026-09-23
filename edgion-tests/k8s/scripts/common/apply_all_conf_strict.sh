@@ -101,6 +101,9 @@ build_exclude_patterns() {
   patterns+=('/EdgionTls/mTLS/Secret_edge_mtls-server\.ya?ml$')
   patterns+=('/HTTPRoute/Backend/BackendTLS/Secret_backend-ca\.ya?ml$')
   patterns+=('/EdgionPlugins/HeaderCertAuth/01_Secret_default_header-cert-ca\.ya?ml$')
+  # The independent processor generates its CA after the test Pods start.
+  # The dynamic helper installs that Secret before applying this source plugin.
+  patterns+=('/EdgionPlugins/ExtProc/DynamicTest/initial/')
   patterns+=('/Gateway/PortConflict/Gateway_internal_conflict\.ya?ml$')
 
   local combined

@@ -120,7 +120,7 @@ spec:
 处理服务**不能**改动：
 
 - **伪 header**（`:method`、`:path`、`:status` 等）——防止篡改路由/方法。
-- **逐跳 / framing header**——`Content-Length`、`Transfer-Encoding`、`Connection`、`Keep-Alive`、`Upgrade`、`TE`、`Trailer`、`Proxy-Connection`。这些由代理自身管理；让外部服务设置它们会导致请求/响应走私。（对齐 Envoy 默认 `disallow_system_headers` 的做法。）
+- **逐跳 / framing header**——`Content-Length`、`Transfer-Encoding`、`Connection`、`Keep-Alive`、`Upgrade`、`TE`、`Trailer`、`Proxy-Connection`。这些请求侧限制保持不变。响应侧共享策略还拒绝 `Proxy-Authenticate` 和 `Proxy-Authorization`，trailer 保留额外校验。分帧及连接字段由代理管理。
 
 任何对受保护 header 的改动都会被丢弃并记入访问日志。
 
@@ -221,3 +221,9 @@ proto 是 `envoy.service.ext_proc.v3` 的裁剪但线协议兼容子集（字段
 - [ForwardAuth 插件](./forward-auth.md)
 - [Response Rewrite 插件](./response-rewrite.md)
 - [过滤器总览](../README.md)
+
+## 响应头策略
+
+响应、trailer 和本地回复修改使用共享策略，包括禁止 `Proxy-Authenticate` 和 `Proxy-Authorization`。请求头限制不变；trailer 专属校验及 gRPC 状态要求仍然适用。
+
+[响应头策略](../gateway-api/response-header-modifier.md#response-header-policy).

@@ -696,9 +696,8 @@ impl EdgionPlugin {
             EdgionPlugin::Canary(c) => c.validation_error(),
             EdgionPlugin::Wasm(c) => c.validation_error(),
             EdgionPlugin::RequestMirror(c) => c.validation_error(),
-            EdgionPlugin::RequestHeaderModifier(c) | EdgionPlugin::ResponseHeaderModifier(c) => {
-                c.validate().err().map(str::to_owned)
-            }
+            EdgionPlugin::RequestHeaderModifier(c) => c.validate().err().map(str::to_owned),
+            EdgionPlugin::ResponseHeaderModifier(c) => c.validate_response().err().map(str::to_owned),
             EdgionPlugin::RequestRedirect(config) => config.prepare().err().map(|error| error.to_string()),
             EdgionPlugin::UrlRewrite(config) => config.prepare().err().map(|error| error.to_string()),
         }

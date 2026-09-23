@@ -12,3 +12,8 @@ before applying a decision to current code.
 ## Review evidence
 
 - [Empty SSE data fields dispatch events](review-evidence/sse-empty-data-fields-dispatch-events.md)
+
+## Regression guards
+
+- [Window context follows emitted text](regression-guards/window-emitted-context.md)
+- [Window capacity admission precedes allocation](regression-guards/window-capacity-admission.md)

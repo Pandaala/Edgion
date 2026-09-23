@@ -318,6 +318,23 @@ mod tests {
     }
 
     #[test]
+    fn terminal_waf_status_matches_the_final_reply_contract() {
+        for status in [100, 101, 199, 200, 599, 600] {
+            let config = WafConfig {
+                rules: format!("SecRule REQUEST_URI \"@contains private\" \"id:1,phase:1,deny,status:{status}\"\n"),
+                mode: WafMode::On,
+                request_body: WafRequestBodyConfig::default(),
+                priority: 0,
+            };
+            assert_eq!(
+                config.validation_error().is_none(),
+                crate::http_status::is_valid_final_http_status(status),
+                "status {status}"
+            );
+        }
+    }
+
+    #[test]
     fn validation_errors_do_not_render_rule_content() {
         let config = WafConfig {
             rules: "SecRule private-(".to_string(),

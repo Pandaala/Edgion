@@ -25,6 +25,8 @@ before applying a decision to current code.
 
 ## Regression guards
 
+- [Builtin argument capacity and operand-stack validation](regression-guards/builtin-argument-capacity-and-stack-validation.md)
+
 - [DSL runtime-limit scalars use one resource-owned contract](regression-guards/runtime-limit-scalar-contract.md)
 
 - [Request methods preserve case](regression-guards/request-method-case-contract.md)
@@ -45,6 +47,7 @@ before applying a decision to current code.
 - [DSL regex constants: DFA size_limit / dfa_size_limit are capped at 1MB](regression-guards/dfa-size-limit.md)
 - [DSL and AI Guard regex replacement output is bounded during construction](regression-guards/bounded-regex-replacement.md)
 - [DSL `break` preserves the VM loop-counter stack](regression-guards/break-preserves-loop-counter-stack.md)
+- [DSL bytecode preserves lexical loop ownership](regression-guards/structured-bytecode-control-flow.md)
 - [DSL builtin output string limits](regression-guards/builtin-output-string-limit.md)
 - [DSL `http.call` response aggregation is bounded while streaming](regression-guards/http-call-full-body-read-before-truncate.md)
 - [`redis.get` / `redis.hget` / `redis.hgetall` values: silent truncation at `max_string_len` — RAISING IS NOT ACCEPTED](regression-guards/redis-read-values-truncate-to-max-string-len.md)

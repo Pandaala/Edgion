@@ -33,9 +33,9 @@ silently allow a denied response or leave the local reply incomplete:
    delivers the denial and the upstream connection is torn down.
 
 3. **A staged replacement must claim an ordinary final status before any
-   downstream write.** Runtime layers such as native WAF can surface a
-   disruptive `1xx` status even though `claim_final_response` accepts only
-   `200..=599`. A rejected claim returns a non-retryable `HTTPStatus(500)`;
+   downstream write.** A dynamic producer or invalid in-memory generation
+   could surface a disruptive `1xx` status even though `claim_final_response`
+   accepts only `200..=599`. A rejected claim returns a non-retryable `HTTPStatus(500)`;
    returning success would silently forward the upstream final response. The
    control-flow error is not attributed to backend outlier detection and does
    not mark `LocalReplyWritten` or `PluginResponseReplaced`.
@@ -133,19 +133,22 @@ a second write.
 | CONNECT answered 2xx / interim 1xx | refused (unchanged) | unit: `local_reply_refused_for_established_connect_tunnel`, `..._interim_informational` |
 | bare `ErrTerminateRequest` plugin result at the response stage (not DSL `terminate()`) | abort, 502 + `PluginTerminateWithoutResponse` | unit: `response_stage_naked_terminate_arms_the_abort` |
 | `grpc_error(8, ..)` at the response stage | abort, exact code 8 | unit: `response_stage_grpc_error_arms_the_abort_with_the_exact_status`; integration blocked, see `tasks/todo/integration-dslgrpcerror-item-never-runs.md` |
-| staged local reply with `1xx` or invalid status | abort before downstream commit, non-retryable 500 | unit: `invalid_response_local_reply_statuses_fail_closed_without_delivery_state`; wire: `WafDynamic` initial phase `waf_response_invalid_status_fails_closed` |
-| native WAF phase-3 disruption with `status:100` after an upstream 200 | client and request-level access log receive terminal 500; the upstream body is not forwarded and the attempt retains status 200 | integration: `waf_response_invalid_status_fails_closed` (`EdgionPlugins/Waf`) |
+| staged local reply with `1xx` or invalid status | abort before downstream commit, non-retryable 500 | unit: `invalid_response_local_reply_statuses_fail_closed_without_delivery_state`; the former WAF wire fixture now rejects the invalid status at compilation |
+| native WAF phase-3 disruption with valid `status:403` after an upstream 200 | client and request-level access log receive terminal 403; the upstream body is not forwarded and the attempt retains status 200 | integration: `waf_response_stage_denial_replaces_upstream` (`EdgionPlugins/Waf`) |
 | staged local reply after another final owner | control-flow abort; first written response remains authoritative | unit: `response_filter_rejects_pending_reply_after_an_existing_writer` |
 | empty H2 DSL local reply followed by abort/session drop | 502 with clean EOS, no reset or upstream content | `dsl_terminate_h2_local_reply_finishes_before_session_drop`; current results in the linked DSL regression guard |
 | empty H1 local reply | empty response with honest `Connection: close` and framing | `empty_local_reply_h1_preserves_close_and_framing`; current results in the linked DSL regression guard |
 
-## Closed follow-up
+## Historical wire evidence and current guard
 
-The native-WAF dynamic integration now exercises a header-isolated phase-3
-`deny,status:100` after an upstream 200. It verifies wire status 500, absence of
-the test backend's response markers, request-level access-log status 500, the
-preserved upstream status 200, and the exact response-header intervention
-summary (`rule_id:1003`, `status:100`). Run it with:
+The 2026-09-09 native-WAF dynamic integration exercised a phase-3
+`deny,status:100` after an upstream 200. It verified wire status 500, absence
+of backend response markers, request-level access-log status 500, and preserved
+upstream status 200. The WAF compiler now rejects that status before runtime;
+the current dynamic scenario tests valid response-stage replacement and
+invalid-update retention. The direct `pg_response_filter` unit test still
+checks fail-closed handling for an invalid staged reply. Run the current
+scenario with:
 
 ```bash
 ./edgion-tests/integration/scripts/integration/run_integration.sh --no-prepare -r EdgionPlugins -i Waf

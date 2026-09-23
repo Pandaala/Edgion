@@ -2000,7 +2000,7 @@ pub fn add_to_linker(linker: &mut Linker<HostState>) -> anyhow::Result<()> {
                 },
                 None => Vec::new(),
             };
-            let status = if (100..=599).contains(&status) {
+            let status = if (200..=599).contains(&status) {
                 status as u16
             } else {
                 500
@@ -2513,6 +2513,23 @@ mod tests {
         let lr = store.data().local_response.as_ref().expect("local response set");
         assert_eq!(lr.status, 403);
         assert_eq!(lr.body, b"denied");
+    }
+
+    #[test]
+    fn guest_local_response_uses_only_final_statuses() {
+        let (mut store, instance) = instantiate_allocation_guest();
+        let local = instance
+            .get_typed_func::<(i32, i32, i32, i32, i32), i32>(&mut store, "local")
+            .unwrap();
+        for status in [100, 101, 199, 200, 599, 600] {
+            assert_eq!(local.call(&mut store, (status, 0, 0, 0, 0)).unwrap(), STATUS_OK);
+            let expected = if (200..=599).contains(&status) {
+                status as u16
+            } else {
+                500
+            };
+            assert_eq!(store.data().local_response.as_ref().unwrap().status, expected);
+        }
     }
 
     /// A single payload larger than the byte budget is rejected, and the

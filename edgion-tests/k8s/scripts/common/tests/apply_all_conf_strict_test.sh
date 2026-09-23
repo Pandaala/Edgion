@@ -148,6 +148,7 @@ UNIQUE_ROOT="${TEMP_DIR}/unique"
 write_config_map "${UNIQUE_ROOT}/root.yaml" "root-unique" "root"
 write_config_map "${UNIQUE_ROOT}/Suite/nested.yaml" "nested-unique" "nested"
 write_config_map "${UNIQUE_ROOT}/EdgionPlugins/BasicAuth/DynamicTest/initial_grouped/initial.yaml" "dynamic-initial" "initial"
+write_config_map "${UNIQUE_ROOT}/EdgionPlugins/ExtProc/DynamicTest/initial/source.yaml" "ext-proc-external-tls" "initial"
 write_config_map "${UNIQUE_ROOT}/EdgionPlugins/BasicAuth/DynamicTest/updates_grouped/update.yaml" "dynamic-update" "update"
 write_config_map "${UNIQUE_ROOT}/EdgionPlugins/RateLimitLocal/DynamicTest/staged/delete_grouped/delete.yaml" "dynamic-delete" "delete"
 write_config_map "${UNIQUE_ROOT}/base/Secret_edgion-test_edge-tls.yaml" "runtime-secret" "runtime"
@@ -157,13 +158,14 @@ write_config_map "${UNIQUE_ROOT}/00-namespace.yaml" "bootstrap-resource" "bootst
 PATH="${FAKE_BIN}:${PATH}" KUBECTL_LOG="${KUBECTL_LOG}" \
   "${APPLIER}" "${UNIQUE_ROOT}" > "${TEMP_DIR}/unique.log" 2>&1 \
   || fail "unique effective fixtures were not applied"
-assert_contains "${TEMP_DIR}/unique.log" "Batch apply finished. Applied=3 Excluded=4"
+assert_contains "${TEMP_DIR}/unique.log" "Batch apply finished. Applied=3 Excluded=5"
 assert_contains "${KUBECTL_LOG}" "RESOURCE:root-unique"
 assert_contains "${KUBECTL_LOG}" "RESOURCE:nested-unique"
 assert_contains "${KUBECTL_LOG}" "RESOURCE:dynamic-initial"
 assert_not_contains "${KUBECTL_LOG}" "RESOURCE:dynamic-update"
 assert_not_contains "${KUBECTL_LOG}" "RESOURCE:dynamic-delete"
 assert_not_contains "${KUBECTL_LOG}" "RESOURCE:runtime-secret"
+assert_not_contains "${KUBECTL_LOG}" "RESOURCE:ext-proc-external-tls"
 assert_not_contains "${KUBECTL_LOG}" "RESOURCE:bootstrap-resource"
 
 : > "${KUBECTL_LOG}"
@@ -171,10 +173,11 @@ PATH="${FAKE_BIN}:${PATH}" KUBECTL_LOG="${KUBECTL_LOG}" \
   "${APPLIER}" --include-bootstrap --include-dynamic-updates "${UNIQUE_ROOT}" \
   > "${TEMP_DIR}/unique-included.log" 2>&1 \
   || fail "explicitly included bootstrap and dynamic fixtures were not applied"
-assert_contains "${TEMP_DIR}/unique-included.log" "Batch apply finished. Applied=6 Excluded=1"
+assert_contains "${TEMP_DIR}/unique-included.log" "Batch apply finished. Applied=6 Excluded=2"
 assert_contains "${KUBECTL_LOG}" "RESOURCE:bootstrap-resource"
 assert_contains "${KUBECTL_LOG}" "RESOURCE:dynamic-update"
 assert_contains "${KUBECTL_LOG}" "RESOURCE:dynamic-delete"
 assert_not_contains "${KUBECTL_LOG}" "RESOURCE:runtime-secret"
+assert_not_contains "${KUBECTL_LOG}" "RESOURCE:ext-proc-external-tls"
 
 echo "OK: strict fixture apply regression tests passed"

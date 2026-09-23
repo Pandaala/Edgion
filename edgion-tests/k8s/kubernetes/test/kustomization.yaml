@@ -5,6 +5,8 @@ resources:
 - test-server/deployment.yaml
 - test-server/service.yaml
 - test-client/deployment.yaml
+- ext-proc-external/deployment.yaml
+- ext-proc-external/service.yaml
 
 labels:
 - includeSelectors: false

@@ -4,6 +4,9 @@
 //! If the auth service responds with 2xx, the request is forwarded to upstream.
 //! Otherwise, the auth service's response is returned to the client.
 
+use crate::gwapi_types::is_valid_header_token;
+use crate::gwapi_types::HEADER_NAME_MAX_LEN;
+use crate::response_header_policy::validate_response_header_mutation;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -159,7 +162,7 @@ impl ForwardAuthConfig {
             return Some(format!("target invalid: {e}"));
         }
         // Validate status_on_error range
-        if !(200..=599).contains(&self.conn.status_on_error) {
+        if !crate::http_status::is_valid_final_http_status(self.conn.status_on_error) {
             return Some(format!(
                 "statusOnError must be 200-599, got {}",
                 self.conn.status_on_error
@@ -171,6 +174,16 @@ impl ForwardAuthConfig {
             );
         }
         // Delegate request-level validation (rejects forward_all on args/cookies)
+        for name in &self.decision.client_headers {
+            if name.len() > HEADER_NAME_MAX_LEN as usize || !is_valid_header_token(name) {
+                return Some(
+                    "decision.clientHeaders must contain valid HTTP header names of at most 256 bytes".to_string(),
+                );
+            }
+            if let Err(error) = validate_response_header_mutation(name) {
+                return Some(error.to_string());
+            }
+        }
         if let Some(e) = self.request.validation_error() {
             return Some(e);
         }

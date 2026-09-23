@@ -12,6 +12,7 @@ pub struct ResponseHeaderModifierFilter {
 
 impl ResponseHeaderModifierFilter {
     pub fn new(config: HTTPHeaderFilter) -> Result<Self, &'static str> {
+        config.validate_response()?;
         Ok(Self {
             plan: HeaderModifierPlan::from_http(config)?,
         })
@@ -19,6 +20,7 @@ impl ResponseHeaderModifierFilter {
 
     /// Create from GRPCHeaderFilter (which has the same structure as HTTPHeaderFilter)
     pub fn new_from_grpc(config: GRPCHeaderFilter) -> Result<Self, &'static str> {
+        config.validate_response()?;
         Ok(Self {
             plan: HeaderModifierPlan::from_grpc(config)?,
         })

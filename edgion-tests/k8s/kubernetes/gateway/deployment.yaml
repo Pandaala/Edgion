@@ -103,6 +103,10 @@ spec:
         - name: geoip-test-fixture
           mountPath: /usr/local/edgion/test-assets/geoip
           readOnly: true
+        - name: wasm-test-fixture
+          mountPath: /usr/local/edgion/test-assets/header_demo.wasm
+          subPath: header_demo.wasm
+          readOnly: true
       volumes:
       - name: config
         configMap:
@@ -119,3 +123,6 @@ spec:
       - name: geoip-test-fixture
         configMap:
           name: edgion-geoip-test-fixture
+      - name: wasm-test-fixture
+        configMap:
+          name: edgion-test-wasm

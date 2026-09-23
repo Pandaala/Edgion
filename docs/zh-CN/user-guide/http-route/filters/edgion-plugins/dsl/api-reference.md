@@ -2149,6 +2149,25 @@ log("processing request for user: " + to_str(user))
 
 ---
 
+### log_fmt
+
+**签名**：`log_fmt(template_literal, value1, ...)` → `Nil`
+
+向当前请求的插件访问日志追加格式化内容。模板必须是字符串字面量，每个值对应
+一个 `{}` 占位符。参数值按配置进行敏感数据脱敏，模板字面文本不脱敏。
+
+每次内建函数调用最多包含 255 个参数，同时必须满足该函数自身的参数数量要求。
+对 `log_fmt`，这表示一个模板加最多 254 个值。超过上限会在编译时被拒绝，配置热更新
+也使用此检查。`maxStackDepth` 是独立的执行限制，提高它不会扩大参数容量。
+预编译字节码也会在执行前校验参数数量、操作数栈高度的一致性，以及模板是否直接来自字符串常量。
+源码和预编译字节码中的动态模板都会被拒绝。
+
+```
+log_fmt("user {}", req.header("X-User-Id"))
+```
+
+---
+
 ### log_warn
 
 **签名**：`log_warn(msg)` → `Nil`
@@ -2264,6 +2283,7 @@ if sig == nil {
 | `uuid()` | 工具 | `Str` | 0 |
 | `range(start, end)` | 工具 | `List` | 2 |
 | `log(msg)` | 工具 | `Nil` | 1 |
+| `log_fmt(template_literal, value1, ...)` | 工具 | `Nil` | 1–255 |
 | `log_warn(msg)` | 工具 | `Nil` | 1 |
 | `log_error(msg)` | 工具 | `Nil` | 1 |
 
@@ -2276,3 +2296,9 @@ if sig == nil {
 - [沙盒安全模型](./sandbox-security.md)
 - [实战示例集](./examples.md)
 - [字节码指南](./bytecode.md)
+
+## 响应头策略
+
+`resp.set_header`、`resp.append_header` 和 `resp.remove_header` 按共享策略检查动态名称，保留原有错误语义。
+
+[响应头策略](../../gateway-api/response-header-modifier.md#response-header-policy).

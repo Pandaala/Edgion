@@ -398,3 +398,9 @@ A: 可以。在 `requestPlugins` 中列举多个，按顺序依次执行。任�
 - [JwtAuth 插件](../http-route/filters/edgion-plugins/jwt-auth.md) — JWT 令牌认证
 - [OpenID Connect 插件](openid-connect.md) — OIDC/OAuth2 认证
 - [HTTPRoute 总览](../http-route/overview.md) — HTTPRoute 配置总览
+
+## 响应头策略
+
+配置的响应头目标遵循共享响应头限制。
+
+[响应头策略](../http-route/filters/gateway-api/response-header-modifier.md#response-header-policy).

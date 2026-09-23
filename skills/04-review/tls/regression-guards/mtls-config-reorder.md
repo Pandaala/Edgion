@@ -37,7 +37,7 @@ accepted** — none is still true.
 reports success to BoringSSL, so the only handshake-aborting effect available
 from inside cert_cb is "do not bind a cert/key". Before the fix, the mTLS
 verify-setup branch ran AFTER `ssl_use_certificate` / `ssl_use_private_key`
-(EdgionTls path) or AFTER `apply_secret_to_ssl` (Gateway path) — so by the
+(EdgionTls path) or after the then-current Gateway Secret installer — so by the
 time `configure_mtls` Err'd, BoringSSL already had a usable cert/key on the
 SSL. The `err_log + return` only skipped `finalize_ssl_ctx`; the handshake
 continued, completing with no client cert ever requested and `is_mtls`
@@ -81,7 +81,14 @@ before binding cert/key — the fail-close shape this page guards is unaffected 
 that timing move.
 
 `apply_gateway_tls_cert` had the same shape with
-`configure_gateway_frontend_mtls` running after `apply_secret_to_ssl`. The
+`configure_gateway_frontend_mtls` running after the then-current Gateway Secret
+installer. That installer has since been removed: the current Gateway path
+configures frontend mTLS and FIPS policy before
+`apply_compiled_certificate_to_ssl` binds the selected identity through
+`install_compiled_serving_identity`. The EdgionTls path configures FIPS policy
+and `configure_mtls` before using the same identity installer. D0015 revalidated
+these ownership and ordering statements against the current BoringSSL callback;
+it does not change the historical failure mechanism. The
 Gateway path additionally interacts with [frontend-mtls-empty-store-on-missing-ca-key],
 which fixed the orthogonal "every Secret lacks `ca.crt` ⇒ empty store" leg; F011
 covers the leg where `ca.crt` is present but its PEM is malformed.

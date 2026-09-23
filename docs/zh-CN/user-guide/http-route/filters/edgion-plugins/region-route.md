@@ -312,3 +312,9 @@ spec:
 - [Dynamic Upstream](./dynamic-upstream.md) — 请求驱动的上游选择
 - [Direct Endpoint](./direct-endpoint.md) — 绕过负载均衡直连指定端点
 - [过滤器总览](../overview.md) — 所有 HTTPRoute 过滤器
+
+## 响应头策略
+
+`writeBack` 中类型为 `ResponseHeader` 的目标必须使用允许的响应头名称。
+
+[响应头策略](../gateway-api/response-header-modifier.md#response-header-policy).

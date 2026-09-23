@@ -17,6 +17,11 @@ value. The main proxied response path applies the same canonical static list and
 token parser to every repeated response `Connection` field before forwarding.
 Both directions implement RFC 9110 §7.6.1 at their owned forwarding boundary.
 
+The response sanitizer additionally strips legacy `Proxy-Connection` on ordinary
+responses; 101 still retains its handshake metadata. This response-only addition
+does not expand the shared request list. Ordinary response producers are separately
+constrained by the [response mutation policy](../../plugin-runtime/regression-guards/response-header-mutation-policy.md).
+
 Suggestions that either path checks only the static eight-entry list are not
 accepted. Re-evaluate a report against the exact forwarding site and repeated
 field handling described below.
@@ -181,3 +186,5 @@ AllEndpointStatus still relays those headers are **not accepted**.
 
 - `http1-03` — 2026-05-19.
 - `B0061` main response boundary — 2026-09-20.
+- `unify-response-header-mutation-policy` — response-only `Proxy-Connection` cleanup;
+  current verification is recorded in the shared policy page.

@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 use bytes::Bytes;
+use edgion_resources::response_header_policy::validate_response_header_mutation;
 use http::Uri;
 use pingora_core::protocols::http::RequestBodyBuffer;
 use pingora_http::{RequestHeader, ResponseHeader};
@@ -157,7 +158,7 @@ pub(crate) fn route_meta_field(meta: &kube::api::ObjectMeta, selector: &str) -> 
 /// An invalid UTF-8 field reached before a match makes the lookup fail rather
 /// than allowing a later field to override an uninterpretable credential. A
 /// match returns immediately, so malformed fields after it are irrelevant.
-fn cookie_value_ref<'a>(headers: &'a http::HeaderMap, name: &str) -> Option<&'a str> {
+pub(crate) fn cookie_value_ref<'a>(headers: &'a http::HeaderMap, name: &str) -> Option<&'a str> {
     for header in headers.get_all(http::header::COOKIE).iter() {
         let cookies = header.to_str().ok()?;
         if let Some(value) = cookies.split(';').find_map(|pair| {
@@ -654,10 +655,10 @@ impl<'a> PingoraSessionAdapter<'a> {
     /// HTTP/2 pseudo-headers and content-type. No DATA frame is emitted.
     pub async fn send_grpc_error_direct(&mut self, grpc_status: u16, message: Option<&str>) -> PluginSessionResult<()> {
         if !self.ctx.claim_final_response(200) {
-            return Ok(());
+            return Err(Box::new(std::io::Error::other("final response writer already claimed")));
         }
-        self.ctx.request_info.set_grpc_status(grpc_status);
         self.grpc_response_terminated = true;
+        self.ctx.request_info.set_grpc_status(grpc_status);
 
         let mut resp = ResponseHeader::build(200, None).map_err(|e| Box::new(e) as PluginSessionError)?;
         // Apply queued ops first so request-stage plugins (e.g. cookie issuance) still land
@@ -715,8 +716,9 @@ impl<'a> PingoraSessionAdapter<'a> {
     async fn send_grpc_trailers_only(&mut self, http_status: u16) -> PluginSessionResult<()> {
         let (grpc_status, grpc_message) = http_to_grpc_status(http_status);
         if !self.ctx.claim_final_response(200) {
-            return Ok(());
+            return Err(Box::new(std::io::Error::other("final response writer already claimed")));
         }
+        self.grpc_response_terminated = true;
         self.ctx.request_info.set_grpc_status(grpc_status);
 
         let mut resp = ResponseHeader::build(200, None).map_err(|e| Box::new(e) as PluginSessionError)?;
@@ -1015,12 +1017,16 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         end_of_stream: bool,
     ) -> PluginSessionResult<()> {
         let http_status = resp.status.as_u16();
+        if !edgion_resources::http_status::is_valid_final_http_status(http_status) {
+            return Err(Box::new(std::io::Error::other("invalid final response status")));
+        }
         if self.ctx.request_info.is_grpc_request && http_status != 200 {
-            self.grpc_response_terminated = true;
             return self.send_grpc_trailers_only(http_status).await;
         }
         if !self.ctx.claim_final_response(http_status) {
-            return Ok(());
+            return Err(Box::new(std::io::Error::other(
+                "invalid or duplicate final response status",
+            )));
         }
         let mut resp = resp;
         if self.ctx.has_pending_response_header_ops() {
@@ -1062,6 +1068,7 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
     }
 
     fn set_response_header(&mut self, name: &str, value: &str) -> PluginSessionResult<()> {
+        validate_response_header_mutation(name)?;
         let value = match http::HeaderValue::from_str(value) {
             Ok(value) => value,
             // Queued malformed values historically disappeared during reply construction.
@@ -1072,6 +1079,7 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
     }
 
     fn set_response_header_value(&mut self, name: &str, value: http::HeaderValue) -> PluginSessionResult<()> {
+        validate_response_header_mutation(name)?;
         if let Some(resp) = &mut self.response_header {
             resp.insert_header(name.to_string(), value)
                 .map_err(|e| Box::new(e) as PluginSessionError)?;
@@ -1085,6 +1093,7 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
     }
 
     fn append_response_header(&mut self, name: &str, value: &str) -> PluginSessionResult<()> {
+        validate_response_header_mutation(name)?;
         let value = match http::HeaderValue::from_str(value) {
             Ok(value) => value,
             Err(_) if self.response_header.is_none() => return Ok(()),
@@ -1094,6 +1103,7 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
     }
 
     fn append_response_header_value(&mut self, name: &str, value: http::HeaderValue) -> PluginSessionResult<()> {
+        validate_response_header_mutation(name)?;
         if let Some(resp) = &mut self.response_header {
             resp.append_header(name.to_string(), value)
                 .map_err(|e| Box::new(e) as PluginSessionError)?;
@@ -1107,6 +1117,7 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
     }
 
     fn remove_response_header(&mut self, name: &str) -> PluginSessionResult<()> {
+        validate_response_header_mutation(name)?;
         if let Some(resp) = &mut self.response_header {
             resp.remove_header(name);
         } else {
@@ -2138,6 +2149,7 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
     }
 
     fn queue_local_reply_header_op(&mut self, op: PendingHeaderOp) -> PluginSessionResult<()> {
+        validate_response_header_mutation(op.name())?;
         self.ctx.queue_pending_response_header_op(op);
         Ok(())
     }
@@ -2410,7 +2422,7 @@ mod local_reply_tests {
         });
         assert!(build_response_local_reply(&mut ctx, 502, Some("{}".into()), false));
         let (h, _) = ctx.take_pending_response_local_reply().unwrap();
-        // queued content-type wins; queued content-length is overridden by the framing re-assert.
+        // Ordinary content-type survives; the rejected length cannot override body-owned framing.
         assert_eq!(
             h.headers.get("content-type").unwrap().to_str().unwrap(),
             "application/json"
@@ -3143,6 +3155,102 @@ pub(crate) mod record_outcome_tests {
     }
 
     #[tokio::test]
+    async fn response_condition_source_allocation_inventory() {
+        use crate::ctx::{ClientCertInfo, NormalizedHostname};
+        use crate::plugins::runtime::conditions::{extract_jwt_claim_values, extract_mtls_values, MtlsField, SanType};
+
+        let mut session = test_session_raw(
+            "GET /alpha?x=one HTTP/1.1\r\nHost: example.com\r\nX-Mode: enabled\r\nCookie: sid=abc\r\n\r\n",
+        )
+        .await;
+        let mut ctx = EdgionHttpContext::default();
+        ctx.request_info.trace_id.initialize(&session.req_header().headers);
+        ctx.request_info.direct_peer_ip = "192.0.2.1".to_string();
+        ctx.request_info.remote_ip = "198.51.100.2".to_string();
+        ctx.request_info.hostname = NormalizedHostname::new("example.com");
+        ctx.request_info.entry_raw_path = "/alpha".to_string();
+        ctx.request_info.normalized_current_path = "/alpha".to_string();
+        ctx.request_info.entry_raw_query = Some("x=one".to_string());
+        ctx.set_ctx_var("demo".to_string(), "value".to_string());
+        ctx.set_ctx_var("jwt_claims".to_string(), r#"{"roles":["admin","dev"]}"#.to_string());
+        ctx.request_info.install_tls_info(
+            None,
+            None,
+            Some(ClientCertInfo {
+                subject: "CN=alice".to_string(),
+                sans: vec![
+                    "alice.example.com".to_string(),
+                    "uri:spiffe://example.com/alice".to_string(),
+                ],
+                cn: Some("alice".to_string()),
+                fingerprint: "ab:cd".to_string(),
+            }),
+            None,
+            None,
+        );
+        // Prime the once-per-request query parse so this measures only the
+        // per-chunk value extraction cost.
+        ctx.cached_query(ctx.request_info.entry_raw_query.as_deref());
+        let adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
+        let cases = [
+            ("traceId", KeyGet::TraceId),
+            ("remoteIp", KeyGet::RemoteIp),
+            ("directPeerIp", KeyGet::DirectPeerIp),
+            ("host", KeyGet::Host),
+            (
+                "header",
+                KeyGet::Header {
+                    name: "X-Mode".to_string(),
+                },
+            ),
+            (
+                "cookie",
+                KeyGet::Cookie {
+                    name: "sid".to_string(),
+                },
+            ),
+            ("query", KeyGet::Query { name: "x".to_string() }),
+            ("path", KeyGet::Path),
+            ("requestPath", KeyGet::RequestPath),
+            ("method", KeyGet::Method),
+            (
+                "ctx",
+                KeyGet::Ctx {
+                    name: "demo".to_string(),
+                },
+            ),
+            ("remoteIpAndPath", KeyGet::RemoteIpAndPath),
+        ];
+        for (label, key) in cases {
+            let (value, stats) =
+                crate::test_allocation_counter::count_allocation_stats(|| std::hint::black_box(adapter.key_get(&key)));
+            assert!(value.is_some(), "{label} fixture must be present");
+            eprintln!(
+                "condition source {label}: {} allocations, {} requested bytes",
+                stats.calls, stats.requested_bytes
+            );
+        }
+
+        let (claims, jwt_stats) = crate::test_allocation_counter::count_allocation_stats(|| {
+            std::hint::black_box(extract_jwt_claim_values(&adapter, "roles"))
+        });
+        assert_eq!(claims, ["admin", "dev"]);
+        eprintln!(
+            "condition source jwtClaimMatch: {} allocations, {} requested bytes",
+            jwt_stats.calls, jwt_stats.requested_bytes
+        );
+
+        let (sans, mtls_stats) = crate::test_allocation_counter::count_allocation_stats(|| {
+            std::hint::black_box(extract_mtls_values(&adapter, MtlsField::San, Some(&SanType::Uri)))
+        });
+        assert_eq!(sans, ["spiffe://example.com/alice"]);
+        eprintln!(
+            "condition source mtlsMatch: {} allocations, {} requested bytes",
+            mtls_stats.calls, mtls_stats.requested_bytes
+        );
+    }
+
+    #[tokio::test]
     async fn plugin_session_grpc_classification_includes_grpc_route_match() {
         let mut session = test_session().await;
         let mut ctx = EdgionHttpContext::default();
@@ -3259,6 +3367,109 @@ pub(crate) mod record_outcome_tests {
         assert_eq!(values[0], "first");
         assert_eq!(values[1].as_bytes(), b"\xffidentity");
         assert!(values[1].is_sensitive());
+    }
+
+    #[tokio::test]
+    async fn response_policy_protects_bound_and_queued_headers_without_blocking_application_fields() {
+        let mut session = test_session().await;
+        for bound in [false, true] {
+            let mut ctx = EdgionHttpContext::default();
+            let mut response = ResponseHeader::build(101, None).unwrap();
+            response.insert_header("content-length", "42").unwrap();
+            response.insert_header("connection", "upgrade").unwrap();
+            response.insert_header("upgrade", "websocket").unwrap();
+            {
+                let mut adapter = if bound {
+                    PingoraSessionAdapter::with_response_header(&mut session, &mut ctx, &mut response)
+                } else {
+                    PingoraSessionAdapter::new(&mut session, &mut ctx)
+                };
+                for name in [
+                    "Content-Length",
+                    "TRANSFER-Encoding",
+                    "Connection",
+                    "Keep-Alive",
+                    "Proxy-Connection",
+                    "TE",
+                    "Trailer",
+                    "Upgrade",
+                    "Proxy-Authenticate",
+                    "Proxy-Authorization",
+                    ":status",
+                ] {
+                    assert!(adapter.set_response_header(name, "1").is_err(), "{name}");
+                    assert!(adapter.append_response_header(name, "1").is_err(), "{name}");
+                    assert!(adapter
+                        .set_response_header_value(name, http::HeaderValue::from_static("1"))
+                        .is_err());
+                    assert!(adapter
+                        .append_response_header_value(name, http::HeaderValue::from_static("1"))
+                        .is_err());
+                    assert!(adapter.remove_response_header(name).is_err());
+                    assert!(adapter
+                        .queue_local_reply_header_op(PendingHeaderOp::Remove { name: name.into() })
+                        .is_err());
+                }
+                for name in [
+                    "Content-Type",
+                    "Content-Encoding",
+                    "Cache-Control",
+                    "WWW-Authenticate",
+                    "grpc-status",
+                ] {
+                    adapter.set_response_header(name, "application-value").unwrap();
+                }
+                adapter.set_response_header("Set-Cookie", "a=1").unwrap();
+                adapter.append_response_header("set-cookie", "b=2").unwrap();
+            }
+            ctx.drain_pending_response_header_ops(&mut response);
+            assert_eq!(response.headers["content-length"], "42");
+            assert_eq!(response.headers["connection"], "upgrade");
+            assert_eq!(response.headers["upgrade"], "websocket");
+            assert_eq!(response.headers["content-encoding"], "application-value");
+            assert_eq!(response.headers.get_all("set-cookie").iter().count(), 2);
+        }
+    }
+
+    #[test]
+    fn direct_pending_operations_cannot_modify_framing() {
+        let value = http::HeaderValue::from_static("999");
+        for op in [
+            PendingHeaderOp::Set {
+                name: "Content-Length".into(),
+                value: value.clone(),
+            },
+            PendingHeaderOp::Append {
+                name: "Content-Length".into(),
+                value: value.clone(),
+            },
+            PendingHeaderOp::AddIfAbsent {
+                name: "Content-Length".into(),
+                value: value.clone(),
+            },
+            PendingHeaderOp::OverwriteIfExists {
+                name: "Content-Length".into(),
+                value,
+            },
+            PendingHeaderOp::Remove {
+                name: "Content-Length".into(),
+            },
+        ] {
+            for present in [false, true] {
+                let mut ctx = EdgionHttpContext::default();
+                let mut response = ResponseHeader::build(200, None).unwrap();
+                if present {
+                    response.insert_header("content-length", "2").unwrap();
+                }
+                ctx.queue_pending_response_header_op(op.clone());
+                assert!(!ctx.has_pending_response_header_ops());
+                op.clone().apply(&mut response);
+                assert_eq!(
+                    response.headers.get("content-length").map(|v| v.to_str().unwrap()),
+                    present.then_some("2")
+                );
+            }
+        }
     }
 
     #[tokio::test]
@@ -4064,11 +4275,45 @@ pub(crate) mod record_outcome_tests {
             adapter
                 .write_response_header(Box::new(resp), true)
                 .await
-                .expect("a rejected claim is not a transport error");
+                .expect_err("an informational status cannot be a terminal local reply");
         }
 
         assert!(session.response_written().is_none());
         assert!(!ctx.response_write_started());
+        assert_eq!(ctx.final_downstream_status(), None);
+    }
+
+    #[tokio::test]
+    async fn direct_writer_reports_a_duplicate_claim_without_writing() {
+        let (mut session, _client) = test_session_with_client().await;
+        let mut ctx = EdgionHttpContext::default();
+        assert!(ctx.claim_final_response(204));
+        let resp = ResponseHeader::build(403, None).unwrap();
+
+        let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
+        adapter
+            .write_response_header(Box::new(resp), true)
+            .await
+            .expect_err("a second local reply must not report success");
+
+        assert!(session.response_written().is_none());
+        assert_eq!(ctx.final_downstream_status(), Some(204));
+    }
+
+    #[tokio::test]
+    async fn grpc_writer_rejects_an_informational_local_reply() {
+        let (mut session, _client) = test_session_with_client().await;
+        let mut ctx = EdgionHttpContext::default();
+        ctx.request_info.is_grpc_request = true;
+        let resp = ResponseHeader::build(101, None).unwrap();
+
+        let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
+        adapter
+            .write_response_header(Box::new(resp), true)
+            .await
+            .expect_err("an informational reply must not become gRPC trailers");
+
+        assert!(session.response_written().is_none());
         assert_eq!(ctx.final_downstream_status(), None);
     }
 

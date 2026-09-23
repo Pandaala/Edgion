@@ -1631,44 +1631,77 @@ impl BodyPluginsTestSuite {
     fn wasm_response_body_hook() -> TestCase {
         TestCase::new(
             "wasm_response_body_hook",
-            "Wasm response-body observation runs only in the body-capable suite",
+            "Wasm response-body hook observes a nonempty upstream chunk",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
                     let url = format!("{}/headers", ctx.http_url());
-                    let _ = ctx
+                    let warmup = ctx
                         .http_client
                         .get(&url)
                         .header("host", "wasm-body.example.com")
                         .send()
                         .await;
+                    if let Err(error) = warmup {
+                        return TestResult::failed(start.elapsed(), format!("Wasm warmup failed: {error}"));
+                    }
+                    let metric = "edgion_wasm_body_pause_unsupported_total";
+                    let before = match ctx.metrics_client().fetch_raw_metrics().await {
+                        Ok(raw) => crate::metrics_helper::counter_value(&raw, metric, &[]),
+                        Err(error) => {
+                            return TestResult::failed(
+                                start.elapsed(),
+                                format!("Initial metrics scrape failed: {error}"),
+                            );
+                        }
+                    };
                     let response = ctx
                         .http_client
                         .get(&url)
                         .header("host", "wasm-body.example.com")
-                        .header("x-wasm-read-body", "1")
                         .send()
                         .await;
                     match response {
-                        Ok(response) if response.status().as_u16() == 200 => {
-                            let value = response.json::<serde_json::Value>().await.unwrap_or_default();
-                            let count = value["headers"]["x-wasm-bodybytes"]
-                                .as_str()
-                                .and_then(|value| value.parse::<u64>().ok())
-                                .unwrap_or(0);
-                            if count > 0 {
+                        Ok(response) if response.status().as_u16() == 200 => match response.bytes().await {
+                            Ok(body) if !body.is_empty() => {}
+                            Ok(_) => {
+                                return TestResult::failed(
+                                    start.elapsed(),
+                                    "Upstream response body was empty".to_string(),
+                                )
+                            }
+                            Err(error) => {
+                                return TestResult::failed(
+                                    start.elapsed(),
+                                    format!("Response body read failed: {error}"),
+                                )
+                            }
+                        },
+                        Ok(response) => {
+                            return TestResult::failed(
+                                start.elapsed(),
+                                format!("Expected 200, got {}", response.status()),
+                            );
+                        }
+                        Err(error) => return TestResult::failed(start.elapsed(), format!("Request failed: {error}")),
+                    }
+                    match ctx.metrics_client().fetch_raw_metrics().await {
+                        Ok(raw) => {
+                            let after = crate::metrics_helper::counter_value(&raw, metric, &[]);
+                            if after > before {
                                 TestResult::passed(start.elapsed())
                             } else {
                                 TestResult::failed(
                                     start.elapsed(),
-                                    "Response body hook observed zero bytes".to_string(),
+                                    format!(
+                                        "Response body hook metric did not increase: before={before}, after={after}"
+                                    ),
                                 )
                             }
                         }
-                        Ok(response) => {
-                            TestResult::failed(start.elapsed(), format!("Expected 200, got {}", response.status()))
+                        Err(error) => {
+                            TestResult::failed(start.elapsed(), format!("Final metrics scrape failed: {error}"))
                         }
-                        Err(error) => TestResult::failed(start.elapsed(), format!("Request failed: {error}")),
                     }
                 })
             },

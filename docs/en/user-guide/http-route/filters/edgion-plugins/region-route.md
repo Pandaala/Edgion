@@ -312,3 +312,9 @@ spec:
 - [Dynamic Upstream](./dynamic-upstream.md) — Request-driven upstream selection
 - [Direct Endpoint](./direct-endpoint.md) — Bypass load balancing to a specific endpoint
 - [Filters Overview](../overview.md) — All HTTPRoute filters
+
+## Response header policy
+
+`writeBack` destinations of type `ResponseHeader` must use an allowed response name.
+
+[Response header policy](../gateway-api/response-header-modifier.md#response-header-policy).

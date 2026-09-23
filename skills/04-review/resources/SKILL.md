@@ -32,4 +32,4 @@ before applying a decision to current code.
 - [EdgionBackend unknown-field handling is mode-specific](regression-guards/edgion-backend-unknown-fields-are-mode-specific.md)
 - [EdgionGatewayConfig process-global values aggregated deterministically — FIXED](regression-guards/edgion-gateway-config-global-aggregation-deterministic.md)
 - [EdgionPlugins closed enums drifted from Rust — FIXED (reconciled + guarded)](regression-guards/edgion-plugins-crd-type-enum-drift.md)
-- [Request local replies require a final HTTP status — FIXED](regression-guards/request-local-reply-final-status-validation.md)
+- [Terminal local replies require a final HTTP status](regression-guards/request-local-reply-final-status-validation.md)

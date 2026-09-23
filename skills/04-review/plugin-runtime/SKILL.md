@@ -23,6 +23,8 @@ before applying a decision to current code.
 
 ## Regression guards
 
+- [Response header mutation policy and body-owner framing](regression-guards/response-header-mutation-policy.md)
+
 - [ExtensionRef tokenized plugin-log contract](regression-guards/extension-ref-tokenized-plugin-log-contract.md)
 
 - [Request-template policies, bounds, and Secret provenance](regression-guards/request-template-policy-unification.md)

@@ -436,6 +436,11 @@
     },
     "Gateway/PreflightPolicyHotReload": {
       "http": 31985
+    },
+    "Gateway/RetainedListenerHandles": {
+      "http": 31986,
+      "grpc": 31987,
+      "tcp": 31988
     }
   }
 }

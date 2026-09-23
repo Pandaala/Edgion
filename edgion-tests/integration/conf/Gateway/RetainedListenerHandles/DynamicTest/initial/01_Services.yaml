@@ -1,0 +1,35 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: retained-handles-http
+  namespace: edgion-test
+spec:
+  ports:
+    - name: http
+      port: 30001
+      protocol: TCP
+      targetPort: 30001
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: retained-handles-grpc
+  namespace: edgion-test
+spec:
+  ports:
+    - name: grpc
+      port: 30021
+      protocol: TCP
+      targetPort: 30021
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: retained-handles-tcp
+  namespace: edgion-test
+spec:
+  ports:
+    - name: tcp
+      port: 30010
+      protocol: TCP
+      targetPort: 30010

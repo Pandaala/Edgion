@@ -221,7 +221,7 @@ impl WebhookServiceConfig {
         // duplicating them here.
 
         // Validate status on error (now on the shared connection struct)
-        if !(200..=599).contains(&self.conn.status_on_error) {
+        if !crate::http_status::is_valid_final_http_status(self.conn.status_on_error) {
             return Some("statusOnError must be between 200 and 599".to_string());
         }
 

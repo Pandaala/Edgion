@@ -8,7 +8,7 @@
 //!
 //! Default (no guard) emits the real value, so the controller's conf_sync transport
 //! serialization — which runs in a different process and never constructs the guard —
-//! is unaffected. See docs/superpowers/specs/2026-06-07-gateway-admin-api-harden-design.md.
+//! is unaffected.
 //!
 //! INVARIANT: the guard is a thread-local, so it only applies on the thread that runs
 //! `serde_json::to_value`. Never move the admin serialization off that thread

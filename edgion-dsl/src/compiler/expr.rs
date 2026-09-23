@@ -3,7 +3,7 @@
 use super::super::ast::*;
 use super::super::bytecode::*;
 use super::super::error::CompileError;
-use super::builtins::{builtin_arity, resolve_namespace_method};
+use super::builtins::{builtin_arity, checked_builtin_argc, resolve_namespace_method};
 use super::Compiler;
 use std::collections::HashSet;
 
@@ -158,6 +158,7 @@ impl Compiler {
         // Check whether the object names a builtin namespace.
         if let ExprKind::Ident(namespace) = &object.kind {
             if let Some(builtin_id) = resolve_namespace_method(namespace, method) {
+                let argc = checked_builtin_argc(args.len())?;
                 // Validate argument count at compile time
                 let arity = builtin_arity(&builtin_id);
                 if !arity.accepts(args.len()) {
@@ -173,7 +174,7 @@ impl Compiler {
                 for arg in args {
                     self.compile_expr(arg)?;
                 }
-                self.emit(OpCode::CallBuiltin(builtin_id, args.len() as u8));
+                self.emit(OpCode::CallBuiltin(builtin_id, argc));
                 return Ok(());
             }
         }
@@ -442,6 +443,7 @@ impl Compiler {
             self.emit(OpCode::JsonGet(path_idx));
             return Ok(());
         } else if name == "log_fmt" {
+            let argc = checked_builtin_argc(args.len())?;
             // log_fmt(template_literal, sensitive_arg1, sensitive_arg2, ...)
             //
             // Template MUST be a string literal — this preserves the safety contract
@@ -471,7 +473,7 @@ impl Compiler {
             for arg in args {
                 self.compile_expr(arg)?;
             }
-            self.emit(OpCode::CallBuiltin(BuiltinId::LogFmt, args.len() as u8));
+            self.emit(OpCode::CallBuiltin(BuiltinId::LogFmt, argc));
             return Ok(());
         }
 
@@ -509,6 +511,7 @@ impl Compiler {
         };
 
         // Validate argument count at compile time
+        let argc = checked_builtin_argc(args.len())?;
         let arity = builtin_arity(&builtin_id);
         if !arity.accepts(args.len()) {
             return Err(CompileError::new(format!(
@@ -522,7 +525,7 @@ impl Compiler {
         for arg in args {
             self.compile_expr(arg)?;
         }
-        self.emit(OpCode::CallBuiltin(builtin_id, args.len() as u8));
+        self.emit(OpCode::CallBuiltin(builtin_id, argc));
         Ok(())
     }
 }
@@ -532,6 +535,66 @@ mod tests {
     use super::super::super::bytecode::{Constant, OpCode, JSON_SELECT_MAX_ENTRIES, JSON_SELECT_MAX_NAME_BYTES};
     use super::super::super::parser::parse_program;
     use super::super::Compiler;
+
+    #[test]
+    fn builtin_argument_capacity_is_checked_before_emitting_operands() {
+        use crate::bytecode::BuiltinId;
+
+        for count in [1, 255, 256, 257] {
+            let source = format!("log_fmt(\"{}\"{})", "{}".repeat(count - 1), ", nil".repeat(count - 1));
+            let program = parse_program(&source).unwrap();
+            let mut compiler = Compiler::new();
+            let result = compiler.compile_stmt(&program.stmts[0]);
+            if count <= 255 {
+                result.unwrap();
+                assert_eq!(
+                    compiler.code[count],
+                    OpCode::CallBuiltin(BuiltinId::LogFmt, count as u8)
+                );
+                assert_eq!(
+                    compiler.line_runs.iter().map(|(n, _)| usize::from(*n)).sum::<usize>(),
+                    compiler.code.len()
+                );
+            } else {
+                assert_eq!(
+                    result.unwrap_err().message,
+                    "builtin call exceeds maximum argument count (255)"
+                );
+                assert!(compiler.code.is_empty());
+                assert!(compiler.constants.is_empty());
+            }
+        }
+        // Both ordinary and namespace call paths check capacity before any
+        // argument is compiled (an undefined operand would otherwise fail).
+        for function in ["len", "req.header"] {
+            let source = format!("{function}({})", vec!["undefined"; 256].join(","));
+            let program = parse_program(&source).unwrap();
+            let mut compiler = Compiler::new();
+            assert_eq!(
+                compiler.compile_stmt(&program.stmts[0]).unwrap_err().message,
+                "builtin call exceeds maximum argument count (255)"
+            );
+            assert!(compiler.code.is_empty());
+        }
+    }
+
+    #[test]
+    fn builtin_argument_capacity_preserves_function_arity() {
+        for (source, valid) in [
+            ("uuid()", true),
+            ("uuid(nil)", false),
+            ("len(nil)", true),
+            ("len(nil, nil)", false),
+            ("req.header(nil)", true),
+            ("req.header(nil, nil)", false),
+            ("http.call(nil, nil, nil, nil, nil)", true),
+            ("http.call(nil, nil, nil, nil, nil, nil)", false),
+            ("log_fmt()", false),
+        ] {
+            let program = parse_program(source).unwrap();
+            assert_eq!(Compiler::new().compile(&program).is_ok(), valid, "{source}");
+        }
+    }
 
     #[test]
     fn test_compile_string_methods() {

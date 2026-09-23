@@ -2,7 +2,7 @@
 # Structural regression for Gateway admin API authentication.
 #
 # The Gateway admin API (default 127.0.0.1:12001) is guarded by a static bearer
-# token (src/core/gateway/api/admin_auth.rs). This test asserts the four corners
+# token (edgion-gateway/src/api/admin_auth.rs). This test asserts the four corners
 # of that contract against a real gateway process started on loopback:
 #
 #   1. No token configured (no EDGION_GATEWAY_ADMIN_TOKEN), integration-testing

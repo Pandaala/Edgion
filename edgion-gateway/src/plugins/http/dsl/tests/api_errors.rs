@@ -6,6 +6,43 @@
 
 use super::*;
 
+#[tokio::test]
+async fn response_policy_dynamic_names_keep_api_error_and_leave_response_unchanged() {
+    use crate::plugins::runtime::session_adapter::record_outcome_tests::test_session;
+    use crate::plugins::runtime::PingoraSessionAdapter;
+    use crate::EdgionHttpContext;
+    use pingora_http::ResponseHeader;
+
+    let mut session = test_session().await;
+    for (function, call) in [
+        ("resp.set_header", "resp.set_header(name, \"999\")"),
+        ("resp.append_header", "resp.append_header(name, \"999\")"),
+        ("resp.remove_header", "resp.remove_header(name)"),
+    ] {
+        for bound in [false, true] {
+            let mut ctx = EdgionHttpContext::default();
+            ctx.set_ctx_var("mutation-name".into(), "CoNtEnT-LeNgTh".into());
+            let mut response = ResponseHeader::build(200, None).unwrap();
+            response.insert_header("content-length", "2").unwrap();
+            {
+                let mut adapter = if bound {
+                    PingoraSessionAdapter::with_response_header(&mut session, &mut ctx, &mut response)
+                } else {
+                    PingoraSessionAdapter::new(&mut session, &mut ctx)
+                };
+                let vm = make_vm(&format!("let name = ctx.get(\"mutation-name\")\n{call}"));
+                let err = vm
+                    .execute(&mut adapter, &mut PluginLog::new("test"), &DslRuntime::default())
+                    .await
+                    .expect_err("protected dynamic name must fail");
+                assert_api_error_function(&err, function);
+            }
+            assert!(!ctx.has_pending_response_header_ops());
+            assert_eq!(response.headers["content-length"], "2");
+        }
+    }
+}
+
 fn err_inject() -> crate::plugins::runtime::traits::session::PluginSessionError {
     Box::new(std::io::Error::other("injected session failure"))
 }

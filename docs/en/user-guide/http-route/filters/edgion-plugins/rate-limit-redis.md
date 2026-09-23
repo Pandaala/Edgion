@@ -543,3 +543,9 @@ quota headers; Redis supplies its own headers only when it runs. No combined
 remaining quota is reported. Extra valid conditions or disabling the Redis entry
 can intentionally bypass supplemental checking; `Continue` does not install a
 mandatory fallback. See [condition reference rules](./conditions.md#ratelimitexceeded).
+
+## Response header policy
+
+Custom response names also retain the rate-limit-specific reserved-name restrictions.
+
+[Response header policy](../gateway-api/response-header-modifier.md#response-header-policy).

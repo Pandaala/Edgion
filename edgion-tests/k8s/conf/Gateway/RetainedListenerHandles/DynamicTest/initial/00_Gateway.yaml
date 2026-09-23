@@ -1,0 +1,19 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: retained-handles-gateway
+  namespace: edgion-test
+spec:
+  gatewayClassName: public-gateway
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 31986
+      hostname: retained-http.sandbox.example.com
+    - name: grpc
+      protocol: HTTP
+      port: 31987
+      hostname: retained-grpc.sandbox.example.com
+    - name: tcp
+      protocol: TCP
+      port: 31988

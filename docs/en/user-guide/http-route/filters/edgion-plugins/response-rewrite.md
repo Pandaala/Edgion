@@ -235,14 +235,10 @@ invalid.
 
 ### 4. Response Framing Headers
 
-`set`, `add`, and the destination of `rename` cannot target `Content-Length` or
-`Transfer-Encoding` (case-insensitive). The gateway owns those fields so the
-proxied response can remain streaming with correct framing.
-
-Removing either framing header is allowed, as is using one as the source of a
-rename to a non-framing header. For example, renaming `Content-Length` to
-`X-Upstream-Length` is valid; renaming another header to `Content-Length` is
-not.
+All `set`, `add`, `remove`, and both `rename` names follow the
+[shared response header policy](../gateway-api/response-header-modifier.md#response-header-policy).
+Protected fields cannot be removed or renamed as a source, including renaming
+`Content-Length` to `X-Upstream-Length`. Both names are checked before mutation.
 
 ---
 

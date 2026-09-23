@@ -30,6 +30,7 @@ before applying a decision to current code.
 
 ## Regression guards
 
+- [Response-body conditions borrow live inputs for each evaluation](regression-guards/response-condition-live-input-borrowing.md)
 - [Canonical outbound clients bound decoded HTTP/2 response headers](regression-guards/outbound-http2-response-header-list-bound.md)
 - [Adaptive telemetry reconciliation is route-contribution incremental](regression-guards/adaptive-telemetry-reconcile-is-incremental.md)
 - [AI runtime stores must report cache residue](regression-guards/ai-runtime-stores-must-report-residue.md)

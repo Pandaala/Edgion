@@ -23,10 +23,11 @@ reaches exactly one matching `LoopEnd` on either natural exhaustion or
 break target before emitting `LoopEnd`, so break backpatches land on the
 cleanup opcode. Natural condition exits already land there.
 
-`continue` is intentionally unchanged: it targets the condition check for a
-`while` loop and the increment step for both `for` forms. Break remains scoped
-to the innermost active loop. Return behavior, loop-limit threshold semantics,
-typed runtime errors, bytecode opcodes, and the bytecode version are unchanged.
+`continue` in a `while` loop targets its `LoopBack` so that iteration is
+counted before the condition is checked again. Both `for` forms still target
+their increment step before `LoopBack`. Break remains scoped to the innermost
+active loop. Return behavior, loop-limit threshold semantics, typed runtime
+errors, bytecode opcodes, and the bytecode version are unchanged.
 
 ## Regression evidence
 
@@ -35,7 +36,9 @@ The table-driven Gateway control-flow regression nests an immediately broken
 limit and a high step budget, all three cases must return
 `RuntimeError::LoopLimitExceeded`, never run until `StepLimitExceeded` or
 natural completion. The compiler loop tests continue to cover all three loop
-forms and nested break/continue patch-stack balance.
+forms and nested break/continue patch-stack balance. A Gateway control-flow
+test verifies that repeated `while` `continue` reaches `LoopLimitExceeded`
+before the step budget.
 
 Re-evaluate this guard if loop cleanup moves out of `LoopEnd`, a new loop form
 is added, or break/continue acquire labeled or multi-level semantics.

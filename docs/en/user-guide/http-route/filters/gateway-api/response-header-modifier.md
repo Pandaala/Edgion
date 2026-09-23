@@ -4,6 +4,37 @@
 
 `ResponseHeaderModifier` modifies the HTTP response headers before the response is returned to the client. It is a standard Gateway API filter and runs in the response stage, after the upstream response headers arrive. Use it to add security headers, strip headers that leak backend details, or stamp the response with gateway metadata.
 
+## Response header mutation policy {#response-header-policy}
+
+Edgion applies the same response policy to HTTPRoute and GRPCRoute modifiers,
+ResponseRewrite, DSL, Wasm, ExtProc, configured local replies (including Mock and
+FaultInjection), ForwardAuth denial headers, response dye, and RegionRoute write-back.
+Names are compared without regard to ASCII case.
+
+| Field | Set, append, conditional write, remove, rename |
+|-------|-----------------------------------------------|
+| Ordinary fields, such as `Cache-Control`, `WWW-Authenticate`, and `Set-Cookie` | Allowed after the feature's usual validation |
+| `Content-Length` | Rejected |
+| `Connection`, `Keep-Alive`, `Proxy-Authenticate`, `Proxy-Authorization`, `TE`, `Trailer`, `Transfer-Encoding`, `Upgrade`, `Proxy-Connection` | Rejected |
+| Pseudo-headers, such as `:status` | Rejected as ordinary headers; use the feature's status API |
+
+Both names in a rename must be allowed. A policy rejection occurs before either
+rename write. Static configuration is validated before use; dynamically supplied
+names are checked when applied. Earlier successful operations keep their effects,
+and each extension retains its existing error handling.
+
+These restrictions apply to HTTP/1.1, HTTP/2, and gRPC responses, including configured
+local replies. Request-header rules remain separate. The Gateway still manages exact
+lengths for its own finite replies, streaming body transformations, compression,
+gRPC-Web, trailers-only errors, and the required 101 upgrade handshake. You do not
+need to configure framing headers for those features.
+
+Received `Connection`-nominated fields are removed during forwarding. A new ordinary
+field authored after that cleanup does not inherit the received nomination. Interim
+1xx responses skip ordinary response-plugin chains; 101 retains transport-owned
+handshake fields. HEAD and bodyless statuses retain their protocol-specific handling.
+
+
 ## Configuration
 
 ```yaml

@@ -45,7 +45,7 @@ such as DSL, but response-stage Wasm host phases do not expose that cache.
 |---|:---:|---|
 | `proxy_get_header_map_pairs` / `proxy_get_header_map_value` | ✅ | Request headers, response headers, and (inside the callout callback) `HttpCallResponseHeaders` — the callout's response headers plus a synthetic `:status` pair |
 | `proxy_replace_header_map_value` / `proxy_add_header_map_value` / `proxy_remove_header_map_value` / `proxy_set_header_map_pairs` | ✅ | Set / add / remove / bulk-replace; applied to the real request/response after the hook returns. Header-map writes to the callout response map are rejected |
-| `proxy_send_local_response` | ✅ | Short-circuits the request with a status, body, and headers. The body is forwarded byte-for-byte, so a binary payload (an image, protobuf, ...) is delivered unchanged; an empty body produces a bodyless response. Also valid from inside `proxy_on_http_call_response` (deny after an auth callout) |
+| `proxy_send_local_response` | ✅ | Short-circuits the request with a final HTTP status (`200`–`599`), body, and headers. An invalid status is replaced with `500`. The body is forwarded byte-for-byte, so a binary payload (an image, protobuf, ...) is delivered unchanged; an empty body produces a bodyless response. Also valid from inside `proxy_on_http_call_response` (deny after an auth callout) |
 | `proxy_http_call` | ✅ (request-headers + tick phases) | See [HTTP callouts](#http-callouts-pauseresume). In the request-body, response-headers, and response-body phases it returns `UNIMPLEMENTED` (12); tick calls require the owning plugin's allowlist (see [Timers](#shared-data-and-timers)) |
 | `proxy_continue_request` / `proxy_continue_stream(Request)` | ✅ | Resumes a request paused on a callout. `proxy_continue_response` remains an accepted no-op |
 | `proxy_get_shared_data` / `proxy_set_shared_data` | ✅ | Per-module KV with CAS — see [Shared data](#shared-data-and-timers) |
@@ -544,3 +544,9 @@ Yes — via `proxy_{get,set}_shared_data`, which is shared across pooled VMs bel
 
 - [ExtProc Plugin](./ext-proc.md) — the gRPC push-model alternative (see [Callout vs ExtProc](#callout-vs-extproc))
 - [Filters overview](../README.md)
+
+## Response header policy
+
+Response map operations and local reply headers follow this policy. Replace-all replaces editable fields while retaining protected fields; allowed duplicate `Set-Cookie` values remain separate. Rejected operations retain existing best-effort handling.
+
+[Response header policy](../gateway-api/response-header-modifier.md#response-header-policy).

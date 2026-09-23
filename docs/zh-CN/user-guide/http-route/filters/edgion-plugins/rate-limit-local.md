@@ -61,3 +61,9 @@ spec:
 通过 `onLimitExceeded: Continue` 和后续 Redis 条目的 `rateLimitExceeded` 条件，
 让本地通过的请求不访问 Redis，仅超额请求使用共享补充额度。
 参见[完整配置](./rate-limit-redis.md#本地额度与-redis-补充准入)。
+
+## 响应头策略
+
+自定义响应头名称还须遵守限流功能自身的保留名称限制。
+
+[响应头策略](../gateway-api/response-header-modifier.md#response-header-policy).

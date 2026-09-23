@@ -17,6 +17,7 @@
 
 use crate::common::KeyGet;
 use crate::duration::parse_duration;
+use crate::response_header_policy::is_protected_response_header;
 use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::HashSet;
@@ -146,7 +147,7 @@ impl LimitHeaderNames {
                     "headerNames.{field} must be a valid HTTP header name of at most 256 bytes"
                 ));
             }
-            if crate::gwapi_types::is_http_framing_or_hop_by_hop_header_name(name) {
+            if is_protected_response_header(name) {
                 return Some(format!(
                     "headerNames.{field} must not use an HTTP framing or hop-by-hop header name"
                 ));
@@ -782,8 +783,9 @@ mod tests {
 
     #[test]
     fn limit_header_names_reject_framing_and_hop_by_hop_names() {
-        for name in
-            std::iter::once("content-length").chain(crate::gwapi_types::HTTP_HOP_BY_HOP_HEADER_NAMES.iter().copied())
+        for name in ["content-length", "proxy-connection"]
+            .into_iter()
+            .chain(crate::gwapi_types::HTTP_HOP_BY_HOP_HEADER_NAMES.iter().copied())
         {
             let headers = LimitHeaderNames {
                 reset: Some(name.to_ascii_uppercase()),

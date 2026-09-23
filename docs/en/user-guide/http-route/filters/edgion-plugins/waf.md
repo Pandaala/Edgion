@@ -39,6 +39,12 @@ Reference this resource from an `HTTPRoute` with the usual Gateway API
 | `requestBody.inspection` | no | `prefix` | Inspect a bounded prefix before backend dispatch, or use `full` for complete-body inspection |
 | `requestBody.prefixSize` | no | `64KiB` | Prefix window from 1 byte through `1MiB`, using size strings such as `16KiB`, `100k`, or `1m`; only valid with `prefix` |
 
+For a disruptive `deny` or `block` action, `status` must be a final HTTP status
+from `200` through `599`. Informational responses, including `101 Switching
+Protocols`, cannot be used as local WAF replies. The same range applies to
+phase default deny statuses; an out-of-range value rejects the ruleset during
+compilation.
+
 Rule source is never emitted through WAF errors, plugin logs, response bodies,
 metrics, or Rust `Debug`. Gateway admin configuration output replaces it with
 `[redacted]`; controller-to-gateway configuration sync still carries the real

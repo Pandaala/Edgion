@@ -11,16 +11,21 @@ knowledge_type: regression-guards
 
 ## Conclusion
 
-`proxy_set_header_map_pairs` is a *whole-map replacement*: after it runs, the live
-session header map for that map id must equal exactly the guest's new vector.
+`proxy_set_header_map_pairs` replaces editable fields. Request-map operations
+retain their existing semantics. Response maps retain protocol-owned protected
+fields even when the guest omits or attempts to overwrite them; ordinary omitted
+fields are removed and valid replacement duplicates are preserved. See the
+[response mutation policy](../../plugin-runtime/regression-guards/response-header-mutation-policy.md).
+Exact response-map equality with an untrusted guest vector is not the contract.
 The old `HeaderOp::ReplaceAll` apply arm only iterated the new pairs and called
 `set_*`, so (a) names present before the replace but omitted from the new vector
 survived on the live session (a security leak — omitted `authorization`/cookie/
 identity headers forwarded upstream), and (b) repeated names in the new vector
 collapsed to the last value (`insert_header` replace-all). Both are fixed.
 
-Re-reports of the "ReplaceAll leaves old headers" or "duplicate replacement
-values collapse" form are **not accepted**.
+A new report must identify an editable omitted field or an allowed duplicate
+that is mishandled in current code. Retaining protected response fields is
+intentional; historical tests are not proof of current correctness.
 
 ## Core Rationale
 
@@ -31,16 +36,16 @@ captures the deduplicated (case-insensitive) set of header names present in the
 guest snapshot *before* `*pairs = new_pairs`, and stores it in
 `HeaderOp::ReplaceAll { map, remove, pairs }`. This is consistent with the live
 session at apply time because prior queued ops are drained in order onto the
-session before the `ReplaceAll` op, so the captured names equal the session's
-names just before the replace is applied.
+session before the `ReplaceAll` op. Rejected protected response operations can
+make the guest snapshot differ from the live map; those names are outside the
+editable replacement contract.
 
 **2. `apply_ops` removes then re-installs.**
 
 `apply_ops` (`edgion-gateway/src/plugins/http/wasm/plugin.rs`) first calls
 `remove_*` once per name in `remove` (`remove_header` clears all values for a
-name), then installs the new vector with `set_*` for the first occurrence of
-each name and `append_*` for later duplicates. This makes the result a true
-replacement and keeps non-combinable fields (multiple `Set-Cookie`) distinct
+name), subject to response policy, then installs the allowed new vector with `set_*` for the first occurrence of
+each name and `append_*` for later duplicates. This replaces the editable fields and keeps non-combinable fields (multiple `Set-Cookie`) distinct
 instead of collapsing to the last value.
 
 **3. Same header-list family as F-001 / gateway-plugins-02.**
@@ -63,7 +68,7 @@ omitted names, which the per-header `Set`/`Add`/`Remove` ops never needed.
 
 ## Re-evaluation Triggers
 
-Re-open only if:
+Re-evaluate if:
 
 - The op-drain model changes so queued ops are no longer applied in order onto
   the session (the snapshot-consistency argument in rationale 1 would break).
@@ -84,3 +89,5 @@ Re-open only if:
 ## Resolution references
 
 - `runtime-03` — 2026-07-18.
+
+- `unify-response-header-mutation-policy` — response replace-all retains protected fields; current verification is recorded in the shared policy page.

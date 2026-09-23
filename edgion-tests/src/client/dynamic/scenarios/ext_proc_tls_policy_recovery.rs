@@ -4,6 +4,7 @@
 use crate::dynamic::scenario::{PhaseSuite, Scenario, ScenarioRunFuture};
 use crate::dynamic::ScenarioCtx;
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
+use crate::suites::status::helpers::controller_local_status;
 use anyhow::{ensure, Context, Result};
 use serde_json::{json, Value};
 use std::time::{Duration, Instant};
@@ -175,7 +176,9 @@ async fn check_publication(ctx: &TestContext, phase: Phase) -> Result<()> {
                 "wrong local validation policy"
             );
             if !gateway {
-                let accepted = value["status"]["conditions"]
+                let local_status = controller_local_status(&value["status"], "edgion.io/gateway-controller")
+                    .context("missing Edgion controller observation")?;
+                let accepted = local_status["conditions"]
                     .as_array()
                     .context("missing conditions")?
                     .iter()

@@ -3,6 +3,7 @@
 //! Validate before publication in both Controller and Gateway. Errors never
 //! include configured names or values, which may contain credentials.
 
+use crate::response_header_policy::validate_response_header_mutation;
 use http::HeaderValue;
 
 use super::grpc_route::{GRPCHeaderFilter, GRPCRouteFilter, GRPCRouteFilterType, GRPCRouteRule};
@@ -57,6 +58,15 @@ fn validate_actions(set: &[HTTPHeader], add: &[HTTPHeader], remove: &[String]) -
 }
 
 impl HTTPHeaderFilter {
+    /// Validate ordinary response mutations in addition to the shared syntax.
+    pub fn validate_response(&self) -> Result<(), &'static str> {
+        self.validate()?;
+        validate_response_actions(
+            self.set.as_deref().unwrap_or_default(),
+            self.add.as_deref().unwrap_or_default(),
+            self.remove.as_deref().unwrap_or_default(),
+        )
+    }
     /// Validate the standard Gateway API header shape and HTTP transport syntax.
     pub fn validate(&self) -> Result<(), &'static str> {
         validate_actions(
@@ -68,6 +78,15 @@ impl HTTPHeaderFilter {
 }
 
 impl GRPCHeaderFilter {
+    /// Response fields follow the same ownership policy for HTTP and gRPC.
+    pub fn validate_response(&self) -> Result<(), &'static str> {
+        self.validate()?;
+        validate_response_actions(
+            self.set.as_deref().unwrap_or_default(),
+            self.add.as_deref().unwrap_or_default(),
+            self.remove.as_deref().unwrap_or_default(),
+        )
+    }
     /// Apply the same header contract as HTTPRoute and EdgionPlugins.
     pub fn validate(&self) -> Result<(), &'static str> {
         validate_actions(
@@ -76,6 +95,18 @@ impl GRPCHeaderFilter {
             self.remove.as_deref().unwrap_or_default(),
         )
     }
+}
+
+fn validate_response_actions(set: &[HTTPHeader], add: &[HTTPHeader], remove: &[String]) -> Result<(), &'static str> {
+    for name in set
+        .iter()
+        .chain(add)
+        .map(|header| header.name.as_str())
+        .chain(remove.iter().map(String::as_str))
+    {
+        validate_response_header_mutation(name)?;
+    }
+    Ok(())
 }
 
 fn validate_pairing(
@@ -131,7 +162,7 @@ pub fn validate_http_filter_list(filters: &[HTTPRouteFilter]) -> Result<(), &'st
             config.validate()?;
         }
         if let Some(config) = &filter.response_header_modifier {
-            config.validate()?;
+            config.validate_response()?;
         }
     }
     Ok(())
@@ -155,7 +186,7 @@ pub fn validate_grpc_filter_list(filters: &[GRPCRouteFilter]) -> Result<(), &'st
             config.validate()?;
         }
         if let Some(config) = &filter.response_header_modifier {
-            config.validate()?;
+            config.validate_response()?;
         }
     }
     Ok(())
@@ -306,6 +337,25 @@ mod tests {
             let grpc: GRPCRouteRule = serde_json::from_value(rule).unwrap();
             assert_eq!(http.header_modifier_error().is_none(), valid);
             assert_eq!(grpc.header_modifier_error(), http.header_modifier_error());
+        }
+    }
+
+    #[test]
+    fn response_header_policy_is_directional_for_native_rules_and_backends() {
+        for name in ["Content-Length", "cOnNeCtIoN", "Proxy-Connection", "TE"] {
+            for (kind, field, valid) in [
+                ("ResponseHeaderModifier", "responseHeaderModifier", false),
+                ("RequestHeaderModifier", "requestHeaderModifier", true),
+            ] {
+                for action in ["set", "add", "remove"] {
+                    let value = if action == "remove" {
+                        json!([name])
+                    } else {
+                        json!([{"name":name, "value":"1"}])
+                    };
+                    assert_lists(json!([{"type":kind, field:{action:value}}]), valid);
+                }
+            }
         }
     }
 

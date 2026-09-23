@@ -211,7 +211,7 @@ impl Compiler {
         self.continue_patch_stacks.push(vec![]);
 
         self.emit(OpCode::LoopInit);
-        let loop_start = self.current_offset(); // continue target = condition check
+        let loop_start = self.current_offset(); // LoopBack target = condition check
 
         self.compile_expr(condition)?;
         let exit_jump = self.emit(OpCode::JumpIfFalse(0));
@@ -222,9 +222,8 @@ impl Compiler {
         }
         self.leave_scope()?;
 
-        let continue_target = loop_start;
-
         let back_offset = loop_start as i32 - (self.current_offset() as i32 + 1);
+        let continue_target = self.current_offset();
         self.emit(OpCode::LoopBack(back_offset));
 
         self.patch_jump(exit_jump);
@@ -242,7 +241,7 @@ impl Compiler {
                 *o = offset;
             }
         }
-        // Backpatch continue jumps → condition check (loop_start)
+        // Backpatch continue jumps to LoopBack so each iteration is counted.
         let continue_patches = self
             .continue_patch_stacks
             .pop()

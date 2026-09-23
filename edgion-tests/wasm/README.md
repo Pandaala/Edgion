@@ -26,7 +26,7 @@ request headers so unrelated scenarios never interfere.
 | request headers         | otherwise                          | request header `x-wasm-added: yes` is added                             |
 | request body            | guest exports the hook and request headers continue | `on_http_request_body` runs once with the complete body and `end_of_stream = true`; for a non-empty body, add its length, callback count, and terminal count to shared `requestbodybytes`, `requestbodycalls`, and `requestbodyeos` |
 | response headers        | always                             | response header `x-wasm-resp: yes` is added                             |
-| response body           | wired at body-filter stage         | read-only: add each chunk's byte count to shared `bodybytes`            |
+| response body           | wired at body-filter stage         | add each chunk's byte count to shared `bodybytes`; with `pluginConfig.string: response-body-probe`, return Pause for nonempty chunks so the host metric records the callback |
 | background (`on_tick`)  | `on_configure` sets a 1s tick      | increment shared `ticks` each tick; when `pluginConfig` is a callout origin, also dispatch GET `<origin>/verify` (`authorization: Bearer valid-token`) — a 200 callback bumps shared `calloutticks` (origin must be in `calloutAllowlist`; a rejected dispatch is ignored) |
 
 The guest source is `header-demo/src/lib.rs`. It uses `set_root_context` (for the
@@ -37,6 +37,12 @@ The request-header hook runs before the request-body hook, so
 The integration scenario sends a body first, then reads those counters on a
 later request to prove the whole-body callback ran exactly once and received
 the terminal flag.
+
+Response-body filters use a separate Wasm runtime from request plugins, so a
+request-header probe cannot read their shared counters. The BodyPlugins suite
+instead checks a per-request increase in
+`edgion_wasm_body_pause_unsupported_total` with the response-body probe enabled.
+The host records Pause and continues streaming the response.
 
 > **ABI export/import names.** The host and guest agree on the canonical
 > proxy-wasm names the official SDK emits: the response-body hook is

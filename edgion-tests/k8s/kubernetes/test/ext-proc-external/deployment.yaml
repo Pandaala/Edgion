@@ -1,0 +1,62 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ext-proc-external
+  namespace: edgion-test
+  labels:
+    app: ext-proc-external
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ext-proc-external
+  template:
+    metadata:
+      labels:
+        app: ext-proc-external
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+      containers:
+        - name: processor
+          image: docker.io/pandaala/edgion-test-server:v0.1.1
+          imagePullPolicy: Always
+          command: ["/usr/local/bin/ext_proc_external_processor"]
+          args:
+            - --allow-cluster-listen
+            - --server-dns-name=ext-proc-external.edgion-test.svc.cluster.local
+            - --grpc-listen=0.0.0.0:30044
+            - --admin-listen=0.0.0.0:30045
+            - --tls-listen=0.0.0.0:30046
+            - --mtls-listen=0.0.0.0:30047
+            - --tls-material-dir=/var/lib/edgion/ext-proc-external-tls
+          ports:
+            - name: grpc
+              containerPort: 30044
+            - name: admin
+              containerPort: 30045
+            - name: tls-grpc
+              containerPort: 30046
+            - name: mtls-grpc
+              containerPort: 30047
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: admin
+            periodSeconds: 2
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          volumeMounts:
+            - name: tls-material
+              mountPath: /var/lib/edgion
+      volumes:
+        - name: tls-material
+          emptyDir: {}

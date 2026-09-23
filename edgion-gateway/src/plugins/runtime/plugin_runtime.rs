@@ -2280,6 +2280,11 @@ impl PluginRuntime {
                 session_adapter.set_terminate();
                 break;
             } else if let PluginRunningResult::ErrResponse { status, body } = result {
+                let (status, body) = if edgion_resources::http_status::is_valid_final_http_status(status) {
+                    (status, body)
+                } else {
+                    (500, None)
+                };
                 if is_grpc_request {
                     // gRPC route: route to the gRPC-native error path. The
                     // HTTP-style resp built below would otherwise be discarded
@@ -2313,11 +2318,14 @@ impl PluginRuntime {
                         let _ = resp.remove_header(&http::header::TRANSFER_ENCODING);
                         let _ = resp.insert_header("content-length", len.to_string());
 
-                        let _ = session_adapter
+                        if session_adapter
                             .write_response_header(Box::new(resp), body.is_none())
-                            .await;
-                        if let Some(b) = body {
-                            let _ = session_adapter.write_response_body(Some(b), true).await;
+                            .await
+                            .is_ok()
+                        {
+                            if let Some(b) = body {
+                                let _ = session_adapter.write_response_body(Some(b), true).await;
+                            }
                         }
                     }
                 }
@@ -2902,6 +2910,39 @@ mod tests {
 
         assert_eq!(ctx.final_downstream_status(), Some(403));
         assert_eq!(client_closed_count(&ctx), 1);
+    }
+
+    #[tokio::test]
+    async fn invalid_request_plugin_reply_uses_a_final_500() {
+        let (mut session, mut client) = plugin_test_session().await;
+        let mut ctx = EdgionHttpContext::default();
+        let mut runtime = PluginRuntime::new();
+        runtime.add_request_filter(Box::new(FixedResultFilter(PluginRunningResult::ErrResponse {
+            status: 100,
+            body: None,
+        })));
+
+        runtime.run_request_plugins(&mut session, &mut ctx).await;
+
+        assert_eq!(ctx.final_downstream_status(), Some(500));
+        assert!(String::from_utf8_lossy(&read_client_response(&mut client).await).starts_with("HTTP/1.1 500"));
+    }
+
+    #[tokio::test]
+    async fn failed_request_reply_claim_does_not_write_a_body() {
+        let (mut session, _client) = plugin_test_session().await;
+        let mut ctx = EdgionHttpContext::default();
+        assert!(ctx.claim_final_response(204));
+        let mut runtime = PluginRuntime::new();
+        runtime.add_request_filter(Box::new(FixedResultFilter(PluginRunningResult::ErrResponse {
+            status: 403,
+            body: Some(Bytes::from_static(b"denied")),
+        })));
+
+        runtime.run_request_plugins(&mut session, &mut ctx).await;
+
+        assert!(session.response_written().is_none());
+        assert_eq!(ctx.final_downstream_status(), Some(204));
     }
 
     /// Read whatever the gateway wrote to the duplex client end. The gRPC
@@ -4256,6 +4297,12 @@ mod header_modifier_validation_tests {
     #[tokio::test]
     async fn header_modifier_invalid_native_lists_seal_all_four_constructors() {
         for filters in [
+            json!([{"type": "ResponseHeaderModifier", "responseHeaderModifier": {
+                "set": [{"name": "Content-Length", "value": "123"}]
+            }}]),
+            json!([{"type": "ResponseHeaderModifier", "responseHeaderModifier": {
+                "remove": ["Proxy-Connection"]
+            }}]),
             json!([{"type": "RequestHeaderModifier"}]),
             json!([{"type": "ResponseHeaderModifier"}]),
             json!([{"type": "RequestHeaderModifier", "requestHeaderModifier": {
@@ -4287,6 +4334,23 @@ mod header_modifier_validation_tests {
             ] {
                 assert_rejected(&runtime).await;
             }
+        }
+    }
+
+    #[tokio::test]
+    async fn response_header_policy_schema_and_gateway_reject_the_same_plugin() {
+        for name in ["Content-Length", "Proxy-Connection", "Connection"] {
+            let plugin: EdgionPlugin = serde_json::from_value(json!({
+                "type": "ResponseHeaderModifier", "config": {"remove": [name]}
+            }))
+            .unwrap();
+            assert!(plugin.validation_error().is_some());
+            let mut runtime = PluginRuntime::new();
+            let errors =
+                runtime.add_from_upstream_response_filters(&[UpstreamResponseFilterEntry::new(plugin)], "default");
+            assert!(!errors.is_empty());
+            runtime.seal_fail_closed();
+            assert_rejected(&runtime).await;
         }
     }
 
@@ -4437,6 +4501,32 @@ mod ext_ref_index_tests {
                 runtime.request_plugins_iter().next().map(|filter| filter.name()),
                 Some("RejectInvalidConfig")
             );
+        }
+    }
+
+    #[tokio::test]
+    async fn external_auth_response_header_policy_preserves_native_runtime_defense() {
+        for header in ["CoNtEnT-LeNgTh", "WWW-Authenticate", "Set-Cookie", "Content-Encoding"] {
+            let config: ForwardAuthConfig = serde_json::from_value(serde_json::json!({
+                "target": {"name": "auth", "port": 8080},
+                "decision": {"clientHeaders": [header]}
+            }))
+            .unwrap();
+            let filters = vec![make_external_auth_filter(config)];
+            for runtime in [
+                PluginRuntime::from_httproute_filters_for_rule(&filters, "ns1", &MirrorTuning::default()),
+                PluginRuntime::from_httproute_filters_for_backend(&filters, "ns1", &MirrorTuning::default()),
+            ] {
+                assert_eq!(runtime.request_plugins_count(), 1);
+                assert_eq!(
+                    runtime.request_plugins_iter().next().map(|filter| filter.name()),
+                    Some(if header == "CoNtEnT-LeNgTh" {
+                        "RejectInvalidConfig"
+                    } else {
+                        "ForwardAuth"
+                    })
+                );
+            }
         }
     }
 

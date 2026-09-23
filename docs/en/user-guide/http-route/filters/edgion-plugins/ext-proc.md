@@ -124,7 +124,7 @@ Conditional actions check whether the header name exists, including when its exi
 The processor **cannot** mutate:
 
 - **Pseudo-headers** (`:method`, `:path`, `:status`, …) — preventing routing/method tampering.
-- **Hop-by-hop / framing headers** — `Content-Length`, `Transfer-Encoding`, `Connection`, `Keep-Alive`, `Upgrade`, `TE`, `Trailer`, `Proxy-Connection`. These are owned by the proxy; allowing an external service to set them would enable request/response smuggling. (Mirrors Envoy's default `disallow_system_headers` posture.)
+- **Hop-by-hop / framing headers** — `Content-Length`, `Transfer-Encoding`, `Connection`, `Keep-Alive`, `Upgrade`, `TE`, `Trailer`, `Proxy-Connection`. These request restrictions remain unchanged. Responses additionally reject `Proxy-Authenticate` and `Proxy-Authorization` under the shared response policy; trailers retain their additional validation. The proxy owns framing and connection fields.
 
 Any attempt to mutate a protected header is dropped and noted in the access log.
 
@@ -329,3 +329,9 @@ Governed by `failureModeAllow`: fail-close (`false`) returns `500`; fail-open (`
 - [ForwardAuth Plugin](./forward-auth.md)
 - [Response Rewrite Plugin](./response-rewrite.md)
 - [Filters overview](../README.md)
+
+## Response header policy
+
+Response, trailer, and local reply mutations use the shared policy, including `Proxy-Authenticate` and `Proxy-Authorization`. Request-header restrictions remain unchanged. Trailer-specific validation, including gRPC status requirements, still applies.
+
+[Response header policy](../gateway-api/response-header-modifier.md#response-header-policy).

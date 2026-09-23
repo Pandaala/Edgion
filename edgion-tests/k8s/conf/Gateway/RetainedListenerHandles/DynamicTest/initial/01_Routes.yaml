@@ -1,0 +1,54 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: retained-handles-http
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: retained-handles-gateway
+      sectionName: http
+  hostnames:
+    - retained-http.sandbox.example.com
+  rules:
+    - matches:
+        - path:
+            type: Exact
+            value: /health
+      backendRefs:
+        - name: test-http
+          port: 30001
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: GRPCRoute
+metadata:
+  name: retained-handles-grpc
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: retained-handles-gateway
+      sectionName: grpc
+  hostnames:
+    - retained-grpc.sandbox.example.com
+  rules:
+    - matches:
+        - method:
+            type: Exact
+            service: test.TestService
+            method: SayHello
+      backendRefs:
+        - name: test-grpc
+          port: 30021
+---
+apiVersion: gateway.networking.k8s.io/v1alpha2
+kind: TCPRoute
+metadata:
+  name: retained-handles-tcp
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: retained-handles-gateway
+      sectionName: tcp
+  rules:
+    - backendRefs:
+        - name: test-tcp
+          port: 30010

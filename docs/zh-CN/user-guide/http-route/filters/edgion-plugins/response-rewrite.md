@@ -234,13 +234,10 @@ HTTP 响应头名称是大小写不敏感的，但建议使用标准的大小写
 
 ### 4. 响应分帧头
 
-`set`、`add` 和 `rename` 的目标名称不能是 `Content-Length` 或
-`Transfer-Encoding`（大小写不敏感）。这些字段由网关管理，以确保代理响应
-始终保持流式传输并具有正确的分帧。
-
-可以删除这两个分帧头，也可以将它们作为 `rename` 的源名称并重命名为非分帧
-响应头。例如，将 `Content-Length` 重命名为 `X-Upstream-Length` 是有效的；
-将其他响应头重命名为 `Content-Length` 则无效。
+所有 `set`、`add`、`remove` 及 `rename` 的源和目标名称均遵循
+[共享响应头策略](../gateway-api/response-header-modifier.md#response-header-policy)。
+受保护字段不能被删除，也不能作为重命名源，包括将 `Content-Length` 重命名为
+`X-Upstream-Length`。两端名称会在修改前完成校验。
 
 ---
 

@@ -122,3 +122,9 @@ Canary 内部的 `config.enable: false` 只暂停选路，仍保留剥离。外�
 - [Canary](./canary.md)、[Dynamic Upstream](./dynamic-upstream.md)、[Direct Endpoint](./direct-endpoint.md)、[RegionRoute](./region-route.md)——各插件特有的 value 来源与示例。
 - [过滤器总览](../overview.md)
 - 设计文档：[`entry-level-dye.md`](../../../../../../skills/01-architecture/02-gateway/entry-level-dye.md)（完整机制、校验与运行时渲染细节）。
+
+## 响应头策略
+
+响应目标除染色专属限制外还遵循共享策略；请求染色保留独立规则。
+
+[响应头策略](../gateway-api/response-header-modifier.md#response-header-policy).

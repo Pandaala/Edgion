@@ -31,5 +31,9 @@ into the testing-gated router.
 single-threaded (the guard is a thread-local — no rayon/spawn_blocking), and never add an
 overriding `impl Serialize` / `#[serde(into)]` on a type above a secret field.
 
-Spec: `docs/superpowers/specs/2026-06-07-gateway-admin-api-harden-design.md`.
+Current authority: `AGENTS.md` (CRD schema and resolved-secret transport invariant),
+`skills/00-design-rules.md` (sensitive-data rule A), and the
+`list_client_resources` implementation and regression test in
+`edgion-gateway/src/api/mod.rs`. D0004 removed a reference to a deleted
+historical design file; it did not change this redaction requirement.
 Sibling note: `gateway-admin-loopback-default.md`.

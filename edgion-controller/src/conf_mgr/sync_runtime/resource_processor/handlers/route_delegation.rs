@@ -1135,6 +1135,47 @@ mod tests {
     // =====================================================================
 
     #[test]
+    fn external_auth_response_header_policy_delegation_and_recovery() {
+        for parent_scope in [false, true] {
+            for backend_scope in [false, true] {
+                // Delegation references cannot carry backend filters at all;
+                // backend-scoped auth belongs to the child's Service backend.
+                if parent_scope && backend_scope {
+                    continue;
+                }
+                for header in ["Content-Length", "WWW-Authenticate"] {
+                    let filter = serde_json::json!({"type": "ExternalAuth", "externalAuth": {
+                        "target": {"name": "auth", "port": 8080},
+                        "decision": {"clientHeaders": [header]}
+                    }});
+                    let mut delegation = delegating_rule("/api", "infra", "child");
+                    let mut terminal = service_rule("/api/child", "child-svc");
+                    let target = if parent_scope { &mut delegation } else { &mut terminal };
+                    if backend_scope {
+                        target["backendRefs"][0]["filters"] = serde_json::json!([filter]);
+                    } else {
+                        target["filters"] = serde_json::json!([filter]);
+                    }
+                    let parent = parent_with_rules(serde_json::json!([delegation, service_rule("/health", "healthy")]));
+                    let child = route("infra", "child", serde_json::json!({"rules": [terminal]}));
+                    let outcome = flatten_route(&parent, &FakeLookup::new(vec![child]));
+                    let rules = outcome.resolved_rules.as_ref().unwrap();
+                    let valid = header == "WWW-Authenticate";
+                    assert_eq!(rules.len(), if valid { 2 } else { 1 });
+                    assert!(rules
+                        .iter()
+                        .any(|rule| rule.backend_refs.as_ref().unwrap()[0].name == "healthy"));
+                    if !valid && !parent_scope {
+                        assert!(dropped_messages(&outcome)
+                            .iter()
+                            .any(|message| message.contains("ExternalAuth")));
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn malformed_parent_header_modifier_drops_only_its_delegating_rule() {
         let mut bad = delegating_rule("/api", "infra", "child");
         bad["filters"] = serde_json::json!([{"type": "RequestHeaderModifier"}]);

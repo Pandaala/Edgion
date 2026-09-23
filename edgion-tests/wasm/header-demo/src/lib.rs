@@ -36,7 +36,9 @@
 //!
 //! Response body (`on_http_response_body`, only when wired at the
 //! upstreamResponseBodyFilter stage): read-only; adds each chunk's byte count to
-//! the shared `bodybytes` counter.
+//! the shared `bodybytes` counter. With `pluginConfig: response-body-probe`, a
+//! nonempty chunk also returns Pause so the host's unsupported-Pause metric
+//! can prove this separate plugin instance ran the hook.
 //!
 //! Background: `on_configure` sets a 1s tick; `on_tick` increments the shared
 //! `ticks` counter. When `pluginConfig` is a callout origin (e.g.
@@ -92,6 +94,7 @@ struct DemoRoot {
     /// Callout origin polled from `on_tick`, taken from `pluginConfig`.
     /// None (no/blank config) disables the tick-callout branch.
     callout_origin: Option<String>,
+    response_body_probe: bool,
 }
 
 impl Context for DemoRoot {
@@ -107,10 +110,12 @@ impl Context for DemoRoot {
 impl RootContext for DemoRoot {
     fn on_configure(&mut self, _plugin_configuration_size: usize) -> bool {
         // pluginConfig, when present, is the origin to poll from on_tick.
-        self.callout_origin = self
+        let config = self
             .get_plugin_configuration()
             .map(|b| String::from_utf8_lossy(&b).trim().to_string())
             .filter(|s| !s.is_empty());
+        self.response_body_probe = config.as_deref() == Some("response-body-probe");
+        self.callout_origin = config.filter(|_| !self.response_body_probe);
         // Drive a 1s background tick that bumps the shared `ticks` counter.
         self.set_tick_period(Duration::from_millis(1000));
         true
@@ -138,7 +143,10 @@ impl RootContext for DemoRoot {
     }
 
     fn create_http_context(&self, _context_id: u32) -> Option<Box<dyn HttpContext>> {
-        Some(Box::new(HeaderDemo::default()))
+        Some(Box::new(HeaderDemo {
+            response_body_probe: self.response_body_probe,
+            ..HeaderDemo::default()
+        }))
     }
 
     fn get_type(&self) -> Option<ContextType> {
@@ -153,6 +161,7 @@ struct HeaderDemo {
     /// Set while a callout is in flight so the callback knows this request is
     /// mid-auth (defensive; the host routes the callback by context anyway).
     awaiting_callout: bool,
+    response_body_probe: bool,
 }
 
 impl Context for HeaderDemo {
@@ -242,6 +251,9 @@ impl HttpContext for HeaderDemo {
         // Read-only observation: count the chunk's bytes into shared state.
         if body_size > 0 {
             bump_shared_counter(self, "bodybytes", body_size as u64);
+            if self.response_body_probe {
+                return Action::Pause;
+            }
         }
         Action::Continue
     }

@@ -438,3 +438,9 @@ spec:
 示例关闭本地限流响应头：本地直接放行时不报告 Redis 额度，执行 Redis 时才报告
 其自身额度，不生成合并剩余额度。额外的有效条件或禁用 Redis 条目可以主动跳过
 补充检查；`Continue` 不会强制后续限流器执行。参见[条件引用规则](./conditions.md#ratelimitexceeded)。
+
+## 响应头策略
+
+自定义响应头名称还须遵守限流功能自身的保留名称限制。
+
+[响应头策略](../gateway-api/response-header-modifier.md#response-header-policy).

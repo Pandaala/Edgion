@@ -24,6 +24,27 @@ residency. Handle pressure coalesces once per generation; other limit failures
 are atomic and never silently truncate raw bytes. The bucket key is choice
 index plus `Content`, `ReasoningContent`, or `ToolArguments(tool_call_index)`.
 
+Window admission precedes allocation. Combined residency counts the live raw
+storage and container capacities together with owned input metadata, replacement
+Strings, staged append metadata, explicit token scratch, semantic results, edits,
+and output while they coexist. Reused raw handle tables and ownership transfers
+are charged once. `RawWindow.bucket_metadata` caches admitted bucket/fragment/range
+capacity and is updated on commit or generation cleanup, avoiding repeated scans
+of old ranges on each append. A rejected `try_retain` returns the original record
+without translating or cloning its ranges. These are visible-capacity bounds,
+not allocator/RSS bounds: fixed allocator/library control blocks and arbitrary
+caller-owned Bytes backing are excluded; retained input is normalized, and
+returned outputs transfer to the consumer's separately bounded ownership.
+
+Overlap is derived from successful output decisions: Release appends decoded
+current text, semantic Replace appends emitted replacement text, and Discard
+preserves prior context. Opaque replacement or an unobservable raw release resets
+continuity. Terminal decisions construct no next-generation overlap. Replacement
+preview only computes encoded length over borrowed text; actual application still
+validates edits and admits their allocation peak. See the SSE regression guards
+for [context continuity](../../04-review/sse/regression-guards/window-emitted-context.md)
+and [capacity admission](../../04-review/sse/regression-guards/window-capacity-admission.md).
+
 ExtProc response STREAMED remains transport-chunk based. Semantic-window
 integration requires explicit configuration plus a reviewed source-aware
 wrapper or driver contract; placing an ordinary processor before the current

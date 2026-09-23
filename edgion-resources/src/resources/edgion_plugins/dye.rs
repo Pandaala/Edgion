@@ -8,6 +8,7 @@
 use super::conditions::PluginConditions;
 use crate::gwapi_types::is_valid_header_token;
 use crate::resources::common::request_template::{CompiledTemplate, SecretPolicy, TemplateAdmission, VariablePolicy};
+use crate::response_header_policy::validate_response_header_mutation;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -126,6 +127,11 @@ impl DyeSuite {
     ) -> Option<String> {
         for (direction, rules) in [("request", &self.request), ("response", &self.response)] {
             for rule in rules {
+                if direction == "response" {
+                    if let Err(error) = validate_response_header_mutation(&rule.name) {
+                        return Some(error.to_string());
+                    }
+                }
                 if !is_valid_header_token(&rule.name) {
                     return Some(format!("dye.{}: invalid header name '{}'", direction, rule.name));
                 }
@@ -254,6 +260,23 @@ mod tests {
     fn valid_minimal_suite_passes() {
         let s = suite(vec![rule("X-Track", &[DyeOutcome::Success], None)], vec![]);
         assert!(s.validation_error(true, ALL_CAPS, &[]).is_none());
+    }
+
+    #[test]
+    fn response_header_policy_does_not_widen_request_dye_restrictions() {
+        for name in ["Keep-Alive", "Proxy-Connection", "Proxy-Authenticate"] {
+            let request = suite(vec![rule(name, &[DyeOutcome::Success], None)], vec![]);
+            assert!(request.validation_error(true, ALL_CAPS, &[]).is_none());
+            let response = suite(vec![], vec![rule(name, &[DyeOutcome::Success], None)]);
+            assert_eq!(
+                response.validation_error(true, ALL_CAPS, &[]).as_deref(),
+                Some("response header mutation targets a protected protocol field")
+            );
+        }
+        for name in ["Content-Type", "Content-Encoding", "Set-Cookie", "X-Region"] {
+            let response = suite(vec![], vec![rule(name, &[DyeOutcome::Success], None)]);
+            assert!(response.validation_error(true, ALL_CAPS, &[]).is_none());
+        }
     }
 
     #[test]

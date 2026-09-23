@@ -16,6 +16,7 @@ use crate::runtime::GatewayInfo;
 use bytes::Bytes;
 use edgion_resources::resources::http_route::SessionPersistence;
 use edgion_resources::resources::lb_policy::ParsedLBPolicy;
+use edgion_resources::response_header_policy::is_protected_response_header;
 use edgion_resources::uri_utils;
 use edgion_resources::{EdgionErrorCode, EdgionInfoCode, HTTPRouteMatch};
 use pingora_core::protocols::l4::socket::SocketAddr;
@@ -2048,12 +2049,25 @@ pub enum PendingHeaderOp {
 }
 
 impl PendingHeaderOp {
+    pub(crate) fn name(&self) -> &str {
+        match self {
+            Self::Set { name, .. }
+            | Self::Append { name, .. }
+            | Self::AddIfAbsent { name, .. }
+            | Self::OverwriteIfExists { name, .. }
+            | Self::Remove { name } => name,
+        }
+    }
+
     /// Apply this queued operation to a real ResponseHeader.
     ///
     /// Values are already validated and retain their raw bytes and sensitivity.
     /// Invalid header names are still silently dropped by `insert_header` /
     /// `append_header`, preserving the queue's best-effort response behavior.
     pub fn apply(self, response_header: &mut ResponseHeader) {
+        if is_protected_response_header(self.name()) {
+            return;
+        }
         match self {
             PendingHeaderOp::Set { name, value } => {
                 let _ = response_header.insert_header(name, value);
@@ -2824,6 +2838,10 @@ impl EdgionHttpContext {
 
     #[inline]
     pub(crate) fn queue_pending_response_header_op(&mut self, op: PendingHeaderOp) {
+        // This queue carries ordinary plugin operations, never body-owner framing.
+        if is_protected_response_header(op.name()) {
+            return;
+        }
         self.ensure_plugin_aux().pending_response_header_ops.push(op);
     }
 

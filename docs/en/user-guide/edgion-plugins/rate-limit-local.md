@@ -559,3 +559,9 @@ are unchanged. Continue alone provides no rejection for local excess.
 Pair it with an aliased, earlier local entry and a subsequent Redis entry using
 `conditions.run` / `rateLimitExceeded` to consume Redis only for overflow. See the
 [full configuration](../http-route/filters/edgion-plugins/rate-limit-redis.md#local-allowance-before-redis-overflow-admission).
+
+## Response header policy
+
+Configured response destinations follow the shared response header restrictions.
+
+[Response header policy](../http-route/filters/gateway-api/response-header-modifier.md#response-header-policy).

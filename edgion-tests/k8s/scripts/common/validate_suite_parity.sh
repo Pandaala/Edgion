@@ -261,11 +261,6 @@ def parse_scope_exceptions(text, project_root, canonical, covered):
             "symbol": "LocalCertificates",
             "tokens": ("edgion-tests/certs", "expired-client.crt", "30043"),
         },
-        "external_processor_fixture": {
-            "path": "edgion-tests/src/client/dynamic/scenarios/ext_proc_tls_policy_recovery.rs",
-            "symbol": "EDGION_EXT_PROC_EXTERNAL_REQUIRED",
-            "tokens": ("EDGION_EXT_PROC_EXTERNAL_ADMIN_URL", "accepted_connections", "observe_cases"),
-        },
         "k8s_status_subresource_fixture": {
             "path": "edgion-tests/src/client/dynamic/scenarios/acme_gatewayref_ownership.rs",
             "symbol": "AcmeGatewayRefOwnership",
@@ -281,30 +276,10 @@ def parse_scope_exceptions(text, project_root, canonical, covered):
             "symbol": "Scenario",
             "tokens": ("docker", "OpenLDAP"),
         },
-        "loopback_only_external_fixture": {
-            "path": "edgion-tests/integration/fixtures/ext_proc_external/main.go",
-            "symbol": "validateListenAddress",
-            "tokens": ('host != "127.0.0.1"', "must use literal 127.0.0.1"),
-        },
         "status_subresource_fixture": {
             "path": "config/crd/edgion-crd/edgion_acme_crd.yaml",
             "symbol": "activeChallenges",
             "tokens": ("/status subresource", "subresources:", "status: {}"),
-        },
-        "single_selected_class_l4": {
-            "path": "edgion-tests/k8s/conf/TCPRoute/L4TimeoutHotReload/DynamicTest/initial/02_Gateway_l4-timeout-gw.yaml",
-            "symbol": "l4-timeout-class",
-            "tokens": ("gatewayClassName: l4-timeout-class",),
-        },
-        "single_selected_class_plugin_policy": {
-            "path": "edgion-tests/src/client/dynamic/scenarios/plugin_policy.rs",
-            "symbol": "PluginPolicyDynamic",
-            "tokens": ("GatewayClass_pp-a.yaml", "pp-b"),
-        },
-        "single_selected_class_preflight": {
-            "path": "edgion-tests/k8s/conf/Gateway/PreflightPolicyHotReload/DynamicTest/initial/resources.yaml",
-            "symbol": "preflight-policy-hot-reload",
-            "tokens": ("gatewayClassName: preflight-policy-hot-reload",),
         },
     }
     result = {name: set() for name in canonical}
@@ -357,18 +332,6 @@ def parse_scope_exceptions(text, project_root, canonical, covered):
         evidence_text = evidence.read_text(encoding="utf-8")
         if symbol not in evidence_text or any(token not in evidence_text for token in reason_contract["tokens"]):
             raise InventoryError(f"scope exceptions line {line_number}: evidence no longer supports {reason}")
-        if reason.startswith("single_selected_class_"):
-            controller_config = project_root / "edgion-tests/k8s/kubernetes/controller/configmap.yaml"
-            if "gateway_class: public-gateway" not in controller_config.read_text(encoding="utf-8"):
-                raise InventoryError("single selected GatewayClass exception no longer matches the Kubernetes controller configuration")
-        if reason == "single_selected_class_plugin_policy":
-            fixture_root = project_root / "edgion-tests/k8s/conf/PluginPolicy/DynamicTest/initial"
-            for class_name in ("pp-a", "pp-b"):
-                class_fixture = (fixture_root / f"GatewayClass_{class_name}.yaml").read_text(encoding="utf-8")
-                gateway_fixture = (fixture_root / f"Gateway_{class_name}.yaml").read_text(encoding="utf-8")
-                if not re.search(rf"(?m)^metadata:\s*\n\s+name:\s*{class_name}\s*$", class_fixture) \
-                    or not re.search(rf"(?m)^\s+gatewayClassName:\s*{class_name}\s*$", gateway_fixture):
-                    raise InventoryError(f"PluginPolicyDynamic exception no longer uses private GatewayClass {class_name}")
         placeholders = ("todo", "tbd", "n/a", "later", "same as above")
         if (
             len(rationale.split()) < 8

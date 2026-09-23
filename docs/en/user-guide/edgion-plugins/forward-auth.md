@@ -432,3 +432,9 @@ A: Yes. List multiple plugins in `requestPlugins`; they execute in order. Any no
 - [JwtAuth Plugin](../http-route/filters/edgion-plugins/jwt-auth.md) — JWT token authentication
 - [OpenID Connect Plugin](openid-connect.md) — OIDC/OAuth2 authentication
 - [HTTPRoute Overview](../http-route/overview.md) — HTTPRoute configuration overview
+
+## Response header policy
+
+Configured response destinations follow the shared response header restrictions.
+
+[Response header policy](../http-route/filters/gateway-api/response-header-modifier.md#response-header-policy).

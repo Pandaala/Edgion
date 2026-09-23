@@ -43,7 +43,7 @@ Wasm **不支持**（异步的）`upstreamResponsePlugins` 阶段。
 |---|:---:|---|
 | `proxy_get_header_map_pairs` / `proxy_get_header_map_value` | ✅ | 请求头、响应头，以及（callout 回调内）`HttpCallResponseHeaders`——callout 响应头外加合成的 `:status` |
 | `proxy_replace_header_map_value` / `proxy_add_header_map_value` / `proxy_remove_header_map_value` / `proxy_set_header_map_pairs` | ✅ | 设置/追加/删除/整体替换；钩子返回后应用到真实请求/响应。对 callout 响应 map 的写入被拒绝 |
-| `proxy_send_local_response` | ✅ | 以指定状态码/响应体/头短路请求。响应体按字节原样透传，二进制内容（图片、protobuf 等）不会被改写；空响应体产生无 body 的响应。也可在 `proxy_on_http_call_response` 内调用（鉴权 callout 后拒绝） |
+| `proxy_send_local_response` | ✅ | 以最终 HTTP 状态码（`200`–`599`）、响应体和响应头短路请求；无效状态码会替换为 `500`。响应体按字节原样透传，二进制内容（图片、protobuf 等）不会被改写；空响应体产生无 body 的响应。也可在 `proxy_on_http_call_response` 内调用（鉴权 callout 后拒绝） |
 | `proxy_http_call` | ✅（请求头 + tick 阶段） | 见 [HTTP callout](#http-calloutpause恢复)。请求 body、响应头、响应 body 阶段均返回 `UNIMPLEMENTED`（12）；tick 外呼须由所属插件的 allowlist 授权（见[定时器](#shared-data-与定时器)） |
 | `proxy_continue_request` / `proxy_continue_stream(Request)` | ✅ | 恢复因 callout 挂起的请求。`proxy_continue_response` 仍是接受型 no-op |
 | `proxy_get_shared_data` / `proxy_set_shared_data` | ✅ | 插件运行时 KV + CAS——见 [shared data](#shared-data-与定时器) |
@@ -531,3 +531,9 @@ impl Context for AuthPlugin {
 
 - [ExtProc 插件](./ext-proc.md)——gRPC 推模式方案（见 [callout 与 ExtProc 的分工](#callout-与-extproc-的分工)）
 - [Filters 总览](../README.md)
+
+## 响应头策略
+
+响应 map 操作及本地回复头遵循此策略。整体替换仅替换可编辑字段，保留受保护字段；允许的重复 `Set-Cookie` 值仍分别保留。被拒绝的操作沿用现有尽力执行方式。
+
+[响应头策略](../gateway-api/response-header-modifier.md#response-header-policy).
