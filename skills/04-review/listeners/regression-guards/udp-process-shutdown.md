@@ -60,14 +60,14 @@ acknowledgement can exceed the grace deadline, so this is not a hard process-exi
 bound. Timeout or a failed task is a shutdown failure and yields a non-zero exit.
 The CLI directly awaits the shutdown operation without an outer cancelling timeout.
 
-Normal cancellation lets an in-progress expiry log/removal pair finish before the
+Normal cancellation lets in-progress retirement and log submission finish before the
 remaining-session pass. Forced abort can abandon unsubmitted terminal logs and
 in-flight datagrams. Log submission uses the existing best-effort logger; it does
 not promise persistence or sink flush. The
 [process-exit log delivery decision](../../link-sys/intentional-design/process-exit-log-delivery-best-effort.md)
-records that independent accepted limitation. Serving-time expiry/activity and same-key receiver
-generation races remain in
-[session retirement](../../../../tasks/todo/retire-udp-sessions-by-generation.md).
+records that independent accepted limitation. Serving-time expiry/activity and
+same-key receiver generation handling are covered by
+[session retirement](udp-session-generation-retirement.md).
 
 ## Verification and re-evaluation
 
@@ -123,5 +123,6 @@ contracts change.
 - `wire-udp-listener-process-shutdown`: confirmed defect, fixed and verified;
   the active source task was removed.
 - `udp-process-shutdown-wire-coverage`: confirmed test gap, closed with the
-  process-level scenario described above. Session-generation retirement and
-  sender persistence remain separate tracked work.
+  process-level scenario described above. Session-generation retirement is
+  covered by [its regression guard](udp-session-generation-retirement.md);
+  sender persistence remains separate tracked work.

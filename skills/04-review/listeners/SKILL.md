@@ -23,6 +23,7 @@ before applying a decision to current code.
 
 - [EGC runtime snapshot publication and lifecycle capture](regression-guards/egc-runtime-snapshot-publication.md)
 - [UDP process shutdown and task completion](regression-guards/udp-process-shutdown.md)
+- [UDP session retirement follows the owning generation](regression-guards/udp-session-generation-retirement.md)
 - [UDP upstream response source must match the pinned backend](regression-guards/udp-upstream-response-source.md)
 - [Full set direct store update](regression-guards/full-set-direct-store-update.md)
 - [Listener Bind Probe — Symmetric With UDP (HTTP/HTTPS/TCP/TLS)](regression-guards/listener-bind-probe-symmetric.md)

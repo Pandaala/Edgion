@@ -3,6 +3,7 @@ use crate::plugins::stream::connection_filter_bridge::resolve_route_scope;
 use dashmap::{mapref::entry::Entry, DashMap};
 use parking_lot::Mutex;
 use pingora_core::protocols::l4::socket::SocketAddr as PingoraSocketAddr;
+use std::future::Future;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -101,10 +102,10 @@ fn is_pinned_upstream_source(src: std::net::SocketAddr, pinned: std::net::Socket
 
 /// Client session information with statistics
 struct ClientSession {
-    session_permit: Mutex<Option<OwnedSemaphorePermit>>,
+    _session_permit: OwnedSemaphorePermit,
     upstream_socket: Arc<UdpSocket>,
     upstream_addr: std::net::SocketAddr,
-    last_activity: Mutex<Instant>,
+    lifecycle: Mutex<SessionLifecycle>,
     session_start: Instant,
     packets_sent: AtomicU64,
     packets_received: AtomicU64,
@@ -112,9 +113,21 @@ struct ClientSession {
     bytes_received: AtomicU64,
 }
 
-impl ClientSession {
-    fn release_permit(&self) {
-        self.session_permit.lock().take();
+struct SessionLifecycle {
+    last_activity: Instant,
+    retired: bool,
+}
+
+trait UpstreamDatagramReceiver: Send + Sync {
+    fn recv_from<'a>(
+        &'a self,
+        buf: &'a mut [u8],
+    ) -> impl Future<Output = std::io::Result<(usize, std::net::SocketAddr)>> + Send + 'a;
+}
+
+impl UpstreamDatagramReceiver for UdpSocket {
+    async fn recv_from<'a>(&'a self, buf: &'a mut [u8]) -> std::io::Result<(usize, std::net::SocketAddr)> {
+        UdpSocket::recv_from(self, buf).await
     }
 }
 
@@ -215,7 +228,6 @@ impl EdgionUdpProxy {
         let peers: Vec<_> = self.client_sessions.iter().map(|entry| *entry.key()).collect();
         for peer in peers {
             if let Some((_, session)) = self.client_sessions.remove(&peer) {
-                session.release_permit();
                 self.log_session(peer, &session).await;
             }
         }
@@ -453,10 +465,13 @@ impl EdgionUdpProxy {
         };
 
         let session = Arc::new(ClientSession {
-            session_permit: Mutex::new(Some(session_permit)),
+            _session_permit: session_permit,
             upstream_socket: upstream_socket.clone(),
             upstream_addr,
-            last_activity: Mutex::new(Instant::now()),
+            lifecycle: Mutex::new(SessionLifecycle {
+                last_activity: Instant::now(),
+                retired: false,
+            }),
             session_start: Instant::now(),
             packets_sent: AtomicU64::new(0),
             packets_received: AtomicU64::new(0),
@@ -472,12 +487,21 @@ impl EdgionUdpProxy {
         let sessions_ref = self.client_sessions.clone();
         let downstream = self.socket.clone();
         let sess = session.clone();
+        let upstream_receiver = session.upstream_socket.clone();
         let cancel = self.cancel_token.clone();
         let listener_port = self.listener_port;
 
         children.spawn(self.child_tasks.track_future(async move {
-            Self::handle_upstream_packets(direct_peer_addr, downstream, sessions_ref, sess, cancel, listener_port)
-                .await;
+            Self::handle_upstream_packets(
+                direct_peer_addr,
+                downstream,
+                upstream_receiver,
+                sessions_ref,
+                sess,
+                cancel,
+                listener_port,
+            )
+            .await;
         }));
 
         Ok(session)
@@ -487,9 +511,10 @@ impl EdgionUdpProxy {
     ///
     /// Exits when the session is removed, the cancel token fires, or a
     /// socket error occurs.
-    async fn handle_upstream_packets(
+    async fn handle_upstream_packets<R: UpstreamDatagramReceiver>(
         direct_peer_addr: std::net::SocketAddr,
         downstream_socket: Arc<UdpSocket>,
+        upstream_receiver: Arc<R>,
         client_sessions: Arc<DashMap<std::net::SocketAddr, Arc<ClientSession>>>,
         session: Arc<ClientSession>,
         cancel: CancellationToken,
@@ -498,16 +523,19 @@ impl EdgionUdpProxy {
         let mut buf = vec![0u8; MAX_UDP_PACKET_SIZE];
 
         loop {
-            if !client_sessions.contains_key(&direct_peer_addr) {
+            if session.lifecycle.lock().retired {
                 break;
             }
 
             tokio::select! {
                 biased;
                 _ = cancel.cancelled() => break,
-                result = tokio::time::timeout(Duration::from_secs(1), session.upstream_socket.recv_from(&mut buf)) => {
+                result = tokio::time::timeout(Duration::from_secs(1), upstream_receiver.recv_from(&mut buf)) => {
                     match result {
                         Ok(Ok((len, src))) => {
+                            if session.lifecycle.lock().retired {
+                                break;
+                            }
                             if !is_pinned_upstream_source(src, session.upstream_addr) {
                                 continue;
                             }
@@ -530,6 +558,14 @@ impl EdgionUdpProxy {
                 }
             }
         }
+
+        if Self::retire_session(&client_sessions, direct_peer_addr, &session, None) {
+            let log_entry = Self::session_log_entry(listener_port, direct_peer_addr, &session);
+            drop(buf);
+            drop(upstream_receiver);
+            drop(session);
+            log_udp(&log_entry).await;
+        }
     }
 
     async fn record_upstream_send_result(
@@ -540,9 +576,12 @@ impl EdgionUdpProxy {
     ) {
         match result {
             Ok(bytes_sent) => {
-                session.packets_sent.fetch_add(1, Ordering::Relaxed);
-                session.bytes_sent.fetch_add(bytes_sent as u64, Ordering::Relaxed);
-                *session.last_activity.lock() = Instant::now();
+                let mut lifecycle = session.lifecycle.lock();
+                if !lifecycle.retired {
+                    session.packets_sent.fetch_add(1, Ordering::Relaxed);
+                    session.bytes_sent.fetch_add(bytes_sent as u64, Ordering::Relaxed);
+                    lifecycle.last_activity = Instant::now();
+                }
             }
             Err(_) => {
                 log_udp(&UdpLogEntry::failure(
@@ -564,9 +603,12 @@ impl EdgionUdpProxy {
     ) {
         match result {
             Ok(bytes_sent) => {
-                session.packets_received.fetch_add(1, Ordering::Relaxed);
-                session.bytes_received.fetch_add(bytes_sent as u64, Ordering::Relaxed);
-                *session.last_activity.lock() = Instant::now();
+                let mut lifecycle = session.lifecycle.lock();
+                if !lifecycle.retired {
+                    session.packets_received.fetch_add(1, Ordering::Relaxed);
+                    session.bytes_received.fetch_add(bytes_sent as u64, Ordering::Relaxed);
+                    lifecycle.last_activity = Instant::now();
+                }
             }
             Err(_) => {
                 log_udp(&UdpLogEntry::failure(
@@ -600,23 +642,59 @@ impl EdgionUdpProxy {
         let mut to_remove = Vec::new();
 
         for entry in self.client_sessions.iter() {
-            let last_activity = *entry.value().last_activity.lock();
+            let last_activity = entry.value().lifecycle.lock().last_activity;
             if now.saturating_duration_since(last_activity) > SESSION_TIMEOUT {
                 to_remove.push((*entry.key(), entry.value().clone()));
             }
         }
 
         for (direct_peer_addr, session) in to_remove {
-            self.log_session(direct_peer_addr, &session).await;
-            if let Some((_, removed)) = self.client_sessions.remove(&direct_peer_addr) {
-                removed.release_permit();
+            if Self::retire_session(&self.client_sessions, direct_peer_addr, &session, Some(now)) {
+                let log_entry = Self::session_log_entry(self.listener_port, direct_peer_addr, &session);
+                drop(session);
+                log_udp(&log_entry).await;
             }
         }
     }
 
+    /// Retire only this generation while holding the map entry and lifecycle lock.
+    /// A send that refreshed activity after collection wins over expiration.
+    fn retire_session(
+        client_sessions: &DashMap<std::net::SocketAddr, Arc<ClientSession>>,
+        direct_peer_addr: std::net::SocketAddr,
+        session: &Arc<ClientSession>,
+        expiry_check: Option<Instant>,
+    ) -> bool {
+        let Entry::Occupied(occupied) = client_sessions.entry(direct_peer_addr) else {
+            return false;
+        };
+        if !Arc::ptr_eq(occupied.get(), session) {
+            return false;
+        }
+        let mut lifecycle = session.lifecycle.lock();
+        if lifecycle.retired
+            || expiry_check.is_some_and(|now| now.saturating_duration_since(lifecycle.last_activity) <= SESSION_TIMEOUT)
+        {
+            return false;
+        }
+        lifecycle.retired = true;
+        drop(lifecycle);
+        occupied.remove();
+        true
+    }
+
     async fn log_session(&self, direct_peer_addr: std::net::SocketAddr, session: &ClientSession) {
-        let log_entry = UdpLogEntry::new(
-            self.listener_port,
+        let log_entry = Self::session_log_entry(self.listener_port, direct_peer_addr, session);
+        log_udp(&log_entry).await;
+    }
+
+    fn session_log_entry(
+        listener_port: u16,
+        direct_peer_addr: std::net::SocketAddr,
+        session: &ClientSession,
+    ) -> UdpLogEntry {
+        UdpLogEntry::new(
+            listener_port,
             crate::ctx::canonicalize_ip(direct_peer_addr.ip()),
             direct_peer_addr.port(),
             Some(session.upstream_addr.to_string()),
@@ -627,8 +705,7 @@ impl EdgionUdpProxy {
             session.packets_received.load(Ordering::Relaxed),
             session.bytes_sent.load(Ordering::Relaxed),
             session.bytes_received.load(Ordering::Relaxed),
-        );
-        log_udp(&log_entry).await;
+        )
     }
 
     /// Visible for testing: current session count.
@@ -643,9 +720,65 @@ mod tests {
     use super::*;
     use crate::routes::udp::UdpPortRouteManager;
     use std::net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV6};
+    use tokio::sync::oneshot;
+
+    type ReceiveResult = std::io::Result<(usize, SocketAddr)>;
+
+    struct ControlledReceiver {
+        result: Mutex<Option<oneshot::Receiver<ReceiveResult>>>,
+        started: Semaphore,
+    }
+
+    impl UpstreamDatagramReceiver for ControlledReceiver {
+        async fn recv_from<'a>(&'a self, _buf: &'a mut [u8]) -> ReceiveResult {
+            let result = self.result.lock().take().expect("one controlled receive");
+            self.started.add_permits(1);
+            result.await.expect("controlled receive result")
+        }
+    }
+
+    fn controlled_receiver() -> (Arc<ControlledReceiver>, oneshot::Sender<ReceiveResult>) {
+        let (send, result) = oneshot::channel();
+        (
+            Arc::new(ControlledReceiver {
+                result: Mutex::new(Some(result)),
+                started: Semaphore::new(0),
+            }),
+            send,
+        )
+    }
 
     fn make_test_listener_key(port: u16) -> ListenerKey {
         ListenerKey::new(SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), port), "UDP")
+    }
+
+    async fn make_test_proxy(port: u16) -> Arc<EdgionUdpProxy> {
+        Arc::new(EdgionUdpProxy::new(
+            port,
+            make_test_listener_key(port),
+            Arc::new(UdpPortRouteManager::new()),
+            crate::config::bind_gateway_config(None),
+            UdpSocket::bind("127.0.0.1:0").await.unwrap(),
+            CancellationToken::new(),
+            TaskTracker::new(),
+        ))
+    }
+
+    fn make_test_session(proxy: &EdgionUdpProxy, last_activity: Instant) -> Arc<ClientSession> {
+        Arc::new(ClientSession {
+            _session_permit: proxy.session_permits.clone().try_acquire_owned().unwrap(),
+            upstream_socket: proxy.socket.clone(),
+            upstream_addr: "127.0.0.1:8080".parse().unwrap(),
+            lifecycle: Mutex::new(SessionLifecycle {
+                last_activity,
+                retired: false,
+            }),
+            session_start: last_activity,
+            packets_sent: AtomicU64::new(0),
+            packets_received: AtomicU64::new(0),
+            bytes_sent: AtomicU64::new(0),
+            bytes_received: AtomicU64::new(0),
+        })
     }
 
     #[test]
@@ -754,10 +887,13 @@ mod tests {
         proxy.client_sessions.insert(
             peer,
             Arc::new(ClientSession {
-                session_permit: Mutex::new(Some(proxy.session_permits.clone().try_acquire_owned().unwrap())),
+                _session_permit: proxy.session_permits.clone().try_acquire_owned().unwrap(),
                 upstream_socket: proxy.socket.clone(),
                 upstream_addr: "192.0.2.2:8080".parse().unwrap(),
-                last_activity: Mutex::new(Instant::now()),
+                lifecycle: Mutex::new(SessionLifecycle {
+                    last_activity: Instant::now(),
+                    retired: false,
+                }),
                 session_start: Instant::now(),
                 packets_sent: AtomicU64::new(5),
                 packets_received: AtomicU64::new(3),
@@ -856,16 +992,17 @@ mod tests {
         let upstream_socket = Arc::new(UdpSocket::bind("127.0.0.1:0").await.unwrap());
         let expired_time = Instant::now() - Duration::from_secs(120);
         let session = Arc::new(ClientSession {
-            session_permit: Mutex::new(Some(
-                proxy
-                    .session_permits
-                    .clone()
-                    .try_acquire_owned()
-                    .expect("test session permit"),
-            )),
+            _session_permit: proxy
+                .session_permits
+                .clone()
+                .try_acquire_owned()
+                .expect("test session permit"),
             upstream_socket,
             upstream_addr: "127.0.0.1:8080".parse().unwrap(),
-            last_activity: Mutex::new(expired_time),
+            lifecycle: Mutex::new(SessionLifecycle {
+                last_activity: expired_time,
+                retired: false,
+            }),
             session_start: expired_time,
             packets_sent: AtomicU64::new(5),
             packets_received: AtomicU64::new(3),
@@ -900,16 +1037,17 @@ mod tests {
         // Insert an active session (recent last_activity)
         let upstream_socket = Arc::new(UdpSocket::bind("127.0.0.1:0").await.unwrap());
         let session = Arc::new(ClientSession {
-            session_permit: Mutex::new(Some(
-                proxy
-                    .session_permits
-                    .clone()
-                    .try_acquire_owned()
-                    .expect("test session permit"),
-            )),
+            _session_permit: proxy
+                .session_permits
+                .clone()
+                .try_acquire_owned()
+                .expect("test session permit"),
             upstream_socket,
             upstream_addr: "127.0.0.1:8080".parse().unwrap(),
-            last_activity: Mutex::new(Instant::now()),
+            lifecycle: Mutex::new(SessionLifecycle {
+                last_activity: Instant::now(),
+                retired: false,
+            }),
             session_start: Instant::now(),
             packets_sent: AtomicU64::new(0),
             packets_received: AtomicU64::new(0),
@@ -923,5 +1061,129 @@ mod tests {
 
         proxy.cleanup_expired_sessions().await;
         assert_eq!(proxy.session_count(), 1);
+    }
+
+    #[tokio::test]
+    async fn expiry_candidate_refreshed_before_retirement_stays_active() {
+        let proxy = make_test_proxy(19993).await;
+        let peer: SocketAddr = "192.0.2.1:12345".parse().unwrap();
+        let session = make_test_session(&proxy, Instant::now() - Duration::from_secs(120));
+        proxy.client_sessions.insert(peer, session.clone());
+        let candidate_time = Instant::now();
+
+        EdgionUdpProxy::record_upstream_send_result(Ok(3), &session, proxy.listener_port, peer).await;
+        assert!(!EdgionUdpProxy::retire_session(
+            &proxy.client_sessions,
+            peer,
+            &session,
+            Some(candidate_time),
+        ));
+        assert_eq!(proxy.session_count(), 1);
+        assert!(!session.lifecycle.lock().retired);
+        assert_eq!(session.packets_sent.load(Ordering::Relaxed), 1);
+    }
+
+    #[tokio::test]
+    async fn retired_generation_cannot_remove_replacement_or_keep_receiver_alive() {
+        let proxy = make_test_proxy(19992).await;
+        let peer: SocketAddr = "192.0.2.2:12346".parse().unwrap();
+        let old = make_test_session(&proxy, Instant::now() - Duration::from_secs(120));
+        proxy.client_sessions.insert(peer, old.clone());
+        assert!(EdgionUdpProxy::retire_session(
+            &proxy.client_sessions,
+            peer,
+            &old,
+            Some(Instant::now()),
+        ));
+        let replacement = make_test_session(&proxy, Instant::now());
+        proxy.client_sessions.insert(peer, replacement.clone());
+        assert!(!EdgionUdpProxy::retire_session(
+            &proxy.client_sessions,
+            peer,
+            &old,
+            None,
+        ));
+
+        tokio::time::timeout(
+            Duration::from_secs(1),
+            EdgionUdpProxy::handle_upstream_packets(
+                peer,
+                proxy.socket.clone(),
+                proxy.socket.clone(),
+                proxy.client_sessions.clone(),
+                old.clone(),
+                proxy.cancel_token.clone(),
+                proxy.listener_port,
+            ),
+        )
+        .await
+        .expect("retired receiver should exit despite replacement");
+        assert!(Arc::ptr_eq(
+            proxy.client_sessions.get(&peer).unwrap().value(),
+            &replacement
+        ));
+        assert_eq!(proxy.session_permits.available_permits(), MAX_UDP_SESSIONS - 2);
+        drop(old);
+        assert_eq!(proxy.session_permits.available_permits(), MAX_UDP_SESSIONS - 1);
+    }
+
+    #[tokio::test]
+    async fn receiver_cancellation_retires_session_and_releases_permit() {
+        let proxy = make_test_proxy(19991).await;
+        let peer: SocketAddr = "192.0.2.3:12347".parse().unwrap();
+        let session = make_test_session(&proxy, Instant::now());
+        proxy.client_sessions.insert(peer, session.clone());
+        let cancel = CancellationToken::new();
+        let (receiver, _send) = controlled_receiver();
+        let handle = tokio::spawn(EdgionUdpProxy::handle_upstream_packets(
+            peer,
+            proxy.socket.clone(),
+            receiver.clone(),
+            proxy.client_sessions.clone(),
+            session.clone(),
+            cancel.clone(),
+            proxy.listener_port,
+        ));
+        receiver.started.acquire().await.unwrap().forget();
+        cancel.cancel();
+        tokio::time::timeout(Duration::from_secs(1), handle)
+            .await
+            .expect("pending receiver should stop on cancellation")
+            .unwrap();
+        assert_eq!(proxy.session_count(), 0);
+        assert!(session.lifecycle.lock().retired);
+        assert_eq!(proxy.session_permits.available_permits(), MAX_UDP_SESSIONS - 1);
+        drop(session);
+        assert_eq!(proxy.session_permits.available_permits(), MAX_UDP_SESSIONS);
+    }
+
+    #[tokio::test]
+    async fn receiver_error_retires_session_and_releases_permit() {
+        let proxy = make_test_proxy(19990).await;
+        let peer: SocketAddr = "192.0.2.4:12348".parse().unwrap();
+        let session = make_test_session(&proxy, Instant::now());
+        proxy.client_sessions.insert(peer, session.clone());
+        let (receiver, send) = controlled_receiver();
+        let handle = tokio::spawn(EdgionUdpProxy::handle_upstream_packets(
+            peer,
+            proxy.socket.clone(),
+            receiver.clone(),
+            proxy.client_sessions.clone(),
+            session.clone(),
+            proxy.cancel_token.clone(),
+            proxy.listener_port,
+        ));
+        receiver.started.acquire().await.unwrap().forget();
+        send.send(Err(std::io::Error::other("controlled receive failure")))
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(1), handle)
+            .await
+            .expect("receiver error should stop the task")
+            .unwrap();
+        assert_eq!(proxy.session_count(), 0);
+        assert!(session.lifecycle.lock().retired);
+        assert_eq!(proxy.session_permits.available_permits(), MAX_UDP_SESSIONS - 1);
+        drop(session);
+        assert_eq!(proxy.session_permits.available_permits(), MAX_UDP_SESSIONS);
     }
 }
