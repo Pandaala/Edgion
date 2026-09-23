@@ -32,9 +32,10 @@ they are `None` after the gRPC/YAML → preparse → runtime path. Only `CorsCon
 (`cors.rs`) builds them; its sole caller `CorsConfig::new` is unused by the runtime. The old
 `Cors::new` did `Arc::new(config.clone())` with no init call, so `is_origin_allowed` fell into the
 single-origin `else` branch (raw `allow_origins == origin` string compare, which never matches a
-comma-separated string) and skipped the regex branch entirely. `validation_error()` at preparse
-only re-compiles each regex pattern for *syntax* (it does not build the `#[serde(skip)]` fields),
-so `seal_fail_closed` never fired for a syntactically-valid config.
+comma-separated string) and skipped the regex branch entirely. At the time,
+`validation_error()` at preparse only re-compiled each regex pattern for *syntax* (and did not
+build the `#[serde(skip)]` fields), so `seal_fail_closed` never fired for a
+syntactically valid config. The current validator also checks the merged expression.
 
 **2. The route runtime is the current construction path**
 
@@ -49,23 +50,22 @@ For a freshly deserialized config, a missing compiled matcher cannot match an or
 that matcher. This is the deny-direction consequence covered by the historical constructor fix;
 it is not a proof that every initialization error disables the whole CORS configuration.
 On `validate_and_init` error both construction sites retain the config and emit `tracing::warn!`.
-Initialization may already have populated other fields before a later regex compilation fails;
-raw exact/wildcard matching is also independent of compiled fields.
+Historically, a merged-regex failure could occur after the origins cache was populated. The
+current validator rejects that error before initialization mutates cached fields; raw exact
+matching remains independent of compiled fields.
 
 Construction runs at plugin build (config-apply / hot-reload), off the request path, so this
 tracing does not violate the data-plane no-tracing rule. The shared `validation_error()` rejects
-credential-policy violations, invalid method/header tokens, and individually invalid regexes
-before initialization. It does not prove that wrapped/merged runtime regex compilation succeeds.
-The former claim that all construction errors are unreachable for operator input was too broad.
-Full compilation parity is therefore still open: Controller ingest can accept a config whose
-merged runtime regex only fails later at Gateway construction, which is why the deny-safe
-fallback above must stay. It is tracked by
-[merged-regex validation parity](../../../../tasks/todo/align-cors-merged-regex-validation-parity.md).
-That task supersedes the former pointer to `precompute-cors-response-headers`, which closed on
-2026-09-22 having delivered request-path header preparation only (see
-[response-header values borrow](../intentional-design/response-header-values-borrowed.md))
-without touching this parity item. See [shared list validation](token-list-validation.md) for the
-bounded current correction.
+credential-policy violations, invalid method/header tokens, and regex lists whose wrapped/merged
+runtime expression cannot compile. Both validation and initialization use
+`origin_regex_patterns` and `compile_merged_patterns`, including the HTTPS-only `*.domain`
+shorthand and the separate timing-origin matcher. A second list item reusing the first item's
+named capture group is rejected at ingest with the field and one-based item number; the
+diagnostic does not echo operator regex content. The Gateway construction fallback remains for
+unexpected failures. This closes
+`align-cors-merged-regex-validation-parity.md`; the earlier `precompute-cors-response-headers`
+task delivered request-path header preparation separately (see
+[response-header values borrow](../intentional-design/response-header-values-borrowed.md)).
 
 **4. Regression locked at the constructor→evaluator boundary**
 
@@ -92,10 +92,8 @@ Re-open only if:
 - A new `#[serde(skip)]` runtime field is added to `CorsConfig` and either construction site is not
   updated to populate it.
 - `validate_and_init` and `validation_error` diverge such that an operator-reachable config passes
-  preparse but fails matcher build at construction. Merged-regex parity is a known open gap tracked
-  by [merged-regex validation parity](../../../../tasks/todo/align-cors-merged-regex-validation-parity.md);
-  assess the remaining initialized and raw matching fields before describing any construction
-  fallback as deny-safe.
+  preparse but fails matcher build at construction. Assess the remaining initialized and raw
+  matching fields before describing any construction fallback as deny-safe.
 
 ## Reference Cases
 

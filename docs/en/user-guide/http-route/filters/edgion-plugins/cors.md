@@ -86,6 +86,8 @@ Existing credential restrictions still apply.
 | `timingAllowOrigins` | String | none | `Timing-Allow-Origin` header value. Supports `*` / `**` |
 | `timingAllowOriginsByRegex` | Array\<String\> | none | Regex patterns for `Timing-Allow-Origin` matching |
 
+Patterns in each regex list are combined into one matcher. The Controller rejects a list if the combined expression cannot compile, such as two entries that reuse the same named capture group. The error identifies the field and entry number without echoing the pattern.
+
 ### Special-value notes
 
 The `allowOrigins` value supports several magic forms:

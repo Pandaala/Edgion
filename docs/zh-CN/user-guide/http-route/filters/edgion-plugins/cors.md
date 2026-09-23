@@ -83,6 +83,8 @@ spec:
 | `timingAllowOrigins` | String | 无 | `Timing-Allow-Origin` 响应头的值。支持 `*` / `**` |
 | `timingAllowOriginsByRegex` | Array\<String\> | 无 | `Timing-Allow-Origin` 来源匹配的正则表达式列表 |
 
+每个正则列表中的表达式会合并为一个匹配器。如果合并后的表达式无法编译（例如两项使用了同名捕获组），Controller 会拒绝该配置。错误信息会指出字段和条目序号，不会回显表达式内容。
+
 ### 特殊值说明
 
 `allowOrigins` 支持多种特殊形式：

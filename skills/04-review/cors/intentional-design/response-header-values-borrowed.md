@@ -106,8 +106,7 @@ APIs gain a zero-copy header-value path.
 - `precompute-cors-response-headers`: refactor task created 2026-09-20, deferred from the
   CORS token-list validation fix; closed 2026-09-22 and its task file removed on close.
   Implemented here with the cache-field requirement deliberately not adopted; see the
-  rejected alternatives above. Its validation/initialization-parity requirement was not
-  delivered and is tracked separately in
-  [merged-regex validation parity](../../../../tasks/todo/align-cors-merged-regex-validation-parity.md).
+  rejected alternatives above. Its validation/initialization-parity requirement was delivered
+  separately; see [constructor and matcher compilation](../regression-guards/new-must-call-validate-and-init.md).
 - Supersedes the "no request-path optimization is claimed" caveat previously carried in
   [token-list-validation](../regression-guards/token-list-validation.md).

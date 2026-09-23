@@ -50,9 +50,9 @@ hyphen, reject empty lists, normalize case, or enforce Gateway API field-length
 limits on these EdgionPlugins strings. Those would reject supported inputs or
 change wire values beyond this fix.
 
-Shared input checks do not imply complete regex compilation parity: stateless
-validation checks individual patterns, while initialization still builds merged
-regexes. This page claims nothing about request-path header preparation; that
+The shared validator now checks the merged regexes used by initialization as well;
+see [constructor and matcher compilation](new-must-call-validate-and-init.md).
+This page claims nothing about request-path header preparation; that
 decision now lives in
 [response-header values borrow](../intentional-design/response-header-values-borrowed.md).
 

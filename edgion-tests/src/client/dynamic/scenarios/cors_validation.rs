@@ -20,6 +20,7 @@ enum Phase {
     Absent,
     Valid,
     Invalid(&'static str),
+    MergedRegex,
     Disabled,
 }
 
@@ -33,6 +34,10 @@ fn plugin(phase: Phase) -> Value {
     });
     match phase {
         Phase::Invalid(field) => config[field] = json!("Bad Name"),
+        Phase::MergedRegex => {
+            config["allowCredentials"] = json!(false);
+            config["allowOriginsByRegex"] = json!([r"(?P<sub>[a-z]+)\.example\.com", r"(?P<sub>[a-z]+)\.example\.org"]);
+        }
         Phase::Disabled => config["allowMethods"] = json!("Bad Name"),
         _ => {}
     }
@@ -67,7 +72,7 @@ async fn check(ctx: &TestContext, phase: Phase) -> Result<()> {
             entry["enable"].as_bool().unwrap_or(true) == expected_entry["enable"].as_bool().unwrap_or(true),
             "Controller has a different enable state"
         );
-        for field in ["allowMethods", "allowHeaders", "exposeHeaders"] {
+        for field in ["allowMethods", "allowHeaders", "exposeHeaders", "allowOriginsByRegex"] {
             ensure!(
                 entry["config"][field] == expected_entry["config"][field],
                 "Controller has a different {field}"
@@ -77,7 +82,7 @@ async fn check(ctx: &TestContext, phase: Phase) -> Result<()> {
             .as_array()
             .and_then(|conditions| conditions.iter().find(|c| c["type"] == "Accepted"))
             .context("missing Accepted condition")?;
-        let invalid = matches!(phase, Phase::Invalid(_));
+        let invalid = matches!(phase, Phase::Invalid(_) | Phase::MergedRegex);
         if let Some(generation) = resource["metadata"]["generation"].as_i64() {
             ensure!(accepted["observedGeneration"] == generation, "stale Accepted condition");
         }
@@ -93,11 +98,19 @@ async fn check(ctx: &TestContext, phase: Phase) -> Result<()> {
                     .is_some_and(|message| message.contains(field)),
                 "missing field diagnostic"
             );
+        } else if matches!(phase, Phase::MergedRegex) {
+            ensure!(accepted["reason"] == "Invalid", "unexpected invalid reason");
+            ensure!(
+                accepted["message"]
+                    .as_str()
+                    .is_some_and(|message| message.contains("allow_origins_by_regex item 2")),
+                "missing merged-regex diagnostic"
+            );
         }
     }
 
     for method in [Method::GET, Method::OPTIONS] {
-        if !matches!(phase, Phase::Valid | Phase::Invalid(_)) && method == Method::OPTIONS {
+        if !matches!(phase, Phase::Valid | Phase::Invalid(_) | Phase::MergedRegex) && method == Method::OPTIONS {
             continue;
         }
         let preflight = method == Method::OPTIONS;
@@ -113,7 +126,7 @@ async fn check(ctx: &TestContext, phase: Phase) -> Result<()> {
         let response = request.send().await?;
         let expected = match phase {
             Phase::Absent => 404,
-            Phase::Invalid(_) => 500,
+            Phase::Invalid(_) | Phase::MergedRegex => 500,
             Phase::Valid if preflight => 204,
             _ => 200,
         };
@@ -202,6 +215,10 @@ static PHASES: &[PhaseSuite] = &[
         factory: || Box::new(Suite(Phase::Invalid("exposeHeaders"))),
     },
     PhaseSuite {
+        name: "merged_regex",
+        factory: || Box::new(Suite(Phase::MergedRegex)),
+    },
+    PhaseSuite {
         name: "disabled",
         factory: || Box::new(Suite(Phase::Disabled)),
     },
@@ -232,6 +249,7 @@ fn run(ctx: ScenarioCtx) -> ScenarioRunFuture {
                 ("methods", Phase::Invalid("allowMethods")),
                 ("headers", Phase::Invalid("allowHeaders")),
                 ("expose", Phase::Invalid("exposeHeaders")),
+                ("merged_regex", Phase::MergedRegex),
                 ("disabled", Phase::Disabled),
                 ("valid", Phase::Valid),
             ] {

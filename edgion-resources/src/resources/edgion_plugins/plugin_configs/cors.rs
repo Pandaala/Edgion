@@ -127,6 +127,65 @@ impl Default for CorsConfig {
 }
 
 impl CorsConfig {
+    fn origin_regex_patterns(&self) -> (Vec<String>, usize) {
+        let mut patterns = Vec::new();
+        if self.allow_origins.contains(',') {
+            for origin in self.allow_origins.split(',') {
+                if let Some(domain) = origin.trim().strip_prefix("*.") {
+                    patterns.push(format!(r"^https://[^/]+\.{}$", regex::escape(domain)));
+                }
+            }
+        } else if let Some(domain) = self.allow_origins.strip_prefix("*.") {
+            patterns.push(format!(r"^https://[^/]+\.{}$", regex::escape(domain)));
+        }
+        let wildcard_count = patterns.len();
+        if let Some(user_patterns) = &self.allow_origins_by_regex {
+            patterns.extend(user_patterns.iter().map(|p| format!("^({})$", p)));
+        }
+        (patterns, wildcard_count)
+    }
+
+    fn compile_merged_patterns(
+        patterns: &[String],
+        field: &str,
+        generated_count: usize,
+    ) -> Result<Option<Regex>, String> {
+        if patterns.is_empty() {
+            return Ok(None);
+        }
+        let merged = patterns
+            .iter()
+            .map(|p| {
+                if p.starts_with('(') {
+                    p.clone()
+                } else {
+                    format!("({})", p)
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("|");
+        Regex::new(&merged).map(Some).map_err(|_| {
+            let failing_index = (generated_count..patterns.len()).find(|&index| {
+                let prefix = patterns[..=index]
+                    .iter()
+                    .map(|p| {
+                        if p.starts_with('(') {
+                            p.clone()
+                        } else {
+                            format!("({})", p)
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join("|");
+                Regex::new(&prefix).is_err()
+            });
+            match failing_index {
+                Some(index) => format!("Invalid regex in {field} item {}", index - generated_count + 1),
+                None => format!("Invalid generated regex in {field}"),
+            }
+        })
+    }
+
     /// Create a new CorsConfig from deserialized config (for EdgionPlugin system)
     /// This initializes runtime caches after deserialization
     pub fn new(mut config: CorsConfig) -> Result<Self, String> {
@@ -141,76 +200,31 @@ impl CorsConfig {
             return Err(error);
         }
 
-        // Parse comma-separated origins into HashMap and collect wildcard patterns
-        let mut wildcard_patterns = Vec::new();
+        // Parse comma-separated origins into HashMap.
 
         if self.allow_origins.contains(',') {
             let mut cache = HashMap::new();
             for origin in self.allow_origins.split(',') {
                 let origin = origin.trim();
-                if !origin.is_empty() {
-                    // Check for subdomain wildcard: *.example.com
-                    if let Some(domain) = origin.strip_prefix("*.") {
-                        // Convert to regex: ^https://[^/]+\.example\.com$
-                        // HTTPS-only by design: the shorthand would otherwise silently allow
-                        // http:// origins, which is unsafe in the face of subdomain takeover or
-                        // legacy http subdomains. For http origins (e.g. local dev), use
-                        // `allow_origins_by_regex` instead.
-                        let pattern = format!(r"^https://[^/]+\.{}$", regex::escape(domain));
-                        wildcard_patterns.push(pattern);
-                    } else {
-                        cache.insert(origin.to_string(), true);
-                    }
+                if !origin.is_empty() && !origin.starts_with("*.") {
+                    cache.insert(origin.to_string(), true);
                 }
             }
             if !cache.is_empty() {
                 self.origins_cache = Some(cache);
             }
-        } else if self.allow_origins.starts_with("*.") {
-            // Single subdomain wildcard (HTTPS-only — see above for rationale)
-            let domain = &self.allow_origins[2..];
-            let pattern = format!(r"^https://[^/]+\.{}$", regex::escape(domain));
-            wildcard_patterns.push(pattern);
         }
 
-        // Compile regex patterns for origins (including wildcards and user-provided regex)
-        let mut all_patterns = wildcard_patterns;
-
-        if let Some(ref patterns) = self.allow_origins_by_regex {
-            all_patterns.extend(patterns.iter().map(|p| format!("^({})$", p)));
-        }
-
-        if !all_patterns.is_empty() {
-            // Merge all patterns into one regex: (pattern1)|(pattern2)|...
-            let merged = all_patterns
-                .iter()
-                .map(|p| {
-                    if p.starts_with('(') {
-                        p.clone()
-                    } else {
-                        format!("({})", p)
-                    }
-                })
-                .collect::<Vec<_>>()
-                .join("|");
-
-            self.compiled_origins_regex =
-                Some(Regex::new(&merged).map_err(|e| format!("Invalid regex pattern: {}", e))?);
-        }
+        let (patterns, generated_count) = self.origin_regex_patterns();
+        self.compiled_origins_regex =
+            Self::compile_merged_patterns(&patterns, "allow_origins_by_regex", generated_count)?;
 
         // Compile regex patterns for timing origins
         if let Some(ref patterns) = self.timing_allow_origins_by_regex {
             if !patterns.is_empty() {
-                let merged = patterns
-                    .iter()
-                    .map(|p| format!("({})", p))
-                    .collect::<Vec<_>>()
-                    .join("|");
-
-                self.compiled_timing_regex = Some(
-                    Regex::new(&merged)
-                        .map_err(|e| format!("Invalid regex in timing_allow_origins_by_regex: {}", e))?,
-                );
+                let wrapped = patterns.iter().map(|p| format!("({})", p)).collect::<Vec<_>>();
+                self.compiled_timing_regex =
+                    Self::compile_merged_patterns(&wrapped, "timing_allow_origins_by_regex", 0)?;
             }
         }
 
@@ -394,23 +408,14 @@ impl PluginValidation for CorsConfig {
             }
         }
 
-        // Validate user-provided regex patterns (try-compile)
-        if let Some(ref patterns) = self.allow_origins_by_regex {
-            for pattern in patterns {
-                if let Err(e) = regex::Regex::new(pattern) {
-                    return Some(format!("Invalid regex in allow_origins_by_regex '{}': {}", pattern, e));
-                }
-            }
+        let (patterns, generated_count) = self.origin_regex_patterns();
+        if let Err(error) = Self::compile_merged_patterns(&patterns, "allow_origins_by_regex", generated_count) {
+            return Some(error);
         }
-
-        if let Some(ref patterns) = self.timing_allow_origins_by_regex {
-            for pattern in patterns {
-                if let Err(e) = regex::Regex::new(pattern) {
-                    return Some(format!(
-                        "Invalid regex in timing_allow_origins_by_regex '{}': {}",
-                        pattern, e
-                    ));
-                }
+        if let Some(patterns) = &self.timing_allow_origins_by_regex {
+            let wrapped = patterns.iter().map(|p| format!("({})", p)).collect::<Vec<_>>();
+            if let Err(error) = Self::compile_merged_patterns(&wrapped, "timing_allow_origins_by_regex", 0) {
+                return Some(error);
             }
         }
 
@@ -897,8 +902,8 @@ mod tests {
             let err = cors.validation_error();
             assert!(err.is_some());
             let msg = err.unwrap();
-            assert!(msg.contains("Invalid regex in allow_origins_by_regex"));
-            assert!(msg.contains("[invalid regex("));
+            assert_eq!(msg, "Invalid regex in allow_origins_by_regex item 1");
+            assert!(!msg.contains("[invalid regex("));
         }
 
         #[test]
@@ -909,7 +914,37 @@ mod tests {
             };
             let err = cors.validation_error();
             assert!(err.is_some());
-            assert!(err.unwrap().contains("Invalid regex in timing_allow_origins_by_regex"));
+            assert_eq!(err.unwrap(), "Invalid regex in timing_allow_origins_by_regex item 1");
+        }
+
+        #[test]
+        fn test_duplicate_capture_names_rejected_before_origin_matcher_build() {
+            let patterns = vec![
+                r"(?P<sub>[a-z]+)\.example\.com".to_string(),
+                r"(?P<sub>[a-z]+)\.example\.org".to_string(),
+            ];
+            for timing in [false, true] {
+                let mut cors = if timing {
+                    CorsConfig {
+                        timing_allow_origins_by_regex: Some(patterns.clone()),
+                        ..Default::default()
+                    }
+                } else {
+                    CorsConfig {
+                        allow_origins: "*.other.example.com".to_string(),
+                        allow_origins_by_regex: Some(patterns.clone()),
+                        ..Default::default()
+                    }
+                };
+                let field = if timing {
+                    "timing_allow_origins_by_regex"
+                } else {
+                    "allow_origins_by_regex"
+                };
+                let expected = format!("Invalid regex in {field} item 2");
+                assert_eq!(cors.validation_error(), Some(expected.clone()));
+                assert_eq!(cors.validate_and_init(), Err(expected));
+            }
         }
 
         #[test]
