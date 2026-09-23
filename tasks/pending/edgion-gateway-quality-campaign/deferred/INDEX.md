@@ -12,7 +12,7 @@
 | D0008 | resolved | `skills/04-review/plugin-runtime/regression-guards/extension-ref-tokenized-plugin-log-contract.md` | B0043 |
 | D0009 | resolved | `skills/04-review/routing/regression-guards/retry-budget-owns-pingora-loop-capacity.md` | B0056 |
 | D0010 | resolved-with-D0009 | `skills/04-review/routing/regression-guards/retry-budget-owns-pingora-loop-capacity.md` | B0056 |
-| D0011 | ready-after-campaign-freeze | `tasks/todo/add-preflight-policy-hot-reload-integration-coverage.md` | B0065 |
+| D0011 | coverage-added | `skills/04-review/cors/regression-guards/preflight-policy-egc-hot-reload.md` | B0065 |
 | D0012 | resolved | `skills/04-review/listeners/regression-guards/egc-runtime-snapshot-publication.md` | B0066 |
 | D0013 | ready-after-campaign-freeze | `tasks/todo/add-duplicate-host-policy-hot-reload-integration-coverage.md` | B0066 |
 | D0014 | resolved | `skills/04-review/tls/regression-guards/edgion-tls-serving-chain-install.md` | B0075 |

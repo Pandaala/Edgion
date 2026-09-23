@@ -433,6 +433,9 @@
     },
     "Gateway/DuplicateHostPolicyHotReload/Redirect": {
       "http": 31984
+    },
+    "Gateway/PreflightPolicyHotReload": {
+      "http": 31985
     }
   }
 }

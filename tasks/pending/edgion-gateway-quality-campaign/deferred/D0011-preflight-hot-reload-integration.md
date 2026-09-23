@@ -2,7 +2,7 @@
 
 ## Meta
 
-- Status: ready-after-campaign-freeze
+- Status: coverage-added
 - Severity: low
 - Discovered in: B0065, `edgion-gateway/src/routes/http/proxy_http/preflight_handler.rs`
 - Category: integration coverage
@@ -20,6 +20,9 @@ Existing `edgion-tests/**` files are frozen for this campaign. Adding the
 scenario safely requires updating the integration inventory and runtime fixture
 outside the campaign mutation lane.
 
-## Canonical task
+## Outcome
 
-- `tasks/todo/add-preflight-policy-hot-reload-integration-coverage.md`
+- The `PreflightPolicyHotReload` dynamic scenario now covers the live update on
+  one HTTP listener address and persistent connection. The user requested that
+  tests not be run in this task, so runtime execution is not claimed.
+- `skills/04-review/cors/regression-guards/preflight-policy-egc-hot-reload.md`

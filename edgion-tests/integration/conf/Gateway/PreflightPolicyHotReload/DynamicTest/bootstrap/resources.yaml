@@ -1,0 +1,95 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: preflight-policy-hot-reload
+spec:
+  controllerName: edgion.io/gateway-controller
+  parametersRef:
+    group: edgion.io
+    kind: EdgionGatewayConfig
+    name: preflight-policy-hot-reload
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: preflight-policy-hot-reload
+  namespace: edgion-test
+spec:
+  gatewayClassName: preflight-policy-hot-reload
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 31985
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: preflight-policy-fallback
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: preflight-policy-hot-reload
+      sectionName: http
+  hostnames:
+    - fallback.preflight-policy.sandbox.example.com
+  rules:
+    - backendRefs:
+        - name: test-http
+          port: 30001
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: preflight-policy-plugin
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: preflight-policy-hot-reload
+      sectionName: http
+  hostnames:
+    - plugin.preflight-policy.sandbox.example.com
+  rules:
+    - filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: preflight-policy-hot-reload
+      backendRefs:
+        - name: test-http
+          port: 30001
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: preflight-policy-native
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: preflight-policy-hot-reload
+      sectionName: http
+  hostnames:
+    - native.preflight-policy.sandbox.example.com
+  rules:
+    - filters:
+        - type: CORS
+          cors:
+            allowOrigins:
+              - https://app.example.com
+            allowMethods:
+              - GET
+      backendRefs:
+        - name: test-http
+          port: 30001
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: preflight-policy-hot-reload
+  namespace: edgion-test
+spec:
+  requestPlugins:
+    - type: Cors
+      config:
+        allowOrigins: https://app.example.com
+        allowMethods: GET

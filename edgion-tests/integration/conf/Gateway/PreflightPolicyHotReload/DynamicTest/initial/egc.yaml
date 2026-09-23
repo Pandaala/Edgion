@@ -1,0 +1,8 @@
+apiVersion: edgion.io/v1alpha1
+kind: EdgionGatewayConfig
+metadata:
+  name: preflight-policy-hot-reload
+spec:
+  preflightPolicy:
+    mode: cors-standard
+    statusCode: 204

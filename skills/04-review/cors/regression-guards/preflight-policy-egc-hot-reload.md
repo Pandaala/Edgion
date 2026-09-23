@@ -54,6 +54,14 @@ Gateway unit coverage exercises initial publication, update, old-request
 pinning, deletion and default lookup, stateless handler modes and CORS
 delegation, the no-CORS fallback status, and invalid-status fail-close behavior.
 
+The `PreflightPolicyHotReload` dynamic scenario now covers the cross-process
+Controller-to-Gateway update on one HTTP listener address and a persistent
+HTTP/1.1 connection. It checks both preflight
+classification modes, fallback status changes, and native and EdgionPlugins
+CORS ownership while polling for the published behavior. This scenario was
+added for D0011; it has not been executed as part of that task. Request pinning
+remains verified by the Gateway unit coverage above, not by this scenario.
+
 Re-evaluate if EGC updates begin rebuilding listeners, HTTP request policies
 move to another publication boundary, or CORS ownership moves out of the native
 and normal route-plugin pipelines.
@@ -61,6 +69,8 @@ and normal route-plugin pipelines.
 ## Resolution references
 
 - B0065 — preflight policy hot-reload correction.
+- D0011 — cross-process dynamic scenario added; runtime execution not claimed.
 - `edgion-gateway/src/config/edgion_gateway/conf_handler_impl.rs`
 - `edgion-gateway/src/routes/http/proxy_http/pg_new_ctx.rs`
 - `edgion-gateway/src/routes/http/proxy_http/preflight_handler.rs`
+- `edgion-tests/src/client/dynamic/scenarios/preflight_policy_hot_reload.rs`
