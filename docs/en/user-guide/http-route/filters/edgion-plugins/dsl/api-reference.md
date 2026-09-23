@@ -2217,7 +2217,9 @@ function-specific argument count. For `log_fmt`, this means one template plus at
 most 254 values. Excess arguments are rejected during compilation, including
 configuration reload. `maxStackDepth` is a separate execution limit: raising it
 does not increase the argument capacity. Precompiled bytecode is also checked for
-valid argument counts and consistent operand-stack heights before execution.
+valid argument counts, consistent operand-stack heights, and a template loaded
+directly from a string constant before execution. Dynamic templates are rejected
+on both configuration paths.
 
 ```
 log_fmt("user {}", req.header("X-User-Id"))

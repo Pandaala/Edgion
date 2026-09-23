@@ -1,34 +1,49 @@
-//! Operand-stack heights at reachable control-flow joins and exits.
+//! Operand-stack heights and literal-template provenance at reachable control-flow joins.
 
-use crate::bytecode::OpCode;
+use crate::bytecode::{BuiltinId, Constant, OpCode};
 use crate::error::ValidationError;
 
 /// Called after instruction-count, operand, and jump-target validation.
-/// Each PC is scheduled once, bounding time and memory by the code length.
-pub(super) fn validate(code: &[OpCode]) -> Result<(), ValidationError> {
-    let mut heights = vec![None; code.len() + 1];
-    heights[0] = Some(0usize);
-    let mut pending = vec![(0, 0usize)];
-    while let Some((pc, height)) = pending.pop() {
+/// A stack slot is marked only when its value comes directly from a string constant.
+/// Join states weaken monotonically, so loops converge within the bounded code size.
+pub(super) fn validate(code: &[OpCode], constants: &[Constant]) -> Result<(), ValidationError> {
+    let mut states = vec![None; code.len() + 1];
+    states[0] = Some(Vec::<bool>::new());
+    let mut pending = vec![0];
+    while let Some(pc) = pending.pop() {
+        let mut stack = states[pc].as_ref().expect("scheduled instruction has a state").clone();
         if pc == code.len() {
-            if height != 0 {
+            if !stack.is_empty() {
                 return Err(ValidationError::new("operand stack is not empty at end of bytecode"));
             }
             continue;
         }
         let op = code[pc];
         let (pops, pushes) = stack_effect(op);
-        if height < pops {
+        if stack.len() < pops {
             return Err(ValidationError::new(format!(
-                "operand stack underflow at instruction {pc}: requires {pops}, has {height}"
+                "operand stack underflow at instruction {pc}: requires {pops}, has {}",
+                stack.len()
             )));
         }
-        let next_height = height - pops + pushes;
+        if let OpCode::CallBuiltin(BuiltinId::LogFmt, argc) = op {
+            if !stack[stack.len() - usize::from(argc)] {
+                return Err(ValidationError::new(format!(
+                    "log_fmt template at instruction {pc} must come directly from a string constant"
+                )));
+            }
+        }
+        stack.truncate(stack.len() - pops);
+        stack.extend(std::iter::repeat_n(false, pushes));
+        if let OpCode::LoadConst(index) = op {
+            *stack.last_mut().expect("LoadConst pushes a value") =
+                matches!(constants.get(usize::from(index)), Some(Constant::Str(_)));
+        }
         if matches!(
             op,
             OpCode::ReturnNext | OpCode::ReturnTerminate | OpCode::ReturnDeny | OpCode::ReturnGrpcError
         ) {
-            if next_height != 0 {
+            if !stack.is_empty() {
                 return Err(ValidationError::new(format!(
                     "operand stack is not empty at return instruction {pc}"
                 )));
@@ -48,16 +63,29 @@ pub(super) fn validate(code: &[OpCode]) -> Result<(), ValidationError> {
             _ => successors[0] = Some(pc + 1),
         }
         for target in successors.into_iter().flatten() {
-            match heights[target] {
-                Some(previous) if previous != next_height => {
+            match &mut states[target] {
+                Some(previous) if previous.len() != stack.len() => {
                     return Err(ValidationError::new(format!(
-                        "inconsistent operand stack height at instruction {target}: {previous} versus {next_height}"
+                        "inconsistent operand stack height at instruction {target}: {} versus {}",
+                        previous.len(),
+                        stack.len()
                     )));
                 }
-                Some(_) => {}
+                Some(previous) => {
+                    let mut changed = false;
+                    for (slot, incoming) in previous.iter_mut().zip(&stack) {
+                        if *slot && !incoming {
+                            *slot = false;
+                            changed = true;
+                        }
+                    }
+                    if changed {
+                        pending.push(target);
+                    }
+                }
                 None => {
-                    heights[target] = Some(next_height);
-                    pending.push((target, next_height));
+                    states[target] = Some(stack.clone());
+                    pending.push(target);
                 }
             }
         }
@@ -84,15 +112,24 @@ fn stack_effect(op: OpCode) -> (usize, usize) {
 
 #[cfg(test)]
 mod tests {
-    use crate::bytecode::{BuiltinId, CompiledScript, OpCode, BYTECODE_VERSION};
+    use crate::bytecode::{BuiltinId, CompiledScript, Constant, OpCode, BYTECODE_VERSION};
     use crate::validator::{compile_dsl_source, ValidationLimits, Validator};
 
     fn errors(code: Vec<OpCode>, max_loop_depth: u16) -> Vec<String> {
+        errors_with_constants(code, vec![], 0, max_loop_depth)
+    }
+
+    fn errors_with_constants(
+        code: Vec<OpCode>,
+        constants: Vec<Constant>,
+        local_count: u16,
+        max_loop_depth: u16,
+    ) -> Vec<String> {
         let script = CompiledScript {
             version: BYTECODE_VERSION,
             code,
-            constants: vec![],
-            local_count: 0,
+            constants,
+            local_count,
             max_loop_depth,
             source: None,
             source_map: None,
@@ -109,15 +146,146 @@ mod tests {
         use OpCode::*;
         for (count, argc, expected) in [(256, 0, "expects 1 to 255"), (257, 1, "not empty")] {
             let mut code = vec![LoadNil; count];
+            if argc == 1 {
+                code[count - 1] = LoadConst(0);
+            }
             code.extend([CallBuiltin(BuiltinId::LogFmt, argc), Pop, ReturnNext]);
-            let errors = errors(code, 0);
+            let errors = errors_with_constants(code, vec![Constant::Str(String::new())], 0, 0);
             assert!(errors.iter().any(|e| e.contains(expected)), "{errors:?}");
         }
         for argc in [1, 255] {
-            let mut code = vec![LoadNil; argc as usize];
+            let mut code = vec![LoadConst(0)];
+            code.extend(vec![LoadNil; argc as usize - 1]);
             code.extend([CallBuiltin(BuiltinId::LogFmt, argc), Pop, ReturnNext]);
-            assert!(errors(code, 0).is_empty());
+            assert!(errors_with_constants(code, vec![Constant::Str(String::new())], 0, 0).is_empty());
         }
+    }
+
+    #[test]
+    fn log_fmt_requires_literal_template_provenance() {
+        use OpCode::*;
+        let constants = vec![Constant::Str("X-Token".into()), Constant::Int(42)];
+        let cases = [
+            (
+                vec![
+                    LoadConst(0),
+                    CallBuiltin(BuiltinId::ReqHeader, 1),
+                    CallBuiltin(BuiltinId::LogFmt, 1),
+                    Pop,
+                    ReturnNext,
+                ],
+                0,
+            ),
+            (
+                vec![
+                    LoadConst(0),
+                    SetLocal(0),
+                    GetLocal(0),
+                    CallBuiltin(BuiltinId::LogFmt, 1),
+                    Pop,
+                    ReturnNext,
+                ],
+                1,
+            ),
+            (
+                vec![
+                    LoadConst(0),
+                    LoadConst(0),
+                    Add,
+                    CallBuiltin(BuiltinId::LogFmt, 1),
+                    Pop,
+                    ReturnNext,
+                ],
+                0,
+            ),
+            (
+                vec![LoadConst(1), CallBuiltin(BuiltinId::LogFmt, 1), Pop, ReturnNext],
+                0,
+            ),
+        ];
+        for (code, local_count) in cases {
+            let errors = errors_with_constants(code, constants.clone(), local_count, 0);
+            assert!(
+                errors
+                    .iter()
+                    .any(|error| error.contains("must come directly from a string constant")),
+                "{errors:?}"
+            );
+        }
+
+        let valid = vec![
+            LoadConst(0),
+            LoadConst(0),
+            CallBuiltin(BuiltinId::ReqHeader, 1),
+            CallBuiltin(BuiltinId::LogFmt, 2),
+            Pop,
+            ReturnNext,
+        ];
+        assert!(errors_with_constants(valid, constants, 0, 0).is_empty());
+    }
+
+    #[test]
+    fn log_fmt_rechecks_template_when_later_branch_weakens_join() {
+        use OpCode::*;
+        let constants = vec![Constant::Str("X-Token".into()), Constant::Str("other".into())];
+        let code = vec![
+            LoadTrue,
+            JumpIfFalse(2),
+            LoadConst(0),
+            Jump(2),
+            LoadConst(0),
+            CallBuiltin(BuiltinId::ReqHeader, 1),
+            CallBuiltin(BuiltinId::LogFmt, 1),
+            Pop,
+            ReturnNext,
+        ];
+        let errors = errors_with_constants(code, constants.clone(), 0, 0);
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("must come directly from a string constant")),
+            "{errors:?}"
+        );
+
+        let code = vec![
+            LoadTrue,
+            JumpIfFalse(2),
+            LoadConst(0),
+            Jump(1),
+            LoadConst(1),
+            CallBuiltin(BuiltinId::LogFmt, 1),
+            Pop,
+            ReturnNext,
+        ];
+        assert!(errors_with_constants(code, constants, 0, 0).is_empty());
+    }
+
+    #[test]
+    fn log_fmt_rechecks_template_when_loop_back_weakens_entry() {
+        use OpCode::*;
+        let code = vec![
+            LoadConst(0),
+            LoopInit,
+            LoadTrue,
+            JumpIfFalse(2),
+            Jump(5),
+            LoadNil,
+            Pop,
+            LoadConst(0),
+            CallBuiltin(BuiltinId::ReqHeader, 1),
+            LoopBack(-8),
+            LoopEnd,
+            CallBuiltin(BuiltinId::LogFmt, 1),
+            Pop,
+            ReturnNext,
+        ];
+        let errors = errors_with_constants(code, vec![Constant::Str("X-Token".into())], 0, 1);
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("must come directly from a string constant")),
+            "{errors:?}"
+        );
     }
 
     #[test]

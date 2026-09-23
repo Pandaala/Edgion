@@ -455,7 +455,7 @@ impl Validator {
         // Only analyze structurally valid, instruction-bounded bytecode. This
         // checks actual operand flow rather than trusting declared call counts.
         if errors.is_empty() {
-            if let Err(error) = stack::validate(&script.code) {
+            if let Err(error) = stack::validate(&script.code, &script.constants) {
                 errors.push(error);
             }
         }

@@ -107,6 +107,7 @@ async fn route_stats(ctx: &ScenarioCtx) -> Result<RouteStats> {
 
 fn assert_stats(current: RouteStats, absent: RouteStats, present: bool) -> Result<()> {
     let expected = if present { 1 } else { 0 };
+    // Each route manager registers all three Gateway listener keys.
     ensure!(
         current.http_routes == absent.http_routes + expected,
         "HTTP route cache: {current:?}, absent: {absent:?}"
@@ -120,15 +121,15 @@ fn assert_stats(current: RouteStats, absent: RouteStats, present: bool) -> Resul
         "TCP route cache: {current:?}, absent: {absent:?}"
     );
     ensure!(
-        current.http_listeners == absent.http_listeners + 2 * expected,
+        current.http_listeners == absent.http_listeners + 3 * expected,
         "HTTP manager registry: {current:?}, absent: {absent:?}"
     );
     ensure!(
-        current.grpc_listeners == absent.grpc_listeners + 2 * expected,
+        current.grpc_listeners == absent.grpc_listeners + 3 * expected,
         "gRPC manager registry: {current:?}, absent: {absent:?}"
     );
     ensure!(
-        current.tcp_listeners == absent.tcp_listeners + expected,
+        current.tcp_listeners == absent.tcp_listeners + 3 * expected,
         "TCP manager registry: {current:?}, absent: {absent:?}"
     );
     ensure!(

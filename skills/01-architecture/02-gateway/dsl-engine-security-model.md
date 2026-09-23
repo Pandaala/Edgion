@@ -16,7 +16,7 @@ The compile-time layers (parser, validator, compiler, bytecode loader) now live 
 | Layer | Where it runs | What it caps | Code |
 |---|---|---|---|
 | Parser | source → AST | source bytes, AST node count, parse-step budget | `edgion-dsl/src/parser/mod.rs:17,32-46,80-86,96-100` |
-| Validator (post-decode) | bytecode → validated program | instruction count, local-var count, constant pool count & bytes, single-string-constant length, observed loop nest depth, `MakeMap(n)` operand, regex/DFA rebuild, definite JSONPath validation, builtin arity, reachable operand-stack heights | `edgion-dsl/src/validator.rs`, `edgion-dsl/src/validator/stack.rs` |
+| Validator (post-decode) | bytecode → validated program | instruction count, local-var count, constant pool count & bytes, single-string-constant length, observed loop nest depth, `MakeMap(n)` operand, regex/DFA rebuild, definite JSONPath validation, builtin arity, reachable operand-stack heights, and `log_fmt` literal-template provenance | `edgion-dsl/src/validator.rs`, `edgion-dsl/src/validator/stack.rs` |
 | Compiler | AST → bytecode | regex pattern length, literal-pattern enforcement, streaming-DFA validation, definite literal JSONPath enforcement, exact builtin argument encoding | `edgion-dsl/src/compiler/` |
 | Bytecode load | decoded base64 → struct | total decoded bytes ≤ 256 KB | `edgion-dsl/src/bytecode.rs:13,285-301` |
 | VM (per-instruction) | runtime | steps, calls, stack depth, loops, string len, list len, map size | `lang/vm.rs:34-95,132-176` |
@@ -112,9 +112,12 @@ These constants are deliberately **not** runtime-configurable. They protect the 
 
 After structural validation, operand-stack analysis rejects reachable underflow,
 inconsistent heights at branch/loop joins, and extra operands at returns or
-fallthrough. It runs only while loading bytecode, with linear time and memory
-in the bounded instruction count. This does not prove value types or literal
-template provenance; see the [argument and stack regression guard](../../04-review/dsl/regression-guards/builtin-argument-capacity-and-stack-validation.md).
+fallthrough. It also requires the first `log_fmt` argument to come directly
+from a string constant on every reachable path. Joins weaken provenance and
+reschedule a PC when needed, so the analysis is not single-pass. It runs only
+while loading instruction-bounded bytecode. It does not prove general value
+types or placeholder counts for hand-crafted bytecode; see the
+[argument and stack regression guard](../../04-review/dsl/regression-guards/builtin-argument-capacity-and-stack-validation.md).
 
 ## 4. Map and List size caps — Point 02 result
 

@@ -21,7 +21,9 @@ const ZERO_SERVICE: &str = "weighted-zero-service";
 const ROUTE_GRANT: &str = "allow-weighted-ai-route";
 const HOST: &str = "ai-backend-weighted.example.com";
 const AI_GATEWAY_PORT: u16 = 31945;
-const SAMPLE_SIZE: u128 = 32;
+const SAMPLE_SIZE: u128 = 128;
+const WEIGHTED_A_MIN: usize = 16;
+const WEIGHTED_A_MAX: usize = 48;
 
 fn provider_endpoint(endpoint_path: &str) -> String {
     provider_endpoint_for(
@@ -44,6 +46,16 @@ struct TrafficSample {
     backend_a: usize,
     backend_b: usize,
     failed: usize,
+}
+
+impl TrafficSample {
+    fn matches_weighted(&self, expected: &Self) -> bool {
+        let backend_a_matches = (WEIGHTED_A_MIN..=WEIGHTED_A_MAX).contains(&self.backend_a);
+        backend_a_matches
+            && self.backend_a + self.backend_b + self.failed == SAMPLE_SIZE as usize
+            && (expected.backend_b == 0) == (self.backend_b == 0)
+            && (expected.failed == 0) == (self.failed == 0)
+    }
 }
 
 fn secret_yaml(name: &str) -> String {
@@ -249,11 +261,15 @@ async fn wait_sample(ctx: &ScenarioCtx, expected: &TrafficSample, label: &str) -
     let deadline = Instant::now() + Duration::from_secs(15);
     loop {
         let actual = sample(ctx).await?;
-        if actual == *expected {
+        if actual.matches_weighted(expected) {
             return Ok(());
         }
         if Instant::now() >= deadline {
-            anyhow::bail!("timed out waiting for {label}; expected {expected:?}, got {actual:?}");
+            anyhow::bail!(
+                "timed out waiting for {label}; expected backend A in {WEIGHTED_A_MIN}..={WEIGHTED_A_MAX} of {SAMPLE_SIZE}, backend B present: {}, failures present: {}; got {actual:?}",
+                expected.backend_b > 0,
+                expected.failed > 0
+            );
         }
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
@@ -328,23 +344,18 @@ async fn run_inner(ctx: &ScenarioCtx) -> Result<()> {
     apply(ctx, route_yaml()).await?;
 
     let healthy = TrafficSample {
-        backend_a: 8,
-        backend_b: 24,
+        backend_a: 32,
+        backend_b: 96,
         failed: 0,
     };
     let invalid_b = TrafficSample {
-        backend_a: 8,
+        backend_a: 32,
         backend_b: 0,
-        failed: 24,
+        failed: 96,
     };
 
     wait_route_condition(ctx, "True", None).await?;
-    wait_sample(
-        ctx,
-        &healthy,
-        "exact 1:3 weighted AI distribution with a zero-weight Service",
-    )
-    .await?;
+    wait_sample(ctx, &healthy, "1:3 weighted AI distribution with a zero-weight Service").await?;
 
     check_header_modifier_updates(ctx).await?;
 

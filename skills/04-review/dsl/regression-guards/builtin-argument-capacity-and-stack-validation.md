@@ -16,9 +16,13 @@ The bytecode representation and VM hot path are unchanged.
 
 After existing structural checks pass, `Validator` verifies reachable operand
 stack heights: no underflow, matching heights at control-flow joins/back edges,
-and no residual operands at returns or fallthrough. The opcode stack-effect
-match is exhaustive; each reachable PC is scheduled once, so analysis is linear
-in the instruction-bounded code length. Return instructions end propagation.
+and no residual operands at returns or fallthrough. It also tracks whether each
+stack value comes directly from `LoadConst` of `Constant::Str`. The first
+`LogFmt` argument must have that provenance on every reachable path. At joins,
+provenance weakens by intersection; a weakened state is propagated again,
+including around loops. The opcode stack-effect match is exhaustive and return
+instructions end propagation. Analysis remains bounded by the instruction limit,
+but is no longer a single visit per PC or linear in code length.
 
 ## Rationale and evidence
 
@@ -47,11 +51,12 @@ Widening the opcode or increasing `maxStackDepth` does not repair unchecked
 narrowing. The compiler returns a static capacity error before compiling the
 call's operands; it publishes no partial script.
 
-This is stack-height validation, not a type or provenance verifier. Balanced
-hand-crafted bytecode may deliberately supply a dynamic template or clean up
-extra operands itself. Template provenance still needs a separate review; do
-not claim arbitrary bytecode templates are safe. Unreachable instructions
-retain structural/arity checks but do not participate in height propagation.
+The provenance check is specific to `LogFmt`; it is not a general bytecode type
+verifier or a placeholder-count check. `GetLocal`, operations, and builtin
+results cannot supply the template even if their runtime value happens to be a
+string. Unreachable instructions retain structural/arity checks but do not
+participate in stack or provenance propagation. The VM and bytecode version do
+not change; this validation rejects previously accepted dynamic templates.
 
 ## Verification and re-evaluation
 
@@ -61,7 +66,26 @@ join/back-edge conflicts, terminal residue, nested calls, short circuiting, and
 all three loop forms. Gateway tests cover source and bytecode rejection parity;
 the existing 255-argument logging test covers VM execution and masking modes.
 
-Verified during this fix:
+The template-provenance correction adds hand-crafted bytecode tests for dynamic
+request-header templates, local-variable and operation results, non-string
+constants, literal templates with nested value calls, branch joins, and loop
+back-edge weakening. A Gateway test checks shared config validation and both
+request/response factories with bytecode taking priority over valid source.
+
+Verification for the template-provenance correction (2026-09-23):
+
+- `cargo test -p edgion-dsl --lib --quiet`: 128 passed.
+- `cargo test -p edgion-gateway --lib dynamic_log_template_bytecode_is_rejected_by_both_factories --quiet`:
+  1 passed.
+- `cargo test -p edgion-gateway --lib test_log_fmt_ --quiet`: 10 passed,
+  including existing masking-mode coverage.
+- `cargo fmt --all -- --check`, `cargo check --workspace --all-targets`,
+  `cargo clippy --workspace --all-targets`, agent-doc validation, SSA-force,
+  metrics inventory, Pingora source policy, and Gateway API transform-contract
+  checks: passed.
+- Independent read-only Astra review: LGTM.
+
+Historical verification for the argument-capacity correction (not rerun by this record):
 
 - `cargo test -p edgion-dsl --lib --quiet`: 125 passed.
 - `cargo test -p edgion-gateway --lib plugins::http::dsl:: -- --nocapture`:
@@ -80,4 +104,7 @@ control-flow semantics, bytecode encoding, or loading boundary changes.
 ## Resolution references
 
 - `reject-dsl-builtin-calls-beyond-argument-capacity` — source count truncation
-  and inconsistent bytecode operands; corrected in this change.
+  and inconsistent bytecode operands; corrected in the earlier change.
+- `tasks/todo/validate-dsl-bytecode-log-template-provenance.md` (Issue N/A) —
+  dynamic `log_fmt` templates in hand-crafted bytecode; corrected by shared
+  literal-template provenance validation.
