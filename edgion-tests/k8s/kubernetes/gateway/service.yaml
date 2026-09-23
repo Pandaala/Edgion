@@ -643,6 +643,30 @@ spec:
     port: 31973
     targetPort: 31973
     protocol: TCP
+  - name: p31975
+    port: 31975
+    targetPort: 31975
+    protocol: TCP
+  - name: p31976
+    port: 31976
+    targetPort: 31976
+    protocol: TCP
+  - name: p31977
+    port: 31977
+    targetPort: 31977
+    protocol: TCP
+  - name: p31978
+    port: 31978
+    targetPort: 31978
+    protocol: TCP
+  - name: p31979
+    port: 31979
+    targetPort: 31979
+    protocol: TCP
+  - name: p31980
+    port: 31980
+    targetPort: 31980
+    protocol: TCP
   - name: p31983
     port: 31983
     targetPort: 31983
@@ -650,6 +674,10 @@ spec:
   - name: p31984
     port: 31984
     targetPort: 31984
+    protocol: TCP
+  - name: p31985
+    port: 31985
+    targetPort: 31985
     protocol: TCP
   - name: p58330
     port: 58330

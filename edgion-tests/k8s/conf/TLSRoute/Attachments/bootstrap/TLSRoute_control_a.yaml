@@ -1,0 +1,16 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: TLSRoute
+metadata:
+  name: tls-attachments-control-a
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: tls-attachments-a
+      namespace: edgion-test
+      sectionName: control
+  hostnames:
+    - "control-a.attachments.example.com"
+  rules:
+    - backendRefs:
+        - name: tls-attachments-backend-30051
+          port: 30051

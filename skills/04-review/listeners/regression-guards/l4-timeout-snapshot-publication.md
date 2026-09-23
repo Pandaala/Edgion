@@ -94,8 +94,9 @@ string, then a disposable TCP probe whose idle close matches the new generation.
 connections on all three paths must then close inside the short window, while
 the pre-update connections remain usable. Fixed sleeps are used only for the
 idle interval itself. The scenario would fail against the former startup-frozen
-timeout behavior. Kubernetes execution is not part of this guard; local/K8s
-dynamic inventory parity remains a separate tracked task.
+timeout behavior. The Kubernetes fixture and execution registration are tracked
+by [Kubernetes dynamic scenario inventory parity](../../testing/regression-guards/kubernetes-dynamic-scenario-inventory-parity.md);
+the Kubernetes scenario was not run against a live cluster in that parity change.
 
 `connectTimeout` is published and captured through the same resolved snapshot.
 This scenario does not add connect-timeout wire coverage: holding upstream

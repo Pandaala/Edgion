@@ -1,0 +1,32 @@
+# Disabled certificate and SAN settings must be inert even on first publication.
+apiVersion: edgion.io/v1
+kind: LinkSys
+metadata:
+  name: redis-disabled-tls-dynamic
+  namespace: edgion-default
+spec:
+  type: redis
+  config:
+    endpoints:
+      - "redis://dragonfly-redis-master.dragonfly-system.svc.cluster.local:6379"
+    db: 0
+    auth:
+      secretRef:
+        name: redis-disabled-tls-auth
+    tls:
+      enabled: false
+      clientCertificateRef:
+        name: redis-disabled-tls-missing-client
+      validation:
+        caCertificateRefs:
+          - kind: Secret
+            name: redis-disabled-tls-missing-ca
+        hostname: redis.example.com
+        subjectAltNames:
+          - type: Hostname
+            hostname: redis.example.com
+    pool:
+      size: 1
+    timeout:
+      connect: 3s
+      command: 2s

@@ -37,7 +37,11 @@ enum State {
 fn connector() -> Result<tokio_rustls::TlsConnector> {
     // Both HTTPS backends belong to test_server; 30052 requires this existing
     // client identity, while 30051 simply does not request it.
-    let cert_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("certs/mtls");
+    let cert_dir = if std::env::var("EDGION_TEST_K8S_MODE").as_deref() == Ok("true") {
+        Path::new("edgion-tests/certs/mtls").to_path_buf()
+    } else {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("certs/mtls")
+    };
     let certs = CertificateDer::pem_file_iter(cert_dir.join("valid-client.crt"))?
         .collect::<std::result::Result<Vec<_>, _>>()?;
     let key = PrivateKeyDer::from_pem_file(cert_dir.join("valid-client.key"))?;

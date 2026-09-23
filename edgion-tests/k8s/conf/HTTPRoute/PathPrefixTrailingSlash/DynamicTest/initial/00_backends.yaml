@@ -1,0 +1,20 @@
+apiVersion: v1
+kind: Service
+metadata: {name: prefix-slash-30001, namespace: edgion-test}
+spec:
+  selector: {app: edgion-test-server}
+  ports: [{name: http, port: 30001, targetPort: 30001}]
+---
+apiVersion: v1
+kind: Service
+metadata: {name: prefix-slash-30002, namespace: edgion-test}
+spec:
+  selector: {app: edgion-test-server}
+  ports: [{name: http, port: 30002, targetPort: 30002}]
+---
+apiVersion: v1
+kind: Service
+metadata: {name: prefix-slash-30003, namespace: edgion-test}
+spec:
+  selector: {app: edgion-test-server}
+  ports: [{name: http, port: 30003, targetPort: 30003}]

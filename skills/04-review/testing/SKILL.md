@@ -23,6 +23,7 @@ before applying a decision to current code.
 
 ## Regression guards
 
+- [Kubernetes dynamic scenario inventory parity](regression-guards/kubernetes-dynamic-scenario-inventory-parity.md)
 - [Sensitive-mode tests use exact subprocess isolation](regression-guards/sensitive-mode-test-subprocess-isolation.md)
 - [Kubernetes preflight accepts kubectl Node collections](regression-guards/kubernetes-preflight-node-collection.md)
 - [Adaptive telemetry reconciliation needs destructive-set coverage](regression-guards/ai-adaptive-reconcile-needs-destructive-set-coverage.md)

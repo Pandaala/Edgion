@@ -1,5 +1,5 @@
 //! A partial LinkSys update must replace the callable provider for one key.
-//! Uses the shared Gateway, test_server, and Redis fixture on port 16379.
+//! Uses the shared Gateway, test_server, and Redis fixture in each test environment.
 
 use crate::dynamic::scenario::{PhaseSuite, Scenario, ScenarioRunFuture};
 use crate::dynamic::ScenarioCtx;

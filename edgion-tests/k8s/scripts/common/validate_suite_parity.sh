@@ -261,6 +261,16 @@ def parse_scope_exceptions(text, project_root, canonical, covered):
             "symbol": "LocalCertificates",
             "tokens": ("edgion-tests/certs", "expired-client.crt", "30043"),
         },
+        "external_processor_fixture": {
+            "path": "edgion-tests/src/client/dynamic/scenarios/ext_proc_tls_policy_recovery.rs",
+            "symbol": "EDGION_EXT_PROC_EXTERNAL_REQUIRED",
+            "tokens": ("EDGION_EXT_PROC_EXTERNAL_ADMIN_URL", "accepted_connections", "observe_cases"),
+        },
+        "k8s_status_subresource_fixture": {
+            "path": "edgion-tests/src/client/dynamic/scenarios/acme_gatewayref_ownership.rs",
+            "symbol": "AcmeGatewayRefOwnership",
+            "tokens": ("updates/expire", "selected-a", "selected-b"),
+        },
         "host_log_topology": {
             "path": "edgion-tests/src/client/suites/l4_duplex.rs",
             "symbol": "LogProbe",

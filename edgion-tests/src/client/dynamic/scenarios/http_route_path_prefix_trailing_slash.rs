@@ -91,16 +91,20 @@ static PHASES: &[PhaseSuite] = &[
 
 async fn cleanup(ctx: &ScenarioCtx) -> Result<()> {
     let token = edgion_cli::cli::auto_auth::resolve_token(None);
-    let resources = [
+    let mut resources = vec![
         ("HTTPRoute", "prefix-slash-z-winner"),
         ("HTTPRoute", "prefix-slash-a-loser"),
-        ("EndpointSlice", "prefix-slash-30001"),
-        ("EndpointSlice", "prefix-slash-30002"),
-        ("EndpointSlice", "prefix-slash-30003"),
         ("Service", "prefix-slash-30001"),
         ("Service", "prefix-slash-30002"),
         ("Service", "prefix-slash-30003"),
     ];
+    if std::env::var("EDGION_TEST_K8S_MODE").as_deref() != Ok("true") {
+        resources.extend([
+            ("EndpointSlice", "prefix-slash-30001"),
+            ("EndpointSlice", "prefix-slash-30002"),
+            ("EndpointSlice", "prefix-slash-30003"),
+        ]);
+    }
     let mut failures = Vec::new();
     for (kind, name) in resources {
         let mut request = ctx

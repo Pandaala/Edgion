@@ -1,0 +1,28 @@
+# Unresolved enabled references must retain the previously published DB 1 client.
+apiVersion: edgion.io/v1
+kind: LinkSys
+metadata:
+  name: redis-disabled-tls-dynamic
+  namespace: edgion-default
+spec:
+  type: redis
+  config:
+    endpoints:
+      - "redis://dragonfly-redis-master.dragonfly-system.svc.cluster.local:6379"
+    db: 0
+    auth:
+      secretRef:
+        name: redis-disabled-tls-auth
+    tls:
+      enabled: true
+      clientCertificateRef:
+        name: redis-disabled-tls-missing-client
+      validation:
+        caCertificateRefs:
+          - kind: Secret
+            name: redis-disabled-tls-missing-ca
+    pool:
+      size: 1
+    timeout:
+      connect: 3s
+      command: 2s

@@ -1,0 +1,14 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: tls-attachments-c
+  namespace: edgion-test
+spec:
+  gatewayClassName: public-gateway
+  listeners:
+    - name: main
+      protocol: TLS
+      port: 31975
+      hostname: "b.attachments.example.com"
+      tls:
+        mode: Passthrough

@@ -1,6 +1,6 @@
 //! Disabled TLS references must not block fresh Redis clients or replacement generations.
 //! Invalid endpoint generations must report `Accepted=False` and retain the last-known-good client.
-//! Uses the shared Redis service on port 16379; never starts another topology.
+//! Uses the shared Redis service in each test environment; never starts another topology.
 
 use crate::dynamic::scenario::{PhaseSuite, Scenario, ScenarioRunFuture};
 use crate::dynamic::ScenarioCtx;
@@ -14,6 +14,14 @@ const NAME: &str = "redis-disabled-tls-dynamic";
 const PROBES: [&str; 2] = ["redis-disabled-tls-probe-0", "redis-disabled-tls-probe-1"];
 const AUTH: &str = "redis-disabled-tls-auth";
 const TIMEOUT: Duration = Duration::from_secs(30);
+
+fn namespace() -> &'static str {
+    if std::env::var("EDGION_TEST_K8S_MODE").is_ok_and(|mode| matches!(mode.as_str(), "true" | "1" | "yes")) {
+        "edgion-default"
+    } else {
+        NS
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Phase {
@@ -118,12 +126,13 @@ fn authed(ctx: &TestContext, request: reqwest::RequestBuilder, gateway: bool) ->
 }
 
 async fn resource(ctx: &TestContext, name: &str, gateway: bool) -> Result<Option<Value>> {
+    let ns = namespace();
     let base = if gateway { gateway_url(ctx) } else { ctx.admin_api_url() };
     let prefix = if gateway { "configclient" } else { "configserver" };
     let response = authed(
         ctx,
         ctx.http_client
-            .get(format!("{base}/{prefix}/LinkSys?namespace={NS}&name={name}")),
+            .get(format!("{base}/{prefix}/LinkSys?namespace={ns}&name={name}")),
         gateway,
     )
     .send()
@@ -144,8 +153,9 @@ async fn resource(ctx: &TestContext, name: &str, gateway: bool) -> Result<Option
 }
 
 async fn redis(ctx: &TestContext, name: &str, operation: &str, payload: Option<Value>) -> Result<Value> {
+    let ns = namespace();
     let url = format!(
-        "{}/api/v1/testing/link-sys/redis/{NS}_{name}/{operation}",
+        "{}/api/v1/testing/link-sys/redis/{ns}_{name}/{operation}",
         gateway_url(ctx)
     );
     let request = match payload {
@@ -201,6 +211,7 @@ async fn check_database(ctx: &TestContext, expected: usize) -> Result<()> {
 }
 
 async fn check(ctx: &TestContext, phase: Phase) -> Result<()> {
+    let ns = namespace();
     if phase == Phase::Absent {
         for name in [NAME, PROBES[0], PROBES[1]] {
             for gateway in [false, true] {
@@ -224,7 +235,7 @@ async fn check(ctx: &TestContext, phase: Phase) -> Result<()> {
         let clients = body["data"].as_array().context("missing client inventory")?;
         for name in [NAME, PROBES[0], PROBES[1]] {
             ensure!(
-                !clients.iter().any(|client| client == &format!("{NS}/{name}")),
+                !clients.iter().any(|client| client == &format!("{ns}/{name}")),
                 "runtime client {name} remains"
             );
         }
@@ -290,6 +301,7 @@ async fn check(ctx: &TestContext, phase: Phase) -> Result<()> {
 }
 
 async fn cleanup(ctx: &ScenarioCtx) -> Result<()> {
+    let ns = namespace();
     let mut errors = Vec::new();
     for (kind, name) in [
         ("LinkSys", NAME),
@@ -300,7 +312,7 @@ async fn cleanup(ctx: &ScenarioCtx) -> Result<()> {
         let response = authed(
             &ctx.test_ctx,
             ctx.test_ctx.http_client.delete(format!(
-                "{}/api/v1/namespaced/{kind}/{NS}/{name}",
+                "{}/api/v1/namespaced/{kind}/{ns}/{name}",
                 ctx.controller_url.trim_end_matches('/')
             )),
             false,

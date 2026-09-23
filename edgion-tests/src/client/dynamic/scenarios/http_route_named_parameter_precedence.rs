@@ -232,20 +232,21 @@ async fn cleanup_routes(ctx: &ScenarioCtx) -> Result<()> {
 }
 
 async fn cleanup_supporting_resources(ctx: &ScenarioCtx) -> Result<()> {
-    delete_resources(
-        ctx,
-        &[
-            ("HTTPRoute", "named-sentinel"),
-            ("EdgionPlugins", "named-capture-observer"),
+    let mut resources = vec![
+        ("HTTPRoute", "named-sentinel"),
+        ("EdgionPlugins", "named-capture-observer"),
+        ("Service", "named-precedence-30001"),
+        ("Service", "named-precedence-30002"),
+        ("Service", "named-precedence-30003"),
+    ];
+    if std::env::var("EDGION_TEST_K8S_MODE").as_deref() != Ok("true") {
+        resources.extend([
             ("EndpointSlice", "named-precedence-30001"),
             ("EndpointSlice", "named-precedence-30002"),
             ("EndpointSlice", "named-precedence-30003"),
-            ("Service", "named-precedence-30001"),
-            ("Service", "named-precedence-30002"),
-            ("Service", "named-precedence-30003"),
-        ],
-    )
-    .await
+        ]);
+    }
+    delete_resources(ctx, &resources).await
 }
 
 async fn cleanup_gateway(ctx: &ScenarioCtx) -> Result<()> {

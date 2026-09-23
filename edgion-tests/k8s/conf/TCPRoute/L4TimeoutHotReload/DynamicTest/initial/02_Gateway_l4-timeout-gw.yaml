@@ -1,0 +1,26 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: l4-timeout-gw
+  namespace: edgion-test
+spec:
+  gatewayClassName: l4-timeout-class
+  listeners:
+    - name: tcp
+      protocol: TCP
+      port: 31978
+    - name: terminate
+      protocol: TLS
+      port: 31979
+      hostname: "l4-timeout.sandbox.example.com"
+      tls:
+        mode: Terminate
+        certificateRefs:
+          - name: edge-tls
+            namespace: edgion-test
+    - name: passthrough
+      protocol: TLS
+      port: 31980
+      hostname: "l4-timeout.sandbox.example.com"
+      tls:
+        mode: Passthrough

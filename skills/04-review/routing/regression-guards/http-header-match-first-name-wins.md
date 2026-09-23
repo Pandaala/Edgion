@@ -108,13 +108,12 @@ Kubernetes fixture directories to `updates/` and changing the scenario path
 restored the standard dynamic-fixture contract. The ownership validator's own
 regression test and a full-conf ownership scan then passed.
 
-The mandatory Kubernetes inventory-parity guard still fails for six unrelated
-dynamic scenario gaps. Its own regression test passes, this scenario is
-registered in both inventories, and the remaining work is tracked by
-`tasks/todo/k8s-dynamic-scenario-inventory-parity.md`. The selected task remains
-blocked only by that global gate; no empty registrations or unsupported
-exceptions were added. Full workspace tests were not run as part of the live
-traffic reproduction.
+At the time of this route fix, the mandatory Kubernetes inventory-parity guard
+still failed for six unrelated dynamic scenario gaps. This scenario was
+registered in both inventories. The separate inventory work is recorded in
+[Kubernetes dynamic scenario inventory parity](../../testing/regression-guards/kubernetes-dynamic-scenario-inventory-parity.md).
+Full workspace tests were not run as part of the original live traffic
+reproduction.
 
 Re-evaluate if the protocol contract, typed ingress, delegation merge,
 programmatic match producers, or compilation/indexing ownership changes.
@@ -123,5 +122,5 @@ programmatic match producers, or compilation/indexing ownership changes.
 
 - `CAND-P2-002` / `http-route-duplicate-header-match-names`: confirmed correctness
   defect, corrected with targeted and FileSystem wire verification on
-  2026-09-12 and live Kubernetes wire verification on 2026-09-14; active task
-  retained only for the unrelated inventory-parity closure gate.
+  2026-09-12 and live Kubernetes wire verification on 2026-09-14; its active task
+  was retained at that time for the unrelated inventory-parity closure gate.
