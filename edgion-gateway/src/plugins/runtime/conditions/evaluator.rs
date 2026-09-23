@@ -7,14 +7,18 @@ use crate::plugins::http::hmac_auth::{HmacVerifier, HmacVerifyOutcome};
 use crate::plugins::runtime::body_gate::body_read_failure_result;
 use crate::plugins::runtime::conditions::extract::{extract_jwt_claim_values, extract_mtls_values};
 use crate::plugins::runtime::log::PluginLog;
+use crate::plugins::runtime::session_adapter::cookie_value_ref;
+use crate::plugins::runtime::traits::header_ext::PluginSessionHeaderExt;
 use crate::plugins::runtime::PluginSession;
 use chrono::{DateTime, Utc};
+use edgion_resources::common::KeyGet;
 use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::resources::edgion_plugins::conditions::{
     AllOfGroup, AnyOfClause, Condition, ConditionSet, JwtClaimMatchCondition, KeyExistCondition, KeyMatchCondition,
     MatchCore, MtlsMatchCondition, PluginConditions, ProbabilityCondition, TimeRangeCondition,
 };
 use edgion_resources::resources::edgion_plugins::BodyRequirement;
+use std::borrow::Cow;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
@@ -791,12 +795,29 @@ impl ConditionExt for Condition {
     }
 }
 
+/// Borrow live condition inputs for one evaluation. Sources without an
+/// equivalent borrowed session accessor retain the canonical owned KeyGet path.
+/// No value survives the current predicate evaluation, so later plugin writes
+/// remain visible on the next chunk.
+fn condition_key_value<'a>(session: &'a dyn PluginSession, key: &KeyGet) -> Option<Cow<'a, str>> {
+    match key {
+        KeyGet::Header { name } => session.header_str(name).map(Cow::Borrowed),
+        KeyGet::Cookie { name } => cookie_value_ref(session.request_header_map(), name).map(Cow::Borrowed),
+        KeyGet::Path => Some(Cow::Borrowed(session.get_path())),
+        KeyGet::RequestPath => Some(Cow::Borrowed(session.get_request_path())),
+        KeyGet::Method => Some(Cow::Borrowed(session.get_method())),
+        KeyGet::RemoteIp => (!session.remote_ip().is_empty()).then(|| Cow::Borrowed(session.remote_ip())),
+        KeyGet::DirectPeerIp => (!session.direct_peer_ip().is_empty()).then(|| Cow::Borrowed(session.direct_peer_ip())),
+        _ => session.key_get(key).map(Cow::Owned),
+    }
+}
+
 fn evaluate_secret_match(
     condition: &edgion_resources::resources::edgion_plugins::conditions::SecretMatchCondition,
     session: &dyn PluginSession,
 ) -> bool {
     use subtle::ConstantTimeEq;
-    let Some(actual) = session.key_get(&condition.key) else {
+    let Some(actual) = condition_key_value(session, &condition.key) else {
         return apply_negate(false, condition.negate);
     };
     let base = condition.resolved_values.as_ref().is_some_and(|expected| {
@@ -893,13 +914,13 @@ fn match_core(core: &MatchCore, value: &str, log: Option<&mut PluginLog>) -> boo
 
 impl KeyExistConditionExt for KeyExistCondition {
     fn evaluate(&self, session: &dyn PluginSession) -> bool {
-        apply_negate(session.key_get(&self.key).is_some(), self.negate)
+        apply_negate(condition_key_value(session, &self.key).is_some(), self.negate)
     }
 }
 
 impl KeyMatchConditionExt for KeyMatchCondition {
     fn evaluate(&self, session: &dyn PluginSession, log: Option<&mut PluginLog>) -> bool {
-        let Some(value) = session.key_get(&self.key) else {
+        let Some(value) = condition_key_value(session, &self.key) else {
             return apply_negate(false, self.negate);
         };
         self.match_value(&value, log)
@@ -934,7 +955,7 @@ impl ProbabilityConditionExt for ProbabilityCondition {
         } else if ratio >= 1.0 {
             true
         } else if let Some(key) = &self.key {
-            if let Some(key_value) = session.key_get(key) {
+            if let Some(key_value) = condition_key_value(session, key) {
                 // Use hash for deterministic sampling
                 let mut hasher = DefaultHasher::new();
                 key_value.hash(&mut hasher);
@@ -968,6 +989,31 @@ mod tests {
     fn create_mock_session_with_key_get(key_values: Vec<(KeyGet, Option<String>)>) -> MockPluginSession {
         let mut mock = MockPluginSession::new();
 
+        let mut headers = http::HeaderMap::new();
+        for (key, value) in &key_values {
+            if let (KeyGet::Header { name }, Some(value)) = (key, value) {
+                headers.insert(
+                    http::HeaderName::from_bytes(name.as_bytes()).expect("valid header name"),
+                    http::HeaderValue::from_str(value).expect("valid header value"),
+                );
+            }
+        }
+        mock.expect_request_header_map().return_const(headers);
+        let borrowed_value = |target: KeyGet| {
+            key_values
+                .iter()
+                .find(|(key, _)| *key == target)
+                .and_then(|(_, value)| value.clone())
+                .unwrap_or_default()
+        };
+        mock.expect_get_path().return_const(borrowed_value(KeyGet::Path));
+        mock.expect_get_request_path()
+            .return_const(borrowed_value(KeyGet::RequestPath));
+        mock.expect_get_method().return_const(borrowed_value(KeyGet::Method));
+        mock.expect_remote_ip().return_const(borrowed_value(KeyGet::RemoteIp));
+        mock.expect_direct_peer_ip()
+            .return_const(borrowed_value(KeyGet::DirectPeerIp));
+
         // Convert to owned map
         let values_map: std::collections::HashMap<String, Option<String>> =
             key_values.into_iter().map(|(k, v)| (format!("{:?}", k), v)).collect();
@@ -978,6 +1024,90 @@ mod tests {
         });
 
         mock
+    }
+
+    #[test]
+    fn borrowed_condition_inputs_recheck_each_chunk_without_owned_key_get() {
+        let conditions = CompiledPluginConditions::new(PluginConditions {
+            skip: None,
+            run: Some(ConditionSet::all_of(vec![
+                key_match("X-Mode", &["enabled"]),
+                Condition::KeyMatch(KeyMatchCondition {
+                    key: KeyGet::Method,
+                    core: core_values(vec!["GET"]),
+                    negate: false,
+                    descriptor: Box::from(""),
+                }),
+            ])),
+        });
+        for (header, expected) in [("enabled", EvaluationResult::Run), ("disabled", EvaluationResult::Skip)] {
+            let mut headers = http::HeaderMap::new();
+            headers.insert("x-mode", http::HeaderValue::from_str(header).unwrap());
+            let mut session = MockPluginSession::new();
+            session.expect_request_header_map().return_const(headers);
+            session.expect_get_method().return_const("GET".to_string());
+            session.expect_key_get().never();
+            assert_eq!(conditions.evaluate(&session), expected);
+            let (result, allocations) = crate::test_allocation_counter::count_allocation_stats(|| {
+                std::hint::black_box(conditions.evaluate(&session))
+            });
+            assert_eq!(result, expected);
+            assert_eq!(allocations.calls, 0);
+        }
+    }
+
+    #[test]
+    fn borrowed_header_condition_keeps_invalid_utf8_missing() {
+        let mut headers = http::HeaderMap::new();
+        headers.insert("x-mode", http::HeaderValue::from_bytes(&[0xff]).unwrap());
+        let mut session = MockPluginSession::new();
+        session.expect_request_header_map().return_const(headers);
+        session.expect_key_get().never();
+        let condition = KeyExistCondition {
+            key: KeyGet::Header {
+                name: "X-Mode".to_string(),
+            },
+            negate: false,
+            descriptor: Box::from(""),
+        };
+        assert!(!condition.evaluate(&session));
+    }
+
+    #[test]
+    fn borrowed_cookie_condition_uses_live_canonical_parser_without_allocating() {
+        let mut headers = http::HeaderMap::new();
+        headers.append(
+            http::header::COOKIE,
+            http::HeaderValue::from_static("other=no; sid=abc"),
+        );
+        let mut session = MockPluginSession::new();
+        session.expect_request_header_map().return_const(headers);
+        session.expect_key_get().never();
+        let key = KeyGet::Cookie {
+            name: "sid".to_string(),
+        };
+        assert_eq!(condition_key_value(&session, &key).as_deref(), Some("abc"));
+        let (value, allocations) = crate::test_allocation_counter::count_allocation_stats(|| {
+            std::hint::black_box(condition_key_value(&session, &key))
+        });
+        assert_eq!(value.as_deref(), Some("abc"));
+        assert_eq!(allocations.calls, 0);
+    }
+
+    #[test]
+    fn borrowed_ip_keys_keep_direct_and_resolved_identities_distinct() {
+        let mut session = MockPluginSession::new();
+        session.expect_direct_peer_ip().return_const("10.0.0.1".to_string());
+        session.expect_remote_ip().return_const("203.0.113.2".to_string());
+        session.expect_key_get().never();
+        assert_eq!(
+            condition_key_value(&session, &KeyGet::DirectPeerIp).as_deref(),
+            Some("10.0.0.1")
+        );
+        assert_eq!(
+            condition_key_value(&session, &KeyGet::RemoteIp).as_deref(),
+            Some("203.0.113.2")
+        );
     }
 
     fn fixed_utc(value: &str) -> DateTime<Utc> {
@@ -1307,7 +1437,7 @@ mod tests {
         };
 
         let mut mock = MockPluginSession::new();
-        mock.expect_key_get().returning(|_| None);
+        mock.expect_request_header_map().return_const(http::HeaderMap::new());
         assert_eq!(conditions.evaluate(&mock), EvaluationResult::Run);
     }
 

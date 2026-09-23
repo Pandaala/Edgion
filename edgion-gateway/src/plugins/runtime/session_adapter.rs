@@ -158,7 +158,7 @@ pub(crate) fn route_meta_field(meta: &kube::api::ObjectMeta, selector: &str) -> 
 /// An invalid UTF-8 field reached before a match makes the lookup fail rather
 /// than allowing a later field to override an uninterpretable credential. A
 /// match returns immediately, so malformed fields after it are irrelevant.
-fn cookie_value_ref<'a>(headers: &'a http::HeaderMap, name: &str) -> Option<&'a str> {
+pub(crate) fn cookie_value_ref<'a>(headers: &'a http::HeaderMap, name: &str) -> Option<&'a str> {
     for header in headers.get_all(http::header::COOKIE).iter() {
         let cookies = header.to_str().ok()?;
         if let Some(value) = cookies.split(';').find_map(|pair| {
@@ -3042,6 +3042,102 @@ pub(crate) mod record_outcome_tests {
             .then_some(())
             .expect("client must not have closed before sending the request");
         session
+    }
+
+    #[tokio::test]
+    async fn response_condition_source_allocation_inventory() {
+        use crate::ctx::{ClientCertInfo, NormalizedHostname};
+        use crate::plugins::runtime::conditions::{extract_jwt_claim_values, extract_mtls_values, MtlsField, SanType};
+
+        let mut session = test_session_raw(
+            "GET /alpha?x=one HTTP/1.1\r\nHost: example.com\r\nX-Mode: enabled\r\nCookie: sid=abc\r\n\r\n",
+        )
+        .await;
+        let mut ctx = EdgionHttpContext::default();
+        ctx.request_info.trace_id.initialize(&session.req_header().headers);
+        ctx.request_info.direct_peer_ip = "192.0.2.1".to_string();
+        ctx.request_info.remote_ip = "198.51.100.2".to_string();
+        ctx.request_info.hostname = NormalizedHostname::new("example.com");
+        ctx.request_info.entry_raw_path = "/alpha".to_string();
+        ctx.request_info.normalized_current_path = "/alpha".to_string();
+        ctx.request_info.entry_raw_query = Some("x=one".to_string());
+        ctx.set_ctx_var("demo".to_string(), "value".to_string());
+        ctx.set_ctx_var("jwt_claims".to_string(), r#"{"roles":["admin","dev"]}"#.to_string());
+        ctx.request_info.install_tls_info(
+            None,
+            None,
+            Some(ClientCertInfo {
+                subject: "CN=alice".to_string(),
+                sans: vec![
+                    "alice.example.com".to_string(),
+                    "uri:spiffe://example.com/alice".to_string(),
+                ],
+                cn: Some("alice".to_string()),
+                fingerprint: "ab:cd".to_string(),
+            }),
+            None,
+            None,
+        );
+        // Prime the once-per-request query parse so this measures only the
+        // per-chunk value extraction cost.
+        ctx.cached_query(ctx.request_info.entry_raw_query.as_deref());
+        let adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
+        let cases = [
+            ("traceId", KeyGet::TraceId),
+            ("remoteIp", KeyGet::RemoteIp),
+            ("directPeerIp", KeyGet::DirectPeerIp),
+            ("host", KeyGet::Host),
+            (
+                "header",
+                KeyGet::Header {
+                    name: "X-Mode".to_string(),
+                },
+            ),
+            (
+                "cookie",
+                KeyGet::Cookie {
+                    name: "sid".to_string(),
+                },
+            ),
+            ("query", KeyGet::Query { name: "x".to_string() }),
+            ("path", KeyGet::Path),
+            ("requestPath", KeyGet::RequestPath),
+            ("method", KeyGet::Method),
+            (
+                "ctx",
+                KeyGet::Ctx {
+                    name: "demo".to_string(),
+                },
+            ),
+            ("remoteIpAndPath", KeyGet::RemoteIpAndPath),
+        ];
+        for (label, key) in cases {
+            let (value, stats) =
+                crate::test_allocation_counter::count_allocation_stats(|| std::hint::black_box(adapter.key_get(&key)));
+            assert!(value.is_some(), "{label} fixture must be present");
+            eprintln!(
+                "condition source {label}: {} allocations, {} requested bytes",
+                stats.calls, stats.requested_bytes
+            );
+        }
+
+        let (claims, jwt_stats) = crate::test_allocation_counter::count_allocation_stats(|| {
+            std::hint::black_box(extract_jwt_claim_values(&adapter, "roles"))
+        });
+        assert_eq!(claims, ["admin", "dev"]);
+        eprintln!(
+            "condition source jwtClaimMatch: {} allocations, {} requested bytes",
+            jwt_stats.calls, jwt_stats.requested_bytes
+        );
+
+        let (sans, mtls_stats) = crate::test_allocation_counter::count_allocation_stats(|| {
+            std::hint::black_box(extract_mtls_values(&adapter, MtlsField::San, Some(&SanType::Uri)))
+        });
+        assert_eq!(sans, ["spiffe://example.com/alice"]);
+        eprintln!(
+            "condition source mtlsMatch: {} allocations, {} requested bytes",
+            mtls_stats.calls, mtls_stats.requested_bytes
+        );
     }
 
     #[tokio::test]
