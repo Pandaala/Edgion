@@ -49,9 +49,8 @@ call's operands; it publishes no partial script.
 
 This is stack-height validation, not a type or provenance verifier. Balanced
 hand-crafted bytecode may deliberately supply a dynamic template or clean up
-extra operands itself. Track that separate defect in
-[template provenance validation](../../../../tasks/todo/validate-dsl-bytecode-log-template-provenance.md).
-Do not claim arbitrary bytecode templates are safe. Unreachable instructions
+extra operands itself. Template provenance still needs a separate review; do
+not claim arbitrary bytecode templates are safe. Unreachable instructions
 retain structural/arity checks but do not participate in height propagation.
 
 ## Verification and re-evaluation

@@ -16,4 +16,4 @@
 | D0012 | resolved | `skills/04-review/listeners/regression-guards/egc-runtime-snapshot-publication.md` | B0066 |
 | D0013 | coverage-added | `skills/04-review/http1/regression-guards/duplicate-host.md` | B0066 |
 | D0014 | resolved | `skills/04-review/tls/regression-guards/edgion-tls-serving-chain-install.md` | B0075 |
-| D0015 | ready-for-separate-task | `tasks/todo/update-stale-mtls-config-helper-knowledge.md` | B0075 |
+| D0015 | resolved | `skills/04-review/tls/regression-guards/mtls-config-reorder.md` | B0075 |
