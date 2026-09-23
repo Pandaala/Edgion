@@ -19,7 +19,8 @@ Gateway URL-fetch errors retain only fixed failure categories, safe HTTP status,
 and the existing byte cap. They never render the configured URL or a reqwest
 error that may carry it. This applies to negative-cache state and cold-path logs
 because both consume the same returned error. The real URL remains unchanged in
-the fetch request and internal module cache key.
+the plugin configuration and fetch request. Runtime ownership is per configured
+plugin instance, with no global URL-keyed module cache.
 
 ## Rationale and evidence
 
@@ -32,7 +33,7 @@ text could therefore reach every Wasm metric and module-load WARN.
 
 The correction is centralized at the two origins: source-label construction in
 `edgion-resources/.../wasm.rs` and fetch-error construction in
-`edgion-gateway/.../vm_manager.rs`. Existing metric, eviction, tick, load-state,
+`edgion-gateway/.../vm_manager.rs`. Existing metric, tick, load-state,
 and request fail-mode consumers inherit the safe values without local redactors.
 
 ## Alternatives and limits
@@ -41,8 +42,9 @@ Hashing the complete URL was rejected because query-token rotation would still
 create stale series. Showing a truncated path was rejected because truncation
 does not make path-carried credentials safe. The origin remains readable for
 operator correlation; an eight-hex digest separates paths. This identity is an
-observability contract, not the module cache identity, and must not replace
-`WasmSourceSpec::cache_key()` or `runtime_cache_key()`.
+observability contract, not a reason to merge runtime instances or a replacement
+for the real fetch URL. The old `runtime_cache_key()` implementation is removed
+by [plugin runtime isolation](wasm-module-cache-key-runtime-config.md).
 
 This guard covers configured Wasm HTTP(S) URL sources. OCI registry diagnostics,
 local file paths, and guest-dispatched callout URLs have separate boundaries.
@@ -55,8 +57,11 @@ Unit coverage in `wasm.rs` uses
 identity and validation errors. Gateway coverage uses
 `url_fetch_transport_error_does_not_expose_configured_url` and
 `url_fetch_does_not_retry_4xx` to exercise transport and HTTP-status failures.
+The plugin ownership migration does not change this redaction contract. The
+Gateway tests passed in the 226-test Wasm run on 2026-09-23; the schema-layer
+tests were not rerun for this ownership change.
 Re-evaluate if the source-label format changes, another error/log consumes
-`source.url` or the cache key, or a new URL fetch implementation bypasses the
+`source.url` or a source identity, or a new URL fetch implementation bypasses the
 canonical label or error boundary.
 
 ## Resolution references

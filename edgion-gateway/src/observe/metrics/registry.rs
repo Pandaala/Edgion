@@ -125,7 +125,7 @@ pub mod names {
     // cache key: bounded by the number of configured modules and readable.
     pub const WASM_MODULE_LOAD_TOTAL: &str = "edgion_wasm_module_load_total";
     pub const WASM_MODULE_COMPILE_DURATION_MS: &str = "edgion_wasm_module_compile_duration_ms";
-    pub const WASM_MODULE_EVICTED_TOTAL: &str = "edgion_wasm_module_evicted_total";
+    pub const WASM_MODULE_RELEASED_TOTAL: &str = "edgion_wasm_module_released_total";
     pub const WASM_INSTANCE_INSTANTIATE_TOTAL: &str = "edgion_wasm_instance_instantiate_total";
     pub const WASM_INSTANCE_DISCARD_TOTAL: &str = "edgion_wasm_instance_discard_total";
     pub const WASM_POOL_SIZE: &str = "edgion_wasm_pool_size";
@@ -954,10 +954,38 @@ pub fn record_wasm_compile_duration(module: &str, ms: f64) {
     histogram!(names::WASM_MODULE_COMPILE_DURATION_MS, "module" => module.to_string()).record(ms);
 }
 
-/// Record a module-cache entry eviction (refcount reached zero and the grace
-/// period elapsed without re-registration).
-pub fn record_wasm_module_evicted(module: &str) {
-    counter!(names::WASM_MODULE_EVICTED_TOTAL, "module" => module.to_string()).increment(1);
+/// Accounts for one live compiled runtime generation, including initialization
+/// and old generations retained by outstanding leases. Capturing the handles
+/// keeps destruction paired with the same recorder as construction.
+pub(crate) struct WasmModuleMetrics {
+    handles: Arc<WasmModuleMetricHandles>,
+}
+
+struct WasmModuleMetricHandles {
+    loaded: Gauge,
+    released: Counter,
+}
+
+pub(crate) fn wasm_module_metrics(module: &str) -> WasmModuleMetrics {
+    let mut registry = live_wasm_metric_handles();
+    let live = registry.entry(module.to_string()).or_default();
+    let handles = live.modules.upgrade().unwrap_or_else(|| {
+        let handles = Arc::new(WasmModuleMetricHandles {
+            loaded: gauge!(names::WASM_MODULES_LOADED),
+            released: counter!(names::WASM_MODULE_RELEASED_TOTAL, "module" => module.to_string()),
+        });
+        live.modules = Arc::downgrade(&handles);
+        handles
+    });
+    handles.loaded.increment(1.0);
+    WasmModuleMetrics { handles }
+}
+
+impl Drop for WasmModuleMetrics {
+    fn drop(&mut self) {
+        self.handles.loaded.decrement(1.0);
+        self.handles.released.increment(1);
+    }
 }
 
 /// Record a fresh VM instantiation (pool miss).
@@ -1002,52 +1030,66 @@ pub fn record_wasm_fail_mode(module: &str, reason: &str, mode: &'static str) {
 }
 
 /// Record a guest-dispatched HTTP callout outcome. `result` is one of
-/// `"ok"`, `"error"`, `"denied"`, `"over_limit"`, `"tick_config_conflict"`
-/// (tick-phase dispatch left disabled: plugins sharing the module configure
-/// different callout allowlists).
+/// `"ok"`, `"error"`, `"denied"`, `"over_limit"`
 pub fn record_wasm_callout(module: &str, result: &'static str) {
     counter!(names::WASM_CALLOUT_TOTAL, "module" => module.to_string(), "result" => result).increment(1);
 }
 
-/// Set the number of compiled modules currently held in the global cache.
-/// Multiplied by `instancePoolSize` this bounds pooling-allocator sizing.
-pub fn set_wasm_modules_loaded(count: usize) {
-    gauge!(names::WASM_MODULES_LOADED).set(count as f64);
-}
-
 // No byte ledger: the exporter gauge itself aggregates mutation deltas.
 // Weak handles cover old request-held generations without retaining stores.
-static WASM_SHARED_DATA_GAUGES: LazyLock<Mutex<HashMap<String, Weak<Gauge>>>> =
+#[derive(Default)]
+struct LiveWasmMetricHandles {
+    bytes: Weak<Gauge>,
+    modules: Weak<WasmModuleMetricHandles>,
+}
+
+impl LiveWasmMetricHandles {
+    fn is_live(&self) -> bool {
+        self.bytes.strong_count() > 0 || self.modules.strong_count() > 0
+    }
+}
+
+static WASM_METRIC_HANDLES: LazyLock<Mutex<HashMap<String, LiveWasmMetricHandles>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
-fn live_wasm_shared_data_gauges() -> parking_lot::MutexGuard<'static, HashMap<String, Weak<Gauge>>> {
-    let mut gauges = WASM_SHARED_DATA_GAUGES.lock();
-    gauges.retain(|_, gauge| gauge.strong_count() > 0);
+fn live_wasm_metric_handles() -> parking_lot::MutexGuard<'static, HashMap<String, LiveWasmMetricHandles>> {
+    let mut gauges = WASM_METRIC_HANDLES.lock();
+    gauges.retain(|_, handles| handles.is_live());
     gauges
 }
 
 /// Register once per live module label; never reset another store's contribution.
 pub(crate) fn wasm_shared_data_bytes_gauge(module: &str) -> Arc<Gauge> {
-    let mut gauges = live_wasm_shared_data_gauges();
-    if let Some(gauge) = gauges.get(module).and_then(Weak::upgrade) {
+    let mut gauges = live_wasm_metric_handles();
+    let live = gauges.entry(module.to_string()).or_default();
+    if let Some(gauge) = live.bytes.upgrade() {
         return gauge;
     }
     let gauge = Arc::new(gauge!(names::WASM_SHARED_DATA_BYTES, "module" => module.to_string()));
-    gauges.insert(module.to_string(), Arc::downgrade(&gauge));
+    live.bytes = Arc::downgrade(&gauge);
     gauge
 }
 
-/// Keep live byte gauges attached across exporter idle eviction. Registration
+/// Keep live Wasm handles attached across exporter idle eviction. Registration
 /// shares this cold-path lock with render; mutation and store Drop never do.
-pub(crate) fn with_live_wasm_shared_data_gauges<R>(render: impl FnOnce() -> R) -> R {
-    let mut gauges = live_wasm_shared_data_gauges();
-    let live: Vec<_> = gauges.values().filter_map(Weak::upgrade).collect();
-    for gauge in &live {
+pub(crate) fn with_live_wasm_metrics<R>(render: impl FnOnce() -> R) -> R {
+    let mut gauges = live_wasm_metric_handles();
+    let bytes: Vec<_> = gauges.values().filter_map(|handles| handles.bytes.upgrade()).collect();
+    let modules: Vec<_> = gauges
+        .values()
+        .filter_map(|handles| handles.modules.upgrade())
+        .collect();
+    for gauge in &bytes {
         gauge.increment(0.0);
     }
+    for handles in &modules {
+        handles.loaded.increment(0.0);
+        handles.released.increment(0);
+    }
     let result = render();
-    drop(live);
-    gauges.retain(|_, gauge| gauge.strong_count() > 0);
+    drop(bytes);
+    drop(modules);
+    gauges.retain(|_, handles| handles.is_live());
     result
 }
 
@@ -1058,11 +1100,11 @@ pub(crate) struct WasmSharedDataMetricStats {
 }
 
 pub(crate) fn wasm_shared_data_metric_stats() -> WasmSharedDataMetricStats {
-    let gauges = live_wasm_shared_data_gauges();
+    let gauges = live_wasm_metric_handles();
     shared_data_metric_stats(&gauges)
 }
 
-fn shared_data_metric_stats(gauges: &HashMap<String, Weak<Gauge>>) -> WasmSharedDataMetricStats {
+fn shared_data_metric_stats(gauges: &HashMap<String, LiveWasmMetricHandles>) -> WasmSharedDataMetricStats {
     let mut keys: Vec<_> = gauges.keys().cloned().collect();
     keys.sort_unstable();
     keys.truncate(100);
@@ -1206,6 +1248,63 @@ mod wasm_shared_data_metric_tests {
 mod tests {
     use super::*;
     use metrics_exporter_prometheus::PrometheusBuilder;
+
+    #[test]
+    fn wasm_module_metrics_follow_overlapping_generation_lifetimes() {
+        let recorder = PrometheusBuilder::new().build_recorder();
+        let handle = recorder.handle();
+        let (old, replacement) = metrics::with_local_recorder(&recorder, || {
+            (wasm_module_metrics("test-module"), wasm_module_metrics("test-module"))
+        });
+        assert!(handle.render().contains("edgion_wasm_modules_loaded 2"));
+        // Drops can run on another executor thread without the local recorder.
+        std::thread::spawn(move || drop(old)).join().unwrap();
+        assert!(handle.render().contains("edgion_wasm_modules_loaded 1"));
+        drop(replacement);
+        let rendered = handle.render();
+        assert!(rendered.contains("edgion_wasm_modules_loaded 0"));
+        assert!(rendered.contains("edgion_wasm_module_released_total{module=\"test-module\"} 2"));
+    }
+
+    #[test]
+    fn wasm_module_metrics_survive_idle_eviction_across_sources_and_generations() {
+        let recorder = PrometheusBuilder::new()
+            .idle_timeout(metrics_util::MetricKindMask::ALL, Some(std::time::Duration::ZERO))
+            .build_recorder();
+        let handle = recorder.handle();
+        let (a, b) = metrics::with_local_recorder(&recorder, || {
+            (
+                wasm_module_metrics("idle-runtime-a"),
+                wasm_module_metrics("idle-runtime-b"),
+            )
+        });
+        let render = || with_live_wasm_metrics(|| handle.render());
+        for _ in 0..4 {
+            let output = render();
+            assert!(output.contains("edgion_wasm_modules_loaded 2"));
+            assert!(output.contains("edgion_wasm_module_released_total{module=\"idle-runtime-a\"} 0"));
+        }
+        let replacement = metrics::with_local_recorder(&recorder, || wasm_module_metrics("idle-runtime-a"));
+        assert!(render().contains("edgion_wasm_modules_loaded 3"));
+        drop(a);
+        for _ in 0..4 {
+            let output = render();
+            assert!(output.contains("edgion_wasm_modules_loaded 2"));
+            assert!(output.contains("edgion_wasm_module_released_total{module=\"idle-runtime-a\"} 1"));
+        }
+        drop(b);
+        assert!(render().contains("edgion_wasm_modules_loaded 1"));
+        drop(replacement);
+        let output = render();
+        assert!(output.contains("edgion_wasm_modules_loaded 0"));
+        assert!(output.contains("edgion_wasm_module_released_total{module=\"idle-runtime-a\"} 2"));
+        assert!(!wasm_shared_data_metric_stats()
+            .keys
+            .iter()
+            .any(|key| key.starts_with("idle-runtime-")));
+        let _ = handle.render();
+        assert!(!handle.render().contains("edgion_wasm_modules_loaded"));
+    }
 
     #[test]
     fn config_conflict_counter_increments() {

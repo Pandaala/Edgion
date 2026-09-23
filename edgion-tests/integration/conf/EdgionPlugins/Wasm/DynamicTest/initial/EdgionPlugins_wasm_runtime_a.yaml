@@ -1,0 +1,19 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: wasm-runtime-a
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - type: Wasm
+      enable: true
+      config:
+        source:
+          file: ../../../edgion-tests/wasm/artifacts/header_demo.wasm
+        pluginConfig:
+          string: "http://127.0.0.1:30040"
+        failOpen: false
+        timeoutMs: 1000
+        calloutAllowlist:
+          - "http://127.0.0.1:30040"
+        calloutTimeoutMs: 3000

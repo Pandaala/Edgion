@@ -59,15 +59,15 @@ EdgionBackend 保留独立的撤销策略。
 | edgion_gateway_fips_policy_active | Gauge | gateway | module_enabled (true/false) | self | 1 = the approved FIPS cipher/curve profile is in effect on downstream listeners; the label records the BoringSSL FIPS-mode signal | - |
 | edgion_wasm_module_load_total | Counter | gateway | module, result (ok/error) | self | Wasm 模块加载结果；所有 Wasm `module` label 使用来源描述，其中 URL 来源使用不含凭据、查询变化不改变且最长 96 字节的身份 | - |
 | edgion_wasm_module_compile_duration_ms | Histogram | gateway | module | self | Wall-clock duration of one Wasm `Module::new` compilation | - |
-| edgion_wasm_module_evicted_total | Counter | gateway | module | self | Wasm module-cache entry eviction (refcount reached zero and the grace period elapsed) | - |
+| edgion_wasm_module_released_total | Counter | gateway | module | self | 最后一个持有者退出后释放的 Wasm 编译运行时代次 | - |
 | edgion_wasm_instance_instantiate_total | Counter | gateway | module | self | Fresh Wasm VM instantiation (instance pool miss) | - |
 | edgion_wasm_instance_discard_total | Counter | gateway | module, reason (poisoned/over_capacity) | self | Wasm VM discarded instead of returned to the pool | - |
 | edgion_wasm_pool_size | Gauge | gateway | module | self | Current pooled Wasm instance count for a module | - |
 | edgion_wasm_hook_duration_ms | Histogram | gateway | module, phase (request_headers/request_body/response_headers/response_body/http_call_response/tick) | self | Duration of one Wasm guest hook invocation | - |
 | edgion_wasm_trap_total | Counter | gateway | module, phase | self | Wasm guest trap (or protocol violation that poisons the lease) | - |
 | edgion_wasm_fail_mode_total | Counter | gateway | module, reason, mode (open/close) | self | Fail-mode decision taken by the Wasm plugin host | - |
-| edgion_wasm_callout_total | Counter | gateway | module, result (ok/error/denied/over_limit/tick_config_conflict) | self | Guest-dispatched HTTP callout outcome | - |
-| edgion_wasm_modules_loaded | Gauge | gateway | none | self | Number of compiled Wasm modules currently held in the global cache (sizing input for pooling-allocator capacity) | - |
+| edgion_wasm_callout_total | Counter | gateway | module, result (ok/error/denied/over_limit) | self | Guest-dispatched HTTP callout outcome | - |
+| edgion_wasm_modules_loaded | Gauge | gateway | none | self | 存活的 Wasm 编译运行时代次数，包括初始化中及旧租约仍持有的代次 | - |
 | edgion_wasm_shared_data_bytes | Gauge | gateway | module | self | 同一模块标签下所有存活 store 的计费字节总和，包括同时存活的新旧代；最后一个 store 销毁后归零（4MiB 上限针对单个 store，而非指标序列） | - |
 | edgion_wasm_body_pause_unsupported_total | Counter | gateway | module | self | A Wasm guest returned `Action::Pause` from the response-body hook, which this host cannot honor (per-chunk window, not a cumulative buffer) — the guest silently observes only the current chunk | alert on this counter (no fixed threshold) |
 | edgion_gateway_plugin_policy_blocked_total | Counter | gateway | plugin | self | A request was rejected because its plugin chain contains an entry blocked by the captured GatewayClass policy | - |

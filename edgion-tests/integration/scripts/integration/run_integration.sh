@@ -3286,9 +3286,8 @@ main() {
             # and inherited here), so gateway-side residue checks run as well.
             # Disable errexit around the call so a non-zero exit (residue / infra
             # error) is captured into $rc and handled below instead of aborting.
-            # Wasm module entries intentionally use a 60-second anti-thrash
-            # eviction grace, so the residue gate must allow that grace to
-            # expire before classifying a live metric handle as a leak.
+            # Allow resource propagation, background cancellation, and in-flight
+            # leases to settle before classifying retained handles as a leak.
             set +e
             "$residue_bin" \
                 --controller-addr "http://127.0.0.1:12101" \

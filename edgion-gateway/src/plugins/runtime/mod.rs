@@ -12,6 +12,7 @@ mod plugin_runtime;
 pub mod policy_filter;
 mod reject_filter;
 pub mod session_adapter;
+pub(crate) mod task_scope;
 pub mod traits;
 
 pub use body_gate::{BodyGatedRequestFilter, BodyGatedUpstreamResponse};

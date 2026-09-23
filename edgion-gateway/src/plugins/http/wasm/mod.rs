@@ -1,5 +1,5 @@
 //! Wasm plugin (proxy-wasm ABI host) — see plugin.rs for the filter impls,
-//! vm_manager.rs for module caching / instance pooling, host_abi.rs for the
+//! vm_manager.rs for plugin-owned runtimes / instance pooling, host_abi.rs for the
 //! ABI bridge.
 
 pub mod callout;

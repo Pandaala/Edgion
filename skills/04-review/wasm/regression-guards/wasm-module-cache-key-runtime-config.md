@@ -1,91 +1,87 @@
 ---
-name: wasm-module-cache-key-runtime-config
-description: Use when reviewing Wasm module-cache findings; covers what the runtime cache key must fold in so per-plugin config is not cross-contaminated.
-status: fixed
-finding_id: contract-01
-closed: 2026-07-18
+name: wasm-plugin-runtime-isolation
+description: Review configured Wasm plugin ownership, mutable state isolation, and removal of global runtime-key sharing.
 knowledge_type: regression-guards
 ---
 
-# Wasm module cache key must fold in per-plugin runtime config — FIXED
+# Wasm runtime isolation follows configured plugin instances
 
-## Conclusion
+## Conclusion and scope
 
-The process-wide Wasm module cache (`WasmVmManager`) keys entries by
-`runtime_cache_key(config)`. A cached `ModuleEntry` owns not just compiled
-bytecode but the per-plugin runtime fields `instance_pool_size`, `timeout_ms`,
-`vmConfig`, and `pluginConfig`. The runtime key therefore MUST fold a digest of
-exactly those four fields in addition to the bytecode source identity. Without
-it, two plugins sharing one module source but differing in any of those fields
-alias the first-loaded entry (cross-route isolation failure + silent no-op on a
-configuration-only hot reload). Fixed 2026-07-18.
+The user-approved ownership model gives each constructed `WasmPlugin` a private
+`WasmRuntime`: load/publication slot, instance pool, shared data, background tick,
+and immutable callout grant. Identical module bytes or configuration do not merge
+different plugin instances. Request hooks and background ticks use that instance's
+grant; there is no cross-plugin grant registry or conflict arbitration.
 
-Re-reports of the "cache keyed only by bytecode source / different `pluginConfig`
-share one entry / config-only hot reload has no effect" form are **not accepted**.
+The common `PluginGeneration` / `EntryCache` owns constructed filters through
+`Arc`. Its identity is one immutable resource generation and one `EntrySlot`
+(`stage`, `index`). Multiple route/policy views can share that same plugin. Different
+entries, stages, resources, and rebuilt generations have independent mutable state.
+Existing requests can finish on their captured generation.
 
-## Core Rationale
+The process-wide `WasmVmManager` retains the Wasmtime Engine and epoch ticker.
+The existing bounded OCI artifact byte cache remains separate. There is no global
+compiled-module/runtime map, runtime cache key, manual plugin refcount, or delayed
+module eviction. Warm access reads the plugin's own atomic publication directly.
 
-**1. Three distinct key/identity roles — do not conflate them**
+## Rationale and evidence
 
-- `WasmSourceSpec::cache_key()` (`edgion-resources/.../wasm.rs`) = schema-level
-  **source identity** only (inline SHA-256, file path, url, oci image). It is
-  intentionally config-independent and must stay that way.
-- `runtime_cache_key()` (`edgion-gateway/.../wasm/vm_manager.rs`) = the actual
-  cache key. It extends the source key with, for `file` sources, the file's
-  `size:mtime` (`;stat=`), and for **all** sources a digest of the per-plugin
-  runtime fields (`;rt=`), via `wasm_runtime_config_digest`.
-- `TickCalloutState` = a per-key refcounted registry that merges
-  `calloutAllowlist` / `calloutTimeoutMs` across plugins on the same key.
+Stable issue `wasm-tick-callout-grant-eviction-race` exposed an authorization
+consistency defect in the former three-map manager. Eviction removed a zero
+refcount, plugin A registered into the old grant state, and eviction then removed
+that state. Plugin B could register a different grant into a fresh state and enable
+tick dispatch although A remained live. This established a bypass of the former
+conflict guard, not access to an origin authorized by no live plugin.
 
-**2. `ModuleEntry` carries per-config state, so the key must separate configs**
+The user explicitly chose instance isolation and eventual cleanup over preserving
+cross-plugin sharing and reload intermediate states. Removing that aggregation
+mechanism eliminates its grant-loss boundary; it does not reinterpret the old
+behavior as safe. The cost is repeated compilation and fresh shared data when a
+plugin is reconstructed. No new compiled-artifact cache is added without evidence
+that its complexity is needed.
 
-`load_inner` copies `instance_pool_size → pool_cap`, `vm_config`,
-`plugin_config`, and `timeout_ms → hook_timeout_ms` into `ModuleEntry`, and
-`new_vm` drives `proxy_on_vm_start` / `proxy_on_configure` from the cached
-vm/plugin config. A source-only key let the first plugin to load a source impose
-its configuration and instance pool on every other plugin using that source.
+Sources: `plugins/http/wasm/{plugin,vm_manager}.rs`,
+`plugins/runtime/entry_bundle.rs`, and `plugins/http/plugin_generation.rs` in
+`edgion-gateway/src`. The architecture boundary is documented in
+[the plugin system](../../../01-architecture/02-gateway/05-plugin-system.md).
+Background destruction is covered by
+[the owner shutdown guard](tick-quiescence-on-zero-reference-eviction.md).
 
-**3. Callout fields are deliberately excluded from the key**
+## Historical correction
 
-`calloutAllowlist` / `calloutTimeoutMs` are merged per-key by `TickCalloutState`,
-not stored as per-entry config, so two plugins differing only in callout config
-should still share the entry. Folding them into the key would fragment the
-callout registry. The digest covers exactly the four `ModuleEntry` config fields
-and nothing else. `failOpen` lives on `WasmPlugin` (not `ModuleEntry`) and is
-likewise not part of the key.
+`contract-01` (2026-07-18) corrected a source-only cache that let one plugin's
+`instance_pool_size`, `timeout_ms`, `vmConfig`, and `pluginConfig` contaminate
+another. Its fix added those fields to `runtime_cache_key`; callout fields remained
+in a separate aggregate. That key implementation is superseded by instance
+ownership. The enduring outcome is isolation of configuration and mutable runtime
+state, not a requirement to retain a global cache or a particular key digest.
 
-## Fix Suggestions Not Accepted
+## Verification and re-evaluation
 
-- "Also key on `calloutAllowlist` / `calloutTimeoutMs`" — those are registry-merged
-  on purpose; keying on them breaks the tick-callout aggregation.
-- "Compare the full `WasmConfig` inside `get_or_load` instead of widening the key" —
-  the key is computed once at `WasmPlugin::build` and reused by preload / sync
-  `try_get` / refcount; an in-`get_or_load` compare would diverge from the key the
-  plugin registered under.
-- Re-report proposing the larger "separate compiled `Module`/`InstancePre` cache
-  from a per-config runtime entry/pool" refactor — that is a wide-impact redesign,
-  not a narrow review fix; the digest-key correction closes the correctness defect.
-  Promote to `tasks/todo/` via brainstorming only if the double-compile cost of
-  same-module/different-config deployments is ever measured to matter.
+On 2026-09-23, `cargo test -p edgion-gateway --lib wasm -- --test-threads=4`
+passed all 226 tests, and the `plugins::runtime::task_scope` test passed.
+Workspace check and Clippy passed. Independent read-only review returned LGTM.
+Coverage includes distinct instances not sharing pools/data/grants, repeated
+loads reusing one runtime's entry, configuration replacement isolating generations,
+and destruction stopping background work without invalidating request leases.
+Read-only review also confirmed common plugin views retain their shared Arc.
+Historical tests of key digests do not
+verify this replacement design.
 
-## Re-evaluation Triggers
+Live verification on the same date passed `WasmRuntimeOwnership` (initial grants,
+swapped grants, restored configuration, and cleanup), all nine static
+`EdgionPlugins/Wasm` tests, and the mandatory cache-residue gate. The latter wiped
+35 resources without errors and reported no leaks. Both suites used one shared
+Controller/Gateway topology. Formatting, agent-doc, SSA-force, metrics inventory,
+Pingora source, Gateway API transform, and Gateway no-tracing checks passed; the
+integration runner's English-only, type-purity, and shell preflights also passed.
 
-Re-open only if: a new per-plugin field is added to `ModuleEntry` from the config
-and is NOT folded into `wasm_runtime_config_digest`; or the compilation cost of
-compiling one module once per distinct config becomes a measured hot-path concern
-(then the compiled-artifact/runtime split becomes worth its complexity).
-
-## Reference Cases
-
-- Finding `contract-01` (review-wasm-issues), fixed 2026-07-18.
-- `edgion-gateway/src/plugins/http/wasm/vm_manager.rs` — `runtime_cache_key`,
-  `wasm_runtime_config_digest`, `ModuleEntry`, `load_inner`, `get_or_load`.
-- Regression tests: `runtime_cache_key_separates_runtime_config_but_not_callouts`,
-  `same_source_distinct_plugin_config_do_not_alias`,
-  `plugin_config_only_reload_lands_new_entry` (same file).
-- Related wasm cache decisions: [`../cpu-memory/cases/wasm-shared-data-no-eviction-no-cluster-kv.md`](../../cpu-memory/intentional-design/wasm-shared-data-no-eviction-no-cluster-kv.md),
-  [`../concurrency/wasm-tick-callout-grant-evict-race.md`](../../concurrency/superseded/wasm-tick-callout-grant-evict-race.md).
+Re-evaluate if mutable state is shared across instances, a compiled-artifact cache
+is introduced, or the common entry cache changes its resource/stage identity.
 
 ## Resolution references
 
-- `contract-01` — 2026-07-18.
+- `contract-01`: historical source-only runtime aliasing correction.
+- `wasm-tick-callout-grant-eviction-race`: replacement of cross-plugin mutable
+  runtime sharing with user-approved plugin instance ownership.

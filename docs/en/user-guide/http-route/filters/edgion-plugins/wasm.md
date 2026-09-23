@@ -15,7 +15,7 @@
 
 ## What does Wasm solve?
 
-proxy-wasm is a portable ABI for writing proxy extensions once and running them on any compliant host (Envoy, this gateway, or others) without recompiling the host itself. Instead of writing a native Rust plugin against Edgion's internal APIs, you compile a small WebAssembly module against the [proxy-wasm SDK](https://crates.io/crates/proxy-wasm) for your language of choice and hand the compiled `.wasm` bytecode to this plugin. The gateway compiles it once, caches the compiled module, and pools initialized instances so per-request execution is cheap.
+proxy-wasm is a portable ABI for writing proxy extensions once and running them on any compliant host (Envoy, this gateway, or others) without recompiling the host itself. Instead of writing a native Rust plugin against Edgion's internal APIs, you compile a small WebAssembly module against the [proxy-wasm SDK](https://crates.io/crates/proxy-wasm) for your language of choice and hand the compiled `.wasm` bytecode to this plugin. Each plugin runtime compiles its loaded generation once and pools initialized instances for reuse across requests. Rebuilding the plugin may repeat compilation.
 
 The implemented ABI is a deliberate subset (see below): header read/write, local responses, **HTTP callouts** (request phase with Pause/resume, and from `on_tick`), **request-body buffer mode** (whole-body, guest-declared, can deny or rewrite), **read-only response-body observation** (per-chunk), **shared data**, and **timers** (`on_tick`). Whole-response buffering and response-body modification are not supported: the main upstream response always remains streaming.
 
@@ -46,10 +46,10 @@ such as DSL, but response-stage Wasm host phases do not expose that cache.
 | `proxy_get_header_map_pairs` / `proxy_get_header_map_value` | ✅ | Request headers, response headers, and (inside the callout callback) `HttpCallResponseHeaders` — the callout's response headers plus a synthetic `:status` pair |
 | `proxy_replace_header_map_value` / `proxy_add_header_map_value` / `proxy_remove_header_map_value` / `proxy_set_header_map_pairs` | ✅ | Set / add / remove / bulk-replace; applied to the real request/response after the hook returns. Header-map writes to the callout response map are rejected |
 | `proxy_send_local_response` | ✅ | Short-circuits the request with a status, body, and headers. The body is forwarded byte-for-byte, so a binary payload (an image, protobuf, ...) is delivered unchanged; an empty body produces a bodyless response. Also valid from inside `proxy_on_http_call_response` (deny after an auth callout) |
-| `proxy_http_call` | ✅ (request-headers + tick phases) | See [HTTP callouts](#http-callouts-pauseresume). In the request-body, response-headers, and response-body phases it returns `UNIMPLEMENTED` (12); in the tick phase it requires an unambiguous allowlist (see [Timers](#shared-data-and-timers)) |
+| `proxy_http_call` | ✅ (request-headers + tick phases) | See [HTTP callouts](#http-callouts-pauseresume). In the request-body, response-headers, and response-body phases it returns `UNIMPLEMENTED` (12); tick calls require the owning plugin's allowlist (see [Timers](#shared-data-and-timers)) |
 | `proxy_continue_request` / `proxy_continue_stream(Request)` | ✅ | Resumes a request paused on a callout. `proxy_continue_response` remains an accepted no-op |
 | `proxy_get_shared_data` / `proxy_set_shared_data` | ✅ | Per-module KV with CAS — see [Shared data](#shared-data-and-timers) |
-| `proxy_set_tick_period_milliseconds` | ✅ | Arms the per-module tick task; `0` stops it. Period floor 100ms |
+| `proxy_set_tick_period_milliseconds` | ✅ | Arms this plugin instance's tick task; `0` stops it. Period floor 100ms |
 | `proxy_get_property` / `proxy_set_property` | ✅ (basic subset) | Readable keys: `request.path`, `request.method`, `request.host`, `source.address`, `plugin_name` (fixed to `Wasm`), `response.code` (response phase only). `proxy_set_property` writes into the current phase's in-memory property map only |
 | `proxy_get_buffer_bytes` | ✅ | `VmConfiguration`, `PluginConfiguration`, `HttpCallResponseBody` (inside the callout callback), `HttpRequestBody` (the **whole buffered request body** in the request-body hook — see [Request-body buffer mode](#request-body-buffer-mode)), and `HttpResponseBody` (the **current chunk window** in the response-body hook) |
 | `proxy_set_buffer_bytes` | ✅ (request body only) | Replaces, inserts, appends, or deletes bytes in `HttpRequestBody` during the whole request-body hook. Response-body writes return `STATUS_UNIMPLEMENTED` (12) |
@@ -123,14 +123,14 @@ vmConfig:
 Use `{json: <value>}` for structured data. Any JSON value is valid, including an
 object, array, string, number, boolean, or null. Edgion serializes the parsed
 value as compact UTF-8 JSON with object keys sorted recursively. This canonical
-form is what the guest receives and what the module-cache identity hashes;
+form is what the guest receives;
 original whitespace, key order, and number spelling are not preserved.
 
 The three forms are strictly mutually exclusive. A missing selector, multiple
 selectors, unknown fields, a bare legacy string, non-canonical Standard padded
 base64, or a decoded value above 64KiB is rejected. Absence differs from an
-explicit empty value. Different forms that produce the same bytes intentionally
-share the same initialized module-cache entry.
+explicit empty value. Different forms that produce the same bytes give the
+guest equivalent configuration, but separate plugin entries retain independent runtimes.
 
 ## Choosing a source form
 
@@ -243,7 +243,7 @@ Semantics and guardrails:
 
 - **Addressing**: the `upstream` parameter is the target **origin URL** (`https://auth.internal:8443`), not an Envoy cluster name. The `:path`, `:method`, and `:authority` pseudo headers from the dispatched header map drive the outbound request (`:authority` is sent as `Host`).
 - **Allowlist**: the origin must exactly match an entry in `calloutAllowlist` (after normalization). No allowlist = no callouts. A denied dispatch returns `INTERNAL_FAILURE` from `proxy_http_call` synchronously.
-- **Request and tick phases**: the response-headers/body stages are synchronous and cannot await; dispatch there returns `UNIMPLEMENTED`. Callouts from `on_tick` are supported with root-context callbacks — see [Timers](#shared-data-and-timers) for the extra allowlist-agreement condition.
+- **Request and tick phases**: the response-headers/body stages are synchronous and cannot await; dispatch there returns `UNIMPLEMENTED`. Callouts from `on_tick` use the owning plugin's authorization and root-context callbacks — see [Timers](#shared-data-and-timers).
 - **Pause required** (request phase): `dispatch` + `Action::Continue` is not supported — the queued callouts are dropped and logged (`callouts-dropped=N`). Dispatch must be followed by `Pause`. (`on_tick` has no Pause concept: callouts dispatched there are always executed after the hook returns.)
 - **Budgets**: at most 8 dispatches per request (or per tick), 4 callback rounds (a callback may dispatch follow-ups), 64 concurrent callouts process-wide, 256KiB response-body cap per callout. Each callout's timeout is `min(guest_timeout, calloutTimeoutMs)`.
 - **Callout failure** (connect error, timeout, oversized body): the callback fires with **0 headers** — the proxy-wasm convention — and the guest decides its own fail behavior. The host never traps the guest for a failed callout.
@@ -338,16 +338,16 @@ Working within the per-chunk model:
 
 ### Shared data
 
-`proxy_get_shared_data` / `proxy_set_shared_data` back a per-module KV store with proxy-wasm CAS semantics (per-key monotonically increasing CAS token; `set` with a nonzero expected CAS fails with `CasMismatch` on mismatch; CAS 0 writes unconditionally; a null value deletes the key).
+`proxy_get_shared_data` / `proxy_set_shared_data` back a plugin-runtime KV store with proxy-wasm CAS semantics (per-key monotonically increasing CAS token; `set` with a nonzero expected CAS fails with `CasMismatch` on mismatch; CAS 0 writes unconditionally; a null value deletes the key).
 
-- **Scope: one module (cache entry) within one gateway process.** All pooled instances of the module share it — across requests, phases, and the tick task. It is **not** cluster-level state: for cluster-wide coordination (e.g. global rate limiting) use `rate_limit_redis`, not shared data.
-- **Trust implication:** every `EdgionPlugins` entry whose source resolves to the same bytecode shares this store — including data a tick-phase callout fetched under one plugin's allowlist, which requests flowing through the *other* plugins can then read. Don't share one module across trust domains whose data must stay separated; ship distinct bytecode (or distinct sources) per tenant instead.
+- **Scope: one configured plugin instance in one gateway process.** Its pooled VMs and tick share the store across requests. The common plugin layer reuses the same instance across references to the same entry in a configuration generation. Separate entries, separate stages, and rebuilt generations have independent stores, even when bytecode and configuration are identical. For cluster-wide coordination use `rate_limit_redis`.
+- **Authorization isolation:** a tick uses only its owning plugin's allowlist. Other entries cannot read its shared data or grant it additional origins.
 - Limits: 64KiB per value, 4MiB total per module. An oversized write returns `BAD_ARGUMENT`. The total is accounted as key + value bytes **plus a fixed ~128B per-entry overhead** (approximating real memory cost), so workloads with many tiny keys get proportionally less logical space — the cap bounds actual memory, not just payload bytes.
-- Lifecycle: freed after the module entry's last owner releases it, including requests still using an evicted or replaced entry (see [Module cache lifecycle](#module-cache-lifecycle)); a reload that changes the module content starts with an empty store. Old and new stores may coexist until in-flight requests finish.
+- Lifecycle: freed after the last holder of the loaded generation releases it, including outstanding request leases (see [Plugin runtime lifecycle](#plugin-runtime-lifecycle)). A rebuilt plugin or refreshed OCI module starts with an empty store; old and new stores may briefly coexist.
 
 ### Timers (`on_tick`)
 
-A guest that calls `proxy_set_tick_period_milliseconds(N)` (typically from `on_configure`) gets `proxy_on_tick` invoked every `N` ms (floor 100ms) on a background task, one per module. The tick instance is leased from the same pool as request instances and runs under the normal `timeoutMs` epoch budget, and **consecutive ticks may run on different pooled instances** — root-context struct fields are per-instance, so state that must survive across ticks belongs in shared data (state *initialized* in `on_configure`, like a parsed config, is fine: every pooled instance runs `on_configure` at init). The guest can change the period or stop ticking (`0`) from inside `on_tick`. The tick task stops automatically when the module's cache entry is evicted.
+A guest that calls `proxy_set_tick_period_milliseconds(N)` (typically from `on_configure`) gets `proxy_on_tick` invoked every `N` ms (floor 100ms) on a background task, one per plugin runtime. The tick instance is leased from the same pool as request instances and runs under the normal `timeoutMs` epoch budget, and **consecutive ticks may run on different pooled instances** — root-context struct fields are per-instance, so state that must survive across ticks belongs in shared data (state *initialized* in `on_configure`, like a parsed config, is fine: every pooled instance runs `on_configure` at init). The guest can change the period or stop ticking (`0`) from inside `on_tick`. The tick task is cancelled when its owning plugin instance is released or its loaded module is replaced. An executing synchronous hook remains bounded by its epoch deadline.
 
 Typical pattern: `on_tick` dispatches a callout to fetch the latest ruleset and writes it into shared data; request hooks read it (rate-limit rule refresh, denylist sync, config polling).
 
@@ -356,11 +356,8 @@ Typical pattern: `on_tick` dispatches a callout to fetch the latest ruleset and 
 `on_tick` may dispatch HTTP callouts like the request phase does. Differences:
 
 - **No Pause/resume**: `proxy_on_tick` has no Action return; callouts queued during the hook are executed right after it returns, and each result is delivered via `proxy_on_http_call_response` on the **root context** (which lives as long as the instance — no per-request context is involved).
-- **Allowlist agreement required.** The tick task is *module-level*, but `calloutAllowlist` is *per-plugin* — and several `EdgionPlugins` entries pointing at the same bytecode share one module (and one tick task). The tick phase therefore arms dispatch only when the plugins referencing the module agree on **one** non-empty allowlist:
-  - Entries with an **empty** `calloutAllowlist` (e.g. the same module also wired at a response/body stage without callout config) carry no opinion and never block tick callouts.
-  - Two or more **different** non-empty allowlists on one module are a **conflict**: tick dispatch stays disabled (`UNIMPLEMENTED`, same as before the feature), a WARN is logged, and `edgion_wasm_callout_total{result="tick_config_conflict"}` is incremented each tick. Fail-safe by design — the alternative would let one plugin's allowlist leak into another's tick execution.
-  - The conflict heals automatically once the disagreeing plugin is removed or its allowlist aligned.
-- The effective timeout cap is the **minimum** `calloutTimeoutMs` across the plugins granting the allowlist; all other callout guardrails (8 dispatches per tick, 4 rounds, concurrency, body cap) apply unchanged.
+- **Plugin-local authorization.** Tick dispatch uses this plugin instance's `calloutAllowlist` and `calloutTimeoutMs`. An empty allowlist disables its tick callouts. Another plugin using the same bytecode neither grants permission nor creates a conflict.
+- The timeout is capped by this plugin's `calloutTimeoutMs`; the other limits (8 dispatches per tick, 4 rounds, concurrency, and response-body cap) still apply.
 
 ## Failure semantics
 
@@ -395,32 +392,34 @@ Each hook call is bounded by `timeoutMs` via wasmtime **epoch interruption**: a 
 - **Per-phase ABI retention budget** — the host-retained bytes a guest accumulates through repeated ABI calls in one hook (queued header ops, `proxy_log` lines, `proxy_set_property` entries) are capped at **32 MiB / 200,000 operations**. Past the budget, further ABI calls return an error status and make **no** partial change; the accumulators are cleared when the hook returns. Legitimate header/log/property use is orders of magnitude below this.
 - **Guest linear-memory cap** — guest memory growth is capped at **128 MiB** (and tables at 100,000 entries), well above any real proxy-wasm working set. This also bounds the size of any single value the guest hands to a host call.
 
-## Module cache lifecycle
+## Plugin runtime lifecycle
 
-The compiled-module cache is keyed by the source **plus, for `file` sources, the file's size+mtime**:
+Each configured Wasm entry owns its loaded module, instance pool, shared data, and background work. References to the same plugin instance share that runtime through the common plugin layer.
 
-- **Refcount eviction.** Every live Wasm plugin instance pins its cache entry. When a reload/config change drops the last reference to an entry (e.g. inline content changed → new key), the orphaned entry is evicted after a **60s grace period** (which absorbs reload thrash). In-flight requests keep the entry alive via their own strong references; memory is freed when the last one finishes. Evictions show up in the `edgion_wasm_module_evicted_total` metric.
-- **`file` sources are content-aware.** The runtime cache key includes the file's size and mtime, captured when the plugin is (re)built. Overwriting the `.wasm` at the same path **and triggering a plugin reload** (any change to the owning `EdgionPlugins` resource, or a full config resync) picks up the new content; the old entry is refcount-evicted. Without a reload the running plugin keeps its original key — a bare file overwrite alone still doesn't hot-swap.
-- **Eager instance warm-up.** One instance is instantiated at load time, so guest init failures surface as clear load errors (negative-cached) instead of per-request acquire failures, and a tick period requested during `on_configure` starts ticking before the first request.
-- **Multi-tenant sizing.** All Wasm modules share one engine-wide pooling allocator. Size `instancePoolSize` with the total across all configured Wasm plugins in mind — estimate the peak instance count as roughly `edgion_wasm_modules_loaded × instancePoolSize`.
+- **Configuration replacement.** Rebuilding an entry creates a fresh runtime. Different entries and stages do not share mutable state, even with identical source/configuration. In-flight requests may complete on their captured old plugin generation.
+- **Automatic cleanup.** Releasing the last plugin owner cancels preload, refresh, and tick work and drops its published module. Outstanding leases may retain the old module until they finish. There is no global runtime registry or 60-second module eviction grace; `edgion_wasm_module_released_total` counts released loaded generations.
+- **Reload tradeoff.** Rebuilds may recompile and reset shared data. Only the process-wide engine and bounded OCI artifact-byte cache remain shared. Old and new generations may briefly overlap; state continuity across configuration replacement is not guaranteed.
+- **File replacement.** Overwriting a `.wasm` file takes effect when the owning plugin is rebuilt and loads the file again. A bare overwrite does not replace an already-loaded runtime.
+- **Preload and refresh.** Eager initialization starts configured ticks before the first request. Cold failures are negative-cached. OCI `Always` refresh keeps the last successful generation on failure; successful replacement cancels the old tick and starts the new generation.
+- **Capacity.** All runtimes use the shared engine's pooling allocator. Size capacity for all configured plugin entries and temporarily overlapping generations; `edgion_wasm_modules_loaded` counts live compiled runtime generations.
 
 ## Metrics
 
-All metrics carry a `module` label. File sources use `file:<path>`, inline sources use `inline:<sha8>`, and URL sources use `url:<canonical-origin>#<path-sha8>`. A URL label is capped at 96 bytes, never contains userinfo, clear-text path, query, or fragment, and stays stable when only signed-query credentials change. The real URL remains part of the internal fetch and cache identity; it is not exposed through metrics or load-error logs.
+Source-scoped metrics carry a `module` label; `edgion_wasm_modules_loaded` is process-wide. File sources use `file:<path>`, inline sources use `inline:<sha8>`, and URL sources use `url:<canonical-origin>#<path-sha8>`. A URL label is capped at 96 bytes, never contains userinfo, clear-text path, query, or fragment, and stays stable when only signed-query credentials change. The real URL remains part of the internal fetch and cache identity; it is not exposed through metrics or load-error logs.
 
 | Metric | Type | Labels | Meaning |
 |---|---|---|---|
 | `edgion_wasm_module_load_total` | counter | `result=ok\|error` | Load attempts (negative-cache hits not counted) |
 | `edgion_wasm_module_compile_duration_ms` | histogram | | `Module::new` wall time |
-| `edgion_wasm_module_evicted_total` | counter | | Refcount evictions |
+| `edgion_wasm_module_released_total` | counter | | Loaded runtime generations released after their last holder exits |
 | `edgion_wasm_instance_instantiate_total` | counter | | Fresh instantiations (pool misses) |
 | `edgion_wasm_instance_discard_total` | counter | `reason=poisoned\|over_capacity` | Instances dropped instead of pooled |
-| `edgion_wasm_pool_size` | gauge | | Current pooled instances |
+| `edgion_wasm_pool_size` | gauge | | Last reported pool size for the source label; not a sum across independent runtimes |
 | `edgion_wasm_hook_duration_ms` | histogram | `phase` | Guest hook wall time (`request_headers`, `request_body`, `response_headers`, `response_body`, `http_call_response`, `tick`) |
 | `edgion_wasm_trap_total` | counter | `phase` | Traps / protocol violations |
 | `edgion_wasm_fail_mode_total` | counter | `reason`, `mode=open\|close` | Fail-mode decisions |
-| `edgion_wasm_callout_total` | counter | `result=ok\|error\|denied\|over_limit\|tick_config_conflict` | Callout outcomes; `tick_config_conflict` counts ticks where dispatch stayed disabled because plugins sharing the module configure different `calloutAllowlist`s |
-| `edgion_wasm_modules_loaded` | gauge | | Compiled modules currently in the global cache |
+| `edgion_wasm_callout_total` | counter | `result=ok\|error\|denied\|over_limit` | Callout outcomes under the owning plugin's grant |
+| `edgion_wasm_modules_loaded` | gauge | | Live compiled runtime generations, including initialization and outstanding old leases |
 | `edgion_wasm_shared_data_bytes` | gauge | `module` | Sum of shared-data bytes across all live stores with the same module label, including overlapping generations and configuration variants; keys + values + ~128B/entry overhead. The 4MiB cap applies to each store, so the aggregate may exceed it. Returns to zero after the last store is released; the zero series may later expire under the configured idle timeout. |
 | `edgion_wasm_body_pause_unsupported_total` | counter | `module` | **Alert on this.** A guest returned `Action::Pause` from the **response-body observation** hook — it wants whole-body buffering, which is not available on the response side (only on the request side, via [Request-body buffer mode](#request-body-buffer-mode)) — and is silently observing only the current chunk instead |
 
@@ -442,9 +441,9 @@ A trap storm shows up as `edgion_wasm_trap_total` and `edgion_wasm_instance_disc
 - **Request-body rewrite only**: `proxy_set_buffer_bytes(HttpRequestBody, ...)` is valid only during the whole request-body hook. Response-body writes remain `STATUS_UNIMPLEMENTED`; other phases return a defined ABI error.
 - **Static mode selection, not dynamic Pause/Continue**: unlike Envoy, the body mode a plugin gets is fixed at module-load time by which hooks the compiled guest exports, not chosen per-request by the guest's `Action` return value. See [Two body modes, chosen statically](#two-body-modes-chosen-statically).
 - **No gRPC callouts** (`proxy_dispatch_grpc_call`): calling it traps.
-- **No callouts from the response/body phases** (sync stages), and request-phase dispatch without `Pause` is dropped. Tick-phase callouts additionally require the module's plugins to agree on one `calloutAllowlist` (see [Timers](#shared-data-and-timers)).
+- **No callouts from the response/body phases** (sync stages), and request-phase dispatch without `Pause` is dropped. Tick-phase callouts use their owning plugin's `calloutAllowlist` (see [Timers](#shared-data-and-timers)).
 - **No shared queues, foreign functions, or guest-defined metrics**: calling them traps.
-- **Per-request contexts are per-hook-call**: the request-headers and response-headers hooks of the same request may run on different pooled instances with fresh context ids. Correlate the phases through shared data or a stashed request header, not guest struct fields.
+- **Per-request contexts are per-hook-call**: the request-headers and response-headers hooks of the same request may run on different pooled instances with fresh context ids. Use an explicit request header to correlate separately configured stages; those entries do not share guest memory or shared data.
 - **`source.oci` v1 constraints**: registries must present a publicly-verifiable TLS certificate (loopback registries may use plain HTTP for local testing); no registry mirrors. See [`source.oci` — pull from an OCI registry](#sourceoci--pull-from-an-oci-registry).
 
 ## Building a guest
@@ -519,7 +518,7 @@ See `edgion-tests/wasm/README.md` for the full contract the reference guest impl
 
 ### Q: My callout is never executed?
 
-Check, in order: (1) the target origin is listed in `calloutAllowlist` — empty list disables callouts entirely; (2) for request-headers-phase dispatch, the guest returns `Action::Pause` — dispatch followed by `Continue` is dropped (`callouts-dropped=N` in the access log); (3) the dispatch happens in the request-headers or tick phase — request-body, response-headers, and response-body phases return `UNIMPLEMENTED`; (4) for tick-phase dispatch, no allowlist conflict — check `edgion_wasm_callout_total{result="tick_config_conflict"}` and the WARN log when several plugins share the module with different `calloutAllowlist`s.
+Check, in order: (1) the target origin is listed in `calloutAllowlist` — empty list disables callouts entirely; (2) for request-headers-phase dispatch, the guest returns `Action::Pause` — dispatch followed by `Continue` is dropped (`callouts-dropped=N` in the access log); (3) the dispatch happens in the request-headers or tick phase — request-body, response-headers, and response-body phases return `UNIMPLEMENTED`; (4) for tick-phase dispatch, the owning plugin itself must authorize the origin — another entry's allowlist does not apply.
 
 ### Q: My request is failing with an unexpected `500` instead of running `proxy_on_request_body`?
 
@@ -535,11 +534,11 @@ Common causes: `source` has zero or more than one of `file`/`inline`/`url`/`oci`
 
 ### Q: I replaced the `.wasm` file on disk but the gateway still runs the old build?
 
-The content-aware cache key is captured when the plugin is built. Touch the owning `EdgionPlugins` resource (any update) after overwriting the file — the reload re-stats the file, lands on a new cache entry, and the old one is evicted after the grace period.
+After overwriting the file, update the owning `EdgionPlugins` resource to rebuild its plugin instance. The new runtime loads the file again; the old runtime is released after its last plugin reference and outstanding leases finish. A bare file overwrite does not replace an already-loaded runtime.
 
 ### Q: Can two requests share state?
 
-Yes — via `proxy_{get,set}_shared_data`, which is shared across all instances of the same module **within one gateway process**. It is not replicated across gateway replicas; cluster-level coordination still belongs to `rate_limit_redis`.
+Yes — via `proxy_{get,set}_shared_data`, which is shared across pooled VMs belonging to the same configured plugin instance **within one gateway process**. Separately configured entries or stages do not share this state. It is not replicated across gateway replicas; cluster-level coordination still belongs to `rate_limit_redis`.
 
 ## Related links
 

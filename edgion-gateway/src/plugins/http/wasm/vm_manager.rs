@@ -1,5 +1,5 @@
-//! Global Wasm VM manager: one JIT engine, per-source compiled-module cache,
-//! and per-module instance pools leased to requests.
+//! One shared JIT engine and independently owned plugin runtimes.
+//! Each runtime publishes its own instance pool, shared data, and tick task.
 //!
 //! Design:
 //! - One global `Engine`, built once behind a `OnceLock`, using the pooling
@@ -10,10 +10,10 @@
 //!   `timeout_ms` before running guest code, so a stuck/looping guest traps
 //!   instead of hanging a worker thread. Dropping a test manager stops and
 //!   joins its ticker so its Engine and pooling mappings can be released.
-//! - Module cache: `DashMap<cache_key, Arc<LoadSlot>>`. Each slot publishes
+//! - Each plugin owns one load slot. Each slot publishes
 //!   its last-known-good entry through an `ArcSwapOption`, while an async
 //!   mutex serializes only the initial load / failure state. Concurrent
-//!   `get_or_load` callers for a cold source share one in-flight compile.
+//!   `get_or_load` callers for a cold plugin share one in-flight compile.
 //!   OCI `Always` refresh runs in the background and never makes readers
 //!   wait for registry IO or compilation. A cold-load error is cached for
 //!   `LOAD_RETRY_SECS` so a broken source doesn't get hammered on every
@@ -59,7 +59,6 @@ use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 use arc_swap::ArcSwapOption;
-use dashmap::DashMap;
 use parking_lot::Mutex;
 use sha2::{Digest, Sha256};
 use wasmtime::{
@@ -70,10 +69,11 @@ use super::callout::resolve_callouts_on;
 use super::host_abi::{self, HostState, WasmPhase};
 use super::shared_data::SharedData;
 use crate::observe::metrics::registry::{
-    record_wasm_callout, record_wasm_compile_duration, record_wasm_hook_duration, record_wasm_instance_discard,
-    record_wasm_instance_instantiate, record_wasm_module_evicted, record_wasm_module_load, record_wasm_trap,
-    set_wasm_modules_loaded, set_wasm_pool_size,
+    record_wasm_compile_duration, record_wasm_hook_duration, record_wasm_instance_discard,
+    record_wasm_instance_instantiate, record_wasm_module_load, record_wasm_trap, set_wasm_pool_size,
+    wasm_module_metrics, WasmModuleMetrics,
 };
+use crate::plugins::runtime::task_scope::{PluginTaskHandle, PluginTaskOwner};
 use edgion_common::startup::catch_redacted_panic;
 use edgion_resources::plugin_configs::{WasmConfig, WasmSourceSpec};
 
@@ -95,16 +95,14 @@ const URL_FETCH_TIMEOUT_SECS: u64 = 10;
 /// Hard cap on module bytes loaded from file or URL sources. This matches the
 /// OCI blob/extracted-module caps and the CLI inspector cap.
 const MAX_MODULE_BYTES: usize = 64 * 1024 * 1024;
-/// How long a cache entry whose plugin refcount dropped to zero is kept
-/// before eviction. The grace absorbs reload thrash (full_set replaces every
-/// plugin instance, briefly dropping every refcount to zero).
-const EVICT_GRACE_SECS: u64 = 60;
 /// Floor for guest-requested tick periods (busy-loop protection).
 const MIN_TICK_PERIOD_MS: u64 = 100;
 /// Stable failure returned when Rust host code unwinds through Wasmtime.
 /// Panic payloads may contain request or configuration data and are never
 /// propagated to callers.
 const WASM_HOST_PANIC_ERROR: &str = "wasm host call panicked";
+const PRELOAD_TASK: usize = 0;
+const REFRESH_TASK: usize = 1;
 
 /// Run one synchronous Wasmtime guest boundary under the process-wide panic
 /// redaction policy. Ordinary Wasmtime and host-function errors retain their
@@ -120,106 +118,7 @@ fn add_production_host_abi(linker: &mut Linker<HostState>) -> Result<(), String>
     host_abi::add_to_linker(linker).map_err(|e| format!("linker setup: {e}"))
 }
 
-/// Cache key actually used at runtime: the schema-level `cache_key()` plus,
-/// for `file` sources, the file's current size+mtime, plus a digest of the
-/// per-plugin runtime fields (see `wasm_runtime_config_digest`).
-///
-/// The file-stat term makes a same-path overwrite followed by a plugin reload
-/// land on a NEW cache entry (the old one is refcount-evicted), fixing the
-/// "replacing the .wasm on disk does not take effect" limitation. A stat
-/// failure falls back to the plain source key — the subsequent load will fail
-/// with a clear read error anyway.
-///
-/// The runtime-config term prevents two plugins that share one module source
-/// but differ in `instancePoolSize` / `timeoutMs` / `vmConfig` / `pluginConfig`
-/// from aliasing the same cached `ModuleEntry` (which owns exactly those
-/// fields). Without it the first plugin to load a source would impose its
-/// configuration and instance pool on every other plugin using that source,
-/// and a configuration-only hot reload would silently no-op.
-///
-/// The `sha256` term keeps the per-resource integrity pin enforced on a cache
-/// hit. SHA-256 verification lives only inside `load_inner`, which a cache hit
-/// short-circuits; if two plugins share one source but pin different digests,
-/// keying on the (normalized) digest lands them on separate entries so each
-/// runs its own verification, rather than the second silently executing the
-/// first's already-loaded bytes. A digest-only hot reload likewise re-keys and
-/// re-verifies. Identical digests still share one entry (no efficiency loss).
-///
-/// The effective OCI pull policy is also part of the key. It is runtime
-/// behavior owned by the slot: an `Always` plugin schedules background
-/// refreshes, while `IfNotPresent` never does. Keeping them in separate slots
-/// prevents a policy-only reload from inheriting an old refresh task. Registry
-/// credentials remain deliberately excluded.
-pub fn runtime_cache_key(config: &WasmConfig) -> String {
-    let mut key = config.source.cache_key();
-    if let Some(path) = &config.source.file {
-        let resolved = edgion_resources::work_dir().resolve(path);
-        if let Ok(md) = std::fs::metadata(&resolved) {
-            let mtime_nanos = md
-                .modified()
-                .ok()
-                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                .map(|d| d.as_nanos())
-                .unwrap_or(0);
-            key = format!("{key};stat={}:{}", md.len(), mtime_nanos);
-        }
-    }
-    // Normalize to lowercase to match the case-insensitive digest comparison in
-    // `load_inner`; absent pin is a distinct (empty) term.
-    let sha = config
-        .sha256
-        .as_deref()
-        .map(str::to_ascii_lowercase)
-        .unwrap_or_default();
-    let pull_policy = effective_oci_pull_policy_key(config);
-    format!(
-        "{key};rt={};sha={sha};pull={pull_policy}",
-        wasm_runtime_config_digest(config)
-    )
-}
-
-/// Digest of the per-plugin runtime fields that `ModuleEntry` copies out of
-/// the config: `instance_pool_size`, `timeout_ms`, `vmConfig`, `pluginConfig`.
-/// Folded into `runtime_cache_key` so plugins sharing one module source but
-/// differing in any of these do not alias the same cached module entry.
-///
-/// `calloutAllowlist` / `calloutTimeoutMs` are deliberately excluded: they are
-/// merged per-key by `TickCalloutState`, not stored as per-entry config, so
-/// two plugins differing only in callout config should still share the entry.
-///
-/// Each byte field is length-prefixed and carries a present/absent marker so
-/// no field-boundary ambiguity can collide two distinct configs (e.g.
-/// `vm=b"a"`/`plugin=b"b"` vs `vm=b"ab"`/`plugin=b""`, or an explicit
-/// empty value vs absence). Representation does not participate: string and
-/// base64 forms that decode to the same bytes intentionally share an entry.
-fn wasm_runtime_config_digest(config: &WasmConfig) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(config.instance_pool_size.to_le_bytes());
-    hasher.update(config.timeout_ms.to_le_bytes());
-    for field in [config.vm_config.as_ref(), config.plugin_config.as_ref()] {
-        match field {
-            Some(raw) => {
-                hasher.update([1u8]);
-                match raw.guest_bytes() {
-                    Ok(bytes) => {
-                        hasher.update([0u8]);
-                        hasher.update((bytes.len() as u64).to_le_bytes());
-                        hasher.update(bytes);
-                    }
-                    // Invalid raw config is rejected before module loading.
-                    // Keep key generation total and collision-safe relative
-                    // to valid empty bytes without exposing the bad value.
-                    Err(_) => hasher.update([0xff]),
-                }
-            }
-            None => hasher.update([0u8]),
-        }
-    }
-    hex::encode(hasher.finalize())
-}
-
-/// Process-wide `WasmVmManager` singleton. All Wasm plugin instances across
-/// the gateway share one engine, module cache, and instance pools.
+/// Process-wide engine and epoch ticker shared by independent plugin runtimes.
 pub fn global_vm_manager() -> &'static WasmVmManager {
     static GLOBAL: OnceLock<WasmVmManager> = OnceLock::new();
     GLOBAL.get_or_init(WasmVmManager::new)
@@ -227,7 +126,7 @@ pub fn global_vm_manager() -> &'static WasmVmManager {
 
 type SharedLoadSlot = Arc<LoadSlot>;
 
-/// One cache-key slot. Readers never take `state`: a fully initialized,
+/// One plugin-owned slot. Readers never take `state`: a fully initialized,
 /// last-known-good module is published independently and remains available
 /// throughout an OCI registry re-check, download, compile, or init failure.
 struct LoadSlot {
@@ -239,7 +138,7 @@ struct LoadSlot {
     /// Single-flight claim for the background refresh task. This is checked
     /// on response-body chunks, so it must stay lock-free.
     refresh_in_flight: AtomicBool,
-    /// Effective OCI policy, resolved once when the policy-keyed slot is
+    /// Effective OCI policy, resolved once when the plugin-owned slot is
     /// created. Hot response-body scheduling never parses the image ref.
     refresh_always: bool,
     /// Single-flight claim for best-effort preload tasks. The cold-load state
@@ -303,13 +202,7 @@ impl Drop for PreloadClaimGuard {
     }
 }
 
-/// One plugin instance's callout configuration, registered against its cache
-/// key so the module tick task can decide whether (and with which allowlist)
-/// to arm `proxy_dispatch_http_call` during `on_tick`.
-///
-/// The allowlist must be normalized (via `normalize_callout_origin`) and
-/// sorted, so two plugins granting the same origins in a different spelling
-/// or order compare equal.
+/// One plugin instance's normalized callout authorization.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct CalloutGrant {
     pub allowlist: Arc<[String]>,
@@ -317,8 +210,7 @@ pub struct CalloutGrant {
 }
 
 impl CalloutGrant {
-    /// A grant with no callout opinion (empty allowlist): never enables and
-    /// never conflicts.
+    /// Disable callouts for this plugin runtime.
     pub fn none() -> Self {
         CalloutGrant {
             allowlist: Arc::from(Vec::new()),
@@ -327,125 +219,38 @@ impl CalloutGrant {
     }
 }
 
-/// Refcounted multiset of the [`CalloutGrant`]s registered for one cache key.
-///
-/// Shared (`Arc`) between the manager's per-key map and the `ModuleEntry`, so
-/// the tick task always sees the CURRENT plugin set: a plugin reload that
-/// changes `calloutAllowlist` swaps its grant here without invalidating the
-/// cached module, and a conflict heals itself once the conflicting plugin is
-/// dropped (no sticky state).
-#[derive(Default)]
-pub struct TickCalloutState {
-    grants: Mutex<Vec<(CalloutGrant, usize)>>,
-    /// Latch so the tick-side conflict WARN fires once per module entry
-    /// lifetime instead of once per tick.
-    conflict_warned: std::sync::atomic::AtomicBool,
+/// Immutable authorization owned by exactly one plugin runtime.
+struct TickCalloutState {
+    grant: CalloutGrant,
     #[cfg(test)]
     active_tick_tasks: AtomicUsize,
-    #[cfg(test)]
-    max_active_tick_tasks: AtomicUsize,
+}
+
+impl TickCalloutState {
+    fn new(grant: CalloutGrant) -> Self {
+        Self {
+            grant,
+            #[cfg(test)]
+            active_tick_tasks: AtomicUsize::new(0),
+        }
+    }
 }
 
 #[cfg(test)]
 struct TestTickTaskGuard {
     state: Arc<TickCalloutState>,
 }
-
 #[cfg(test)]
 impl TestTickTaskGuard {
     fn new(state: Arc<TickCalloutState>) -> Self {
-        let active = state.active_tick_tasks.fetch_add(1, Ordering::AcqRel) + 1;
-        state.max_active_tick_tasks.fetch_max(active, Ordering::AcqRel);
+        state.active_tick_tasks.fetch_add(1, Ordering::AcqRel);
         Self { state }
     }
 }
-
 #[cfg(test)]
 impl Drop for TestTickTaskGuard {
     fn drop(&mut self) {
         self.state.active_tick_tasks.fetch_sub(1, Ordering::AcqRel);
-    }
-}
-
-/// Tick-phase callout decision derived from the registered grants.
-enum TickCalloutGate {
-    /// No plugin granted a (non-empty) allowlist: dispatch stays unarmed,
-    /// exactly like today's documented behavior.
-    Disabled,
-    /// Two or more plugins granted DIFFERENT non-empty allowlists for the
-    /// same module. Arming any one of them (or their union) would let one
-    /// plugin's grant leak into another's tick execution, so dispatch stays
-    /// unarmed (fail-safe) and the situation is warned + counted.
-    Conflict,
-    /// Exactly one distinct non-empty allowlist is granted: arm it. The
-    /// timeout cap is the minimum across the granting plugins.
-    Enabled { allowlist: Arc<[String]>, timeout_ms: u64 },
-}
-
-impl TickCalloutState {
-    /// Register one plugin's grant. Grants with an empty allowlist carry no
-    /// opinion about tick callouts (the common "same module also wired at a
-    /// response/body stage without callout config" case) and never create a
-    /// conflict — they are still tracked so `remove` stays symmetric.
-    fn add(&self, grant: CalloutGrant) {
-        let mut grants = self.grants.lock();
-        if let Some((_, count)) = grants.iter_mut().find(|(g, _)| *g == grant) {
-            *count += 1;
-            return;
-        }
-        grants.push((grant, 1));
-        // Warn only on a REAL conflict: two distinct non-empty allowlists.
-        // Grant entries are keyed by (allowlist, timeout), so counting entries
-        // would false-positive on same-allowlist/different-timeout grants,
-        // which `gate()` merges (min timeout) rather than disables.
-        let mut distinct_allowlists: Vec<&Arc<[String]>> = Vec::new();
-        for (g, _) in grants.iter() {
-            if !g.allowlist.is_empty() && !distinct_allowlists.iter().any(|a| **a == g.allowlist) {
-                distinct_allowlists.push(&g.allowlist);
-            }
-        }
-        if distinct_allowlists.len() > 1 {
-            tracing::warn!(
-                distinct = distinct_allowlists.len(),
-                "wasm module is shared by plugins with different calloutAllowlists; \
-                 tick-phase callouts stay disabled until the configs agree"
-            );
-        }
-    }
-
-    /// Drop one plugin's grant (paired with `add` in the plugin's Drop).
-    fn remove(&self, grant: &CalloutGrant) {
-        let mut grants = self.grants.lock();
-        if let Some(pos) = grants.iter().position(|(g, _)| g == grant) {
-            grants[pos].1 -= 1;
-            if grants[pos].1 == 0 {
-                grants.swap_remove(pos);
-            }
-        }
-    }
-
-    /// Resolve the current tick-phase callout decision.
-    fn gate(&self) -> TickCalloutGate {
-        let grants = self.grants.lock();
-        let mut enabled: Option<(Arc<[String]>, u64)> = None;
-        for (grant, _) in grants.iter() {
-            if grant.allowlist.is_empty() {
-                continue;
-            }
-            match &mut enabled {
-                None => enabled = Some((grant.allowlist.clone(), grant.timeout_ms)),
-                Some((allowlist, timeout_ms)) => {
-                    if *allowlist != grant.allowlist {
-                        return TickCalloutGate::Conflict;
-                    }
-                    *timeout_ms = (*timeout_ms).min(grant.timeout_ms);
-                }
-            }
-        }
-        match enabled {
-            Some((allowlist, timeout_ms)) => TickCalloutGate::Enabled { allowlist, timeout_ms },
-            None => TickCalloutGate::Disabled,
-        }
     }
 }
 
@@ -471,47 +276,7 @@ struct PreparedModule {
     tick_period_ms: u64,
 }
 
-/// Cancellation guard for the narrow refresh handoff window after the old
-/// tick task is stopped but before the new entry is published. If the refresh
-/// future is dropped, re-arm the old task only when it is still the current
-/// publication for this exact cache slot.
-struct TickHandoffGuard {
-    cache: Arc<CacheInner>,
-    cache_key: String,
-    slot: SharedLoadSlot,
-    old_entry: Arc<ModuleEntry>,
-    committed: bool,
-}
-
-impl TickHandoffGuard {
-    fn commit(&mut self) {
-        self.committed = true;
-    }
-}
-
-impl Drop for TickHandoffGuard {
-    fn drop(&mut self) {
-        if self.committed {
-            return;
-        }
-        let slot_is_current = self
-            .cache
-            .modules
-            .get(&self.cache_key)
-            .is_some_and(|current| Arc::ptr_eq(current.value(), &self.slot));
-        let entry_is_current = self
-            .slot
-            .published
-            .load_full()
-            .is_some_and(|current| Arc::ptr_eq(&current, &self.old_entry));
-        if slot_is_current && entry_is_current {
-            let period = self.old_entry.tick_period_ms.load(Ordering::Acquire);
-            self.old_entry.activate_tick(period);
-        }
-    }
-}
-
-/// Global engine + per-source compiled module cache.
+/// Global engine and owned epoch ticker.
 ///
 /// `engine` is a `Result` rather than a bare `Engine`: pooling-allocator
 /// reservation can fail (e.g. a restrictive `RLIMIT_AS`), and the gateway's
@@ -521,16 +286,9 @@ impl Drop for TickHandoffGuard {
 pub struct WasmVmManager {
     engine: Result<Engine, String>,
     /// Owns the epoch thread for a successfully constructed Engine. Dropped
-    /// explicitly before the Engine/cache so no thread retains an Engine
+    /// explicitly before the Engine so no thread retains an Engine
     /// clone beyond this manager's lifetime.
     epoch_ticker: Option<EpochTicker>,
-    /// Module cache + plugin refcounts. Behind one `Arc` so the delayed
-    /// eviction task can hold the maps without a `'static` borrow of the
-    /// manager (test managers are not `'static`).
-    cache: Arc<CacheInner>,
-    /// Grace period between a refcount hitting zero and the entry being
-    /// evicted. Constant in production; overridable in tests.
-    evict_grace: Duration,
 }
 
 struct EpochTicker {
@@ -570,33 +328,8 @@ impl Drop for EpochTicker {
 impl Drop for WasmVmManager {
     fn drop(&mut self) {
         // Stop the thread before field teardown drops the manager's Engine
-        // and the module-cache Engine clones.
+        // and its Engine clones.
         drop(self.epoch_ticker.take());
-    }
-}
-
-struct CacheInner {
-    modules: DashMap<String, SharedLoadSlot>,
-    /// cache_key → number of live `WasmPlugin` instances built on it.
-    refs: DashMap<String, usize>,
-    /// cache_key → the callout grants of those instances (tick-callout
-    /// arming decision). Kept alongside `refs` and evicted with them.
-    tick_callouts: DashMap<String, Arc<TickCalloutState>>,
-}
-
-impl CacheInner {
-    fn new() -> Arc<Self> {
-        Arc::new(CacheInner {
-            modules: DashMap::new(),
-            refs: DashMap::new(),
-            tick_callouts: DashMap::new(),
-        })
-    }
-
-    /// The shared per-key grant state, created on first touch (register or
-    /// load, whichever happens first).
-    fn tick_callout_state(&self, cache_key: &str) -> Arc<TickCalloutState> {
-        self.tick_callouts.entry(cache_key.to_string()).or_default().clone()
     }
 }
 
@@ -620,8 +353,6 @@ impl WasmVmManager {
                 return WasmVmManager {
                     engine: Err(msg),
                     epoch_ticker: None,
-                    cache: CacheInner::new(),
-                    evict_grace: Duration::from_secs(EVICT_GRACE_SECS),
                 };
             }
         };
@@ -638,29 +369,18 @@ impl WasmVmManager {
                 return WasmVmManager {
                     engine: Err(msg),
                     epoch_ticker: None,
-                    cache: CacheInner::new(),
-                    evict_grace: Duration::from_secs(EVICT_GRACE_SECS),
                 };
             }
         };
         WasmVmManager {
             engine: Ok(engine),
             epoch_ticker: Some(epoch_ticker),
-            cache: CacheInner::new(),
-            evict_grace: Duration::from_secs(EVICT_GRACE_SECS),
         }
     }
 
     #[cfg(test)]
     pub fn new_for_test() -> Self {
         Self::new()
-    }
-
-    /// Test-only: shrink the eviction grace so eviction tests do not sleep
-    /// for the production 60s window.
-    #[cfg(test)]
-    pub fn set_evict_grace_for_test(&mut self, grace: Duration) {
-        self.evict_grace = grace;
     }
 
     /// Test-only seam for Fix 1's engine-failure path: build a manager
@@ -673,260 +393,158 @@ impl WasmVmManager {
         WasmVmManager {
             engine,
             epoch_ticker: None,
-            cache: CacheInner::new(),
-            evict_grace: Duration::from_secs(EVICT_GRACE_SECS),
         }
     }
 
-    /// Borrow the engine, or clone out the cached init-failure message.
-    /// Every internal use of the engine goes through this helper so an init
-    /// failure is a normal `Err` at every call site instead of a panic.
+    #[cfg(test)]
     fn engine(&self) -> Result<&Engine, String> {
         self.engine.as_ref().map_err(|e| e.clone())
     }
 
-    /// Canonical policy-keyed slot lookup/creation shared by direct loads and
-    /// best-effort preload. The effective OCI policy is parsed only when a
-    /// slot is first created; warm lookups clone the existing Arc.
-    fn get_or_create_slot(&self, config: &WasmConfig, cache_key: &str) -> SharedLoadSlot {
-        match self.cache.modules.get(cache_key) {
-            Some(slot) => slot.clone(),
-            None => self
-                .cache
-                .modules
-                .entry(cache_key.to_string())
-                .or_insert_with(|| Arc::new(LoadSlot::new(effective_oci_always(config))))
-                .clone(),
+    pub fn new_runtime(&self, config: &WasmConfig, grant: CalloutGrant) -> WasmRuntime {
+        let tasks = PluginTaskOwner::new();
+        super::oci::cache::register_owner();
+        WasmRuntime {
+            state: Arc::new(RuntimeState {
+                engine: self.engine.clone(),
+                config: config.clone(),
+                slot: Arc::new(LoadSlot::new(effective_oci_always(config))),
+                tick_callouts: Arc::new(TickCalloutState::new(grant)),
+                tasks: tasks.handle(),
+            }),
+            tasks,
         }
     }
+}
 
-    /// Fast, non-blocking lookup for sync stages. Returns `None` while the
-    /// module has not finished its first successful load. A background OCI
-    /// refresh never hides the published last-known-good entry.
-    pub fn try_get(&self, cache_key: &str) -> Option<Arc<ModuleEntry>> {
-        let slot = self.cache.modules.get(cache_key)?;
-        slot.published.load_full()
+/// One configured plugin owns its runtime. Tasks only retain `RuntimeState`.
+pub struct WasmRuntime {
+    state: Arc<RuntimeState>,
+    tasks: PluginTaskOwner<2>,
+}
+
+struct RuntimeState {
+    engine: Result<Engine, String>,
+    config: WasmConfig,
+    slot: SharedLoadSlot,
+    tick_callouts: Arc<TickCalloutState>,
+    tasks: PluginTaskHandle<2>,
+}
+
+impl Drop for WasmRuntime {
+    fn drop(&mut self) {
+        // Closing the publication gate first makes the slot stable even if a
+        // cancelled compile completes later on a blocking worker.
+        self.tasks.close();
+        if let Some(entry) = self.state.slot.published.swap(None) {
+            entry.stop_tick();
+        }
+        super::oci::cache::unregister_owner();
+    }
+}
+
+impl WasmRuntime {
+    pub(super) fn config(&self) -> &WasmConfig {
+        &self.state.config
     }
 
-    /// Non-blocking lookup for synchronous response stages. It returns the
-    /// published entry immediately and, for an expired OCI `Always` source,
-    /// lets one caller claim a background refresh. This also gives modules
-    /// configured only on response stages their documented refresh behavior.
-    pub fn try_get_or_schedule_refresh(&self, config: &WasmConfig, cache_key: &str) -> Option<Arc<ModuleEntry>> {
-        let slot = self.cache.modules.get(cache_key)?.clone();
-        let entry = slot.published.load_full()?;
-        self.schedule_oci_refresh(config, cache_key, slot, entry.clone());
+    pub fn try_get(&self) -> Option<Arc<ModuleEntry>> {
+        self.state.slot.published.load_full()
+    }
+
+    pub fn try_get_or_schedule_refresh(&self) -> Option<Arc<ModuleEntry>> {
+        let entry = self.try_get()?;
+        self.state.schedule_oci_refresh(entry.clone());
         Some(entry)
     }
 
-    /// Register one live `WasmPlugin` built on `cache_key`, along with its
-    /// callout grant (tick-callout arming input). Paired with
-    /// `unregister_plugin` in the plugin's `Drop`; the count keeps the cache
-    /// entry alive across reloads that still reference the same source.
-    pub fn register_plugin(&self, cache_key: &str, grant: CalloutGrant) {
-        super::oci::cache::register_owner();
-        *self.cache.refs.entry(cache_key.to_string()).or_insert(0) += 1;
-        self.cache.tick_callout_state(cache_key).add(grant);
+    pub fn spawn_preload(&self) {
+        self.state.spawn_preload();
     }
 
-    /// Drop one plugin reference (and its callout grant). When the count
-    /// reaches zero the entry is evicted after `evict_grace` unless a new
-    /// plugin re-registers the key in the meantime (reload thrash).
-    /// In-flight `VmLease`s stay safe: they hold `Arc<ModuleEntry>` strong
-    /// refs, so removal from the map only unpins the entry — memory is freed
-    /// once the last lease returns.
-    ///
-    /// Unpinning alone does NOT quiesce the entry's tick task: a tick round
-    /// upgrades its `Weak` for the whole round, so the strong count cannot
-    /// reach zero (and `Drop`'s abort cannot fire) while a round is inside a
-    /// callout future. Eviction therefore stops the task explicitly, exactly
-    /// like the OCI refresh handoff does.
-    pub fn unregister_plugin(&self, cache_key: &str, metrics_label: &str, grant: &CalloutGrant) {
-        super::oci::cache::unregister_owner();
-        self.cache.tick_callout_state(cache_key).remove(grant);
-        let now_zero = match self.cache.refs.get_mut(cache_key) {
-            Some(mut count) => {
-                *count = count.saturating_sub(1);
-                *count == 0
-            }
-            None => false,
-        };
-        if !now_zero {
-            return;
-        }
-        let cache = self.cache.clone();
-        let key = cache_key.to_string();
-        let label = metrics_label.to_string();
-        // Returns the evicted entry (when one was published) so the caller can
-        // quiesce its tick task; `None` means nothing was evicted.
-        let evict = move || -> Option<Arc<ModuleEntry>> {
-            // Re-check: a concurrent register_plugin during the grace period
-            // keeps the entry. `remove_if` is atomic per entry.
-            if cache.refs.remove_if(&key, |_, count| *count == 0).is_some() {
-                // Clean the grant record whenever the refcount hit zero — NOT
-                // gated on a modules entry existing: a module that never
-                // loaded (engine init failure, or the plugin dropped before
-                // its preload ran) has refs + tick_callouts records but no
-                // modules entry, and the record would otherwise leak forever.
-                cache.tick_callouts.remove(&key);
-                if let Some((_, slot)) = cache.modules.remove(&key) {
-                    record_wasm_module_evicted(&label);
-                    set_wasm_modules_loaded(cache.modules.len());
-                    tracing::info!(module = %label, "wasm module cache entry evicted (refcount zero)");
-                    return slot.published.load_full();
-                }
-            }
-            None
-        };
-        match tokio::runtime::Handle::try_current() {
-            Ok(handle) => {
-                let grace = self.evict_grace;
-                handle.spawn(async move {
-                    tokio::time::sleep(grace).await;
-                    if let Some(entry) = evict() {
-                        // Bounded: the abort lands on the tick task's next host
-                        // await point, and a synchronous guest call in progress
-                        // is already capped by the engine epoch deadline. This
-                        // task is not the tick task, so there is no self-abort;
-                        // `stop_tick` takes the join handle out of its mutex
-                        // before awaiting, so no lock is held across the await.
-                        entry.stop_tick().await;
-                    }
-                });
-            }
-            // No runtime (process teardown): evict immediately. The grace is
-            // an anti-thrash optimization, not a correctness requirement.
-            // Nothing can await here, so the tick task falls back to `Drop`'s
-            // abort once the dying process releases its last strong reference.
-            Err(_) => drop(evict()),
-        }
+    pub async fn get_or_load(&self) -> Result<Arc<ModuleEntry>, String> {
+        self.state.get_or_load_with_linker(add_production_host_abi).await
     }
 
-    /// Fire-and-forget warm-up (used at plugin construction). Requires a
-    /// running tokio runtime; silently skips otherwise (the first real
-    /// request will trigger a lazy load via `get_or_load`).
-    pub fn spawn_preload(&'static self, config: &WasmConfig, cache_key: &str) {
-        let Some((claim, config, cache_key)) = self.prepare_preload(config, cache_key) else {
-            return;
-        };
-        tokio::spawn(async move {
-            let _claim = claim;
-            let _ = self.get_or_load(&config, &cache_key).await;
-        });
-    }
-
-    fn prepare_preload(&self, config: &WasmConfig, cache_key: &str) -> Option<(PreloadClaimGuard, WasmConfig, String)> {
-        // Engine initialization already emitted one process-level error. This
-        // method is reachable from sync response/body misses, so stay silent
-        // and inspect the field by reference: `engine()` clones the cached
-        // error text, which would allocate once per chunk on a permanent
-        // engine failure. Do not create cache/task state either.
-        if self.engine.is_err() {
-            return None;
-        }
-        if tokio::runtime::Handle::try_current().is_err() {
-            return None;
-        }
-        let slot = self.get_or_create_slot(config, cache_key);
-        if slot.published.load_full().is_some() || monotonic_millis() < slot.load_retry_due_ms.load(Ordering::Acquire) {
-            return None;
-        }
-        let claim = slot.try_claim_preload()?;
-        // Only the winning task needs owned inputs. Repeated response chunks
-        // during an in-flight load or retry window must not copy the key.
-        Some((claim, config.clone(), cache_key.to_owned()))
-    }
-
-    /// Test-only preload path whose task owns an `Arc` manager instead of
-    /// requiring a leaked `'static` manager. Production still uses the
-    /// process-global manager and its zero-allocation static borrow.
     #[cfg(test)]
-    fn spawn_preload_for_test(self: &Arc<Self>, config: &WasmConfig, cache_key: &str) {
-        let Some((claim, config, cache_key)) = self.prepare_preload(config, cache_key) else {
-            return;
-        };
-        let manager = self.clone();
-        tokio::spawn(async move {
-            let _claim = claim;
-            let _ = manager.get_or_load(&config, &cache_key).await;
-        });
-    }
-
-    /// Load (or return the cached) compiled module + instance pool for a
-    /// config. `cache_key` must be the plugin's stored `runtime_cache_key`
-    /// (recomputing it here could diverge from the key the plugin registered
-    /// and uses on the sync `try_get` path if the source file changed on
-    /// disk in between). Concurrent callers for the same key share one
-    /// in-flight load. Errors are cached for `LOAD_RETRY_SECS` to avoid
-    /// hammering a bad source.
-    pub async fn get_or_load(&self, config: &WasmConfig, cache_key: &str) -> Result<Arc<ModuleEntry>, String> {
-        self.get_or_load_with_linker(config, cache_key, add_production_host_abi)
-            .await
-    }
-
-    async fn get_or_load_with_linker<F>(
-        &self,
-        config: &WasmConfig,
-        cache_key: &str,
-        add_host_abi: F,
-    ) -> Result<Arc<ModuleEntry>, String>
+    async fn get_or_load_with_linker<F>(&self, add_host_abi: F) -> Result<Arc<ModuleEntry>, String>
     where
         F: FnOnce(&mut Linker<HostState>) -> Result<(), String> + Send,
     {
-        let engine = self.engine()?.clone();
-        let slot = self.get_or_create_slot(config, cache_key);
+        self.state.get_or_load_with_linker(add_host_abi).await
+    }
+}
 
-        // The common path is one lock-free snapshot load. Registry IO and
-        // compilation happen only in the claimed background task.
-        if let Some(entry) = slot.published.load_full() {
-            self.schedule_oci_refresh(config, cache_key, slot, entry.clone());
+impl RuntimeState {
+    fn prepare_preload(&self) -> Option<PreloadClaimGuard> {
+        if self.engine.is_err() || tokio::runtime::Handle::try_current().is_err() {
+            return None;
+        }
+        if self.slot.published.load_full().is_some()
+            || monotonic_millis() < self.slot.load_retry_due_ms.load(Ordering::Acquire)
+        {
+            return None;
+        }
+        self.slot.try_claim_preload()
+    }
+
+    fn spawn_preload(self: &Arc<Self>) {
+        let Some(claim) = self.prepare_preload() else {
+            return;
+        };
+        // Only the winner clones task inputs; response misses stay allocation-free.
+        let state = self.clone();
+        self.tasks.spawn(PRELOAD_TASK, async move {
+            let _claim = claim;
+            if let Err(error) = state.get_or_load_with_linker(add_production_host_abi).await {
+                tracing::warn!(error = %error, "wasm module preload failed");
+            }
+        });
+    }
+
+    async fn get_or_load_with_linker<F>(self: &Arc<Self>, add_host_abi: F) -> Result<Arc<ModuleEntry>, String>
+    where
+        F: FnOnce(&mut Linker<HostState>) -> Result<(), String> + Send,
+    {
+        let engine = self.engine.as_ref().map_err(Clone::clone)?.clone();
+        if let Some(entry) = self.slot.published.load_full() {
+            self.schedule_oci_refresh(entry.clone());
             return Ok(entry);
         }
-
-        // Cold loads retain the existing same-key serialization. Re-check the
-        // publication after acquiring the lock because another waiter may
-        // have completed the first load while this task was suspended.
-        let mut guard = slot.state.lock().await;
-        if let Some(entry) = slot.published.load_full() {
-            drop(guard);
-            self.schedule_oci_refresh(config, cache_key, slot, entry.clone());
+        let mut guard = self.slot.state.lock().await;
+        if let Some(entry) = self.slot.published.load_full() {
             return Ok(entry);
         }
-        match &mut *guard {
-            LoadState::Failed { error } if monotonic_millis() < slot.load_retry_due_ms.load(Ordering::Acquire) => {
+        if let LoadState::Failed { error } = &*guard {
+            if monotonic_millis() < self.slot.load_retry_due_ms.load(Ordering::Acquire) {
                 return Err(error.clone());
             }
-            _ => {}
         }
-        let label = config.source.metrics_label();
-        match Self::load_inner_with_linker(engine, config, self.cache.tick_callout_state(cache_key), add_host_abi).await
-        {
-            Ok(prepared) => {
-                record_wasm_module_load(&label, "ok");
-                slot.load_retry_due_ms.store(u64::MAX, Ordering::Release);
-                slot.refresh_due_ms.store(
-                    next_oci_refresh_deadline(&slot, prepared.oci.is_some()),
-                    Ordering::Release,
-                );
-                *guard = LoadState::Loaded { oci: prepared.oci };
-                // Publish only after fetch, verification, compile, linker
-                // setup, and eager VM initialization all succeeded. Tick is
-                // activated only after publication, so a prepared entry has
-                // no externally visible background behavior.
-                slot.published.store(Some(prepared.entry.clone()));
-                prepared.entry.activate_tick(prepared.tick_period_ms);
-                set_wasm_modules_loaded(self.cache.modules.len());
-                Ok(prepared.entry)
-            }
-            Err(e) => {
+        let label = self.config.source.metrics_label();
+        match Self::load_inner_with_linker(engine, &self.config, self.tick_callouts.clone(), add_host_abi).await {
+            Ok(prepared) => self
+                .tasks
+                .with_active(|| {
+                    self.slot.load_retry_due_ms.store(u64::MAX, Ordering::Release);
+                    self.slot.refresh_due_ms.store(
+                        next_oci_refresh_deadline(&self.slot, prepared.oci.is_some()),
+                        Ordering::Release,
+                    );
+                    *guard = LoadState::Loaded { oci: prepared.oci };
+                    self.slot.published.store(Some(prepared.entry.clone()));
+                    prepared.entry.activate_tick(prepared.tick_period_ms);
+                    record_wasm_module_load(&label, "ok");
+                    prepared.entry
+                })
+                .ok_or_else(|| "wasm plugin runtime stopped".to_string()),
+            Err(error) => {
                 record_wasm_module_load(&label, "error");
-                tracing::warn!(error = %e, "wasm module load failed");
-                slot.load_retry_due_ms.store(
-                    monotonic_millis().saturating_add(LOAD_RETRY_SECS.saturating_mul(1000)),
+                self.slot.load_retry_due_ms.store(
+                    monotonic_millis().saturating_add(LOAD_RETRY_SECS * 1000),
                     Ordering::Release,
                 );
-                *guard = LoadState::Failed { error: e.clone() };
-                Err(e)
+                *guard = LoadState::Failed { error: error.clone() };
+                Err(error)
             }
         }
     }
@@ -1032,6 +650,7 @@ impl WasmVmManager {
             .instantiate_pre(&module)
             .map_err(|e| format!("instantiate_pre: {e}"))?;
         let entry = Arc::new(ModuleEntry {
+            _metrics: wasm_module_metrics(&label),
             engine,
             instance_pre,
             pool: Mutex::new(Vec::new()),
@@ -1063,186 +682,101 @@ impl WasmVmManager {
         })
     }
 
-    /// Claim and spawn one background OCI `Always` refresh if its monotonic
-    /// deadline expired. All checks on the response-body hot path are atomic;
-    /// no mutex is acquired unless this caller wins the single-flight claim.
-    fn schedule_oci_refresh(
-        &self,
-        config: &WasmConfig,
-        cache_key: &str,
-        slot: SharedLoadSlot,
-        old_entry: Arc<ModuleEntry>,
-    ) {
-        if monotonic_millis() < slot.refresh_due_ms.load(Ordering::Acquire) {
+    fn schedule_oci_refresh(self: &Arc<Self>, old_entry: Arc<ModuleEntry>) {
+        if monotonic_millis() < self.slot.refresh_due_ms.load(Ordering::Acquire) {
             return;
         }
-        let Some(claim) = slot.try_claim_refresh() else {
+        let Some(claim) = self.slot.try_claim_refresh() else {
             return;
         };
-
-        let Ok(handle) = tokio::runtime::Handle::try_current() else {
+        if self.engine.is_err() {
             return;
-        };
-        let Ok(engine) = self.engine().cloned() else {
-            return;
-        };
-        let cache = self.cache.clone();
-        let config = config.clone();
-        let cache_key = cache_key.to_string();
-        let tick_callouts = cache.tick_callout_state(&cache_key);
-        handle.spawn(async move {
-            Self::refresh_oci_entry(engine, cache, cache_key, config, tick_callouts, slot, old_entry, claim).await;
+        }
+        let state = self.clone();
+        self.tasks.spawn(REFRESH_TASK, async move {
+            let _claim = claim;
+            state.refresh_oci_entry(old_entry).await;
         });
     }
 
-    #[allow(clippy::too_many_arguments)]
-    async fn refresh_oci_entry(
-        engine: Engine,
-        cache: Arc<CacheInner>,
-        cache_key: String,
-        config: WasmConfig,
-        tick_callouts: Arc<TickCalloutState>,
-        slot: SharedLoadSlot,
-        old_entry: Arc<ModuleEntry>,
-        _claim: RefreshClaimGuard,
-    ) {
+    async fn refresh_oci_entry(&self, old_entry: Arc<ModuleEntry>) {
         let previous_digest = {
-            let guard = slot.state.lock().await;
+            let guard = self.slot.state.lock().await;
             match &*guard {
-                LoadState::Loaded {
-                    oci: Some(OciLoadedMeta { manifest_digest }),
-                } => manifest_digest.clone(),
-                _ => {
-                    slot.refresh_due_ms.store(u64::MAX, Ordering::Release);
-                    return;
-                }
+                LoadState::Loaded { oci: Some(oci) } => oci.manifest_digest.clone(),
+                _ => return,
             }
         };
-
-        let Some(spec) = config.source.oci.as_ref() else {
-            slot.refresh_due_ms.store(u64::MAX, Ordering::Release);
+        let Some(spec) = self.config.source.oci.as_ref() else {
             return;
         };
         let resolved_digest = match super::oci::resolve_manifest_digest(spec).await {
             Ok(digest) => digest,
-            Err(e) => {
-                tracing::warn!(error = %e, "wasm oci Always re-check failed; keeping the loaded module");
-                finish_oci_refresh(&slot);
+            Err(error) => {
+                tracing::warn!(error = %error, "wasm oci Always re-check failed; keeping the loaded module");
+                finish_oci_refresh(&self.slot);
                 return;
             }
         };
         if resolved_digest == previous_digest {
-            finish_oci_refresh(&slot);
+            finish_oci_refresh(&self.slot);
             return;
         }
-
-        let label = config.source.metrics_label();
-        let prepared = match Self::load_inner(engine, &config, tick_callouts).await {
-            Ok(loaded) => loaded,
-            Err(e) => {
+        let Ok(engine) = &self.engine else {
+            return;
+        };
+        let label = self.config.source.metrics_label();
+        let prepared = match Self::load_inner(engine.clone(), &self.config, self.tick_callouts.clone()).await {
+            Ok(prepared) => prepared,
+            Err(error) => {
                 record_wasm_module_load(&label, "error");
-                tracing::warn!(error = %e, "wasm oci Always refresh failed; keeping the loaded module");
-                finish_oci_refresh(&slot);
+                tracing::warn!(error = %error, "wasm oci Always refresh failed; keeping the loaded module");
+                finish_oci_refresh(&self.slot);
                 return;
             }
         };
-
-        // Confirm the old publication before touching its tick task. The
-        // prepared entry remains inactive throughout this handoff.
-        let mut state = slot.state.lock().await;
-        let slot_is_current = cache
-            .modules
-            .get(&cache_key)
-            .is_some_and(|current| Arc::ptr_eq(current.value(), &slot));
-        let entry_is_current = slot
-            .published
-            .load_full()
-            .is_some_and(|current| Arc::ptr_eq(&current, &old_entry));
-        if !slot_is_current || !entry_is_current {
-            return;
-        }
-
-        let mut handoff = TickHandoffGuard {
-            cache: cache.clone(),
-            cache_key: cache_key.clone(),
-            slot: slot.clone(),
-            old_entry: old_entry.clone(),
-            committed: false,
-        };
-        // `abort` alone is insufficient: an old tick may be inside guest code
-        // or a callout future. Await termination so old/new tick side effects
-        // can never overlap.
-        old_entry.stop_tick().await;
-
-        // Re-check after the await. Keep the DashMap guard alive through the
-        // synchronous publication so this exact slot cannot be replaced.
-        let current_slot = cache.modules.get(&cache_key);
-        let slot_is_current = current_slot
-            .as_ref()
-            .is_some_and(|current| Arc::ptr_eq(current.value(), &slot));
-        let entry_is_current = slot
-            .published
-            .load_full()
-            .is_some_and(|current| Arc::ptr_eq(&current, &old_entry));
-        if !slot_is_current || !entry_is_current {
-            return;
-        }
-
-        slot.refresh_due_ms.store(
-            next_oci_refresh_deadline(&slot, prepared.oci.is_some()),
-            Ordering::Release,
-        );
-        *state = LoadState::Loaded { oci: prepared.oci };
-        slot.published.store(Some(prepared.entry.clone()));
-        prepared.entry.activate_tick(prepared.tick_period_ms);
-        handoff.commit();
-        record_wasm_module_load(&label, "ok");
+        let mut state = self.slot.state.lock().await;
+        self.tasks.with_active(|| {
+            // No await between stopping the old task and publishing its successor.
+            // A running old guest may finish its bounded call during the swap.
+            old_entry.stop_tick();
+            self.slot.refresh_due_ms.store(
+                next_oci_refresh_deadline(&self.slot, prepared.oci.is_some()),
+                Ordering::Release,
+            );
+            *state = LoadState::Loaded { oci: prepared.oci };
+            self.slot.published.store(Some(prepared.entry.clone()));
+            prepared.entry.activate_tick(prepared.tick_period_ms);
+            record_wasm_module_load(&label, "ok");
+        });
     }
+}
 
-    /// Test-only: force the next `get_or_load` on an OCI entry to run the
-    /// `Always` re-check immediately.
-    #[cfg(test)]
-    pub async fn backdate_oci_check_for_test(&self, cache_key: &str) {
-        let Some(slot) = self.cache.modules.get(cache_key).map(|s| s.clone()) else {
-            return;
-        };
-        slot.refresh_due_ms.store(0, Ordering::Release);
+#[cfg(test)]
+impl WasmRuntime {
+    async fn backdate_oci_check_for_test(&self) {
+        self.state.slot.refresh_due_ms.store(0, Ordering::Release);
     }
-
-    #[cfg(test)]
-    async fn wait_for_oci_refresh_for_test(&self, cache_key: &str) {
-        let Some(slot) = self.cache.modules.get(cache_key).map(|s| s.clone()) else {
-            return;
-        };
+    async fn wait_for_oci_refresh_for_test(&self) {
         tokio::time::timeout(Duration::from_secs(5), async {
-            while slot.refresh_in_flight.load(Ordering::Acquire) {
+            while self.state.slot.refresh_in_flight.load(Ordering::Acquire) {
                 tokio::task::yield_now().await;
             }
         })
         .await
-        .expect("OCI refresh finishes within the test deadline");
+        .expect("OCI refresh finishes within deadline");
     }
-
-    #[cfg(test)]
-    fn backdate_load_retry_for_test(&self, cache_key: &str) {
-        let Some(slot) = self.cache.modules.get(cache_key).map(|slot| slot.clone()) else {
-            return;
-        };
-        slot.load_retry_due_ms.store(0, Ordering::Release);
+    fn backdate_load_retry_for_test(&self) {
+        self.state.slot.load_retry_due_ms.store(0, Ordering::Release);
     }
-
-    #[cfg(test)]
-    async fn wait_for_preload_for_test(&self, cache_key: &str) {
-        let Some(slot) = self.cache.modules.get(cache_key).map(|s| s.clone()) else {
-            return;
-        };
+    async fn wait_for_preload_for_test(&self) {
         tokio::time::timeout(Duration::from_secs(5), async {
-            while slot.preload_in_flight.load(Ordering::Acquire) {
+            while self.state.slot.preload_in_flight.load(Ordering::Acquire) {
                 tokio::task::yield_now().await;
             }
         })
         .await
-        .expect("preload finishes within the test deadline");
+        .expect("preload finishes within deadline");
     }
 }
 
@@ -1373,9 +907,9 @@ fn module_too_large_error() -> String {
     format!("wasm module exceeds {MAX_MODULE_BYTES} bytes")
 }
 
-/// Bound on concurrently in-flight url/OCI fetches across all modules. Same-url
-/// callers already share one in-flight load via the per-key `LoadSlot`
-/// mutex; this caps distinct-url fan-out during a startup storm.
+/// Bound on concurrently in-flight URL/OCI fetches across all plugins.
+/// Each plugin serializes its own cold loads; this also caps fetches from
+/// independent plugins, including plugins configured with the same URL.
 pub(super) fn url_fetch_permits() -> &'static tokio::sync::Semaphore {
     static PERMITS: OnceLock<tokio::sync::Semaphore> = OnceLock::new();
     PERMITS.get_or_init(|| tokio::sync::Semaphore::new(4))
@@ -1508,6 +1042,7 @@ async fn fetch_url_bytes_with_permits(
 /// A compiled module plus its instance pool. Cheaply shared (`Arc`) across
 /// concurrent requests once loaded.
 pub struct ModuleEntry {
+    _metrics: WasmModuleMetrics,
     engine: Engine,
     instance_pre: InstancePre<HostState>,
     pool: Mutex<Vec<PooledVm>>,
@@ -1517,7 +1052,7 @@ pub struct ModuleEntry {
     /// Human-readable source descriptor for metrics labels.
     metrics_label: String,
     /// Module-wide shared KV, cloned into every pooled VM's HostState.
-    /// Freed with this entry (i.e. follows cache eviction).
+    /// Freed after the plugin and its last in-flight lease release this entry.
     shared_data: Arc<SharedData>,
     /// Per-hook budget for background (tick) leases; mirrors the config's
     /// `timeoutMs`.
@@ -1525,16 +1060,12 @@ pub struct ModuleEntry {
     /// Background `proxy_on_tick` driver, started once when a guest sets a
     /// nonzero tick period. Holds a `Weak` back-reference; aborted on Drop.
     tick_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
-    /// Latest guest-selected tick period. Retained when a refresh handoff
-    /// stops the task so cancellation can safely re-arm the still-published
-    /// old entry.
+    /// Latest trusted guest-selected tick period.
     tick_period_ms: AtomicU64,
     /// Publication/lifecycle gate. Prepared entries and entries being stopped
     /// for refresh cannot spawn a replacement task from a concurrent acquire.
     tick_enabled: AtomicBool,
-    /// The callout grants of the plugins registered on this entry's cache
-    /// key (shared with the manager's map). Read every tick round to decide
-    /// whether `on_tick` may dispatch callouts, and with which allowlist.
+    /// Immutable authorization from the owning plugin configuration.
     tick_callouts: Arc<TickCalloutState>,
     /// Whether the guest exports `proxy_on_response_body`. Computed once
     /// at load; lets the body-filter stage skip the per-chunk lease entirely
@@ -1632,7 +1163,7 @@ impl ModuleEntry {
     /// Start the module tick task once a guest requested a nonzero period.
     /// Idempotent; requires a tokio runtime (skipped otherwise, e.g. in
     /// sync-only unit tests). The task holds only a `Weak` back-reference,
-    /// so cache eviction still drops the entry — `Drop` aborts the task.
+    /// while the plugin owner explicitly aborts it when shutting down.
     fn activate_tick(self: &Arc<Self>, period_ms: u64) {
         self.tick_enabled.store(true, Ordering::Release);
         self.maybe_start_tick(period_ms);
@@ -1646,7 +1177,7 @@ impl ModuleEntry {
             return;
         }
         let mut guard = self.tick_task.lock();
-        if guard.is_some() {
+        if !self.tick_enabled.load(Ordering::Acquire) || guard.is_some() {
             return;
         }
         self.tick_period_ms.store(period_ms, Ordering::Release);
@@ -1674,30 +1205,14 @@ impl ModuleEntry {
                     Vec::new(),
                     std::collections::HashMap::new(),
                 );
-                // Arm dispatch only when the module's registered plugins
-                // agree on one non-empty allowlist; on conflict the guest
-                // keeps seeing UNIMPLEMENTED (fail-safe, warned + counted).
-                let armed = match entry.tick_callouts.gate() {
-                    TickCalloutGate::Enabled { allowlist, timeout_ms } => {
-                        lease.state_mut().arm_dispatch(allowlist, timeout_ms);
-                        Some(timeout_ms)
-                    }
-                    TickCalloutGate::Conflict => {
-                        record_wasm_callout(&label, "tick_config_conflict");
-                        if !entry
-                            .tick_callouts
-                            .conflict_warned
-                            .swap(true, std::sync::atomic::Ordering::Relaxed)
-                        {
-                            tracing::warn!(
-                                module = %label,
-                                "wasm tick callouts disabled: plugins sharing this module \
-                                 configure different calloutAllowlists"
-                            );
-                        }
-                        None
-                    }
-                    TickCalloutGate::Disabled => None,
+                let grant = &entry.tick_callouts.grant;
+                let armed = if grant.allowlist.is_empty() {
+                    None
+                } else {
+                    lease
+                        .state_mut()
+                        .arm_dispatch(grant.allowlist.clone(), grant.timeout_ms);
+                    Some(grant.timeout_ms)
                 };
                 match lease.call_on_tick() {
                     Err(e) => {
@@ -1766,14 +1281,15 @@ impl ModuleEntry {
         *guard = Some(handle);
     }
 
-    /// Stop and fully quiesce this entry's background tick task. Ordinary
-    /// request leases remain valid because only the task handle is affected.
-    async fn stop_tick(&self) {
-        self.tick_enabled.store(false, Ordering::Release);
-        let handle = self.tick_task.lock().take();
+    /// Stop future tick work without invalidating in-flight request leases.
+    fn stop_tick(&self) {
+        let handle = {
+            let mut task = self.tick_task.lock();
+            self.tick_enabled.store(false, Ordering::Release);
+            task.take()
+        };
         if let Some(handle) = handle {
             handle.abort();
-            let _ = handle.await;
         }
     }
 
@@ -2352,18 +1868,13 @@ mod tests {
     }
 
     async fn load_with_panicking_linker(
-        manager: &WasmVmManager,
-        config: &WasmConfig,
+        runtime: &WasmRuntime,
         should_panic: Arc<AtomicBool>,
         calls: Arc<AtomicUsize>,
         failed_tick_period: Option<u64>,
     ) -> Result<Arc<ModuleEntry>, String> {
-        manager
-            .get_or_load_with_linker(
-                config,
-                &runtime_cache_key(config),
-                panicking_linker(should_panic, calls, failed_tick_period),
-            )
+        runtime
+            .get_or_load_with_linker(panicking_linker(should_panic, calls, failed_tick_period))
             .await
     }
 
@@ -2435,13 +1946,12 @@ mod tests {
         c
     }
 
-    /// Test shorthand: load with the runtime cache key derived from the
-    /// config, matching what `WasmPlugin::build` does in production.
+    /// Load an entry for synchronous lease tests. Tick tests retain a runtime owner.
     async fn load(
         mgr: &WasmVmManager,
         config: &edgion_resources::plugin_configs::WasmConfig,
     ) -> Result<Arc<ModuleEntry>, String> {
-        mgr.get_or_load(config, &runtime_cache_key(config)).await
+        mgr.new_runtime(config, CalloutGrant::none()).get_or_load().await
     }
 
     fn call_panic_site(lease: &mut VmLease, site: PanicSite) -> Result<(), String> {
@@ -2507,25 +2017,20 @@ mod tests {
         ] {
             let file = write_temp_wasm(&panic_guest(site));
             let config = file_config(file.path());
-            let cache_key = runtime_cache_key(&config);
             let manager = WasmVmManager::new_for_test();
+            let runtime = manager.new_runtime(&config, CalloutGrant::none());
             let should_panic = Arc::new(AtomicBool::new(true));
             let calls = Arc::new(AtomicUsize::new(0));
 
-            let error = load_with_panicking_linker(&manager, &config, should_panic, calls.clone(), None)
+            let error = load_with_panicking_linker(&runtime, should_panic, calls.clone(), None)
                 .await
                 .expect_err("host panic must fail eager initialization");
 
             assert!(error.ends_with(WASM_HOST_PANIC_ERROR), "{site:?}: {error}");
             assert!(!error.contains(HOST_PANIC_SENTINEL), "{site:?}: {error}");
             assert_eq!(calls.load(Ordering::SeqCst), 1, "{site:?}");
-            assert!(manager.try_get(&cache_key).is_none(), "{site:?} was published");
-            let slot = manager
-                .cache
-                .modules
-                .get(&cache_key)
-                .expect("failed slot retained")
-                .clone();
+            assert!(runtime.try_get().is_none(), "{site:?} was published");
+            let slot = runtime.state.slot.clone();
             assert!(slot.published.load_full().is_none(), "{site:?} published a candidate");
             assert!(
                 matches!(&*slot.state.lock().await, LoadState::Failed { .. }),
@@ -2552,9 +2057,10 @@ mod tests {
             let file = write_temp_wasm(&panic_guest(site));
             let config = file_config(file.path());
             let manager = WasmVmManager::new_for_test();
+            let runtime = manager.new_runtime(&config, CalloutGrant::none());
             let should_panic = Arc::new(AtomicBool::new(false));
             let calls = Arc::new(AtomicUsize::new(0));
-            let entry = load_with_panicking_linker(&manager, &config, should_panic.clone(), calls, None)
+            let entry = load_with_panicking_linker(&runtime, should_panic.clone(), calls, None)
                 .await
                 .expect("guest initializes while panic is disabled");
             assert_eq!(entry.pool_len(), 1, "{site:?} eager pool");
@@ -2618,8 +2124,9 @@ mod tests {
         let mut cfg = file_config(f.path());
         cfg.plugin_config = Some(WasmRawConfig::string("v1"));
         let mgr = WasmVmManager::new_for_test();
-        let e1 = load(&mgr, &cfg).await.expect("loads v1");
-        let e1b = load(&mgr, &cfg).await.expect("cached v1");
+        let runtime = mgr.new_runtime(&cfg, CalloutGrant::none());
+        let e1 = runtime.get_or_load().await.expect("loads v1");
+        let e1b = runtime.get_or_load().await.expect("cached v1");
         assert!(Arc::ptr_eq(&e1, &e1b), "unchanged config shares the entry");
 
         cfg.plugin_config = Some(WasmRawConfig::string("v2"));
@@ -2629,6 +2136,108 @@ mod tests {
             "pluginConfig-only reload must produce a new entry"
         );
         assert_eq!(e2.plugin_config, b"v2");
+    }
+
+    #[tokio::test]
+    async fn plugin_drop_releases_publication_but_preserves_in_flight_lease() {
+        let file = write_temp_wasm(MINI_GUEST);
+        let manager = WasmVmManager::new_for_test();
+        let runtime = manager.new_runtime(&file_config(file.path()), CalloutGrant::none());
+        let state = runtime.state.clone();
+        let entry = runtime.get_or_load().await.unwrap();
+        let weak = Arc::downgrade(&entry);
+        let mut lease = entry.acquire(100).unwrap();
+        drop(entry);
+        drop(runtime);
+        assert!(state.slot.published.load_full().is_none());
+        lease
+            .state_mut()
+            .begin_phase(WasmPhase::RequestHeaders, vec![], vec![], HashMap::new());
+        assert!(lease.call_on_request_headers(0).is_ok());
+        drop(lease);
+        assert!(weak.upgrade().is_none());
+    }
+
+    #[tokio::test]
+    async fn shared_data_metric_handle_follows_plugin_and_lease_lifetime() {
+        let file = write_temp_wasm(MINI_GUEST);
+        let manager = WasmVmManager::new_for_test();
+        let runtime = manager.new_runtime(&file_config(file.path()), CalloutGrant::none());
+        let entry = runtime.get_or_load().await.unwrap();
+        let label = entry.metrics_label.clone();
+        let lease = entry.acquire(100).unwrap();
+        drop(entry);
+        drop(runtime);
+        assert!(crate::observe::metrics::registry::wasm_shared_data_metric_stats()
+            .keys
+            .contains(&label));
+        drop(lease);
+        assert!(!crate::observe::metrics::registry::wasm_shared_data_metric_stats()
+            .keys
+            .contains(&label));
+    }
+
+    #[tokio::test]
+    async fn dropped_plugin_rejects_late_load_publication_and_tick_start() {
+        let file = write_temp_wasm(TICK_GUEST);
+        let manager = WasmVmManager::new_for_test();
+        let runtime = manager.new_runtime(&file_config(file.path()), CalloutGrant::none());
+        let state = runtime.state.clone();
+        let guard = state.slot.state.lock().await;
+        let late = state.clone();
+        let (started, ready) = tokio::sync::oneshot::channel();
+        let load = tokio::spawn(async move {
+            let _ = started.send(());
+            late.get_or_load_with_linker(add_production_host_abi).await
+        });
+        ready.await.unwrap();
+        drop(runtime);
+        drop(guard);
+        assert_eq!(load.await.unwrap().unwrap_err(), "wasm plugin runtime stopped");
+        assert!(state.slot.published.load_full().is_none());
+        assert_eq!(state.tick_callouts.active_tick_tasks.load(Ordering::Acquire), 0);
+    }
+
+    #[tokio::test]
+    async fn identical_sources_keep_plugin_grants_pools_and_shared_data_independent() {
+        let file = write_temp_wasm(MINI_GUEST);
+        let config = file_config(file.path());
+        let manager = WasmVmManager::new_for_test();
+        let grant_a = grant(vec!["https://a.example".to_string()], 100);
+        let grant_b = grant(vec!["https://b.example".to_string()], 200);
+        let a = manager.new_runtime(&config, grant_a.clone());
+        let b = manager.new_runtime(&config, grant_b.clone());
+        let entry_a = a.get_or_load().await.unwrap();
+        let entry_b = b.get_or_load().await.unwrap();
+        assert!(!Arc::ptr_eq(&entry_a, &entry_b));
+        assert!(!Arc::ptr_eq(&entry_a.shared_data, &entry_b.shared_data));
+        assert_eq!(entry_a.tick_callouts.grant, grant_a);
+        assert_eq!(entry_b.tick_callouts.grant, grant_b);
+        let lease = entry_a.acquire(100).unwrap();
+        assert_eq!(entry_a.pool_len(), 0);
+        assert_eq!(entry_b.pool_len(), 1);
+        drop(a);
+        assert!(Arc::ptr_eq(&b.get_or_load().await.unwrap(), &entry_b));
+        assert_eq!(entry_b.tick_callouts.grant, grant_b);
+        drop(lease);
+    }
+
+    #[tokio::test]
+    async fn recreated_plugin_reads_replaced_file_and_owns_new_policy() {
+        let file = write_temp_wasm(MINI_GUEST);
+        let config = file_config(file.path());
+        let manager = WasmVmManager::new_for_test();
+        let old = manager.new_runtime(&config, CalloutGrant::none());
+        let old_entry = old.get_or_load().await.unwrap();
+        std::fs::write(file.path(), wat::parse_str(TRAP_GUEST).unwrap()).unwrap();
+        let new = manager.new_runtime(&config, CalloutGrant::none());
+        let new_entry = new.get_or_load().await.unwrap();
+        let mut lease = new_entry.acquire(100).unwrap();
+        lease
+            .state_mut()
+            .begin_phase(WasmPhase::RequestHeaders, vec![], vec![], HashMap::new());
+        assert!(lease.call_on_request_headers(0).is_err());
+        assert!(!Arc::ptr_eq(&old_entry, &new_entry));
     }
 
     #[tokio::test]
@@ -2906,21 +2515,18 @@ mod tests {
 
         let mgr = WasmVmManager::new_for_test();
         // Warm the cache with the correct pin.
-        mgr.register_plugin(&runtime_cache_key(&good), CalloutGrant::none());
-        load(&mgr, &good).await.expect("correct pin loads");
+        let runtime = mgr.new_runtime(&good, CalloutGrant::none());
+        let verified = runtime.get_or_load().await.expect("correct pin loads");
 
         // The mismatching config must still fail even though the bytes are warm.
         let err = load(&mgr, &bad).await.unwrap_err();
         assert!(err.contains("sha256"), "warm cache must not bypass the pin; got: {err}");
 
-        // Repeating the correct pin (different hex case) shares the warm entry.
+        // Digest comparison remains case-insensitive for independent plugins.
         let mut good2 = file_config(f.path());
         good2.sha256 = Some(correct.to_ascii_uppercase());
-        assert_eq!(
-            runtime_cache_key(&good2),
-            runtime_cache_key(&good),
-            "identical digest (case-insensitive) must share one entry"
-        );
+        let uppercase = load(&mgr, &good2).await.expect("uppercase pin loads");
+        assert!(!Arc::ptr_eq(&verified, &uppercase));
     }
 
     #[tokio::test]
@@ -2997,159 +2603,6 @@ mod tests {
             .any(|warning| warning.code == edgion_wasm::CompatibilityCode::KnownNotInvokedHook));
     }
 
-    /// Refcount eviction: when the last plugin unregisters a cache key, the
-    /// entry disappears after the grace period; an in-flight lease taken
-    /// before eviction stays usable (Arc keeps the entry alive).
-    #[tokio::test]
-    async fn refcount_zero_evicts_entry_after_grace() {
-        let f = write_temp_wasm(MINI_GUEST);
-        let config = file_config(f.path());
-        let key = runtime_cache_key(&config);
-        let mut mgr = WasmVmManager::new_for_test();
-        mgr.set_evict_grace_for_test(Duration::from_millis(50));
-
-        mgr.register_plugin(&key, CalloutGrant::none());
-        let entry = load(&mgr, &config).await.expect("loads");
-        let mut lease = entry.acquire(100).expect("lease");
-
-        mgr.unregister_plugin(&key, "test-module", &CalloutGrant::none());
-        // Poll rather than a single fixed sleep: the eviction task's timer
-        // can be delayed under parallel test load.
-        let mut evicted = false;
-        for _ in 0..40 {
-            tokio::time::sleep(Duration::from_millis(50)).await;
-            if mgr.try_get(&key).is_none() {
-                evicted = true;
-                break;
-            }
-        }
-        assert!(evicted, "entry must be evicted after grace");
-
-        // The lease taken before eviction is still safe to drive.
-        lease
-            .state_mut()
-            .begin_phase(WasmPhase::RequestHeaders, vec![], vec![], HashMap::new());
-        assert!(lease.call_on_request_headers(0).is_ok());
-    }
-
-    /// The store-stats signal used by cache-residue validation follows the
-    /// complete module-entry lifetime: it stays live during the anti-thrash
-    /// grace and disappears once an unleased zero-reference entry is evicted.
-    #[tokio::test]
-    async fn shared_data_metric_handle_follows_delayed_module_eviction() {
-        let f = write_temp_wasm(MINI_GUEST);
-        let config = file_config(f.path());
-        let key = runtime_cache_key(&config);
-        let mut mgr = WasmVmManager::new_for_test();
-        mgr.set_evict_grace_for_test(Duration::from_millis(100));
-
-        mgr.register_plugin(&key, CalloutGrant::none());
-        let entry = load(&mgr, &config).await.expect("loads");
-        let metrics_label = entry.metrics_label.clone();
-        drop(entry);
-
-        mgr.unregister_plugin(&key, "test-module", &CalloutGrant::none());
-        tokio::time::sleep(Duration::from_millis(25)).await;
-        assert!(mgr.try_get(&key).is_some(), "entry must remain during grace");
-        assert!(
-            crate::observe::metrics::registry::wasm_shared_data_metric_stats()
-                .keys
-                .contains(&metrics_label),
-            "live shared-data handle must remain visible during grace"
-        );
-
-        let mut released = false;
-        for _ in 0..40 {
-            tokio::time::sleep(Duration::from_millis(50)).await;
-            let stats = crate::observe::metrics::registry::wasm_shared_data_metric_stats();
-            if mgr.try_get(&key).is_none() && !stats.keys.contains(&metrics_label) {
-                released = true;
-                break;
-            }
-        }
-        assert!(released, "entry and shared-data metric handle must release after grace");
-    }
-
-    /// A re-register during the grace period cancels the eviction.
-    #[tokio::test]
-    async fn reregister_during_grace_keeps_entry() {
-        let f = write_temp_wasm(MINI_GUEST);
-        let config = file_config(f.path());
-        let key = runtime_cache_key(&config);
-        let mut mgr = WasmVmManager::new_for_test();
-        mgr.set_evict_grace_for_test(Duration::from_millis(100));
-
-        mgr.register_plugin(&key, CalloutGrant::none());
-        load(&mgr, &config).await.expect("loads");
-        mgr.unregister_plugin(&key, "test-module", &CalloutGrant::none());
-        // Reload thrash: a new plugin instance re-registers within the grace.
-        mgr.register_plugin(&key, CalloutGrant::none());
-        tokio::time::sleep(Duration::from_millis(300)).await;
-        assert!(
-            mgr.try_get(&key).is_some(),
-            "re-registered entry must survive the grace window"
-        );
-    }
-
-    /// File-source cache keys are content-aware: overwriting the same path
-    /// with different bytes yields a different runtime cache key.
-    #[test]
-    fn runtime_cache_key_changes_when_file_replaced() {
-        let f = write_temp_wasm(MINI_GUEST);
-        let config = file_config(f.path());
-        let key_before = runtime_cache_key(&config);
-        // Overwrite with different content (different size guarantees a
-        // stat-visible change even on coarse-mtime filesystems).
-        let bytes = wat::parse_str(TRAP_GUEST).unwrap();
-        std::fs::write(f.path(), &bytes).unwrap();
-        let key_after = runtime_cache_key(&config);
-        assert_ne!(key_before, key_after, "same-path overwrite must change the key");
-        // Non-file sources are unaffected by stat, but the runtime key always
-        // folds in the per-plugin config digest, so it extends (not equals)
-        // the schema source key.
-        let mut inline = edgion_resources::plugin_configs::WasmConfig::default();
-        inline.source.inline = Some("AAAA".to_string());
-        let inline_key = runtime_cache_key(&inline);
-        assert!(inline_key.starts_with(&inline.source.cache_key()));
-        assert!(!inline_key.contains(";stat="), "inline source has no file stat term");
-        assert!(inline_key.contains(";rt="), "runtime config digest is always present");
-    }
-
-    #[test]
-    fn runtime_cache_key_separates_effective_oci_pull_policy_in_both_reload_directions() {
-        use edgion_resources::plugin_configs::OciPullPolicy;
-
-        let mut always = WasmConfig::default();
-        always.source.oci = Some(edgion_resources::plugin_configs::WasmOciSpec {
-            image: "registry.example.com/team/module:1.0".to_string(),
-            pull_policy: Some(OciPullPolicy::Always),
-            ..Default::default()
-        });
-        let mut if_not_present = always.clone();
-        if_not_present.source.oci.as_mut().unwrap().pull_policy = Some(OciPullPolicy::IfNotPresent);
-
-        let always_key = runtime_cache_key(&always);
-        let if_not_present_key = runtime_cache_key(&if_not_present);
-        for (old, new) in [(&always_key, &if_not_present_key), (&if_not_present_key, &always_key)] {
-            assert_ne!(
-                old, new,
-                "a policy-only reload in either direction must move to a new slot"
-            );
-        }
-
-        let mut implicit_latest = always.clone();
-        let oci = implicit_latest.source.oci.as_mut().unwrap();
-        oci.image = "registry.example.com/team/module:latest".to_string();
-        oci.pull_policy = None;
-        let mut explicit_latest = implicit_latest.clone();
-        explicit_latest.source.oci.as_mut().unwrap().pull_policy = Some(OciPullPolicy::Always);
-        assert_eq!(
-            runtime_cache_key(&implicit_latest),
-            runtime_cache_key(&explicit_latest),
-            "equivalent effective policies should still share a slot"
-        );
-    }
-
     #[tokio::test]
     async fn refresh_claim_is_released_when_task_is_aborted() {
         let slot = Arc::new(LoadSlot::new(true));
@@ -3179,111 +2632,6 @@ mod tests {
             next_oci_refresh_deadline(&slot, true),
             u64::MAX,
             "the precomputed slot policy alone disables refresh"
-        );
-    }
-
-    /// Regression (contract-01): the runtime cache key folds in the per-plugin
-    /// runtime fields that `ModuleEntry` owns (instance pool size, hook
-    /// timeout, `vmConfig`, `pluginConfig`) but NOT the callout fields, which
-    /// are merged per-key by `TickCalloutState`.
-    #[test]
-    fn runtime_cache_key_separates_runtime_config_but_not_callouts() {
-        let base = {
-            let mut c = edgion_resources::plugin_configs::WasmConfig::default();
-            c.source.inline = Some("AAAA".to_string());
-            c
-        };
-        let k0 = runtime_cache_key(&base);
-
-        let mut c = base.clone();
-        c.plugin_config = Some(WasmRawConfig::string("x"));
-        assert_ne!(runtime_cache_key(&c), k0, "pluginConfig must affect the key");
-
-        let mut c = base.clone();
-        c.vm_config = Some(WasmRawConfig::string("x"));
-        assert_ne!(runtime_cache_key(&c), k0, "vmConfig must affect the key");
-
-        let mut c = base.clone();
-        c.instance_pool_size += 1;
-        assert_ne!(runtime_cache_key(&c), k0, "instancePoolSize must affect the key");
-
-        let mut c = base.clone();
-        c.timeout_ms += 1;
-        assert_ne!(runtime_cache_key(&c), k0, "timeoutMs must affect the key");
-
-        // Callout config is merged by TickCalloutState, not keyed.
-        let mut c = base.clone();
-        c.callout_timeout_ms += 1;
-        assert_eq!(runtime_cache_key(&c), k0, "calloutTimeoutMs must NOT affect the key");
-
-        let mut c = base.clone();
-        c.callout_allowlist = vec!["https://example.com".to_string()];
-        assert_eq!(runtime_cache_key(&c), k0, "calloutAllowlist must NOT affect the key");
-
-        // Present-vs-absent must not collide (Some("") differs from None).
-        let mut some_empty = base.clone();
-        some_empty.plugin_config = Some(WasmRawConfig::string(""));
-        assert_ne!(runtime_cache_key(&some_empty), k0, "Some(\"\") must differ from None");
-
-        // Representation is not identity: both decode to the same guest bytes.
-        let mut string = base.clone();
-        string.plugin_config = Some(WasmRawConfig::string("same"));
-        let mut base64 = base.clone();
-        base64.plugin_config = Some(WasmRawConfig::base64("c2FtZQ=="));
-        assert_eq!(
-            runtime_cache_key(&string),
-            runtime_cache_key(&base64),
-            "equal effective bytes must share the cache entry"
-        );
-
-        let json: edgion_resources::plugin_configs::WasmRawConfig =
-            serde_json::from_str(r#"{"json":{"z":1,"a":2}}"#).expect("valid raw JSON config");
-        let mut json_config = base.clone();
-        json_config.plugin_config = Some(json);
-        let mut canonical_string = base.clone();
-        canonical_string.plugin_config = Some(WasmRawConfig::string(r#"{"a":2,"z":1}"#));
-        assert_eq!(
-            runtime_cache_key(&json_config),
-            runtime_cache_key(&canonical_string),
-            "JSON cache identity must hash the exact canonical bytes passed to the guest"
-        );
-    }
-
-    /// Regression (contract-04): the per-resource `sha256` pin participates in
-    /// the cache key so two plugins sharing one source but pinning different
-    /// digests land on separate entries (each runs its own verification),
-    /// while identical digests still share one entry regardless of hex case.
-    #[test]
-    fn runtime_cache_key_separates_by_sha256_pin() {
-        let base = {
-            let mut c = edgion_resources::plugin_configs::WasmConfig::default();
-            c.source.url = Some("https://artifacts.internal/m.wasm".to_string());
-            c.sha256 = Some("a".repeat(64));
-            c
-        };
-        let k_a = runtime_cache_key(&base);
-
-        // Same source, different digest → different entry (own verification).
-        let mut b = base.clone();
-        b.sha256 = Some("b".repeat(64));
-        assert_ne!(runtime_cache_key(&b), k_a, "different sha256 must not alias one entry");
-
-        // Same digest, different hex case → same entry (compare is case-insensitive).
-        let mut c = base.clone();
-        c.sha256 = Some("A".repeat(64));
-        assert_eq!(
-            runtime_cache_key(&c),
-            k_a,
-            "same digest must share one entry regardless of case"
-        );
-
-        // Absent pin must differ from any present pin.
-        let mut none = base.clone();
-        none.sha256 = None;
-        assert_ne!(
-            runtime_cache_key(&none),
-            k_a,
-            "absent sha256 must differ from a present one"
         );
     }
 
@@ -3526,51 +2874,25 @@ mod tests {
         );
     }
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn borrowed_preload_inputs_survive_concurrent_misses_and_retry() {
-        let manager = Arc::new(WasmVmManager::new_for_test());
-        let mut config = WasmConfig::default();
-        config.source.inline = Some("AAAA".to_string());
-        let key = runtime_cache_key(&config);
-        let (claim, owned_config, owned_key) = manager
-            .prepare_preload(&config, &key)
-            .expect("a cold slot admits one preload");
-        assert_eq!(owned_key, key);
-        // The background task must remain independent of its caller's inputs.
-        drop(key);
-        drop(config);
-        assert_eq!(runtime_cache_key(&owned_config), owned_key);
-        let slot = manager.get_or_create_slot(&owned_config, &owned_key);
-        assert!(Arc::ptr_eq(&claim.slot, &slot));
-
-        let config = Arc::new(owned_config);
-        let key = Arc::new(owned_key);
+    #[tokio::test]
+    async fn preload_claim_is_single_flight_and_respects_retry_deadline() {
+        let manager = WasmVmManager::new_for_test();
+        let runtime = manager.new_runtime(&WasmConfig::default(), CalloutGrant::none());
+        let state = &runtime.state;
+        let claim = state.prepare_preload().expect("cold runtime admits preload");
         let mut callers = tokio::task::JoinSet::new();
-        // Retain the winning claim until every competing response miss returns.
-        // No network, load delay, or scheduler ordering is needed for this window.
         for _ in 0..64 {
-            let manager = manager.clone();
-            let config = config.clone();
-            let key = key.clone();
-            callers.spawn(async move { manager.prepare_preload(&config, &key).is_none() });
+            let state = state.clone();
+            callers.spawn(async move { state.prepare_preload().is_none() });
         }
         while let Some(result) = callers.join_next().await {
-            assert!(result.expect("competing caller completes"));
+            assert!(result.unwrap());
         }
-        assert_eq!(manager.cache.modules.len(), 1);
-        assert!(slot.preload_in_flight.load(Ordering::Acquire));
-
         drop(claim);
-        assert!(!slot.preload_in_flight.load(Ordering::Acquire));
-        slot.load_retry_due_ms.store(u64::MAX, Ordering::Release);
-        assert!(manager.prepare_preload(&config, &key).is_none());
-        assert!(!slot.preload_in_flight.load(Ordering::Acquire));
-        slot.load_retry_due_ms.store(0, Ordering::Release);
-        let (retry_claim, _, retry_key) = manager
-            .prepare_preload(&config, &key)
-            .expect("an expired retry deadline admits a new preload");
-        assert!(Arc::ptr_eq(&retry_claim.slot, &slot));
-        assert_eq!(retry_key, *key);
+        state.slot.load_retry_due_ms.store(u64::MAX, Ordering::Release);
+        assert!(state.prepare_preload().is_none());
+        state.slot.load_retry_due_ms.store(0, Ordering::Release);
+        assert!(state.prepare_preload().is_some());
     }
 
     #[tokio::test]
@@ -3593,11 +2915,11 @@ mod tests {
 
         let mut ok = WasmConfig::default();
         ok.source.url = Some(format!("{}/ok.wasm", server.uri()));
-        let ok_key = runtime_cache_key(&ok);
+        let ok_runtime = manager.new_runtime(&ok, CalloutGrant::none());
         for _ in 0..64 {
-            manager.spawn_preload_for_test(&ok, &ok_key);
+            ok_runtime.spawn_preload();
         }
-        manager.wait_for_preload_for_test(&ok_key).await;
+        ok_runtime.wait_for_preload_for_test().await;
         assert_eq!(
             server.received_requests().await.unwrap().len(),
             1,
@@ -3612,26 +2934,26 @@ mod tests {
             .await;
         let mut bad = WasmConfig::default();
         bad.source.url = Some(format!("{}/bad.wasm", server.uri()));
-        let bad_key = runtime_cache_key(&bad);
+        let bad_runtime = manager.new_runtime(&bad, CalloutGrant::none());
 
         for _ in 0..64 {
-            manager.spawn_preload_for_test(&bad, &bad_key);
+            bad_runtime.spawn_preload();
         }
-        manager.wait_for_preload_for_test(&bad_key).await;
+        bad_runtime.wait_for_preload_for_test().await;
         assert_eq!(server.received_requests().await.unwrap().len(), 1);
 
         // During the negative-cache window no task (and therefore no request)
         // is created, even if a response-body hook reports the miss per chunk.
         for _ in 0..64 {
-            manager.spawn_preload_for_test(&bad, &bad_key);
+            bad_runtime.spawn_preload();
         }
         assert_eq!(server.received_requests().await.unwrap().len(), 1);
 
-        manager.backdate_load_retry_for_test(&bad_key);
+        bad_runtime.backdate_load_retry_for_test();
         for _ in 0..64 {
-            manager.spawn_preload_for_test(&bad, &bad_key);
+            bad_runtime.spawn_preload();
         }
-        manager.wait_for_preload_for_test(&bad_key).await;
+        bad_runtime.wait_for_preload_for_test().await;
         assert_eq!(
             server.received_requests().await.unwrap().len(),
             2,
@@ -3662,14 +2984,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn engine_unavailable_preload_creates_no_slot_or_task() {
+    async fn engine_unavailable_preload_creates_no_task() {
         let manager = Arc::new(WasmVmManager::new_with_engine_result(Err(
             "wasm engine unavailable: test".to_string(),
         )));
         let mut config = WasmConfig::default();
         config.source.inline = Some("AAAA".to_string());
-        manager.spawn_preload_for_test(&config, &runtime_cache_key(&config));
-        assert!(manager.cache.modules.is_empty());
+        let runtime = manager.new_runtime(&config, CalloutGrant::none());
+        runtime.spawn_preload();
+        assert!(runtime.try_get().is_none());
+        assert!(!runtime.state.slot.preload_in_flight.load(Ordering::Acquire));
     }
 
     #[tokio::test]
@@ -3960,16 +3284,18 @@ mod tests {
         let file = write_temp_wasm(&panic_guest(PanicSite::Tick));
         let config = file_config(file.path());
         let manager = WasmVmManager::new_for_test();
+        let runtime = manager.new_runtime(&config, CalloutGrant::none());
         let should_panic = Arc::new(AtomicBool::new(false));
         let calls = Arc::new(AtomicUsize::new(0));
-        let entry = load_with_panicking_linker(&manager, &config, should_panic.clone(), calls.clone(), Some(0))
+        let entry = load_with_panicking_linker(&runtime, should_panic.clone(), calls.clone(), Some(0))
             .await
             .expect("tick panic guest loads");
 
         should_panic.store(true, Ordering::SeqCst);
         entry.activate_tick(MIN_TICK_PERIOD_MS);
         wait_for_test_calls(&calls, 2).await;
-        entry.stop_tick().await;
+        entry.stop_tick();
+        wait_for_active_tick_tasks(&entry.tick_callouts, 0, "tick stopped").await;
 
         assert_eq!(
             entry.tick_period_ms.load(Ordering::Acquire),
@@ -3987,22 +3313,21 @@ mod tests {
         let should_panic = Arc::new(AtomicBool::new(false));
         let callback_calls = Arc::new(AtomicUsize::new(0));
         let dispatch_calls = Arc::new(AtomicUsize::new(0));
-        let entry = manager
-            .get_or_load_with_linker(
-                &config,
-                &runtime_cache_key(&config),
-                panicking_tick_callout_linker(should_panic.clone(), callback_calls.clone(), dispatch_calls.clone()),
-            )
+        let runtime = manager.new_runtime(&config, grant(vec!["http://example.invalid".to_string()], 10));
+        let entry = runtime
+            .get_or_load_with_linker(panicking_tick_callout_linker(
+                should_panic.clone(),
+                callback_calls.clone(),
+                dispatch_calls.clone(),
+            ))
             .await
             .expect("tick callout panic guest loads");
-        entry
-            .tick_callouts
-            .add(grant(vec!["http://example.invalid".to_string()], 10));
 
         should_panic.store(true, Ordering::SeqCst);
         entry.activate_tick(MIN_TICK_PERIOD_MS);
         wait_for_test_calls(&callback_calls, 2).await;
-        entry.stop_tick().await;
+        entry.stop_tick();
+        wait_for_active_tick_tasks(&entry.tick_callouts, 0, "tick stopped").await;
 
         assert!(dispatch_calls.load(Ordering::SeqCst) >= 2);
         assert_eq!(
@@ -4013,12 +3338,12 @@ mod tests {
         assert_eq!(entry.pool_len(), 0, "each panicking callback VM must be discarded");
     }
 
-    /// Zero-reference eviction must quiesce a tick round that is parked inside
+    /// Plugin destruction must stop a tick round that is parked inside
     /// a callout. The round holds the strong `Arc` that `Drop`'s abort depends
     /// on, so without an explicit stop the entry (and its shared data) would
     /// survive until the callout's own timeout expires.
     #[tokio::test]
-    async fn zero_reference_eviction_stops_a_tick_round_blocked_in_a_callout() {
+    async fn plugin_drop_stops_a_tick_round_blocked_in_a_callout() {
         // Accept connections and never answer them: the callout stays in its
         // response await for the whole `BLOCKED_CALLOUT_TIMEOUT_MS` budget.
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
@@ -4035,75 +3360,37 @@ mod tests {
 
         let file = write_temp_wasm(TICK_CALLOUT_PANIC_GUEST);
         let config = file_config(file.path());
-        let key = runtime_cache_key(&config);
-        let mut mgr = WasmVmManager::new_for_test();
-        mgr.set_evict_grace_for_test(Duration::from_millis(50));
+        let mgr = WasmVmManager::new_for_test();
 
         let callout_grant = grant(vec![origin.clone()], u64::from(BLOCKED_CALLOUT_TIMEOUT_MS));
-        mgr.register_plugin(&key, callout_grant.clone());
+        let runtime = mgr.new_runtime(&config, callout_grant);
         let dispatch_calls = Arc::new(AtomicUsize::new(0));
-        let entry = mgr
-            .get_or_load_with_linker(
-                &config,
-                &key,
-                blocking_tick_callout_linker(origin, dispatch_calls.clone()),
-            )
+        let entry = runtime
+            .get_or_load_with_linker(blocking_tick_callout_linker(origin, dispatch_calls.clone()))
             .await
             .expect("tick callout guest loads");
         let tick_state = entry.tick_callouts.clone();
         entry.activate_tick(MIN_TICK_PERIOD_MS);
-        // Only the cache may pin the entry; a test-held Arc would mask the bug.
+        // Only the runtime may pin the entry; a test-held Arc would mask the bug.
         drop(entry);
 
         wait_for_test_calls(&dispatch_calls, 1).await;
         wait_for_test_calls(&connected, 1).await;
 
-        mgr.unregister_plugin(&key, "test-module", &callout_grant);
+        let state = runtime.state.clone();
+        drop(runtime);
         wait_for_active_tick_tasks(
             &tick_state,
             0,
-            "eviction must stop a tick round still inside its callout",
+            "plugin drop must stop a tick round still inside its callout",
         )
         .await;
-        assert!(mgr.try_get(&key).is_none(), "zero-reference entry must be evicted");
+        assert!(
+            state.slot.published.load_full().is_none(),
+            "dropped plugin must clear publication"
+        );
 
         accept_task.abort();
-    }
-
-    /// The tick shutdown added to eviction must not fire when a plugin
-    /// re-registers inside the anti-thrash grace: entry and tick task both stay.
-    #[tokio::test]
-    async fn reregister_during_grace_keeps_the_tick_task_running() {
-        let f = write_temp_wasm(TICK_GUEST);
-        let config = file_config(f.path());
-        let key = runtime_cache_key(&config);
-        let mut mgr = WasmVmManager::new_for_test();
-        mgr.set_evict_grace_for_test(Duration::from_millis(100));
-
-        mgr.register_plugin(&key, CalloutGrant::none());
-        let entry = load(&mgr, &config).await.expect("loads");
-        let tick_state = entry.tick_callouts.clone();
-        wait_for_active_tick_tasks(&tick_state, 1, "guest-requested tick starts at load").await;
-
-        mgr.unregister_plugin(&key, "test-module", &CalloutGrant::none());
-        // Reload thrash: a new plugin instance re-registers within the grace.
-        mgr.register_plugin(&key, CalloutGrant::none());
-        tokio::time::sleep(Duration::from_millis(400)).await;
-
-        assert!(
-            mgr.try_get(&key).is_some(),
-            "re-registered entry must survive the grace window"
-        );
-        assert_eq!(
-            tick_state.active_tick_tasks.load(Ordering::Acquire),
-            1,
-            "the surviving entry must keep its tick task"
-        );
-        assert!(
-            entry.tick_enabled.load(Ordering::Acquire),
-            "a cancelled eviction must not disable tick"
-        );
-        assert!(entry.tick_task.lock().is_some(), "the tick join handle must remain");
     }
 
     /// on_tick fires periodically once the guest sets a period during
@@ -4112,7 +3399,8 @@ mod tests {
     async fn tick_task_drives_guest_on_tick() {
         let f = write_temp_wasm(TICK_GUEST);
         let mgr = WasmVmManager::new_for_test();
-        let entry = load(&mgr, &file_config(f.path())).await.expect("loads");
+        let runtime = mgr.new_runtime(&file_config(f.path()), CalloutGrant::none());
+        let entry = runtime.get_or_load().await.expect("loads");
         // The eager warm instance created at load time already ran
         // on_configure, so the tick task is armed. Wait a few periods.
         let mut cas_seen = 0u32;
@@ -4208,7 +3496,7 @@ mod tests {
         false
     }
 
-    /// Tick-callout happy path: a single registered non-empty allowlist arms
+    /// Tick-callout happy path: the plugin's non-empty allowlist arms
     /// dispatch in the tick phase; the callout hits the target and the
     /// success callback is delivered on the root context.
     #[tokio::test]
@@ -4226,11 +3514,10 @@ mod tests {
         let f = write_temp_wasm(TICK_CALLOUT_GUEST);
         let mut config = file_config(f.path());
         config.plugin_config = Some(WasmRawConfig::string(server.uri()));
-        let key = runtime_cache_key(&config);
         let mgr = WasmVmManager::new_for_test();
-        mgr.register_plugin(&key, grant(vec![server.uri()], 1000));
+        let runtime = mgr.new_runtime(&config, grant(vec![server.uri()], 1000));
 
-        let entry = load(&mgr, &config).await.expect("loads");
+        let entry = runtime.get_or_load().await.expect("loads");
         assert!(
             wait_shared_key(&entry, "cb").await,
             "success callback must be delivered to the root context"
@@ -4249,11 +3536,10 @@ mod tests {
         let mut config = file_config(f.path());
         // Port 1 is unreachable; still allowlisted so dispatch succeeds.
         config.plugin_config = Some(WasmRawConfig::string("http://127.0.0.1:1"));
-        let key = runtime_cache_key(&config);
         let mgr = WasmVmManager::new_for_test();
-        mgr.register_plugin(&key, grant(vec!["http://127.0.0.1:1".to_string()], 300));
+        let runtime = mgr.new_runtime(&config, grant(vec!["http://127.0.0.1:1".to_string()], 300));
 
-        let entry = load(&mgr, &config).await.expect("loads");
+        let entry = runtime.get_or_load().await.expect("loads");
         assert!(
             wait_shared_key(&entry, "cf").await,
             "failed callout must deliver the 0-header callback"
@@ -4275,105 +3561,16 @@ mod tests {
         let f = write_temp_wasm(TICK_CALLOUT_GUEST);
         let mut config = file_config(f.path());
         config.plugin_config = Some(WasmRawConfig::string(server.uri()));
-        let key = runtime_cache_key(&config);
         let mgr = WasmVmManager::new_for_test();
         // Dispatch IS armed, but for a different origin than the guest targets.
-        mgr.register_plugin(&key, grant(vec!["http://allowed.example.com".to_string()], 1000));
+        let runtime = mgr.new_runtime(&config, grant(vec!["http://allowed.example.com".to_string()], 1000));
 
-        let entry = load(&mgr, &config).await.expect("loads");
+        let entry = runtime.get_or_load().await.expect("loads");
         assert!(wait_shared_key(&entry, "df").await, "guest must observe the denial");
         assert!(
             server.received_requests().await.unwrap().is_empty(),
             "no callout may reach a non-allowlisted origin"
         );
-    }
-
-    /// Conflicting grants (two distinct non-empty allowlists on one module):
-    /// the tick phase must NOT arm dispatch — the guest sees UNIMPLEMENTED —
-    /// and the conflict heals once the second grant is dropped.
-    #[tokio::test]
-    async fn tick_callout_conflict_not_armed_then_heals() {
-        use wiremock::matchers::{method, path};
-        use wiremock::{Mock, MockServer, ResponseTemplate};
-
-        let server = MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path("/check"))
-            .respond_with(ResponseTemplate::new(200))
-            .mount(&server)
-            .await;
-
-        let f = write_temp_wasm(TICK_CALLOUT_GUEST);
-        let mut config = file_config(f.path());
-        config.plugin_config = Some(WasmRawConfig::string(server.uri()));
-        let key = runtime_cache_key(&config);
-        let mgr = WasmVmManager::new_for_test();
-        let grant_a = grant(vec![server.uri()], 1000);
-        let grant_b = grant(vec!["http://other.example.com".to_string()], 1000);
-        mgr.register_plugin(&key, grant_a);
-        mgr.register_plugin(&key, grant_b.clone());
-
-        let entry = load(&mgr, &config).await.expect("loads");
-        assert!(
-            wait_shared_key(&entry, "df").await,
-            "conflicting grants must leave dispatch unarmed (guest observes the error)"
-        );
-        assert!(
-            server.received_requests().await.unwrap().is_empty(),
-            "no callout may be sent while the grants conflict"
-        );
-
-        // Healing: dropping the conflicting grant re-enables tick callouts
-        // with the single remaining allowlist.
-        mgr.unregister_plugin(&key, "test-module", &grant_b);
-        assert!(
-            wait_shared_key(&entry, "cb").await,
-            "tick callouts must recover once the conflicting grant is gone"
-        );
-        assert!(!server.received_requests().await.unwrap().is_empty());
-    }
-
-    /// Grant-registry logic: empty allowlists carry no opinion, equal
-    /// allowlists merge (min timeout), distinct non-empty allowlists
-    /// conflict, and removal restores the previous state.
-    #[test]
-    fn tick_callout_gate_transitions() {
-        let state = TickCalloutState::default();
-        assert!(matches!(state.gate(), TickCalloutGate::Disabled));
-
-        // Empty grants never enable or conflict.
-        state.add(CalloutGrant::none());
-        assert!(matches!(state.gate(), TickCalloutGate::Disabled));
-
-        let a = grant(vec!["http://a.example.com".to_string()], 500);
-        state.add(a.clone());
-        match state.gate() {
-            TickCalloutGate::Enabled { allowlist, timeout_ms } => {
-                assert_eq!(&*allowlist, &["http://a.example.com:80".to_string()]);
-                assert_eq!(timeout_ms, 500);
-            }
-            _ => panic!("single non-empty grant must enable"),
-        }
-
-        // Same allowlist with a different timeout: still enabled, min wins.
-        let a_slow = grant(vec!["http://a.example.com".to_string()], 900);
-        state.add(a_slow.clone());
-        match state.gate() {
-            TickCalloutGate::Enabled { timeout_ms, .. } => assert_eq!(timeout_ms, 500),
-            _ => panic!("equal allowlists must not conflict"),
-        }
-
-        // A second distinct non-empty allowlist conflicts…
-        let b = grant(vec!["http://b.example.com".to_string()], 500);
-        state.add(b.clone());
-        assert!(matches!(state.gate(), TickCalloutGate::Conflict));
-
-        // …and removing it heals back to enabled, then to disabled.
-        state.remove(&b);
-        assert!(matches!(state.gate(), TickCalloutGate::Enabled { .. }));
-        state.remove(&a);
-        state.remove(&a_slow);
-        assert!(matches!(state.gate(), TickCalloutGate::Disabled));
     }
 
     /// Fix 1 regression test: a failed engine init (e.g. pooling-allocator
@@ -4392,7 +3589,7 @@ mod tests {
 
         // The module never gets far enough to populate the cache, so a
         // sync-path caller sees a plain miss rather than a panic too.
-        assert!(mgr.try_get(&runtime_cache_key(&config)).is_none());
+        assert!(mgr.new_runtime(&config, CalloutGrant::none()).try_get().is_none());
     }
 
     #[tokio::test]
@@ -4406,17 +3603,11 @@ mod tests {
 
         let file = write_temp_wasm(MINI_GUEST);
         let config = file_config(file.path());
-        let cache_key = runtime_cache_key(&config);
-        let load_error = load(&manager, &config).await.expect_err("load uses unavailable state");
-        assert_eq!(load_error, engine_error);
-        assert!(manager.try_get(&cache_key).is_none());
-        assert!(manager.cache.modules.is_empty());
-        assert!(manager.cache.tick_callouts.is_empty());
-
-        manager.spawn_preload_for_test(&config, &cache_key);
-        tokio::task::yield_now().await;
-        assert!(manager.cache.modules.is_empty(), "preload created a load slot");
-        assert!(manager.cache.tick_callouts.is_empty(), "preload created tick state");
+        let runtime = manager.new_runtime(&config, CalloutGrant::none());
+        assert!(runtime.get_or_load().await.unwrap_err().contains("epoch ticker"));
+        runtime.spawn_preload();
+        assert!(runtime.try_get().is_none());
+        assert!(!runtime.state.slot.preload_in_flight.load(Ordering::Acquire));
     }
 
     #[tokio::test]
@@ -4466,35 +3657,35 @@ mod tests {
             "timeoutMs": 500
         }))
         .unwrap();
-        let cache_key = runtime_cache_key(&config);
 
         let mgr = WasmVmManager::new_for_test();
-        let entry1 = mgr.get_or_load(&config, &cache_key).await.unwrap();
+        let runtime = mgr.new_runtime(&config, CalloutGrant::none());
+        let entry1 = runtime.get_or_load().await.unwrap();
         // Within the re-check interval: cached entry, no new resolution.
-        let entry1b = mgr.get_or_load(&config, &cache_key).await.unwrap();
+        let entry1b = runtime.get_or_load().await.unwrap();
         assert!(Arc::ptr_eq(&entry1, &entry1b));
 
         // Registry moves the tag to new content; backdate to force a re-check.
         server.reset().await;
         mount(&server, WASM_B).await;
-        mgr.backdate_oci_check_for_test(&cache_key).await;
-        let during_refresh = mgr.get_or_load(&config, &cache_key).await.unwrap();
+        runtime.backdate_oci_check_for_test().await;
+        let during_refresh = runtime.get_or_load().await.unwrap();
         assert!(
             Arc::ptr_eq(&entry1, &during_refresh),
             "the last-known-good entry must remain published while refresh runs"
         );
-        mgr.wait_for_oci_refresh_for_test(&cache_key).await;
-        let entry2 = mgr.try_get(&cache_key).expect("refreshed entry is published");
+        runtime.wait_for_oci_refresh_for_test().await;
+        let entry2 = runtime.try_get().expect("refreshed entry is published");
         assert!(!Arc::ptr_eq(&entry1, &entry2), "digest change must reload the module");
 
         // Unchanged digest after another backdate: entry is kept.
-        mgr.backdate_oci_check_for_test(&cache_key).await;
-        let entry2b = mgr.get_or_load(&config, &cache_key).await.unwrap();
+        runtime.backdate_oci_check_for_test().await;
+        let entry2b = runtime.get_or_load().await.unwrap();
         assert!(Arc::ptr_eq(&entry2, &entry2b));
-        mgr.wait_for_oci_refresh_for_test(&cache_key).await;
+        runtime.wait_for_oci_refresh_for_test().await;
         assert!(Arc::ptr_eq(
             &entry2,
-            &mgr.try_get(&cache_key).expect("unchanged entry stays published")
+            &runtime.try_get().expect("unchanged entry stays published")
         ));
 
         // A moved tag whose bytes fail compilation must not replace the
@@ -4502,15 +3693,12 @@ mod tests {
         const INVALID_WASM: &[u8] = b"not a wasm module";
         server.reset().await;
         mount(&server, INVALID_WASM).await;
-        mgr.backdate_oci_check_for_test(&cache_key).await;
+        runtime.backdate_oci_check_for_test().await;
+        assert!(Arc::ptr_eq(&entry2, &runtime.get_or_load().await.unwrap()));
+        runtime.wait_for_oci_refresh_for_test().await;
         assert!(Arc::ptr_eq(
             &entry2,
-            &mgr.get_or_load(&config, &cache_key).await.unwrap()
-        ));
-        mgr.wait_for_oci_refresh_for_test(&cache_key).await;
-        assert!(Arc::ptr_eq(
-            &entry2,
-            &mgr.try_get(&cache_key).expect("compile failure preserves LKG")
+            &runtime.try_get().expect("compile failure preserves LKG")
         ));
 
         // A policy-only reload gets a distinct slot. The old Always task may
@@ -4531,26 +3719,21 @@ mod tests {
             .respond_with(ResponseTemplate::new(200).set_body_bytes(WASM_A.to_vec()))
             .mount(&server)
             .await;
-        mgr.backdate_oci_check_for_test(&cache_key).await;
-        assert!(Arc::ptr_eq(
-            &entry2,
-            &mgr.get_or_load(&config, &cache_key).await.unwrap()
-        ));
+        runtime.backdate_oci_check_for_test().await;
+        assert!(Arc::ptr_eq(&entry2, &runtime.get_or_load().await.unwrap()));
         let mut if_not_present = config.clone();
         if_not_present.source.oci.as_mut().unwrap().pull_policy =
             Some(edgion_resources::plugin_configs::OciPullPolicy::IfNotPresent);
-        let if_not_present_key = runtime_cache_key(&if_not_present);
-        assert_ne!(cache_key, if_not_present_key);
-        let if_not_present_entry = mgr
-            .get_or_load(&if_not_present, &if_not_present_key)
+        let new_runtime = mgr.new_runtime(&if_not_present, CalloutGrant::none());
+        let if_not_present_entry = new_runtime
+            .get_or_load()
             .await
             .expect("new-policy slot loads independently");
-        mgr.wait_for_oci_refresh_for_test(&cache_key).await;
+        runtime.wait_for_oci_refresh_for_test().await;
         assert!(
             Arc::ptr_eq(
                 &if_not_present_entry,
-                &mgr.try_get(&if_not_present_key)
-                    .expect("new-policy entry remains published")
+                &new_runtime.try_get().expect("new-policy entry remains published")
             ),
             "the old Always task must not publish into the new-policy slot"
         );
@@ -4593,9 +3776,9 @@ mod tests {
             "timeoutMs": 500
         }))
         .unwrap();
-        let cache_key = runtime_cache_key(&config);
         let mgr = WasmVmManager::new_for_test();
-        let lkg = mgr.get_or_load(&config, &cache_key).await.unwrap();
+        let runtime = mgr.new_runtime(&config, CalloutGrant::none());
+        let lkg = runtime.get_or_load().await.unwrap();
 
         server.reset().await;
         Mock::given(method("GET"))
@@ -4607,20 +3790,20 @@ mod tests {
             )
             .mount(&server)
             .await;
-        mgr.backdate_oci_check_for_test(&cache_key).await;
+        runtime.backdate_oci_check_for_test().await;
 
-        let request_entry = tokio::time::timeout(Duration::from_millis(50), mgr.get_or_load(&config, &cache_key))
+        let request_entry = tokio::time::timeout(Duration::from_millis(50), runtime.get_or_load())
             .await
             .expect("request lookup must not wait for the delayed manifest")
             .unwrap();
         assert!(Arc::ptr_eq(&lkg, &request_entry));
         for _ in 0..32 {
-            let response_entry = mgr
-                .try_get_or_schedule_refresh(&config, &cache_key)
+            let response_entry = runtime
+                .try_get_or_schedule_refresh()
                 .expect("response-only lookup serves LKG");
             assert!(Arc::ptr_eq(&lkg, &response_entry));
         }
-        mgr.wait_for_oci_refresh_for_test(&cache_key).await;
+        runtime.wait_for_oci_refresh_for_test().await;
         assert_eq!(
             server.received_requests().await.unwrap().len(),
             1,
@@ -4628,7 +3811,7 @@ mod tests {
         );
         assert!(Arc::ptr_eq(
             &lkg,
-            &mgr.try_get(&cache_key).expect("unchanged LKG remains published")
+            &runtime.try_get().expect("unchanged LKG remains published")
         ));
 
         // A definitive registry failure advances the refresh deadline but
@@ -4639,20 +3822,20 @@ mod tests {
             .respond_with(ResponseTemplate::new(400))
             .mount(&server)
             .await;
-        mgr.backdate_oci_check_for_test(&cache_key).await;
-        let response_entry = mgr
-            .try_get_or_schedule_refresh(&config, &cache_key)
+        runtime.backdate_oci_check_for_test().await;
+        let response_entry = runtime
+            .try_get_or_schedule_refresh()
             .expect("failed refresh still serves LKG");
         assert!(Arc::ptr_eq(&lkg, &response_entry));
-        mgr.wait_for_oci_refresh_for_test(&cache_key).await;
+        runtime.wait_for_oci_refresh_for_test().await;
         assert!(Arc::ptr_eq(
             &lkg,
-            &mgr.try_get(&cache_key).expect("failed refresh preserves LKG")
+            &runtime.try_get().expect("failed refresh preserves LKG")
         ));
     }
 
     #[tokio::test]
-    async fn oci_refresh_handoff_never_overlaps_old_and_new_tick_tasks() {
+    async fn oci_refresh_stops_old_tick_and_starts_new_tick() {
         use sha2::{Digest as _, Sha256};
         use wiremock::matchers::{method, path};
         use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -4700,27 +3883,22 @@ mod tests {
             "timeoutMs": 500
         }))
         .unwrap();
-        let cache_key = runtime_cache_key(&config);
         let mgr = WasmVmManager::new_for_test();
-        let old_entry = mgr.get_or_load(&config, &cache_key).await.unwrap();
+        let runtime = mgr.new_runtime(&config, CalloutGrant::none());
+        let old_entry = runtime.get_or_load().await.unwrap();
         let tick_state = old_entry.tick_callouts.clone();
         wait_for_active_tick_tasks(&tick_state, 1, "the published entry owns the tick task").await;
 
         server.reset().await;
         mount(&server, wasm_b).await;
-        mgr.backdate_oci_check_for_test(&cache_key).await;
-        let served_during_refresh = mgr.get_or_load(&config, &cache_key).await.unwrap();
+        runtime.backdate_oci_check_for_test().await;
+        let served_during_refresh = runtime.get_or_load().await.unwrap();
         assert!(Arc::ptr_eq(&old_entry, &served_during_refresh));
-        mgr.wait_for_oci_refresh_for_test(&cache_key).await;
-        let new_entry = mgr.try_get(&cache_key).expect("new entry published");
+        runtime.wait_for_oci_refresh_for_test().await;
+        let new_entry = runtime.try_get().expect("new entry published");
         assert!(!Arc::ptr_eq(&old_entry, &new_entry));
         wait_for_active_tick_tasks(&tick_state, 1, "the refreshed entry owns the tick task").await;
 
-        assert_eq!(
-            tick_state.max_active_tick_tasks.load(Ordering::Acquire),
-            1,
-            "old and new entries must never own tick tasks concurrently"
-        );
         assert!(old_entry.tick_task.lock().is_none(), "old tick task must be stopped");
         assert!(!old_entry.tick_enabled.load(Ordering::Acquire));
         assert!(new_entry.tick_enabled.load(Ordering::Acquire));
@@ -4772,7 +3950,11 @@ mod tests {
         }))
         .unwrap();
         let mgr = WasmVmManager::new_for_test();
-        let err = mgr.get_or_load(&config, &runtime_cache_key(&config)).await.unwrap_err();
+        let err = mgr
+            .new_runtime(&config, CalloutGrant::none())
+            .get_or_load()
+            .await
+            .unwrap_err();
         assert!(err.contains("sha256 mismatch"), "got: {err}");
     }
 }

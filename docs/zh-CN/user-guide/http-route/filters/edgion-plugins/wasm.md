@@ -14,7 +14,7 @@
 
 ## Wasm 解决什么问题？
 
-proxy-wasm 是一套可移植的代理扩展 ABI：编写一次扩展，即可运行在任意兼容 host（Envoy、本网关或其他实现）上，无需重新编译 host 本身。你不需要针对 Edgion 内部 API 编写原生 Rust 插件，而是用你偏好语言的 [proxy-wasm SDK](https://crates.io/crates/proxy-wasm) 编译出一个体积较小的 WebAssembly 模块，把编译产物 `.wasm` 字节码交给本插件。网关只编译一次、缓存编译结果，并对初始化好的实例做池化，因此单次请求的执行成本很低。
+proxy-wasm 是一套可移植的代理扩展 ABI：编写一次扩展，即可运行在任意兼容 host（Envoy、本网关或其他实现）上，无需重新编译 host 本身。你不需要针对 Edgion 内部 API 编写原生 Rust 插件，而是用你偏好语言的 [proxy-wasm SDK](https://crates.io/crates/proxy-wasm) 编译出一个体积较小的 WebAssembly 模块，把编译产物 `.wasm` 字节码交给本插件。每个插件运行时对其加载代次编译一次，并池化初始化后的实例供请求复用；插件重建可能再次编译。
 
 实现的 ABI 是一个刻意收敛的子集（见下文）：header 读写、本地响应、**HTTP callout**（请求阶段 Pause/恢复，以及 `on_tick` 内发起）、**请求 body 整体缓冲模式**（完整 body、由 guest 声明、可拒绝或改写请求）、**响应 body 只读观测**（按 chunk）、**shared data** 与**定时器**（`on_tick`）。不支持完整响应体缓冲和响应 body 改写；主上游响应始终保持流式传输。
 
@@ -44,10 +44,10 @@ Wasm **不支持**（异步的）`upstreamResponsePlugins` 阶段。
 | `proxy_get_header_map_pairs` / `proxy_get_header_map_value` | ✅ | 请求头、响应头，以及（callout 回调内）`HttpCallResponseHeaders`——callout 响应头外加合成的 `:status` |
 | `proxy_replace_header_map_value` / `proxy_add_header_map_value` / `proxy_remove_header_map_value` / `proxy_set_header_map_pairs` | ✅ | 设置/追加/删除/整体替换；钩子返回后应用到真实请求/响应。对 callout 响应 map 的写入被拒绝 |
 | `proxy_send_local_response` | ✅ | 以指定状态码/响应体/头短路请求。响应体按字节原样透传，二进制内容（图片、protobuf 等）不会被改写；空响应体产生无 body 的响应。也可在 `proxy_on_http_call_response` 内调用（鉴权 callout 后拒绝） |
-| `proxy_http_call` | ✅（请求头 + tick 阶段） | 见 [HTTP callout](#http-calloutpause恢复)。请求 body、响应头、响应 body 阶段均返回 `UNIMPLEMENTED`（12）；tick 阶段要求 allowlist 无歧义（见[定时器](#shared-data-与定时器)） |
+| `proxy_http_call` | ✅（请求头 + tick 阶段） | 见 [HTTP callout](#http-calloutpause恢复)。请求 body、响应头、响应 body 阶段均返回 `UNIMPLEMENTED`（12）；tick 外呼须由所属插件的 allowlist 授权（见[定时器](#shared-data-与定时器)） |
 | `proxy_continue_request` / `proxy_continue_stream(Request)` | ✅ | 恢复因 callout 挂起的请求。`proxy_continue_response` 仍是接受型 no-op |
-| `proxy_get_shared_data` / `proxy_set_shared_data` | ✅ | 模块级 KV + CAS——见 [shared data](#shared-data-与定时器) |
-| `proxy_set_tick_period_milliseconds` | ✅ | 启动模块级 tick 任务；`0` 停止。周期下限 100ms |
+| `proxy_get_shared_data` / `proxy_set_shared_data` | ✅ | 插件运行时 KV + CAS——见 [shared data](#shared-data-与定时器) |
+| `proxy_set_tick_period_milliseconds` | ✅ | 启动本插件实例的 tick 任务；`0` 停止。周期下限 100ms |
 | `proxy_get_property` / `proxy_set_property` | ✅（基础子集） | 可读键：`request.path`、`request.method`、`request.host`、`source.address`、`plugin_name`（固定为 `Wasm`）、`response.code`（仅响应阶段）。`proxy_set_property` 仅写入当前阶段的内存属性表 |
 | `proxy_get_buffer_bytes` | ✅ | `VmConfiguration`、`PluginConfiguration`、`HttpCallResponseBody`（callout 回调内）、`HttpRequestBody`（请求 body 钩子内的**完整缓冲 body**——见[请求 body 整体缓冲模式](#请求-body-整体缓冲模式)）、`HttpResponseBody`（响应 body 钩子内的**当前 chunk 窗口**） |
 | `proxy_set_buffer_bytes` | ✅（仅请求 body） | 在完整请求 body 钩子内替换、插入、追加或删除 `HttpRequestBody` 字节。响应 body 写入返回 `STATUS_UNIMPLEMENTED`（12） |
@@ -120,13 +120,13 @@ vmConfig:
 
 结构化数据使用 `{json: <value>}`。它允许任意 JSON value，包括 object、array、
 string、number、boolean 与 null。Edgion 将解析后的 value 编码为紧凑 UTF-8 JSON，
-并递归排序 object key。guest 收到的正是这组 canonical 字节，模块缓存 identity
-也对它做 hash；原始空白、key 顺序与 number 写法不会保留。
+并递归排序 object key。guest 收到的正是这组 canonical 字节；
+原始空白、key 顺序与 number 写法不会保留。
 
 三种形态严格互斥。缺少 selector、同时设置多个 selector、未知字段、旧式裸 string、
 非 canonical 的 Standard padded base64，以及解码后超过 64KiB 的值都会被拒绝。
-字段缺省与显式 empty 的语义不同；不同形态若产生相同字节，则会有意共享同一个
-已初始化模块缓存 entry。
+字段缺省与显式 empty 的语义不同；不同形态若产生相同字节，guest 收到的配置等价，
+但分别配置的插件条目仍拥有独立运行时。
 
 ## 来源形态选型
 
@@ -230,7 +230,7 @@ requestPlugins:
 
 - **寻址**：`upstream` 参数是目标 **origin URL**（`https://auth.internal:8443`），不是 Envoy 的 cluster 名。dispatch 的 header map 里的 `:path`、`:method`、`:authority` 伪头驱动外呼请求（`:authority` 作为 `Host` 发送）。
 - **允许列表**：origin 必须（规范化后）精确匹配 `calloutAllowlist` 的某一项。没有允许列表 = 没有 callout。被拒绝的 dispatch 同步返回 `INTERNAL_FAILURE`。
-- **请求 + tick 阶段**：响应头/body 阶段是同步的、无法 await，dispatch 返回 `UNIMPLEMENTED`。`on_tick` 内的 callout 已支持，回调投递到 root context——额外的"allowlist 一致"条件见[定时器](#shared-data-与定时器)。
+- **请求 + tick 阶段**：响应头/body 阶段是同步的、无法 await，dispatch 返回 `UNIMPLEMENTED`。`on_tick` 内的 callout 使用所属插件的授权，回调投递到 root context，见[定时器](#shared-data-与定时器)。
 - **必须 Pause**（请求阶段）：`dispatch` + `Action::Continue` 不受支持——排队的 callout 被丢弃并记日志（`callouts-dropped=N`）。dispatch 之后必须 Pause。（`on_tick` 没有 Pause 概念：在那里 dispatch 的 callout 总是在钩子返回后执行。）
 - **预算**：每请求（或每 tick）最多 8 次 dispatch、4 轮回调（回调里可以追发 callout）、全进程 64 个并发 callout、单 callout 响应体上限 256KiB。每个 callout 的超时为 `min(guest 超时, calloutTimeoutMs)`。
 - **callout 失败**（连接错误、超时、响应体超限）：回调以 **0 个 header** 触发（proxy-wasm 惯例），guest 自行决定失败行为。宿主绝不因 callout 失败而 trap guest。
@@ -325,16 +325,16 @@ impl HttpContext for BodyScanner {
 
 ### Shared data
 
-`proxy_get_shared_data` / `proxy_set_shared_data` 提供带 proxy-wasm CAS 语义的模块级 KV（每 key 单调递增的 CAS 令牌；`set` 携带非零期望 CAS 且不匹配时返回 `CasMismatch`；CAS 0 无条件写；空值删除 key）。
+`proxy_get_shared_data` / `proxy_set_shared_data` 提供带 proxy-wasm CAS 语义的插件运行时 KV（每 key 单调递增的 CAS 令牌；`set` 携带非零期望 CAS 且不匹配时返回 `CasMismatch`；CAS 0 无条件写；空值删除 key）。
 
-- **作用域：单个网关进程内的一个模块（缓存条目）。** 该模块的所有池化实例共享——跨请求、跨阶段、含 tick 任务。它**不是**集群级状态：集群级协调（如全局限流）仍然用 `rate_limit_redis`，不要用 shared data。
-- **信任含义**：所有解析到同一份字节码的 `EdgionPlugins` 条目共享这个 store——包括 tick 阶段按某一个插件的 allowlist 外呼拉回的数据，流经*其他*插件的请求也读得到。数据必须隔离的信任域之间不要共享同一模块；按租户分发不同的字节码（或不同来源）。
+- **作用域：单个网关进程内的一个配置插件实例。** 该实例的池化 VM 和 tick 跨请求共享数据。通用插件层会在同一配置代次中复用同一条目的插件实例；不同条目、不同阶段和重建后的配置代次各自拥有独立 store，即使字节码与配置完全相同。集群级协调使用 `rate_limit_redis`。
+- **授权隔离：** tick 只使用所属插件的 allowlist；其他条目无法读取其 shared data，也不能为它增加可访问地址。
 - 上限：单值 64KiB，每模块总量 4MiB。超限写入返回 `BAD_ARGUMENT`。总量按 key + value 字节**外加每条目约 128B 固定开销**记账（近似真实内存占用），因此海量小 key 场景可用的逻辑空间相应减少——该上限约束的是实际内存，而不只是负载字节。
-- 生命周期：模块条目的最后一个持有者释放后才回收，包括仍在使用已淘汰或已替换条目的请求（见[模块缓存生命周期](#模块缓存生命周期)）；换内容的 reload 从空 store 开始。在途请求完成前，新旧 store 可以同时存在。
+- 生命周期：加载代次的最后一个持有者释放后回收，包括尚未结束的请求租约（见[插件运行时生命周期](#插件运行时生命周期)）。插件重建或 OCI 模块刷新从空 store 开始；新旧 store 可以短暂并存。
 
 ### 定时器（`on_tick`）
 
-guest 调用 `proxy_set_tick_period_milliseconds(N)`（通常在 `on_configure` 里）后，后台任务（每模块一个）每 `N` ms（下限 100ms）调用一次 `proxy_on_tick`。tick 实例从与请求相同的池租借，受正常 `timeoutMs` epoch 预算约束，且**相邻两次 tick 可能落在不同的池化实例上**——root context 的结构体字段是实例本地的，需要跨 tick 存活的状态请放 shared data（在 `on_configure` 里*初始化*的状态没问题，比如解析好的配置：每个池化实例初始化时都会跑 `on_configure`）。guest 可在 `on_tick` 内调整周期或停止（`0`）。模块缓存条目被淘汰时 tick 任务自动停止。
+guest 调用 `proxy_set_tick_period_milliseconds(N)`（通常在 `on_configure` 里）后，后台任务（每个插件运行时一个）每 `N` ms（下限 100ms）调用一次 `proxy_on_tick`。tick 实例从与请求相同的池租借，受正常 `timeoutMs` epoch 预算约束，且**相邻两次 tick 可能落在不同的池化实例上**——root context 的结构体字段是实例本地的，需要跨 tick 存活的状态请放 shared data（在 `on_configure` 里*初始化*的状态没问题，比如解析好的配置：每个池化实例初始化时都会跑 `on_configure`）。guest 可在 `on_tick` 内调整周期或停止（`0`）。所属插件实例释放或加载的模块被替换时，tick 任务会被取消；正在执行的同步钩子仍受 epoch 超时约束。
 
 典型模式：`on_tick` 发 callout 拉取最新规则集写进 shared data，请求钩子读取（限流规则热刷新、风控名单同步、配置轮询）。
 
@@ -343,11 +343,8 @@ guest 调用 `proxy_set_tick_period_milliseconds(N)`（通常在 `on_configure` 
 `on_tick` 可以像请求阶段一样 dispatch HTTP callout，差异在于：
 
 - **没有 Pause/恢复**：`proxy_on_tick` 没有 Action 返回值；钩子期间排队的 callout 在钩子返回后立即执行，每个结果经 `proxy_on_http_call_response` 投递到 **root context**（与实例同生命周期——不涉及任何请求级上下文）。
-- **要求 allowlist 一致。** tick 任务是*模块级*的，而 `calloutAllowlist` 是*每插件*的——多个 `EdgionPlugins` 条目指向同一份字节码时共享同一个模块（和同一个 tick 任务）。因此 tick 阶段只有在引用该模块的插件对**唯一**一份非空 allowlist 达成一致时才启用 dispatch：
-  - `calloutAllowlist` 为**空**的条目（例如同一模块还挂在响应/body 阶段但没配 callout）视为"无主张"，不会阻断 tick callout。
-  - 同一模块出现 ≥2 份**不同**的非空 allowlist 即**冲突**：tick dispatch 保持禁用（`UNIMPLEMENTED`，与该特性之前的行为一致），记一条 WARN，并且每个 tick 递增 `edgion_wasm_callout_total{result="tick_config_conflict"}`。这是有意的 fail-safe——否则一个插件的 allowlist 会泄漏到另一个插件的 tick 执行里。
-  - 冲突方被移除或 allowlist 对齐后自动恢复。
-- 生效的超时上限是授权插件中 `calloutTimeoutMs` 的**最小值**；其余 callout 护栏（每 tick 8 次 dispatch、4 轮、并发上限、响应体上限）不变。
+- **插件独立授权。** tick 使用本插件实例的 `calloutAllowlist` 和 `calloutTimeoutMs`。空 allowlist 禁用本插件的 tick 外呼；使用相同字节码的其他插件既不能授予权限，也不会产生冲突。
+- 超时由本插件的 `calloutTimeoutMs` 限制；其余护栏（每 tick 8 次 dispatch、4 轮、并发上限和响应体上限）不变。
 
 ## 失败语义
 
@@ -382,32 +379,34 @@ trap（或其他故障）的 VM 实例会被**污染**：直接丢弃而不回�
 - **每阶段 ABI 保留预算**——guest 在单次钩子内通过反复 ABI 调用累积的宿主保留量（排队的 header 操作、`proxy_log` 日志行、`proxy_set_property` 条目）上限为 **32 MiB / 20 万次操作**。超预算后后续 ABI 调用返回错误状态且**不做任何部分变更**；这些累积器在钩子返回时清空。合法的 header/日志/属性用量远低于此。
 - **guest 线性内存上限**——guest 内存增长上限 **128 MiB**（表 10 万项），远高于任何真实 proxy-wasm 工作集。这同时约束了 guest 传给宿主调用的任何单个值的大小。
 
-## 模块缓存生命周期
+## 插件运行时生命周期
 
-编译模块缓存的 key 是来源本身，**外加 `file` 来源的文件 size+mtime**：
+每个配置中的 Wasm 条目拥有自己的加载模块、实例池、shared data 和后台任务。对同一插件实例的引用通过通用插件层共享该运行时。
 
-- **引用计数淘汰。** 每个存活的 Wasm 插件实例都会 pin 住其缓存条目。reload/配置变更使某条目失去最后一个引用（如 inline 内容变化 → 新 key）后，孤儿条目在 **60s 宽限期**后被淘汰（宽限吸收 reload 抖动）。在途请求通过自身强引用保持条目存活；最后一个结束后内存释放。淘汰计入 `edgion_wasm_module_evicted_total` 指标。
-- **`file` 来源内容感知。** 运行时缓存 key 含文件 size 与 mtime，在插件（重）构建时采集。同路径覆写 `.wasm` **并触发插件 reload**（对所属 `EdgionPlugins` 资源的任何更新，或全量配置重同步）即可生效新内容；旧条目被引用计数淘汰。不 reload 的话运行中插件仍持旧 key——单纯覆写文件仍不会热替换。
-- **实例预热。** 加载时即实例化一个实例：guest 初始化失败成为清晰的加载错误（进负缓存），而不是每请求的 acquire 失败；`on_configure` 里设置的 tick 周期在首个请求到来前就开始生效。
-- **多租户容量。** 所有 Wasm 模块共享一个引擎级 pooling allocator。`instancePoolSize` 要按全部已配置 Wasm 插件的实例总量核算——峰值实例数约为 `edgion_wasm_modules_loaded × instancePoolSize`。
+- **配置替换。** 重建条目会创建新的运行时。不同条目和阶段不共享可变状态，即使来源与配置相同。在途请求可以使用捕获的旧插件代次完成处理。
+- **自动回收。** 最后一个插件持有者释放时，取消预加载、刷新和 tick，释放已发布模块。尚未结束的租约可以继续持有旧模块。没有全局运行时注册表或 60 秒模块回收宽限；`edgion_wasm_module_released_total` 统计已释放的加载代次。
+- **重载代价。** 重建可能重新编译并重置 shared data。进程级引擎和有界 OCI 原始字节缓存继续共享。新旧代次允许短暂交叠，不保证配置替换前后的状态连续。
+- **文件替换。** 覆写 `.wasm` 文件后，所属插件重建并重新加载文件时生效。单纯覆写不会替换已经加载的运行时。
+- **预加载与刷新。** 预初始化可在首个请求前启动 tick。首次加载失败会进入负缓存。OCI `Always` 刷新失败保留最后成功版本；刷新成功取消旧 tick 并启动新代次。
+- **容量规划。** 所有运行时使用共享引擎的 pooling allocator。容量需覆盖全部插件条目及短暂并存的新旧代次；`edgion_wasm_modules_loaded` 统计存活的编译运行时代次。
 
 ## 指标
 
-所有指标都带 `module` label。文件来源使用 `file:<path>`，内联来源使用 `inline:<sha8>`，URL 来源使用 `url:<canonical-origin>#<path-sha8>`。URL label 最长 96 字节，不含 userinfo、明文路径、查询参数或片段；仅签名查询凭据变化时，label 保持稳定。真实 URL 仍用于内部下载和缓存身份，不会进入指标或模块加载错误日志。
+按来源统计的指标带 `module` label；`edgion_wasm_modules_loaded` 是进程级指标。文件来源使用 `file:<path>`，内联来源使用 `inline:<sha8>`，URL 来源使用 `url:<canonical-origin>#<path-sha8>`。URL label 最长 96 字节，不含 userinfo、明文路径、查询参数或片段；仅签名查询凭据变化时，label 保持稳定。真实 URL 仍用于内部下载和缓存身份，不会进入指标或模块加载错误日志。
 
 | 指标 | 类型 | Labels | 含义 |
 |---|---|---|---|
 | `edgion_wasm_module_load_total` | counter | `result=ok\|error` | 加载尝试（负缓存命中不计） |
 | `edgion_wasm_module_compile_duration_ms` | histogram | | `Module::new` 耗时 |
-| `edgion_wasm_module_evicted_total` | counter | | 引用计数淘汰次数 |
+| `edgion_wasm_module_released_total` | counter | | 最后一个持有者退出后释放的加载运行时代次数 |
 | `edgion_wasm_instance_instantiate_total` | counter | | 新实例化（池 miss） |
 | `edgion_wasm_instance_discard_total` | counter | `reason=poisoned\|over_capacity` | 未回池而被丢弃的实例 |
-| `edgion_wasm_pool_size` | gauge | | 当前池内实例数 |
+| `edgion_wasm_pool_size` | gauge | | 该来源标签最后上报的池内实例数，不汇总独立运行时 |
 | `edgion_wasm_hook_duration_ms` | histogram | `phase` | guest 钩子耗时（`request_headers`、`request_body`、`response_headers`、`response_body`、`http_call_response`、`tick`） |
 | `edgion_wasm_trap_total` | counter | `phase` | trap / 协议违规 |
 | `edgion_wasm_fail_mode_total` | counter | `reason`、`mode=open\|close` | fail-mode 决策 |
-| `edgion_wasm_callout_total` | counter | `result=ok\|error\|denied\|over_limit\|tick_config_conflict` | callout 结果；`tick_config_conflict` 统计因共享模块的插件配置了不同 `calloutAllowlist` 而保持禁用 dispatch 的 tick 次数 |
-| `edgion_wasm_modules_loaded` | gauge | | 全局缓存中当前的编译模块数 |
+| `edgion_wasm_callout_total` | counter | `result=ok\|error\|denied\|over_limit` | 所属插件授权下的 callout 结果 |
+| `edgion_wasm_modules_loaded` | gauge | | 存活的编译运行时代次数，包括初始化中及旧租约仍持有的代次 |
 | `edgion_wasm_shared_data_bytes` | gauge | `module` | 同一模块标签下所有存活 store 的 shared-data 字节总和，包括同时存活的新旧代及不同配置变体；计入 key、value 和每条目约 128B 开销。4MiB 上限针对单个 store，汇总值可以超过它。最后一个 store 释放后归零，零值序列之后可按配置的空闲超时被淘汰。 |
 | `edgion_wasm_body_pause_unsupported_total` | counter | `module` | **建议配告警。** guest 在**响应 body 观测**钩子里返回了 `Action::Pause`——它想要整体 body 缓冲，而响应侧目前不提供该能力（只有请求侧的[请求 body 整体缓冲模式](#请求-body-整体缓冲模式)提供）——因此它正在静默地只看到当前 chunk |
 
@@ -429,9 +428,9 @@ trap 风暴表现为 `edgion_wasm_trap_total` 与 `edgion_wasm_instance_discard_
 - **仅支持请求 body 改写**：`proxy_set_buffer_bytes(HttpRequestBody, ...)` 仅在完整请求 body 钩子内有效。响应 body 写入仍返回 `STATUS_UNIMPLEMENTED`，其他阶段返回明确的 ABI 错误。
 - **静态选模式，非动态 Pause/Continue**：不同于 Envoy，插件拿到哪种 body 模式在模块加载时就由编译出的 guest 导出了哪些钩子决定，而不是由 guest 每次请求返回的 `Action` 决定。见[两种 body 模式，静态选择](#两种-body-模式静态选择)。
 - **无 gRPC callout**（`proxy_dispatch_grpc_call`）：调用即 trap。
-- **响应/body 阶段不能 callout**（同步阶段），且请求阶段 dispatch 后不 Pause 会被丢弃。tick 阶段的 callout 还额外要求共享模块的插件对 `calloutAllowlist` 达成一致（见[定时器](#shared-data-与定时器)）。
+- **响应/body 阶段不能 callout**（同步阶段），且请求阶段 dispatch 后不 Pause 会被丢弃。tick 阶段的 callout 使用所属插件的 `calloutAllowlist`（见[定时器](#shared-data-与定时器)）。
 - **无 shared queue、foreign function、guest 自定义 metrics**：调用即 trap。
-- **请求级上下文按钩子调用创建**：同一请求的请求头钩子与响应头钩子可能运行在不同池化实例上、拿到全新 context id。跨阶段关联请用 shared data 或塞请求头，不要依赖 guest 结构体字段。
+- **请求级上下文按钩子调用创建**：同一请求的请求头钩子与响应头钩子可能运行在不同池化实例上、拿到全新 context id。分别配置的阶段通过显式请求头关联；这些条目不共享 guest 内存或 shared data。
 - **`source.oci` v1 限制**：镜像仓库必须提供可公开验证的 TLS 证书（本地测试用的 loopback 仓库可使用明文 HTTP）；不支持镜像仓库镜像（registry mirror）。见[`source.oci`——从 OCI 镜像仓库拉取](#sourceoci从-oci-镜像仓库拉取)。
 
 ## 编写 guest
@@ -506,7 +505,7 @@ impl Context for AuthPlugin {
 
 ### Q：我的 callout 从未被执行？
 
-依次检查：（1）目标 origin 是否列在 `calloutAllowlist`——空列表完全禁用 callout；（2）请求头阶段 dispatch 后 guest 是否返回了 `Action::Pause`——dispatch 后 `Continue` 会被丢弃（访问日志出现 `callouts-dropped=N`）；（3）dispatch 是否发生在请求头或 tick 阶段——请求 body、响应头、响应 body 阶段均返回 `UNIMPLEMENTED`；（4）tick 阶段 dispatch 还要求无 allowlist 冲突——多个插件以不同 `calloutAllowlist` 共享同一模块时，查看 `edgion_wasm_callout_total{result="tick_config_conflict"}` 与 WARN 日志。
+依次检查：（1）目标 origin 是否列在 `calloutAllowlist`——空列表完全禁用 callout；（2）请求头阶段 dispatch 后 guest 是否返回了 `Action::Pause`——dispatch 后 `Continue` 会被丢弃（访问日志出现 `callouts-dropped=N`）；（3）dispatch 是否发生在请求头或 tick 阶段——请求 body、响应头、响应 body 阶段均返回 `UNIMPLEMENTED`；（4）tick 阶段必须由所属插件自身授权目标地址，其他条目的 allowlist 不适用。
 
 ### Q：我的请求意外返回了 `500`，而不是运行 `proxy_on_request_body`？
 
@@ -522,11 +521,11 @@ impl Context for AuthPlugin {
 
 ### Q：我覆写了磁盘上的 `.wasm` 文件，但网关还在跑旧构建？
 
-内容感知的缓存 key 在插件构建时采集。覆写文件后更新一次所属 `EdgionPlugins` 资源（任意变更）——reload 会重新 stat 文件、落到新缓存条目，旧条目在宽限期后被淘汰。
+覆写文件后更新所属 `EdgionPlugins` 资源，触发插件实例重建。新运行时会重新加载文件；旧运行时随最后一个插件引用和在途租约结束而释放。单纯覆写不会替换已经加载的运行时。
 
 ### Q：两个请求之间能共享状态吗？
 
-能——用 `proxy_{get,set}_shared_data`，同一模块的所有实例在**单个网关进程内**共享。它不跨网关副本复制；集群级协调仍属于 `rate_limit_redis`。
+能——用 `proxy_{get,set}_shared_data`，同一个配置插件实例的所有池化 VM 在**单个网关进程内**共享。分别配置的条目或阶段不共享这些状态。它不跨网关副本复制；集群级协调仍属于 `rate_limit_redis`。
 
 ## 相关链接
 

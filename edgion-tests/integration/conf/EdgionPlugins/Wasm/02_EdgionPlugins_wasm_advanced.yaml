@@ -17,11 +17,9 @@
 # at 127.0.0.1:30040 (start_all.sh --auth-port 30040); its /verify returns 200
 # for "Bearer valid-token" and 401 otherwise.
 #
-# pluginConfig is set identically on all three stages: they share one module
-# cache entry (same source file), whose vm/plugin config is taken from
-# whichever plugin loads first. Only the request stage carries the
-# calloutAllowlist — the other stages' empty lists carry no opinion for the
-# tick-callout decision (no conflict).
+# Each stage owns its runtime, shared data, and tick task even with identical
+# source and pluginConfig. Only the request stage authorizes tick callouts;
+# the response stage's empty allowlist disables its own tick callouts.
 apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:

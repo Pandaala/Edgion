@@ -46,6 +46,7 @@ pub mod tcp_esp_reload;
 pub mod tls_route_attachments;
 pub mod tls_route_plugins_reload;
 pub mod waf_dynamic;
+pub mod wasm_runtime_ownership;
 
 pub mod request_id_dynamic;
 

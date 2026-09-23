@@ -8,10 +8,11 @@ knowledge_type: regression-guards
 
 ## Conclusion and scope
 
-Wasm response-header and response-body misses borrow `WasmPlugin.cache_key`
-through `WasmVmManager::spawn_preload` and `prepare_preload`. Only a successful
-`LoadSlot::try_claim_preload` creates the owned key and configuration required
-by the background task. The plugin retains its construction-time runtime key.
+Wasm response-header and response-body misses consult the configured plugin's
+private runtime slot. Engine/runtime availability, publication, retry deadline,
+and the atomic preload claim are checked before copying task inputs or spawning
+work. Warm access reads the private atomic publication directly; no global map
+lookup or runtime key is needed.
 
 ## Rationale and evidence
 
@@ -20,38 +21,39 @@ Finding `avoid-wasm-response-inflight-cache-key-allocation` (campaign source
 cloned the key before checking whether preload was already claimed. Each chunk
 during a cold load or negative-cache window could allocate a discarded String.
 
-The correction is in `edgion-gateway/src/plugins/http/wasm/plugin.rs` (build and
-both synchronous response callbacks) and `vm_manager.rs` (`prepare_preload`).
+The mechanism lives in `edgion-gateway/src/plugins/http/wasm/plugin.rs` (build and
+both synchronous response callbacks) and `vm_manager.rs` (runtime preload).
 The engine/runtime checks, published-module check, retry deadline, and atomic
 preload claim precede creation of task-owned inputs. `PreloadClaimGuard` still
 releases the claim on drop, including task cancellation.
 
 This follows the hot-path performance rules in
 [the design index](../../../00-design-rules.md#u-gateway-hot-path-performance--bounded-memory).
-The existing [runtime cache identity guard](wasm-module-cache-key-runtime-config.md)
-still applies: borrowing changes ownership timing, not source/config identity,
-registration, eviction, or runtime-config isolation. It did not previously
-establish that unsuccessful preload attempts avoided key copies.
+The [plugin instance isolation guard](wasm-module-cache-key-runtime-config.md)
+now replaces runtime-key identity and registration. The original allocation
+correction remains relevant as a claim-before-copy rule even though the key
+itself has been removed.
 
 ## Alternatives and limits
 
-No extra lock, cache, task registry, metric, or response buffering is introduced.
+The preload claim remains atomic; the task ownership gate is entered only for
+work that won the claim. No response buffering or per-chunk diagnostics are added.
 Response fail-open/fail-close handling, body trap behavior, streaming, and
-request-owned diagnostics remain unchanged. Initial slot creation still needs
-an owned map key; a successful task still owns its inputs. This correction does
-not claim that cold slot creation or the entire Wasm body callback allocates zero.
+request-owned diagnostics remain unchanged. The private slot is constructed with
+the plugin; a successful task still owns its inputs. This rule does not claim
+that the entire Wasm body callback allocates zero.
 There is no measured throughput improvement or allocation-count benchmark.
 
 ## Verification and re-evaluation
 
-`borrowed_preload_inputs_survive_concurrent_misses_and_retry` retains the first
+Historical `borrowed_preload_inputs_survive_concurrent_misses_and_retry` retained the first
 claim while 64 concurrent callers attempt preparation, verifies they are rejected,
 and checks caller-input independence, slot identity, claim release, negative-cache
 suppression, and retry. It uses no network or timing sleeps. Allocation placement
 is established by the borrowed signatures and the copy after the claim; the test
 checks lifecycle behavior rather than counting allocator calls.
 
-Current verification (2026-09-10):
+Historical verification (2026-09-10, before plugin-owned runtime replacement):
 
 - `cargo test -p edgion-gateway --lib preload`: all four tests passed, including
   the new deterministic test, cancellation release, unavailable engine, and
@@ -63,6 +65,10 @@ Current verification (2026-09-10):
   and `check_pingora_source_policy.py` under `cicd/checks/`: passed.
 - Independent read-only review: LGTM. Existing integration tests were not
   modified or run; no full-workspace test run was performed.
+
+The 2026-09-23 ownership run passed all 226 selected Gateway Wasm tests.
+Replacement tests preserve single-flight, negative-cache, claim cancellation,
+and unavailable-engine coverage without retaining obsolete key APIs.
 
 Re-evaluate if preload gains another entry point, owned inputs move before the
 claim, or cache identity, slot creation, retry, or cancellation semantics change.

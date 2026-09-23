@@ -2116,8 +2116,8 @@ pub fn add_to_linker(linker: &mut Linker<HostState>) -> anyhow::Result<()> {
     linker.func_wrap(host::MODULE, host::PROXY_HTTP_CALL, host_http_call)?;
     linker.func_wrap(host::MODULE, host::PROXY_DISPATCH_HTTP_CALL, host_http_call)?;
 
-    // Shared data (per-module KV with CAS). Process-local: shared across
-    // all pooled VMs of one ModuleEntry, freed with the cache entry.
+    // Shared data (plugin-runtime KV with CAS). Process-local: shared across
+    // all pooled VMs of one ModuleEntry, freed with its last holder.
     linker.func_wrap(
         host::MODULE,
         host::PROXY_GET_SHARED_DATA,

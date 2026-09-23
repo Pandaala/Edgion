@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use super::callout::resolve_callouts_on;
 use super::host_abi::{HeaderOp, LocalResponse, WasmPhase, MAP_HTTP_REQUEST_HEADERS, MAP_HTTP_RESPONSE_HEADERS};
-use super::vm_manager::{global_vm_manager, runtime_cache_key, CalloutGrant, ModuleEntry, VmLease};
+use super::vm_manager::{global_vm_manager, CalloutGrant, ModuleEntry, VmLease, WasmRuntime};
 use crate::observe::metrics::registry::{record_wasm_body_pause_unsupported, record_wasm_fail_mode};
 use crate::plugins::runtime::log::la;
 use crate::plugins::runtime::traits::session::BodyReadError;
@@ -27,12 +27,9 @@ const PLUGIN_NAME: &str = "Wasm";
 
 pub struct WasmPlugin {
     name: String,
-    config: WasmConfig,
-    /// Runtime cache key (schema key + file stat for `file` sources),
-    /// computed once at build so every path of this plugin instance —
-    /// preload, async load, sync `try_get`, refcount — agrees on one key
-    /// even if the source file is replaced on disk mid-lifetime.
-    cache_key: String,
+    /// Mutable Wasm state belongs to this plugin instance. The common plugin
+    /// runtime keeps this owner alive while requests still use the plugin.
+    runtime: WasmRuntime,
     /// Bounded-cardinality source descriptor for metrics.
     metrics_label: String,
     /// Normalized callout allowlist origins, shared into each phase's
@@ -42,7 +39,6 @@ pub struct WasmPlugin {
 
 impl WasmPlugin {
     fn build(config: &WasmConfig) -> Self {
-        let cache_key = runtime_cache_key(config);
         // Admission validation already rejects malformed entries; a residual
         // bad entry here (e.g. a file-mode gateway without the controller
         // validation) is dropped with a WARN rather than failing the plugin.
@@ -59,35 +55,27 @@ impl WasmPlugin {
                 },
             )
             .collect();
-        // Canonical order so grants from plugins listing the same origins in
-        // a different order compare equal in the tick-callout registry.
+        // Keep the normalized authorization set stable and duplicate-free.
         callout_allowlist.sort();
         callout_allowlist.dedup();
+        let callout_allowlist: Arc<[String]> = Arc::from(callout_allowlist);
+        let runtime = global_vm_manager().new_runtime(
+            config,
+            CalloutGrant {
+                allowlist: callout_allowlist.clone(),
+                timeout_ms: config.callout_timeout_ms,
+            },
+        );
         let plugin = WasmPlugin {
             name: PLUGIN_NAME.to_string(),
-            config: config.clone(),
-            cache_key,
+            runtime,
             metrics_label: config.source.metrics_label(),
-            callout_allowlist: Arc::from(callout_allowlist),
+            callout_allowlist,
         };
-        // Pin the cache entry for this plugin's lifetime (released in Drop;
-        // the manager evicts the entry after a grace period once no plugin
-        // references it anymore). The grant feeds the module-level
-        // tick-callout decision (see `TickCalloutState`).
-        global_vm_manager().register_plugin(&plugin.cache_key, plugin.callout_grant());
-        // Warm the module cache so the first request does not pay compile
+        // Warm this runtime so the first request does not pay compile
         // latency (best-effort; lazy load covers the miss).
-        global_vm_manager().spawn_preload(config, &plugin.cache_key);
+        plugin.runtime.spawn_preload();
         plugin
-    }
-
-    /// This plugin's callout configuration as registered with (and removed
-    /// from) the manager's tick-callout registry.
-    fn callout_grant(&self) -> CalloutGrant {
-        CalloutGrant {
-            allowlist: self.callout_allowlist.clone(),
-            timeout_ms: self.config.callout_timeout_ms,
-        }
     }
 
     pub fn create_request(config: &WasmConfig) -> Option<Box<dyn RequestFilter>> {
@@ -113,7 +101,7 @@ impl WasmPlugin {
     /// cause available.
     fn fail_mode(&self, session: &mut dyn PluginSession, log: &mut PluginLog, reason: &str) -> PluginRunningResult {
         let cause = reason.replace(' ', "-");
-        if self.config.fail_open {
+        if self.runtime.config().fail_open {
             record_wasm_fail_mode(&self.metrics_label, reason, "open");
             log.push_fmt("wasm {}:fail-open", la![reason]);
             session.record_outcome(DyeOutcome::FailOpen, &cause);
@@ -191,7 +179,7 @@ impl WasmPlugin {
             .begin_phase(WasmPhase::RequestHeaders, request_headers, Vec::new(), props);
         lease
             .state_mut()
-            .arm_dispatch(self.callout_allowlist.clone(), self.config.callout_timeout_ms);
+            .arm_dispatch(self.callout_allowlist.clone(), self.runtime.config().callout_timeout_ms);
 
         let Ok((ctx_id, action)) = lease.call_on_request_headers_open(num_headers) else {
             // Hot path: `fail_mode` records the metric and PluginLog entry; no tracing.
@@ -315,7 +303,7 @@ impl WasmPlugin {
                 return self.fail_mode(session, log, "body read");
             }
         };
-        let Ok(mut lease) = entry.acquire(self.config.timeout_ms) else {
+        let Ok(mut lease) = entry.acquire(self.runtime.config().timeout_ms) else {
             return self.fail_mode(session, log, "acquire");
         };
         let size = body.len() as i32;
@@ -371,7 +359,13 @@ impl WasmPlugin {
     /// round cap are dropped (guest is dispatching in a loop); the no-resume
     /// fallback in the caller decides the request's fate.
     async fn resolve_callouts(&self, lease: &mut VmLease, ctx_id: i32, log: &mut PluginLog) -> Result<(), String> {
-        let outcome = resolve_callouts_on(lease, ctx_id, self.config.callout_timeout_ms, &self.metrics_label).await?;
+        let outcome = resolve_callouts_on(
+            lease,
+            ctx_id,
+            self.runtime.config().callout_timeout_ms,
+            &self.metrics_label,
+        )
+        .await?;
         log.push_fmt(
             "wasm callouts={} leftover={}",
             la![
@@ -514,8 +508,8 @@ impl UpstreamResponseBodyFilter for WasmPlugin {
         end_of_stream: bool,
         _session: &mut dyn PluginSession,
     ) -> Option<std::time::Duration> {
-        let Some(entry) = global_vm_manager().try_get_or_schedule_refresh(&self.config, &self.cache_key) else {
-            global_vm_manager().spawn_preload(&self.config, &self.cache_key);
+        let Some(entry) = self.runtime.try_get_or_schedule_refresh() else {
+            self.runtime.spawn_preload();
             return None;
         };
         // Header-only guests pay nothing per chunk: skip the lease entirely
@@ -523,7 +517,7 @@ impl UpstreamResponseBodyFilter for WasmPlugin {
         if !entry.has_body_hook() {
             return None;
         }
-        let chunk_budget_ms = (self.config.timeout_ms / 10).max(10);
+        let chunk_budget_ms = (self.runtime.config().timeout_ms / 10).max(10);
         let Ok(mut lease) = entry.acquire(chunk_budget_ms) else {
             // Per-chunk hot path: acquire failure is non-fatal (stream continues);
             // no tracing here (Iron rule 3).
@@ -555,16 +549,6 @@ impl UpstreamResponseBodyFilter for WasmPlugin {
             Err(_) => {}
         }
         None
-    }
-}
-
-impl Drop for WasmPlugin {
-    fn drop(&mut self) {
-        // Release this plugin's pin on the module cache entry. PluginStore
-        // replaces plugin instances wholesale on reload, so a config change
-        // drops the old instance here and the manager evicts the now-orphaned
-        // entry after its grace period.
-        global_vm_manager().unregister_plugin(&self.cache_key, &self.metrics_label, &self.callout_grant());
     }
 }
 
@@ -668,11 +652,11 @@ impl RequestFilter for WasmPlugin {
     }
 
     async fn run_request(&self, session: &mut dyn PluginSession, log: &mut PluginLog) -> PluginRunningResult {
-        let Ok(entry) = global_vm_manager().get_or_load(&self.config, &self.cache_key).await else {
+        let Ok(entry) = self.runtime.get_or_load().await else {
             // Hot path: `fail_mode` records the metric and PluginLog entry; no tracing.
             return self.fail_mode(session, log, "load");
         };
-        let Ok(lease) = entry.acquire(self.config.timeout_ms) else {
+        let Ok(lease) = entry.acquire(self.runtime.config().timeout_ms) else {
             return self.fail_mode(session, log, "acquire");
         };
         self.run_leased_request(entry, lease, session, log).await
@@ -691,11 +675,11 @@ impl UpstreamResponseFilter for WasmPlugin {
     ) -> PluginRunningResult {
         // Sync hook: no await available. Use the non-blocking cache lookup;
         // on miss kick a background load and apply the fail mode this time.
-        let Some(entry) = global_vm_manager().try_get_or_schedule_refresh(&self.config, &self.cache_key) else {
-            global_vm_manager().spawn_preload(&self.config, &self.cache_key);
+        let Some(entry) = self.runtime.try_get_or_schedule_refresh() else {
+            self.runtime.spawn_preload();
             return self.fail_mode(session, log, "not loaded");
         };
-        let Ok(lease) = entry.acquire(self.config.timeout_ms) else {
+        let Ok(lease) = entry.acquire(self.runtime.config().timeout_ms) else {
             // Hot path: `fail_mode` records the metric and PluginLog entry; no tracing.
             return self.fail_mode(session, log, "acquire");
         };
@@ -938,6 +922,37 @@ mod tests {
         let mut log = PluginLog::new("Wasm");
         let res = plugin.run_request(&mut session, &mut log).await;
         assert_eq!(res, PluginRunningResult::GoodNext);
+    }
+
+    #[tokio::test]
+    async fn separate_plugin_instances_isolate_state_and_drop_independently() {
+        let f = write_temp_wasm(GUEST_SET_HEADER);
+        let config = config_for(f.path(), false);
+        let first = WasmPlugin::build(&config);
+        let second = WasmPlugin::build(&config);
+        let first_entry = first.runtime.get_or_load().await.expect("first runtime loads");
+        let second_entry = second.runtime.get_or_load().await.expect("second runtime loads");
+        assert!(!Arc::ptr_eq(&first_entry, &second_entry));
+        first_entry
+            .shared_data_for_test()
+            .set("owner", Some(b"first".to_vec()), 0)
+            .expect("write first runtime state");
+        assert!(second_entry.shared_data_for_test().get("owner").is_none());
+        drop(first_entry);
+        drop(first);
+
+        let mut session = base_mock();
+        session
+            .expect_set_request_header()
+            .withf(|name, value| name == "x-wat-added" && value == "yes")
+            .times(1)
+            .returning(|_, _| Ok(()));
+        let mut log = PluginLog::new("Wasm");
+        assert_eq!(
+            second.run_request(&mut session, &mut log).await,
+            PluginRunningResult::GoodNext
+        );
+        assert!(second_entry.shared_data_for_test().get("owner").is_none());
     }
 
     #[tokio::test]
@@ -1298,7 +1313,8 @@ mod tests {
         let f = write_temp_wasm(GUEST_BODY_OBSERVER);
         let c = config_for(f.path(), false);
         let mgr = WasmVmManager::new_for_test();
-        let entry = mgr.get_or_load(&c, &runtime_cache_key(&c)).await.expect("loads");
+        let runtime = mgr.new_runtime(&c, CalloutGrant::none());
+        let entry = runtime.get_or_load().await.expect("loads");
         let mut lease = entry.acquire(100).expect("lease");
         lease.state_mut().begin_phase(
             WasmPhase::ResponseBody,
@@ -1346,22 +1362,16 @@ mod tests {
     /// per-chunk hot path — Iron rule 3).
     #[tokio::test]
     async fn body_pause_is_metered_and_never_breaks_the_stream() {
-        use crate::plugins::http::wasm::vm_manager::WasmVmManager;
         let f = write_temp_wasm(GUEST_BODY_PAUSE);
         let c = config_for(f.path(), false);
 
         // The Pausing guest exports a body hook, so the body-filter stage will
         // lease and run it (rather than skipping header-only guests).
-        let mgr = WasmVmManager::new_for_test();
-        let entry = mgr.get_or_load(&c, &runtime_cache_key(&c)).await.expect("loads");
+        let plugin = WasmPlugin::build(&c);
+        let entry = plugin.runtime.get_or_load().await.expect("loads");
         assert!(entry.has_body_hook(), "guest exports proxy_on_response_body");
 
         // Plugin path: a Pausing guest must not throttle or break the stream.
-        global_vm_manager()
-            .get_or_load(&c, &runtime_cache_key(&c))
-            .await
-            .expect("module loads");
-        let plugin = WasmPlugin::create_body_filter(&c).unwrap();
         let mut session = MockPluginSession::new();
         let chunk = Some(bytes::Bytes::from_static(b"abc"));
         for eos in [false, true] {
@@ -1378,11 +1388,8 @@ mod tests {
     async fn body_filter_releases_chunk_before_returning_lease_to_pool() {
         let f = write_temp_wasm(GUEST_BODY_OBSERVER);
         let c = config_for(f.path(), false);
-        let entry = global_vm_manager()
-            .get_or_load(&c, &runtime_cache_key(&c))
-            .await
-            .expect("module loads");
-        let plugin = WasmPlugin::create_body_filter(&c).expect("body filter");
+        let plugin = WasmPlugin::build(&c);
+        let entry = plugin.runtime.get_or_load().await.expect("module loads");
         let mut session = MockPluginSession::new();
         let chunk = Bytes::from(vec![1, 2, 3, 4]);
         let body = Some(chunk.clone());
@@ -1423,12 +1430,9 @@ mod tests {
         for wat in [GUEST_BODY_OBSERVER, GUEST_SET_HEADER, GUEST_TRAP, GUEST_BODY_TRAP] {
             let f = write_temp_wasm(wat);
             let c = config_for(f.path(), false);
-            // Warm the cache so try_get hits.
-            global_vm_manager()
-                .get_or_load(&c, &runtime_cache_key(&c))
-                .await
-                .expect("loads");
-            let plugin = WasmPlugin::create_body_filter(&c).unwrap();
+            // Warm this plugin's runtime so the sync lookup hits.
+            let plugin = WasmPlugin::build(&c);
+            plugin.runtime.get_or_load().await.expect("loads");
             let mut session = MockPluginSession::new();
             let chunk = Some(bytes::Bytes::from_static(b"data"));
             let r = plugin.run_upstream_response_body_filter(&chunk, false, &mut session);
@@ -1478,15 +1482,7 @@ mod tests {
 
     /// Response-phase coverage for the same reference guest: verifies the
     /// `x-wasm-resp: yes` contract. The sync `run_upstream_response_filter`
-    /// hook uses `try_get`, which only hits once the module is warmed in the
-    /// cache — drive one request-phase call first to populate it.
-    ///
-    /// The module cache is global (process-wide) and keyed by the source
-    /// file path, so this test copies the artifact into its own temp file
-    /// rather than reusing the shared path constant: that keeps its cache
-    /// key disjoint from `reference_guest_module_loads_and_runs` (and any
-    /// concurrently-running preload from that test's `WasmPlugin::build`),
-    /// avoiding a transient `try_lock` race on the shared cache slot.
+    /// hook uses a sync lookup, so warm the same plugin's runtime first.
     #[tokio::test]
     async fn reference_guest_response_phase_sets_header() {
         let src_path = concat!(
@@ -1504,13 +1500,8 @@ mod tests {
         let mut c = WasmConfig::default();
         c.source.file = Some(f.path().to_string_lossy().into_owned());
 
-        // Warm the module cache so the sync response-phase `try_get` hits.
-        global_vm_manager()
-            .get_or_load(&c, &runtime_cache_key(&c))
-            .await
-            .expect("module loads");
-
-        let plugin = WasmPlugin::create_response_filter(&c).unwrap();
+        let plugin = WasmPlugin::build(&c);
+        plugin.runtime.get_or_load().await.expect("module loads");
         let mut session = base_mock();
         session.expect_response_headers().returning(Vec::new);
         session.expect_get_response_status().return_const(Some(200u16));
@@ -1529,17 +1520,16 @@ mod tests {
     // These drive the REAL rebuilt `header_demo.wasm` (proxy-wasm Rust SDK)
     // through the host for callout / tick+shared-data / body observation — the
     // same guest the integration suite uses, so they catch SDK-vs-host ABI
-    // drift the WAT fixtures cannot. Each test copies the artifact to its own
-    // temp file so its cache entry (and thus its SharedData + tick task) is
-    // disjoint from the others'.
+    // drift the WAT fixtures cannot. Every plugin owns independent mutable
+    // runtime state even when tests use the same artifact.
 
     const REF_ARTIFACT: &str = concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../edgion-tests/wasm/artifacts/header_demo.wasm"
     );
 
-    /// Copy the committed reference artifact to a fresh temp file (disjoint
-    /// cache key). Returns None when the artifact has not been built.
+    /// Copy the committed reference artifact to a fresh temp file.
+    /// Returns None when the artifact has not been built.
     fn ref_artifact_temp() -> Option<tempfile::NamedTempFile> {
         if !std::path::Path::new(REF_ARTIFACT).exists() {
             eprintln!("skipping: reference artifact not built");
@@ -1669,14 +1659,11 @@ mod tests {
 
         // Load warms one instance, which runs on_configure (sets the 1s tick)
         // and arms the module tick task.
-        global_vm_manager()
-            .get_or_load(&c, &runtime_cache_key(&c))
-            .await
-            .expect("module loads");
+        let plugin = WasmPlugin::build(&c);
+        plugin.runtime.get_or_load().await.expect("module loads");
         // Wait for at least two ticks.
         tokio::time::sleep(std::time::Duration::from_millis(2300)).await;
 
-        let plugin = WasmPlugin::create_request(&c).unwrap();
         let seen = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
         let seen2 = seen.clone();
         let mut session = ref_mock(vec![("host", "t.example.com"), ("x-wasm-read-ticks", "1")]);
@@ -1729,8 +1716,8 @@ mod tests {
         // `fail_mode` (Task 7), so `fail_open` keeps that phase a no-op.
         c.fail_open = true;
 
-        // Building the plugin registers its callout grant and preloads the
-        // module; the eager warm instance runs on_configure (1s tick).
+        // Building the plugin binds its callout grant and preloads its
+        // runtime; the eager warm instance runs on_configure (1s tick).
         let plugin = WasmPlugin::create_request(&c).unwrap();
 
         // Poll until a tick's callout has been published, rather than sleeping a fixed 2.5s
@@ -1789,24 +1776,20 @@ mod tests {
         // no-op for the request below (this test's own body path goes through
         // the response body filter, not `read_request_body`).
         c.fail_open = true;
-        global_vm_manager()
-            .get_or_load(&c, &runtime_cache_key(&c))
-            .await
-            .expect("module loads");
+        let plugin = WasmPlugin::build(&c);
+        plugin.runtime.get_or_load().await.expect("module loads");
 
         // Drive two response-body chunks through the body filter.
-        let body_plugin = WasmPlugin::create_body_filter(&c).unwrap();
         let mut bsession = MockPluginSession::new();
         let chunk = Some(bytes::Bytes::from_static(&[b'x'; 100]));
-        assert!(body_plugin
+        assert!(plugin
             .run_upstream_response_body_filter(&chunk, false, &mut bsession)
             .is_none());
-        assert!(body_plugin
+        assert!(plugin
             .run_upstream_response_body_filter(&chunk, true, &mut bsession)
             .is_none());
 
-        // A request reads the accumulated byte count.
-        let req_plugin = WasmPlugin::create_request(&c).unwrap();
+        // A request on the same plugin reads its accumulated byte count.
         let seen = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
         let seen2 = seen.clone();
         let mut session = ref_mock(vec![("host", "t.example.com"), ("x-wasm-read-body", "1")]);
@@ -1823,7 +1806,7 @@ mod tests {
         // See `reference_guest_module_loads_and_runs` for why this fires (R17).
         session.expect_record_error().return_const(());
         let mut log = PluginLog::new("Wasm");
-        let res = req_plugin.run_request(&mut session, &mut log).await;
+        let res = plugin.run_request(&mut session, &mut log).await;
         assert_eq!(res, PluginRunningResult::GoodNext);
         assert!(
             seen.load(std::sync::atomic::Ordering::Relaxed) >= 200,

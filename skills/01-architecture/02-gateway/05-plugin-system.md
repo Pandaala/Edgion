@@ -245,6 +245,37 @@ Gateway HTTP/stream source and EGC/binding/attachment callbacks
 - [ ] Condition evaluation on the body path calls `CompiledPluginConditions::evaluate` (grep for `evaluate_detail` on the body path — must be absent).
 - [ ] No `ctx.pending_edgion_plugins_logs.push` or `session.start_edgion_plugins_log` calls on the body path.
 
+## Wasm runtime ownership
+
+Each constructed `WasmPlugin` owns a private `WasmRuntime`, including its load
+slot, atomic module publication, pool, shared data, tick, and callout grant.
+`PluginGeneration` / `EntryCache` already shares constructed filters by Arc
+within one immutable source generation and one stage/index entry. Multiple
+route or policy views of that entry therefore reuse its runtime; separate
+entries, stages, resources, and rebuilt generations do not share mutable Wasm
+state, even with identical module bytes.
+
+The global Wasm manager retains the Engine and epoch ticker. The existing bounded
+OCI artifact byte cache remains a separate fetch optimization. There is no global
+mutable runtime map, manual plugin refcount, grant aggregation, or 60-second
+module eviction grace. Configuration reconstruction may reset shared data and
+repeat compilation; in-flight requests may finish using their captured generation.
+
+The private runtime owner closes background task admission/publication and aborts
+preload, refresh, and tick on destruction. Background tasks retain execution state,
+never the owner that issues cancellation. Late completion cannot publish or restart
+work after closure. Cancellation is eventual at host await points or bounded guest
+execution boundaries; old/new generations may briefly overlap. OCI refresh failures
+retain that runtime's last successful entry without rollback choreography.
+
+Warm callbacks read the private atomic publication directly. Cold work preserves
+single-flight preload, negative-cache retry deadlines, and claim-before-copy
+allocation discipline. Request and tick callouts use the same plugin's immutable
+grant; separate plugins neither contribute authorization nor disable each other's
+ticks. See [runtime isolation](../../04-review/wasm/regression-guards/wasm-module-cache-key-runtime-config.md)
+and [background shutdown](../../04-review/wasm/regression-guards/tick-quiescence-on-zero-reference-eviction.md)
+for evidence, history, and verification limits.
+
 ## HTTP plugin inventory
 
 The schema enum `EdgionPlugin` in

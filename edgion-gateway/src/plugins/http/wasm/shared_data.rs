@@ -1,8 +1,9 @@
-//! Per-module shared key/value store (proxy-wasm `{get,set}_shared_data`).
+//! Plugin-runtime shared key/value store (proxy-wasm `{get,set}_shared_data`).
 //!
 //! One `SharedData` instance hangs off each `ModuleEntry`, so every pooled
-//! VM of the same module (across requests and the tick task) shares it, and
-//! its lifetime follows the module-cache eviction of the entry.
+//! VM of that plugin generation (across requests and the tick task) shares it.
+//! Separate plugin entries do not share state. The store is released with the
+//! last entry holder, including outstanding request leases after replacement.
 //!
 //! Scope: **single gateway process**. This is NOT cluster-level state —
 //! cluster-wide coordination (e.g. global rate limiting) remains the domain
@@ -268,7 +269,7 @@ mod tests {
     use super::*;
 
     fn assert_gauge(handle: &metrics_exporter_prometheus::PrometheusHandle, module: &str, bytes: usize) {
-        let rendered = crate::observe::metrics::registry::with_live_wasm_shared_data_gauges(|| handle.render());
+        let rendered = crate::observe::metrics::registry::with_live_wasm_metrics(|| handle.render());
         let sample = format!("edgion_wasm_shared_data_bytes{{module=\"{module}\"}} {bytes}");
         assert!(
             rendered.lines().any(|line| line == sample),

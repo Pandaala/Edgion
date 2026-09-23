@@ -45,7 +45,7 @@ pub fn init_metrics_exporter(cfg: &MetricsConfig) -> Result<(), String> {
 async fn metrics_handler() -> Response {
     crate::link_sys::runtime::store::record_published_link_sys_health();
     crate::observe::metrics::GatewayMetrics::with_live_lb_degrade_counters(|| {
-        super::registry::with_live_wasm_shared_data_gauges(render_metrics)
+        super::registry::with_live_wasm_metrics(render_metrics)
     })
 }
 

@@ -9,10 +9,10 @@ knowledge_type: regression-guards
 ## Conclusion and scope
 
 `edgion_wasm_shared_data_bytes{module}` sums accounted bytes across every live
-`SharedData` with the same canonical source metrics label. Runtime configuration
-variants, file reloads, signed URL rotations, and OCI refresh generations can
+`SharedData` with the same canonical source metrics label. Independent configured plugins, rebuilt
+resource generations, signed URL rotations, and OCI refresh generations can
 share a label while owning different stores. An old request lease retains its
-entry and store after cache replacement or eviction. The 4 MiB admission cap
+entry and store after runtime replacement or owner destruction. The 4 MiB admission cap
 remains per store, not per metric series.
 
 ## Rationale and evidence
@@ -33,8 +33,7 @@ registration, bounded labels, and construction-time metric handles.
 ## Alternatives and limits
 
 Setting zero on `ModuleEntry::drop` would erase other stores' contributions.
-Generation labels would accumulate series. Changing KV identity or lifetime
-would violate the separate accepted storage policy in
+Generation labels would accumulate series. KV identity and lifetime follow the current user-approved storage policy in
 `../../cpu-memory/intentional-design/wasm-shared-data-no-eviction-no-cluster-kv.md`.
 
 The exporter evicts idle gauges by default. The registry therefore keeps weak
@@ -43,7 +42,12 @@ following the existing LB counter keepalive boundary. Registration and render
 share a cold-path lock; mutation and store destruction never acquire it. Dead
 weak entries are pruned on registration, scrape, and store-stats collection.
 This metadata is bounded by live labels plus entries retired since the last
-cleanup, and is visible as `wasm_shared_data_metrics` in store-stats.
+cleanup, and is visible as `wasm_shared_data_metrics` in store-stats. This existing
+registry also retains weak module-lifetime metric handles: its metadata count
+includes labels with live byte gauges or live module guards. The canonical
+`with_live_wasm_metrics` render boundary touches both kinds of handles, including
+the release counter, so exporter idle eviction cannot detach a live owner's
+construction-time handle. No second metric registry is introduced.
 
 The last drop balances the series to zero; the exporter can subsequently expire
 that unowned series. Scrapes during an in-progress mutation may observe a
@@ -55,35 +59,32 @@ This metric accounts key/value bytes and fixed entry overhead, not exact RSS.
 Inline `shared_data::tests` covers overlapping stores, both drop orders,
 recreation, rejected writes, concurrent mutation/registration/drop, a retained
 request-style Arc, and live-handle keepalive with exporter idle eviction enabled.
-`vm_manager::tests::shared_data_metric_handle_follows_delayed_module_eviction`
-also covers the ownership boundary used by cache-residue validation: the handle
-remains visible during the module cache's anti-thrash grace and disappears after
-an unleased zero-reference entry is evicted. The validator preserves a nonzero
-`wasm_shared_data_metrics.count` as residue. Its 75-second default deadline now
-bounds the quiesced eviction path: eviction schedules after the 60-second grace
-and then stops the tick task explicitly, so a running tick round no longer
-retains a `VmLease` and `SharedData` past the deadline. The residual windows that
-path does not cover are enumerated in
-[tick-quiescence-on-zero-reference-eviction](tick-quiescence-on-zero-reference-eviction.md).
-Existing CAS/capacity tests remain in place. No live integration scenario changes.
-Fresh verification: `cargo test -p edgion-gateway --lib shared_data` passed all
-21 selected tests, including the real guest ABI roundtrip and preflight checks.
-The store-stats serialization test and all three existing LB keepalive tests
-also passed. Workspace check/Clippy, formatting, agent-doc consistency, SSA,
-metrics inventory, Pingora source policy, no-tracing, English-only, and the
-unchanged `edgion-tests` diff guard passed. Clippy retained one pre-existing
-`redundant_async_block` warning in the frozen DSL gRPC integration test.
-Independent read-only review returned LGTM. These checks do not claim a full
-integration-suite run.
+The plugin-owned runtime replacement removes delayed global module eviction.
+An owner drop cancels its background work; outstanding request leases can still
+retain their store and metric handle. Store destruction, not clearing another
+plugin's metric series, removes its contribution. Multiple private runtimes with
+one metrics label are an ordinary case under the new ownership model.
+See [owner shutdown](tick-quiescence-on-zero-reference-eviction.md).
 
-For `wasm-shared-data-eviction-grace-exceeds-residue-timeout`, focused current-tree
-verification passed the delayed module-eviction metric-handle test, all 23
-`cache_residue` tests, the local runner deadline contract test, and the Kubernetes
-residue-gate shell test. This focused evidence distinguishes bounded grace from a
-nonzero idle-entry signal that survives the validator deadline; it does not claim a
-fresh live EdgionPlugins integration sweep. The running-tick-callout case is covered
-separately by
-[tick-quiescence-on-zero-reference-eviction](tick-quiescence-on-zero-reference-eviction.md).
+Historical verification before the ownership replacement: all 21 selected
+`cargo test -p edgion-gateway --lib shared_data` tests, store-stats serialization,
+three LB keepalive tests, workspace check/Clippy, formatting, doc/SSA/metrics/
+Pingora/no-tracing/English-only guards passed. One pre-existing DSL integration
+Clippy warning remained. Independent review returned LGTM; no full integration
+run was claimed. Historical follow-up verification also passed the delayed
+module-eviction handle test, 23 cache-residue tests, local runner deadline contract,
+and Kubernetes residue-gate shell test. Those results concern the old 60-second
+grace and are not fresh verification of owner destruction.
+
+The 2026-09-23 ownership run passed all 226 selected Gateway Wasm tests, including
+both module-metric lifetime tests and the SharedData tests. The module-metric
+idle-eviction test covers overlapping same-source generations and distinct sources.
+The replacement ownership test establishes that owner drop releases unleased
+stores, and retained request leases keep their contribution until their last drop.
+The existing 75-second residue deadline remains an upper bound; it does not
+require introducing a new grace or delaying cancellation.
+The same ownership run also passed the live dynamic scenario, static Wasm suite,
+and mandatory cache-residue gate with no retained store or metric metadata leaks.
 
 Re-evaluate if recorder installation order, idle eviction, metrics rendering
 entry points, store accounting, or module ownership changes. Metrics must be
@@ -94,8 +95,8 @@ series under the cardinality guard remains subject to that guard's policy.
 
 - `wasm-shared-data-gauge-generation-lifecycle` — pending task created
   2026-09-07; corrected with mutation deltas and destruction symmetry.
-- `wasm-shared-data-eviction-grace-exceeds-residue-timeout` — the residue
-  deadline now exceeds the idle module eviction grace, with metric visibility
+- `wasm-shared-data-eviction-grace-exceeds-residue-timeout` — historically, the residue
+  deadline was raised above the then-current idle eviction grace, with metric visibility
   and fail-close regression coverage. Running-tick quiescence was closed by
   `wasm-tick-retention-exceeds-residue-deadline` (2026-09-23); its rule lives in
   [tick-quiescence-on-zero-reference-eviction](tick-quiescence-on-zero-reference-eviction.md).

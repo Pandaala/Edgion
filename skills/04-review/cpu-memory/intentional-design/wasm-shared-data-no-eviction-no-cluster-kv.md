@@ -12,13 +12,12 @@ knowledge_type: intentional-design
 ## Conclusion
 
 The wasm shared data store (`edgion-gateway/src/plugins/http/wasm/shared_data.rs`) deliberately
-has **no LRU/TTL eviction**, **no Redis/cluster-level backend**, **no cross-reload retention
-beyond content-identical cache-entry reuse**, and **no restart persistence**. Fill-up is handled
-fail-loud: writes beyond the 4MiB per-module cap return `TooLarge` and the guest decides.
+has **no LRU/TTL eviction**, **no Redis/cluster-level backend**, **no guaranteed cross-rebuild retention**, and **no restart persistence**. Fill-up is handled
+fail-loud: writes beyond the 4MiB per-store cap return `TooLarge` and the guest decides.
 
-Fix suggestions of the form "add LRU/TTL eviction to bound memory", "back shared data with
-Redis for multi-replica consistency", or "persist shared data across reloads/restarts" are
-**not accepted**.
+LRU/TTL eviction, transparent Redis backing, and restart persistence are outside
+this accepted storage model. Reconsider them against the concrete triggers below;
+the historical decision alone does not disprove a new defect or requirement.
 
 ## Core Rationale
 
@@ -28,8 +27,8 @@ Redis for multi-replica consistency", or "persist shared data across reloads/res
   NO TTL — data lives until the vm_id's last VM handle is destroyed. Our three caps
   (64KiB/value, 4MiB/module, host-side allocation bounds) are already strictly tighter than
   the reference implementation.
-- **Eviction under CAS is a correctness trap.** No host has ever evicted shared-data keys, so
-  no guest code defends against keys vanishing; the spec gives guests no eviction notification
+- **Eviction changes guest-visible CAS behavior.** The historical reference hosts
+  did not evict shared-data keys; the spec gives guests no eviction notification
   and no defined CAS semantics for a reborn key. The dominant workload (tick-fetched ruleset
   published for request hooks) would turn LRU into "denylist silently half-disappears" — a
   worse failure than a loud `TooLarge`.
@@ -39,12 +38,26 @@ Redis for multi-replica consistency", or "persist shared data across reloads/res
   cluster-level = `rate_limit_redis` native plugin or guest callouts (tick-callout is
   implemented and covers the poll-and-publish pattern). A Higress-style host extension is
   deferred until a real user scenario demands direct guest KV access, not rejected forever.
-- **Store lifetime bound to the module cache entry is the safe model.** Envoy's one public
-  shared-data incident (envoy#13835 / cpp-host#86, fixed by #114) was caused by store lifetime
-  outliving the VM; the fix converged on cleanup-at-destruction — structurally what Edgion
-  already does. Content-addressed scoping (cache_key) is tighter than Envoy's declared vm_id.
-  Reload with changed bytecode intentionally starts empty (old data may not fit new rule
-  formats); guests self-heal via first tick fetch.
+- **Store lifetime follows the private loaded entry of a configured plugin.** The
+  user-approved runtime redesign gives each constructed `WasmPlugin` a private
+  pool/shared-data/tick scope. Common `PluginGeneration` / `EntryCache` Arc reuse
+  shares one plugin across route and policy views; distinct stage/index entries
+  and resource generations do not share data even with identical bytecode.
+  Rebuilding configuration may reset data and repeat compilation. OCI refresh
+  publishes a fresh entry and store, while old request leases retain their old
+  entry until completion. This supersedes content-identical global cache reuse
+  and the 60-second eviction grace. Owner destruction explicitly cancels ticks;
+  a tick cannot postpone cancellation by retaining the entry itself. See
+  [runtime isolation](../../wasm/regression-guards/wasm-module-cache-key-runtime-config.md).
+  The earlier Envoy leak precedent (envoy#13835 / cpp-host#86, fixed by #114)
+  remains historical evidence for keeping store lifetime tied to live execution
+  state, not authority for a particular global cache or cross-plugin identity.
+
+The user explicitly accepted state reset and repeated cold compilation to simplify
+ownership and ensure final configuration correctness. This is a scoped design
+choice, not a universal requirement that all caches use instance identity.
+The replacement passed all 226 selected Gateway Wasm tests on 2026-09-23,
+including independent stores, configuration replacement, and retained request leases.
 
 ## Explicitly rejected alternatives
 
@@ -54,13 +67,14 @@ Redis for multi-replica consistency", or "persist shared data across reloads/res
 - Cross-restart persistence / cross-reload identity: no host precedent; stale-data and
   format-migration hazards exceed the cold-start gap that tick fetch already fills.
 
-## Related fixed finding (do not re-report)
+## Related historical correction
 
 Accounting originally counted only logical key+value bytes, excluding ~100–150B/entry
 structural overhead, so pathological many-tiny-key loads could inflate the 4MiB cap's real
 RSS by orders of magnitude. **Fixed 2026-07-12**: `ENTRY_OVERHEAD_BYTES = 128` is charged per
 entry on insert/delete (`shared_data.rs`), bounding entry count to ~30k and making the cap
-track real memory. Do not escalate the (now closed) overhead gap into an eviction requirement.
+track real memory. Recheck that accounting before treating the old overhead gap
+as evidence for eviction; a fresh defect remains reportable.
 
 ## Re-evaluation triggers
 
@@ -75,4 +89,4 @@ track real memory. Do not escalate the (now closed) overhead gap into an evictio
 - Analysis and sources: `tasks/wasm-followups/shared-data-storage-analysis.md` (2026-07-12).
 - Envoy leak precedent: envoyproxy/envoy#13835, proxy-wasm/proxy-wasm-cpp-host#86 (fixed #114).
 - Sibling multi-tenant trust note: `docs/en/.../wasm.md` shared data section (tick-fetched
-  data readable by all plugins sharing the module).
+  data readable by all references sharing the same constructed plugin).

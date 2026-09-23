@@ -71,15 +71,15 @@ EdgionBackend retains its separate withdrawal policy.
 | edgion_gateway_fips_policy_active | Gauge | gateway | module_enabled (true/false) | self | 1 = the approved FIPS cipher/curve profile is in effect on downstream listeners; the label records the BoringSSL FIPS-mode signal | - |
 | edgion_wasm_module_load_total | Counter | gateway | module, result (ok/error) | self | Wasm module load attempt outcome; every Wasm `module` label uses the source descriptor, with URL sources represented by a credential-free, query-stable identity capped at 96 bytes | - |
 | edgion_wasm_module_compile_duration_ms | Histogram | gateway | module | self | Wall-clock duration of one Wasm `Module::new` compilation | - |
-| edgion_wasm_module_evicted_total | Counter | gateway | module | self | Wasm module-cache entry eviction (refcount reached zero and the grace period elapsed) | - |
+| edgion_wasm_module_released_total | Counter | gateway | module | self | Compiled Wasm runtime generation released after its last holder exits | - |
 | edgion_wasm_instance_instantiate_total | Counter | gateway | module | self | Fresh Wasm VM instantiation (instance pool miss) | - |
 | edgion_wasm_instance_discard_total | Counter | gateway | module, reason (poisoned/over_capacity) | self | Wasm VM discarded instead of returned to the pool | - |
 | edgion_wasm_pool_size | Gauge | gateway | module | self | Current pooled Wasm instance count for a module | - |
 | edgion_wasm_hook_duration_ms | Histogram | gateway | module, phase (request_headers/request_body/response_headers/response_body/http_call_response/tick) | self | Duration of one Wasm guest hook invocation | - |
 | edgion_wasm_trap_total | Counter | gateway | module, phase | self | Wasm guest trap (or protocol violation that poisons the lease) | - |
 | edgion_wasm_fail_mode_total | Counter | gateway | module, reason, mode (open/close) | self | Fail-mode decision taken by the Wasm plugin host | - |
-| edgion_wasm_callout_total | Counter | gateway | module, result (ok/error/denied/over_limit/tick_config_conflict) | self | Guest-dispatched HTTP callout outcome | - |
-| edgion_wasm_modules_loaded | Gauge | gateway | none | self | Number of compiled Wasm modules currently held in the global cache (sizing input for pooling-allocator capacity) | - |
+| edgion_wasm_callout_total | Counter | gateway | module, result (ok/error/denied/over_limit) | self | Guest-dispatched HTTP callout outcome | - |
+| edgion_wasm_modules_loaded | Gauge | gateway | none | self | Live compiled Wasm runtime generations, including initialization and outstanding old leases | - |
 | edgion_wasm_shared_data_bytes | Gauge | gateway | module | self | Sum of accounted bytes across all live stores sharing a module label, including overlapping generations; zero after the last store drops (4MiB cap per store, not per series) | - |
 | edgion_wasm_body_pause_unsupported_total | Counter | gateway | module | self | A Wasm guest returned `Action::Pause` from the response-body hook, which this host cannot honor (per-chunk window, not a cumulative buffer) — the guest silently observes only the current chunk | alert on this counter (no fixed threshold) |
 | edgion_gateway_plugin_policy_blocked_total | Counter | gateway | plugin | self | A request was rejected because its plugin chain contains an entry blocked by the captured GatewayClass policy | - |

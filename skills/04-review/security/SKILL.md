@@ -35,7 +35,7 @@ before applying a decision to current code.
 - [L4 Relay Idle Timeout — NOT-AN-ISSUE](regression-guards/l4-relay-idle-timeout.md)
 - [Proxy-Wasm Runtime Hardening](regression-guards/proxy-wasm-runtime-hardening.md)
 - [`lint_rbac_policy` dangerous-grant check covers `watch` — FIXED (m1-01, 2026-05-29)](regression-guards/rbac-lint-watch-dangerous-grant.md)
-- [Wasm source-keyed module cache bypasses per-resource SHA verification — FIXED](regression-guards/wasm-cache-key-includes-sha256-pin.md)
+- [Each Wasm plugin runtime verifies its configured integrity pin](regression-guards/wasm-cache-key-includes-sha256-pin.md)
 
 ## Review evidence
 
