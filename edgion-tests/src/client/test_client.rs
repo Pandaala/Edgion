@@ -40,6 +40,7 @@ const EXPECTED_DYNAMIC_SCENARIO_IDS: &[&str] = &[
     "AiBackendPolicyIntegration",
     "AiBackendSecretRotation",
     "AiBackendWeighted",
+    "AiGuardOrderingDynamic",
     "GatewayDynamic",
     "DslDynamic",
     "DslTerminateDynamic",
@@ -1509,9 +1510,11 @@ fn dynamic_port_contract(id: &str) -> Result<Option<(&'static str, port_config::
         "HttpRouteNamedParameterPrecedence" => Some(("HTTPRoute/NamedParameterPrecedence", PortKind::Http)),
         "HttpRoutePathPrefixTrailingSlash" => Some(("HTTPRoute/Basic", PortKind::Http)),
         "PluginPolicyDynamic" => Some(("PluginPolicy", PortKind::Http)),
-        "AiBackendLifecycle" | "AiBackendPolicyIntegration" | "AiBackendSecretRotation" | "AiBackendWeighted" => {
-            Some(("EdgionBackend/SingleProvider", PortKind::Http))
-        }
+        "AiBackendLifecycle"
+        | "AiBackendPolicyIntegration"
+        | "AiBackendSecretRotation"
+        | "AiBackendWeighted"
+        | "AiGuardOrderingDynamic" => Some(("EdgionBackend/SingleProvider", PortKind::Http)),
         "AllEndpointStatusTls"
         | "LinkSysProviderReplacement"
         | "EncryptedActiveHealthChecks"

@@ -77,9 +77,23 @@ Historical verification on 2026-09-10, before scoped-policy publication:
 - Independent read-only review: LGTM. No full workspace test suite or real
   integration run was performed.
 
-Existing integration files are frozen for this task. The remaining real
-Controller-to-Gateway hot-reload and provider-observation coverage is tracked in
-`tasks/todo/ai-guard-ordering-hot-reload-integration.md`.
+The source fix left integration files frozen. The D0082 follow-up now uses
+`edgion-tests/src/client/dynamic/scenarios/ai_guard_ordering.rs` and its
+`EdgionPlugins/AiGuardOrdering/DynamicTest` fixtures to publish a valid
+`requestPlugins` list, reverse its AiGuard/AiProxy entries, then restore it.
+The Controller `Accepted` condition, Gateway HTTP response, and the existing
+per-request provider counter are checked in each generation. The invalid
+generation covers a chat request, a request whose condition skips AiGuard,
+and an ordinary non-chat request. Provider observations retain counts only
+and are drained by the scenario; no request body or credential is stored.
+
+Fresh local integration verification on 2026-09-23 used the shared
+Controller/Gateway topology with `EdgionBackend/SingleProvider` loaded and ran
+`target/debug/test_client -g --dynamic-scenario AiGuardOrderingDynamic`: passed.
+This establishes the local HTTP hot-reload boundary, including zero provider
+calls for the rejected generation and recovery after restoring valid order.
+It does not establish Kubernetes-mode behavior or replace the full integration
+sweep. `target/debug/test_client --list-dynamic-scenarios` also passed.
 
 Re-evaluate when the shared validator emits different failure categories,
 publication retention policy changes, request-stage gate precedence changes,
@@ -88,9 +102,9 @@ or ordering support extends across resources.
 The 2026-09-11 migration re-ran the full plugin-store module: 36 passed, with
 policy tests using actual EGC compilation/publication instead of entry stamps.
 See [scoped policy publication](scoped-policy-runtime-publication.md) for current
-ownership and the remaining final-review/integration boundary.
+ownership and related scoped-policy boundaries.
 
 ## Resolution references
 
 - D0082 / `fail-closed-ai-guard-proxy-order-violations` — fixed and verified
-  2026-09-10; integration coverage remains separately tracked above.
+  2026-09-10; the hot-reload integration follow-up passed locally on 2026-09-23.

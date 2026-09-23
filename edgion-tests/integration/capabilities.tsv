@@ -13,3 +13,4 @@ dynamic	BodyDynamic	body-buffering
 dynamic	RequestMirrorReferenceGrant	body-buffering
 dynamic	WafDynamic	body-buffering
 dynamic	PluginPolicyDynamic	body-buffering
+dynamic	AiGuardOrderingDynamic	body-buffering
