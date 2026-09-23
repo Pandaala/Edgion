@@ -25,8 +25,9 @@ calls. The Kubernetes runner invokes the dynamic helper in full-run mode and
 fails on an incomplete result protocol. The helper restores each scenario's
 declared reset directory, waits for the named primary resource to reach the
 Gateway, and invokes `test_client --dynamic-scenario <id>` in the client pod.
-The source task `k8s-dynamic-scenario-inventory-parity` recorded six missing
-dynamic IDs. At implementation time, the live inventory had twelve gaps; a
+The source tasks `k8s-dynamic-scenario-inventory-parity` and
+`complete-k8s-dynamic-scenario-parity` recorded missing dynamic IDs. At
+implementation time, the live inventory had twelve gaps; a
 concurrent HEAD update also introduced `PreflightPolicyHotReload`. The execution
 manifest now includes those supported scenarios. The static
 `EdgionPlugins/DslTerminate` selection was also added to the Kubernetes suite
@@ -44,6 +45,9 @@ fake processor. These rows do not represent executed Kubernetes assertions.
 The pre-existing `EncryptedActiveHealthChecks` exception has a separate local
 certificate and listener boundary.
 
+The exact fixture constraints and removal conditions are recorded in
+[Kubernetes dynamic fixture boundaries](../compatibility-constraints/kubernetes-dynamic-fixture-boundaries.md).
+
 ## Verification and re-evaluation
 
 `validate_suite_parity.sh`, its regression test, the dynamic helper regression
@@ -59,3 +63,5 @@ interfaces. Re-run inventory parity whenever either runner or manifest changes.
 
 - `k8s-dynamic-scenario-inventory-parity` — confirmed test coverage gap; supported
   scenarios registered and narrow unsupported boundaries documented.
+- `complete-k8s-dynamic-scenario-parity` — the later inventory pass also
+  registered supported Kubernetes fixtures and the static DSL terminate suite.

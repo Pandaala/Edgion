@@ -281,6 +281,16 @@ def parse_scope_exceptions(text, project_root, canonical, covered):
             "symbol": "Scenario",
             "tokens": ("docker", "OpenLDAP"),
         },
+        "loopback_only_external_fixture": {
+            "path": "edgion-tests/integration/fixtures/ext_proc_external/main.go",
+            "symbol": "validateListenAddress",
+            "tokens": ('host != "127.0.0.1"', "must use literal 127.0.0.1"),
+        },
+        "status_subresource_fixture": {
+            "path": "config/crd/edgion-crd/edgion_acme_crd.yaml",
+            "symbol": "activeChallenges",
+            "tokens": ("/status subresource", "subresources:", "status: {}"),
+        },
     }
     result = {name: set() for name in canonical}
     seen = set()

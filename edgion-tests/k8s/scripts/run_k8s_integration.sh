@@ -2596,7 +2596,7 @@ run_all_selected_suites() {
     "EdgionPlugins/Wasm|EdgionPlugins|Wasm"
     "EdgionPlugins/Dsl|EdgionPlugins|Dsl"
     "EdgionPlugins/Dsl|EdgionPlugins|DslGrpcError"
-    "EdgionPlugins/Dsl|EdgionPlugins|DslTerminate"
+    "EdgionPlugins/DslTerminateContract|EdgionPlugins|DslTerminate"
     "EdgionPlugins/DslBody|EdgionPlugins|DslBody"
     "EdgionPlugins/EdgionConfigDataManaged|EdgionPlugins|EdgionConfigDataManaged"
     "EdgionPlugins/GeoRestriction|EdgionPlugins|GeoRestriction"

@@ -24,6 +24,7 @@ use tokio::net::TcpStream;
 use tokio::time::{sleep, timeout};
 
 const EGC_NAME: &str = "l4-timeout-egc";
+const K8S_GATEWAY_HOST: &str = "l4-timeout-gateway.edgion-system.svc.cluster.local";
 const SNI: &str = "l4-timeout.sandbox.example.com";
 const TCP_PORT: u16 = 31978;
 const TERMINATE_PORT: u16 = 31979;
@@ -116,7 +117,12 @@ static PHASES: &[PhaseSuite] = &[PhaseSuite {
 }];
 
 async fn connect_raw(ctx: &TestContext, port: u16) -> Result<TcpStream> {
-    let addr = format!("{}:{port}", ctx.target_host);
+    let host = if std::env::var("EDGION_TEST_K8S_MODE").as_deref() == Ok("true") {
+        K8S_GATEWAY_HOST
+    } else {
+        &ctx.target_host
+    };
+    let addr = format!("{host}:{port}");
     let stream = timeout(SETUP_TIMEOUT, TcpStream::connect(&addr))
         .await
         .with_context(|| format!("connect to {addr} timed out"))?

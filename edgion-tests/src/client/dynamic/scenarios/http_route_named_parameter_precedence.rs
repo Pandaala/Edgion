@@ -194,8 +194,12 @@ static PHASES: &[PhaseSuite] = &[
 
 async fn delete_resources(ctx: &ScenarioCtx, resources: &[(&str, &str)]) -> Result<()> {
     let client = crate::dynamic::apply::build_client(&ctx.controller_url)?;
+    let k8s_mode = std::env::var("EDGION_TEST_K8S_MODE").as_deref() == Ok("true");
     let mut failures = Vec::new();
     for &(kind, name) in resources {
+        if k8s_mode && kind == "EndpointSlice" {
+            continue;
+        }
         match client.delete(kind, Some("edgion-test"), name).await {
             Ok(response) if response.status().is_success() || response.status().as_u16() == 404 => {}
             Ok(response) => failures.push(format!("{kind}/{name}: HTTP {}", response.status())),
@@ -270,7 +274,12 @@ fn run(ctx: ScenarioCtx) -> ScenarioRunFuture {
             ctx.wait_phase(SCENARIO, "absent", Duration::from_secs(20)).await?;
             ctx.apply_dir("initial/").await?;
             ctx.wait_phase(SCENARIO, "initial", Duration::from_secs(20)).await?;
-            ctx.apply_dir("updated/").await?;
+            let updated_path = if std::env::var("EDGION_TEST_K8S_MODE").as_deref() == Ok("true") {
+                "updates/updated/"
+            } else {
+                "updated/"
+            };
+            ctx.apply_dir(updated_path).await?;
             ctx.wait_phase(SCENARIO, "updated", Duration::from_secs(20)).await?;
             ctx.apply_dir("initial/").await?;
             ctx.wait_phase(SCENARIO, "initial", Duration::from_secs(20)).await

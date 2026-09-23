@@ -21,6 +21,10 @@ before applying a decision to current code.
 - [`/api/v1/debug/store-stats` path prefix vs testing-mode gate — ACCEPTED-TRADEOFF](intentional-design/store-stats-testing-router-naming.md)
 - [Testing-router error-body enumeration & no-auth on `create_testing_router` — ACCEPTED-TRADEOFF](intentional-design/testing-router-error-body-enumeration.md)
 
+## Compatibility constraints
+
+- [Kubernetes dynamic fixture boundaries](compatibility-constraints/kubernetes-dynamic-fixture-boundaries.md)
+
 ## Regression guards
 
 - [Kubernetes dynamic scenario inventory parity](regression-guards/kubernetes-dynamic-scenario-inventory-parity.md)

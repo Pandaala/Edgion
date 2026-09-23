@@ -1,0 +1,19 @@
+# Expose only this scenario's listeners without changing the shared Gateway Service.
+apiVersion: v1
+kind: Service
+metadata:
+  name: l4-timeout-gateway
+  namespace: edgion-system
+spec:
+  selector:
+    app: edgion-gateway
+  ports:
+    - name: tcp
+      port: 31978
+      targetPort: 31978
+    - name: terminate
+      port: 31979
+      targetPort: 31979
+    - name: passthrough
+      port: 31980
+      targetPort: 31980

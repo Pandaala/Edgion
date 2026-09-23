@@ -245,13 +245,25 @@ async fn cleanup(ctx: &ScenarioCtx) -> Result<()> {
 
 fn run(ctx: ScenarioCtx) -> ScenarioRunFuture {
     Box::pin(async move {
+        let k8s_mode = std::env::var("EDGION_TEST_K8S_MODE").as_deref() == Ok("true");
         let result: Result<()> = async {
             cleanup(&ctx).await?;
-            ctx.apply_dir("initial/").await?;
+            ctx.apply_dir(if k8s_mode { "DynamicTest/initial/" } else { "initial/" })
+                .await?;
             ctx.wait_phase(SCENARIO, "initial", TIMEOUT).await?;
-            ctx.apply_dir("invalid/").await?;
+            ctx.apply_dir(if k8s_mode {
+                "DynamicTest/updates/invalid/"
+            } else {
+                "invalid/"
+            })
+            .await?;
             ctx.wait_phase(SCENARIO, "invalid", TIMEOUT).await?;
-            ctx.apply_dir("repaired/").await?;
+            ctx.apply_dir(if k8s_mode {
+                "DynamicTest/updates/repaired/"
+            } else {
+                "repaired/"
+            })
+            .await?;
             ctx.wait_phase(SCENARIO, "repaired", TIMEOUT).await
         }
         .await;

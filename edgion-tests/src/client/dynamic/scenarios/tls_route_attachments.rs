@@ -23,6 +23,26 @@ const PORT_B: u16 = 31976;
 const PHASE_TIMEOUT: Duration = Duration::from_secs(30);
 const IO_TIMEOUT: Duration = Duration::from_secs(3);
 
+fn k8s_mode() -> bool {
+    std::env::var("EDGION_TEST_K8S_MODE").as_deref() == Ok("true")
+}
+
+async fn apply_initial(ctx: &ScenarioCtx) -> Result<()> {
+    // Kubernetes owns creationTimestamp. Recreate the competitor after the
+    // target so the older target wins their shared hostname on port A.
+    if k8s_mode() {
+        ctx.delete_resources("delete/competitor.txt").await?;
+    }
+    ctx.apply_dir("initial").await?;
+    if k8s_mode() {
+        // Kubernetes creationTimestamp has second precision. A same-second
+        // creation would fall back to name ordering and lose the regression.
+        tokio::time::sleep(Duration::from_millis(1100)).await;
+        ctx.apply_dir("../bootstrap/TLSRoute_competitor.yaml").await?;
+    }
+    Ok(())
+}
+
 #[derive(Clone, Copy)]
 enum State {
     Absent,
@@ -37,8 +57,8 @@ enum State {
 fn connector() -> Result<tokio_rustls::TlsConnector> {
     // Both HTTPS backends belong to test_server; 30052 requires this existing
     // client identity, while 30051 simply does not request it.
-    let cert_dir = if std::env::var("EDGION_TEST_K8S_MODE").as_deref() == Ok("true") {
-        Path::new("edgion-tests/certs/mtls").to_path_buf()
+    let cert_dir = if k8s_mode() {
+        Path::new("/usr/local/edgion/edgion-tests/certs/mtls").to_path_buf()
     } else {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("certs/mtls")
     };
@@ -337,7 +357,7 @@ fn run(ctx: ScenarioCtx) -> ScenarioRunFuture {
             ctx.apply_dir("../bootstrap").await?;
             delete_target(&ctx).await?;
             ctx.wait_phase(SCENARIO, "absent", PHASE_TIMEOUT).await?;
-            ctx.apply_dir("initial").await?;
+            apply_initial(&ctx).await?;
             ctx.wait_phase(SCENARIO, "initial", PHASE_TIMEOUT).await?;
             // Keep the broad parent in place while only Gateway listener identity changes.
             ctx.apply_dir("updates/broad-parent").await?;
@@ -345,7 +365,7 @@ fn run(ctx: ScenarioCtx) -> ScenarioRunFuture {
             ctx.apply_dir("updates/rename").await?;
             ctx.wait_phase(SCENARIO, "listener_renamed", PHASE_TIMEOUT).await?;
             ctx.apply_dir("../bootstrap/Gateway_a.yaml").await?;
-            ctx.apply_dir("initial").await?;
+            apply_initial(&ctx).await?;
             ctx.wait_phase(SCENARIO, "initial", PHASE_TIMEOUT).await?;
             for (update, phase) in [
                 ("updates/parent", "parent_removed"),
@@ -355,12 +375,12 @@ fn run(ctx: ScenarioCtx) -> ScenarioRunFuture {
                 ctx.apply_dir(update).await?;
                 ctx.wait_phase(SCENARIO, phase, PHASE_TIMEOUT).await?;
                 ctx.apply_dir("../bootstrap/Gateway_a.yaml").await?;
-                ctx.apply_dir("initial").await?;
+                apply_initial(&ctx).await?;
                 ctx.wait_phase(SCENARIO, "initial", PHASE_TIMEOUT).await?;
             }
             delete_target(&ctx).await?;
             ctx.wait_phase(SCENARIO, "absent", PHASE_TIMEOUT).await?;
-            ctx.apply_dir("initial").await?;
+            apply_initial(&ctx).await?;
             ctx.wait_phase(SCENARIO, "initial", PHASE_TIMEOUT).await
         }
         .await;
@@ -368,6 +388,9 @@ fn run(ctx: ScenarioCtx) -> ScenarioRunFuture {
         let cleanup = async {
             ctx.apply_dir("../bootstrap/Gateway_a.yaml").await?;
             delete_target(&ctx).await?;
+            if k8s_mode() {
+                ctx.apply_dir("../bootstrap/TLSRoute_competitor.yaml").await?;
+            }
             ctx.wait_phase(SCENARIO, "absent", PHASE_TIMEOUT).await
         }
         .await;
