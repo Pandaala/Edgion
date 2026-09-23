@@ -14,6 +14,6 @@
 | D0010 | resolved-with-D0009 | `skills/04-review/routing/regression-guards/retry-budget-owns-pingora-loop-capacity.md` | B0056 |
 | D0011 | coverage-added | `skills/04-review/cors/regression-guards/preflight-policy-egc-hot-reload.md` | B0065 |
 | D0012 | resolved | `skills/04-review/listeners/regression-guards/egc-runtime-snapshot-publication.md` | B0066 |
-| D0013 | ready-after-campaign-freeze | `tasks/todo/add-duplicate-host-policy-hot-reload-integration-coverage.md` | B0066 |
+| D0013 | coverage-added | `skills/04-review/http1/regression-guards/duplicate-host.md` | B0066 |
 | D0014 | resolved | `skills/04-review/tls/regression-guards/edgion-tls-serving-chain-install.md` | B0075 |
 | D0015 | ready-for-separate-task | `tasks/todo/update-stale-mtls-config-helper-knowledge.md` | B0075 |
