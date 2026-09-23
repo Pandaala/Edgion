@@ -1,0 +1,37 @@
+{
+  "schema": "edgion-waf-acceptance/v1",
+  "profile": "waf-dynamic-production-v1",
+  "corpus_revision": "repository-tracked-2026-09-23",
+  "profiles": [
+    {
+      "name": "initial",
+      "path": "edgion-tests/integration/conf/EdgionPlugins/Waf/DynamicTest/initial/EdgionPlugins_waf-dynamic.yaml",
+      "sha256": "996ff05af40f26757c996595cd62639f69dbddaeeb6aa582f98522db169d2a48",
+      "rule_ids": [1001, 1002, 1003]
+    },
+    {
+      "name": "updated",
+      "path": "edgion-tests/integration/conf/EdgionPlugins/Waf/DynamicTest/updates/to_v2/EdgionPlugins_waf-dynamic.yaml",
+      "sha256": "0341533cc4a53eea1449be11c750baa61c89c3974b8c170e0516e030f6b21683",
+      "rule_ids": [2001, 2002]
+    },
+    {
+      "name": "detection",
+      "path": "edgion-tests/integration/conf/EdgionPlugins/Waf/DynamicTest/updates/to_detection/EdgionPlugins_waf-dynamic.yaml",
+      "sha256": "7e8fb8feb000851f411984de78faf738ee8810e52e7c698f46ba81aa2c6ca078",
+      "rule_ids": [2501]
+    }
+  ],
+  "cases": [
+    {"id": "initial-allow", "profile": "initial", "version": "v1", "body": "clean", "response_deny": false, "expected_status": 200, "expected_rule_id": null},
+    {"id": "initial-header-deny", "profile": "initial", "version": "v2", "body": "clean", "response_deny": false, "expected_status": 403, "expected_rule_id": 1001},
+    {"id": "initial-body-deny", "profile": "initial", "version": "v1", "body": "blocked", "response_deny": false, "expected_status": 406, "expected_rule_id": 1002},
+    {"id": "initial-response-deny", "profile": "initial", "version": "v1", "body": "clean", "response_deny": true, "expected_status": 403, "expected_rule_id": 1003},
+    {"id": "updated-allow", "profile": "updated", "version": "v2", "body": "clean", "response_deny": false, "expected_status": 200, "expected_rule_id": null},
+    {"id": "updated-header-deny", "profile": "updated", "version": "v1", "body": "clean", "response_deny": false, "expected_status": 451, "expected_rule_id": 2001},
+    {"id": "updated-body-deny", "profile": "updated", "version": "v2", "body": "blocked", "response_deny": false, "expected_status": 406, "expected_rule_id": 2002},
+    {"id": "detection-allow", "profile": "detection", "version": "v1", "body": "clean", "response_deny": false, "expected_status": 200, "expected_rule_id": null},
+    {"id": "detection-match", "profile": "detection", "version": "v1", "body": "blocked", "response_deny": false, "expected_status": 200, "expected_rule_id": 2501}
+  ],
+  "exclusions": []
+}

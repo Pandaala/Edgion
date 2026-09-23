@@ -1,0 +1,34 @@
+name: WAF production acceptance
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+jobs:
+  acceptance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Rust toolchain
+        uses: ./.github/actions/setup-rust
+        with:
+          toolchain: "1.96.1"
+          install-deps: "true"
+          cache-enabled: "true"
+          cache-key-prefix: "cargo-waf-acceptance"
+
+      - name: Verify selected production rules and Gateway behavior
+        run: bash cicd/checks/run_waf_production_acceptance.sh
+
+      - name: Upload acceptance reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: waf-production-acceptance
+          path: target/waf-production-acceptance/
+          if-no-files-found: warn

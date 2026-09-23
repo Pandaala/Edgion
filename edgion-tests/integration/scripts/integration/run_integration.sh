@@ -1839,6 +1839,9 @@ run_all_tests() {
                 elif [ "$G_ITEM" = "RetainedListenerHandles" ]; then
                     run_test "Dyn_RetainedListenerHandles" \
                         "${EDGION_TEST_CLIENT_BIN} -g --dynamic-scenario RetainedListenerHandles" || test_failed=true
+                elif [ "$G_ITEM" = "WafDynamic" ]; then
+                    run_test "Dyn_WafDynamic" \
+                        "${EDGION_TEST_CLIENT_BIN} -g --dynamic-scenario WafDynamic" || test_failed=true
                 else
                     # Replace / with _ in item name for log file
                     local item_safe=$(echo "$G_ITEM" | tr '/' '_')
@@ -2460,7 +2463,9 @@ main() {
                 suites="${base_suites},LinkSys/${G_ITEM}"
             fi
         elif [ -n "$G_ITEM" ]; then
-            if [ "$G_RESOURCE" = "Gateway" ] && [ "$G_ITEM" = "TLS/BackendTLS" ]; then
+            if [ "$G_RESOURCE" = "Gateway" ] && [ "$G_ITEM" = "WafDynamic" ]; then
+                suites="${base_suites},EdgionPlugins/base,EdgionPlugins/Waf/DynamicTest"
+            elif [ "$G_RESOURCE" = "Gateway" ] && [ "$G_ITEM" = "TLS/BackendTLS" ]; then
                 suites="${base_suites},HTTPRoute/Backend/BackendTLS"
             elif [ "$G_RESOURCE" = "Gateway" ] && [ "$G_ITEM" = "TLS/BackendTLSSAN" ]; then
                 suites="${base_suites},HTTPRoute/Backend/BackendTLSSAN,HTTPRoute/Backend/BackendTLS"

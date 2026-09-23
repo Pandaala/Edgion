@@ -18,6 +18,7 @@ The repo currently has the following workflows under `.github/workflows/`:
 | Workflow | Trigger | Purpose |
 |----------|---------|---------|
 | `ci.yml` | `push` / `pull_request` to `main` / `master` | Rust check / fmt / clippy / test + agent-docs gate |
+| `waf-production-acceptance.yml` | `push` / `pull_request` to `main` / `master`, manual | Strict selected WAF profile report and Gateway wire/hot-reload acceptance |
 | `check-english-only.yml` | `pull_request` + `push` to `main` | Runs `./cicd/checks/check_english_only.sh` — the English-only gate the project relies on |
 | `check-gateway-no-tracing.yml` | `pull_request` + `push` to `main` | Runs `./cicd/checks/check_gateway_no_tracing.py` — forbids unapproved `tracing::*` macros on data-plane hot paths (function-level) |
 | `check-ssa-force.yml` | repository workflow trigger | Ensures every server-side apply uses forced `PatchParams`, subject to the script allowlist |
