@@ -204,6 +204,11 @@ async fn write_terminate_reply(
     reply: Option<Bytes>,
     header_ops: Vec<crate::PendingHeaderOp>,
 ) {
+    let (status, reply) = if edgion_resources::http_status::is_valid_final_http_status(status) {
+        (status, reply)
+    } else {
+        (500, None)
+    };
     // Contract obligation: when a FINAL response is already committed
     // downstream (an early upstream response raced the upload), observe it
     // and abandon — writing here would splice the terminate body into the
@@ -401,6 +406,37 @@ mod tests {
         client.read_to_end(&mut wire).await.unwrap();
         let body_start = wire.windows(4).position(|bytes| bytes == b"\r\n\r\n").unwrap() + 4;
         assert_eq!(&wire[body_start..], body.as_ref());
+    }
+
+    #[tokio::test]
+    async fn invalid_terminate_status_uses_a_bodyless_final_500() {
+        let (mut client, server) = tokio::io::duplex(4096);
+        let stream: pingora_core::protocols::Stream = Box::new(server);
+        let mut session = Session::new_h1(stream);
+        client
+            .write_all(b"POST / HTTP/1.1\r\nHost: test\r\nContent-Length: 1\r\n\r\n")
+            .await
+            .unwrap();
+        session.read_request().await.unwrap();
+        let mut ctx = EdgionHttpContext::default();
+
+        write_terminate_reply(
+            &mut session,
+            &mut ctx,
+            100,
+            None,
+            Some(Bytes::from_static(b"internal detail")),
+            Vec::new(),
+        )
+        .await;
+
+        assert_eq!(ctx.final_downstream_status(), Some(500));
+        drop(session);
+        let mut wire = Vec::new();
+        client.read_to_end(&mut wire).await.unwrap();
+        assert!(!wire
+            .windows(b"internal detail".len())
+            .any(|window| window == b"internal detail"));
     }
 
     #[tokio::test]

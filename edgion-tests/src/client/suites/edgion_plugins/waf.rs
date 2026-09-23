@@ -11,7 +11,7 @@ async fn send_waf_request(
     ctx: &TestContext,
     version: &str,
     body: Option<&str>,
-    invalid_response_status: bool,
+    response_deny: bool,
     trace_id: Option<&str>,
 ) -> Result<reqwest::Response, String> {
     let url = format!("http://{}:{}/test/waf-dynamic", ctx.target_host, ctx.http_port);
@@ -23,8 +23,8 @@ async fn send_waf_request(
             ctx.http_client.get(&url)
         };
         request = request.header("host", HOST).header("x-waf-version", version);
-        if invalid_response_status {
-            request = request.header("x-waf-invalid-status", "trigger");
+        if response_deny {
+            request = request.header("x-waf-response-deny", "trigger");
         }
         if let Some(trace_id) = trace_id {
             request = request
@@ -73,7 +73,7 @@ fn request_case(
     })
 }
 
-async fn check_invalid_response_status(ctx: &TestContext, trace: &str) -> Result<(), String> {
+async fn check_response_stage_deny(ctx: &TestContext, trace: &str) -> Result<(), String> {
     let response = send_waf_request(ctx, "v1", None, true, Some(trace)).await;
     let mut failures = Vec::new();
     match response {
@@ -81,13 +81,13 @@ async fn check_invalid_response_status(ctx: &TestContext, trace: &str) -> Result
             let status = response.status().as_u16();
             match response.text().await {
                 Ok(body) => {
-                    if status != 500 {
-                        failures.push(format!("expected wire status 500, got {status}; body={body:?}"));
+                    if status != 403 {
+                        failures.push(format!("expected wire status 403, got {status}; body={body:?}"));
                     }
                     for upstream_marker in ["Server: 0.0.0.0:30001", "Path: /test/waf-dynamic"] {
                         if body.contains(upstream_marker) {
                             failures.push(format!(
-                                "invalid WAF status leaked the upstream response marker {upstream_marker:?}; body={body:?}"
+                                "WAF response denial leaked the upstream response marker {upstream_marker:?}; body={body:?}"
                             ));
                         }
                     }
@@ -101,13 +101,13 @@ async fn check_invalid_response_status(ctx: &TestContext, trace: &str) -> Result
     match ctx.access_log_client().get_access_log_with_retry(trace, 15, 200).await {
         Ok(access_log) => {
             let upstreams = access_log.data["backend_context"]["upstreams"].as_array();
-            if access_log.status_code() != Some(500)
+            if access_log.status_code() != Some(403)
                 || upstreams
                     .is_none_or(|upstreams| upstreams.len() != 1 || upstreams[0]["status"].as_u64() != Some(200))
                 || access_log.data["waf"]["outcome"].as_str() != Some("blocked")
                 || access_log.data["waf"]["intervention"]["phase"].as_str() != Some("response_headers")
                 || access_log.data["waf"]["intervention"]["rule_id"].as_u64() != Some(1003)
-                || access_log.data["waf"]["intervention"]["status"].as_u64() != Some(100)
+                || access_log.data["waf"]["intervention"]["status"].as_u64() != Some(403)
             {
                 failures.push(format!("unexpected access log: {}", access_log.data));
             }
@@ -122,7 +122,7 @@ async fn check_invalid_response_status(ctx: &TestContext, trace: &str) -> Result
     }
 }
 
-async fn cleanup_invalid_status_access_log(ctx: &TestContext, trace: &str) -> Result<(), String> {
+async fn cleanup_response_deny_access_log(ctx: &TestContext, trace: &str) -> Result<(), String> {
     let client = ctx.access_log_client();
     let mut last_error = None;
     for attempt in 0..15 {
@@ -136,26 +136,26 @@ async fn cleanup_invalid_status_access_log(ctx: &TestContext, trace: &str) -> Re
         }
     }
     match last_error {
-        Some(error) => Err(format!("WAF invalid-status access-log cleanup failed: {error}")),
+        Some(error) => Err(format!("WAF response-denial access-log cleanup failed: {error}")),
         None => Ok(()),
     }
 }
 
-fn invalid_response_status_case() -> TestCase {
+fn response_stage_deny_case() -> TestCase {
     TestCase::new(
-        "waf_response_invalid_status_fails_closed",
-        "phase-3 WAF status 100 fails closed without forwarding the upstream response",
+        "waf_response_stage_denial_replaces_upstream",
+        "phase-3 WAF denial replaces the upstream response with 403",
         |ctx: TestContext| {
             Box::pin(async move {
                 let start = Instant::now();
-                let trace = format!("waf-invalid-response-status-{}", uuid::Uuid::new_v4());
-                let result = tokio::time::timeout(Duration::from_secs(15), check_invalid_response_status(&ctx, &trace))
+                let trace = format!("waf-response-deny-{}", uuid::Uuid::new_v4());
+                let result = tokio::time::timeout(Duration::from_secs(15), check_response_stage_deny(&ctx, &trace))
                     .await
-                    .unwrap_or_else(|_| Err("WAF invalid-status assertions exceeded their deadline".to_string()));
+                    .unwrap_or_else(|_| Err("WAF response-denial assertions exceeded their deadline".to_string()));
                 let cleanup =
-                    tokio::time::timeout(Duration::from_secs(5), cleanup_invalid_status_access_log(&ctx, &trace))
+                    tokio::time::timeout(Duration::from_secs(5), cleanup_response_deny_access_log(&ctx, &trace))
                         .await
-                        .map_err(|_| "WAF invalid-status access-log cleanup exceeded its deadline".to_string())
+                        .map_err(|_| "WAF response-denial access-log cleanup exceeded its deadline".to_string())
                         .and_then(|result| result);
                 match (result, cleanup) {
                     (Ok(()), Ok(())) => TestResult::passed(start.elapsed()),
@@ -201,7 +201,7 @@ impl TestSuite for WafDynamicInitialTestSuite {
                 Some("blocked"),
                 406,
             ),
-            invalid_response_status_case(),
+            response_stage_deny_case(),
         ]
     }
 }

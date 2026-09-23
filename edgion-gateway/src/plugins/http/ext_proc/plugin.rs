@@ -641,7 +641,7 @@ pub(super) fn immediate_action(
     let Some(status) = imm.status.as_ref().map(|status| status.code) else {
         return Err("missing immediate HTTP status");
     };
-    if !(200..=599).contains(&status) {
+    if !u16::try_from(status).is_ok_and(edgion_resources::http_status::is_valid_final_http_status) {
         return Err("non-final immediate HTTP status");
     }
     let grpc_status = imm.grpc_status.map(|status| status.status);

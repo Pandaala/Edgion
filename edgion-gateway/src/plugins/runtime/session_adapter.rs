@@ -652,10 +652,10 @@ impl<'a> PingoraSessionAdapter<'a> {
     /// HTTP/2 pseudo-headers and content-type. No DATA frame is emitted.
     pub async fn send_grpc_error_direct(&mut self, grpc_status: u16, message: Option<&str>) -> PluginSessionResult<()> {
         if !self.ctx.claim_final_response(200) {
-            return Ok(());
+            return Err(Box::new(std::io::Error::other("final response writer already claimed")));
         }
-        self.ctx.request_info.set_grpc_status(grpc_status);
         self.grpc_response_terminated = true;
+        self.ctx.request_info.set_grpc_status(grpc_status);
 
         let mut resp = ResponseHeader::build(200, None).map_err(|e| Box::new(e) as PluginSessionError)?;
         // Apply queued ops first so request-stage plugins (e.g. cookie issuance) still land
@@ -713,8 +713,9 @@ impl<'a> PingoraSessionAdapter<'a> {
     async fn send_grpc_trailers_only(&mut self, http_status: u16) -> PluginSessionResult<()> {
         let (grpc_status, grpc_message) = http_to_grpc_status(http_status);
         if !self.ctx.claim_final_response(200) {
-            return Ok(());
+            return Err(Box::new(std::io::Error::other("final response writer already claimed")));
         }
+        self.grpc_response_terminated = true;
         self.ctx.request_info.set_grpc_status(grpc_status);
 
         let mut resp = ResponseHeader::build(200, None).map_err(|e| Box::new(e) as PluginSessionError)?;
@@ -1013,12 +1014,16 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         end_of_stream: bool,
     ) -> PluginSessionResult<()> {
         let http_status = resp.status.as_u16();
+        if !edgion_resources::http_status::is_valid_final_http_status(http_status) {
+            return Err(Box::new(std::io::Error::other("invalid final response status")));
+        }
         if self.ctx.request_info.is_grpc_request && http_status != 200 {
-            self.grpc_response_terminated = true;
             return self.send_grpc_trailers_only(http_status).await;
         }
         if !self.ctx.claim_final_response(http_status) {
-            return Ok(());
+            return Err(Box::new(std::io::Error::other(
+                "invalid or duplicate final response status",
+            )));
         }
         let mut resp = resp;
         if self.ctx.has_pending_response_header_ops() {
@@ -3981,11 +3986,45 @@ pub(crate) mod record_outcome_tests {
             adapter
                 .write_response_header(Box::new(resp), true)
                 .await
-                .expect("a rejected claim is not a transport error");
+                .expect_err("an informational status cannot be a terminal local reply");
         }
 
         assert!(session.response_written().is_none());
         assert!(!ctx.response_write_started());
+        assert_eq!(ctx.final_downstream_status(), None);
+    }
+
+    #[tokio::test]
+    async fn direct_writer_reports_a_duplicate_claim_without_writing() {
+        let (mut session, _client) = test_session_with_client().await;
+        let mut ctx = EdgionHttpContext::default();
+        assert!(ctx.claim_final_response(204));
+        let resp = ResponseHeader::build(403, None).unwrap();
+
+        let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
+        adapter
+            .write_response_header(Box::new(resp), true)
+            .await
+            .expect_err("a second local reply must not report success");
+
+        assert!(session.response_written().is_none());
+        assert_eq!(ctx.final_downstream_status(), Some(204));
+    }
+
+    #[tokio::test]
+    async fn grpc_writer_rejects_an_informational_local_reply() {
+        let (mut session, _client) = test_session_with_client().await;
+        let mut ctx = EdgionHttpContext::default();
+        ctx.request_info.is_grpc_request = true;
+        let resp = ResponseHeader::build(101, None).unwrap();
+
+        let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
+        adapter
+            .write_response_header(Box::new(resp), true)
+            .await
+            .expect_err("an informational reply must not become gRPC trailers");
+
+        assert!(session.response_written().is_none());
         assert_eq!(ctx.final_downstream_status(), None);
     }
 

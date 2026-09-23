@@ -162,7 +162,7 @@ impl ForwardAuthConfig {
             return Some(format!("target invalid: {e}"));
         }
         // Validate status_on_error range
-        if !(200..=599).contains(&self.conn.status_on_error) {
+        if !crate::http_status::is_valid_final_http_status(self.conn.status_on_error) {
             return Some(format!(
                 "statusOnError must be 200-599, got {}",
                 self.conn.status_on_error

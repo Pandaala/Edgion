@@ -2280,6 +2280,11 @@ impl PluginRuntime {
                 session_adapter.set_terminate();
                 break;
             } else if let PluginRunningResult::ErrResponse { status, body } = result {
+                let (status, body) = if edgion_resources::http_status::is_valid_final_http_status(status) {
+                    (status, body)
+                } else {
+                    (500, None)
+                };
                 if is_grpc_request {
                     // gRPC route: route to the gRPC-native error path. The
                     // HTTP-style resp built below would otherwise be discarded
@@ -2313,11 +2318,14 @@ impl PluginRuntime {
                         let _ = resp.remove_header(&http::header::TRANSFER_ENCODING);
                         let _ = resp.insert_header("content-length", len.to_string());
 
-                        let _ = session_adapter
+                        if session_adapter
                             .write_response_header(Box::new(resp), body.is_none())
-                            .await;
-                        if let Some(b) = body {
-                            let _ = session_adapter.write_response_body(Some(b), true).await;
+                            .await
+                            .is_ok()
+                        {
+                            if let Some(b) = body {
+                                let _ = session_adapter.write_response_body(Some(b), true).await;
+                            }
                         }
                     }
                 }
@@ -2902,6 +2910,39 @@ mod tests {
 
         assert_eq!(ctx.final_downstream_status(), Some(403));
         assert_eq!(client_closed_count(&ctx), 1);
+    }
+
+    #[tokio::test]
+    async fn invalid_request_plugin_reply_uses_a_final_500() {
+        let (mut session, mut client) = plugin_test_session().await;
+        let mut ctx = EdgionHttpContext::default();
+        let mut runtime = PluginRuntime::new();
+        runtime.add_request_filter(Box::new(FixedResultFilter(PluginRunningResult::ErrResponse {
+            status: 100,
+            body: None,
+        })));
+
+        runtime.run_request_plugins(&mut session, &mut ctx).await;
+
+        assert_eq!(ctx.final_downstream_status(), Some(500));
+        assert!(String::from_utf8_lossy(&read_client_response(&mut client).await).starts_with("HTTP/1.1 500"));
+    }
+
+    #[tokio::test]
+    async fn failed_request_reply_claim_does_not_write_a_body() {
+        let (mut session, _client) = plugin_test_session().await;
+        let mut ctx = EdgionHttpContext::default();
+        assert!(ctx.claim_final_response(204));
+        let mut runtime = PluginRuntime::new();
+        runtime.add_request_filter(Box::new(FixedResultFilter(PluginRunningResult::ErrResponse {
+            status: 403,
+            body: Some(Bytes::from_static(b"denied")),
+        })));
+
+        runtime.run_request_plugins(&mut session, &mut ctx).await;
+
+        assert!(session.response_written().is_none());
+        assert_eq!(ctx.final_downstream_status(), Some(204));
     }
 
     /// Read whatever the gateway wrote to the duplex client end. The gRPC

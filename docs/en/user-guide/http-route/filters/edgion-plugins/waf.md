@@ -34,6 +34,12 @@ Reference this resource from an `HTTPRoute` with the usual Gateway API
 | `mode` | no | `on` | `on` enforces disruptive actions; `detectionOnly` records matches without blocking |
 | `priority` | no | `0` | Owner-selection priority from `0` through `65535`; a larger value wins |
 
+For a disruptive `deny` or `block` action, `status` must be a final HTTP status
+from `200` through `599`. Informational responses, including `101 Switching
+Protocols`, cannot be used as local WAF replies. The same range applies to
+phase default deny statuses; an out-of-range value rejects the ruleset during
+compilation.
+
 Rule source is never emitted through WAF errors, plugin logs, response bodies,
 metrics, or Rust `Debug`. Gateway admin configuration output replaces it with
 `[redacted]`; controller-to-gateway configuration sync still carries the real

@@ -326,7 +326,7 @@ impl PhaseDefaults {
     }
 
     pub fn try_deny(phase: Phase, status: u16, log: bool, audit_log: bool) -> Result<Self, DefaultsContextError> {
-        if !(100..=599).contains(&status) {
+        if !(200..=599).contains(&status) {
             return Err(DefaultsContextError::InvalidStatus { phase });
         }
         Ok(Self {
@@ -380,7 +380,7 @@ impl SemanticValidationContext {
                 return Err(DefaultsContextError::DuplicatePhase { phase: value.phase() });
             }
             if let DefaultDisruptive::Deny { status } = value.disruptive() {
-                if !(100..=599).contains(&status) {
+                if !(200..=599).contains(&status) {
                     return Err(DefaultsContextError::InvalidStatus { phase: value.phase() });
                 }
             }
@@ -7023,7 +7023,7 @@ fn severity_name(value: Severity) -> &'static str {
 
 fn parse_status(value: SemanticText<'_>) -> Result<LocalActionValue, SemanticError> {
     let parsed = parse_unsigned(value, ScalarKind::Status)?;
-    if !(100..=599).contains(&parsed) {
+    if !(200..=599).contains(&parsed) {
         return Err(SemanticError::InvalidScalar {
             kind: ScalarKind::Status,
             position: value.span().start,
@@ -8568,6 +8568,9 @@ mod tests {
             "SecAction \"id:0\"\n",
             "SecAction \"phase:Request\"\n",
             "SecAction \"severity:08\"\n",
+            "SecAction \"status:100\"\n",
+            "SecAction \"status:101\"\n",
+            "SecAction \"status:199\"\n",
             "SecAction \"status:600\"\n",
             "SecAction \"skip:0\"\n",
         ] {
@@ -11167,12 +11170,17 @@ SecRuleRemoveById 3 4-5
                 phase: Phase::RequestBody
             })
         ));
-        assert!(matches!(
-            PhaseDefaults::try_deny(Phase::RequestBody, 99, true, true),
-            Err(DefaultsContextError::InvalidStatus {
-                phase: Phase::RequestBody
-            })
-        ));
+        for status in [99, 100, 101, 199, 600] {
+            assert!(matches!(
+                PhaseDefaults::try_deny(Phase::RequestBody, status, true, true),
+                Err(DefaultsContextError::InvalidStatus {
+                    phase: Phase::RequestBody
+                })
+            ));
+        }
+        for status in [200, 599] {
+            assert!(PhaseDefaults::try_deny(Phase::RequestBody, status, true, true).is_ok());
+        }
 
         let deny = PhaseDefaults::try_deny(Phase::RequestBody, 403, true, false).unwrap();
         let context = SemanticValidationContext::try_new(Some(Phase::RequestBody), &[deny]).unwrap();
