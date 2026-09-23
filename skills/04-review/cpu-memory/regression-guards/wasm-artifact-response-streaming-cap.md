@@ -67,17 +67,17 @@ separate OCI pipeline lease; see the
 Do not use the historical four-request limit as evidence of a whole-pipeline
 memory bound.
 
-**4. Test coverage & its limit.** The regression tests serve honestly-oversized
-bodies, so they exercise the Content-Length fast-reject. The **false / absent /
-chunked** Content-Length path (the streaming counter itself) is **not**
-unit-testable with the `wiremock` + `hyper` stack: hyper panics on a
-Content-Length/body-length mismatch (`h1/role.rs`), so a mock cannot emit a
-false-small length, and wiremock has no chunked/streaming body. This is the same
-limitation the pre-existing `response_too_large_returns_error` test (`call.rs`)
-lives with. The streaming counter's truncation logic is shared, small, and
-carried by the production callout path; do **not** re-file "add a false-CL
-streaming test" as an actionable gap unless the test stack gains a way to send
-one.
+**4. Test coverage & its limit.** The OCI and URL-module regression tests serve
+honestly-oversized bodies, so they exercise the Content-Length fast-reject.
+The shared outbound call tests now use a socket-free response stream to check
+exact-cap success and over-cap rejection with absent and falsely-small
+Content-Length values. Those tests drive the same `stream_body_chunks_capped`
+collector used by `stream_body_capped`, but they do not exercise the real
+reqwest response adapter or the four Wasm acquisition call sites. The old
+`wiremock` + `hyper` limitation remains relevant to live HTTP fixtures: hyper
+panics on a Content-Length/body-length mismatch (`h1/role.rs`), and wiremock
+cannot emit the required streaming body. A claim about a specific Wasm path
+still needs path-level evidence.
 
 ## Fix Suggestions Not Accepted
 

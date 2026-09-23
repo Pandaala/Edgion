@@ -11,7 +11,7 @@ use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 use bytes::Bytes;
-use futures::StreamExt;
+use futures::{Stream, StreamExt};
 
 use edgion_resources::resources::common::success::SuccessOutcome;
 
@@ -150,6 +150,93 @@ pub async fn outbound_call_with_body(
     body_override: Option<bytes::Bytes>,
     diagnostics: &mut OutboundRequestDiagnostics,
 ) -> Result<OutboundResponse, OutboundCallError> {
+    outbound_call_with_body_using(
+        client,
+        session,
+        path_override,
+        global_max_bytes,
+        extra_headers,
+        body_override,
+        diagnostics,
+        client.http_client.as_ref(),
+    )
+    .await
+}
+
+trait OutboundTransportError {
+    fn is_timeout(&self) -> bool;
+    fn is_connect(&self) -> bool;
+}
+
+impl OutboundTransportError for reqwest::Error {
+    fn is_timeout(&self) -> bool {
+        self.is_timeout()
+    }
+
+    fn is_connect(&self) -> bool {
+        self.is_connect()
+    }
+}
+
+trait OutboundHttpResponse {
+    type BodyError;
+
+    fn status(&self) -> u16;
+    fn headers(&self) -> &reqwest::header::HeaderMap;
+    fn content_length(&self) -> Option<u64>;
+    fn bytes_stream(self) -> impl Stream<Item = Result<Bytes, Self::BodyError>>;
+}
+
+impl OutboundHttpResponse for reqwest::Response {
+    type BodyError = reqwest::Error;
+
+    fn status(&self) -> u16 {
+        self.status().as_u16()
+    }
+
+    fn headers(&self) -> &reqwest::header::HeaderMap {
+        self.headers()
+    }
+
+    fn content_length(&self) -> Option<u64> {
+        self.content_length()
+    }
+
+    fn bytes_stream(self) -> impl Stream<Item = Result<Bytes, Self::BodyError>> {
+        self.bytes_stream()
+    }
+}
+
+trait OutboundTransport {
+    type Response: OutboundHttpResponse;
+    type Error: OutboundTransportError;
+
+    async fn execute(&self, req: reqwest::Request) -> Result<Self::Response, Self::Error>;
+}
+
+impl OutboundTransport for reqwest::Client {
+    type Response = reqwest::Response;
+    type Error = reqwest::Error;
+
+    async fn execute(&self, req: reqwest::Request) -> Result<Self::Response, Self::Error> {
+        self.execute(req).await
+    }
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "private transport seam mirrors the public call parameters"
+)]
+async fn outbound_call_with_body_using<T: OutboundTransport>(
+    client: &ManagedOutboundClient,
+    session: &dyn PluginSession,
+    path_override: Option<&str>,
+    global_max_bytes: usize,
+    extra_headers: &[(&str, &str)],
+    body_override: Option<bytes::Bytes>,
+    diagnostics: &mut OutboundRequestDiagnostics,
+    transport: &T,
+) -> Result<OutboundResponse, OutboundCallError> {
     // ── 1. Health gate ────────────────────────────────────────────────────────
     if !client.health.healthy.load(Ordering::Relaxed) && !should_halfopen_probe(client) {
         return Err(OutboundCallError::Unhealthy);
@@ -261,7 +348,7 @@ pub async fn outbound_call_with_body(
             return Err(OutboundCallError::Connect);
         };
 
-        let exec = tokio::time::timeout(effective_timeout, client.http_client.execute(req)).await;
+        let exec = tokio::time::timeout(effective_timeout, transport.execute(req)).await;
 
         match exec {
             Err(_elapsed) => {
@@ -298,7 +385,7 @@ pub async fn outbound_call_with_body(
                 }
             }
             Ok(Ok(resp)) => {
-                let status = resp.status().as_u16();
+                let status = resp.status();
 
                 // Status-based retry eligibility.
                 let mut status_retry = client
@@ -313,7 +400,7 @@ pub async fn outbound_call_with_body(
                 if status_retry && attempt + 1 < max_attempts {
                     if let Some(retry) = client.retry.as_ref() {
                         if retry.honor_retry_after && (status == 429 || status == 503) {
-                            match parse_retry_after_ms(resp.headers()) {
+                            match parse_retry_after_ms(resp.headers(), std::time::SystemTime::now()) {
                                 Some(ra_ms) if ra_ms > retry.max_delay_ms => {
                                     // Backend asked for longer than we're willing to
                                     // block: stop retrying and return this response
@@ -357,7 +444,7 @@ pub async fn outbound_call_with_body(
                     }
                 }
                 let resp_headers = resp.headers().clone();
-                let Ok((body, truncated)) = stream_body_capped(resp, max_bytes).await else {
+                let Ok((body, truncated)) = stream_body_chunks_capped(resp.bytes_stream(), max_bytes).await else {
                     record_passive_result(&client.health, &client.passive_health_check, false);
                     return Err(OutboundCallError::Connect);
                 };
@@ -519,9 +606,9 @@ pub(crate) fn replace_url_host(base: &str, authority: &str) -> String {
 /// Parse a `Retry-After` header into milliseconds. Accepts delta-seconds
 /// (`"2"`) and HTTP-date; a past date yields 0. Returns `None` if the header
 /// is absent or unparseable.
-fn parse_retry_after_ms(headers: &reqwest::header::HeaderMap) -> Option<u64> {
+fn parse_retry_after_ms(headers: &reqwest::header::HeaderMap, now: std::time::SystemTime) -> Option<u64> {
     let raw = headers.get(reqwest::header::RETRY_AFTER)?.to_str().ok()?.trim();
-    let duration = edgion_common::time::parse_retry_after(raw, std::time::SystemTime::now())?;
+    let duration = edgion_common::time::parse_retry_after(raw, now)?;
     Some(duration.as_millis().min(u64::MAX as u128) as u64)
 }
 
@@ -554,7 +641,14 @@ pub(crate) async fn stream_body_capped(
     resp: reqwest::Response,
     max_bytes: usize,
 ) -> Result<(Bytes, bool), reqwest::Error> {
-    let mut stream = resp.bytes_stream();
+    stream_body_chunks_capped(resp.bytes_stream(), max_bytes).await
+}
+
+async fn stream_body_chunks_capped<S, E>(stream: S, max_bytes: usize) -> Result<(Bytes, bool), E>
+where
+    S: Stream<Item = Result<Bytes, E>>,
+{
+    futures::pin_mut!(stream);
     let mut buf: Vec<u8> = Vec::with_capacity(8192.min(max_bytes));
     while let Some(chunk) = stream.next().await {
         let chunk = chunk?;
@@ -652,6 +746,10 @@ fn process_elapsed_secs() -> u64 {
     Instant::now().saturating_duration_since(*origin).as_secs()
 }
 
+#[cfg(test)]
+#[path = "call_transport_tests.rs"]
+mod transport_tests;
+
 // ============================================================
 // Tests
 // ============================================================
@@ -722,32 +820,17 @@ mod tests {
     use crate::plugins::http::common::outbound::request::CompiledRequest;
     use crate::plugins::http::common::outbound::target::ResolvedTarget;
     use crate::plugins::runtime::traits::session::MockPluginSession;
-    use crate::plugins::runtime::traits::test_helpers::setup_header_mocks;
     use edgion_resources::resources::common::outbound_request::OutboundRequestSpec;
     use edgion_resources::resources::common::request_template::CompiledTemplate;
 
     // ── Helpers ──────────────────────────────────────────────────────────────
-
-    /// Convert a wiremock server URI (e.g. `http://127.0.0.1:PORT`) to a
-    /// `localhost`-based URL (`http://localhost:PORT`).
-    ///
-    /// `dial_url()` runs an SSRF guard on IP addresses. `127.0.0.1` is a loopback
-    /// IP and is blocked. `localhost` is a DNS hostname — `extract_ip_literal`
-    /// cannot parse it as a `SocketAddr`, so the literal-level SSRF check is skipped
-    /// and `dial_url` returns `Ok`. `reqwest` then resolves `localhost` → `127.0.0.1`
-    /// and connects to the mock server normally.
-    fn localhost_uri(server_uri: &str) -> String {
-        server_uri.replace("127.0.0.1", "localhost")
-    }
 
     /// Compile a template string for test use, panicking on a compile error.
     fn compile_tpl(s: &str) -> CompiledTemplate {
         CompiledTemplate::compile(s).unwrap()
     }
 
-    /// Build a minimal [`ManagedOutboundClient`] whose `ResolvedTarget` is a
-    /// `Static` URL. The `url` must not be a loopback IP; use `localhost_uri`
-    /// to convert wiremock URLs before passing them here.
+    /// Build a minimal [`ManagedOutboundClient`] with a static target.
     fn make_client(url: &str) -> ManagedOutboundClient {
         ManagedOutboundClient {
             http_client: get_http_client_arc(),
@@ -766,14 +849,6 @@ mod tests {
             health_task: None,
             resolved_secrets: None,
         }
-    }
-
-    /// Build a mock session that returns the given HTTP method and request path.
-    fn make_session(method: &str, path: &str) -> MockPluginSession {
-        let mut s = MockPluginSession::new();
-        s.expect_get_method().return_const(method.to_string());
-        s.expect_get_request_path().return_const(path.to_string());
-        s
     }
 
     fn non_cloneable_request() -> reqwest::Request {
@@ -828,865 +903,6 @@ mod tests {
     }
 
     // ── TDD tests ─────────────────────────────────────────────────────────────
-
-    /// P0 TDD: a non-2xx response (403) must be returned as `Ok(OutboundResponse)`
-    /// with headers intact, not as `Err(...)`.
-    ///
-    /// This is the key behavioral change vs. the old webhook_call: previously
-    /// a 403 mapped to `Err(StatusNotSuccess { .. })` and dropped the headers.
-    /// Now callers receive the full response and decide what to do.
-    #[tokio::test]
-    async fn non_success_returns_response_with_headers() {
-        use wiremock::matchers::{method, path};
-        use wiremock::{Mock, MockServer, ResponseTemplate};
-
-        let server = MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path("/check"))
-            .respond_with(
-                ResponseTemplate::new(403)
-                    .append_header("www-authenticate", "Bearer")
-                    .set_body_bytes(b"denied".to_vec()),
-            )
-            .mount(&server)
-            .await;
-
-        // wiremock binds to 127.0.0.1 which is blocked by dial_url's SSRF guard.
-        // Use localhost_uri() to replace the IP with the hostname "localhost";
-        // extract_ip_literal cannot parse a DNS name so the literal-level SSRF check
-        // is skipped, and reqwest resolves "localhost" → 127.0.0.1 to reach the mock server.
-        let client = make_client(&localhost_uri(&server.uri()));
-
-        let session = make_session("GET", "/check");
-        let resp = outbound_call(&client, &session, None, 4096, &[], &mut Default::default())
-            .await
-            .unwrap();
-        assert_eq!(resp.status, 403);
-        assert_eq!(
-            resp.headers.get("www-authenticate").map(|v| v.to_str().unwrap_or("")),
-            Some("Bearer")
-        );
-        assert_eq!(&resp.body[..], b"denied");
-    }
-
-    /// P0 TDD (timeout): a response that takes longer than `client.timeout` must
-    /// produce `Err(OutboundCallError::Timeout)`.
-    #[tokio::test]
-    async fn timeout_returns_timeout_error() {
-        use wiremock::matchers::{method, path};
-        use wiremock::{Mock, MockServer, ResponseTemplate};
-
-        let server = MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path("/slow"))
-            .respond_with(
-                ResponseTemplate::new(200)
-                    .set_delay(Duration::from_millis(500))
-                    .set_body_bytes(b"eventually".to_vec()),
-            )
-            .mount(&server)
-            .await;
-
-        let mut client = make_client(&localhost_uri(&server.uri()));
-        client.timeout = Duration::from_millis(50);
-
-        let session = make_session("GET", "/slow");
-        let err = outbound_call(&client, &session, None, 4096, &[], &mut Default::default())
-            .await
-            .unwrap_err();
-        assert!(
-            matches!(err, OutboundCallError::Timeout),
-            "expected Timeout, got {err:?}"
-        );
-    }
-
-    /// Unhealthy gate: a client marked unhealthy (no backoff/halfopen) returns Unhealthy.
-    #[tokio::test]
-    async fn unhealthy_gate_returns_unhealthy_error() {
-        let client = make_client("http://10.0.0.1:1");
-        client.health.healthy.store(false, Ordering::Relaxed);
-
-        let session = MockPluginSession::new();
-        let result = outbound_call(&client, &session, None, 65536, &[], &mut Default::default()).await;
-        assert!(
-            matches!(result, Err(OutboundCallError::Unhealthy)),
-            "expected Unhealthy, got {result:?}"
-        );
-    }
-
-    /// Rate-limited gate: an exhausted counter returns RateLimited immediately.
-    #[tokio::test]
-    async fn rate_limited_gate_returns_rate_limited_error() {
-        use crate::link_sys::providers::webhook::runtime::SlidingWindowCounter;
-
-        let mut client = make_client("http://10.0.0.1:1");
-        client.rate = Some(SlidingWindowCounter::new(0, Duration::from_secs(1)));
-
-        let session = MockPluginSession::new();
-        let result = outbound_call(&client, &session, None, 65536, &[], &mut Default::default()).await;
-        assert!(
-            matches!(result, Err(OutboundCallError::RateLimited)),
-            "expected RateLimited, got {result:?}"
-        );
-    }
-
-    /// ResponseTooLarge: response body exceeds `max_response_bytes` cap.
-    #[tokio::test]
-    async fn response_too_large_returns_error() {
-        use wiremock::matchers::{method, path};
-        use wiremock::{Mock, MockServer, ResponseTemplate};
-
-        let server = MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path("/big"))
-            .respond_with(ResponseTemplate::new(200).set_body_bytes(b"x".repeat(200)))
-            .mount(&server)
-            .await;
-
-        let mut client = make_client(&localhost_uri(&server.uri()));
-        client.max_response_bytes = 10; // well below 200 bytes
-
-        let session = make_session("GET", "/big");
-        let result = outbound_call(&client, &session, None, 65536, &[], &mut Default::default()).await;
-        assert!(
-            matches!(result, Err(OutboundCallError::ResponseTooLarge)),
-            "expected ResponseTooLarge, got {result:?}"
-        );
-    }
-
-    /// Successful 200 response is returned as Ok with correct body.
-    #[tokio::test]
-    async fn successful_200_returns_ok_with_body() {
-        use wiremock::matchers::{method, path};
-        use wiremock::{Mock, MockServer, ResponseTemplate};
-
-        let server = MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path("/ok"))
-            .respond_with(ResponseTemplate::new(200).set_body_bytes(b"hello".to_vec()))
-            .mount(&server)
-            .await;
-
-        let client = make_client(&localhost_uri(&server.uri()));
-
-        let session = make_session("GET", "/ok");
-        let resp = outbound_call(&client, &session, None, 65536, &[], &mut Default::default())
-            .await
-            .unwrap();
-        assert_eq!(resp.status, 200);
-        assert_eq!(&resp.body[..], b"hello");
-    }
-
-    /// Retry on status: first 503, then 200; final result is Ok after exactly 2 requests.
-    #[tokio::test]
-    async fn retry_on_status_retries_and_succeeds() {
-        use edgion_resources::resources::common::external_http::{BackoffPolicy, WebhookRetry};
-        use wiremock::matchers::{method, path};
-        use wiremock::{Mock, MockServer, ResponseTemplate};
-
-        let server = MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path("/retry"))
-            .respond_with(ResponseTemplate::new(503))
-            .up_to_n_times(1)
-            .with_priority(1)
-            .mount(&server)
-            .await;
-        Mock::given(method("GET"))
-            .and(path("/retry"))
-            .respond_with(ResponseTemplate::new(200).set_body_bytes(b"ok".to_vec()))
-            .with_priority(2)
-            .mount(&server)
-            .await;
-
-        let mut client = make_client(&localhost_uri(&server.uri()));
-        client.retry = Some(WebhookRetry {
-            max_retries: 1,
-            retry_delay_ms: 0,
-            retry_on_timeout: Some(false),
-            retry_on_connect_error: false,
-            retry_on_status: vec![503],
-            backoff_policy: BackoffPolicy::Exponential,
-            max_delay_ms: 1000,
-            jitter: false,
-            honor_retry_after: false,
-            retry_on_body_failure: false,
-        });
-
-        let session = make_session("GET", "/retry");
-        let resp = outbound_call(&client, &session, None, 65536, &[], &mut Default::default())
-            .await
-            .unwrap();
-        assert_eq!(resp.status, 200);
-
-        let received = server.received_requests().await.unwrap();
-        assert_eq!(received.len(), 2, "expected 2 requests (initial + 1 retry)");
-    }
-
-    /// `Retry-After` within the configured `max_delay_ms` cap is honored as the
-    /// delay for the next attempt, and only that single delay is applied — no
-    /// double-sleep from the top-of-loop backoff.
-    #[tokio::test]
-    async fn retry_after_within_cap_is_honored() {
-        use wiremock::matchers::{method, path};
-        use wiremock::{Mock, MockServer, ResponseTemplate};
-        let server = MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path("/ra"))
-            .respond_with(ResponseTemplate::new(503).insert_header("retry-after", "1"))
-            .up_to_n_times(1)
-            .with_priority(1)
-            .mount(&server)
-            .await;
-        Mock::given(method("GET"))
-            .and(path("/ra"))
-            .respond_with(ResponseTemplate::new(200))
-            .with_priority(2)
-            .mount(&server)
-            .await;
-        let mut client = make_client(&localhost_uri(&server.uri()));
-        let mut retry = tests_retry(0);
-        retry.retry_on_status = vec![503];
-        retry.honor_retry_after = true;
-        retry.max_delay_ms = 2000;
-        client.retry = Some(retry);
-        let session = make_session("GET", "/ra");
-        let start = std::time::Instant::now();
-        let resp = outbound_call(&client, &session, None, 4096, &[], &mut Default::default())
-            .await
-            .unwrap();
-        assert_eq!(resp.status, 200);
-        let elapsed = start.elapsed();
-        assert!(
-            elapsed >= Duration::from_millis(900),
-            "should have waited ~1s, got {elapsed:?}"
-        );
-        // Regression: exactly one sleep per retry gap. `retry_delay_ms: 0` means
-        // the normal backoff contributes ~0ms, so a double-sleep bug (Retry-After
-        // sleep PLUS the top-of-loop backoff sleep reusing the header value) would
-        // push this well past 1.5s; a correct single sleep stays close to 1s.
-        assert!(
-            elapsed < Duration::from_millis(1500),
-            "double-sleep suspected, got {elapsed:?}"
-        );
-    }
-
-    /// A `Retry-After` value exceeding `max_delay_ms` must stop retrying
-    /// immediately and return the response as-is (no further requests).
-    #[tokio::test]
-    async fn retry_after_over_cap_stops_and_returns_response() {
-        use wiremock::matchers::{method, path};
-        use wiremock::{Mock, MockServer, ResponseTemplate};
-        let server = MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path("/ra2"))
-            .respond_with(ResponseTemplate::new(503).insert_header("retry-after", "3600"))
-            .mount(&server)
-            .await;
-        let mut client = make_client(&localhost_uri(&server.uri()));
-        let mut retry = tests_retry(0);
-        retry.retry_on_status = vec![503];
-        retry.honor_retry_after = true;
-        retry.max_delay_ms = 2000;
-        client.retry = Some(retry);
-        let session = make_session("GET", "/ra2");
-        let resp = outbound_call(&client, &session, None, 4096, &[], &mut Default::default())
-            .await
-            .unwrap();
-        assert_eq!(resp.status, 503);
-        assert_eq!(
-            server.received_requests().await.unwrap().len(),
-            1,
-            "must not retry past the cap"
-        );
-    }
-
-    /// A 200 response with a body that fails a `success.body` predicate is still
-    /// returned as `Ok` (status-based flow is unaffected), but `client.classify`
-    /// reports failure — a business error like `{"code": -101}` embedded in a 200
-    /// is not a transport failure, so `outbound_call` must not turn it into an `Err`.
-    #[tokio::test]
-    async fn body_failure_returns_response_and_optionally_retries() {
-        use edgion_resources::resources::common::success::{BodyPredicate, PredicateOp, SuccessSpec};
-        use wiremock::matchers::{method, path};
-        use wiremock::{Mock, MockServer, ResponseTemplate};
-
-        let server = MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path("/biz"))
-            .respond_with(
-                ResponseTemplate::new(200)
-                    .insert_header("content-type", "application/json")
-                    .set_body_string(r#"{"code": -101}"#),
-            )
-            .mount(&server)
-            .await;
-
-        let mut client = make_client(&localhost_uri(&server.uri()));
-        client.success = Some(SuccessSpec {
-            status_codes: Some(vec![200]),
-            body: vec![BodyPredicate {
-                pointer: "/code".into(),
-                op: PredicateOp::Equals(serde_json::json!(0)),
-            }],
-        });
-
-        let session = make_session("GET", "/biz");
-        let resp = outbound_call(&client, &session, None, 4096, &[], &mut Default::default())
-            .await
-            .unwrap();
-        assert_eq!(resp.status, 200);
-        assert!(
-            !client.classify(&resp),
-            "body predicate should classify this as failure"
-        );
-    }
-
-    /// Task 2.3: a terminal `BodyFail` (200 OK accepted at the status layer, but
-    /// rejected by a `success.body` predicate) must increment
-    /// `edgion_outbound_success_predicate_fail_total` exactly once — this is the
-    /// otherwise-invisible "200 OK but error in the body" case. Uses
-    /// `metrics::set_default_local_recorder`, which is documented as safe across
-    /// `.await` points on a single-threaded runtime (the default `#[tokio::test]`
-    /// flavor used throughout this file).
-    #[tokio::test]
-    async fn terminal_body_fail_records_predicate_fail_metric() {
-        use crate::observe::metrics::registry::names;
-        use edgion_resources::resources::common::success::{BodyPredicate, PredicateOp, SuccessSpec};
-        use metrics_util::debugging::{DebugValue, DebuggingRecorder};
-        use wiremock::matchers::{method, path};
-        use wiremock::{Mock, MockServer, ResponseTemplate};
-
-        let server = MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path("/biz-metric"))
-            .respond_with(
-                ResponseTemplate::new(200)
-                    .insert_header("content-type", "application/json")
-                    .set_body_string(r#"{"code": -101}"#),
-            )
-            .mount(&server)
-            .await;
-
-        let mut client = make_client(&localhost_uri(&server.uri()));
-        client.success = Some(SuccessSpec {
-            status_codes: Some(vec![200]),
-            body: vec![BodyPredicate {
-                pointer: "/code".into(),
-                op: PredicateOp::Equals(serde_json::json!(0)),
-            }],
-        });
-
-        let recorder = DebuggingRecorder::new();
-        let snapshotter = recorder.snapshotter();
-        let session = make_session("GET", "/biz-metric");
-        {
-            // No retry configured (client.retry is None): this attempt is terminal,
-            // not a retried one, so the branch under test must fire exactly once.
-            let _guard = metrics::set_default_local_recorder(&recorder);
-            let resp = outbound_call(&client, &session, None, 4096, &[], &mut Default::default())
-                .await
-                .unwrap();
-            assert_eq!(resp.status, 200);
-        }
-
-        let snap = snapshotter.snapshot().into_vec();
-        let count = snap
-            .iter()
-            .find(|(k, _, _, _)| k.key().name() == names::OUTBOUND_SUCCESS_PREDICATE_FAIL_TOTAL)
-            .map(|(_, _, _, v)| match v {
-                DebugValue::Counter(c) => *c,
-                other => panic!("expected a Counter value, got {other:?}"),
-            })
-            .expect("predicate-fail counter must be registered after a terminal BodyFail");
-        assert_eq!(count, 1, "must record exactly one predicate-fail metric");
-    }
-
-    /// Regression (Task 2.2 review, Important #1): a retryable status carrying a
-    /// body LARGER than `max_response_bytes` must still retry — the reorder that
-    /// streams the body before the retry decision must not apply on the
-    /// status-retry path. Before the fix, streaming the oversized error body on
-    /// the first (retryable) 503 attempt turned it into `Err(ResponseTooLarge)`
-    /// instead of retrying.
-    #[tokio::test]
-    async fn status_retry_does_not_stream_oversized_error_body() {
-        use wiremock::matchers::{method, path};
-        use wiremock::{Mock, MockServer, ResponseTemplate};
-
-        let server = MockServer::start().await;
-        // Body is well over the 16-byte cap configured below.
-        let big_error_body = b"x".repeat(64);
-        Mock::given(method("GET"))
-            .and(path("/retry-big"))
-            .respond_with(ResponseTemplate::new(503).set_body_bytes(big_error_body))
-            .up_to_n_times(1)
-            .with_priority(1)
-            .mount(&server)
-            .await;
-        Mock::given(method("GET"))
-            .and(path("/retry-big"))
-            .respond_with(ResponseTemplate::new(200).set_body_bytes(b"ok".to_vec()))
-            .with_priority(2)
-            .mount(&server)
-            .await;
-
-        let mut client = make_client(&localhost_uri(&server.uri()));
-        client.max_response_bytes = 16; // well below the 503 error body
-        let mut retry = tests_retry(0);
-        retry.retry_on_status = vec![503];
-        client.retry = Some(retry);
-
-        client
-            .compiled_request
-            .headers
-            .origin
-            .push(super::super::request::CompiledOriginField {
-                name: "x-private-metadata".into(),
-                presence: edgion_resources::resources::common::outbound_request::PresencePolicy::WarnIfMissing,
-            });
-        let mut session = make_session("GET", "/retry-big");
-        // Request construction and presence evaluation happen once, not once
-        // per attempt. The field remains absent in both outbound requests.
-        session.expect_header_value().times(1).return_const(None::<String>);
-        let mut diagnostics = OutboundRequestDiagnostics::default();
-        let resp = outbound_call(&client, &session, None, 65536, &[], &mut diagnostics)
-            .await
-            .expect("must retry past the oversized error body and succeed, not ResponseTooLarge");
-        assert_eq!(resp.status, 200);
-
-        let received = server.received_requests().await.unwrap();
-        assert_eq!(received.len(), 2, "expected 2 requests (initial 503 + 1 retry)");
-        assert!(received
-            .iter()
-            .all(|request| !request.headers.contains_key("x-private-metadata")));
-        let mut log = crate::plugins::runtime::PluginLog::new("test");
-        diagnostics.emit(&mut log);
-        assert_eq!(log.render_for_test(), "warn outbound field missing");
-    }
-
-    /// `retry_on_body_failure` actually retries: first response fails the
-    /// `success.body` predicate, second passes; final result is Ok after 2 requests.
-    #[tokio::test]
-    async fn retry_on_body_failure_actually_retries() {
-        use edgion_resources::resources::common::success::{BodyPredicate, PredicateOp, SuccessSpec};
-        use wiremock::matchers::{method, path};
-        use wiremock::{Mock, MockServer, ResponseTemplate};
-
-        let server = MockServer::start().await;
-        // NOTE: `set_body_string` unconditionally stamps Content-Type: text/plain at
-        // response-generation time (it cannot be overridden by a later
-        // `insert_header`), so `set_body_json` is used here to get a real
-        // `application/json` Content-Type for the body-predicate JSON parse to see.
-        Mock::given(method("GET"))
-            .and(path("/biz-retry"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"code": -101})))
-            .up_to_n_times(1)
-            .with_priority(1)
-            .mount(&server)
-            .await;
-        Mock::given(method("GET"))
-            .and(path("/biz-retry"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"code": 0})))
-            .with_priority(2)
-            .mount(&server)
-            .await;
-
-        let mut client = make_client(&localhost_uri(&server.uri()));
-        client.success = Some(SuccessSpec {
-            status_codes: None,
-            body: vec![BodyPredicate {
-                pointer: "/code".into(),
-                op: PredicateOp::Equals(serde_json::json!(0)),
-            }],
-        });
-        let mut retry = tests_retry(0);
-        retry.retry_on_body_failure = true;
-        client.retry = Some(retry);
-
-        let session = make_session("GET", "/biz-retry");
-        let resp = outbound_call(&client, &session, None, 4096, &[], &mut Default::default())
-            .await
-            .unwrap();
-        assert_eq!(resp.status, 200);
-        assert!(client.classify(&resp), "final response must classify as success");
-
-        let received = server.received_requests().await.unwrap();
-        assert_eq!(received.len(), 2, "expected 2 requests (initial body-fail + 1 retry)");
-    }
-
-    /// Regression (Task 2.2 review, Important #2): `retry_on_body_failure: true`
-    /// must NOT retry a 404 that is outside `retry_on_status` — a StatusFail is
-    /// not a BodyFail. Before the fix, `client.classify()` folded the status
-    /// check into its bool result, so any non-success status (including a 404)
-    /// looked like a body failure and got retried.
-    #[tokio::test]
-    async fn retry_on_body_failure_does_not_widen_to_status_failures() {
-        use wiremock::matchers::{method, path};
-        use wiremock::{Mock, MockServer, ResponseTemplate};
-
-        let server = MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path("/not-found"))
-            .respond_with(ResponseTemplate::new(404))
-            .mount(&server)
-            .await;
-
-        let mut client = make_client(&localhost_uri(&server.uri()));
-        client.success = None; // any 2xx is success; 404 is a StatusFail
-        let mut retry = tests_retry(0);
-        retry.retry_on_status = vec![]; // 404 is not retry-eligible on status
-        retry.retry_on_body_failure = true;
-        client.retry = Some(retry);
-
-        let session = make_session("GET", "/not-found");
-        let resp = outbound_call(&client, &session, None, 4096, &[], &mut Default::default())
-            .await
-            .unwrap();
-        assert_eq!(resp.status, 404);
-
-        let received = server.received_requests().await.unwrap();
-        assert_eq!(
-            received.len(),
-            1,
-            "a StatusFail (404, not in retry_on_status) must not be retried by retry_on_body_failure"
-        );
-    }
-
-    /// Regression: an over-cap `Retry-After` must win over `retry_on_body_failure`
-    /// — `retry_after_stop` suppresses body-retry entirely, so exactly one request
-    /// is made and the 503 is returned as-is.
-    #[tokio::test]
-    async fn retry_after_over_cap_suppresses_body_retry() {
-        use wiremock::matchers::{method, path};
-        use wiremock::{Mock, MockServer, ResponseTemplate};
-
-        let server = MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path("/ra-body"))
-            .respond_with(ResponseTemplate::new(503).insert_header("retry-after", "3600"))
-            .mount(&server)
-            .await;
-
-        let mut client = make_client(&localhost_uri(&server.uri()));
-        let mut retry = tests_retry(0);
-        retry.retry_on_status = vec![503];
-        retry.honor_retry_after = true;
-        retry.max_delay_ms = 2000;
-        retry.retry_on_body_failure = true;
-        client.retry = Some(retry);
-
-        let session = make_session("GET", "/ra-body");
-        let resp = outbound_call(&client, &session, None, 4096, &[], &mut Default::default())
-            .await
-            .unwrap();
-        assert_eq!(resp.status, 503);
-        assert_eq!(
-            server.received_requests().await.unwrap().len(),
-            1,
-            "over-cap Retry-After must suppress body-retry, not just status-retry"
-        );
-    }
-
-    /// An unresolved `retry_on_timeout: None` must behave as `false` at the
-    /// `outbound_call` read site. The real per-consumer default is resolved in
-    /// `ManagedOutboundClient::from_parts` (Task 1.3); a raw `None` reaching
-    /// `outbound_call` (as happens when a test builds `client.retry` directly,
-    /// bypassing `from_parts`) still falls back to no-retry.
-    #[tokio::test]
-    async fn timeout_not_retried_by_default_when_option_none() {
-        use wiremock::matchers::{method, path};
-        use wiremock::{Mock, MockServer, ResponseTemplate};
-
-        let server = MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path("/slow"))
-            .respond_with(ResponseTemplate::new(200).set_delay(Duration::from_millis(300)))
-            .mount(&server)
-            .await;
-
-        let mut client = make_client(&localhost_uri(&server.uri()));
-        client.timeout = Duration::from_millis(50);
-        let mut retry = tests_retry(0);
-        retry.retry_on_timeout = None; // unresolved → treated as false at the client build site
-        client.retry = Some(retry);
-
-        let session = make_session("GET", "/slow");
-        let _ = outbound_call(&client, &session, None, 4096, &[], &mut Default::default()).await;
-
-        // Only one request should have been attempted (no timeout retry).
-        assert_eq!(server.received_requests().await.unwrap().len(), 1);
-    }
-
-    /// RC2 regression: `forward_all=true` must actually forward all non-hop-by-hop
-    /// headers to the outbound target (including `Authorization`).
-    ///
-    /// Before the fix, `build_request` step 7 called `collect_list_fields` directly,
-    /// which ignored `forward_all`. This test verifies the corrected path via
-    /// `collect_headers`.
-    #[tokio::test]
-    async fn forward_all_actually_forwards_authorization_header() {
-        use edgion_resources::resources::common::outbound_request::{ListFields, OutboundRequestSpec};
-        use wiremock::matchers::{header, method, path};
-        use wiremock::{Mock, MockServer, ResponseTemplate};
-
-        let server = MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path("/verify"))
-            .and(header("authorization", "Bearer test-token"))
-            .respond_with(ResponseTemplate::new(200))
-            .mount(&server)
-            .await;
-
-        let client = ManagedOutboundClient {
-            http_client: get_http_client_arc(),
-            resolved_target: ResolvedTarget::Static(localhost_uri(&server.uri())),
-            compiled_request: CompiledRequest::from_spec(&OutboundRequestSpec {
-                headers: ListFields {
-                    forward_all: true,
-                    ..Default::default()
-                },
-                ..Default::default()
-            })
-            .expect("must compile"),
-            health: HealthState::new(),
-            rate: None,
-            success: None,
-            max_response_bytes: 64 * 1024,
-            timeout: Duration::from_secs(5),
-            timeout_template: None,
-            retry: None,
-            egress_policy: None,
-            passive_health_check: None,
-            health_task: None,
-            resolved_secrets: None,
-        };
-
-        let mut session = MockPluginSession::new();
-        session.expect_get_method().return_const("GET".to_string());
-        session.expect_get_request_path().return_const("/verify".to_string());
-        setup_header_mocks(&mut session, &[("authorization", "Bearer test-token")]);
-
-        let resp = outbound_call(&client, &session, None, 4096, &[], &mut Default::default())
-            .await
-            .unwrap();
-        assert_eq!(resp.status, 200, "authorization header should have been forwarded");
-    }
-
-    /// RC3 regression: `${secretRef:...}` templates in custom headers must resolve
-    /// at call time from `client.resolved_secrets`.
-    ///
-    /// Before the fix, `outbound_call` passed `None` for secrets to `build_request`,
-    /// so every `${secretRef:...}` segment evaluated to an empty string.
-    #[tokio::test]
-    async fn secret_ref_in_custom_header_is_resolved_at_runtime() {
-        use edgion_resources::resources::common::external_http::ResolvedSecrets;
-        use edgion_resources::resources::common::outbound_request::{
-            CustomField, CustomSource, ListFields, OutboundRequestSpec,
-        };
-        use std::collections::BTreeMap;
-        use wiremock::matchers::{header, method, path};
-        use wiremock::{Mock, MockServer, ResponseTemplate};
-
-        let server = MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path("/api"))
-            .and(header("authorization", "Bearer test-secret-value"))
-            .respond_with(ResponseTemplate::new(200))
-            .mount(&server)
-            .await;
-
-        let mut secrets_map = BTreeMap::new();
-        secrets_map.insert("ns/n:k".to_string(), "test-secret-value".to_string());
-
-        let client = ManagedOutboundClient {
-            http_client: get_http_client_arc(),
-            resolved_target: ResolvedTarget::Static(localhost_uri(&server.uri())),
-            compiled_request: CompiledRequest::from_spec(&OutboundRequestSpec {
-                headers: ListFields {
-                    custom: vec![CustomField {
-                        name: "authorization".to_string(),
-                        source: CustomSource::Template("Bearer ${secretRef:ns/n:k}".to_string()),
-                    }],
-                    ..Default::default()
-                },
-                ..Default::default()
-            })
-            .expect("must compile"),
-            health: HealthState::new(),
-            rate: None,
-            success: None,
-            max_response_bytes: 64 * 1024,
-            timeout: Duration::from_secs(5),
-            timeout_template: None,
-            retry: None,
-            egress_policy: None,
-            passive_health_check: None,
-            health_task: None,
-            resolved_secrets: Some(ResolvedSecrets(secrets_map)),
-        };
-
-        let session = make_session("GET", "/api");
-        let resp = outbound_call(&client, &session, None, 4096, &[], &mut Default::default())
-            .await
-            .unwrap();
-        assert_eq!(resp.status, 200, "secretRef should have resolved at runtime");
-    }
-
-    /// End-to-end: a json body with a ${secretRef:...} placeholder is rendered,
-    /// escaped, shipped with Content-Type: application/json, and survives the
-    /// retry loop's try_clone (Bytes-backed body).
-    #[tokio::test]
-    async fn json_body_with_secret_ref_is_sent() {
-        use edgion_resources::resources::common::external_http::ResolvedSecrets;
-        use edgion_resources::resources::common::outbound_request::{
-            BodySpec, MethodSpec, OutboundRequestSpec, PathSpec,
-        };
-        use std::collections::BTreeMap;
-        use wiremock::matchers::{body_json, header, method, path};
-        use wiremock::{Mock, MockServer, ResponseTemplate};
-
-        let server = MockServer::start().await;
-        Mock::given(method("POST"))
-            .and(path("/notify"))
-            .and(header("content-type", "application/json"))
-            .and(body_json(serde_json::json!({
-                "token": "test-secret-value",
-                "caller": "edgion-gateway"
-            })))
-            .respond_with(ResponseTemplate::new(200))
-            .mount(&server)
-            .await;
-
-        let mut secrets = BTreeMap::new();
-        secrets.insert("ns/n:k".to_string(), "test-secret-value".to_string());
-
-        let mut client = make_client(&localhost_uri(&server.uri()));
-        client.compiled_request = CompiledRequest::from_spec(&OutboundRequestSpec {
-            path: Some(PathSpec {
-                template: "/notify".to_string(),
-                allow_override: false,
-            }),
-            method: Some(MethodSpec {
-                template: "POST".to_string(),
-            }),
-            body: Some(BodySpec::Json {
-                template: r#"{"token": "${secretRef:ns/n:k}", "caller": "edgion-gateway"}"#.to_string(),
-            }),
-            ..Default::default()
-        })
-        .expect("must compile");
-        client.resolved_secrets = Some(ResolvedSecrets(secrets));
-
-        let session = MockPluginSession::new();
-        let resp = outbound_call(&client, &session, None, 4096, &[], &mut Default::default())
-            .await
-            .unwrap();
-        assert_eq!(resp.status, 200, "body + CT + secret must all match the mock");
-    }
-
-    // ── Templated timeout tests (Task 3.2) ───────────────────────────────────
-
-    /// P0 TDD: a `timeout_template` that renders a smaller value than the static
-    /// `timeout` must win — the rendered value (50ms) triggers a timeout against a
-    /// slow (200ms) mock even though the static default (5s) would not.
-    #[tokio::test]
-    async fn timeout_template_from_header_triggers_timeout() {
-        use wiremock::matchers::{method, path};
-        use wiremock::{Mock, MockServer, ResponseTemplate};
-
-        let server = MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path("/t"))
-            .respond_with(ResponseTemplate::new(200).set_delay(Duration::from_millis(200)))
-            .mount(&server)
-            .await;
-
-        let mut client = make_client(&localhost_uri(&server.uri()));
-        client.timeout = Duration::from_secs(5); // static default is generous
-        client.timeout_template = Some(compile_tpl("${header:X-Test-Timeout}")); // renders to "50"
-
-        let mut session = MockPluginSession::new();
-        session.expect_get_method().return_const("GET".to_string());
-        session.expect_get_request_path().return_const("/t".to_string());
-        session
-            .expect_request_header_map()
-            .return_const(http::HeaderMap::from_iter([(
-                http::HeaderName::from_bytes(b"X-Test-Timeout").unwrap(),
-                http::HeaderValue::from_static("50"),
-            )]));
-
-        let err = outbound_call(&client, &session, None, 4096, &[], &mut Default::default())
-            .await
-            .unwrap_err();
-        assert!(
-            matches!(err, OutboundCallError::Timeout),
-            "expected Timeout, got {err:?}"
-        );
-    }
-
-    /// A template that renders to a non-numeric value falls back to the static
-    /// `timeout` — the call must succeed against a mock that would exceed a bogus
-    /// (unparseable) render but comfortably fits within the generous static timeout.
-    #[tokio::test]
-    async fn timeout_template_garbage_render_falls_back_to_static_timeout() {
-        use wiremock::matchers::{method, path};
-        use wiremock::{Mock, MockServer, ResponseTemplate};
-
-        let server = MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path("/t2"))
-            .respond_with(ResponseTemplate::new(200).set_delay(Duration::from_millis(50)))
-            .mount(&server)
-            .await;
-
-        let mut client = make_client(&localhost_uri(&server.uri()));
-        client.timeout = Duration::from_secs(5); // static default must be honored
-        client.timeout_template = Some(compile_tpl("${header:X-Test-Timeout}")); // renders to "abc"
-
-        let mut session = MockPluginSession::new();
-        session.expect_get_method().return_const("GET".to_string());
-        session.expect_get_request_path().return_const("/t2".to_string());
-        session
-            .expect_request_header_map()
-            .return_const(http::HeaderMap::from_iter([(
-                http::HeaderName::from_bytes(b"X-Test-Timeout").unwrap(),
-                http::HeaderValue::from_static("abc"),
-            )]));
-
-        let resp = outbound_call(&client, &session, None, 4096, &[], &mut Default::default())
-            .await
-            .expect("a garbage render must fall back to the static timeout, not fail the call");
-        assert_eq!(resp.status, 200);
-    }
-
-    /// An absent header (template renders empty) also falls back to the static
-    /// `timeout` — an empty string is neither a valid `u64` nor `> 0`.
-    #[tokio::test]
-    async fn timeout_template_missing_header_falls_back_to_static_timeout() {
-        use wiremock::matchers::{method, path};
-        use wiremock::{Mock, MockServer, ResponseTemplate};
-
-        let server = MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path("/t3"))
-            .respond_with(ResponseTemplate::new(200))
-            .mount(&server)
-            .await;
-
-        let mut client = make_client(&localhost_uri(&server.uri()));
-        client.timeout = Duration::from_secs(5);
-        client.timeout_template = Some(compile_tpl("${header:X-Test-Timeout}"));
-
-        let mut session = MockPluginSession::new();
-        session.expect_get_method().return_const("GET".to_string());
-        session.expect_get_request_path().return_const("/t3".to_string());
-        session.expect_request_header_map().return_const(http::HeaderMap::new());
-
-        let resp = outbound_call(&client, &session, None, 4096, &[], &mut Default::default())
-            .await
-            .expect("a missing header must fall back to the static timeout");
-        assert_eq!(resp.status, 200);
-    }
 
     /// `resolve_timeout` clamps an over-ceiling render to `MAX_OUTBOUND_TIMEOUT_MS`,
     /// tested directly since driving a 60s+ real timeout end-to-end is impractical.
