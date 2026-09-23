@@ -52,8 +52,13 @@ invalid for every limit.
 Each entered loop emits one `LoopInit` and reaches exactly one matching
 `LoopEnd` on natural exhaustion or `break`. The compiler patches `break` to
 the `LoopEnd` opcode itself, not after it, so the VM pops the inner counter
-before an enclosing loop executes `LoopBack`. `continue` targets remain the
-condition check for `while` and the increment step for both `for` forms.
+before an enclosing loop executes `LoopBack`. A `while` `continue` targets its
+`LoopBack`, while a `for` `continue` targets its increment step before
+`LoopBack`; both paths count the iteration. At load time, validation rejects
+ordinary backward jumps and jumps across lexical loop identities, including
+between sibling loops at equal depth. `LoopBack` must point backward within
+its own innermost loop. This preserves `maxLoopIterations` for accepted
+bytecode; `maxSteps` remains an independent runtime bound.
 
 Request-body scanning has a separate per-plugin runtime limit,
 `DslRuntime::max_body_scan_passes` (default 4, configured as

@@ -186,3 +186,21 @@ fn nested_break_preserves_the_outer_loop_iteration_limit() {
         );
     }
 }
+
+#[test]
+fn while_continue_counts_toward_the_loop_iteration_limit() {
+    let limits = VmLimits {
+        max_loop_iterations: 2,
+        max_steps: 10_000,
+        ..Default::default()
+    };
+    let error = run_expect_runtime_err_with_limits(
+        "let mut i = 0\nwhile i < 10 {\ni = i + 1\ncontinue\n}",
+        MockPluginSession::new(),
+        limits,
+    );
+    assert!(
+        matches!(error, RuntimeError::LoopLimitExceeded { limit: 2 }),
+        "got {error:?}"
+    );
+}

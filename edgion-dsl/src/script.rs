@@ -139,6 +139,111 @@ mod tests {
     }
 
     #[test]
+    fn resolve_script_rejects_unstructured_bytecode_jumps() {
+        let cases = [
+            (
+                "ordinary back edge",
+                vec![OpCode::LoopInit, OpCode::Jump(-1), OpCode::LoopEnd],
+            ),
+            (
+                "conditional back edge",
+                vec![
+                    OpCode::LoopInit,
+                    OpCode::LoadTrue,
+                    OpCode::JumpIfFalse(-2),
+                    OpCode::LoopEnd,
+                ],
+            ),
+            (
+                "enter loop",
+                vec![OpCode::Jump(1), OpCode::LoopInit, OpCode::LoadTrue, OpCode::LoopEnd],
+            ),
+            ("skip cleanup", vec![OpCode::LoopInit, OpCode::Jump(1), OpCode::LoopEnd]),
+            (
+                "cross sibling loops",
+                vec![
+                    OpCode::LoopInit,
+                    OpCode::Jump(2),
+                    OpCode::LoopEnd,
+                    OpCode::LoopInit,
+                    OpCode::LoadTrue,
+                    OpCode::LoopEnd,
+                ],
+            ),
+            (
+                "forward LoopBack",
+                vec![OpCode::LoopInit, OpCode::LoopBack(0), OpCode::LoopEnd],
+            ),
+            (
+                "cross-loop LoopBack",
+                vec![
+                    OpCode::LoopInit,
+                    OpCode::LoadTrue,
+                    OpCode::LoopEnd,
+                    OpCode::LoopInit,
+                    OpCode::LoopBack(-3),
+                    OpCode::LoopEnd,
+                ],
+            ),
+        ];
+        for (name, mut code) in cases {
+            code.push(OpCode::ReturnNext);
+            let script = CompiledScript {
+                version: crate::bytecode::BYTECODE_VERSION,
+                code,
+                constants: vec![],
+                local_count: 0,
+                max_loop_depth: 1,
+                source: None,
+                source_map: None,
+            };
+            let encoded = script.serialize_base64().unwrap();
+            let error = resolve_script(None, Some(&encoded), &ValidationLimits::default()).expect_err(name);
+            assert!(error.contains("bytecode validation failed"), "{name}: {error}");
+        }
+    }
+
+    #[test]
+    fn resolve_script_accepts_compiler_control_flow() {
+        let source = r#"
+            let mut n = 0
+            while n < 4 {
+                n = n + 1
+                if n == 2 { continue }
+                for i in range(0, 3) {
+                    if i == 1 { break }
+                }
+            }
+            for item in split("a,b", ",") {
+                if item == "a" { continue }
+            }
+            let result = (true && false) || true
+        "#;
+        let script = resolve_script(Some(source), None, &ValidationLimits::default()).unwrap();
+        let encoded = script.serialize_base64().unwrap();
+        resolve_script(None, Some(&encoded), &ValidationLimits::default()).unwrap();
+    }
+
+    #[test]
+    fn resolve_script_rejects_deep_serialized_loop_nesting() {
+        let mut code = vec![OpCode::LoopInit; 5_000];
+        code.extend(std::iter::repeat_n(OpCode::LoopEnd, 5_000));
+        let script = CompiledScript {
+            version: crate::bytecode::BYTECODE_VERSION,
+            code,
+            constants: vec![],
+            local_count: 0,
+            max_loop_depth: 5_000,
+            source: None,
+            source_map: None,
+        };
+        let encoded = script.serialize_base64().unwrap();
+        let error = resolve_script(None, Some(&encoded), &ValidationLimits::default()).unwrap_err();
+        assert!(error.contains("too many instructions"), "{error}");
+        assert!(error.contains("loop nesting too deep"), "{error}");
+    }
+
+    #[test]
     fn check_rejects_unknown_redis_link() {
         let script = compile("let r = redis.get(\"mylink\", \"mykey\")");
         let err = check_redis_link_names(&script, &HashSet::new())

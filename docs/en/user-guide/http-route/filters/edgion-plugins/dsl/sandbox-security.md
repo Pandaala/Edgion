@@ -40,7 +40,7 @@ Each bytecode instruction consumes one step. Steps are the most direct measure o
 
 **maxLoopIterations (Maximum Loop Iterations)**
 
-Caps the number of iterations for a single `for` loop. For example, when iterating over a list, if the number of elements exceeds this value the loop terminates early and raises a `LoopLimitExceeded` error. This limit works in tandem with `maxSteps`: even if the step budget has not been exhausted, a loop with an excessive number of iterations will still be intercepted.
+Caps the number of iterations for a single `for` or `while` loop. For example, when iterating over a list, if the number of elements exceeds this value the loop terminates early and raises a `LoopLimitExceeded` error. `continue` also counts toward this limit. This limit works in tandem with `maxSteps`: even if the step budget has not been exhausted, a loop with an excessive number of iterations will still be intercepted.
 
 **maxCallCount (Maximum Function Calls)**
 
@@ -137,6 +137,8 @@ When a script is loaded — compiled from `source` or validated from `bytecode` 
 | Total constant pool size | 32,768 bytes | Total bytes of all strings in the constant pool |
 | Max loop nesting depth | 8 | Maximum nesting level of `for` loops |
 | Regex pattern length | 1,024 bytes | Maximum length of a single regex literal |
+
+Pre-compiled bytecode is also checked for structured jumps: ordinary jumps cannot jump backward or cross loop boundaries, and a loop back-edge must stay inside its own loop. Invalid bytecode is rejected when loaded, while iteration counts are enforced at runtime.
 
 Compile-time validation is a one-time cost. Once a script passes validation, the compiled result is cached and reused for subsequent requests without recompilation.
 
