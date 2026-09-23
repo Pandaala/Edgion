@@ -50,14 +50,21 @@ The exact fixture constraints and removal conditions are recorded in
 
 ## Verification and re-evaluation
 
-`validate_suite_parity.sh`, its regression test, the dynamic helper regression
-test, and the no-EndpointSlice fixture guard passed after the changes. New YAML
-fixtures parsed successfully. The active `orbstack` context lacked the Edgion
-test namespaces, so the new scenarios were not executed against a live
-Kubernetes deployment in this run. Re-evaluate the two new exceptions when the
-runner gains status-subresource phase writes and dedicated ACME challenge
-listeners, or an independent external ExtProc processor with its TLS and admin
-interfaces. Re-run inventory parity whenever either runner or manifest changes.
+The initial static inventory and helper checks passed, but they did not execute
+the scenarios. A later live `orbstack` run built local arm64 images and passed
+`CorsValidation`, `DslTerminateDynamic`, `HttpRouteNamedParameterPrecedence`,
+`HttpRoutePathPrefixTrailingSlash`, `LinkSysDisabledTls`,
+`LinkSysProviderReplacement`, `RateLimitLocalOverflowDynamic`,
+`TlsRouteAttachments`, and the subsequently added `AiGuardOrderingDynamic`.
+The static `EdgionPlugins/DslTerminate` suite passed all four assertions after
+its Kubernetes HTTP contract fixtures were added. The full prepare could not
+finish because the cluster Service IP range filled during bulk fixture apply;
+the focused runs used the deployed stack and each scenario's reset fixtures.
+The three private GatewayClass scenarios were tried and failed because this
+controller deployment selects only `public-gateway`; they are now explicit
+scope exceptions rather than executable manifest entries. Re-evaluate each
+exception when its stated topology requirement changes. Re-run inventory
+parity whenever either runner or manifest changes.
 
 ## Resolution references
 

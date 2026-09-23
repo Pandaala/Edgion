@@ -1,0 +1,26 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: ai-guard-ordering-dynamic
+  namespace: edgion-test
+spec:
+  requestPlugins:
+    - type: AiGuard
+      conditions:
+        skip:
+          allOf:
+            - type: keyExist
+              key:
+                type: header
+                name: X-Skip-Ai-Guard
+      config:
+        rules:
+          - name: never-match
+            match:
+              type: regex
+              pattern: never-present-in-test-prompt
+            action: reject
+    - type: AiProxy
+      config:
+        backendSelection:
+          type: Weighted

@@ -71,9 +71,8 @@ The Rust JSON Schema validator does not execute arbitrary Kubernetes CEL.
 The local validator still indexes by `ResourceKind`, takes the first CRD version,
 and permits duplicate bundle entries to overwrite each other. This closure neither
 fixes nor disproves those limitations; the user declined expanding non-Kubernetes
-checks in this task. The broader
-[Gateway API compatibility task](../../../../tasks/todo/gateway-api-version-compatibility-and-validation/gateway-api-version-compatibility-and-validation.md)
-retains separate support-matrix, status, and conformance questions. It must honor
+checks in this task. Broader Gateway API compatibility work retains separate
+support-matrix, status, and conformance questions. It must honor
 this scope decision rather than automatically reintroduce the declined mechanisms.
 
 This decision was checked against current source; no new runtime behavior or

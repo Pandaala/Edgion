@@ -11,6 +11,7 @@ pub mod ctx;
 pub mod registry;
 pub mod scenario;
 pub mod scenarios;
+pub mod status;
 pub mod wait;
 
 pub use ctx::ScenarioCtx;

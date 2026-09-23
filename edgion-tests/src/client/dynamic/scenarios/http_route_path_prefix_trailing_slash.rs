@@ -133,7 +133,9 @@ fn run(ctx: ScenarioCtx) -> ScenarioRunFuture {
         let result = async {
             cleanup(&ctx).await?;
             ctx.wait_phase(SCENARIO, "absent", Duration::from_secs(20)).await?;
-            ctx.apply_dir("bootstrap/").await?;
+            if std::env::var("EDGION_TEST_K8S_MODE").as_deref() != Ok("true") {
+                ctx.apply_dir("bootstrap/").await?;
+            }
             ctx.apply_dir("initial/").await?;
             ctx.wait_phase(SCENARIO, "initial", Duration::from_secs(20)).await?;
             let updated_path = if std::env::var("EDGION_TEST_K8S_MODE").as_deref() == Ok("true") {

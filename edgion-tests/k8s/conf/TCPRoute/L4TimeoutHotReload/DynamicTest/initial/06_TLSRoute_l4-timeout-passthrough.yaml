@@ -12,6 +12,6 @@ spec:
     - "l4-timeout.sandbox.example.com"
   rules:
     - backendRefs:
-        - name: test-https-backend
+        - name: l4-timeout-https-backend
           port: 30051
           weight: 100

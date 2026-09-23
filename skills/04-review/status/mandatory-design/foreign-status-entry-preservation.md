@@ -143,6 +143,6 @@ changes.
 
 ## Resolution references
 
-- Related proposal: [multiple GatewayClasses per Kubernetes Controller deployment](../../../../tasks/todo/kubernetes-gateway-class-allow-list.md)
+- Related design gap: [multiple GatewayClasses per Kubernetes Controller deployment](../../../08-kubernetes/01-gateway-api/01-not-implemented.md)
   — would align the private envelope with the upstream shape and remove the
   vestigial class key. Not a prerequisite for this page's native-list rule.

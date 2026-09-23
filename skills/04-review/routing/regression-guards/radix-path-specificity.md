@@ -144,8 +144,9 @@ Every generation uses `wait_phase`; there is no fixed sleep. A bootstrap sentine
 route keeps the Gateway's plugin publication scope available while the scenario
 deletes every tested route and requires all eight paths to return 404 before the
 initial generation and again during final cleanup. The scenario then deletes the
-sentinel, plugin, EndpointSlices, Services, and Gateway. Its dedicated Gateway
-listener must be present when the Gateway process starts. For a focused local run, preload
+sentinel, plugin, EndpointSlices, and Services. FileSystem mode also deletes the
+Gateway; Kubernetes mode retains its shared Gateway fixture between runs. Its
+dedicated Gateway listener must be present when the Gateway process starts. For a focused local run, preload
 `base,HTTPRoute/Basic,HTTPRoute/NamedParameterPrecedence` with
 `start_all_with_conf.sh`, then invoke the dynamic scenario. Selecting
 `HTTPRoute/NamedParameterPrecedence` as an ordinary static suite is invalid
@@ -163,14 +164,18 @@ Fresh verification for that integration follow-up on 2026-09-14:
   HttpRouteNamedParameterPrecedence`: passed against that live local stack with
   all eight cases in all three generations.
 
-The Kubernetes integration path was not run and this scenario is not registered
-in the Kubernetes dynamic inventory or fixture tree. Fresh cross-process evidence
-currently covers only the FileSystem configuration backend. This cross-process
-scenario uses ASCII-only fixtures. Raw-Unicode semantics have only in-process
-coverage; File/etcd can carry that extension input, while the Kubernetes Gateway
-API structural schema may reject it before Edgion sees it and was not tested here.
-The full workspace test suite was not run
-during the original repair or this integration follow-up.
+On 2026-09-23, the scenario was registered in the Kubernetes dynamic inventory
+with dedicated fixtures. It passed twice consecutively and passed in a nine-scenario
+run against the OrbStack Kubernetes stack. Deleting and recreating its Gateway
+between Kubernetes runs left the Gateway configuration snapshot populated but
+all eight route requests returned 404 until a Gateway process restart; the
+scenario now retains that shared Gateway fixture in Kubernetes mode, following
+the [Gateway recreation lifecycle boundary](../../listeners/intentional-design/gateway-recreation-requires-restart.md). This
+cross-process scenario uses ASCII-only fixtures. Raw-Unicode semantics have only
+in-process coverage; File/etcd can carry that extension input, while the
+Kubernetes Gateway API structural schema may reject it before Edgion sees it
+and was not tested here. The full workspace test suite was not run during the
+original repair, the FileSystem follow-up, or this Kubernetes follow-up.
 
 Agent-doc validation initially found an unrelated pre-existing broken reference
 to the UDP shutdown wire-coverage task. The then-deferred task was restored from

@@ -3,12 +3,9 @@ CorsValidation	EdgionPlugins/Cors/DynamicTest	initial	httproutes.gateway.network
 DslTerminateDynamic	EdgionPlugins/DslTerminateDynamic/DynamicTest	initial	edgionplugins.edgion.io	edgionplugins	edgion-default	dsl-terminate-dynamic
 HttpRouteNamedParameterPrecedence	HTTPRoute/NamedParameterPrecedence/DynamicTest	initial	httproutes.gateway.networking.k8s.io	httproute	edgion-test	named-static-z-winner
 HttpRoutePathPrefixTrailingSlash	HTTPRoute/PathPrefixTrailingSlash/DynamicTest	initial	httproutes.gateway.networking.k8s.io	httproute	edgion-test	prefix-slash-z-winner
-L4TimeoutHotReload	TCPRoute/L4TimeoutHotReload/DynamicTest	initial	edgiongatewayclassconfigs.edgion.io	edgiongatewayconfig	-	l4-timeout-egc
 LinkSysDisabledTls	LinkSys/Redis/DisabledTls/DynamicTest	initial	linksys.edgion.io	linksys	edgion-default	redis-disabled-tls-dynamic
 LinkSysProviderReplacement	LinkSys/Redis/ProviderReplacement/DynamicTest	initial	linksys.edgion.io	linksys	edgion-test	linksys-provider-replacement
-PluginPolicyDynamic	PluginPolicy/DynamicTest	initial	gateways.gateway.networking.k8s.io	gateway	edgion-test	pp-a
-PreflightPolicyHotReload	Gateway/PreflightPolicyHotReload/DynamicTest	initial	edgiongatewayclassconfigs.edgion.io	edgiongatewayconfig	-	preflight-policy-hot-reload
-RateLimitLocalOverflowDynamic	EdgionPlugins/RateLimitLocal/OverflowDynamic	initial	edgionplugins.edgion.io	edgionplugins	edgion-default	rate-limit-overflow-dynamic
+RateLimitLocalOverflowDynamic	EdgionPlugins/RateLimitLocal/OverflowDynamic/DynamicTest	initial	edgionplugins.edgion.io	edgionplugins	edgion-default	rate-limit-overflow-dynamic
 TlsRouteAttachments	TLSRoute/Attachments	bootstrap	gateways.gateway.networking.k8s.io	gateway	edgion-test	tls-attachments-a
 EgcRuntimeHotReload	Gateway/EgcRuntimeHotReload/DynamicTest	initial	edgiongatewayclassconfigs.edgion.io	edgiongatewayconfig	-	egc-runtime-hot-reload
 DuplicateHostPolicyHotReload	Gateway/DuplicateHostPolicyHotReload/DynamicTest	initial	edgiongatewayclassconfigs.edgion.io	edgiongatewayconfig	-	duplicate-host-policy-hot-reload
@@ -16,6 +13,7 @@ HttpRouteDuplicateHeaders	HTTPRoute/Match/DynamicTest	initial	httproutes.gateway
 AiBackendLifecycle	EdgionBackend/Lifecycle/DynamicTest	initial	edgionplugins.edgion.io	edgionplugins	edgion-test	lifecycle-ai-proxy
 AiBackendSecretRotation	EdgionBackend/SingleProvider/DynamicTest	initial	edgionbackends.edgion.io	edgionbackend	edgion-test	single-provider-fixture-provider
 AiBackendWeighted	EdgionBackend/Weighted/DynamicTest	initial	edgionplugins.edgion.io	edgionplugins	edgion-test	weighted-ai-proxy
+AiGuardOrderingDynamic	EdgionPlugins/AiGuardOrdering/DynamicTest	initial	edgionplugins.edgion.io	edgionplugins	edgion-test	ai-guard-ordering-dynamic
 BasicAuthDynamic	EdgionPlugins/BasicAuth/DynamicTest	initial	edgionplugins.edgion.io	edgionplugins	edgion-default	basic-auth-dynamic
 BasicAuthDynamicGrouped	EdgionPlugins/BasicAuth/DynamicTest	initial_grouped	edgionplugins.edgion.io	edgionplugins	edgion-default	basic-auth-dynamic-grouped
 BodyDynamic	EdgionPlugins/BodyDynamic/DynamicTest	updates/to_reset	edgionplugins.edgion.io	edgionplugins	edgion-default	body-dynamic

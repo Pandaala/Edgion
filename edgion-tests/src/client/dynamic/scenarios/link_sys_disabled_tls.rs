@@ -256,9 +256,7 @@ async fn check(ctx: &TestContext, phase: Phase) -> Result<()> {
             "stale Redis endpoints"
         );
         if !gateway {
-            let conditions = resource["status"]["conditions"]
-                .as_array()
-                .context("missing status conditions")?;
+            let conditions = crate::dynamic::status::conditions(&resource)?;
             for (kind, expected) in [
                 ("Accepted", if invalid_endpoint { "False" } else { "True" }),
                 ("ResolvedRefs", if enabled { "False" } else { "True" }),

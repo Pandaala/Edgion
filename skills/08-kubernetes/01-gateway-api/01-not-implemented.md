@@ -249,7 +249,7 @@ This blocks the standard pattern of one controller offering several classes that
 differ only by `parametersRef` (for Edgion, several `EdgionGatewayConfig`
 parameter sets). It also keeps the shared two-class `PluginPolicyDynamic`
 scenario off the canonical Kubernetes topology; see
-[k8s-dynamic-scenario-inventory-parity](../../../tasks/todo/k8s-dynamic-scenario-inventory-parity.md).
+[Kubernetes dynamic scenario inventory parity](../../04-review/testing/regression-guards/kubernetes-dynamic-scenario-inventory-parity.md).
 
 Ecosystem positions, for calibration: Istio filters on `controllerName` only and
 ships `istio` and `istio-waypoint` under one controller; Traefik filters
@@ -260,9 +260,9 @@ kgateway takes a primary class plus a `WaypointGatewayClassName` and an
 
 No conformance test currently fails because of this — the suites run a single
 class. It is recorded here because it is a deliberate deviation from the spec's
-ownership model, not an oversight. Migration proposal, including the status
-envelope work it depends on:
-[kubernetes-gateway-class-allow-list](../../../tasks/todo/kubernetes-gateway-class-allow-list.md).
+ownership model, not an oversight. A migration must also address the private
+status envelope's class key; see
+[deployment-partitioned observations](../../04-review/status/regression-guards/deployment-partitioned-observations.md).
 
 ## Conformance profile boundaries
 

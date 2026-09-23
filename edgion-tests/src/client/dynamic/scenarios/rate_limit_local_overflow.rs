@@ -179,9 +179,7 @@ async fn check(ctx: &TestContext, phase: Phase) -> Result<()> {
             "stale consumer reference"
         );
         if !gateway {
-            let conditions = resource["status"]["conditions"]
-                .as_array()
-                .context("missing status conditions")?;
+            let conditions = crate::dynamic::status::conditions(&resource)?;
             let accepted = conditions
                 .iter()
                 .find(|condition| condition["type"] == "Accepted")

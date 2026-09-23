@@ -78,9 +78,9 @@ async fn check(ctx: &TestContext, phase: Phase) -> Result<()> {
                 "Controller has a different {field}"
             );
         }
-        let accepted = resource["status"]["conditions"]
-            .as_array()
-            .and_then(|conditions| conditions.iter().find(|c| c["type"] == "Accepted"))
+        let accepted = crate::dynamic::status::conditions(resource)?
+            .iter()
+            .find(|c| c["type"] == "Accepted")
             .context("missing Accepted condition")?;
         let invalid = matches!(phase, Phase::Invalid(_) | Phase::MergedRegex);
         if let Some(generation) = resource["metadata"]["generation"].as_i64() {

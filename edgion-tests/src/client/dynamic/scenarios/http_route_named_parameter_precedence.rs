@@ -254,6 +254,9 @@ async fn cleanup_supporting_resources(ctx: &ScenarioCtx) -> Result<()> {
 }
 
 async fn cleanup_gateway(ctx: &ScenarioCtx) -> Result<()> {
+    if std::env::var("EDGION_TEST_K8S_MODE").as_deref() == Ok("true") {
+        return Ok(());
+    }
     let client = crate::dynamic::apply::build_client(&ctx.controller_url)?;
     let response = client
         .delete("Gateway", Some("edgion-test"), "named-parameter-precedence-gateway")
@@ -270,7 +273,9 @@ fn run(ctx: ScenarioCtx) -> ScenarioRunFuture {
     Box::pin(async move {
         let result = async {
             cleanup_routes(&ctx).await?;
-            ctx.apply_dir("bootstrap/").await?;
+            if std::env::var("EDGION_TEST_K8S_MODE").as_deref() != Ok("true") {
+                ctx.apply_dir("bootstrap/").await?;
+            }
             ctx.wait_phase(SCENARIO, "absent", Duration::from_secs(20)).await?;
             ctx.apply_dir("initial/").await?;
             ctx.wait_phase(SCENARIO, "initial", Duration::from_secs(20)).await?;

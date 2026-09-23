@@ -86,9 +86,9 @@ async fn check_status(ctx: &TestContext, valid: bool) -> Result<()> {
         .context("Controller resource response was not JSON")?;
     ensure!(body["success"] == true, "Controller resource lookup failed: {body}");
     let resource = &body["data"];
-    let accepted = resource["status"]["conditions"]
-        .as_array()
-        .and_then(|conditions| conditions.iter().find(|condition| condition["type"] == "Accepted"))
+    let accepted = crate::dynamic::status::conditions(resource)?
+        .iter()
+        .find(|condition| condition["type"] == "Accepted")
         .context("EdgionPlugins Accepted condition is missing")?;
     ensure!(
         accepted["status"] == if valid { "True" } else { "False" },

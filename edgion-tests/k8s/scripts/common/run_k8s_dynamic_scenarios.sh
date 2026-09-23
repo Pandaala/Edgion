@@ -236,10 +236,17 @@ fi
 DIRECT_ENDPOINT_IP="127.0.0.1"
 DIRECT_UNREADY_ENDPOINT_IP="127.0.0.1"
 REGION_BACKEND_IP="127.0.0.1"
+BACKEND_ENDPOINT_IPS=""
 needs_endpoint_discovery=false
 for scenario_id in "${SELECTED_SCENARIOS[@]}"; do
   case "${scenario_id}" in
     DirectEndpointPortResolution|RegionRouteValidation) needs_endpoint_discovery=true ;;
+    AiGuardOrderingDynamic)
+      BACKEND_ENDPOINT_IPS="$(
+        "${ENDPOINT_INVENTORY}" --namespace edgion-test \
+          --service edgion-test-server --port 30001 --timeout-secs 30 --output ips
+      )"
+      ;;
   esac
 done
 if [[ "${needs_endpoint_discovery}" == "true" ]]; then
@@ -657,6 +664,7 @@ run_scenario_with_phase_barriers() {
     EDGION_TEST_DIRECT_ENDPOINT_IP="${DIRECT_ENDPOINT_IP}" \
     EDGION_TEST_DIRECT_UNREADY_ENDPOINT_IP="${DIRECT_UNREADY_ENDPOINT_IP}" \
     EDGION_TEST_REGION_BACKEND_IP="${REGION_BACKEND_IP}" \
+    EDGION_TEST_BACKEND_ENDPOINT_IPS="${BACKEND_ENDPOINT_IPS}" \
     EDGION_TEST_MIRROR_SERVER_HOST="edgion-test-server.edgion-test.svc.cluster.local" \
     EDGION_TEST_K8S_PHASE_BARRIER=true \
     EDGION_TEST_K8S_PHASE_ACK_TIMEOUT_SECONDS="${PHASE_EXEC_TIMEOUT_SECONDS}" \
@@ -927,6 +935,7 @@ for scenario_id in "${SELECTED_SCENARIOS[@]}"; do
       EDGION_TEST_DIRECT_ENDPOINT_IP="${DIRECT_ENDPOINT_IP}" \
       EDGION_TEST_DIRECT_UNREADY_ENDPOINT_IP="${DIRECT_UNREADY_ENDPOINT_IP}" \
       EDGION_TEST_REGION_BACKEND_IP="${REGION_BACKEND_IP}" \
+      EDGION_TEST_BACKEND_ENDPOINT_IPS="${BACKEND_ENDPOINT_IPS}" \
       EDGION_TEST_MIRROR_SERVER_HOST="edgion-test-server.edgion-test.svc.cluster.local" \
       sh -c 'cd "$1" && exec "$2" -g --target-host "$3" --dynamic-scenario "$4"' \
       sh "${REMOTE_ROOT}" "${TEST_CLIENT_BIN_PATH}" "${TARGET_HOST}" "${scenario_id}"; then
