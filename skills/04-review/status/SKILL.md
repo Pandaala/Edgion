@@ -9,6 +9,10 @@ Read [routing and classification](../knowledge-routing.md) before adding or movi
 Search these pages by behavior, symbol, or finding ID; revalidate historical evidence
 before applying a decision to current code.
 
+## Mandatory design
+
+- [Foreign entries in Gateway API status lists are preserved, never reclaimed](mandatory-design/foreign-status-entry-preservation.md)
+
 ## Regression guards
 
 - [GatewayClass reporting and publication](regression-guards/gatewayclass-reporting-and-publication.md)

@@ -17,7 +17,7 @@ before applying a decision to current code.
 - [GEP-2257 Duration Field Scope — CONVERTED SET IS CLOSED](intentional-design/gep2257-duration-field-scope.md)
 - [`PartiallyInvalid` is not route-exclusive — DOCS-DRIFT (fixed)](intentional-design/partially-invalid-not-route-exclusive.md)
 - [ReferenceGrant validation is a controller-global policy — DESIGN-DECISION](intentional-design/reference-grant-validation-controller-scoped.md)
-- [SchemaValidator Non-K8s Asymmetry Is Architectural, Not a Gap](intentional-design/schema-validator-non-k8s-asymmetry.md)
+- [Schema validation placement and Kubernetes availability without bundle locking](intentional-design/schema-validator-non-k8s-asymmetry.md)
 - [Unknown EdgionPlugin variant rejects the EdgionPlugins resource — ACCEPTED-TRADEOFF (strict typed enum is intentional)](intentional-design/unknown-plugin-variant-strict-enum.md)
 - [Validation errors are untyped `Vec<String>` — ACCEPTED-TRADEOFF (the machine-readable taxonomy already exists as the Gateway API `.status.conditions.reason` field)](intentional-design/validation-errors-untyped-string-vs-status-reason-taxonomy.md)
 

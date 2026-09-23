@@ -38,7 +38,15 @@ fencing remains separately tracked and is not claimed fixed by this status envel
   an owned raw Gateway and matching published UID/class.
 - Merge preserves foreign entries and their order. Cleanup requires authoritative
   class identity/deletion evidence; absence requires a complete unfiltered LIST.
-  Source teardown and filtered/unwatched views do not prove deletion.
+  Source teardown and filtered/unwatched views do not prove deletion. **This page
+  governs the private envelope**, including this cleanup; the Gateway API native
+  lists are governed separately by
+  [foreign status entry preservation](../mandatory-design/foreign-status-entry-preservation.md),
+  whose upstream contract forbids reclaiming a foreign entry and keys on
+  controllerName alone. The envelope's divergence is deliberate and outside that
+  contract — these are Edgion's own CRDs — so it is not a finding. Whether to
+  align them is an open proposal, not a decision; that page's "Relationship to
+  the private envelope" section records the retired premise behind the class key.
 - The cap is 32 after pruning. Existing owners can update at 32; new owners cannot
   evict others. Invalid observations or capacity failure suppress persistence,
   not local configuration processing. Malformed input is retained opaquely until

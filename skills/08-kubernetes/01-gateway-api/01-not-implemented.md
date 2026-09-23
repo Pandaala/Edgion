@@ -227,6 +227,43 @@ Current behavior: when the Controller parses a GRPCRoute, if `retry.codes` is no
 - Workaround: configure a retry policy in the client gRPC SDK (such as `retryPolicy.retryableStatusCodes` in the gRPC service config); the client can read trailers in full and retry by status code
 - Related code: `edgion-resources/src/resources/grpc_route.rs` lines 526–541
 
+## Multiple GatewayClasses per Controller deployment
+
+**Decision: current limitation; migration proposed but not implemented**
+
+Gateway API claims resources through `GatewayClass.spec.controllerName`: a
+controller accepts every GatewayClass naming it and serves the Gateways that
+reference any accepted class. The spec has no concept of a startup filter on
+GatewayClass *names*, and `spec.controllerName` is immutable once the
+GatewayClass exists.
+
+Edgion's Kubernetes mode adds one. `conf_center.gateway_class` is a required
+single name used as an exact-match filter, so one Controller deployment serves
+exactly one class. `GatewayClassHandler::filter` already reports on every class
+matching the resolved `controllerName`, but `should_publish` retains the
+selected-class check, so a matching class with a different name receives
+`Accepted=False/Unsupported` with an empty `supportedFeatures` list and its
+Gateways are never published to the data plane.
+
+This blocks the standard pattern of one controller offering several classes that
+differ only by `parametersRef` (for Edgion, several `EdgionGatewayConfig`
+parameter sets). It also keeps the shared two-class `PluginPolicyDynamic`
+scenario off the canonical Kubernetes topology; see
+[k8s-dynamic-scenario-inventory-parity](../../../tasks/todo/k8s-dynamic-scenario-inventory-parity.md).
+
+Ecosystem positions, for calibration: Istio filters on `controllerName` only and
+ships `istio` and `istio-waypoint` under one controller; Traefik filters
+GatewayClasses by *label selector* and processes all of them when it is empty;
+kgateway takes a primary class plus a `WaypointGatewayClassName` and an
+`AdditionalGatewayClasses` map; NGINX Gateway Fabric has the same single-class
+`--gatewayclass` limitation as Edgion and documents it as such.
+
+No conformance test currently fails because of this — the suites run a single
+class. It is recorded here because it is a deliberate deviation from the spec's
+ownership model, not an oversight. Migration proposal, including the status
+envelope work it depends on:
+[kubernetes-gateway-class-allow-list](../../../tasks/todo/kubernetes-gateway-class-allow-list.md).
+
 ## Conformance profile boundaries
 
 `GATEWAY-TLS` is declared and its committed split-profile report passes. It is
