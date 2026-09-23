@@ -9,10 +9,10 @@
 
 ## Evidence
 
-The root Gateway process configuration and several nested process-config
-objects accept unrelated unknown YAML keys. A known example is a misplaced
-top-level `geoip` key, which can be silently ignored instead of rejecting the
-operator's intended configuration.
+At discovery, the root Gateway process configuration and several nested
+process-config objects accepted unrelated unknown YAML keys without a
+diagnostic. A misplaced top-level `geoip` key was one example: it left the
+operator's intended configuration unapplied.
 
 ## Why deferred
 
@@ -23,5 +23,8 @@ and could change startup acceptance without a coordinated design and inventory.
 
 ## Resolution
 
-- `skills/04-review/deserialization/intentional-design/gateway-process-config-unknown-fields-advisory.md`
-- The Gateway now reports ignored process-config fields with bounded startup WARN diagnostics. This record's evidence and deferral rationale describe the earlier B0009 state.
+- Ordinary unknown Gateway process-config fields emit an ERROR-level startup
+  diagnostic and do not block startup. Existing strict subtrees remain strict.
+- The reusable decision is in
+  `skills/04-review/deserialization/intentional-design/gateway-process-config-unknown-fields-advisory.md`.
+- This record's evidence and deferral rationale describe the earlier B0009 state.

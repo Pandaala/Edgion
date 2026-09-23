@@ -46,11 +46,11 @@ gateway:
 `GatewayConfig` 在根配置结构中通过 `#[command(flatten)]` 提供给 CLI，但在 YAML 侧**没有**
 `#[serde(flatten)]`。因此，把 `geoip:` 块写在**文档根层级**——比正确位置高了一层——会被外层
 结构体忽略，最终 `GeoIpConfig` 停留在空的默认值上（没有 `db_path`，没有 `update_url`）。为便于
-平滑发布，Gateway 会继续启动，但会输出结构化 WARN，包含 `field_path="geoip"` 和
+平滑发布，Gateway 会继续启动，但会输出结构化 ERROR 日志，包含 `field_path="geoip"` 和
 `action="ignored"`。告警不会包含字段值或原始 YAML。
 
 ```yaml
-# 错误 —— 产生空的 GeoIpConfig，并输出 field_path="geoip" 的启动 WARN
+# 错误 —— 产生空的 GeoIpConfig，并输出 field_path="geoip" 的启动 ERROR 日志
 geoip:
   db_path: /var/lib/edgion/geoip/db.mmdb
 
@@ -62,7 +62,7 @@ gateway:
 
 这个坑在实现过程中真实地消耗了大量排查时间——它最初被误判为 conf_sync 的传播竞态问题。如果
 地理规则看起来毫无效果，且 `edgion_geoip_db_loaded` 一直是 `0`，而你的 YAML 明明设置了
-`db_path`，请先检查启动 WARN 和缩进层级。
+`db_path`，请先检查启动 ERROR 日志和缩进层级。
 
 ### 字段参考
 
@@ -526,7 +526,7 @@ TLS 监听器拒绝使用上方 Stage1 的仅指标路径。HTTP 拒绝仍走普
 
 | 现象 | 可能原因 | 解决方法 |
 |---|---|---|
-| 启动 WARN 报告 `field_path="geoip"` 和 `action="ignored"`，且 `edgion_geoip_db_loaded` 一直是 `0` | `geoip:` 写在了文档根层级，而不是嵌套在 `gateway:` 下 | 把它移到 `gateway:` 下——见[最容易踩的坑](#-最容易踩的坑) |
+| 启动 ERROR 日志报告 `field_path="geoip"` 和 `action="ignored"`，且 `edgion_geoip_db_loaded` 一直是 `0` | `geoip:` 写在了文档根层级，而不是嵌套在 `gateway:` 下 | 把它移到 `gateway:` 下——见[最容易踩的坑](#-最容易踩的坑) |
 | 配置加载失败，报错提到某个 `geoip` 子字段是未知字段 | `geoip` 块内部的 camelCase 拼写错误（例如 `dbPath`） | 使用 snake_case——`db_path`、`update_url` 等 |
 | 全新部署之后 `edgion_geoip_db_loaded` 一直是 `0` | 首次启动时的正常状态——没有内置数据库，且更新器尚未完成第一个周期 | 等待首次成功周期，或检查 `edgion_geoip_update_failed_total{reason}` 是否卡在某个失败原因上 |
 | Gateway 进程在没有 panic 日志的情况下崩溃，且发生在某个数据库文件刚被外部修改之后不久 | 有东西原地写入了 `db_path`，而不是用重命名做替换——SIGBUS | 停止任何原地写入的行为；只有内置更新器，或同文件系统上"临时文件+重命名"的写入方式被支持 |

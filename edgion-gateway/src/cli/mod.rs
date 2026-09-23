@@ -28,7 +28,7 @@ fn report_unknown_config_fields<'a>(
     truncated: bool,
 ) {
     for field_path in field_paths {
-        tracing::warn!(
+        tracing::error!(
             component = "config",
             config_file,
             field_path,
@@ -37,7 +37,7 @@ fn report_unknown_config_fields<'a>(
         );
     }
     if truncated {
-        tracing::warn!(
+        tracing::error!(
             component = "config",
             config_file,
             reported_fields = MAX_UNKNOWN_CONFIG_FIELDS,
@@ -810,7 +810,7 @@ impl EdgionGatewayCli {
 }
 
 #[cfg(test)]
-mod config_warning_tests {
+mod config_diagnostic_tests {
     use super::{config::EdgionGatewayConfig, report_unknown_config_fields};
     use std::io::{self, Write};
     use std::sync::Arc;
@@ -840,7 +840,7 @@ mod config_warning_tests {
     }
 
     #[test]
-    fn unknown_process_config_warning_is_structured_and_value_free() {
+    fn unknown_process_config_error_is_structured_and_value_free() {
         let mut file = tempfile::NamedTempFile::new().unwrap();
         file.write_all(b"future_section:\n  nested_secret_value: secret-value-must-not-appear\n")
             .unwrap();
@@ -865,6 +865,7 @@ mod config_warning_tests {
         });
 
         let output = String::from_utf8(writer.0.lock().clone()).unwrap();
+        assert!(output.contains("ERROR"), "{output}");
         assert!(output.contains("future_section"), "{output}");
         assert!(output.contains("config/test-gateway.yaml"), "{output}");
         assert!(output.contains("action=\"ignored\""), "{output}");
@@ -873,7 +874,7 @@ mod config_warning_tests {
     }
 
     #[test]
-    fn truncated_unknown_process_config_warning_reports_the_cap() {
+    fn truncated_unknown_process_config_error_reports_the_cap() {
         let writer = TestWriter::default();
         let subscriber = tracing_subscriber::fmt()
             .without_time()
@@ -886,6 +887,7 @@ mod config_warning_tests {
         });
 
         let output = String::from_utf8(writer.0.lock().clone()).unwrap();
+        assert!(output.contains("ERROR"), "{output}");
         assert!(output.contains("reported_fields=32"), "{output}");
         assert!(output.contains("action=\"ignored\""), "{output}");
     }

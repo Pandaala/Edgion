@@ -50,11 +50,11 @@ gateway:
 but **not** `#[serde(flatten)]` for YAML. A `geoip:` block written at the **document root** — one
 level too high — is therefore ignored by the outer struct and leaves `GeoIpConfig` at its empty
 defaults (no `db_path`, no `update_url`). The Gateway continues starting for rollout
-compatibility, but emits a structured startup WARN naming `field_path="geoip"` and
-`action="ignored"`. The warning never includes the field value or raw YAML.
+compatibility, but emits a structured startup ERROR log naming `field_path="geoip"` and
+`action="ignored"`. The diagnostic never includes the field value or raw YAML.
 
 ```yaml
-# WRONG — produces an empty GeoIpConfig and a startup WARN for field_path="geoip"
+# WRONG — produces an empty GeoIpConfig and a startup ERROR log for field_path="geoip"
 geoip:
   db_path: /var/lib/edgion/geoip/db.mmdb
 
@@ -66,7 +66,7 @@ gateway:
 
 This exact mistake cost real debugging time during implementation — it was first mistaken for a
 conf_sync propagation race. If geo rules appear to have no effect and
-`edgion_geoip_db_loaded` stays `0` while your YAML clearly sets a `db_path`, inspect startup WARNs
+`edgion_geoip_db_loaded` stays `0` while your YAML clearly sets a `db_path`, inspect startup ERROR logs
 and check indentation first.
 
 ### Field reference
@@ -597,7 +597,7 @@ state produces an unconditional request.
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
-| Startup WARN reports `field_path="geoip"` and `action="ignored"`; `edgion_geoip_db_loaded` stays `0` | `geoip:` is at the document root instead of nested under `gateway:` | Move it under `gateway:` — see [the top-level nesting trap](#-the-single-most-common-way-to-get-this-wrong) |
+| Startup ERROR log reports `field_path="geoip"` and `action="ignored"`; `edgion_geoip_db_loaded` stays `0` | `geoip:` is at the document root instead of nested under `gateway:` | Move it under `gateway:` — see [the top-level nesting trap](#-the-single-most-common-way-to-get-this-wrong) |
 | Config load fails with an unknown-field error mentioning a `geoip` sub-key | A camelCase typo inside the `geoip` block (e.g. `dbPath`) | Use snake_case — `db_path`, `update_url`, etc. |
 | `edgion_geoip_db_loaded` stays `0` after a fresh deploy | Normal at first start — no bundled database, and the updater hasn't completed its first cycle yet | Wait for the first successful cycle, or check `edgion_geoip_update_failed_total{reason}` for a stuck failure |
 | Gateway process dies with no panic log, mid-request, shortly after a database file was touched externally | Something wrote `db_path` in place instead of rename-swapping it — SIGBUS | Stop whatever wrote in place; only the built-in updater or a same-filesystem temp-file-plus-rename writer are supported |

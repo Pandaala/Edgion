@@ -572,7 +572,7 @@ sizing (`max_db_bytes` + 2× current database size), absent-dimension rule-miss 
 **Must be nested under `gateway:`.** `GatewayConfig` uses `#[command(flatten)]` for the CLI but
 NOT `#[serde(flatten)]` for YAML, so a top-level `geoip:` key is ignored by the outer struct and
 leaves `GeoIpConfig` at its empty defaults. The Gateway continues starting but emits a structured
-startup WARN with `field_path="geoip"` and `action="ignored"`; it never logs the value or raw
+startup ERROR log with `field_path="geoip"` and `action="ignored"`; it never logs the value or raw
 YAML. `GeoIpConfig`'s own `deny_unknown_fields` remains stricter and rejects a typo *inside* the
 block (for example `dbPath`).
 

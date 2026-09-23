@@ -9,7 +9,7 @@ knowledge_type: intentional-design
 ## Conclusion and scope
 
 The local Gateway process YAML reports ordinary unknown fields through bounded
-startup WARN diagnostics and continues with the recognized configuration. Each
+startup ERROR diagnostics and continues with the recognized configuration. Each
 diagnostic names the config file and full field path, sets `action="ignored"`,
 and never includes the field value or raw YAML.
 
@@ -32,8 +32,8 @@ default while the process started without any diagnostic.
 D0005 resolved that silent no-op by wrapping the production YAML deserializer
 with `serde_ignored` and retaining the existing
 `singleton_map_recursive` adapter. The loaded result carries sorted, deduplicated
-paths to `EdgionGatewayCli::run`, which emits WARNs immediately after binary-owned
-logging is initialized. At most 32 paths are retained; a separate WARN reports
+paths to `EdgionGatewayCli::run`, which emits ERROR logs immediately after binary-owned
+logging is initialized. At most 32 paths are retained; a separate ERROR log reports
 that additional findings were omitted.
 
 The current reachable process-config tree has no Serde `flatten`, internally or
@@ -44,10 +44,11 @@ production deserializer and focused tests.
 ## Alternatives and limits
 
 Failing startup for every unknown field would provide the strongest typo
-protection, but was rejected for this boundary in favor of rollout tolerance.
-The accepted cost is that an operator can ignore the WARN and still run with a
-defaulted setting. Documentation therefore describes both the ignored action
-and the resulting fallback behavior.
+protection, but the operator decision for this boundary is to report ordinary
+unknown fields at ERROR level while continuing startup. The accepted cost is
+that an operator can ignore the diagnostic and still run with a defaulted
+setting. Documentation therefore describes both the ignored action and the
+resulting fallback behavior.
 
 Adding `deny_unknown_fields` to every shared Common or Resources type was also
 rejected: it would change Controller and other consumers merely to implement a
@@ -58,7 +59,7 @@ rejected because it could drift from the actual deserializer.
 known to be blind through `#[serde(flatten)]` and adjacently tagged enums; see
 [`serde_ignored` blind spots](../../resources/compatibility-constraints/serde-ignored-blind-spots-schema-walk-instead.md).
 If either construct enters this process-config tree, re-evaluate this mechanism
-and prefer the canonical schema walker rather than assuming the warning remains
+and prefer the canonical schema walker rather than assuming the diagnostic remains
 complete.
 
 ## Verification and re-evaluation
@@ -71,11 +72,11 @@ for D0005 rather than treated as permanently current evidence here.
 
 Re-evaluate this decision if:
 
-- unknown fields should become startup errors for the whole process file;
+- unknown fields should become fatal startup errors for the whole process file;
 - a Serde flatten, internally/adjacently tagged enum, or untagged object enum is
   added to the reachable configuration tree;
 - process configuration becomes remotely supplied or hot-reloaded;
-- warnings gain a durable deployment-status or validation API surface.
+- diagnostics gain a durable deployment-status or validation API surface.
 
 ## Resolution references
 

@@ -14,12 +14,12 @@ gateway:
   admin_listen: "127.0.0.1:12001"        # Admin API listen address (default: 127.0.0.1:12001, loopback-only)
   # probe_listen: "0.0.0.0:12000"        # Liveness/readiness probe port (default: 0.0.0.0:12000); binds 0.0.0.0 so kubelet can reach the pod IP
   # geoip:                               # MUST be nested under `gateway:` — a top-level `geoip:` key is
-  #                                       # ignored with a startup WARN. See docs/en/ops-guide/gateway/geoip.md
+  #                                       # ignored with a startup ERROR log. See docs/en/ops-guide/gateway/geoip.md
   #   db_path: /var/lib/edgion/geoip/db.mmdb
   #   update_url: https://mirror.internal/geo.mmdb
 
 # Unknown fields in this process YAML are ignored for rollout compatibility, but the Gateway
-# emits a startup WARN with the full field path and action="ignored". Existing strict subtrees
+# emits a startup ERROR log with the full field path and action="ignored". Existing strict subtrees
 # (including geoip, path_normalization, request_mirror, and access_log_options) still reject
 # unknown fields and abort startup.
 

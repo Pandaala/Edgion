@@ -14,12 +14,12 @@ gateway:
   admin_listen: "127.0.0.1:12001"        # Admin API 监听地址（默认：127.0.0.1:12001，仅 loopback）
   # probe_listen: "0.0.0.0:12000"        # 存活/就绪探针端口（默认：0.0.0.0:12000）；绑定 0.0.0.0 以便 kubelet 可通过 Pod IP 访问
   # geoip:                               # 必须嵌套在 gateway: 下 —— 写在顶层的 geoip: 会被忽略，
-  #                                       # 并产生启动 WARN。见 docs/zh-CN/ops-guide/gateway/geoip.md
+  #                                       # 并产生日志级别为 ERROR 的启动诊断。见 docs/zh-CN/ops-guide/gateway/geoip.md
   #   db_path: /var/lib/edgion/geoip/db.mmdb
   #   update_url: https://mirror.internal/geo.mmdb
 
 # 为便于平滑发布，进程 YAML 中的普通未知字段会被忽略，但 Gateway 会输出包含完整字段路径及
-# action="ignored" 的启动 WARN。已有的严格子结构（包括 geoip、path_normalization、
+# action="ignored"、级别为 ERROR 的启动日志。已有的严格子结构（包括 geoip、path_normalization、
 # request_mirror 和 access_log_options）仍会拒绝未知字段并中止启动。
 
 # ─── gRPC 通道安全（必填）─────────────────────────────────────────
