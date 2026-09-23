@@ -21,6 +21,7 @@ before applying a decision to current code.
 
 ## Regression guards
 
+- [Retained listener managers stop serving removed routes](regression-guards/retained-listener-manager-clearing-wire-coverage.md)
 - [Gateway Add final-value publication](regression-guards/gateway-add-final-value-publication.md)
 
 - [EGC runtime snapshot publication and lifecycle capture](regression-guards/egc-runtime-snapshot-publication.md)

@@ -41,8 +41,9 @@ inspection confirms the following ownership chain:
 Historical HTTP evidence recorded 404/`RouteNotFound` after a successful TLS
 handshake; terminated TLS evidence recorded no selected TLSRoute after Gateway
 reapply. These are route reachability observations, not certificate-matching
-failures. Source patterns also cover gRPC, TCP, UDP, and TLS passthrough, but no
-fresh wire verification of those families is claimed here.
+failures. The later [retained-manager wire guard](../regression-guards/retained-listener-manager-clearing-wire-coverage.md)
+verified HTTP, gRPC, and TCP on macOS; TLS and UDP remain outside that wire
+scenario.
 
 ## Alternatives and accepted cost
 
@@ -75,8 +76,8 @@ This is a product choice, distinct from the
 [Pingora runtime bind/drain constraint](../compatibility-constraints/listener-port-set-frozen-at-startup.md):
 the dependency limitation alone does not prove same-socket recovery impossible.
 
-The [retained-handle clearing coverage task](../../../../tasks/todo/route-manager-retained-listener-handle-integration.md)
-remains valid and open. Fail-closed clearing does not promise later recovery.
+The [retained-handle clearing coverage](../regression-guards/retained-listener-manager-clearing-wire-coverage.md)
+checks fail-closed routing; it does not promise later recovery.
 Established connections, pinned snapshots, and UDP sessions retain their existing
 lifetime contracts; this decision does not require rematching them.
 
@@ -87,6 +88,11 @@ publication and distinct identities on recreation. They were inspected, not
 rerun for this documentation-only decision. Historical integration failures are
 preserved in the related routing knowledge; no failed recovery test is relabeled
 as passing.
+
+The later targeted `RetainedListenerHandles` dynamic scenario passed on macOS
+on 2026-09-23. Linux CI execution was not verified; the user chose to close
+the coverage task without that result. This newer evidence does not change the
+restart boundary or retroactively make the 2026-09-13 checks a wire test.
 
 The two `BothAbsentParentRef` recovery tests now exercise Controller dependency
 requeue by renaming a Listener without changing its physical key. They verify
