@@ -2,7 +2,7 @@
 
 ## Meta
 
-- Status: ready-for-separate-task
+- Status: resolved
 - Severity: low
 - Discovered in: B0001, `edgion-gateway/Cargo.toml`
 - Category: maintainability
@@ -15,6 +15,7 @@ All three product binary manifests expose allocator optional dependencies throug
 
 A Gateway-only edit would create cross-binary inconsistency; the issue needs a coordinated workspace-wide task.
 
-## Canonical task
+## Resolution
 
-- `tasks/todo/use-explicit-allocator-dependency-features.md`
+- The Gateway, Controller, and CLI manifests now use explicit `dep:` entries for both optional allocator dependencies.
+- `skills/04-review/supply-chain/regression-guards/allocator-feature-surface.md`

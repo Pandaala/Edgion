@@ -15,6 +15,7 @@ before applying a decision to current code.
 
 ## Regression guards
 
+- [Allocator Features Select the Dependency and Binary Allocator Together](regression-guards/allocator-feature-surface.md)
 - [Rustls TLS 1.3 Encryption-Level Validation](regression-guards/rustls-tls13-encryption-level-validation.md)
 
 ## Intentional design

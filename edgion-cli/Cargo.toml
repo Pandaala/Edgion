@@ -21,8 +21,8 @@ workspace = true
 default = ["allocator-jemalloc"]
 
 # Memory allocator selection (mutually exclusive) — lives with the binary.
-allocator-jemalloc = ["tikv-jemallocator"]
-allocator-mimalloc = ["mimalloc"]
+allocator-jemalloc = ["dep:tikv-jemallocator"]
+allocator-mimalloc = ["dep:mimalloc"]
 allocator-system = []
 
 [dependencies]

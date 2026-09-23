@@ -23,6 +23,8 @@ Allocator selection and `#[global_allocator]` live in each binary entry point,
 not in a workspace-root library. Only the Gateway selects a TLS backend.
 Controller and CLI have allocator features only. There is no Pingora source
 feature: the Gateway always builds against the Edgion fork family.
+The allocator dependency crate names `tikv-jemallocator` and `mimalloc` are
+implementation details, not selectable Cargo features of these binaries.
 
 ## Gateway TLS and FIPS
 

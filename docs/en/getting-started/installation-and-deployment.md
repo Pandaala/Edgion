@@ -70,6 +70,11 @@ If you need to understand process-level configuration and working directories, c
 
 - [Developer Guide / Work Directory Design](../dev-guide/work-directory.md)
 
+When building any of the three binaries from source, select the allocator with
+`allocator-jemalloc` (the default), `allocator-mimalloc`, or `allocator-system`.
+The dependency crate names `tikv-jemallocator` and `mimalloc` are not Cargo
+feature names for these binaries.
+
 ### Running the container image in a non-Kubernetes mode
 
 The `start.sh` path above uses the release binaries with the CRD schemas already on disk under

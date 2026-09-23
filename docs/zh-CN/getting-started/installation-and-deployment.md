@@ -68,6 +68,10 @@ cicd/deploy/standalone/start.sh
 
 - [开发指南 / Work Directory 设计](../dev-guide/work-directory.md)
 
+从源码构建这三个二进制时，请通过 `allocator-jemalloc`（默认）、
+`allocator-mimalloc` 或 `allocator-system` 选择分配器。依赖 crate 名称
+`tikv-jemallocator` 和 `mimalloc` 不是这些二进制的 Cargo feature 名称。
+
 ### 用容器镜像运行非 Kubernetes 模式
 
 上面的 `start.sh` 路径使用发行版二进制，CRD schema 已经在磁盘的 `config/crd` 下，无需额外处理。
