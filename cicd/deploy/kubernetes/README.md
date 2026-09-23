@@ -199,10 +199,11 @@ invalid identity inputs stop startup. GatewayClass `spec.controllerName` is
 immutable: create a replacement class when changing it.
 
 Independent deployments must use distinct controller names and GatewayClasses.
-Replicas sharing an identity must share the selected class, configuration view,
+Replicas sharing an identity must share the configuration view,
 and election domain. Explicit identity collisions are not detected at runtime.
-GatewayClass watches ignore `label_selector` so every matching class gets status;
-unselected classes receive `Accepted=False/Unsupported` and are not served.
+GatewayClass watches ignore `label_selector`; every class with this controllerName
+receives normal validation and publication. Each Gateway uses its own class's
+parametersRef. The obsolete `conf_center.gateway_class` key is rejected if present.
 `no_watch_kinds: [GatewayClass]` disables this reporting and Gateway processing.
 
 ### Gateway Config

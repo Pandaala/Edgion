@@ -694,18 +694,11 @@ spec:
                   x-kubernetes-list-type: map
                   x-kubernetes-list-map-keys:
                     - controllerName
-                    - gatewayClassName
                   items:
                     type: object
-                    required: [controllerName, gatewayClassName, gatewayClassUid, status]
+                    required: [controllerName, status]
                     properties:
                       controllerName:
-                        type: string
-                        minLength: 1
-                      gatewayClassName:
-                        type: string
-                        minLength: 1
-                      gatewayClassUid:
                         type: string
                         minLength: 1
                       status:

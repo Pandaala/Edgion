@@ -2998,7 +2998,6 @@ spec:
         let runtime = ControllerRuntime::default();
         runtime.set_status_identity(KubernetesStatusIdentity {
             controller_name: "example.com/controller".into(),
-            gateway_class_name: "ours".into(),
         });
         assert_eq!(
             evaluate_issuance_eligibility(&raw, "default/test-acme", &runtime),

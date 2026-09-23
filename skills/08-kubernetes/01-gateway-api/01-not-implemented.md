@@ -229,40 +229,25 @@ Current behavior: when the Controller parses a GRPCRoute, if `retry.codes` is no
 
 ## Multiple GatewayClasses per Controller deployment
 
-**Decision: current limitation; migration proposed but not implemented**
+**Decision: supported; former limitation superseded**
 
-Gateway API claims resources through `GatewayClass.spec.controllerName`: a
-controller accepts every GatewayClass naming it and serves the Gateways that
-reference any accepted class. The spec has no concept of a startup filter on
-GatewayClass *names*, and `spec.controllerName` is immutable once the
-GatewayClass exists.
+Edgion serves every GatewayClass whose `spec.controllerName` matches the resolved
+deployment identity. Each Gateway uses its own class's parametersRef and
+EdgionGatewayConfig. There is no class-name startup selector; the old
+`conf_center.gateway_class` key is rejected when present. Independent deployments
+retain distinct controllerName values and election domains. Deliberate cross-class
+sharing of one physical listener port remains unsupported.
 
-Edgion's Kubernetes mode adds one. `conf_center.gateway_class` is a required
-single name used as an exact-match filter, so one Controller deployment serves
-exactly one class. `GatewayClassHandler::filter` already reports on every class
-matching the resolved `controllerName`, but `should_publish` retains the
-selected-class check, so a matching class with a different name receives
-`Accepted=False/Unsupported` with an empty `supportedFeatures` list and its
-Gateways are never published to the data plane.
-
-This blocks the standard pattern of one controller offering several classes that
-differ only by `parametersRef` (for Edgion, several `EdgionGatewayConfig`
-parameter sets). It also keeps the shared two-class `PluginPolicyDynamic`
-scenario off the canonical Kubernetes topology; see
-[Kubernetes dynamic scenario inventory parity](../../04-review/testing/regression-guards/kubernetes-dynamic-scenario-inventory-parity.md).
-
-Ecosystem positions, for calibration: Istio filters on `controllerName` only and
-ships `istio` and `istio-waypoint` under one controller; Traefik filters
-GatewayClasses by *label selector* and processes all of them when it is empty;
-kgateway takes a primary class plus a `WaypointGatewayClassName` and an
-`AdditionalGatewayClasses` map; NGINX Gateway Fabric has the same single-class
-`--gatewayclass` limitation as Edgion and documents it as such.
-
-No conformance test currently fails because of this — the suites run a single
-class. It is recorded here because it is a deliberate deviation from the spec's
-ownership model, not an oversight. A migration must also address the private
-status envelope's class key; see
-[deployment-partitioned observations](../../04-review/status/regression-guards/deployment-partitioned-observations.md).
+Gateway API permits an implementation to accept only one compatible class when
+it can reconcile only one. The former single-class model was an accepted product
+boundary, not a specification violation or a demonstrated conformance failure.
+The `kubernetes-gateway-class-allow-list` feature expansion also changes Edgion's
+private status envelope to one observation per controllerName, retaining foreign
+entries without class-based pruning. See
+[GatewayClass reporting and publication](../../04-review/status/regression-guards/gatewayclass-reporting-and-publication.md)
+and [deployment observations](../../04-review/status/regression-guards/deployment-partitioned-observations.md)
+for evidence and verification limits. This support statement does not claim a new
+upstream conformance run.
 
 ## Conformance profile boundaries
 

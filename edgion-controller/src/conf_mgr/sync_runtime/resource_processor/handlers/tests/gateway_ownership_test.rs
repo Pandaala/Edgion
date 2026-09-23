@@ -19,8 +19,8 @@ const CLASS: &str = "selected";
 const KEY: &str = "apps/gateway";
 const OWNER: &str = "example.com/owner";
 
-fn ownership(owner: &str, class: &str) -> GatewayClassOwnership {
-    GatewayClassOwnership::new(owner.to_string(), Some(class.to_string()))
+fn ownership(owner: &str) -> GatewayClassOwnership {
+    GatewayClassOwnership::new(owner.to_string())
 }
 
 fn class(owner: &str, name: &str, uid: &str) -> GatewayClass {
@@ -104,16 +104,16 @@ struct Fixture {
 }
 
 impl Fixture {
-    fn new(owner: &str, selected_class: &str) -> Self {
+    fn new(owner: &str) -> Self {
         let runtime = Arc::new(ControllerRuntime::default());
         let classes = Arc::new(ResourceProcessor::new(
             "GatewayClass",
             16,
-            Arc::new(GatewayClassHandler::new(ownership(owner, selected_class))),
+            Arc::new(GatewayClassHandler::new(ownership(owner))),
             runtime.clone(),
         ));
         let handler = Arc::new(PausableGateway {
-            inner: GatewayHandler::new(Some(ownership(owner, selected_class)), Some("192.0.2.1".into())),
+            inner: GatewayHandler::new(Some(ownership(owner)), Some("192.0.2.1".into())),
             hold: AtomicBool::new(false),
             entered: Notify::new(),
             resume: Notify::new(),
@@ -193,7 +193,7 @@ impl Fixture {
 
 #[tokio::test]
 async fn missing_class_recovers_and_delete_recreate_revokes_side_effects() {
-    let f = Fixture::new(OWNER, CLASS);
+    let f = Fixture::new(OWNER);
     assert!(matches!(f.gateway_turn(true).await, WorkItemResult::Skipped));
     f.assert_published(false);
     f.class_event(CLASS, Some(class(OWNER, CLASS, "first"))).await;
@@ -210,13 +210,9 @@ async fn missing_class_recovers_and_delete_recreate_revokes_side_effects() {
 }
 
 #[tokio::test]
-async fn independent_deployments_only_publish_the_selected_class_and_owner() {
-    for (owner, selected, allowed) in [
-        (OWNER, CLASS, true),
-        ("example.com/other", CLASS, false),
-        (OWNER, "other-class", false),
-    ] {
-        let f = Fixture::new(owner, selected);
+async fn independent_deployments_only_publish_matching_owners() {
+    for (owner, allowed) in [(OWNER, true), ("example.com/other", false)] {
+        let f = Fixture::new(owner);
         let result = f.class_event(CLASS, Some(class(OWNER, CLASS, "uid"))).await;
         assert_eq!(matches!(result, WorkItemResult::Processed { .. }), owner == OWNER);
         assert_eq!(f.classes.get(CLASS).is_some(), allowed);
@@ -236,7 +232,7 @@ async fn independent_deployments_only_publish_the_selected_class_and_owner() {
 
 #[tokio::test]
 async fn raw_owned_class_never_published_then_coalesced_foreign_never_adopts_gateway() {
-    let f = Fixture::new(OWNER, CLASS);
+    let f = Fixture::new(OWNER);
     f.class_raw.upsert(CLASS.into(), Arc::new(class(OWNER, CLASS, "brief")));
     assert!(matches!(f.gateway_turn(true).await, WorkItemResult::Skipped));
     assert!(matches!(
@@ -251,7 +247,7 @@ async fn raw_owned_class_never_published_then_coalesced_foreign_never_adopts_gat
 
 #[tokio::test]
 async fn class_incarnation_not_generation_or_accepted_controls_gateway_ownership() {
-    let f = Fixture::new(OWNER, CLASS);
+    let f = Fixture::new(OWNER);
     f.class_event(CLASS, Some(class(OWNER, CLASS, "first"))).await;
     f.gateway_turn(false).await;
     let mut updated = class(OWNER, CLASS, "first");
@@ -291,7 +287,7 @@ async fn class_incarnation_not_generation_or_accepted_controls_gateway_ownership
 
 #[tokio::test]
 async fn unavailable_class_identity_fails_closed_but_local_sources_remain_unscoped() {
-    let f = Fixture::new(OWNER, CLASS);
+    let f = Fixture::new(OWNER);
     for uid in [Some(""), None] {
         let mut value = class(OWNER, CLASS, "placeholder");
         value.metadata.uid = uid.map(str::to_string);
@@ -312,7 +308,7 @@ async fn unavailable_class_identity_fails_closed_but_local_sources_remain_unscop
 
 #[tokio::test]
 async fn unpublication_during_gateway_processing_requeues_the_same_worker_for_cleanup() {
-    let f = Arc::new(Fixture::new(OWNER, CLASS));
+    let f = Arc::new(Fixture::new(OWNER));
     f.class_event(CLASS, Some(class(OWNER, CLASS, "first"))).await;
     f.handler.hold.store(true, Ordering::SeqCst);
     let worker = {
@@ -333,7 +329,7 @@ async fn unpublication_during_gateway_processing_requeues_the_same_worker_for_cl
 
 #[tokio::test]
 async fn repeated_class_and_gateway_status_echoes_converge_without_status_changes() {
-    let f = Fixture::new(OWNER, CLASS);
+    let f = Fixture::new(OWNER);
     let mut current_class = class(OWNER, CLASS, "uid");
     for round in 0..6 {
         let result = f.class_event(CLASS, Some(current_class)).await;
@@ -370,11 +366,10 @@ async fn repeated_class_and_gateway_status_echoes_converge_without_status_change
 }
 
 #[tokio::test]
-async fn unselected_class_reports_rejection_preserves_foreign_conditions_and_never_publishes() {
-    let f = Fixture::new(OWNER, CLASS);
+async fn every_matching_class_validates_parameters_and_preserves_foreign_conditions() {
+    let f = Fixture::new(OWNER);
     f.runtime.set_status_identity(KubernetesStatusIdentity {
         controller_name: OWNER.into(),
-        gateway_class_name: CLASS.into(),
     });
     let mut value = class(OWNER, "unassigned", "uid-unassigned");
     value.spec.parameters_ref = Some(
@@ -408,21 +403,23 @@ async fn unselected_class_reports_rejection_preserves_foreign_conditions_and_nev
             persisted_status,
         } = f.class_event("unassigned", Some(value)).await
         else {
-            panic!("matching unselected class needs a status result");
+            panic!("matching class needs a status result");
         };
         assert_eq!(status_changed, round == 0);
         let status = persisted_status.unwrap();
         assert_eq!(status["conditions"][0], foreign);
-        assert_eq!(status["conditions"].as_array().unwrap().len(), 2);
-        assert_eq!(status["conditions"][1]["type"], "Accepted");
-        assert_eq!(status["conditions"][1]["status"], "False");
-        assert_eq!(status["conditions"][1]["reason"], "Unsupported");
-        assert_eq!(status["supportedFeatures"], serde_json::json!([]));
-        assert!(f.classes.get("unassigned").is_none());
-        assert!(
-            f.gateways.workqueue().is_empty(),
-            "no publication hook for status-only output"
-        );
+        assert_eq!(status["conditions"].as_array().unwrap().len(), 4);
+        let accepted = status["conditions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["type"] == "Accepted")
+            .unwrap();
+        assert_eq!(accepted["status"], "False");
+        assert_eq!(accepted["reason"], "InvalidParameters");
+        assert!(!status["supportedFeatures"].as_array().unwrap().is_empty());
+        assert!(f.classes.get("unassigned").is_some());
+        assert!(f.gateways.workqueue().is_empty(), "unrelated Gateways are not requeued");
         value = obj;
     }
     // A features-only drift is semantic too; omitted/null is not an explicit clear.
@@ -438,8 +435,8 @@ async fn unselected_class_reports_rejection_preserves_foreign_conditions_and_nev
 }
 
 #[tokio::test]
-async fn status_only_class_init_withdrawal_and_leader_recovery_use_raw_keys() {
-    let f = Fixture::new(OWNER, CLASS);
+async fn matching_class_init_and_leader_recovery_use_raw_keys() {
+    let f = Fixture::new(OWNER);
     let value = class(OWNER, "unassigned", "old");
     f.class_raw.upsert("unassigned".into(), Arc::new(value.clone()));
     assert!(matches!(
@@ -449,11 +446,9 @@ async fn status_only_class_init_withdrawal_and_leader_recovery_use_raw_keys() {
             ..
         }
     ));
-    assert!(f.classes.get("unassigned").is_none());
+    assert!(f.classes.get("unassigned").is_some());
 
-    // Simulate a formerly published object. Status-only processing must withdraw
-    // it with ordinary cleanup and enqueue raw Gateway dependents after removal.
-    f.classes.save(value.clone(), None);
+    // Publishing the class enqueues raw Gateway dependents.
     let mut dependent = gateway();
     dependent.spec.gateway_class_name = "unassigned".into();
     f.gateway_raw.upsert(KEY.into(), Arc::new(dependent));
@@ -461,9 +456,9 @@ async fn status_only_class_init_withdrawal_and_leader_recovery_use_raw_keys() {
         f.class_event("unassigned", Some(value)).await,
         WorkItemResult::Processed { .. }
     ));
-    assert!(f.classes.get("unassigned").is_none());
-    assert!(matches!(f.gateway_turn(false).await, WorkItemResult::Skipped));
-    f.assert_published(false);
+    assert!(f.classes.get("unassigned").is_some());
+    assert!(matches!(f.gateway_turn(false).await, WorkItemResult::Processed { .. }));
+    f.assert_published(true);
 
     // Delete/recreate before a leader change. The unpublished new incarnation
     // must be visited even though ServerCache has no key for it.
@@ -487,21 +482,21 @@ async fn status_only_class_init_withdrawal_and_leader_recovery_use_raw_keys() {
         obj, status_changed, ..
     } = result
     else {
-        panic!("leader must recover status-only classes");
+        panic!("leader must recover matching classes");
     };
     assert_eq!(obj.metadata.uid.as_deref(), Some("new"));
     assert!(status_changed);
-    assert!(f.classes.get("unassigned").is_none());
+    assert!(f.classes.get("unassigned").is_some());
 }
 
 #[tokio::test]
-async fn distinct_controller_identities_converge_with_selected_and_unassigned_classes() {
-    let a = Fixture::new("example.com/a", "a");
-    let b = Fixture::new("example.com/b", "b");
+async fn distinct_controller_identities_converge_with_multiple_classes() {
+    let a = Fixture::new("example.com/a");
+    let b = Fixture::new("example.com/b");
     for (owner, name, accepted) in [
         ("example.com/a", "a", "True"),
         ("example.com/b", "b", "True"),
-        ("example.com/a", "unassigned", "False"),
+        ("example.com/a", "unassigned", "True"),
     ] {
         let mut value = class(owner, name, name);
         for round in 0..4 {
@@ -534,13 +529,13 @@ async fn distinct_controller_identities_converge_with_selected_and_unassigned_cl
     assert!(b.classes.get("b").is_some());
     assert!(a.classes.get("b").is_none());
     assert!(b.classes.get("a").is_none());
-    assert!(a.classes.get("unassigned").is_none());
+    assert!(a.classes.get("unassigned").is_some());
     assert!(b.classes.get("unassigned").is_none());
 }
 
 #[tokio::test]
 async fn one_selected_class_still_publishes_multiple_gateways() {
-    let f = Fixture::new(OWNER, CLASS);
+    let f = Fixture::new(OWNER);
     let mut second = gateway();
     second.metadata.name = Some("second".into());
     second.metadata.uid = Some("second-uid".into());
@@ -552,4 +547,68 @@ async fn one_selected_class_still_publishes_multiple_gateways() {
         assert!(f.gateways.get(key).unwrap().spec.resolved_attachment_proof.is_some());
     }
     assert!(f.gateways.workqueue().is_empty());
+}
+
+#[tokio::test]
+async fn two_matching_classes_publish_distinct_parameters_and_gateway_transfer_revokes_ownership() {
+    use super::EdgionGatewayConfigHandler;
+    use crate::conf_mgr::sync_runtime::resource_processor::status_ownership::gateway_is_owned;
+    use edgion_resources::EdgionGatewayConfig;
+
+    let f = Fixture::new(OWNER);
+    f.runtime.set_status_identity(KubernetesStatusIdentity {
+        controller_name: OWNER.into(),
+    });
+    let configs = Arc::new(ResourceProcessor::<EdgionGatewayConfig>::new(
+        "EdgionGatewayConfig",
+        16,
+        Arc::new(EdgionGatewayConfigHandler::new()),
+        f.runtime.clone(),
+    ));
+    let config_raw = Arc::new(LocalRawStore::new());
+    configs.set_raw_store(config_raw.clone());
+    f.runtime.processor_registry.register(configs);
+    let mut second = gateway();
+    second.metadata.name = Some("second".into());
+    second.metadata.uid = Some("second-uid".into());
+    second.spec.gateway_class_name = "second-class".into();
+    second.spec.listeners.as_mut().unwrap()[0].port = 8443;
+    f.gateway_raw.upsert("apps/second".into(), Arc::new(second));
+    for (name, config_name) in [(CLASS, "config-a"), ("second-class", "config-b")] {
+        let config = serde_json::from_value(serde_json::json!({"metadata":{"name": config_name}, "spec":{}})).unwrap();
+        config_raw.upsert(config_name.into(), Arc::new(config));
+        let mut value = class(OWNER, name, name);
+        value.spec.parameters_ref = Some(
+            serde_json::from_value(serde_json::json!({
+                "group":"edgion.io", "kind":"EdgionGatewayConfig", "name":config_name
+            }))
+            .unwrap(),
+        );
+        f.class_event(name, Some(value)).await;
+        let published = f.classes.get(name).unwrap();
+        assert_eq!(published.spec.parameters_ref.as_ref().unwrap().name, config_name);
+        assert!(published
+            .status
+            .unwrap()
+            .conditions
+            .iter()
+            .any(|c| c.type_ == "Accepted" && c.status == "True"));
+    }
+    f.gateway_turn(false).await;
+    f.gateway_turn(false).await;
+    for key in [KEY, "apps/second"] {
+        assert!(gateway_is_owned(&f.gateways.get(key).unwrap(), &f.runtime));
+    }
+    assert!(matches!(
+        f.class_event("foreign", Some(class("example/foreign", "foreign", "foreign")))
+            .await,
+        WorkItemResult::Skipped
+    ));
+    let mut transferred = gateway();
+    transferred.spec.gateway_class_name = "foreign".into();
+    f.gateway_raw.upsert(KEY.into(), Arc::new(transferred.clone()));
+    assert!(!gateway_is_owned(&transferred, &f.runtime));
+    assert!(matches!(f.gateway_turn(true).await, WorkItemResult::Deleted { .. }));
+    assert!(f.gateways.get(KEY).is_none());
+    assert!(f.gateways.get("apps/second").is_some());
 }

@@ -14,7 +14,6 @@ logging:
 
 conf_center:
   type: kubernetes
-  gateway_class: __GATEWAY_CLASS__
   controller_name: edgion.io/proxy-controller/__GATEWAY_CLASS__
   watch_namespaces: [__NAMESPACE__]
   ha_mode: leader-only

@@ -19,7 +19,6 @@ The `ha_mode` configuration option supports two multi-replica modes for differen
 ```yaml
 conf_center:
   type: kubernetes
-  gateway_class: edgion
   ha_mode: leader-only    # or "all-serve"
   leader_election:
     lease_name: edgion-controller-leader

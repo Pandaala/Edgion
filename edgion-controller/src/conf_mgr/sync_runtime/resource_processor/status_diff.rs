@@ -66,9 +66,8 @@ fn native_status_equal(kind: &str, old: &Value, new: &Value, resource_namespace:
 }
 
 /// Kubernetes observations are a map keyed by deployment identity, not array order.
-/// UID changes are semantic even when the new incarnation reports identical conditions.
 fn controller_observations_equal(kind: &str, old: &Value, new: &Value) -> bool {
-    type Observations<'a> = BTreeMap<(&'a str, &'a str), (&'a str, &'a Value)>;
+    type Observations<'a> = BTreeMap<&'a str, &'a Value>;
     fn decode(value: &Value) -> Option<Observations<'_>> {
         let object = value.as_object()?;
         if object.len() != 1 {
@@ -77,15 +76,15 @@ fn controller_observations_equal(kind: &str, old: &Value, new: &Value) -> bool {
         let mut entries = BTreeMap::new();
         for entry in object.get("controllers")?.as_array()? {
             let controller = entry.get("controllerName")?.as_str()?;
-            let class = entry.get("gatewayClassName")?.as_str()?;
-            let uid = entry.get("gatewayClassUid")?.as_str()?;
-            let status = entry.get("status")?;
-            if controller.is_empty()
-                || class.is_empty()
-                || uid.is_empty()
-                || !status.is_object()
-                || entries.insert((controller, class), (uid, status)).is_some()
+            if entry
+                .as_object()?
+                .keys()
+                .any(|field| !matches!(field.as_str(), "controllerName" | "status"))
             {
+                return None;
+            }
+            let status = entry.get("status")?;
+            if controller.is_empty() || !status.is_object() || entries.insert(controller, status).is_some() {
                 return None;
             }
         }
@@ -95,10 +94,9 @@ fn controller_observations_equal(kind: &str, old: &Value, new: &Value) -> bool {
         return false;
     };
     old.len() == new.len()
-        && new.iter().all(|(key, (uid, payload))| {
-            old.get(key).is_some_and(|(old_uid, old_payload)| {
-                uid == old_uid && native_status_equal(kind, old_payload, payload, None)
-            })
+        && new.iter().all(|(key, payload)| {
+            old.get(key)
+                .is_some_and(|old_payload| native_status_equal(kind, old_payload, payload, None))
         })
 }
 
@@ -331,13 +329,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn controller_observations_compare_identity_uid_and_native_semantics() {
+    fn controller_observations_compare_identity_and_native_semantics() {
         use serde_json::json;
         for kind in ["EdgionPlugins", "EdgionStreamPlugins", "EdgionBackend", "LinkSys"] {
-            let entry = |class: &str| {
+            let entry = |controller: &str| {
                 json!({
-                    "controllerName": "example/controller", "gatewayClassName": class,
-                    "gatewayClassUid": "uid-1", "status": {"conditions": [{
+                    "controllerName": controller, "status": {"conditions": [{
                         "type": "ResolvedRefs", "status": "True", "reason": "ResolvedRefs",
                         "message": "Resolved", "observedGeneration": 1,
                         "lastTransitionTime": "2026-01-01T00:00:00Z"
@@ -349,9 +346,9 @@ mod tests {
             new["controllers"][0]["status"]["conditions"][0]["lastTransitionTime"] = json!("2026-02-01T00:00:00Z");
             let changed = |value: &Value| status_semantically_changed(kind, &old.to_string(), &value.to_string(), None);
             assert!(!changed(&new), "{kind}: order and transition time are not changes");
-            let mut changed_uid = new.clone();
-            changed_uid["controllers"][0]["gatewayClassUid"] = json!("uid-2");
-            assert!(changed(&changed_uid));
+            let mut changed_owner = new.clone();
+            changed_owner["controllers"][0]["controllerName"] = json!("new/controller");
+            assert!(changed(&changed_owner));
             let mut changed_condition = new.clone();
             changed_condition["controllers"][0]["status"]["conditions"][0]["status"] = json!("False");
             assert!(changed(&changed_condition));

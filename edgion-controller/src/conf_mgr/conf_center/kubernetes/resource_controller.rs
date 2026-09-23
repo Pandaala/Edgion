@@ -298,13 +298,6 @@ where
                 let was_committed = sources[index].ever_committed;
                 let keys = sources[index].apply(event)?;
                 let first_commit = !was_committed && sources[index].ever_committed;
-                if self.kind == "GatewayClass"
-                    && first_commit
-                    && self.watcher_config.label_selector.is_none()
-                    && self.watcher_config.field_selector.is_none()
-                {
-                    self.processor.runtime().set_gateway_classes_complete(true);
-                }
                 if compare_ownership && (first_commit || before.as_ref() != Some(&signatures())) {
                     self.requeue_ownership_dependents().await;
                 }
@@ -375,10 +368,6 @@ where
                 handle.abort();
                 let _ = handle.await;
             }
-        }
-        if self.kind == "GatewayClass" {
-            // Source teardown clears its stores; that absence is not an API deletion.
-            self.processor.runtime().set_gateway_classes_complete(false);
         }
         drop(sources);
         result

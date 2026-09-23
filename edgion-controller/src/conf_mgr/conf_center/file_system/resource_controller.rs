@@ -1622,8 +1622,6 @@ mod tests {
                 key,
                 &serde_json::json!({"controllers": [{
                     "controllerName": "edgion.io/gateway-controller",
-                    "gatewayClassName": "edgion",
-                    "gatewayClassUid": "uid-1",
                     "status": {"conditions": []}
                 }]}),
             )

@@ -78,9 +78,9 @@ A Controller → Gateway HTTP Pull reverse-query scheme was once evaluated (with
 
 This is the **local** condition shape. In Kubernetes, EdgionPlugins,
 EdgionStreamPlugins, EdgionBackend and LinkSys persist complete observations in
-`status.controllers[]`, keyed by `(controllerName, gatewayClassName)`. Each entry
-contains `gatewayClassUid` and a nested native `status` payload. UID proves the
-class incarnation, not a new list key. LinkSys lifecycle fields belong inside
+`status.controllers[]`, keyed only by `controllerName`. Each entry contains a
+nested native `status` payload, independent of class count or class lifetime.
+LinkSys lifecycle fields belong inside
 that payload too; there is no aggregate top-level status that competing
 deployments can overwrite. FileSystem/etcd persistence retains native status.
 conf_sync transports both the complete source-specific status and native currentStatus.
@@ -94,9 +94,10 @@ status. Incoming currentStatus is cleared and recomputed; the field is excluded
 from CRD schemas but serialized through conf_sync. Missing ownership, invalid
 observations or the 32-entry cap suppress persistence, not local processing.
 An existing owner can update at the cap; a new owner cannot evict another.
-Inactive observations remain until committed GatewayClass deletion or identity
-replacement proves them obsolete. Absence requires a completed, unfiltered
-GatewayClass LIST; filtered, unwatched and initializing views cannot prove it.
+Inactive observations remain until an operator patches status or recreates the
+resource. GatewayClass deletion or identity replacement never prunes entries.
+Merge preserves foreign values and order from the observed snapshot; typed ingest
+may normalize optional empty fields before that snapshot.
 
 These Edgion status structs use
 `edgion_resources::resources::common::Condition` and the shared
@@ -112,11 +113,10 @@ per-ancestor comparator row in [§7](#7-status-persistence) and
 
 **GatewayClass special:** GatewayClassStatus also has `supported_features: Option<Vec<SupportedFeature>>`
 (each wire entry is an object with a `name` field),
-populated for selected classes with the full list of supported Gateway API features (matching
+populated for matching classes with the full list of supported Gateway API features (matching
 the conformance test declaration in `edgion-tests/conformance/conformance_test.go`).
-Unselected matching classes receive `Accepted=False/Unsupported` and an explicit
-empty feature list, without publication or deployment-local parameter resolution.
-Foreign conditions are retained; old owned ResolvedRefs/SupportedVersion are removed.
+Every matching class receives ordinary parameter validation and publication.
+Foreign-controller classes are not handled; foreign conditions are retained.
 
 ```rust
 fn update_status(&self, obj: &mut T, _ctx: &HandlerContext, validation_errors: &[String]) {
@@ -367,8 +367,9 @@ visible after reserialization is insufficient. Logical comparison excludes these
 tombstones. Mixed or unknown shapes suppress persistence without dropping config.
 
 Native parent/ancestor arrays retain their API shape. Kubernetes projection
-limits writes to attachments whose Gateway belongs to the selected class,
-including when deployments share controllerName. Missing Gateway history is
+limits current serving status to attachments whose Gateway belongs to a class
+owned by this controllerName. Independent deployments use distinct identities.
+Missing Gateway history is
 preserved in complete status but cannot become current serving authority. Delegation selects
 one writer from the first sorted canonical parentRef before lookup; missing,
 invalid or cyclic chains do not fall back to a visible alternative branch.
@@ -403,15 +404,15 @@ not force reconciliation. Status IO remains inline in the single per-kind worker
 
 Version checking protects against stale writes, not incorrect snapshot ownership or stale
 leadership. Kubernetes GatewayClass status covers all classes matching the resolved
-controller name, independently of the global label selector. Only the selected class
-is published; leader acquisition requeues raw class keys as well as published keys.
+controller name, independently of the global label selector. All matching classes
+are published; leader acquisition requeues raw class keys as well as published keys.
 Explicitly disabling the GatewayClass watcher disables reporting. Gateway processing
 additionally requires that the referenced raw
 class's nonempty UID matches this deployment's published class incarnation. Class
 publication/unpublication requeues matching raw Gateways after the cache mutation;
 ownership loss withdraws cached state rather than writing a rejection into another
 controller's status. Generation and class `Accepted` do not define ownership. Independent
-deployments must use distinct controller names; replicas sharing one class/owner need the same
+deployments must use distinct controller names; replicas sharing one owner need the same
 election domain and configuration view. This is not a fence for arbitrarily overlapping
 independent writers. Handlers must preserve foreign `parents`/`ancestors` entries already in their
 input, and explicitly serialize empty owned lists when clearing them. Both policy handlers

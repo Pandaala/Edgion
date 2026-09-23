@@ -18,7 +18,7 @@
 //! │           │     4. Run (Init → Runtime)                                      │
 //! │           │                                                                  │
 //! │           ├── Gateway ───────────────────────────────────────────────────►  │
-//! │           │     [Same flow + gateway_class filter]                          │
+//! │           │     [Same flow + controllerName ownership]                          │
 //! │           │                                                                  │
 //! │           └── ...  ...                                               │
 //! │                                                                              │
@@ -322,7 +322,7 @@ async fn requeue_selector_gateways(runtime: Arc<ControllerRuntime>) {
     let Some(processor) = runtime.processor_registry.get("Gateway") else {
         return;
     };
-    // Iterate cache keys (already filtered by our gatewayClassName via the
+    // Iterate cache keys (already filtered by our controllerName via the
     // handler) rather than raw_store, to avoid requeuing Gateways owned by
     // other controllers.
     for key in processor.list_keys() {
@@ -351,7 +351,6 @@ async fn requeue_selector_gateways(runtime: Arc<ControllerRuntime>) {
 /// This controller focuses solely on resource watching and synchronization.
 pub struct KubernetesController {
     client: Client,
-    gateway_class_name: String,
     controller_name: String,
     gateway_address: Option<String>,
     watch_mode: NamespaceWatchMode,
@@ -374,7 +373,6 @@ impl KubernetesController {
     #[allow(clippy::too_many_arguments)]
     pub fn with_metadata_filter(
         client: Client,
-        gateway_class_name: String,
         controller_name: String,
         gateway_address: Option<String>,
         watch_namespaces: Vec<String>,
@@ -388,7 +386,6 @@ impl KubernetesController {
             component = "k8s_controller",
             watch_mode = ?watch_mode,
             label_selector = ?label_selector,
-            gateway_class_name = %gateway_class_name,
             controller_name = %controller_name,
             gateway_address = ?gateway_address,
             metadata_filter_enabled = true,
@@ -398,7 +395,6 @@ impl KubernetesController {
 
         Ok(Self {
             client,
-            gateway_class_name,
             controller_name,
             gateway_address,
             watch_mode,
@@ -457,7 +453,6 @@ impl KubernetesController {
     ) -> Result<ControllerExitReason> {
         runtime.set_status_identity(KubernetesStatusIdentity {
             controller_name: self.controller_name.clone(),
-            gateway_class_name: self.gateway_class_name.clone(),
         });
         self.run_controllers(shutdown_signal, runtime).await
     }
@@ -589,10 +584,7 @@ impl KubernetesController {
             h.spawn(spawn_cluster::<GatewayClass, _>(
                 self,
                 "GatewayClass",
-                GatewayClassHandler::new(GatewayClassOwnership::new(
-                    self.controller_name.clone(),
-                    Some(self.gateway_class_name.clone()),
-                )),
+                GatewayClassHandler::new(GatewayClassOwnership::new(self.controller_name.clone())),
                 &ctx,
             ));
         }
@@ -709,10 +701,7 @@ impl KubernetesController {
                 self,
                 "Gateway",
                 GatewayHandler::new(
-                    Some(GatewayClassOwnership::new(
-                        self.controller_name.clone(),
-                        Some(self.gateway_class_name.clone()),
-                    )),
+                    Some(GatewayClassOwnership::new(self.controller_name.clone())),
                     self.gateway_address.clone(),
                 ),
                 &ctx,

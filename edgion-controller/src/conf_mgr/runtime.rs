@@ -43,7 +43,6 @@ use crate::services::credential_manager::memory::CredentialMemoryStore;
 /// `Arc<ControllerRuntime>` so cloning is cheap and all owners see the same data.
 pub struct ControllerRuntime {
     status_identity: RwLock<Option<KubernetesStatusIdentity>>,
-    gateway_classes_complete: AtomicBool,
     pub(crate) processor_registry: ProcessorRegistry,
     pub(crate) namespace_store: NamespaceStore,
     pub(crate) ref_grant_dispatcher: ReferenceGrantEventDispatcher,
@@ -115,7 +114,6 @@ impl ControllerRuntime {
     pub fn new() -> Self {
         Self {
             status_identity: RwLock::new(None),
-            gateway_classes_complete: AtomicBool::new(false),
             processor_registry: ProcessorRegistry::new(),
             namespace_store: NamespaceStore::new(),
             ref_grant_dispatcher: ReferenceGrantEventDispatcher::new(),
@@ -156,15 +154,6 @@ impl ControllerRuntime {
 
     pub fn set_status_identity(&self, identity: KubernetesStatusIdentity) {
         *self.status_identity.write() = Some(identity);
-    }
-
-    /// Only an unfiltered, committed cluster-wide LIST proves class absence.
-    pub fn set_gateway_classes_complete(&self, complete: bool) {
-        self.gateway_classes_complete.store(complete, Ordering::Release);
-    }
-
-    pub fn gateway_classes_complete(&self) -> bool {
-        self.gateway_classes_complete.load(Ordering::Acquire)
     }
 
     pub fn set_managed_credentials_supported(&self, supported: bool) {
@@ -220,7 +209,6 @@ impl ControllerRuntime {
     /// on each restart; dispatcher listeners are left alive by design (see above).
     pub fn reset(&self) {
         *self.status_identity.write() = None;
-        self.set_gateway_classes_complete(false);
         self.processor_registry.clear_processors();
         tracing::info!(component = "controller_runtime", "Cleared ProcessorRegistry");
 

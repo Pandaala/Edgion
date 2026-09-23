@@ -82,36 +82,22 @@ fn resolve_params_ref(gc: &GatewayClass, ctx: &HandlerContext) -> ParamsRefState
     }
 }
 
-/// Deployment ownership of GatewayClasses. Non-Kubernetes sources may omit
-/// the selected class; Kubernetes always supplies its configured class name.
+/// Deployment ownership of every class with the configured controllerName.
 pub struct GatewayClassOwnership {
     controller_name: String,
-    gateway_class_name: Option<String>,
 }
 
 impl GatewayClassOwnership {
     pub(super) fn owns_gateway(&self, gateway: &Gateway, runtime: &ControllerRuntime) -> bool {
-        gateway_has_class_owner(
-            gateway,
-            &self.controller_name,
-            self.gateway_class_name.as_deref(),
-            runtime,
-        )
+        gateway_has_class_owner(gateway, &self.controller_name, runtime)
     }
 
-    pub fn new(controller_name: String, gateway_class_name: Option<String>) -> Self {
-        Self {
-            controller_name,
-            gateway_class_name,
-        }
+    pub fn new(controller_name: String) -> Self {
+        Self { controller_name }
     }
 
     pub(super) fn matches(&self, gc: &GatewayClass) -> bool {
         gc.spec.controller_name == self.controller_name
-            && self
-                .gateway_class_name
-                .as_ref()
-                .is_none_or(|name| gc.metadata.name.as_ref() == Some(name))
     }
 }
 
@@ -129,7 +115,7 @@ impl GatewayClassHandler {
 #[cfg(test)]
 impl Default for GatewayClassHandler {
     fn default() -> Self {
-        Self::new(GatewayClassOwnership::new(DEFAULT_CONTROLLER_NAME.to_string(), None))
+        Self::new(GatewayClassOwnership::new(DEFAULT_CONTROLLER_NAME.to_string()))
     }
 }
 
@@ -185,27 +171,6 @@ impl ProcessorHandler<GatewayClass> for GatewayClassHandler {
 
     fn update_status(&self, gc: &mut GatewayClass, ctx: &HandlerContext, validation_errors: &[String]) {
         let generation = gc.metadata.generation;
-        if !self.ownership.matches(gc) {
-            // Reporting responsibility spans every matching controllerName, but
-            // serving authority remains limited to the selected class. Do not
-            // resolve deployment-local parameters for an unsupported class.
-            let status = gc.status.get_or_insert_with(GatewayClassStatus::default);
-            status
-                .conditions
-                .retain(|condition| !matches!(condition.type_.as_str(), "ResolvedRefs" | "SupportedVersion"));
-            update_condition(
-                &mut status.conditions,
-                condition_false(
-                    condition_types::ACCEPTED,
-                    "Unsupported",
-                    "GatewayClass is not selected by this controller deployment",
-                    generation,
-                ),
-            );
-            // An omitted field cannot clear an old list in a JSON Merge Patch.
-            status.supported_features = Some(Vec::new());
-            return;
-        }
         let ref_state = resolve_params_ref(gc, ctx);
         let status = gc.status.get_or_insert_with(GatewayClassStatus::default);
 

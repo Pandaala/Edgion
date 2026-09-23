@@ -13,8 +13,6 @@ use serde_json::{json, Value};
 fn controller() -> ControllerObservation<ConditionsStatus> {
     ControllerObservation {
         controller_name: "example.io/controller".into(),
-        gateway_class_name: "edge".into(),
-        gateway_class_uid: "uid-edge".into(),
         status: ConditionsStatus::default(),
     }
 }
@@ -39,8 +37,6 @@ fn link_sys_serializes_native_or_envelope_without_mixing() {
     assert_eq!(serde_json::to_value(LinkSysStatus::default()).unwrap(), json!({}));
     let envelope = ControllerStatus::Partitioned(vec![ControllerObservation {
         controller_name: "example.io/controller".into(),
-        gateway_class_name: "edge".into(),
-        gateway_class_uid: "uid-edge".into(),
         status: LinkSysLocalStatus::default(),
     }]);
     let encoded = serde_json::to_value(envelope).unwrap();
@@ -65,8 +61,6 @@ fn link_sys_envelope_retains_every_local_lifecycle_field() {
     };
     let status = ControllerStatus::Partitioned(vec![ControllerObservation {
         controller_name: "example.io/controller".into(),
-        gateway_class_name: "edge".into(),
-        gateway_class_uid: "uid-edge".into(),
         status: local,
     }]);
     let local = &serde_json::to_value(status).unwrap()["controllers"][0]["status"];
@@ -124,19 +118,15 @@ fn committed_crds_define_bounded_structural_controller_maps() {
         assert_eq!(controllers["x-kubernetes-list-type"], "map", "{file}");
         assert_eq!(
             controllers["x-kubernetes-list-map-keys"],
-            json!(["controllerName", "gatewayClassName"]),
+            json!(["controllerName"]),
             "{file}"
         );
         let item = &controllers["items"];
-        assert_eq!(
-            item["required"],
-            json!(["controllerName", "gatewayClassName", "gatewayClassUid", "status"]),
-            "{file}"
-        );
-        for field in ["controllerName", "gatewayClassName", "gatewayClassUid"] {
-            assert_eq!(item["properties"][field]["type"], "string", "{file}.{field}");
-            assert_eq!(item["properties"][field]["minLength"], 1, "{file}.{field}");
-        }
+        assert_eq!(item["required"], json!(["controllerName", "status"]), "{file}");
+        assert_eq!(item["properties"]["controllerName"]["type"], "string", "{file}");
+        assert_eq!(item["properties"]["controllerName"]["minLength"], 1, "{file}");
+        assert!(item["properties"].get("gatewayClassName").is_none(), "{file}");
+        assert!(item["properties"].get("gatewayClassUid").is_none(), "{file}");
         assert_eq!(item["properties"]["status"]["type"], "object", "{file}");
         let conditions = &item["properties"]["status"]["properties"]["conditions"];
         assert_eq!(conditions["x-kubernetes-list-type"], "map", "{file}");

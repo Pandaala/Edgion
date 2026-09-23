@@ -285,7 +285,6 @@ impl KubernetesCenter {
         tracing::info!(
             component = "kubernetes_center",
             mode = "kubernetes",
-            gateway_class = %config.gateway_class(),
             "Creating KubernetesCenter"
         );
 
@@ -377,7 +376,6 @@ impl KubernetesCenter {
         tracing::info!(
             component = "kubernetes_center",
             mode = "kubernetes",
-            gateway_class = %config.gateway_class(),
             controller_name = %self.controller_name,
             namespaces = ?config.watch_namespaces(),
             metadata_filter_enabled = true,
@@ -389,7 +387,6 @@ impl KubernetesCenter {
         let no_watch_kinds = config.no_watch_kinds.iter().cloned().collect();
         KubernetesController::with_metadata_filter(
             client.clone(),
-            config.gateway_class.clone(),
             self.controller_name.clone(),
             config.gateway_address.clone(),
             config.watch_namespaces.clone(),
@@ -1432,7 +1429,7 @@ mod leadership_signal_tests {
     /// Build a `KubernetesCenter` without touching a cluster. Only the
     /// leadership signal is exercised, which never talks to the apiserver.
     pub(super) fn unconnected_center() -> KubernetesCenter {
-        let config = KubernetesConfig::new("edgion");
+        let config = KubernetesConfig::default();
         let runtime = Arc::new(ControllerRuntime::new());
         runtime.set_single_publisher(config.ha_mode() != HaMode::AllServe);
         KubernetesCenter {

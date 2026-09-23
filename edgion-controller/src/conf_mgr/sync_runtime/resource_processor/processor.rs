@@ -742,9 +742,7 @@ where
                 if kubernetes && status_pipeline::is_partitioned(self.kind) {
                     persisted_status = match (&observer, persisted_status.as_ref()) {
                         (Some(identity), Some(local)) if persistence_allowed => {
-                            let facts = status_pipeline::class_observations(&self.runtime, observed_status);
-                            match status_observation::merge_status(self.kind, observed_status, local, identity, &facts)
-                            {
+                            match status_observation::merge_status(self.kind, observed_status, local, identity) {
                                 Ok(status) => status,
                                 Err(error) => {
                                     tracing::warn!(component = "status_projection", kind = self.kind, error = %error,

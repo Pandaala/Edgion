@@ -19,8 +19,8 @@ Gateway is Edgion's core resource. It defines the gateway's Listeners (listening
 
 ### filter
 
-Kubernetes supplies `GatewayClassOwnership`: the selected class name and controller name.
-The raw referenced GatewayClass must match both, and its nonempty UID must match the
+Kubernetes supplies `GatewayClassOwnership`: the resolved controller name.
+The raw referenced GatewayClass must match that name, and its nonempty UID must match the
 GatewayClass already published in this deployment's processed cache. Missing, unwatched,
 foreign or not-yet-published class incarnations fail closed. Generation and `Accepted`
 are not ownership gates. Losing eligibility uses the processor's ordinary deletion path

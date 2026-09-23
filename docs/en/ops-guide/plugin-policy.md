@@ -44,10 +44,10 @@ them to the same EGC. An unreferenced EGC has no effect on plugin execution.
 Install the updated structural CRD before setting `pluginPolicy` in Kubernetes;
 otherwise an API server using the old schema can prune the field.
 
-The current Kubernetes Controller startup setting `conf_center.gateway_class`
-still selects one GatewayClass per Controller. Policy binding does not widen that
-resource ownership. Multiple-class publication is available to configuration
-centers that supply those Gateways, including filesystem mode.
+The Kubernetes Controller serves every GatewayClass whose `spec.controllerName`
+matches its deployment identity. Each Gateway selects policy through its own
+class's `parametersRef`, so multiple classes in one deployment can use different
+policies. Use separate physical listener ports for different classes.
 
 Names are exact, case-sensitive `<family>/<Type>` values: `http` covers all four
 HTTP stages, `stream` covers the connection stage, and `tls-route` covers the

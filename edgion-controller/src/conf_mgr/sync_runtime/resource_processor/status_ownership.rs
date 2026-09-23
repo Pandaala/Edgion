@@ -13,29 +13,15 @@ use crate::conf_mgr::ControllerRuntime;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct KubernetesStatusIdentity {
     pub controller_name: String,
-    pub gateway_class_name: String,
 }
 
-/// Ownership is established by the selected class incarnation, not its conditions.
-pub fn gateway_has_class_owner(
-    gateway: &Gateway,
-    controller_name: &str,
-    class_name: Option<&str>,
-    runtime: &ControllerRuntime,
-) -> bool {
-    gateway_owned_class_uid(gateway, controller_name, class_name, runtime).is_some()
+/// Ownership requires the referenced class incarnation, not its conditions.
+pub fn gateway_has_class_owner(gateway: &Gateway, controller_name: &str, runtime: &ControllerRuntime) -> bool {
+    gateway_owned_class_uid(gateway, controller_name, runtime).is_some()
 }
 
-fn gateway_owned_class_uid(
-    gateway: &Gateway,
-    controller_name: &str,
-    class_name: Option<&str>,
-    runtime: &ControllerRuntime,
-) -> Option<String> {
+fn gateway_owned_class_uid(gateway: &Gateway, controller_name: &str, runtime: &ControllerRuntime) -> Option<String> {
     let name = &gateway.spec.gateway_class_name;
-    if class_name.is_some_and(|selected| selected != name) {
-        return None;
-    }
     let processor = runtime.processor_registry.get("GatewayClass")?;
     let raw = processor
         .get_raw_any(name)
@@ -51,14 +37,9 @@ fn gateway_owned_class_uid(
 }
 
 pub fn gateway_is_owned(gateway: &Gateway, runtime: &ControllerRuntime) -> bool {
-    runtime.status_identity().is_none_or(|identity| {
-        gateway_has_class_owner(
-            gateway,
-            &identity.controller_name,
-            Some(&identity.gateway_class_name),
-            runtime,
-        )
-    })
+    runtime
+        .status_identity()
+        .is_none_or(|identity| gateway_has_class_owner(gateway, &identity.controller_name, runtime))
 }
 
 /// A serving attachment requires this deployment's current published incarnation.
@@ -80,12 +61,7 @@ fn serving_gateway_with_class_uid(
     };
     let raw = processor.get_raw_any(&key)?.downcast::<Gateway>().ok()?;
     let uid = raw.metadata.uid.as_deref().filter(|uid| !uid.is_empty())?;
-    let class_uid = gateway_owned_class_uid(
-        &raw,
-        &identity.controller_name,
-        Some(&identity.gateway_class_name),
-        runtime,
-    )?;
+    let class_uid = gateway_owned_class_uid(&raw, &identity.controller_name, runtime)?;
     (published.metadata.uid.as_deref() == Some(uid) && published.spec.gateway_class_name == raw.spec.gateway_class_name)
         .then_some((published, Some(class_uid)))
 }
@@ -367,7 +343,6 @@ mod tests {
             let runtime = Arc::new(ControllerRuntime::default());
             runtime.set_status_identity(KubernetesStatusIdentity {
                 controller_name: "example.com/controller".into(),
-                gateway_class_name: selected.into(),
             });
             let classes = Arc::new(ResourceProcessor::new(
                 "GatewayClass",
@@ -380,7 +355,7 @@ mod tests {
             runtime.processor_registry.register(classes.clone());
             for name in ["a", "b"] {
                 let class: GatewayClass = serde_json::from_value(json!({"metadata":{"name":name,"uid":name},
-                    "spec":{"controllerName":"example.com/controller"}}))
+                    "spec":{"controllerName":if name == selected {"example.com/controller"} else {"example.com/foreign"}}}))
                 .unwrap();
                 class_raw.upsert(name.into(), Arc::new(class.clone()));
                 classes.on_init_apply(class, None).await;
@@ -440,27 +415,27 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn same_controller_different_classes_preserve_each_other_and_converge() {
-        let a = Fixture::new("a").await;
-        let b = Fixture::new("b").await;
+    async fn one_controller_owns_parents_across_both_matching_classes() {
+        let fixture = Fixture::new("a").await;
+        let mut second = (*fixture.class_raw.get("b").unwrap()).clone();
+        second.spec.controller_name = "example.com/controller".into();
+        fixture.class_raw.upsert("b".into(), Arc::new(second.clone()));
+        fixture.classes.on_init_apply(second, None).await;
         let resource = json!({"spec":{"parentRefs":[{"name":"a"},{"name":"b"}]}});
-        let mut persisted = json!({"parents":[]});
-        for _ in 0..8 {
-            for (fixture, own, other) in [(&a, "a", "b"), (&b, "b", "a")] {
-                let computed = json!({"parents":[entry(own, "local"),entry(other, "different dependency view")]});
-                let (local, next) =
-                    native_status_projection("HTTPRoute", "apps", &resource, &persisted, &computed, &fixture.runtime)
-                        .unwrap();
-                assert_eq!(local["parents"], json!([entry(own, "local")]));
-                persisted = next;
-            }
-            assert_eq!(persisted["parents"].as_array().unwrap().len(), 2);
-            assert!(persisted["parents"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .all(|entry| entry["conditions"][0]["message"] == "local"));
-        }
+        let computed = json!({"parents":[entry("a", "local a"),entry("b", "local b")]});
+        let (local, persisted) = native_status_projection(
+            "HTTPRoute",
+            "apps",
+            &resource,
+            &json!({"parents":[]}),
+            &computed,
+            &fixture.runtime,
+        )
+        .unwrap();
+        assert_eq!(local, computed);
+        assert_eq!(persisted, computed);
+        assert!(serving_gateway("apps", "a", &fixture.runtime).is_some());
+        assert!(serving_gateway("apps", "b", &fixture.runtime).is_some());
     }
 
     #[tokio::test]

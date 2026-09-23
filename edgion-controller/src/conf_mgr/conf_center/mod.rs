@@ -47,7 +47,7 @@ macro_rules! for_each_provider_core_resource {
     ($cb:ident, $controller_name:expr) => {
         $cb!(
             GatewayClass,
-            GatewayClassHandler::new(GatewayClassOwnership::new($controller_name.to_string(), None))
+            GatewayClassHandler::new(GatewayClassOwnership::new($controller_name.to_string()))
         );
         $cb!(Secret, SecretHandler::new());
         $cb!(ConfigMap, ConfigMapHandler::new());

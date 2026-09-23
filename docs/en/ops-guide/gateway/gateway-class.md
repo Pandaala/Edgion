@@ -10,8 +10,8 @@ matches the Edgion controller, then set `gatewayClassName` on your Gateways to r
 GatewayClass may also point at an `EdgionGatewayConfig` via `parametersRef` to tune data-plane
 behavior.
 
-Edgion follows a 1 controller : 1 GatewayClass model: a single Edgion instance manages one
-GatewayClass. `parametersRef` is optional — when unset, Gateways use built-in defaults; when
+One Edgion Controller deployment serves every GatewayClass matching its controllerName.
+Each Gateway uses its own class's configuration. `parametersRef` is optional — when unset, Gateways use built-in defaults; when
 set, it must reference an `edgion.io/EdgionGatewayConfig`.
 
 ## Configuration
@@ -55,14 +55,15 @@ Missing or invalid components stop startup. An explicit `controller_name` takes
 precedence; blank or invalid values fail startup. FileSystem and etcd require an
 explicit value. See [Controller configuration](../configuration/controller-config.md).
 
-The Controller reports status for every GatewayClass with this controller name.
-Classes other than the configured `gateway_class` receive
-`Accepted=False/Unsupported`, with no supported features, and are not published to
-Gateways. The GatewayClass watch ignores `label_selector` so unlabeled classes are
+The Controller validates, reports status for and publishes every GatewayClass with
+this controller name. Adding a matching class requires no Controller restart.
+The removed `conf_center.gateway_class` startup key is rejected if supplied,
+including null. Use RBAC to control class creation and controllerName assignment.
+The GatewayClass watch ignores `label_selector` so unlabeled classes are
 also reported. `no_watch_kinds: [GatewayClass]` disables both reporting and Gateway
 processing.
 
-Kubernetes ownership checks both `controller_name` and the configured `gateway_class`.
+Kubernetes ownership checks `controller_name`.
 The Controller processes a Gateway only after it has published the matching GatewayClass
 incarnation (the same nonempty Kubernetes UID). A missing, foreign or unwatched class
 does not authorize Gateway processing; `no_watch_kinds: [GatewayClass]` therefore disables
@@ -71,8 +72,8 @@ until ownership is established again. Class `Accepted=False` does not itself tra
 ownership, and an ordinary generation update does not revoke it.
 
 Use distinct controller names and GatewayClasses for independent deployments.
-Explicit identity collisions are not detected at runtime. HA replicas sharing one class
-and controller name must share their election domain and configuration/resource view.
+Explicit identity collisions are not detected at runtime. HA replicas sharing a
+controller name must share their election domain and configuration/resource view.
 The version check below does not prevent two independently elected, overlapping deployments
 from alternating different desired statuses.
 
@@ -173,16 +174,16 @@ spec:
 
 In Kubernetes, `EdgionPlugins`, `EdgionStreamPlugins`, `EdgionBackend` and
 `LinkSys` store each deployment's complete observation in `status.controllers[]`.
-Select the entry by `controllerName` and `gatewayClassName`, then inspect its
-`status.conditions`. `gatewayClassUid` identifies the current GatewayClass
-incarnation. LinkSys credential lifecycle fields also live inside that entry's
+Select the entry by `controllerName`, then inspect its `status.conditions`.
+One deployment has one observation regardless of how many classes it serves.
+LinkSys credential lifecycle fields also live inside that entry's
 `status`, not at the top level.
 
 Each resource holds at most 32 deployment entries. Existing entries can still
 update at the limit; a new deployment cannot evict another entry. The Controller
 reports the refused status write while continuing local configuration processing.
-Inactive entries do not expire: cleanup requires authoritative GatewayClass
-deletion or identity-replacement evidence. FileSystem and etcd persistence retain
+Inactive entries do not expire, including after GatewayClass deletion: an operator
+must patch status or recreate the resource to remove them. FileSystem and etcd persistence retain
 their native status format. Gateway configuration retains complete `status` and
 includes Controller-generated `spec.currentStatus`. Inspect this current view
 when troubleshooting this deployment's route acceptance, listener status, or
@@ -190,11 +191,20 @@ ACME challenges. Another deployment's successful status does not authorize local
 serving. This is internal diagnostic and transport data; do not set it in resource
 YAML. A Route with missing current status or no matching `Accepted=True` entry is
 not admitted by the data plane. Independent deployments should use distinct
-controller names and GatewayClasses; replicas sharing a class must share an election domain and
+controller names and GatewayClasses; replicas sharing an identity must share an election domain and
 configuration view.
+
+This is a pre-release status format change. Observations containing the old
+`gatewayClassName` or `gatewayClassUid` fields are not automatically migrated:
+the Controller suppresses status persistence for that resource while continuing
+local configuration processing. Applying the CRDs alone does not establish a
+status migration. Coordinate affected deployments before explicitly resetting
+status or recreating the resource; normal reconciliation preserves other
+deployments' observations.
 
 ### GatewayClass caveats
 
+- Multiple classes may reference different EdgionGatewayConfigs, but cannot share one physical listener port.
 - `controllerName` is immutable in the Gateway API; to change controllers you must delete and
   recreate the GatewayClass.
 - If `controllerName` does not exactly match the configured Controller name, Edgion never sets

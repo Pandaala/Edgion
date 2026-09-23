@@ -473,7 +473,6 @@ the `.await`, and tokio silently swallows a panic at a task boundary otherwise.
 ```yaml
 conf_center:
   type: kubernetes
-  gateway_class: edgion
   controller_name: edgion.io/gateway-controller
   ha_mode: leader-only            # or "all-serve"
   cache_ready_deadline_secs: 90   # default; restart-bound, see "Supervision & Recovery" above

@@ -58,9 +58,9 @@ rule must attach `AiProxy`; candidate order and weights come exclusively from
 ## Status
 
 Kubernetes stores these native conditions in
-`status.controllers[].status.conditions`, selected by `controllerName` and
-`gatewayClassName`; `gatewayClassUid` identifies the class incarnation.
-FileSystem/etcd and conf_sync retain native conditions. See the shared 32-entry
+`status.controllers[].status.conditions`, selected only by `controllerName`.
+FileSystem/etcd retain native conditions; conf_sync carries complete source
+status plus native `spec.currentStatus`. See the shared 32-entry
 [observation contract](../../01-architecture/01-controller/10-status-management.md#7-status-persistence).
 
 - `Accepted` reports static schema and semantic validation.

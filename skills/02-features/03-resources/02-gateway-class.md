@@ -10,7 +10,7 @@ description: GatewayClass resource schema: controller binding and runtime config
 
 GatewayClass defines the "type" of a Gateway, associating it with a specific controller implementation and optionally referencing a runtime configuration.
 
-> **Design decision**: Edgion adopts the 1 Controller : 1 GatewayClass pattern (consistent with Envoy Gateway and NGINX Gateway Fabric); a single instance explicitly does not support managing multiple GatewayClasses. `parametersRef` is optional — when unset, the Gateway uses built-in defaults; when set, it must reference `edgion.io/EdgionGatewayConfig`.
+> **Design decision**: One deployment serves every GatewayClass matching its resolved controllerName. Each Gateway uses its class's own optional parametersRef; when unset, it uses built-in defaults, and when set, it must reference `edgion.io/EdgionGatewayConfig`. Independent deployments use distinct identities and election domains. Cross-class physical listener sharing is not supported.
 
 ## Full Schema
 
@@ -32,7 +32,7 @@ spec:
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `controllerName` | `String` | Yes | Must match the configured `controller_name` (default `edgion.io/gateway-controller`) |
+| `controllerName` | `String` | Yes | Must match the deployment's explicitly configured or generated `controller_name` |
 | `parametersRef` | `ParametersRef?` | No | Reference to an EdgionGatewayConfig CRD |
 | `description` | `String?` | No | Human-readable description |
 
@@ -59,9 +59,9 @@ GatewayClass (cluster-scoped)
 ```
 
 - One GatewayClass can correspond to multiple Gateways.
-- In K8s mode, the Controller matches both the configured GatewayClass name and controller name.
+- In K8s mode, the Controller matches the resolved controller name, without a class-name selector.
   Gateway processing also requires a matching raw and published class incarnation (nonempty UID).
-- FileSystem/etcd retain GatewayClass filtering by the default controller name without a
+- FileSystem/etcd retain GatewayClass filtering by the explicitly configured controller name without a
   selected-class restriction; their Gateway handlers do not require class publication.
 
 ## Status Schema

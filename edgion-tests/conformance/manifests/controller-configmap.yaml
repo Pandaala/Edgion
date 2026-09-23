@@ -25,7 +25,6 @@ data:
 
     conf_center:
       type: kubernetes
-      gateway_class: edgion
       controller_name: edgion.io/gateway-controller
       gateway_address: PLACEHOLDER_WILL_BE_PATCHED
       # Empty watch_namespaces = watch all namespaces.

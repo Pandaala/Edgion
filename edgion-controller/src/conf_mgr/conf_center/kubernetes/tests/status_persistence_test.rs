@@ -93,20 +93,18 @@ fn assert_conflict(result: Result<(), StatusWriteError>) {
 }
 
 #[tokio::test]
-async fn unselected_gateway_class_patch_clears_features_and_watch_echo_converges() {
+async fn matching_gateway_class_patch_updates_features_and_watch_echo_converges() {
     use crate::conf_mgr::sync_runtime::resource_processor::handlers::{GatewayClassHandler, GatewayClassOwnership};
     use crate::conf_mgr::sync_runtime::resource_processor::status_ownership::KubernetesStatusIdentity;
     let runtime = Arc::new(ControllerRuntime::default());
     runtime.set_status_identity(KubernetesStatusIdentity {
         controller_name: "example.com/controller".into(),
-        gateway_class_name: "selected".into(),
     });
     let processor = ResourceProcessor::new(
         "GatewayClass",
         8,
         Arc::new(GatewayClassHandler::new(GatewayClassOwnership::new(
             "example.com/controller".into(),
-            Some("selected".into()),
         ))),
         runtime,
     );
@@ -139,8 +137,11 @@ async fn unselected_gateway_class_patch_clears_features_and_watch_echo_converges
             .await
             .unwrap();
         }
-        assert!(processor.get("resource").is_none());
-        assert_eq!(state.lock().object["status"]["supportedFeatures"], json!([]));
+        assert!(processor.get("resource").is_some());
+        assert!(!state.lock().object["status"]["supportedFeatures"]
+            .as_array()
+            .unwrap()
+            .is_empty());
     }
     assert_eq!(state.lock().requests.len(), 1);
 }
@@ -153,8 +154,6 @@ async fn canonical_observation_patch_removes_only_retired_native_fields_and_conv
     };
     let identity = ObserverIdentity {
         controller_name: "example/controller".into(),
-        gateway_class_name: "edge".into(),
-        gateway_class_uid: "class-uid".into(),
     };
     let old_native = json!({"conditions": [], "observedGeneration": 1,
         "credentialState": "Valid", "publishedGeneration": "2", "issuedAt": "2026-01-01T00:00:00Z",
@@ -163,7 +162,7 @@ async fn canonical_observation_patch_removes_only_retired_native_fields_and_conv
         "publishedConsumerCount": 3, "conflictedConsumerCount": 0});
     assert_eq!(project_status("LinkSys", &old_native, &identity).unwrap(), None);
     let local = json!({"conditions": []});
-    let logical = merge_status("LinkSys", Some(&old_native), &local, &identity, &[])
+    let logical = merge_status("LinkSys", Some(&old_native), &local, &identity)
         .unwrap()
         .unwrap();
     let mut wire = logical.clone();
@@ -193,7 +192,7 @@ async fn canonical_observation_patch_removes_only_retired_native_fields_and_conv
         echo, logical,
         "retired lifecycle fields must not remain beside controllers"
     );
-    let next = merge_status("LinkSys", Some(&echo), &local, &identity, &[])
+    let next = merge_status("LinkSys", Some(&echo), &local, &identity)
         .unwrap()
         .unwrap();
     assert!(!status_semantically_changed(
@@ -213,14 +212,12 @@ fn native_empty_fields_elided_by_typed_ingest_are_still_retired_on_the_wire() {
     use edgion_resources::resources::link_sys::LinkSysStatus;
     let identity = ObserverIdentity {
         controller_name: "example/controller".into(),
-        gateway_class_name: "edge".into(),
-        gateway_class_uid: "uid".into(),
     };
     let api_status = json!({"conditions": [], "publishedGeneration": null, "nextRefreshTime": null});
     let typed: LinkSysStatus = serde_json::from_value(api_status.clone()).unwrap();
     let captured = serde_json::to_value(typed).unwrap();
     assert_eq!(captured, json!({}), "typed serialization omits empty and null fields");
-    let logical = merge_status("LinkSys", Some(&captured), &json!({}), &identity, &[])
+    let logical = merge_status("LinkSys", Some(&captured), &json!({}), &identity)
         .unwrap()
         .unwrap();
     let mut wire = logical.clone();
@@ -230,7 +227,7 @@ fn native_empty_fields_elided_by_typed_ingest_are_still_retired_on_the_wire() {
     let mut echo = api_status;
     json_patch::merge(&mut echo, &wire);
     assert_eq!(echo, logical);
-    let next = merge_status("LinkSys", Some(&echo), &json!({}), &identity, &[])
+    let next = merge_status("LinkSys", Some(&echo), &json!({}), &identity)
         .unwrap()
         .unwrap();
     assert!(
@@ -619,7 +616,6 @@ async fn raw_foreign_class_commits_requeue_without_status_echo_fanout() {
             tx.send(Ok(event)).await.unwrap();
         }
         eventually(|| classes.is_ready()).await;
-        assert_eq!(runtime.gateway_classes_complete(), !filtered);
         assert!(classes.get("foreign").is_none());
         let queue = routes.workqueue();
         assert_eq!(queue.len(), 1, "never-published foreign class must wake raw dependents");
@@ -643,12 +639,7 @@ async fn raw_foreign_class_commits_requeue_without_status_echo_fanout() {
         assert!(state.lock().requests.is_empty());
         cancel.cancel();
         task.await.unwrap().unwrap();
-        assert!(
-            !runtime.gateway_classes_complete(),
-            "source teardown cannot prove class deletion"
-        );
         runtime.reset();
-        assert!(!runtime.gateway_classes_complete());
         assert!(runtime.status_identity().is_none());
     }
 }

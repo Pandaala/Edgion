@@ -28,7 +28,6 @@ data:
 
     conf_center:
       type: kubernetes
-      gateway_class: public-gateway
       controller_name: edgion.io/gateway-controller
       # Route delegation suites own reverse-lock children in dedicated namespaces.
       watch_namespaces: [edgion-system, edgion-default, edgion-test, edgion-backend, backend, app, app2, cert-store, edgion-deleg, edgion-grpc-deleg, edgion-deleg-dyn, edgion-grpc-deleg-dyn, edgion-it]

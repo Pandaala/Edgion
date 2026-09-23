@@ -16,16 +16,12 @@ use super::Condition;
 /// Maximum number of controller observations retained in a Kubernetes status.
 pub const MAX_CONTROLLER_OBSERVATIONS: usize = 32;
 
-/// A controller's status observation for one GatewayClass incarnation.
+/// A deployment's status observation, keyed only by controllerName.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ControllerObservation<T> {
     #[schemars(length(min = 1))]
     pub controller_name: String,
-    #[schemars(length(min = 1))]
-    pub gateway_class_name: String,
-    #[schemars(length(min = 1))]
-    pub gateway_class_uid: String,
     pub status: T,
 }
 
@@ -193,8 +189,6 @@ mod tests {
 
         let partitioned = ControllerStatus::Partitioned(vec![ControllerObservation {
             controller_name: "example.io/controller".into(),
-            gateway_class_name: "edge".into(),
-            gateway_class_uid: "uid-1".into(),
             status: Local {
                 value: "partitioned".into(),
             },
@@ -203,8 +197,6 @@ mod tests {
             serde_json::to_value(&partitioned).unwrap(),
             serde_json::json!({"controllers": [{
                 "controllerName": "example.io/controller",
-                "gatewayClassName": "edge",
-                "gatewayClassUid": "uid-1",
                 "status": {"value": "partitioned"}
             }]})
         );

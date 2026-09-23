@@ -9,10 +9,10 @@ knowledge_type: mandatory-design
 ## Conclusion
 
 `EdgionGatewayConfig.spec.requestBody` is parsed on the gateway configuration
-update path and published with the EGC resource in one immutable
-`EdgionGatewayConfigSnapshot`. Each new HTTP request loads the snapshot, looks
-up the EGC named by the listener's GatewayClass, and copies the compact
-`ResolvedRequestBodyConfig` into its context.
+update path into an immutable `ResolvedGatewayConfig`. Listener construction
+binds the EGC named by its GatewayClass through `bind_gateway_config`. Each new
+HTTP request loads one generation from that stable `GatewayConfigHandle` and
+copies its compact `ResolvedRequestBodyConfig` into the request context.
 
 An EGC update therefore changes the body capture switch, memory spill
 threshold, physical body cap, and storage-operation timeout for subsequent
@@ -25,23 +25,25 @@ and missing references use the built-in default policy.
 
 Human-readable byte sizes are parsed only when `full_set` or `partial_update`
 builds the next snapshot. The request path performs one lock-free `ArcSwap`
-load, one bounded `HashMap` lookup, and a `Copy`; it does not parse strings or
+load and a `Copy`; it does not look up the resource table, parse strings or
 take a blocking lock.
 
-### Resource and derived policy share one epoch
+### One immutable runtime generation per EGC
 
-The EGC resource map and its resolved body-policy map are fields of the same
-snapshot and are published by one `ArcSwap::store`. Two independent stores
-would permit a request to observe a new resource paired with the previous
-derived policy.
+`publish_snapshot` refreshes each live binding with a complete resolved runtime
+generation under the configuration writer lock. A request pins that generation,
+including its body policy. Atomicity is per EGC, not across EGC resources or
+between the runtime binding and the raw-resource/admin view. Deletion installs
+defaults into the existing handle; recreation refreshes that same handle.
 
-### The scope remains one GatewayClass per process
+### Each class retains its own EGC binding
 
-This fix does not add multi-GatewayClass support. Edgion's supported deployment
-model remains one Controller/Gateway instance per GatewayClass. The lookup is
-keyed by the referenced EGC name so the listener can distinguish an explicit
-reference from a GatewayClass with no `parametersRef`, for which built-in
-defaults remain stable.
+The `kubernetes-gateway-class-allow-list` expansion supports multiple classes
+matching one Controller identity. `runtime/server/base.rs` resolves each Gateway's
+class and parametersRef before binding its listeners. The existing per-EGC handle
+keeps distinct classes' policies separate; a class without parametersRef keeps
+built-in defaults. The former single-class premise is superseded. Deliberate
+cross-class sharing of one physical listener port remains unsupported.
 
 ## Fix Suggestions Not Accepted
 
@@ -58,7 +60,7 @@ defaults remain stable.
 
 ## Re-evaluation Triggers
 
-- Edgion formally supports multiple GatewayClasses in one Gateway process.
+- Cross-class physical listener sharing is introduced.
 - A request-body policy becomes listener- or route-specific rather than
   GatewayClass-level.
 - GatewayClass `parametersRef` changes are required to retarget already-bound

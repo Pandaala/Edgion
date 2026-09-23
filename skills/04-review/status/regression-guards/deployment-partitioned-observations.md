@@ -11,8 +11,8 @@ knowledge_type: regression-guards
 Deployments with overlapping resource watches can see different Secrets,
 ReferenceGrants or backends. A fresh resourceVersion precondition prevents stale
 replacement but does not stop alternating, successful writes of opposite locally
-computed conditions. Sharing controllerName across different GatewayClasses makes
-controllerName-only native attachment ownership insufficient too.
+computed conditions. Independent deployments therefore use distinct controllerName
+values and election domains; class names do not identify independent writers.
 
 `CAND-P2-B` concerns EdgionPlugins, EdgionStreamPlugins, EdgionBackend and LinkSys.
 `CAND-P2-A` concerns class-dependent native attachment outcomes; its companion
@@ -25,29 +25,29 @@ fencing remains separately tracked and is not claimed fixed by this status envel
 ## Corrected contract
 
 - Kubernetes stores complete `ControllerStatus<T>` observations in controllers[],
-  keyed by controllerName and gatewayClassName. gatewayClassUid proves incarnation;
-  it is not a new key. LinkSys lifecycle fields stay inside the same nested payload.
+  keyed only by controllerName. One deployment writes one observation regardless
+  of how many classes it serves. No class name or UID belongs to this envelope.
+  LinkSys lifecycle fields stay inside the same nested payload.
 - Handlers compute with native working status. ServerCache/conf_sync retain the
   complete logical `status` and a separate typed native `spec.currentStatus` for
   current-deployment decisions. Gateway status consumers use currentStatus only.
   The processor returns a separate persistence payload; Kubernetes must not
   extract it from local cache. Typed status replacement preserves compiled fields
   and ingest sidecars. This split implements `current-status-projection`.
-- A matching committed raw GatewayClass/controller/nonempty UID identifies a flat
-  observer without granting serving authority. Native serving additionally needs
-  an owned raw Gateway and matching published UID/class.
-- Merge preserves foreign entries and their order. Cleanup requires authoritative
-  class identity/deletion evidence; absence requires a complete unfiltered LIST.
-  Source teardown and filtered/unwatched views do not prove deletion. **This page
-  governs the private envelope**, including this cleanup; the Gateway API native
-  lists are governed separately by
+- The resolved controllerName identifies the shared-resource observer without a
+  class anchor. Native serving still needs an owned raw Gateway and matching
+  published UID/class; removing envelope class evidence does not weaken that proof.
+- Merge preserves foreign entries and their order from the observed snapshot.
+  Class deletion, UID changes, relists and deployment removal never prune them.
+  An obsolete deployment entry remains until an operator patches status or
+  recreates the resource. Typed ingest may normalize empty optional fields before
+  this snapshot; preservation does not promise byte-for-byte API JSON retention.
+  **This page governs the private envelope**; the Gateway API native lists are
+  governed separately by
   [foreign status entry preservation](../mandatory-design/foreign-status-entry-preservation.md),
-  whose upstream contract forbids reclaiming a foreign entry and keys on
-  controllerName alone. The envelope's divergence is deliberate and outside that
-  contract — these are Edgion's own CRDs — so it is not a finding. Whether to
-  align them is an open proposal, not a decision; that page's "Relationship to
-  the private envelope" section records the retired premise behind the class key.
-- The cap is 32 after pruning. Existing owners can update at 32; new owners cannot
+  whose upstream contract forbids reclaiming a foreign entry. Alignment of the
+  private envelope is an explicit product decision, not an upstream requirement.
+- The cap is 32. Existing owners can update at 32; new owners cannot
   evict others. Invalid observations or capacity failure suppress persistence,
   not local configuration processing. Malformed input is retained opaquely until
   the processor can reject its status without rejecting the whole resource.
@@ -58,7 +58,7 @@ fencing remains separately tracked and is not claimed fixed by this status envel
   sends fixed-whitelist native-field null tombstones only on the wire. All retired
   fields must be cleared, including empty/null fields omitted by typed serialization.
   Unknown or mixed input does not authorize arbitrary field deletion.
-- Semantic comparison matches observation keys one-to-one, compares UID and native
+- Semantic comparison matches controllerName keys one-to-one and compares native
   payload meaning, and ignores order and condition transition times. Lifecycle
   values remain semantic. CAS, one worker and inline status IO are unchanged.
 
@@ -90,10 +90,19 @@ permission to truncate foreign entries. ACME timers, restart recovery and active
 attempt handoff fencing remain outside the verified correction.
 
 The subsequent [GatewayClass reporting correction](gatewayclass-reporting-and-publication.md)
-requires distinct controllerName values for independent deployments, including
-those selecting different classes. Observation partitioning remains unchanged;
-sharing a controllerName across independent election/configuration domains is no
-longer a supported deployment contract.
+requires distinct controllerName values for independent deployments. The
+`kubernetes-gateway-class-allow-list` expansion removes the former
+`(controllerName, gatewayClassName)` key, gatewayClassUid and class-evidence
+pruning together with the four CRDs' old list-map keys. There is no compatibility
+shim for that pre-release persisted shape. Malformed or retired envelopes suppress
+status persistence while local processing continues. The accepted cost of retaining
+foreign entries is manual cleanup when deployment identities accumulate.
+
+Current implementation verification: Controller resource_processor 832 passed,
+configuration 42 passed, Kubernetes configuration center 74 passed; resource
+envelope/CRD tests 5 passed and shared-wrapper tests 2 passed. Three sequential
+Controller all-target compile checks, formatting and diff whitespace checks passed.
+No live Kubernetes, workspace or Clippy result is implied by these targeted runs.
 
 ## Re-evaluation
 

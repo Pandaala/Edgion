@@ -86,11 +86,11 @@ Live Kubernetes tests passed for one managed Class: Block/Bypass at all HTTP
 stages, status changes, API-server field preservation, EGC deletion/recreation,
 and class parametersRef rebinding. Controller/Gateway Pod UID and restart counts
 remained unchanged. The Kubernetes cache-residue gate passed with validator_rc=0.
-The existing Kubernetes `gateway_class` startup filter permits only one Class;
-the two-class shared scenario is not automatically registered there. Its local
-two-class run passed. Expanding one Kubernetes Controller instance to manage
-multiple classes is a separate product-scope decision, not part of D0095's
-retention or GatewayClass-scoping correction.
+At the time of D0095 verification, the Kubernetes `gateway_class` startup filter
+permitted only one class, so that historical evidence excluded the shared
+two-class Kubernetes scenario. Its local two-class run passed. The subsequent
+`kubernetes-gateway-class-allow-list` expansion removes that startup restriction;
+its Kubernetes verification is separate from D0095's historical results.
 The dynamic scenario needs a freshly preloaded shared topology after its final
 cleanup because of a separately recorded listener-recreation defect. Kubernetes
 prepare also encounters a separately recorded EdgionTls structural schema rejection;

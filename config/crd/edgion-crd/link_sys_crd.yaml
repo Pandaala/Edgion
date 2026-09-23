@@ -261,18 +261,11 @@ spec:
                   x-kubernetes-list-type: map
                   x-kubernetes-list-map-keys:
                     - controllerName
-                    - gatewayClassName
                   items:
                     type: object
-                    required: [controllerName, gatewayClassName, gatewayClassUid, status]
+                    required: [controllerName, status]
                     properties:
                       controllerName:
-                        type: string
-                        minLength: 1
-                      gatewayClassName:
-                        type: string
-                        minLength: 1
-                      gatewayClassUid:
                         type: string
                         minLength: 1
                       status:
@@ -346,10 +339,6 @@ spec:
           type: string
           jsonPath: .spec.config.endpoints[0]
           description: "First endpoint"
-        - name: GatewayClasses
-          type: string
-          jsonPath: .status.controllers[*].gatewayClassName
-          description: "GatewayClasses with controller observations"
         - name: Age
           type: date
           jsonPath: .metadata.creationTimestamp

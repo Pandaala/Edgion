@@ -49,9 +49,9 @@ mod scan_conditions_tests {
     #[test]
     fn controller_observations_nested_conditions_are_scanned() {
         let resource = json!({"status": {"controllers": [
-            {"controllerName": "example/controller", "gatewayClassName": "a", "gatewayClassUid": "a-uid",
+            {"controllerName": "example/a",
              "status": {"conditions": [{"type": "ResolvedRefs", "status": "False"}]}},
-            {"controllerName": "example/controller", "gatewayClassName": "b", "gatewayClassUid": "b-uid",
+            {"controllerName": "example/b",
              "status": {"conditions": [{"type": "Accepted", "status": "True"}]}}
         ]}});
         let conditions = scan_conditions(&resource);

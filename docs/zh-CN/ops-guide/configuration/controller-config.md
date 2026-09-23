@@ -69,7 +69,6 @@ conf_center:
 # ─── conf_center：Kubernetes 模式（生产部署）─────────────────────
 # conf_center:
 #   type: kubernetes
-#   gateway_class: edgion                          # 必填：匹配的 GatewayClass 名称
 #   controller_name: edgion.io/gateway-controller  # Gateway API status 回报的 controllerName
 #   watch_namespaces: []                           # 空列表 = 监听所有命名空间
 #   label_selector: ""                             # 标签过滤
@@ -173,11 +172,14 @@ FileSystem 和 etcd 必须显式配置该字段。仅 Kubernetes 在省略时使
 `edgion.io/gateway-controller/edgion-system/edgion-controller`。
 
 独立部署必须使用不同的 controller name 和 GatewayClass；运行时不会检测显式身份冲突。
-同一身份的副本必须共享选定类、配置视图和选举域。独立 Kubernetes 部署还需使用不同的选主 Lease；
+同一身份的副本必须共享配置视图和选举域。独立 Kubernetes 部署还需使用不同的选主 Lease；
 自动生成 controller name 不会修改 lease_name 或 lease_namespace。GatewayClass 的 `spec.controllerName`
 不可变；更换身份时需要创建替代类。
 
-Controller 为身份匹配但未被 `gateway_class` 选中的类报告 `Accepted=False/Unsupported`，不接管流量。
+Controller 接管所有 `spec.controllerName` 与部署身份匹配的 GatewayClass，并逐个执行参数校验。
+每个 Gateway 使用自己引用的 class 的 `parametersRef`；新增匹配类无需重启 Controller。
+没有类名筛选配置；显式提供已移除的 `conf_center.gateway_class`（包括 null）会导致启动失败。
+请通过 RBAC 控制 GatewayClass 创建和 controllerName 分配。多个 class 不支持共用一个物理监听端口。
 GatewayClass 的监听忽略 `label_selector`，覆盖没有匹配标签的类。
 将 `GatewayClass` 加入 `no_watch_kinds` 会关闭此报告，并停止 Gateway 处理。
 
@@ -196,7 +198,6 @@ GatewayClass 的监听忽略 `label_selector`，覆盖没有匹配标签的类�
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `type` | `String` | — | 固定填 `"kubernetes"` |
-| `gateway_class` | `String` | **必填** | 匹配的 GatewayClass 名称 |
 | `controller_name` | `String` | namespace + Deployment 身份 | 显式覆盖自动生成的控制器身份 |
 | `watch_namespaces` | `Array<String>` | `[]`（全部） | 监听的命名空间列表，空列表表示监听所有命名空间 |
 | `label_selector` | `String` | `""` | 资源标签过滤表达式，不作用于 GatewayClass |
@@ -432,7 +433,6 @@ conf_center:
 ```yaml
 conf_center:
   type: kubernetes
-  gateway_class: edgion
   controller_name: edgion.io/gateway-controller
   watch_namespaces: [default, production]
   gateway_address: "203.0.113.10"
@@ -456,7 +456,6 @@ logging:
 ```yaml
 conf_center:
   type: kubernetes
-  gateway_class: edgion
   ha_mode: leader-only
   controller_name: edgion.io/gateway-controller
   leader_election:

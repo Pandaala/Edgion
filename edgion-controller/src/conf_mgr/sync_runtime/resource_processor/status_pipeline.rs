@@ -9,7 +9,7 @@ use edgion_resources::{
 };
 use serde_json::Value;
 
-use super::status_observation::{ClassObservation, ObserverIdentity};
+use super::status_observation::ObserverIdentity;
 use crate::conf_mgr::ControllerRuntime;
 
 pub(super) fn is_partitioned(kind: &str) -> bool {
@@ -31,51 +31,9 @@ pub(super) fn has_non_native_status<T: 'static>(obj: &T) -> bool {
 
 pub(super) fn observer_identity(runtime: &ControllerRuntime) -> Option<ObserverIdentity> {
     let identity = runtime.status_identity()?;
-    let processor = runtime.processor_registry.get("GatewayClass")?;
-    let raw = processor.get_raw_any(&identity.gateway_class_name)?;
-    let class = raw.downcast_ref::<GatewayClass>()?;
-    let uid = class.metadata.uid.as_ref().filter(|uid| !uid.is_empty())?;
-    if class.spec.controller_name != identity.controller_name {
-        return None;
-    }
     Some(ObserverIdentity {
         controller_name: identity.controller_name,
-        gateway_class_name: identity.gateway_class_name,
-        gateway_class_uid: uid.clone(),
     })
-}
-
-pub(super) fn class_observations(runtime: &ControllerRuntime, status: Option<&Value>) -> Vec<ClassObservation> {
-    let Some(processor) = runtime.processor_registry.get("GatewayClass") else {
-        return Vec::new();
-    };
-    let Some(entries) = status.and_then(|s| s.get("controllers")).and_then(Value::as_array) else {
-        return Vec::new();
-    };
-    let mut facts = Vec::new();
-    for entry in entries {
-        let Some(name) = entry.get("gatewayClassName").and_then(Value::as_str) else {
-            continue;
-        };
-        match processor.get_raw_any(name) {
-            Some(raw) => {
-                if let Some(class) = raw.downcast_ref::<GatewayClass>() {
-                    if let Some(uid) = class.metadata.uid.as_ref().filter(|uid| !uid.is_empty()) {
-                        facts.push(ClassObservation::Existing {
-                            name: name.to_owned(),
-                            uid: uid.clone(),
-                            controller_name: class.spec.controller_name.clone(),
-                        });
-                    }
-                }
-            }
-            None if runtime.gateway_classes_complete() => {
-                facts.push(ClassObservation::Deleted { name: name.to_owned() });
-            }
-            None => {}
-        }
-    }
-    facts
 }
 
 /// Only replace status: compiled regexes, resolved fields and unknown-field sidecars survive.
@@ -229,7 +187,7 @@ pub(super) fn filter_current_native_attachment_status<T: 'static>(obj: &mut T, c
 #[cfg(test)]
 mod tests {
     use super::super::status_ownership::KubernetesStatusIdentity;
-    use super::super::{HandlerContext, LocalRawStore, ProcessorHandler, ResourceProcessor, WorkItemResult};
+    use super::super::{HandlerContext, ProcessorHandler, ResourceProcessor, WorkItemResult};
     use super::*;
     use serde_json::json;
     use std::sync::Arc;
@@ -251,10 +209,6 @@ mod tests {
             );
         }
     }
-
-    struct ClassHandler;
-    #[async_trait::async_trait]
-    impl ProcessorHandler<GatewayClass> for ClassHandler {}
 
     struct NativeRouteHandler;
     macro_rules! native_route_handler {
@@ -376,27 +330,8 @@ mod tests {
     fn deployment(class: &str, resolved: bool) -> Arc<ResourceProcessor<EdgionPlugins>> {
         let runtime = Arc::new(ControllerRuntime::new());
         runtime.set_status_identity(KubernetesStatusIdentity {
-            controller_name: "example/controller".into(),
-            gateway_class_name: class.into(),
+            controller_name: format!("example/{class}"),
         });
-        let classes = Arc::new(ResourceProcessor::new(
-            "GatewayClass",
-            100,
-            Arc::new(ClassHandler),
-            runtime.clone(),
-        ));
-        let raw = Arc::new(LocalRawStore::new());
-        for name in ["a", "b"] {
-            let obj = serde_json::from_value(json!({
-                "apiVersion": "gateway.networking.k8s.io/v1", "kind": "GatewayClass",
-                "metadata": {"name": name, "uid": format!("uid-{name}")},
-                "spec": {"controllerName": "example/controller"}
-            }))
-            .unwrap();
-            raw.upsert(name.into(), Arc::new(obj));
-        }
-        classes.set_raw_store(raw);
-        runtime.processor_registry.register(classes);
         Arc::new(ResourceProcessor::new(
             "EdgionPlugins",
             100,
@@ -444,7 +379,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn missing_owner_preserves_local_processing_without_flat_persistence() {
+    async fn controller_without_class_watcher_persists_local_observation() {
         let processor = deployment("missing", true);
         let raw: EdgionPlugins = serde_json::from_value(json!({"apiVersion": "edgion.io/v1",
             "kind": "EdgionPlugins", "metadata": {"name": "shared", "namespace": "apps"}, "spec": {}}))
@@ -457,10 +392,11 @@ mod tests {
         else {
             panic!("expected local publication")
         };
-        assert!(obj.status.is_none(), "no persisted status was observed");
         assert!(obj.spec.current_status.is_some());
-        assert!(!status_changed);
-        assert!(persisted_status.is_none());
+        assert!(status_changed);
+        let persisted = persisted_status.unwrap();
+        assert_eq!(persisted["controllers"].as_array().unwrap().len(), 1);
+        assert_eq!(persisted["controllers"][0]["controllerName"], "example/missing");
     }
 
     #[tokio::test]
@@ -469,6 +405,8 @@ mod tests {
             json!({"controllers": "invalid"}),
             json!({"controllers": [], "conditions": []}),
             json!({"controllers": [{"controllerName": "example/controller"}]}),
+            json!({"controllers": [{"controllerName": "example/a", "gatewayClassName": "retired", "gatewayClassUid": "old", "status": {}}]}),
+            json!({"controllers": [{"controllerName": "example/a", "extra": true, "status": {}}]}),
         ] {
             let processor = deployment("a", true);
             let raw: EdgionPlugins = serde_json::from_value(json!({"apiVersion": "edgion.io/v1",
@@ -489,6 +427,52 @@ mod tests {
             assert!(!status_changed);
             assert!(persisted_status.is_none());
             assert!(processor.get("apps/shared").is_some());
+        }
+    }
+
+    #[tokio::test]
+    async fn full_observation_capacity_suppresses_only_new_writer_persistence() {
+        let foreign: Vec<Value> = (0..32)
+            .map(|index| {
+                json!({
+                "controllerName": format!("foreign/{index}"), "status": {"conditions": [{
+                    "type": "Accepted", "status": "True", "reason": "ForeignView",
+                    "message": "Foreign controller observation", "observedGeneration": 1,
+                    "lastTransitionTime": "2026-09-21T00:00:00Z"
+                }]}
+                })
+            })
+            .collect();
+        for existing_owner in [false, true] {
+            let mut entries = foreign.clone();
+            if existing_owner {
+                entries[0]["controllerName"] = json!("example/a");
+            }
+            let status = json!({"controllers": entries});
+            let processor = deployment("a", true);
+            let raw = serde_json::from_value(
+                json!({"metadata":{"name":"shared","namespace":"apps"}, "spec":{}, "status": status}),
+            )
+            .unwrap();
+            let WorkItemResult::Processed {
+                obj,
+                status_changed,
+                persisted_status,
+            } = processor.on_init_apply(raw, None).await
+            else {
+                panic!("expected local publication")
+            };
+            assert!(obj.spec.current_status.is_some());
+            assert!(processor.get("apps/shared").is_some());
+            assert_eq!(status_changed, existing_owner);
+            if existing_owner {
+                let persisted = persisted_status.unwrap();
+                assert_eq!(persisted["controllers"].as_array().unwrap().len(), 32);
+                assert_eq!(&persisted["controllers"].as_array().unwrap()[1..], &entries[1..]);
+            } else {
+                assert!(persisted_status.is_none());
+                assert_eq!(serde_json::to_value(obj.status).unwrap(), status);
+            }
         }
     }
 

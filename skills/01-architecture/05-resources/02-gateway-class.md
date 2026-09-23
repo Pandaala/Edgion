@@ -13,9 +13,9 @@ deployment's resolved `conf_center.controller_name`.
 
 ## Design decisions
 
-- **Kubernetes: one selected class, multiple Gateways**: reporting an unselected class
-  does not grant serving authority. Independent deployments use distinct controllerName
-  values. Replicas sharing one identity must share the selected class, election domain
+- **All matching classes, multiple Gateways**: every class with this deployment's
+  controllerName is eligible for reporting and publication. Independent deployments
+  use distinct controllerName values. Replicas share the election domain
   and configuration view. Explicit duplicate identities are not detected or coordinated.
 - **Startup identity**: explicit `conf_center.controller_name` is required for FS/etcd.
   Kubernetes may omit it to derive `edgion.io/gateway-controller/{namespace}/{deployment}`
@@ -39,11 +39,10 @@ disables the watcher and its reporting capability.
 
 ### should_publish
 
-The shared `GatewayClassOwnership` also checks the selected `gateway_class` name
-in Kubernetes mode. An unselected matching class produces status but is not
-published; an old cached object is withdrawn via normal cleanup. It does not run
-on_change/after_publish. Leadership recovery includes raw GatewayClass keys,
-because status-only objects are absent from the published cache.
+The shared `GatewayClassOwnership` checks controllerName in every mode. There is
+no startup class-name selector. Matching classes are published individually;
+foreign classes are excluded, and an old cached object is withdrawn via normal
+cleanup. Leadership recovery includes raw GatewayClass keys.
 
 ### after_publish / after_unpublish
 
@@ -66,12 +65,9 @@ No special handling; passes through directly.
 
 ### update_status
 
-- An unselected matching class receives `Accepted=False/Unsupported` without
-  resolving deployment-local parameters. Remove old owned ResolvedRefs and
-  SupportedVersion diagnostics, preserve foreign conditions, and write an explicit
-  empty supportedFeatures list. Semantic comparison includes this list so a
-  features-only change is persisted and WATCH echoes converge.
-- The following validation applies to selected classes (all matching classes in FS/etcd):
+- The following validation applies independently to every matching class.
+  Semantic comparison includes supportedFeatures so features-only changes persist
+  and WATCH echoes converge. Foreign conditions remain intact.
 - `parametersRef` must use group `edgion.io` and kind `EdgionGatewayConfig`.
   Invalid group/kind or missing EGC produces `ResolvedRefs=False` and
   `Accepted=False`, both with reason `InvalidParameters`.
@@ -93,6 +89,10 @@ whether the EGC's new processed object has already been published. See the
 ## Gateway-side processing
 
 After GatewayClass is synced to the Gateway side, it is stored in the GatewayClass cache (`edgion-gateway/src/config/gateway_class/`) and used for class-matching validation of Gateway resources.
+
+`runtime/server/base.rs` resolves each Gateway's class and that class's own
+parametersRef. Multiple classes require no array-valued sync message. This does
+not add deliberate cross-class sharing of a physical listener port.
 
 ## Cross-resource relationships
 

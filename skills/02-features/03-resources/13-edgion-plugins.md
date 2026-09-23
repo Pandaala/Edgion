@@ -10,10 +10,11 @@ description: Full EdgionPlugins CRD schema and HTTP plugin catalog.
 The EdgionPlugins resource defines a set of HTTP-layer plugin configurations referenced by routes via ExtensionRef.
 
 Kubernetes status uses `status.controllers[]`: select the observation by
-`controllerName` and `gatewayClassName`, then read `status.conditions` inside
-that entry. `gatewayClassUid` proves the incarnation. The complete observation
+`controllerName`, then read `status.conditions` inside
+that entry. One deployment has one observation across all its classes. The complete observation
 is deployment-local because Secret and reference visibility can differ.
-FileSystem/etcd and conf_sync retain native `status.conditions`. See the shared
+FileSystem/etcd retain native `status.conditions`; conf_sync carries complete
+source status plus native `spec.currentStatus`. See the shared
 32-entry [observation contract](../../01-architecture/01-controller/10-status-management.md#7-status-persistence).
 
 ## Basic Schema

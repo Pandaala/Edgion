@@ -181,7 +181,6 @@ The controller must watch **all namespaces** (conformance creates its own):
 ```yaml
 conf_center:
   type: kubernetes
-  gateway_class: edgion
   # watch_namespaces omitted = watch all namespaces
 ```
 

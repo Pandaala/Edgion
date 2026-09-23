@@ -101,7 +101,6 @@ it protects Controller-to-Gateway traffic, not Controller-to-etcd traffic.
 # edgion-controller-k8s.yaml
 conf_center:
   type: kubernetes
-  gateway_class: edgion          # Required: name of the GatewayClass to match
 
   # Optional: namespace filter
   watch_namespaces: [default, production]
@@ -114,7 +113,6 @@ conf_center:
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `gateway_class` | `String` | **Required** | Only process resources for this GatewayClass |
 | `watch_namespaces` | `Vec<String>` | All | List of namespaces to restrict watching to |
 | `gateway_address` | `String?` | — | Address reported in the Gateway status |
 
@@ -136,7 +134,6 @@ conf_center:
 ```yaml
 conf_center:
   type: kubernetes
-  gateway_class: edgion
   ha_mode: leader-only
   leader_election:
     lease_name: edgion-controller-leader

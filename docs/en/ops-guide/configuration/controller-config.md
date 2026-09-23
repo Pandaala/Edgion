@@ -69,7 +69,6 @@ conf_center:
 # ─── conf_center: Kubernetes mode (production) ────────────────────
 # conf_center:
 #   type: kubernetes
-#   gateway_class: edgion                          # Required: GatewayClass name to manage
 #   controller_name: edgion.io/gateway-controller  # controllerName reported in Gateway API status
 #   watch_namespaces: []                           # Empty = watch all namespaces
 #   label_selector: ""                             # Label filter for watched resources
@@ -181,14 +180,18 @@ and Deployment `edgion-controller`, configure the GatewayClass with
 
 Independent deployments must use distinct controller names and GatewayClasses;
 explicit identity collisions are not detected at runtime. Replicas sharing an
-identity must share the selected class, configuration view and election domain.
+identity must share the configuration view and election domain.
 Independent Kubernetes deployments also need separate leader-election Leases;
 generating a controller name does not change lease_name or lease_namespace.
 GatewayClass `spec.controllerName` is immutable; create a replacement class when
 changing its identity.
 
-The Controller reports `Accepted=False/Unsupported` for matching classes other
-than its selected `gateway_class`, without serving them. GatewayClass watches
+The Controller serves every GatewayClass whose `spec.controllerName` matches its
+identity and validates each class's parameters. Each Gateway uses its own class's
+`parametersRef`; adding a matching class requires no Controller restart. There is
+no class-name selector. Supplying the removed `conf_center.gateway_class` key,
+including null, fails startup. Use RBAC to control class creation and controllerName
+assignment. Multiple classes cannot share one physical listener port. GatewayClass watches
 ignore `label_selector` to cover unlabeled classes too. Adding `GatewayClass` to
 `no_watch_kinds` disables this reporting and prevents Gateway processing.
 
@@ -207,7 +210,6 @@ Note: The `--conf-dir` CLI flag overrides `conf_dir` and switches `conf_center` 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `type` | `String` | — | Must be `"kubernetes"` |
-| `gateway_class` | `String` | **Required** | GatewayClass name this controller manages |
 | `controller_name` | `String` | Namespace + Deployment identity | Explicit override of the generated controller identity |
 | `watch_namespaces` | `Array<String>` | `[]` (all) | Namespaces to watch; empty list means all namespaces |
 | `label_selector` | `String` | `""` | Label selector filter for watched resources, excluding GatewayClass |
@@ -341,7 +343,6 @@ You can also override at startup via CLI:
 ```yaml
 conf_center:
   type: kubernetes
-  gateway_class: edgion
   controller_name: edgion.io/gateway-controller
   watch_namespaces: [default, production]
   gateway_address: "203.0.113.10"
@@ -365,7 +366,6 @@ Enable leader election for multi-replica Kubernetes deployments:
 ```yaml
 conf_center:
   type: kubernetes
-  gateway_class: edgion
   ha_mode: leader-only
   controller_name: edgion.io/gateway-controller
   leader_election:

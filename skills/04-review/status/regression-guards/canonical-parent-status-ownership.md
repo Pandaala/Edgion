@@ -19,11 +19,11 @@ reuse the existing entry to preserve transition times. Empty/absent parentRefs a
 entries. Parent-status diff receives the resource namespace and compares entries one-to-one,
 including multiplicity, so changes cannot hide behind a reused first match.
 
-ControllerName alone is insufficient when independent deployments manage different
-GatewayClasses under the same name. Kubernetes `status_ownership` projection now
+Independent deployments use distinct controllerName values; one deployment may
+serve every class matching its identity. Kubernetes `status_ownership` projection
 separates `spec.currentStatus` from the complete `status`: only proven local
-Gateway attachments contribute current state, while foreign controllers and other
-classes remain in persisted and cached complete status. Missing Gateway history is retained
+Gateway attachments contribute current state, while foreign controllers remain
+in persisted and cached complete status. Missing Gateway history is retained
 without granting serving authority. The same projection handles both policy
 ancestor families. Raw spec removal can consistently clear this controller's
 removed parent entries without erasing another controller's entries.

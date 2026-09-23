@@ -67,12 +67,7 @@ impl ConfMgr {
                 Arc::new(FileSystemCenter::new(fs_config)?)
             }
             ConfCenterConfig::Kubernetes(k8s_config) => {
-                tracing::info!(
-                    component = "conf_mgr",
-                    mode = "kubernetes",
-                    gateway_class = %k8s_config.gateway_class(),
-                    "Creating KubernetesCenter"
-                );
+                tracing::info!(component = "conf_mgr", mode = "kubernetes", "Creating KubernetesCenter");
                 Arc::new(KubernetesCenter::new(k8s_config).await?)
             }
             ConfCenterConfig::Etcd(etcd_config) => {

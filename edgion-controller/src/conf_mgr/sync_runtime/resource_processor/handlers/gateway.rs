@@ -1,7 +1,7 @@
 //! Gateway Handler
 //!
 //! Handles Gateway resources with:
-//! - Filter by gateway_class_name
+//! - Filter by the referenced GatewayClass's controllerName ownership
 //! - TLS Secret reference resolution
 //! - SecretRefManager registration for cascading updates
 //! - ListenerPortManager registration for port conflict detection

@@ -41,9 +41,9 @@ spec:
 同一个 EGC；未被引用的 EGC 不影响插件执行。Kubernetes 环境应先安装更新后的
 结构化 CRD，否则旧 schema 可能裁剪 `pluginPolicy` 字段。
 
-当前 Kubernetes Controller 的启动配置 `conf_center.gateway_class` 仍只接管一个
-GatewayClass；策略绑定不会扩大资源接管范围。文件系统等能提供多个 Class 下
-Gateway 的配置中心可以使用多 Class 策略发布。
+Kubernetes Controller 接管所有 `spec.controllerName` 与部署身份匹配的 GatewayClass。
+每个 Gateway 通过自己引用的 class 的 `parametersRef` 选择策略，因此同一部署的
+多个 class 可以使用不同策略。多个 class 应使用不同的物理监听端口。
 
 插件名称使用区分大小写的 `<family>/<Type>`：`http` 覆盖四个 HTTP 插件阶段，
 `stream` 覆盖连接阶段，`tls-route` 覆盖 TLSRoute 阶段。不同 family 的同名插件

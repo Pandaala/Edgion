@@ -38,7 +38,6 @@ impl std::fmt::Display for HaMode {
 /// ```yaml
 /// type: kubernetes
 /// controller_name: edgion.io/gateway-controller
-/// gateway_class: edgion
 /// watch_namespaces:
 ///   - default
 ///   - prod
@@ -51,7 +50,7 @@ impl std::fmt::Display for HaMode {
 ///   blocked_annotations:
 ///     - kubectl.kubernetes.io/last-applied-configuration
 /// ```
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct KubernetesConfig {
     /// Namespaces to watch. Empty means all namespaces.
     #[serde(default)]
@@ -60,9 +59,6 @@ pub struct KubernetesConfig {
     /// Label selector for filtering resources, except GatewayClass reporting.
     #[serde(default)]
     pub label_selector: Option<String>,
-
-    /// Gateway class name this controller manages
-    pub gateway_class: String,
 
     /// Gateway API identity. When omitted, derive it from POD_NAMESPACE and
     /// EDGION_CONTROLLER_DEPLOYMENT_NAME; invalid/missing inputs fail startup.
@@ -110,13 +106,72 @@ pub struct KubernetesConfig {
     pub cache_ready_deadline_secs: u64,
 }
 
-impl KubernetesConfig {
-    /// Create a new KubernetesConfig with the required gateway class
-    pub fn new(gateway_class: impl Into<String>) -> Self {
+impl<'de> Deserialize<'de> for KubernetesConfig {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        // Keep startup's existing unknown/duplicate-field behavior while refusing
+        // the removed selector even when its explicitly supplied value is null.
+        #[derive(Deserialize)]
+        struct Input {
+            #[serde(default)]
+            watch_namespaces: Vec<String>,
+
+            #[serde(default)]
+            label_selector: Option<String>,
+
+            #[serde(default)]
+            controller_name: Option<String>,
+
+            #[serde(default)]
+            metadata_filter: MetadataFilterConfig,
+
+            #[serde(default)]
+            leader_election: LeaderElectionConfig,
+
+            #[serde(default)]
+            gateway_address: Option<String>,
+
+            #[serde(default)]
+            ha_mode: HaMode,
+
+            #[serde(default)]
+            no_watch_kinds: Vec<String>,
+
+            #[serde(default = "default_cache_ready_deadline_secs")]
+            cache_ready_deadline_secs: u64,
+            #[serde(default, rename = "gateway_class", deserialize_with = "reject_gateway_class")]
+            _removed_gateway_class: (),
+        }
+        fn reject_gateway_class<'de, D>(_: D) -> std::result::Result<(), D::Error>
+        where
+            D: serde::Deserializer<'de>,
+        {
+            Err(serde::de::Error::custom(
+                "gateway_class has been removed; GatewayClasses are selected by controller_name",
+            ))
+        }
+        let input = Input::deserialize(deserializer)?;
+        Ok(Self {
+            watch_namespaces: input.watch_namespaces,
+            label_selector: input.label_selector,
+            controller_name: input.controller_name,
+            metadata_filter: input.metadata_filter,
+            leader_election: input.leader_election,
+            gateway_address: input.gateway_address,
+            ha_mode: input.ha_mode,
+            no_watch_kinds: input.no_watch_kinds,
+            cache_ready_deadline_secs: input.cache_ready_deadline_secs,
+        })
+    }
+}
+
+impl Default for KubernetesConfig {
+    fn default() -> Self {
         Self {
             watch_namespaces: Vec::new(),
             label_selector: None,
-            gateway_class: gateway_class.into(),
             controller_name: None,
             metadata_filter: MetadataFilterConfig::default(),
             leader_election: LeaderElectionConfig::default(),
@@ -126,7 +181,9 @@ impl KubernetesConfig {
             cache_ready_deadline_secs: default_cache_ready_deadline_secs(),
         }
     }
+}
 
+impl KubernetesConfig {
     /// Set watch namespaces. Test-only builder seam.
     #[cfg(test)]
     pub fn with_watch_namespaces(mut self, namespaces: Vec<String>) -> Self {
@@ -164,11 +221,6 @@ impl KubernetesConfig {
     #[cfg(test)]
     pub fn label_selector(&self) -> Option<&str> {
         self.label_selector.as_deref()
-    }
-
-    /// Get gateway class
-    pub fn gateway_class(&self) -> &str {
-        &self.gateway_class
     }
 
     /// Get controller name
@@ -338,8 +390,7 @@ mod tests {
 
     #[test]
     fn test_kubernetes_config_new() {
-        let config = KubernetesConfig::new("edgion");
-        assert_eq!(config.gateway_class, "edgion");
+        let config = KubernetesConfig::default();
         assert_eq!(config.controller_name, None);
         assert!(config.watch_namespaces.is_empty());
         assert!(config.label_selector.is_none());
@@ -347,12 +398,11 @@ mod tests {
 
     #[test]
     fn test_kubernetes_config_builder() {
-        let config = KubernetesConfig::new("edgion")
+        let config = KubernetesConfig::default()
             .with_watch_namespaces(vec!["default".to_string(), "prod".to_string()])
             .with_label_selector("app=edgion")
             .with_controller_name("example.com/controller");
 
-        assert_eq!(config.gateway_class(), "edgion");
         assert_eq!(config.resolve_controller_name().unwrap(), "example.com/controller");
         assert_eq!(config.watch_namespaces(), &["default", "prod"]);
         assert_eq!(config.label_selector(), Some("app=edgion"));
@@ -360,10 +410,10 @@ mod tests {
 
     #[test]
     fn test_kubernetes_config_serialize() {
-        let config = KubernetesConfig::new("edgion").with_watch_namespaces(vec!["default".to_string()]);
+        let config = KubernetesConfig::default().with_watch_namespaces(vec!["default".to_string()]);
 
         let yaml = serde_yaml::to_string(&config).unwrap();
-        assert!(yaml.contains("gateway_class: edgion"));
+        assert!(!yaml.contains("gateway_class"));
         assert!(!yaml.contains("controller_name:"));
         assert!(yaml.contains("watch_namespaces:"));
     }
@@ -371,14 +421,12 @@ mod tests {
     #[test]
     fn test_kubernetes_config_deserialize() {
         let yaml = r#"
-gateway_class: edgion
 watch_namespaces:
   - default
   - prod
 label_selector: app=edgion
 "#;
         let config: KubernetesConfig = serde_yaml::from_str(yaml).unwrap();
-        assert_eq!(config.gateway_class, "edgion");
         assert_eq!(config.controller_name, None);
         assert_eq!(config.watch_namespaces, vec!["default", "prod"]);
         assert_eq!(config.label_selector, Some("app=edgion".to_string()));
@@ -445,23 +493,19 @@ remove_managed_fields: false
     #[test]
     fn test_ha_mode_serde() {
         let yaml_str = r#"
-gateway_class: edgion
 ha_mode: all-serve
 "#;
         let config: KubernetesConfig = serde_yaml::from_str(yaml_str).unwrap();
         assert_eq!(config.ha_mode, HaMode::AllServe);
 
         let yaml_str = r#"
-gateway_class: edgion
 ha_mode: leader-only
 "#;
         let config: KubernetesConfig = serde_yaml::from_str(yaml_str).unwrap();
         assert_eq!(config.ha_mode, HaMode::LeaderOnly);
 
         // Default (no ha_mode specified) should be LeaderOnly
-        let yaml_str = r#"
-gateway_class: edgion
-"#;
+        let yaml_str = "{}";
         let config: KubernetesConfig = serde_yaml::from_str(yaml_str).unwrap();
         assert_eq!(config.ha_mode, HaMode::LeaderOnly);
     }
@@ -479,15 +523,17 @@ mod cache_ready_deadline_tests {
 
     #[test]
     fn default_deadline_is_90_and_valid() {
-        let cfg = KubernetesConfig::new("edgion");
+        let cfg = KubernetesConfig::default();
         assert_eq!(cfg.cache_ready_deadline_secs, 90);
         assert!(cfg.validate().is_ok());
     }
 
     #[test]
     fn deadline_at_or_below_poll_budget_rejected() {
-        let mut cfg = KubernetesConfig::new("edgion");
-        cfg.cache_ready_deadline_secs = 0;
+        let mut cfg = KubernetesConfig {
+            cache_ready_deadline_secs: 0,
+            ..Default::default()
+        };
         assert!(cfg.validate().is_err());
         cfg.cache_ready_deadline_secs = 30;
         assert!(cfg.validate().is_err());
@@ -497,7 +543,7 @@ mod cache_ready_deadline_tests {
 
     #[test]
     fn deadline_deserializes_with_default() {
-        let yaml = "gateway_class: edgion\n";
+        let yaml = "{}";
         let cfg: KubernetesConfig = serde_yaml::from_str(yaml).expect("parse");
         assert_eq!(cfg.cache_ready_deadline_secs, 90);
     }

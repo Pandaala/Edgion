@@ -63,7 +63,6 @@ impl Deployment {
             16,
             Arc::new(GatewayClassHandler::new(GatewayClassOwnership::new(
                 DEFAULT_CONTROLLER_NAME.into(),
-                Some(class.into()),
             ))),
             runtime.clone(),
         ));

@@ -26,10 +26,10 @@ The original shared `validate_request_id_early_attachment` call moved into
 GatewayClass `resolve_params_ref`. It reads raw EGC and plugin generations, so
 the plugins → EGC → GatewayClass requeue chain does not depend on cross-worker
 processed-cache publication order. EGC retains plugin reference registration and
-delete cleanup. Class ownership remains the separate controllerName/selected-class
-publication gate. The subsequent [reporting correction](gatewayclass-reporting-and-publication.md)
-separates controller-name reporting from selected-class publication: unsupported
-classes bypass local parameter validation. This does not add a second status writer.
+delete cleanup. Class ownership uses controllerName for reporting and publication.
+Every matching class performs its own local parameter validation, including when
+several classes share one deployment. The [reporting and publication contract](gatewayclass-reporting-and-publication.md)
+preserves distinct identities for independent deployments. This does not add a second status writer.
 
 ## Limits and regression evidence
 
@@ -49,7 +49,7 @@ classes bypass local parameter validation. This does not add a second status wri
 - These are in-process processor/queue tests, not live Kubernetes or deployment
   tests.
 
-Fresh targeted verification:
+Historical targeted verification for the original correction:
 
 - `cargo test -p edgion-controller --lib gateway_class -- --test-threads=2`: 10 passed.
 - `cargo test -p edgion-controller --lib edgion_gateway_config -- --test-threads=2`: 12 passed.

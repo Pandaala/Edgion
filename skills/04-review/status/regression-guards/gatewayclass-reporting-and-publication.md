@@ -8,15 +8,14 @@ knowledge_type: regression-guards
 
 ## Conclusion and scope
 
-Kubernetes GatewayClass reporting covers every class matching the deployment's
-resolved controllerName. Only the selected class is published to ServerCache;
-unselected matching classes receive Accepted=False/Unsupported with an explicit
-empty supportedFeatures list. They do not resolve deployment-local parameters.
-Old owned ResolvedRefs/SupportedVersion conditions are removed; foreign conditions
-and unchanged transition times remain intact. A foreign controllerName is ignored.
+GatewayClass reporting and publication cover every class matching the deployment's
+resolved controllerName. Each matching class receives ordinary parameter validation
+and is published to ServerCache; each Gateway resolves its own class's parametersRef.
+A foreign controllerName is ignored. The obsolete Kubernetes startup key
+`gateway_class` is rejected explicitly, including null; there is no name selector.
 
 Independent deployments must use distinct controllerName values. Replicas sharing
-one identity must share their selected class, configuration view and election
+one identity must share their configuration view and election
 domain. The user explicitly chose this boundary for
 `gatewayclass-status-reporting-ownership`, instead of introducing an assignment
 registry and coordinated cross-deployment reporter.
@@ -38,10 +37,11 @@ and the vendored Gateway API v1.5 GatewayClass status/Accepted contract. The pin
 contract requires reporting on all classes specifying the implementation's name
 and True/False according to provisioning support; permanent Pending is insufficient.
 
-`GatewayClassHandler::filter` determines reporting eligibility;
-`should_publish` retains the selected-class check. ResourceProcessor always returns
-the computed persistence payload, but status-only outcomes bypass on_change and
-after_publish, withdrawing an old cache object through normal deletion hooks.
+`GatewayClassHandler::filter` and `should_publish` use the same controllerName
+ownership predicate. ResourceProcessor still separates the persistence payload
+from cache publication and withdraws objects that lose eligibility through normal
+deletion hooks. Class publication/unpublication requeues dependent raw Gateway keys,
+including Gateways never admitted to the processed cache.
 Gateway serving still requires the existing raw/published class UID proof.
 There is no second queue, status worker, API retry, or request-path mechanism.
 
@@ -52,7 +52,7 @@ explicit empty-list serialization actually clears stale features in Merge Patch.
 
 ## Alternatives and limits
 
-Simply removing class filtering would allow opposing fresh writers. CAS prevents
+Sharing one controllerName across independent deployments would allow opposing fresh writers. CAS prevents
 stale snapshots, not repeated disagreement on current resourceVersions. Distinct
 identities avoid that overlap under the supported deployment contract; explicit
 identity collisions are not detected or prevented at runtime. Generated identities
@@ -65,28 +65,37 @@ immutable in Kubernetes. Explicit no_watch_kinds still disables class reporting.
 Non-Kubernetes identity validation does not make FileSystem safe for multiple
 writers or create distributed coordination for independent etcd election domains.
 
+The former single-class deployment design was permitted by Gateway API; the
+`kubernetes-gateway-class-allow-list` change is an authorized feature expansion,
+not a correction of a specification violation. Creating another matching class
+makes it eligible without restarting the Controller. RBAC must govern class
+creation and controllerName assignment. Multiple classes do not authorize sharing
+one physical listener port across classes; existing conflict handling remains.
+
 ## Verification and re-evaluation
 
-Regression coverage: `handlers/tests/gateway_ownership_test.rs` covers reporting,
-non-publication, foreign conditions, features-only drift, stale-cache withdrawal,
-recreation, raw-key leader recovery, independent identities, and multiple Gateways
-per class. `kubernetes/tests/status_persistence_test.rs` drives the real status
+Regression coverage: `handlers/tests/gateway_ownership_test.rs` covers two matching
+classes with distinct parametersRef values, foreign non-publication, conditions,
+features-only drift, stale-cache withdrawal, recreation, raw-key leader recovery,
+independent identities, and multiple Gateways per class.
+`kubernetes/tests/status_persistence_test.rs` drives the real status
 patch helper through an in-memory Merge Patch transport and checks WATCH convergence.
 Watcher selector tests and startup/identity tests cover configuration boundaries.
 
-`edgion-tests/k8s/scripts/test_gatewayclass_reporting.py` is a focused live-cluster
-hot-update regression using an existing Controller. It is not a Gateway API
-conformance suite. The current local cluster lacks GatewayClass CRDs and Edgion
-deployments; no live Kubernetes or conformance pass is claimed.
+Current implementation checks for `kubernetes-gateway-class-allow-list`:
+Controller resource_processor 832 passed, configuration 42 passed, Kubernetes
+configuration center 74 passed; three sequential Controller all-target compile
+checks, formatting and diff whitespace checks passed. These are in-process
+checks, not live Kubernetes or conformance evidence.
 
-The broader Controller library run found five existing failures (1541 passed,
+The historical 2026-09-21 broader Controller library run found five failures (1541 passed,
 5 failed, 6 ignored). All five were independently reproduced on unchanged HEAD
 `8d3d681875afb72af437340e556cf738e848cc38` in a temporary worktree. They remain
 outside this correction as the `linksys-timeout-advisory-test-fixtures` and
 `filesystem-repaired-resource-error-status` follow-ups.
 Neither is treated as corrected or accepted by this fix.
 
-Fresh verification for this correction on 2026-09-21:
+Historical verification for the reporting correction on 2026-09-21:
 
 - Controller resource_processor suite: 825 passed.
 - Controller Kubernetes configuration-center suite: 73 passed.
@@ -101,11 +110,9 @@ Fresh verification for this correction on 2026-09-21:
   consistency and `run_k8s_proxy_protocol_jobs_test.sh`: passed.
 - Independent read-only code/knowledge review and final fixture review: LGTM.
 
-The live script can be run after deploying the tested binary and CRDs, using
-`EDGION_ADMIN_TOKEN` and
-`python3 edgion-tests/k8s/scripts/test_gatewayclass_reporting.py --gateway-class <selected-class> --controller-url <admin-url>`.
-It checks unlabelled class rejection, hot updates, feature clearing, stable echoes,
-recreation and absence from publication, without starting a second topology.
+The original live reporting script tested rejection and non-publication of a
+second matching class. Those historical expectations are superseded by the
+controllerName-only publication contract; they are not current verification.
 
 Re-evaluate on controller identity/default changes, new publication hooks,
 watch-selector or leader-recovery changes, or any proposal to support independent
@@ -115,4 +122,7 @@ and reporter handoff semantics, not a weaker ownership predicate.
 ## Resolution references
 
 - `gatewayclass-status-reporting-ownership`: separate class status coverage from
-  selected-class publication under the user-approved distinct-deployment identity contract.
+  publication under the distinct-deployment identity contract; the single-class
+  publication restriction from that correction is superseded.
+- `kubernetes-gateway-class-allow-list`: publish all matching classes, preserve
+  incarnation proof, and reject the retired startup selector.

@@ -24,9 +24,14 @@ Both environment inputs must be present and valid; the Deployment name is inject
 explicitly, never inferred from a Pod name. Explicit blank or invalid identities
 fail startup in every mode. GatewayClass.spec.controllerName must match exactly.
 Independent deployments use different identities; replicas share one identity,
-selected class, election domain and configuration view. Explicit collisions are
+election domain and configuration view. Explicit collisions are
 not detected. GatewayClass WATCH ignores label_selector for reporting coverage;
 no_watch_kinds still disables the watcher and reporting.
+
+All classes matching the resolved controllerName are eligible for publication,
+including classes created after startup. Each Gateway uses its referenced class's
+parametersRef. The obsolete `conf_center.gateway_class` key is rejected if present,
+including null. There is no class-name setting or allow-list.
 
 ```yaml
 # Working directory (only fields that explicitly use the work-dir resolver use this base)
@@ -105,7 +110,6 @@ conf_center:
 # ─── Kubernetes mode ───
 # conf_center:
 #   type: kubernetes
-#   gateway_class: edgion                 # Required: GatewayClass to match
 #   controller_name: edgion.io/gateway-controller  # controllerName reported in Gateway API status
 #   watch_namespaces: []                  # Empty = all namespaces
 #   label_selector: ""                    # Resource label selector (top-level in this variant)
@@ -575,7 +579,6 @@ CLI special cases:
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `type` | `String` | — | `"kubernetes"` |
-| `gateway_class` | `String` | **Required** | Name of the GatewayClass to match |
 | `controller_name` | `String` | — | controllerName reported in Gateway API status |
 | `watch_namespaces` | `Vec<String>` | `[]` (all) | List of namespaces to watch |
 | `label_selector` | `String` | `""` | Resource label filter |
@@ -769,6 +772,6 @@ Path normalization configuration is read on the Gateway side (`edgion-resources/
 ## Most Common Controller Configuration Changes in This Project
 
 - Switch the configuration directory for local testing: change `conf_center.type = "file_system"` + `conf_dir`
-- Limit a K8s deployment to a single GatewayClass: change `gateway_class`
+- Select a K8s deployment's owned classes: configure their `spec.controllerName` to match its resolved identity
 - Control cache caps for different kinds: change `conf_sync.capacity_overrides`
 - Tune observability noise: change `logging.log_level`

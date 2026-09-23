@@ -32,7 +32,6 @@ use std::path::PathBuf;
 /// ```yaml
 /// type: kubernetes
 /// controller_name: edgion.io/gateway-controller
-/// gateway_class: edgion
 /// watch_namespaces:
 ///   - default
 ///   - prod
@@ -105,13 +104,6 @@ impl From<PathBuf> for ConfCenterConfig {
     }
 }
 
-/// Create a Kubernetes config from gateway class
-impl From<&str> for ConfCenterConfig {
-    fn from(gateway_class: &str) -> Self {
-        Self::Kubernetes(KubernetesConfig::new(gateway_class))
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -133,7 +125,7 @@ mod tests {
     #[test]
     fn test_kubernetes_config() {
         let config = ConfCenterConfig::Kubernetes(
-            KubernetesConfig::new("edgion")
+            KubernetesConfig::default()
                 .with_watch_namespaces(vec!["default".to_string(), "prod".to_string()])
                 .with_label_selector("app=edgion"),
         );
@@ -142,7 +134,6 @@ mod tests {
         let k8s_config = config.as_kubernetes().unwrap();
         assert_eq!(k8s_config.watch_namespaces(), &["default", "prod"]);
         assert_eq!(k8s_config.label_selector(), Some("app=edgion"));
-        assert_eq!(k8s_config.gateway_class(), "edgion");
 
         // Test metadata filter
         let filter = k8s_config.metadata_filter();
@@ -176,7 +167,6 @@ watch_namespaces:
   - default
   - prod
 label_selector: app=edgion
-gateway_class: edgion
 "#;
         let config: ConfCenterConfig = serde_yaml::from_str(yaml).unwrap();
         assert!(config.is_k8s_mode());
@@ -189,7 +179,6 @@ gateway_class: edgion
     fn test_deserialize_kubernetes_with_metadata_filter() {
         let yaml = r#"
 type: kubernetes
-gateway_class: edgion
 metadata_filter:
   blocked_annotations:
     - "custom.annotation/to-remove"
@@ -211,9 +200,24 @@ metadata_filter:
     }
 
     #[test]
-    fn test_from_gateway_class() {
-        let config: ConfCenterConfig = "edgion".into();
-        assert!(config.is_k8s_mode());
-        assert_eq!(config.as_kubernetes().unwrap().gateway_class(), "edgion");
+    fn obsolete_gateway_class_is_rejected_through_tagged_configuration() {
+        for value in ["edgion", "''", "null", "12"] {
+            let error =
+                serde_yaml::from_str::<ConfCenterConfig>(&format!("type: kubernetes\ngateway_class: {value}\n"))
+                    .unwrap_err();
+            assert!(error.to_string().contains("gateway_class has been removed"), "{error}");
+        }
+        let config: ConfCenterConfig =
+            serde_yaml::from_str("type: kubernetes\ncontroller_name: example.com/controller\n").unwrap();
+        assert_eq!(
+            config.as_kubernetes().unwrap().resolve_controller_name().unwrap(),
+            "example.com/controller"
+        );
+        assert!(!serde_yaml::to_string(&config).unwrap().contains("gateway_class"));
+        assert!(serde_yaml::from_str::<ConfCenterConfig>(
+            "type: kubernetes\nha_mode: all-serve\nha_mode: leader-only\n"
+        )
+        .is_err());
+        assert!(serde_yaml::from_str::<ConfCenterConfig>("type: kubernetes\nunrelated: ignored\n").is_ok());
     }
 }

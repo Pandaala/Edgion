@@ -106,7 +106,6 @@ logging:
 # Kubernetes mode example (production):
 # conf_center:
 #   type: kubernetes
-#   gateway_class: edgion              # Required: GatewayClass name to manage
 #   controller_name: "edgion.io/gateway-controller"  # Explicit identity; distinct per independent deployment
 #   watch_namespaces: []               # Empty = all namespaces, or [ns1, ns2]
 #   label_selector: ""                 # Optional: filter resources by label
