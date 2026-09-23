@@ -4463,6 +4463,32 @@ mod ext_ref_index_tests {
     }
 
     #[tokio::test]
+    async fn external_auth_response_header_policy_preserves_native_runtime_defense() {
+        for header in ["CoNtEnT-LeNgTh", "WWW-Authenticate", "Set-Cookie", "Content-Encoding"] {
+            let config: ForwardAuthConfig = serde_json::from_value(serde_json::json!({
+                "target": {"name": "auth", "port": 8080},
+                "decision": {"clientHeaders": [header]}
+            }))
+            .unwrap();
+            let filters = vec![make_external_auth_filter(config)];
+            for runtime in [
+                PluginRuntime::from_httproute_filters_for_rule(&filters, "ns1", &MirrorTuning::default()),
+                PluginRuntime::from_httproute_filters_for_backend(&filters, "ns1", &MirrorTuning::default()),
+            ] {
+                assert_eq!(runtime.request_plugins_count(), 1);
+                assert_eq!(
+                    runtime.request_plugins_iter().next().map(|filter| filter.name()),
+                    Some(if header == "CoNtEnT-LeNgTh" {
+                        "RejectInvalidConfig"
+                    } else {
+                        "ForwardAuth"
+                    })
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
     async fn missing_extension_ref_payload_fails_closed_in_all_route_scopes() {
         let http: Vec<HTTPRouteFilter> = serde_json::from_value(serde_json::json!([
             {"type": "ExtensionRef"}

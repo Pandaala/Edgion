@@ -1037,6 +1037,32 @@ fn invalid_cors_reason(rule: &edgion_resources::resources::http_route::HTTPRoute
     rule.unsupported_cors_reason()
 }
 
+/// Apply the same static ForwardAuth validation as Gateway construction before
+/// publishing a rule or copying it into a delegation result.
+fn invalid_external_auth_reason(rule: &edgion_resources::resources::http_route::HTTPRouteRule) -> Option<String> {
+    let filter_reason = |filter: &edgion_resources::resources::http_route::HTTPRouteFilter| {
+        if filter.filter_type != HTTPRouteFilterType::ExternalAuth {
+            return None;
+        }
+        filter.external_auth.as_ref()?.validation_error()
+    };
+    for (index, filter) in rule.filters.iter().flatten().enumerate() {
+        if let Some(reason) = filter_reason(filter) {
+            return Some(format!("filters[{index}] ExternalAuth: {reason}"));
+        }
+    }
+    for (backend_index, backend) in rule.backend_refs.iter().flatten().enumerate() {
+        for (filter_index, filter) in backend.filters.iter().flatten().enumerate() {
+            if let Some(reason) = filter_reason(filter) {
+                return Some(format!(
+                    "backendRefs[{backend_index}].filters[{filter_index}] ExternalAuth: {reason}"
+                ));
+            }
+        }
+    }
+    None
+}
+
 /// Returns a reason string if a rule has an invalid `ExtensionRef` filter.
 ///
 /// `ExtensionRef` has exactly one recognized use: `EdgionPlugins` in the
@@ -1447,6 +1473,10 @@ pub(crate) fn find_invalid_rule_details(route: &HTTPRoute, _route_ns: &str) -> V
             continue;
         }
         if let Some(reason) = invalid_cors_reason(rule) {
+            details.push((idx, reason));
+            continue;
+        }
+        if let Some(reason) = invalid_external_auth_reason(rule) {
             details.push((idx, reason));
             continue;
         }
@@ -3050,6 +3080,73 @@ spec:
             "PartiallyInvalid message must include valid/total rule count; got: {}",
             partial.message
         );
+    }
+
+    #[test]
+    fn external_auth_response_header_policy_status_and_recovery() {
+        use crate::conf_mgr::conf_center::common::parse_resource_content;
+
+        for backend_scope in [false, true] {
+            let filter = serde_json::json!({"type": "ExternalAuth", "externalAuth": {
+                "target": {"name": "auth", "port": 8080},
+                "decision": {"clientHeaders": ["CoNtEnT-LeNgTh"]}
+            }});
+            let mut invalid = serde_json::json!({});
+            if backend_scope {
+                invalid["backendRefs"] = serde_json::json!([
+                    {"name": "svc", "port": 80, "filters": [filter]}
+                ]);
+            } else {
+                invalid["filters"] = serde_json::json!([filter]);
+            }
+            let input = serde_json::json!({
+                "apiVersion": "gateway.networking.k8s.io/v1", "kind": "HTTPRoute",
+                "metadata": {"name": "auth", "namespace": "default"},
+                "spec": {"parentRefs": [{"name": "gw"}], "rules": [invalid, {}]}
+            });
+            // Exercise the common FileSystem/etcd decoding boundary.
+            let mut route: HTTPRoute = parse_resource_content(&serde_yaml::to_string(&input).unwrap()).unwrap();
+            let handler = HttpRouteHandler::default();
+            let ctx = make_ctx();
+            handler.update_status(&mut route, &ctx, &[]);
+            assert_eq!(route.spec.invalid_rule_indices.as_deref(), Some(&[0][..]));
+            let conditions = &route.status.as_ref().unwrap().parents[0].conditions;
+            assert!(conditions.iter().any(|c| c.type_ == "PartiallyInvalid"
+                && c.status == "True"
+                && c.message.contains("ExternalAuth")
+                && c.message.contains("1 of 2 rules active")));
+            let details = find_invalid_rule_details(&route, "default");
+            assert_eq!(details[0].1.contains("backendRefs[0]"), backend_scope);
+
+            route.spec.rules.as_mut().unwrap().truncate(1);
+            handler.update_status(&mut route, &ctx, &[]);
+            let conditions = &route.status.as_ref().unwrap().parents[0].conditions;
+            assert!(conditions
+                .iter()
+                .any(|c| c.type_ == "Accepted" && c.status == "False" && c.message.contains("ExternalAuth")));
+            assert!(!conditions
+                .iter()
+                .any(|c| c.type_ == "PartiallyInvalid" && c.status == "True"));
+
+            let rule = &mut route.spec.rules.as_mut().unwrap()[0];
+            let filters = if backend_scope {
+                rule.backend_refs.as_mut().unwrap()[0].filters.as_mut().unwrap()
+            } else {
+                rule.filters.as_mut().unwrap()
+            };
+            filters[0].external_auth.as_mut().unwrap().decision.client_headers = vec![
+                "WWW-Authenticate".into(),
+                "Set-Cookie".into(),
+                "Content-Encoding".into(),
+            ];
+            handler.update_status(&mut route, &ctx, &[]);
+            assert!(route.spec.invalid_rule_indices.is_none());
+            assert!(find_invalid_rule_details(&route, "default").is_empty());
+            assert!(!route.status.as_ref().unwrap().parents[0]
+                .conditions
+                .iter()
+                .any(|c| c.message.contains("ExternalAuth")));
+        }
     }
 
     #[test]

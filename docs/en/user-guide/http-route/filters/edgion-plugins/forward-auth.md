@@ -63,4 +63,11 @@ spec:
 
 `decision.clientHeaders` rejects protected or invalid names during configuration validation. Denial responses filter all fields nominated by every received `Connection` value, including automatically copied `Content-Type`. A non-text `Connection` value suppresses remote header copying, while the bounded denial body is still relayed. Allowed repeated fields, including `Set-Cookie` and `WWW-Authenticate`, retain their values.
 
+For filesystem/etcd configurations using the inline HTTPRoute `ExternalAuth`
+form, the Controller also validates rule and backend filter configurations,
+including delegated source rules. Invalid rules are excluded while valid siblings
+remain active; correcting the configuration clears the invalid-rule status.
+This inline form is not a claim of compatibility with the Kubernetes Gateway API
+`ExternalAuth` schema. Use the documented `EdgionPlugins` binding for Kubernetes.
+
 [Response header policy](../gateway-api/response-header-modifier.md#response-header-policy).

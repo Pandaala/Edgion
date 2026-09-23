@@ -39,11 +39,17 @@ not roll back earlier successful operations.
 | Rate-limit custom names | Shared response protection plus existing feature-specific exclusions |
 | RequestId | Existing stricter destination validator independently covers every protected name, plus routing, credential, and tracing exclusions |
 | RegionRoute writeBack and response dye | Shared response validation; dye's request/business exclusions remain |
-| ForwardAuth denial | Validated clientHeaders; filter every received Connection field's nominees, including automatic Content-Type; non-text Connection suppresses remote header copy; valid repeated selected values retained |
+| ForwardAuth denial | Validated clientHeaders, including native HTTPRoute rule/backend and delegation source admission; filter every received Connection field's nominees, including automatic Content-Type; non-text Connection suppresses remote header copy; valid repeated selected values retained |
 | PendingHeaderOp/local reply queue | Guard creation and application so direct queuing cannot bypass session setters |
 | Direct finite local/error replies | Private ResponseHeader writes own exact length; gRPC trailers-only removes framing; queued ordinary mutations cannot replace it |
 
 ## Protocol and body-owner evidence
+
+Native HTTPRoute ExternalAuth static admission uses the same ForwardAuth
+validator as Gateway construction. Invalid rules are isolated before publication
+or delegation; ordinary selected headers remain valid after an update. See the
+[native ExternalAuth guard](gw-plugin-runtime-01-httproute-external-auth-invalid-plugins-never-sealed.md)
+for `CAND-admission-001`, FileSystem/etcd reachability, and Kubernetes limitations.
 
 | Path | Boundary |
 |---|---|
