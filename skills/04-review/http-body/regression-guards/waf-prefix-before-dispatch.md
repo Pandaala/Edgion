@@ -54,7 +54,15 @@ registered request-body buffer and request relay contracts.
   `full`. Later phases cannot depend on an unavailable full request body.
 - Prefix completion is explicit (`NotRequired`, `EndOfStream`, `WindowFilled`);
   the engine does not publish an empty or truncated body as a complete document.
-- Full mode uses complete `BodyStorage` capture even for raw phrase rules.
+- Full mode uses complete `BodyStorage` capture for body consumers, including raw phrase rules.
+- Phase two alone does not imply body consumption. Compiler target and macro
+  dependency analysis is shared by prefix eligibility, execution, and capture
+  planning. Body-independent phase-two rules use ordinary evaluation and may
+  run with `NotRequired` prefix completion; mixed rules retain schedule order.
+  Header/URI and `ARGS_GET` / `ARGS_GET_NAMES` consumers do not capture a body in
+  either mode. `ARGS`, `ARGS_NAMES`, processor metadata, and later-phase body
+  dependencies remain conservatively body-dependent. Prefix restrictions on
+  macros, chains, and control/state actions remain unchanged.
 - Native prefix capture disables retry, including short bodies. Reusing an already
   complete cache keeps its existing replay policy.
 - Transport overrun is distinct from cached inspection bytes. Its backing must be
@@ -73,6 +81,11 @@ the transformation output bound and prefix operator-work accounting remain
 unchanged. No generation-sized prefix match table is retained. Regression tests
 cover a 1 MiB prefix with 33 rules, first-rule denial, actual budget exhaustion,
 detection-only findings, and the output bound on borrowed bytes.
+
+Body-dependency regression tests cover prefix configuration acceptance for
+body-independent phase-two targets, zero Gateway body reads in both modes,
+`NotRequired` phase-two denial, and both orderings of mixed header/raw rules.
+These unit tests do not replace the outstanding Gateway wire/hot-reload gate.
 
 Before the configurable-window amendment, local verification passed with an external temporary Cargo patch to the sibling
 Pingora branch `feat/waf-request-body-prefix`: workspace check and Clippy,

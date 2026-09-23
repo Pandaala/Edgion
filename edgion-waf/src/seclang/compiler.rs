@@ -794,6 +794,7 @@ pub enum RequestBodyExecutionClass {
 /// Low-cost aggregate of the Phase 2 execution lanes in one generation.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct RequestBodyExecutionSummary {
+    requires_request_body: bool,
     streaming_raw_rule_units: usize,
     streaming_structured_rule_units: usize,
     bounded_snapshot_rule_units: usize,
@@ -817,11 +818,10 @@ impl RequestBodyExecutionSummary {
         self.unsupported_rule_units
     }
 
+    /// Whether a phase-two target or macro consumes request-body values.
+    /// Execution-lane counts also include body-independent phase-two units.
     pub const fn requires_request_body(self) -> bool {
-        self.streaming_raw_rule_units != 0
-            || self.streaming_structured_rule_units != 0
-            || self.bounded_snapshot_rule_units != 0
-            || self.unsupported_rule_units != 0
+        self.requires_request_body
     }
 }
 
@@ -1053,6 +1053,12 @@ impl CompiledGeneration {
     pub fn request_body_execution_summary(&self) -> RequestBodyExecutionSummary {
         let mut summary = RequestBodyExecutionSummary::default();
         for unit in self.rule_units() {
+            if unit.record().phase == Phase::RequestBody {
+                let unit = unit.record();
+                summary.requires_request_body |= self.members[unit.member_start..unit.member_start + unit.member_count]
+                    .iter()
+                    .any(|member| self.member_requires_request_body(*member));
+            }
             match unit.request_body_execution_class() {
                 Some(RequestBodyExecutionClass::StreamingRaw) => summary.streaming_raw_rule_units += 1,
                 Some(RequestBodyExecutionClass::StreamingStructured) => {
@@ -1085,15 +1091,17 @@ impl CompiledGeneration {
             }
             self.members[unit.member_start..unit.member_start + unit.member_count]
                 .iter()
-                .any(|member| {
-                    member.target_plan.is_some_and(|id| {
-                        let plan = self.target_plans[id];
-                        self.target_records[plan.record_start..plan.record_start + plan.record_count]
-                            .iter()
-                            .any(|record| collection_requires_request_body(record.collection))
-                    }) || self.member_has_body_macro(*member)
-                })
+                .any(|member| self.member_requires_request_body(*member))
         })
+    }
+
+    fn member_requires_request_body(&self, member: CompiledMemberPlan) -> bool {
+        member.target_plan.is_some_and(|id| {
+            let plan = self.target_plans[id];
+            self.target_records[plan.record_start..plan.record_start + plan.record_count]
+                .iter()
+                .any(|record| collection_requires_request_body(record.collection))
+        }) || self.member_has_body_macro(member)
     }
 
     fn member_has_body_macro(&self, member: CompiledMemberPlan) -> bool {
@@ -1138,7 +1146,7 @@ impl CompiledGeneration {
                 return Err("requestBody.inspection prefix does not support control or state actions; select full");
             }
             if unit.phase == Phase::RequestBody {
-                if !is_prefix_body_member(self, unit.member_start) {
+                if self.member_requires_request_body(member) && !is_prefix_body_member(self, unit.member_start) {
                     return Err("requestBody.inspection prefix requires positive raw REQUEST_BODY contains/pm rules; select full");
                 }
             } else if unit.phase != Phase::RequestHeaders {

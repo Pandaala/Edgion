@@ -234,11 +234,38 @@ mod tests {
     }
 
     #[test]
+    fn prefix_accepts_body_independent_phase_two_rules() {
+        for target in [
+            "REQUEST_HEADERS:X-Test",
+            "REQUEST_URI",
+            "ARGS_GET:item",
+            "ARGS_GET_NAMES",
+        ] {
+            let config = WafConfig {
+                rules: format!("SecRule {target} \"!@contains blocked\" \"id:1,phase:2,deny\""),
+                ..Default::default()
+            };
+            let generation = config.compile_generation().unwrap();
+            assert!(!generation.requires_complete_request_body(), "{target}");
+            assert!(
+                !generation.request_body_execution_summary().requires_request_body(),
+                "{target}"
+            );
+            assert_eq!(
+                generation.request_body_execution_summary().streaming_raw_rule_units(),
+                1
+            );
+        }
+    }
+
+    #[test]
     fn prefix_rejects_whole_body_and_control_dependencies_across_generation() {
         for rules in [
             "SecRule REQUEST_BODY \"!@contains forbidden\" \"id:1,phase:2,deny\"",
             "SecRule REQUEST_BODY \"@endsWith forbidden\" \"id:1,phase:2,deny\"",
             "SecRule ARGS:item \"@contains forbidden\" \"id:1,phase:2,deny\"",
+            "SecRule ARGS_NAMES \"@contains forbidden\" \"id:1,phase:2,deny\"",
+            "SecRule REQBODY_PROCESSOR \"@streq JSON\" \"id:1,phase:2,deny\"",
             "SecRule REQUEST_BODY_LENGTH \"@gt 10\" \"id:1,phase:2,deny\"",
             "SecRule REQUEST_BODY \"@contains forbidden\" \"id:1,phase:2,deny,t:base64Decode\"",
             "SecRule REQUEST_BODY \"@contains forbidden\" \"id:1,phase:3,deny\"",

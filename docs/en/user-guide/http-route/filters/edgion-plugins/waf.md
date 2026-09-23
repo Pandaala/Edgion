@@ -55,7 +55,11 @@ source.
   sends no request headers or body to the backend. Admission only means no rule
   blocked this prefix; bytes after the window are not inspected by WAF.
 - Prefix mode accepts a conservative subset of positive raw `REQUEST_BODY`
-  `@contains` / `@pm` rules. Negated, structured, chained, control-flow, and
+  `@contains` / `@pm` rules. Phase-2 rules using only headers, URI, or query-only
+  collections (`ARGS_GET` / `ARGS_GET_NAMES`) use normal rule evaluation without
+  reading the body. If no rule consumes body values, neither inspection mode
+  captures it. Mixed header/body rules retain their configured order.
+  Negated body matches, structured body targets, chains, control flow, and
   whole-body-dependent rules require explicit `inspection: full`. Validation
   checks the entire generation, including later-phase body dependencies.
 - WAF alone captures only its inspection window in the shared request-body
@@ -67,7 +71,7 @@ source.
   Body mutation after prefix inspection and incompatible streaming processors
   fail closed. Native prefix captures disable upstream retries, including short
   bodies; complete shared captures retain their existing retry policy.
-- `inspection: full` waits for complete bounded capture and uses the existing
+- When rules consume body values, `inspection: full` waits for complete bounded capture and uses the existing
   shared memory/disk storage before phase 2. Choose it when rules need complete
   body semantics; omit `prefixSize` in this mode. Physical body and execution
   limits still apply. It also applies to raw rules that previously ran while forwarding.

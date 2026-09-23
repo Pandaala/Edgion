@@ -79,10 +79,7 @@ impl WafPlugin {
             WafMode::On => RuleEngineMode::On,
             WafMode::DetectionOnly => RuleEngineMode::DetectionOnly,
         };
-        let request_body_execution = generation.request_body_execution_summary();
-        let requires_request_body = request_body_execution.requires_request_body()
-            || (config.request_body.inspection == WafRequestBodyInspection::Full
-                && generation.requires_complete_request_body());
+        let requires_request_body = generation.requires_complete_request_body();
         let generation_bytes = generation.retained_bytes();
         Ok(Self {
             shared: Arc::new(SharedWaf {
@@ -587,6 +584,59 @@ mod tests {
             RequestFilter::run_request(&plugin, &mut session, &mut log).await,
             PluginRunningResult::GoodNext
         );
+    }
+
+    #[tokio::test]
+    async fn phase_two_headers_do_not_read_body_in_either_inspection_mode() {
+        for inspection in [WafRequestBodyInspection::Prefix, WafRequestBodyInspection::Full] {
+            for blocked in [false, true] {
+                let plugin = plugin_with_inspection(
+                    "SecRule REQUEST_HEADERS:X-Test \"@streq blocked\" \"id:1,phase:2,deny,status:409\"\n",
+                    WafMode::On,
+                    inspection,
+                );
+                assert!(!plugin.shared.requires_request_body);
+                let mut session = MockPluginSession::new();
+                expect_request_head_with_headers(
+                    &mut session,
+                    "/",
+                    vec![(
+                        b"X-Test".to_vec(),
+                        if blocked {
+                            b"blocked".to_vec()
+                        } else {
+                            b"allowed".to_vec()
+                        },
+                    )],
+                );
+                session.expect_read_request_body().times(0);
+                session.expect_read_request_body_prefix().times(0);
+                if !blocked {
+                    session
+                        .expect_install_waf_transaction()
+                        .times(1)
+                        .return_once(|_, transaction| {
+                            assert_eq!(
+                                transaction.next_phase(),
+                                Some(edgion_waf::seclang::Phase::ResponseHeaders)
+                            );
+                            true
+                        });
+                }
+                let result = RequestFilter::run_request(&plugin, &mut session, &mut PluginLog::new(NAME)).await;
+                assert_eq!(
+                    result,
+                    if blocked {
+                        PluginRunningResult::ErrResponse {
+                            status: 409,
+                            body: None,
+                        }
+                    } else {
+                        PluginRunningResult::GoodNext
+                    }
+                );
+            }
+        }
     }
 
     #[tokio::test]

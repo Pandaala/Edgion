@@ -960,12 +960,7 @@ impl<'generation> Transaction<'generation> {
             || prefix.len() > limit
             || (completion == RequestBodyPrefixCompletion::WindowFilled && prefix.len() != limit)
             || (completion == RequestBodyPrefixCompletion::NotRequired
-                && (!prefix.is_empty()
-                    || self
-                        .generation
-                        .units
-                        .iter()
-                        .any(|unit| unit.phase == Phase::RequestBody)))
+                && (!prefix.is_empty() || self.generation.requires_complete_request_body()))
         {
             return Err(RuntimeError::GenerationInvariant);
         }
@@ -1355,7 +1350,14 @@ impl<'generation> Transaction<'generation> {
                 if unit.member_count != 1 {
                     return Err(RuntimeError::GenerationInvariant);
                 }
-                Some(self.evaluate_prefix_member(unit.member_start, prefix, &mut prefix_work)?)
+                if self
+                    .generation
+                    .member_requires_request_body(self.generation.members[unit.member_start])
+                {
+                    Some(self.evaluate_prefix_member(unit.member_start, prefix, &mut prefix_work)?)
+                } else {
+                    None
+                }
             } else {
                 None
             };
@@ -4265,6 +4267,78 @@ mod tests {
                 .map(|finding| finding.rule_id())
                 .collect::<Vec<_>>(),
             [61, 62, 63, 68]
+        );
+        assert_eq!(transaction.next_phase(), Some(Phase::ResponseHeaders));
+    }
+
+    #[test]
+    fn prefix_mixes_header_and_body_rules_in_schedule_order() {
+        let headers = [RequestHeader::new(b"X-Test", b"blocked")];
+        for targets in [
+            ["REQUEST_HEADERS:X-Test", "REQUEST_BODY"],
+            ["REQUEST_BODY", "REQUEST_HEADERS:X-Test"],
+        ] {
+            let rules = format!("SecRule {} \"@contains blocked\" \"id:1,phase:2,deny,status:409\"\nSecRule {} \"@contains blocked\" \"id:2,phase:2,deny,status:403\"\n", targets[0], targets[1]);
+            let generation = generation(&rules);
+            assert!(generation.requires_complete_request_body());
+            assert!(generation.request_body_execution_summary().requires_request_body());
+            for mode in [RuleEngineMode::On, RuleEngineMode::DetectionOnly] {
+                let mut transaction = Transaction::new_with_modes(
+                    &generation,
+                    request(&headers, b"/"),
+                    RuntimeLimits::default(),
+                    EvaluationMode::Accelerated,
+                    mode,
+                )
+                .unwrap();
+                transaction.execute_request_headers().unwrap();
+                let outcome = transaction
+                    .execute_request_body_prefix(b"blocked", 7, RequestBodyPrefixCompletion::EndOfStream)
+                    .unwrap();
+                if mode == RuleEngineMode::On {
+                    assert_eq!(
+                        outcome.intervention,
+                        Some(Intervention {
+                            rule_id: 1,
+                            status: 409
+                        })
+                    );
+                    assert_eq!(outcome.evaluated_units, 1);
+                } else {
+                    assert_eq!(
+                        outcome
+                            .findings
+                            .iter()
+                            .map(|finding| finding.rule_id)
+                            .collect::<Vec<_>>(),
+                        vec![1, 2]
+                    );
+                    assert_eq!(outcome.intervention, None);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn prefix_not_required_still_executes_phase_two_header_rules() {
+        let generation = generation("SecRule REQUEST_HEADERS:X-Test \"@streq blocked\" \"id:1,phase:2,deny\"\n");
+        let headers = [RequestHeader::new(b"X-Test", b"blocked")];
+        let mut transaction = Transaction::new(&generation, request(&headers, b"/"), RuntimeLimits::default()).unwrap();
+        transaction.execute_request_headers().unwrap();
+        let outcome = transaction
+            .execute_request_body_prefix(b"", 64, RequestBodyPrefixCompletion::NotRequired)
+            .unwrap();
+        assert_eq!(
+            outcome.intervention,
+            Some(Intervention {
+                rule_id: 1,
+                status: 403
+            })
+        );
+        assert!(transaction.request.body.is_none());
+        assert_eq!(
+            transaction.request_prefix_completion(),
+            Some(RequestBodyPrefixCompletion::NotRequired)
         );
         assert_eq!(transaction.next_phase(), Some(Phase::ResponseHeaders));
     }
