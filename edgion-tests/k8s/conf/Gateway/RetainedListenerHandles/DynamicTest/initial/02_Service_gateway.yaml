@@ -1,0 +1,18 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: retained-handles-gateway
+  namespace: edgion-system
+spec:
+  selector:
+    app: edgion-gateway
+  ports:
+    - name: http
+      port: 31986
+      targetPort: 31986
+    - name: grpc
+      port: 31987
+      targetPort: 31987
+    - name: tcp
+      port: 31988
+      targetPort: 31988

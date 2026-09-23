@@ -38,6 +38,7 @@ pub mod rate_limit_local_overflow;
 pub mod region_route_validation;
 pub mod request_access_policy_hmac_dynamic;
 pub mod request_mirror_reference_grant;
+pub mod retained_listener_handles;
 pub mod route_delegation_dynamic;
 pub mod service_degrade_threshold;
 pub mod sp_backend_change;

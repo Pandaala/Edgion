@@ -6,6 +6,7 @@ HttpRouteNamedParameterPrecedence	HTTPRoute/NamedParameterPrecedence/DynamicTest
 HttpRoutePathPrefixTrailingSlash	HTTPRoute/PathPrefixTrailingSlash/DynamicTest	initial	httproutes.gateway.networking.k8s.io	httproute	edgion-test	prefix-slash-z-winner
 LinkSysDisabledTls	LinkSys/Redis/DisabledTls/DynamicTest	initial	linksys.edgion.io	linksys	edgion-default	redis-disabled-tls-dynamic
 L4TimeoutHotReload	TCPRoute/L4TimeoutHotReload/DynamicTest	initial	gatewayclasses.gateway.networking.k8s.io	gatewayclass	-	l4-timeout-class
+RetainedListenerHandles	Gateway/RetainedListenerHandles/DynamicTest	initial	gateways.gateway.networking.k8s.io	gateway	edgion-test	retained-handles-gateway
 LinkSysProviderReplacement	LinkSys/Redis/ProviderReplacement/DynamicTest	initial	linksys.edgion.io	linksys	edgion-test	linksys-provider-replacement
 PluginPolicyDynamic	PluginPolicy/DynamicTest	initial	gatewayclasses.gateway.networking.k8s.io	gatewayclass	-	pp-a
 PreflightPolicyHotReload	Gateway/PreflightPolicyHotReload/DynamicTest	initial	gatewayclasses.gateway.networking.k8s.io	gatewayclass	-	preflight-policy-hot-reload

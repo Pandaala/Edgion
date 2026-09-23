@@ -1,0 +1,3 @@
+HTTPRoute/edgion-test/retained-handles-http
+GRPCRoute/edgion-test/retained-handles-grpc
+TCPRoute/edgion-test/retained-handles-tcp
